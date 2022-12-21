@@ -10,7 +10,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: fedora-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Set up Go 1.19
         uses: actions/setup-go@v1
