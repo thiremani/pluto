@@ -30,6 +30,10 @@ const (
 	LPAREN = "("
 	RPAREN = ")"
 
+	NEWLINE = "\n"
+	INDENT = "INDENT"
+	DEINDENT = "DEINDENT"
+
 	// Keywords
 	DEF      = "DEF"
 	TRUE     = "TRUE"
