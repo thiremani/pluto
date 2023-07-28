@@ -137,6 +137,10 @@ func (l *Lexer) indentLevel() (bool, error) {
             l.skipComment()
         }
 
+        if l.curr == '\t' {
+            return false, errors.New("indent using tabs not allowed")
+        }
+
         if l.curr != '\n' {
             break
         }

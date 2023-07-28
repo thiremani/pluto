@@ -152,3 +152,18 @@ func TestIndentErr(t *testing.T) {
 
     checkInput(t, input, tests)
 }
+
+func TestTabErr(t *testing.T) {
+    input := `aman = 5
+    	bb = 10`
+
+    tests := []Test {
+        {token.IDENT, "aman"},
+        {token.ASSIGN, "="},
+        {token.INT, "5"},
+        {token.NEWLINE, "\n"},
+        {token.ILLEGAL, "\t"},
+    }
+
+    checkInput(t, input, tests)
+}
