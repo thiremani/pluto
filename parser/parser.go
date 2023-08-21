@@ -12,6 +12,7 @@ const (
 	_ int = iota
 	LOWEST
 	ASSIGN      // =
+	COMMA       // ,
 	EQUALS      // ==
 	LESSGREATER // > or <
 	SUM         // +
@@ -22,6 +23,7 @@ const (
 
 var precedences = map[token.TokenType]int{
 	token.ASSIGN:   ASSIGN,
+	token.COMMA:    COMMA,
 	token.EQ:       EQUALS,
 	token.NOT_EQ:   EQUALS,
 	token.LT:       LESSGREATER,
@@ -82,6 +84,7 @@ func New(l *lexer.Lexer) *Parser {
 
 	p.multiParseFns = make(map[token.TokenType]multiParseFn)
 	p.registerMulti(token.ASSIGN, p.parseMultiExpression)
+	p.registerMulti(token.COMMA, p.parseMultiExpression)
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -188,19 +191,20 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	for !p.peekTokenIs(token.NEWLINE) && precedence < p.peekPrecedence() {
 		multiExp := p.multiParseFns[p.peekToken.Type]
 		if multiExp != nil {
-			leftExp = multiExp(leftExp)
 			p.nextToken()
-			return leftExp
+			leftExp = multiExp(leftExp)
 		}
 
 		infix := p.infixParseFns[p.peekToken.Type]
-		if infix == nil {
-			return leftExp
+		if infix != nil {
+			p.nextToken()
+			leftExp = infix(leftExp)
 		}
 
-		p.nextToken()
-
-		leftExp = infix(leftExp)
+		if multiExp == nil && infix == nil {
+			fmt.Println("returning exp", leftExp.TokenLiteral(), leftExp.String())
+			return leftExp
+		}
 	}
 
 	return leftExp
@@ -270,22 +274,14 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 }
 
 func (p *Parser) parseMultiExpression(exp ast.Expression) ast.Expression {
-	p.nextToken()
-
-	var m *ast.MultiExpression
-	switch e := exp.(type) {
-	case *ast.MultiExpression:
-		m = e
-		p.nextToken()
-		m.Expressions = append(m.Expressions, p.parseExpression(LOWEST))
-	default:
-		m = &ast.MultiExpression {
-			Token: p.curToken,
-			Expressions: []ast.Expression{exp},
-		}
-		p.nextToken()
-		m.Expressions = append(m.Expressions, p.parseExpression(LOWEST))
+	m := &ast.MultiExpression {
+		Token: p.curToken,
+		Expressions: []ast.Expression{exp},
 	}
+
+	precedence := p.curPrecedence()
+	p.nextToken()
+	m.Expressions = append(m.Expressions, p.parseExpression(precedence))
 
 	return m
 }

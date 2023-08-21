@@ -45,6 +45,37 @@ func TestAssign(t *testing.T) {
 	}
 }
 
+func TestMultiAssign(t *testing.T) {
+	tests := []struct {
+		input  string
+		expId  string
+		expStr string
+	} {
+		{"x, y = 2, 4", "x", "x, y, 2, 4"},
+	}
+
+	for _, tt := range tests {
+		l := lexer.New(tt.input)
+		p := New(l)
+		program := p.ParseProgram()
+		checkParserErrors(t, p)
+
+		if len(program.Statements) != 1 {
+			t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
+		}
+
+		stmt := program.Statements[0]
+
+		if !testStmt(t, stmt, tt.expId) {
+			return
+		}
+
+		me := stmt.(*ast.ExpressionStatement).Expression.(*ast.MultiExpression)
+
+		testMultiExp(t, me, "=", tt.expStr)
+	}
+}
+
 func TestIdentifierExpression(t *testing.T) {
 	input := "foobar"
 

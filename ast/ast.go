@@ -47,10 +47,11 @@ func (p *Program) String() string {
 }
 
 // Statements
+/*
 type LetStatement struct {
 	Token token.Token // the token.LET token
-	Name  *Identifier
-	Value Expression
+	Name  []Expression
+	Value []Expression
 }
 
 func (ls *LetStatement) statementNode()       {}
@@ -59,14 +60,22 @@ func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 
 	out.WriteString(ls.TokenLiteral() + " ")
-	out.WriteString(ls.Name.String())
+	for i, exp := range ls.Name {
+		out.WriteString(exp.String())
+		if i != len(ls.Name) - 1 {
+			out.WriteString(", ")
+		}
+	}
 	out.WriteString(" = ")
 
 	if ls.Value != nil {
-		out.WriteString(ls.Value.String())
+		for i, exp := range ls.Value {
+			out.WriteString(exp.String())
+			if i != len(ls.Value) - 1 {
+				out.WriteString(", ")
+			}
+		}
 	}
-
-	out.WriteString(";")
 
 	return out.String()
 }
@@ -90,7 +99,7 @@ func (rs *ReturnStatement) String() string {
 	out.WriteString(";")
 
 	return out.String()
-}
+} */
 
 type ExpressionStatement struct {
 	Token      token.Token // the first token of the expression
@@ -166,6 +175,26 @@ func (pe *PrefixExpression) String() string {
 	out.WriteString(pe.Operator)
 	out.WriteString(pe.Right.String())
 	out.WriteString(")")
+
+	return out.String()
+}
+
+type MultiExpression struct {
+	Token token.Token // The separator which is , or =
+	Expressions []Expression
+}
+
+func (me *MultiExpression) expressionNode()      {}
+func (me *MultiExpression) TokenLiteral() string { return me.Token.Literal }
+func (me *MultiExpression) String() string {
+	var out bytes.Buffer
+
+	for i, exp := range me.Expressions {
+		out.WriteString(exp.String())
+		if i != len(me.Expressions) - 1 {
+			out.WriteString(", ")
+		}
+	}
 
 	return out.String()
 }
