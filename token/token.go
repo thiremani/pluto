@@ -33,14 +33,6 @@ const (
 	NEWLINE = "\n"
 	INDENT = "INDENT"
 	DEINDENT = "DEINDENT"
-
-	// Keywords
-	DEF      = "DEF"
-	TRUE     = "TRUE"
-	FALSE    = "FALSE"
-	IF       = "IF"
-	ELSE     = "ELSE"
-	RETURN   = "RETURN"
 )
 
 type Token struct {
@@ -48,13 +40,7 @@ type Token struct {
 	Literal string
 }
 
-var keywords = map[string]TokenType{
-	"def":    DEF,
-	"true":   TRUE,
-	"false":  FALSE,
-	"if":     IF,
-	"else":   ELSE,
-	"return": RETURN,
+var keywords = map[string]TokenType {
 }
 
 func LookupIdent(ident string) TokenType {
