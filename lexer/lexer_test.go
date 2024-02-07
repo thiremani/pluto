@@ -35,18 +35,17 @@ func TestNextToken(t *testing.T) {
     ten = 10
     # abc
     # def
-    def add(x, y)
-        return x + y
+    res = add(x, y)
+        res = x + y
     result = add(five, ten)
     !-/*5
     5 < 10 > 5
     
 
 
-    if 5 < 10
-        return true
-    else
-        return false
+    b = 5
+    a = 10
+        b > 2 3
 
 10 == 10
     10 != 9
@@ -62,7 +61,8 @@ func TestNextToken(t *testing.T) {
         {token.ASSIGN, "="},
         {token.INT, "10"},
         {token.NEWLINE, "\n"},
-        {token.DEF, "def"},
+        {token.IDENT, "res"},
+        {token.ASSIGN, "="},
         {token.IDENT, "add"},
         {token.LPAREN, "("},
         {token.IDENT, "x"},
@@ -71,7 +71,8 @@ func TestNextToken(t *testing.T) {
         {token.RPAREN, ")"},
         {token.NEWLINE, "\n"},
         {token.INDENT, "r"},
-        {token.RETURN, "return"},
+        {token.IDENT, "res"},
+        {token.ASSIGN, "="},
         {token.IDENT, "x"},
         {token.PLUS, "+"},
         {token.IDENT, "y"},
@@ -98,21 +99,19 @@ func TestNextToken(t *testing.T) {
         {token.GT, ">"},
         {token.INT, "5"},
         {token.NEWLINE, "\n"},
-        {token.IF, "if"},
+        {token.IDENT, "b"},
+        {token.ASSIGN, "="},
         {token.INT, "5"},
-        {token.LT, "<"},
+        {token.NEWLINE, "\n"},
+        {token.IDENT, "a"},
+        {token.ASSIGN, "="},
         {token.INT, "10"},
         {token.NEWLINE, "\n"},
-        {token.INDENT, "r"},
-        {token.RETURN, "return"},
-        {token.TRUE, "true"},
-        {token.NEWLINE, "\n"},
-        {token.DEINDENT, "e"},
-        {token.ELSE, "else"},
-        {token.NEWLINE, "\n"},
-        {token.INDENT, "r"},
-        {token.RETURN, "return"},
-        {token.FALSE, "false"},
+        {token.INDENT, "b"},
+        {token.IDENT, "b"},
+        {token.GT, ">"},
+        {token.INT, "2"},
+        {token.INT, "3"},
         {token.NEWLINE, "\n"},
         {token.DEINDENT, "1"},
         {token.DEINDENT, "1"},
