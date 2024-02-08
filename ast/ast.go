@@ -211,6 +211,24 @@ func (ie *InfixExpression) String() string {
 	return out.String()
 }
 
+type ConditionExpression struct {
+	Token token.Token
+	Condition Expression
+	Consequence *BlockStatement
+}
+
+func (ce *ConditionExpression) expressionNode()      {}
+func (ce *ConditionExpression) TokenLiteral() string {return ce.Token.Literal}
+func (ce *ConditionExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString(ce.Condition.String())
+	out.WriteString(" ")
+	out.WriteString(ce.Consequence.String())
+
+	return out.String()
+}
+
 type FunctionLiteral struct {
 	Token      token.Token // The 'fn' token
 	Parameters []*Identifier

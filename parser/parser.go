@@ -13,10 +13,9 @@ const (
 	LOWEST
 	ASSIGN      // =
 	COMMA       // ,
-	EQUALS      // ==
-	LESSGREATER // > or <
 	SUM         // +
 	PRODUCT     // *
+	LESSGREATER // > or <
 	PREFIX      // -X or !X
 	CALL        // myFunction(X)
 )
@@ -24,8 +23,8 @@ const (
 var precedences = map[token.TokenType]int{
 	token.ASSIGN:   ASSIGN,
 	token.COMMA:    COMMA,
-	token.EQ:       EQUALS,
-	token.NOT_EQ:   EQUALS,
+	token.EQ:       LESSGREATER,
+	token.NOT_EQ:   LESSGREATER,
 	token.LT:       LESSGREATER,
 	token.GT:       LESSGREATER,
 	token.PLUS:     SUM,
@@ -280,6 +279,17 @@ func (p *Parser) parseMultiExpression(exp ast.Expression) ast.Expression {
 	m.Expressions = append(m.Expressions, p.parseExpression(precedence))
 
 	return m
+}
+
+func (p *Parser) parseConditionExpression() ast.Expression {
+	expression := &ast.ConditionExpression{Token: p.curToken}
+
+	p.nextToken()
+
+	expression.Condition = p.parseExpression(LOWEST)
+	expression.Consequence = p.parseBlockStatement()
+
+	return expression
 }
 
 func (p *Parser) parseGroupedExpression() ast.Expression {
