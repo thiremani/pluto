@@ -6,6 +6,7 @@ import (
 	"pluto/lexer"
 	"pluto/token"
 	"strconv"
+	"reflect"
 )
 
 const (
@@ -35,9 +36,9 @@ var precedences = map[token.TokenType]int{
 }
 
 type (
-	prefixParseFn func() ast.Expression
-	infixParseFn  func(ast.Expression) ast.Expression
-	multiParseFn  func(ast.Expression) ast.Expression
+	prefixParseFn      func() ast.Expression
+	infixParseFn       func(ast.Expression) ast.Expression
+	conditionParseFn   func(ast.Expression) ast.Expression
 )
 
 type Parser struct {
@@ -47,9 +48,16 @@ type Parser struct {
 	curToken  token.Token
 	peekToken token.Token
 
-	prefixParseFns map[token.TokenType]prefixParseFn
-	infixParseFns  map[token.TokenType]infixParseFn
-	multiParseFns  map[token.TokenType]multiParseFn
+	st StInfo
+
+	prefixParseFns      map[token.TokenType]prefixParseFn
+	infixParseFns       map[token.TokenType]infixParseFn
+	conditionParseFns   map[token.TokenType]conditionParseFn
+}
+
+type StInfo struct {
+	curNesting int // how nested are we in the current statement. Condition consequence is only allowed in 1st level.
+	prevOp     token.Token // previous infix operation. If it is a comparison, then consequence expression is allowed
 }
 
 func New(l *lexer.Lexer) *Parser {
@@ -77,9 +85,13 @@ func New(l *lexer.Lexer) *Parser {
 
 	p.registerInfix(token.LPAREN, p.parseCallExpression)
 
-	p.multiParseFns = make(map[token.TokenType]multiParseFn)
-	p.registerMulti(token.ASSIGN, p.parseMultiExpression)
-	p.registerMulti(token.COMMA, p.parseMultiExpression)
+	p.conditionParseFns = make(map[token.TokenType]conditionParseFn)
+/*
+	p.registerCondition(token.EQ, p.parseConditionExpression)
+	p.registerCondition(token.NOT_EQ, p.parseConditionExpression)
+	p.registerCondition(token.GT, p.parseConditionExpression)
+	p.registerCondition(token.LT, p.parseConditionExpression)
+*/
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -142,37 +154,65 @@ func (p *Parser) ParseProgram() *ast.Program {
 }
 
 func (p *Parser) parseStatement() ast.Statement {
-	return p.parseExpressionStatement()
-}
-/*
-func (p *Parser) parseLetStatement() *ast.LetStatement {
+	firstToken := p.curToken
+
+	expList := p.parseExpList()
+
+	if p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+		p.nextToken()
+		return &ast.PrintStatement{
+			Token: firstToken,
+		}
+	}
+
+	if !p.expectPeek(token.ASSIGN) {
+		return nil
+	}
+
 	stmt := &ast.LetStatement{Token: p.curToken}
-
-	stmt.Name = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	stmt.Name = p.toIdentList(expList)
+	if len(stmt.Name) != len(expList) {
+		return nil
+	}
 
 	p.nextToken()
-
-	stmt.Value = p.parseExpression(LOWEST)
+	stmt.Value = p.parseExpList()
+	// check number of identifiers and expressions are equal
+	if len(stmt.Name) != len(stmt.Value) {
+		msg := fmt.Sprintf("Number of variables to be assigned is %d. But number of expressions provided is %d", len(stmt.Name), len(stmt.Value))
+		p.errors = append(p.errors, msg)
+		return nil
+	}
 
 	return stmt
 }
 
-func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
-	stmt := &ast.ReturnStatement{Token: p.curToken}
+func (p *Parser) toIdentList(expList []ast.Expression) []*ast.Identifier {
+	identifiers := []*ast.Identifier{}
+	for _, exp := range expList {
+		identifier, ok := exp.(*ast.Identifier)
+		if !ok {
+			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q", reflect.TypeOf(identifier), reflect.TypeOf(exp))
+			p.errors = append(p.errors, msg)
+			break
+		}
+		identifiers = append(identifiers, identifier)
+	}
+	return identifiers
+}
 
-	p.nextToken()
-
-	stmt.ReturnValue = p.parseExpression(LOWEST)
-
-	return stmt
-} */
-
-func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
-	stmt := &ast.ExpressionStatement{Token: p.curToken}
-
-	stmt.Expression = p.parseExpression(LOWEST)
-
-	return stmt
+func (p *Parser) parseExpList() []ast.Expression {
+	expList := []ast.Expression{p.parseExpression(LOWEST)}
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		p.nextToken()
+		if p.peekTokenIs(token.ASSIGN) || p.peekTokenIs(token.NEWLINE) {
+			return expList
+		}
+		p.parseExpression(LOWEST)
+	}
+	return expList
 }
 
 func (p *Parser) parseExpression(precedence int) ast.Expression {
@@ -183,23 +223,13 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	}
 	leftExp := prefix()
 
-	for !p.peekTokenIs(token.NEWLINE) && precedence < p.peekPrecedence() {
-		multiExp := p.multiParseFns[p.peekToken.Type]
-		if multiExp != nil {
-			p.nextToken()
-			leftExp = multiExp(leftExp)
-		}
-
+	for precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.Type]
-		if infix != nil {
-			p.nextToken()
-			leftExp = infix(leftExp)
-		}
-
-		if multiExp == nil && infix == nil {
-			fmt.Println("returning exp", leftExp.TokenLiteral(), leftExp.String())
+		if infix == nil {
 			return leftExp
 		}
+		p.nextToken()
+		leftExp = infix(leftExp)
 	}
 
 	return leftExp
@@ -255,6 +285,7 @@ func (p *Parser) parsePrefixExpression() ast.Expression {
 }
 
 func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
+	p.st.curNesting++
 	expression := &ast.InfixExpression{
 		Token:    p.curToken,
 		Operator: p.curToken.Literal,
@@ -262,35 +293,34 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 	}
 
 	precedence := p.curPrecedence()
+	p.st.prevOp = p.curToken
 	p.nextToken()
 	expression.Right = p.parseExpression(precedence)
 
+	p.st.curNesting--
+
 	return expression
 }
-
-func (p *Parser) parseMultiExpression(exp ast.Expression) ast.Expression {
-	m := &ast.MultiExpression {
-		Token: p.curToken,
-		Expressions: []ast.Expression{exp},
+/*
+func (p *Parser) parseConditionExpression(left ast.Expression) ast.Expression {
+	if p.curToken.Type == token.NEWLINE {
+		return left
 	}
 
-	precedence := p.curPrecedence()
-	p.nextToken()
-	m.Expressions = append(m.Expressions, p.parseExpression(precedence))
+	if p.curStNesting != 0 {
+		msg := "Nested condition statements are not allowed"
+		p.errors = append(p.errors, msg)
+		return left
+	}
 
-	return m
-}
-
-func (p *Parser) parseConditionExpression() ast.Expression {
-	expression := &ast.ConditionExpression{Token: p.curToken}
-
-	p.nextToken()
-
-	expression.Condition = p.parseExpression(LOWEST)
-	expression.Consequence = p.parseBlockStatement()
+	expression := &ast.ConditionExpression{Token: p.prevOp}
+	p.prevOp = token.Token{}
+	expression.Condition = left
+	expression.Consequence = p.parseExpression(LOWEST)
 
 	return expression
 }
+*/
 
 func (p *Parser) parseGroupedExpression() ast.Expression {
 	p.nextToken()
@@ -414,6 +444,6 @@ func (p *Parser) registerInfix(tokenType token.TokenType, fn infixParseFn) {
 	p.infixParseFns[tokenType] = fn
 }
 
-func (p *Parser) registerMulti(tokenType token.TokenType, fn multiParseFn) {
-	p.multiParseFns[tokenType] = fn
+func (p *Parser) registerCondition(tokenType token.TokenType, fn conditionParseFn) {
+	p.conditionParseFns[tokenType] = fn
 }

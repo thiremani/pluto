@@ -13,9 +13,9 @@ func TestAssign(t *testing.T) {
 		expId  string
 		expStr string
 	} {
-		{"x = y = 5", "x", "x, y, 5"},
-		{"y = 5 * 3 + 2", "y", "y, ((5 * 3) + 2)"},
-		{"foobar = 2 + 3 / 5", "foobar", "foobar, (2 + (3 / 5))"},
+		{"x = 5", "=", "x = 5"},
+		{"y = 5 * 3 + 2", "=", "y = ((5 * 3) + 2)"},
+		{"foobar = 2 + 3 / 5", "=", "foobar = (2 + (3 / 5))"},
 	}
 
 	for _, tt := range tests {
@@ -30,21 +30,12 @@ func TestAssign(t *testing.T) {
 
 		stmt := program.Statements[0]
 
-		if !testStmt(t, stmt, tt.expId) {
+		if !testStmt(t, stmt, tt.expId, tt.expStr) {
 			return
 		}
-
-		e := stmt.(*ast.ExpressionStatement).Expression
-
-		me, ok := e.(*ast.MultiExpression)
-		if !ok {
-			t.Errorf("Expected MultiExpression type but got %T", e)
-		}
-
-		testMultiExp(t, me, "=", tt.expStr)
 	}
 }
-
+/*
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -334,6 +325,45 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 	}
 }
 
+func TestConditionExpression(t *testing.T) {
+	input := `a = x < y x
+	res = a > 3 + 2`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	for _, st := range program.Statements {
+		t.Log(st)
+	}
+
+	if len(program.Statements) != 2 {
+		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
+			1, len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
+			program.Statements[0])
+	}
+
+	exp, ok := stmt.Expression.(*ast.ConditionExpression)
+	if !ok {
+		t.Fatalf("stmt.Expression is not ast.ConditionExpression. got=%T",
+			stmt.Expression)
+	}
+
+	if !testInfixExpression(t, exp.Condition, "x", "<", "y") {
+		return
+	}
+
+	if !testIdentifier(t, exp.Consequence, "x") {
+		return
+	}
+} */
+
 func testInfixExpression(t *testing.T, exp ast.Expression, left interface{},
 	operator string, right interface{}) bool {
 
@@ -418,27 +448,16 @@ func testIdentifier(t *testing.T, exp ast.Expression, value string) bool {
 	return true
 }
 
-func testStmt(t *testing.T, s ast.Statement, expToken string) bool {
+func testStmt(t *testing.T, s ast.Statement, expToken string, expStr string) bool {
 	if s.TokenLiteral() != expToken {
 		t.Errorf("s.TokenLiteral got=%q. Expected %q", s.TokenLiteral(), expToken)
 		return false
 	}
-	return true
-}
 
-func testMultiExp(t *testing.T, e *ast.MultiExpression, expToken string, expStr string) bool {
-	gotToken := e.TokenLiteral()
-	if gotToken != expToken {
-		t.Errorf("got %s. Expected token %s", gotToken, expToken)
-		return false
+	stmtStr := s.String()
+	if stmtStr != expStr {
+		t.Errorf("s.String got=%q. Expected %q", stmtStr, expStr)
 	}
-
-	gotStr := e.String()
-	if gotStr != expStr {
-		t.Errorf("got string %s. Expected string %s", gotStr, expStr)
-		return false
-	}
-
 	return true
 }
 

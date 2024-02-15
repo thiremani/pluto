@@ -1,6 +1,7 @@
 package ast
 
 import (
+	"fmt"
 	"bytes"
 	"pluto/token"
 	"strings"
@@ -47,11 +48,11 @@ func (p *Program) String() string {
 }
 
 // Statements
-/*
 type LetStatement struct {
-	Token token.Token // the token.LET token
-	Name  []Expression
+	Token token.Token // the token.ASSIGN token
+	Name  []*Identifier
 	Value []Expression
+	Condition []Expression
 }
 
 func (ls *LetStatement) statementNode()       {}
@@ -59,60 +60,39 @@ func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 
-	out.WriteString(ls.TokenLiteral() + " ")
-	for i, exp := range ls.Name {
-		out.WriteString(exp.String())
-		if i != len(ls.Name) - 1 {
-			out.WriteString(", ")
-		}
-	}
+	nameStr := fmt.Sprint(ls.Name)
+	nameStr = nameStr[1:len(nameStr) - 1]
+	out.WriteString(nameStr)
 	out.WriteString(" = ")
 
+	if ls.Condition != nil {
+		condStr := fmt.Sprint(ls.Condition)
+		condStr = condStr[1:len(condStr) - 1]
+		out.WriteString(condStr)
+	}
+
 	if ls.Value != nil {
-		for i, exp := range ls.Value {
-			out.WriteString(exp.String())
-			if i != len(ls.Value) - 1 {
-				out.WriteString(", ")
-			}
-		}
+		valStr := fmt.Sprint(ls.Value)
+		valStr = valStr[1:len(valStr) - 1]
+		out.WriteString(valStr)
 	}
 
 	return out.String()
 }
 
-type ReturnStatement struct {
-	Token       token.Token // the 'return' token
-	ReturnValue Expression
+type PrintStatement struct {
+	Token token.Token // the first token of the expression
+	Expression []Expression
 }
 
-func (rs *ReturnStatement) statementNode()       {}
-func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
-func (rs *ReturnStatement) String() string {
+func (ps *PrintStatement) statementNode()       {}
+func (ps *PrintStatement) TokenLiteral() string {return ps.Token.Literal}
+func (ps *PrintStatement) String() string {
 	var out bytes.Buffer
 
-	out.WriteString(rs.TokenLiteral() + " ")
-
-	if rs.ReturnValue != nil {
-		out.WriteString(rs.ReturnValue.String())
-	}
-
-	out.WriteString(";")
+	out.WriteString(fmt.Sprintln(ps.Expression))
 
 	return out.String()
-} */
-
-type ExpressionStatement struct {
-	Token      token.Token // the first token of the expression
-	Expression Expression
-}
-
-func (es *ExpressionStatement) statementNode()       {}
-func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *ExpressionStatement) String() string {
-	if es.Expression != nil {
-		return es.Expression.String()
-	}
-	return ""
 }
 
 type BlockStatement struct {
@@ -131,6 +111,7 @@ func (bs *BlockStatement) String() string {
 
 	return out.String()
 }
+
 
 // Expressions
 type Identifier struct {
@@ -170,26 +151,6 @@ func (pe *PrefixExpression) String() string {
 	return out.String()
 }
 
-type MultiExpression struct {
-	Token token.Token // The separator which is , or =
-	Expressions []Expression
-}
-
-func (me *MultiExpression) expressionNode()      {}
-func (me *MultiExpression) TokenLiteral() string { return me.Token.Literal }
-func (me *MultiExpression) String() string {
-	var out bytes.Buffer
-
-	for i, exp := range me.Expressions {
-		out.WriteString(exp.String())
-		if i != len(me.Expressions) - 1 {
-			out.WriteString(", ")
-		}
-	}
-
-	return out.String()
-}
-
 type InfixExpression struct {
 	Token    token.Token // The operator token, e.g. +
 	Left     Expression
@@ -207,24 +168,6 @@ func (ie *InfixExpression) String() string {
 	out.WriteString(" " + ie.Operator + " ")
 	out.WriteString(ie.Right.String())
 	out.WriteString(")")
-
-	return out.String()
-}
-
-type ConditionExpression struct {
-	Token token.Token
-	Condition Expression
-	Consequence *BlockStatement
-}
-
-func (ce *ConditionExpression) expressionNode()      {}
-func (ce *ConditionExpression) TokenLiteral() string {return ce.Token.Literal}
-func (ce *ConditionExpression) String() string {
-	var out bytes.Buffer
-
-	out.WriteString(ce.Condition.String())
-	out.WriteString(" ")
-	out.WriteString(ce.Consequence.String())
 
 	return out.String()
 }
