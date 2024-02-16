@@ -35,14 +35,14 @@ func TestAssign(t *testing.T) {
 		}
 	}
 }
-/*
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		input  string
 		expId  string
 		expStr string
 	} {
-		{"x, y = 2, 4", "x", "x, y, 2, 4"},
+		{"x, y = 2, 4", "=", "x, y = 2, 4"},
 	}
 
 	for _, tt := range tests {
@@ -57,16 +57,12 @@ func TestMultiAssign(t *testing.T) {
 
 		stmt := program.Statements[0]
 
-		if !testStmt(t, stmt, tt.expId) {
+		if !testStmt(t, stmt, tt.expId, tt.expStr) {
 			return
 		}
-
-		me := stmt.(*ast.ExpressionStatement).Expression.(*ast.MultiExpression)
-
-		testMultiExp(t, me, "=", tt.expStr)
 	}
 }
-
+/*
 func TestIdentifierExpression(t *testing.T) {
 	input := "foobar"
 
@@ -456,7 +452,7 @@ func testStmt(t *testing.T, s ast.Statement, expToken string, expStr string) boo
 
 	stmtStr := s.String()
 	if stmtStr != expStr {
-		t.Errorf("s.String got=%q. Expected %q", stmtStr, expStr)
+		t.Errorf("s.String got %q. Expected %q", stmtStr, expStr)
 	}
 	return true
 }

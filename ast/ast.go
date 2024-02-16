@@ -47,6 +47,29 @@ func (p *Program) String() string {
 	return out.String()
 }
 
+func printVec(a []Expression) string {
+	if len(a) == 0 {
+		return ""
+	}
+
+	ret := a[0].(Expression).String()
+	for _, val := range a[1:] {
+		n := val.(Expression)
+		ret += ", "
+		ret += n.String()
+	}
+
+	return ret
+}
+
+func toExpressionVec(idents []*Identifier) []Expression {
+	ret := []Expression{}
+	for _, val := range idents {
+		ret = append(ret, val)
+	}
+	return ret
+}
+
 // Statements
 type LetStatement struct {
 	Token token.Token // the token.ASSIGN token
@@ -60,21 +83,15 @@ func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 
-	nameStr := fmt.Sprint(ls.Name)
-	nameStr = nameStr[1:len(nameStr) - 1]
-	out.WriteString(nameStr)
+	out.WriteString(printVec(toExpressionVec(ls.Name)))
 	out.WriteString(" = ")
 
 	if ls.Condition != nil {
-		condStr := fmt.Sprint(ls.Condition)
-		condStr = condStr[1:len(condStr) - 1]
-		out.WriteString(condStr)
+		out.WriteString(printVec(ls.Condition))
 	}
 
 	if ls.Value != nil {
-		valStr := fmt.Sprint(ls.Value)
-		valStr = valStr[1:len(valStr) - 1]
-		out.WriteString(valStr)
+		out.WriteString(printVec(ls.Value))
 	}
 
 	return out.String()

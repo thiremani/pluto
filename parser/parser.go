@@ -173,6 +173,11 @@ func (p *Parser) parseStatement() ast.Statement {
 	stmt := &ast.LetStatement{Token: p.curToken}
 	stmt.Name = p.toIdentList(expList)
 	if len(stmt.Name) != len(expList) {
+		idx := len(stmt.Name) + 1
+		if idx < len(expList) {
+			msg := fmt.Sprintf("Expected %q to be a variable name", expList[idx])
+			p.errors = append(p.errors, msg)
+		}
 		return nil
 	}
 
@@ -207,10 +212,10 @@ func (p *Parser) parseExpList() []ast.Expression {
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
+		expList = append(expList, p.parseExpression(LOWEST))
 		if p.peekTokenIs(token.ASSIGN) || p.peekTokenIs(token.NEWLINE) {
 			return expList
 		}
-		p.parseExpression(LOWEST)
 	}
 	return expList
 }
