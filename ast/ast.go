@@ -1,7 +1,6 @@
 package ast
 
 import (
-	"fmt"
 	"bytes"
 	"pluto/token"
 	"strings"
@@ -107,7 +106,7 @@ func (ps *PrintStatement) TokenLiteral() string {return ps.Token.Literal}
 func (ps *PrintStatement) String() string {
 	var out bytes.Buffer
 
-	out.WriteString(fmt.Sprintln(ps.Expression))
+	out.WriteString(printVec(ps.Expression))
 
 	return out.String()
 }

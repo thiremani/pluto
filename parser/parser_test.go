@@ -167,7 +167,7 @@ func TestParsingPrefixExpressions(t *testing.T) {
 		}
 	}
 }
-/*
+
 func TestParsingInfixExpressions(t *testing.T) {
 	infixTests := []struct {
 		input      string
@@ -204,13 +204,13 @@ func TestParsingInfixExpressions(t *testing.T) {
 				1, len(program.Statements))
 		}
 
-		stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+		stmt, ok := program.Statements[0].(*ast.PrintStatement)
 		if !ok {
 			t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
 				program.Statements[0])
 		}
 
-		if !testInfixExpression(t, stmt.Expression, tt.leftValue,
+		if !testInfixExpression(t, stmt.Expression[0], tt.leftValue,
 			tt.operator, tt.rightValue) {
 			return
 		}
@@ -320,7 +320,7 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 		}
 	}
 }
-
+/*
 func TestConditionExpression(t *testing.T) {
 	input := `a = x < y x
 	res = a > 3 + 2`
