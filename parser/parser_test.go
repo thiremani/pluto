@@ -62,7 +62,7 @@ func TestMultiAssign(t *testing.T) {
 		}
 	}
 }
-/*
+
 func TestIdentifierExpression(t *testing.T) {
 	input := "foobar"
 
@@ -75,13 +75,13 @@ func TestIdentifierExpression(t *testing.T) {
 		t.Fatalf("program has not enough statements. got=%d",
 			len(program.Statements))
 	}
-	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	stmt, ok := program.Statements[0].(*ast.PrintStatement)
 	if !ok {
-		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
+		t.Fatalf("program.Statements[0] is not ast.PrintStatement. got=%T",
 			program.Statements[0])
 	}
 
-	ident, ok := stmt.Expression.(*ast.Identifier)
+	ident, ok := stmt.Expression[0].(*ast.Identifier)
 	if !ok {
 		t.Fatalf("exp not *ast.Identifier. got=%T", stmt.Expression)
 	}
@@ -93,7 +93,7 @@ func TestIdentifierExpression(t *testing.T) {
 			ident.TokenLiteral())
 	}
 }
-
+/*
 func TestIntegerLiteralExpression(t *testing.T) {
 	input := "5"
 

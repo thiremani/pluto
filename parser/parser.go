@@ -158,11 +158,12 @@ func (p *Parser) parseStatement() ast.Statement {
 
 	expList := p.parseExpList()
 
-	if p.peekTokenIs(token.NEWLINE) {
+	if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
 		p.nextToken()
 		p.nextToken()
 		return &ast.PrintStatement{
 			Token: firstToken,
+			Expression: expList,
 		}
 	}
 
@@ -213,9 +214,6 @@ func (p *Parser) parseExpList() []ast.Expression {
 		p.nextToken()
 		p.nextToken()
 		expList = append(expList, p.parseExpression(LOWEST))
-		if p.peekTokenIs(token.ASSIGN) || p.peekTokenIs(token.NEWLINE) {
-			return expList
-		}
 	}
 	return expList
 }
