@@ -124,7 +124,7 @@ func TestIntegerLiteralExpression(t *testing.T) {
 			literal.TokenLiteral())
 	}
 }
-/*
+
 func TestParsingPrefixExpressions(t *testing.T) {
 	prefixTests := []struct {
 		input    string
@@ -148,13 +148,13 @@ func TestParsingPrefixExpressions(t *testing.T) {
 				1, len(program.Statements))
 		}
 
-		stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+		stmt, ok := program.Statements[0].(*ast.PrintStatement)
 		if !ok {
 			t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
 				program.Statements[0])
 		}
 
-		exp, ok := stmt.Expression.(*ast.PrefixExpression)
+		exp, ok := stmt.Expression[0].(*ast.PrefixExpression)
 		if !ok {
 			t.Fatalf("stmt is not ast.PrefixExpression. got=%T", stmt.Expression)
 		}
@@ -167,7 +167,7 @@ func TestParsingPrefixExpressions(t *testing.T) {
 		}
 	}
 }
-
+/*
 func TestParsingInfixExpressions(t *testing.T) {
 	infixTests := []struct {
 		input      string
