@@ -191,6 +191,13 @@ func (p *Parser) parseStatement() ast.Statement {
 		return nil
 	}
 
+	if !(p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF)) {
+		msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %q", p.peekToken)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+	p.nextToken()
+
 	return stmt
 }
 
