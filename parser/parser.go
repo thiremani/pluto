@@ -160,7 +160,6 @@ func (p *Parser) parseStatement() ast.Statement {
 
 	if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
 		p.nextToken()
-		p.nextToken()
 		return &ast.PrintStatement{
 			Token: firstToken,
 			Expression: expList,
@@ -197,7 +196,6 @@ func (p *Parser) parseStatement() ast.Statement {
 		return nil
 	}
 	p.nextToken()
-
 	return stmt
 }
 
