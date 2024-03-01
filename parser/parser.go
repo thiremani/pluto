@@ -179,7 +179,6 @@ func (p *Parser) parseStatement() ast.Statement {
 
 	p.nextToken()
 	expList = p.parseExpList()
-
 	if p.stmtEnded() {
 		stmt.Value = expList
 		return p.endStatement(stmt)
@@ -195,6 +194,8 @@ func (p *Parser) parseStatement() ast.Statement {
 	}
 
 	stmt.Condition = expList
+
+	p.nextToken()
 	stmt.Value = p.parseExpList()
 
 	if p.stmtEnded() {
@@ -334,26 +335,6 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 
 	return expression
 }
-/*
-func (p *Parser) parseConditionExpression(left ast.Expression) ast.Expression {
-	if p.curToken.Type == token.NEWLINE {
-		return left
-	}
-
-	if p.curStNesting != 0 {
-		msg := "Nested condition statements are not allowed"
-		p.errors = append(p.errors, msg)
-		return left
-	}
-
-	expression := &ast.ConditionExpression{Token: p.prevOp}
-	p.prevOp = token.Token{}
-	expression.Condition = left
-	expression.Consequence = p.parseExpression(LOWEST)
-
-	return expression
-}
-*/
 
 func (p *Parser) parseGroupedExpression() ast.Expression {
 	p.nextToken()

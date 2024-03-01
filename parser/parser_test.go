@@ -320,10 +320,9 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 		}
 	}
 }
-/*
+
 func TestConditionExpression(t *testing.T) {
-	input := `a = x < y x
-	res = a > 3 + 2`
+	input := `a = x < y x`
 
 	l := lexer.New(input)
 	p := New(l)
@@ -334,31 +333,29 @@ func TestConditionExpression(t *testing.T) {
 		t.Log(st)
 	}
 
-	if len(program.Statements) != 2 {
+	if len(program.Statements) != 1 {
 		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
 			1, len(program.Statements))
 	}
 
-	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
 	if !ok {
 		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
 			program.Statements[0])
 	}
 
-	exp, ok := stmt.Expression.(*ast.ConditionExpression)
-	if !ok {
-		t.Fatalf("stmt.Expression is not ast.ConditionExpression. got=%T",
-			stmt.Expression)
-	}
-
-	if !testInfixExpression(t, exp.Condition, "x", "<", "y") {
+	if !testInfixExpression(t, stmt.Condition[0], "x", "<", "y") {
 		return
 	}
 
-	if !testIdentifier(t, exp.Consequence, "x") {
+	if !testIdentifier(t, stmt.Name[0], "a") {
 		return
 	}
-} */
+
+	if !testLiteralExpression(t, stmt.Value[0], "x") {
+		return
+	}
+}
 
 func testInfixExpression(t *testing.T, exp ast.Expression, left interface{},
 	operator string, right interface{}) bool {

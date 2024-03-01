@@ -87,6 +87,7 @@ func (ls *LetStatement) String() string {
 
 	if ls.Condition != nil {
 		out.WriteString(printVec(ls.Condition))
+		out.WriteString(" ")
 	}
 
 	if ls.Value != nil {
