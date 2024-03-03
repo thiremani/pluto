@@ -34,31 +34,31 @@ func (l *Lexer) NextToken() token.Token {
             curr := l.curr
             l.readRune()
             literal := string(curr) + string(l.curr)
-            tok = token.Token{Type: token.EQ, Literal: literal}
+            tok = token.Token{Type: token.EQL, Literal: literal}
         } else {
             tok = newToken(token.ASSIGN, l.curr)
         }
     case '+':
-        tok = newToken(token.PLUS, l.curr)
+        tok = newToken(token.ADD, l.curr)
     case '-':
-        tok = newToken(token.MINUS, l.curr)
+        tok = newToken(token.SUB, l.curr)
     case '!':
         if l.peekRune() == '=' {
             ch := l.curr
             l.readRune()
             literal := string(ch) + string(l.curr)
-            tok = token.Token{Type: token.NOT_EQ, Literal: literal}
+            tok = token.Token{Type: token.NEQ, Literal: literal}
         } else {
-            tok = newToken(token.BANG, l.curr)
+            tok = newToken(token.NOT, l.curr)
         }
     case '/':
-        tok = newToken(token.SLASH, l.curr)
+        tok = newToken(token.QUO, l.curr)
     case '*':
-        tok = newToken(token.ASTERISK, l.curr)
+        tok = newToken(token.MUL, l.curr)
     case '<':
-        tok = newToken(token.LT, l.curr)
+        tok = newToken(token.LSS, l.curr)
     case '>':
-        tok = newToken(token.GT, l.curr)
+        tok = newToken(token.GTR, l.curr)
     case ',':
         tok = newToken(token.COMMA, l.curr)
     case '(':
@@ -74,7 +74,7 @@ func (l *Lexer) NextToken() token.Token {
     default:
         if isLetter(l.curr) {
             tok.Literal = l.readIdentifier()
-            tok.Type = token.LookupIdent(tok.Literal)
+            tok.Type = token.IDENT
             return tok
         } else if isDigit(l.curr) {
             tok.Type = token.INT

@@ -24,14 +24,14 @@ const (
 var precedences = map[token.TokenType]int{
 	token.ASSIGN:   ASSIGN,
 	token.COMMA:    COMMA,
-	token.EQ:       LESSGREATER,
-	token.NOT_EQ:   LESSGREATER,
-	token.LT:       LESSGREATER,
-	token.GT:       LESSGREATER,
-	token.PLUS:     SUM,
-	token.MINUS:    SUM,
-	token.SLASH:    PRODUCT,
-	token.ASTERISK: PRODUCT,
+	token.EQL:      LESSGREATER,
+	token.NEQ:      LESSGREATER,
+	token.LSS:      LESSGREATER,
+	token.GTR:      LESSGREATER,
+	token.ADD:      SUM,
+	token.SUB:      SUM,
+	token.QUO:      PRODUCT,
+	token.MUL:      PRODUCT,
 	token.LPAREN:   CALL,
 }
 
@@ -39,8 +39,6 @@ type (
 	prefixParseFn      func() ast.Expression
 	infixParseFn       func(ast.Expression) ast.Expression
 )
-
-var compList = []string{token.EQ, token.NOT_EQ, token.LT, token.GT}
 
 type Parser struct {
 	l      *lexer.Lexer
@@ -51,8 +49,6 @@ type Parser struct {
 
 	prefixParseFns      map[token.TokenType]prefixParseFn
 	infixParseFns       map[token.TokenType]infixParseFn
-
-	isComparison          map[string]bool
 }
 
 func New(l *lexer.Lexer) *Parser {
@@ -64,27 +60,21 @@ func New(l *lexer.Lexer) *Parser {
 	p.prefixParseFns = make(map[token.TokenType]prefixParseFn)
 	p.registerPrefix(token.IDENT, p.parseIdentifier)
 	p.registerPrefix(token.INT, p.parseIntegerLiteral)
-	p.registerPrefix(token.BANG, p.parsePrefixExpression)
-	p.registerPrefix(token.MINUS, p.parsePrefixExpression)
+	p.registerPrefix(token.NOT, p.parsePrefixExpression)
+	p.registerPrefix(token.SUB, p.parsePrefixExpression)
 	p.registerPrefix(token.LPAREN, p.parseGroupedExpression)
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
-	p.registerInfix(token.PLUS, p.parseInfixExpression)
-	p.registerInfix(token.MINUS, p.parseInfixExpression)
-	p.registerInfix(token.SLASH, p.parseInfixExpression)
-	p.registerInfix(token.ASTERISK, p.parseInfixExpression)
-	p.registerInfix(token.EQ, p.parseInfixExpression)
-	p.registerInfix(token.NOT_EQ, p.parseInfixExpression)
-	p.registerInfix(token.LT, p.parseInfixExpression)
-	p.registerInfix(token.GT, p.parseInfixExpression)
+	p.registerInfix(token.ADD, p.parseInfixExpression)
+	p.registerInfix(token.SUB, p.parseInfixExpression)
+	p.registerInfix(token.QUO, p.parseInfixExpression)
+	p.registerInfix(token.MUL, p.parseInfixExpression)
+	p.registerInfix(token.EQL, p.parseInfixExpression)
+	p.registerInfix(token.NEQ, p.parseInfixExpression)
+	p.registerInfix(token.LSS, p.parseInfixExpression)
+	p.registerInfix(token.GTR, p.parseInfixExpression)
 
 	p.registerInfix(token.LPAREN, p.parseCallExpression)
-
-	p.isComparison = make(map[string]bool)
-	p.isComparison[token.EQ] = true
-	p.isComparison[token.NOT_EQ] = true
-	p.isComparison[token.LT] = true
-	p.isComparison[token.GT] = true
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -122,7 +112,7 @@ func (p *Parser) Errors() []string {
 
 func (p *Parser) peekError(t token.TokenType) {
 	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
-		t, p.peekToken.Type)
+		t, p.peekToken)
 	p.errors = append(p.errors, msg)
 }
 
@@ -225,8 +215,7 @@ func (p *Parser) isCondition(exp ast.Expression) bool {
 		return false
 	}
 
-	_, ok = p.isComparison[ie.Operator]
-	return ok
+	return ie.Token.IsComparison()
 }
 
 func (p *Parser) toIdentList(expList []ast.Expression) []*ast.Identifier {
