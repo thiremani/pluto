@@ -152,10 +152,6 @@ func (t Token) IsComparison() bool {
 	return comparison_beg < t.Type && comparison_end > t.Type
 }
 
-func (t Token) String() string {
-	return t.Type.String()
-}
-
 func (tokenType TokenType) String() string {
 	s := ""
 	if 0 <= tokenType && tokenType < TokenType(len(tokens)) {
