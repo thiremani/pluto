@@ -148,7 +148,7 @@ func TestNextToken(t *testing.T) {
 
     checkInput(t, input, tests)
 }
-/*
+
 func TestIndentErr(t *testing.T) {
     input := `aesop = 4
     bulb = 5
@@ -156,16 +156,16 @@ func TestIndentErr(t *testing.T) {
     `
 
     tests := []Test {
-        {token.IDENT, "aesop", ""},
-        {token.ASSIGN, "=", ""},
-        {token.INT, "4", ""},
-        {token.NEWLINE, "\n", ""},
-        {token.INDENT, "b", ""},
-        {token.IDENT, "bulb", ""},
-        {token.ASSIGN, "=", ""},
-        {token.INT, "5", ""},
-        {token.NEWLINE, "\n", ""},
-        {token.ILLEGAL, "c", "indentation error"},
+        {token.IDENT, "aesop", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 7},
+        {token.INT, "4", "", 1, 9},
+        {token.NEWLINE, "\n", "", 1, 10},
+        {token.INDENT, "b", "", 2, 5},
+        {token.IDENT, "bulb", "", 2, 5},
+        {token.ASSIGN, "=", "", 2, 10},
+        {token.INT, "5", "", 2, 12},
+        {token.NEWLINE, "\n", "", 2, 13},
+        {token.ILLEGAL, "c", "indentation error", 3, 3},
     }
 
     checkInput(t, input, tests)
@@ -176,11 +176,11 @@ func TestTabErr(t *testing.T) {
     	bb = 10`
 
     tests := []Test {
-        {token.IDENT, "aman", ""},
-        {token.ASSIGN, "=", ""},
-        {token.INT, "5", ""},
-        {token.NEWLINE, "\n", ""},
-        {token.ILLEGAL, "\t", "indent using tabs not allowed"},
+        {token.IDENT, "aman", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 6},
+        {token.INT, "5", "", 1, 8},
+        {token.NEWLINE, "\n", "", 1, 9},
+        {token.ILLEGAL, "\t", "indent using tabs not allowed", 2, 5},
     }
 
     checkInput(t, input, tests)
@@ -190,7 +190,7 @@ func TestEof(t *testing.T) {
     input := ``
 
     tests := []Test {
-        {token.EOF, "", ""},
+        {token.EOF, "", "", 1, 1},
     }
 
     checkInput(t, input, tests)
@@ -198,17 +198,17 @@ func TestEof(t *testing.T) {
     input = `a = 10
     `
     tests = []Test {
-        {token.IDENT, "a", ""},
-        {token.ASSIGN, "=", ""},
-        {token.INT, "10", ""},
-        {token.NEWLINE, "\n", ""},
-        {token.EOF, "", ""},
+        {token.IDENT, "a", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 3},
+        {token.INT, "10", "", 1, 5},
+        {token.NEWLINE, "\n", "", 1, 7},
+        {token.EOF, "", "", 2, 5},
     }
     checkInput(t, input, tests)
 
     input = `#`
     tests = []Test {
-        {token.EOF, "", ""},
+        {token.EOF, "", "", 1, 2},
     }
     checkInput(t, input, tests)
-} */
+}
