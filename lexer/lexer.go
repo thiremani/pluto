@@ -1,7 +1,6 @@
 package lexer
 
 import (
-    "fmt"
 	"errors"
 	"pluto/token"
 )
@@ -88,6 +87,8 @@ func (l *Lexer) NextToken() (token.Token, error) {
         l.newLine()
         l.onNewline = true
         tok = l.createToken(token.NEWLINE, string(l.curr))
+    case 0:
+        fallthrough
     case eof:
         tok.Literal = ""
         tok.Type = token.EOF
@@ -180,14 +181,13 @@ func (l *Lexer) indentLevel() (bool, error) {
         if l.column < level {
             return false, errors.New("indentation error")
         } else if l.column == level {
-            fmt.Printf("Indentation stack is %v\n", l.indentStack)
             l.toDeindent = len(l.indentStack) - 1 - idx
             return false, nil
         }
     }
 
     stackLen := len(l.indentStack)
-    if stackLen == 0 && l.column > 0 {
+    if stackLen == 0 && l.column > 1 {
         l.indentStack = append(l.indentStack, l.column)
         return true, nil
     }
@@ -203,7 +203,6 @@ func (l *Lexer) indentLevel() (bool, error) {
 func (l *Lexer) skipComment() {
     for l.curr != '\n' {
         if l.curr == eof {
-            l.onNewline = false
             return
         }
         l.readRune()

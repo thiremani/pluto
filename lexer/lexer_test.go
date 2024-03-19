@@ -1,8 +1,8 @@
 package lexer
 
 import (
-	"pluto/token"
 	"testing"
+    "pluto/token"
 )
 
 type Test struct {
@@ -18,6 +18,7 @@ func checkInput(t *testing.T, input string, tests []Test) {
 		tok, err := l.NextToken()
 
 		if tok.Type != tt.expectedType {
+            t.Errorf("expected error=%q, got=%q", tt.expectedError, err)
 			t.Fatalf("tests[%d] - tokentype wrong. expected=%q, got=%q",
 				i, tt.expectedType, tok.Type)
 		}
