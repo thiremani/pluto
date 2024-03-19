@@ -1,8 +1,8 @@
 package lexer
 
 import (
-    "testing"
-    "pluto/token"
+	"pluto/token"
+	"testing"
 )
 
 type Test struct {
@@ -152,7 +152,7 @@ func TestIndentErr(t *testing.T) {
         {token.ASSIGN, "=", ""},
         {token.INT, "5", ""},
         {token.NEWLINE, "\n", ""},
-        {token.ILLEGAL, "c", "Indentation error"},
+        {token.ILLEGAL, "c", "indentation error"},
     }
 
     checkInput(t, input, tests)

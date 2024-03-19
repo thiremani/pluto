@@ -1,7 +1,10 @@
 package lexer
 
-import "errors"
-import "pluto/token"
+import (
+    "fmt"
+	"errors"
+	"pluto/token"
+)
 
 type Lexer struct {
     input          []rune
@@ -14,6 +17,10 @@ type Lexer struct {
     indentStack    []int // indentation level stack
     toDeindent     int  // number of deindent tokens to be emitted before we continue with current token
 }
+
+const (
+    eof = -1
+)
 
 func New(input string) *Lexer {
     l := &Lexer{input: []rune(input)}
@@ -78,9 +85,10 @@ func (l *Lexer) NextToken() (token.Token, error) {
     case ')':
         tok = l.createToken(token.RPAREN, string(l.curr))
     case '\n':
+        l.newLine()
         l.onNewline = true
         tok = l.createToken(token.NEWLINE, string(l.curr))
-    case 0:
+    case eof:
         tok.Literal = ""
         tok.Type = token.EOF
     default:
@@ -138,50 +146,54 @@ func (l *Lexer) deindentToken() (token.Token, error) {
 }
 
 func (l *Lexer) indentLevel() (bool, error) {
-    currLevel := 0
     for {
-        currLevel = 0
         for l.curr == ' ' {
             l.readRune()
-            currLevel++
         }
 
         if l.curr == '#' {
             l.skipComment()
         }
 
-        if l.curr == '\t' {
+        if l.curr == '\t' || l.curr == '\r' {
             return false, errors.New("indent using tabs not allowed")
+        }
+
+        if l.curr == eof {
+            l.onNewline = false
+            return false, nil
         }
 
         if l.curr != '\n' {
             break
         }
+        l.newLine()
         l.readRune()
     }
 
-    if currLevel == 0 {
+    if l.column == 1 {
         l.toDeindent = len(l.indentStack)
         return false, nil
     }
 
     for idx, level := range l.indentStack {
-        if currLevel < level {
-            return false, errors.New("Indentation error")
-        } else if currLevel == level {
+        if l.column < level {
+            return false, errors.New("indentation error")
+        } else if l.column == level {
+            fmt.Printf("Indentation stack is %v\n", l.indentStack)
             l.toDeindent = len(l.indentStack) - 1 - idx
             return false, nil
         }
     }
 
     stackLen := len(l.indentStack)
-    if stackLen == 0 && currLevel > 0 {
-        l.indentStack = append(l.indentStack, currLevel)
+    if stackLen == 0 && l.column > 0 {
+        l.indentStack = append(l.indentStack, l.column)
         return true, nil
     }
 
-    if currLevel > l.indentStack[stackLen - 1] {
-        l.indentStack = append(l.indentStack, currLevel)
+    if l.column > l.indentStack[stackLen - 1] {
+        l.indentStack = append(l.indentStack, l.column)
         return true, nil
     }
 
@@ -190,14 +202,24 @@ func (l *Lexer) indentLevel() (bool, error) {
 
 func (l *Lexer) skipComment() {
     for l.curr != '\n' {
+        if l.curr == eof {
+            l.onNewline = false
+            return
+        }
         l.readRune()
     }
+    l.newLine()
 }
 
 func (l *Lexer) skipWhitespace() {
     for l.curr == ' ' || l.curr == '\t' || l.curr == '\r' {
         l.readRune()
     }
+}
+
+func (l *Lexer) newLine() {
+    l.lineOffset++
+    l.column = 0
 }
 
 func (l *Lexer) readRune() {
