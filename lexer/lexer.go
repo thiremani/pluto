@@ -146,7 +146,7 @@ func (l *Lexer) deindentToken() (token.Token, error) {
     return l.createToken(token.DEINDENT, string(l.curr)), nil
 }
 
-func (l *Lexer) indentLevel() (bool, error) {
+func (l *Lexer) skipNewlineSpaces() error {
     for {
         for l.curr == ' ' {
             l.readRune()
@@ -157,12 +157,7 @@ func (l *Lexer) indentLevel() (bool, error) {
         }
 
         if l.curr == '\t' || l.curr == '\r' {
-            return false, errors.New("indent using tabs not allowed")
-        }
-
-        if l.curr == eof {
-            l.onNewline = false
-            return false, nil
+            return errors.New("indent using tabs not allowed")
         }
 
         if l.curr != '\n' {
@@ -171,10 +166,28 @@ func (l *Lexer) indentLevel() (bool, error) {
         l.newLine()
         l.readRune()
     }
+    return nil
+}
+
+func (l *Lexer) indentLevel() (bool, error) {
+    err := l.skipNewlineSpaces()
+    if err!= nil {
+        return false, err
+    }
+
+    if l.curr == eof || l.curr == 0 {
+        l.onNewline = false
+        return false, nil
+    }
 
     if l.column == 1 {
         l.toDeindent = len(l.indentStack)
         return false, nil
+    }
+
+    if len(l.indentStack) == 0 {
+        l.indentStack = append(l.indentStack, l.column)
+        return true, nil
     }
 
     for idx, level := range l.indentStack {
@@ -184,17 +197,11 @@ func (l *Lexer) indentLevel() (bool, error) {
             l.toDeindent = len(l.indentStack) - 1 - idx
             return false, nil
         }
-    }
 
-    stackLen := len(l.indentStack)
-    if stackLen == 0 && l.column > 1 {
-        l.indentStack = append(l.indentStack, l.column)
-        return true, nil
-    }
-
-    if l.column > l.indentStack[stackLen - 1] {
-        l.indentStack = append(l.indentStack, l.column)
-        return true, nil
+        if idx == len(l.indentStack) - 1 {
+            l.indentStack = append(l.indentStack, l.column)
+            return true, nil
+        }
     }
 
     return false, nil
@@ -202,7 +209,7 @@ func (l *Lexer) indentLevel() (bool, error) {
 
 func (l *Lexer) skipComment() {
     for l.curr != '\n' {
-        if l.curr == eof {
+        if l.curr == eof || l.curr == 0 {
             return
         }
         l.readRune()
