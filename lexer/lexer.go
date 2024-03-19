@@ -171,7 +171,7 @@ func (l *Lexer) skipNewlineSpaces() error {
 
 func (l *Lexer) indentLevel() (bool, error) {
     err := l.skipNewlineSpaces()
-    if err!= nil {
+    if err != nil {
         return false, err
     }
 
