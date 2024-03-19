@@ -22,7 +22,7 @@ const (
 )
 
 func New(input string) *Lexer {
-    l := &Lexer{input: []rune(input), onNewline: true}
+    l := &Lexer{input: []rune(input), lineOffset: 1, onNewline: true}
     l.readRune()
     return l
 }
@@ -49,10 +49,10 @@ func (l *Lexer) NextToken() (token.Token, error) {
     switch l.curr {
     case '=':
         if l.peekRune() == '=' {
+            tok = l.createToken(token.EQL, "")
             curr := l.curr
             l.readRune()
-            literal := string(curr) + string(l.curr)
-            tok = l.createToken(token.EQL, literal)
+            tok.Literal = string(curr) + string(l.curr)
         } else {
             tok = l.createToken(token.ASSIGN, string(l.curr))
         }
@@ -62,10 +62,10 @@ func (l *Lexer) NextToken() (token.Token, error) {
         tok = l.createToken(token.SUB, string(l.curr))
     case '!':
         if l.peekRune() == '=' {
+            tok = l.createToken(token.NEQ, "")
             ch := l.curr
             l.readRune()
-            literal := string(ch) + string(l.curr)
-            tok = l.createToken(token.NEQ, literal)
+            tok.Literal = string(ch) + string(l.curr)
         } else {
             tok = l.createToken(token.NOT, string(l.curr))
         }
@@ -84,21 +84,20 @@ func (l *Lexer) NextToken() (token.Token, error) {
     case ')':
         tok = l.createToken(token.RPAREN, string(l.curr))
     case '\n':
+        tok = l.createToken(token.NEWLINE, string(l.curr))
         l.newLine()
         l.onNewline = true
-        tok = l.createToken(token.NEWLINE, string(l.curr))
     case 0:
         fallthrough
     case eof:
-        tok.Literal = ""
-        tok.Type = token.EOF
+        tok = l.createToken(token.EOF, "")
     default:
         if isLetter(l.curr) {
+            tok = l.createToken(token.IDENT, "")
             tok.Literal = l.readIdentifier()
-            tok.Type = token.IDENT
             return tok, nil
         } else if isDigit(l.curr) {
-            tok.Type = token.INT
+            tok = l.createToken(token.INT, "")
             tok.Literal = l.readNumber()
             return tok, nil
         } else {
@@ -214,7 +213,6 @@ func (l *Lexer) skipComment() {
         }
         l.readRune()
     }
-    l.newLine()
 }
 
 func (l *Lexer) skipWhitespace() {
