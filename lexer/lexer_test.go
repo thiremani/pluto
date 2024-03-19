@@ -173,3 +173,30 @@ func TestTabErr(t *testing.T) {
 
     checkInput(t, input, tests)
 }
+
+func TestEof(t *testing.T) {
+    input := ``
+
+    tests := []Test {
+        {token.EOF, "", ""},
+    }
+
+    checkInput(t, input, tests)
+
+    input = `a = 10
+    `
+    tests = []Test {
+        {token.IDENT, "a", ""},
+        {token.ASSIGN, "=", ""},
+        {token.INT, "10", ""},
+        {token.NEWLINE, "\n", ""},
+        {token.EOF, "", ""},
+    }
+    checkInput(t, input, tests)
+
+    input = `#`
+    tests = []Test {
+        {token.EOF, "", ""},
+    }
+    checkInput(t, input, tests)
+}

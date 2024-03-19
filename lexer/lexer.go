@@ -22,7 +22,7 @@ const (
 )
 
 func New(input string) *Lexer {
-    l := &Lexer{input: []rune(input)}
+    l := &Lexer{input: []rune(input), onNewline: true}
     l.readRune()
     return l
 }
