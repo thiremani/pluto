@@ -4,13 +4,15 @@ import "errors"
 import "pluto/token"
 
 type Lexer struct {
-    input        []rune
-    position     int  // current position in input (points to current rune)
-    readPosition int  // current reading position in input (after current rune)
-    curr         rune // current rune under examination
-    newline      bool // at beginning of new line
-    iLevel       []int // indentation level stack
-    deindent     int  // number of deindent tokens to be emitted before we continue with current token
+    input          []rune
+    position       int  // current position in input (points to current rune)
+    readPosition   int  // current reading position in input (after current rune)
+    curr           rune // current rune under examination
+    lineOffset     int  // line number
+    column         int  // column number in the line
+    onNewline      bool // at beginning of new line
+    indentStack    []int // indentation level stack
+    toDeindent int  // number of deindent tokens to be emitted before we continue with current token
 }
 
 func New(input string) *Lexer {
@@ -19,10 +21,24 @@ func New(input string) *Lexer {
     return l
 }
 
-func (l *Lexer) NextToken() token.Token {
-    var tok token.Token
+type Lit interface {
+    rune | string
+}
 
-    if l.newline {
+func (l *Lexer) createToken(tokenType token.TokenType, literal string) token.Token {
+    return token.Token {
+        Type:    tokenType,
+        Literal: literal,
+        Line:    l.lineOffset,
+        Column:  l.column,
+    }
+}
+
+func (l *Lexer) NextToken() (token.Token, error) {
+    var tok token.Token
+    var err error
+
+    if l.onNewline {
         return l.indentToken()
     } else {
         l.skipWhitespace()
@@ -34,40 +50,40 @@ func (l *Lexer) NextToken() token.Token {
             curr := l.curr
             l.readRune()
             literal := string(curr) + string(l.curr)
-            tok = token.Token{Type: token.EQL, Literal: literal}
+            tok = l.createToken(token.EQL, literal)
         } else {
-            tok = newToken(token.ASSIGN, l.curr)
+            tok = l.createToken(token.ASSIGN, string(l.curr))
         }
     case '+':
-        tok = newToken(token.ADD, l.curr)
+        tok = l.createToken(token.ADD, string(l.curr))
     case '-':
-        tok = newToken(token.SUB, l.curr)
+        tok = l.createToken(token.SUB, string(l.curr))
     case '!':
         if l.peekRune() == '=' {
             ch := l.curr
             l.readRune()
             literal := string(ch) + string(l.curr)
-            tok = token.Token{Type: token.NEQ, Literal: literal}
+            tok = l.createToken(token.NEQ, literal)
         } else {
-            tok = newToken(token.NOT, l.curr)
+            tok = l.createToken(token.NOT, string(l.curr))
         }
     case '/':
-        tok = newToken(token.QUO, l.curr)
+        tok = l.createToken(token.QUO, string(l.curr))
     case '*':
-        tok = newToken(token.MUL, l.curr)
+        tok = l.createToken(token.MUL, string(l.curr))
     case '<':
-        tok = newToken(token.LSS, l.curr)
+        tok = l.createToken(token.LSS, string(l.curr))
     case '>':
-        tok = newToken(token.GTR, l.curr)
+        tok = l.createToken(token.GTR, string(l.curr))
     case ',':
-        tok = newToken(token.COMMA, l.curr)
+        tok = l.createToken(token.COMMA, string(l.curr))
     case '(':
-        tok = newToken(token.LPAREN, l.curr)
+        tok = l.createToken(token.LPAREN, string(l.curr))
     case ')':
-        tok = newToken(token.RPAREN, l.curr)
+        tok = l.createToken(token.RPAREN, string(l.curr))
     case '\n':
-        l.newline = true
-        tok = newToken(token.NEWLINE, l.curr)
+        l.onNewline = true
+        tok = l.createToken(token.NEWLINE, string(l.curr))
     case 0:
         tok.Literal = ""
         tok.Type = token.EOF
@@ -75,53 +91,54 @@ func (l *Lexer) NextToken() token.Token {
         if isLetter(l.curr) {
             tok.Literal = l.readIdentifier()
             tok.Type = token.IDENT
-            return tok
+            return tok, nil
         } else if isDigit(l.curr) {
             tok.Type = token.INT
             tok.Literal = l.readNumber()
-            return tok
+            return tok, nil
         } else {
-            tok = newToken(token.ILLEGAL, l.curr)
+            tok = l.createToken(token.ILLEGAL, string(l.curr))
+            err = errors.New("Illegal character '" + string(l.curr) + "'")
         }
     }
 
     l.readRune()
-    return tok
+    return tok, err
 }
 
-func (l *Lexer) indentToken() token.Token {
-    if l.deindent > 0 {
+func (l *Lexer) indentToken() (token.Token, error) {
+    if l.toDeindent > 0 {
         return l.deindentToken()
     }
 
     indent, err := l.indentLevel()
 
     if err != nil {
-        return newToken(token.ILLEGAL, l.curr)
+        return l.createToken(token.ILLEGAL, string(l.curr)), err
     }
 
-    if l.deindent > 0 {
+    if l.toDeindent > 0 {
         return l.deindentToken()
     }
 
-    l.newline = false
+    l.onNewline = false
     if indent {
-        return newToken(token.INDENT, l.curr)
+        return l.createToken(token.INDENT, string(l.curr)), nil
     }
 
     return l.NextToken()
 }
 
-func (l *Lexer) deindentToken() token.Token {
-    l.deindent--
-    if len(l.iLevel) > 0 {
-        l.iLevel = l.iLevel[:len(l.iLevel) - 1]
+func (l *Lexer) deindentToken() (token.Token, error) {
+    l.toDeindent--
+    if len(l.indentStack) > 0 {
+        l.indentStack = l.indentStack[:len(l.indentStack) - 1]
     }
-    if l.deindent == 0 {
-        l.newline = false
+    if l.toDeindent == 0 {
+        l.onNewline = false
     }
 
-    return newToken(token.DEINDENT, l.curr)
+    return l.createToken(token.DEINDENT, string(l.curr)), nil
 }
 
 func (l *Lexer) indentLevel() (bool, error) {
@@ -148,27 +165,27 @@ func (l *Lexer) indentLevel() (bool, error) {
     }
 
     if currLevel == 0 {
-        l.deindent = len(l.iLevel)
+        l.toDeindent = len(l.indentStack)
         return false, nil
     }
 
-    for idx, level := range l.iLevel {
+    for idx, level := range l.indentStack {
         if currLevel < level {
-            return false, errors.New("indent error")
+            return false, errors.New("Indentation error")
         } else if currLevel == level {
-            l.deindent = len(l.iLevel) - 1 - idx
+            l.toDeindent = len(l.indentStack) - 1 - idx
             return false, nil
         }
     }
 
-    ilevelLen := len(l.iLevel)
-    if ilevelLen == 0 && currLevel > 0 {
-        l.iLevel = append(l.iLevel, currLevel)
+    stackLen := len(l.indentStack)
+    if stackLen == 0 && currLevel > 0 {
+        l.indentStack = append(l.indentStack, currLevel)
         return true, nil
     }
 
-    if currLevel > l.iLevel[ilevelLen - 1] {
-        l.iLevel = append(l.iLevel, currLevel)
+    if currLevel > l.indentStack[stackLen - 1] {
+        l.indentStack = append(l.indentStack, currLevel)
         return true, nil
     }
 
@@ -195,6 +212,7 @@ func (l *Lexer) readRune() {
     }
     l.position = l.readPosition
     l.readPosition++
+    l.column++
 }
 
 func (l *Lexer) peekRune() rune {
@@ -227,8 +245,4 @@ func isLetter(ch rune) bool {
 
 func isDigit(ch rune) bool {
     return '0' <= ch && ch <= '9'
-}
-
-func newToken(tokenType token.TokenType, curr rune) token.Token {
-    return token.Token{Type: tokenType, Literal: string(curr)}
 }

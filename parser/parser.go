@@ -84,8 +84,12 @@ func New(l *lexer.Lexer) *Parser {
 }
 
 func (p *Parser) nextToken() {
+	var err error
 	p.curToken = p.peekToken
-	p.peekToken = p.l.NextToken()
+	p.peekToken, err = p.l.NextToken()
+	if err != nil {
+		p.errors = append(p.errors, err.Error())
+	}
 }
 
 func (p *Parser) curTokenIs(t token.TokenType) bool {
