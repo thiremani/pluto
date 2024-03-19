@@ -12,17 +12,13 @@ type Lexer struct {
     column         int  // column number in the line
     onNewline      bool // at beginning of new line
     indentStack    []int // indentation level stack
-    toDeindent int  // number of deindent tokens to be emitted before we continue with current token
+    toDeindent     int  // number of deindent tokens to be emitted before we continue with current token
 }
 
 func New(input string) *Lexer {
     l := &Lexer{input: []rune(input)}
     l.readRune()
     return l
-}
-
-type Lit interface {
-    rune | string
 }
 
 func (l *Lexer) createToken(tokenType token.TokenType, literal string) token.Token {
