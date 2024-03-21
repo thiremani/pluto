@@ -322,7 +322,8 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 }
 
 func TestConditionExpression(t *testing.T) {
-	input := `a = x < y x`
+	input := `a = x < y x
+		res = a > 3 + 2`
 
 	l := lexer.New(input)
 	p := New(l)
@@ -333,7 +334,7 @@ func TestConditionExpression(t *testing.T) {
 		t.Log(st)
 	}
 
-	if len(program.Statements) != 1 {
+	if len(program.Statements) != 2 {
 		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
 			1, len(program.Statements))
 	}
@@ -353,6 +354,24 @@ func TestConditionExpression(t *testing.T) {
 	}
 
 	if !testLiteralExpression(t, stmt.Value[0], "x") {
+		return
+	}
+
+	stmt, ok = program.Statements[1].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("program.Statements[1] is not ast.ExpressionStatement. got=%T",
+            program.Statements[1])
+	}
+
+	if !testInfixExpression(t, stmt.Condition[0], "a", ">", "3") {
+		return
+	}
+
+	if !testIdentifier(t, stmt.Name[0], "res") {
+		return
+	}
+
+	if !testInfixExpression(t, stmt.Value[0], "a > 3", "+", "2") {
 		return
 	}
 }

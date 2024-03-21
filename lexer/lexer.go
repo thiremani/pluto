@@ -146,6 +146,7 @@ func (l *Lexer) deindentToken() (token.Token, error) {
 }
 
 func (l *Lexer) skipNewlineSpaces() error {
+    var err error
     for {
         for l.curr == ' ' {
             l.readRune()
@@ -155,22 +156,25 @@ func (l *Lexer) skipNewlineSpaces() error {
             l.skipComment()
         }
 
-        if l.curr == '\t' || l.curr == '\r' {
-            return errors.New("indent using tabs not allowed")
+        for l.curr == '\t' {
+            l.readRune()
+            err = errors.New("indent using tabs not allowed")
         }
 
         if l.curr != '\n' {
             break
         }
+        err = nil
         l.newLine()
         l.readRune()
     }
-    return nil
+    return err
 }
 
 func (l *Lexer) indentLevel() (bool, error) {
     err := l.skipNewlineSpaces()
     if err != nil {
+        l.onNewline = false
         return false, err
     }
 
