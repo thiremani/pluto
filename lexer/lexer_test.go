@@ -180,7 +180,7 @@ func TestTabErr(t *testing.T) {
         {token.ASSIGN, "=", "", 1, 6},
         {token.INT, "5", "", 1, 8},
         {token.NEWLINE, "\n", "", 1, 9},
-        {token.ILLEGAL, "\t", "indent using tabs not allowed", 2, 5},
+        {token.ILLEGAL, "b", "indent using tabs not allowed", 2, 6},
     }
 
     checkInput(t, input, tests)

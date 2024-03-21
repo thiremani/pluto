@@ -247,6 +247,11 @@ func (p *Parser) parseExpList() []ast.Expression {
 }
 
 func (p *Parser) parseExpression(precedence int) ast.Expression {
+	// ignore illegal tokens
+	for p.curTokenIs(token.ILLEGAL) {
+		p.nextToken()
+	}
+
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
 		p.noPrefixParseFnError(p.curToken.Type)

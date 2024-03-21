@@ -323,16 +323,12 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 
 func TestConditionExpression(t *testing.T) {
 	input := `a = x < y x
-		res = a > 3 + 2`
+res = a > 3 + 2`
 
 	l := lexer.New(input)
 	p := New(l)
 	program := p.ParseProgram()
 	checkParserErrors(t, p)
-
-	for _, st := range program.Statements {
-		t.Log(st)
-	}
 
 	if len(program.Statements) != 2 {
 		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
@@ -363,15 +359,21 @@ func TestConditionExpression(t *testing.T) {
             program.Statements[1])
 	}
 
-	if !testInfixExpression(t, stmt.Condition[0], "a", ">", "3") {
+	exp := stmt.Value[0].(*ast.InfixExpression)
+	left := exp.Left
+	if !testInfixExpression(t, left, "a", ">", 3) {
+		return
+	}
+
+	if exp.Operator!= "+" {
+		t.Errorf("exp.Operator is not '+'. got=%s", exp.Operator)
+	}
+
+	if !testLiteralExpression(t, exp.Right, 2) {
 		return
 	}
 
 	if !testIdentifier(t, stmt.Name[0], "res") {
-		return
-	}
-
-	if !testInfixExpression(t, stmt.Value[0], "a > 3", "+", "2") {
 		return
 	}
 }
