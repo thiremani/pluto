@@ -184,6 +184,46 @@ func TestTabErr(t *testing.T) {
     }
 
     checkInput(t, input, tests)
+
+    input = `a = 5
+		
+    b = 6`
+
+    tests = []Test {
+        {token.IDENT, "a", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 3},
+        {token.INT, "5", "", 1, 5},
+        {token.NEWLINE, "\n", "", 1, 6},
+        {token.INDENT, "b", "", 3, 5},
+        {token.IDENT, "b", "", 3, 5},
+        {token.ASSIGN, "=", "", 3, 7},
+        {token.INT, "6", "", 3, 9},
+        {token.EOF, "", "", 3, 10},
+    }
+
+    checkInput(t, input, tests)
+
+    input = `res = 123
+	m = n
+		q = r`
+
+    tests = []Test {
+        {token.IDENT, "res", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 5},
+        {token.INT, "123", "", 1, 7},
+        {token.NEWLINE, "\n", "", 1, 10},
+        {token.ILLEGAL, "m", "indent using tabs not allowed", 2, 2},
+        {token.IDENT, "m", "", 2, 2},
+        {token.ASSIGN, "=", "", 2, 4},
+        {token.IDENT, "n", "", 2, 6},
+		{token.NEWLINE, "\n", "", 2, 7},
+        {token.ILLEGAL, "q", "indent using tabs not allowed", 3, 3},
+        {token.IDENT, "q", "", 3, 3},
+        {token.ASSIGN, "=", "", 3, 5},
+        {token.IDENT, "r", "", 3, 7},
+    }
+
+	checkInput(t, input, tests)
 }
 
 func TestEof(t *testing.T) {
