@@ -216,7 +216,7 @@ func TestTabErr(t *testing.T) {
         {token.IDENT, "m", "", 2, 2},
         {token.ASSIGN, "=", "", 2, 4},
         {token.IDENT, "n", "", 2, 6},
-		{token.NEWLINE, "\n", "", 2, 7},
+        {token.NEWLINE, "\n", "", 2, 7},
         {token.ILLEGAL, "q", "indent using tabs not allowed", 3, 3},
         {token.IDENT, "q", "", 3, 3},
         {token.ASSIGN, "=", "", 3, 5},
