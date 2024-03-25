@@ -123,7 +123,7 @@ func (p *Parser) peekError(t token.TokenType) {
 		t, p.peekToken.Type)
 	ce := &token.CompileError{
 		Token: p.curToken,
-        Msg:   msg,
+		Msg:   msg,
 	}
 	p.errors = append(p.errors, ce)
 }
