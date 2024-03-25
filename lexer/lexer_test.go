@@ -165,7 +165,7 @@ func TestIndentErr(t *testing.T) {
         {token.ASSIGN, "=", "", 2, 10},
         {token.INT, "5", "", 2, 12},
         {token.NEWLINE, "\n", "", 2, 13},
-        {token.ILLEGAL, "c", "indentation error", 3, 3},
+        {token.ILLEGAL, "c", "3:3:c:indentation error", 3, 3},
     }
 
     checkInput(t, input, tests)
@@ -180,7 +180,7 @@ func TestTabErr(t *testing.T) {
         {token.ASSIGN, "=", "", 1, 6},
         {token.INT, "5", "", 1, 8},
         {token.NEWLINE, "\n", "", 1, 9},
-        {token.ILLEGAL, "b", "indent using tabs not allowed", 2, 6},
+        {token.ILLEGAL, "b", "2:6:b:indent using tabs not allowed", 2, 6},
     }
 
     checkInput(t, input, tests)
@@ -212,12 +212,12 @@ func TestTabErr(t *testing.T) {
         {token.ASSIGN, "=", "", 1, 5},
         {token.INT, "123", "", 1, 7},
         {token.NEWLINE, "\n", "", 1, 10},
-        {token.ILLEGAL, "m", "indent using tabs not allowed", 2, 2},
+        {token.ILLEGAL, "m", "2:2:m:indent using tabs not allowed", 2, 2},
         {token.IDENT, "m", "", 2, 2},
         {token.ASSIGN, "=", "", 2, 4},
         {token.IDENT, "n", "", 2, 6},
         {token.NEWLINE, "\n", "", 2, 7},
-        {token.ILLEGAL, "q", "indent using tabs not allowed", 3, 3},
+        {token.ILLEGAL, "q", "3:3:q:indent using tabs not allowed", 3, 3},
         {token.IDENT, "q", "", 3, 3},
         {token.ASSIGN, "=", "", 3, 5},
         {token.IDENT, "r", "", 3, 7},

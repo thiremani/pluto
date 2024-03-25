@@ -1,7 +1,6 @@
 package lexer
 
 import (
-	"errors"
 	"pluto/token"
 )
 
@@ -36,9 +35,9 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string) token.Tok
     }
 }
 
-func (l *Lexer) NextToken() (token.Token, error) {
+func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
     var tok token.Token
-    var err error
+    var err *token.CompileError
 
     if l.onNewline {
         return l.indentToken()
@@ -102,7 +101,10 @@ func (l *Lexer) NextToken() (token.Token, error) {
             return tok, nil
         } else {
             tok = l.createToken(token.ILLEGAL, string(l.curr))
-            err = errors.New("Illegal character '" + string(l.curr) + "'")
+            err = &token.CompileError {
+                Token: tok,
+                Msg:   "Illegal character '" + string(l.curr) + "'",
+            }
         }
     }
 
@@ -110,7 +112,7 @@ func (l *Lexer) NextToken() (token.Token, error) {
     return tok, err
 }
 
-func (l *Lexer) indentToken() (token.Token, error) {
+func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
     if l.toDeindent > 0 {
         return l.deindentToken()
     }
@@ -133,7 +135,7 @@ func (l *Lexer) indentToken() (token.Token, error) {
     return l.NextToken()
 }
 
-func (l *Lexer) deindentToken() (token.Token, error) {
+func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
     l.toDeindent--
     if len(l.indentStack) > 0 {
         l.indentStack = l.indentStack[:len(l.indentStack) - 1]
@@ -145,8 +147,8 @@ func (l *Lexer) deindentToken() (token.Token, error) {
     return l.createToken(token.DEINDENT, string(l.curr)), nil
 }
 
-func (l *Lexer) skipNewlineSpaces() error {
-    var err error
+func (l *Lexer) skipNewlineSpaces() *token.CompileError {
+    var err *token.CompileError
     for {
         for l.curr == ' ' {
             l.readRune()
@@ -158,7 +160,10 @@ func (l *Lexer) skipNewlineSpaces() error {
 
         for l.curr == '\t' {
             l.readRune()
-            err = errors.New("indent using tabs not allowed")
+            err = &token.CompileError{
+                Token: l.createToken(token.ILLEGAL, string(l.curr)),
+                Msg:   "indent using tabs not allowed",
+            }
         }
 
         if l.curr != '\n' {
@@ -171,7 +176,7 @@ func (l *Lexer) skipNewlineSpaces() error {
     return err
 }
 
-func (l *Lexer) indentLevel() (bool, error) {
+func (l *Lexer) indentLevel() (bool, *token.CompileError) {
     err := l.skipNewlineSpaces()
     if err != nil {
         l.onNewline = false
@@ -195,7 +200,10 @@ func (l *Lexer) indentLevel() (bool, error) {
 
     for idx, level := range l.indentStack {
         if l.column < level {
-            return false, errors.New("indentation error")
+            return false, &token.CompileError {
+                Token: l.createToken(token.ILLEGAL, string(l.curr)),
+                Msg:   "indentation error",
+            }
         } else if l.column == level {
             l.toDeindent = len(l.indentStack) - 1 - idx
             return false, nil
