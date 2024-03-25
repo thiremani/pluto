@@ -42,7 +42,7 @@ type (
 
 type Parser struct {
 	l      *lexer.Lexer
-	errors []string
+	errors []*token.CompileError
 
 	curToken  token.Token
 	peekToken token.Token
@@ -54,7 +54,7 @@ type Parser struct {
 func New(l *lexer.Lexer) *Parser {
 	p := &Parser{
 		l:      l,
-		errors: []string{},
+		errors: []*token.CompileError{},
 	}
 
 	p.prefixParseFns = make(map[token.TokenType]prefixParseFn)
@@ -84,11 +84,11 @@ func New(l *lexer.Lexer) *Parser {
 }
 
 func (p *Parser) nextToken() {
-	var err error
+	var err *token.CompileError
 	p.curToken = p.peekToken
 	p.peekToken, err = p.l.NextToken()
 	if err != nil {
-		p.errors = append(p.errors, err.Error())
+		p.errors = append(p.errors, err)
 	}
 }
 
@@ -111,18 +111,30 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 }
 
 func (p *Parser) Errors() []string {
-	return p.errors
+	var msgs []string
+	for _, err := range p.errors {
+        msgs = append(msgs, err.Error())
+    }
+	return msgs
 }
 
 func (p *Parser) peekError(t token.TokenType) {
 	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
 		t, p.peekToken.Type)
-	p.errors = append(p.errors, msg)
+	ce := &token.CompileError{
+		Token: p.curToken,
+        Msg:   msg,
+	}
+	p.errors = append(p.errors, ce)
 }
 
 func (p *Parser) noPrefixParseFnError(t token.TokenType) {
 	msg := fmt.Sprintf("no prefix parse function for %s found", t)
-	p.errors = append(p.errors, msg)
+	ce := &token.CompileError{
+        Token: p.curToken,
+        Msg:   msg,
+    }
+	p.errors = append(p.errors, ce)
 }
 
 func (p *Parser) stmtEnded() bool {
@@ -163,11 +175,6 @@ func (p *Parser) parseStatement() ast.Statement {
 	stmt := &ast.LetStatement{Token: p.curToken}
 	stmt.Name = p.toIdentList(expList)
 	if len(stmt.Name) != len(expList) {
-		idx := len(stmt.Name) + 1
-		if idx < len(expList) {
-			msg := fmt.Sprintf("Expected %q to be a variable name", expList[idx])
-			p.errors = append(p.errors, msg)
-		}
 		return nil
 	}
 
@@ -182,7 +189,11 @@ func (p *Parser) parseStatement() ast.Statement {
 	for _, exp := range expList {
 		if !p.isCondition(exp) {
 			msg := fmt.Sprintf("Expression %q is not a condition. The main operation should be a comparison", exp.String())
-			p.errors = append(p.errors, msg)
+			ce := &token.CompileError{
+                Token: exp.Tok(),
+                Msg:   msg,
+            }
+			p.errors = append(p.errors, ce)
 			return nil
 		}
 	}
@@ -197,7 +208,11 @@ func (p *Parser) parseStatement() ast.Statement {
 	}
 
 	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %q", p.peekToken)
-	p.errors = append(p.errors, msg)
+	ce := &token.CompileError{
+        Token: p.curToken,
+        Msg:   msg,
+    }
+	p.errors = append(p.errors, ce)
 	return nil
 }
 
@@ -205,7 +220,11 @@ func (p *Parser) endStatement(stmt *ast.LetStatement) ast.Statement {
 	// check number of identifiers and expressions are equal
 	if len(stmt.Name) != len(stmt.Value) {
 		msg := fmt.Sprintf("Number of variables to be assigned is %d. But number of expressions provided is %d", len(stmt.Name), len(stmt.Value))
-		p.errors = append(p.errors, msg)
+		ce := &token.CompileError{
+            Token: stmt.Token,
+            Msg:   msg,
+        }
+		p.errors = append(p.errors, ce)
 		return nil
 	}
 
@@ -228,7 +247,11 @@ func (p *Parser) toIdentList(expList []ast.Expression) []*ast.Identifier {
 		identifier, ok := exp.(*ast.Identifier)
 		if !ok {
 			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q", reflect.TypeOf(identifier), reflect.TypeOf(exp))
-			p.errors = append(p.errors, msg)
+			ce := &token.CompileError{
+				Token: exp.Tok(),
+                Msg:   msg,
+            }
+			p.errors = append(p.errors, ce)
 			break
 		}
 		identifiers = append(identifiers, identifier)
@@ -298,7 +321,11 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
-		p.errors = append(p.errors, msg)
+		ce := &token.CompileError{
+            Token: p.curToken,
+            Msg:   msg,
+        }
+		p.errors = append(p.errors, ce)
 		return nil
 	}
 

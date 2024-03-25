@@ -8,7 +8,7 @@ import (
 
 // The base Node interface
 type Node interface {
-	TokenLiteral() string
+	Tok() token.Token
 	String() string
 }
 
@@ -28,11 +28,14 @@ type Program struct {
 	Statements []Statement
 }
 
-func (p *Program) TokenLiteral() string {
+func (p *Program) Tok() token.Token {
 	if len(p.Statements) > 0 {
-		return p.Statements[0].TokenLiteral()
+		return p.Statements[0].Tok()
 	} else {
-		return ""
+		return token.Token{
+			Type: token.EOF,
+			Literal: "",
+		}
 	}
 }
 
@@ -78,7 +81,7 @@ type LetStatement struct {
 }
 
 func (ls *LetStatement) statementNode()       {}
-func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
+func (ls *LetStatement) Tok() token.Token { return ls.Token }
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 
@@ -103,7 +106,7 @@ type PrintStatement struct {
 }
 
 func (ps *PrintStatement) statementNode()       {}
-func (ps *PrintStatement) TokenLiteral() string {return ps.Token.Literal}
+func (ps *PrintStatement) Tok() token.Token {return ps.Token}
 func (ps *PrintStatement) String() string {
 	var out bytes.Buffer
 
@@ -118,7 +121,7 @@ type BlockStatement struct {
 }
 
 func (bs *BlockStatement) statementNode()       {}
-func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Literal }
+func (bs *BlockStatement) Tok() token.Token { return bs.Token }
 func (bs *BlockStatement) String() string {
 	var out bytes.Buffer
 
@@ -137,7 +140,7 @@ type Identifier struct {
 }
 
 func (i *Identifier) expressionNode()      {}
-func (i *Identifier) TokenLiteral() string { return i.Token.Literal }
+func (i *Identifier) Tok() token.Token { return i.Token }
 func (i *Identifier) String() string       { return i.Value }
 
 type IntegerLiteral struct {
@@ -146,7 +149,7 @@ type IntegerLiteral struct {
 }
 
 func (il *IntegerLiteral) expressionNode()      {}
-func (il *IntegerLiteral) TokenLiteral() string { return il.Token.Literal }
+func (il *IntegerLiteral) Tok() token.Token { return il.Token }
 func (il *IntegerLiteral) String() string       { return il.Token.Literal }
 
 type PrefixExpression struct {
@@ -156,7 +159,7 @@ type PrefixExpression struct {
 }
 
 func (pe *PrefixExpression) expressionNode()      {}
-func (pe *PrefixExpression) TokenLiteral() string { return pe.Token.Literal }
+func (pe *PrefixExpression) Tok() token.Token { return pe.Token }
 func (pe *PrefixExpression) String() string {
 	var out bytes.Buffer
 
@@ -176,7 +179,7 @@ type InfixExpression struct {
 }
 
 func (ie *InfixExpression) expressionNode()      {}
-func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *InfixExpression) Tok() token.Token { return ie.Token }
 func (ie *InfixExpression) String() string {
 	var out bytes.Buffer
 
@@ -196,7 +199,7 @@ type FunctionLiteral struct {
 }
 
 func (fl *FunctionLiteral) expressionNode()      {}
-func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Literal }
+func (fl *FunctionLiteral) Tok() token.Token { return fl.Token }
 func (fl *FunctionLiteral) String() string {
 	var out bytes.Buffer
 
@@ -205,7 +208,7 @@ func (fl *FunctionLiteral) String() string {
 		params = append(params, p.String())
 	}
 
-	out.WriteString(fl.TokenLiteral())
+	out.WriteString(fl.Tok().Literal)
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(") ")
@@ -221,7 +224,7 @@ type CallExpression struct {
 }
 
 func (ce *CallExpression) expressionNode()      {}
-func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
+func (ce *CallExpression) Tok() token.Token { return ce.Token }
 func (ce *CallExpression) String() string {
 	var out bytes.Buffer
 
