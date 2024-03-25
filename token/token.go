@@ -166,3 +166,12 @@ func (tokenType TokenType) String() string {
 
 	return s
 }
+
+type CompileError struct {
+	Token Token
+	Msg   string
+}
+
+func (ce *CompileError) Error() string {
+	return strconv.Itoa(ce.Token.Line) + ":" + strconv.Itoa(ce.Token.Column) + ":" + ce.Token.Literal + ":" + ce.Msg
+}

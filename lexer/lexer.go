@@ -20,6 +20,11 @@ const (
     eof = -1
 )
 
+const (
+    INDENT_ERR = "indentation error"
+    INDENT_TAB_ERR = "indent using tabs not allowed"
+)
+
 func New(input string) *Lexer {
     l := &Lexer{input: []rune(input), lineOffset: 1, onNewline: true}
     l.readRune()
@@ -162,7 +167,7 @@ func (l *Lexer) skipNewlineSpaces() *token.CompileError {
             l.readRune()
             err = &token.CompileError{
                 Token: l.createToken(token.ILLEGAL, string(l.curr)),
-                Msg:   "indent using tabs not allowed",
+                Msg:   INDENT_TAB_ERR,
             }
         }
 
@@ -202,7 +207,7 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
         if l.column < level {
             return false, &token.CompileError {
                 Token: l.createToken(token.ILLEGAL, string(l.curr)),
-                Msg:   "indentation error",
+                Msg:   INDENT_ERR,
             }
         } else if l.column == level {
             l.toDeindent = len(l.indentStack) - 1 - idx
