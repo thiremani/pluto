@@ -172,14 +172,23 @@ func (p *Parser) parseStatement() ast.Statement {
 		return nil
 	}
 
-	stmt := &ast.LetStatement{Token: p.curToken}
-	stmt.Name = p.toIdentList(expList)
-	if len(stmt.Name) != len(expList) {
-		return nil
+	identList, ce := p.toIdentList(expList)
+	if ce != nil {
+		p.errors = append(p.errors, ce)
+        return nil
+	}
+
+	return p.parseLetStatement(identList)
+}
+
+func (p *Parser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatement {
+	stmt := &ast.LetStatement {
+		Token: p.curToken,
+		Name: identList,
 	}
 
 	p.nextToken()
-	expList = p.parseExpList()
+	expList := p.parseExpList()
 	if p.stmtEnded() {
 		stmt.Value = expList
 		return p.endStatement(stmt)
@@ -216,7 +225,7 @@ func (p *Parser) parseStatement() ast.Statement {
 	return nil
 }
 
-func (p *Parser) endStatement(stmt *ast.LetStatement) ast.Statement {
+func (p *Parser) endStatement(stmt *ast.LetStatement) *ast.LetStatement {
 	// check number of identifiers and expressions are equal
 	if len(stmt.Name) != len(stmt.Value) {
 		msg := fmt.Sprintf("Number of variables to be assigned is %d. But number of expressions provided is %d", len(stmt.Name), len(stmt.Value))
@@ -241,22 +250,22 @@ func (p *Parser) isCondition(exp ast.Expression) bool {
 	return ie.Token.IsComparison()
 }
 
-func (p *Parser) toIdentList(expList []ast.Expression) []*ast.Identifier {
+func (p *Parser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *token.CompileError) {
 	identifiers := []*ast.Identifier{}
+	var ce *token.CompileError
 	for _, exp := range expList {
 		identifier, ok := exp.(*ast.Identifier)
 		if !ok {
 			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q", reflect.TypeOf(identifier), reflect.TypeOf(exp))
-			ce := &token.CompileError{
+			ce = &token.CompileError{
 				Token: exp.Tok(),
                 Msg:   msg,
             }
-			p.errors = append(p.errors, ce)
 			break
 		}
 		identifiers = append(identifiers, identifier)
 	}
-	return identifiers
+	return identifiers, ce
 }
 
 func (p *Parser) parseExpList() []ast.Expression {
