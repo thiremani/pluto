@@ -193,8 +193,9 @@ func (ie *InfixExpression) String() string {
 }
 
 type FunctionLiteral struct {
-	Token      token.Token // The 'fn' token
+	Token      token.Token // The identifier
 	Parameters []*Identifier
+	Outputs    []*Identifier
 	Body       *BlockStatement
 }
 

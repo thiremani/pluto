@@ -69,6 +69,7 @@ const (
 	NEQ      // !=
 	LEQ      // <=
 	GEQ      // >=
+	COLON
 	comparison_end
 
 	NEWLINE
@@ -118,6 +119,7 @@ var tokens = [...]string{
 	SHR_ASSIGN:     ">>=",
 	AND_NOT_ASSIGN: "&^=",
 
+	COLON: ":",
 
 	LPAREN: "(",
 	LBRACK: "[",

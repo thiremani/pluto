@@ -77,6 +77,8 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
         tok = l.createToken(token.QUO, string(l.curr))
     case '*':
         tok = l.createToken(token.MUL, string(l.curr))
+    case ':':
+        tok = l.createToken(token.COLON, string(l.curr))
     case '<':
         tok = l.createToken(token.LSS, string(l.curr))
     case '>':
