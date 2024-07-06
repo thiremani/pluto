@@ -82,8 +82,6 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.LSS, p.parseInfixExpression)
 	p.registerInfix(token.GTR, p.parseInfixExpression)
 
-	p.registerInfix(token.LPAREN, p.parseCallExpression)
-
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
 	p.nextToken()
@@ -304,32 +302,21 @@ func (p *Parser) parseExpList() []ast.Expression {
 	return expList
 }
 
-func (p *Parser) parseFunction() ast.Expression {
-	f := &ast.FunctionLiteral {
-		Token: p.curToken,
-		Parameters: []*ast.Identifier{},
-		Outputs: []*ast.Identifier{},
-		Body: &ast.BlockStatement {
-			Token: p.curToken,
-            Statements: []ast.Statement{},
-		},
-	}
-
-	p.nextToken()
+func (p *Parser) parseFunction(funcToken token.Token) ast.Expression {
 	if p.inBlock {
-		return p.parseCallExpression(f)
+		return p.parseCallExpression(funcToken)
 	}
 
 	if p.inScript {
-		return p.parseCallExpression(f)
+		return p.parseCallExpression(funcToken)
 	}
 
 	if !p.peekTokenIs(token.IDENT) {
 		p.inScript = true
-		return p.parseCallExpression(f)
+		return p.parseCallExpression(funcToken)
 	}
 
-	return p.parseFunctionLiteral(f)
+	return p.parseFunctionLiteral(funcToken)
 }
 
 func (p *Parser) parseExpression(precedence int) ast.Expression {
@@ -345,8 +332,11 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	}
 	leftExp := prefix()
 
-	if p.peekTokenIs(token.LPAREN) {
-		return p.parseFunction()
+	_, ok := leftExp.(*ast.Identifier)
+	if p.peekTokenIs(token.LPAREN) && ok {
+		funcToken := p.curToken
+		p.nextToken()
+		return p.parseFunction(funcToken)
 	}
 
 	for precedence < p.peekPrecedence() {
@@ -462,17 +452,28 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	return block
 }
 
-func (p *Parser) parseFunctionLiteral(lit *ast.FunctionLiteral) ast.Expression {
-	lit.Parameters = p.parseFunctionParameters()
+func (p *Parser) parseFunctionLiteral(funcToken token.Token) ast.Expression {
+	f := &ast.FunctionLiteral {
+		Token: funcToken,
+		Parameters: []*ast.Identifier{},
+		Outputs: []*ast.Identifier{},
+		Body: &ast.BlockStatement {
+			Token: p.curToken,
+            Statements: []ast.Statement{},
+		},
+	}
+
+	f.Parameters = p.parseFunctionParameters()
 
 	if !p.peekTokenIs(token.NEWLINE) {
 		p.peekError(token.NEWLINE)
 		return nil
 	}
 
+	// TODO either handle block statement below or remove line below
 	// lit.Body = p.parseBlockStatement()
 
-	return lit
+	return f
 }
 
 func (p *Parser) parseIdentifiers() []*ast.Identifier {
@@ -508,10 +509,14 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 	return identifiers
 }
 
-func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
-	exp := &ast.CallExpression{Token: p.curToken, Function: function}
-	exp.Arguments = p.parseCallArguments()
-	return exp
+func (p *Parser) parseCallExpression(funcToken token.Token) ast.Expression {
+	ce := &ast.CallExpression{
+		Token: p.curToken,
+        Function: &ast.Identifier{Token: funcToken, Value: funcToken.Literal},
+    }
+
+	ce.Arguments = p.parseCallArguments()
+	return ce
 }
 
 func (p *Parser) parseCallArguments() []ast.Expression {

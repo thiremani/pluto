@@ -311,6 +311,7 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 	for _, tt := range tests {
 		l := lexer.New(tt.input)
 		p := New(l)
+		p.inScript = true
 		program := p.ParseProgram()
 		checkParserErrors(t, p)
 
