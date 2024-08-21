@@ -321,7 +321,8 @@ func (p *Parser) parseFunction(f ast.Expression) ast.Expression {
 		return p.parseCallExpression(f)
 	}
 
-	if !p.peekTokenIs(token.IDENT) {
+	// TODO handle for when peekTokenIs RPAREN and is call expression
+	if !(p.peekTokenIs(token.IDENT) || p.peekTokenIs(token.RPAREN)) {
 		p.inScript = true
 		return p.parseCallExpression(f)
 	}
