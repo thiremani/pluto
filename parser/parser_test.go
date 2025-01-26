@@ -9,32 +9,50 @@ import (
 
 func TestAssign(t *testing.T) {
 	tests := []struct {
+		name   string
 		input  string
 		expId  string
 		expStr string
-	} {
-		{"x = 5", "=", "x = 5"},
-		{"y = 5 * 3 + 2", "=", "y = ((5 * 3) + 2)"},
-		{"foobar = 2 + 3 / 5", "=", "foobar = (2 + (3 / 5))"},
+	}{
+		{
+			name:   "simple assignment",
+			input:  "x = 5",
+			expId:  "=",
+			expStr: "x = 5",
+		},
+		{
+			name:   "math expression assignment",
+			input:  "y = 5 * 3 + 2",
+			expId:  "=",
+			expStr: "y = ((5 * 3) + 2)",
+		},
+		{
+			name:   "complex expression assignment",
+			input:  "foobar = 2 + 3 / 5",
+			expId:  "=",
+			expStr: "foobar = (2 + (3 / 5))",
+		},
 	}
 
 	for _, tt := range tests {
-		l := lexer.New(tt.input)
-		p := New(l)
-		program := p.ParseProgram()
-		checkParserErrors(t, p)
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			p := New(l)
+			program := p.ParseProgram()
+			checkParserErrors(t, p)
 
-		if len(program.Statements) != 1 {
-			t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
-		}
+			if len(program.Statements) != 1 {
+				t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
+			}
 
-		stmt := program.Statements[0]
-
-		if !testStmt(t, stmt, tt.expId, tt.expStr) {
-			return
-		}
+			stmt := program.Statements[0]
+			if !testStmt(t, stmt, tt.expId, tt.expStr) {
+				return
+			}
+		})
 	}
 }
+
 
 func TestInvalidAssignment(t *testing.T) {
 	tests := []struct {
