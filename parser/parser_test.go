@@ -37,18 +37,33 @@ func TestAssign(t *testing.T) {
 }
 
 func TestInvalidAssignment(t *testing.T) {
-    input := "123 = 5"
-    l := lexer.New(input)
-    p := New(l)
-    p.ParseProgram()
-	errs := p.Errors()
-    if len(errs) == 0 {
-        t.Fatalf("expected parser errors, got none")
-    }
+	tests := []struct {
+		input    string
+		expError string
+	}{
+		{
+			input:    "123 = 5",
+			expError: `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`,
+		},
+		{
+			input:    "x, 5 = 1, 2", // Invalid identifier in multi-assign
+			expError: `1:4:5:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`,
+		},
+	}
 
-	expErr := `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`
-	if errs[0] != expErr {
-		t.Fatalf("unexpected error message: %s. Expected: %s", errs[0], expErr)
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			p := New(l)
+			p.ParseProgram()
+			errs := p.Errors()
+			if len(errs) == 0 {
+				t.Fatal("expected parser errors, got none")
+			}
+			if errs[0] != tt.expError {
+				t.Fatalf("unexpected error: %s\nwant: %s", errs[0], tt.expError)
+			}
+		})
 	}
 }
 
