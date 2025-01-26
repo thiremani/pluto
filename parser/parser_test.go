@@ -36,6 +36,22 @@ func TestAssign(t *testing.T) {
 	}
 }
 
+func TestInvalidAssignment(t *testing.T) {
+    input := "123 = 5"
+    l := lexer.New(input)
+    p := New(l)
+    p.ParseProgram()
+	errs := p.Errors()
+    if len(errs) == 0 {
+        t.Fatalf("expected parser errors, got none")
+    }
+
+	expErr := `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`
+	if errs[0] != expErr {
+		t.Fatalf("unexpected error message: %s. Expected: %s", errs[0], expErr)
+	}
+}
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		input  string
