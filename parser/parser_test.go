@@ -538,6 +538,42 @@ func TestFunctionParameterParsing(t *testing.T) {
 	}
 }
 
+func TestNestedGuardCondition(t *testing.T) {
+	input := `res = (a > 3) < (b < 5) (c + d)`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("stmt is not ast.LetStatement. got=%T", program.Statements[0])
+	}
+
+	// Condition: (a > 3) < (b < 5)
+	condInfix, ok := stmt.Condition[0].(*ast.InfixExpression)
+	if !ok {
+		t.Fatalf("condition is not infix expression. got=%T", stmt.Condition[0])
+	}
+
+	// Validate nested conditions
+	if !testInfixExpression(t, condInfix.Left, "a", ">", 3) {
+		return
+	}
+	if !testInfixExpression(t, condInfix.Right, "b", "<", 5) {
+		return
+	}
+
+	// Value: (c + d)
+	if !testInfixExpression(t, stmt.Value[0], "c", "+", "d") {
+		return
+	}
+}
+
 func testInfixExpression(t *testing.T, exp ast.Expression, left interface{},
 	operator string, right interface{}) bool {
 

@@ -82,8 +82,6 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.LSS, p.parseInfixExpression)
 	p.registerInfix(token.GTR, p.parseInfixExpression)
 
-	p.registerInfix(token.LPAREN, p.parseFunction)
-
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
 	p.nextToken()
@@ -313,19 +311,22 @@ func (p *Parser) parseExpList() []ast.Expression {
 }
 
 func (p *Parser) parseFunction(f ast.Expression) ast.Expression {
-	if p.inBlock {
-		return p.parseCallExpression(f)
-	}
-
-	if p.inScript {
+	// is function defintion or function call
+	if p.inBlock || p.inScript {
 		return p.parseCallExpression(f)
 	}
 
 	// TODO handle for when peekTokenIs RPAREN and is call expression
+	// if peek token is not ident (is a number) then we are in script mode and it is a function call
+	// Similarly if we have function without arguments then it may signal start of a script. If there are arguments, it cannot be start of a script
+	// because the arguments will have to be define before the function so script will start there
 	if !(p.peekTokenIs(token.IDENT) || p.peekTokenIs(token.RPAREN)) {
 		p.inScript = true
 		return p.parseCallExpression(f)
 	}
+	// TODO check this later
+	// Actually if function is previously defined then we should be in script mode
+	// We should also check on the next line there is no indentation
 
 	return p.parseFunctionLiteral(f)
 }
@@ -343,6 +344,11 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 		return nil
 	}
 	leftExp := prefix()
+
+	if leftExp.Tok().Type == token.IDENT && p.peekToken.Type == token.LPAREN {
+		p.nextToken()
+		return p.parseFunction(leftExp)
+	}
 
 	for precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.Type]
