@@ -347,7 +347,7 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 
 	if leftExp.Tok().Type == token.IDENT && p.peekToken.Type == token.LPAREN {
 		p.nextToken()
-		return p.parseFunction(leftExp)
+		leftExp = p.parseFunction(leftExp)
 	}
 
 	for precedence < p.peekPrecedence() {

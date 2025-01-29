@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"pluto/ast"
 	"pluto/lexer"
 	"testing"
@@ -571,6 +572,79 @@ func TestNestedGuardCondition(t *testing.T) {
 	// Value: (c + d)
 	if !testInfixExpression(t, stmt.Value[0], "c", "+", "d") {
 		return
+	}
+}
+
+func TestMultiReturnCondition(t *testing.T) {
+	input := "x, y = a > 5 10, 20" // If "a > 5", assign x=10, y=20
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.LetStatement)
+	// Verify condition
+	if !testInfixExpression(t, stmt.Condition[0], "a", ">", 5) {
+		return
+	}
+	// Verify values
+	if !testIntegerLiteral(t, stmt.Value[0], 10) || !testIntegerLiteral(t, stmt.Value[1], 20) {
+		t.Fatal("values not parsed correctly")
+	}
+}
+
+func TestInvalidConditionError(t *testing.T) {
+	tests := []struct {
+		input    string
+		expError string
+	}{
+		{
+			input:    "x = 5 + 3 y", // "+" is not a comparison
+			expError: "Expression \"(5 + 3)\" is not a condition",
+		},
+		{
+			input:    "res = foo(2) result", // Function call is not a comparison
+			expError: "Expression \"foo(2)\" is not a condition",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			p := New(l)
+			p.ParseProgram()
+			errs := p.Errors()
+
+			if len(errs) == 0 {
+				t.Fatal("expected parser error, got none")
+			}
+			if !strings.Contains(errs[0], tt.expError) {
+				t.Fatalf("wrong error: %q (expected %q)", errs[0], tt.expError)
+			}
+		})
+	}
+}
+
+func TestFunctionCallInCondition(t *testing.T) {
+	input := "res = pow(2, 3) > 8 result"
+
+	l := lexer.New(input)
+	p := New(l)
+	p.inScript = true
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.LetStatement)
+	// Condition: "pow(2, 3) > 8"
+	cond, ok := stmt.Condition[0].(*ast.InfixExpression)
+	if !ok || cond.Operator != ">" {
+		t.Fatalf("condition not parsed as infix expression")
+	}
+	// Left side: "pow(2, 3)"
+	leftCall, ok := cond.Left.(*ast.CallExpression)
+	if !ok || leftCall.Function.Value != "pow" {
+		t.Fatal("function call in condition not parsed")
 	}
 }
 
