@@ -2,4 +2,7 @@ a.o
 a.out
 /main.s
 pluto
+test
+*.o
+*.ll
 .DS_Store

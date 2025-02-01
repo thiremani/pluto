@@ -158,6 +158,15 @@ type PrefixExpression struct {
 	Right    Expression
 }
 
+type StringLiteral struct {
+	Token token.Token
+	Value string
+}
+
+func (sl *StringLiteral) expressionNode()      {}
+func (sl *StringLiteral) Tok() token.Token { return sl.Token }
+func (sl *StringLiteral) String() string       { return sl.Token.Literal }
+
 func (pe *PrefixExpression) expressionNode()      {}
 func (pe *PrefixExpression) Tok() token.Token { return pe.Token }
 func (pe *PrefixExpression) String() string {

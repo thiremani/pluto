@@ -2,18 +2,24 @@ package main
 
 import (
 	"fmt"
-	"pluto/repl"
 	"os"
-	"os/user"
+	"pluto/compiler"
+	"pluto/lexer"
+	"pluto/parser"
 )
 
 func main() {
-	user, err := user.Current()
+	source, err := os.ReadFile(os.Args[1])
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error reading file: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Printf("Hello %s! This is the Pluto Programming Language!\n",
-		user.Username)
-	fmt.Printf("Feel free to type in commands\n")
-	repl.Start(os.Stdin, os.Stdout)
+
+	// Parse and compile
+	l := lexer.New(string(source))
+	p := parser.New(l)
+	ast := p.ParseProgram()
+	comp := compiler.NewCompiler("pluto_module")
+	comp.Compile(ast)
+	fmt.Println(comp.GenerateIR())
 }
