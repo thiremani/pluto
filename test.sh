@@ -75,6 +75,7 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   export LD_LIBRARY_PATH=/usr/lib/llvm-19/lib:$LD_LIBRARY_PATH
   set -x
   ACTUAL_OUTPUT=$("$BUILD_PREFIX.out")
+  EXPECTED_OUTPUT=$(<"$EXPECTED_FILE")
   set +x
 
   if [ "$ACTUAL_OUTPUT" = "$EXPECTED_OUTPUT" ]; then
