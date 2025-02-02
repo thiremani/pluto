@@ -64,6 +64,7 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   echo -n "🔍 Testing $TEST_NAME... "
 
   # Compilation pipeline
+  echo -n "Compiling to ll file"
   $PLUTO_EXE "$TEST_FILE" > "$BUILD_PREFIX.ll"
   llc -filetype=obj "$BUILD_PREFIX.ll" -o "$BUILD_PREFIX.o"
   clang "$BUILD_PREFIX.o" -o "$BUILD_PREFIX.out"
@@ -71,6 +72,8 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   # Run and verify
   ACTUAL_OUTPUT=$("$BUILD_PREFIX.out")
   EXPECTED_OUTPUT=$(<"$EXPECTED_FILE")
+  echo $ACTUAL_OUTPUT
+  echo $EXPECTED_OUTPUT
 
   if [ "$ACTUAL_OUTPUT" = "$EXPECTED_OUTPUT" ]; then
     echo "✅ Passed"
