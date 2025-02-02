@@ -33,8 +33,7 @@ func NewCompiler(moduleName string) *Compiler {
 
 func (c *Compiler) Compile(program *ast.Program) {
 	// Create main function
-	voidType := c.context.VoidType()
-	mainType := llvm.FunctionType(voidType, []llvm.Type{}, false)
+	mainType := llvm.FunctionType(c.context.Int32Type(), []llvm.Type{}, false)
 	mainFunc := llvm.AddFunction(c.module, "main", mainType)
 	mainBlock := c.context.AddBasicBlock(mainFunc, "entry")
 	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
@@ -49,8 +48,8 @@ func (c *Compiler) Compile(program *ast.Program) {
 		}
 	}
 
-	// Add return instruction
-	c.builder.CreateRetVoid()
+    // Add explicit return 0
+	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
@@ -226,7 +225,8 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
         // Append format specifier based on type
         switch typ.TypeKind() {
         case llvm.IntegerTypeKind:
-            formatStr += "%d "
+			// %ld for 64-bit integers
+            formatStr += "%ld "
         case llvm.PointerTypeKind:
             if typ.ElementType().TypeKind() == llvm.IntegerTypeKind && typ.ElementType().IntTypeWidth() == 8 {
                 formatStr += "%s "  // Assume it's a string
