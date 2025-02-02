@@ -16,7 +16,8 @@ jobs:
 
       - name: Install LLVM
         run: |
-          sudo apt install llvm clang
+          sudo apt-get update
+          sudo apt-get install -y llvm clang lld
 
       - name: Build compiler
         run: go build -o pluto main.go
