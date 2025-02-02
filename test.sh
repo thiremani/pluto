@@ -76,7 +76,6 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   set -x
   ACTUAL_OUTPUT=$("$BUILD_PREFIX.out")
   set +x
-  echo $EXPECTED_OUTPUT
 
   if [ "$ACTUAL_OUTPUT" = "$EXPECTED_OUTPUT" ]; then
     echo "✅ Passed"
