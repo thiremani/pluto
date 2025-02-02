@@ -1,0 +1,27 @@
+name: Pluto CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install LLVM
+        run: |
+          sudo apt install llvm clang
+
+      - name: Build compiler
+        run: go build -o pluto main.go
+
+      - name: Run tests
+        run: |
+          chmod +x test.sh
+          ./test.sh
