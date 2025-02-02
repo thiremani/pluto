@@ -61,18 +61,21 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   EXPECTED_FILE="${TEST_FILE%.pt}.exp"
   BUILD_PREFIX="$BUILD_DIR/$TEST_NAME"
 
-  echo -n "🔍 Testing $TEST_NAME... "
-
-  # Compilation pipeline
-  echo -n "Compiling to ll file"
+  # Compilation pipeline with debugging
+  echo "=== Compilation Steps ==="
   $PLUTO_EXE "$TEST_FILE" > "$BUILD_PREFIX.ll"
-  llc -filetype=obj "$BUILD_PREFIX.ll" -o "$BUILD_PREFIX.o"
-  clang "$BUILD_PREFIX.o" -o "$BUILD_PREFIX.out"
+  echo "Generated LLVM IR:"
+  cat "$BUILD_PREFIX.ll"
 
-  # Run and verify
+  llc -filetype=obj "$BUILD_PREFIX.ll" -o "$BUILD_PREFIX.o"
+  clang -v "$BUILD_PREFIX.o" -o "$BUILD_PREFIX.out" -L/usr/lib/llvm-19/lib -Wl,-rpath=/usr/lib/llvm-19/lib
+
+  # Run with library path
+  echo "=== Execution ==="
+  export LD_LIBRARY_PATH=/usr/lib/llvm-19/lib:$LD_LIBRARY_PATH
+  set -x
   ACTUAL_OUTPUT=$("$BUILD_PREFIX.out")
-  EXPECTED_OUTPUT=$(<"$EXPECTED_FILE")
-  echo $ACTUAL_OUTPUT
+  set +x
   echo $EXPECTED_OUTPUT
 
   if [ "$ACTUAL_OUTPUT" = "$EXPECTED_OUTPUT" ]; then
