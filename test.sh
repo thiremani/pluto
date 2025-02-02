@@ -58,7 +58,7 @@ FAILED=0
 for TEST_FILE in "${TEST_FILES[@]}"; do
   BASE_NAME=$(basename "$TEST_FILE" .pt)
   TEST_NAME="${BASE_NAME%.*}"
-  EXPECTED_FILE="${TEST_FILE%.pt}.expected"
+  EXPECTED_FILE="${TEST_FILE%.pt}.exp"
   BUILD_PREFIX="$BUILD_DIR/$TEST_NAME"
 
   echo -n "🔍 Testing $TEST_NAME... "
