@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -14,11 +14,13 @@ jobs:
         with:
           go-version: "1.23"
 
+      # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install LLVM
         run: |
-          wget https://apt.llvm.org/llvm.sh
-            chmod +x llvm.sh
-            sudo ./llvm.sh
+          echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-18 main' | sudo tee /etc/apt/sources.list.d/llvm.list
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install clang-18 llvm-18-dev lld-18 libclang-18-dev
 
       - name: Build compiler
         run: go build -o pluto main.go
