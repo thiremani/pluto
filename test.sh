@@ -74,9 +74,13 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
   echo "=== Execution ==="
   export LD_LIBRARY_PATH=/usr/lib/llvm-19/lib:$LD_LIBRARY_PATH
   set -x
-  ACTUAL_OUTPUT=$("$BUILD_PREFIX.out")
-  EXPECTED_OUTPUT=$(<"$EXPECTED_FILE")
+  ACTUAL_OUTPUT=$("$BUILD_PREFIX.out" || echo "EXECUTION_FAILED")
   set +x
+
+  echo "=== Expected vs Actual ==="
+  echo "Expected: '$(<"$EXPECTED_FILE")'"
+  echo "Actual:   '$ACTUAL_OUTPUT'"
+  echo ""
 
   if [ "$ACTUAL_OUTPUT" = "$EXPECTED_OUTPUT" ]; then
     echo "✅ Passed"

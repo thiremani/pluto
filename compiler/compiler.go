@@ -3,6 +3,7 @@ package compiler
 import (
 	"pluto/ast"
 	"fmt"
+	"strings"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -240,7 +241,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
     }
 
     // Add newline and null terminator
-    formatStr += "\n"
+	formatStr = strings.TrimSuffix(formatStr, " ") + "\n" // Remove trailing space
     formatConst := llvm.ConstString(formatStr, true)  // true = add \0
 
     // Create unique global variable for the format string
