@@ -131,7 +131,7 @@ class TestRunner:
         """Main test runner"""
         try:
             self.build_compiler()
-            # self.run_unit_tests()
+            self.run_unit_tests()
             self.run_compiler_tests()
         finally:
             if not KEEP_BUILD:
