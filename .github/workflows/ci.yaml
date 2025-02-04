@@ -28,10 +28,7 @@ jobs:
           echo "CGO_LDFLAGS=-L/usr/lib/llvm-19/lib" >> $GITHUB_ENV
           echo "PATH=/usr/lib/llvm-19/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Build compiler
-        run: go build -o pluto main.go
-
-      - name: Run tests
+      - name: Run full test suite
         run: |
           chmod +x test.sh
           ./test.sh
