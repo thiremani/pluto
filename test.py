@@ -148,6 +148,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="Keep build artifacts")
     args = parser.parse_args()
-    
+
     KEEP_BUILD = args.keep
     TestRunner().run()
