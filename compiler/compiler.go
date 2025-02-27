@@ -53,7 +53,17 @@ func (c *Compiler) Compile(program *ast.Program) {
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
-	// Handle conditions
+	// Capture previous values BEFORE processing the LetStatement
+	prevValues := make(map[string]llvm.Value)
+	for _, ident := range stmt.Name {
+		if val, exists := c.symbols[ident.Value]; exists {
+			prevValues[ident.Value] = val // Existing value
+		} else {
+			prevValues[ident.Value] = llvm.ConstInt(c.context.Int64Type(), 0, false) // Default to 0
+		}
+	}
+
+	// Compile condition
 	var cond llvm.Value
 	for i, expr := range stmt.Condition {
 		condVal, _ := c.compileExpression(expr)
@@ -64,27 +74,39 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 		}
 	}
 
-	// Create basic blocks for conditional flow
-    ifBlock := c.context.AddBasicBlock(fn, "if_block")
-    elseBlock := c.context.AddBasicBlock(fn, "else_block")
-    contBlock := c.context.AddBasicBlock(fn, "cont_block")
+	// Create blocks for conditional flow
+	ifBlock := c.context.AddBasicBlock(fn, "if_block")
+	elseBlock := c.context.AddBasicBlock(fn, "else_block")
+	contBlock := c.context.AddBasicBlock(fn, "cont_block")
 
 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 
-	// True block (assign values)
+	// True block: Assign new values if condition is true
 	c.builder.SetInsertPoint(ifBlock, ifBlock.FirstInstruction())
+	trueValues := make(map[string]llvm.Value)
 	for i, ident := range stmt.Name {
 		val, _ := c.compileExpression(stmt.Value[i])
-		c.symbols[ident.Value] = val
+		trueValues[ident.Value] = val
 	}
 	c.builder.CreateBr(contBlock)
 
-	// False block (no assignment)
+	// False block: Do NOT assign anything (preserve previous values)
 	c.builder.SetInsertPoint(elseBlock, elseBlock.FirstInstruction())
 	c.builder.CreateBr(contBlock)
 
-	// Continue block
+	// Continuation block: Merge new (true) or previous (false) values
 	c.builder.SetInsertPoint(contBlock, contBlock.FirstInstruction())
+	for _, ident := range stmt.Name {
+		phi := c.builder.CreatePHI(c.context.Int64Type(), ident.Value+"_phi")
+		phi.AddIncoming(
+			[]llvm.Value{
+				trueValues[ident.Value],  // Value from true block
+				prevValues[ident.Value],  // Value from before the LetStatement
+			},
+			[]llvm.BasicBlock{ifBlock, elseBlock},
+		)
+		c.symbols[ident.Value] = phi // Update symbol table
+	}
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression) (llvm.Value, llvm.Type) {
