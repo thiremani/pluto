@@ -53,6 +53,16 @@ func (c *Compiler) Compile(program *ast.Program) {
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
+	// Handle unconditional assignments (no conditions)
+	if len(stmt.Condition) == 0 {
+		// Directly assign values without branching
+		for i, ident := range stmt.Name {
+			val, _ := c.compileExpression(stmt.Value[i])
+			c.symbols[ident.Value] = val // Overwrite previous value
+		}
+		return // Exit early; no PHI nodes or blocks needed
+	}
+
 	// Capture previous values BEFORE processing the LetStatement
 	prevValues := make(map[string]llvm.Value)
 	for _, ident := range stmt.Name {
@@ -64,8 +74,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	}
 
 	// Compile condition
-	// Initialize with default true condition
-	cond := llvm.ConstInt(c.context.Int1Type(), 1, false)
+	var cond llvm.Value
 	for i, expr := range stmt.Condition {
 		condVal, _ := c.compileExpression(expr)
 		if i == 0 {

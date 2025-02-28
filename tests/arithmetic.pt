@@ -1,4 +1,7 @@
 x = 3
 y = 4
-z = 3 + 4
-z
+z = x + y
+u = x * y
+a = y / x
+b = x - y
+x, y, z, u, a, b
