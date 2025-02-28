@@ -64,7 +64,8 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	}
 
 	// Compile condition
-	var cond llvm.Value
+	// Initialize with default true condition
+	cond := llvm.ConstInt(c.context.Int1Type(), 1, false)
 	for i, expr := range stmt.Condition {
 		condVal, _ := c.compileExpression(expr)
 		if i == 0 {
