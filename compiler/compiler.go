@@ -124,6 +124,9 @@ func (c *Compiler) compileExpression(expr ast.Expression) (llvm.Value, llvm.Type
     case *ast.IntegerLiteral:
         val := llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
         return val, val.Type()
+    case *ast.FloatLiteral:
+        val := llvm.ConstFloat(c.context.DoubleType(), e.Value)
+        return val, val.Type()
     case *ast.StringLiteral:
         // Create global string constant
         str := llvm.ConstString(e.Value, true)
@@ -158,18 +161,50 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) llvm.Value {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) llvm.Value {
-	left, _ := c.compileExpression(expr.Left)
-	right, _ := c.compileExpression(expr.Right)
+	left, leftType := c.compileExpression(expr.Left)
+	right, rightType := c.compileExpression(expr.Right)
+
+	// Determine types and promote to float if needed
+	leftIsFloat := leftType.TypeKind() == llvm.DoubleTypeKind
+	rightIsFloat := rightType.TypeKind() == llvm.DoubleTypeKind
+
+	leftVal := left
+	rightVal := right
+    opType := leftType
+
+	if leftIsFloat {
+		rightVal = c.builder.CreateSIToFP(right, c.context.DoubleType(), "cast_to_float")
+	}
+
+	if rightIsFloat {
+		leftVal = c.builder.CreateSIToFP(left, c.context.DoubleType(), "cast_to_float")
+        opType = c.context.DoubleType()
+    }
 
 	switch expr.Operator {
 	case "+":
+		if opType.TypeKind() == llvm.DoubleTypeKind {
+            return c.builder.CreateFAdd(leftVal, rightVal, "fadd_tmp")
+        }
 		return c.builder.CreateAdd(left, right, "add_tmp")
 	case "-":
+		if opType.TypeKind() == llvm.DoubleTypeKind {
+            return c.builder.CreateFSub(leftVal, rightVal, "fsub_tmp")
+        }
 		return c.builder.CreateSub(left, right, "sub_tmp")
 	case "*":
+		if opType.TypeKind() == llvm.DoubleTypeKind {
+            return c.builder.CreateFMul(leftVal, rightVal, "fmul_tmp")
+        }
 		return c.builder.CreateMul(left, right, "mul_tmp")
 	case "/":
-		return c.builder.CreateSDiv(left, right, "div_tmp")
+		if leftType.TypeKind() != llvm.DoubleTypeKind {
+            left = c.builder.CreateSIToFP(left, c.context.DoubleType(), "cast_to_float")
+        }
+        if rightType.TypeKind() != llvm.DoubleTypeKind {
+            right = c.builder.CreateSIToFP(right, c.context.DoubleType(), "cast_to_float")
+        }
+		return c.builder.CreateFDiv(left, right, "fdiv_tmp")
 	case ">":
 		return c.builder.CreateICmp(llvm.IntSGT, left, right, "cmp_tmp")
 	case "<":
@@ -259,6 +294,8 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
         case llvm.IntegerTypeKind:
 			// %ld for 64-bit integers
             formatStr += "%ld "
+		case llvm.DoubleTypeKind:
+			formatStr += "%f "
         case llvm.PointerTypeKind:
             if typ.ElementType().TypeKind() == llvm.IntegerTypeKind && typ.ElementType().IntTypeWidth() == 8 {
                 formatStr += "%s "  // Assume it's a string

@@ -5,3 +5,14 @@ u = x * y
 a = y / x
 b = x - y
 x, y, z, u, a, b
+
+m = 2.
+n = 5
+sum = m + n
+sub = m - n
+mul = m * n
+div = m / n
+sum, sub, mul, div
+
+o = 3.4
+n + o, n - o, n * o, n / o

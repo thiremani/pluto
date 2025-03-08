@@ -102,9 +102,13 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
             tok = l.createToken(token.IDENT, "")
             tok.Literal = l.readIdentifier()
             return tok, nil
-        } else if isDigit(l.curr) {
+        } else if isDigit(l.curr) || (l.curr == '.' && isDigit(l.peekRune())) {
             tok = l.createToken(token.INT, "")
-            tok.Literal = l.readNumber()
+            var isFloat bool
+            tok.Literal, isFloat = l.readNumber()
+            if isFloat {
+                tok.Type = token.FLOAT
+            }
             return tok, nil
         } else {
             tok = l.createToken(token.ILLEGAL, string(l.curr))
@@ -272,12 +276,24 @@ func (l *Lexer) readIdentifier() string {
     return string(l.input[position:l.position])
 }
 
-func (l *Lexer) readNumber() string {
+func (l *Lexer) readNumber() (string, bool) {
+    isFloat := false
     position := l.position
     for isDigit(l.curr) {
         l.readRune()
     }
-    return string(l.input[position:l.position])
+
+    // Check for decimal point
+    if l.curr == '.' {
+        isFloat = true
+        l.readRune()
+        // Read fractional part
+        for isDigit(l.curr) {
+            l.readRune()
+        }
+    }
+
+    return string(l.input[position:l.position]), isFloat
 }
 
 func isLetter(ch rune) bool {

@@ -252,3 +252,21 @@ func TestEof(t *testing.T) {
     }
     checkInput(t, input, tests)
 }
+
+func TestFloat(t *testing.T) {
+    input := `val = 3.14
+met = 1.
+`
+    tests := []Test{
+        {token.IDENT, "val", "", 1, 1},
+        {token.ASSIGN, "=", "", 1, 5},
+        {token.FLOAT, "3.14", "", 1, 7},
+        {token.NEWLINE, "\n", "", 1, 11},
+        {token.IDENT, "met", "", 2, 1},
+        {token.ASSIGN, "=", "", 2, 5},
+        {token.FLOAT, "1.", "", 2, 7},
+        {token.NEWLINE, "\n", "", 2, 9},
+        {token.EOF, "", "", 3, 1},
+    }
+    checkInput(t, input, tests)
+}
