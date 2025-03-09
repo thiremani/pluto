@@ -294,8 +294,8 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
         case llvm.IntegerTypeKind:
 			// %ld for 64-bit integers
             formatStr += "%ld "
-		case llvm.DoubleTypeKind:
-			formatStr += "%f "
+		case llvm.DoubleTypeKind, llvm.FloatTypeKind:
+			formatStr += "%.15g "
         case llvm.PointerTypeKind:
             if typ.ElementType().TypeKind() == llvm.IntegerTypeKind && typ.ElementType().IntTypeWidth() == 8 {
                 formatStr += "%s "  // Assume it's a string
