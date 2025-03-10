@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"pluto/token"
+    "strings"
 )
 
 type Lexer struct {
@@ -93,6 +94,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
         tok = l.createToken(token.NEWLINE, string(l.curr))
         l.newLine()
         l.onNewline = true
+    case '"':
+        tok = l.createToken(token.STRING, "")
+        l.readRune()
+        tok.Literal = l.readString()
     case 0:
         fallthrough
     case eof:
@@ -258,6 +263,27 @@ func (l *Lexer) readRune() {
     l.position = l.readPosition
     l.readPosition++
     l.column++
+}
+
+func (l *Lexer) readString() string {
+    var out strings.Builder
+    for l.curr != '"' && l.curr != 0 {
+        if l.curr == '\\' {
+            l.readRune()
+            switch l.curr {
+            case 'n': out.WriteByte('\n')
+            case 't': out.WriteByte('\t')
+            case '"': out.WriteByte('"')
+            case '\\': out.WriteByte('\\')
+            default: out.WriteRune(l.curr) // Handle invalid escapes literally
+            }
+        } else {
+            out.WriteRune(l.curr)
+        }
+        l.readRune()
+    }
+    l.readRune() // Skip closing "
+    return out.String()
 }
 
 func (l *Lexer) peekRune() rune {

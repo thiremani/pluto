@@ -15,7 +15,7 @@ const (
 	INT    // 1343456
 	FLOAT  // 123.45
 	IMAG   // 123.45i
-	CHAR   // 'a'
+	RUNE   // 'a'
 	STRING // "abc"
 	literal_end
 
@@ -87,7 +87,7 @@ var tokens = [...]string{
 	INT:    "INT",
 	FLOAT:  "FLOAT",
 	IMAG:   "IMAG",
-	CHAR:   "CHAR",
+	RUNE:   "RUNE",
 	STRING: "STRING",
 
 	ASSIGN: "=",

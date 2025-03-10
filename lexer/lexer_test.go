@@ -270,3 +270,11 @@ met = 1.
     }
     checkInput(t, input, tests)
 }
+
+func TestString(t *testing.T) {
+    input := `"hello\nworld"`
+    tests := []Test{
+        {token.STRING, "hello\nworld", "", 1, 1},
+    }
+    checkInput(t, input, tests)
+}

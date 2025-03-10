@@ -7,11 +7,17 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+type Symbol struct {
+    Val llvm.Value
+    Type  Type
+}
+
+
 type Compiler struct {
 	context    llvm.Context
 	module     llvm.Module
 	builder    llvm.Builder
-	symbols    map[string]llvm.Value
+	symbols    map[string]Symbol
 	funcParams map[string][]llvm.Value
 	formatCounter int  // Track unique format strings
 }
@@ -20,12 +26,12 @@ func NewCompiler(moduleName string) *Compiler {
 	context := llvm.NewContext()
 	module := context.NewModule(moduleName)
 	builder := context.NewBuilder()
-	
+
 	return &Compiler{
 		context:    context,
 		module:     module,
 		builder:    builder,
-		symbols:    make(map[string]llvm.Value),
+		symbols:    make(map[string]Symbol),
 		funcParams: make(map[string][]llvm.Value),
 		formatCounter: 0,
 	}
@@ -52,31 +58,74 @@ func (c *Compiler) Compile(program *ast.Program) {
 	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
 }
 
+func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
+	switch t.Kind() {
+	case IntKind:
+		intType := t.(Int)
+		switch intType.Width {
+		case 8:
+			return c.context.Int8Type()
+		case 16:
+			return c.context.Int16Type()
+		case 32:
+			return c.context.Int32Type()
+		case 64:
+			return c.context.Int64Type()
+		default:
+			panic(fmt.Sprintf("unsupported int width: %d", intType.Width))
+		}
+	case FloatKind:
+		floatType := t.(Float)
+		if floatType.Width == 32 {
+			return c.context.FloatType()
+		} else if floatType.Width == 64 {
+			return c.context.DoubleType()
+		} else {
+			panic(fmt.Sprintf("unsupported float width: %d", floatType.Width))
+		}
+	case StringKind:
+		// Represent a string as a pointer to an 8-bit integer.
+		return llvm.PointerType(c.context.Int8Type(), 0)
+	case PointerKind:
+		ptrType := t.(Pointer)
+		elemLLVM := c.mapToLLVMType(ptrType.Elem)
+		return llvm.PointerType(elemLLVM, 0)
+	case ArrayKind:
+		arrType := t.(Array)
+		elemLLVM := c.mapToLLVMType(arrType.Elem)
+		return llvm.ArrayType(elemLLVM, arrType.Length)
+	default:
+		panic("unknown type in mapToLLVMType: " + t.String())
+	}
+}
+
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	// Handle unconditional assignments (no conditions)
 	if len(stmt.Condition) == 0 {
 		// Directly assign values without branching
 		for i, ident := range stmt.Name {
-			val, _ := c.compileExpression(stmt.Value[i])
-			c.symbols[ident.Value] = val // Overwrite previous value
+			c.symbols[ident.Value] = c.compileExpression(stmt.Value[i])
 		}
 		return // Exit early; no PHI nodes or blocks needed
 	}
 
 	// Capture previous values BEFORE processing the LetStatement
-	prevValues := make(map[string]llvm.Value)
+	prevValues := make(map[string]Symbol)
 	for _, ident := range stmt.Name {
 		if val, exists := c.symbols[ident.Value]; exists {
 			prevValues[ident.Value] = val // Existing value
 		} else {
-			prevValues[ident.Value] = llvm.ConstInt(c.context.Int64Type(), 0, false) // Default to 0
+			prevValues[ident.Value] = Symbol{
+				Val: llvm.ConstInt(c.context.Int64Type(), 0, false), // Default to 0
+				Type: Int{Width: 64},
+			}
 		}
 	}
 
 	// Compile condition
 	var cond llvm.Value
 	for i, expr := range stmt.Condition {
-		condVal, _ := c.compileExpression(expr)
+		condVal := c.compileExpression(expr).Val
 		if i == 0 {
 			cond = condVal
 		} else {
@@ -93,10 +142,9 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 
 	// True block: Assign new values if condition is true
 	c.builder.SetInsertPoint(ifBlock, ifBlock.FirstInstruction())
-	trueValues := make(map[string]llvm.Value)
+	trueValues := make(map[string]Symbol)
 	for i, ident := range stmt.Name {
-		val, _ := c.compileExpression(stmt.Value[i])
-		trueValues[ident.Value] = val
+		trueValues[ident.Value] = c.compileExpression(stmt.Value[i])
 	}
 	c.builder.CreateBr(contBlock)
 
@@ -107,110 +155,152 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	// Continuation block: Merge new (true) or previous (false) values
 	c.builder.SetInsertPoint(contBlock, contBlock.FirstInstruction())
 	for _, ident := range stmt.Name {
-		phi := c.builder.CreatePHI(c.context.Int64Type(), ident.Value+"_phi")
+		// Look up the existing symbol to get its custom type.
+		sym, ok := c.symbols[ident.Value]
+		if !ok {
+			// Provide a default symbol if the variable hasn't been defined.
+			sym = Symbol{
+				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false),
+				Type: Int{Width: 64},
+			}
+		}
+		llvmType := c.mapToLLVMType(sym.Type)
+		phi := c.builder.CreatePHI(llvmType, ident.Value+"_phi")
 		phi.AddIncoming(
 			[]llvm.Value{
-				trueValues[ident.Value],  // Value from true block
-				prevValues[ident.Value],  // Value from before the LetStatement
+				trueValues[ident.Value].Val,  // Value from true block
+				prevValues[ident.Value].Val,  // Value from before the LetStatement
 			},
 			[]llvm.BasicBlock{ifBlock, elseBlock},
 		)
-		c.symbols[ident.Value] = phi // Update symbol table
+		c.symbols[ident.Value] = Symbol {
+			Val: phi, // Update symbol table
+			Type: sym.Type,
+		}
 	}
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression) (llvm.Value, llvm.Type) {
+func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
     switch e := expr.(type) {
     case *ast.IntegerLiteral:
-        val := llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
-        return val, val.Type()
+        s.Val = llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
+		s.Type = Int{Width: 64}
+        return
     case *ast.FloatLiteral:
-        val := llvm.ConstFloat(c.context.DoubleType(), e.Value)
-        return val, val.Type()
+        s.Val = llvm.ConstFloat(c.context.DoubleType(), e.Value)
+		s.Type = Float{Width: 64}
+        return
     case *ast.StringLiteral:
         // Create global string constant
         str := llvm.ConstString(e.Value, true)
-        global := llvm.AddGlobal(c.module, str.Type(), "str_literal")
+		// Compute the array length (including the null terminator).
+		arrayLength := len(e.Value) + 1
+		// Create an array type for [arrayLength x i8]
+		arrType := llvm.ArrayType(c.module.Context().Int8Type(), arrayLength)
+
+		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+		c.formatCounter++
+
+        global := llvm.AddGlobal(c.module, arrType, globalName)
         global.SetInitializer(str)
-        ptr := c.builder.CreateGEP(
-            global.Type(),
-            global,
-            []llvm.Value{
-                llvm.ConstInt(c.context.Int64Type(), 0, false),
-                llvm.ConstInt(c.context.Int64Type(), 0, false),
-            },
-            "str_ptr",
-        )
-        return ptr, ptr.Type()
+		global.SetLinkage(llvm.PrivateLinkage)    // Make it private.
+		global.SetUnnamedAddr(true)                // Mark as unnamed address.
+		global.SetGlobalConstant(true)                  // Mark it as constant.
+
+		fmt.Println(global)
+		// Create the GEP with two 64-bit zero indices.
+		zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
+		s.Val = llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero,})
+		s.Type = String{Length: arrayLength}
+		return
     case *ast.Identifier:
-        val := c.compileIdentifier(e)
-        return val, val.Type()
+        s = c.compileIdentifier(e)
+        return
     case *ast.InfixExpression:
-        val := c.compileInfixExpression(e)
-        return val, val.Type()
+        s = c.compileInfixExpression(e)
+        return
     default:
         panic("unsupported expression type")
     }
 }
 
-func (c *Compiler) compileIdentifier(ident *ast.Identifier) llvm.Value {
+func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
 	if val, ok := c.symbols[ident.Value]; ok {
 		return val
 	}
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 }
 
-func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) llvm.Value {
-	left, leftType := c.compileExpression(expr.Left)
-	right, rightType := c.compileExpression(expr.Right)
+func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) {
+	left := c.compileExpression(expr.Left)
+	right := c.compileExpression(expr.Right)
 
 	// Determine types and promote to float if needed
-	leftIsFloat := leftType.TypeKind() == llvm.DoubleTypeKind
-	rightIsFloat := rightType.TypeKind() == llvm.DoubleTypeKind
+	leftIsFloat := left.Type.Kind() == FloatKind
+	rightIsFloat := right.Type.Kind() == FloatKind
 
-	leftVal := left
-	rightVal := right
-    opType := leftType
+	opType := IntKind
 
-	if leftIsFloat {
-		rightVal = c.builder.CreateSIToFP(right, c.context.DoubleType(), "cast_to_float")
+	if leftIsFloat || rightIsFloat {
+		opType = FloatKind
+		if !leftIsFloat {
+			left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
+		}
+		if !rightIsFloat {
+			right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
+		}
 	}
-
-	if rightIsFloat {
-		leftVal = c.builder.CreateSIToFP(left, c.context.DoubleType(), "cast_to_float")
-        opType = c.context.DoubleType()
-    }
 
 	switch expr.Operator {
 	case "+":
-		if opType.TypeKind() == llvm.DoubleTypeKind {
-            return c.builder.CreateFAdd(leftVal, rightVal, "fadd_tmp")
+		if opType == FloatKind {
+            s.Val = c.builder.CreateFAdd(left.Val, right.Val, "fadd_tmp")
+			s.Type = Float{Width: 64}
+			return
         }
-		return c.builder.CreateAdd(left, right, "add_tmp")
+		s.Val = c.builder.CreateAdd(left.Val, right.Val, "add_tmp")
+		s.Type = Int{Width: 64}
+		return
 	case "-":
-		if opType.TypeKind() == llvm.DoubleTypeKind {
-            return c.builder.CreateFSub(leftVal, rightVal, "fsub_tmp")
+		if opType == FloatKind {
+            s.Val = c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp")
+			s.Type = Float{Width: 64}
+			return
         }
-		return c.builder.CreateSub(left, right, "sub_tmp")
+		s.Val = c.builder.CreateSub(left.Val, right.Val, "sub_tmp")
+		s.Type = Int{Width: 64}
+		return
 	case "*":
-		if opType.TypeKind() == llvm.DoubleTypeKind {
-            return c.builder.CreateFMul(leftVal, rightVal, "fmul_tmp")
+		if opType == FloatKind {
+            s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
+			s.Type = Float{Width: 64}
+			return
         }
-		return c.builder.CreateMul(left, right, "mul_tmp")
+		s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
+		s.Type = Int{Width: 64}
+		return
 	case "/":
-		if leftType.TypeKind() != llvm.DoubleTypeKind {
-            left = c.builder.CreateSIToFP(left, c.context.DoubleType(), "cast_to_float")
+		if left.Type.Kind() != FloatKind {
+            left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
         }
-        if rightType.TypeKind() != llvm.DoubleTypeKind {
-            right = c.builder.CreateSIToFP(right, c.context.DoubleType(), "cast_to_float")
+        if right.Type.Kind() != FloatKind {
+            right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
         }
-		return c.builder.CreateFDiv(left, right, "fdiv_tmp")
+		s.Val = c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
+		s.Type = Float{Width: 64}
+		return
 	case ">":
-		return c.builder.CreateICmp(llvm.IntSGT, left, right, "cmp_tmp")
+		s.Val = c.builder.CreateICmp(llvm.IntSGT, left.Val, right.Val, "cmp_tmp")
+		s.Type = Int{Width: 64}
+		return
 	case "<":
-		return c.builder.CreateICmp(llvm.IntSLT, left, right, "cmp_tmp")
+		s.Val = c.builder.CreateICmp(llvm.IntSLT, left.Val, right.Val, "cmp_tmp")
+		s.Type = Int{Width: 64}
+		return
 	case "==":
-		return c.builder.CreateICmp(llvm.IntEQ, left, right, "eq_tmp")
+		s.Val = c.builder.CreateICmp(llvm.IntEQ, left.Val, right.Val, "eq_tmp")
+		s.Type = Int{Width: 64}
+		return
 	}
 	panic("unknown operator")
 }
@@ -234,7 +324,10 @@ func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
 	for i, param := range fn.Parameters {
 		alloca := c.createEntryBlockAlloca(function, param.Value)
 		c.builder.CreateStore(function.Params()[i], alloca)
-		c.symbols[param.Value] = alloca
+		c.symbols[param.Value] = Symbol{
+			Val: alloca,
+			Type: Int{Width: 64},
+        }
 	}
 
 	// Compile function body
@@ -272,7 +365,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
 
 	args := make([]llvm.Value, len(ce.Arguments))
 	for i, arg := range ce.Arguments {
-		args[i], _ = c.compileExpression(arg)
+		args[i] = c.compileExpression(arg).Val
 	}
 
     funcType := fn.Type().ElementType() // Get function signature type
@@ -287,26 +380,23 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
     // Generate format string based on expression types
     for _, expr := range ps.Expression {
         // Compile the expression and get its value and type
-        val, typ := c.compileExpression(expr)
+        s := c.compileExpression(expr)
 
-        // Append format specifier based on type
-        switch typ.TypeKind() {
-        case llvm.IntegerTypeKind:
+		// Append format specifier based on type
+        switch s.Type.Kind() {
+        case IntKind:
 			// %ld for 64-bit integers
             formatStr += "%ld "
-		case llvm.DoubleTypeKind, llvm.FloatTypeKind:
+		case FloatKind:
 			formatStr += "%.15g "
-        case llvm.PointerTypeKind:
-            if typ.ElementType().TypeKind() == llvm.IntegerTypeKind && typ.ElementType().IntTypeWidth() == 8 {
-                formatStr += "%s "  // Assume it's a string
-            } else {
-                panic("unsupported pointer type in print statement")
-            }
+        case StringKind:
+				formatStr += "%s "
         default:
-            panic("unsupported type in print statement")
+			err := "unsupported type in print statement " + s.Type.String()
+            panic(err)
         }
 
-        args = append(args, val)
+        args = append(args, s.Val)
     }
 
     // Add newline and null terminator
