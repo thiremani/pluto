@@ -287,7 +287,6 @@ func (l *Lexer) readString() string {
 		}
 		l.readRune()
 	}
-	l.readRune() // Skip closing "
 	return out.String()
 }
 

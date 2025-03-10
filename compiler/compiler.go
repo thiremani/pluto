@@ -206,7 +206,6 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		global.SetUnnamedAddr(true)            // Mark as unnamed address.
 		global.SetGlobalConstant(true)         // Mark it as constant.
 
-		fmt.Println(global)
 		// Create the GEP with two 64-bit zero indices.
 		zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
 		s.Val = llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})

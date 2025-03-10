@@ -88,12 +88,12 @@ func (ls *LetStatement) String() string {
 	out.WriteString(printVec(toExpressionVec(ls.Name)))
 	out.WriteString(" = ")
 
-	if ls.Condition != nil {
+	if len(ls.Condition) > 0 {
 		out.WriteString(printVec(ls.Condition))
 		out.WriteString(" ")
 	}
 
-	if ls.Value != nil {
+	if len(ls.Value) > 0 {
 		out.WriteString(printVec(ls.Value))
 	}
 

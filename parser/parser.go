@@ -205,8 +205,10 @@ func (p *Parser) parseStatement() ast.Statement {
 
 func (p *Parser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatement {
 	stmt := &ast.LetStatement{
-		Token: p.curToken,
-		Name:  identList,
+		Token:     p.curToken,
+		Name:      identList,
+		Value:     []ast.Expression{},
+		Condition: []ast.Expression{},
 	}
 
 	p.nextToken()
