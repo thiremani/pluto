@@ -56,19 +56,19 @@ const (
 	COMMA  // ,
 	PERIOD // .
 
-	RPAREN    // )
-	RBRACK    // ]
-	RBRACE    // }
+	RPAREN // )
+	RBRACK // ]
+	RBRACE // }
 	operator_end
 
 	comparison_beg
-	EQL    // ==
-	LSS    // <
-	GTR    // >
+	EQL // ==
+	LSS // <
+	GTR // >
 
-	NEQ      // !=
-	LEQ      // <=
-	GEQ      // >=
+	NEQ // !=
+	LEQ // <=
+	GEQ // >=
 	COLON
 	comparison_end
 
@@ -127,18 +127,17 @@ var tokens = [...]string{
 	COMMA:  ",",
 	PERIOD: ".",
 
-	RPAREN:    ")",
-	RBRACK:    "]",
-	RBRACE:    "}",
+	RPAREN: ")",
+	RBRACK: "]",
+	RBRACE: "}",
 
+	EQL: "==",
+	LSS: "<",
+	GTR: ">",
 
-	EQL:    "==",
-	LSS:    "<",
-	GTR:    ">",
-
-	NEQ:    "!=",
-	LEQ:    "<=",
-	GEQ:    ">=",
+	NEQ: "!=",
+	LEQ: "<=",
+	GEQ: ">=",
 
 	NEWLINE:  "\n",
 	INDENT:   "INDENT",

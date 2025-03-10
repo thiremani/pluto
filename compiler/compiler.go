@@ -1,25 +1,24 @@
 package compiler
 
 import (
-	"pluto/ast"
 	"fmt"
+	"pluto/ast"
 	"strings"
 	"tinygo.org/x/go-llvm"
 )
 
 type Symbol struct {
-    Val llvm.Value
-    Type  Type
+	Val  llvm.Value
+	Type Type
 }
 
-
 type Compiler struct {
-	context    llvm.Context
-	module     llvm.Module
-	builder    llvm.Builder
-	symbols    map[string]Symbol
-	funcParams map[string][]llvm.Value
-	formatCounter int  // Track unique format strings
+	context       llvm.Context
+	module        llvm.Module
+	builder       llvm.Builder
+	symbols       map[string]Symbol
+	funcParams    map[string][]llvm.Value
+	formatCounter int // Track unique format strings
 }
 
 func NewCompiler(moduleName string) *Compiler {
@@ -28,11 +27,11 @@ func NewCompiler(moduleName string) *Compiler {
 	builder := context.NewBuilder()
 
 	return &Compiler{
-		context:    context,
-		module:     module,
-		builder:    builder,
-		symbols:    make(map[string]Symbol),
-		funcParams: make(map[string][]llvm.Value),
+		context:       context,
+		module:        module,
+		builder:       builder,
+		symbols:       make(map[string]Symbol),
+		funcParams:    make(map[string][]llvm.Value),
 		formatCounter: 0,
 	}
 }
@@ -54,7 +53,7 @@ func (c *Compiler) Compile(program *ast.Program) {
 		}
 	}
 
-    // Add explicit return 0
+	// Add explicit return 0
 	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
 }
 
@@ -116,7 +115,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 			prevValues[ident.Value] = val // Existing value
 		} else {
 			prevValues[ident.Value] = Symbol{
-				Val: llvm.ConstInt(c.context.Int64Type(), 0, false), // Default to 0
+				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false), // Default to 0
 				Type: Int{Width: 64},
 			}
 		}
@@ -168,31 +167,31 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 		phi := c.builder.CreatePHI(llvmType, ident.Value+"_phi")
 		phi.AddIncoming(
 			[]llvm.Value{
-				trueValues[ident.Value].Val,  // Value from true block
-				prevValues[ident.Value].Val,  // Value from before the LetStatement
+				trueValues[ident.Value].Val, // Value from true block
+				prevValues[ident.Value].Val, // Value from before the LetStatement
 			},
 			[]llvm.BasicBlock{ifBlock, elseBlock},
 		)
-		c.symbols[ident.Value] = Symbol {
-			Val: phi, // Update symbol table
+		c.symbols[ident.Value] = Symbol{
+			Val:  phi, // Update symbol table
 			Type: sym.Type,
 		}
 	}
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
-    switch e := expr.(type) {
-    case *ast.IntegerLiteral:
-        s.Val = llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
+	switch e := expr.(type) {
+	case *ast.IntegerLiteral:
+		s.Val = llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
 		s.Type = Int{Width: 64}
-        return
-    case *ast.FloatLiteral:
-        s.Val = llvm.ConstFloat(c.context.DoubleType(), e.Value)
+		return
+	case *ast.FloatLiteral:
+		s.Val = llvm.ConstFloat(c.context.DoubleType(), e.Value)
 		s.Type = Float{Width: 64}
-        return
-    case *ast.StringLiteral:
-        // Create global string constant
-        str := llvm.ConstString(e.Value, true)
+		return
+	case *ast.StringLiteral:
+		// Create global string constant
+		str := llvm.ConstString(e.Value, true)
 		// Compute the array length (including the null terminator).
 		arrayLength := len(e.Value) + 1
 		// Create an array type for [arrayLength x i8]
@@ -201,27 +200,27 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 
-        global := llvm.AddGlobal(c.module, arrType, globalName)
-        global.SetInitializer(str)
-		global.SetLinkage(llvm.PrivateLinkage)    // Make it private.
-		global.SetUnnamedAddr(true)                // Mark as unnamed address.
-		global.SetGlobalConstant(true)                  // Mark it as constant.
+		global := llvm.AddGlobal(c.module, arrType, globalName)
+		global.SetInitializer(str)
+		global.SetLinkage(llvm.PrivateLinkage) // Make it private.
+		global.SetUnnamedAddr(true)            // Mark as unnamed address.
+		global.SetGlobalConstant(true)         // Mark it as constant.
 
 		fmt.Println(global)
 		// Create the GEP with two 64-bit zero indices.
 		zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-		s.Val = llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero,})
+		s.Val = llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
 		s.Type = String{Length: arrayLength}
 		return
-    case *ast.Identifier:
-        s = c.compileIdentifier(e)
-        return
-    case *ast.InfixExpression:
-        s = c.compileInfixExpression(e)
-        return
-    default:
-        panic("unsupported expression type")
-    }
+	case *ast.Identifier:
+		s = c.compileIdentifier(e)
+		return
+	case *ast.InfixExpression:
+		s = c.compileInfixExpression(e)
+		return
+	default:
+		panic("unsupported expression type")
+	}
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
@@ -254,38 +253,38 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 	switch expr.Operator {
 	case "+":
 		if opType == FloatKind {
-            s.Val = c.builder.CreateFAdd(left.Val, right.Val, "fadd_tmp")
+			s.Val = c.builder.CreateFAdd(left.Val, right.Val, "fadd_tmp")
 			s.Type = Float{Width: 64}
 			return
-        }
+		}
 		s.Val = c.builder.CreateAdd(left.Val, right.Val, "add_tmp")
 		s.Type = Int{Width: 64}
 		return
 	case "-":
 		if opType == FloatKind {
-            s.Val = c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp")
+			s.Val = c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp")
 			s.Type = Float{Width: 64}
 			return
-        }
+		}
 		s.Val = c.builder.CreateSub(left.Val, right.Val, "sub_tmp")
 		s.Type = Int{Width: 64}
 		return
 	case "*":
 		if opType == FloatKind {
-            s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
+			s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
 			s.Type = Float{Width: 64}
 			return
-        }
+		}
 		s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
 		s.Type = Int{Width: 64}
 		return
 	case "/":
 		if left.Type.Kind() != FloatKind {
-            left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
-        }
-        if right.Type.Kind() != FloatKind {
-            right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
-        }
+			left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
+		}
+		if right.Type.Kind() != FloatKind {
+			right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
+		}
 		s.Val = c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
 		s.Type = Float{Width: 64}
 		return
@@ -312,7 +311,7 @@ func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
 	for i := range fn.Parameters {
 		paramTypes[i] = c.context.Int64Type()
 	}
-	
+
 	funcType := llvm.FunctionType(returnType, paramTypes, false)
 	function := llvm.AddFunction(c.module, fn.Token.Literal, funcType)
 
@@ -325,27 +324,27 @@ func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
 		alloca := c.createEntryBlockAlloca(function, param.Value)
 		c.builder.CreateStore(function.Params()[i], alloca)
 		c.symbols[param.Value] = Symbol{
-			Val: alloca,
+			Val:  alloca,
 			Type: Int{Width: 64},
-        }
+		}
 	}
 
 	// Compile function body
 	c.compileBlockStatement(fn.Body)
 	c.builder.CreateRetVoid()
-	
+
 	return function
 }
 
 func (c *Compiler) compileBlockStatement(bs *ast.BlockStatement) {
-    for _, stmt := range bs.Statements {
-        switch s := stmt.(type) {
-        case *ast.LetStatement:
-            c.compileLetStatement(s, c.builder.GetInsertBlock().Parent())  // Current function
-        case *ast.PrintStatement:
-            c.compilePrintStatement(s)
-        }
-    }
+	for _, stmt := range bs.Statements {
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			c.compileLetStatement(s, c.builder.GetInsertBlock().Parent()) // Current function
+		case *ast.PrintStatement:
+			c.compilePrintStatement(s)
+		}
+	}
 }
 
 func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value {
@@ -368,74 +367,74 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
 		args[i] = c.compileExpression(arg).Val
 	}
 
-    funcType := fn.Type().ElementType() // Get function signature type
-    return c.builder.CreateCall(funcType, fn, args, "call_tmp")
+	funcType := fn.Type().ElementType() // Get function signature type
+	return c.builder.CreateCall(funcType, fn, args, "call_tmp")
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-    // Track format specifiers and arguments
-    var formatStr string
-    var args []llvm.Value
+	// Track format specifiers and arguments
+	var formatStr string
+	var args []llvm.Value
 
-    // Generate format string based on expression types
-    for _, expr := range ps.Expression {
-        // Compile the expression and get its value and type
-        s := c.compileExpression(expr)
+	// Generate format string based on expression types
+	for _, expr := range ps.Expression {
+		// Compile the expression and get its value and type
+		s := c.compileExpression(expr)
 
 		// Append format specifier based on type
-        switch s.Type.Kind() {
-        case IntKind:
+		switch s.Type.Kind() {
+		case IntKind:
 			// %ld for 64-bit integers
-            formatStr += "%ld "
+			formatStr += "%ld "
 		case FloatKind:
 			formatStr += "%.15g "
-        case StringKind:
-				formatStr += "%s "
-        default:
+		case StringKind:
+			formatStr += "%s "
+		default:
 			err := "unsupported type in print statement " + s.Type.String()
-            panic(err)
-        }
+			panic(err)
+		}
 
-        args = append(args, s.Val)
-    }
+		args = append(args, s.Val)
+	}
 
-    // Add newline and null terminator
+	// Add newline and null terminator
 	formatStr = strings.TrimSuffix(formatStr, " ") + "\n" // Remove trailing space
-    formatConst := llvm.ConstString(formatStr, true)  // true = add \0
+	formatConst := llvm.ConstString(formatStr, true)      // true = add \0
 
-    // Create unique global variable for the format string
-    globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)
-    c.formatCounter++
+	// Create unique global variable for the format string
+	globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)
+	c.formatCounter++
 
-    // Define global array with exact length
-    arrayLength := len(formatStr) + 1  // +1 for null terminator
-    arrayType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
-    formatGlobal := llvm.AddGlobal(c.module, arrayType, globalName)
-    formatGlobal.SetInitializer(formatConst)
+	// Define global array with exact length
+	arrayLength := len(formatStr) + 1 // +1 for null terminator
+	arrayType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
+	formatGlobal := llvm.AddGlobal(c.module, arrayType, globalName)
+	formatGlobal.SetInitializer(formatConst)
 
-    // Get pointer to the format string
-    zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-    formatPtr := c.builder.CreateGEP(
-        arrayType,
-        formatGlobal,
-        []llvm.Value{zero, zero},
-        "fmt_ptr",
-    )
+	// Get pointer to the format string
+	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
+	formatPtr := c.builder.CreateGEP(
+		arrayType,
+		formatGlobal,
+		[]llvm.Value{zero, zero},
+		"fmt_ptr",
+	)
 
-    // Declare printf (variadic function)
-    printfType := llvm.FunctionType(
-        c.context.Int32Type(),
-        []llvm.Type{llvm.PointerType(c.context.Int8Type(), 0)},
-        true,  // Variadic
-    )
-    printf := c.module.NamedFunction("printf")
-    if printf.IsNil() {
-        printf = llvm.AddFunction(c.module, "printf", printfType)
-    }
+	// Declare printf (variadic function)
+	printfType := llvm.FunctionType(
+		c.context.Int32Type(),
+		[]llvm.Type{llvm.PointerType(c.context.Int8Type(), 0)},
+		true, // Variadic
+	)
+	printf := c.module.NamedFunction("printf")
+	if printf.IsNil() {
+		printf = llvm.AddFunction(c.module, "printf", printfType)
+	}
 
-    // Call printf with all arguments
-    allArgs := append([]llvm.Value{formatPtr}, args...)
-    c.builder.CreateCall(printfType, printf, allArgs, "printf_call")
+	// Call printf with all arguments
+	allArgs := append([]llvm.Value{formatPtr}, args...)
+	c.builder.CreateCall(printfType, printf, allArgs, "printf_call")
 }
 
 // Helper function to generate final output

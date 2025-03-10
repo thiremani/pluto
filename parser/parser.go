@@ -5,8 +5,8 @@ import (
 	"pluto/ast"
 	"pluto/lexer"
 	"pluto/token"
-	"strconv"
 	"reflect"
+	"strconv"
 )
 
 const (
@@ -23,23 +23,23 @@ const (
 )
 
 var precedences = map[token.TokenType]int{
-	token.ASSIGN:   ASSIGN,
-	token.COMMA:    COMMA,
-	token.COLON:    COLON,
-	token.ADD:      SUM,
-	token.SUB:      SUM,
-	token.QUO:      PRODUCT,
-	token.MUL:      PRODUCT,
-	token.EQL:      LESSGREATER,
-	token.NEQ:      LESSGREATER,
-	token.LSS:      LESSGREATER,
-	token.GTR:      LESSGREATER,
-	token.LPAREN:   CALL,
+	token.ASSIGN: ASSIGN,
+	token.COMMA:  COMMA,
+	token.COLON:  COLON,
+	token.ADD:    SUM,
+	token.SUB:    SUM,
+	token.QUO:    PRODUCT,
+	token.MUL:    PRODUCT,
+	token.EQL:    LESSGREATER,
+	token.NEQ:    LESSGREATER,
+	token.LSS:    LESSGREATER,
+	token.GTR:    LESSGREATER,
+	token.LPAREN: CALL,
 }
 
 type (
-	prefixParseFn      func() ast.Expression
-	infixParseFn       func(ast.Expression) ast.Expression
+	prefixParseFn func() ast.Expression
+	infixParseFn  func(ast.Expression) ast.Expression
 )
 
 type Parser struct {
@@ -51,8 +51,8 @@ type Parser struct {
 	inScript  bool
 	inBlock   bool
 
-	prefixParseFns      map[token.TokenType]prefixParseFn
-	infixParseFns       map[token.TokenType]infixParseFn
+	prefixParseFns map[token.TokenType]prefixParseFn
+	infixParseFns  map[token.TokenType]infixParseFn
 }
 
 func New(l *lexer.Lexer) *Parser {
@@ -61,7 +61,7 @@ func New(l *lexer.Lexer) *Parser {
 		errors: []*token.CompileError{},
 
 		inScript: false,
-		inBlock: false,
+		inBlock:  false,
 	}
 
 	p.prefixParseFns = make(map[token.TokenType]prefixParseFn)
@@ -121,17 +121,17 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 func (p *Parser) Errors() []string {
 	var msgs []string
 	for _, err := range p.errors {
-        msgs = append(msgs, err.Error())
-    }
+		msgs = append(msgs, err.Error())
+	}
 	return msgs
 }
 
 func (p *Parser) errMsg(tokenLoc string, expToken, gotToken token.TokenType) *token.CompileError {
 	msg := fmt.Sprintf("expected %s to be %s, got %s instead", tokenLoc, expToken, gotToken)
-    return &token.CompileError{
-        Token: p.curToken,
-        Msg:   msg,
-    }
+	return &token.CompileError{
+		Token: p.curToken,
+		Msg:   msg,
+	}
 }
 
 func (p *Parser) illegalToken(t token.Token) *token.CompileError {
@@ -147,15 +147,15 @@ func (p *Parser) peekError(t token.TokenType) {
 }
 
 func (p *Parser) curError(t token.TokenType) {
-    p.errors = append(p.errors, p.errMsg("current token", t, p.curToken.Type))
+	p.errors = append(p.errors, p.errMsg("current token", t, p.curToken.Type))
 }
 
 func (p *Parser) noPrefixParseFnError(t token.TokenType) {
 	msg := fmt.Sprintf("no prefix parse function for %s found", t)
 	ce := &token.CompileError{
-        Token: p.curToken,
-        Msg:   msg,
-    }
+		Token: p.curToken,
+		Msg:   msg,
+	}
 	p.errors = append(p.errors, ce)
 }
 
@@ -185,7 +185,7 @@ func (p *Parser) parseStatement() ast.Statement {
 	if p.stmtEnded() {
 		p.nextToken()
 		return &ast.PrintStatement{
-			Token: firstToken,
+			Token:      firstToken,
 			Expression: expList,
 		}
 	}
@@ -197,16 +197,16 @@ func (p *Parser) parseStatement() ast.Statement {
 	identList, ce := p.toIdentList(expList)
 	if ce != nil {
 		p.errors = append(p.errors, ce)
-        return nil
+		return nil
 	}
 
 	return p.parseLetStatement(identList)
 }
 
 func (p *Parser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatement {
-	stmt := &ast.LetStatement {
+	stmt := &ast.LetStatement{
 		Token: p.curToken,
-		Name: identList,
+		Name:  identList,
 	}
 
 	p.nextToken()
@@ -221,9 +221,9 @@ func (p *Parser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatemen
 		if !p.isCondition(exp) {
 			msg := fmt.Sprintf("Expression %q is not a condition. The main operation should be a comparison", exp.String())
 			ce := &token.CompileError{
-                Token: exp.Tok(),
-                Msg:   msg,
-            }
+				Token: exp.Tok(),
+				Msg:   msg,
+			}
 			p.errors = append(p.errors, ce)
 			return nil
 		}
@@ -240,9 +240,9 @@ func (p *Parser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatemen
 
 	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %q", p.peekToken)
 	ce := &token.CompileError{
-        Token: p.curToken,
-        Msg:   msg,
-    }
+		Token: p.curToken,
+		Msg:   msg,
+	}
 	p.errors = append(p.errors, ce)
 	return nil
 }
@@ -258,9 +258,9 @@ func (p *Parser) endLetStatement(stmt *ast.LetStatement) *ast.LetStatement {
 	if len(stmt.Name) != len(stmt.Value) {
 		msg := fmt.Sprintf("Number of variables to be assigned is %d. But number of expressions provided is %d", len(stmt.Name), len(stmt.Value))
 		ce := &token.CompileError{
-            Token: stmt.Token,
-            Msg:   msg,
-        }
+			Token: stmt.Token,
+			Msg:   msg,
+		}
 		p.errors = append(p.errors, ce)
 		return nil
 	}
@@ -293,8 +293,8 @@ func (p *Parser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *toke
 			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q", reflect.TypeOf(identifier), reflect.TypeOf(exp))
 			ce = &token.CompileError{
 				Token: exp.Tok(),
-                Msg:   msg,
-            }
+				Msg:   msg,
+			}
 			break
 		}
 		identifiers = append(identifiers, identifier)
@@ -384,7 +384,6 @@ func (p *Parser) parseIdentifier() ast.Expression {
 	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 }
 
-
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
@@ -392,9 +391,9 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		ce := &token.CompileError{
-            Token: p.curToken,
-            Msg:   msg,
-        }
+			Token: p.curToken,
+			Msg:   msg,
+		}
 		p.errors = append(p.errors, ce)
 		return nil
 	}
@@ -405,24 +404,24 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 }
 
 func (p *Parser) parseFloatLiteral() ast.Expression {
-    lit := &ast.FloatLiteral{Token: p.curToken}
-    value, err := strconv.ParseFloat(p.curToken.Literal, 64)
-    if err != nil {
-        msg := fmt.Sprintf("could not parse %q as float", p.curToken.Literal)
-        ce := &token.CompileError{Token: p.curToken, Msg: msg}
-        p.errors = append(p.errors, ce)
-        return nil
-    }
+	lit := &ast.FloatLiteral{Token: p.curToken}
+	value, err := strconv.ParseFloat(p.curToken.Literal, 64)
+	if err != nil {
+		msg := fmt.Sprintf("could not parse %q as float", p.curToken.Literal)
+		ce := &token.CompileError{Token: p.curToken, Msg: msg}
+		p.errors = append(p.errors, ce)
+		return nil
+	}
 
-    lit.Value = value
-    return lit
+	lit.Value = value
+	return lit
 }
 
 func (p *Parser) parseStringLiteral() ast.Expression {
-    return &ast.StringLiteral{
-        Token: p.curToken,
-        Value: p.curToken.Literal,
-    }
+	return &ast.StringLiteral{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
 }
 
 func (p *Parser) parsePrefixExpression() ast.Expression {
@@ -487,13 +486,13 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 }
 
 func (p *Parser) parseFunctionLiteral(f ast.Expression) ast.Expression {
-	fl := &ast.FunctionLiteral {
-		Token: f.Tok(),
+	fl := &ast.FunctionLiteral{
+		Token:      f.Tok(),
 		Parameters: []*ast.Identifier{},
-		Outputs: []*ast.Identifier{},
-		Body: &ast.BlockStatement {
-			Token: p.curToken,
-            Statements: []ast.Statement{},
+		Outputs:    []*ast.Identifier{},
+		Body: &ast.BlockStatement{
+			Token:      p.curToken,
+			Statements: []ast.Statement{},
 		},
 	}
 
@@ -545,9 +544,9 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 
 func (p *Parser) parseCallExpression(f ast.Expression) ast.Expression {
 	ce := &ast.CallExpression{
-		Token: p.curToken,
-        Function: &ast.Identifier{Token: f.Tok(), Value: f.Tok().Literal},
-    }
+		Token:    p.curToken,
+		Function: &ast.Identifier{Token: f.Tok(), Value: f.Tok().Literal},
+	}
 
 	ce.Arguments = p.parseCallArguments()
 	return ce

@@ -71,7 +71,7 @@ func (s String) String() string {
 }
 
 func (s String) Kind() Kind {
-    return StringKind
+	return StringKind
 }
 
 // Array represents an array type with a fixed length.
@@ -85,5 +85,5 @@ func (a Array) String() string {
 }
 
 func (a Array) Kind() Kind {
-    return ArrayKind
+	return ArrayKind
 }

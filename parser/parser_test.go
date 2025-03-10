@@ -2,9 +2,9 @@ package parser
 
 import (
 	"fmt"
-	"strings"
 	"pluto/ast"
 	"pluto/lexer"
+	"strings"
 	"testing"
 )
 
@@ -54,7 +54,6 @@ func TestAssign(t *testing.T) {
 	}
 }
 
-
 func TestInvalidAssignment(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -91,7 +90,7 @@ func TestMultiAssign(t *testing.T) {
 		input  string
 		expId  string
 		expStr string
-	} {
+	}{
 		{"x, y = 2, 4", "=", "x, y = 2, 4"},
 	}
 
@@ -176,15 +175,15 @@ func TestIntegerLiteralExpression(t *testing.T) {
 }
 
 func TestStringLiteral(t *testing.T) {
-    input := `"hello"`
-    l := lexer.New(input)
-    p := New(l)
-    program := p.ParseProgram()
-    stmt := program.Statements[0].(*ast.PrintStatement)
-    literal := stmt.Expression[0].(*ast.StringLiteral)
-    if literal.Value != "hello" {
-        t.Errorf("literal.Value not %q. got=%q", "hello", literal.Value)
-    }
+	input := `"hello"`
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	stmt := program.Statements[0].(*ast.PrintStatement)
+	literal := stmt.Expression[0].(*ast.StringLiteral)
+	if literal.Value != "hello" {
+		t.Errorf("literal.Value not %q. got=%q", "hello", literal.Value)
+	}
 }
 
 func TestParsingPrefixExpressions(t *testing.T) {
@@ -419,7 +418,7 @@ res = a > 3 + 2`
 	stmt, ok = program.Statements[1].(*ast.LetStatement)
 	if !ok {
 		t.Fatalf("program.Statements[1] is not ast.ExpressionStatement. got=%T",
-            program.Statements[1])
+			program.Statements[1])
 	}
 
 	exp := stmt.Value[0].(*ast.InfixExpression)
@@ -428,7 +427,7 @@ res = a > 3 + 2`
 		return
 	}
 
-	if exp.Operator!= "+" {
+	if exp.Operator != "+" {
 		t.Errorf("exp.Operator is not '+'. got=%s", exp.Operator)
 	}
 
@@ -462,12 +461,12 @@ func TestFunctionLiteralParsing(t *testing.T) {
 	}
 
 	if !testIdentifier(t, stmt.Name[0], "y") {
-        return
-    }
+		return
+	}
 
 	if !testIdentifier(t, stmt.Name[1], "quo") {
-        return
-    }
+		return
+	}
 
 	if len(stmt.Value) != 1 {
 		t.Fatalf("stmt does not contain %d value. got=%d\n", 1, len(stmt.Value))
@@ -492,9 +491,9 @@ func TestFunctionLiteralParsing(t *testing.T) {
 		return
 	}
 
-	if len(f.Body.Statements)!= 3 {
-        t.Fatalf("function literal body has wrong number of statements. want 3, got=%d\n", len(f.Body.Statements))
-    }
+	if len(f.Body.Statements) != 3 {
+		t.Fatalf("function literal body has wrong number of statements. want 3, got=%d\n", len(f.Body.Statements))
+	}
 
 	stmt1 := f.Body.Statements[0].(*ast.LetStatement)
 	if !testIdentifier(t, stmt1.Name[0], "y") {
@@ -520,10 +519,10 @@ func TestFunctionLiteralParsing(t *testing.T) {
 
 func TestFunctionParameterParsing(t *testing.T) {
 	tests := []struct {
-		input string
-        expected []string
-	} {
-	{input: `a = fn()
+		input    string
+		expected []string
+	}{
+		{input: `a = fn()
     a = 4`, expected: []string{}},
 		{input: `y = f(x)
     y = x * x`, expected: []string{"x"}},
@@ -542,7 +541,7 @@ func TestFunctionParameterParsing(t *testing.T) {
 
 		if len(function.Parameters) != len(tt.expected) {
 			t.Errorf("length parameters wrong. want %d, got=%d\n",
-			len(tt.expected), len(function.Parameters))
+				len(tt.expected), len(function.Parameters))
 		}
 
 		for i, ident := range tt.expected {
