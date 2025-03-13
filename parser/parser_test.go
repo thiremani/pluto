@@ -532,7 +532,7 @@ func TestFunctionParameterParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		l := lexer.New(tt.input)
-		p := New(l, true)
+		p := New(l, false)
 		program := p.ParseProgram()
 		checkParserErrors(t, p)
 
