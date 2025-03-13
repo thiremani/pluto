@@ -3,6 +3,8 @@ package lexer
 import (
 	"pluto/token"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Lexer struct {
@@ -298,12 +300,18 @@ func (l *Lexer) peekRune() rune {
 	}
 }
 
+// readIdentifier reads a Unicode identifier from the input.
+// it assumes first character (rune) is a letter
 func (l *Lexer) readIdentifier() string {
-	position := l.position
-	for isLetter(l.curr) {
+	startPos := l.position
+	l.readRune() // Consume first character
+
+	// Read subsequent valid characters (letters, digits, `_`)
+	for isLetterOrDigit(l.curr) {
 		l.readRune()
 	}
-	return string(l.input[position:l.position])
+
+	return string(l.input[startPos:l.position])
 }
 
 func (l *Lexer) readNumber() (string, bool) {
@@ -326,10 +334,22 @@ func (l *Lexer) readNumber() (string, bool) {
 	return string(l.input[position:l.position]), isFloat
 }
 
+// isLetter checks if a rune is a valid start of an identifier (Unicode letter or `_`).
+// this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
+// optimization is the if condition that quickly returns for ASCII characters
 func isLetter(ch rune) bool {
-	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
+	return 'a' <= lower(ch) && lower(ch) <= 'z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
 }
 
-func isDigit(ch rune) bool {
-	return '0' <= ch && ch <= '9'
+// isLetterOrDigit checks if a rune can be part of an identifier (Unicode letter, digit, `_`).
+func isLetterOrDigit(ch rune) bool {
+	return isLetter(ch) || isDigit(ch)
 }
+
+// this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
+// optimization is the if condition that quickly returns for ASCII characters
+func isDigit(ch rune) bool {
+	return '0' <= ch && ch <= '9' || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
+}
+
+func lower(ch rune) rune { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter

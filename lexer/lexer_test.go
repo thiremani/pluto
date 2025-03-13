@@ -278,3 +278,31 @@ func TestString(t *testing.T) {
 	}
 	checkInput(t, input, tests)
 }
+
+func TestUnicodeIdentifiers(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Valid Unicode identifiers
+		{"变量", "变量"},           // Chinese characters
+		{"αβγ", "αβγ"},         // Greek letters (general)
+		{"π", "π"},             // Greek letter pi
+		{"θ१२३", "θ१२३"},       // Greek letter theta with hindu numerals
+		{"πθ", "πθ"},           // Multi-letter Greek identifier
+		{"πθ123", "πθ123"},     // Greek letters with digits
+		{"π_θ", "π_θ"},         // Greek letters with underscore
+		{"_hidden", "_hidden"}, // Leading underscore
+		{"i123", "i123"},       // Latin letter with digits
+		{"ñandú", "ñandú"},     // Latin letters with diacritics
+	}
+
+	for _, tt := range tests {
+		l := New(tt.input)
+		ident := l.readIdentifier()
+
+		if ident != tt.expected {
+			t.Errorf("For input %q, expected identifier %q, got %q", tt.input, tt.expected, ident)
+		}
+	}
+}
