@@ -306,3 +306,54 @@ func TestUnicodeIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestNextTokenUnexpected(t *testing.T) {
+	tests := []struct {
+		input       string
+		expectedTok []token.Token
+		expectedErr []string // expected error message per token; empty means no error.
+	}{
+		{
+			input: "123abc",
+			// "123" should be read as a number token, then "abc" as an identifier.
+			expectedTok: []token.Token{
+				{Type: token.INT, Literal: "123"},
+				{Type: token.IDENT, Literal: "abc"},
+			},
+			expectedErr: []string{"", ""},
+		},
+		{
+			input: "@abc",
+			// "@" is illegal so should yield an ILLEGAL token with an error message,
+			// then "abc" is lexed as an identifier.
+			expectedTok: []token.Token{
+				{Type: token.ILLEGAL, Literal: "@"},
+				{Type: token.IDENT, Literal: "abc"},
+			},
+			expectedErr: []string{"1:1:@:Illegal character '@'", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		l := New(tt.input)
+		for i, expected := range tt.expectedTok {
+			tok, err := l.NextToken()
+			if tok.Type != expected.Type {
+				t.Errorf("For input %q, token %d: expected type %q, got %q", tt.input, i, expected.Type, tok.Type)
+			}
+			if tok.Literal != expected.Literal {
+				t.Errorf("For input %q, token %d: expected literal %q, got %q", tt.input, i, expected.Literal, tok.Literal)
+			}
+			expectedErr := tt.expectedErr[i]
+			if expectedErr != "" {
+				if err == nil || err.Error() != expectedErr {
+					t.Errorf("For input %q, token %d: expected error %q, got %v", tt.input, i, expectedErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("For input %q, token %d: expected no error, got %v", tt.input, i, err)
+				}
+			}
+		}
+	}
+}
