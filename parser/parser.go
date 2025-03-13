@@ -55,12 +55,12 @@ type Parser struct {
 	infixParseFns  map[token.TokenType]infixParseFn
 }
 
-func New(l *lexer.Lexer) *Parser {
+func New(l *lexer.Lexer, isScript bool) *Parser {
 	p := &Parser{
 		l:      l,
 		errors: []*token.CompileError{},
 
-		inScript: false,
+		inScript: isScript,
 		inBlock:  false,
 	}
 
@@ -320,14 +320,6 @@ func (p *Parser) parseFunction(f ast.Expression) ast.Expression {
 		return p.parseCallExpression(f)
 	}
 
-	// TODO handle for when peekTokenIs RPAREN and is call expression
-	// if peek token is not ident (is a number) then we are in script mode and it is a function call
-	// Similarly if we have function without arguments then it may signal start of a script. If there are arguments, it cannot be start of a script
-	// because the arguments will have to be define before the function so script will start there
-	if !(p.peekTokenIs(token.IDENT) || p.peekTokenIs(token.RPAREN)) {
-		p.inScript = true
-		return p.parseCallExpression(f)
-	}
 	// TODO check this later
 	// Actually if function is previously defined then we should be in script mode
 	// We should also check on the next line there is no indentation

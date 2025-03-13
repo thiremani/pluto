@@ -11,7 +11,7 @@ import (
 func TestStringCompile(t *testing.T) {
 	input := `"hello"`
 	l := lexer.New(input)
-	p := parser.New(l)
+	p := parser.New(l, true)
 	program := p.ParseProgram()
 
 	comp := NewCompiler("test")

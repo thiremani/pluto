@@ -8,11 +8,31 @@ import (
 	"pluto/compiler"
 	"pluto/lexer"
 	"pluto/parser"
+	"runtime"
 	"strings"
 )
 
 var PT_SUFFIX = ".pt"
+var SPT_SUFFIX = ".spt"
 var IR_SUFFIX = ".ll"
+
+var allowedExts = []string{PT_SUFFIX, SPT_SUFFIX}
+
+func isValidExtension(fileName string) (bool, bool) {
+	ext := filepath.Ext(fileName) // Extract file extension
+	for _, expectedExt := range allowedExts {
+		if runtime.GOOS == "windows" {
+			if strings.EqualFold(ext, expectedExt) {
+				return true, expectedExt == SPT_SUFFIX
+			}
+		} else {
+			if ext == expectedExt {
+				return true, expectedExt == PT_SUFFIX
+			}
+		}
+	}
+	return false, false
+}
 
 func main() {
 	var outputFile string
@@ -27,6 +47,13 @@ func main() {
 	}
 
 	inputFile := args[0]
+	isValidExt, isScript := isValidExtension(inputFile)
+	if !isValidExt {
+		fmt.Printf("Error: Pluto files must use %s (code) or %s (script) extensions\n",
+			PT_SUFFIX, SPT_SUFFIX)
+		os.Exit(1)
+	}
+
 	source, err := os.ReadFile(inputFile)
 	if err != nil {
 		fmt.Printf("Error reading file: %v\n", err)
@@ -35,7 +62,7 @@ func main() {
 
 	// Parse and compile
 	l := lexer.New(string(source))
-	p := parser.New(l)
+	p := parser.New(l, isScript)
 	ast := p.ParseProgram()
 	c := compiler.NewCompiler("pluto_module")
 	c.Compile(ast)
