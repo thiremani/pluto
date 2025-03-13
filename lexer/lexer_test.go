@@ -307,6 +307,36 @@ func TestUnicodeIdentifiers(t *testing.T) {
 	}
 }
 
+func TestASCIINumbers(t *testing.T) {
+	tests := []struct {
+		input             string
+		expectedTokenType token.TokenType
+		expectedLiteral   string
+	}{
+		// Valid ASCII number
+		{"123", token.INT, "123"},
+		// A number written with Arabic–Indic digits (U+0661, U+0662, U+0663)
+		// Since we want to restrict numbers to ASCII, this should be treated as illegal.
+		// We expect the lexer to return an ILLEGAL token for the first character.
+		{"١٢٣", token.ILLEGAL, "١"},
+		// A mixed case: starting with an ASCII digit should work, even if later there are non-ASCII digits.
+		// (This may be subject to design: you might want to treat the entire literal as illegal.)
+		{"1٢٣", token.INT, "1"},
+	}
+
+	for _, tt := range tests {
+		l := New(tt.input)
+		tok, _ := l.NextToken()
+
+		if tok.Type != tt.expectedTokenType {
+			t.Errorf("For input %q, expected token type %q, got %q", tt.input, tt.expectedTokenType, tok.Type)
+		}
+		if tok.Literal != tt.expectedLiteral {
+			t.Errorf("For input %q, expected literal %q, got %q", tt.input, tt.expectedLiteral, tok.Literal)
+		}
+	}
+}
+
 func TestNextTokenUnexpected(t *testing.T) {
 	tests := []struct {
 		input       string

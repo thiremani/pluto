@@ -109,7 +109,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 			tok = l.createToken(token.IDENT, "")
 			tok.Literal = l.readIdentifier()
 			return tok, nil
-		} else if isDigit(l.curr) || (l.curr == '.' && isDigit(l.peekRune())) {
+		} else if isDecimal(l.curr) || (l.curr == '.' && isDecimal(l.peekRune())) {
 			tok = l.createToken(token.INT, "")
 			var isFloat bool
 			tok.Literal, isFloat = l.readNumber()
@@ -317,7 +317,7 @@ func (l *Lexer) readIdentifier() string {
 func (l *Lexer) readNumber() (string, bool) {
 	isFloat := false
 	position := l.position
-	for isDigit(l.curr) {
+	for isDecimal(l.curr) {
 		l.readRune()
 	}
 
@@ -326,7 +326,7 @@ func (l *Lexer) readNumber() (string, bool) {
 		isFloat = true
 		l.readRune()
 		// Read fractional part
-		for isDigit(l.curr) {
+		for isDecimal(l.curr) {
 			l.readRune()
 		}
 	}
@@ -349,7 +349,9 @@ func isLetterOrDigit(ch rune) bool {
 // this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
 // optimization is the if condition that quickly returns for ASCII characters
 func isDigit(ch rune) bool {
-	return '0' <= ch && ch <= '9' || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
+	return isDecimal(ch) || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
 }
+
+func isDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
 
 func lower(ch rune) rune { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter
