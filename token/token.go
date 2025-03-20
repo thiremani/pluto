@@ -5,12 +5,13 @@ import "strconv"
 type TokenType int
 
 const (
-	ILLEGAL = iota
+	// Special tokens.
+	ILLEGAL TokenType = iota
 	EOF
 	COMMENT
 
+	// Literal tokens.
 	literal_beg
-	// Identifiers + literals
 	IDENT  // add, foobar, x, y, ...
 	INT    // 1343456
 	FLOAT  // 123.45
@@ -19,48 +20,21 @@ const (
 	STRING // "abc"
 	literal_end
 
+	// Operator and punctuation tokens.
 	operator_beg
-	// Operators and delimiters
-	ASSIGN // =
-	NOT    // !
-
-	ADD // +
-	SUB // -
-	MUL // *
-	QUO // /
-	REM // %
-
-	AND     // &
-	OR      // |
-	XOR     // ^
-	SHL     // <<
-	SHR     // >>
-	AND_NOT // &^
-
-	ADD_ASSIGN // +=
-	SUB_ASSIGN // -=
-	MUL_ASSIGN // *=
-	QUO_ASSIGN // /=
-	REM_ASSIGN // %=
-
-	AND_ASSIGN     // &=
-	OR_ASSIGN      // |=
-	XOR_ASSIGN     // ^=
-	SHL_ASSIGN     // <<=
-	SHR_ASSIGN     // >>=
-	AND_NOT_ASSIGN // &^=
-
-	LPAREN // (
-	LBRACK // [
-	LBRACE // {
-	COMMA  // ,
-	PERIOD // .
-
-	RPAREN // )
-	RBRACK // ]
-	RBRACE // }
+	ASSIGN   // =
+	OPERATOR // generic operator for arithmetic etc.
+	LPAREN   // (
+	LBRACK   // [
+	LBRACE   // {
+	COMMA    // ,
+	PERIOD   // .
+	RPAREN   // )
+	RBRACK   // ]
+	RBRACE   // }
 	operator_end
 
+	// Comparison tokens.
 	comparison_beg
 	EQL // ==
 	LSS // <
@@ -69,79 +43,115 @@ const (
 	NEQ // !=
 	LEQ // <=
 	GEQ // >=
-	COLON
+
+	COLON // : is if we want to loop from 0:n. For eg: y += 0:n x
 	comparison_end
 
+	// Other tokens.
 	NEWLINE
 	INDENT
 	DEINDENT
 )
 
+const (
+	SYM_BANG   = "!"
+	SYM_ASSIGN = "="
+
+	// arithmetic symbols
+	SYM_ADD = "+"
+	SYM_SUB = "-"
+	SYM_MUL = "*"
+	SYM_DIV = "/"
+	SYM_QUO = "÷"
+	SYM_MOD = "%"
+	SYM_EXP = "^"
+
+	// comparison symbols
+	SYM_EQL = "=="
+	SYM_LSS = "<"
+	SYM_GTR = ">"
+
+	SYM_NEQ = "!="
+	SYM_LEQ = "<="
+	SYM_GEQ = ">="
+
+	// logical symbols
+	SYM_AND = "&"
+	SYM_OR  = "|"
+
+	// punctuation symbols
+	SYM_LPAREN = "("
+	SYM_LBRACK = "["
+	SYM_LBRACE = "{"
+	SYM_COMMA  = ","
+	SYM_PERIOD = "."
+	SYM_COLON  = ":"
+	SYM_RPAREN = ")"
+	SYM_RBRACK = "]"
+	SYM_RBRACE = "}"
+
+	SYM_DQUOTE  = "\""
+	SYM_SQUOTE  = "'"
+	SYM_ACCENT  = "`"
+	SYM_NEWLINE = "\n"
+	SYM_TAB     = "\t"
+	SYM_BSLASH  = "\\"
+
+	SYM_COMMENT = "#"
+)
+
+const (
+	STR_ILLEGAL  = "ILLEGAL"
+	STR_EOF      = "EOF"
+	STR_COMMENT  = "COMMENT"
+	STR_IDENT    = "IDENT"
+	STR_INT      = "INT"
+	STR_FLOAT    = "FLOAT"
+	STR_IMAG     = "IMAG"
+	STR_RUNE     = "RUNE"
+	STR_STRING   = "STRING"
+	STR_OPERATOR = "OPERATOR"
+	STR_INDENT   = "INDENT"
+	STR_DEINDENT = "DEINDENT"
+)
+
 var tokens = [...]string{
-	ILLEGAL: "ILLEGAL",
+	ILLEGAL: STR_ILLEGAL,
 
-	EOF:     "EOF",
-	COMMENT: "COMMENT",
+	EOF:     STR_EOF,
+	COMMENT: STR_COMMENT,
 
-	IDENT:  "IDENT",
-	INT:    "INT",
-	FLOAT:  "FLOAT",
-	IMAG:   "IMAG",
-	RUNE:   "RUNE",
-	STRING: "STRING",
+	IDENT:  STR_IDENT,
+	INT:    STR_INT,
+	FLOAT:  STR_FLOAT,
+	IMAG:   STR_IMAG,
+	RUNE:   STR_RUNE,
+	STRING: STR_STRING,
 
-	ASSIGN: "=",
-	NOT:    "!",
+	OPERATOR: STR_OPERATOR,
 
-	ADD: "+",
-	SUB: "-",
-	MUL: "*",
-	QUO: "/",
-	REM: "%",
+	ASSIGN: SYM_ASSIGN,
+	LPAREN: SYM_LPAREN,
+	LBRACK: SYM_LBRACK,
+	LBRACE: SYM_LBRACE,
+	COMMA:  SYM_COMMA,
+	PERIOD: SYM_PERIOD,
+	COLON:  SYM_COLON, // COLON as punctuation
+	RPAREN: SYM_RPAREN,
+	RBRACK: SYM_RBRACK,
+	RBRACE: SYM_RBRACE,
 
-	AND:     "&",
-	OR:      "|",
-	XOR:     "^",
-	SHL:     "<<",
-	SHR:     ">>",
-	AND_NOT: "&^",
+	EQL: SYM_EQL,
+	LSS: SYM_LSS,
+	GTR: SYM_GTR,
 
-	ADD_ASSIGN: "+=",
-	SUB_ASSIGN: "-=",
-	MUL_ASSIGN: "*=",
-	QUO_ASSIGN: "/=",
-	REM_ASSIGN: "%=",
+	NEQ: SYM_NEQ,
+	LEQ: SYM_LEQ,
+	GEQ: SYM_GEQ,
 
-	AND_ASSIGN:     "&=",
-	OR_ASSIGN:      "|=",
-	XOR_ASSIGN:     "^=",
-	SHL_ASSIGN:     "<<=",
-	SHR_ASSIGN:     ">>=",
-	AND_NOT_ASSIGN: "&^=",
-
-	COLON: ":",
-
-	LPAREN: "(",
-	LBRACK: "[",
-	LBRACE: "{",
-	COMMA:  ",",
-	PERIOD: ".",
-
-	RPAREN: ")",
-	RBRACK: "]",
-	RBRACE: "}",
-
-	EQL: "==",
-	LSS: "<",
-	GTR: ">",
-
-	NEQ: "!=",
-	LEQ: "<=",
-	GEQ: ">=",
-
-	NEWLINE:  "\n",
-	INDENT:   "INDENT",
-	DEINDENT: "DEINDENT",
+	NEWLINE:  SYM_NEWLINE,
+	INDENT:   STR_INDENT,
+	DEINDENT: STR_DEINDENT,
 }
 
 type Token struct {
@@ -166,6 +176,15 @@ func (tokenType TokenType) String() string {
 	}
 
 	return s
+}
+
+// TokenTypeWithOp returns token type string if it is not an operator
+// if it is an operator then it returns the operator literal
+func (t Token) TokenTypeWithOp() string {
+	if t.Type == OPERATOR {
+		return t.Literal
+	}
+	return t.Type.String()
 }
 
 type CompileError struct {

@@ -54,56 +54,55 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	switch l.curr {
-	case '=':
-		if l.peekRune() == '=' {
-			tok = l.createToken(token.EQL, "")
-			curr := l.curr
-			l.readRune()
-			tok.Literal = string(curr) + string(l.curr)
-		} else {
-			tok = l.createToken(token.ASSIGN, string(l.curr))
-		}
-	case '+':
-		tok = l.createToken(token.ADD, string(l.curr))
-	case '-':
-		tok = l.createToken(token.SUB, string(l.curr))
-	case '!':
-		if l.peekRune() == '=' {
-			tok = l.createToken(token.NEQ, "")
-			ch := l.curr
-			l.readRune()
-			tok.Literal = string(ch) + string(l.curr)
-		} else {
-			tok = l.createToken(token.NOT, string(l.curr))
-		}
-	case '/':
-		tok = l.createToken(token.QUO, string(l.curr))
-	case '*':
-		tok = l.createToken(token.MUL, string(l.curr))
-	case ':':
-		tok = l.createToken(token.COLON, string(l.curr))
-	case '<':
-		tok = l.createToken(token.LSS, string(l.curr))
-	case '>':
-		tok = l.createToken(token.GTR, string(l.curr))
-	case ',':
-		tok = l.createToken(token.COMMA, string(l.curr))
-	case '(':
-		tok = l.createToken(token.LPAREN, string(l.curr))
-	case ')':
-		tok = l.createToken(token.RPAREN, string(l.curr))
 	case '\n':
-		tok = l.createToken(token.NEWLINE, string(l.curr))
+		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE)
 		l.newLine()
 		l.onNewline = true
 	case '"':
-		tok = l.createToken(token.STRING, "")
+		tok = l.createToken(token.STRING, token.SYM_DQUOTE)
 		l.readRune()
 		tok.Literal = l.readString()
+	case ':':
+		tok = l.createToken(token.COLON, token.SYM_COLON)
+	case ',':
+		tok = l.createToken(token.COMMA, token.SYM_COMMA)
+	case '(':
+		tok = l.createToken(token.LPAREN, token.SYM_LPAREN)
+	case ')':
+		tok = l.createToken(token.RPAREN, token.SYM_RPAREN)
 	case 0:
 		fallthrough
 	case eof:
 		tok = l.createToken(token.EOF, "")
+	case '=':
+		if l.peekRune() == '=' {
+			tok = l.createToken(token.EQL, token.SYM_EQL)
+			l.readRune()
+		} else {
+			tok = l.createToken(token.ASSIGN, token.SYM_ASSIGN)
+		}
+	case '<':
+		if l.peekRune() == '=' {
+			tok = l.createToken(token.LEQ, token.SYM_LEQ)
+			l.readRune()
+		} else {
+			tok = l.createToken(token.LSS, token.SYM_LSS)
+		}
+	case '>':
+		if l.peekRune() == '=' {
+			tok = l.createToken(token.GEQ, token.SYM_GEQ)
+			l.readRune()
+		} else {
+			tok = l.createToken(token.GTR, token.SYM_GTR)
+		}
+	case '!':
+		if l.peekRune() == '=' {
+			tok = l.createToken(token.NEQ, token.SYM_NEQ)
+			l.readRune()
+			l.readRune()
+			return tok, nil
+		}
+		fallthrough
 	default:
 		if isLetter(l.curr) {
 			tok = l.createToken(token.IDENT, "")
@@ -117,11 +116,17 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 				tok.Type = token.FLOAT
 			}
 			return tok, nil
+		} else if isOperator(l.curr) {
+			// Read a maximal sequence of operator characters.
+			tok = l.createToken(token.OPERATOR, "")
+			tok.Literal = l.readOperator()
+			return tok, nil
 		} else {
-			tok = l.createToken(token.ILLEGAL, string(l.curr))
+			ch := string(l.curr)
+			tok = l.createToken(token.ILLEGAL, ch)
 			err = &token.CompileError{
 				Token: tok,
-				Msg:   "Illegal character '" + string(l.curr) + "'",
+				Msg:   "Illegal character '" + ch + "'",
 			}
 		}
 	}
@@ -334,6 +339,15 @@ func (l *Lexer) readNumber() (string, bool) {
 	return string(l.input[position:l.position]), isFloat
 }
 
+// readOperator consumes a maximal sequence of operator characters and returns the combined string.
+func (l *Lexer) readOperator() string {
+	startPos := l.position
+	for isOperator(l.curr) {
+		l.readRune()
+	}
+	return string(l.input[startPos:l.position])
+}
+
 // isLetter checks if a rune is a valid start of an identifier (Unicode letter or `_`).
 // this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
 // optimization is the if condition that quickly returns for ASCII characters
@@ -350,6 +364,26 @@ func isLetterOrDigit(ch rune) bool {
 // optimization is the if condition that quickly returns for ASCII characters
 func isDigit(ch rune) bool {
 	return isDecimal(ch) || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
+}
+
+// isOperator returns true if the rune is one of the allowed ASCII operator characters or unicode symbol
+func isOperator(ch rune) bool {
+	if ch < 128 {
+		// For ASCII, explicitly list allowed operator characters.
+		switch ch {
+		// Exclude '=' because it's used for assignment or comparisons.
+		case '+', '-', '*', '/', '%', '!', '&', '|', '^', '~', '?', '@', '$', '\\':
+			return true
+		default:
+			return false
+		}
+	}
+	// For non-ASCII, allow characters in math symbols, other symbols,
+	// currency symbols (Sc), and modifier symbols (Sk).
+	return unicode.Is(unicode.Sm, ch) ||
+		unicode.Is(unicode.So, ch) ||
+		unicode.Is(unicode.Sc, ch) ||
+		unicode.Is(unicode.Sk, ch)
 }
 
 func isDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }

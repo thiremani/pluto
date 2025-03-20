@@ -93,7 +93,7 @@ func TestNextToken(t *testing.T) {
 		{token.IDENT, "res", "", 8, 9},
 		{token.ASSIGN, "=", "", 8, 13},
 		{token.IDENT, "x", "", 8, 15},
-		{token.ADD, "+", "", 8, 17},
+		{token.OPERATOR, "+", "", 8, 17},
 		{token.IDENT, "y", "", 8, 19},
 		{token.NEWLINE, "\n", "", 8, 20},
 		{token.DEINDENT, "r", "", 9, 5},
@@ -106,10 +106,7 @@ func TestNextToken(t *testing.T) {
 		{token.IDENT, "ten", "", 9, 24},
 		{token.RPAREN, ")", "", 9, 27},
 		{token.NEWLINE, "\n", "", 9, 28},
-		{token.NOT, "!", "", 10, 5},
-		{token.SUB, "-", "", 10, 6},
-		{token.QUO, "/", "", 10, 7},
-		{token.MUL, "*", "", 10, 8},
+		{token.OPERATOR, "!-/*", "", 10, 5},
 		{token.INT, "5", "", 10, 9},
 		{token.NEWLINE, "\n", "", 10, 10},
 		{token.INT, "5", "", 11, 5},
@@ -337,6 +334,42 @@ func TestASCIINumbers(t *testing.T) {
 	}
 }
 
+func TestReadOperator(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Single-character operators.
+		{"+", "+"},
+		{"-", "-"},
+		{"*", "*"},
+		{"/", "/"},
+		{"!", "!"},
+		// Multi-character operators.
+		{"++", "++"},
+		// Mixed operators.
+		{"+-*/", "+-*/"},
+		// Operators with additional allowed punctuation (including colon and dollar and backslash).
+		{"@$\\", "@$\\"},
+		// Operator followed by a letter should stop reading at the first non-operator.
+		{"++abc", "++"},
+		// Non-ASCII operator characters are allowed if they fall into allowed Unicode categories.
+		{"±√", "±√"},
+		{"⌘★♦", "⌘★♦"},
+		{"₹", "₹"},
+	}
+
+	for _, tt := range tests {
+		l := New(tt.input)
+		// Call readOperator directly. Since our readOperator consumes operator characters,
+		// it should return the maximal sequence.
+		op := l.readOperator()
+		if op != tt.expected {
+			t.Errorf("readOperator(%q): expected %q, got %q", tt.input, tt.expected, op)
+		}
+	}
+}
+
 func TestNextTokenUnexpected(t *testing.T) {
 	tests := []struct {
 		input       string
@@ -353,14 +386,14 @@ func TestNextTokenUnexpected(t *testing.T) {
 			expectedErr: []string{"", ""},
 		},
 		{
-			input: "@abc",
-			// "@" is illegal so should yield an ILLEGAL token with an error message,
+			input: "=abc",
+			// = is lexed as token.ASSIGN
 			// then "abc" is lexed as an identifier.
 			expectedTok: []token.Token{
-				{Type: token.ILLEGAL, Literal: "@"},
+				{Type: token.ASSIGN, Literal: "="},
 				{Type: token.IDENT, Literal: "abc"},
 			},
-			expectedErr: []string{"1:1:@:Illegal character '@'", ""},
+			expectedErr: []string{"", ""},
 		},
 	}
 

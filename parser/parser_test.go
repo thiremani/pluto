@@ -288,7 +288,7 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 			"((-a) * b)",
 		},
 		{
-			"!-a",
+			"!(-a)",
 			"(!(-a))",
 		},
 		{
