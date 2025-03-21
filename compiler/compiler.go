@@ -152,6 +152,16 @@ func (c *Compiler) initOpFuncs() {
 	c.opFuncs[opKey{Operator: token.SYM_GEQ, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
 		return c.builder.CreateFCmp(llvm.FloatOGE, left, right, "fcmp_ge")
 	}
+
+	// Register exponentiation operator for floating-point values.
+	powType := llvm.FunctionType(c.context.DoubleType(), []llvm.Type{c.context.DoubleType(), c.context.DoubleType()}, false)
+	powFunc := c.module.NamedFunction("llvm.pow.f64")
+	if powFunc.IsNil() {
+		powFunc = llvm.AddFunction(c.module, "llvm.pow.f64", powType)
+	}
+	c.opFuncs[opKey{Operator: "^", LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
+		return c.builder.CreateCall(powType, powFunc, []llvm.Value{left, right}, "pow_tmp")
+	}
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {

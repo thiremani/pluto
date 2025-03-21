@@ -17,6 +17,7 @@ const (
 	COLON       // :
 	SUM         // +
 	PRODUCT     // *
+	EXP         // ^
 	LESSGREATER // > or <
 	PREFIX      // -X or !X
 	CALL        // myFunction(X)
@@ -31,6 +32,7 @@ var precedences = map[string]int{
 	token.SYM_MUL:    PRODUCT,
 	token.SYM_DIV:    PRODUCT,
 	token.SYM_QUO:    PRODUCT,
+	token.SYM_EXP:    EXP,
 	token.SYM_EQL:    LESSGREATER,
 	token.SYM_LSS:    LESSGREATER,
 	token.SYM_GTR:    LESSGREATER,
