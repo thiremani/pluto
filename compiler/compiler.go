@@ -8,17 +8,6 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-// opKey represents the key for an operator function based on
-// the operator literal and the operand type names.
-type opKey struct {
-	Operator  string
-	LeftType  string
-	RightType string
-}
-
-// opFunc is the type for functions that generate LLVM IR for an operator.
-type opFunc func(left, right llvm.Value) llvm.Value
-
 type Symbol struct {
 	Val  llvm.Value
 	Type Type
@@ -71,97 +60,6 @@ func (c *Compiler) Compile(program *ast.Program) {
 
 	// Add explicit return 0
 	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
-}
-
-func (c *Compiler) initOpFuncs() {
-	// Initialize the operator functions map with concise type names ("i64" and "f64").
-	c.opFuncs = make(map[opKey]opFunc)
-
-	// Integer addition
-	c.opFuncs[opKey{Operator: token.SYM_ADD, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateAdd(left, right, "add_tmp")
-	}
-	// Float addition
-	c.opFuncs[opKey{Operator: token.SYM_ADD, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFAdd(left, right, "fadd_tmp")
-	}
-	// Integer subtraction
-	c.opFuncs[opKey{Operator: token.SYM_SUB, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateSub(left, right, "sub_tmp")
-	}
-	// Float subtraction
-	c.opFuncs[opKey{Operator: token.SYM_SUB, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFSub(left, right, "fsub_tmp")
-	}
-	// Integer multiplication
-	c.opFuncs[opKey{Operator: token.SYM_MUL, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateMul(left, right, "mul_tmp")
-	}
-	// Float multiplication
-	c.opFuncs[opKey{Operator: token.SYM_MUL, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFMul(left, right, "fmul_tmp")
-	}
-	// For division, if both operands are integers, promote them to float and do float division.
-	c.opFuncs[opKey{Operator: token.SYM_DIV, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		leftFP := c.builder.CreateSIToFP(left, c.context.DoubleType(), "cast_to_f64")
-		rightFP := c.builder.CreateSIToFP(right, c.context.DoubleType(), "cast_to_f64")
-		return c.builder.CreateFDiv(leftFP, rightFP, "fdiv_tmp")
-	}
-	// Float division
-	c.opFuncs[opKey{Operator: token.SYM_DIV, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFDiv(left, right, "fdiv_tmp")
-	}
-
-	//Comparisons
-	// Integer comparisons
-	c.opFuncs[opKey{Operator: token.SYM_EQL, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntEQ, left, right, "icmp_eq")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_LSS, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntSLT, left, right, "icmp_lt")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_GTR, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntSGT, left, right, "icmp_gt")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_NEQ, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntNE, left, right, "icmp_ne")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_LEQ, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntSLE, left, right, "icmp_le")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_GEQ, LeftType: "i64", RightType: "i64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateICmp(llvm.IntSGE, left, right, "icmp_ge")
-	}
-
-	// Float comparisons
-	c.opFuncs[opKey{Operator: token.SYM_EQL, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatOEQ, left, right, "fcmp_eq")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_LSS, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatOLT, left, right, "fcmp_lt")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_GTR, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatOGT, left, right, "fcmp_gt")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_NEQ, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatONE, left, right, "fcmp_ne")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_LEQ, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatOLE, left, right, "fcmp_le")
-	}
-	c.opFuncs[opKey{Operator: token.SYM_GEQ, LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateFCmp(llvm.FloatOGE, left, right, "fcmp_ge")
-	}
-
-	// Register exponentiation operator for floating-point values.
-	powType := llvm.FunctionType(c.context.DoubleType(), []llvm.Type{c.context.DoubleType(), c.context.DoubleType()}, false)
-	powFunc := c.module.NamedFunction("llvm.pow.f64")
-	if powFunc.IsNil() {
-		powFunc = llvm.AddFunction(c.module, "llvm.pow.f64", powType)
-	}
-	c.opFuncs[opKey{Operator: "^", LeftType: "f64", RightType: "f64"}] = func(left, right llvm.Value) llvm.Value {
-		return c.builder.CreateCall(powType, powFunc, []llvm.Value{left, right}, "pow_tmp")
-	}
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -344,10 +242,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 	leftIsFloat := left.Type.Kind() == FloatKind
 	rightIsFloat := right.Type.Kind() == FloatKind
 
-	opType := IntKind
-
 	if leftIsFloat || rightIsFloat {
-		opType = FloatKind
 		if !leftIsFloat {
 			left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
 			left.Type = Float{Width: 64}
@@ -356,6 +251,12 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 			right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
 			right.Type = Float{Width: 64}
 		}
+	} else if expr.Operator == token.SYM_DIV || expr.Operator == token.SYM_EXP {
+		// if both types are int, we currently convert both to float for operations / and ^
+		left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
+		left.Type = Float{Width: 64}
+		right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
+		right.Type = Float{Width: 64}
 	}
 
 	// Build a key based on the operator literal and the operand types.
@@ -367,19 +268,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 	}
 
 	if fn, ok := c.opFuncs[key]; ok {
-		result := fn(left.Val, right.Val)
-		var resultType Type
-		if expr.Operator == token.SYM_DIV {
-			resultType = Float{Width: 64}
-		} else if opType == FloatKind {
-			resultType = Float{Width: 64}
-		} else {
-			resultType = Int{Width: 64}
-		}
-		s = Symbol{
-			Val:  result,
-			Type: resultType,
-		}
+		s = fn(left, right)
 		return
 	}
 	panic("unsupported operator: " + expr.Operator + " for types: " + left.Type.String() + ", " + right.Type.String())
