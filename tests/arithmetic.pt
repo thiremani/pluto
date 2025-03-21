@@ -16,3 +16,5 @@ sum, sub, mul, div
 
 o = 3.4
 n + o, n - o, n * o, n / o
+
+m + o, m - o, m * o, m / o

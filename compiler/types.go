@@ -24,7 +24,7 @@ type Int struct {
 }
 
 func (i Int) String() string {
-	return fmt.Sprintf("int%d", i.Width)
+	return fmt.Sprintf("i%d", i.Width)
 }
 
 func (i Int) Kind() Kind {
@@ -37,7 +37,7 @@ type Float struct {
 }
 
 func (f Float) String() string {
-	return fmt.Sprintf("float%d", f.Width)
+	return fmt.Sprintf("f%d", f.Width)
 }
 
 func (f Float) Kind() Kind {
