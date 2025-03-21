@@ -1,0 +1,6 @@
+s = "hello world"
+s
+
+t = "abcd"
+
+s, t
