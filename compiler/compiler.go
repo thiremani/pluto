@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"pluto/ast"
+	"pluto/lexer"
 	"pluto/token"
 	"strings"
 	"tinygo.org/x/go-llvm"
@@ -341,6 +342,66 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
 	return c.builder.CreateCall(funcType, fn, args, "call_tmp")
 }
 
+// defaultSpecifier returns the printf conversion specifier for a given type.
+func defaultSpecifier(t Type) string {
+	switch t.Kind() {
+	case IntKind:
+		return "%ld"
+	case FloatKind:
+		return "%.15g"
+	case StringKind:
+		return "%s"
+	default:
+		err := "unsupported type in print statement " + t.String()
+		panic(err)
+	}
+}
+
+// formatIdentifiers scans the string literal for markers of the form "-identifier".
+// For each such marker, it looks up the identifier in the symbol table and replaces the marker
+// with the appropriate conversion specifier. It returns the new format string along with a slice
+// of llvm.Value for each variable found.
+func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
+	var builder strings.Builder
+	var args []llvm.Value
+
+	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
+	runes := []rune(s)
+	i := 0
+	for i < len(runes) {
+		// If we see a '-' and the next rune is a valid identifier start...
+		if runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1]) {
+			// Parse the identifier.
+			j := i + 2
+			for j < len(runes) && lexer.IsLetterOrDigit(runes[j]) {
+				j++
+			}
+			identifier := string(runes[i+1 : j])
+			// Look up the identifier in the symbol table.
+			sym, ok := c.symbols[identifier]
+			if !ok {
+				// If the symbol isn't found, you might want to error out or leave the marker intact.
+				// Here, we simply output the marker as-is.
+				builder.WriteRune('-')
+				builder.WriteString(identifier)
+			} else {
+				// Replace the marker with the default conversion specifier for this type.
+				spec := defaultSpecifier(sym.Type)
+				builder.WriteString(spec)
+				// Append the corresponding llvm.Value to the argument list.
+				args = append(args, sym.Val)
+			}
+			// Advance past the marker.
+			i = j
+			continue
+		}
+		// Otherwise, simply output the rune.
+		builder.WriteRune(runes[i])
+		i++
+	}
+	return builder.String(), args
+}
+
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	// Track format specifiers and arguments
 	var formatStr string
@@ -348,24 +409,17 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// Generate format string based on expression types
 	for _, expr := range ps.Expression {
-		// Compile the expression and get its value and type
-		s := c.compileExpression(expr)
-
-		// Append format specifier based on type
-		switch s.Type.Kind() {
-		case IntKind:
-			// %ld for 64-bit integers
-			formatStr += "%ld "
-		case FloatKind:
-			formatStr += "%.15g "
-		case StringKind:
-			formatStr += "%s "
-		default:
-			err := "unsupported type in print statement " + s.Type.String()
-			panic(err)
+		// If the expression is a string literal, check for embedded markers.
+		if strLit, ok := expr.(*ast.StringLiteral); ok {
+			processed, newArgs := c.formatIdentifiers(strLit.Value)
+			formatStr += processed + " " // separate expressions with a space
+			args = append(args, newArgs...)
+		} else {
+			// Compile the expression and get its value and type
+			s := c.compileExpression(expr)
+			formatStr += defaultSpecifier(s.Type) + " "
+			args = append(args, s.Val)
 		}
-
-		args = append(args, s.Val)
 	}
 
 	// Add newline and null terminator

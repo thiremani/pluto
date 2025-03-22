@@ -2,5 +2,10 @@ s = "hello world"
 s
 
 t = "abcd"
-
 s, t
+
+x = 5
+six = 6
+"x = -x, six = -six"
+y = 5 * x
+"x is -x", "y is -y"

@@ -104,11 +104,11 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		}
 		fallthrough
 	default:
-		if isLetter(l.curr) {
+		if IsLetter(l.curr) {
 			tok = l.createToken(token.IDENT, "")
 			tok.Literal = l.readIdentifier()
 			return tok, nil
-		} else if isDecimal(l.curr) || (l.curr == '.' && isDecimal(l.peekRune())) {
+		} else if IsDecimal(l.curr) || (l.curr == '.' && IsDecimal(l.peekRune())) {
 			tok = l.createToken(token.INT, "")
 			var isFloat bool
 			tok.Literal, isFloat = l.readNumber()
@@ -116,7 +116,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 				tok.Type = token.FLOAT
 			}
 			return tok, nil
-		} else if isOperator(l.curr) {
+		} else if IsOperator(l.curr) {
 			// Read a maximal sequence of operator characters.
 			tok = l.createToken(token.OPERATOR, "")
 			tok.Literal = l.readOperator()
@@ -312,7 +312,7 @@ func (l *Lexer) readIdentifier() string {
 	l.readRune() // Consume first character
 
 	// Read subsequent valid characters (letters, digits, `_`)
-	for isLetterOrDigit(l.curr) {
+	for IsLetterOrDigit(l.curr) {
 		l.readRune()
 	}
 
@@ -322,7 +322,7 @@ func (l *Lexer) readIdentifier() string {
 func (l *Lexer) readNumber() (string, bool) {
 	isFloat := false
 	position := l.position
-	for isDecimal(l.curr) {
+	for IsDecimal(l.curr) {
 		l.readRune()
 	}
 
@@ -331,7 +331,7 @@ func (l *Lexer) readNumber() (string, bool) {
 		isFloat = true
 		l.readRune()
 		// Read fractional part
-		for isDecimal(l.curr) {
+		for IsDecimal(l.curr) {
 			l.readRune()
 		}
 	}
@@ -342,7 +342,7 @@ func (l *Lexer) readNumber() (string, bool) {
 // readOperator consumes a maximal sequence of operator characters and returns the combined string.
 func (l *Lexer) readOperator() string {
 	startPos := l.position
-	for isOperator(l.curr) {
+	for IsOperator(l.curr) {
 		l.readRune()
 	}
 	return string(l.input[startPos:l.position])
@@ -351,23 +351,23 @@ func (l *Lexer) readOperator() string {
 // isLetter checks if a rune is a valid start of an identifier (Unicode letter or `_`).
 // this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
 // optimization is the if condition that quickly returns for ASCII characters
-func isLetter(ch rune) bool {
+func IsLetter(ch rune) bool {
 	return 'a' <= lower(ch) && lower(ch) <= 'z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
 }
 
 // isLetterOrDigit checks if a rune can be part of an identifier (Unicode letter, digit, `_`).
-func isLetterOrDigit(ch rune) bool {
-	return isLetter(ch) || isDigit(ch)
+func IsLetterOrDigit(ch rune) bool {
+	return IsLetter(ch) || IsDigit(ch)
 }
 
 // this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
 // optimization is the if condition that quickly returns for ASCII characters
-func isDigit(ch rune) bool {
-	return isDecimal(ch) || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
+func IsDigit(ch rune) bool {
+	return IsDecimal(ch) || ch >= utf8.RuneSelf && unicode.IsDigit(ch)
 }
 
 // isOperator returns true if the rune is one of the allowed ASCII operator characters or unicode symbol
-func isOperator(ch rune) bool {
+func IsOperator(ch rune) bool {
 	if ch < 128 {
 		// For ASCII, explicitly list allowed operator characters.
 		switch ch {
@@ -386,6 +386,6 @@ func isOperator(ch rune) bool {
 		unicode.Is(unicode.Sk, ch)
 }
 
-func isDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
+func IsDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
 
 func lower(ch rune) rune { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter
