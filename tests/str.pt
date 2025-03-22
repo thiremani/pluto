@@ -8,4 +8,14 @@ x = 5
 six = 6
 "x = -x, six = -six"
 y = 5 * x
-"x is -x", "y is -y"
+"x - -x", "y - -y, and negative numbers are -1, -2, -3"
+z = 8.73
+a = 1.23
+"Preceding with blanks: -x%10d"
+
+x = 42
+"Preceding with zeros -x%010d and different radices -x%o -x%x -x%#o -x%#x \n"
+"Floats: -z%4.2f -z%+.0e -a%E"
+"Width: -x%5d"
+"Percent: -x%%"
+"Multiple percentage: %% -z%4.2f%% %%"

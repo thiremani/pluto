@@ -1,4 +1,11 @@
 hello world
 hello world abcd
 x = 5, six = 6
-x is 5 y is 25
+x - 5 y - 25, and negative numbers are -1, -2, -3
+Preceding with blanks:          5
+Preceding with zeros 0000000042 and different radices 52 2a 052 0x2a 
+
+Floats: 8.73 +9e+00 1.230000E+00
+Width:    42
+Percent: 42%
+Multiple percentage: % 8.73% %

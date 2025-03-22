@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"pluto/ast"
-	"pluto/lexer"
 	"pluto/token"
 	"strings"
 	"tinygo.org/x/go-llvm"
@@ -355,51 +354,6 @@ func defaultSpecifier(t Type) string {
 		err := "unsupported type in print statement " + t.String()
 		panic(err)
 	}
-}
-
-// formatIdentifiers scans the string literal for markers of the form "-identifier".
-// For each such marker, it looks up the identifier in the symbol table and replaces the marker
-// with the appropriate conversion specifier. It returns the new format string along with a slice
-// of llvm.Value for each variable found.
-func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
-	var builder strings.Builder
-	var args []llvm.Value
-
-	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
-	runes := []rune(s)
-	i := 0
-	for i < len(runes) {
-		// If we see a '-' and the next rune is a valid identifier start...
-		if runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1]) {
-			// Parse the identifier.
-			j := i + 2
-			for j < len(runes) && lexer.IsLetterOrDigit(runes[j]) {
-				j++
-			}
-			identifier := string(runes[i+1 : j])
-			// Look up the identifier in the symbol table.
-			sym, ok := c.symbols[identifier]
-			if !ok {
-				// If the symbol isn't found, you might want to error out or leave the marker intact.
-				// Here, we simply output the marker as-is.
-				builder.WriteRune('-')
-				builder.WriteString(identifier)
-			} else {
-				// Replace the marker with the default conversion specifier for this type.
-				spec := defaultSpecifier(sym.Type)
-				builder.WriteString(spec)
-				// Append the corresponding llvm.Value to the argument list.
-				args = append(args, sym.Val)
-			}
-			// Advance past the marker.
-			i = j
-			continue
-		}
-		// Otherwise, simply output the rune.
-		builder.WriteRune(runes[i])
-		i++
-	}
-	return builder.String(), args
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
