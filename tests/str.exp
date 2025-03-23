@@ -9,3 +9,5 @@ Floats: 8.73 +9e+00 1.230000E+00
 Width:    42
 Percent: 42%
 Multiple percentage: % 8.73% %
+Variable width     42
+Variable precision     8.73   1.23 and   8.73%

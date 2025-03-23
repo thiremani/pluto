@@ -82,7 +82,10 @@ class TestRunner:
 
         # Generate LLVM IR
         ir_file = build_prefix.with_suffix(".ll")
-        self.run_command(["./" + str(PLUTO_EXE), "-o", str(ir_file), str(test_file)], self.project_root)
+        compiler_output = self.run_command(["./" + str(PLUTO_EXE), "-o", str(ir_file), str(test_file)], self.project_root)
+        if compiler_output != "":
+            print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")  # Add this line
+
 
         # Compile to binary
         obj_file = build_prefix.with_suffix(".o")

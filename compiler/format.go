@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"pluto/lexer"
 	"strings"
 	"tinygo.org/x/go-llvm"
@@ -27,37 +28,120 @@ func formatSpecifierEnd(ch rune) bool {
 		ch == '%'
 }
 
-// parseMarker attempts to parse a marker starting at index i in runes.
-// It returns the parsed identifier, the custom specifier (if any), and the new index.
-func parseMarker(runes []rune, i int) (identifier string, customSpec string, newIndex int) {
-	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start.
-	j := i + 2
+// parseSpecifier assumes runes[start] == '%'
+// for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
+// these are then returned as specIds. (-identifier) is replaced with *
+func parseSpecifier(runes []rune, start int) (specIds []string, spec string, endIndex int) {
+	// Read until we encounter a conversion specifier end char (like d, f, etc.)
+	specRunes := []rune{runes[start]}
+	it := start + 1
+	for it < len(runes) && !formatSpecifierEnd(runes[it]) {
+		if runes[it] == '*' {
+			panic("Using * not allowed in format specifier. Instead use (-var), where var is an integer variable.")
+		}
+		if it+2 < len(runes) && runes[it] == '(' && runes[it+1] == '-' && lexer.IsLetter(runes[it+2]) {
+			specId, end := parseIdentifier(runes, it+2)
+			if end >= len(runes) || runes[end] != ')' {
+				panic(fmt.Sprintf("Expected ) after the identifier %s", specId))
+			}
+			specIds = append(specIds, specId)
+			specRunes = append(specRunes, '*')
+			it = end + 1
+			continue
+		}
+		specRunes = append(specRunes, runes[it])
+		it++
+	}
+
+	// if we don't hit string end, add one to include the last character in return string
+	if it < len(runes) {
+		specRunes = append(specRunes, runes[it])
+		it++
+	}
+
+	endIndex = it
+	spec = string(specRunes)
+	return
+}
+
+// Assumes runes[start] is a valid start to the identifier (lexer.IsLetter)
+func parseIdentifier(runes []rune, start int) (identifier string, end int) {
+	j := start + 1
 	for j < len(runes) && lexer.IsLetterOrDigit(runes[j]) {
 		j++
 	}
-	identifier = string(runes[i+1 : j])
-	customSpec = ""
-	// Check if a custom specifier follows, starting with '%'
-	if j < len(runes) && runes[j] == '%' {
-		specStart := j
-		j++ // consume '%'
-		// Read until we encounter a conversion specifier (like d, f, etc.)
-		for j < len(runes) && !formatSpecifierEnd(runes[j]) {
-			j++
+	end = j
+	identifier = string(runes[start:end])
+	return
+}
+
+// parseMarker attempts to parse a marker starting at index i in runes.
+// It returns the parsed identifier, the custom specifier (if any), and the new index.
+func parseMarker(runes []rune, i int) (idents []string, customSpec string, newIndex int) {
+	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start.
+	specIds := make([]string, 0)
+	identifier, end := parseIdentifier(runes, i+1)
+	if end < len(runes) && runes[end] == '%' {
+		if end+1 == len(runes) {
+			panic("Invalid format specifier string: Format specifier is incomplete")
 		}
-		// Optionally include the conversion specifier character:
-		if j < len(runes) {
-			j++ // include the conversion specifier
-		}
-		customSpec = string(runes[specStart:j])
+		specStart := end
+		specIds, customSpec, end = parseSpecifier(runes, specStart)
 	}
-	return identifier, customSpec, j
+
+	idents = append(idents, identifier)
+	idents = append(idents, specIds...)
+	newIndex = end
+	return
+}
+
+// assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
+func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (formattedStr string, idArgs []llvm.Value) {
+	var builder strings.Builder
+	mainId := ids[0]
+	// Look up the identifier in the symbol table.
+	if sym, ok := c.symbols[mainId]; ok {
+		// Use the custom specifier if provided; otherwise, use the default.
+		for _, specId := range ids[1:] {
+			var specSym Symbol
+			var exists bool
+			if specSym, exists = c.symbols[specId]; !exists {
+				panic(fmt.Sprintf("Identifier %s not found within specifier. Specifier was after identifier %s", specId, mainId))
+			}
+			idArgs = append(idArgs, specSym.Val)
+		}
+
+		// if customSpec is either "" or %% it must be written later anyway. %% must be written as is.
+		if customSpec == "" || customSpec == "%%" {
+			builder.WriteString(defaultSpecifier(sym.Type))
+		}
+		builder.WriteString(customSpec)
+		formattedStr = builder.String()
+		idArgs = append(idArgs, sym.Val)
+		return
+	}
+	// If the symbol isn't found, you might want to error out or leave the marker intact.
+	// Here, we simply output the marker as-is.
+	if len(ids) > 1 {
+		panic(fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier with identifier parameters %v", mainId, customSpec, ids[1:]))
+	}
+	builder.WriteRune('-')
+	builder.WriteString(mainId)
+	if customSpec != "" && customSpec != "%%" {
+		panic(fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier", mainId, customSpec))
+	}
+	builder.WriteString(customSpec)
+	formattedStr = builder.String()
+	return
 }
 
 // formatIdentifiers scans the string literal for markers of the form "-identifier".
 // For each such marker, it looks up the identifier in the symbol table and replaces the marker
 // with the appropriate conversion specifier. It returns the new format string along with a slice
 // of llvm.Value for each variable found.
+// it additionally supports specifiers %d, %f etc as defined by the printf function
+// the * option for the width and precision should be replaced by their corresponding variables within parentheses and with the marker
+// eg: -a%(-w)d prints the integer variable a with width given by the variable w
 func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
 	var builder strings.Builder
 	var args []llvm.Value
@@ -66,36 +150,20 @@ func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
 	runes := []rune(s)
 	i := 0
 	for i < len(runes) {
-		// If we see a '-' and the next rune is a valid identifier start...
-		if runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1]) {
-			// Parse the identifier.
-			identifier, customSpec, newIndex := parseMarker(runes, i)
-			// Look up the identifier in the symbol table.
-			if sym, ok := c.symbols[identifier]; ok {
-				// Use the custom specifier if provided; otherwise, use the default.
-				spec := customSpec
-				if spec == "" || spec == "%%" {
-					spec = defaultSpecifier(sym.Type)
-				}
-				builder.WriteString(spec)
-				if customSpec == "%%" {
-					builder.WriteString(customSpec)
-				}
-				args = append(args, sym.Val)
-			} else {
-				// If the symbol isn't found, you might want to error out or leave the marker intact.
-				// Here, we simply output the marker as-is.
-				builder.WriteRune('-')
-				builder.WriteString(identifier)
-				builder.WriteString(customSpec)
-			}
-			// Advance past the marker.
-			i = newIndex
+		if !(runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1])) {
+			builder.WriteRune(runes[i])
+			i++
 			continue
 		}
-		// Otherwise, simply output the rune.
-		builder.WriteRune(runes[i])
-		i++
+		// If we see a '-' and the next rune is a valid identifier start...
+		// Parse the marker.
+		identifiers, customSpec, newIndex := parseMarker(runes, i)
+		formattedStr, idArgs := c.parseIdsWithSpecifiers(identifiers, customSpec)
+		builder.WriteString(formattedStr)
+		args = append(args, idArgs...)
+		// Advance past the marker.
+		i = newIndex
 	}
-	return builder.String(), args
+	st := builder.String()
+	return st, args
 }
