@@ -58,6 +58,9 @@ func parseSpecifier(runes []rune, start int) (specIds []string, spec string, end
 		specRunes = append(specRunes, runes[it])
 		it++
 	}
+	if !formatSpecifierEnd(specRunes[len(specRunes)-1]) {
+		panic(fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete", string(specRunes)))
+	}
 
 	endIndex = it
 	spec = string(specRunes)
@@ -157,9 +160,20 @@ func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
 	i := 0
 	for i < len(runes) {
 		if !(runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1])) {
-			builder.WriteRune(runes[i])
-			i++
-			continue
+			// disallow specifiers that are not after identifiers
+			if runes[i] != '%' {
+				builder.WriteRune(runes[i])
+				i++
+				continue
+			}
+			if i+1 < len(runes) && runes[i+1] == '%' {
+				// allow %%
+				builder.WriteRune(runes[i])
+				builder.WriteRune(runes[i+1])
+				i += 2
+				continue
+			}
+			panic(fmt.Sprintf("specifier found without corresponding identifier for variable. The allowed format is -var%%specifier Specifier is at index %d", i))
 		}
 		// If we see a '-' and the next rune is a valid identifier start...
 		// Parse the marker.
@@ -170,6 +184,7 @@ func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
 		// Advance past the marker.
 		i = newIndex
 	}
+
 	st := builder.String()
 	return st, args
 }
