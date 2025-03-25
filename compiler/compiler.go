@@ -227,9 +227,81 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 	}
 }
 
+func setInstAlignment(inst llvm.Value, t Type) {
+	switch typ := t.(type) {
+	case Int:
+		// divide by 8 as we want num bytes
+		inst.SetAlignment(int(typ.Width >> 3))
+	case Float:
+		// divide by 8 as we want num bytes
+		inst.SetAlignment(int(typ.Width >> 3))
+	case String:
+		// TODO not sure what this should be
+	default:
+		panic("Unsupported pointer element type")
+	}
+}
+
+// PromoteToMemory converts a variable that’s currently in a register into one stored in memory.
+// This is needed for supporting the %n specifier (which requires a pointer to the variable).
+func (c *Compiler) promoteToMemory(id string) {
+	var sym Symbol
+	var ok bool
+	if sym, ok = c.symbols[id]; !ok {
+		panic("Undefined variable: " + id)
+	}
+
+	// Get the current basic block and its function.
+	currentBlock := c.builder.GetInsertBlock()
+	fn := currentBlock.Parent()
+
+	// Get the function’s entry block.
+	entryBlock := fn.EntryBasicBlock()
+
+	// Save the current insertion point by remembering the current block.
+	// Now, set the insertion point to the beginning of the entry block.
+	// We choose the first non-PHI instruction so that we don’t disturb PHI nodes.
+	firstInst := entryBlock.FirstInstruction()
+	if !firstInst.IsNil() {
+		c.builder.SetInsertPointBefore(firstInst)
+	} else {
+		c.builder.SetInsertPointAtEnd(entryBlock)
+	}
+
+	// Create the alloca in the entry block. This will allocate space for the variable.
+	alloca := c.builder.CreateAlloca(c.mapToLLVMType(sym.Type), id)
+
+	// Restore the insertion point to the original basic block.
+	c.builder.SetInsertPointAtEnd(currentBlock)
+
+	// Store the current register value into the newly allocated memory.
+	storeInst := c.builder.CreateStore(sym.Val, alloca)
+	// Set the alignment on the store to match the alloca.
+	setInstAlignment(storeInst, sym.Type)
+
+	// Update your symbol table here if needed so that the variable now refers to "alloca".
+	c.symbols[id] = Symbol{
+		Val:  alloca,
+		Type: Pointer{Elem: sym.Type},
+	}
+}
+
+func (c *Compiler) derefIfPointer(s Symbol) Symbol {
+	if s.Type.Kind() == PointerKind {
+		ptr := s.Type.(Pointer)
+		// Load the pointer value
+		loadInst := c.builder.CreateLoad(c.mapToLLVMType(ptr.Elem), s.Val, "")
+		setInstAlignment(loadInst, ptr.Elem)
+		s.Val = loadInst
+		s.Type = ptr.Elem
+		return s
+	}
+	return s
+}
+
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
-	if val, ok := c.symbols[ident.Value]; ok {
-		return val
+	if s, ok := c.symbols[ident.Value]; ok {
+		return c.derefIfPointer(s)
 	}
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 }
@@ -389,15 +461,12 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	arrayType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
 	formatGlobal := llvm.AddGlobal(c.module, arrayType, globalName)
 	formatGlobal.SetInitializer(formatConst)
+	// It is essential to mark this as constant. Else a printf like %n which writes to pointer will fail
+	formatGlobal.SetGlobalConstant(true)
 
 	// Get pointer to the format string
 	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-	formatPtr := c.builder.CreateGEP(
-		arrayType,
-		formatGlobal,
-		[]llvm.Value{zero, zero},
-		"fmt_ptr",
-	)
+	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 
 	// Declare printf (variadic function)
 	printfType := llvm.FunctionType(

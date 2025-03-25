@@ -1,0 +1,5 @@
+four. Wrote four characters to x
+x is now 4 and a pointer on the stack automatically dereferenced for use
+write char. y should now be 10 and allocated on the stack
+y is 10. z = x * y and z is 40
+14 -6

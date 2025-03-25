@@ -22,3 +22,6 @@ two = 2
 "Multiple percentage: %% -z%4.2f%% %%"
 "Variable width -x%(-six)d"
 "Variable precision -z%8.(-two)f -a%(-six).2f and -z%(-six).(-two)f%%"
+
+var = 22
+"Var is -var%d, x is", x, "Now y is -y%8d and two is", two

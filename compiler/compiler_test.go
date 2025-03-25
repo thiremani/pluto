@@ -19,7 +19,7 @@ func TestStringCompile(t *testing.T) {
 	comp.Compile(program)
 	ir := comp.GenerateIR()
 
-	expectedIR := `@printf_fmt_0 = global [7 x i8] c"hello\0A\00"`
+	expectedIR := `@printf_fmt_0 = constant [7 x i8] c"hello\0A\00"`
 	if !strings.Contains(ir, expectedIR) {
 		t.Errorf("IR does not contain string constant:\n%s", ir)
 	}

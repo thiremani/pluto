@@ -1,0 +1,13 @@
+# The purpose of this test is to check if variables are promoted to memory from register
+# basic operations and expressions run without a hitch (the compiler dereferences the pointers and then evaluates)
+# for this we currently use the printf function with %n specifier. The %n specifier expects a pointer as the variable.
+
+x = 10
+"four-x%n. Wrote four characters to x"
+"x is now -x and a pointer on the stack automatically dereferenced for use"
+
+y = 0
+"write char-y%n. y should now be 10 and allocated on the stack"
+z = x * y
+"y is -y%d. z = x * y and z is -z%d"
+x + y, x - y
