@@ -20,3 +20,6 @@ n + o, n - o, n * o, n / o
 m + o, m - o, m * o, m / o
 
 m^n, m^o, n^o
+
+4x^2 + 3x + 1
+1 + 2x + 2.5x^3
