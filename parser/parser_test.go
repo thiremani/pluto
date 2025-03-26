@@ -383,6 +383,89 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 	}
 }
 
+func TestImplicitMultParsing(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expStr string
+	}{
+		{
+			name:   "simple multiplication",
+			input:  "x = 5a",
+			expStr: "x = (5 * a)",
+		},
+		{
+			name:   "multiplication and addition",
+			input:  "y = 5x + 2",
+			expStr: "y = ((5 * x) + 2)",
+		},
+		{
+			name:   "complex function parsing",
+			input:  "y = x^2 + 3.14x + 1",
+			expStr: "y = (((x ^ 2) + (3.14 * x)) + 1)",
+		},
+		{
+			name:   "reverse function parsing",
+			input:  "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4",
+			expStr: "y = ((((1 + (2 * x)) + (3.11 * (x ^ 2))) + (2.03 * (x3 ^ 3))) + (7 * (x3ab ^ 4)))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			p := New(l, true)
+			program := p.ParseProgram()
+			checkParserErrors(t, p)
+
+			if len(program.Statements) != 1 {
+				t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
+			}
+
+			_, ok := program.Statements[0].(*ast.LetStatement)
+			if !ok {
+				t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
+					program.Statements[0])
+			}
+
+			s := program.String()
+			if s != tt.expStr {
+				t.Errorf("expected=%q, got=%q", tt.expStr, s)
+			}
+		})
+	}
+}
+
+func TestImplicitMultParsingSpaces(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expErr string
+	}{
+		{
+			name:   "simple multiplication",
+			input:  "x = 5 a",
+			expErr: "1:5:5:Expression \"5\" is not a condition. The main operation should be a comparison",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			p := New(l, true)
+			p.ParseProgram()
+			errs := p.Errors()
+			if len(errs) != 1 {
+				t.Errorf("Expected 1 error, got %d", len(p.errors))
+			}
+
+			if errs[0] != tt.expErr {
+				t.Errorf("expected=%q, got=%q", tt.expErr, errs[0])
+			}
+		})
+	}
+}
+
 func TestConditionExpression(t *testing.T) {
 	input := `a = x < y x
 res = a > 3 + 2`

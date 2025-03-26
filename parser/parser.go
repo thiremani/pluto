@@ -51,10 +51,11 @@ type Parser struct {
 	l      *lexer.Lexer
 	errors []*token.CompileError
 
-	curToken  token.Token
-	peekToken token.Token
-	inScript  bool
-	inBlock   bool
+	curToken   token.Token
+	peekToken  token.Token
+	savedToken token.Token
+	inScript   bool
+	inBlock    bool
 
 	prefixParseFns map[string]prefixParseFn
 	infixParseFns  map[string]infixParseFn
@@ -102,11 +103,34 @@ func New(l *lexer.Lexer, isScript bool) *Parser {
 }
 
 func (p *Parser) nextToken() {
+	if p.savedToken != (token.Token{}) {
+		p.curToken = p.peekToken
+		p.peekToken = p.savedToken
+		p.savedToken = token.Token{}
+		return
+	}
+
 	var err *token.CompileError
 	p.curToken = p.peekToken
 	p.peekToken, err = p.l.NextToken()
 	if err != nil {
 		p.errors = append(p.errors, err)
+	}
+
+	// Handle implicit multiplication:
+	// If the current token is an INT or FLOAT and the following token is an IDENT,
+	// and there is no whitespace between them (i.e., the current token's ending column
+	// equals the next token's starting column), then we assume an implicit multiplication.
+	// In this case, we save the IDENT token in 'savedToken', and substitute the next token
+	// with a multiplication operator '*' token. This way, an input like "5var" is treated as "5 * var".
+	if (p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT) && p.peekToken.Type == token.IDENT && p.curToken.Column+len(p.curToken.Literal) == p.peekToken.Column {
+		p.savedToken = p.peekToken
+		p.peekToken = token.Token{
+			Type:    token.OPERATOR,
+			Literal: token.SYM_MUL,
+			Line:    p.savedToken.Line,
+			Column:  p.savedToken.Column,
+		}
 	}
 }
 
