@@ -74,7 +74,7 @@ func TestFormatStringPanics(t *testing.T) {
 			}()
 
 			l := lexer.New(tc.input)
-			p := parser.New(l, true)
+			p := parser.New(l)
 			program := p.ParseProgram()
 			c := NewCompiler("TestFormatPanics")
 			c.Compile(program)
@@ -104,7 +104,7 @@ func TestValidFormatString(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			l := lexer.New(tc.input)
-			p := parser.New(l, true)
+			p := parser.New(l)
 			program := p.ParseProgram()
 			c := NewCompiler("TestValidFormatString")
 			c.Compile(program)

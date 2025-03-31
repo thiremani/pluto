@@ -98,7 +98,7 @@ class TestRunner:
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")        
-        test_files = list((self.project_root/TEST_DIR).glob("*.pt"))
+        test_files = list((self.project_root/TEST_DIR).glob("*.spt"))
 
         for test_file in test_files:
             print(f"\n{Fore.CYAN}Testing {test_file.name}:{Style.RESET_ALL}")

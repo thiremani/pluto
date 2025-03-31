@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pluto/ast"
 	"pluto/compiler"
 	"pluto/lexer"
 	"pluto/parser"
@@ -27,7 +28,7 @@ func isValidExtension(fileName string) (bool, bool) {
 			}
 		} else {
 			if ext == expectedExt {
-				return true, expectedExt == PT_SUFFIX
+				return true, expectedExt == SPT_SUFFIX
 			}
 		}
 	}
@@ -62,8 +63,14 @@ func main() {
 
 	// Parse and compile
 	l := lexer.New(string(source))
-	p := parser.New(l, isScript)
-	ast := p.ParseProgram()
+	var ast *ast.Program
+	if isScript {
+		sp := parser.NewScriptParser(l)
+		ast = sp.Parse()
+	} else {
+		cp := parser.NewCodeParser(l)
+		ast = cp.Parse()
+	}
 	c := compiler.NewCompiler("pluto_module")
 	c.Compile(ast)
 	ir := c.GenerateIR()

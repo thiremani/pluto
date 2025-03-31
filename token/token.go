@@ -12,12 +12,14 @@ const (
 
 	// Literal tokens.
 	literal_beg
-	IDENT  // add, foobar, x, y, ...
+	IDENT // add, foobar, x, y, ...
+	const_beg
 	INT    // 1343456
 	FLOAT  // 123.45
 	IMAG   // 123.45i
 	RUNE   // 'a'
 	STRING // "abc"
+	const_end
 	literal_end
 
 	// Operator and punctuation tokens.
@@ -163,6 +165,10 @@ type Token struct {
 
 func (t Token) IsComparison() bool {
 	return comparison_beg < t.Type && comparison_end > t.Type
+}
+
+func (t Token) IsConstant() bool {
+	return const_beg < t.Type && const_end > t.Type
 }
 
 func (tokenType TokenType) String() string {

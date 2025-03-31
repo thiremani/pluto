@@ -22,12 +22,12 @@ func Start(in io.Reader, out io.Writer) {
 
 		line := scanner.Text()
 		l := lexer.New(line)
-		p := parser.New(l, true)
+		sp := parser.NewScriptParser(l)
 
-		program := p.ParseProgram()
+		program := sp.Parse()
 
-		if len(p.Errors()) != 0 {
-			printParserErrors(out, p.Errors())
+		if len(sp.Errors()) != 0 {
+			printParserErrors(out, sp.Errors())
 			continue
 		}
 
