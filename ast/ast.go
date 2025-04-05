@@ -73,6 +73,31 @@ func toExpressionVec(idents []*Identifier) []Expression {
 }
 
 // Statements
+// ConstStatement represents a constant assignment in a .pt file.
+// For example: PI = 3.14159
+type ConstStatement struct {
+	Token token.Token   // The token.ASSIGN token
+	Name  []*Identifier // Constant names
+	Value []Expression  // The literal expression(s) representing the constant
+}
+
+func (cs *ConstStatement) statementNode() {}
+
+func (cs *ConstStatement) Tok() token.Token {
+	return cs.Token
+}
+
+func (cs *ConstStatement) String() string {
+	var out bytes.Buffer
+
+	out.WriteString(printVec(toExpressionVec(cs.Name)))
+	out.WriteString(" = ")
+
+	out.WriteString(printVec(cs.Value))
+
+	return out.String()
+}
+
 type LetStatement struct {
 	Token     token.Token // the token.ASSIGN token
 	Name      []*Identifier

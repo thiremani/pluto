@@ -16,7 +16,7 @@ func TestStringCompile(t *testing.T) {
 	program := sp.Parse()
 
 	comp := NewCompiler("test")
-	comp.Compile(program)
+	comp.CompileScript(program)
 	ir := comp.GenerateIR()
 
 	expectedIR := `@printf_fmt_0 = constant [7 x i8] c"hello\0A\00"`
@@ -34,7 +34,7 @@ six = 6`
 	program := sp.Parse()
 
 	c := NewCompiler("TestFormatIdentifiers")
-	c.Compile(program)
+	c.CompileScript(program)
 	res, vals := c.formatIdentifiers("x = -x, six = -six")
 	expStr := "x = %ld, six = %ld"
 	if res != expStr {

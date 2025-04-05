@@ -64,16 +64,20 @@ func main() {
 	// Parse and compile
 	l := lexer.New(string(source))
 	var ast *ast.Program
+	var ir string
 	if isScript {
 		sp := parser.NewScriptParser(l)
 		ast = sp.Parse()
+		c := compiler.NewCompiler("script_module")
+		c.CompileScript(ast)
+		ir = c.GenerateIR()
 	} else {
 		cp := parser.NewCodeParser(l)
 		ast = cp.Parse()
+		c := compiler.NewCompiler("code_module")
+		c.CompileCode(ast)
+		ir = c.GenerateIR()
 	}
-	c := compiler.NewCompiler("pluto_module")
-	c.Compile(ast)
-	ir := c.GenerateIR()
 
 	if outputFile == "" {
 		outputFile = strings.TrimSuffix(inputFile, PT_SUFFIX)

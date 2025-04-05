@@ -41,7 +41,26 @@ func NewCompiler(moduleName string) *Compiler {
 	return &c
 }
 
-func (c *Compiler) Compile(program *ast.Program) {
+// CompileCode compiles a .pt file (code mode) into a library (.o or .a)
+func (c *Compiler) CompileCode(program *ast.Program) {
+	for _, stmt := range program.Statements {
+		switch s := stmt.(type) {
+		case *ast.ConstStatement:
+			c.compileConstStatement(s)
+		// case *ast.FunctionStatement:
+		// 	c.compileFunctionStatement(s)
+		// case *ast.OperatorStatement:
+		// 	c.compileOperatorStatement(s)
+		// case *ast.StructStatement:
+		// 	c.compileStructStatement(s)
+		// Add more definitions here as needed
+		default:
+			panic(fmt.Sprintf("Unsupported top-level statement in code mode: %T", s))
+		}
+	}
+}
+
+func (c *Compiler) CompileScript(program *ast.Program) {
 	// Create main function
 	mainType := llvm.FunctionType(c.context.Int32Type(), []llvm.Type{}, false)
 	mainFunc := llvm.AddFunction(c.module, "main", mainType)
@@ -100,6 +119,67 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		return llvm.ArrayType(elemLLVM, arrType.Length)
 	default:
 		panic("unknown type in mapToLLVMType: " + t.String())
+	}
+}
+
+// createGlobalString creates a global string constant in the LLVM module.
+// The 'linkage' parameter allows you to specify the desired llvm.Linkage,
+// such as llvm.ExternalLinkage for exported constants or llvm.PrivateLinkage for internal use.
+func (c *Compiler) createGlobalString(value, name string, linkage llvm.Linkage) llvm.Value {
+	strConst := llvm.ConstString(value, true)
+	arrayLength := len(value) + 1
+	arrType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
+	// Generate a unique global name.
+	globalName := fmt.Sprintf("str_const_%s_%d", name, c.formatCounter)
+	c.formatCounter++
+	// Create the global variable in the module.
+	global := llvm.AddGlobal(c.module, arrType, globalName)
+	global.SetInitializer(strConst)
+	global.SetLinkage(linkage)
+	global.SetUnnamedAddr(true)
+	global.SetGlobalConstant(true)
+	// Create a constant GEP (GetElementPointer) to obtain a pointer to the first element.
+	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
+	gep := llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
+	return gep
+}
+
+func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
+	for i := 0; i < len(stmt.Name); i++ {
+		name := stmt.Name[i].Value
+		valueExpr := stmt.Value[i]
+		var val llvm.Value
+		var typ Type
+
+		switch v := valueExpr.(type) {
+		case *ast.IntegerLiteral:
+			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
+			typ = Int{Width: 64}
+
+		case *ast.FloatLiteral:
+			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
+			typ = Float{Width: 64}
+
+		case *ast.StringLiteral:
+			// Create a global string constant
+			val = c.createGlobalString(v.Value, name, llvm.ExternalLinkage)
+			typ = String{}
+
+		default:
+			panic(fmt.Sprintf("unsupported constant type: %T", v))
+		}
+
+		// Create a global LLVM variable
+		global := llvm.AddGlobal(c.module, c.mapToLLVMType(typ), name)
+		global.SetInitializer(val)
+		global.SetLinkage(llvm.ExternalLinkage)
+		global.SetGlobalConstant(true)
+
+		// Add to symbol table
+		c.symbols[name] = Symbol{
+			Val:  global,
+			Type: typ,
+		}
 	}
 }
 
@@ -195,26 +275,8 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		s.Type = Float{Width: 64}
 		return
 	case *ast.StringLiteral:
-		// Create global string constant
-		str := llvm.ConstString(e.Value, true)
-		// Compute the array length (including the null terminator).
-		arrayLength := len(e.Value) + 1
-		// Create an array type for [arrayLength x i8]
-		arrType := llvm.ArrayType(c.module.Context().Int8Type(), arrayLength)
-
-		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
-		c.formatCounter++
-
-		global := llvm.AddGlobal(c.module, arrType, globalName)
-		global.SetInitializer(str)
-		global.SetLinkage(llvm.PrivateLinkage) // Make it private.
-		global.SetUnnamedAddr(true)            // Mark as unnamed address.
-		global.SetGlobalConstant(true)         // Mark it as constant.
-
-		// Create the GEP with two 64-bit zero indices.
-		zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-		s.Val = llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
-		s.Type = String{Length: arrayLength}
+		s.Val = c.createGlobalString(e.Value, "expr", llvm.PrivateLinkage)
+		s.Type = String{}
 		return
 	case *ast.Identifier:
 		s = c.compileIdentifier(e)

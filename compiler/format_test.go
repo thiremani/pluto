@@ -77,7 +77,7 @@ func TestFormatStringPanics(t *testing.T) {
 			p := parser.New(l)
 			program := p.ParseProgram()
 			c := NewCompiler("TestFormatPanics")
-			c.Compile(program)
+			c.CompileScript(program)
 		})
 	}
 }
@@ -107,7 +107,7 @@ func TestValidFormatString(t *testing.T) {
 			p := parser.New(l)
 			program := p.ParseProgram()
 			c := NewCompiler("TestValidFormatString")
-			c.Compile(program)
+			c.CompileScript(program)
 			ir := c.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {
 				t.Errorf("IR does not contain string constant.\nIR: %s\n, expected to contain: %s\n", ir, tc.expectOutput)

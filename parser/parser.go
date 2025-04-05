@@ -234,43 +234,50 @@ func (p *StmtParser) parseStatement() ast.Statement {
 func (p *StmtParser) parseCodeStatement() (ast.Statement, SubMode) {
 	// Every statement in code mode starts with identifiers
 	if !p.curTokenIs(token.IDENT) {
-		return nil, SubModeNone
+		p.curError(token.IDENT)
+		return nil, None
 	}
 
 	idents := p.parseIdentifiers()
 	if idents == nil {
-		return nil, SubModeNone
+		return nil, None
 	}
 
 	if !p.expectPeek(token.ASSIGN) {
-		return nil, SubModeNone
-	}
-
-	stmt := &ast.LetStatement{
-		Token:     p.curToken,
-		Name:      idents,
-		Value:     []ast.Expression{},
-		Condition: []ast.Expression{},
+		return nil, None
 	}
 
 	if p.peekToken.IsConstant() {
-		// assume constant assignments
-		p.nextToken()
-		stmt.Value = p.parseConstants()
-		if !p.stmtEnded() {
-			msg := fmt.Sprintf("Expected %q or %q to end the statement", token.NEWLINE, token.EOF)
-			ce := &token.CompileError{
-				Token: p.curToken,
-				Msg:   msg,
-			}
-			p.errors = append(p.errors, ce)
-			return nil, SubModeNone
+		stmt := p.parseConstStatement(idents)
+		if stmt == nil {
+			return nil, None
 		}
-		return stmt, Const
 	}
 
 	// TODO operator, function, struct definitions
-	return nil, SubModeNone
+	return nil, None
+}
+
+func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstStatement {
+	stmt := &ast.ConstStatement{
+		Token: p.curToken,
+		Name:  idents,
+		Value: []ast.Expression{},
+	}
+
+	// assume constant assignments
+	p.nextToken()
+	stmt.Value = p.parseConstants()
+	if !p.stmtEnded() {
+		msg := fmt.Sprintf("Expected %q or %q to end the statement", token.NEWLINE, token.EOF)
+		ce := &token.CompileError{
+			Token: p.curToken,
+			Msg:   msg,
+		}
+		p.errors = append(p.errors, ce)
+		return nil
+	}
+	return stmt
 }
 
 // parseConstants expects first token to be a constant

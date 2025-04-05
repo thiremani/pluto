@@ -10,7 +10,7 @@ type SubMode int
 
 const (
 	// sub modes
-	SubModeNone = iota // if parsing gives an error
+	None = iota // if parsing gives an error
 	Const
 	Operator
 	Function
