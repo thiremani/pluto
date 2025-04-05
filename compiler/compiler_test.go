@@ -51,3 +51,27 @@ six = 6`
 		}
 	}
 }
+
+func TestConstCompile(t *testing.T) {
+	input := `pi = 3.1415926535
+answer = 42
+greeting = "hello"`
+
+	l := lexer.New(input)
+	cp := parser.NewCodeParser(l)
+	program := cp.Parse()
+
+	c := NewCompiler("testConst")
+	c.CompileCode(program)
+	ir := c.GenerateIR()
+
+	if !strings.Contains(ir, "@pi =") {
+		t.Errorf("IR does not contain global constant for pi:\n%s", ir)
+	}
+	if !strings.Contains(ir, "@answer =") {
+		t.Errorf("IR does not contain global constant for answer:\n%s", ir)
+	}
+	if !strings.Contains(ir, "@greeting =") {
+		t.Errorf("IR does not contain global constant for greeting:\n%s", ir)
+	}
+}

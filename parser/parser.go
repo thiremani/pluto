@@ -252,6 +252,7 @@ func (p *StmtParser) parseCodeStatement() (ast.Statement, SubMode) {
 		if stmt == nil {
 			return nil, None
 		}
+		return stmt, Const
 	}
 
 	// TODO operator, function, struct definitions
@@ -277,6 +278,7 @@ func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstSta
 		p.errors = append(p.errors, ce)
 		return nil
 	}
+	p.nextToken()
 	return stmt
 }
 
