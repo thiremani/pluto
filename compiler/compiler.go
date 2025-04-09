@@ -125,55 +125,53 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 // createGlobalString creates a global string constant in the LLVM module.
 // The 'linkage' parameter allows you to specify the desired llvm.Linkage,
 // such as llvm.ExternalLinkage for exported constants or llvm.PrivateLinkage for internal use.
-func (c *Compiler) createGlobalString(value, name string, linkage llvm.Linkage) llvm.Value {
+func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) llvm.Value {
 	strConst := llvm.ConstString(value, true)
 	arrayLength := len(value) + 1
 	arrType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
-	// Generate a unique global name.
-	globalName := fmt.Sprintf("str_const_%s_%d", name, c.formatCounter)
-	c.formatCounter++
-	// Create the global variable in the module.
-	global := llvm.AddGlobal(c.module, arrType, globalName)
-	global.SetInitializer(strConst)
-	global.SetLinkage(linkage)
-	global.SetUnnamedAddr(true)
-	global.SetGlobalConstant(true)
+
 	// Create a constant GEP (GetElementPointer) to obtain a pointer to the first element.
-	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-	gep := llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
-	return gep
+	// zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
+	// gep := llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
+	return c.makeGlobalConst(arrType, name, strConst, llvm.ExternalLinkage, true)
+}
+
+func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage, ua bool) llvm.Value {
+	// Create a global LLVM variable
+	global := llvm.AddGlobal(c.module, llvmType, name)
+	global.SetInitializer(val)
+	global.SetLinkage(linkage)
+	global.SetUnnamedAddr(ua)
+	global.SetGlobalConstant(true)
+	return global
 }
 
 func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 	for i := 0; i < len(stmt.Name); i++ {
 		name := stmt.Name[i].Value
 		valueExpr := stmt.Value[i]
-		var val llvm.Value
+		var val, global llvm.Value
 		var typ Type
 
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
 			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
 			typ = Int{Width: 64}
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage, false)
 
 		case *ast.FloatLiteral:
 			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
 			typ = Float{Width: 64}
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage, false)
 
 		case *ast.StringLiteral:
 			// Create a global string constant
-			val = c.createGlobalString(v.Value, name, llvm.ExternalLinkage)
+			global = c.createGlobalString(name, v.Value, llvm.ExternalLinkage)
 			typ = String{}
 
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
-
-		// Create a global LLVM variable
-		global := llvm.AddGlobal(c.module, c.mapToLLVMType(typ), name)
-		global.SetInitializer(val)
-		global.SetLinkage(llvm.ExternalLinkage)
-		global.SetGlobalConstant(true)
 
 		// Add to symbol table
 		c.symbols[name] = Symbol{
@@ -275,7 +273,10 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		s.Type = Float{Width: 64}
 		return
 	case *ast.StringLiteral:
-		s.Val = c.createGlobalString(e.Value, "expr", llvm.PrivateLinkage)
+		// create a global name for the literal
+		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+		c.formatCounter++
+		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 		s.Type = String{}
 		return
 	case *ast.Identifier:

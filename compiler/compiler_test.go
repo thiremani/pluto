@@ -75,8 +75,7 @@ greeting = "hello"`
 		t.Errorf("IR does not contain global constant for answer. Exp: %s, ir: \n%s", expAns, ir)
 	}
 
-	expGreeting := `@str_const_greeting_0 = unnamed_addr constant [6 x i8] c"hello\00"
-@greeting = constant ptr @str_const_greeting_0`
+	expGreeting := `@greeting = unnamed_addr constant [6 x i8] c"hello\00"`
 
 	if !strings.Contains(ir, expGreeting) {
 		t.Errorf("IR does not contain global constant for greeting. Exp: %s, ir: \n%s", expGreeting, ir)
