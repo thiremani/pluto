@@ -130,10 +130,7 @@ func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) 
 	arrayLength := len(value) + 1
 	arrType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
 
-	// Create a constant GEP (GetElementPointer) to obtain a pointer to the first element.
-	// zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
-	// gep := llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
-	return c.makeGlobalConst(arrType, name, strConst, llvm.ExternalLinkage)
+	return c.makeGlobalConst(arrType, name, strConst, linkage)
 }
 
 func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
@@ -165,7 +162,6 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage)
 
 		case *ast.StringLiteral:
-			// Create a global string constant
 			global = c.createGlobalString(name, v.Value, llvm.ExternalLinkage)
 			typ = String{}
 

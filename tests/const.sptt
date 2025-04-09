@@ -1,0 +1,4 @@
+pi, greeting
+x = answer
+x = x + 5 + pi
+x, 2x, x / e
