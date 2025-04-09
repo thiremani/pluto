@@ -133,15 +133,15 @@ func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) 
 	// Create a constant GEP (GetElementPointer) to obtain a pointer to the first element.
 	// zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
 	// gep := llvm.ConstGEP(arrType, global, []llvm.Value{zero, zero})
-	return c.makeGlobalConst(arrType, name, strConst, llvm.ExternalLinkage, true)
+	return c.makeGlobalConst(arrType, name, strConst, llvm.ExternalLinkage)
 }
 
-func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage, ua bool) llvm.Value {
+func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
 	// Create a global LLVM variable
 	global := llvm.AddGlobal(c.module, llvmType, name)
 	global.SetInitializer(val)
 	global.SetLinkage(linkage)
-	global.SetUnnamedAddr(ua)
+	global.SetUnnamedAddr(true)
 	global.SetGlobalConstant(true)
 	return global
 }
@@ -157,12 +157,12 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		case *ast.IntegerLiteral:
 			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
 			typ = Int{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage, false)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage)
 
 		case *ast.FloatLiteral:
 			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
 			typ = Float{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage, false)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage)
 
 		case *ast.StringLiteral:
 			// Create a global string constant
