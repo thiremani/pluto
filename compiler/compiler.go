@@ -14,10 +14,10 @@ type Symbol struct {
 }
 
 type Compiler struct {
+	Symbols       map[string]Symbol
 	context       llvm.Context
 	module        llvm.Module
 	builder       llvm.Builder
-	symbols       map[string]Symbol
 	funcParams    map[string][]llvm.Value
 	opFuncs       map[opKey]opFunc // opFuncs maps an operator key to a function that generates the corresponding LLVM IR.
 	formatCounter int              // Track unique format strings
@@ -29,10 +29,10 @@ func NewCompiler(moduleName string) *Compiler {
 	builder := context.NewBuilder()
 
 	c := Compiler{
+		Symbols:       make(map[string]Symbol),
 		context:       context,
 		module:        module,
 		builder:       builder,
-		symbols:       make(map[string]Symbol),
 		funcParams:    make(map[string][]llvm.Value),
 		formatCounter: 0,
 	}
@@ -42,22 +42,11 @@ func NewCompiler(moduleName string) *Compiler {
 }
 
 // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
-func (c *Compiler) CompileCode(program *ast.Program) {
-	for _, stmt := range program.Statements {
-		switch s := stmt.(type) {
-		case *ast.ConstStatement:
-			c.compileConstStatement(s)
-		// case *ast.FunctionStatement:
-		// 	c.compileFunctionStatement(s)
-		// case *ast.OperatorStatement:
-		// 	c.compileOperatorStatement(s)
-		// case *ast.StructStatement:
-		// 	c.compileStructStatement(s)
-		// Add more definitions here as needed
-		default:
-			panic(fmt.Sprintf("Unsupported top-level statement in code mode: %T", s))
-		}
+func (c *Compiler) CompileConst(code *ast.Code) {
+	for _, stmt := range code.Const.Statements {
+		c.compileConstStatement(stmt)
 	}
+	// compile op, func, struct
 }
 
 func (c *Compiler) CompileScript(program *ast.Program) {
@@ -154,15 +143,15 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		case *ast.IntegerLiteral:
 			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
 			typ = Int{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.InternalLinkage)
 
 		case *ast.FloatLiteral:
 			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
 			typ = Float{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.ExternalLinkage)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.InternalLinkage)
 
 		case *ast.StringLiteral:
-			global = c.createGlobalString(name, v.Value, llvm.ExternalLinkage)
+			global = c.createGlobalString(name, v.Value, llvm.InternalLinkage)
 			typ = String{}
 
 		default:
@@ -170,7 +159,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		}
 
 		// Add to symbol table
-		c.symbols[name] = Symbol{
+		c.Symbols[name] = Symbol{
 			Val:  global,
 			Type: typ,
 		}
@@ -182,7 +171,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	if len(stmt.Condition) == 0 {
 		// Directly assign values without branching
 		for i, ident := range stmt.Name {
-			c.symbols[ident.Value] = c.compileExpression(stmt.Value[i])
+			c.Symbols[ident.Value] = c.compileExpression(stmt.Value[i])
 		}
 		return // Exit early; no PHI nodes or blocks needed
 	}
@@ -190,7 +179,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	// Capture previous values BEFORE processing the LetStatement
 	prevValues := make(map[string]Symbol)
 	for _, ident := range stmt.Name {
-		if val, exists := c.symbols[ident.Value]; exists {
+		if val, exists := c.Symbols[ident.Value]; exists {
 			prevValues[ident.Value] = val // Existing value
 		} else {
 			prevValues[ident.Value] = Symbol{
@@ -234,7 +223,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	c.builder.SetInsertPoint(contBlock, contBlock.FirstInstruction())
 	for _, ident := range stmt.Name {
 		// Look up the existing symbol to get its custom type.
-		sym, ok := c.symbols[ident.Value]
+		sym, ok := c.Symbols[ident.Value]
 		if !ok {
 			// Provide a default symbol if the variable hasn't been defined.
 			sym = Symbol{
@@ -251,7 +240,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 			},
 			[]llvm.BasicBlock{ifBlock, elseBlock},
 		)
-		c.symbols[ident.Value] = Symbol{
+		c.Symbols[ident.Value] = Symbol{
 			Val:  phi, // Update symbol table
 			Type: sym.Type,
 		}
@@ -306,7 +295,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 func (c *Compiler) promoteToMemory(id string) {
 	var sym Symbol
 	var ok bool
-	if sym, ok = c.symbols[id]; !ok {
+	if sym, ok = c.Symbols[id]; !ok {
 		panic("Undefined variable: " + id)
 	}
 
@@ -339,7 +328,7 @@ func (c *Compiler) promoteToMemory(id string) {
 	setInstAlignment(storeInst, sym.Type)
 
 	// Update your symbol table here if needed so that the variable now refers to "alloca".
-	c.symbols[id] = Symbol{
+	c.Symbols[id] = Symbol{
 		Val:  alloca,
 		Type: Pointer{Elem: sym.Type},
 	}
@@ -359,7 +348,7 @@ func (c *Compiler) derefIfPointer(s Symbol) Symbol {
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
-	if s, ok := c.symbols[ident.Value]; ok {
+	if s, ok := c.Symbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
@@ -424,7 +413,7 @@ func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
 	for i, param := range fn.Parameters {
 		alloca := c.createEntryBlockAlloca(function, param.Value)
 		c.builder.CreateStore(function.Params()[i], alloca)
-		c.symbols[param.Value] = Symbol{
+		c.Symbols[param.Value] = Symbol{
 			Val:  alloca,
 			Type: Int{Width: 64},
 		}

@@ -75,39 +75,74 @@ class TestRunner:
             print(f"{Fore.RED}❌ Unit tests failed!{Style.RESET_ALL}")
             sys.exit(1)
 
-    def compile_and_run(self, test_file: Path) -> str:
+    def compile(self, dir: Path):
+        """Compile a pluto directory"""
+        try:
+            compiler_output = self.run_command(
+                [self.project_root/PLUTO_EXE],
+                cwd=dir
+            )
+            if compiler_output != "":
+                print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")
+        except subprocess.CalledProcessError as e:
+            print(f"{Fore.RED}❌ Compilation failed for {dir}{Style.RESET_ALL}")
+            raise
+
+        # Find generated IR files (both code and script)
+        ptcache = os.getenv("PTCACHE")
+        build_dir = ptcache/dir.name
+        ir_files = list(build_dir.glob("**/*.ll"))
+        if not ir_files:
+            raise RuntimeError("No LLVM IR files generated")
+        # Compile all IR files to object files
+        obj_files = []
+        for ir_file in ir_files:
+            obj_file = build_dir / (ir_file.stem + ".o")
+            self.run_command(["llc", "-filetype=obj", str(ir_file), "-o", str(obj_file)])
+            obj_files.append(str(obj_file))
+
+        # Link objects into executable
+        exe_file = build_dir / test_name
+        self.run_command(["clang", *obj_files, "-o", str(exe_file)])
+
+    def compile_and_run(self, test_dir: Path) -> str:
         """Compile and run a Pluto test file"""
-        test_name = test_file.stem
-        build_prefix = BUILD_DIR / test_name
+        test_name = test_dir
+        build_dir = BUILD_DIR / test_name
+        build_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate LLVM IR
-        ir_file = build_prefix.with_suffix(".ll")
-        compiler_output = self.run_command(["./" + str(PLUTO_EXE), "-o", str(ir_file), str(test_file)], self.project_root)
-        if compiler_output != "":
-            print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")  # Add this line
+        # Generate LLVM IR - run compiler in test directory
+        try:
+            compiler_output = self.run_command(
+                [self.project_root/PLUTO_EXE], 
+                cwd=test_dir
+            )
+            if compiler_output != "":
+                print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")
+        except subprocess.CalledProcessError as e:
+            print(f"{Fore.RED}❌ Compilation failed for {test_name}{Style.RESET_ALL}")
+            raise
 
 
-        # Compile to binary
-        obj_file = build_prefix.with_suffix(".o")
-        self.run_command(["llc", "-filetype=obj", str(ir_file), "-o", str(obj_file)])
-        self.run_command(["clang", str(obj_file), "-o", str(build_prefix)])
+
+
 
         # Execute
-        return self.run_command([str(build_prefix)])
+        return self.run_command([str(exe_file)])
 
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")        
-        test_files = list((self.project_root/TEST_DIR).glob("*.spt"))
+        exp_files = list((self.project_root/TEST_DIR).glob("*.exp"))
 
-        for test_file in test_files:
-            print(f"\n{Fore.CYAN}Testing {test_file.name}:{Style.RESET_ALL}")
-            expected_file = test_file.with_suffix(".exp")
+        for exp_file in exp_files:
+            test_name = exp_file.name.removesuffix(".exp")
+            print(f"\n{Fore.CYAN}Testing {exp_file.name}:{Style.RESET_ALL}")
 
             try:
-                actual_output = self.compile_and_run(test_file)
-                expected_output = expected_file.read_text()
-                
+                actual_output = self.compile_and_run(exp_file)
+                expected_output = exp_file.read_text()
+
                 if actual_output == expected_output:
                     print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                     self.passed += 1

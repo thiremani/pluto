@@ -31,30 +31,19 @@ func (cp *CodeParser) Errors() []string {
 	return cp.p.Errors()
 }
 
-func (cp *CodeParser) Parse() *ast.Program {
-	program := &ast.Program{}
-	program.Statements = []ast.Statement{}
+func (cp *CodeParser) Parse() *ast.Code {
+	code := &ast.Code{}
 	for !cp.p.curTokenIs(token.EOF) {
 		stmt, _ := cp.p.parseCodeStatement()
 		if stmt != nil {
-			program.Statements = append(program.Statements, stmt)
+			switch s := stmt.(type) {
+			case *ast.ConstStatement:
+				code.Const.Statements = append(code.Const.Statements, s)
+				// handle op, func, struct, member func
+			}
 		}
 		cp.p.nextToken()
 	}
 
-	return program
-}
-
-func (cp *CodeParser) parseConstants(program *ast.Program) {
-
-}
-
-func (cp *CodeParser) parseOperators(program *ast.Program) {
-}
-
-func (cp *CodeParser) parseFunctions(program *ast.Program) {
-}
-
-func (cp *CodeParser) parseStructs(program *ast.Program) {
-
+	return code
 }
