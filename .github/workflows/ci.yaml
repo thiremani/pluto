@@ -15,18 +15,24 @@ jobs:
           go-version: "1.23"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
-      - name: Install LLVM
+      - name: Install LLVM and Dependencies
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 19  # Install LLVM 19
-          sudo apt-get install -y llvm-19-dev
+          sudo apt-get install -y llvm-19-dev lld-19 clang-19
 
       - name: Set LLVM environment
         run: |
           echo "CGO_CFLAGS=-I/usr/lib/llvm-19/include" >> $GITHUB_ENV
           echo "CGO_LDFLAGS=-L/usr/lib/llvm-19/lib" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/llvm-19/bin:$PATH" >> $GITHUB_ENV
+          echo "/usr/lib/llvm-19/bin" >> $GITHUB_PATH
+
+      - name: Verify LLVM Tools
+        run: |
+          llvm-config-19 --version
+          clang-19 --version
+          ld.lld-19 --version
 
       - name: Run full test suite
         run: |

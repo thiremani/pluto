@@ -142,7 +142,7 @@ class TestRunner:
         print(f"\n{Fore.YELLOW}📊 Final Results:{Style.RESET_ALL}")
         print(f"{Fore.GREEN}✅ {self.passed} Passed{Style.RESET_ALL}")
         print(f"{Fore.RED}❌ {self.failed} Failed{Style.RESET_ALL}")
-        sys.exit(self.failed > 0)
+        sys.exit(1 if self.failed > 0 else 0)
 
 if __name__ == "__main__":
     import argparse
