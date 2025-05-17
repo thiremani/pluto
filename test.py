@@ -88,59 +88,19 @@ class TestRunner:
             print(f"{Fore.RED}❌ Compilation failed for {dir}{Style.RESET_ALL}")
             raise
 
-        # Find generated IR files (both code and script)
-        ptcache = os.getenv("PTCACHE")
-        build_dir = ptcache/dir.name
-        ir_files = list(build_dir.glob("**/*.ll"))
-        if not ir_files:
-            raise RuntimeError("No LLVM IR files generated")
-        # Compile all IR files to object files
-        obj_files = []
-        for ir_file in ir_files:
-            obj_file = build_dir / (ir_file.stem + ".o")
-            self.run_command(["llc", "-filetype=obj", str(ir_file), "-o", str(obj_file)])
-            obj_files.append(str(obj_file))
-
-        # Link objects into executable
-        exe_file = build_dir / test_name
-        self.run_command(["clang", *obj_files, "-o", str(exe_file)])
-
-    def compile_and_run(self, test_dir: Path) -> str:
-        """Compile and run a Pluto test file"""
-        test_name = test_dir
-        build_dir = BUILD_DIR / test_name
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate LLVM IR - run compiler in test directory
-        try:
-            compiler_output = self.run_command(
-                [self.project_root/PLUTO_EXE], 
-                cwd=test_dir
-            )
-            if compiler_output != "":
-                print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")
-        except subprocess.CalledProcessError as e:
-            print(f"{Fore.RED}❌ Compilation failed for {test_name}{Style.RESET_ALL}")
-            raise
-
-
-
-
-
-        # Execute
-        return self.run_command([str(exe_file)])
-
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
-        print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")        
-        exp_files = list((self.project_root/TEST_DIR).glob("*.exp"))
+        print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
+        test_dir = self.project_root/TEST_DIR
+        self.compile(test_dir)
 
+        exp_files = list((self.project_root/TEST_DIR).glob("*.exp"))
         for exp_file in exp_files:
             test_name = exp_file.name.removesuffix(".exp")
-            print(f"\n{Fore.CYAN}Testing {exp_file.name}:{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
 
             try:
-                actual_output = self.compile_and_run(exp_file)
+                actual_output = self.run_command([str(test_dir/test_name)])
                 expected_output = exp_file.read_text()
 
                 if actual_output == expected_output:
@@ -149,7 +109,7 @@ class TestRunner:
                 else:
                     self.show_diff(expected_output, actual_output)
                     self.failed += 1
-                    
+
             except Exception as e:
                 print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
                 self.failed += 1

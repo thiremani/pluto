@@ -6,3 +6,15 @@ test
 *.o
 *.ll
 .DS_Store
+
+# Ignore all files in tests folder that have no given extensions (likely executables)
+tests/*
+!tests/*.pt
+!tests/*.spt
+!tests/*.exp
+
+# Ignore all files in subdirectories of tests/ that have no given extensions (likely executables)
+tests/*/*
+!tests/**/*.pt
+!tests/**/*.spt
+!tests/**/*.exp

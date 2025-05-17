@@ -65,17 +65,17 @@ greeting = "hello"`
 	c.CompileConst(code)
 	ir := c.GenerateIR()
 
-	expPi := "@pi = internal unnamed_addr constant double 0x400921FB54411744"
+	expPi := "@pi = unnamed_addr constant double 0x400921FB54411744"
 	if !strings.Contains(ir, expPi) {
 		t.Errorf("IR does not contain global constant for pi. Exp: %s, ir: \n%s", expPi, ir)
 	}
 
-	expAns := "@answer = internal unnamed_addr constant i64 42"
+	expAns := "@answer = unnamed_addr constant i64 42"
 	if !strings.Contains(ir, expAns) {
 		t.Errorf("IR does not contain global constant for answer. Exp: %s, ir: \n%s", expAns, ir)
 	}
 
-	expGreeting := `@greeting = internal unnamed_addr constant [6 x i8] c"hello\00"`
+	expGreeting := `@greeting = unnamed_addr constant [6 x i8] c"hello\00"`
 
 	if !strings.Contains(ir, expGreeting) {
 		t.Errorf("IR does not contain global constant for greeting. Exp: %s, ir: \n%s", expGreeting, ir)

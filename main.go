@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,12 @@ import (
 var PT_SUFFIX = ".pt"
 var SPT_SUFFIX = ".spt"
 var IR_SUFFIX = ".ll"
+
+var CODE_DIR = "code"
+var SCRIPT_DIR = "script"
+var LINKED_DIR = "linked"
+
+var OPT_LEVEL = "-O2" // Can be configured via flag
 
 // getDefaultPTCache gets env variable PTCACHE
 // if it is not set sets it to default value for windows, mac, linux
@@ -49,7 +56,7 @@ func defaultPTCache() string {
 	return ptcache
 }
 
-func compileCode(pkg, ptcache string, codeFiles []string) {
+func compileCode(codeFiles []string, pkgDir, pkg string) {
 	pkgCode := ast.NewCode()
 	for _, codeFile := range codeFiles {
 		source, err := os.ReadFile(codeFile)
@@ -74,96 +81,180 @@ func compileCode(pkg, ptcache string, codeFiles []string) {
 	c.CompileConst(pkgCode)
 	ir := c.GenerateIR()
 
-	outPath := filepath.Join(ptcache, pkg, "code", pkg+".ll")
+	outPath := filepath.Join(pkgDir, CODE_DIR, pkg+IR_SUFFIX)
 	os.MkdirAll(filepath.Dir(outPath), 0755)
 	if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
 		fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
 	}
-
-	return c.symbols
 }
 
-func compileScript(pkg, ptcache string, scriptFiles []string) {
-	for _, scriptFile := range scriptFiles {
-		source, err := os.ReadFile(scriptFile)
-		if err != nil {
-			fmt.Printf("Error reading %s: %v\n", scriptFile, err)
-			continue
-		}
-		l := lexer.New(string(source))
-		sp := parser.NewScriptParser(l)
-		ast := sp.Parse()
-		modName := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
-		c := compiler.NewCompiler(modName)
-		c.CompileScript(ast)
-		ir := c.GenerateIR()
-
-		llName := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX) + ".ll"
-		outPath := filepath.Join(ptcache, pkg, "script", llName)
-		os.MkdirAll(filepath.Dir(outPath), 0755)
-		if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
-			fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
-		}
+func compileScript(script, scriptFile, pkgDir, pkg string) string {
+	source, err := os.ReadFile(scriptFile)
+	if err != nil {
+		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
+		return ""
 	}
+	l := lexer.New(string(source))
+	sp := parser.NewScriptParser(l)
+	ast := sp.Parse()
+	c := compiler.NewCompiler(script)
+	c.CompileScript(ast)
+	ir := c.GenerateIR()
+
+	llName := script + ".ll"
+	outPath := filepath.Join(pkgDir, SCRIPT_DIR, llName)
+	os.MkdirAll(filepath.Dir(outPath), 0755)
+	if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
+		fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
+		return ""
+	}
+	return outPath
 }
 
-// linkIR locates the one package under ptcache, then for each
+// Copy copies the contents of the file at srcpath to a regular file
+// at dstpath. If the file named by dstpath already exists, it is
+// truncated. The function does not copy the file mode, file
+// permission bits, or file attributes.
+func Copy(srcpath, dstpath string) (err error) {
+	r, err := os.Open(srcpath)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	defer r.Close() // ignore error: file was opened read-only.
+
+	w, err := os.Create(dstpath)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	defer func() {
+		// Report the error, if any, from Close, but do so
+		// only if there isn't already an outgoing error.
+		c := w.Close()
+		if c != nil {
+			fmt.Println(c)
+		}
+		if err == nil {
+			err = c
+		}
+	}()
+
+	_, err = io.Copy(w, r)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return err
+}
+
+// runLLVMLink links scriptLL and codeLL files using llvm-link command into outLL
+// It creates the directory for outLL if it does not exist
+// In case codeLL = "" it just copies scriptLL into outLL
+func runLLVMLink(pkgDir, script, scriptLL, codeLL string) (string, error) {
+	outLL := filepath.Join(pkgDir, LINKED_DIR, script+IR_SUFFIX)
+	os.MkdirAll(filepath.Dir(outLL), 0755)
+	if codeLL == "" {
+		// nothing to link
+		return outLL, Copy(scriptLL, outLL)
+	}
+	args := []string{"-S", "-o", outLL, codeLL, scriptLL}
+	cmd := exec.Command("llvm-link", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("⚠️ Failed linking to output file %q. Err: %v\n", outLL, err)
+		fmt.Printf("Input script: %q. Input code file: %q", scriptLL, codeLL)
+		return "", err
+	}
+	return outLL, nil
+}
+
+// build locates the one package under ptcache, then for each
 // script IR in ptcache/<pkg>/script/*.ll it runs:
 //
-//	llvm-link ptcache/<pkg>/code/<pkg>.ll script.ll -o script_combined.ll
-//
-// if there is no .../code/<pkg>.ll then the function is a no-op
-func linkIR(ptcache, pkg string) {
-	pkgDir := filepath.Join(ptcache, pkg)
-	if _, err := os.Stat(pkgDir); err != nil {
-		fmt.Println(err)
-		return
-	}
+//	llvm-link ptcache/<pkg>/code/<pkg>.ll script.ll -o ptcache/<pkg>/linked/script.ll
+// if there is no <pkg>.ll in code folder to link then it simply copies the script.ll to linked folder
+// it then builds binary for the linked script.ll
 
-	// Check if code IR exists
-	codeLL := filepath.Join(pkgDir, "code", pkg+".ll")
+func buildScript(script, scriptLL, pkgDir, pkg, cwd string) {
+	codeLL := filepath.Join(pkgDir, CODE_DIR, pkg+IR_SUFFIX)
 	if _, err := os.Stat(codeLL); err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Printf("⚠️ Error checking code IR %q: %v\n", codeLL, err)
+			fmt.Printf("⚠️ Error checking code IR %q: %v. Build failed.\n", codeLL, err)
+			return
 		}
-		return
+		codeLL = ""
 	}
 
-	scriptDir := filepath.Join(pkgDir, "script")
-	scripts, err := os.ReadDir(scriptDir)
+	outLL, err := runLLVMLink(pkgDir, script, scriptLL, codeLL)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			fmt.Printf("⚠️ Error reading scripts dir %q: %v\n", scriptDir, err)
-		}
 		return
 	}
 
-	for _, s := range scripts {
-		if s.IsDir() || !strings.HasSuffix(s.Name(), ".ll") {
-			continue
-		}
-
-		scriptLL := filepath.Join(scriptDir, s.Name())
-		base := strings.TrimSuffix(s.Name(), ".ll")
-		outLL := filepath.Join(scriptDir, base+"_combined.ll")
-
-		cmd := exec.Command("llvm-link", codeLL, scriptLL, "-o", outLL)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("⚠️ Failed linking %q + %q → %q: %v\n", codeLL, scriptLL, outLL, err)
-			continue
-		}
-		fmt.Printf("↪ Successfully linked %q + %q → %q\n", codeLL, scriptLL, outLL)
+	if err := genBinary(script, outLL, pkgDir, cwd); err != nil {
+		fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
+	} else {
+		fmt.Printf("✅ Successfully built binary for script: %s\n", script)
 	}
+}
+
+func genBinary(bin, linkedLL, pkgDir, cwd string) error {
+	// Create temp files
+	optFile := filepath.Join(pkgDir, SCRIPT_DIR, bin+".opt.ll")
+	objFile := filepath.Join(pkgDir, SCRIPT_DIR, bin+".o")
+	binFile := filepath.Join(cwd, bin)
+
+	// Optimization pass
+	optCmd := exec.Command("opt", OPT_LEVEL, "-S", linkedLL, "-o", optFile)
+	if output, err := optCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("optimization failed: %s\n%s", err, string(output))
+	}
+
+	// Compile to object file
+	llcCmd := exec.Command("llc", "-filetype=obj", optFile, "-o", objFile)
+	if output, err := llcCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("llc compilation failed: %s\n%s", err, string(output))
+	}
+
+	linkArgs := []string{"-flto"}
+
+	if runtime.GOOS == "darwin" {
+		// Mach-O linker (ld64.lld) wants -dead_strip
+		linkArgs = append(linkArgs, "-Wl,-dead_strip")
+	} else {
+		// ELF linkers (ld, lld) accept --gc-sections
+		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+	}
+
+	linkArgs = append(linkArgs,
+		objFile,
+		"-o",
+		binFile,
+	)
+
+	// Link executable (with dead code elimination)
+	clangCmd := exec.Command("clang", linkArgs...)
+	if output, err := clangCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("linking failed: %s\n%s", err, string(output))
+	}
+
+	return nil
 }
 
 func main() {
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Printf("Error getting current working directory: %v\n", err)
-		os.Exit(1)
+	var cwd string
+	var err error
+	if len(os.Args) > 1 {
+		cwd = os.Args[1]
+	} else {
+		cwd, err = os.Getwd()
+		if err != nil {
+			fmt.Printf("Error getting current working directory: %v\n", err)
+			os.Exit(1)
+		}
 	}
+
 	fmt.Println("Current working directory is", cwd)
 
 	ptcache := defaultPTCache()
@@ -176,6 +267,8 @@ func main() {
 	// TODO change pkgName to what is given by pt.mod
 	pkg := filepath.Base(cwd)
 	fmt.Println("Extracted pkg name is", pkg)
+
+	pkgDir := filepath.Join(ptcache, pkg)
 
 	dirEntries, err := os.ReadDir(cwd)
 	if err != nil {
@@ -198,7 +291,10 @@ func main() {
 		}
 	}
 
-	compileCode(pkg, ptcache, codeFiles)
-	compileScript(pkg, ptcache, scriptFiles)
-	linkIR(ptcache, pkg)
+	compileCode(codeFiles, pkgDir, pkg)
+	for _, scriptFile := range scriptFiles {
+		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
+		scriptLL := compileScript(script, scriptFile, pkgDir, pkg)
+		buildScript(script, scriptLL, pkgDir, pkg, cwd)
+	}
 }

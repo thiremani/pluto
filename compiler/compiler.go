@@ -136,6 +136,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 	for i := 0; i < len(stmt.Name); i++ {
 		name := stmt.Name[i].Value
 		valueExpr := stmt.Value[i]
+		linkage := llvm.ExternalLinkage
 		var val, global llvm.Value
 		var typ Type
 
@@ -143,15 +144,15 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		case *ast.IntegerLiteral:
 			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
 			typ = Int{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.InternalLinkage)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
 
 		case *ast.FloatLiteral:
 			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
 			typ = Float{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, llvm.InternalLinkage)
+			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
 
 		case *ast.StringLiteral:
-			global = c.createGlobalString(name, v.Value, llvm.InternalLinkage)
+			global = c.createGlobalString(name, v.Value, linkage)
 			typ = String{}
 
 		default:
