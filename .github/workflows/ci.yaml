@@ -33,7 +33,7 @@ jobs:
         run: |
           llvm-config-19 --version
           clang-19 --version
-          lld-19 --version
+          ld.lld-19 --version
 
       - name: Run full test suite
         run: |
