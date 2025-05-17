@@ -27,12 +27,13 @@ jobs:
           echo "CGO_CFLAGS=-I/usr/lib/llvm-19/include" >> $GITHUB_ENV
           echo "CGO_LDFLAGS=-L/usr/lib/llvm-19/lib" >> $GITHUB_ENV
           echo "/usr/lib/llvm-19/bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-19/lib" >> $GITHUB_ENV
 
       - name: Verify LLVM Tools
         run: |
           llvm-config-19 --version
           clang-19 --version
-          ld.lld-19 --version
+          lld-19 --version
 
       - name: Run full test suite
         run: |

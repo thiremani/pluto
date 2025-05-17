@@ -217,7 +217,7 @@ func genBinary(bin, linkedLL, pkgDir, cwd string) error {
 		return fmt.Errorf("llc compilation failed: %s\n%s", err, string(output))
 	}
 
-	linkArgs := []string{"-flto"}
+	linkArgs := []string{"-flto", "-fuse-ld=lld"}
 
 	if runtime.GOOS == "darwin" {
 		// Mach-O linker (ld64.lld) wants -dead_strip
