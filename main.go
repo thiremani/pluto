@@ -212,7 +212,7 @@ func genBinary(bin, linkedLL, pkgDir, cwd string) error {
 	}
 
 	// Compile to object file
-	llcCmd := exec.Command("llc", "-filetype=obj", optFile, "-o", objFile)
+	llcCmd := exec.Command("llc", "-filetype=obj", "-relocation-model=pic", optFile, "-o", objFile)
 	if output, err := llcCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("llc compilation failed: %s\n%s", err, string(output))
 	}
