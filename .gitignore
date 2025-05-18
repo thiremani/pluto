@@ -7,14 +7,13 @@ test
 *.ll
 .DS_Store
 
-# Ignore all files in tests folder that have no given extensions (likely executables)
-tests/*
-!tests/*.pt
-!tests/*.spt
-!tests/*.exp
+# only ignore built binaries in tests
+tests/**
 
-# Ignore all files in subdirectories of tests/ that have no given extensions (likely executables)
-tests/*/*
+# but don’t ignore the directory tree itself (so we can re-include below)  
+!tests/**/
+
+# now re-include any .pt .spt or .exp anywhere under tests/  
 !tests/**/*.pt
 !tests/**/*.spt
 !tests/**/*.exp

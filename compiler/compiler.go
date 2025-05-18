@@ -15,30 +15,31 @@ type Symbol struct {
 
 type Compiler struct {
 	Symbols       map[string]Symbol
-	context       llvm.Context
-	module        llvm.Module
+	ExtSymbols    map[string]Symbol
+	Context       llvm.Context
+	Module        llvm.Module
 	builder       llvm.Builder
 	funcParams    map[string][]llvm.Value
 	opFuncs       map[opKey]opFunc // opFuncs maps an operator key to a function that generates the corresponding LLVM IR.
 	formatCounter int              // Track unique format strings
 }
 
-func NewCompiler(moduleName string) *Compiler {
-	context := llvm.NewContext()
-	module := context.NewModule(moduleName)
-	builder := context.NewBuilder()
+func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
+	module := ctx.NewModule(moduleName)
+	builder := ctx.NewBuilder()
 
-	c := Compiler{
+	c := &Compiler{
 		Symbols:       make(map[string]Symbol),
-		context:       context,
-		module:        module,
+		ExtSymbols:    make(map[string]Symbol),
+		Context:       ctx,
+		Module:        module,
 		builder:       builder,
 		funcParams:    make(map[string][]llvm.Value),
 		formatCounter: 0,
 	}
 	c.initOpFuncs()
 
-	return &c
+	return c
 }
 
 // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
@@ -51,9 +52,9 @@ func (c *Compiler) CompileConst(code *ast.Code) {
 
 func (c *Compiler) CompileScript(program *ast.Program) {
 	// Create main function
-	mainType := llvm.FunctionType(c.context.Int32Type(), []llvm.Type{}, false)
-	mainFunc := llvm.AddFunction(c.module, "main", mainType)
-	mainBlock := c.context.AddBasicBlock(mainFunc, "entry")
+	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
+	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
+	mainBlock := c.Context.AddBasicBlock(mainFunc, "entry")
 	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
 
 	// Compile all statements
@@ -67,7 +68,7 @@ func (c *Compiler) CompileScript(program *ast.Program) {
 	}
 
 	// Add explicit return 0
-	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
+	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -76,28 +77,28 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		intType := t.(Int)
 		switch intType.Width {
 		case 8:
-			return c.context.Int8Type()
+			return c.Context.Int8Type()
 		case 16:
-			return c.context.Int16Type()
+			return c.Context.Int16Type()
 		case 32:
-			return c.context.Int32Type()
+			return c.Context.Int32Type()
 		case 64:
-			return c.context.Int64Type()
+			return c.Context.Int64Type()
 		default:
 			panic(fmt.Sprintf("unsupported int width: %d", intType.Width))
 		}
 	case FloatKind:
 		floatType := t.(Float)
 		if floatType.Width == 32 {
-			return c.context.FloatType()
+			return c.Context.FloatType()
 		} else if floatType.Width == 64 {
-			return c.context.DoubleType()
+			return c.Context.DoubleType()
 		} else {
 			panic(fmt.Sprintf("unsupported float width: %d", floatType.Width))
 		}
 	case StringKind:
 		// Represent a string as a pointer to an 8-bit integer.
-		return llvm.PointerType(c.context.Int8Type(), 0)
+		return llvm.PointerType(c.Context.Int8Type(), 0)
 	case PointerKind:
 		ptrType := t.(Pointer)
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
@@ -117,14 +118,14 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) llvm.Value {
 	strConst := llvm.ConstString(value, true)
 	arrayLength := len(value) + 1
-	arrType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
+	arrType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
 
 	return c.makeGlobalConst(arrType, name, strConst, linkage)
 }
 
 func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
 	// Create a global LLVM variable
-	global := llvm.AddGlobal(c.module, llvmType, name)
+	global := llvm.AddGlobal(c.Module, llvmType, name)
 	global.SetInitializer(val)
 	global.SetLinkage(linkage)
 	global.SetUnnamedAddr(true)
@@ -137,33 +138,28 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		name := stmt.Name[i].Value
 		valueExpr := stmt.Value[i]
 		linkage := llvm.ExternalLinkage
-		var val, global llvm.Value
-		var typ Type
+		sym := Symbol{}
+		var val llvm.Value
 
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
-			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
-			typ = Int{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
+			val = llvm.ConstInt(c.Context.Int64Type(), uint64(v.Value), false)
+			sym.Type = Pointer{Elem: Int{Width: 64}}
+			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
 
 		case *ast.FloatLiteral:
-			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
-			typ = Float{Width: 64}
-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
+			val = llvm.ConstFloat(c.Context.DoubleType(), v.Value)
+			sym.Type = Pointer{Elem: Float{Width: 64}}
+			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), name, val, linkage)
 
 		case *ast.StringLiteral:
-			global = c.createGlobalString(name, v.Value, linkage)
-			typ = String{}
+			sym.Val = c.createGlobalString(name, v.Value, linkage)
+			sym.Type = String{}
 
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
-
-		// Add to symbol table
-		c.Symbols[name] = Symbol{
-			Val:  global,
-			Type: typ,
-		}
+		c.Symbols[name] = sym
 	}
 }
 
@@ -184,7 +180,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 			prevValues[ident.Value] = val // Existing value
 		} else {
 			prevValues[ident.Value] = Symbol{
-				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false), // Default to 0
+				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
 				Type: Int{Width: 64},
 			}
 		}
@@ -202,9 +198,9 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	}
 
 	// Create blocks for conditional flow
-	ifBlock := c.context.AddBasicBlock(fn, "if_block")
-	elseBlock := c.context.AddBasicBlock(fn, "else_block")
-	contBlock := c.context.AddBasicBlock(fn, "cont_block")
+	ifBlock := c.Context.AddBasicBlock(fn, "if_block")
+	elseBlock := c.Context.AddBasicBlock(fn, "else_block")
+	contBlock := c.Context.AddBasicBlock(fn, "cont_block")
 
 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 
@@ -228,7 +224,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 		if !ok {
 			// Provide a default symbol if the variable hasn't been defined.
 			sym = Symbol{
-				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false),
+				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false),
 				Type: Int{Width: 64},
 			}
 		}
@@ -251,11 +247,11 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
-		s.Val = llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
+		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
 		s.Type = Int{Width: 64}
 		return
 	case *ast.FloatLiteral:
-		s.Val = llvm.ConstFloat(c.context.DoubleType(), e.Value)
+		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
 		s.Type = Float{Width: 64}
 		return
 	case *ast.StringLiteral:
@@ -352,6 +348,9 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
 	if s, ok := c.Symbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
+	if s, ok := c.ExtSymbols[ident.Value]; ok {
+		return c.derefIfPointer(s)
+	}
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 }
 
@@ -365,18 +364,18 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 
 	if leftIsFloat || rightIsFloat {
 		if !leftIsFloat {
-			left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
+			left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
 			left.Type = Float{Width: 64}
 		}
 		if !rightIsFloat {
-			right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
+			right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
 			right.Type = Float{Width: 64}
 		}
 	} else if expr.Operator == token.SYM_DIV || expr.Operator == token.SYM_EXP {
 		// if both types are int, we currently convert both to float for operations / and ^
-		left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
+		left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
 		left.Type = Float{Width: 64}
-		right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
+		right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
 		right.Type = Float{Width: 64}
 	}
 
@@ -397,17 +396,17 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 
 func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
 	// Create function type
-	returnType := c.context.VoidType()
+	returnType := c.Context.VoidType()
 	paramTypes := make([]llvm.Type, len(fn.Parameters))
 	for i := range fn.Parameters {
-		paramTypes[i] = c.context.Int64Type()
+		paramTypes[i] = c.Context.Int64Type()
 	}
 
 	funcType := llvm.FunctionType(returnType, paramTypes, false)
-	function := llvm.AddFunction(c.module, fn.Token.Literal, funcType)
+	function := llvm.AddFunction(c.Module, fn.Token.Literal, funcType)
 
 	// Create entry block
-	entry := c.context.AddBasicBlock(function, "entry")
+	entry := c.Context.AddBasicBlock(function, "entry")
 	c.builder.SetInsertPoint(entry, entry.FirstInstruction())
 
 	// Store parameters
@@ -442,13 +441,13 @@ func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value 
 	currentInsert := c.builder.GetInsertBlock()
 	c.builder.SetInsertPointBefore(f.EntryBasicBlock().FirstInstruction())
 
-	alloca := c.builder.CreateAlloca(c.context.Int64Type(), name)
+	alloca := c.builder.CreateAlloca(c.Context.Int64Type(), name)
 	c.builder.SetInsertPointAtEnd(currentInsert)
 	return alloca
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
-	fn := c.module.NamedFunction(ce.Function.Value)
+	fn := c.Module.NamedFunction(ce.Function.Value)
 	if fn.IsNil() {
 		panic("undefined function: " + ce.Function.Value)
 	}
@@ -507,25 +506,25 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// Define global array with exact length
 	arrayLength := len(formatStr) + 1 // +1 for null terminator
-	arrayType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
-	formatGlobal := llvm.AddGlobal(c.module, arrayType, globalName)
+	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
+	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
 	formatGlobal.SetInitializer(formatConst)
 	// It is essential to mark this as constant. Else a printf like %n which writes to pointer will fail
 	formatGlobal.SetGlobalConstant(true)
 
 	// Get pointer to the format string
-	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
+	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
 	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 
 	// Declare printf (variadic function)
 	printfType := llvm.FunctionType(
-		c.context.Int32Type(),
-		[]llvm.Type{llvm.PointerType(c.context.Int8Type(), 0)},
+		c.Context.Int32Type(),
+		[]llvm.Type{llvm.PointerType(c.Context.Int8Type(), 0)},
 		true, // Variadic
 	)
-	printf := c.module.NamedFunction("printf")
+	printf := c.Module.NamedFunction("printf")
 	if printf.IsNil() {
-		printf = llvm.AddFunction(c.module, "printf", printfType)
+		printf = llvm.AddFunction(c.Module, "printf", printfType)
 	}
 
 	// Call printf with all arguments
@@ -535,5 +534,5 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 // Helper function to generate final output
 func (c *Compiler) GenerateIR() string {
-	return c.module.String()
+	return c.Module.String()
 }

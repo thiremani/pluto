@@ -75,8 +75,8 @@ func (c *Compiler) initOpFuncs() {
 	}
 	// For division, if both operands are integers, promote them to float and do float division.
 	c.opFuncs[opKey{Operator: token.SYM_DIV, LeftType: "i64", RightType: "i64"}] = func(left, right Symbol) Symbol {
-		leftFP := c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_f64")
-		rightFP := c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_f64")
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_f64")
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_f64")
 		return Symbol{
 			Val:  c.builder.CreateFDiv(leftFP, rightFP, "fdiv_tmp"),
 			Type: Float{Width: 64},
@@ -90,10 +90,10 @@ func (c *Compiler) initOpFuncs() {
 	}
 	// Exponentiation (^):
 	// Register exponentiation operator for float values.
-	powType := llvm.FunctionType(c.context.DoubleType(), []llvm.Type{c.context.DoubleType(), c.context.DoubleType()}, false)
-	powFunc := c.module.NamedFunction("llvm.pow.f64")
+	powType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType(), c.Context.DoubleType()}, false)
+	powFunc := c.Module.NamedFunction("llvm.pow.f64")
 	if powFunc.IsNil() {
-		powFunc = llvm.AddFunction(c.module, "llvm.pow.f64", powType)
+		powFunc = llvm.AddFunction(c.Module, "llvm.pow.f64", powType)
 	}
 	c.opFuncs[opKey{Operator: "^", LeftType: "f64", RightType: "f64"}] = func(left, right Symbol) Symbol {
 		return Symbol{

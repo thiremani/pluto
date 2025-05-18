@@ -15,7 +15,7 @@ func TestStringCompile(t *testing.T) {
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	comp := NewCompiler("test")
+	comp := NewCompiler(llvm.NewContext(), "test")
 	comp.CompileScript(program)
 	ir := comp.GenerateIR()
 
@@ -33,7 +33,7 @@ six = 6`
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	c := NewCompiler("TestFormatIdentifiers")
+	c := NewCompiler(llvm.NewContext(), "TestFormatIdentifiers")
 	c.CompileScript(program)
 	res, vals := c.formatIdentifiers("x = -x, six = -six")
 	expStr := "x = %ld, six = %ld"
@@ -43,7 +43,7 @@ six = 6`
 	if len(vals) != 2 {
 		t.Errorf("len(vals) does not match expected. got: %d, expected: 2", len(vals))
 	}
-	expVals := []llvm.Value{llvm.ConstInt(c.context.Int64Type(), 5, false), llvm.ConstInt(c.context.Int64Type(), 6, false)}
+	expVals := []llvm.Value{llvm.ConstInt(c.Context.Int64Type(), 5, false), llvm.ConstInt(c.Context.Int64Type(), 6, false)}
 	for i, val := range vals {
 		if val != expVals[i] {
 			t.Errorf("vals[%d] does not match expected.", i)
@@ -61,7 +61,7 @@ greeting = "hello"`
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
-	c := NewCompiler("testConst")
+	c := NewCompiler(llvm.NewContext(), "testConst")
 	c.CompileConst(code)
 	ir := c.GenerateIR()
 

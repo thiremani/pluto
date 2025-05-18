@@ -77,6 +77,7 @@ class TestRunner:
 
     def compile(self, dir: Path):
         """Compile a pluto directory"""
+        print(f"{Fore.CYAN}Compiling {dir}...{Style.RESET_ALL}")
         try:
             compiler_output = self.run_command(
                 [self.project_root/PLUTO_EXE],
@@ -91,32 +92,37 @@ class TestRunner:
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
-        test_dir = self.project_root/TEST_DIR
-        self.compile(test_dir)
-
-        exp_files = list((self.project_root/TEST_DIR).glob("*.exp"))
-        for exp_file in exp_files:
-            test_name = exp_file.name.removesuffix(".exp")
-            print(f"\n{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
-
+        # Collect all subdirectories with .exp files (including nested)
+        test_dirs = set()
+        for exp_path in TEST_DIR.rglob("*.exp"):
+            test_dirs.add(exp_path.parent)
+        
+        for test_dir in test_dirs:
+            print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
             try:
-                actual_output = self.run_command([str(test_dir/test_name)])
-                expected_output = exp_file.read_text()
-
-                if actual_output == expected_output:
-                    print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
-                    self.passed += 1
-                else:
-                    self.show_diff(expected_output, actual_output)
-                    self.failed += 1
-
-            except Exception as e:
-                print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
+                self.compile(test_dir)
+            except subprocess.CalledProcessError:
                 self.failed += 1
-                if KEEP_BUILD:
-                    print(f"Build artifacts preserved in {BUILD_DIR}")
-                else:
-                    shutil.rmtree(BUILD_DIR, ignore_errors=True)
+                continue  # Skip tests if compilation fails
+
+            exp_files = list(test_dir.glob("*.exp"))
+            for exp_file in exp_files:
+                test_name = exp_file.stem
+                print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
+                try:
+                    actual_output = self.run_command([str(test_dir / test_name)])
+                    expected_output = exp_file.read_text()
+
+                    if actual_output == expected_output:
+                        print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
+                        self.passed += 1
+                    else:
+                        self.show_diff(expected_output, actual_output)
+                        self.failed += 1
+
+                except Exception as e:
+                    print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
+                    self.failed += 1
 
     def show_diff(self, expected: str, actual: str):
         """Show colored diff output"""

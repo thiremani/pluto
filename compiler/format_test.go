@@ -6,6 +6,8 @@ import (
 	"pluto/parser"
 	"strings"
 	"testing"
+
+	"tinygo.org/x/go-llvm"
 )
 
 func TestFormatStringPanics(t *testing.T) {
@@ -76,7 +78,7 @@ func TestFormatStringPanics(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler("TestFormatPanics")
+			c := NewCompiler(llvm.NewContext(), "TestFormatPanics")
 			c.CompileScript(program)
 		})
 	}
@@ -106,7 +108,7 @@ func TestValidFormatString(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler("TestValidFormatString")
+			c := NewCompiler(llvm.NewContext(), "TestValidFormatString")
 			c.CompileScript(program)
 			ir := c.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {

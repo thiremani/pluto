@@ -1,0 +1,822 @@
+diff --git a/.gitignore b/.gitignore
+index 813ad8f..a75916d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,14 +7,13 @@ test
+ *.ll
+ .DS_Store
+ 
+-# Ignore all files in tests folder that have no given extensions (likely executables)
+-tests/*
+-!tests/*.pt
+-!tests/*.spt
+-!tests/*.exp
++# only ignore built binaries in tests
++tests/**
+ 
+-# Ignore all files in subdirectories of tests/ that have no given extensions (likely executables)
+-tests/*/*
++# but don’t ignore the directory tree itself (so we can re-include below)  
++!tests/**/
++
++# now re-include any .pt .spt or .exp anywhere under tests/  
+ !tests/**/*.pt
+ !tests/**/*.spt
+-!tests/**/*.exp
++!tests/**/*.exp
+\ No newline at end of file
+diff --git a/compiler/compiler.go b/compiler/compiler.go
+index d4d32bb..c6441ec 100644
+--- a/compiler/compiler.go
++++ b/compiler/compiler.go
+@@ -15,30 +15,31 @@ type Symbol struct {
+ 
+ type Compiler struct {
+ 	Symbols       map[string]Symbol
+-	context       llvm.Context
+-	module        llvm.Module
++	ExtSymbols    map[string]Symbol
++	Context       llvm.Context
++	Module        llvm.Module
+ 	builder       llvm.Builder
+ 	funcParams    map[string][]llvm.Value
+ 	opFuncs       map[opKey]opFunc // opFuncs maps an operator key to a function that generates the corresponding LLVM IR.
+ 	formatCounter int              // Track unique format strings
+ }
+ 
+-func NewCompiler(moduleName string) *Compiler {
+-	context := llvm.NewContext()
+-	module := context.NewModule(moduleName)
+-	builder := context.NewBuilder()
++func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
++	module := ctx.NewModule(moduleName)
++	builder := ctx.NewBuilder()
+ 
+-	c := Compiler{
++	c := &Compiler{
+ 		Symbols:       make(map[string]Symbol),
+-		context:       context,
+-		module:        module,
++		ExtSymbols:    make(map[string]Symbol),
++		Context:       ctx,
++		Module:        module,
+ 		builder:       builder,
+ 		funcParams:    make(map[string][]llvm.Value),
+ 		formatCounter: 0,
+ 	}
+ 	c.initOpFuncs()
+ 
+-	return &c
++	return c
+ }
+ 
+ // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
+@@ -51,9 +52,9 @@ func (c *Compiler) CompileConst(code *ast.Code) {
+ 
+ func (c *Compiler) CompileScript(program *ast.Program) {
+ 	// Create main function
+-	mainType := llvm.FunctionType(c.context.Int32Type(), []llvm.Type{}, false)
+-	mainFunc := llvm.AddFunction(c.module, "main", mainType)
+-	mainBlock := c.context.AddBasicBlock(mainFunc, "entry")
++	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
++	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
++	mainBlock := c.Context.AddBasicBlock(mainFunc, "entry")
+ 	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
+ 
+ 	// Compile all statements
+@@ -67,7 +68,7 @@ func (c *Compiler) CompileScript(program *ast.Program) {
+ 	}
+ 
+ 	// Add explicit return 0
+-	c.builder.CreateRet(llvm.ConstInt(c.context.Int32Type(), 0, false))
++	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
+ }
+ 
+ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
+@@ -76,28 +77,28 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
+ 		intType := t.(Int)
+ 		switch intType.Width {
+ 		case 8:
+-			return c.context.Int8Type()
++			return c.Context.Int8Type()
+ 		case 16:
+-			return c.context.Int16Type()
++			return c.Context.Int16Type()
+ 		case 32:
+-			return c.context.Int32Type()
++			return c.Context.Int32Type()
+ 		case 64:
+-			return c.context.Int64Type()
++			return c.Context.Int64Type()
+ 		default:
+ 			panic(fmt.Sprintf("unsupported int width: %d", intType.Width))
+ 		}
+ 	case FloatKind:
+ 		floatType := t.(Float)
+ 		if floatType.Width == 32 {
+-			return c.context.FloatType()
++			return c.Context.FloatType()
+ 		} else if floatType.Width == 64 {
+-			return c.context.DoubleType()
++			return c.Context.DoubleType()
+ 		} else {
+ 			panic(fmt.Sprintf("unsupported float width: %d", floatType.Width))
+ 		}
+ 	case StringKind:
+ 		// Represent a string as a pointer to an 8-bit integer.
+-		return llvm.PointerType(c.context.Int8Type(), 0)
++		return llvm.PointerType(c.Context.Int8Type(), 0)
+ 	case PointerKind:
+ 		ptrType := t.(Pointer)
+ 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
+@@ -117,14 +118,14 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
+ func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) llvm.Value {
+ 	strConst := llvm.ConstString(value, true)
+ 	arrayLength := len(value) + 1
+-	arrType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
++	arrType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
+ 
+ 	return c.makeGlobalConst(arrType, name, strConst, linkage)
+ }
+ 
+ func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
+ 	// Create a global LLVM variable
+-	global := llvm.AddGlobal(c.module, llvmType, name)
++	global := llvm.AddGlobal(c.Module, llvmType, name)
+ 	global.SetInitializer(val)
+ 	global.SetLinkage(linkage)
+ 	global.SetUnnamedAddr(true)
+@@ -137,33 +138,28 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
+ 		name := stmt.Name[i].Value
+ 		valueExpr := stmt.Value[i]
+ 		linkage := llvm.ExternalLinkage
+-		var val, global llvm.Value
+-		var typ Type
++		sym := Symbol{}
++		var val llvm.Value
+ 
+ 		switch v := valueExpr.(type) {
+ 		case *ast.IntegerLiteral:
+-			val = llvm.ConstInt(c.context.Int64Type(), uint64(v.Value), false)
+-			typ = Int{Width: 64}
+-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
++			val = llvm.ConstInt(c.Context.Int64Type(), uint64(v.Value), false)
++			sym.Type = Pointer{Elem: Int{Width: 64}}
++			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
+ 
+ 		case *ast.FloatLiteral:
+-			val = llvm.ConstFloat(c.context.DoubleType(), v.Value)
+-			typ = Float{Width: 64}
+-			global = c.makeGlobalConst(c.mapToLLVMType(typ), name, val, linkage)
++			val = llvm.ConstFloat(c.Context.DoubleType(), v.Value)
++			sym.Type = Pointer{Elem: Float{Width: 64}}
++			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), name, val, linkage)
+ 
+ 		case *ast.StringLiteral:
+-			global = c.createGlobalString(name, v.Value, linkage)
+-			typ = String{}
++			sym.Val = c.createGlobalString(name, v.Value, linkage)
++			sym.Type = String{}
+ 
+ 		default:
+ 			panic(fmt.Sprintf("unsupported constant type: %T", v))
+ 		}
+-
+-		// Add to symbol table
+-		c.Symbols[name] = Symbol{
+-			Val:  global,
+-			Type: typ,
+-		}
++		c.Symbols[name] = sym
+ 	}
+ }
+ 
+@@ -184,7 +180,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
+ 			prevValues[ident.Value] = val // Existing value
+ 		} else {
+ 			prevValues[ident.Value] = Symbol{
+-				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false), // Default to 0
++				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
+ 				Type: Int{Width: 64},
+ 			}
+ 		}
+@@ -202,9 +198,9 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
+ 	}
+ 
+ 	// Create blocks for conditional flow
+-	ifBlock := c.context.AddBasicBlock(fn, "if_block")
+-	elseBlock := c.context.AddBasicBlock(fn, "else_block")
+-	contBlock := c.context.AddBasicBlock(fn, "cont_block")
++	ifBlock := c.Context.AddBasicBlock(fn, "if_block")
++	elseBlock := c.Context.AddBasicBlock(fn, "else_block")
++	contBlock := c.Context.AddBasicBlock(fn, "cont_block")
+ 
+ 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+ 
+@@ -228,7 +224,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
+ 		if !ok {
+ 			// Provide a default symbol if the variable hasn't been defined.
+ 			sym = Symbol{
+-				Val:  llvm.ConstInt(c.context.Int64Type(), 0, false),
++				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false),
+ 				Type: Int{Width: 64},
+ 			}
+ 		}
+@@ -251,11 +247,11 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
+ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
+ 	switch e := expr.(type) {
+ 	case *ast.IntegerLiteral:
+-		s.Val = llvm.ConstInt(c.context.Int64Type(), uint64(e.Value), false)
++		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
+ 		s.Type = Int{Width: 64}
+ 		return
+ 	case *ast.FloatLiteral:
+-		s.Val = llvm.ConstFloat(c.context.DoubleType(), e.Value)
++		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
+ 		s.Type = Float{Width: 64}
+ 		return
+ 	case *ast.StringLiteral:
+@@ -352,6 +348,9 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
+ 	if s, ok := c.Symbols[ident.Value]; ok {
+ 		return c.derefIfPointer(s)
+ 	}
++	if s, ok := c.ExtSymbols[ident.Value]; ok {
++		return c.derefIfPointer(s)
++	}
+ 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
+ }
+ 
+@@ -365,18 +364,18 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol)
+ 
+ 	if leftIsFloat || rightIsFloat {
+ 		if !leftIsFloat {
+-			left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
++			left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
+ 			left.Type = Float{Width: 64}
+ 		}
+ 		if !rightIsFloat {
+-			right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
++			right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
+ 			right.Type = Float{Width: 64}
+ 		}
+ 	} else if expr.Operator == token.SYM_DIV || expr.Operator == token.SYM_EXP {
+ 		// if both types are int, we currently convert both to float for operations / and ^
+-		left.Val = c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_float")
++		left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
+ 		left.Type = Float{Width: 64}
+-		right.Val = c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_float")
++		right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
+ 		right.Type = Float{Width: 64}
+ 	}
+ 
+@@ -397,17 +396,17 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol)
+ 
+ func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
+ 	// Create function type
+-	returnType := c.context.VoidType()
++	returnType := c.Context.VoidType()
+ 	paramTypes := make([]llvm.Type, len(fn.Parameters))
+ 	for i := range fn.Parameters {
+-		paramTypes[i] = c.context.Int64Type()
++		paramTypes[i] = c.Context.Int64Type()
+ 	}
+ 
+ 	funcType := llvm.FunctionType(returnType, paramTypes, false)
+-	function := llvm.AddFunction(c.module, fn.Token.Literal, funcType)
++	function := llvm.AddFunction(c.Module, fn.Token.Literal, funcType)
+ 
+ 	// Create entry block
+-	entry := c.context.AddBasicBlock(function, "entry")
++	entry := c.Context.AddBasicBlock(function, "entry")
+ 	c.builder.SetInsertPoint(entry, entry.FirstInstruction())
+ 
+ 	// Store parameters
+@@ -442,13 +441,13 @@ func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value
+ 	currentInsert := c.builder.GetInsertBlock()
+ 	c.builder.SetInsertPointBefore(f.EntryBasicBlock().FirstInstruction())
+ 
+-	alloca := c.builder.CreateAlloca(c.context.Int64Type(), name)
++	alloca := c.builder.CreateAlloca(c.Context.Int64Type(), name)
+ 	c.builder.SetInsertPointAtEnd(currentInsert)
+ 	return alloca
+ }
+ 
+ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
+-	fn := c.module.NamedFunction(ce.Function.Value)
++	fn := c.Module.NamedFunction(ce.Function.Value)
+ 	if fn.IsNil() {
+ 		panic("undefined function: " + ce.Function.Value)
+ 	}
+@@ -507,25 +506,25 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+ 
+ 	// Define global array with exact length
+ 	arrayLength := len(formatStr) + 1 // +1 for null terminator
+-	arrayType := llvm.ArrayType(c.context.Int8Type(), arrayLength)
+-	formatGlobal := llvm.AddGlobal(c.module, arrayType, globalName)
++	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
++	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
+ 	formatGlobal.SetInitializer(formatConst)
+ 	// It is essential to mark this as constant. Else a printf like %n which writes to pointer will fail
+ 	formatGlobal.SetGlobalConstant(true)
+ 
+ 	// Get pointer to the format string
+-	zero := llvm.ConstInt(c.context.Int64Type(), 0, false)
++	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+ 	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
+ 
+ 	// Declare printf (variadic function)
+ 	printfType := llvm.FunctionType(
+-		c.context.Int32Type(),
+-		[]llvm.Type{llvm.PointerType(c.context.Int8Type(), 0)},
++		c.Context.Int32Type(),
++		[]llvm.Type{llvm.PointerType(c.Context.Int8Type(), 0)},
+ 		true, // Variadic
+ 	)
+-	printf := c.module.NamedFunction("printf")
++	printf := c.Module.NamedFunction("printf")
+ 	if printf.IsNil() {
+-		printf = llvm.AddFunction(c.module, "printf", printfType)
++		printf = llvm.AddFunction(c.Module, "printf", printfType)
+ 	}
+ 
+ 	// Call printf with all arguments
+@@ -535,5 +534,5 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+ 
+ // Helper function to generate final output
+ func (c *Compiler) GenerateIR() string {
+-	return c.module.String()
++	return c.Module.String()
+ }
+diff --git a/compiler/compiler_test.go b/compiler/compiler_test.go
+index 3d4c2ec..f894665 100644
+--- a/compiler/compiler_test.go
++++ b/compiler/compiler_test.go
+@@ -15,7 +15,7 @@ func TestStringCompile(t *testing.T) {
+ 	sp := parser.NewScriptParser(l)
+ 	program := sp.Parse()
+ 
+-	comp := NewCompiler("test")
++	comp := NewCompiler(llvm.NewContext(), "test")
+ 	comp.CompileScript(program)
+ 	ir := comp.GenerateIR()
+ 
+@@ -33,7 +33,7 @@ six = 6`
+ 	sp := parser.NewScriptParser(l)
+ 	program := sp.Parse()
+ 
+-	c := NewCompiler("TestFormatIdentifiers")
++	c := NewCompiler(llvm.NewContext(), "TestFormatIdentifiers")
+ 	c.CompileScript(program)
+ 	res, vals := c.formatIdentifiers("x = -x, six = -six")
+ 	expStr := "x = %ld, six = %ld"
+@@ -43,7 +43,7 @@ six = 6`
+ 	if len(vals) != 2 {
+ 		t.Errorf("len(vals) does not match expected. got: %d, expected: 2", len(vals))
+ 	}
+-	expVals := []llvm.Value{llvm.ConstInt(c.context.Int64Type(), 5, false), llvm.ConstInt(c.context.Int64Type(), 6, false)}
++	expVals := []llvm.Value{llvm.ConstInt(c.Context.Int64Type(), 5, false), llvm.ConstInt(c.Context.Int64Type(), 6, false)}
+ 	for i, val := range vals {
+ 		if val != expVals[i] {
+ 			t.Errorf("vals[%d] does not match expected.", i)
+@@ -61,7 +61,7 @@ greeting = "hello"`
+ 	cp := parser.NewCodeParser(l)
+ 	code := cp.Parse()
+ 
+-	c := NewCompiler("testConst")
++	c := NewCompiler(llvm.NewContext(), "testConst")
+ 	c.CompileConst(code)
+ 	ir := c.GenerateIR()
+ 
+diff --git a/compiler/format_test.go b/compiler/format_test.go
+index 0d115ea..a08460b 100644
+--- a/compiler/format_test.go
++++ b/compiler/format_test.go
+@@ -6,6 +6,8 @@ import (
+ 	"pluto/parser"
+ 	"strings"
+ 	"testing"
++
++	"tinygo.org/x/go-llvm"
+ )
+ 
+ func TestFormatStringPanics(t *testing.T) {
+@@ -76,7 +78,7 @@ func TestFormatStringPanics(t *testing.T) {
+ 			l := lexer.New(tc.input)
+ 			p := parser.New(l)
+ 			program := p.ParseProgram()
+-			c := NewCompiler("TestFormatPanics")
++			c := NewCompiler(llvm.NewContext(), "TestFormatPanics")
+ 			c.CompileScript(program)
+ 		})
+ 	}
+@@ -106,7 +108,7 @@ func TestValidFormatString(t *testing.T) {
+ 			l := lexer.New(tc.input)
+ 			p := parser.New(l)
+ 			program := p.ParseProgram()
+-			c := NewCompiler("TestValidFormatString")
++			c := NewCompiler(llvm.NewContext(), "TestValidFormatString")
+ 			c.CompileScript(program)
+ 			ir := c.GenerateIR()
+ 			if !strings.Contains(ir, tc.expectOutput) {
+diff --git a/compiler/operators.go b/compiler/operators.go
+index a1918d0..7ce1e46 100644
+--- a/compiler/operators.go
++++ b/compiler/operators.go
+@@ -75,8 +75,8 @@ func (c *Compiler) initOpFuncs() {
+ 	}
+ 	// For division, if both operands are integers, promote them to float and do float division.
+ 	c.opFuncs[opKey{Operator: token.SYM_DIV, LeftType: "i64", RightType: "i64"}] = func(left, right Symbol) Symbol {
+-		leftFP := c.builder.CreateSIToFP(left.Val, c.context.DoubleType(), "cast_to_f64")
+-		rightFP := c.builder.CreateSIToFP(right.Val, c.context.DoubleType(), "cast_to_f64")
++		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_f64")
++		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_f64")
+ 		return Symbol{
+ 			Val:  c.builder.CreateFDiv(leftFP, rightFP, "fdiv_tmp"),
+ 			Type: Float{Width: 64},
+@@ -90,10 +90,10 @@ func (c *Compiler) initOpFuncs() {
+ 	}
+ 	// Exponentiation (^):
+ 	// Register exponentiation operator for float values.
+-	powType := llvm.FunctionType(c.context.DoubleType(), []llvm.Type{c.context.DoubleType(), c.context.DoubleType()}, false)
+-	powFunc := c.module.NamedFunction("llvm.pow.f64")
++	powType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType(), c.Context.DoubleType()}, false)
++	powFunc := c.Module.NamedFunction("llvm.pow.f64")
+ 	if powFunc.IsNil() {
+-		powFunc = llvm.AddFunction(c.module, "llvm.pow.f64", powType)
++		powFunc = llvm.AddFunction(c.Module, "llvm.pow.f64", powType)
+ 	}
+ 	c.opFuncs[opKey{Operator: "^", LeftType: "f64", RightType: "f64"}] = func(left, right Symbol) Symbol {
+ 		return Symbol{
+diff --git a/go.mod b/go.mod
+index a65e6e7..67ba3ae 100644
+--- a/go.mod
++++ b/go.mod
+@@ -2,4 +2,4 @@ module pluto
+ 
+ go 1.24
+ 
+-require tinygo.org/x/go-llvm v0.0.0-20250119132755-9dca92dfb4f9 // indirect
++require tinygo.org/x/go-llvm v0.0.0-20250422114502-b8f170971e74
+diff --git a/go.sum b/go.sum
+index 80f1ca4..9a4f03f 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,2 +1,4 @@
+ tinygo.org/x/go-llvm v0.0.0-20250119132755-9dca92dfb4f9 h1:rMvEzuCYjyiR+pmdiCVWTQw3L6VqiSIXoL19I3lYufE=
+ tinygo.org/x/go-llvm v0.0.0-20250119132755-9dca92dfb4f9/go.mod h1:GFbusT2VTA4I+l4j80b17KFK+6whv69Wtny5U+T8RR0=
++tinygo.org/x/go-llvm v0.0.0-20250422114502-b8f170971e74 h1:ovavgTdIBWCH8YWlcfq9gkpoyT1+IxMKSn+Df27QwE8=
++tinygo.org/x/go-llvm v0.0.0-20250422114502-b8f170971e74/go.mod h1:GFbusT2VTA4I+l4j80b17KFK+6whv69Wtny5U+T8RR0=
+diff --git a/main.go b/main.go
+index 2b4f895..9a43d80 100644
+--- a/main.go
++++ b/main.go
+@@ -2,7 +2,6 @@ package main
+ 
+ import (
+ 	"fmt"
+-	"io"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -12,17 +11,20 @@ import (
+ 	"pluto/parser"
+ 	"runtime"
+ 	"strings"
++
++	"tinygo.org/x/go-llvm"
+ )
+ 
+-var PT_SUFFIX = ".pt"
+-var SPT_SUFFIX = ".spt"
+-var IR_SUFFIX = ".ll"
++const (
++	PT_SUFFIX  = ".pt"
++	SPT_SUFFIX = ".spt"
++	IR_SUFFIX  = ".ll"
+ 
+-var CODE_DIR = "code"
+-var SCRIPT_DIR = "script"
+-var LINKED_DIR = "linked"
++	SCRIPT_DIR = "script"
++	CODE_DIR   = "code"
+ 
+-var OPT_LEVEL = "-O2" // Can be configured via flag
++	OPT_LEVEL = "-O2" // Can be configured via flag
++)
+ 
+ // getDefaultPTCache gets env variable PTCACHE
+ // if it is not set sets it to default value for windows, mac, linux
+@@ -56,7 +58,7 @@ func defaultPTCache() string {
+ 	return ptcache
+ }
+ 
+-func compileCode(codeFiles []string, pkgDir, pkg string) {
++func compileCode(codeFiles []string, pkgDir, pkg string, ctx llvm.Context) (*compiler.Compiler, string, error) {
+ 	pkgCode := ast.NewCode()
+ 	for _, codeFile := range codeFiles {
+ 		source, err := os.ReadFile(codeFile)
+@@ -68,8 +70,8 @@ func compileCode(codeFiles []string, pkgDir, pkg string) {
+ 		cp := parser.NewCodeParser(l)
+ 		code := cp.Parse()
+ 
+-		if len(cp.Errors()) > 0 {
+-			for _, e := range cp.Errors() {
++		if errs := cp.Errors(); len(errs) > 0 {
++			for _, e := range errs {
+ 				fmt.Printf("%s: %s\n", codeFile, e)
+ 			}
+ 			continue
+@@ -77,7 +79,7 @@ func compileCode(codeFiles []string, pkgDir, pkg string) {
+ 		pkgCode.Merge(code)
+ 	}
+ 
+-	c := compiler.NewCompiler(pkg)
++	c := compiler.NewCompiler(ctx, pkg)
+ 	c.CompileConst(pkgCode)
+ 	ir := c.GenerateIR()
+ 
+@@ -85,128 +87,60 @@ func compileCode(codeFiles []string, pkgDir, pkg string) {
+ 	os.MkdirAll(filepath.Dir(outPath), 0755)
+ 	if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
+ 		fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
++		return c, outPath, err
+ 	}
++	return c, outPath, nil
+ }
+ 
+-func compileScript(script, scriptFile, pkgDir, pkg string) string {
++func compileScript(script, pkgDir, scriptFile string, codeCompiler *compiler.Compiler, codePath string, ctx llvm.Context) (string, error) {
+ 	source, err := os.ReadFile(scriptFile)
+ 	if err != nil {
+ 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
+-		return ""
++		return "", err
+ 	}
+ 	l := lexer.New(string(source))
+ 	sp := parser.NewScriptParser(l)
+ 	ast := sp.Parse()
+-	c := compiler.NewCompiler(script)
+-	c.CompileScript(ast)
+-	ir := c.GenerateIR()
++	c := compiler.NewCompiler(ctx, script)
+ 
+-	llName := script + ".ll"
+-	outPath := filepath.Join(pkgDir, SCRIPT_DIR, llName)
+-	os.MkdirAll(filepath.Dir(outPath), 0755)
+-	if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
+-		fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
+-		return ""
+-	}
+-	return outPath
+-}
+-
+-// Copy copies the contents of the file at srcpath to a regular file
+-// at dstpath. If the file named by dstpath already exists, it is
+-// truncated. The function does not copy the file mode, file
+-// permission bits, or file attributes.
+-func Copy(srcpath, dstpath string) (err error) {
+-	r, err := os.Open(srcpath)
++	buffer, err := llvm.NewMemoryBufferFromFile(codePath)
+ 	if err != nil {
+-		fmt.Println(err)
+-		return err
++		fmt.Printf("Error loading to memory buffer: %v\n", err)
++		return "", err
+ 	}
+-	defer r.Close() // ignore error: file was opened read-only.
+-
+-	w, err := os.Create(dstpath)
++	clone, err := ctx.ParseIR(buffer)
+ 	if err != nil {
+-		fmt.Println(err)
+-		return err
++		fmt.Printf("Error parsing IR: %v\n", err)
++		return "", err
+ 	}
+-
+-	defer func() {
+-		// Report the error, if any, from Close, but do so
+-		// only if there isn't already an outgoing error.
+-		c := w.Close()
+-		if c != nil {
+-			fmt.Println(c)
+-		}
+-		if err == nil {
+-			err = c
+-		}
+-	}()
+-
+-	_, err = io.Copy(w, r)
+-	if err != nil {
++	// Link code-mode module into script's module in-memory
++	if err := llvm.LinkModules(c.Module, clone); err != nil {
+ 		fmt.Println(err)
+-	}
+-	return err
+-}
+-
+-// runLLVMLink links scriptLL and codeLL files using llvm-link command into outLL
+-// It creates the directory for outLL if it does not exist
+-// In case codeLL = "" it just copies scriptLL into outLL
+-func runLLVMLink(pkgDir, script, scriptLL, codeLL string) (string, error) {
+-	outLL := filepath.Join(pkgDir, LINKED_DIR, script+IR_SUFFIX)
+-	os.MkdirAll(filepath.Dir(outLL), 0755)
+-	if codeLL == "" {
+-		// nothing to link
+-		return outLL, Copy(scriptLL, outLL)
+-	}
+-	args := []string{"-S", "-o", outLL, codeLL, scriptLL}
+-	cmd := exec.Command("llvm-link", args...)
+-	cmd.Stdout = os.Stdout
+-	cmd.Stderr = os.Stderr
+-	if err := cmd.Run(); err != nil {
+-		fmt.Printf("⚠️ Failed linking to output file %q. Err: %v\n", outLL, err)
+-		fmt.Printf("Input script: %q. Input code file: %q", scriptLL, codeLL)
+ 		return "", err
+ 	}
+-	return outLL, nil
+-}
+ 
+-// build locates the one package under ptcache, then for each
+-// script IR in ptcache/<pkg>/script/*.ll it runs:
+-//
+-//	llvm-link ptcache/<pkg>/code/<pkg>.ll script.ll -o ptcache/<pkg>/linked/script.ll
+-// if there is no <pkg>.ll in code folder to link then it simply copies the script.ll to linked folder
+-// it then builds binary for the linked script.ll
+-
+-func buildScript(script, scriptLL, pkgDir, pkg, cwd string) {
+-	codeLL := filepath.Join(pkgDir, CODE_DIR, pkg+IR_SUFFIX)
+-	if _, err := os.Stat(codeLL); err != nil {
+-		if !os.IsNotExist(err) {
+-			fmt.Printf("⚠️ Error checking code IR %q: %v. Build failed.\n", codeLL, err)
+-			return
+-		}
+-		codeLL = ""
+-	}
+-
+-	outLL, err := runLLVMLink(pkgDir, script, scriptLL, codeLL)
+-	if err != nil {
+-		return
+-	}
++	c.ExtSymbols = codeCompiler.Symbols
++	c.CompileScript(ast)
++	ir := c.GenerateIR()
+ 
+-	if err := genBinary(script, outLL, pkgDir, cwd); err != nil {
+-		fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
+-	} else {
+-		fmt.Printf("✅ Successfully built binary for script: %s\n", script)
++	llName := script + IR_SUFFIX
++	outPath := filepath.Join(pkgDir, SCRIPT_DIR, llName)
++	os.MkdirAll(filepath.Dir(outPath), 0755)
++	if err := os.WriteFile(outPath, []byte(ir), 0644); err != nil {
++		fmt.Printf("Error writing IR to %s: %v\n", outPath, err)
++		return "", err
+ 	}
++	return outPath, nil
+ }
+ 
+-func genBinary(bin, linkedLL, pkgDir, cwd string) error {
++func genBinary(bin, scriptLL, pkgDir, cwd string) error {
+ 	// Create temp files
+ 	optFile := filepath.Join(pkgDir, SCRIPT_DIR, bin+".opt.ll")
+ 	objFile := filepath.Join(pkgDir, SCRIPT_DIR, bin+".o")
+ 	binFile := filepath.Join(cwd, bin)
+ 
+ 	// Optimization pass
+-	optCmd := exec.Command("opt", OPT_LEVEL, "-S", linkedLL, "-o", optFile)
++	optCmd := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile)
+ 	if output, err := optCmd.CombinedOutput(); err != nil {
+ 		return fmt.Errorf("optimization failed: %s\n%s", err, string(output))
+ 	}
+@@ -291,10 +225,23 @@ func main() {
+ 		}
+ 	}
+ 
+-	compileCode(codeFiles, pkgDir, pkg)
++	ctx := llvm.NewContext()
++	codeCompiler, codePath, err := compileCode(codeFiles, pkgDir, pkg, ctx)
++	if err != nil {
++		return
++	}
++
+ 	for _, scriptFile := range scriptFiles {
+ 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
+-		scriptLL := compileScript(script, scriptFile, pkgDir, pkg)
+-		buildScript(script, scriptLL, pkgDir, pkg, cwd)
++		scriptLL, err := compileScript(script, pkgDir, scriptFile, codeCompiler, codePath, ctx)
++		if err != nil {
++			continue
++		}
++
++		if err := genBinary(script, scriptLL, pkgDir, cwd); err != nil {
++			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
++		} else {
++			fmt.Printf("✅ Successfully built binary for script: %s\n", script)
++		}
+ 	}
+ }
+diff --git a/test.py b/test.py
+index 0cd5a46..e59ffed 100644
+--- a/test.py
++++ b/test.py
+@@ -77,6 +77,7 @@ class TestRunner:
+ 
+     def compile(self, dir: Path):
+         """Compile a pluto directory"""
++        print(f"{Fore.CYAN}Compiling {dir}...{Style.RESET_ALL}")
+         try:
+             compiler_output = self.run_command(
+                 [self.project_root/PLUTO_EXE],
+@@ -91,32 +92,37 @@ class TestRunner:
+     def run_compiler_tests(self):
+         """Run all compiler end-to-end tests"""
+         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
+-        test_dir = self.project_root/TEST_DIR
+-        self.compile(test_dir)
+-
+-        exp_files = list((self.project_root/TEST_DIR).glob("*.exp"))
+-        for exp_file in exp_files:
+-            test_name = exp_file.name.removesuffix(".exp")
+-            print(f"\n{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
+-
++        # Collect all subdirectories with .exp files (including nested)
++        test_dirs = set()
++        for exp_path in TEST_DIR.rglob("*.exp"):
++            test_dirs.add(exp_path.parent)
++        
++        for test_dir in test_dirs:
++            print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
+             try:
+-                actual_output = self.run_command([str(test_dir/test_name)])
+-                expected_output = exp_file.read_text()
+-
+-                if actual_output == expected_output:
+-                    print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
+-                    self.passed += 1
+-                else:
+-                    self.show_diff(expected_output, actual_output)
+-                    self.failed += 1
+-
+-            except Exception as e:
+-                print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
++                self.compile(test_dir)
++            except subprocess.CalledProcessError:
+                 self.failed += 1
+-                if KEEP_BUILD:
+-                    print(f"Build artifacts preserved in {BUILD_DIR}")
+-                else:
+-                    shutil.rmtree(BUILD_DIR, ignore_errors=True)
++                continue  # Skip tests if compilation fails
++
++            exp_files = list(test_dir.glob("*.exp"))
++            for exp_file in exp_files:
++                test_name = exp_file.stem
++                print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
++                try:
++                    actual_output = self.run_command([str(test_dir / test_name)])
++                    expected_output = exp_file.read_text()
++
++                    if actual_output == expected_output:
++                        print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
++                        self.passed += 1
++                    else:
++                        self.show_diff(expected_output, actual_output)
++                        self.failed += 1
++
++                except Exception as e:
++                    print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
++                    self.failed += 1
+ 
+     def show_diff(self, expected: str, actual: str):
+         """Show colored diff output"""
+diff --git a/tests/const.exp b/tests/const.exp
+deleted file mode 100644
+index 68af7ae..0000000
+--- a/tests/const.exp
++++ /dev/null
+@@ -1,2 +0,0 @@
+-3.14159 hello
+-50.14159 100.28318
+diff --git a/tests/const.pt b/tests/const.pt
+deleted file mode 100644
+index 988edaa..0000000
+--- a/tests/const.pt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-pi = 3.14159
+-e = 2.71828
+-answer = 42
+-greeting = "hello"
+\ No newline at end of file
+diff --git a/tests/const.sptt b/tests/const.sptt
+deleted file mode 100644
+index 0194e5d..0000000
+--- a/tests/const.sptt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-pi, greeting
+-x = answer
+-x = x + 5 + pi
+-x, 2x, x / e
+\ No newline at end of file
