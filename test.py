@@ -20,18 +20,18 @@ class TestRunner:
         self.llvm_bin = self.detect_llvm_path()
 
     def detect_llvm_path(self) -> Path:
-        # Try common LLVM 19 paths
+        # Try common LLVM 20 paths
         paths = [
-            Path("/usr/lib/llvm-19/bin"),  # Linux
-            Path("/usr/local/opt/llvm@19/bin"),  # macOS
-            Path("/opt/homebrew/opt/llvm@19/bin")  # macOS ARM
+            Path("/usr/lib/llvm-20/bin"),  # Linux
+            Path("/usr/local/opt/llvm@20/bin"),  # macOS
+            Path("/opt/homebrew/opt/llvm@20/bin")  # macOS ARM
         ]
         for p in paths:
             if p.exists():
                 return p
-        raise RuntimeError("LLVM 19 not found. Install with:\n"
+        raise RuntimeError("LLVM 20 not found. Install with:\n"
                            "Linux: https://apt.llvm.org/\n"
-                           "macOS: brew install llvm@19")
+                           "macOS: brew install llvm@20")
         
     def run_command(self, cmd: list, cwd: Path = None) -> str:
         """Execute a command and return its output"""
