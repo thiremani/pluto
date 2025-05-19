@@ -28,6 +28,37 @@ type Program struct {
 	Statements []Statement
 }
 
+type Code struct {
+	Const Const
+	// Func Func
+	// Struct Struct
+}
+
+func NewCode() *Code {
+	Const := Const{
+		Statements: []*ConstStatement{},
+	}
+
+	return &Code{
+		Const: Const,
+	}
+}
+
+func (c *Code) Merge(other *Code) {
+	// Merge constants
+	if other != nil {
+		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
+	}
+
+	// Add similar merging logic for Func/Struct when implemented
+	// c.Func.Merge(other.Func)
+	// c.Struct.Merge(other.Struct)
+}
+
+type Const struct {
+	Statements []*ConstStatement
+}
+
 func (p *Program) Tok() token.Token {
 	if len(p.Statements) > 0 {
 		return p.Statements[0].Tok()

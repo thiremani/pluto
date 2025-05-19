@@ -20,18 +20,18 @@ class TestRunner:
         self.llvm_bin = self.detect_llvm_path()
 
     def detect_llvm_path(self) -> Path:
-        # Try common LLVM 19 paths
+        # Try common LLVM 20 paths
         paths = [
-            Path("/usr/lib/llvm-19/bin"),  # Linux
-            Path("/usr/local/opt/llvm@19/bin"),  # macOS
-            Path("/opt/homebrew/opt/llvm@19/bin")  # macOS ARM
+            Path("/usr/lib/llvm-20/bin"),  # Linux
+            Path("/usr/local/opt/llvm@20/bin"),  # macOS
+            Path("/opt/homebrew/opt/llvm@20/bin")  # macOS ARM
         ]
         for p in paths:
             if p.exists():
                 return p
-        raise RuntimeError("LLVM 19 not found. Install with:\n"
+        raise RuntimeError("LLVM 20 not found. Install with:\n"
                            "Linux: https://apt.llvm.org/\n"
-                           "macOS: brew install llvm@19")
+                           "macOS: brew install llvm@20")
         
     def run_command(self, cmd: list, cwd: Path = None) -> str:
         """Execute a command and return its output"""
@@ -75,53 +75,54 @@ class TestRunner:
             print(f"{Fore.RED}❌ Unit tests failed!{Style.RESET_ALL}")
             sys.exit(1)
 
-    def compile_and_run(self, test_file: Path) -> str:
-        """Compile and run a Pluto test file"""
-        test_name = test_file.stem
-        build_prefix = BUILD_DIR / test_name
-
-        # Generate LLVM IR
-        ir_file = build_prefix.with_suffix(".ll")
-        compiler_output = self.run_command(["./" + str(PLUTO_EXE), "-o", str(ir_file), str(test_file)], self.project_root)
-        if compiler_output != "":
-            print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")  # Add this line
-
-
-        # Compile to binary
-        obj_file = build_prefix.with_suffix(".o")
-        self.run_command(["llc", "-filetype=obj", str(ir_file), "-o", str(obj_file)])
-        self.run_command(["clang", str(obj_file), "-o", str(build_prefix)])
-
-        # Execute
-        return self.run_command([str(build_prefix)])
+    def compile(self, dir: Path):
+        """Compile a pluto directory"""
+        print(f"{Fore.CYAN}Compiling {dir}...{Style.RESET_ALL}")
+        try:
+            compiler_output = self.run_command(
+                [self.project_root/PLUTO_EXE],
+                cwd=dir
+            )
+            if compiler_output != "":
+                print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")
+        except subprocess.CalledProcessError as e:
+            print(f"{Fore.RED}❌ Compilation failed for {dir}{Style.RESET_ALL}")
+            raise
 
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
-        print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")        
-        test_files = list((self.project_root/TEST_DIR).glob("*.spt"))
-
-        for test_file in test_files:
-            print(f"\n{Fore.CYAN}Testing {test_file.name}:{Style.RESET_ALL}")
-            expected_file = test_file.with_suffix(".exp")
-
+        print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
+        # Collect all subdirectories with .exp files (including nested)
+        test_dirs = set()
+        for exp_path in TEST_DIR.rglob("*.exp"):
+            test_dirs.add(exp_path.parent)
+        
+        for test_dir in test_dirs:
+            print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
             try:
-                actual_output = self.compile_and_run(test_file)
-                expected_output = expected_file.read_text()
-                
-                if actual_output == expected_output:
-                    print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
-                    self.passed += 1
-                else:
-                    self.show_diff(expected_output, actual_output)
-                    self.failed += 1
-                    
-            except Exception as e:
-                print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
+                self.compile(test_dir)
+            except subprocess.CalledProcessError:
                 self.failed += 1
-                if KEEP_BUILD:
-                    print(f"Build artifacts preserved in {BUILD_DIR}")
-                else:
-                    shutil.rmtree(BUILD_DIR, ignore_errors=True)
+                continue  # Skip tests if compilation fails
+
+            exp_files = list(test_dir.glob("*.exp"))
+            for exp_file in exp_files:
+                test_name = exp_file.stem
+                print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
+                try:
+                    actual_output = self.run_command([str(test_dir / test_name)])
+                    expected_output = exp_file.read_text()
+
+                    if actual_output == expected_output:
+                        print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
+                        self.passed += 1
+                    else:
+                        self.show_diff(expected_output, actual_output)
+                        self.failed += 1
+
+                except Exception as e:
+                    print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
+                    self.failed += 1
 
     def show_diff(self, expected: str, actual: str):
         """Show colored diff output"""
@@ -147,7 +148,7 @@ class TestRunner:
         print(f"\n{Fore.YELLOW}📊 Final Results:{Style.RESET_ALL}")
         print(f"{Fore.GREEN}✅ {self.passed} Passed{Style.RESET_ALL}")
         print(f"{Fore.RED}❌ {self.failed} Failed{Style.RESET_ALL}")
-        sys.exit(self.failed > 0)
+        sys.exit(1 if self.failed > 0 else 0)
 
 if __name__ == "__main__":
     import argparse
