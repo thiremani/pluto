@@ -142,8 +142,8 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 
 func genBinary(scriptLL, bin, cacheDir, cwd string) error {
 	// Create temp files
-	optFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+".opt.ll")
-	objFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+".o")
+	optFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
+	objFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
 	binFile := filepath.Join(cwd, bin)
 
 	// Optimization pass
