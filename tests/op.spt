@@ -1,0 +1,12 @@
+# bitwise and shift operators
+a = 6 & 3
+b = 6 | 3
+c = 6 ⊕ 3
+d = 10 % 3
+e = 10.5 % 3
+f = 10.7 % 3.5
+g = 1 << 2
+h = 8 >> 1
+
+# print them all
+a, b, c, d, e, f, g, h

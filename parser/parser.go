@@ -15,6 +15,10 @@ const (
 	ASSIGN      // =
 	COMMA       // ,
 	COLON       // :
+	BITWISE_OR  // |
+	BITWISE_XOR // ⊕
+	BITWISE_AND // &
+	SHIFT       // << >> >>>
 	SUM         // +
 	PRODUCT     // *
 	EXP         // ^
@@ -27,11 +31,18 @@ var precedences = map[string]int{
 	token.SYM_ASSIGN: ASSIGN,
 	token.SYM_COMMA:  COMMA,
 	token.SYM_COLON:  COLON,
+	token.SYM_OR:     BITWISE_OR,
+	token.SYM_XOR:    BITWISE_XOR,
+	token.SYM_AND:    BITWISE_AND,
+	token.SYM_SHL:    SHIFT,
+	token.SYM_SHR:    SHIFT,
+	token.SYM_ASR:    SHIFT,
 	token.SYM_ADD:    SUM,
 	token.SYM_SUB:    SUM,
 	token.SYM_MUL:    PRODUCT,
 	token.SYM_DIV:    PRODUCT,
 	token.SYM_QUO:    PRODUCT,
+	token.SYM_MOD:    PRODUCT,
 	token.SYM_EXP:    EXP,
 	token.SYM_EQL:    LESSGREATER,
 	token.SYM_LSS:    LESSGREATER,
@@ -76,6 +87,12 @@ func New(l *lexer.Lexer) *StmtParser {
 
 	p.infixParseFns = make(map[string]infixParseFn)
 	p.registerInfix(token.SYM_COLON, p.parseInfixExpression)
+	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
+	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
+	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
+	p.registerInfix(token.SYM_SHL, p.parseInfixExpression)
+	p.registerInfix(token.SYM_SHR, p.parseInfixExpression)
+	p.registerInfix(token.SYM_ASR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_ADD, p.parseInfixExpression)
 	p.registerInfix(token.SYM_SUB, p.parseInfixExpression)
 	p.registerInfix(token.SYM_MUL, p.parseInfixExpression)

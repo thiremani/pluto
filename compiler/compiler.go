@@ -264,7 +264,7 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		s = c.compileInfixExpression(e)
 		return
 	default:
-		panic("unsupported expression type")
+		panic(fmt.Sprintln("unsupported expression type", e))
 	}
 }
 

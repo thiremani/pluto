@@ -85,6 +85,9 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		if l.peekRune() == '=' {
 			tok = l.createToken(token.LEQ, token.SYM_LEQ)
 			l.readRune()
+		} else if l.peekRune() == '<' {
+			tok = l.createToken(token.OPERATOR, token.SYM_SHL)
+			l.readRune()
 		} else {
 			tok = l.createToken(token.LSS, token.SYM_LSS)
 		}
@@ -92,6 +95,14 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		if l.peekRune() == '=' {
 			tok = l.createToken(token.GEQ, token.SYM_GEQ)
 			l.readRune()
+		} else if l.peekRune() == '>' {
+			l.readRune()
+			if l.peekRune() == '>' {
+				tok = l.createToken(token.OPERATOR, token.SYM_ASR)
+				l.readRune()
+			} else {
+				tok = l.createToken(token.OPERATOR, token.SYM_SHR)
+			}
 		} else {
 			tok = l.createToken(token.GTR, token.SYM_GTR)
 		}

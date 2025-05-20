@@ -77,9 +77,16 @@ const (
 	SYM_LEQ = "<="
 	SYM_GEQ = ">="
 
-	// logical symbols
-	SYM_AND = "&"
-	SYM_OR  = "|"
+	// bitwise symbols
+	SYM_AND   = "&"
+	SYM_OR    = "|"
+	SYM_XOR   = "⊕"
+	SYM_TILDE = "~"
+
+	// shift symbols
+	SYM_SHL = "<<"
+	SYM_SHR = ">>"
+	SYM_ASR = ">>>"
 
 	// punctuation symbols
 	SYM_LPAREN = "("

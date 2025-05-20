@@ -186,4 +186,68 @@ var defaultOps = map[opKey]opFunc{
 			Type: Int{Width: 64},
 		}
 	},
+
+	// Bitwise AND
+	{Operator: token.SYM_AND, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateAnd(left.Val, right.Val, "and_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Bitwise OR
+	{Operator: token.SYM_OR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateOr(left.Val, right.Val, "or_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Bitwise XOR
+	{Operator: token.SYM_XOR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateXor(left.Val, right.Val, "xor_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Integer Modulo (Signed)
+	{Operator: token.SYM_MOD, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateSRem(left.Val, right.Val, "srem_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+	// Floating-Point Modulo (via fmod)
+	{Operator: token.SYM_MOD, LeftType: "f64", RightType: "f64"}: func(c *Compiler, left, right Symbol) Symbol {
+
+		return Symbol{
+			Val:  c.builder.CreateFRem(left.Val, right.Val, "frem_tmp"),
+			Type: Float{Width: 64},
+		}
+	},
+
+	// Left Shift
+	{Operator: token.SYM_SHL, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateShl(left.Val, right.Val, "shl_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Logical Right Shift
+	{Operator: token.SYM_SHR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Arithmetic Right Shift (Signed)
+	{Operator: token.SYM_ASR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
 }
