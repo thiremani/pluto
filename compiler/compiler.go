@@ -20,15 +20,14 @@ type Compiler struct {
 	Module        llvm.Module
 	builder       llvm.Builder
 	funcParams    map[string][]llvm.Value
-	opFuncs       map[opKey]opFunc // opFuncs maps an operator key to a function that generates the corresponding LLVM IR.
-	formatCounter int              // Track unique format strings
+	formatCounter int // Track unique format strings
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
 	module := ctx.NewModule(moduleName)
 	builder := ctx.NewBuilder()
 
-	c := &Compiler{
+	return &Compiler{
 		Symbols:       make(map[string]Symbol),
 		ExtSymbols:    make(map[string]Symbol),
 		Context:       ctx,
@@ -37,9 +36,6 @@ func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
 		funcParams:    make(map[string][]llvm.Value),
 		formatCounter: 0,
 	}
-	c.initOpFuncs()
-
-	return c
 }
 
 // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
@@ -387,8 +383,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 		RightType: right.Type.String(),
 	}
 
-	if fn, ok := c.opFuncs[key]; ok {
-		s = fn(left, right)
+	if fn, ok := defaultOps[key]; ok {
+		s = fn(c, left, right)
 		return
 	}
 	panic("unsupported operator: " + expr.Operator + " for types: " + left.Type.String() + ", " + right.Type.String())
