@@ -1,0 +1,20 @@
+# unary prefix operators
+a = !0
+b = !123
+c = ~0
+d = ~10
+e = -7
+f = -4.2364
+g = -(-3.5)
+
+a, b, c, d, e, f, g
+
+# Maximum/minimum values
+maxNeg = -(9223372036854775807)
+floatNeg = -(-0.0)
+
+maxNeg, floatNeg
+
+# Bitwise edge case
+allOnes = ~(-1) # Should be 0
+allOnes

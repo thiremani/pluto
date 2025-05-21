@@ -83,6 +83,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.STR_STRING, p.parseStringLiteral)
 	p.registerPrefix(token.SYM_BANG, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SUB, p.parsePrefixExpression)
+	p.registerPrefix(token.SYM_TILDE, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_LPAREN, p.parseGroupedExpression)
 
 	p.infixParseFns = make(map[string]infixParseFn)

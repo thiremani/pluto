@@ -53,6 +53,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		l.skipWhitespace()
 	}
 
+	if l.curr == '#' {
+		l.skipComment()
+	}
+
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE)

@@ -12,9 +12,20 @@ type opKey struct {
 	RightType string
 }
 
+// compiler/operators.go
+
+type unaryOpKey struct {
+	Operator    string
+	OperandType string
+}
+
 // opFunc defines the function signature for an operator function.
 // It takes two Symbols and returns a new Symbol.
 type opFunc func(c *Compiler, left, right Symbol) Symbol
+
+// unaryOpFunc defines the function signature for a unary operator function.
+// It takes one Symbol and returns a new Symbol
+type unaryOpFunc func(c *Compiler, operand Symbol) Symbol
 
 // defaultOps is a map between operator, types and the corresponding operator function
 // For simplicity, we assume that the Symbol type’s Type field's String() method returns
@@ -247,6 +258,41 @@ var defaultOps = map[opKey]opFunc{
 	{Operator: token.SYM_ASR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
 		return Symbol{
 			Val:  c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+}
+
+var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
+	// Unary Minus (-)
+	{Operator: "-", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateNeg(operand.Val, "neg_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+	{Operator: "-", OperandType: "f64"}: func(c *Compiler, operand Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateFNeg(operand.Val, "fneg_tmp"),
+			Type: Float{Width: 64},
+		}
+	},
+
+	// Bitwise NOT
+	{Operator: "~", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+		allOnes := llvm.ConstAllOnes(c.Context.Int64Type())
+		return Symbol{
+			Val:  c.builder.CreateXor(operand.Val, allOnes, "not_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
+
+	// Logical NOT
+	{Operator: "!", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+		zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		cmp := c.builder.CreateICmp(llvm.IntEQ, operand.Val, zero, "not_cmp")
+		return Symbol{
+			Val:  c.builder.CreateZExt(cmp, c.Context.Int64Type(), "not_bool"),
 			Type: Int{Width: 64},
 		}
 	},

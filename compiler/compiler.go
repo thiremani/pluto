@@ -263,6 +263,9 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 	case *ast.InfixExpression:
 		s = c.compileInfixExpression(e)
 		return
+	case *ast.PrefixExpression:
+		s = c.compilePrefixExpression(e)
+		return
 	default:
 		panic(fmt.Sprintln("unsupported expression type", e))
 	}
@@ -388,6 +391,22 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 		return
 	}
 	panic("unsupported operator: " + expr.Operator + " for types: " + left.Type.String() + ", " + right.Type.String())
+}
+
+// compilePrefixExpression handles unary operators (prefix expressions).
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) Symbol {
+	// First compile the operand
+	operand := c.compileExpression(expr.Right)
+
+	// Lookup in the defaultPrefixOps table
+	key := unaryOpKey{
+		Operator:    expr.Operator,
+		OperandType: operand.Type.String(),
+	}
+	if fn, ok := defaultUnaryOps[key]; ok {
+		return fn(c, operand)
+	}
+	panic("unsupported unary operator: " + expr.Operator + " for type: " + operand.Type.String())
 }
 
 func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
