@@ -236,24 +236,31 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 		return true, nil
 	}
 
-	for idx, level := range l.indentStack {
-		if l.column < level {
+	if l.column > l.indentStack[len(l.indentStack)-1] {
+		// new indentation level
+		l.indentStack = append(l.indentStack, l.column)
+		return true, nil
+	}
+
+	for i := len(l.indentStack) - 1; i >= 0; i-- {
+		level := l.indentStack[i]
+		if l.column == level {
+			// found matching level -> dedent to it
+			l.toDeindent = len(l.indentStack) - 1 - i
+			return false, nil
+		} else if l.column > level {
 			return false, &token.CompileError{
 				Token: l.createToken(token.ILLEGAL, string(l.curr)),
 				Msg:   INDENT_ERR,
 			}
-		} else if l.column == level {
-			l.toDeindent = len(l.indentStack) - 1 - idx
-			return false, nil
-		}
-
-		if idx == len(l.indentStack)-1 {
-			l.indentStack = append(l.indentStack, l.column)
-			return true, nil
 		}
 	}
 
-	return false, nil
+	// column in > 1 but does not match any level in the indentStack
+	return false, &token.CompileError{
+		Token: l.createToken(token.ILLEGAL, string(l.curr)),
+		Msg:   INDENT_ERR,
+	}
 }
 
 func (l *Lexer) skipComment() {

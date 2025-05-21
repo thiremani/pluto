@@ -420,3 +420,147 @@ func TestNextTokenUnexpected(t *testing.T) {
 		}
 	}
 }
+
+func TestIndentation(t *testing.T) {
+	t.Run("valid multi-level", func(t *testing.T) {
+		src := `root
+    child1
+        leaf
+    child2
+root2`
+		expected := []Test{
+			{token.IDENT, "root", "", 1, 1},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.INDENT, "c", "", 2, 5},
+			{token.IDENT, "child1", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 11},
+			{token.INDENT, "l", "", 3, 9},
+			{token.IDENT, "leaf", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 13},
+			{token.DEINDENT, "c", "", 4, 5},
+			{token.IDENT, "child2", "", 4, 5},
+			{token.NEWLINE, "\n", "", 4, 11},
+			{token.DEINDENT, "r", "", 5, 1},
+			{token.IDENT, "root2", "", 5, 1},
+			{token.EOF, "", "", 5, 6},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("invalid dedent level", func(t *testing.T) {
+		src := `if x
+    pass
+  print()`
+		expected := []Test{
+			{token.IDENT, "if", "", 1, 1},
+			{token.IDENT, "x", "", 1, 4},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.INDENT, "p", "", 2, 5},
+			{token.IDENT, "pass", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.ILLEGAL, "p", "3:3:p:" + INDENT_ERR, 3, 3},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("mixed tabs error", func(t *testing.T) {
+		src := "if x\n\t\tpass"
+		expected := []Test{
+			{token.IDENT, "if", "", 1, 1},
+			{token.IDENT, "x", "", 1, 4},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.ILLEGAL, "p", "2:3:p:" + INDENT_TAB_ERR, 2, 3},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("multiple dedents", func(t *testing.T) {
+		src := `y = a()
+    if b
+        pass
+print()`
+		expected := []Test{
+			{token.IDENT, "y", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "a", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.RPAREN, ")", "", 1, 7},
+			{token.NEWLINE, "\n", "", 1, 8},
+			{token.INDENT, "i", "", 2, 5},
+			{token.IDENT, "if", "", 2, 5},
+			{token.IDENT, "b", "", 2, 8},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INDENT, "p", "", 3, 9},
+			{token.IDENT, "pass", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 13},
+			{token.DEINDENT, "p", "", 4, 1},
+			{token.DEINDENT, "p", "", 4, 1},
+			{token.IDENT, "print", "", 4, 1},
+			{token.LPAREN, "(", "", 4, 6},
+			{token.RPAREN, ")", "", 4, 7},
+			{token.EOF, "", "", 4, 8},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("comments ignore indent", func(t *testing.T) {
+		src := `if x
+    # comment
+    pass
+  # another comment
+print()`
+		expected := []Test{
+			{token.IDENT, "if", "", 1, 1},
+			{token.IDENT, "x", "", 1, 4},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.INDENT, "p", "", 3, 5},
+			{token.IDENT, "pass", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 9},
+			{token.DEINDENT, "p", "", 5, 1},
+			{token.IDENT, "print", "", 5, 1},
+			{token.LPAREN, "(", "", 5, 6},
+			{token.RPAREN, ")", "", 5, 7},
+			{token.EOF, "", "", 5, 8},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("empty indented line", func(t *testing.T) {
+		src := `if x
+    
+    pass`
+		expected := []Test{
+			{token.IDENT, "if", "", 1, 1},
+			{token.IDENT, "x", "", 1, 4},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.INDENT, "p", "", 3, 5},
+			{token.IDENT, "pass", "", 3, 5},
+			{token.EOF, "", "", 3, 9},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("invalid indent after dedent", func(t *testing.T) {
+		src := `if x
+    pass
+        foo
+    bar
+  baz`
+		expected := []Test{
+			{token.IDENT, "if", "", 1, 1},
+			{token.IDENT, "x", "", 1, 4},
+			{token.NEWLINE, "\n", "", 1, 5},
+			{token.INDENT, "p", "", 2, 5},
+			{token.IDENT, "pass", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INDENT, "f", "", 3, 9},
+			{token.IDENT, "foo", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 12},
+			{token.DEINDENT, "b", "", 4, 5},
+			{token.IDENT, "bar", "", 4, 5},
+			{token.NEWLINE, "\n", "", 4, 8},
+			{token.ILLEGAL, "b", "5:3:b:" + INDENT_ERR, 5, 3},
+		}
+		checkInput(t, src, expected)
+	})
+}
