@@ -86,14 +86,15 @@ var defaultOps = map[opKey]opFunc{
 	{Operator: token.SYM_QUO, LeftType: "f64", RightType: "f64"}: func(c *Compiler, left, right Symbol) Symbol {
 		// float ÷ float → float via truncation
 		div := c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
-		// truncate toward zero to 64-bit signed integer
-		trunc := c.builder.CreateFPToSI(div, c.Context.Int64Type(), "fp_to_i")
-		// cast back to double
-		res := c.builder.CreateSIToFP(trunc, c.Context.DoubleType(), "i_to_fp")
-		return Symbol{
-			Val:  res,
-			Type: left.Type,
+		// get or declare the llvm.trunc.f64 intrinsic
+		truncType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType()}, false)
+		truncFn := c.Module.NamedFunction("llvm.trunc.f64")
+		if truncFn.IsNil() {
+			truncFn = llvm.AddFunction(c.Module, "llvm.trunc.f64", truncType)
 		}
+
+		res := c.builder.CreateCall(truncType, truncFn, []llvm.Value{div}, "trunc_tmp")
+		return Symbol{Val: res, Type: left.Type}
 	},
 
 	// For division, if both operands are integers, promote them to float and do float division.
