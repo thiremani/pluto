@@ -7,6 +7,7 @@ import (
 	"pluto/token"
 	"reflect"
 	"strconv"
+	"unicode/utf8"
 )
 
 const (
@@ -136,7 +137,7 @@ func (p *StmtParser) nextToken() {
 	// equals the next token's starting column), then we assume an implicit multiplication.
 	// In this case, we save the IDENT token in 'savedToken', and substitute the next token
 	// with a multiplication operator '*' token. This way, an input like "5var" is treated as "5 * var".
-	if (p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT) && p.peekToken.Type == token.IDENT && p.curToken.Column+len(p.curToken.Literal) == p.peekToken.Column {
+	if (p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT) && p.peekToken.Type == token.IDENT && p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column {
 		p.savedToken = p.peekToken
 		p.peekToken = token.Token{
 			Type:    token.OPERATOR,
