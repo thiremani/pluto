@@ -2,11 +2,38 @@
 a = 6 & 3
 b = 6 | 3
 c = 6 ⊕ 3
-d = 10 % 3
-e = 10.5 % 3
-f = 10.7 % 3.5
-g = 1 << 2
-h = 8 >> 1
+
+d = 1 << 2
+e = 8 >> 1
+f = -8 >> 1 # arithmetic right shift
+g = -8 >>> 1 # logical right shift
 
 # print them all
-a, b, c, d, e, f, g, h
+a, b, c, d, e, f, g
+
+# check the quo and mod functions
+qii = 10 ÷ 3
+qfi = 10.2 ÷ 3
+qif = 10 ÷ 3.1
+qff = 10.2 ÷ 3.1
+
+rii = 10 % 3
+rfi = 10.5 % 3
+rif = 10 % 3.5
+rff = 10.7 % 3.5
+
+qii, qfi, qif, qff
+rii, rfi, rif, rff
+
+# negatives for quo, mod
+n1 = -10 ÷ 3
+n2 = -10.2 ÷ -3
+n3 = -10 ÷ 3.2
+n4 = -10.4 ÷ -3.2
+n1, n2, n3, n4
+
+m1 = 10 % -3
+m2 = -10.2 % 3
+m3 = 10 % -3.2
+m4 = -10.4 % -3.2
+m1, m2, m3, m4

@@ -85,8 +85,8 @@ const (
 
 	// shift symbols
 	SYM_SHL = "<<"
-	SYM_SHR = ">>"
-	SYM_ASR = ">>>"
+	SYM_ASR = ">>"
+	SYM_SHR = ">>>"
 
 	// punctuation symbols
 	SYM_LPAREN = "("

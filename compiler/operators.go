@@ -83,6 +83,19 @@ var defaultOps = map[opKey]opFunc{
 			Type: left.Type,
 		}
 	},
+	{Operator: token.SYM_QUO, LeftType: "f64", RightType: "f64"}: func(c *Compiler, left, right Symbol) Symbol {
+		// float ÷ float → float via truncation
+		div := c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
+		// truncate toward zero to 64-bit signed integer
+		trunc := c.builder.CreateFPToSI(div, c.Context.Int64Type(), "fp_to_i")
+		// cast back to double
+		res := c.builder.CreateSIToFP(trunc, c.Context.DoubleType(), "i_to_fp")
+		return Symbol{
+			Val:  res,
+			Type: left.Type,
+		}
+	},
+
 	// For division, if both operands are integers, promote them to float and do float division.
 	{Operator: token.SYM_DIV, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
 		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_f64")
@@ -246,14 +259,6 @@ var defaultOps = map[opKey]opFunc{
 		}
 	},
 
-	// Logical Right Shift
-	{Operator: token.SYM_SHR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp"),
-			Type: Int{Width: 64},
-		}
-	},
-
 	// Arithmetic Right Shift (Signed)
 	{Operator: token.SYM_ASR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
 		return Symbol{
@@ -261,17 +266,25 @@ var defaultOps = map[opKey]opFunc{
 			Type: Int{Width: 64},
 		}
 	},
+
+	// Logical Right Shift
+	{Operator: token.SYM_SHR, LeftType: "i64", RightType: "i64"}: func(c *Compiler, left, right Symbol) Symbol {
+		return Symbol{
+			Val:  c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp"),
+			Type: Int{Width: 64},
+		}
+	},
 }
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	// Unary Minus (-)
-	{Operator: "-", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+	{Operator: token.SYM_SUB, OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
 		return Symbol{
 			Val:  c.builder.CreateNeg(operand.Val, "neg_tmp"),
 			Type: Int{Width: 64},
 		}
 	},
-	{Operator: "-", OperandType: "f64"}: func(c *Compiler, operand Symbol) Symbol {
+	{Operator: token.SYM_SUB, OperandType: "f64"}: func(c *Compiler, operand Symbol) Symbol {
 		return Symbol{
 			Val:  c.builder.CreateFNeg(operand.Val, "fneg_tmp"),
 			Type: Float{Width: 64},
@@ -279,7 +292,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Bitwise NOT
-	{Operator: "~", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+	{Operator: token.SYM_TILDE, OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
 		allOnes := llvm.ConstAllOnes(c.Context.Int64Type())
 		return Symbol{
 			Val:  c.builder.CreateXor(operand.Val, allOnes, "not_tmp"),
@@ -288,7 +301,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Logical NOT
-	{Operator: "!", OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
+	{Operator: token.SYM_BANG, OperandType: "i64"}: func(c *Compiler, operand Symbol) Symbol {
 		zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
 		cmp := c.builder.CreateICmp(llvm.IntEQ, operand.Val, zero, "not_cmp")
 		return Symbol{

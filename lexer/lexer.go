@@ -102,10 +102,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		} else if l.peekRune() == '>' {
 			l.readRune()
 			if l.peekRune() == '>' {
-				tok = l.createToken(token.OPERATOR, token.SYM_ASR)
+				tok = l.createToken(token.OPERATOR, token.SYM_SHR)
 				l.readRune()
 			} else {
-				tok = l.createToken(token.OPERATOR, token.SYM_SHR)
+				tok = l.createToken(token.OPERATOR, token.SYM_ASR)
 			}
 		} else {
 			tok = l.createToken(token.GTR, token.SYM_GTR)
