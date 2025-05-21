@@ -64,6 +64,10 @@ func defaultPTCache() string {
 }
 
 func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context) (*compiler.Compiler, string, error) {
+	if len(codeFiles) == 0 {
+		return nil, "", nil
+	}
+
 	pkgCode := ast.NewCode()
 	for _, codeFile := range codeFiles {
 		source, err := os.ReadFile(codeFile)
@@ -110,23 +114,26 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 	ast := sp.Parse()
 	c := compiler.NewCompiler(ctx, script)
 
-	buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
-	if err != nil {
-		fmt.Printf("Error loading to memory buffer: %v\n", err)
-		return "", err
-	}
-	clone, err := ctx.ParseIR(buffer)
-	if err != nil {
-		fmt.Printf("Error parsing IR: %v\n", err)
-		return "", err
-	}
-	// Link code-mode module into script's module in-memory
-	if err := llvm.LinkModules(c.Module, clone); err != nil {
-		fmt.Printf("Error linking modules: %v\n", err)
-		return "", err
+	// Only link if code module has content
+	if codeCompiler != nil && !codeCompiler.Module.IsNil() {
+		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
+		if err != nil {
+			fmt.Printf("Error loading to memory buffer: %v\n", err)
+			return "", err
+		}
+		clone, err := ctx.ParseIR(buffer)
+		if err != nil {
+			fmt.Printf("Error parsing IR: %v\n", err)
+			return "", err
+		}
+		// Link code-mode module into script's module in-memory
+		if err := llvm.LinkModules(c.Module, clone); err != nil {
+			fmt.Printf("Error linking modules: %v\n", err)
+			return "", err
+		}
+		c.ExtSymbols = codeCompiler.Symbols
 	}
 
-	c.ExtSymbols = codeCompiler.Symbols
 	c.CompileScript(ast)
 	ir := c.GenerateIR()
 
