@@ -250,32 +250,45 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	return p.parseLetStatement(identList)
 }
 
-func (p *StmtParser) parseCodeStatement() (ast.Statement, SubMode) {
+func (p *StmtParser) parseCodeStatement() ast.Statement {
 	// Every statement in code mode starts with identifiers
 	if !p.curTokenIs(token.IDENT) {
 		p.curError(token.IDENT)
-		return nil, None
+		return nil
 	}
 
 	idents := p.parseIdentifiers()
 	if idents == nil {
-		return nil, None
+		return nil
 	}
 
 	if !p.expectPeek(token.ASSIGN) {
-		return nil, None
+		return nil
 	}
 
 	if p.peekToken.IsConstant() {
-		stmt := p.parseConstStatement(idents)
-		if stmt == nil {
-			return nil, None
+		s := p.parseConstStatement(idents)
+		// below code is needed as we should return nil if ConstStatement is nil, and not interface to nil
+		if s != nil {
+			return s
 		}
-		return stmt, Const
+		return nil
 	}
 
+	if p.peekTokenIs(token.IDENT) {
+		p.nextToken()
+		if p.peekTokenIs(token.LPAREN) {
+			fTok := p.curToken
+			p.nextToken()
+			f := p.parseFuncStatement(fTok, idents)
+			if f != nil {
+				return f
+			}
+			return nil
+		}
+	}
 	// TODO operator, function, struct definitions
-	return nil, None
+	return nil
 }
 
 func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstStatement {
@@ -317,6 +330,7 @@ func (p *StmtParser) parseConstants() []ast.Expression {
 			p.errors = append(p.errors, ce)
 			continue
 		}
+		p.nextToken()
 		values = append(values, p.parseConstant())
 	}
 	return values
@@ -583,10 +597,10 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 
 // assumes current token is token.NEWLINE
 func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
-	p.nextToken()
-	if !p.curTokenIs(token.INDENT) {
-		p.curError(token.INDENT)
+	if !p.peekTokenIs(token.INDENT) {
+		p.peekError(token.INDENT)
 	}
+	p.nextToken()
 	p.nextToken()
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
@@ -602,29 +616,31 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 	return block
 }
 
-func (p *StmtParser) parseFunctionDefinition(f ast.Expression) ast.Expression {
-	fl := &ast.FunctionLiteral{
-		Token:      f.Tok(),
+func (p *StmtParser) parseFuncStatement(fTok token.Token, outputs []*ast.Identifier) *ast.FuncStatement {
+	f := &ast.FuncStatement{
+		Token:      fTok,
 		Parameters: []*ast.Identifier{},
-		Outputs:    []*ast.Identifier{},
+		Outputs:    outputs,
 		Body: &ast.BlockStatement{
 			Statements: []ast.Statement{},
 		},
 	}
 
-	fl.Parameters = p.parseFunctionParameters()
-	if fl.Parameters == nil {
+	fp := p.parseFunctionParameters()
+	if fp == nil {
 		return nil
 	}
+	f.Parameters = fp
 
 	if !p.peekTokenIs(token.NEWLINE) {
 		p.peekError(token.NEWLINE)
 		return nil
 	}
 
-	fl.Body = p.parseBlockStatement()
+	p.nextToken()
+	f.Body = p.parseBlockStatement()
 
-	return fl
+	return f
 }
 
 // parseIdentifiers expects curToken to be an identifier
@@ -648,18 +664,16 @@ func (p *StmtParser) parseIdentifiers() []*ast.Identifier {
 }
 
 func (p *StmtParser) parseFunctionParameters() []*ast.Identifier {
-	identifiers := []*ast.Identifier{}
-
 	if p.peekTokenIs(token.RPAREN) {
 		p.nextToken()
-		return identifiers
+		return []*ast.Identifier{}
 	}
 
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
 
-	identifiers = p.parseIdentifiers()
+	identifiers := p.parseIdentifiers()
 
 	if !p.expectPeek(token.RPAREN) {
 		return nil

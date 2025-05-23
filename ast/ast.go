@@ -2,6 +2,7 @@ package ast
 
 import (
 	"bytes"
+	"maps"
 	"pluto/token"
 	"strings"
 )
@@ -30,17 +31,28 @@ type Program struct {
 
 type Code struct {
 	Const Const
-	// Func Func
+	Func  Func
 	// Struct Struct
+}
+
+type FuncKey struct {
+	FuncName string
+	Arity    int
 }
 
 func NewCode() *Code {
 	Const := Const{
 		Statements: []*ConstStatement{},
+		Map:        make(map[string]*ConstStatement),
+	}
+	Func := Func{
+		Statements: []*FuncStatement{},
+		Map:        make(map[FuncKey]*FuncStatement),
 	}
 
 	return &Code{
 		Const: Const,
+		Func:  Func,
 	}
 }
 
@@ -48,15 +60,23 @@ func (c *Code) Merge(other *Code) {
 	// Merge constants
 	if other != nil {
 		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
+		maps.Copy(c.Const.Map, other.Const.Map)
+		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
+		maps.Copy(c.Func.Map, other.Func.Map)
 	}
 
-	// Add similar merging logic for Func/Struct when implemented
-	// c.Func.Merge(other.Func)
+	// Add similar merging logic for struct when implemented
 	// c.Struct.Merge(other.Struct)
 }
 
 type Const struct {
 	Statements []*ConstStatement
+	Map        map[string]*ConstStatement
+}
+
+type Func struct {
+	Statements []*FuncStatement
+	Map        map[FuncKey]*FuncStatement
 }
 
 func (p *Program) Tok() token.Token {
@@ -265,16 +285,16 @@ func (ie *InfixExpression) String() string {
 	return out.String()
 }
 
-type FunctionLiteral struct {
+type FuncStatement struct {
 	Token      token.Token // The identifier
 	Parameters []*Identifier
 	Outputs    []*Identifier
 	Body       *BlockStatement
 }
 
-func (fl *FunctionLiteral) expressionNode()  {}
-func (fl *FunctionLiteral) Tok() token.Token { return fl.Token }
-func (fl *FunctionLiteral) String() string {
+func (fl *FuncStatement) statementNode()   {}
+func (fl *FuncStatement) Tok() token.Token { return fl.Token }
+func (fl *FuncStatement) String() string {
 	var out bytes.Buffer
 
 	params := []string{}

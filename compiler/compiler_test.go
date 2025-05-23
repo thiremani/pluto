@@ -62,7 +62,7 @@ greeting = "hello"`
 	code := cp.Parse()
 
 	c := NewCompiler(llvm.NewContext(), "testConst")
-	c.CompileConst(code)
+	c.Compile(code)
 	ir := c.GenerateIR()
 
 	expPi := "@pi = unnamed_addr constant double 0x400921FB54411744"

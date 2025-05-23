@@ -1,5 +1,168 @@
 package parser
 
+import (
+	"pluto/ast"
+	"pluto/lexer"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseConstStatement(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+		errs     []string
+	}{
+		{
+			"a = 5",
+			[]string{"a"},
+			nil,
+		},
+		{
+			"a, b = 5, 10",
+			[]string{"a", "b"},
+			nil,
+		},
+		{
+			"a, a = 1, 2",
+			nil,
+			[]string{"duplicate identifier in this statement: a"},
+		},
+		{
+			"a = 5\nb, a = 10, 5",
+			nil,
+			[]string{"global redeclaration of constant a"},
+		},
+	}
+
+	for _, tt := range tests {
+		l := lexer.New(tt.input)
+		p := NewCodeParser(l)
+		code := p.Parse()
+
+		if tt.errs != nil {
+			require.Len(t, p.Errors(), len(tt.errs))
+			for i, err := range tt.errs {
+				require.Contains(t, p.Errors()[i], err)
+			}
+			continue
+		}
+
+		require.Empty(t, p.Errors())
+		require.Len(t, code.Const.Statements, 1)
+
+		stmt := code.Const.Statements[0]
+		require.Len(t, stmt.Name, len(tt.expected))
+		for i, ident := range stmt.Name {
+			require.Equal(t, tt.expected[i], ident.Value)
+		}
+	}
+}
+
+func TestParseFuncStatement(t *testing.T) {
+	tests := []struct {
+		input  string
+		name   string
+		params []string
+		errs   []string
+	}{
+		{
+			`y = square(x)
+    y = x * x`,
+			"square",
+			[]string{"x"},
+			nil,
+		},
+		{
+			`sum = add(a, b)
+    sum = a + b`,
+			"add",
+			[]string{"a", "b"},
+			nil,
+		},
+		{
+			`log = logger()
+    print("log")`,
+			"logger",
+			[]string{},
+			nil,
+		},
+		{
+			`bad = func(x, x)
+    bed = x * 2`,
+			"func",
+			nil,
+			[]string{"duplicate parameter x"},
+		},
+		{
+			`empty = func(x,)
+    x = x + 1`,
+			"func",
+			nil,
+			[]string{"expected next token to be IDENT, got ) instead"},
+		},
+	}
+
+	for _, tt := range tests {
+		l := lexer.New(tt.input)
+		p := NewCodeParser(l)
+		code := p.Parse()
+
+		if tt.errs != nil {
+			require.NotEmpty(t, p.Errors())
+			for _, err := range tt.errs {
+				require.Contains(t, p.Errors()[0], err)
+			}
+			continue
+		}
+
+		require.Empty(t, p.Errors())
+		require.Len(t, code.Func.Statements, 1)
+
+		fn := code.Func.Statements[0]
+		require.Equal(t, tt.name, fn.Token.Literal)
+		require.Len(t, fn.Parameters, len(tt.params))
+		for i, param := range fn.Parameters {
+			require.Equal(t, tt.params[i], param.Value)
+		}
+	}
+}
+
+func TestFunctionOverloading(t *testing.T) {
+	input := `c = add(a, b)
+    y = a + b
+
+y = add(a, b, c)
+    a + b + c
+`
+	l := lexer.New(input)
+	p := NewCodeParser(l)
+	code := p.Parse()
+
+	require.Empty(t, p.Errors())
+	require.Len(t, code.Func.Statements, 2)
+
+	// Verify both functions exist with different arities
+	key1 := ast.FuncKey{FuncName: "add", Arity: 2}
+	key2 := ast.FuncKey{FuncName: "add", Arity: 3}
+	require.NotNil(t, code.Func.Map[key1])
+	require.NotNil(t, code.Func.Map[key2])
+}
+
+func TestMixedValidInvalid(t *testing.T) {
+	input := `valid = 42
+invalid = f(x, x)
+    invalid = x * 2
+`
+	l := lexer.New(input)
+	p := NewCodeParser(l)
+	p.Parse()
+
+	require.Len(t, p.Errors(), 1)
+	require.Contains(t, p.Errors()[0], "duplicate parameter x")
+}
+
 /*
 func TestFunctionLiteralParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)

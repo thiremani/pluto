@@ -72,8 +72,8 @@ func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context)
 	for _, codeFile := range codeFiles {
 		source, err := os.ReadFile(codeFile)
 		if err != nil {
-			fmt.Printf("Error reading %s: %v\n", codeFile, err)
-			continue
+			err := fmt.Errorf("error reading %s: %v", codeFile, err)
+			return nil, "", err
 		}
 		l := lexer.New(string(source))
 		cp := parser.NewCodeParser(l)
@@ -83,13 +83,15 @@ func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context)
 			for _, e := range errs {
 				fmt.Printf("%s: %s\n", codeFile, e)
 			}
-			continue
+			err := fmt.Errorf("error parsing code file %s", codeFile)
+			return nil, "", err
 		}
+		fmt.Println("Got ast code as", code)
 		pkgCode.Merge(code)
 	}
 
 	c := compiler.NewCompiler(ctx, modPath)
-	c.CompileConst(pkgCode)
+	c.Compile(pkgCode)
 	ir := c.GenerateIR()
 
 	pkg := filepath.Base(modPath)

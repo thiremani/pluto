@@ -39,11 +39,16 @@ func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
 }
 
 // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
-func (c *Compiler) CompileConst(code *ast.Code) {
+func (c *Compiler) Compile(code *ast.Code) {
 	for _, stmt := range code.Const.Statements {
 		c.compileConstStatement(stmt)
 	}
+
 	// compile op, func, struct
+	/*
+		for _, f := range code.Func.Statements {
+			c.compileFuncStatement(f)
+		} */
 }
 
 func (c *Compiler) CompileScript(program *ast.Program) {
@@ -409,7 +414,8 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) Symbol {
 	panic("unsupported unary operator: " + expr.Operator + " for type: " + operand.Type.String())
 }
 
-func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) llvm.Value {
+/*
+func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement) llvm.Value {
 	// Create function type
 	returnType := c.Context.VoidType()
 	paramTypes := make([]llvm.Type, len(fn.Parameters))
@@ -450,11 +456,19 @@ func (c *Compiler) compileBlockStatement(bs *ast.BlockStatement) {
 			c.compilePrintStatement(s)
 		}
 	}
-}
+}*/
 
 func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value {
 	currentInsert := c.builder.GetInsertBlock()
-	c.builder.SetInsertPointBefore(f.EntryBasicBlock().FirstInstruction())
+	entryBlock := f.EntryBasicBlock()
+	firstInst := entryBlock.FirstInstruction()
+
+	// Handle empty entry block
+	if firstInst.IsNil() {
+		c.builder.SetInsertPointAtEnd(entryBlock)
+	} else {
+		c.builder.SetInsertPointBefore(firstInst)
+	}
 
 	alloca := c.builder.CreateAlloca(c.Context.Int64Type(), name)
 	c.builder.SetInsertPointAtEnd(currentInsert)
