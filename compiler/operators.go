@@ -1,7 +1,7 @@
 package compiler
 
 import (
-	"pluto/token"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 

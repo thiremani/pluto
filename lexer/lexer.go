@@ -1,7 +1,7 @@
 package lexer
 
 import (
-	"pluto/token"
+	"github.com/thiremani/pluto/token"
 	"strings"
 	"unicode"
 	"unicode/utf8"

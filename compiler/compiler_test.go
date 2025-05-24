@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"pluto/lexer"
-	"pluto/parser"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 	"tinygo.org/x/go-llvm"
 )
 

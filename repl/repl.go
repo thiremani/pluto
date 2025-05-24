@@ -3,9 +3,9 @@ package repl
 import (
 	"bufio"
 	"fmt"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 	"io"
-	"pluto/lexer"
-	"pluto/parser"
 )
 
 const PROMPT = ">> "

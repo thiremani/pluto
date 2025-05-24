@@ -3,13 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/compiler"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"pluto/ast"
-	"pluto/compiler"
-	"pluto/lexer"
-	"pluto/parser"
 	"runtime"
 	"strings"
 

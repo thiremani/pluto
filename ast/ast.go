@@ -2,8 +2,8 @@ package ast
 
 import (
 	"bytes"
+	"github.com/thiremani/pluto/token"
 	"maps"
-	"pluto/token"
 	"strings"
 )
 

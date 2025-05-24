@@ -2,8 +2,8 @@ package parser
 
 import (
 	"fmt"
-	"pluto/ast"
-	"pluto/lexer"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 	"strings"
 	"testing"
 

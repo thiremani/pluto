@@ -2,9 +2,9 @@ package parser
 
 import (
 	"fmt"
-	"pluto/ast"
-	"pluto/lexer"
-	"pluto/token"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/token"
 )
 
 type CodeParser struct {

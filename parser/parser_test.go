@@ -2,7 +2,7 @@ package parser
 
 import (
 	"fmt"
-	"pluto/ast"
+	"github.com/thiremani/pluto/ast"
 	"testing"
 )
 

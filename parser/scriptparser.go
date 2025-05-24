@@ -1,8 +1,8 @@
 package parser
 
 import (
-	"pluto/ast"
-	"pluto/lexer"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 )
 
 type ScriptParser struct {

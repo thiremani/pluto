@@ -2,8 +2,8 @@ package compiler
 
 import (
 	"fmt"
-	"pluto/ast"
-	"pluto/token"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"strings"
 	"tinygo.org/x/go-llvm"
 )

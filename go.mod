@@ -1,4 +1,4 @@
-module pluto
+module github.com/thiremani/pluto
 
 go 1.24
 

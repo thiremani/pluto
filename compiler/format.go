@@ -2,7 +2,7 @@ package compiler
 
 import (
 	"fmt"
-	"pluto/lexer"
+	"github.com/thiremani/pluto/lexer"
 	"strings"
 	"tinygo.org/x/go-llvm"
 )

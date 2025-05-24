@@ -2,8 +2,8 @@ package compiler
 
 import (
 	"fmt"
-	"pluto/lexer"
-	"pluto/parser"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 	"strings"
 	"testing"
 
