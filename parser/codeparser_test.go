@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"fmt"
 	"pluto/ast"
 	"pluto/lexer"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -163,115 +165,121 @@ invalid = f(x, x)
 	require.Contains(t, p.Errors()[0], "duplicate parameter x")
 }
 
-/*
-func TestFunctionLiteralParsing(t *testing.T) {
+func TestFuncStatementParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)
     y = 1
     quo = y / x
-    y = 0:n x`
+    y = 0:n y * x`
 
-	l := lexer.New(input)
-	p := New(l, false)
-	program := p.ParseProgram()
-	checkParserErrors(t, p)
+	t.Run("parse function literal", func(t *testing.T) {
+		l := lexer.New(input)
+		cp := NewCodeParser(l)
+		program := cp.Parse()
+		require.Empty(t, cp.p.errors)
 
-	if len(program.Statements) != 1 {
-		t.Fatalf("program.Statements does not contain %d statements. got=%d\n", 1, len(program.Statements))
-	}
+		// Verify function statement
+		require.Len(t, program.Func.Statements, 1, "program should contain 1 function statement")
+		fn := program.Func.Statements[0]
 
-	stmt, ok := program.Statements[0].(*ast.LetStatement)
-	if !ok {
-		t.Fatalf("program.Statements[0] is not an ast.ExpressionStatement. got=%T", program.Statements[0])
-	}
+		t.Run("function metadata", func(t *testing.T) {
+			require.Equal(t, "pow", fn.Token.Literal, "function name mismatch")
+			require.Len(t, fn.Parameters, 2, "parameter count mismatch")
+			require.Len(t, fn.Outputs, 2, "return value count mismatch")
+		})
 
-	if !testIdentifier(t, stmt.Name[0], "y") {
-		return
-	}
+		t.Run("parameters", func(t *testing.T) {
+			testIdentifier(t, fn.Parameters[0], "x")
+			testIdentifier(t, fn.Parameters[1], "n")
+		})
 
-	if !testIdentifier(t, stmt.Name[1], "quo") {
-		return
-	}
+		t.Run("outputs", func(t *testing.T) {
+			testIdentifier(t, fn.Outputs[0], "y")
+			testIdentifier(t, fn.Outputs[1], "quo")
+		})
 
-	if len(stmt.Value) != 1 {
-		t.Fatalf("stmt does not contain %d value. got=%d\n", 1, len(stmt.Value))
-	}
+		t.Run("body statements", func(t *testing.T) {
+			require.Len(t, fn.Body.Statements, 3, "body statement count mismatch")
 
-	f, ok := stmt.Value[0].(*ast.FunctionLiteral)
-	if !ok {
-		t.Fatalf("stmt.Expression is not ast.FunctionLiteral. got=%T",
-			stmt.Value[0])
-	}
+			t.Run("first assignment", func(t *testing.T) {
+				stmt := fn.Body.Statements[0].(*ast.LetStatement)
+				require.Len(t, stmt.Name, 1, "assignment target count")
+				testIdentifier(t, stmt.Name[0], "y")
+				testIntegerLiteral(t, stmt.Value[0], 1)
+			})
 
-	if len(f.Parameters) != 2 {
-		t.Fatalf("function literal parameters wrong. want 2, got=%d\n",
-			len(f.Parameters))
-	}
+			t.Run("second assignment", func(t *testing.T) {
+				stmt := fn.Body.Statements[1].(*ast.LetStatement)
+				require.Len(t, stmt.Name, 1, "assignment target count")
+				testIdentifier(t, stmt.Name[0], "quo")
+				testInfixExpression(t, stmt.Value[0], "y", "/", "x")
+			})
 
-	if !testIdentifier(t, f.Parameters[0], "x") {
-		return
-	}
+			t.Run("conditional assignment", func(t *testing.T) {
+				stmt := fn.Body.Statements[2].(*ast.LetStatement)
+				require.Len(t, stmt.Name, 1, "assignment target count")
+				testIdentifier(t, stmt.Name[0], "y")
 
-	if !testIdentifier(t, f.Parameters[1], "n") {
-		return
-	}
+				// Test condition
+				require.Len(t, stmt.Condition, 1, "condition count")
+				testInfixExpression(t, stmt.Condition[0], 0, ":", "n")
 
-	if len(f.Body.Statements) != 3 {
-		t.Fatalf("function literal body has wrong number of statements. want 3, got=%d\n", len(f.Body.Statements))
-	}
-
-	stmt1 := f.Body.Statements[0].(*ast.LetStatement)
-	if !testIdentifier(t, stmt1.Name[0], "y") {
-		return
-	}
-	if !testIntegerLiteral(t, stmt1.Value[0], 1) {
-		return
-	}
-
-	stmt3 := f.Body.Statements[2].(*ast.LetStatement)
-	if !testIdentifier(t, stmt3.Name[0], "y") {
-		return
-	}
-
-	if !testInfixExpression(t, stmt3.Condition[0], 0, ":", "n") {
-		return
-	}
-
-	if !testIdentifier(t, stmt3.Value[0], "x") {
-		return
-	}
+				// Test value
+				require.Len(t, stmt.Value, 1, "value count")
+				testInfixExpression(t, stmt.Value[0], "y", "*", "x")
+			})
+		})
+	})
 }
 
 func TestFunctionParameterParsing(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		expected []string
 	}{
-		{input: `a = fn()
-    a = 4`, expected: []string{}},
-		{input: `y = f(x)
-    y = x * x`, expected: []string{"x"}},
-		{input: `r = f(x, y, z)
-    r = x + y + z`, expected: []string{"x", "y", "z"}},
+		{
+			name:     "zero parameters",
+			input:    `a = fn()\n    a = 4`,
+			expected: []string{},
+		},
+		{
+			name:     "single parameter",
+			input:    `y = f(x)\n    y = x * x`,
+			expected: []string{"x"},
+		},
+		{
+			name:     "multiple parameters",
+			input:    `r = f(x, y, z)\n    r = x + y + z`,
+			expected: []string{"x", "y", "z"},
+		},
 	}
 
 	for _, tt := range tests {
-		l := lexer.New(tt.input)
-		p := New(l, false)
-		program := p.ParseProgram()
-		checkParserErrors(t, p)
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(strings.ReplaceAll(tt.input, `\n`, "\n"))
+			cp := NewCodeParser(l)
+			program := cp.Parse()
 
-		val := program.Statements[0].(*ast.LetStatement).Value
-		function := val[0].(*ast.FunctionLiteral)
+			// Validate parser errors first
+			require.Empty(t, cp.p.errors, "parser should have no errors")
 
-		if len(function.Parameters) != len(tt.expected) {
-			t.Errorf("length parameters wrong. want %d, got=%d\n",
-				len(tt.expected), len(function.Parameters))
-		}
+			// Check root statements
+			require.NotEmpty(t, program.Func.Statements, "program should have function statements")
 
-		for i, ident := range tt.expected {
-			testLiteralExpression(t, function.Parameters[i], ident)
-		}
+			stmt := program.Func.Statements[0]
+
+			// Test parameter count
+			require.Equal(t, len(tt.expected), len(stmt.Parameters),
+				"parameter count mismatch")
+
+			// Test individual parameters
+			for i, expected := range tt.expected {
+				t.Run(fmt.Sprintf("parameter_%d", i+1), func(t *testing.T) {
+					require.GreaterOrEqual(t, len(stmt.Parameters), i+1,
+						"insufficient parameters parsed")
+					testIdentifier(t, stmt.Parameters[i], expected)
+				})
+			}
+		})
 	}
 }
-
-*/
