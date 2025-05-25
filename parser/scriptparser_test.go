@@ -1,11 +1,28 @@
 package parser
 
 import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
-	"strings"
-	"testing"
 )
+
+// requireOnlyLetStmt asserts the program has exactly one LetStatement and returns it.
+func requireOnlyLetStmt(t *testing.T, program *ast.Program) *ast.LetStatement {
+	require.Len(t, program.Statements, 1, "expected exactly one statement, got %d", len(program.Statements))
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	require.Truef(t, ok, "expected *ast.LetStatement, got %T", program.Statements[0])
+	return stmt
+}
+
+// requireOnlyPrintStmt asserts the program has exactly one PrintStatement and returns it.
+func requireOnlyPrintStmt(t *testing.T, program *ast.Program) *ast.PrintStatement {
+	require.Len(t, program.Statements, 1, "expected exactly one statement, got %d", len(program.Statements))
+	stmt, ok := program.Statements[0].(*ast.PrintStatement)
+	require.Truef(t, ok, "expected *ast.PrintStatement, got %T", program.Statements[0])
+	return stmt
+}
 
 func TestAssign(t *testing.T) {
 	tests := []struct {
@@ -14,24 +31,163 @@ func TestAssign(t *testing.T) {
 		expId  string
 		expStr string
 	}{
-		{
-			name:   "simple assignment",
-			input:  "x = 5",
-			expId:  "=",
-			expStr: "x = 5",
-		},
-		{
-			name:   "math expression assignment",
-			input:  "y = 5 * 3 + 2",
-			expId:  "=",
-			expStr: "y = ((5 * 3) + 2)",
-		},
-		{
-			name:   "complex expression assignment",
-			input:  "foobar = 2 + 3 / 5",
-			expId:  "=",
-			expStr: "foobar = (2 + (3 / 5))",
-		},
+		{"simple assignment", "x = 5", "=", "x = 5"},
+		{"math expression assignment", "y = 5 * 3 + 2", "=", "y = ((5 * 3) + 2)"},
+		{"complex expression assignment", "foobar = 2 + 3 / 5", "=", "foobar = (2 + (3 / 5))"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyLetStmt(t, program)
+			require.Equal(t, tt.expId, stmt.Token.Literal, "assignment token mismatch for input: %q", tt.input)
+			require.Equal(t, tt.expStr, stmt.String(), "assignment string mismatch for input: %q", tt.input)
+		})
+	}
+}
+
+func TestInvalidAssignment(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expError string
+	}{
+		{"numeric LHS", "123 = 5", `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`},
+		{"invalid multi-assign", "x, 5 = 1, 2", `1:4:5:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			errs := sp.Errors()
+			require.Len(t, errs, 1, "expected one parse error for input %q", tt.input)
+			require.Equal(t, tt.expError, errs[0], "unexpected error for input: %q", tt.input)
+		})
+	}
+}
+
+func TestMultiAssign(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expId  string
+		expStr string
+	}{
+		{"multi assignment", "x, y = 2, 4", "=", "x, y = 2, 4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyLetStmt(t, program)
+			require.Equal(t, tt.expId, stmt.Token.Literal, "multi-assign token mismatch for input: %q", tt.input)
+			require.Equal(t, tt.expStr, stmt.String(), "multi-assign string mismatch for input: %q", tt.input)
+		})
+	}
+}
+
+func TestIdentifierExpression(t *testing.T) {
+	const input = "foobar"
+	l := lexer.New(input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	printStmt := requireOnlyPrintStmt(t, program)
+	ident, ok := printStmt.Expression[0].(*ast.Identifier)
+	require.Truef(t, ok, "expected *ast.Identifier, got %T", printStmt.Expression[0])
+	require.Equal(t, "foobar", ident.Value)
+	require.Equal(t, "foobar", ident.Tok().Literal)
+}
+
+func TestIntegerLiteralExpression(t *testing.T) {
+	const input = "5"
+	l := lexer.New(input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	printStmt := requireOnlyPrintStmt(t, program)
+	lit, ok := printStmt.Expression[0].(*ast.IntegerLiteral)
+	require.Truef(t, ok, "expected *ast.IntegerLiteral, got %T", printStmt.Expression[0])
+	require.Equal(t, int64(5), lit.Value)
+	require.Equal(t, "5", lit.Tok().Literal)
+}
+
+func TestStringLiteral(t *testing.T) {
+	const input = `"hello"`
+	l := lexer.New(input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	printStmt := requireOnlyPrintStmt(t, program)
+	lit, ok := printStmt.Expression[0].(*ast.StringLiteral)
+	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression[0])
+	require.Equal(t, "hello", lit.Value)
+	require.Equal(t, "hello", lit.Token.Literal)
+}
+
+func TestParsingPrefixExpressions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		operator string
+		value    interface{}
+	}{
+		{"negate int", "-15", "-", 15},
+		{"not int", "!5", "!", 5},
+		{"negate ident", "-foobar", "-", "foobar"},
+		{"not ident", "!foobar", "!", "foobar"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			printStmt := requireOnlyPrintStmt(t, program)
+			exp, ok := printStmt.Expression[0].(*ast.PrefixExpression)
+			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression[0])
+			require.Equal(t, tt.operator, exp.Operator)
+			// testLiteralExpression is assumed available
+			require.Truef(t, testLiteralExpression(t, exp.Right, tt.value), "literal mismatch for input %q", tt.input)
+		})
+	}
+}
+
+func TestParsingInfixExpressions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		left     interface{}
+		operator string
+		right    interface{}
+	}{
+		{"add int", "5 + 5", 5, "+", 5},
+		{"sub int", "5 - 5", 5, "-", 5},
+		{"mul int", "5 * 5", 5, "*", 5},
+		{"div int", "5 / 5", 5, "/", 5},
+		{"gt int", "5 > 5", 5, ">", 5},
+		{"lt int", "5 < 5", 5, "<", 5},
+		{"eq int", "5 == 5", 5, "==", 5},
+		{"neq int", "5 != 5", 5, "!=", 5},
+		{"add ident", "foobar + barfoo", "foobar", "+", "barfoo"},
+		{"sub ident", "foobar - barfoo", "foobar", "-", "barfoo"},
+		{"mul ident", "foobar * barfoo", "foobar", "*", "barfoo"},
+		{"div ident", "foobar / barfoo", "foobar", "/", "barfoo"},
+		{"gt ident", "foobar > barfoo", "foobar", ">", "barfoo"},
+		{"lt ident", "foobar < barfoo", "foobar", "<", "barfoo"},
+		{"eq ident", "foobar == barfoo", "foobar", "==", "barfoo"},
+		{"neq ident", "foobar != barfoo", "foobar", "!=", "barfoo"},
 	}
 
 	for _, tt := range tests {
@@ -39,345 +195,58 @@ func TestAssign(t *testing.T) {
 			l := lexer.New(tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
-			checkParserErrors(t, sp.p)
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
 
-			if len(program.Statements) != 1 {
-				t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
-			}
+			printStmt := requireOnlyPrintStmt(t, program)
+			infix, ok := printStmt.Expression[0].(*ast.InfixExpression)
+			require.Truef(t, ok, "input %q: expected *ast.InfixExpression, got %T", tt.input, printStmt.Expression[0])
 
-			stmt := program.Statements[0]
-			if !testStmt(t, stmt, tt.expId, tt.expStr) {
-				return
-			}
+			require.Truef(t, testInfixExpression(t, infix, tt.left, tt.operator, tt.right),
+				"input %q: infix expression mismatch", tt.input)
 		})
-	}
-}
-
-func TestInvalidAssignment(t *testing.T) {
-	tests := []struct {
-		input    string
-		expError string
-	}{
-		{
-			input:    "123 = 5",
-			expError: `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`,
-		},
-		{
-			input:    "x, 5 = 1, 2", // Invalid identifier in multi-assign
-			expError: `1:4:5:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			l := lexer.New(tt.input)
-			sp := NewScriptParser(l)
-			sp.Parse()
-			errs := sp.Errors()
-			if len(errs) == 0 {
-				t.Fatal("expected parser errors, got none")
-			}
-			if errs[0] != tt.expError {
-				t.Fatalf("unexpected error: %s\nwant: %s", errs[0], tt.expError)
-			}
-		})
-	}
-}
-
-func TestMultiAssign(t *testing.T) {
-	tests := []struct {
-		input  string
-		expId  string
-		expStr string
-	}{
-		{"x, y = 2, 4", "=", "x, y = 2, 4"},
-	}
-
-	for _, tt := range tests {
-		l := lexer.New(tt.input)
-		sp := NewScriptParser(l)
-		program := sp.Parse()
-		checkParserErrors(t, sp.p)
-
-		if len(program.Statements) != 1 {
-			t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
-		}
-
-		stmt := program.Statements[0]
-
-		if !testStmt(t, stmt, tt.expId, tt.expStr) {
-			return
-		}
-	}
-}
-
-func TestIdentifierExpression(t *testing.T) {
-	input := "foobar"
-
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	checkParserErrors(t, sp.p)
-
-	if len(program.Statements) != 1 {
-		t.Fatalf("program has not enough statements. got=%d",
-			len(program.Statements))
-	}
-	stmt, ok := program.Statements[0].(*ast.PrintStatement)
-	if !ok {
-		t.Fatalf("program.Statements[0] is not ast.PrintStatement. got=%T",
-			program.Statements[0])
-	}
-
-	ident, ok := stmt.Expression[0].(*ast.Identifier)
-	if !ok {
-		t.Fatalf("exp not *ast.Identifier. got=%T", stmt.Expression)
-	}
-	if ident.Value != "foobar" {
-		t.Errorf("ident.Value not %s. got=%s", "foobar", ident.Value)
-	}
-	if ident.Tok().Literal != "foobar" {
-		t.Errorf("ident.TokenLiteral not %s. got=%s", "foobar",
-			ident.Tok().Literal)
-	}
-}
-
-func TestIntegerLiteralExpression(t *testing.T) {
-	input := "5"
-
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	checkParserErrors(t, sp.p)
-
-	if len(program.Statements) != 1 {
-		t.Fatalf("program has not enough statements. got=%d",
-			len(program.Statements))
-	}
-	stmt, ok := program.Statements[0].(*ast.PrintStatement)
-	if !ok {
-		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
-			program.Statements[0])
-	}
-
-	literal, ok := stmt.Expression[0].(*ast.IntegerLiteral)
-	if !ok {
-		t.Fatalf("exp not *ast.IntegerLiteral. got=%T", stmt.Expression)
-	}
-	if literal.Value != 5 {
-		t.Errorf("literal.Value not %d. got=%d", 5, literal.Value)
-	}
-	if literal.Tok().Literal != "5" {
-		t.Errorf("literal.TokenLiteral not %s. got=%s", "5",
-			literal.Tok().Literal)
-	}
-}
-
-func TestStringLiteral(t *testing.T) {
-	input := `"hello"`
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	stmt := program.Statements[0].(*ast.PrintStatement)
-	literal := stmt.Expression[0].(*ast.StringLiteral)
-	if literal.Value != "hello" {
-		t.Errorf("literal.Value not %q. got=%q", "hello", literal.Value)
-	}
-}
-
-func TestParsingPrefixExpressions(t *testing.T) {
-	prefixTests := []struct {
-		input    string
-		operator string
-		value    interface{}
-	}{
-		{"!5", "!", 5},
-		{"-15", "-", 15},
-		{"!foobar", "!", "foobar"},
-		{"-foobar", "-", "foobar"},
-	}
-
-	for _, tt := range prefixTests {
-		l := lexer.New(tt.input)
-		sp := NewScriptParser(l)
-		program := sp.Parse()
-		checkParserErrors(t, sp.p)
-
-		if len(program.Statements) != 1 {
-			t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
-				1, len(program.Statements))
-		}
-
-		stmt, ok := program.Statements[0].(*ast.PrintStatement)
-		if !ok {
-			t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
-				program.Statements[0])
-		}
-
-		exp, ok := stmt.Expression[0].(*ast.PrefixExpression)
-		if !ok {
-			t.Fatalf("stmt is not ast.PrefixExpression. got=%T", stmt.Expression)
-		}
-		if exp.Operator != tt.operator {
-			t.Fatalf("exp.Operator is not '%s'. got=%s",
-				tt.operator, exp.Operator)
-		}
-		if !testLiteralExpression(t, exp.Right, tt.value) {
-			return
-		}
-	}
-}
-
-func TestParsingInfixExpressions(t *testing.T) {
-	infixTests := []struct {
-		input      string
-		leftValue  interface{}
-		operator   string
-		rightValue interface{}
-	}{
-		{"5 + 5", 5, "+", 5},
-		{"5 - 5", 5, "-", 5},
-		{"5 * 5", 5, "*", 5},
-		{"5 / 5", 5, "/", 5},
-		{"5 > 5", 5, ">", 5},
-		{"5 < 5", 5, "<", 5},
-		{"5 == 5", 5, "==", 5},
-		{"5 != 5", 5, "!=", 5},
-		{"foobar + barfoo", "foobar", "+", "barfoo"},
-		{"foobar - barfoo", "foobar", "-", "barfoo"},
-		{"foobar * barfoo", "foobar", "*", "barfoo"},
-		{"foobar / barfoo", "foobar", "/", "barfoo"},
-		{"foobar > barfoo", "foobar", ">", "barfoo"},
-		{"foobar < barfoo", "foobar", "<", "barfoo"},
-		{"foobar == barfoo", "foobar", "==", "barfoo"},
-		{"foobar != barfoo", "foobar", "!=", "barfoo"},
-	}
-
-	for _, tt := range infixTests {
-		l := lexer.New(tt.input)
-		sp := NewScriptParser(l)
-		program := sp.Parse()
-		checkParserErrors(t, sp.p)
-
-		if len(program.Statements) != 1 {
-			t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
-				1, len(program.Statements))
-		}
-
-		stmt, ok := program.Statements[0].(*ast.PrintStatement)
-		if !ok {
-			t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
-				program.Statements[0])
-		}
-
-		if !testInfixExpression(t, stmt.Expression[0], tt.leftValue,
-			tt.operator, tt.rightValue) {
-			return
-		}
 	}
 }
 
 func TestOperatorPrecedenceParsing(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		expected string
 	}{
-		{
-			"-a * b",
-			"((-a) * b)",
-		},
-		{
-			"!(-a)",
-			"(!(-a))",
-		},
-		{
-			"a + b + c",
-			"((a + b) + c)",
-		},
-		{
-			"a + b - c",
-			"((a + b) - c)",
-		},
-		{
-			"a * b * c",
-			"((a * b) * c)",
-		},
-		{
-			"a * b / c",
-			"((a * b) / c)",
-		},
-		{
-			"a + b / c",
-			"(a + (b / c))",
-		},
-		{
-			"a + b * c + d / e - f",
-			"(((a + (b * c)) + (d / e)) - f)",
-		},
-		{
-			"5 > 4 == 3 < 4",
-			"(((5 > 4) == 3) < 4)",
-		},
-		{
-			"5 < 4 != 3 > 4",
-			"(((5 < 4) != 3) > 4)",
-		},
-		{
-			"3 + 4 * 5 == 3 * 1 + 4 * 5",
-			"((3 + ((4 * (5 == 3)) * 1)) + (4 * 5))",
-		},
-		{
-			"3 > 5 == a",
-			"((3 > 5) == a)",
-		},
-		{
-			"3 < 5 == a",
-			"((3 < 5) == a)",
-		},
-		{
-			"1 + (2 + 3) + 4",
-			"((1 + (2 + 3)) + 4)",
-		},
-		{
-			"(5 + 5) * 2",
-			"((5 + 5) * 2)",
-		},
-		{
-			"2 / (5 + 5)",
-			"(2 / (5 + 5))",
-		},
-		{
-			"(5 + 5) * 2 * (5 + 5)",
-			"(((5 + 5) * 2) * (5 + 5))",
-		},
-		{
-			"-(5 + 5)",
-			"(-(5 + 5))",
-		},
-		{
-			"a + add(b * c) + d",
-			"((a + add((b * c))) + d)",
-		},
-		{
-			"add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))",
-			"add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)))",
-		},
-		{
-			"add(a + b + c * d / f + g)",
-			"add((((a + b) + ((c * d) / f)) + g))",
-		},
+		{"negate then multiply", "-a * b", "((-a) * b)"},
+		{"not wrap", "!(-a)", "(!(-a))"},
+		{"add chain", "a + b + c", "((a + b) + c)"},
+		{"add then sub", "a + b - c", "((a + b) - c)"},
+		{"mul chain", "a * b * c", "((a * b) * c)"},
+		{"mul then div", "a * b / c", "((a * b) / c)"},
+		{"add then div", "a + b / c", "(a + (b / c))"},
+		{"multi op", "a + b * c + d / e - f", "(((a + (b * c)) + (d / e)) - f)"},
+		{"multi cmp", "5 > 4 == 3 < 4", "(((5 > 4) == 3) < 4)"},
+		{"multi cmp opp", "5 < 4 != 3 > 4", "(((5 < 4) != 3) > 4)"},
+		{"multi op with cmp", "3 + 4 * 5 == 3 * 1 + 4 * 5", "((3 + ((4 * (5 == 3)) * 1)) + (4 * 5))"},
+		{"multi cmp with id", "3 > 5 == a", "((3 > 5) == a)"},
+		{"multi cmp with id 2", "3 < 5 == a", "((3 < 5) == a)"},
+		{"brackets", "1 + (2 + 3) + 4", "((1 + (2 + 3)) + 4)"},
+		{"brackets for add then mul", "(5 + 5) * 2", "((5 + 5) * 2)"},
+		{"brackets in divisor", "2 / (5 + 5)", "(2 / (5 + 5))"},
+		{"multi brackets", "(5 + 5) * 2 * (5 + 5)", "(((5 + 5) * 2) * (5 + 5))"},
+		{"prefix before brackets", "-(5 + 5)", "(-(5 + 5))"},
+		{"function", "a + add(b * c) + d", "((a + add((b * c))) + d)"},
+		{"function insicde function", "add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))", "add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)))"},
+		{"multi ops inside function", "add(a + b + c * d / f + g)", "add((((a + b) + ((c * d) / f)) + g))"},
 	}
 
 	for _, tt := range tests {
-		l := lexer.New(tt.input)
-		sp := NewScriptParser(l)
-		program := sp.Parse()
-		checkParserErrors(t, sp.p)
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
 
-		actual := program.String()
-		if actual != tt.expected {
-			t.Errorf("expected=%q, got=%q", tt.expected, actual)
-		}
+			actual := program.String()
+			require.Equalf(t, tt.expected, actual,
+				"input %q: operator precedence mismatch: got %q, want %q", tt.input, actual, tt.expected)
+		})
 	}
 }
 
@@ -387,64 +256,33 @@ func TestImplicitMultParsing(t *testing.T) {
 		input  string
 		expStr string
 	}{
-		{
-			name:   "simple multiplication",
-			input:  "x = 5a",
-			expStr: "x = (5 * a)",
-		},
-		{
-			name:   "multiplication and addition",
-			input:  "y = 5x + 2",
-			expStr: "y = ((5 * x) + 2)",
-		},
-		{
-			name:   "complex function parsing",
-			input:  "y = x^2 + 3.14x + 1",
-			expStr: "y = (((x ^ 2) + (3.14 * x)) + 1)",
-		},
-		{
-			name:   "reverse function parsing",
-			input:  "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4",
-			expStr: "y = ((((1 + (2 * x)) + (3.11 * (x ^ 2))) + (2.03 * (x3 ^ 3))) + (7 * (x3ab ^ 4)))",
-		},
+		{"simple", "x = 5a", "x = (5 * a)"},
+		{"add after mult", "y = 5x + 2", "y = ((5 * x) + 2)"},
+		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 * x)) + 1)"},
+		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 * x)) + (3.11 * (x ^ 2))) + (2.03 * (x3 ^ 3))) + (7 * (x3ab ^ 4)))"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
-			checkParserErrors(t, sp.p)
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
 
-			if len(program.Statements) != 1 {
-				t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
-			}
-
-			_, ok := program.Statements[0].(*ast.LetStatement)
-			if !ok {
-				t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
-					program.Statements[0])
-			}
-
-			s := program.String()
-			if s != tt.expStr {
-				t.Errorf("expected=%q, got=%q", tt.expStr, s)
-			}
+			stmt := requireOnlyLetStmt(t, program)
+			require.Equalf(t, tt.expStr, stmt.String(), "input %q: implicit mult mismatch", tt.input)
 		})
 	}
 }
 
 func TestImplicitMultParsingSpaces(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		expErr string
+		name      string
+		input     string
+		expErrLen int
+		expErr    string
 	}{
-		{
-			name:   "simple multiplication",
-			input:  "x = 5 a",
-			expErr: "1:5:5:Expression \"5\" is not a condition. The main operation should be a comparison",
-		},
+		{"implicit mult with space", "x = 5 a", 1, "1:5:5:Expression \"5\" is not a condition. The main operation should be a comparison"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "1:7:+:Expression \"(1 + 2)\" is not a condition. The main operation should be a comparison 1:15:3:expected next token to be =, got IDENT instead"},
 	}
 
 	for _, tt := range tests {
@@ -453,178 +291,124 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 			sp := NewScriptParser(l)
 			sp.Parse()
 			errs := sp.Errors()
-			if len(errs) != 1 {
-				t.Errorf("Expected 1 error, got %d", len(errs))
+			require.Lenf(t, errs, tt.expErrLen, "input %q: expected one error, got %d", tt.input, len(errs))
+			err := ""
+			for i := range tt.expErrLen {
+				if i > 0 {
+					err += " "
+				}
+				err += errs[i]
 			}
-
-			if errs[0] != tt.expErr {
-				t.Errorf("expected=%q, got=%q", tt.expErr, errs[0])
-			}
+			require.Equalf(t, tt.expErr, err, "input %q: error mismatch", tt.input)
 		})
 	}
 }
 
 func TestConditionExpression(t *testing.T) {
-	input := `a = x < y x
-res = a > 3 + 2`
-
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	checkParserErrors(t, sp.p)
-
-	if len(program.Statements) != 2 {
-		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
-			1, len(program.Statements))
-	}
-
-	stmt, ok := program.Statements[0].(*ast.LetStatement)
-	if !ok {
-		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
-			program.Statements[0])
-	}
-
-	if !testInfixExpression(t, stmt.Condition[0], "x", "<", "y") {
-		return
-	}
-
-	if !testIdentifier(t, stmt.Name[0], "a") {
-		return
-	}
-
-	if !testLiteralExpression(t, stmt.Value[0], "x") {
-		return
-	}
-
-	stmt, ok = program.Statements[1].(*ast.LetStatement)
-	if !ok {
-		t.Fatalf("program.Statements[1] is not ast.ExpressionStatement. got=%T",
-			program.Statements[1])
-	}
-
-	exp := stmt.Value[0].(*ast.InfixExpression)
-	left := exp.Left
-	if !testInfixExpression(t, left, "a", ">", 3) {
-		return
-	}
-
-	if exp.Operator != "+" {
-		t.Errorf("exp.Operator is not '+'. got=%s", exp.Operator)
-	}
-
-	if !testLiteralExpression(t, exp.Right, 2) {
-		return
-	}
-
-	if !testIdentifier(t, stmt.Name[0], "res") {
-		return
-	}
-}
-
-func TestNestedGuardCondition(t *testing.T) {
-	input := `res = (a > 3) < (b < 5) (c + d)`
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	checkParserErrors(t, sp.p)
-
-	if len(program.Statements) != 1 {
-		t.Fatalf("program.Statements does not contain 1 statement. got=%d", len(program.Statements))
-	}
-
-	stmt, ok := program.Statements[0].(*ast.LetStatement)
-	if !ok {
-		t.Fatalf("stmt is not ast.LetStatement. got=%T", program.Statements[0])
-	}
-
-	// Condition: (a > 3) < (b < 5)
-	condInfix, ok := stmt.Condition[0].(*ast.InfixExpression)
-	if !ok {
-		t.Fatalf("condition is not infix expression. got=%T", stmt.Condition[0])
-	}
-
-	// Validate nested conditions
-	if !testInfixExpression(t, condInfix.Left, "a", ">", 3) {
-		return
-	}
-	if !testInfixExpression(t, condInfix.Right, "b", "<", 5) {
-		return
-	}
-
-	// Value: (c + d)
-	if !testInfixExpression(t, stmt.Value[0], "c", "+", "d") {
-		return
-	}
-}
-
-func TestMultiReturnCondition(t *testing.T) {
-	input := "x, y = a > 5 10, 20" // If "a > 5", assign x=10, y=20
-
-	l := lexer.New(input)
-	sp := NewScriptParser(l)
-	program := sp.Parse()
-	checkParserErrors(t, sp.p)
-
-	stmt := program.Statements[0].(*ast.LetStatement)
-	// Verify condition
-	if !testInfixExpression(t, stmt.Condition[0], "a", ">", 5) {
-		return
-	}
-	// Verify values
-	if !testIntegerLiteral(t, stmt.Value[0], 10) || !testIntegerLiteral(t, stmt.Value[1], 20) {
-		t.Fatal("values not parsed correctly")
-	}
-}
-
-func TestInvalidConditionError(t *testing.T) {
 	tests := []struct {
-		input    string
-		expError string
+		name      string
+		input     string
+		condLeft  interface{}
+		condOp    string
+		condRight interface{}
+		expStr    string
 	}{
-		{
-			input:    "x = 5 + 3 y", // "+" is not a comparison
-			expError: "Expression \"(5 + 3)\" is not a condition",
-		},
-		{
-			input:    "res = foo(2) result", // Function call is not a comparison
-			expError: "Expression \"foo(2)\" is not a condition",
-		},
+		{"simple condition", "a = x < y x", "x", "<", "y", "x"},
+		{"condition with add", "res = a > 3 + 2", "", "", "", "((a > 3) + 2)"},
+		// add more cases as needed
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			sp := NewScriptParser(l)
-			sp.Parse()
-			errs := sp.Errors()
+			program := sp.Parse()
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
 
-			if len(errs) == 0 {
-				t.Fatal("expected parser error, got none")
+			stmt := requireOnlyLetStmt(t, program)
+			// test condition
+			if len(stmt.Condition) > 0 {
+				require.Truef(t, testInfixExpression(t, stmt.Condition[0], tt.condLeft, tt.condOp, tt.condRight),
+					"input %q: condition mismatch", tt.input)
 			}
-			if !strings.Contains(errs[0], tt.expError) {
-				t.Fatalf("wrong error: %q (expected %q)", errs[0], tt.expError)
+			// test value
+			if len(stmt.Value) > 0 {
+				require.Equal(t, tt.expStr, stmt.Value[0].String())
 			}
 		})
 	}
 }
 
-func TestFunctionCallInCondition(t *testing.T) {
-	input := "res = pow(2, 3) > 8 result"
-
+// Multi-return condition
+func TestMultiReturnCondition(t *testing.T) {
+	const input = "x, y = a > 5 10, 20"
 	l := lexer.New(input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
-	checkParserErrors(t, sp.p)
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
-	stmt := program.Statements[0].(*ast.LetStatement)
-	// Condition: "pow(2, 3) > 8"
+	stmt := requireOnlyLetStmt(t, program)
+	require.Truef(t, testInfixExpression(t, stmt.Condition[0], "a", ">", 5), "condition mismatch")
+	require.Truef(t, testIntegerLiteral(t, stmt.Value[0], 10) && testIntegerLiteral(t, stmt.Value[1], 20),
+		"multi-return values mismatch")
+}
+
+func TestInvalidConditionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expError string
+	}{
+		{"plus not cond", "x = 5 + 3 y", "Expression \"(5 + 3)\" is not a condition"},
+		{"func not cond", "res = foo(2) result", "Expression \"foo(2)\" is not a condition"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New(tt.input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			errs := sp.Errors()
+			require.Lenf(t, errs, 1, "input %q: expected one error, got %d", tt.input, len(errs))
+			require.Containsf(t, errs[0], tt.expError, "input %q: error mismatch", tt.input)
+		})
+	}
+}
+
+func TestNestedGuardCondition(t *testing.T) {
+	const input = "res = (a > 3) < (b < 5) (c + d)"
+	t.Run("nested guard condition", func(t *testing.T) {
+		l := lexer.New(input)
+		sp := NewScriptParser(l)
+		program := sp.Parse()
+		require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", input, sp.Errors())
+
+		stmt := requireOnlyLetStmt(t, program)
+
+		// Condition: (a > 3) < (b < 5)
+		cond, ok := stmt.Condition[0].(*ast.InfixExpression)
+		require.Truef(t, ok, "expected *ast.InfixExpression for condition, got %T", stmt.Condition[0])
+		// Validate nested conditions
+		require.Truef(t, testInfixExpression(t, cond.Left, "a", ">", 3), "left nested condition mismatch")
+		require.Truef(t, testInfixExpression(t, cond.Right, "b", "<", 5), "right nested condition mismatch")
+
+		// Value: (c + d)
+		require.Truef(t, testInfixExpression(t, stmt.Value[0], "c", "+", "d"), "value expression mismatch")
+	})
+}
+
+// Function call in condition
+func TestFunctionCallInCondition(t *testing.T) {
+	const input = "res = pow(2, 3) > 8 result"
+	l := lexer.New(input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
 	cond, ok := stmt.Condition[0].(*ast.InfixExpression)
-	if !ok || cond.Operator != ">" {
-		t.Fatalf("condition not parsed as infix expression")
-	}
-	// Left side: "pow(2, 3)"
-	leftCall, ok := cond.Left.(*ast.CallExpression)
-	if !ok || leftCall.Function.Value != "pow" {
-		t.Fatal("function call in condition not parsed")
-	}
+	require.Truef(t, ok, "expected Inf expression, got %T", stmt.Condition[0])
+	require.Equal(t, ">", cond.Operator)
+
+	callExpr, ok := cond.Left.(*ast.CallExpression)
+	require.Truef(t, ok, "expected CallExpression, got %T", cond.Left)
+	require.Equal(t, "pow", callExpr.Function.Value)
 }
