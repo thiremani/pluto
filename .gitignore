@@ -17,3 +17,6 @@ tests/**
 !tests/**/*.pt
 !tests/**/*.spt
 !tests/**/*.exp
+
+# ignore diff.txt files
+diff.txt
