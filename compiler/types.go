@@ -6,10 +6,16 @@ type Kind int
 
 const (
 	IntKind Kind = iota
+	UintKind
 	FloatKind
 	PointerKind
-	StringKind
+	StrKind
 	ArrayKind
+)
+
+const (
+	I64 = "I64"
+	F64 = "F64"
 )
 
 // Type is the interface for all types in our language.
@@ -24,7 +30,7 @@ type Int struct {
 }
 
 func (i Int) String() string {
-	return fmt.Sprintf("i%d", i.Width)
+	return fmt.Sprintf("I%d", i.Width)
 }
 
 func (i Int) Kind() Kind {
@@ -37,7 +43,7 @@ type Float struct {
 }
 
 func (f Float) String() string {
-	return fmt.Sprintf("f%d", f.Width)
+	return fmt.Sprintf("F%d", f.Width)
 }
 
 func (f Float) Kind() Kind {
@@ -57,21 +63,18 @@ func (p Pointer) Kind() Kind {
 	return PointerKind
 }
 
-// String represents a string type.
+// Str represents a string type.
 // You can optionally store a maximum length if needed.
-type String struct {
+type Str struct {
 	Length int // For fixed-length strings. Could be -1 for dynamic-length.
 }
 
-func (s String) String() string {
-	if s.Length >= 0 {
-		return fmt.Sprintf("string[%d]", s.Length)
-	}
-	return "string"
+func (s Str) String() string {
+	return "Str"
 }
 
-func (s String) Kind() Kind {
-	return StringKind
+func (s Str) Kind() Kind {
+	return StrKind
 }
 
 // Array represents an array type with a fixed length.
@@ -81,7 +84,7 @@ type Array struct {
 }
 
 func (a Array) String() string {
-	return fmt.Sprintf("[%d]%s", a.Length, a.Elem.String())
+	return fmt.Sprintf("[%s] * %d", a.Elem.String(), a.Length)
 }
 
 func (a Array) Kind() Kind {

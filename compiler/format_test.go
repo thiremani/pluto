@@ -2,10 +2,12 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/thiremani/pluto/lexer"
-	"github.com/thiremani/pluto/parser"
 	"strings"
 	"testing"
+
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 
 	"tinygo.org/x/go-llvm"
 )
@@ -78,7 +80,7 @@ func TestFormatStringPanics(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler(llvm.NewContext(), "TestFormatPanics")
+			c := NewCompiler(llvm.NewContext(), "TestFormatPanics", ast.NewCode())
 			c.CompileScript(program)
 		})
 	}
@@ -108,7 +110,7 @@ func TestValidFormatString(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler(llvm.NewContext(), "TestValidFormatString")
+			c := NewCompiler(llvm.NewContext(), "TestValidFormatString", ast.NewCode())
 			c.CompileScript(program)
 			ir := c.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {

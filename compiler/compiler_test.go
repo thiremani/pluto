@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
 	"tinygo.org/x/go-llvm"
@@ -15,7 +16,7 @@ func TestStringCompile(t *testing.T) {
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	comp := NewCompiler(llvm.NewContext(), "test")
+	comp := NewCompiler(llvm.NewContext(), "test", ast.NewCode())
 	comp.CompileScript(program)
 	ir := comp.GenerateIR()
 
@@ -33,7 +34,7 @@ six = 6`
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	c := NewCompiler(llvm.NewContext(), "TestFormatIdentifiers")
+	c := NewCompiler(llvm.NewContext(), "TestFormatIdentifiers", ast.NewCode())
 	c.CompileScript(program)
 	res, vals := c.formatIdentifiers("x = -x, six = -six")
 	expStr := "x = %ld, six = %ld"
@@ -61,8 +62,8 @@ greeting = "hello"`
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
-	c := NewCompiler(llvm.NewContext(), "testConst")
-	c.Compile(code)
+	c := NewCompiler(llvm.NewContext(), "testConst", code)
+	c.Compile()
 	ir := c.GenerateIR()
 
 	expPi := "@pi = unnamed_addr constant double 0x400921FB54411744"

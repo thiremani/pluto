@@ -90,8 +90,8 @@ func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context)
 		pkgCode.Merge(code)
 	}
 
-	c := compiler.NewCompiler(ctx, modPath)
-	c.Compile(pkgCode)
+	c := compiler.NewCompiler(ctx, modPath, pkgCode)
+	c.Compile()
 	ir := c.GenerateIR()
 
 	pkg := filepath.Base(modPath)
@@ -114,7 +114,7 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 	l := lexer.New(string(source))
 	sp := parser.NewScriptParser(l)
 	ast := sp.Parse()
-	c := compiler.NewCompiler(ctx, script)
+	c := compiler.NewCompiler(ctx, script, codeCompiler.CodeAST)
 
 	// Only link if code module has content
 	if codeCompiler != nil && !codeCompiler.Module.IsNil() {
@@ -133,7 +133,7 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 			fmt.Printf("Error linking modules: %v\n", err)
 			return "", err
 		}
-		c.ExtSymbols = codeCompiler.Symbols
+		c.CodeSymbols = codeCompiler.Symbols
 	}
 
 	c.CompileScript(ast)

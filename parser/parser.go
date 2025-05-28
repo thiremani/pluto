@@ -379,7 +379,8 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	expList := p.parseExpList()
 	if p.stmtEnded() {
 		stmt.Value = expList
-		return p.endLetStatement(stmt)
+		p.nextToken()
+		return stmt
 	}
 
 	if !p.conditionsOk(expList) {
@@ -392,7 +393,8 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	stmt.Value = p.parseExpList()
 
 	if p.stmtEnded() {
-		return p.endLetStatement(stmt)
+		p.nextToken()
+		return stmt
 	}
 
 	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %q", p.peekToken)
@@ -402,30 +404,6 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	}
 	p.errors = append(p.errors, ce)
 	return nil
-}
-
-func (p *StmtParser) endLetStatement(stmt *ast.LetStatement) *ast.LetStatement {
-	p.nextToken()
-	// if statement value is a function call multiple return args are allowed
-	// but only if it is a single call and not a list of expressions
-	if len(stmt.Name) > 1 {
-		if _, ok := stmt.Value[0].(*ast.CallExpression); ok {
-			return stmt
-		}
-	}
-
-	// check number of identifiers and expressions are equal if stmt.Value is not a function
-	if len(stmt.Name) != len(stmt.Value) {
-		msg := fmt.Sprintf("Number of variables to be assigned is %d. But number of expressions provided is %d", len(stmt.Name), len(stmt.Value))
-		ce := &token.CompileError{
-			Token: stmt.Token,
-			Msg:   msg,
-		}
-		p.errors = append(p.errors, ce)
-		return nil
-	}
-
-	return stmt
 }
 
 func (p *StmtParser) isCondition(exp ast.Expression) bool {

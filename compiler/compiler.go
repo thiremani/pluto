@@ -15,32 +15,33 @@ type Symbol struct {
 
 type Compiler struct {
 	Symbols       map[string]Symbol
-	ExtSymbols    map[string]Symbol
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
-	funcParams    map[string][]llvm.Value
 	formatCounter int // Track unique format strings
+	CodeSymbols   map[string]Symbol
+	CodeAST       *ast.Code
 }
 
-func NewCompiler(ctx llvm.Context, moduleName string) *Compiler {
+func NewCompiler(ctx llvm.Context, moduleName string, ast *ast.Code) *Compiler {
 	module := ctx.NewModule(moduleName)
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
 		Symbols:       make(map[string]Symbol),
-		ExtSymbols:    make(map[string]Symbol),
 		Context:       ctx,
 		Module:        module,
 		builder:       builder,
-		funcParams:    make(map[string][]llvm.Value),
 		formatCounter: 0,
+		CodeSymbols:   make(map[string]Symbol),
+		CodeAST:       ast,
 	}
 }
 
 // CompileCode compiles a .pt file (code mode) into a library (.o or .a)
-func (c *Compiler) Compile(code *ast.Code) {
-	for _, stmt := range code.Const.Statements {
+func (c *Compiler) Compile() {
+	Const := c.CodeAST.Const
+	for _, stmt := range Const.Statements {
 		c.compileConstStatement(stmt)
 	}
 
@@ -97,7 +98,7 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		} else {
 			panic(fmt.Sprintf("unsupported float width: %d", floatType.Width))
 		}
-	case StringKind:
+	case StrKind:
 		// Represent a string as a pointer to an 8-bit integer.
 		return llvm.PointerType(c.Context.Int8Type(), 0)
 	case PointerKind:
@@ -155,7 +156,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 
 		case *ast.StringLiteral:
 			sym.Val = c.createGlobalString(name, v.Value, linkage)
-			sym.Type = String{}
+			sym.Type = Str{}
 
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
@@ -260,7 +261,7 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-		s.Type = String{}
+		s.Type = Str{}
 		return
 	case *ast.Identifier:
 		s = c.compileIdentifier(e)
@@ -270,6 +271,9 @@ func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 		return
 	case *ast.PrefixExpression:
 		s = c.compilePrefixExpression(e)
+		return
+	case *ast.CallExpression:
+		s = c.compileCallExpression(e)
 		return
 	default:
 		panic(fmt.Sprintln("unsupported expression type", e))
@@ -284,7 +288,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 	case Float:
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
-	case String:
+	case Str:
 		// TODO not sure what this should be
 	default:
 		panic("Unsupported pointer element type")
@@ -352,7 +356,7 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
 	if s, ok := c.Symbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
-	if s, ok := c.ExtSymbols[ident.Value]; ok {
+	if s, ok := c.CodeSymbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
@@ -414,29 +418,28 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) Symbol {
 	panic("unsupported unary operator: " + expr.Operator + " for type: " + operand.Type.String())
 }
 
-/*
-func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement) llvm.Value {
-	// Create function type
+// compileFuncStatement assumes len(args) == len(fn.Parameters)
+func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement, args []Symbol) llvm.Value {
 	returnType := c.Context.VoidType()
 	paramTypes := make([]llvm.Type, len(fn.Parameters))
 	for i := range fn.Parameters {
-		paramTypes[i] = c.Context.Int64Type()
+		paramTypes[i] = c.mapToLLVMType(args[i].Type)
 	}
 
 	funcType := llvm.FunctionType(returnType, paramTypes, false)
-	function := llvm.AddFunction(c.Module, fn.Token.Literal, funcType)
+	function := llvm.AddFunction(c.Module, mangle(fn.Token.Literal, args), funcType)
 
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
 	c.builder.SetInsertPoint(entry, entry.FirstInstruction())
 
 	// Store parameters
-	for i, param := range fn.Parameters {
-		alloca := c.createEntryBlockAlloca(function, param.Value)
+	for i, arg := range args {
+		alloca := c.createEntryBlockAlloca(function, fn.Parameters[i].Value)
 		c.builder.CreateStore(function.Params()[i], alloca)
-		c.Symbols[param.Value] = Symbol{
+		c.Symbols[fn.Parameters[i].Value] = Symbol{
 			Val:  alloca,
-			Type: Int{Width: 64},
+			Type: arg.Type,
 		}
 	}
 
@@ -456,7 +459,7 @@ func (c *Compiler) compileBlockStatement(bs *ast.BlockStatement) {
 			c.compilePrintStatement(s)
 		}
 	}
-}*/
+}
 
 func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value {
 	currentInsert := c.builder.GetInsertBlock()
@@ -475,19 +478,33 @@ func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression) llvm.Value {
-	fn := c.Module.NamedFunction(ce.Function.Value)
-	if fn.IsNil() {
-		panic("undefined function: " + ce.Function.Value)
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
+	args := make([]Symbol, len(ce.Arguments))
+	argsV := make([]llvm.Value, len(ce.Arguments))
+	for i, arg := range ce.Arguments {
+		args[i] = c.compileExpression(arg)
+		argsV[i] = args[i].Val
 	}
 
-	args := make([]llvm.Value, len(ce.Arguments))
-	for i, arg := range ce.Arguments {
-		args[i] = c.compileExpression(arg).Val
+	fn := c.Module.NamedFunction(mangle(ce.Function.Value, args))
+	if fn.IsNil() {
+		// attempt to compile existing function template from Code
+		fk := ast.FuncKey{
+			FuncName: ce.Function.Value,
+			Arity:    len(args),
+		}
+		if template, ok := c.CodeAST.Func.Map[fk]; ok {
+			fn = c.compileFuncStatement(template, args)
+		} else {
+			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
+		}
 	}
 
 	funcType := fn.Type().ElementType() // Get function signature type
-	return c.builder.CreateCall(funcType, fn, args, "call_tmp")
+	return Symbol{
+		Val:  c.builder.CreateCall(funcType, fn, argsV, "call_tmp"),
+		Type: Int{Width: 64}, // should be adjusted based on actual function return type
+	}
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
@@ -497,7 +514,7 @@ func defaultSpecifier(t Type) string {
 		return "%ld"
 	case FloatKind:
 		return "%.15g"
-	case StringKind:
+	case StrKind:
 		return "%s"
 	default:
 		err := "unsupported type in print statement " + t.String()
