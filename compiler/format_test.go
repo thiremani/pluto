@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
 
@@ -80,8 +79,8 @@ func TestFormatStringPanics(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler(llvm.NewContext(), "TestFormatPanics", ast.NewCode())
-			c.CompileScript(program)
+			sc := NewScriptCompiler(llvm.NewContext(), "TestFormatPanics", program, nil)
+			sc.Compile()
 		})
 	}
 }
@@ -110,9 +109,9 @@ func TestValidFormatString(t *testing.T) {
 			l := lexer.New(tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			c := NewCompiler(llvm.NewContext(), "TestValidFormatString", ast.NewCode())
-			c.CompileScript(program)
-			ir := c.GenerateIR()
+			sc := NewScriptCompiler(llvm.NewContext(), "TestValidFormatString", program, nil)
+			sc.Compile()
+			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {
 				t.Errorf("IR does not contain string constant.\nIR: %s\n, expected to contain: %s\n", ir, tc.expectOutput)
 			}

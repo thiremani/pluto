@@ -63,7 +63,7 @@ func defaultPTCache() string {
 	return ptcache
 }
 
-func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context) (*compiler.Compiler, string, error) {
+func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context) (*compiler.CodeCompiler, string, error) {
 	if len(codeFiles) == 0 {
 		return nil, "", nil
 	}
@@ -86,13 +86,12 @@ func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context)
 			err := fmt.Errorf("error parsing code file %s", codeFile)
 			return nil, "", err
 		}
-		fmt.Println("Got ast code as", code)
 		pkgCode.Merge(code)
 	}
 
-	c := compiler.NewCompiler(ctx, modPath, pkgCode)
-	c.Compile()
-	ir := c.GenerateIR()
+	cc := compiler.NewCodeCompiler(ctx, modPath, pkgCode)
+	cc.Compile()
+	ir := cc.Compiler.GenerateIR()
 
 	pkg := filepath.Base(modPath)
 	fmt.Println("Pkg name is", pkg)
@@ -102,10 +101,10 @@ func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context)
 		fmt.Printf("Error writing IR to %s: %v\n", codeLL, err)
 		return nil, "", err
 	}
-	return c, codeLL, nil
+	return cc, codeLL, nil
 }
 
-func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.Compiler, codeLL string, ctx llvm.Context) (string, error) {
+func compileScript(scriptFile, script, cacheDir string, cc *compiler.CodeCompiler, codeLL string, ctx llvm.Context) (string, error) {
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
@@ -114,10 +113,10 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 	l := lexer.New(string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
-	c := compiler.NewCompiler(ctx, script, ast.NewCode())
+	sc := compiler.NewScriptCompiler(ctx, script, program, cc)
 
 	// Only link if code module has content
-	if codeCompiler != nil && !codeCompiler.Module.IsNil() {
+	if cc != nil && !cc.Compiler.Module.IsNil() {
 		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
 		if err != nil {
 			fmt.Printf("Error loading to memory buffer: %v\n", err)
@@ -129,16 +128,14 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 			return "", err
 		}
 		// Link code-mode module into script's module in-memory
-		if err := llvm.LinkModules(c.Module, clone); err != nil {
+		if err := llvm.LinkModules(sc.Compiler.Module, clone); err != nil {
 			fmt.Printf("Error linking modules: %v\n", err)
 			return "", err
 		}
-		c.CodeSymbols = codeCompiler.Symbols
-		c.CodeAST = codeCompiler.CodeAST
 	}
 
-	c.CompileScript(program)
-	ir := c.GenerateIR()
+	sc.Compile()
+	ir := sc.Compiler.GenerateIR()
 
 	llName := script + IR_SUFFIX
 	scriptLL := filepath.Join(cacheDir, SCRIPT_DIR, llName)

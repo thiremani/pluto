@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
 	"tinygo.org/x/go-llvm"
@@ -16,9 +15,9 @@ func TestStringCompile(t *testing.T) {
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	comp := NewCompiler(llvm.NewContext(), "test", ast.NewCode())
-	comp.CompileScript(program)
-	ir := comp.GenerateIR()
+	sc := NewScriptCompiler(llvm.NewContext(), "test", program, nil)
+	sc.Compile()
+	ir := sc.Compiler.GenerateIR()
 
 	expectedIR := `@printf_fmt_0 = constant [7 x i8] c"hello\0A\00"`
 	if !strings.Contains(ir, expectedIR) {
@@ -34,9 +33,9 @@ six = 6`
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	c := NewCompiler(llvm.NewContext(), "TestFormatIdentifiers", ast.NewCode())
-	c.CompileScript(program)
-	res, vals := c.formatIdentifiers("x = -x, six = -six")
+	sc := NewScriptCompiler(llvm.NewContext(), "TestFormatIdentifiers", program, nil)
+	sc.Compile()
+	res, vals := sc.Compiler.formatIdentifiers("x = -x, six = -six")
 	expStr := "x = %ld, six = %ld"
 	if res != expStr {
 		t.Errorf("formattedStr does not match expected. got: %s, expected: %s", res, expStr)
@@ -44,7 +43,7 @@ six = 6`
 	if len(vals) != 2 {
 		t.Errorf("len(vals) does not match expected. got: %d, expected: 2", len(vals))
 	}
-	expVals := []llvm.Value{llvm.ConstInt(c.Context.Int64Type(), 5, false), llvm.ConstInt(c.Context.Int64Type(), 6, false)}
+	expVals := []llvm.Value{llvm.ConstInt(sc.Compiler.Context.Int64Type(), 5, false), llvm.ConstInt(sc.Compiler.Context.Int64Type(), 6, false)}
 	for i, val := range vals {
 		if val != expVals[i] {
 			t.Errorf("vals[%d] does not match expected.", i)
@@ -62,9 +61,9 @@ greeting = "hello"`
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
-	c := NewCompiler(llvm.NewContext(), "testConst", code)
+	c := NewCodeCompiler(llvm.NewContext(), "testConst", code)
 	c.Compile()
-	ir := c.GenerateIR()
+	ir := c.Compiler.GenerateIR()
 
 	expPi := "@pi = unnamed_addr constant double 0x400921FB54411744"
 	if !strings.Contains(ir, expPi) {

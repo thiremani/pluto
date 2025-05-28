@@ -18,12 +18,11 @@ type Compiler struct {
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
-	formatCounter int // Track unique format strings
-	CodeSymbols   map[string]Symbol
-	CodeAST       *ast.Code
+	formatCounter int           // Track unique format strings
+	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 }
 
-func NewCompiler(ctx llvm.Context, moduleName string, ast *ast.Code) *Compiler {
+func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
 	module := ctx.NewModule(moduleName)
 	builder := ctx.NewBuilder()
 
@@ -33,44 +32,8 @@ func NewCompiler(ctx llvm.Context, moduleName string, ast *ast.Code) *Compiler {
 		Module:        module,
 		builder:       builder,
 		formatCounter: 0,
-		CodeSymbols:   make(map[string]Symbol),
-		CodeAST:       ast,
+		CodeCompiler:  cc,
 	}
-}
-
-// CompileCode compiles a .pt file (code mode) into a library (.o or .a)
-func (c *Compiler) Compile() {
-	Const := c.CodeAST.Const
-	for _, stmt := range Const.Statements {
-		c.compileConstStatement(stmt)
-	}
-
-	// compile op, func, struct
-	/*
-		for _, f := range code.Func.Statements {
-			c.compileFuncStatement(f)
-		} */
-}
-
-func (c *Compiler) CompileScript(program *ast.Program) {
-	// Create main function
-	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
-	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
-	mainBlock := c.Context.AddBasicBlock(mainFunc, "entry")
-	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
-
-	// Compile all statements
-	for _, stmt := range program.Statements {
-		switch s := stmt.(type) {
-		case *ast.LetStatement:
-			c.compileLetStatement(s, mainFunc)
-		case *ast.PrintStatement:
-			c.compilePrintStatement(s)
-		}
-	}
-
-	// Add explicit return 0
-	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -356,9 +319,15 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
 	if s, ok := c.Symbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
-	if s, ok := c.CodeSymbols[ident.Value]; ok {
+
+	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
+		panic(fmt.Sprintf("undefined variable: %s", ident.Value))
+	}
+	codeSymbols := c.CodeCompiler.Compiler.Symbols
+	if s, ok := codeSymbols[ident.Value]; ok {
 		return c.derefIfPointer(s)
 	}
+
 	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 }
 
@@ -493,10 +462,14 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
 			FuncName: ce.Function.Value,
 			Arity:    len(args),
 		}
-		if template, ok := c.CodeAST.Func.Map[fk]; ok {
+
+		if c.CodeCompiler != nil && c.CodeCompiler.Code != nil {
+			code := c.CodeCompiler.Code
+			template, ok := code.Func.Map[fk]
+			if !ok {
+				panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
+			}
 			fn = c.compileFuncStatement(template, args)
-		} else {
-			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
 		}
 	}
 
