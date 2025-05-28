@@ -3,4 +3,4 @@ x is now 4 and a pointer on the stack automatically dereferenced for use
 write char. y should now be 10 and allocated on the stack
 y is 10. z = x * y and z is 40
 14 -6
-Check the percent op with vars x, y, z. The result is 0x4 0xa 0x28
+Check the pointer op with vars x, y, z. The result is 0x4 0xa 0x28

@@ -11,4 +11,4 @@ y = 0
 z = x * y
 "y is -y%d. z = x * y and z is -z%d"
 x + y, x - y
-"Check the percent op with vars x, y, z. The result is -x%p -y%p -z%p"
+"Check the pointer op with vars x, y, z. The result is -x%p -y%p -z%p"
