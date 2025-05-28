@@ -113,8 +113,8 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 	}
 	l := lexer.New(string(source))
 	sp := parser.NewScriptParser(l)
-	ast := sp.Parse()
-	c := compiler.NewCompiler(ctx, script, codeCompiler.CodeAST)
+	program := sp.Parse()
+	c := compiler.NewCompiler(ctx, script, ast.NewCode())
 
 	// Only link if code module has content
 	if codeCompiler != nil && !codeCompiler.Module.IsNil() {
@@ -134,9 +134,10 @@ func compileScript(scriptFile, script, cacheDir string, codeCompiler *compiler.C
 			return "", err
 		}
 		c.CodeSymbols = codeCompiler.Symbols
+		c.CodeAST = codeCompiler.CodeAST
 	}
 
-	c.CompileScript(ast)
+	c.CompileScript(program)
 	ir := c.GenerateIR()
 
 	llName := script + IR_SUFFIX
