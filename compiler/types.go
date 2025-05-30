@@ -1,6 +1,9 @@
 package compiler
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Kind int
 
@@ -10,6 +13,7 @@ const (
 	FloatKind
 	PointerKind
 	StrKind
+	FuncKind
 	ArrayKind
 )
 
@@ -77,6 +81,20 @@ func (s Str) Kind() Kind {
 	return StrKind
 }
 
+type Func struct {
+	Name    string
+	Params  []Type
+	Outputs []Type
+}
+
+func (f Func) String() string {
+	return fmt.Sprintf("%s = %s(%s)", typesStr(f.Outputs), f.Name, typesStr(f.Params))
+}
+
+func (f Func) Kind() Kind {
+	return FuncKind
+}
+
 // Array represents an array type with a fixed length.
 type Array struct {
 	Elem   Type // Element type
@@ -89,4 +107,18 @@ func (a Array) String() string {
 
 func (a Array) Kind() Kind {
 	return ArrayKind
+}
+
+func typesStr(types []Type) string {
+	if len(types) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, t := range types {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(t.String())
+	}
+	return sb.String()
 }

@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"strings"
 	"tinygo.org/x/go-llvm"
 )
@@ -209,6 +208,15 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
 	}
 }
 
+func (c *Compiler) inferTypes(s *ast.LetStatement) []Type {
+	outTypes := make([]Type, 0, len(s.Name))
+	// for i, expr := range s.Value {
+
+	// }
+
+	return outTypes
+}
+
 func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -335,29 +343,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 	left := c.compileExpression(expr.Left)
 	right := c.compileExpression(expr.Right)
 
-	// Determine types and promote to float if needed
-	leftIsFloat := left.Type.Kind() == FloatKind
-	rightIsFloat := right.Type.Kind() == FloatKind
-
-	if leftIsFloat || rightIsFloat {
-		if !leftIsFloat {
-			left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
-			left.Type = Float{Width: 64}
-		}
-		if !rightIsFloat {
-			right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
-			right.Type = Float{Width: 64}
-		}
-	} else if expr.Operator == token.SYM_DIV || expr.Operator == token.SYM_EXP {
-		// if both types are int, we currently convert both to float for operations / and ^
-		left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
-		left.Type = Float{Width: 64}
-		right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
-		right.Type = Float{Width: 64}
-	}
-
 	// Build a key based on the operator literal and the operand types.
-	// We assume that the String() method for your custom Type returns "i64" for Int{Width: 64} and "f64" for Float{Width: 64}.
+	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
 	key := opKey{
 		Operator:  expr.Operator,
 		LeftType:  left.Type.String(),
@@ -365,7 +352,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) 
 	}
 
 	if fn, ok := defaultOps[key]; ok {
-		s = fn(c, left, right)
+		s = fn(c, left, right, true)
 		return
 	}
 	panic("unsupported operator: " + expr.Operator + " for types: " + left.Type.String() + ", " + right.Type.String())
@@ -382,41 +369,76 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) Symbol {
 		OperandType: operand.Type.String(),
 	}
 	if fn, ok := defaultUnaryOps[key]; ok {
-		return fn(c, operand)
+		return fn(c, operand, true)
 	}
 	panic("unsupported unary operator: " + expr.Operator + " for type: " + operand.Type.String())
 }
 
-// compileFuncStatement assumes len(args) == len(fn.Parameters)
-func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement, args []Symbol) llvm.Value {
-	returnType := c.Context.VoidType()
-	paramTypes := make([]llvm.Type, len(fn.Parameters))
-	for i := range fn.Parameters {
-		paramTypes[i] = c.mapToLLVMType(args[i].Type)
+func (c *Compiler) createReturnType(outTypes []Type) llvm.Type {
+	fields := make([]llvm.Type, len(outTypes))
+	for i, t := range outTypes {
+		fields[i] = c.mapToLLVMType(t)
+	}
+	st := c.Context.StructCreateNamed("returnStruct")
+	st.StructSetBody(fields, false) // false = not packed
+	return st
+}
+
+func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement, args []Symbol) (llvm.Value, []Type) {
+	llvmInputs := make([]llvm.Type, len(args))
+	for i, a := range args {
+		llvmInputs[i] = c.mapToLLVMType(a.Type)
 	}
 
-	funcType := llvm.FunctionType(returnType, paramTypes, false)
-	function := llvm.AddFunction(c.Module, mangle(fn.Token.Literal, args), funcType)
+	// Compile function body
+	c.compileBlockStatement(fn.Body)
+	// body should have compiled outputs into symbol table
+	outTypes := c.inferOutTypes(fn)
+
+	retStruct := c.createReturnType(outTypes)
+	llvmParams := []llvm.Type{
+		llvm.PointerType(retStruct, 0),
+	}
+	llvmParams = append(llvmParams, llvmInputs...)
+
+	codeModule := c.CodeCompiler.Compiler.Module
+	funcType := llvm.FunctionType(c.Context.VoidType(), llvmParams, false)
+	function := llvm.AddFunction(codeModule, mangle(fn.Token.Literal, args), funcType)
+
+	// Add sret and noalias attributes to first parameter
+	function.AddAttributeAtIndex(0, c.Context.CreateEnumAttribute(llvm.AttributeKindID("sret"), 0))
+	function.AddAttributeAtIndex(0, c.Context.CreateEnumAttribute(llvm.AttributeKindID("noalias"), 0))
 
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
 	c.builder.SetInsertPoint(entry, entry.FirstInstruction())
 
 	// Store parameters
-	for i, arg := range args {
-		alloca := c.createEntryBlockAlloca(function, fn.Parameters[i].Value)
-		c.builder.CreateStore(function.Params()[i], alloca)
-		c.Symbols[fn.Parameters[i].Value] = Symbol{
+	for i, param := range fn.Parameters {
+		alloca := c.createEntryBlockAlloca(function, param.Value)
+		c.builder.CreateStore(function.Param(i+1), alloca)
+		c.Symbols[param.Value] = Symbol{
 			Val:  alloca,
-			Type: arg.Type,
+			Type: args[i].Type,
 		}
 	}
 
-	// Compile function body
-	c.compileBlockStatement(fn.Body)
 	c.builder.CreateRetVoid()
 
-	return function
+	return function, outTypes
+}
+
+func (c *Compiler) inferOutTypes(fn *ast.FuncStatement) []Type {
+	outTypes := make([]Type, 0, len(fn.Outputs))
+	for _, stmt := range fn.Body.Statements {
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			c.inferTypes(s)
+		default:
+			continue
+		}
+	}
+	return outTypes
 }
 
 func (c *Compiler) compileBlockStatement(bs *ast.BlockStatement) {
@@ -455,7 +477,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
 		argsV[i] = args[i].Val
 	}
 
-	fn := c.Module.NamedFunction(mangle(ce.Function.Value, args))
+	codeModule := c.CodeCompiler.Compiler.Module
+	fn := codeModule.NamedFunction(mangle(ce.Function.Value, args))
+	var outTypes []Type
 	if fn.IsNil() {
 		// attempt to compile existing function template from Code
 		fk := ast.FuncKey{
@@ -463,21 +487,30 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
 			Arity:    len(args),
 		}
 
-		if c.CodeCompiler != nil && c.CodeCompiler.Code != nil {
-			code := c.CodeCompiler.Code
-			template, ok := code.Func.Map[fk]
-			if !ok {
-				panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
-			}
-			fn = c.compileFuncStatement(template, args)
+		code := c.CodeCompiler.Code
+		template, ok := code.Func.Map[fk]
+		if !ok {
+			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
 		}
+		fn, outTypes = c.compileFuncStatement(template, args)
 	}
 
-	funcType := fn.Type().ElementType() // Get function signature type
-	return Symbol{
-		Val:  c.builder.CreateCall(funcType, fn, argsV, "call_tmp"),
-		Type: Int{Width: 64}, // should be adjusted based on actual function return type
+	sretPtr := c.createEntryBlockAlloca(
+		c.builder.GetInsertBlock().Parent(),
+		"sret_tmp",
+	)
+	llvmArgs := []llvm.Value{sretPtr}
+	llvmArgs = append(llvmArgs, argsV...)
+
+	c.builder.CreateCall(fn.Type().ElementType(), fn, llvmArgs, "call_tmp")
+
+	results := make([]Symbol, len(outTypes))
+	for i, typ := range outTypes {
+		gep := c.builder.CreateStructGEP(sretPtr.Type(), sretPtr, i, "ret_gep")
+		load := c.builder.CreateLoad(c.mapToLLVMType(typ), gep, "ret_load")
+		results[i] = Symbol{Val: load, Type: typ}
 	}
+	return results[0]
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.

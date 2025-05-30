@@ -21,11 +21,11 @@ type unaryOpKey struct {
 
 // opFunc defines the function signature for an operator function.
 // It takes two Symbols and returns a new Symbol.
-type opFunc func(c *Compiler, left, right Symbol) Symbol
+type opFunc func(c *Compiler, left, right Symbol, compile bool) Symbol
 
 // unaryOpFunc defines the function signature for a unary operator function.
 // It takes one Symbol and returns a new Symbol
-type unaryOpFunc func(c *Compiler, operand Symbol) Symbol
+type unaryOpFunc func(c *Compiler, operand Symbol, compile bool) Symbol
 
 // defaultOps is a map between operator, types and the corresponding operator function
 // For simplicity, we assume that the Symbol type’s Type field's String() method returns
@@ -33,281 +33,657 @@ type unaryOpFunc func(c *Compiler, operand Symbol) Symbol
 var defaultOps = map[opKey]opFunc{
 	// --- Arithmetic Operators ---
 	// Addition:
-	{Operator: token.SYM_ADD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateAdd(left.Val, right.Val, "add_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_ADD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateAdd(left.Val, right.Val, "add_tmp")
+		return
 	},
-	{Operator: token.SYM_ADD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFAdd(left.Val, right.Val, "fadd_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_ADD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFAdd(left.Val, right.Val, "fadd_tmp")
+		return
+	},
+
+	{Operator: token.SYM_ADD, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFAdd(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fadd_if_tmp")
+		return
+	},
+	{Operator: token.SYM_ADD, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFAdd(left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"), "fadd_fi_tmp")
+		return
 	},
 
 	// Subtraction:
-	{Operator: token.SYM_SUB, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateSub(left.Val, right.Val, "sub_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_SUB, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateSub(left.Val, right.Val, "sub_tmp")
+		return
 	},
-	{Operator: token.SYM_SUB, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_SUB, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp")
+		return
+	},
+	{Operator: token.SYM_SUB, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFSub(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fsub_if_tmp")
+		return
+	},
+	{Operator: token.SYM_SUB, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFSub(left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"), "fsub_fi_tmp")
+		return
 	},
 
 	// Multiplication:
-	{Operator: token.SYM_MUL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateMul(left.Val, right.Val, "mul_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_MUL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
+		return
 	},
-	{Operator: token.SYM_MUL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_MUL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
+		return
+	},
+	{Operator: token.SYM_MUL, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFMul(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fmul_if_tmp")
+		return
+	},
+	{Operator: token.SYM_MUL, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		s.Val = c.builder.CreateFMul(left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"), "fmul_fi_tmp")
+		return
 	},
 
 	// Division:
 	// For integers, this example uses integer division (CreateSDiv).
 	// For ÷ operator
-	{Operator: token.SYM_QUO, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateSDiv(left.Val, right.Val, "div_tmp"),
-			Type: left.Type,
-		}
-	},
-	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		// float ÷ float → float via truncation
-		div := c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
-		// get or declare the llvm.trunc.f64 intrinsic
-		truncType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType()}, false)
-		truncFn := c.Module.NamedFunction("llvm.trunc.f64")
-		if truncFn.IsNil() {
-			truncFn = llvm.AddFunction(c.Module, "llvm.trunc.f64", truncType)
+	{Operator: token.SYM_QUO, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
 
-		res := c.builder.CreateCall(truncType, truncFn, []llvm.Value{div}, "trunc_tmp")
-		return Symbol{Val: res, Type: left.Type}
+		s.Val = c.builder.CreateSDiv(left.Val, right.Val, "div_tmp")
+		return
+	},
+	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		s.Val = floatQuo(c, left.Val, right.Val)
+		return
+	},
+	{Operator: token.SYM_QUO, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		s.Val = floatQuo(c, c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val)
+		return
+	},
+	{Operator: token.SYM_QUO, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		s.Val = floatQuo(c, left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"))
+		return
 	},
 
 	// For division, if both operands are integers, promote them to float and do float division.
-	{Operator: token.SYM_DIV, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
+	{Operator: token.SYM_DIV, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = Float{Width: 64}
+		if !compile {
+			return
+		}
+
 		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
 		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
-		return Symbol{
-			Val:  c.builder.CreateFDiv(leftFP, rightFP, "fdiv_tmp"),
-			Type: Float{Width: 64},
-		}
+		s.Val = c.builder.CreateFDiv(leftFP, rightFP, "fdiv_ii_tmp")
+		return
 	},
-	{Operator: token.SYM_DIV, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp"),
-			Type: left.Type,
+	{Operator: token.SYM_DIV, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
+		return
+	},
+	{Operator: token.SYM_DIV, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFDiv(leftFP, right.Val, "fdiv_if_tmp")
+		return
+	},
+	{Operator: token.SYM_DIV, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFDiv(left.Val, rightFP, "fdiv_fi_tmp")
+		return
 	},
 
 	// Exponentiation (^):
-	{Operator: token.SYM_EXP, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		// Register exponentiation operator for float values.
-		powType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType(), c.Context.DoubleType()}, false)
-		powFunc := c.Module.NamedFunction("llvm.pow.f64")
-		if powFunc.IsNil() {
-			powFunc = llvm.AddFunction(c.Module, "llvm.pow.f64", powType)
+	{Operator: token.SYM_EXP, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = Float{Width: 64}
+		if !compile {
+			return
 		}
-		return Symbol{
-			Val:  c.builder.CreateCall(powType, powFunc, []llvm.Value{left.Val, right.Val}, "pow_tmp"),
-			Type: left.Type,
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = floatExp(c, leftFP, rightFP)
+		return
+	},
+	{Operator: token.SYM_EXP, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = floatExp(c, left.Val, right.Val)
+		return
+	},
+	{Operator: token.SYM_EXP, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = floatExp(c, leftFP, right.Val)
+		return
+	},
+	{Operator: token.SYM_EXP, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = floatExp(c, left.Val, rightFP)
+		return
 	},
 
 	// --- Comparison Operators ---
 	// Equality (==)
-	{Operator: token.SYM_EQL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntEQ, left.Val, right.Val, "eq_I64"),
-			Type: Int{Width: 64}, // Representing boolean as an int (0 or 1)
+	{Operator: token.SYM_EQL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateICmp(llvm.IntEQ, left.Val, right.Val, "eq_I64")
+		return
 	},
-	{Operator: token.SYM_EQL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatUEQ, left.Val, right.Val, "eq_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_EQL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFCmp(llvm.FloatUEQ, left.Val, right.Val, "eq_F64")
+		return
+	},
+	{Operator: token.SYM_EQL, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUEQ, leftFP, right.Val, "eq_I64_F64")
+		return
+	},
+	{Operator: token.SYM_EQL, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUEQ, left.Val, rightFP, "eq_F64_I64")
+		return
 	},
 
 	// Not Equal (!=)
-	{Operator: token.SYM_NEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntNE, left.Val, right.Val, "neq_I64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_NEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateICmp(llvm.IntNE, left.Val, right.Val, "neq_I64")
+		return
 	},
-	{Operator: token.SYM_NEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatUNE, left.Val, right.Val, "neq_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_NEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, right.Val, "neq_F64")
+		return
+	},
+	{Operator: token.SYM_NEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, leftFP, right.Val, "neq_I64_F64")
+		return
+	},
+	{Operator: token.SYM_NEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUNE, left.Val, rightFP, "neq_F64_I64")
+		return
 	},
 
 	// Less Than (<)
-	{Operator: token.SYM_LSS, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntSLT, left.Val, right.Val, "lt_I64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_LSS, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+		s.Val = c.builder.CreateICmp(llvm.IntSLT, left.Val, right.Val, "lt_I64")
+		return
 	},
-	{Operator: token.SYM_LSS, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatULT, left.Val, right.Val, "lt_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_LSS, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+		s.Val = c.builder.CreateFCmp(llvm.FloatULT, left.Val, right.Val, "lt_F64")
+		return
+	},
+	{Operator: token.SYM_LSS, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatULT, leftFP, right.Val, "lt_I64_F64")
+		return
+	},
+	{Operator: token.SYM_LSS, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatULT, left.Val, rightFP, "lt_F64_I64")
+		return
 	},
 
 	// Less Than or Equal (<=)
-	{Operator: token.SYM_LEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntSLE, left.Val, right.Val, "le_I64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_LEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateICmp(llvm.IntSLE, left.Val, right.Val, "le_I64")
+		return
 	},
-	{Operator: token.SYM_LEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatULE, left.Val, right.Val, "le_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_LEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+		s.Val = c.builder.CreateFCmp(llvm.FloatULE, left.Val, right.Val, "le_F64")
+		return
+	},
+	{Operator: token.SYM_LEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatULE, leftFP, right.Val, "le_I64_F64")
+		return
+	},
+	{Operator: token.SYM_LEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatULE, left.Val, rightFP, "le_F64_I64")
+		return
 	},
 
 	// Greater Than (>)
-	{Operator: token.SYM_GTR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntSGT, left.Val, right.Val, "gt_I64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_GTR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateICmp(llvm.IntSGT, left.Val, right.Val, "gt_I64")
+		return
 	},
-	{Operator: token.SYM_GTR, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatUGT, left.Val, right.Val, "gt_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_GTR, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGT, left.Val, right.Val, "gt_F64")
+		return
+	},
+	{Operator: token.SYM_GTR, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGT, leftFP, right.Val, "gt_I64_F64")
+		return
+	},
+	{Operator: token.SYM_GTR, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGT, left.Val, rightFP, "gt_F64_I64")
+		return
 	},
 
 	// Greater Than or Equal (>=)
-	{Operator: token.SYM_GEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateICmp(llvm.IntSGE, left.Val, right.Val, "ge_I64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_GEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateICmp(llvm.IntSGE, left.Val, right.Val, "ge_I64")
+		return
 	},
-	{Operator: token.SYM_GEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFCmp(llvm.FloatUGE, left.Val, right.Val, "ge_F64"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_GEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGE, left.Val, right.Val, "ge_F64")
+		return
+	},
+	{Operator: token.SYM_GEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGE, leftFP, right.Val, "ge_I64_F64")
+		return
+	},
+	{Operator: token.SYM_GEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFCmp(llvm.FloatUGE, rightFP, right.Val, "ge_F64_I64")
+		return
 	},
 
 	// Bitwise AND
-	{Operator: token.SYM_AND, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateAnd(left.Val, right.Val, "and_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_AND, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateAnd(left.Val, right.Val, "and_tmp")
+		return
 	},
 
 	// Bitwise OR
-	{Operator: token.SYM_OR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateOr(left.Val, right.Val, "or_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_OR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateOr(left.Val, right.Val, "or_tmp")
+		return
 	},
 
 	// Bitwise XOR
-	{Operator: token.SYM_XOR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateXor(left.Val, right.Val, "xor_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_XOR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateXor(left.Val, right.Val, "xor_tmp")
+		return
 	},
 
 	// Integer Modulo (Signed)
-	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateSRem(left.Val, right.Val, "srem_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
-	},
-	// Floating-Point Modulo (via fmod)
-	{Operator: token.SYM_MOD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol) Symbol {
 
-		return Symbol{
-			Val:  c.builder.CreateFRem(left.Val, right.Val, "frem_tmp"),
-			Type: Float{Width: 64},
+		s.Val = c.builder.CreateSRem(left.Val, right.Val, "srem_tmp")
+		return
+	},
+
+	// Floating-Point Modulo
+	{Operator: token.SYM_MOD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFRem(left.Val, right.Val, "frem_tmp")
+		return
+	},
+	{Operator: token.SYM_MOD, LeftType: I64, RightType: F64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = right.Type
+		if !compile {
+			return
+		}
+
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFRem(leftFP, right.Val, "frem_if_tmp")
+		return
+	},
+	{Operator: token.SYM_MOD, LeftType: F64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
+		}
+
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFRem(left.Val, rightFP, "frem_fi_tmp")
+		return
 	},
 
 	// Left Shift
-	{Operator: token.SYM_SHL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateShl(left.Val, right.Val, "shl_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_SHL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateShl(left.Val, right.Val, "shl_tmp")
+		return
 	},
 
 	// Arithmetic Right Shift (Signed)
-	{Operator: token.SYM_ASR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_ASR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateAShr(left.Val, right.Val, "ashr_tmp")
+		return
 	},
 
 	// Logical Right Shift
-	{Operator: token.SYM_SHR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_SHR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right Symbol, compile bool) (s Symbol) {
+		s.Type = left.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp")
+		return
 	},
 }
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	// Unary Minus (-)
-	{Operator: token.SYM_SUB, OperandType: I64}: func(c *Compiler, operand Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateNeg(operand.Val, "neg_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_SUB, OperandType: I64}: func(c *Compiler, operand Symbol, compile bool) (s Symbol) {
+		s.Type = operand.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateNeg(operand.Val, "neg_tmp")
+		return
 	},
-	{Operator: token.SYM_SUB, OperandType: F64}: func(c *Compiler, operand Symbol) Symbol {
-		return Symbol{
-			Val:  c.builder.CreateFNeg(operand.Val, "fneg_tmp"),
-			Type: Float{Width: 64},
+	{Operator: token.SYM_SUB, OperandType: F64}: func(c *Compiler, operand Symbol, compile bool) (s Symbol) {
+		s.Type = operand.Type
+		if !compile {
+			return
 		}
+
+		s.Val = c.builder.CreateFNeg(operand.Val, "fneg_tmp")
+		return
 	},
 
 	// Bitwise NOT
-	{Operator: token.SYM_TILDE, OperandType: I64}: func(c *Compiler, operand Symbol) Symbol {
-		allOnes := llvm.ConstAllOnes(c.Context.Int64Type())
-		return Symbol{
-			Val:  c.builder.CreateXor(operand.Val, allOnes, "not_tmp"),
-			Type: Int{Width: 64},
+	{Operator: token.SYM_TILDE, OperandType: I64}: func(c *Compiler, operand Symbol, compile bool) (s Symbol) {
+		s.Type = operand.Type
+		if !compile {
+			return
 		}
+
+		allOnes := llvm.ConstAllOnes(c.Context.Int64Type())
+		s.Val = c.builder.CreateXor(operand.Val, allOnes, "not_tmp")
+		return
 	},
 
 	// Logical NOT
-	{Operator: token.SYM_BANG, OperandType: I64}: func(c *Compiler, operand Symbol) Symbol {
+	{Operator: token.SYM_BANG, OperandType: I64}: func(c *Compiler, operand Symbol, compile bool) (s Symbol) {
+		s.Type = operand.Type
+		if !compile {
+			return
+		}
+
 		zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
 		cmp := c.builder.CreateICmp(llvm.IntEQ, operand.Val, zero, "not_cmp")
-		return Symbol{
-			Val:  c.builder.CreateZExt(cmp, c.Context.Int64Type(), "not_bool"),
-			Type: Int{Width: 64},
-		}
+		s.Val = c.builder.CreateZExt(cmp, c.Context.Int64Type(), "not_bool")
+		return
 	},
+}
+
+// float = float ÷ float via truncation
+// floatQuo assumes left and right are both of type F64
+func floatQuo(c *Compiler, left, right llvm.Value) llvm.Value {
+	div := c.builder.CreateFDiv(left, right, "fdiv_tmp")
+	// get or declare the llvm.trunc.f64 intrinsic
+	truncType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType()}, false)
+	truncFn := c.Module.NamedFunction("llvm.trunc.f64")
+	if truncFn.IsNil() {
+		truncFn = llvm.AddFunction(c.Module, "llvm.trunc.f64", truncType)
+	}
+
+	return c.builder.CreateCall(truncType, truncFn, []llvm.Value{div}, "trunc_tmp")
+}
+
+// floatExp assumes left and right are both of type F64
+func floatExp(c *Compiler, left, right llvm.Value) llvm.Value {
+	// Register exponentiation operator for float values.
+	powType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType(), c.Context.DoubleType()}, false)
+	powFunc := c.Module.NamedFunction("llvm.pow.f64")
+	if powFunc.IsNil() {
+		powFunc = llvm.AddFunction(c.Module, "llvm.pow.f64", powType)
+	}
+	return c.builder.CreateCall(powType, powFunc, []llvm.Value{left, right}, "pow_tmp")
 }
