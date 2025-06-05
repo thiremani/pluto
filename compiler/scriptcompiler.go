@@ -20,21 +20,17 @@ func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program
 func (sc *ScriptCompiler) Compile() {
 	// Create main function
 	c := sc.Compiler
-	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
-	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
-	mainBlock := c.Context.AddBasicBlock(mainFunc, "entry")
-	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
+	// first run to get types, run checks etc.
+	for _, stmt := range sc.Program.Statements {
+		c.doStatement(stmt, false)
+	}
 
 	// Compile all statements
+	c.addMain()
 	for _, stmt := range sc.Program.Statements {
-		switch s := stmt.(type) {
-		case *ast.LetStatement:
-			c.compileLetStatement(s, mainFunc)
-		case *ast.PrintStatement:
-			c.compilePrintStatement(s)
-		}
+		c.doStatement(stmt, true)
 	}
 
 	// Add explicit return 0
-	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
+	c.addRet()
 }

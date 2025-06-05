@@ -28,6 +28,21 @@ func formatSpecifierEnd(ch rune) bool {
 		ch == '%'
 }
 
+// defaultSpecifier returns the printf conversion specifier for a given type.
+func defaultSpecifier(t Type) string {
+	switch t.Kind() {
+	case IntKind:
+		return "%ld"
+	case FloatKind:
+		return "%.15g"
+	case StrKind:
+		return "%s"
+	default:
+		err := "unsupported type in print statement " + t.String()
+		panic(err)
+	}
+}
+
 // parseSpecifier assumes runes[start] == '%'
 // for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
 // these are then returned as specIds. (-identifier) is replaced with *
@@ -103,16 +118,16 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 	var builder strings.Builder
 	mainId := ids[0]
 	// Look up the identifier in the symbol table.
-	if sym, ok := c.Symbols[mainId]; ok {
-		sym = c.derefIfPointer(sym)
+	if sym, ok := c.Get(mainId); ok {
+		sym = c.derefIfPointer(sym, true)
 		// Use the custom specifier if provided; otherwise, use the default.
 		for _, specId := range ids[1:] {
-			var specSym Symbol
+			var specSym *Symbol
 			var exists bool
-			if specSym, exists = c.Symbols[specId]; !exists {
+			if specSym, exists = c.Get(specId); !exists {
 				panic(fmt.Sprintf("Identifier %s not found within specifier. Specifier was after identifier %s", specId, mainId))
 			}
-			idArgs = append(idArgs, c.derefIfPointer(specSym).Val)
+			idArgs = append(idArgs, c.derefIfPointer(specSym, true).Val)
 		}
 
 		// if customSpec is either "" or %% it must be written later anyway. %% must be written as is.
@@ -122,8 +137,8 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 		builder.WriteString(customSpec)
 		formattedStr = builder.String()
 		if len(customSpec) > 0 && customSpec[len(customSpec)-1] == 'n' {
-			c.promoteToMemory(mainId)
-			idArgs = append(idArgs, c.Symbols[mainId].Val)
+			s := c.promoteToMemory(mainId)
+			idArgs = append(idArgs, s.Val)
 			return
 		}
 		idArgs = append(idArgs, sym.Val)

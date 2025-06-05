@@ -6,7 +6,7 @@ const (
 	ON      = "$.$" // for the on keyword that separates func args from attr arguments
 )
 
-func mangle(funcName string, args []Symbol) string {
+func mangle(funcName string, args []*Symbol) string {
 	mangledName := PREFIX + funcName
 	for i := 0; i < len(args); i++ {
 		mangledName += PREFIX + args[i].Type.String()
