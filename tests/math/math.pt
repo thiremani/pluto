@@ -4,5 +4,9 @@ answer = 42
 greeting = "hello"
 
 # define a generic “square” function
-y = square(x)
+res = square(x)
     res = x * x
+
+quo, rem = div(dividend, divisor)
+    quo = dividend ÷ divisor
+    rem = dividend % divisor
