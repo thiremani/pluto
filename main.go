@@ -181,6 +181,7 @@ func genBinary(scriptLL, bin, cacheDir, cwd string) error {
 		objFile,
 		"-o",
 		binFile,
+		"-lm", // link against the standard math library
 	)
 
 	// Link executable (with dead code elimination)
