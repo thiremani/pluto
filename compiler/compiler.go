@@ -641,12 +641,13 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangl
 	for i, param := range fn.Parameters {
 		arg := args[i]
 		paramVal := function.Param(i + 1)
-		alloca := c.createEntryBlockAlloca(c.mapToLLVMType(arg.Type), param.Value)
-		c.createStore(paramVal, alloca, arg.Type)
+		paramVal.SetName(param.Value) // Good practice to name the LLVM value
 
+		// Put the parameter directly into the symbol table as a VALUE, not a pointer.
+		// Parameters in Pluto are assumed to be read-only, so it doesn't need a memory slot.
 		c.Put(param.Value, &Symbol{
-			Val:  alloca,
-			Type: Pointer{Elem: arg.Type},
+			Val:  paramVal,
+			Type: arg.Type,
 		})
 	}
 
