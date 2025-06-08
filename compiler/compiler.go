@@ -691,7 +691,7 @@ func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[
 
 		}
 		if s.Type != o.Type {
-			panic(fmt.Sprintf("Cannot change type of variable! Type before entering function %s: %s. Type after entering: %s", fn.Token.Literal, s.Type, o.Type))
+			panic(fmt.Sprintf("Cannot change type of variable! Type before entering function %s: %s. Type after entering: %s. Variable name: %s", fn.Token.Literal, s.Type, o.Type, id.Value))
 		}
 	}
 

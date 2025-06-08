@@ -25,6 +25,8 @@ func (sc *ScriptCompiler) Compile() {
 		c.doStatement(stmt, false)
 	}
 
+	// reset symbol table
+	c.Scopes = []Scope{NewScope(FuncScope)}
 	// Compile all statements
 	c.addMain()
 	for _, stmt := range sc.Program.Statements {
