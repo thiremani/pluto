@@ -174,28 +174,14 @@ func (c *Compiler) doStatement(stmt ast.Statement, compile bool) {
 }
 
 // does conditional assignment
-func (c *Compiler) doCondAssign(stmt *ast.LetStatement, cond llvm.Value, trueSymbols map[string]*Symbol) {
-	// This map will hold the symbols before the conditional
-	prevSymbols := make(map[string]*Symbol)
-
-	// possibly promote values to memory if trueSym is a pointer
-	for _, ident := range stmt.Name {
-		name := ident.Value
-		trueSym := trueSymbols[name]
-		prevSym, ok := c.Get(ident.Value)
-		if !ok {
-			prevSym = &Symbol{
-				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
-				Type: Int{Width: 64},
-			}
-			c.Put(name, prevSym)
+func (c *Compiler) doCondStatement(stmt *ast.LetStatement, cond llvm.Value, compile bool) {
+	if !compile {
+		syms := []*Symbol{}
+		for _, expr := range stmt.Value {
+			syms = append(syms, c.doExpression(expr, compile)...)
 		}
-		prevSymbols[name] = prevSym
-
-		if trueSym.Type.Kind() == PointerKind {
-			// promoteToMemory does nothing if it is already in memory
-			c.promoteToMemory(name)
-		}
+		c.inferStatementTypes(stmt, syms)
+		return
 	}
 
 	fn := c.builder.GetInsertBlock().Parent()
@@ -205,17 +191,47 @@ func (c *Compiler) doCondAssign(stmt *ast.LetStatement, cond llvm.Value, trueSym
 
 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 	c.builder.SetInsertPointAtEnd(ifBlock)
+	trueSymbols := []*Symbol{}
+	for _, expr := range stmt.Value {
+		trueSymbols = append(trueSymbols, c.doExpression(expr, compile)...)
+	}
+
+	// This list will hold the symbols before the conditional
+	prevSymbols := []*Symbol{}
+
+	// possibly promote values to memory if trueSym is a pointer
+	for i, ident := range stmt.Name {
+		name := ident.Value
+		trueSym := trueSymbols[i]
+		prevSym, ok := c.Get(ident.Value)
+		if !ok {
+			prevSym = &Symbol{
+				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
+				Type: Int{Width: 64},
+			}
+			c.Put(name, prevSym)
+		}
+		prevSymbols = append(prevSymbols, prevSym)
+
+		if trueSym.Type.Kind() == PointerKind {
+			// promoteToMemory does nothing if it is already in memory
+			// do not set prevSym to newly allocated memory as it is already a ready value
+			// otherwise it would need an unnecessary store and load
+			c.promoteToMemory(name)
+		}
+	}
+
 	c.builder.CreateBr(contBlock)
 	c.builder.SetInsertPointAtEnd(elseBlock)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
-	for _, ident := range stmt.Name {
+	for i, ident := range stmt.Name {
 		// Look up the existing symbol to get its custom type.
 		name := ident.Value
 		finalSym, _ := c.Get(name)
-		prevSym := prevSymbols[name]
-		trueSym := trueSymbols[name]
+		prevSym := prevSymbols[i]
+		trueSym := trueSymbols[i]
 
 		if finalSym.Type.Kind() == PointerKind {
 			addr := finalSym.Val
@@ -254,14 +270,40 @@ func (c *Compiler) doCondAssign(stmt *ast.LetStatement, cond llvm.Value, trueSym
 	}
 }
 
-func (c *Compiler) doLetStatement(stmt *ast.LetStatement, compile bool) {
-	cond, hasConditions := c.doConditions(stmt, compile)
-
+func (c *Compiler) doSimpleStatement(stmt *ast.LetStatement, compile bool) {
 	syms := []*Symbol{}
 	for _, expr := range stmt.Value {
 		syms = append(syms, c.doExpression(expr, compile)...)
 	}
 
+	if !compile {
+		c.inferStatementTypes(stmt, syms)
+		return
+	}
+
+	for i, ident := range stmt.Name {
+		name := ident.Value
+		// This is the new symbol from the right-hand side. It should represent a pure value.
+		newRhsSymbol := syms[i]
+
+		// Check if the variable on the LEFT-hand side (`name`) already exists
+		// and if it represents a memory location (a pointer).
+		if lhsSymbol, ok := c.Get(name); ok && lhsSymbol.Type.Kind() == PointerKind {
+			// CASE A: Storing to an existing memory location.
+			// Example: `res = x * x` where `res` is a function output pointer.
+
+			// `newRhsSymbol.Val` is the value to store (e.g., the result of `x * x`).
+			// `lhsSymbol.Val` is the pointer to the memory location for `res`.
+			// `newRhsSymbol.Type` is the type of the value being stored.
+			c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
+			continue
+		}
+
+		c.Put(name, newRhsSymbol)
+	}
+}
+
+func (c *Compiler) inferStatementTypes(stmt *ast.LetStatement, syms []*Symbol) {
 	if len(stmt.Name) != len(syms) {
 		panic(fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d", len(stmt.Name), len(syms)))
 	}
@@ -273,37 +315,19 @@ func (c *Compiler) doLetStatement(stmt *ast.LetStatement, compile bool) {
 
 	// wait for true values to be put in c.Scopes above so they have types
 	// TODO check type of variable has not changed
-	if !compile {
-		c.PutBulk(trueValues)
-		return
-	}
+	c.PutBulk(trueValues)
+}
+
+func (c *Compiler) doLetStatement(stmt *ast.LetStatement, compile bool) {
+	cond, hasConditions := c.doConditions(stmt, compile)
 
 	// TODO check type of variable has not changed
 	if !hasConditions {
-		for i, ident := range stmt.Name {
-			name := ident.Value
-			// This is the new symbol from the right-hand side. It should represent a pure value.
-			newRhsSymbol := syms[i]
-
-			// Check if the variable on the LEFT-hand side (`name`) already exists
-			// and if it represents a memory location (a pointer).
-			if lhsSymbol, ok := c.Get(name); ok && lhsSymbol.Type.Kind() == PointerKind {
-				// CASE A: Storing to an existing memory location.
-				// Example: `res = x * x` where `res` is a function output pointer.
-
-				// `newRhsSymbol.Val` is the value to store (e.g., the result of `x * x`).
-				// `lhsSymbol.Val` is the pointer to the memory location for `res`.
-				// `newRhsSymbol.Type` is the type of the value being stored.
-				c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
-				continue
-			}
-
-			c.Put(name, newRhsSymbol)
-		}
+		c.doSimpleStatement(stmt, compile)
 		return
 	}
 
-	c.doCondAssign(stmt, cond, trueValues)
+	c.doCondStatement(stmt, cond, compile)
 }
 
 // if compile bool is false, we only return symbol with type info. This is used for type inference
