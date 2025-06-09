@@ -679,16 +679,6 @@ func (c *Compiler) inferOutTypes(fn *ast.FuncStatement, outputs map[string]*Symb
 }
 
 func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[string]*Symbol {
-	outputs := make(map[string]*Symbol)
-	// see if there are any write args already in outer scope
-	for _, id := range fn.Outputs {
-		if s, ok := c.Get(id.Value); ok {
-			writeArg := GetCopy(s)
-			writeArg.FuncArg = true
-			writeArg.ReadOnly = false
-			outputs[id.Value] = writeArg
-		}
-	}
 	c.PushScope(FuncScope)
 	defer c.PopScope()
 
@@ -698,12 +688,12 @@ func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[
 		readArg.ReadOnly = true
 		c.Put(id.Value, readArg)
 	}
-	c.PutBulk(outputs)
 
 	for _, stmt := range fn.Body.Statements {
 		c.doStatement(stmt, false)
 	}
 
+	outputs := make(map[string]*Symbol)
 	for i, id := range fn.Outputs {
 		s, ok := c.Get(id.Value)
 		if !ok {

@@ -7,8 +7,8 @@ z
 
 dividend = 17
 divisor = 6
-q1, r1 = div(dividend, divisor)
-q1, r1
+quo, rem = div(dividend, divisor)
+quo, rem
 
 q2, r2 = div(dividend, 2.3)
 q2, r2
