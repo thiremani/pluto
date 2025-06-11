@@ -8,8 +8,24 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+type Symbol struct {
+	Val      llvm.Value
+	Type     Type
+	FuncArg  bool
+	ReadOnly bool
+}
+
+func GetCopy(s *Symbol) (newSym *Symbol) {
+	newSym = &Symbol{}
+	newSym.Val = s.Val
+	newSym.Type = s.Type
+	newSym.FuncArg = s.FuncArg
+	newSym.ReadOnly = s.ReadOnly
+	return newSym
+}
+
 type Compiler struct {
-	Scopes        []Scope
+	Scopes        []Scope[*Symbol]
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
@@ -23,7 +39,7 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
-		Scopes:        []Scope{NewScope(FuncScope)},
+		Scopes:        []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
 		Context:       ctx,
 		Module:        module,
 		builder:       builder,
@@ -121,7 +137,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
-		c.Put(name, sym)
+		Put(c.Scopes, name, sym)
 	}
 }
 
@@ -203,13 +219,13 @@ func (c *Compiler) doCondStatement(stmt *ast.LetStatement, cond llvm.Value, comp
 	for i, ident := range stmt.Name {
 		name := ident.Value
 		trueSym := trueSymbols[i]
-		prevSym, ok := c.Get(ident.Value)
+		prevSym, ok := Get(c.Scopes, ident.Value)
 		if !ok {
 			prevSym = &Symbol{
 				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
 				Type: Int{Width: 64},
 			}
-			c.Put(name, prevSym)
+			Put(c.Scopes, name, prevSym)
 		}
 		prevSymbols = append(prevSymbols, prevSym)
 
@@ -229,7 +245,7 @@ func (c *Compiler) doCondStatement(stmt *ast.LetStatement, cond llvm.Value, comp
 	for i, ident := range stmt.Name {
 		// Look up the existing symbol to get its custom type.
 		name := ident.Value
-		finalSym, _ := c.Get(name)
+		finalSym, _ := Get(c.Scopes, name)
 		prevSym := prevSymbols[i]
 		trueSym := trueSymbols[i]
 
@@ -266,7 +282,7 @@ func (c *Compiler) doCondStatement(stmt *ast.LetStatement, cond llvm.Value, comp
 			},
 			[]llvm.BasicBlock{ifBlock, elseBlock},
 		)
-		c.Put(ident.Value, &Symbol{Val: phi, Type: trueSym.Type})
+		Put(c.Scopes, ident.Value, &Symbol{Val: phi, Type: trueSym.Type})
 	}
 }
 
@@ -288,7 +304,7 @@ func (c *Compiler) doSimpleStatement(stmt *ast.LetStatement, compile bool) {
 
 		// Check if the variable on the LEFT-hand side (`name`) already exists
 		// and if it represents a memory location (a pointer).
-		if lhsSymbol, ok := c.Get(name); ok && lhsSymbol.Type.Kind() == PointerKind {
+		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PointerKind {
 			// CASE A: Storing to an existing memory location.
 			// Example: `res = x * x` where `res` is a function output pointer.
 
@@ -299,7 +315,7 @@ func (c *Compiler) doSimpleStatement(stmt *ast.LetStatement, compile bool) {
 			continue
 		}
 
-		c.Put(name, newRhsSymbol)
+		Put(c.Scopes, name, newRhsSymbol)
 	}
 }
 
@@ -315,7 +331,7 @@ func (c *Compiler) inferStatementTypes(stmt *ast.LetStatement, syms []*Symbol) {
 
 	// wait for true values to be put in c.Scopes above so they have types
 	// TODO check type of variable has not changed
-	c.PutBulk(trueValues)
+	PutBulk(c.Scopes, trueValues)
 }
 
 func (c *Compiler) doLetStatement(stmt *ast.LetStatement, compile bool) {
@@ -398,7 +414,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 // converts it into a memory-backed variable, and updates the symbol table.
 // This is a high-level operation with an intentional side effect on the compiler's state.
 func (c *Compiler) promoteToMemory(name string) *Symbol {
-	sym, ok := c.Get(name)
+	sym, ok := Get(c.Scopes, name)
 	if !ok {
 		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
@@ -420,7 +436,7 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 
 	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
 	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
-	c.Put(name, newPtrSymbol)
+	Put(c.Scopes, name, newPtrSymbol)
 	return newPtrSymbol
 }
 
@@ -469,7 +485,7 @@ func (c *Compiler) derefIfPointer(s *Symbol, compile bool) *Symbol {
 
 // if compile is false, we only return symbol with type info. This is used for type inference
 func (c *Compiler) doIdentifier(ident *ast.Identifier, compile bool) *Symbol {
-	if s, ok := c.Get(ident.Value); ok {
+	if s, ok := Get(c.Scopes, ident.Value); ok {
 		return c.derefIfPointer(s, compile)
 	}
 
@@ -477,7 +493,7 @@ func (c *Compiler) doIdentifier(ident *ast.Identifier, compile bool) *Symbol {
 		panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 	}
 	cc := c.CodeCompiler.Compiler
-	if s, ok := cc.Get(ident.Value); ok {
+	if s, ok := Get(cc.Scopes, ident.Value); ok {
 		return c.derefIfPointer(s, compile)
 	}
 
@@ -489,7 +505,7 @@ func (c *Compiler) doInfixExpression(expr *ast.InfixExpression, compile bool) (r
 	left := c.doExpression(expr.Left, compile)
 	right := c.doExpression(expr.Right, compile)
 	if len(left) != len(right) {
-		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left: %d. Right: %d", len(left), len(right)))
+		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d", expr.Left, len(left), expr.Right, len(right)))
 	}
 
 	// Build a key based on the operator literal and the operand types.
@@ -622,8 +638,8 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 }
 
 func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangled string, retStruct llvm.Type, function llvm.Value) {
-	c.PushScope(FuncScope)
-	defer c.PopScope()
+	PushScope(&c.Scopes, FuncScope)
+	defer PopScope(&c.Scopes)
 
 	sretPtr := function.Param(0)
 
@@ -632,7 +648,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangl
 
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
 
-		c.Put(outIdent.Value, &Symbol{
+		Put(c.Scopes, outIdent.Value, &Symbol{
 			Val:  fieldPtr,
 			Type: Pointer{Elem: outType},
 		})
@@ -645,7 +661,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangl
 
 		// Put the parameter directly into the symbol table as a VALUE, not a pointer.
 		// Parameters in Pluto are assumed to be read-only, so it doesn't need a memory slot.
-		c.Put(param.Value, &Symbol{
+		Put(c.Scopes, param.Value, &Symbol{
 			Val:  paramVal,
 			Type: arg.Type,
 		})
@@ -664,6 +680,36 @@ func (c *Compiler) doFuncStatement(fn *ast.FuncStatement, args []*Symbol, mangle
 
 }
 
+func (c *Compiler) inferFuncOutputTypes(ce *ast.CallExpression, args []*Symbol, mangled string) []Type {
+	if ft, ok := c.FuncCache[mangled]; ok && ft.AllTypesInferred() {
+		return ft.Outputs
+	}
+
+	fk := ast.FuncKey{
+		FuncName: ce.Function.Value,
+		Arity:    len(args),
+	}
+
+	code := c.CodeCompiler.Code
+	template, ok := code.Func.Map[fk]
+	if !ok {
+		panic(fmt.Sprintf("undefined function! Name: %s. Arity (num args): %d", ce.Function.Value, len(args)))
+	}
+
+	ft := &Func{
+		Name: ce.Function.Value,
+	}
+
+	for _, arg := range args {
+		ft.Params = append(ft.Params, arg.Type)
+	}
+
+	// create a queue for functions the function calls
+	// we assume inferTypesInBlock caches the function in FuncCache
+	outputs := c.inferTypesInBlock(template, args)
+	return c.inferOutTypes(template, outputs)
+}
+
 // inferOutTypes assumes the all block LetStatements have been walked
 // and assumes types are in Types SymTable
 func (c *Compiler) inferOutTypes(fn *ast.FuncStatement, outputs map[string]*Symbol) []Type {
@@ -679,14 +725,14 @@ func (c *Compiler) inferOutTypes(fn *ast.FuncStatement, outputs map[string]*Symb
 }
 
 func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[string]*Symbol {
-	c.PushScope(FuncScope)
-	defer c.PopScope()
+	PushScope(&c.Scopes, FuncScope)
+	defer PopScope(&c.Scopes)
 
 	for i, id := range fn.Parameters {
 		readArg := GetCopy(args[i])
 		readArg.FuncArg = true
 		readArg.ReadOnly = true
-		c.Put(id.Value, readArg)
+		Put(c.Scopes, id.Value, readArg)
 	}
 
 	for _, stmt := range fn.Body.Statements {
@@ -695,7 +741,7 @@ func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[
 
 	outputs := make(map[string]*Symbol)
 	for i, id := range fn.Outputs {
-		s, ok := c.Get(id.Value)
+		s, ok := Get(c.Scopes, id.Value)
 		if !ok {
 			panic(fmt.Sprintf("Could not infer type of output for function %s. Output arg index: %d. arg name: %s", fn.Token.Literal, i, id.Value))
 		}

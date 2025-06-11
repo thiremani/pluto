@@ -12,8 +12,6 @@ type opKey struct {
 	RightType string
 }
 
-// compiler/operators.go
-
 type unaryOpKey struct {
 	Operator    string
 	OperandType string

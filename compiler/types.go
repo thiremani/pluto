@@ -8,7 +8,8 @@ import (
 type Kind int
 
 const (
-	IntKind Kind = iota
+	UnresolvedKind Kind = iota
+	IntKind
 	UintKind
 	FloatKind
 	PointerKind
@@ -27,6 +28,11 @@ type Type interface {
 	String() string
 	Kind() Kind
 }
+
+type Unresolved struct{}
+
+func (u Unresolved) Kind() Kind     { return UnresolvedKind }
+func (u Unresolved) String() string { return "?" } // or "Unresolved"
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -95,6 +101,15 @@ func (f Func) Kind() Kind {
 	return FuncKind
 }
 
+func (f Func) AllTypesInferred() bool {
+	for _, ot := range f.Outputs {
+		if ot.Kind() == UnresolvedKind {
+			return false
+		}
+	}
+	return true
+}
+
 // Array represents an array type with a fixed length.
 type Array struct {
 	Elem   Type // Element type
@@ -102,7 +117,7 @@ type Array struct {
 }
 
 func (a Array) String() string {
-	return fmt.Sprintf("[%s] * %d", a.Elem.String(), a.Length)
+	return fmt.Sprintf("%d * [%s]", a.Length, a.Elem.String())
 }
 
 func (a Array) Kind() Kind {

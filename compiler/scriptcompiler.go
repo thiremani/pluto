@@ -18,16 +18,15 @@ func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program
 }
 
 func (sc *ScriptCompiler) Compile() {
-	// Create main function
 	c := sc.Compiler
-	// first run to get types, run checks etc.
+
 	for _, stmt := range sc.Program.Statements {
 		c.doStatement(stmt, false)
 	}
 
 	// reset symbol table
-	c.Scopes = []Scope{NewScope(FuncScope)}
-	// Compile all statements
+	c.Scopes = []Scope[*Symbol]{NewScope[*Symbol](FuncScope)}
+	// Create main function
 	c.addMain()
 	for _, stmt := range sc.Program.Statements {
 		c.doStatement(stmt, true)

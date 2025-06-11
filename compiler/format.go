@@ -118,13 +118,13 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 	var builder strings.Builder
 	mainId := ids[0]
 	// Look up the identifier in the symbol table.
-	if sym, ok := c.Get(mainId); ok {
+	if sym, ok := Get(c.Scopes, mainId); ok {
 		sym = c.derefIfPointer(sym, true)
 		// Use the custom specifier if provided; otherwise, use the default.
 		for _, specId := range ids[1:] {
 			var specSym *Symbol
 			var exists bool
-			if specSym, exists = c.Get(specId); !exists {
+			if specSym, exists = Get(c.Scopes, specId); !exists {
 				panic(fmt.Sprintf("Identifier %s not found within specifier. Specifier was after identifier %s", specId, mainId))
 			}
 			idArgs = append(idArgs, c.derefIfPointer(specSym, true).Val)
