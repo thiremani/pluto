@@ -1,15 +1,20 @@
 package compiler
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Kind int
 
 const (
-	IntKind Kind = iota
+	UnresolvedKind Kind = iota
+	IntKind
 	UintKind
 	FloatKind
 	PointerKind
 	StrKind
+	FuncKind
 	ArrayKind
 )
 
@@ -23,6 +28,11 @@ type Type interface {
 	String() string
 	Kind() Kind
 }
+
+type Unresolved struct{}
+
+func (u Unresolved) Kind() Kind     { return UnresolvedKind }
+func (u Unresolved) String() string { return "?" } // or "Unresolved"
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -77,6 +87,29 @@ func (s Str) Kind() Kind {
 	return StrKind
 }
 
+type Func struct {
+	Name    string
+	Params  []Type
+	Outputs []Type
+}
+
+func (f Func) String() string {
+	return fmt.Sprintf("%s = %s(%s)", typesStr(f.Outputs), f.Name, typesStr(f.Params))
+}
+
+func (f Func) Kind() Kind {
+	return FuncKind
+}
+
+func (f Func) AllTypesInferred() bool {
+	for _, ot := range f.Outputs {
+		if ot.Kind() == UnresolvedKind {
+			return false
+		}
+	}
+	return true
+}
+
 // Array represents an array type with a fixed length.
 type Array struct {
 	Elem   Type // Element type
@@ -84,9 +117,39 @@ type Array struct {
 }
 
 func (a Array) String() string {
-	return fmt.Sprintf("[%s] * %d", a.Elem.String(), a.Length)
+	return fmt.Sprintf("%d * [%s]", a.Length, a.Elem.String())
 }
 
 func (a Array) Kind() Kind {
 	return ArrayKind
+}
+
+func typesStr(types []Type) string {
+	if len(types) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, t := range types {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(t.String())
+	}
+	return sb.String()
+}
+
+// Checks if two type arrays are equal
+// Be careful with Unresolved types
+func EqualTypes(left []Type, right []Type) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for i, l := range left {
+		if l.String() != right[i].String() {
+			return false
+		}
+	}
+
+	return true
 }

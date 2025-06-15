@@ -1,5 +1,5 @@
 pi, greeting
-x = answer
+x = answer + 0.0
 x = x + 5 + pi
 y = 0.5g*100
 x, 2x, x / e

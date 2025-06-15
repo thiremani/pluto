@@ -2,24 +2,36 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"strings"
+
+	"github.com/thiremani/pluto/ast"
 	"tinygo.org/x/go-llvm"
 )
 
 type Symbol struct {
-	Val  llvm.Value
-	Type Type
+	Val      llvm.Value
+	Type     Type
+	FuncArg  bool
+	ReadOnly bool
+}
+
+func GetCopy(s *Symbol) (newSym *Symbol) {
+	newSym = &Symbol{}
+	newSym.Val = s.Val
+	newSym.Type = s.Type
+	newSym.FuncArg = s.FuncArg
+	newSym.ReadOnly = s.ReadOnly
+	return newSym
 }
 
 type Compiler struct {
-	Symbols       map[string]Symbol
+	Scopes        []Scope[*Symbol]
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
 	formatCounter int           // Track unique format strings
 	CodeCompiler  *CodeCompiler // Optional reference for script compilation
+	FuncCache     map[string]*Func
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -27,12 +39,13 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
-		Symbols:       make(map[string]Symbol),
+		Scopes:        []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
 		Context:       ctx,
 		Module:        module,
 		builder:       builder,
 		formatCounter: 0,
 		CodeCompiler:  cc,
+		FuncCache:     make(map[string]*Func),
 	}
 }
 
@@ -103,7 +116,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		name := stmt.Name[i].Value
 		valueExpr := stmt.Value[i]
 		linkage := llvm.ExternalLinkage
-		sym := Symbol{}
+		sym := &Symbol{}
 		var val llvm.Value
 
 		switch v := valueExpr.(type) {
@@ -124,123 +137,232 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
-		c.Symbols[name] = sym
+		Put(c.Scopes, name, sym)
 	}
 }
 
-func (c *Compiler) compileLetStatement(stmt *ast.LetStatement, fn llvm.Value) {
-	// Handle unconditional assignments (no conditions)
-	if len(stmt.Condition) == 0 {
-		// Directly assign values without branching
-		for i, ident := range stmt.Name {
-			c.Symbols[ident.Value] = c.compileExpression(stmt.Value[i])
-		}
-		return // Exit early; no PHI nodes or blocks needed
-	}
-
-	// Capture previous values BEFORE processing the LetStatement
-	prevValues := make(map[string]Symbol)
-	for _, ident := range stmt.Name {
-		if val, exists := c.Symbols[ident.Value]; exists {
-			prevValues[ident.Value] = val // Existing value
-		} else {
-			prevValues[ident.Value] = Symbol{
-				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
-				Type: Int{Width: 64},
-			}
-		}
-	}
-
+func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, hasConditions bool) {
 	// Compile condition
-	var cond llvm.Value
-	for i, expr := range stmt.Condition {
-		condVal := c.compileExpression(expr).Val
-		if i == 0 {
-			cond = condVal
-		} else {
-			cond = c.builder.CreateAnd(cond, condVal, "and_cond")
-		}
+	if len(stmt.Condition) == 0 {
+		hasConditions = false
+		return
 	}
 
-	// Create blocks for conditional flow
-	ifBlock := c.Context.AddBasicBlock(fn, "if_block")
-	elseBlock := c.Context.AddBasicBlock(fn, "else_block")
-	contBlock := c.Context.AddBasicBlock(fn, "cont_block")
+	hasConditions = true
+	for i, expr := range stmt.Condition {
+		condSyms := c.compileExpression(expr)
+		for idx, condSym := range condSyms {
+			if i == 0 && idx == 0 {
+				cond = condSym.Val
+				continue
+			}
+			cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
+		}
+	}
+	return
+}
 
+func (c *Compiler) addMain() {
+	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
+	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
+	mainBlock := c.Context.AddBasicBlock(mainFunc, "entry")
+	c.builder.SetInsertPoint(mainBlock, mainBlock.FirstInstruction())
+}
+
+// adds final return for main exit
+func (c *Compiler) addRet() {
+	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
+}
+
+func (c *Compiler) compileStatement(stmt ast.Statement) {
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		c.compileLetStatement(s)
+	case *ast.PrintStatement:
+		c.compilePrintStatement(s)
+	default:
+		panic(fmt.Sprintf("Cannot handle statement type %T", s))
+	}
+}
+
+// does conditional assignment
+func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, "if")
+	elseBlock := c.Context.AddBasicBlock(fn, "else")
+	contBlock := c.Context.AddBasicBlock(fn, "continue")
 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 
-	// True block: Assign new values if condition is true
-	c.builder.SetInsertPoint(ifBlock, ifBlock.FirstInstruction())
-	trueValues := make(map[string]Symbol)
-	for i, ident := range stmt.Name {
-		trueValues[ident.Value] = c.compileExpression(stmt.Value[i])
+	// Create blocks and branch.
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	ifValues, ifBlockEnd := c.compileIfCond(stmt)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	elseValues, elseBlockEnd := c.compileElseCond(stmt, ifValues)
+	c.builder.CreateBr(contBlock)
+
+	// MERGE the branches.
+	c.compileMergeBlock(stmt, contBlock, ifValues, elseValues, ifBlockEnd, elseBlockEnd)
+
+	// Set the builder's position for the next statement.
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicBlock) {
+	// Populate IF block.
+	ifSymbols := []*Symbol{}
+
+	// compileExpression already derefs any pointers
+	// so don't worry about creating a load here
+	for _, expr := range stmt.Value {
+		ifSymbols = append(ifSymbols, c.compileExpression(expr)...)
 	}
-	c.builder.CreateBr(contBlock)
 
-	// False block: Do NOT assign anything (preserve previous values)
-	c.builder.SetInsertPoint(elseBlock, elseBlock.FirstInstruction())
-	c.builder.CreateBr(contBlock)
+	return ifSymbols, c.builder.GetInsertBlock()
+}
 
-	// Continuation block: Merge new (true) or previous (false) values
-	c.builder.SetInsertPoint(contBlock, contBlock.FirstInstruction())
-	for _, ident := range stmt.Name {
-		// Look up the existing symbol to get its custom type.
-		sym, ok := c.Symbols[ident.Value]
+// ELSE block: pull "previous" symbols from scope and deref pointers
+func (c *Compiler) compileElseCond(stmt *ast.LetStatement, trueSymbols []*Symbol) (elseSyms []*Symbol, elseEnd llvm.BasicBlock) {
+	elseSyms = make([]*Symbol, len(stmt.Name))
+	for i, ident := range stmt.Name {
+		name := ident.Value
+
+		prevSym, ok := Get(c.Scopes, name)
 		if !ok {
-			// Provide a default symbol if the variable hasn't been defined.
-			sym = Symbol{
+			// first time: give a default zero
+			prevSym = &Symbol{
 				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false),
 				Type: Int{Width: 64},
 			}
+			Put(c.Scopes, name, prevSym)
 		}
-		llvmType := c.mapToLLVMType(sym.Type)
-		phi := c.builder.CreatePHI(llvmType, ident.Value+"_phi")
+
+		// Dereference pointers into raw values; if prevSym was an alloca, load it,
+		// otherwise a no-op.
+		elseSyms[i] = c.derefIfPointer(prevSym)
+	}
+	return elseSyms, c.builder.GetInsertBlock()
+}
+
+// MERGE block: build PHIs on the pure value type, then do final store if needed
+func (c *Compiler) compileMergeBlock(
+	stmt *ast.LetStatement,
+	contBlk llvm.BasicBlock,
+	ifSyms, elseSyms []*Symbol,
+	ifEnd, elseEnd llvm.BasicBlock,
+) {
+	// position builder at top of contBlk
+	c.builder.SetInsertPoint(contBlk, contBlk.FirstInstruction())
+
+	// --- Phase 1: create all PHIs first on the value type
+	// the phis MUST be at the top of the block
+	phis := make([]llvm.Value, len(stmt.Name))
+	for i, ident := range stmt.Name {
+		ty := ifSyms[i].Type // both branches must agree
+		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
+	}
+
+	// --- Phase 2: hook them up and do the stores/updates
+	for i, ident := range stmt.Name {
+		name := ident.Value
+		phi := phis[i]
+		ifVal := ifSyms[i].Val
+		elseVal := elseSyms[i].Val
+
+		// sanity
+		if ifVal.IsNil() || elseVal.IsNil() {
+			panic("nil incoming to PHI for " + name)
+		}
+
 		phi.AddIncoming(
-			[]llvm.Value{
-				trueValues[ident.Value].Val, // Value from true block
-				prevValues[ident.Value].Val, // Value from before the LetStatement
-			},
-			[]llvm.BasicBlock{ifBlock, elseBlock},
+			[]llvm.Value{ifVal, elseVal},
+			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
-		c.Symbols[ident.Value] = Symbol{
-			Val:  phi, // Update symbol table
-			Type: sym.Type,
+
+		// if the variable was stack-allocated, store back
+		orig, _ := Get(c.Scopes, name)
+		if ptr, ok := orig.Type.(Pointer); ok {
+			// orig.Val holds the alloca
+			c.createStore(phi, orig.Val, ptr.Elem)
+		} else {
+			// pure SSA: update the symbol to the PHI
+			Put(c.Scopes, name, &Symbol{Val: phi, Type: ifSyms[i].Type})
 		}
 	}
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression) (s Symbol) {
+func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
+	syms := []*Symbol{}
+	for _, expr := range stmt.Value {
+		syms = append(syms, c.compileExpression(expr)...)
+	}
+
+	for i, ident := range stmt.Name {
+		name := ident.Value
+		// This is the new symbol from the right-hand side. It should represent a pure value.
+		newRhsSymbol := syms[i]
+
+		// Check if the variable on the LEFT-hand side (`name`) already exists
+		// and if it represents a memory location (a pointer).
+		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PointerKind {
+			// CASE A: Storing to an existing memory location.
+			// Example: `res = x * x` where `res` is a function output pointer.
+
+			// `newRhsSymbol.Val` is the value to store (e.g., the result of `x * x`).
+			// `lhsSymbol.Val` is the pointer to the memory location for `res`.
+			// `newRhsSymbol.Type` is the type of the value being stored.
+			c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
+			continue
+		}
+
+		Put(c.Scopes, name, newRhsSymbol)
+	}
+}
+
+func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
+	cond, hasConditions := c.compileConditions(stmt)
+	// TODO check type of variable has not changed
+	if !hasConditions {
+		c.compileSimpleStatement(stmt)
+		return
+	}
+
+	c.compileCondStatement(stmt, cond)
+}
+
+// if compile bool is false, we only return symbol with type info. This is used for type inference
+func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
+	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
-		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
 		s.Type = Int{Width: 64}
-		return
+		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
+		res = []*Symbol{s}
 	case *ast.FloatLiteral:
-		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
 		s.Type = Float{Width: 64}
-		return
+		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
+		res = []*Symbol{s}
 	case *ast.StringLiteral:
+		s.Type = Str{}
 		// create a global name for the literal
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-		s.Type = Str{}
-		return
+		res = []*Symbol{s}
 	case *ast.Identifier:
-		s = c.compileIdentifier(e)
-		return
+		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
-		s = c.compileInfixExpression(e)
-		return
+		res = c.compileInfixExpression(e)
 	case *ast.PrefixExpression:
-		s = c.compilePrefixExpression(e)
-		return
+		res = c.compilePrefixExpression(e)
 	case *ast.CallExpression:
-		s = c.compileCallExpression(e)
-		return
+		res = c.compileCallExpression(e)
 	default:
-		panic(fmt.Sprintln("unsupported expression type", e))
+		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
+
+	return
 }
 
 func setInstAlignment(inst llvm.Value, t Type) {
@@ -252,210 +374,280 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
 	case Str:
-		// TODO not sure what this should be
+		// We assume Str is i8* or u8*
+		inst.SetAlignment(8)
+	case Pointer:
+		inst.SetAlignment(8)
 	default:
-		panic("Unsupported pointer element type")
+		panic("Unsupported type for alignment" + typ.String())
 	}
 }
 
-// PromoteToMemory converts a variable that’s currently in a register into one stored in memory.
-// This is needed for supporting the %n specifier (which requires a pointer to the variable).
-func (c *Compiler) promoteToMemory(id string) {
-	var sym Symbol
-	var ok bool
-	if sym, ok = c.Symbols[id]; !ok {
-		panic("Undefined variable: " + id)
+// promoteToMemory takes the name of a variable that currently holds a value,
+// converts it into a memory-backed variable, and updates the symbol table.
+// This is a high-level operation with an intentional side effect on the compiler's state.
+func (c *Compiler) promoteToMemory(name string) *Symbol {
+	sym, ok := Get(c.Scopes, name)
+	if !ok {
+		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
 
-	// Get the current basic block and its function.
-	currentBlock := c.builder.GetInsertBlock()
-	fn := currentBlock.Parent()
-
-	// Get the function’s entry block.
-	entryBlock := fn.EntryBasicBlock()
-
-	// Save the current insertion point by remembering the current block.
-	// Now, set the insertion point to the beginning of the entry block.
-	// We choose the first non-PHI instruction so that we don’t disturb PHI nodes.
-	firstInst := entryBlock.FirstInstruction()
-	if !firstInst.IsNil() {
-		c.builder.SetInsertPointBefore(firstInst)
-	} else {
-		c.builder.SetInsertPointAtEnd(entryBlock)
+	if sym.Type.Kind() == PointerKind {
+		return sym
 	}
 
-	// Create the alloca in the entry block. This will allocate space for the variable.
-	alloca := c.builder.CreateAlloca(c.mapToLLVMType(sym.Type), id)
+	// Create a memory slot (alloca) in the function's entry block.
+	// The type of the memory slot is the type of the value we're storing.
+	alloca := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name+".mem")
+	c.createStore(sym.Val, alloca, sym.Type)
 
-	// Restore the insertion point to the original basic block.
-	c.builder.SetInsertPointAtEnd(currentBlock)
-
-	// Store the current register value into the newly allocated memory.
-	storeInst := c.builder.CreateStore(sym.Val, alloca)
-	// Set the alignment on the store to match the alloca.
-	setInstAlignment(storeInst, sym.Type)
-
-	// Update your symbol table here if needed so that the variable now refers to "alloca".
-	c.Symbols[id] = Symbol{
+	// Create the new symbol that represents the pointer to this memory.
+	newPtrSymbol := &Symbol{
 		Val:  alloca,
 		Type: Pointer{Elem: sym.Type},
 	}
+
+	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
+	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
+	Put(c.Scopes, name, newPtrSymbol)
+	return newPtrSymbol
 }
 
-func (c *Compiler) derefIfPointer(s Symbol) Symbol {
-	if s.Type.Kind() == PointerKind {
-		ptr := s.Type.(Pointer)
-		// Load the pointer value
-		loadInst := c.builder.CreateLoad(c.mapToLLVMType(ptr.Elem), s.Val, "")
-		setInstAlignment(loadInst, ptr.Elem)
-		s.Val = loadInst
-		s.Type = ptr.Elem
+// createStore is a simple helper that creates an LLVM store instruction and sets its alignment.
+// It has NO side effects on the Go compiler state or symbols.
+func (c *Compiler) createStore(val llvm.Value, ptr llvm.Value, valType Type) llvm.Value {
+	storeInst := c.builder.CreateStore(val, ptr)
+	setInstAlignment(storeInst, valType)
+	return storeInst
+}
+
+// createLoad is a simple helper that creates an LLVM load instruction and sets its alignment.
+// It has NO side effects on the Go compiler state or symbols.
+// It returns the LLVM value that results from the load.
+func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.Value {
+	loadInst := c.builder.CreateLoad(c.mapToLLVMType(elemType), ptr, name)
+	// The alignment is based on the type of data being loaded from memory.
+	setInstAlignment(loadInst, elemType)
+	return loadInst
+}
+
+// derefIfPointer checks a symbol. If it's a pointer, it returns a NEW symbol
+// representing the value loaded from that pointer. Otherwise, it returns the
+// original symbol unmodified. It has NO side effects.
+func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
+	var ptrType Pointer
+	var ok bool
+	if ptrType, ok = s.Type.(Pointer); !ok {
 		return s
 	}
-	return s
+
+	loadedVal := c.createLoad(s.Val, ptrType.Elem, "_load") // Use our new helper
+
+	// Return a BRAND NEW symbol containing the result of the load.
+	// Copy the symbol if we need other data like is it func arg, read only
+	newS := GetCopy(s)
+	newS.Val = loadedVal
+	newS.Type = ptrType.Elem
+	return newS
 }
 
-func (c *Compiler) compileIdentifier(ident *ast.Identifier) Symbol {
-	if s, ok := c.Symbols[ident.Value]; ok {
+// if compile is false, we only return symbol with type info. This is used for type inference
+func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
+	if s, ok := Get(c.Scopes, ident.Value); ok {
 		return c.derefIfPointer(s)
 	}
 
 	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
 		panic(fmt.Sprintf("undefined variable: %s", ident.Value))
 	}
-	codeSymbols := c.CodeCompiler.Compiler.Symbols
-	if s, ok := codeSymbols[ident.Value]; ok {
+	cc := c.CodeCompiler.Compiler
+	if s, ok := Get(cc.Scopes, ident.Value); ok {
 		return c.derefIfPointer(s)
 	}
 
-	panic(fmt.Sprintf("undefined variable: %s", ident.Value))
+	panic(fmt.Sprintf("undefined variable: %s. Not found in script or code files", ident.Value))
 }
 
-func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (s Symbol) {
+func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
+	res = []*Symbol{}
 	left := c.compileExpression(expr.Left)
 	right := c.compileExpression(expr.Right)
-
-	// Determine types and promote to float if needed
-	leftIsFloat := left.Type.Kind() == FloatKind
-	rightIsFloat := right.Type.Kind() == FloatKind
-
-	if leftIsFloat || rightIsFloat {
-		if !leftIsFloat {
-			left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
-			left.Type = Float{Width: 64}
-		}
-		if !rightIsFloat {
-			right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
-			right.Type = Float{Width: 64}
-		}
-	} else if expr.Operator == token.SYM_DIV || expr.Operator == token.SYM_EXP {
-		// if both types are int, we currently convert both to float for operations / and ^
-		left.Val = c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float")
-		left.Type = Float{Width: 64}
-		right.Val = c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float")
-		right.Type = Float{Width: 64}
+	if len(left) != len(right) {
+		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d", expr.Left, len(left), expr.Right, len(right)))
 	}
 
 	// Build a key based on the operator literal and the operand types.
-	// We assume that the String() method for your custom Type returns "i64" for Int{Width: 64} and "f64" for Float{Width: 64}.
-	key := opKey{
-		Operator:  expr.Operator,
-		LeftType:  left.Type.String(),
-		RightType: right.Type.String(),
-	}
+	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
+	for i := 0; i < len(left); i++ {
+		l := c.derefIfPointer(left[i])
 
-	if fn, ok := defaultOps[key]; ok {
-		s = fn(c, left, right)
-		return
+		r := c.derefIfPointer(right[i])
+
+		key := opKey{
+			Operator:  expr.Operator,
+			LeftType:  l.Type.String(),
+			RightType: r.Type.String(),
+		}
+
+		var fn opFunc
+		var ok bool
+		if fn, ok = defaultOps[key]; !ok {
+			panic("unsupported operator: " + expr.Operator + " for types: " + l.Type.String() + ", " + r.Type.String())
+		}
+		res = append(res, fn(c, l, r, true))
 	}
-	panic("unsupported operator: " + expr.Operator + " for types: " + left.Type.String() + ", " + right.Type.String())
+	return
 }
 
 // compilePrefixExpression handles unary operators (prefix expressions).
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) Symbol {
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
 	// First compile the operand
 	operand := c.compileExpression(expr.Right)
 
-	// Lookup in the defaultPrefixOps table
-	key := unaryOpKey{
-		Operator:    expr.Operator,
-		OperandType: operand.Type.String(),
+	for _, op := range operand {
+		// Lookup in the defaultPrefixOps table
+		key := unaryOpKey{
+			Operator:    expr.Operator,
+			OperandType: op.Type.String(),
+		}
+
+		var fn unaryOpFunc
+		var ok bool
+		if fn, ok = defaultUnaryOps[key]; !ok {
+			panic("unsupported unary operator: " + expr.Operator + " for type: " + op.Type.String())
+
+		}
+		res = append(res, fn(c, c.derefIfPointer(op), true))
 	}
-	if fn, ok := defaultUnaryOps[key]; ok {
-		return fn(c, operand)
-	}
-	panic("unsupported unary operator: " + expr.Operator + " for type: " + operand.Type.String())
+	return
 }
 
-// compileFuncStatement assumes len(args) == len(fn.Parameters)
-func (c *Compiler) compileFuncStatement(fn *ast.FuncStatement, args []Symbol) llvm.Value {
-	returnType := c.Context.VoidType()
-	paramTypes := make([]llvm.Type, len(fn.Parameters))
-	for i := range fn.Parameters {
-		paramTypes[i] = c.mapToLLVMType(args[i].Type)
+func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
+	// Check if we've already made a "%<mangled>_ret" in this module:
+	retName := mangled + "_ret"
+
+	if named := c.Module.GetTypeByName(retName); !named.IsNil() {
+		return named
+	}
+	// Otherwise, define it exactly once:
+	st := c.Context.StructCreateNamed(retName)
+	fields := make([]llvm.Type, len(outputTypes))
+	for i, t := range outputTypes {
+		fields[i] = c.mapToLLVMType(t)
+	}
+	st.StructSetBody(fields, false)
+	return st
+}
+
+func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Type {
+	ptrToRet := llvm.PointerType(retStruct, 0)
+	llvmParams := append([]llvm.Type{ptrToRet}, inputs...)
+
+	funcType := llvm.FunctionType(c.Context.VoidType(), llvmParams, false)
+	return funcType
+}
+
+func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string) (llvm.Value, []Type) {
+	FuncType, ok := c.FuncCache[mangled]
+	if !ok {
+		panic("FuncType not in function cache! Mangled name: " + mangled)
 	}
 
-	funcType := llvm.FunctionType(returnType, paramTypes, false)
-	function := llvm.AddFunction(c.Module, mangle(fn.Token.Literal, args), funcType)
+	llvmInputs := make([]llvm.Type, len(args))
+	for i, a := range args {
+		llvmInputs[i] = c.mapToLLVMType(a.Type)
+	}
+
+	retStruct := c.getReturnStruct(mangled, FuncType.Outputs)
+	funcType := c.getFuncType(retStruct, llvmInputs)
+	function := llvm.AddFunction(c.Module, mangled, funcType)
+
+	sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
+	function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
+	function.AddAttributeAtIndex(1, c.Context.CreateEnumAttribute(llvm.AttributeKindID("noalias"), 0))
 
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
-	c.builder.SetInsertPoint(entry, entry.FirstInstruction())
+	savedBlock := c.builder.GetInsertBlock()
+	c.builder.SetInsertPointAtEnd(entry)
 
-	// Store parameters
-	for i, arg := range args {
-		alloca := c.createEntryBlockAlloca(function, fn.Parameters[i].Value)
-		c.builder.CreateStore(function.Params()[i], alloca)
-		c.Symbols[fn.Parameters[i].Value] = Symbol{
-			Val:  alloca,
-			Type: arg.Type,
-		}
-	}
+	c.compileFuncBlock(fn, args, mangled, retStruct, function)
 
-	// Compile function body
-	c.compileBlockStatement(fn.Body)
 	c.builder.CreateRetVoid()
 
-	return function
+	// Restore the builder to where it was before compiling this function
+	if !savedBlock.IsNil() {
+		c.builder.SetInsertPointAtEnd(savedBlock)
+	}
+
+	return function, FuncType.Outputs
 }
 
-func (c *Compiler) compileBlockStatement(bs *ast.BlockStatement) {
-	for _, stmt := range bs.Statements {
-		switch s := stmt.(type) {
-		case *ast.LetStatement:
-			c.compileLetStatement(s, c.builder.GetInsertBlock().Parent()) // Current function
-		case *ast.PrintStatement:
-			c.compilePrintStatement(s)
-		}
+func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangled string, retStruct llvm.Type, function llvm.Value) {
+	PushScope(&c.Scopes, FuncScope)
+	defer PopScope(&c.Scopes)
+
+	sretPtr := function.Param(0)
+
+	for i, outIdent := range fn.Outputs {
+		outType := c.FuncCache[mangled].Outputs[i]
+
+		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
+
+		Put(c.Scopes, outIdent.Value, &Symbol{
+			Val:  fieldPtr,
+			Type: Pointer{Elem: outType},
+		})
+	}
+
+	for i, param := range fn.Parameters {
+		arg := args[i]
+		paramVal := function.Param(i + 1)
+		paramVal.SetName(param.Value) // Good practice to name the LLVM value
+
+		// Put the parameter directly into the symbol table as a VALUE, not a pointer.
+		// Parameters in Pluto are assumed to be read-only, so it doesn't need a memory slot.
+		Put(c.Scopes, param.Value, &Symbol{
+			Val:  paramVal,
+			Type: arg.Type,
+		})
+	}
+
+	for _, stmt := range fn.Body.Statements {
+		c.compileStatement(stmt)
 	}
 }
 
-func (c *Compiler) createEntryBlockAlloca(f llvm.Value, name string) llvm.Value {
-	currentInsert := c.builder.GetInsertBlock()
-	entryBlock := f.EntryBasicBlock()
-	firstInst := entryBlock.FirstInstruction()
+func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value {
+	current := c.builder.GetInsertBlock()
+	fn := current.Parent()
+	entry := fn.EntryBasicBlock()
+	first := entry.FirstInstruction()
 
-	// Handle empty entry block
-	if firstInst.IsNil() {
-		c.builder.SetInsertPointAtEnd(entryBlock)
+	if first.IsNil() {
+		c.builder.SetInsertPointAtEnd(entry)
 	} else {
-		c.builder.SetInsertPointBefore(firstInst)
+		c.builder.SetInsertPointBefore(first)
 	}
 
-	alloca := c.builder.CreateAlloca(c.Context.Int64Type(), name)
-	c.builder.SetInsertPointAtEnd(currentInsert)
+	alloca := c.builder.CreateAlloca(ty, name)
+	c.builder.SetInsertPointAtEnd(current)
 	return alloca
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
-	args := make([]Symbol, len(ce.Arguments))
-	argsV := make([]llvm.Value, len(ce.Arguments))
-	for i, arg := range ce.Arguments {
-		args[i] = c.compileExpression(arg)
-		argsV[i] = args[i].Val
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
+	args := []*Symbol{}
+	argTypes := []Type{}
+	for _, callArg := range ce.Arguments {
+		args = append(args, c.compileExpression(callArg)...)
+	}
+	for _, arg := range args {
+		argTypes = append(argTypes, arg.Type)
 	}
 
-	fn := c.Module.NamedFunction(mangle(ce.Function.Value, args))
+	mangled := mangle(ce.Function.Value, argTypes)
+	fn := c.Module.NamedFunction(mangled)
+	var outTypes []Type
 	if fn.IsNil() {
 		// attempt to compile existing function template from Code
 		fk := ast.FuncKey{
@@ -463,36 +655,42 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) Symbol {
 			Arity:    len(args),
 		}
 
-		if c.CodeCompiler != nil && c.CodeCompiler.Code != nil {
-			code := c.CodeCompiler.Code
-			template, ok := code.Func.Map[fk]
-			if !ok {
-				panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
-			}
-			fn = c.compileFuncStatement(template, args)
+		code := c.CodeCompiler.Code
+		template, ok := code.Func.Map[fk]
+		if !ok {
+			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
+		}
+
+		savedBlock := c.builder.GetInsertBlock()
+		fn, outTypes = c.compileFunc(template, args, mangled)
+		c.builder.SetInsertPointAtEnd(savedBlock)
+	} else {
+		outTypes = c.FuncCache[mangled].Outputs
+	}
+
+	res = make([]*Symbol, len(outTypes))
+	llvmInputs := make([]llvm.Type, len(args))
+	for i, a := range args {
+		llvmInputs[i] = c.mapToLLVMType(a.Type)
+	}
+
+	retStruct := c.getReturnStruct(mangled, outTypes)
+	funcType := c.getFuncType(retStruct, llvmInputs)
+	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
+	llvmArgs := []llvm.Value{sretPtr}
+	for _, arg := range args {
+		llvmArgs = append(llvmArgs, arg.Val)
+	}
+
+	c.builder.CreateCall(funcType, fn, llvmArgs, "")
+
+	for i, typ := range outTypes {
+		res[i] = &Symbol{
+			Val:  c.createLoad(c.builder.CreateStructGEP(retStruct, sretPtr, i, "ret_gep"), typ, ""),
+			Type: typ,
 		}
 	}
-
-	funcType := fn.Type().ElementType() // Get function signature type
-	return Symbol{
-		Val:  c.builder.CreateCall(funcType, fn, argsV, "call_tmp"),
-		Type: Int{Width: 64}, // should be adjusted based on actual function return type
-	}
-}
-
-// defaultSpecifier returns the printf conversion specifier for a given type.
-func defaultSpecifier(t Type) string {
-	switch t.Kind() {
-	case IntKind:
-		return "%ld"
-	case FloatKind:
-		return "%.15g"
-	case StrKind:
-		return "%s"
-	default:
-		err := "unsupported type in print statement " + t.String()
-		panic(err)
-	}
+	return res
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
@@ -507,9 +705,12 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 			processed, newArgs := c.formatIdentifiers(strLit.Value)
 			formatStr += processed + " " // separate expressions with a space
 			args = append(args, newArgs...)
-		} else {
-			// Compile the expression and get its value and type
-			s := c.compileExpression(expr)
+			continue
+		}
+
+		// Compile the expression and get its value and type
+		syms := c.compileExpression(expr)
+		for _, s := range syms {
 			formatStr += defaultSpecifier(s.Type) + " "
 			args = append(args, s.Val)
 		}
