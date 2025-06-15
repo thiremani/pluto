@@ -1,0 +1,179 @@
+package compiler
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
+	"tinygo.org/x/go-llvm"
+)
+
+func TestMutualRecursion(t *testing.T) {
+	codeStr := `# define isEven: returns (x, y) = (is-even?, is-odd?)
+x, y = isEven(n)
+    # recursive step: if n≠0, flip the pair returned by isOdd(n-1)
+    x, y = n != 0 isOdd(n - 1)
+    # base case: 0 is even, not odd
+    x = n == 1 "no"
+    x = n == 0 "yes"
+
+# define isOdd: returns (x, y) = (is-odd?, is-even?)
+# this function only infers type for y
+x, y = isOdd(n)
+    # recursive step: if n≠0, flip the pair returned by isEven(n-1)
+    x, y = n != 0 isEven(n - 1)
+    # base case: 0 is not odd, but even
+    y = n == 1 "no"
+    y = n == 0 "yes"`
+
+	l := lexer.New(codeStr)
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+
+	if errs := cp.Errors(); len(errs) > 0 {
+		t.Error(strings.Join(errs, ","))
+	}
+
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "test", code)
+	cc.Compile()
+
+	script := `x, y = isEven(3)
+x, y`
+
+	sl := lexer.New(script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	ts := NewTypeSolver(program, cc)
+	ts.Solve()
+
+	// check func cache
+	isEvenFunc := ts.FuncCache["$isEven$I64"]
+	if isEvenFunc.Outputs[0].Kind() != StrKind {
+		t.Errorf("isEven func should strkind for output arg 0")
+	}
+	if isEvenFunc.Outputs[1].Kind() != StrKind {
+		t.Errorf("isEven func should strkind for output arg 1")
+	}
+
+	isOddFunc := ts.FuncCache["$isOdd$I64"]
+	if isOddFunc.Outputs[0].Kind() != UnresolvedKind {
+		t.Errorf("isOdd func should strkind for output arg 0")
+	}
+	if isOddFunc.Outputs[1].Kind() != StrKind {
+		t.Errorf("isOdd func should strkind for output arg 1")
+	}
+
+	// now further compile for isOdd
+	nextScript := `x, y = isOdd(17)
+x, y`
+
+	nsl := lexer.New(nextScript)
+	nsp := parser.NewScriptParser(nsl)
+	nextProgram := nsp.Parse()
+	nts := NewTypeSolver(nextProgram, cc)
+	nts.Solve()
+
+	nextOddFunc := nts.FuncCache["$isOdd$I64"]
+	if nextOddFunc.Outputs[0].Kind() != StrKind {
+		t.Errorf("Next isOdd func should strkind for output arg 0")
+	}
+	if nextOddFunc.Outputs[1].Kind() != StrKind {
+		t.Errorf("Next isOdd func should strkind for output arg 1")
+	}
+}
+
+func TestCycles(t *testing.T) {
+	// Use defer to set up a panic handler. This function will run
+	// right before TestCycles exits, either normally or via a panic.
+	defer noConvergeRecover(t)
+
+	codeStr := `# define cyclic recursion
+y = f(x)
+    y = g(x)
+
+y = g(x)
+    y = h(x)
+
+y = h(x)
+    y = f(x)`
+
+	l := lexer.New(codeStr)
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+
+	if errs := cp.Errors(); len(errs) > 0 {
+		t.Error(strings.Join(errs, ","))
+	}
+
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "test", code)
+	cc.Compile()
+
+	script := `x = 6
+y = f(x)
+y`
+	sl := lexer.New(script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	ts := NewTypeSolver(program, cc)
+	ts.Solve()
+}
+
+func TestNoBaseCase(t *testing.T) {
+	defer noConvergeRecover(t)
+
+	codeStr := `# define cyclic recursion
+y = f(x)
+    y = f(x-1)
+`
+
+	l := lexer.New(codeStr)
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+
+	if errs := cp.Errors(); len(errs) > 0 {
+		t.Error(strings.Join(errs, ","))
+	}
+
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "test", code)
+	cc.Compile()
+
+	script := `x = 6
+y = f(x)
+y`
+	sl := lexer.New(script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	ts := NewTypeSolver(program, cc)
+	ts.Solve()
+}
+
+func noConvergeRecover(t *testing.T) {
+	// `recover()` catches a panic. If there was no panic, it returns nil.
+	r := recover()
+	if r == nil {
+		// If we get here, it means ts.Solve() completed WITHOUT panicking.
+		// This is an error for this specific test case.
+		t.Errorf("The code did not panic, but was expected to for an unresolvable type cycle.")
+		return
+	}
+
+	// Optionally, you can check if the panic message is what you expect.
+	// `r` holds the value passed to `panic()`.
+	errMsg, ok := r.(string)
+	if !ok {
+		t.Errorf("Panic object is not a string: %v", r)
+		return
+	}
+
+	expectedPanicMsg := "Inferring output types for function f is not converging"
+	if !strings.Contains(errMsg, expectedPanicMsg) {
+		t.Errorf("Expected panic message to contain '%s', but got '%s'", expectedPanicMsg, errMsg)
+	}
+
+	// If we get here, the test passed because it panicked as expected.
+	t.Logf("Successfully caught expected panic: %v", r)
+}
