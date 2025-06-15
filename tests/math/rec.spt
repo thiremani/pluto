@@ -6,3 +6,15 @@ res
 
 res = fac(1)
 res
+
+f1 = fib(1)
+f1
+
+f2 = fib(5)
+f2
+
+f3 = fib(0)
+f3
+
+f4 = fib(32)
+f4

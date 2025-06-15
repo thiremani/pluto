@@ -2,3 +2,10 @@ y = fac(n)
     y = n != 1, n != 0 n * fac(n-1)
     y = n == 0 1
     y = n == 1 1
+
+y = fib(n)
+    y = fibAux(n, 0, 1)
+
+y = fibAux(n, a, b)
+    y = n == 0 a
+    y = n != 0 fibAux(n - 1, b, a + b)

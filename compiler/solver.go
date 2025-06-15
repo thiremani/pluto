@@ -78,6 +78,10 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		var typ Type
 		var ok bool
 		if typ, ok = Get(ts.Scopes, ident.Value); ok {
+			// if new type is Unresolved then don't update new type or do a type check
+			if newType.Kind() == UnresolvedKind {
+				continue
+			}
 			// allow for type reassignment from unknown type to concrete type
 			if typ.Kind() == UnresolvedKind {
 				trueValues[ident.Value] = newType

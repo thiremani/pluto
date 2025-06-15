@@ -664,7 +664,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		savedBlock := c.builder.GetInsertBlock()
 		fn, outTypes = c.compileFunc(template, args, mangled)
 		c.builder.SetInsertPointAtEnd(savedBlock)
-
 	} else {
 		outTypes = c.FuncCache[mangled].Outputs
 	}
