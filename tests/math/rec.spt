@@ -1,0 +1,8 @@
+res = fac(7)
+res
+
+res = fac(20)
+res
+
+res = fac(1)
+res

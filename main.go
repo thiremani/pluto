@@ -332,6 +332,7 @@ func main() {
 
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
+		fmt.Println("🛠️ Starting compile for script: " + script)
 		scriptLL, err := compileScript(scriptFile, script, cacheDir, codeCompiler, codeLL, ctx)
 		if err != nil {
 			continue

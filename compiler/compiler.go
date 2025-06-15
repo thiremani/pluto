@@ -141,7 +141,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 	}
 }
 
-func (c *Compiler) doConditions(stmt *ast.LetStatement, compile bool) (cond llvm.Value, hasConditions bool) {
+func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, hasConditions bool) {
 	// Compile condition
 	if len(stmt.Condition) == 0 {
 		hasConditions = false
@@ -150,11 +150,7 @@ func (c *Compiler) doConditions(stmt *ast.LetStatement, compile bool) (cond llvm
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.doExpression(expr, compile)
-		if !compile {
-			continue
-		}
-
+		condSyms := c.compileExpression(expr)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -178,123 +174,128 @@ func (c *Compiler) addRet() {
 	c.builder.CreateRet(llvm.ConstInt(c.Context.Int32Type(), 0, false))
 }
 
-func (c *Compiler) doStatement(stmt ast.Statement, compile bool) {
+func (c *Compiler) compileStatement(stmt ast.Statement) {
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
-		c.doLetStatement(s, compile)
+		c.compileLetStatement(s)
 	case *ast.PrintStatement:
-		c.doPrintStatement(s, compile)
+		c.compilePrintStatement(s)
 	default:
 		panic(fmt.Sprintf("Cannot handle statement type %T", s))
 	}
 }
 
 // does conditional assignment
-func (c *Compiler) doCondStatement(stmt *ast.LetStatement, cond llvm.Value, compile bool) {
-	if !compile {
-		syms := []*Symbol{}
-		for _, expr := range stmt.Value {
-			syms = append(syms, c.doExpression(expr, compile)...)
-		}
-		c.inferStatementTypes(stmt, syms)
-		return
-	}
-
+func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
 	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "if_block")
-	elseBlock := c.Context.AddBasicBlock(fn, "else_block")
-	contBlock := c.Context.AddBasicBlock(fn, "cont_block")
-
+	ifBlock := c.Context.AddBasicBlock(fn, "if")
+	elseBlock := c.Context.AddBasicBlock(fn, "else")
+	contBlock := c.Context.AddBasicBlock(fn, "continue")
 	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+
+	// Create blocks and branch.
 	c.builder.SetInsertPointAtEnd(ifBlock)
-	trueSymbols := []*Symbol{}
+	ifValues, ifBlockEnd := c.compileIfCond(stmt)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	elseValues, elseBlockEnd := c.compileElseCond(stmt, ifValues)
+	c.builder.CreateBr(contBlock)
+
+	// MERGE the branches.
+	c.compileMergeBlock(stmt, contBlock, ifValues, elseValues, ifBlockEnd, elseBlockEnd)
+
+	// Set the builder's position for the next statement.
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicBlock) {
+	// Populate IF block.
+	ifSymbols := []*Symbol{}
+
+	// compileExpression already derefs any pointers
+	// so don't worry about creating a load here
 	for _, expr := range stmt.Value {
-		trueSymbols = append(trueSymbols, c.doExpression(expr, compile)...)
+		ifSymbols = append(ifSymbols, c.compileExpression(expr)...)
 	}
 
-	// This list will hold the symbols before the conditional
-	prevSymbols := []*Symbol{}
+	return ifSymbols, c.builder.GetInsertBlock()
+}
 
-	// possibly promote values to memory if trueSym is a pointer
+// ELSE block: pull "previous" symbols from scope and deref pointers
+func (c *Compiler) compileElseCond(stmt *ast.LetStatement, trueSymbols []*Symbol) (elseSyms []*Symbol, elseEnd llvm.BasicBlock) {
+	elseSyms = make([]*Symbol, len(stmt.Name))
 	for i, ident := range stmt.Name {
 		name := ident.Value
-		trueSym := trueSymbols[i]
-		prevSym, ok := Get(c.Scopes, ident.Value)
+
+		prevSym, ok := Get(c.Scopes, name)
 		if !ok {
+			// first time: give a default zero
 			prevSym = &Symbol{
-				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false), // Default to 0
+				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false),
 				Type: Int{Width: 64},
 			}
 			Put(c.Scopes, name, prevSym)
 		}
-		prevSymbols = append(prevSymbols, prevSym)
 
-		if trueSym.Type.Kind() == PointerKind {
-			// promoteToMemory does nothing if it is already in memory
-			// do not set prevSym to newly allocated memory as it is already a ready value
-			// otherwise it would need an unnecessary store and load
-			c.promoteToMemory(name)
-		}
+		// Dereference pointers into raw values; if prevSym was an alloca, load it,
+		// otherwise a no-op.
+		elseSyms[i] = c.derefIfPointer(prevSym)
+	}
+	return elseSyms, c.builder.GetInsertBlock()
+}
+
+// MERGE block: build PHIs on the pure value type, then do final store if needed
+func (c *Compiler) compileMergeBlock(
+	stmt *ast.LetStatement,
+	contBlk llvm.BasicBlock,
+	ifSyms, elseSyms []*Symbol,
+	ifEnd, elseEnd llvm.BasicBlock,
+) {
+	// position builder at top of contBlk
+	c.builder.SetInsertPoint(contBlk, contBlk.FirstInstruction())
+
+	// --- Phase 1: create all PHIs first on the value type
+	// the phis MUST be at the top of the block
+	phis := make([]llvm.Value, len(stmt.Name))
+	for i, ident := range stmt.Name {
+		ty := ifSyms[i].Type // both branches must agree
+		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	c.builder.CreateBr(contBlock)
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
+	// --- Phase 2: hook them up and do the stores/updates
 	for i, ident := range stmt.Name {
-		// Look up the existing symbol to get its custom type.
 		name := ident.Value
-		finalSym, _ := Get(c.Scopes, name)
-		prevSym := prevSymbols[i]
-		trueSym := trueSymbols[i]
+		phi := phis[i]
+		ifVal := ifSyms[i].Val
+		elseVal := elseSyms[i].Val
 
-		if finalSym.Type.Kind() == PointerKind {
-			addr := finalSym.Val
-			elemType := finalSym.Type.(Pointer).Elem
-
-			elseVal := prevSym.Val
-			if prevSym.Type.Kind() == PointerKind {
-				// it was always in memory
-				elseVal = c.createLoad(prevSym.Val, elemType, name+"_prev")
-			}
-
-			ifVal := trueSym.Val
-			if trueSym.Type.Kind() == PointerKind {
-				ifVal = c.createLoad(trueSym.Val, elemType, name+"_true")
-			}
-
-			valToStorePhi := c.builder.CreatePHI(c.mapToLLVMType(elemType), name+"_val_phi")
-			valToStorePhi.AddIncoming(
-				[]llvm.Value{ifVal, elseVal},
-				[]llvm.BasicBlock{ifBlock, elseBlock},
-			)
-			c.createStore(valToStorePhi, addr, elemType)
-			continue
+		// sanity
+		if ifVal.IsNil() || elseVal.IsNil() {
+			panic("nil incoming to PHI for " + name)
 		}
 
-		// This case only happens if both prevSym and trueSym were values (not in memory)
-		phi := c.builder.CreatePHI(c.mapToLLVMType(trueSym.Type), name+"_phi")
 		phi.AddIncoming(
-			[]llvm.Value{
-				trueSym.Val, // Value from true block
-				prevSym.Val, // Value from before the LetStatement
-			},
-			[]llvm.BasicBlock{ifBlock, elseBlock},
+			[]llvm.Value{ifVal, elseVal},
+			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
-		Put(c.Scopes, ident.Value, &Symbol{Val: phi, Type: trueSym.Type})
+
+		// if the variable was stack-allocated, store back
+		orig, _ := Get(c.Scopes, name)
+		if ptr, ok := orig.Type.(Pointer); ok {
+			// orig.Val holds the alloca
+			c.createStore(phi, orig.Val, ptr.Elem)
+		} else {
+			// pure SSA: update the symbol to the PHI
+			Put(c.Scopes, name, &Symbol{Val: phi, Type: ifSyms[i].Type})
+		}
 	}
 }
 
-func (c *Compiler) doSimpleStatement(stmt *ast.LetStatement, compile bool) {
+func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
 	for _, expr := range stmt.Value {
-		syms = append(syms, c.doExpression(expr, compile)...)
-	}
-
-	if !compile {
-		c.inferStatementTypes(stmt, syms)
-		return
+		syms = append(syms, c.compileExpression(expr)...)
 	}
 
 	for i, ident := range stmt.Name {
@@ -319,72 +320,44 @@ func (c *Compiler) doSimpleStatement(stmt *ast.LetStatement, compile bool) {
 	}
 }
 
-func (c *Compiler) inferStatementTypes(stmt *ast.LetStatement, syms []*Symbol) {
-	if len(stmt.Name) != len(syms) {
-		panic(fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d", len(stmt.Name), len(syms)))
-	}
-
-	trueValues := make(map[string]*Symbol)
-	for i, ident := range stmt.Name {
-		trueValues[ident.Value] = syms[i]
-	}
-
-	// wait for true values to be put in c.Scopes above so they have types
-	// TODO check type of variable has not changed
-	PutBulk(c.Scopes, trueValues)
-}
-
-func (c *Compiler) doLetStatement(stmt *ast.LetStatement, compile bool) {
-	cond, hasConditions := c.doConditions(stmt, compile)
-
+func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
+	cond, hasConditions := c.compileConditions(stmt)
 	// TODO check type of variable has not changed
 	if !hasConditions {
-		c.doSimpleStatement(stmt, compile)
+		c.compileSimpleStatement(stmt)
 		return
 	}
 
-	c.doCondStatement(stmt, cond, compile)
+	c.compileCondStatement(stmt, cond)
 }
 
 // if compile bool is false, we only return symbol with type info. This is used for type inference
-func (c *Compiler) doExpression(expr ast.Expression, compile bool) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		s.Type = Int{Width: 64}
-		if !compile {
-			res = []*Symbol{s}
-			return
-		}
 		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
 		res = []*Symbol{s}
 	case *ast.FloatLiteral:
 		s.Type = Float{Width: 64}
-		if !compile {
-			res = []*Symbol{s}
-			return
-		}
 		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
 		s.Type = Str{}
-		if !compile {
-			res = []*Symbol{s}
-			return
-		}
 		// create a global name for the literal
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 		res = []*Symbol{s}
 	case *ast.Identifier:
-		res = []*Symbol{c.doIdentifier(e, compile)}
+		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
-		res = c.doInfixExpression(e, compile)
+		res = c.compileInfixExpression(e)
 	case *ast.PrefixExpression:
-		res = c.doPrefixExpression(e, compile)
+		res = c.compilePrefixExpression(e)
 	case *ast.CallExpression:
-		res = c.doCallExpression(e, compile)
+		res = c.compileCallExpression(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
@@ -461,32 +434,27 @@ func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.V
 // derefIfPointer checks a symbol. If it's a pointer, it returns a NEW symbol
 // representing the value loaded from that pointer. Otherwise, it returns the
 // original symbol unmodified. It has NO side effects.
-// if compile is false then it only returns symbol with type info.
-// This is used for type inference.
-func (c *Compiler) derefIfPointer(s *Symbol, compile bool) *Symbol {
+func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	var ptrType Pointer
 	var ok bool
 	if ptrType, ok = s.Type.(Pointer); !ok {
 		return s
 	}
 
-	if !compile {
-		return &Symbol{Type: ptrType.Elem}
-	}
-
-	loadedVal := c.createLoad(s.Val, ptrType.Elem, "") // Use our new helper
+	loadedVal := c.createLoad(s.Val, ptrType.Elem, "_load") // Use our new helper
 
 	// Return a BRAND NEW symbol containing the result of the load.
-	return &Symbol{
-		Val:  loadedVal,
-		Type: ptrType.Elem,
-	}
+	// Copy the symbol if we need other data like is it func arg, read only
+	newS := GetCopy(s)
+	newS.Val = loadedVal
+	newS.Type = ptrType.Elem
+	return newS
 }
 
 // if compile is false, we only return symbol with type info. This is used for type inference
-func (c *Compiler) doIdentifier(ident *ast.Identifier, compile bool) *Symbol {
+func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	if s, ok := Get(c.Scopes, ident.Value); ok {
-		return c.derefIfPointer(s, compile)
+		return c.derefIfPointer(s)
 	}
 
 	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
@@ -494,16 +462,16 @@ func (c *Compiler) doIdentifier(ident *ast.Identifier, compile bool) *Symbol {
 	}
 	cc := c.CodeCompiler.Compiler
 	if s, ok := Get(cc.Scopes, ident.Value); ok {
-		return c.derefIfPointer(s, compile)
+		return c.derefIfPointer(s)
 	}
 
 	panic(fmt.Sprintf("undefined variable: %s. Not found in script or code files", ident.Value))
 }
 
-func (c *Compiler) doInfixExpression(expr *ast.InfixExpression, compile bool) (res []*Symbol) {
+func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
 	res = []*Symbol{}
-	left := c.doExpression(expr.Left, compile)
-	right := c.doExpression(expr.Right, compile)
+	left := c.compileExpression(expr.Left)
+	right := c.compileExpression(expr.Right)
 	if len(left) != len(right) {
 		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d", expr.Left, len(left), expr.Right, len(right)))
 	}
@@ -511,9 +479,9 @@ func (c *Compiler) doInfixExpression(expr *ast.InfixExpression, compile bool) (r
 	// Build a key based on the operator literal and the operand types.
 	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
 	for i := 0; i < len(left); i++ {
-		l := c.derefIfPointer(left[i], compile)
+		l := c.derefIfPointer(left[i])
 
-		r := c.derefIfPointer(right[i], compile)
+		r := c.derefIfPointer(right[i])
 
 		key := opKey{
 			Operator:  expr.Operator,
@@ -526,15 +494,15 @@ func (c *Compiler) doInfixExpression(expr *ast.InfixExpression, compile bool) (r
 		if fn, ok = defaultOps[key]; !ok {
 			panic("unsupported operator: " + expr.Operator + " for types: " + l.Type.String() + ", " + r.Type.String())
 		}
-		res = append(res, fn(c, l, r, compile))
+		res = append(res, fn(c, l, r, true))
 	}
 	return
 }
 
 // compilePrefixExpression handles unary operators (prefix expressions).
-func (c *Compiler) doPrefixExpression(expr *ast.PrefixExpression, compile bool) (res []*Symbol) {
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
 	// First compile the operand
-	operand := c.doExpression(expr.Right, compile)
+	operand := c.compileExpression(expr.Right)
 
 	for _, op := range operand {
 		// Lookup in the defaultPrefixOps table
@@ -549,7 +517,7 @@ func (c *Compiler) doPrefixExpression(expr *ast.PrefixExpression, compile bool) 
 			panic("unsupported unary operator: " + expr.Operator + " for type: " + op.Type.String())
 
 		}
-		res = append(res, fn(c, c.derefIfPointer(op, compile), compile))
+		res = append(res, fn(c, c.derefIfPointer(op), true))
 	}
 	return
 }
@@ -577,28 +545,6 @@ func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Typ
 
 	funcType := llvm.FunctionType(c.Context.VoidType(), llvmParams, false)
 	return funcType
-}
-
-func (c *Compiler) inferFuncTypes(fn *ast.FuncStatement, args []*Symbol, mangled string) []Type {
-	// if func is already in cache then skip as it is a recursive call
-	if _, ok := c.FuncCache[mangled]; ok {
-		return nil
-	}
-
-	// add func to cache
-	FuncType := &Func{
-		Name: fn.Token.Literal,
-	}
-	for _, arg := range args {
-		FuncType.Params = append(FuncType.Params, arg.Type)
-	}
-	c.FuncCache[mangled] = FuncType
-
-	outputs := c.inferTypesInBlock(fn, args)
-	// body should have compiled outputs into symbol table
-	FuncType.Outputs = c.inferOutTypes(fn, outputs)
-	c.FuncCache[mangled] = FuncType
-	return FuncType.Outputs
 }
 
 func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string) (llvm.Value, []Type) {
@@ -668,95 +614,8 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangl
 	}
 
 	for _, stmt := range fn.Body.Statements {
-		c.doStatement(stmt, true)
+		c.compileStatement(stmt)
 	}
-}
-
-func (c *Compiler) doFuncStatement(fn *ast.FuncStatement, args []*Symbol, mangled string, compile bool) (llvm.Value, []Type) {
-	if !compile {
-		return llvm.Value{}, c.inferFuncTypes(fn, args, mangled)
-	}
-	return c.compileFunc(fn, args, mangled)
-
-}
-
-func (c *Compiler) inferFuncOutputTypes(ce *ast.CallExpression, args []*Symbol, mangled string) []Type {
-	if ft, ok := c.FuncCache[mangled]; ok && ft.AllTypesInferred() {
-		return ft.Outputs
-	}
-
-	fk := ast.FuncKey{
-		FuncName: ce.Function.Value,
-		Arity:    len(args),
-	}
-
-	code := c.CodeCompiler.Code
-	template, ok := code.Func.Map[fk]
-	if !ok {
-		panic(fmt.Sprintf("undefined function! Name: %s. Arity (num args): %d", ce.Function.Value, len(args)))
-	}
-
-	ft := &Func{
-		Name: ce.Function.Value,
-	}
-
-	for _, arg := range args {
-		ft.Params = append(ft.Params, arg.Type)
-	}
-
-	// create a queue for functions the function calls
-	// we assume inferTypesInBlock caches the function in FuncCache
-	outputs := c.inferTypesInBlock(template, args)
-	return c.inferOutTypes(template, outputs)
-}
-
-// inferOutTypes assumes the all block LetStatements have been walked
-// and assumes types are in Types SymTable
-func (c *Compiler) inferOutTypes(fn *ast.FuncStatement, outputs map[string]*Symbol) []Type {
-	outTypes := make([]Type, len(fn.Outputs))
-	for i, o := range fn.Outputs {
-		s := outputs[o.Value]
-		if s == nil || s.Type == nil {
-			panic(fmt.Sprintf("Could not infer output type for function %s. Output Arg %d, Name %s", fn.Token.Literal, i, o.Value))
-		}
-		outTypes[i] = s.Type
-	}
-	return outTypes
-}
-
-func (c *Compiler) inferTypesInBlock(fn *ast.FuncStatement, args []*Symbol) map[string]*Symbol {
-	PushScope(&c.Scopes, FuncScope)
-	defer PopScope(&c.Scopes)
-
-	for i, id := range fn.Parameters {
-		readArg := GetCopy(args[i])
-		readArg.FuncArg = true
-		readArg.ReadOnly = true
-		Put(c.Scopes, id.Value, readArg)
-	}
-
-	for _, stmt := range fn.Body.Statements {
-		c.doStatement(stmt, false)
-	}
-
-	outputs := make(map[string]*Symbol)
-	for i, id := range fn.Outputs {
-		s, ok := Get(c.Scopes, id.Value)
-		if !ok {
-			panic(fmt.Sprintf("Could not infer type of output for function %s. Output arg index: %d. arg name: %s", fn.Token.Literal, i, id.Value))
-		}
-		o, exists := outputs[id.Value]
-		if !exists {
-			outputs[id.Value] = s
-			continue
-
-		}
-		if s.Type != o.Type {
-			panic(fmt.Sprintf("Cannot change type of variable! Type before entering function %s: %s. Type after entering: %s. Variable name: %s", fn.Token.Literal, s.Type, o.Type, id.Value))
-		}
-	}
-
-	return outputs
 }
 
 func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value {
@@ -776,13 +635,17 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) doCallExpression(ce *ast.CallExpression, compile bool) (res []*Symbol) {
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
 	args := []*Symbol{}
-	for _, arg := range ce.Arguments {
-		args = append(args, c.doExpression(arg, compile)...)
+	argTypes := []Type{}
+	for _, callArg := range ce.Arguments {
+		args = append(args, c.compileExpression(callArg)...)
+	}
+	for _, arg := range args {
+		argTypes = append(argTypes, arg.Type)
 	}
 
-	mangled := mangle(ce.Function.Value, args)
+	mangled := mangle(ce.Function.Value, argTypes)
 	fn := c.Module.NamedFunction(mangled)
 	var outTypes []Type
 	if fn.IsNil() {
@@ -797,27 +660,16 @@ func (c *Compiler) doCallExpression(ce *ast.CallExpression, compile bool) (res [
 		if !ok {
 			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
 		}
-		// set compile flag to false to get outTypes
-		if compile {
-			savedBlock := c.builder.GetInsertBlock()
-			fn, outTypes = c.doFuncStatement(template, args, mangled, compile)
-			c.builder.SetInsertPointAtEnd(savedBlock)
 
-		} else {
-			fn, outTypes = c.doFuncStatement(template, args, mangled, compile)
-		}
+		savedBlock := c.builder.GetInsertBlock()
+		fn, outTypes = c.compileFunc(template, args, mangled)
+		c.builder.SetInsertPointAtEnd(savedBlock)
+
 	} else {
 		outTypes = c.FuncCache[mangled].Outputs
 	}
 
 	res = make([]*Symbol, len(outTypes))
-	if !compile {
-		for i := range outTypes {
-			res[i] = &Symbol{Type: outTypes[i]}
-		}
-		return
-	}
-
 	llvmInputs := make([]llvm.Type, len(args))
 	for i, a := range args {
 		llvmInputs[i] = c.mapToLLVMType(a.Type)
@@ -842,7 +694,7 @@ func (c *Compiler) doCallExpression(ce *ast.CallExpression, compile bool) (res [
 	return res
 }
 
-func (c *Compiler) doPrintStatement(ps *ast.PrintStatement, compile bool) {
+func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	// Track format specifiers and arguments
 	var formatStr string
 	var args []llvm.Value
@@ -850,29 +702,24 @@ func (c *Compiler) doPrintStatement(ps *ast.PrintStatement, compile bool) {
 	// Generate format string based on expression types
 	for _, expr := range ps.Expression {
 		// If the expression is a string literal, check for embedded markers.
-		if strLit, ok := expr.(*ast.StringLiteral); ok && compile {
+		if strLit, ok := expr.(*ast.StringLiteral); ok {
 			processed, newArgs := c.formatIdentifiers(strLit.Value)
 			formatStr += processed + " " // separate expressions with a space
 			args = append(args, newArgs...)
 			continue
 		}
+
 		// Compile the expression and get its value and type
-		syms := c.doExpression(expr, compile)
-		if !compile {
-			continue
-		}
+		syms := c.compileExpression(expr)
 		for _, s := range syms {
 			formatStr += defaultSpecifier(s.Type) + " "
 			args = append(args, s.Val)
 		}
 	}
-	if !compile {
-		return
-	}
 
 	// Add newline and null terminator
 	formatStr = strings.TrimSuffix(formatStr, " ") + "\n" // Remove trailing space
-	formatConst := llvm.ConstString(formatStr, compile)   // true = add \0
+	formatConst := llvm.ConstString(formatStr, true)      // true = add \0
 
 	// Create unique global variable for the format string
 	globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)

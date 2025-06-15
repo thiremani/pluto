@@ -137,3 +137,19 @@ func typesStr(types []Type) string {
 	}
 	return sb.String()
 }
+
+// Checks if two type arrays are equal
+// Be careful with Unresolved types
+func EqualTypes(left []Type, right []Type) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for i, l := range left {
+		if l.String() != right[i].String() {
+			return false
+		}
+	}
+
+	return true
+}
