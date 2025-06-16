@@ -164,10 +164,11 @@ var tokens = [...]string{
 }
 
 type Token struct {
-	Type    TokenType
-	Literal string
-	Line    int
-	Column  int
+	FileName string
+	Type     TokenType
+	Literal  string
+	Line     int
+	Column   int
 }
 
 func (t Token) IsComparison() bool {

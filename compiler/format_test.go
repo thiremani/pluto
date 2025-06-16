@@ -76,7 +76,7 @@ func TestFormatStringPanics(t *testing.T) {
 				}
 			}()
 
-			l := lexer.New(tc.input)
+			l := lexer.New("TestFormatStringPanics", tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
 			sc := NewScriptCompiler(llvm.NewContext(), "TestFormatPanics", program, nil)
@@ -106,7 +106,7 @@ func TestValidFormatString(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			l := lexer.New(tc.input)
+			l := lexer.New("TestValidFormatString", tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
 			sc := NewScriptCompiler(llvm.NewContext(), "TestValidFormatString", program, nil)

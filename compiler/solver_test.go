@@ -27,7 +27,7 @@ x, y = isOdd(n)
     y = n == 1 "no"
     y = n == 0 "yes"`
 
-	l := lexer.New(codeStr)
+	l := lexer.New("TestMutualRecursionCode", codeStr)
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
@@ -42,7 +42,7 @@ x, y = isOdd(n)
 	script := `x, y = isEven(3)
 x, y`
 
-	sl := lexer.New(script)
+	sl := lexer.New("TestMutualRecursionScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	ts := NewTypeSolver(program, cc)
@@ -69,7 +69,7 @@ x, y`
 	nextScript := `x, y = isOdd(17)
 x, y`
 
-	nsl := lexer.New(nextScript)
+	nsl := lexer.New("TestMutualRecursionScript2", nextScript)
 	nsp := parser.NewScriptParser(nsl)
 	nextProgram := nsp.Parse()
 	nts := NewTypeSolver(nextProgram, cc)
@@ -99,7 +99,7 @@ y = g(x)
 y = h(x)
     y = f(x)`
 
-	l := lexer.New(codeStr)
+	l := lexer.New("TestCyclesCode", codeStr)
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
@@ -114,7 +114,7 @@ y = h(x)
 	script := `x = 6
 y = f(x)
 y`
-	sl := lexer.New(script)
+	sl := lexer.New("TestCyclesScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	ts := NewTypeSolver(program, cc)
@@ -129,7 +129,7 @@ y = f(x)
     y = f(x-1)
 `
 
-	l := lexer.New(codeStr)
+	l := lexer.New("TestNoBaseCaseCode", codeStr)
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
@@ -144,7 +144,7 @@ y = f(x)
 	script := `x = 6
 y = f(x)
 y`
-	sl := lexer.New(script)
+	sl := lexer.New("TestNoBaseCaseScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	ts := NewTypeSolver(program, cc)

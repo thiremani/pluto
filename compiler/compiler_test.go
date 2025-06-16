@@ -11,7 +11,7 @@ import (
 
 func TestStringCompile(t *testing.T) {
 	input := `"hello"`
-	l := lexer.New(input)
+	l := lexer.New("TestStringCompile", input)
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
@@ -29,7 +29,7 @@ func TestFormatIdentifiers(t *testing.T) {
 	input := `x = 5
 six = 6`
 
-	l := lexer.New(input)
+	l := lexer.New("TestFormatIdentifiers", input)
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
@@ -57,7 +57,7 @@ func TestConstCompile(t *testing.T) {
 answer = 42
 greeting = "hello"`
 
-	l := lexer.New(input)
+	l := lexer.New("TestConstCompile", input)
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 

@@ -14,7 +14,7 @@ type Test struct {
 }
 
 func checkInput(t *testing.T, input string, tests []Test) {
-	l := New(input)
+	l := New("", input)
 
 	for i, tt := range tests {
 		tok, err := l.NextToken()
@@ -295,7 +295,7 @@ func TestUnicodeIdentifiers(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := New(tt.input)
+		l := New("TestUnicodeIdentifiers", tt.input)
 		ident := l.readIdentifier()
 
 		if ident != tt.expected {
@@ -322,7 +322,7 @@ func TestASCIINumbers(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := New(tt.input)
+		l := New("TestASCIINumbers", tt.input)
 		tok, _ := l.NextToken()
 
 		if tok.Type != tt.expectedTokenType {
@@ -360,7 +360,7 @@ func TestReadOperator(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := New(tt.input)
+		l := New("TestReadOperator", tt.input)
 		// Call readOperator directly. Since our readOperator consumes operator characters,
 		// it should return the maximal sequence.
 		op := l.readOperator()
@@ -398,7 +398,7 @@ func TestNextTokenUnexpected(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := New(tt.input)
+		l := New("TestNextTokenUnexpected", tt.input)
 		for i, expected := range tt.expectedTok {
 			tok, err := l.NextToken()
 			if tok.Type != expected.Type {

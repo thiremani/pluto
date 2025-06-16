@@ -31,6 +31,20 @@ const (
 	OPT_LEVEL = "-O2" // Can be configured via flag
 )
 
+// Pluto holds the state of a single pluto invocation.
+// You can initialize it from the working directory and then
+type Pluto struct {
+	Cwd     string // Working directory (may be a subdir of RootDir)
+	RootDir string // Absolute root of the project (where pt.mod lives)
+	ModName string // The name of the module as written in the first non-commented line of pt.mod
+	ModPath string // The module path declared in pt.mod + any relative subdirectory
+	RelPath string // The path relative to the module path declared in pt.mod
+
+	CacheDir string // Cache directory (<PTCACHE>/<modulePath>)
+
+	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
+}
+
 // getDefaultPTCache gets env variable PTCACHE
 // if it is not set sets it to default value for windows, mac, linux
 func defaultPTCache() string {
@@ -61,137 +75,6 @@ func defaultPTCache() string {
 
 	os.Setenv("PTCACHE", ptcache)
 	return ptcache
-}
-
-func compileCode(codeFiles []string, cacheDir, modPath string, ctx llvm.Context) (*compiler.CodeCompiler, string, error) {
-	if len(codeFiles) == 0 {
-		return nil, "", nil
-	}
-
-	pkgCode := ast.NewCode()
-	for _, codeFile := range codeFiles {
-		source, err := os.ReadFile(codeFile)
-		if err != nil {
-			err := fmt.Errorf("error reading %s: %v", codeFile, err)
-			return nil, "", err
-		}
-		l := lexer.New(string(source))
-		cp := parser.NewCodeParser(l)
-		code := cp.Parse()
-
-		if errs := cp.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				fmt.Printf("%s: %s\n", codeFile, e)
-			}
-			err := fmt.Errorf("error parsing code file %s", codeFile)
-			return nil, "", err
-		}
-		pkgCode.Merge(code)
-	}
-
-	cc := compiler.NewCodeCompiler(ctx, modPath, pkgCode)
-	cc.Compile()
-	ir := cc.Compiler.GenerateIR()
-
-	pkg := filepath.Base(modPath)
-	fmt.Println("Pkg name is", pkg)
-	codeLL := filepath.Join(cacheDir, CODE_DIR, pkg+IR_SUFFIX)
-	os.MkdirAll(filepath.Dir(codeLL), 0755)
-	if err := os.WriteFile(codeLL, []byte(ir), 0644); err != nil {
-		fmt.Printf("Error writing IR to %s: %v\n", codeLL, err)
-		return nil, "", err
-	}
-	return cc, codeLL, nil
-}
-
-func compileScript(scriptFile, script, cacheDir string, cc *compiler.CodeCompiler, codeLL string, ctx llvm.Context) (string, error) {
-	source, err := os.ReadFile(scriptFile)
-	if err != nil {
-		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
-		return "", err
-	}
-	l := lexer.New(string(source))
-	sp := parser.NewScriptParser(l)
-	program := sp.Parse()
-	sc := compiler.NewScriptCompiler(ctx, script, program, cc)
-
-	// Only link if code module has content
-	if cc != nil && !cc.Compiler.Module.IsNil() {
-		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
-		if err != nil {
-			fmt.Printf("Error loading to memory buffer: %v\n", err)
-			return "", err
-		}
-		clone, err := ctx.ParseIR(buffer)
-		if err != nil {
-			fmt.Printf("Error parsing IR: %v\n", err)
-			return "", err
-		}
-		// Link code-mode module into script's module in-memory
-		if err := llvm.LinkModules(sc.Compiler.Module, clone); err != nil {
-			fmt.Printf("Error linking modules: %v\n", err)
-			return "", err
-		}
-	}
-
-	sc.Compile()
-	ir := sc.Compiler.GenerateIR()
-
-	llName := script + IR_SUFFIX
-	scriptLL := filepath.Join(cacheDir, SCRIPT_DIR, llName)
-	os.MkdirAll(filepath.Dir(scriptLL), 0755)
-	if err := os.WriteFile(scriptLL, []byte(ir), 0644); err != nil {
-		fmt.Printf("Error writing IR to %s: %v\n", scriptLL, err)
-		return "", err
-	}
-	return scriptLL, nil
-}
-
-func genBinary(scriptLL, bin, cacheDir, cwd string) error {
-	// Create temp files
-	optFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
-	objFile := filepath.Join(cacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
-	binFile := filepath.Join(cwd, bin)
-
-	// Optimization pass
-	optCmd := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile)
-	if output, err := optCmd.CombinedOutput(); err != nil {
-		fmt.Printf("optimization failed: %s\n%s\n", err, string(output))
-		return err
-	}
-
-	// Compile to object file
-	llcCmd := exec.Command("llc", "-filetype=obj", "-relocation-model=pic", optFile, "-o", objFile)
-	if output, err := llcCmd.CombinedOutput(); err != nil {
-		fmt.Printf("llc compilation failed: %s\n%s\n", err, string(output))
-		return err
-	}
-
-	linkArgs := []string{"-flto", "-fuse-ld=lld"}
-
-	if runtime.GOOS == "darwin" {
-		// Mach-O linker (ld64.lld) wants -dead_strip
-		linkArgs = append(linkArgs, "-Wl,-dead_strip")
-	} else {
-		// ELF linkers (ld, lld) accept --gc-sections
-		linkArgs = append(linkArgs, "-Wl,--gc-sections")
-	}
-
-	linkArgs = append(linkArgs,
-		objFile,
-		"-o",
-		binFile,
-		"-lm", // link against the standard math library
-	)
-
-	// Link executable (with dead code elimination)
-	clangCmd := exec.Command("clang", linkArgs...)
-	if output, err := clangCmd.CombinedOutput(); err != nil {
-		fmt.Printf("linking failed: %s\n%s\n", err, string(output))
-		return err
-	}
-
-	return nil
 }
 
 // findModRoot walks up from startDir until it finds a directory containing pt.mod.
@@ -246,28 +129,224 @@ func parseModuleName(modFile string) (string, error) {
 	return "", err
 }
 
-// getFullModPath returns the full import path for cwd by combining the
-// module name from pt.mod with the relative subpath under that root.
-func getFullModPath(cwd string) (string, error) {
-	root, err := findModRoot(cwd)
+// resolveModPath does up to the directory in cwd that contains pt.mod file
+// it takes module name from pt.mod with the relative subpath to cwd and sets it as modPath
+// it also saves relPath, rootDir (the absolute path to the directory that contains pt.mod)
+// all this is set in the Pluto struct
+func (p *Pluto) resolveModPaths(cwd string) error {
+	var err error
+	p.RootDir, err = findModRoot(cwd)
 	if err != nil {
+		return err
+	}
+	fmt.Println("Root dir is", p.RootDir)
+
+	p.ModName, err = parseModuleName(filepath.Join(p.RootDir, MOD_FILE))
+	if err != nil {
+		return err
+	}
+
+	p.RelPath, err = filepath.Rel(p.RootDir, cwd)
+	if err != nil {
+		err = fmt.Errorf("rel %s -> %s: %w", p.RootDir, cwd, err)
+		return err
+	}
+
+	if p.RelPath == "." {
+		p.RelPath = ""
+		p.ModPath = p.ModName
+	} else {
+		// ensure forward slashes
+		p.RelPath = filepath.ToSlash(p.RelPath)
+		p.ModPath = p.ModName + "/" + p.RelPath
+	}
+
+	fmt.Printf("Mod path is %s\n", p.ModPath)
+	fmt.Printf("Relative path of current directory to module root is %s\n", p.RelPath)
+
+	return nil
+}
+
+func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
+	if len(codeFiles) == 0 {
+		return nil, "", nil
+	}
+
+	pkgCode := ast.NewCode()
+	for _, codeFile := range codeFiles {
+		source, err := os.ReadFile(codeFile)
+		if err != nil {
+			err := fmt.Errorf("error reading %s: %v", codeFile, err)
+			return nil, "", err
+		}
+		l := lexer.New(p.RelPath+"/"+filepath.Base(codeFile), string(source))
+		cp := parser.NewCodeParser(l)
+		code := cp.Parse()
+
+		if errs := cp.Errors(); len(errs) > 0 {
+			for _, e := range errs {
+				fmt.Printf("%s: %s\n", codeFile, e)
+			}
+			err := fmt.Errorf("error parsing code file %s", codeFile)
+			return nil, "", err
+		}
+		pkgCode.Merge(code)
+	}
+
+	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
+	cc.Compile()
+	ir := cc.Compiler.GenerateIR()
+
+	pkg := filepath.Base(p.ModPath)
+	fmt.Println("Pkg name is", pkg)
+	codeLL := filepath.Join(p.CacheDir, CODE_DIR, pkg+IR_SUFFIX)
+	os.MkdirAll(filepath.Dir(codeLL), 0755)
+	if err := os.WriteFile(codeLL, []byte(ir), 0644); err != nil {
+		fmt.Printf("Error writing IR to %s: %v\n", codeLL, err)
+		return nil, "", err
+	}
+	return cc, codeLL, nil
+}
+
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string) (string, error) {
+	source, err := os.ReadFile(scriptFile)
+	if err != nil {
+		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
 		return "", err
 	}
-	moduleName, err := parseModuleName(filepath.Join(root, MOD_FILE))
-	if err != nil {
+	l := lexer.New(p.RelPath+"/"+filepath.Base(script), string(source))
+	sp := parser.NewScriptParser(l)
+	program := sp.Parse()
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc)
+
+	// Only link if code module has content
+	if cc != nil && !cc.Compiler.Module.IsNil() {
+		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
+		if err != nil {
+			fmt.Printf("Error loading to memory buffer: %v\n", err)
+			return "", err
+		}
+		clone, err := p.Ctx.ParseIR(buffer)
+		if err != nil {
+			fmt.Printf("Error parsing IR: %v\n", err)
+			return "", err
+		}
+		// Link code-mode module into script's module in-memory
+		if err := llvm.LinkModules(sc.Compiler.Module, clone); err != nil {
+			fmt.Printf("Error linking modules: %v\n", err)
+			return "", err
+		}
+	}
+
+	sc.Compile()
+	ir := sc.Compiler.GenerateIR()
+
+	llName := script + IR_SUFFIX
+	scriptLL := filepath.Join(p.CacheDir, SCRIPT_DIR, llName)
+	os.MkdirAll(filepath.Dir(scriptLL), 0755)
+	if err := os.WriteFile(scriptLL, []byte(ir), 0644); err != nil {
+		fmt.Printf("Error writing IR to %s: %v\n", scriptLL, err)
 		return "", err
 	}
-	rel, err := filepath.Rel(root, cwd)
+	return scriptLL, nil
+}
+
+func (p *Pluto) GenBinary(scriptLL, bin string) error {
+	// Create temp files
+	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
+	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
+	binFile := filepath.Join(p.Cwd, bin)
+
+	// Optimization pass
+	optCmd := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile)
+	if output, err := optCmd.CombinedOutput(); err != nil {
+		fmt.Printf("optimization failed: %s\n%s\n", err, string(output))
+		return err
+	}
+
+	// Compile to object file
+	llcCmd := exec.Command("llc", "-filetype=obj", "-relocation-model=pic", optFile, "-o", objFile)
+	if output, err := llcCmd.CombinedOutput(); err != nil {
+		fmt.Printf("llc compilation failed: %s\n%s\n", err, string(output))
+		return err
+	}
+
+	linkArgs := []string{"-flto", "-fuse-ld=lld"}
+
+	if runtime.GOOS == "darwin" {
+		// Mach-O linker (ld64.lld) wants -dead_strip
+		linkArgs = append(linkArgs, "-Wl,-dead_strip")
+	} else {
+		// ELF linkers (ld, lld) accept --gc-sections
+		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+	}
+
+	linkArgs = append(linkArgs,
+		objFile,
+		"-o",
+		binFile,
+		"-lm", // link against the standard math library
+	)
+
+	// Link executable (with dead code elimination)
+	clangCmd := exec.Command("clang", linkArgs...)
+	if output, err := clangCmd.CombinedOutput(); err != nil {
+		fmt.Printf("linking failed: %s\n%s\n", err, string(output))
+		return err
+	}
+
+	return nil
+}
+
+func (p *Pluto) ScanPlutoFiles() ([]string, []string) {
+	dirEntries, err := os.ReadDir(p.Cwd)
 	if err != nil {
-		err = fmt.Errorf("rel %s -> %s: %w", root, cwd, err)
-		return "", err
+		fmt.Printf("Error reading current directory: %v\n", err)
+		os.Exit(1)
 	}
-	if rel == "." {
-		return moduleName, nil
+
+	codeFiles := []string{}
+	scriptFiles := []string{}
+	for _, entry := range dirEntries {
+		if entry.IsDir() {
+			// TODO we can check if this dir is in pt.mod. If so then compile the directory also
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, PT_SUFFIX) {
+			codeFiles = append(codeFiles, filepath.Join(p.Cwd, name))
+		} else if strings.HasSuffix(name, SPT_SUFFIX) {
+			scriptFiles = append(scriptFiles, filepath.Join(p.Cwd, name))
+		}
 	}
-	// ensure forward slashes
-	rel = filepath.ToSlash(rel)
-	return moduleName + "/" + rel, nil
+	return codeFiles, scriptFiles
+}
+
+func New(cwd string) *Pluto {
+	fmt.Println("Current working directory is", cwd)
+
+	ptcache := defaultPTCache()
+	fmt.Printf("Using PTCACHE: %s\n", ptcache)
+	if err := os.MkdirAll(ptcache, 0755); err != nil {
+		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	p := &Pluto{
+		Cwd: cwd,
+		Ctx: llvm.NewContext(),
+	}
+
+	err := p.resolveModPaths(cwd)
+	if err != nil {
+		os.Exit(1)
+	}
+
+	// Use module path (slashes) as unique cache key
+	p.CacheDir = filepath.Join(ptcache, filepath.FromSlash(p.ModPath))
+	fmt.Printf("Cache dir is %s\n", p.CacheDir)
+
+	return p
 }
 
 func main() {
@@ -283,49 +362,9 @@ func main() {
 		}
 	}
 
-	fmt.Println("Current working directory is", cwd)
-
-	ptcache := defaultPTCache()
-	fmt.Printf("Using PTCACHE: %s\n", ptcache)
-	if err := os.MkdirAll(ptcache, 0755); err != nil {
-		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Determine module import path from pt.mod
-	modPath, err := getFullModPath(cwd)
-	if err != nil {
-		os.Exit(1)
-	}
-
-	fmt.Printf("Resolved module path is %s\n", modPath)
-	// Use module path (slashes) as unique cache key
-	cacheDir := filepath.Join(ptcache, filepath.FromSlash(modPath))
-	fmt.Printf("Cache dir is %s\n", cacheDir)
-
-	dirEntries, err := os.ReadDir(cwd)
-	if err != nil {
-		fmt.Printf("Error reading current directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	codeFiles := []string{}
-	scriptFiles := []string{}
-	for _, entry := range dirEntries {
-		if entry.IsDir() {
-			// TODO compile within directories too
-			continue
-		}
-		name := entry.Name()
-		if strings.HasSuffix(name, PT_SUFFIX) {
-			codeFiles = append(codeFiles, filepath.Join(cwd, name))
-		} else if strings.HasSuffix(name, SPT_SUFFIX) {
-			scriptFiles = append(scriptFiles, filepath.Join(cwd, name))
-		}
-	}
-
-	ctx := llvm.NewContext()
-	codeCompiler, codeLL, err := compileCode(codeFiles, cacheDir, modPath, ctx)
+	p := New(cwd)
+	codeFiles, scriptFiles := p.ScanPlutoFiles()
+	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
 		return
 	}
@@ -333,12 +372,12 @@ func main() {
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptLL, err := compileScript(scriptFile, script, cacheDir, codeCompiler, codeLL, ctx)
+		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL)
 		if err != nil {
 			continue
 		}
 
-		if err := genBinary(scriptLL, script, cacheDir, cwd); err != nil {
+		if err := p.GenBinary(scriptLL, script); err != nil {
 			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
 		} else {
 			fmt.Printf("✅ Successfully built binary for script: %s\n", script)

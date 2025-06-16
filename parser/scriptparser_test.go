@@ -37,7 +37,7 @@ func TestAssign(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestAssign", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
@@ -60,7 +60,7 @@ func TestInvalidAssignment(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestInvalidAssignment", tt.input)
 			sp := NewScriptParser(l)
 			sp.Parse()
 			errs := sp.Errors()
@@ -81,7 +81,7 @@ func TestMultiAssign(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestMultiAssign", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
@@ -95,7 +95,7 @@ func TestMultiAssign(t *testing.T) {
 
 func TestIdentifierExpression(t *testing.T) {
 	const input = "foobar"
-	l := lexer.New(input)
+	l := lexer.New("TestIdentifierExpression", input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
@@ -109,7 +109,7 @@ func TestIdentifierExpression(t *testing.T) {
 
 func TestIntegerLiteralExpression(t *testing.T) {
 	const input = "5"
-	l := lexer.New(input)
+	l := lexer.New("TestIntegerLiteralExpression", input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
@@ -123,7 +123,7 @@ func TestIntegerLiteralExpression(t *testing.T) {
 
 func TestStringLiteral(t *testing.T) {
 	const input = `"hello"`
-	l := lexer.New(input)
+	l := lexer.New("TestStringLiteral", input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
@@ -149,7 +149,7 @@ func TestParsingPrefixExpressions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestParsingPrefixExpression", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Empty(t, sp.Errors())
@@ -192,7 +192,7 @@ func TestParsingInfixExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestParsingInfixExpression", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
@@ -238,7 +238,7 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestOperatorPrecedenceParsing", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
@@ -263,7 +263,7 @@ func TestImplicitMultParsing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestImplicitMultParsing", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
@@ -287,7 +287,7 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestImplicitMultParsingSpaces", tt.input)
 			sp := NewScriptParser(l)
 			sp.Parse()
 			errs := sp.Errors()
@@ -319,7 +319,7 @@ func TestConditionExpression(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestConditionExpression", tt.input)
 			sp := NewScriptParser(l)
 			program := sp.Parse()
 			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
@@ -341,7 +341,7 @@ func TestConditionExpression(t *testing.T) {
 // Multi-return condition
 func TestMultiReturnCondition(t *testing.T) {
 	const input = "x, y = a > 5 10, 20"
-	l := lexer.New(input)
+	l := lexer.New("TestMultiReturnCondition", input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
@@ -363,7 +363,7 @@ func TestInvalidConditionError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
+			l := lexer.New("TestInvalidConditionError", tt.input)
 			sp := NewScriptParser(l)
 			sp.Parse()
 			errs := sp.Errors()
@@ -376,7 +376,7 @@ func TestInvalidConditionError(t *testing.T) {
 func TestNestedGuardCondition(t *testing.T) {
 	const input = "res = (a > 3) < (b < 5) (c + d)"
 	t.Run("nested guard condition", func(t *testing.T) {
-		l := lexer.New(input)
+		l := lexer.New("TestNestedGuardCondition", input)
 		sp := NewScriptParser(l)
 		program := sp.Parse()
 		require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", input, sp.Errors())
@@ -398,7 +398,7 @@ func TestNestedGuardCondition(t *testing.T) {
 // Function call in condition
 func TestFunctionCallInCondition(t *testing.T) {
 	const input = "res = pow(2, 3) > 8 result"
-	l := lexer.New(input)
+	l := lexer.New("TestFunctionCallInCondition", input)
 	sp := NewScriptParser(l)
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())

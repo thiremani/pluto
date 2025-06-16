@@ -39,7 +39,7 @@ func TestParseConstStatement(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := lexer.New(tt.input)
+		l := lexer.New("TestParseConstStatement", tt.input)
 		p := NewCodeParser(l)
 		code := p.Parse()
 
@@ -107,7 +107,7 @@ func TestParseFuncStatement(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		l := lexer.New(tt.input)
+		l := lexer.New("TestParseFuncStatement", tt.input)
 		p := NewCodeParser(l)
 		code := p.Parse()
 
@@ -138,7 +138,7 @@ func TestFunctionOverloading(t *testing.T) {
 y = add(a, b, c)
     a + b + c
 `
-	l := lexer.New(input)
+	l := lexer.New("TestFunctionOverloading", input)
 	p := NewCodeParser(l)
 	code := p.Parse()
 
@@ -157,7 +157,7 @@ func TestMixedValidInvalid(t *testing.T) {
 invalid = f(x, x)
     invalid = x * 2
 `
-	l := lexer.New(input)
+	l := lexer.New("TestMixedValidInvalid", input)
 	p := NewCodeParser(l)
 	p.Parse()
 
@@ -172,7 +172,7 @@ func TestFuncStatementParsing(t *testing.T) {
     y = 0:n y * x`
 
 	t.Run("parse function literal", func(t *testing.T) {
-		l := lexer.New(input)
+		l := lexer.New("TestFuncStatementParsing", input)
 		cp := NewCodeParser(l)
 		program := cp.Parse()
 		require.Empty(t, cp.p.errors)
@@ -256,7 +256,7 @@ func TestFunctionParameterParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(strings.ReplaceAll(tt.input, `\n`, "\n"))
+			l := lexer.New("TestFunctionParameterParsing", strings.ReplaceAll(tt.input, `\n`, "\n"))
 			cp := NewCodeParser(l)
 			program := cp.Parse()
 

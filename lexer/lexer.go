@@ -8,6 +8,7 @@ import (
 )
 
 type Lexer struct {
+	FileName     string
 	input        []rune
 	position     int   // current position in input (points to current rune)
 	readPosition int   // current reading position in input (after current rune)
@@ -28,18 +29,19 @@ const (
 	INDENT_TAB_ERR = "indent using tabs not allowed"
 )
 
-func New(input string) *Lexer {
-	l := &Lexer{input: []rune(input), lineOffset: 1, onNewline: true}
+func New(fileName, input string) *Lexer {
+	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, onNewline: true}
 	l.readRune()
 	return l
 }
 
 func (l *Lexer) createToken(tokenType token.TokenType, literal string) token.Token {
 	return token.Token{
-		Type:    tokenType,
-		Literal: literal,
-		Line:    l.lineOffset,
-		Column:  l.column,
+		FileName: l.FileName,
+		Type:     tokenType,
+		Literal:  literal,
+		Line:     l.lineOffset,
+		Column:   l.column,
 	}
 }
 
