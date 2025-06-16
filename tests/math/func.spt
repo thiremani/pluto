@@ -12,3 +12,24 @@ quo, rem
 
 q2, r2 = div(dividend, 2.3)
 q2, r2
+
+mod, res = isDiv(10, 3)
+mod, res
+
+x, y = 12, 4
+mod, res = isDiv(12, 4)
+mod, res
+
+flx, fly = 10.5, 3.5
+flmod, flres = isDiv(flx, fly)
+flmod, flres
+
+flmod, flres = isDiv(14, 5.8)
+flmod, flres
+
+i = 3
+s1, s2 = f(i) + g(i)
+s1, s2
+
+a, b, c, d = f(2), g(1)
+a, b, c, d
