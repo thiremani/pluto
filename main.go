@@ -345,6 +345,7 @@ func New(cwd string) *Pluto {
 	// Use module path (slashes) as unique cache key
 	p.CacheDir = filepath.Join(ptcache, filepath.FromSlash(p.ModPath))
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
+	fmt.Println()
 
 	return p
 }
@@ -366,6 +367,11 @@ func main() {
 	codeFiles, scriptFiles := p.ScanPlutoFiles()
 	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
+		return
+	}
+
+	if len(scriptFiles) == 0 {
+		fmt.Println("😱 No script file to compile!")
 		return
 	}
 
