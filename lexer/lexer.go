@@ -202,7 +202,7 @@ func (l *Lexer) skipNewlineSpaces() *token.CompileError {
 			l.readRune()
 			err = &token.CompileError{
 				Token: l.createToken(token.ILLEGAL, string(l.curr)),
-				Msg:   INDENT_TAB_ERR,
+				Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
 			}
 		}
 
@@ -253,7 +253,7 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 		} else if l.column > level {
 			return false, &token.CompileError{
 				Token: l.createToken(token.ILLEGAL, string(l.curr)),
-				Msg:   INDENT_ERR,
+				Msg:   INDENT_ERR + ". At char: " + string(l.curr),
 			}
 		}
 	}
@@ -261,7 +261,7 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 	// column in > 1 but does not match any level in the indentStack
 	return false, &token.CompileError{
 		Token: l.createToken(token.ILLEGAL, string(l.curr)),
-		Msg:   INDENT_ERR,
+		Msg:   INDENT_ERR + ". At char: " + string(l.curr),
 	}
 }
 

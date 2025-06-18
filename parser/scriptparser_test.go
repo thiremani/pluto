@@ -55,8 +55,8 @@ func TestInvalidAssignment(t *testing.T) {
 		input    string
 		expError string
 	}{
-		{"numeric LHS", "123 = 5", `1:1:123:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`},
-		{"invalid multi-assign", "x, 5 = 1, 2", `1:4:5:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral"`},
+		{"numeric LHS", "123 = 5", `TestInvalidAssignment:1:1:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral". Literal: "123"`},
+		{"invalid multi-assign", "x, 5 = 1, 2", `TestInvalidAssignment:1:4:expected expression to be of type "*ast.Identifier". Instead got "*ast.IntegerLiteral". Literal: "5"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,8 +281,8 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 		expErrLen int
 		expErr    string
 	}{
-		{"implicit mult with space", "x = 5 a", 1, "1:5:5:Expression \"5\" is not a condition. The main operation should be a comparison"},
-		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "1:7:+:Expression \"(1 + 2)\" is not a condition. The main operation should be a comparison 1:15:3:expected next token to be =, got IDENT instead"},
+		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. The main operation should be a comparison"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. The main operation should be a comparison TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
 	}
 
 	for _, tt := range tests {

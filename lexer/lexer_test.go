@@ -162,7 +162,7 @@ func TestIndentErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 2, 10},
 		{token.INT, "5", "", 2, 12},
 		{token.NEWLINE, "\n", "", 2, 13},
-		{token.ILLEGAL, "c", "3:3:c:" + INDENT_ERR, 3, 3},
+		{token.ILLEGAL, "c", "3:3:" + INDENT_ERR + ". At char: c", 3, 3},
 	}
 
 	checkInput(t, input, tests)
@@ -177,7 +177,7 @@ func TestTabErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 6},
 		{token.INT, "5", "", 1, 8},
 		{token.NEWLINE, "\n", "", 1, 9},
-		{token.ILLEGAL, "b", "2:6:b:" + INDENT_TAB_ERR, 2, 6},
+		{token.ILLEGAL, "b", "2:6:" + INDENT_TAB_ERR + ". At char: b", 2, 6},
 	}
 
 	checkInput(t, input, tests)
@@ -209,12 +209,12 @@ func TestTabErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 5},
 		{token.INT, "123", "", 1, 7},
 		{token.NEWLINE, "\n", "", 1, 10},
-		{token.ILLEGAL, "m", "2:2:m:" + INDENT_TAB_ERR, 2, 2},
+		{token.ILLEGAL, "m", "2:2:" + INDENT_TAB_ERR + ". At char: m", 2, 2},
 		{token.IDENT, "m", "", 2, 2},
 		{token.ASSIGN, "=", "", 2, 4},
 		{token.IDENT, "n", "", 2, 6},
 		{token.NEWLINE, "\n", "", 2, 7},
-		{token.ILLEGAL, "q", "3:3:q:" + INDENT_TAB_ERR, 3, 3},
+		{token.ILLEGAL, "q", "3:3:" + INDENT_TAB_ERR + ". At char: q", 3, 3},
 		{token.IDENT, "q", "", 3, 3},
 		{token.ASSIGN, "=", "", 3, 5},
 		{token.IDENT, "r", "", 3, 7},
@@ -458,7 +458,7 @@ root2`
 			{token.INDENT, "p", "", 2, 5},
 			{token.IDENT, "pass", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 9},
-			{token.ILLEGAL, "p", "3:3:p:" + INDENT_ERR, 3, 3},
+			{token.ILLEGAL, "p", "3:3:" + INDENT_ERR + ". At char: p", 3, 3},
 		}
 		checkInput(t, src, expected)
 	})
@@ -469,7 +469,7 @@ root2`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.ILLEGAL, "p", "2:3:p:" + INDENT_TAB_ERR, 2, 3},
+			{token.ILLEGAL, "p", "2:3:" + INDENT_TAB_ERR + ". At char: p", 2, 3},
 		}
 		checkInput(t, src, expected)
 	})
@@ -559,7 +559,7 @@ print()`
 			{token.DEINDENT, "b", "", 4, 5},
 			{token.IDENT, "bar", "", 4, 5},
 			{token.NEWLINE, "\n", "", 4, 8},
-			{token.ILLEGAL, "b", "5:3:b:" + INDENT_ERR, 5, 3},
+			{token.ILLEGAL, "b", "5:3:" + INDENT_ERR + ". At char: b", 5, 3},
 		}
 		checkInput(t, src, expected)
 	})

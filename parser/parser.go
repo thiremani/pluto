@@ -421,7 +421,7 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 	for _, exp := range expList {
 		identifier, ok := exp.(*ast.Identifier)
 		if !ok {
-			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q", reflect.TypeOf(identifier), reflect.TypeOf(exp))
+			msg := fmt.Sprintf("expected expression to be of type %q. Instead got %q. Literal: %q", reflect.TypeOf(identifier), reflect.TypeOf(exp), exp.Tok().Literal)
 			ce = &token.CompileError{
 				Token: exp.Tok(),
 				Msg:   msg,

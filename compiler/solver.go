@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -19,6 +20,7 @@ type TypeSolver struct {
 	InProgress   map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
 	ScriptFunc   string              // this is the current func in the main scope we are inferring type for
 	Converging   bool
+	Errors       []*token.CompileError
 }
 
 func NewTypeSolver(program *ast.Program, cc *CodeCompiler) *TypeSolver {
@@ -35,6 +37,7 @@ func NewTypeSolver(program *ast.Program, cc *CodeCompiler) *TypeSolver {
 		InProgress:   map[string]struct{}{},
 		ScriptFunc:   "",
 		Converging:   false,
+		Errors:       []*token.CompileError{},
 	}
 }
 
@@ -69,7 +72,12 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	if len(stmt.Name) != len(types) {
-		panic(fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d", len(stmt.Name), len(types)))
+		ce := &token.CompileError{
+			Token: stmt.Token,
+			Msg:   fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d. Stmt %q", len(stmt.Name), len(types), stmt.Token.Literal),
+		}
+		ts.Errors = append(ts.Errors, ce)
+		return
 	}
 
 	trueValues := make(map[string]Type)
@@ -88,7 +96,12 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 				continue
 			}
 			if newType.String() != typ.String() {
-				panic(fmt.Sprintf("cannot reassign type to identifier %s. Old Type: %s. New Type: %s", ident.Value, typ, newType))
+				ce := &token.CompileError{
+					Token: ident.Token,
+					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
+				}
+				ts.Errors = append(ts.Errors, ce)
+				return
 			}
 			continue
 		}
@@ -139,7 +152,12 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
 		return t
 	}
 
-	panic(fmt.Sprintf("undefined variable: %s. Not found in script or code files. Could not infer type", ident.Value))
+	ce := &token.CompileError{
+		Token: ident.Token,
+		Msg:   fmt.Sprintf("variable not found in script or code files. Could not infer type. Undefined variable: %q", ident.Token.Literal),
+	}
+	ts.Errors = append(ts.Errors, ce)
+	return Unresolved{}
 }
 
 // TypeInfixExpression returns output types of infix expression
@@ -149,7 +167,12 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 	left := ts.TypeExpression(expr.Left)
 	right := ts.TypeExpression(expr.Right)
 	if len(left) != len(right) {
-		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d", expr.Left, len(left), expr.Right, len(right)))
+		ce := &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d. Operator: %q", expr.Left, len(left), expr.Right, len(right), expr.Token.Literal),
+		}
+		ts.Errors = append(ts.Errors, ce)
+		return []Type{Unresolved{}}
 	}
 
 	res := []Type{}
@@ -180,7 +203,11 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 		var fn opFunc
 		var ok bool
 		if fn, ok = defaultOps[key]; !ok {
-			panic(fmt.Sprintf("unsupported operator: %s for types: %s and %s", expr.Operator, leftType, rightType))
+			cerr := &token.CompileError{
+				Token: expr.Token,
+				Msg:   fmt.Sprintf("unsupported operator: %q for types: %s, %s", expr.Token, leftType, rightType),
+			}
+			ts.Errors = append(ts.Errors, cerr)
 		}
 
 		leftSym := &Symbol{
@@ -225,7 +252,11 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 		var fn unaryOpFunc
 		var ok bool
 		if fn, ok = defaultUnaryOps[key]; !ok {
-			panic(fmt.Sprintf("unsupported unary operator %s for type %s", expr.Operator, opType))
+			cerr := &token.CompileError{
+				Token: expr.Token,
+				Msg:   fmt.Sprintf("unsupported unary operator: %q for type: %s", expr.Operator, opType),
+			}
+			ts.Errors = append(ts.Errors, cerr)
 		}
 
 		opSym := &Symbol{
@@ -253,7 +284,11 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 	code := ts.CodeCompiler.Code
 	template, yes := code.Func.Map[fk]
 	if !yes {
-		panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
+		cerr := &token.CompileError{
+			Token: ce.Token,
+			Msg:   fmt.Sprintf("undefined function: %s", ce.Function.Value),
+		}
+		ts.Errors = append(ts.Errors, cerr)
 	}
 
 	mangled := mangle(ce.Function.Value, args)

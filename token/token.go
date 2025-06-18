@@ -1,6 +1,9 @@
 package token
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 type TokenType int
 
@@ -207,5 +210,11 @@ type CompileError struct {
 }
 
 func (ce *CompileError) Error() string {
-	return strconv.Itoa(ce.Token.Line) + ":" + strconv.Itoa(ce.Token.Column) + ":" + ce.Token.Literal + ":" + ce.Msg
+	// core location prefix
+	prefix := fmt.Sprintf("%d:%d", ce.Token.Line, ce.Token.Column)
+	if ce.Token.FileName != "" {
+		prefix = fmt.Sprintf("%s:%s", ce.Token.FileName, prefix)
+	}
+	// message, optionally quoting the literal
+	return fmt.Sprintf("%s:%s", prefix, ce.Msg)
 }

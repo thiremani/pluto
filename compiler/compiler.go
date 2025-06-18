@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -32,6 +33,7 @@ type Compiler struct {
 	formatCounter int           // Track unique format strings
 	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 	FuncCache     map[string]*Func
+	Errors        []*token.CompileError
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -46,6 +48,7 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		formatCounter: 0,
 		CodeCompiler:  cc,
 		FuncCache:     make(map[string]*Func),
+		Errors:        []*token.CompileError{},
 	}
 }
 
@@ -453,28 +456,21 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 
 // if compile is false, we only return symbol with type info. This is used for type inference
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
-	if s, ok := Get(c.Scopes, ident.Value); ok {
+	s, ok := Get(c.Scopes, ident.Value)
+	if ok {
 		return c.derefIfPointer(s)
 	}
 
-	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
-		panic(fmt.Sprintf("undefined variable: %s", ident.Value))
-	}
 	cc := c.CodeCompiler.Compiler
-	if s, ok := Get(cc.Scopes, ident.Value); ok {
-		return c.derefIfPointer(s)
-	}
-
-	panic(fmt.Sprintf("undefined variable: %s. Not found in script or code files", ident.Value))
+	// no need to check ok as that is done in the typesolver
+	s, _ = Get(cc.Scopes, ident.Value)
+	return c.derefIfPointer(s)
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
 	res = []*Symbol{}
 	left := c.compileExpression(expr.Left)
 	right := c.compileExpression(expr.Right)
-	if len(left) != len(right) {
-		panic(fmt.Sprintf("Left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d", expr.Left, len(left), expr.Right, len(right)))
-	}
 
 	// Build a key based on the operator literal and the operand types.
 	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
@@ -489,11 +485,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Sym
 			RightType: r.Type.String(),
 		}
 
-		var fn opFunc
-		var ok bool
-		if fn, ok = defaultOps[key]; !ok {
-			panic("unsupported operator: " + expr.Operator + " for types: " + l.Type.String() + ", " + r.Type.String())
-		}
+		fn := defaultOps[key]
 		res = append(res, fn(c, l, r, true))
 	}
 	return
@@ -511,12 +503,7 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*S
 			OperandType: op.Type.String(),
 		}
 
-		var fn unaryOpFunc
-		var ok bool
-		if fn, ok = defaultUnaryOps[key]; !ok {
-			panic("unsupported unary operator: " + expr.Operator + " for type: " + op.Type.String())
-
-		}
+		fn := defaultUnaryOps[key]
 		res = append(res, fn(c, c.derefIfPointer(op), true))
 	}
 	return
@@ -548,10 +535,7 @@ func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Typ
 }
 
 func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string) (llvm.Value, []Type) {
-	FuncType, ok := c.FuncCache[mangled]
-	if !ok {
-		panic("FuncType not in function cache! Mangled name: " + mangled)
-	}
+	FuncType := c.FuncCache[mangled]
 
 	llvmInputs := make([]llvm.Type, len(args))
 	for i, a := range args {
@@ -656,10 +640,8 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		}
 
 		code := c.CodeCompiler.Code
-		template, ok := code.Func.Map[fk]
-		if !ok {
-			panic(fmt.Sprintf("undefined function: %s", ce.Function.Value))
-		}
+		// no need to check for ok as typesolver does that
+		template := code.Func.Map[fk]
 
 		savedBlock := c.builder.GetInsertBlock()
 		fn, outTypes = c.compileFunc(template, args, mangled)
