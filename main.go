@@ -2,16 +2,18 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
-	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/compiler"
-	"github.com/thiremani/pluto/lexer"
-	"github.com/thiremani/pluto/parser"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/compiler"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/parser"
 
 	"tinygo.org/x/go-llvm"
 )
@@ -173,6 +175,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 	}
 
 	pkgCode := ast.NewCode()
+	var errStr string
 	for _, codeFile := range codeFiles {
 		source, err := os.ReadFile(codeFile)
 		if err != nil {
@@ -184,17 +187,23 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 		code := cp.Parse()
 
 		if errs := cp.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				fmt.Printf("%s: %s\n", codeFile, e)
-			}
-			err := fmt.Errorf("error parsing code file %s", codeFile)
-			return nil, "", err
+			fmt.Println(errs)
+			errStr += fmt.Sprintf("error parsing code file %s\n", codeFile)
+			continue
 		}
 		pkgCode.Merge(code)
 	}
 
+	if errStr != "" {
+		return nil, "", errors.New(errStr)
+	}
+
 	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
-	cc.Compile()
+	errs := cc.Compile()
+	if len(errs) != 0 {
+		fmt.Println(errs)
+		return nil, "", fmt.Errorf("error while compiling code module %s", p.ModPath)
+	}
 	ir := cc.Compiler.GenerateIR()
 
 	pkg := filepath.Base(p.ModPath)
@@ -238,7 +247,11 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		}
 	}
 
-	sc.Compile()
+	errs := sc.Compile()
+	if len(errs) != 0 {
+		fmt.Println(errs)
+		return "", fmt.Errorf("error compiling scriptFile %s for script %s", scriptFile, script)
+	}
 	ir := sc.Compiler.GenerateIR()
 
 	llName := script + IR_SUFFIX
@@ -367,7 +380,8 @@ func main() {
 	codeFiles, scriptFiles := p.ScanPlutoFiles()
 	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
-		return
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	if len(scriptFiles) == 0 {
@@ -380,6 +394,8 @@ func main() {
 		fmt.Println("🛠️ Starting compile for script: " + script)
 		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL)
 		if err != nil {
+			fmt.Println(err)
+			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
 			continue
 		}
 

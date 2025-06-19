@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -18,9 +19,11 @@ func NewCodeCompiler(ctx llvm.Context, moduleName string, code *ast.Code) *CodeC
 }
 
 // compile compiles the constants in the AST and adds them to the compiler's symbol table.
-func (cc *CodeCompiler) Compile() {
+func (cc *CodeCompiler) Compile() []*token.CompileError {
 	// Compile constants
 	for _, stmt := range cc.Code.Const.Statements {
 		cc.Compiler.compileConstStatement(stmt)
 	}
+
+	return cc.Compiler.Errors
 }

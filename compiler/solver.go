@@ -52,10 +52,12 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 	}
 }
 
-func (ts *TypeSolver) Solve() {
+func (ts *TypeSolver) Solve() []*token.CompileError {
 	for _, stmt := range ts.Program.Statements {
 		ts.TypeStatement(stmt)
 	}
+
+	return ts.Errors
 }
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {

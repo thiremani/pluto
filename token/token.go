@@ -218,3 +218,9 @@ func (ce *CompileError) Error() string {
 	// message, optionally quoting the literal
 	return fmt.Sprintf("%s:%s", prefix, ce.Msg)
 }
+
+func Str(errs []*CompileError) {
+	for _, err := range errs {
+		fmt.Println(err)
+	}
+}
