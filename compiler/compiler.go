@@ -684,7 +684,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	for _, expr := range ps.Expression {
 		// If the expression is a string literal, check for embedded markers.
 		if strLit, ok := expr.(*ast.StringLiteral); ok {
-			processed, newArgs := c.formatIdentifiers(strLit.Value)
+			processed, newArgs := c.formatIdentifiers(strLit)
 			formatStr += processed + " " // separate expressions with a space
 			args = append(args, newArgs...)
 			continue
@@ -693,7 +693,16 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		// Compile the expression and get its value and type
 		syms := c.compileExpression(expr)
 		for _, s := range syms {
-			formatStr += defaultSpecifier(s.Type) + " "
+			spec, err := defaultSpecifier(s.Type)
+			if err != nil {
+				cerr := &token.CompileError{
+					Token: expr.Tok(),
+					Msg:   err.Error(),
+				}
+				c.Errors = append(c.Errors, cerr)
+				continue
+			}
+			formatStr += spec + " "
 			args = append(args, s.Val)
 		}
 	}

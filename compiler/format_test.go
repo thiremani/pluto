@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -11,76 +10,78 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-func TestFormatStringPanics(t *testing.T) {
+func TestFormatStringErrors(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		expectPanic string
+		expectError string
 	}{
 		{
 			name:        "NoIdentifier",
 			input:       `"Value: %d"`,
-			expectPanic: "specifier found without corresponding identifier for variable. The allowed format is -var%specifier Specifier is at index 7",
+			expectError: "TestFormatStringErrors:1:1:specifier found without corresponding identifier for variable. The allowed format is -var%specifier. Specifier is at index 7. Str: Value: %d",
 		},
 		{
 			name: "AsteiskNotAllowed",
 			input: `x = 10
 "Value: -x%*d"`,
-			expectPanic: "Using * not allowed in format specifier. Instead use (-var), where var is an integer variable.",
+			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
 		},
 		{
 			name: "MissingClosingParen",
 			input: `x = 2
 "Value: -x%(-var"`,
-			expectPanic: "Expected ) after the identifier var",
+			expectError: "Expected ) after the identifier var",
 		},
 		{
 			name:        "UndefinedVariable",
 			input:       `"Value: -undefinedVar%d"`,
-			expectPanic: "Identifier undefinedVar not found. Unexpected specifier %d after identifier",
+			expectError: "Identifier undefinedVar not found. Unexpected specifier %d after identifier",
 		},
 		{
 			name: "InvalidFormatSpecifier",
 			input: `x = 4
 "x = -x%"`,
-			expectPanic: "Invalid format specifier string: Format specifier is incomplete",
+			expectError: "Invalid format specifier string: Format specifier is incomplete",
 		},
 		{
 			name:        "UndefinedVariable",
 			input:       `"Value: -x%s"`,
-			expectPanic: "Identifier x not found. Unexpected specifier %s after identifier",
+			expectError: "Identifier x not found. Unexpected specifier %s after identifier",
 		},
 		{
 			name: "IdentifierWithinSpecifierNotFound",
 			input: `x = 10
 "Value: -x%(-var)d"`,
-			expectPanic: "Identifier var not found within specifier. Specifier was after identifier x",
+			expectError: "Identifier var not found within specifier. Specifier was after identifier x",
 		},
 		{
 			name: "SpecifierDoesNotEnd",
 			input: `x = 10
 "Value: -x%#-"`,
-			expectPanic: "Invalid format specifier string: Format specifier '%#-' is incomplete",
+			expectError: "Invalid format specifier string: Format specifier '%#-' is incomplete",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatal("Expected panic, got none")
-				}
-				if !strings.Contains(fmt.Sprint(r), tc.expectPanic) {
-					t.Fatalf("Expected panic containing %q, got %q", tc.expectPanic, r)
-				}
-			}()
-
-			l := lexer.New("TestFormatStringPanics", tc.input)
+			l := lexer.New("TestFormatStringErrors", tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			sc := NewScriptCompiler(llvm.NewContext(), "TestFormatPanics", program, nil)
-			sc.Compile()
+			// Check for parser errors first, though these tests focus on compiler errors
+			if len(p.Errors()) > 0 {
+				t.Fatalf("Unexpected parser errors: %v", p.Errors())
+			}
+
+			sc := NewScriptCompiler(llvm.NewContext(), "TestFormatErrors", program, nil)
+			errs := sc.Compile()
+
+			if len(errs) == 0 {
+				t.Fatal("Expected a compile error, but got none.")
+			}
+			if !strings.Contains(errs[0].Error(), tc.expectError) {
+				t.Errorf("Expected error message to contain %q, but got %q", tc.expectError, errs[0].Error())
+			}
 		})
 	}
 }

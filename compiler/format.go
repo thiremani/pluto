@@ -1,63 +1,66 @@
 package compiler
 
 import (
+	"errors"
 	"fmt"
-	"github.com/thiremani/pluto/lexer"
 	"strings"
+
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
 func formatSpecifierEnd(ch rune) bool {
-	return ch == 'd' ||
-		ch == 'i' ||
-		ch == 'u' ||
-		ch == 'o' ||
-		ch == 'x' ||
-		ch == 'X' ||
-		ch == 'f' ||
-		ch == 'F' ||
-		ch == 'e' ||
-		ch == 'E' ||
-		ch == 'g' ||
-		ch == 'G' ||
-		ch == 'a' ||
-		ch == 'c' ||
-		ch == 's' ||
-		ch == 'p' ||
-		ch == 'n' ||
-		ch == '%'
+	switch ch {
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'c', 's', 'p', 'n', '%':
+		return true
+	}
+	return false
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
-func defaultSpecifier(t Type) string {
+func defaultSpecifier(t Type) (string, error) {
 	switch t.Kind() {
 	case IntKind:
-		return "%ld"
+		return "%ld", nil
 	case FloatKind:
-		return "%.15g"
+		return "%.15g", nil
 	case StrKind:
-		return "%s"
+		return "%s", nil
 	default:
-		err := "unsupported type in print statement " + t.String()
-		panic(err)
+		err := fmt.Errorf("unsupported type in print statement %s", t.String())
+		return "", err
 	}
 }
 
 // parseSpecifier assumes runes[start] == '%'
 // for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
 // these are then returned as specIds. (-identifier) is replaced with *
-func parseSpecifier(runes []rune, start int) (specIds []string, spec string, endIndex int) {
+func (c *Compiler) parseSpecifier(sl *ast.StringLiteral, runes []rune, start int) (specIds []string, spec string, endIndex int) {
 	// Read until we encounter a conversion specifier end char (like d, f, etc.)
 	specRunes := []rune{runes[start]}
 	it := start + 1
 	for it < len(runes) && !formatSpecifierEnd(runes[it]) {
 		if runes[it] == '*' {
-			panic("Using * not allowed in format specifier. Instead use (-var), where var is an integer variable.")
+			cerr := &token.CompileError{
+				Token: sl.Token,
+				Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", sl.Value),
+			}
+			c.Errors = append(c.Errors, cerr)
+			it += 1
+			continue
 		}
 		if it+2 < len(runes) && runes[it] == '(' && runes[it+1] == '-' && lexer.IsLetter(runes[it+2]) {
 			specId, end := parseIdentifier(runes, it+2)
 			if end >= len(runes) || runes[end] != ')' {
-				panic(fmt.Sprintf("Expected ) after the identifier %s", specId))
+				cerr := &token.CompileError{
+					Token: sl.Token,
+					Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, sl.Value),
+				}
+				c.Errors = append(c.Errors, cerr)
+				it = end + 1
+				continue
 			}
 			specIds = append(specIds, specId)
 			specRunes = append(specRunes, '*')
@@ -74,7 +77,11 @@ func parseSpecifier(runes []rune, start int) (specIds []string, spec string, end
 		it++
 	}
 	if !formatSpecifierEnd(specRunes[len(specRunes)-1]) {
-		panic(fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete", string(specRunes)))
+		cerr := &token.CompileError{
+			Token: sl.Token,
+			Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), sl.Value),
+		}
+		c.Errors = append(c.Errors, cerr)
 	}
 
 	endIndex = it
@@ -95,16 +102,23 @@ func parseIdentifier(runes []rune, start int) (identifier string, end int) {
 
 // parseMarker attempts to parse a marker starting at index i in runes.
 // It returns the parsed identifier, the custom specifier (if any), and the new index.
-func parseMarker(runes []rune, i int) (idents []string, customSpec string, newIndex int) {
+func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (idents []string, customSpec string, newIndex int, err error) {
 	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start.
 	specIds := make([]string, 0)
 	identifier, end := parseIdentifier(runes, i+1)
 	if end < len(runes) && runes[end] == '%' {
 		if end+1 == len(runes) {
-			panic("Invalid format specifier string: Format specifier is incomplete")
+			cerr := &token.CompileError{
+				Token: sl.Token,
+				Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier is incomplete. Str: %s", sl.Value),
+			}
+			c.Errors = append(c.Errors, cerr)
+			newIndex = end + 1
+			err = errors.New(cerr.Msg)
+			return
 		}
 		specStart := end
-		specIds, customSpec, end = parseSpecifier(runes, specStart)
+		specIds, customSpec, end = c.parseSpecifier(sl, runes, specStart)
 	}
 
 	idents = append(idents, identifier)
@@ -114,7 +128,7 @@ func parseMarker(runes []rune, i int) (idents []string, customSpec string, newIn
 }
 
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
-func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (formattedStr string, idArgs []llvm.Value) {
+func (c *Compiler) parseIdsWithSpecifiers(sl *ast.StringLiteral, ids []string, customSpec string) (formattedStr string, idArgs []llvm.Value) {
 	var builder strings.Builder
 	mainId := ids[0]
 	// Look up the identifier in the symbol table.
@@ -125,14 +139,28 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 			var specSym *Symbol
 			var exists bool
 			if specSym, exists = Get(c.Scopes, specId); !exists {
-				panic(fmt.Sprintf("Identifier %s not found within specifier. Specifier was after identifier %s", specId, mainId))
+				cerr := &token.CompileError{
+					Token: sl.Token,
+					Msg:   fmt.Sprintf("Identifier %s not found within specifier. Specifier was after identifier %s. Str: %s", specId, mainId, sl.Value),
+				}
+				c.Errors = append(c.Errors, cerr)
+				continue
 			}
 			idArgs = append(idArgs, c.derefIfPointer(specSym).Val)
 		}
 
 		// if customSpec is either "" or %% it must be written later anyway. %% must be written as is.
 		if customSpec == "" || customSpec == "%%" {
-			builder.WriteString(defaultSpecifier(sym.Type))
+			spec, err := defaultSpecifier(sym.Type)
+			if err != nil {
+				cerr := &token.CompileError{
+					Token: sl.Token,
+					Msg:   fmt.Sprintf("Error parsing ids with specifiers. String: %s. Err: %s", sl.Value, err),
+				}
+				c.Errors = append(c.Errors, cerr)
+				return
+			}
+			builder.WriteString(spec)
 		}
 		builder.WriteString(customSpec)
 		formattedStr = builder.String()
@@ -147,12 +175,20 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 	// If the symbol isn't found, you might want to error out or leave the marker intact.
 	// Here, we simply output the marker as-is.
 	if len(ids) > 1 {
-		panic(fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier with identifier parameters %v", mainId, customSpec, ids[1:]))
+		cerr := &token.CompileError{
+			Token: sl.Token,
+			Msg:   fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier with identifier parameters %v. Str: %s", mainId, customSpec, ids[1:], sl.Value),
+		}
+		c.Errors = append(c.Errors, cerr)
 	}
 	builder.WriteRune('-')
 	builder.WriteString(mainId)
 	if customSpec != "" && customSpec != "%%" {
-		panic(fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier", mainId, customSpec))
+		cerr := &token.CompileError{
+			Token: sl.Token,
+			Msg:   fmt.Sprintf("Identifier %s not found. Unexpected specifier %s after identifier. Str: %s", mainId, customSpec, sl.Value),
+		}
+		c.Errors = append(c.Errors, cerr)
 	}
 	builder.WriteString(customSpec)
 	formattedStr = builder.String()
@@ -166,12 +202,12 @@ func (c *Compiler) parseIdsWithSpecifiers(ids []string, customSpec string) (form
 // it additionally supports specifiers %d, %f etc as defined by the printf function
 // the * option for the width and precision should be replaced by their corresponding variables within parentheses and with the marker
 // eg: -a%(-w)d prints the integer variable a with width given by the variable w
-func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
+func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Value) {
 	var builder strings.Builder
 	var args []llvm.Value
 
 	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
-	runes := []rune(s)
+	runes := []rune(sl.String())
 	i := 0
 	for i < len(runes) {
 		if !(runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1])) {
@@ -181,19 +217,29 @@ func (c *Compiler) formatIdentifiers(s string) (string, []llvm.Value) {
 				i++
 				continue
 			}
-			if i+1 < len(runes) && runes[i+1] == '%' {
+			if runes[i+1] == '%' {
 				// allow %%
 				builder.WriteRune(runes[i])
 				builder.WriteRune(runes[i+1])
 				i += 2
 				continue
 			}
-			panic(fmt.Sprintf("specifier found without corresponding identifier for variable. The allowed format is -var%%specifier Specifier is at index %d", i))
+			cerr := &token.CompileError{
+				Token: sl.Token,
+				Msg:   fmt.Sprintf("specifier found without corresponding identifier for variable. The allowed format is -var%%specifier. Specifier is at index %d. Str: %s", i, sl.Value),
+			}
+			c.Errors = append(c.Errors, cerr)
+			i++
+			continue
 		}
 		// If we see a '-' and the next rune is a valid identifier start...
 		// Parse the marker.
-		identifiers, customSpec, newIndex := parseMarker(runes, i)
-		formattedStr, idArgs := c.parseIdsWithSpecifiers(identifiers, customSpec)
+		identifiers, customSpec, newIndex, err := c.parseMarker(sl, runes, i)
+		if err != nil {
+			i = newIndex
+			continue
+		}
+		formattedStr, idArgs := c.parseIdsWithSpecifiers(sl, identifiers, customSpec)
 		builder.WriteString(formattedStr)
 		args = append(args, idArgs...)
 		// Advance past the marker.

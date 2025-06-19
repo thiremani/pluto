@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -35,7 +37,18 @@ six = 6`
 
 	sc := NewScriptCompiler(llvm.NewContext(), "TestFormatIdentifiers", program, nil)
 	sc.Compile()
-	res, vals := sc.Compiler.formatIdentifiers("x = -x, six = -six")
+	testStr := "x = -x, six = -six"
+	sl := &ast.StringLiteral{
+		Token: token.Token{
+			FileName: "FormatIdentifiers",
+			Type:     token.STRING,
+			Literal:  testStr,
+			Line:     1,
+			Column:   1,
+		},
+		Value: testStr,
+	}
+	res, vals := sc.Compiler.formatIdentifiers(sl)
 	expStr := "x = %ld, six = %ld"
 	if res != expStr {
 		t.Errorf("formattedStr does not match expected. got: %s, expected: %s", res, expStr)
