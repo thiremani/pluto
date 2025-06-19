@@ -12,3 +12,5 @@ z = x * y
 "y is -y%d. z = x * y and z is -z%d"
 x + y, x - y
 "Check the pointer op with vars x, y, z. The result is -x%p -y%p -z%p"
+
+"x is - x. This checks a space between marker (-) and variable does not print var value"
