@@ -3,6 +3,7 @@ package token
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 type TokenType int
@@ -174,6 +175,8 @@ type Token struct {
 	Column   int
 }
 
+type CompileErrors []*CompileError
+
 func (t Token) IsComparison() bool {
 	return comparison_beg < t.Type && comparison_end > t.Type
 }
@@ -219,8 +222,11 @@ func (ce *CompileError) Error() string {
 	return fmt.Sprintf("%s:%s", prefix, ce.Msg)
 }
 
-func Str(errs []*CompileError) {
-	for _, err := range errs {
-		fmt.Println(err)
+func (ces CompileErrors) String() string {
+	var b strings.Builder
+	for _, e := range ces {
+		b.WriteString(e.Error())
+		b.WriteRune('\n')
 	}
+	return b.String()
 }
