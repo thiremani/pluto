@@ -17,11 +17,6 @@ func TestFormatStringErrors(t *testing.T) {
 		expectError string
 	}{
 		{
-			name:        "NoIdentifier",
-			input:       `"Value: %d"`,
-			expectError: "TestFormatStringErrors:1:1:specifier found without corresponding identifier for variable. The allowed format is -var%specifier. Specifier is at index 7. Str: Value: %d",
-		},
-		{
 			name: "AsteiskNotAllowed",
 			input: `x = 10
 "Value: -x%*d"`,
@@ -102,7 +97,24 @@ func TestValidFormatString(t *testing.T) {
 			name: "Escape%%",
 			input: `x = 5
 "Value: %%-x%%`,
-			expectOutput: "Value: %%%ld%%",
+			expectOutput: "Value: %%%%%ld%%",
+		},
+		{
+			name:         "NoIdentifier",
+			input:        `"Value: %d"`,
+			expectOutput: "Value: %%d",
+		},
+		{
+			name: "SpaceAfterVar",
+			input: `x = 5
+"x = -x %d"`,
+			expectOutput: "x = %ld %%d",
+		},
+		{
+			name: "PercentAfterSpecifier",
+			input: `x = 5.
+"x = -x%4.2f%"`,
+			expectOutput: "x = %4.2f%%",
 		},
 	}
 	for _, tc := range tests {

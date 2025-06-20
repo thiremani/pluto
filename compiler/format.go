@@ -211,24 +211,12 @@ func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Valu
 	i := 0
 	for i < len(runes) {
 		if !(runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1])) {
-			// disallow specifiers that are not after identifiers
-			if runes[i] != '%' {
+			builder.WriteRune(runes[i])
+			if runes[i] == '%' {
+				// % is not after -var. so we allow lone %
+				// for printf we need to write it twice
 				builder.WriteRune(runes[i])
-				i++
-				continue
 			}
-			if runes[i+1] == '%' {
-				// allow %%
-				builder.WriteRune(runes[i])
-				builder.WriteRune(runes[i+1])
-				i += 2
-				continue
-			}
-			cerr := &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("specifier found without corresponding identifier for variable. The allowed format is -var%%specifier. Specifier is at index %d. Str: %s", i, sl.Value),
-			}
-			c.Errors = append(c.Errors, cerr)
 			i++
 			continue
 		}
