@@ -39,9 +39,10 @@ class TestRunner:
         # Prepend LLVM bin to PATH
         env = os.environ.copy()
         env["PATH"] = f"{self.llvm_bin}:{env['PATH']}"
+        str_cmd = [str(c) for c in cmd]
         try:
             result = subprocess.run(
-                cmd,
+                str_cmd,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -51,7 +52,7 @@ class TestRunner:
             )
             return result.stdout
         except subprocess.CalledProcessError as e:
-            print(f"\n{Fore.RED}Command failed: {' '.join(cmd)}{Style.RESET_ALL}")
+            print(f"\n{Fore.RED}Command failed: {' '.join(str_cmd)}{Style.RESET_ALL}")
             print(e.output)
             raise
 
@@ -88,7 +89,10 @@ class TestRunner:
                 print(f"{Fore.BLUE}Compiler output:\n{compiler_output}{Style.RESET_ALL}")
         except subprocess.CalledProcessError as e:
             print(f"{Fore.RED}❌ Compilation failed for {dir}{Style.RESET_ALL}")
-            raise
+            # Print the captured stdout/stderr from the failed pluto process
+            if e.output:
+                print(f"{Fore.BLUE}Compiler output was:\n{e.output.strip()}{Style.RESET_ALL}")
+            raise # Re-raise the exception to stop tests for this directory.
 
     def _compare_outputs(self, expected_output: str, actual_output: str) -> bool:
         """
