@@ -29,26 +29,17 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "Expected ) after the identifier var",
 		},
 		{
-			name:        "UndefinedVariable",
-			input:       `"Value: -undefinedVar%d"`,
-			expectError: "Identifier undefinedVar not found. Unexpected specifier %d after identifier",
-		},
-		{
 			name: "InvalidFormatSpecifier",
 			input: `x = 4
 "x = -x%"`,
 			expectError: "Invalid format specifier string: Format specifier is incomplete",
 		},
-		{
-			name:        "UndefinedVariable",
-			input:       `"Value: -x%s"`,
-			expectError: "Identifier x not found. Unexpected specifier %s after identifier",
-		},
+
 		{
 			name: "IdentifierWithinSpecifierNotFound",
 			input: `x = 10
 "Value: -x%(-var)d"`,
-			expectError: "Identifier var not found within specifier. Specifier was after identifier x",
+			expectError: "Undefined variable var within specifier. String Literal is Value: -x%(-var)d",
 		},
 		{
 			name: "SpecifierDoesNotEnd",
@@ -115,6 +106,18 @@ func TestValidFormatString(t *testing.T) {
 			input: `x = 5.
 "x = -x%4.2f%"`,
 			expectOutput: "x = %4.2f%%",
+		},
+		{
+			name:         "VarNotDefined",
+			input:        `"Value: -x%s"`,
+			expectOutput: "Value: -x%%s",
+		},
+		{
+			name: "SpecifierArg",
+			input: `x = 14
+digits = 4
+"x is -x%(-digits)d"`,
+			expectOutput: "x is %*d",
 		},
 	}
 	for _, tc := range tests {
