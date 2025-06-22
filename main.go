@@ -389,6 +389,8 @@ func main() {
 		return
 	}
 
+	compileErr := 0
+	binErr := 0
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
@@ -396,13 +398,18 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
+			compileErr++
 			continue
 		}
 
 		if err := p.GenBinary(scriptLL, script); err != nil {
 			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
+			binErr++
 		} else {
 			fmt.Printf("✅ Successfully built binary for script: %s\n", script)
 		}
+	}
+	if compileErr > 0 || binErr > 0 {
+		os.Exit(1)
 	}
 }

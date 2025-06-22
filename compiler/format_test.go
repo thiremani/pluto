@@ -53,6 +53,18 @@ func TestFormatStringErrors(t *testing.T) {
 "Value: -x%q"`,
 			expectError: "Invalid format specifier string: Format specifier '%q' is incomplete. Str: Value: -x%q",
 		},
+		{
+			name: "IntWithFloatSpecifier",
+			input: `x = 5
+"x = -x%f"`,
+			expectError: "Format specifier end 'f' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
+		{
+			name: "FloatWithIntSpecifier",
+			input: `y = 3.14
+"y = -y%d"`,
+			expectError: "Format specifier end 'd' is not correct for variable type. Variable identifier: y. Variable type: F64",
+		},
 	}
 
 	for _, tc := range tests {

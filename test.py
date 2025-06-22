@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import subprocess
 import os
 import shutil
@@ -113,11 +114,29 @@ class TestRunner:
                     actual_output = self.run_command([str(test_dir / test_name)])
                     expected_output = exp_file.read_text()
 
-                    if actual_output == expected_output:
+                    act_lines = actual_output.splitlines()
+                    exp_lines = expected_output.splitlines()
+                    ok = True
+                    for idx, (e, a) in enumerate(zip(exp_lines, act_lines), start=1):
+                        if e.startswith("re:"):
+                            pattern = e[len("re:"):]
+                            if not re.fullmatch(pattern, a):
+                                print(f"{Fore.RED}❌ Line {idx} did not match regex{Style.RESET_ALL}")
+                                print(f"    pattern: {pattern!r}")
+                                print(f"    actual : {a!r}")
+                                ok = False
+                                break
+                        else:
+                            if e != a:
+                                print(f"{Fore.RED}❌ Line {idx} mismatch{Style.RESET_ALL}")
+                                print(f"    expected: {e!r}")
+                                print(f"    actual  : {a!r}")
+                                ok = False
+                                break
+                    if ok:
                         print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                         self.passed += 1
                     else:
-                        self.show_diff(expected_output, actual_output)
                         self.failed += 1
 
                 except Exception as e:

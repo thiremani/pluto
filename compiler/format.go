@@ -18,6 +18,26 @@ func formatSpecifierEnd(ch rune) bool {
 	return false
 }
 
+var specToKind = map[rune]Kind{
+	'd': IntKind,
+	'i': IntKind,
+	'u': IntKind,
+	'o': IntKind,
+	'x': IntKind,
+	'X': IntKind,
+	'f': FloatKind,
+	'F': FloatKind,
+	'e': FloatKind,
+	'E': FloatKind,
+	'g': FloatKind,
+	'G': FloatKind,
+	'a': FloatKind,
+	'c': IntKind, // maybe character code
+	's': StrKind,
+	'p': PointerKind, // if you introduce a PtrKind
+	'n': IntKind,     // byte‐count pointer
+}
+
 // defaultSpecifier returns the printf conversion specifier for a given type.
 func defaultSpecifier(t Type) (string, error) {
 	switch t.Kind() {
@@ -159,36 +179,74 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 		return s, ok
 	}
 	cc := c.CodeCompiler.Compiler
-	// no need to check ok as that is done in the typesolver
 	s, ok = Get(cc.Scopes, id)
 	return c.derefIfPointer(s), ok
 }
 
+// gets the raw symbol WITHOUT deref if pointer
+// in case it is a PointerKind will return alloca and Type should be PointerKind
+func (c *Compiler) getRawSym(id string) (*Symbol, bool) {
+	s, ok := Get(c.Scopes, id)
+	if ok {
+		return s, ok
+	}
+
+	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
+		return s, ok
+	}
+
+	cc := c.CodeCompiler.Compiler
+	s, ok = Get(cc.Scopes, id)
+	return s, ok
+}
+
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
-func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value) {
+// if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
+func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, err *token.CompileError) {
 	var builder strings.Builder
 	mainSym := syms[0]
 	valArgs = []llvm.Value{}
 	// Use the custom specifier if provided; otherwise, use the default.
 	for _, specSym := range syms[1:] {
-		valArgs = append(valArgs, c.derefIfPointer(specSym).Val)
+		valArgs = append(valArgs, specSym.Val)
 	}
 
 	// if customSpec is either "" or %% it must be written later anyway. %% must be written as is.
+	var spec string
+	var err1 error
 	if customSpec == "" || customSpec == "%%" {
-		spec, err := defaultSpecifier(mainSym.Type)
-		if err != nil {
-			cerr := &token.CompileError{
+		spec, err1 = defaultSpecifier(mainSym.Type)
+		if err1 != nil {
+			err = &token.CompileError{
 				Token: sl.Token,
 				Msg:   fmt.Sprintf("Error formatting string. String: %s. Err: %s", sl.Value, err),
 			}
-			c.Errors = append(c.Errors, cerr)
+			c.Errors = append(c.Errors, err)
 			return
 		}
 		builder.WriteString(spec)
 	}
-
+	// customSpec %% is written here
 	builder.WriteString(customSpec)
+
+	finalSpec := customSpec
+	if spec != "" {
+		finalSpec = spec
+	}
+	specRune := rune(finalSpec[len(finalSpec)-1])
+	if specRune == 'p' {
+		mainSym, _ = c.getRawSym(mainId)
+	}
+	mainType := mainSym.Type
+	if specToKind[specRune] != mainType.Kind() {
+		err = &token.CompileError{
+			Token: sl.Token,
+			Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
+		}
+		c.Errors = append(c.Errors, err)
+		return
+	}
+
 	formattedStr = builder.String()
 	if len(customSpec) > 0 && customSpec[len(customSpec)-1] == 'n' {
 		s := c.promoteToMemory(mainId)
@@ -237,7 +295,10 @@ func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Valu
 		if err != nil {
 			return "", args
 		}
-		formattedStr, idArgs := c.parseFormatting(sl, mainId, syms, customSpec)
+		formattedStr, idArgs, err := c.parseFormatting(sl, mainId, syms, customSpec)
+		if err != nil {
+			return "", args
+		}
 		builder.WriteString(formattedStr)
 		args = append(args, idArgs...)
 		// Advance past the marker.
