@@ -47,6 +47,12 @@ func TestFormatStringErrors(t *testing.T) {
 "Value: -x%#-"`,
 			expectError: "Invalid format specifier string: Format specifier '%#-' is incomplete",
 		},
+		{
+			name: "UnsupportedSpecifier",
+			input: `x = 5
+"Value: -x%q"`,
+			expectError: "Invalid format specifier string: Format specifier '%q' is incomplete. Str: Value: -x%q",
+		},
 	}
 
 	for _, tc := range tests {
@@ -118,6 +124,35 @@ func TestValidFormatString(t *testing.T) {
 digits = 4
 "x is -x%(-digits)d"`,
 			expectOutput: "x is %*d",
+		},
+		{
+			name: "MixedBackToBack",
+			input: `x = 3
+y = 3.2
+"x = -x%ld-y"`,
+			// float default format is "%.15g"
+			expectOutput: "x = %ld%.15g",
+		},
+		{
+			name: "MixedBackToBackSpecifiers",
+			input: `x = 3
+y = 3.2
+"x = -x%ld-y%f"`,
+			// float default format is "%.15g"
+			expectOutput: "x = %ld%f",
+		},
+		{
+			name: "MixedBackToBackOneVar",
+			input: `x = 3
+"x = -x%ld-y%f"`,
+			// float default format is "%.15g"
+			expectOutput: "x = %ld-y%%f",
+		},
+		{
+			name: "CountPointer",
+			input: `x = 5
+"x = -x%n"`,
+			expectOutput: "x = %n",
 		},
 	}
 	for _, tc := range tests {
