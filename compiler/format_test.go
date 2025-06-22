@@ -65,6 +65,12 @@ func TestFormatStringErrors(t *testing.T) {
 "y = -y%d"`,
 			expectError: "Format specifier end 'd' is not correct for variable type. Variable identifier: y. Variable type: F64",
 		},
+		{
+			name: "PointerOnNonPointer",
+			input: `x = 42
+"Value: -x%p"`,
+			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
 	}
 
 	for _, tc := range tests {

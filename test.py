@@ -90,58 +90,79 @@ class TestRunner:
             print(f"{Fore.RED}❌ Compilation failed for {dir}{Style.RESET_ALL}")
             raise
 
+    def _compare_outputs(self, expected_output: str, actual_output: str) -> bool:
+        """
+        Compares expected and actual output line by line, supporting regex.
+        Returns True on match, False on mismatch.
+        """
+        actual_lines = actual_output.splitlines()
+        expected_lines = expected_output.splitlines()
+
+        if len(actual_lines) != len(expected_lines):
+            print(f"{Fore.RED}❌ Mismatched number of output lines.{Style.RESET_ALL}")
+            self.show_diff(expected_output, actual_output)
+            return False
+
+        for i, (expected_line, actual_line) in enumerate(zip(expected_lines, actual_lines), 1):
+            if expected_line.startswith("re:"):
+                pattern = expected_line[len("re:"):].strip()
+                if not re.fullmatch(pattern, actual_line):
+                    print(f"{Fore.RED}❌ Line {i} did not match regex{Style.RESET_ALL}")
+                    print(f"    pattern: {pattern!r}")
+                    print(f"    actual : {actual_line!r}")
+                    return False
+            else:
+                if expected_line != actual_line:
+                    print(f"{Fore.RED}❌ Line {i} mismatch{Style.RESET_ALL}")
+                    print(f"    expected: {expected_line!r}")
+                    print(f"    actual  : {actual_line!r}")
+                    return False
+        
+        return True
+
+    def _run_single_test(self, test_dir: Path, exp_file: Path):
+        """
+        Runs a single test case (one .exp file) and updates pass/fail counters.
+        """
+        test_name = exp_file.stem
+        print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
+        try:
+            executable_path = str(test_dir / test_name)
+            actual_output = self.run_command([executable_path])
+            expected_output = exp_file.read_text()
+
+            if self._compare_outputs(expected_output, actual_output):
+                print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
+                self.passed += 1
+            else:
+                self.failed += 1
+
+        except Exception as e:
+            print(f"{Fore.RED}❌ Failed with exception: {e}{Style.RESET_ALL}")
+            self.failed += 1
+
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
-        # Collect all subdirectories with .exp files (including nested)
-        test_dirs = set()
-        for exp_path in TEST_DIR.rglob("*.exp"):
-            test_dirs.add(exp_path.parent)
         
-        for test_dir in test_dirs:
+        test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
+        
+        for test_dir in sorted(list(test_dirs)): # Sorting provides deterministic order
             print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
+            
+            # 1. Compile the entire directory
             try:
                 self.compile(test_dir)
             except subprocess.CalledProcessError:
-                self.failed += 1
-                continue  # Skip tests if compilation fails
+                print(f"{Fore.RED}❌ Compilation failed for directory, skipping tests.{Style.RESET_ALL}")
+                # We count this as one failure for the whole directory's tests
+                num_tests_in_dir = len(list(test_dir.glob("*.exp")))
+                self.failed += num_tests_in_dir
+                continue
 
-            exp_files = list(test_dir.glob("*.exp"))
-            for exp_file in exp_files:
-                test_name = exp_file.stem
-                print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
-                try:
-                    actual_output = self.run_command([str(test_dir / test_name)])
-                    expected_output = exp_file.read_text()
-
-                    act_lines = actual_output.splitlines()
-                    exp_lines = expected_output.splitlines()
-                    ok = True
-                    for idx, (e, a) in enumerate(zip(exp_lines, act_lines), start=1):
-                        if e.startswith("re:"):
-                            pattern = e[len("re:"):]
-                            if not re.fullmatch(pattern, a):
-                                print(f"{Fore.RED}❌ Line {idx} did not match regex{Style.RESET_ALL}")
-                                print(f"    pattern: {pattern!r}")
-                                print(f"    actual : {a!r}")
-                                ok = False
-                                break
-                        else:
-                            if e != a:
-                                print(f"{Fore.RED}❌ Line {idx} mismatch{Style.RESET_ALL}")
-                                print(f"    expected: {e!r}")
-                                print(f"    actual  : {a!r}")
-                                ok = False
-                                break
-                    if ok:
-                        print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
-                        self.passed += 1
-                    else:
-                        self.failed += 1
-
-                except Exception as e:
-                    print(f"{Fore.RED}❌ Failed: {e}{Style.RESET_ALL}")
-                    self.failed += 1
+            # 2. Run each test in the directory
+            for exp_file in sorted(list(test_dir.glob("*.exp"))):
+                self._run_single_test(test_dir, exp_file)
 
     def show_diff(self, expected: str, actual: str):
         """Show colored diff output"""
