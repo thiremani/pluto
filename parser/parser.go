@@ -701,3 +701,24 @@ func (p *StmtParser) registerPrefix(op string, fn prefixParseFn) {
 func (p *StmtParser) registerInfix(op string, fn infixParseFn) {
 	p.infixParseFns[op] = fn
 }
+
+// checkNoDuplicates walks a slice of identifiers and returns
+// a CompileError for each name that appears more than once.
+// It skips blank‐identifier (“_”).
+func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier) {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		name := id.Value
+		if name == "_" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: id.Token,
+				Msg:   fmt.Sprintf("duplicate identifier: %s in this statement", name),
+			})
+			continue
+		}
+		seen[name] = struct{}{}
+	}
+}

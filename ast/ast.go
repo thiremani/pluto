@@ -105,9 +105,9 @@ func printVec(a []Expression) string {
 		return ""
 	}
 
-	ret := a[0].(Expression).String()
+	ret := a[0].String()
 	for _, val := range a[1:] {
-		n := val.(Expression)
+		n := val
 		ret += ", "
 		ret += n.String()
 	}

@@ -29,7 +29,7 @@ func TestParseConstStatement(t *testing.T) {
 		{
 			"a, a = 1, 2",
 			nil,
-			[]string{"duplicate identifier in this statement: a"},
+			[]string{"duplicate identifier: a in this statement"},
 		},
 		{
 			"a = 5\nb, a = 10, 5",
@@ -95,7 +95,7 @@ func TestParseFuncStatement(t *testing.T) {
     bed = x * 2`,
 			"func",
 			nil,
-			[]string{"duplicate parameter x"},
+			[]string{"duplicate identifier: x in this statement"},
 		},
 		{
 			`empty = func(x,)
@@ -162,7 +162,7 @@ invalid = f(x, x)
 	p.Parse()
 
 	require.Len(t, p.Errors(), 1)
-	require.Contains(t, p.Errors()[0], "duplicate parameter x")
+	require.Contains(t, p.Errors()[0], "duplicate identifier: x in this statement")
 }
 
 func TestFuncStatementParsing(t *testing.T) {

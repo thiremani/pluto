@@ -46,31 +46,27 @@ func (cp *CodeParser) Parse() *ast.Code {
 }
 
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
-	hasDuplicate := false
-	tmpMap := make(map[string]struct{})
+	prevLen := len(cp.p.errors)
+	cp.p.checkNoDuplicates(s.Name)
+
+	// Check for global redeclarations against the code map.
 	for _, id := range s.Name {
-		msg := ""
 		if _, ok := code.Const.Map[id.Value]; ok {
-			msg = fmt.Sprintf("global redeclaration of constant %s", id.Value)
-		} else if _, ok := tmpMap[id.Value]; ok {
-			msg = fmt.Sprintf("duplicate identifier in this statement: %s", id.Value)
-		}
-		if msg != "" {
+			msg := fmt.Sprintf("global redeclaration of constant %s", id.Value)
 			ce := &token.CompileError{
 				Token: id.Token,
 				Msg:   msg,
 			}
 			cp.p.errors = append(cp.p.errors, ce)
-			hasDuplicate = true
-			continue
 		}
-		tmpMap[id.Value] = struct{}{}
 	}
-	if hasDuplicate {
+
+	if len(cp.p.errors) > prevLen {
+		// If there are errors, we don't add the statement to the code.
 		return
 	}
 
-	// Add the statement ONCE after verifying no duplicates
+	// add the statement to the code if no errors were found
 	code.Const.Statements = append(code.Const.Statements, s)
 	for _, id := range s.Name {
 		code.Const.Map[id.Value] = s
@@ -78,6 +74,8 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
+	prevLen := len(cp.p.errors)
+
 	fKey := ast.FuncKey{
 		FuncName: s.Token.Literal,
 		Arity:    len(s.Parameters),
@@ -92,22 +90,28 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 		return
 	}
 	// check parameters are distinct and not ""
-	tmpMap := make(map[string]struct{})
-	goodFunc := true
+
+	// Duplicate Input Parameters
+	cp.p.checkNoDuplicates(s.Parameters)
+
+	// Duplicate Output Parameters
+	cp.p.checkNoDuplicates(s.Outputs)
+
+	// Input/Output Name Conflicts (NEW & Optional but Recommended)
+	paramNames := make(map[string]struct{})
 	for _, p := range s.Parameters {
-		if _, ok := tmpMap[p.Value]; ok {
-			msg := fmt.Sprintf("Function %s has duplicate parameter %s", s.Token.Literal, p.Value)
-			ce := &token.CompileError{
-				Token: p.Token,
-				Msg:   msg,
-			}
-			cp.p.errors = append(cp.p.errors, ce)
-			goodFunc = false
-			continue
-		}
-		tmpMap[p.Value] = struct{}{}
+		paramNames[p.Value] = struct{}{}
 	}
-	if !goodFunc {
+	for _, o := range s.Outputs {
+		if _, exists := paramNames[o.Value]; exists {
+			msg := fmt.Sprintf("identifier '%s' cannot be used as both an input and an output parameter", o.Value)
+			ce := &token.CompileError{Token: o.Token, Msg: msg}
+			cp.p.errors = append(cp.p.errors, ce)
+		}
+	}
+
+	if len(cp.p.errors) > prevLen {
+		// If there are errors, we don't add the statement to the code.
 		return
 	}
 
