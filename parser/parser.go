@@ -247,6 +247,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		return nil
 	}
 
+	p.checkNoDuplicates(identList)
 	return p.parseLetStatement(identList)
 }
 

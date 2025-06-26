@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -411,4 +412,56 @@ func TestFunctionCallInCondition(t *testing.T) {
 	callExpr, ok := cond.Left.(*ast.CallExpression)
 	require.Truef(t, ok, "expected CallExpression, got %T", cond.Left)
 	require.Equal(t, "pow", callExpr.Function.Value)
+}
+
+func TestLetStatementDuplicateIdentifiers(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{
+			name:    "simple duplicate",
+			input:   `a, a = 1, 2`,
+			wantErr: "duplicate identifier: a in this statement",
+		},
+		{
+			name:    "duplicate later",
+			input:   `x, y, x = 1, 2, 3`,
+			wantErr: "duplicate identifier: x in this statement",
+		},
+		{
+			name:    "Duplicate With Conditions",
+			input:   `y, z, y = a > b 1, 2, 3`,
+			wantErr: "duplicate identifier: y in this statement",
+		},
+		{
+			name:    "blank allowed",
+			input:   `_, _, a = 1, 2, 3`,
+			wantErr: "", // no error
+		},
+		{
+			name:    "mixed blank and dup",
+			input:   `_, b, _ = 1, 2, 3`,
+			wantErr: "", // no error
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("dupTest", tc.input))
+			sp.Parse()
+			errs := sp.Errors()
+			if tc.wantErr == "" {
+				if len(errs) > 0 {
+					t.Fatalf("expected no errors, got %v", errs)
+				}
+				return
+			}
+
+			if !strings.Contains(errs[0], tc.wantErr) {
+				t.Errorf("expected error %q, got %q", tc.wantErr, errs[0])
+			}
+		})
+	}
 }
