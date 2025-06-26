@@ -70,39 +70,90 @@ func TestParseFuncStatement(t *testing.T) {
 		errs   []string
 	}{
 		{
-			`y = square(x)
+			name: "square",
+			input: `y = square(x)
     y = x * x`,
-			"square",
-			[]string{"x"},
-			nil,
+			params: []string{"x"},
+			errs:   nil,
 		},
 		{
-			`sum = add(a, b)
+			name: "add",
+			input: `sum = add(a, b)
     sum = a + b`,
-			"add",
-			[]string{"a", "b"},
-			nil,
+			params: []string{"a", "b"},
+			errs:   nil,
 		},
 		{
-			`log = logger()
+			name: "logger",
+			input: `log = logger()
     print("log")`,
-			"logger",
-			[]string{},
-			nil,
+			params: []string{},
+			errs:   nil,
 		},
 		{
-			`bad = func(x, x)
+			name: "func",
+			input: `bad = func(x, x)
     bed = x * 2`,
-			"func",
-			nil,
-			[]string{"duplicate identifier: x in this statement"},
+			params: nil,
+			errs:   []string{"duplicate identifier: x in this statement"},
 		},
 		{
-			`empty = func(x,)
+			name: "func",
+			input: `empty = func(x,)
     x = x + 1`,
-			"func",
-			nil,
-			[]string{"expected next token to be IDENT, got ) instead"},
+			params: nil,
+			errs:   []string{"expected next token to be IDENT, got ) instead"},
+		},
+		{
+			name: "dupOut",
+			input: `
+y, z, y = dupOut(x)
+    y = x`,
+			params: []string{"x"},
+			errs:   []string{"duplicate identifier: y in this statement"},
+		},
+		{
+			name: "inOutOverlap",
+			input: `
+y, z = inOutOverlap(x, y)
+    z = x + y`,
+			params: []string{"x", "y"},
+			errs:   []string{"identifier: y cannot be used as both an input and an output parameter"},
+		},
+		{
+			name: "dupInAndOut",
+			input: `
+a, b, a = dupInAndOut(x, y, x)
+    b = x + y`,
+			params: []string{"x", "y", "x"},
+			// The parser should find both errors
+			errs: []string{
+				"duplicate identifier: x in this statement",
+				"duplicate identifier: a in this statement",
+			},
+		},
+		{
+			name: "blankOut",
+			input: `_, _, a = blankOut()
+    a = 23`,
+			params: []string{},
+			errs:   nil,
+		},
+		{
+			name: "blankOut",
+			input: `
+_, b, _ = blankOut(x)
+    b = x`,
+			params: []string{"x"},
+			errs:   nil,
+		},
+		{
+			name: "blankIn",
+			input: `
+y = blankIn(_, x, _)
+    y = x`,
+			params: []string{"_", "x", "_"},
+			errs:   nil,
 		},
 	}
 
@@ -113,8 +164,8 @@ func TestParseFuncStatement(t *testing.T) {
 
 		if tt.errs != nil {
 			require.NotEmpty(t, p.Errors())
-			for _, err := range tt.errs {
-				require.Contains(t, p.Errors()[0], err)
+			for i, err := range tt.errs {
+				require.Contains(t, p.Errors()[i], err)
 			}
 			continue
 		}

@@ -104,7 +104,7 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 	}
 	for _, o := range s.Outputs {
 		if _, exists := paramNames[o.Value]; exists {
-			msg := fmt.Sprintf("identifier '%s' cannot be used as both an input and an output parameter", o.Value)
+			msg := fmt.Sprintf("identifier: %s cannot be used as both an input and an output parameter", o.Value)
 			ce := &token.CompileError{Token: o.Token, Msg: msg}
 			cp.p.errors = append(cp.p.errors, ce)
 		}
