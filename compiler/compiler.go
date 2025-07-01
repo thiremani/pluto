@@ -334,7 +334,6 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-// if compile bool is false, we only return symbol with type info. This is used for type inference
 func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
