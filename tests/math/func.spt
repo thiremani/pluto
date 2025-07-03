@@ -17,7 +17,7 @@ mod, res = isDiv(10, 3)
 mod, res
 
 x, y = 12, 4
-mod, res = isDiv(12, 4)
+mod, res = isDiv(x, y)
 mod, res
 
 flx, fly = 10.5, 3.5
@@ -31,6 +31,7 @@ i = 3
 s1, s2 = f(i) + g(i)
 s1, s2
 
+a # use previously defined value of a
 a, b, c, d = f(2), g(1)
 a, b, c, d
 

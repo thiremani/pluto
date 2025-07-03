@@ -28,6 +28,13 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 		return errs
 	}
 
+	cfg := NewCFG(sc.Compiler.CodeCompiler)
+	cfg.Analyze(sc.Program.Statements)
+	if len(cfg.Errors) != 0 {
+		// return any data‐flow errors (use‐before‐def, dead stores, etc.)
+		return cfg.Errors
+	}
+
 	c := sc.Compiler
 	// copy the output types we got into compile func cache
 	maps.Copy(c.FuncCache, ts.FuncCache)

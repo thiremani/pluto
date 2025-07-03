@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
 
@@ -83,7 +84,9 @@ func TestFormatStringErrors(t *testing.T) {
 				t.Fatalf("Unexpected parser errors: %v", p.Errors())
 			}
 
-			sc := NewScriptCompiler(llvm.NewContext(), "TestFormatErrors", program, nil)
+			ctx := llvm.NewContext()
+			cc := NewCodeCompiler(ctx, "TestFormatStringErrors", ast.NewCode())
+			sc := NewScriptCompiler(ctx, "TestFormatErrors", program, cc)
 			errs := sc.Compile()
 
 			if len(errs) == 0 {
@@ -132,11 +135,6 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "x = %4.2f%%",
 		},
 		{
-			name:         "VarNotDefined",
-			input:        `"Value: -x%s"`,
-			expectOutput: "Value: -x%%s",
-		},
-		{
 			name: "SpecifierArg",
 			input: `x = 14
 digits = 4
@@ -178,7 +176,10 @@ y = 3.2
 			l := lexer.New("TestValidFormatString", tc.input)
 			p := parser.New(l)
 			program := p.ParseProgram()
-			sc := NewScriptCompiler(llvm.NewContext(), "TestValidFormatString", program, nil)
+
+			ctx := llvm.NewContext()
+			cc := NewCodeCompiler(ctx, "TestValidFormatString", ast.NewCode())
+			sc := NewScriptCompiler(ctx, "TestValidFormatString", program, cc)
 			sc.Compile()
 			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {

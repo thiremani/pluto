@@ -453,7 +453,6 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	return newS
 }
 
-// if compile is false, we only return symbol with type info. This is used for type inference
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, ok := Get(c.Scopes, ident.Value)
 	if ok {
@@ -683,7 +682,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	for _, expr := range ps.Expression {
 		// If the expression is a string literal, check for embedded markers.
 		if strLit, ok := expr.(*ast.StringLiteral); ok {
-			processed, newArgs := c.formatIdentifiers(strLit)
+			processed, newArgs := c.formatString(strLit)
 			formatStr += processed + " " // separate expressions with a space
 			args = append(args, newArgs...)
 			continue

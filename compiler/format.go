@@ -72,28 +72,11 @@ func (c *Compiler) parseSpecifier(sl *ast.StringLiteral, runes []rune, start int
 			return
 		}
 
-		if it+2 < len(runes) && runes[it] == '(' && runes[it+1] == '-' && lexer.IsLetter(runes[it+2]) {
+		if specIdAhead(runes, it) {
+			// cfg already checks that the ')' is after the identifier
+			// and identifier is in the symbol table
 			specId, end := parseIdentifier(runes, it+2)
-			if end >= len(runes) || runes[end] != ')' {
-				err = &token.CompileError{
-					Token: sl.Token,
-					Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, sl.Value),
-				}
-				c.Errors = append(c.Errors, err)
-				endIndex = end + 1
-				return
-			}
-			specSym, ok := c.getIdSym(specId)
-			if !ok {
-				err = &token.CompileError{
-					Token: sl.Token,
-					Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, sl.Value),
-				}
-				c.Errors = append(c.Errors, err)
-				endIndex = end + 1
-				return
-			}
-
+			specSym, _ := c.getIdSym(specId)
 			specSyms = append(specSyms, specSym)
 			specRunes = append(specRunes, '*')
 			// it must go past the )
@@ -149,7 +132,7 @@ func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (main
 		return mainId, []*Symbol{}, "", end, false, nil
 	}
 
-	if end < len(runes) && runes[end] == '%' {
+	if hasSpecifier(runes, end) {
 		if end+1 == len(runes) {
 			err = &token.CompileError{
 				Token: sl.Token,
@@ -180,7 +163,10 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	}
 	cc := c.CodeCompiler.Compiler
 	s, ok = Get(cc.Scopes, id)
-	return c.derefIfPointer(s), ok
+	if ok {
+		return c.derefIfPointer(s), ok
+	}
+	return s, ok
 }
 
 // gets the raw symbol WITHOUT deref if pointer
@@ -258,14 +244,14 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 	return
 }
 
-// formatIdentifiers scans the string literal for markers of the form "-identifier".
+// formatString scans the string literal for markers of the form "-identifier".
 // For each such marker, it looks up the identifier in the symbol table and replaces the marker
 // with the appropriate conversion specifier. It returns the new format string along with a slice
 // of llvm.Value for each variable found.
 // it additionally supports specifiers %d, %f etc as defined by the printf function
 // the * option for the width and precision should be replaced by their corresponding variables within parentheses and with the marker
 // eg: -a%(-w)d prints the integer variable a with width given by the variable w
-func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Value) {
+func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value) {
 	var builder strings.Builder
 	var args []llvm.Value
 
@@ -273,7 +259,7 @@ func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Valu
 	runes := []rune(sl.String())
 	i := 0
 	for i < len(runes) {
-		if !(runes[i] == '-' && i+1 < len(runes) && lexer.IsLetter(runes[i+1])) {
+		if !(maybeMarker(runes, i)) {
 			builder.WriteRune(runes[i])
 			if runes[i] == '%' {
 				// % is not after -var. so we allow lone %
@@ -307,4 +293,22 @@ func (c *Compiler) formatIdentifiers(sl *ast.StringLiteral) (string, []llvm.Valu
 
 	st := builder.String()
 	return st, args
+}
+
+func maybeMarker(runes []rune, i int) bool {
+	if i+1 < len(runes) && runes[i] == '-' && lexer.IsLetter(runes[i+1]) {
+		return true
+	}
+	return false
+}
+
+func hasSpecifier(runes []rune, i int) bool {
+	if i < len(runes) && runes[i] == '%' {
+		return true
+	}
+	return false
+}
+
+func specIdAhead(runes []rune, i int) bool {
+	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
 }

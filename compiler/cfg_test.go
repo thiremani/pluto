@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"tinygo.org/x/go-llvm"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
@@ -130,14 +131,11 @@ func TestCFGAnalysis(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 1. Setup - uses require
 			prog := parseInput(t, tc.name, tc.input)
-			cfg := BuildCFG(prog.Statements)
+			cc := NewCodeCompiler(llvm.NewContext(), "TestCFGAnalysis", ast.NewCode())
+			cfg := NewCFG(cc)
+			cfg.Analyze(prog.Statements)
 
-			// 2. Action
-			cfg.Analyze()
-
-			// 3. Assertions - uses assert
 			if tc.expectError {
 				// Assert that we have at least one error.
 				assert.NotEmpty(t, cfg.Errors, "Expected an error, but got none.")

@@ -17,7 +17,9 @@ func TestStringCompile(t *testing.T) {
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(llvm.NewContext(), "test", program, nil)
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "testStringCompile", ast.NewCode())
+	sc := NewScriptCompiler(ctx, "test", program, cc)
 	sc.Compile()
 	ir := sc.Compiler.GenerateIR()
 
@@ -29,13 +31,16 @@ func TestStringCompile(t *testing.T) {
 
 func TestFormatIdentifiers(t *testing.T) {
 	input := `x = 5
-six = 6`
+six = 6
+x, six`
 
 	l := lexer.New("TestFormatIdentifiers", input)
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(llvm.NewContext(), "TestFormatIdentifiers", program, nil)
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", ast.NewCode())
+	sc := NewScriptCompiler(ctx, "TestFormatIdentifiers", program, cc)
 	sc.Compile()
 	testStr := "x = -x, six = -six"
 	sl := &ast.StringLiteral{
@@ -48,7 +53,7 @@ six = 6`
 		},
 		Value: testStr,
 	}
-	res, vals := sc.Compiler.formatIdentifiers(sl)
+	res, vals := sc.Compiler.formatString(sl)
 	expStr := "x = %ld, six = %ld"
 	if res != expStr {
 		t.Errorf("formattedStr does not match expected. got: %s, expected: %s", res, expStr)
