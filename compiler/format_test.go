@@ -170,6 +170,11 @@ y = 3.2
 "x = -x%n"`,
 			expectOutput: "x = %n",
 		},
+		{
+			name:         "VarNotDefined",
+			input:        `"Value: -x%s"`,
+			expectOutput: "Value: -x%%s",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

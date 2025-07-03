@@ -27,6 +27,7 @@ func TestCFGAnalysis(t *testing.T) {
 	testCases := []struct {
 		name          string
 		input         string
+		code          string
 		expectError   bool
 		errorContains string
 	}{
@@ -64,6 +65,17 @@ func TestCFGAnalysis(t *testing.T) {
 		{
 			name:        "EmptyProgram",
 			input:       ``,
+			expectError: false,
+		},
+		{
+			name: "FormatMarker After Def",
+			input: `x = 42
+"Answer: -x"`, // x defined before marker
+			expectError: false,
+		},
+		{
+			name:        "Var Not Defined",
+			input:       `"Value: -x%s"`,
 			expectError: false,
 		},
 		// --- Error Cases ---
@@ -127,12 +139,23 @@ func TestCFGAnalysis(t *testing.T) {
 			expectError:   true,
 			errorContains: `variable "x" has not been defined`,
 		},
+		{
+			name: "Write To Constant",
+			code: `a = 4`,
+			input: `
+x = a
+a = 2`, // redeclaring/writing to const 'a'
+			expectError:   true,
+			errorContains: `cannot write to constant "a"`,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			prog := parseInput(t, tc.name, tc.input)
-			cc := NewCodeCompiler(llvm.NewContext(), "TestCFGAnalysis", ast.NewCode())
+			cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
+			cc := NewCodeCompiler(llvm.NewContext(), "TestCFGAnalysis", cp.Parse())
+			cc.Compile()
 			cfg := NewCFG(cc)
 			cfg.Analyze(prog.Statements)
 
