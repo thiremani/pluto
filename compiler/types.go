@@ -76,7 +76,7 @@ func (p Pointer) Kind() Kind {
 // Str represents a string type.
 // You can optionally store a maximum length if needed.
 type Str struct {
-	Length int // For fixed-length strings. Could be -1 for dynamic-length.
+	Length int
 }
 
 func (s Str) String() string {

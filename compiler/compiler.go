@@ -70,11 +70,12 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		}
 	case FloatKind:
 		floatType := t.(Float)
-		if floatType.Width == 32 {
+		switch floatType.Width {
+		case 32:
 			return c.Context.FloatType()
-		} else if floatType.Width == 64 {
+		case 64:
 			return c.Context.DoubleType()
-		} else {
+		default:
 			panic(fmt.Sprintf("unsupported float width: %d", floatType.Width))
 		}
 	case StrKind:
@@ -234,10 +235,7 @@ func (c *Compiler) compileElseCond(stmt *ast.LetStatement, trueSymbols []*Symbol
 		prevSym, ok := Get(c.Scopes, name)
 		if !ok {
 			// first time: give a default zero
-			prevSym = &Symbol{
-				Val:  llvm.ConstInt(c.Context.Int64Type(), 0, false),
-				Type: Int{Width: 64},
-			}
+			prevSym = c.makeZeroValue(trueSymbols[i].Type)
 			Put(c.Scopes, name, prevSym)
 		}
 
@@ -293,6 +291,23 @@ func (c *Compiler) compileMergeBlock(
 			Put(c.Scopes, name, &Symbol{Val: phi, Type: ifSyms[i].Type})
 		}
 	}
+}
+
+func (c *Compiler) makeZeroValue(symType Type) *Symbol {
+	s := &Symbol{
+		Type: symType,
+	}
+	switch symType.Kind() {
+	case IntKind:
+		s.Val = llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	case FloatKind:
+		s.Val = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+	case StrKind:
+		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
+	default:
+		panic(fmt.Sprintf("unsupported type for zero value: %s", symType.String()))
+	}
+	return s
 }
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
