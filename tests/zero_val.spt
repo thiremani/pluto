@@ -1,0 +1,11 @@
+# This test checks default zero values are set to the correct types
+
+x = 3 > 4 4
+y = 2 < 0 3.14
+str = 3 > 6 "test"
+x, "-y%0.2f", str
+
+x1 = 3 > 1 5
+y1 = 5 < 7 2.71
+str1 = 3 > 2 "hello!"
+x1, y1, str1
