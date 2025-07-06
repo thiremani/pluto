@@ -45,11 +45,14 @@ x, y`
 	sl := lexer.New("TestMutualRecursionScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
-	ts := NewTypeSolver(program, cc)
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, "TestMutualRecursionScript", program, cc, funcCache)
+	ts := NewTypeSolver(sc)
 	ts.Solve()
 
 	// check func cache
-	isEvenFunc := ts.FuncCache["$isEven$I64"]
+	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["$isEven$I64"]
 	if isEvenFunc.Outputs[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
@@ -57,7 +60,7 @@ x, y`
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
-	isOddFunc := ts.FuncCache["$isOdd$I64"]
+	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
 	if isOddFunc.Outputs[0].Kind() != UnresolvedKind {
 		t.Errorf("isOdd func should strkind for output arg 0")
 	}
@@ -72,10 +75,12 @@ x, y`
 	nsl := lexer.New("TestMutualRecursionScript2", nextScript)
 	nsp := parser.NewScriptParser(nsl)
 	nextProgram := nsp.Parse()
-	nts := NewTypeSolver(nextProgram, cc)
+
+	nsc := NewScriptCompiler(ctx, "testNext", nextProgram, cc, funcCache)
+	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
-	nextOddFunc := nts.FuncCache["$isOdd$I64"]
+	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
 	if nextOddFunc.Outputs[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
@@ -117,7 +122,10 @@ y`
 	sl := lexer.New("TestCyclesScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
-	ts := NewTypeSolver(program, cc)
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache)
+	ts := NewTypeSolver(sc)
 	ts.Solve()
 }
 
@@ -147,7 +155,10 @@ y`
 	sl := lexer.New("TestNoBaseCaseScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
-	ts := NewTypeSolver(program, cc)
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache)
+	ts := NewTypeSolver(sc)
 	ts.Solve()
 }
 

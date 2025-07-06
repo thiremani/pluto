@@ -1,8 +1,6 @@
 package compiler
 
 import (
-	"maps"
-
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
@@ -13,16 +11,18 @@ type ScriptCompiler struct {
 	Program  *ast.Program
 }
 
-func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler) *ScriptCompiler {
+func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func) *ScriptCompiler {
+	compiler := NewCompiler(ctx, moduleName, cc)
+	compiler.FuncCache = funcCache
 	return &ScriptCompiler{
-		Compiler: NewCompiler(ctx, moduleName, cc),
+		Compiler: compiler,
 		Program:  program,
 	}
 }
 
 func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	// get output types for all functions
-	ts := NewTypeSolver(sc.Program, sc.Compiler.CodeCompiler)
+	ts := NewTypeSolver(sc)
 	errs := ts.Solve()
 	if len(errs) != 0 {
 		return errs
@@ -36,9 +36,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	}
 
 	c := sc.Compiler
-	// copy the output types we got into compile func cache
-	maps.Copy(c.FuncCache, ts.FuncCache)
-
 	// Create main function
 	c.addMain()
 	for _, stmt := range sc.Program.Statements {

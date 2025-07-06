@@ -217,7 +217,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 	return cc, codeLL, nil
 }
 
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string) (string, error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func) (string, error) {
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
@@ -226,7 +226,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	l := lexer.New(p.RelPath+"/"+filepath.Base(script), string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
-	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc)
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache)
 
 	// Only link if code module has content
 	if cc != nil && !cc.Compiler.Module.IsNil() {
@@ -391,10 +391,11 @@ func main() {
 
 	compileErr := 0
 	binErr := 0
+	funcCache := make(map[string]*compiler.Func)
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL)
+		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)

@@ -58,14 +58,6 @@ func NewCFG(cc *CodeCompiler) *CFG {
 	}
 }
 
-// addStatementToBlock adds a simple statement and its events to a block.
-func (cfg *CFG) addStatement(stmt ast.Statement) {
-	events := cfg.extractEvents(stmt)
-	lb := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
-	sn := &StmtNode{Stmt: stmt, Events: events}
-	lb.Stmts = append(lb.Stmts, sn)
-}
-
 // collectReads walks an expression tree and returns a slice of all
 // the identifier names it finds, put in VarEvent. This is a read-only analysis.
 func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {

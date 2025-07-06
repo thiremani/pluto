@@ -19,7 +19,9 @@ func TestStringCompile(t *testing.T) {
 
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "testStringCompile", ast.NewCode())
-	sc := NewScriptCompiler(ctx, "test", program, cc)
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, "test", program, cc, funcCache)
 	sc.Compile()
 	ir := sc.Compiler.GenerateIR()
 
@@ -40,7 +42,9 @@ x, six`
 
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", ast.NewCode())
-	sc := NewScriptCompiler(ctx, "TestFormatIdentifiers", program, cc)
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, "TestFormatIdentifiers", program, cc, funcCache)
 	sc.Compile()
 	testStr := "x = -x, six = -six"
 	sl := &ast.StringLiteral{

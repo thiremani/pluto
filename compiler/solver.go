@@ -12,32 +12,22 @@ import (
 // It is mainly needed to infer the output types of a function
 // given input arguments
 type TypeSolver struct {
-	CodeCompiler *CodeCompiler // required to get const/struct/func
-	Program      *ast.Program
-	Scopes       []Scope[Type]
-	Dummy        *Compiler
-	FuncCache    map[string]*Func
-	InProgress   map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc   string              // this is the current func in the main scope we are inferring type for
-	Converging   bool
-	Errors       []*token.CompileError
+	ScriptCompiler *ScriptCompiler
+	Scopes         []Scope[Type]
+	InProgress     map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
+	ScriptFunc     string              // this is the current func in the main scope we are inferring type for
+	Converging     bool
+	Errors         []*token.CompileError
 }
 
-func NewTypeSolver(program *ast.Program, cc *CodeCompiler) *TypeSolver {
-	// The dummy compiler is created once to avoid repeated allocations.
-	// It doesn't need a module or other complex state.
-	dummyCtx := llvm.NewContext()
-	dummyCompiler := &Compiler{Context: dummyCtx}
+func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		CodeCompiler: cc,
-		Program:      program,
-		Scopes:       []Scope[Type]{NewScope[Type](FuncScope)},
-		Dummy:        dummyCompiler,
-		FuncCache:    make(map[string]*Func),
-		InProgress:   map[string]struct{}{},
-		ScriptFunc:   "",
-		Converging:   false,
-		Errors:       []*token.CompileError{},
+		ScriptCompiler: sc,
+		Scopes:         []Scope[Type]{NewScope[Type](FuncScope)},
+		InProgress:     map[string]struct{}{},
+		ScriptFunc:     "",
+		Converging:     false,
+		Errors:         []*token.CompileError{},
 	}
 }
 
@@ -53,7 +43,8 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 }
 
 func (ts *TypeSolver) Solve() []*token.CompileError {
-	for _, stmt := range ts.Program.Statements {
+	program := ts.ScriptCompiler.Program
+	for _, stmt := range program.Statements {
 		ts.TypeStatement(stmt)
 	}
 
@@ -145,7 +136,8 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
 		return t
 	}
 
-	cc := ts.CodeCompiler.Compiler
+	compiler := ts.ScriptCompiler.Compiler
+	cc := compiler.CodeCompiler.Compiler
 	if s, ok := Get(cc.Scopes, ident.Value); ok {
 		t := s.Type
 		if ptr, yes := t.(Pointer); yes {
@@ -222,7 +214,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 		}
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to fn
-		res = append(res, fn(ts.Dummy, leftSym, rightSym, false).Type)
+		res = append(res, fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type)
 	}
 
 	return res
@@ -267,7 +259,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 		}
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to function
-		res = append(res, fn(ts.Dummy, opSym, false).Type)
+		res = append(res, fn(ts.ScriptCompiler.Compiler, opSym, false).Type)
 	}
 
 	return res
@@ -283,7 +275,9 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 		FuncName: ce.Function.Value,
 		Arity:    len(args),
 	}
-	code := ts.CodeCompiler.Code
+
+	compiler := ts.ScriptCompiler.Compiler
+	code := compiler.CodeCompiler.Code
 	template, yes := code.Func.Map[fk]
 	if !yes {
 		cerr := &token.CompileError{
@@ -294,7 +288,8 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 	}
 
 	mangled := mangle(ce.Function.Value, args)
-	f, ok := ts.FuncCache[mangled]
+	// first check scriptCompiler compiler if that itself has function in its function (perhaps through a previous script compilation)
+	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if ok && f.AllTypesInferred() {
 		return f.Outputs
 	}
@@ -308,7 +303,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 		for range template.Outputs {
 			f.Outputs = append(f.Outputs, Unresolved{})
 		}
-		ts.FuncCache[mangled] = f
+		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
 
 	for _, arg := range args {
