@@ -170,24 +170,27 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 }
 
 func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
+	pkgCode := ast.NewCode()
+	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
 	if len(codeFiles) == 0 {
-		return nil, "", nil
+		return cc, "", nil
 	}
 
-	pkgCode := ast.NewCode()
 	var errStr string
 	for _, codeFile := range codeFiles {
 		source, err := os.ReadFile(codeFile)
 		if err != nil {
 			err := fmt.Errorf("error reading %s: %v", codeFile, err)
-			return nil, "", err
+			return cc, "", err
 		}
 		l := lexer.New(p.RelPath+"/"+filepath.Base(codeFile), string(source))
 		cp := parser.NewCodeParser(l)
 		code := cp.Parse()
 
 		if errs := cp.Errors(); len(errs) > 0 {
-			fmt.Println(errs)
+			for _, err := range errs {
+				errStr += fmt.Sprintln(err)
+			}
 			errStr += fmt.Sprintf("error parsing code file %s\n", codeFile)
 			continue
 		}
@@ -198,11 +201,12 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 		return nil, "", errors.New(errStr)
 	}
 
-	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
 	errs := cc.Compile()
 	if len(errs) != 0 {
-		fmt.Println(errs)
-		return nil, "", fmt.Errorf("error while compiling code module %s", p.ModPath)
+		for _, err := range errs {
+			errStr += fmt.Sprintln(err)
+		}
+		return nil, "", fmt.Errorf("%s\nerror while compiling code module %s", errStr, p.ModPath)
 	}
 	ir := cc.Compiler.GenerateIR()
 
@@ -229,7 +233,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache)
 
 	// Only link if code module has content
-	if cc != nil && !cc.Compiler.Module.IsNil() {
+	if codeLL != "" {
 		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
 		if err != nil {
 			fmt.Printf("Error loading to memory buffer: %v\n", err)

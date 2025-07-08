@@ -28,8 +28,8 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 		return ts.Errors
 	}
 
-	cfg := NewCFG(sc)
-	cfg.Analyze()
+	cfg := NewCFG(sc.Compiler.CodeCompiler)
+	cfg.Analyze(sc.Program.Statements)
 	if len(cfg.Errors) != 0 {
 		// return any data‐flow errors (use‐before‐def, dead stores, etc.)
 		return cfg.Errors

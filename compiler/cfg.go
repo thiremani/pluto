@@ -36,11 +36,10 @@ type BasicBlock struct {
 
 // CFG holds all blocks for a function (or “main”).
 type CFG struct {
-	ScriptCompiler *ScriptCompiler
-	Blocks         []*BasicBlock
-	Scopes         []Scope[VarEvent] // Used ONLY by the forward pass
-	Errors         []*token.CompileError
-	ValidatedFuncs map[ast.FuncKey]struct{}
+	CodeCompiler *CodeCompiler // The context to look up globals
+	Blocks       []*BasicBlock
+	Scopes       []Scope[VarEvent] // Used ONLY by the forward pass
+	Errors       []*token.CompileError
 }
 
 // PushBlock creates and returns a new, empty basic block
@@ -57,13 +56,12 @@ func (cfg *CFG) PopBlock() {
 	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
 }
 
-func NewCFG(sc *ScriptCompiler) *CFG {
+func NewCFG(cc *CodeCompiler) *CFG {
 	return &CFG{
-		ScriptCompiler: sc,
-		Blocks:         make([]*BasicBlock, 0),
-		Scopes:         make([]Scope[VarEvent], 0),
-		Errors:         make([]*token.CompileError, 0),
-		ValidatedFuncs: make(map[ast.FuncKey]struct{}),
+		CodeCompiler: cc,
+		Blocks:       make([]*BasicBlock, 0),
+		Scopes:       []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
+		Errors:       make([]*token.CompileError, 0),
 	}
 }
 
@@ -209,8 +207,7 @@ func (cfg *CFG) extractEvents(stmt ast.Statement) []VarEvent {
 }
 
 // Analyze performs all data-flow checks on the CFG.
-func (cfg *CFG) Analyze() {
-	statements := cfg.ScriptCompiler.Program.Statements
+func (cfg *CFG) Analyze(statements []ast.Statement) {
 	if len(statements) == 0 {
 		return
 	}
@@ -221,21 +218,15 @@ func (cfg *CFG) Analyze() {
 	PushScope(&cfg.Scopes, FuncScope)
 	// cannot pop global scope
 
-	cfg.forwardPass(statements) // Forward pass for use-before-definition and write-after-write
-	cfg.backwardPass()          // Backward pass for liveness and dead store
+	cfg.forwardPass(statements)                 // Forward pass for use-before-definition and write-after-write
+	cfg.backwardPass(make(map[string]struct{})) // Backward pass for liveness and dead store
 }
 
 func (cfg *CFG) AnalyzeFuncs() {
-	// Validate all functions in the CodeCompiler.
-	cfg.PushBlock()
-	defer cfg.PopBlock()
-	PushScope(&cfg.Scopes, FuncScope)
-	// cannot pop global scope
-
-	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
-	for fk, fn := range cc.Code.Func.Map {
-		if _, ok := cfg.ValidatedFuncs[fk]; ok {
-			continue // Already validated this function
+	validatedFuncs := make(map[ast.FuncKey]struct{})
+	for fk, fn := range cfg.CodeCompiler.Code.Func.Map {
+		if _, ok := validatedFuncs[fk]; ok {
+			continue
 		}
 
 		prevLen := len(cfg.Errors)
@@ -244,7 +235,57 @@ func (cfg *CFG) AnalyzeFuncs() {
 			// If there are errors, we don't add the function to the validated set.
 			continue
 		}
-		cfg.ValidatedFuncs[fk] = struct{}{}
+		validatedFuncs[fk] = struct{}{}
+	}
+}
+
+// Combined “write‐to‐input” and “unused‐input” check
+func (cfg *CFG) checkInputParams(params []*ast.Identifier, stmts []*StmtNode) {
+	for _, inParam := range params {
+		wasRead := false
+
+		// scan once for both reads and illegal writes
+		for _, sn := range stmts {
+			for _, ev := range sn.Events {
+				if ev.Name != inParam.Value {
+					continue
+				}
+				switch ev.Kind {
+				case Read:
+					wasRead = true
+					// keep scanning to catch a write if it exists
+				case Write, ConditionalWrite:
+					cfg.addError(ev.Token,
+						fmt.Sprintf("cannot write to input parameter %q", inParam.Value))
+					// still want to record whether it was ever read, so don’t break out completely
+				}
+			}
+		}
+
+		if !wasRead {
+			cfg.addError(inParam.Tok(),
+				fmt.Sprintf("input parameter %q is never read", inParam.Value))
+		}
+	}
+}
+
+func (cfg *CFG) checkOutputParams(outputs []*ast.Identifier, stmts []*StmtNode) {
+	for _, outParam := range outputs {
+		sawWrite := false
+	WriteLoop:
+		for _, sn := range stmts {
+			for _, ev := range sn.Events {
+				if ev.Name == outParam.Value && (ev.Kind == Write || ev.Kind == ConditionalWrite) {
+					sawWrite = true
+					break WriteLoop
+				}
+			}
+		}
+
+		if !sawWrite {
+			cfg.addError(outParam.Tok(), fmt.Sprintf(
+				"output parameter %q is never assigned", outParam.Value))
+		}
 	}
 }
 
@@ -262,7 +303,18 @@ func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 	}
 
 	cfg.forwardPass(fn.Body.Statements)
-	cfg.backwardPass()
+
+	stmts := cfg.Blocks[len(cfg.Blocks)-1].Stmts
+	cfg.checkInputParams(fn.Parameters, stmts)
+	cfg.checkOutputParams(fn.Outputs, stmts)
+
+	// seed the live map in backward pass with output parameters
+	// as the output parameters will be used later.
+	live := make(map[string]struct{})
+	for _, output := range fn.Outputs {
+		live[output.Value] = struct{}{}
+	}
+	cfg.backwardPass(live)
 }
 
 // forwardPass checks for use-before-definition and simple write-after-write errors.
@@ -307,7 +359,7 @@ func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
 		}
 	}
 	// check we are not writing to a constant
-	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
+	cc := cfg.CodeCompiler
 	if _, ok := cc.Code.Const.Map[e.Name]; ok {
 		cfg.addError(e.Token, fmt.Sprintf("cannot write to constant %q", e.Name))
 	}
@@ -317,9 +369,8 @@ func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
 
 // backwardPass checks for liveness, identifying unused variables and dead stores.
 // This pass iterates backward through the events.
-func (cfg *CFG) backwardPass() {
+func (cfg *CFG) backwardPass(live map[string]struct{}) {
 	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
-	live := make(map[string]struct{})
 	for i := len(block.Stmts) - 1; i >= 0; i-- {
 		sn := block.Stmts[i]
 		for j := len(sn.Events) - 1; j >= 0; j-- {
@@ -365,7 +416,7 @@ func (cfg *CFG) isDefined(name string) bool {
 
 // isGlobalConst is a simple helper.
 func (cfg *CFG) isGlobalConst(name string) bool {
-	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
+	cc := cfg.CodeCompiler
 	_, ok := cc.Code.Const.Map[name]
 	return ok
 }

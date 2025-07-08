@@ -158,9 +158,6 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 		return c.derefIfPointer(s), ok
 	}
 
-	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
-		return s, ok
-	}
 	cc := c.CodeCompiler.Compiler
 	s, ok = Get(cc.Scopes, id)
 	if ok {
@@ -174,10 +171,6 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 func (c *Compiler) getRawSym(id string) (*Symbol, bool) {
 	s, ok := Get(c.Scopes, id)
 	if ok {
-		return s, ok
-	}
-
-	if c.CodeCompiler == nil || c.CodeCompiler.Compiler == nil {
 		return s, ok
 	}
 
