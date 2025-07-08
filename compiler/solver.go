@@ -42,13 +42,11 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 	}
 }
 
-func (ts *TypeSolver) Solve() []*token.CompileError {
+func (ts *TypeSolver) Solve() {
 	program := ts.ScriptCompiler.Program
 	for _, stmt := range program.Statements {
 		ts.TypeStatement(stmt)
 	}
-
-	return ts.Errors
 }
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {

@@ -154,10 +154,11 @@ a = 2`, // redeclaring/writing to const 'a'
 		t.Run(tc.name, func(t *testing.T) {
 			prog := parseInput(t, tc.name, tc.input)
 			cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
-			cc := NewCodeCompiler(llvm.NewContext(), "TestCFGAnalysis", cp.Parse())
+			ctx := llvm.NewContext()
+			cc := NewCodeCompiler(ctx, "TestCFGAnalysis", cp.Parse())
 			cc.Compile()
-			cfg := NewCFG(cc)
-			cfg.Analyze(prog.Statements)
+			cfg := NewCFG(NewScriptCompiler(ctx, tc.name, prog, cc, make(map[string]*Func)))
+			cfg.Analyze()
 
 			if tc.expectError {
 				// Assert that we have at least one error.

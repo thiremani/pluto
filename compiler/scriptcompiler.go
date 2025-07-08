@@ -23,13 +23,13 @@ func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program
 func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	// get output types for all functions
 	ts := NewTypeSolver(sc)
-	errs := ts.Solve()
-	if len(errs) != 0 {
-		return errs
+	ts.Solve()
+	if len(ts.Errors) != 0 {
+		return ts.Errors
 	}
 
-	cfg := NewCFG(sc.Compiler.CodeCompiler)
-	cfg.Analyze(sc.Program.Statements)
+	cfg := NewCFG(sc)
+	cfg.Analyze()
 	if len(cfg.Errors) != 0 {
 		// return any data‐flow errors (use‐before‐def, dead stores, etc.)
 		return cfg.Errors

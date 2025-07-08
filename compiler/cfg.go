@@ -36,25 +36,34 @@ type BasicBlock struct {
 
 // CFG holds all blocks for a function (or “main”).
 type CFG struct {
-	CodeCompiler *CodeCompiler
-	Blocks       []*BasicBlock
-	Scopes       []Scope[VarEvent] // Used ONLY by the forward pass
-	Errors       []*token.CompileError
+	ScriptCompiler *ScriptCompiler
+	Blocks         []*BasicBlock
+	Scopes         []Scope[VarEvent] // Used ONLY by the forward pass
+	Errors         []*token.CompileError
+	ValidatedFuncs map[ast.FuncKey]struct{}
 }
 
-// newBlock creates and returns a new, empty basic block
-func (cfg *CFG) newBlock() {
+// PushBlock creates and returns a new, empty basic block
+func (cfg *CFG) PushBlock() {
 	cfg.Blocks = append(cfg.Blocks, &BasicBlock{
 		Stmts: []*StmtNode{},
 	})
 }
 
-func NewCFG(cc *CodeCompiler) *CFG {
+func (cfg *CFG) PopBlock() {
+	if len(cfg.Blocks) == 0 {
+		panic("cannot pop block: no blocks available")
+	}
+	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
+}
+
+func NewCFG(sc *ScriptCompiler) *CFG {
 	return &CFG{
-		CodeCompiler: cc,
-		Blocks:       make([]*BasicBlock, 0),
-		Scopes:       make([]Scope[VarEvent], 0),
-		Errors:       make([]*token.CompileError, 0),
+		ScriptCompiler: sc,
+		Blocks:         make([]*BasicBlock, 0),
+		Scopes:         make([]Scope[VarEvent], 0),
+		Errors:         make([]*token.CompileError, 0),
+		ValidatedFuncs: make(map[ast.FuncKey]struct{}),
 	}
 }
 
@@ -114,14 +123,10 @@ func (cfg *CFG) collectStringReads(sl *ast.StringLiteral) []VarEvent {
 // it assumes start is at marker
 func (cfg *CFG) collectMarkerReads(sl *ast.StringLiteral, runes []rune, start int) []VarEvent {
 	mainId, end := parseIdentifier(runes, start+1)
-	_, exists := Get(cfg.Scopes, mainId) // Ensure the main identifier exists
+	exists := cfg.isDefined(mainId)
 	if !exists {
-		// check if it is a constant
-		code := cfg.CodeCompiler.Code
-		if _, ok := code.Const.Map[mainId]; !ok {
-			// nothing to collect if the main identifier is not in the symbol table
-			return nil
-		}
+		// nothing to collect if the main identifier is not in the symbol table
+		return nil
 	}
 
 	evs := []VarEvent{{Name: mainId, Kind: Read, Token: sl.Tok()}}
@@ -151,22 +156,17 @@ func (cfg *CFG) collectSpecifierReads(sl *ast.StringLiteral, runes []rune, start
 			return nil
 		}
 
-		_, ok := Get(cfg.Scopes, specId)
+		ok := cfg.isDefined(specId)
 		if !ok {
-			// check if it is a constant
-			code := cfg.CodeCompiler.Code
-			if _, ok := code.Const.Map[specId]; !ok {
-				err := &token.CompileError{
-					Token: sl.Token,
-					Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, sl.Value),
-				}
-				cfg.Errors = append(cfg.Errors, err)
-				return nil
+			err := &token.CompileError{
+				Token: sl.Token,
+				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, sl.Value),
 			}
+			cfg.Errors = append(cfg.Errors, err)
+			return nil
 		}
 
 		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: sl.Tok()})
-
 	}
 	return evs
 }
@@ -209,16 +209,60 @@ func (cfg *CFG) extractEvents(stmt ast.Statement) []VarEvent {
 }
 
 // Analyze performs all data-flow checks on the CFG.
-// This is the functional approach you suggested.
-func (cfg *CFG) Analyze(statements []ast.Statement) {
+func (cfg *CFG) Analyze() {
+	statements := cfg.ScriptCompiler.Program.Statements
 	if len(statements) == 0 {
 		return
 	}
-	cfg.newBlock()
+
+	cfg.PushBlock()
+	defer cfg.PopBlock()
+
 	PushScope(&cfg.Scopes, FuncScope)
 	// cannot pop global scope
+
 	cfg.forwardPass(statements) // Forward pass for use-before-definition and write-after-write
 	cfg.backwardPass()          // Backward pass for liveness and dead store
+}
+
+func (cfg *CFG) AnalyzeFuncs() {
+	// Validate all functions in the CodeCompiler.
+	cfg.PushBlock()
+	defer cfg.PopBlock()
+	PushScope(&cfg.Scopes, FuncScope)
+	// cannot pop global scope
+
+	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
+	for fk, fn := range cc.Code.Func.Map {
+		if _, ok := cfg.ValidatedFuncs[fk]; ok {
+			continue // Already validated this function
+		}
+
+		prevLen := len(cfg.Errors)
+		cfg.validateFunc(fn)
+		if len(cfg.Errors) > prevLen {
+			// If there are errors, we don't add the function to the validated set.
+			continue
+		}
+		cfg.ValidatedFuncs[fk] = struct{}{}
+	}
+}
+
+func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
+	cfg.PushBlock() // Start a new block for the function
+	defer cfg.PopBlock()
+
+	PushScope(&cfg.Scopes, FuncScope)
+	defer PopScope(&cfg.Scopes) // Ensure we pop the function scope after validation
+
+	// add the input arguments to the scope
+	for _, param := range fn.Parameters {
+		ve := VarEvent{Name: param.Value, Kind: Read, Token: param.Tok()}
+		Put(cfg.Scopes, param.Value, ve)
+	}
+
+	cfg.forwardPass(fn.Body.Statements)
+	cfg.backwardPass()
 }
 
 // forwardPass checks for use-before-definition and simple write-after-write errors.
@@ -263,11 +307,8 @@ func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
 		}
 	}
 	// check we are not writing to a constant
-	if cfg.CodeCompiler == nil || cfg.CodeCompiler.Code == nil {
-		return // No code to check against
-	}
-	code := cfg.CodeCompiler.Code
-	if _, ok := code.Const.Map[e.Name]; ok {
+	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
+	if _, ok := cc.Code.Const.Map[e.Name]; ok {
 		cfg.addError(e.Token, fmt.Sprintf("cannot write to constant %q", e.Name))
 	}
 	// update the last write type.
@@ -324,9 +365,7 @@ func (cfg *CFG) isDefined(name string) bool {
 
 // isGlobalConst is a simple helper.
 func (cfg *CFG) isGlobalConst(name string) bool {
-	if cfg.CodeCompiler == nil || cfg.CodeCompiler.Code == nil {
-		return false
-	}
-	_, ok := cfg.CodeCompiler.Code.Const.Map[name]
+	cc := cfg.ScriptCompiler.Compiler.CodeCompiler
+	_, ok := cc.Code.Const.Map[name]
 	return ok
 }
