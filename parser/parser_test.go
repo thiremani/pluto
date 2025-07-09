@@ -2,8 +2,11 @@ package parser
 
 import (
 	"fmt"
-	"github.com/thiremani/pluto/ast"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 )
 
 func testInfixExpression(t *testing.T, exp ast.Expression, left interface{},
@@ -114,4 +117,92 @@ func checkParserErrors(t *testing.T, p *StmtParser) {
 		t.Errorf("parser error: %q", msg)
 	}
 	t.FailNow()
+}
+
+func testLiteral(t *testing.T, lit ast.Expression, exp interface{}) {
+	switch v := exp.(type) {
+	case int64:
+		if v >= 0 {
+			testIntegerLiteral(t, lit, v)
+			return
+		}
+
+		// expect a PrefixExpression
+		pe, ok := lit.(*ast.PrefixExpression)
+		require.True(t, ok, "expected *ast.PrefixExpression for negative, got %T", lit)
+		require.Equal(t, "-", pe.Operator)
+
+		// and its operand should be the absolute value
+		testIntegerLiteral(t, pe.Right, -v)
+	case string:
+		testIdentifier(t, lit, v)
+	case nil:
+		require.Nil(t, lit, "expected nil literal, got %T", lit)
+	default:
+		t.Errorf("type of exp not handled. got=%T", lit)
+	}
+}
+
+func TestParseRangeLiteral(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantStart interface{} // int64 or string
+		wantStop  interface{} // int64 or string
+		wantStep  interface{} // int64, string, or nil
+	}{
+		{
+			input:     "x = 0:5 x",
+			wantStart: int64(0),
+			wantStop:  int64(5),
+			wantStep:  nil,
+		},
+		{
+			input:     "x = 0:n x",
+			wantStart: int64(0),
+			wantStop:  "n",
+			wantStep:  nil,
+		},
+		{
+			input:     "x = 0:10:2 x",
+			wantStart: int64(0),
+			wantStop:  int64(10),
+			wantStep:  int64(2),
+		},
+		{
+			input:     "x = 5:0:-1 x",
+			wantStart: int64(5),
+			wantStop:  int64(0),
+			wantStep:  int64(-1),
+		},
+		{
+			input:     "x = a:b:c x",
+			wantStart: "a",
+			wantStop:  "b",
+			wantStep:  "c",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			l := lexer.New("range_test", tt.input)
+			p := New(l)
+			program := p.ParseProgram()
+			require.Empty(t, p.Errors())
+
+			// Should be one LetStatement: x = <range> x
+			require.Len(t, program.Statements, 1, "expected exactly one statement")
+			stmt, ok := program.Statements[0].(*ast.LetStatement)
+			require.True(t, ok, "expected *ast.LetStatement, got %T", program.Statements[0])
+
+			// And the RHS value must be a RangeLiteral
+			require.Len(t, stmt.Condition, 1, "expected statement to have exactly one condition")
+			rl, ok := stmt.Condition[0].(*ast.RangeLiteral)
+			require.True(t, ok, "expected *ast.RangeLiteral, got %T", stmt.Condition[0])
+
+			require.Equal(t, ":", rl.Token.Literal)
+			testLiteral(t, rl.Start, tt.wantStart)
+			testLiteral(t, rl.Stop, tt.wantStop)
+			testLiteral(t, rl.Step, tt.wantStep)
+		})
+	}
 }

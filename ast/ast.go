@@ -2,9 +2,11 @@ package ast
 
 import (
 	"bytes"
-	"github.com/thiremani/pluto/token"
+	"fmt"
 	"maps"
 	"strings"
+
+	"github.com/thiremani/pluto/token"
 )
 
 // The base Node interface
@@ -236,12 +238,6 @@ func (fl *FloatLiteral) expressionNode()  {}
 func (fl *FloatLiteral) Tok() token.Token { return fl.Token }
 func (fl *FloatLiteral) String() string   { return fl.Token.Literal }
 
-type PrefixExpression struct {
-	Token    token.Token // The prefix token, e.g. !
-	Operator string
-	Right    Expression
-}
-
 type StringLiteral struct {
 	Token token.Token
 	Value string
@@ -250,6 +246,30 @@ type StringLiteral struct {
 func (sl *StringLiteral) expressionNode()  {}
 func (sl *StringLiteral) Tok() token.Token { return sl.Token }
 func (sl *StringLiteral) String() string   { return sl.Token.Literal }
+
+// RangeLiteral represents start:stop[:step]
+type RangeLiteral struct {
+	Token token.Token // the first ':' token
+	Start Expression  // e.g. the “0” in 0:5 or x in x:y
+	Stop  Expression  // the “5” in 0:5
+	Step  Expression  // optional; nil if omitted
+}
+
+func (rl *RangeLiteral) expressionNode()  {}
+func (rl *RangeLiteral) Tok() token.Token { return rl.Token }
+func (rl *RangeLiteral) String() string {
+	if rl.Step != nil {
+		return fmt.Sprintf("%s:%s:%s",
+			rl.Start.String(), rl.Stop.String(), rl.Step.String())
+	}
+	return fmt.Sprintf("%s:%s", rl.Start.String(), rl.Stop.String())
+}
+
+type PrefixExpression struct {
+	Token    token.Token // The prefix token, e.g. !
+	Operator string
+	Right    Expression
+}
 
 func (pe *PrefixExpression) expressionNode()  {}
 func (pe *PrefixExpression) Tok() token.Token { return pe.Token }

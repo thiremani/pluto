@@ -271,8 +271,12 @@ func TestFuncStatementParsing(t *testing.T) {
 				testIdentifier(t, stmt.Name[0], "y")
 
 				// Test condition
-				require.Len(t, stmt.Condition, 1, "condition count")
-				testInfixExpression(t, stmt.Condition[0], 0, ":", "n")
+				require.Len(t, stmt.Condition, 1)
+				rl, ok := stmt.Condition[0].(*ast.RangeLiteral)
+				require.True(t, ok, "expected a RangeLiteral for 0:n")
+				testIntegerLiteral(t, rl.Start, 0)
+				testIdentifier(t, rl.Stop, "n")
+				require.Nil(t, rl.Step, "step should be nil for 0:n")
 
 				// Test value
 				require.Len(t, stmt.Value, 1, "value count")

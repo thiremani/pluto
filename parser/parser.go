@@ -82,13 +82,15 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.STR_INT, p.parseIntegerLiteral)
 	p.registerPrefix(token.STR_FLOAT, p.parseFloatLiteral)
 	p.registerPrefix(token.STR_STRING, p.parseStringLiteral)
+
 	p.registerPrefix(token.SYM_BANG, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SUB, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_TILDE, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_LPAREN, p.parseGroupedExpression)
 
 	p.infixParseFns = make(map[string]infixParseFn)
-	p.registerInfix(token.SYM_COLON, p.parseInfixExpression)
+	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
+
 	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
@@ -288,7 +290,7 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 			return nil
 		}
 	}
-	// TODO operator, function, struct definitions
+	// TODO operator, struct definitions
 	return nil
 }
 
@@ -408,12 +410,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 }
 
 func (p *StmtParser) isCondition(exp ast.Expression) bool {
-	ie, ok := exp.(*ast.InfixExpression)
-	if !ok {
-		return false
-	}
-
-	return ie.Token.IsComparison()
+	return exp.Tok().IsComparison()
 }
 
 func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *token.CompileError) {
@@ -533,6 +530,45 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 		Token: p.curToken,
 		Value: p.curToken.Literal,
 	}
+}
+
+// parseRangeLiteral is called when we encounter a ':' in an infix position.
+// The `left` argument is the expression that was just parsed before the ':'.
+func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
+	// `left` is the "start" of our range.
+	// p.curToken is the `:`.
+	rl := &ast.RangeLiteral{
+		Token: p.curToken,
+		Start: left,
+	}
+
+	// Get the precedence of the ':' operator to handle right-associativity correctly.
+	precedence := p.curPrecedence()
+	p.nextToken() // Consume the ':'
+
+	rl.Stop = p.parseExpression(precedence)
+	if rl.Stop == nil {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "expected expression after ':' for range stop",
+		})
+		return nil
+	}
+
+	if p.peekTokenIs(token.COLON) {
+		p.nextToken()
+		p.nextToken()
+		rl.Step = p.parseExpression(precedence)
+		if rl.Step == nil {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: p.curToken,
+				Msg:   "expected expression after second ':' for range step",
+			})
+			return nil
+		}
+	}
+
+	return rl
 }
 
 func (p *StmtParser) parsePrefixExpression() ast.Expression {
