@@ -77,6 +77,15 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	case *ast.StringLiteral:
 		// Collect any identifiers within the format string.
 		return cfg.collectStringReads(e)
+
+	case *ast.RangeLiteral:
+		// a range literal “start:stop[:step]” reads start, stop, and optionally step
+		evs := cfg.collectReads(e.Start)
+		evs = append(cfg.collectReads(e.Stop), evs...)
+		if e.Step != nil {
+			evs = append(cfg.collectReads(e.Step), evs...)
+		}
+		return evs
 	// Base case that IS an identifier.
 	case *ast.Identifier:
 		// Return a new slice

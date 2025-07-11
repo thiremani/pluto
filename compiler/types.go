@@ -14,6 +14,7 @@ const (
 	FloatKind
 	PointerKind
 	StrKind
+	RangeKind
 	FuncKind
 	ArrayKind
 )
@@ -85,6 +86,18 @@ func (s Str) String() string {
 
 func (s Str) Kind() Kind {
 	return StrKind
+}
+
+type Range struct {
+	Iter Type
+}
+
+func (r Range) String() string {
+	return "Range_" + r.Iter.String()
+}
+
+func (r Range) Kind() Kind {
+	return RangeKind
 }
 
 type Func struct {

@@ -1,0 +1,18 @@
+i = 0:5
+j = 1:10
+k = 0:4:2
+l = -3:5:1
+i, j, k, l, 0:6
+
+zero = 0
+a = 6
+b = 8
+c = 10
+d = 3
+
+i = zero:a
+j = 1:b
+k = a:b:c
+u = 0:b:d
+
+"i is -i, j is -j, k is -k", u

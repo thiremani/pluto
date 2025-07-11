@@ -47,6 +47,8 @@ func defaultSpecifier(t Type) (string, error) {
 		return "%.15g", nil
 	case StrKind:
 		return "%s", nil
+	case RangeKind:
+		return "%s", nil
 	default:
 		err := fmt.Errorf("unsupported type in print statement %s", t.String())
 		return "", err
@@ -146,7 +148,11 @@ func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (main
 		specSyms, customSpec, end, err = c.parseSpecifier(sl, runes, specStart)
 	}
 
-	syms = append(syms, mainSym)
+	if mainSym.Type.Kind() == RangeKind {
+		syms = append(syms, &Symbol{Val: c.rangeStrArg(mainSym), Type: Str{}})
+	} else {
+		syms = append(syms, mainSym)
+	}
 	syms = append(syms, specSyms...)
 	newIndex = end
 	return

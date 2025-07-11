@@ -274,6 +274,14 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
 	binFile := filepath.Join(p.Cwd, bin)
 
+	runtimeC := filepath.Join(p.RootDir, "runtime", "runtime.c")
+	runtimeObj := filepath.Join(p.CacheDir, SCRIPT_DIR, "runtime.o")
+	rtCmd := exec.Command("clang", OPT_LEVEL, "-c", runtimeC, "-o", runtimeObj)
+	if out, err := rtCmd.CombinedOutput(); err != nil {
+		fmt.Printf("runtime compile failed: %s\n%s\n", err, string(out))
+		return err
+	}
+
 	// Optimization pass
 	optCmd := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile)
 	if output, err := optCmd.CombinedOutput(); err != nil {
@@ -300,6 +308,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 
 	linkArgs = append(linkArgs,
 		objFile,
+		runtimeObj,
 		"-o",
 		binFile,
 		"-lm", // link against the standard math library

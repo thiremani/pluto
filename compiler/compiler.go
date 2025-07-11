@@ -81,6 +81,16 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 	case StrKind:
 		// Represent a string as a pointer to an 8-bit integer.
 		return llvm.PointerType(c.Context.Int8Type(), 0)
+	case RangeKind:
+		r := t.(Range)
+		// Lower the element type (e.g. Int{64} → I64)
+		elemLLVM := c.mapToLLVMType(r.Iter)
+		// Build a { i64, i64, i64 }-style struct type
+		// false means “not packed”
+		return llvm.StructType(
+			[]llvm.Type{elemLLVM, elemLLVM, elemLLVM},
+			false,
+		)
 	case PointerKind:
 		ptrType := t.(Pointer)
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
@@ -366,6 +376,23 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+		res = []*Symbol{s}
+	case *ast.RangeLiteral:
+		s.Type = Range{Iter: Int{Width: 64}}
+		rType := c.mapToLLVMType(s.Type)
+		agg := llvm.Undef(rType)
+		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start)[0].Val, 0, "start")
+		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop)[0].Val, 1, "stop")
+		// insert step, defaulting to 1 if no step was provided
+		var stepVal llvm.Value
+		if e.Step != nil {
+			stepVal = c.compileExpression(e.Step)[0].Val
+		} else {
+			// default step = 1
+			stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+		}
+		agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
+		s.Val = agg
 		res = []*Symbol{s}
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
@@ -688,10 +715,40 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	return res
 }
 
+func (c *Compiler) rangeStrArg(s *Symbol) (arg llvm.Value) {
+	// extract numeric fields
+	start := c.builder.CreateExtractValue(s.Val, 0, "")
+	stop := c.builder.CreateExtractValue(s.Val, 1, "")
+	step := c.builder.CreateExtractValue(s.Val, 2, "")
+
+	// call range_i64_str
+	fnType, fn := c.GetCFunc(RANGE_I64_STR)
+	arg = c.builder.CreateCall(
+		fnType,
+		fn,
+		[]llvm.Value{start, stop, step},
+		RANGE_I64_STR,
+	)
+	return
+}
+
+func (c *Compiler) free(ptrs []llvm.Value) {
+	fnType, fn := c.GetCFunc(FREE)
+	for _, ptr := range ptrs {
+		c.builder.CreateCall(fnType, fn, []llvm.Value{ptr}, "") // name should be empty as it returns a void
+	}
+}
+
+func (c *Compiler) printf(args []llvm.Value) {
+	fnType, fn := c.GetCFunc(PRINTF)
+	c.builder.CreateCall(fnType, fn, args, PRINTF)
+}
+
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	// Track format specifiers and arguments
 	var formatStr string
 	var args []llvm.Value
+	var toFree []llvm.Value
 
 	// Generate format string based on expression types
 	for _, expr := range ps.Expression {
@@ -715,7 +772,15 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 				c.Errors = append(c.Errors, cerr)
 				continue
 			}
+
 			formatStr += spec + " "
+			if s.Type.Kind() == RangeKind {
+				arg := c.rangeStrArg(s)
+				args = append(args, arg)
+				toFree = append(toFree, arg)
+				continue
+			}
+
 			args = append(args, s.Val)
 		}
 	}
@@ -740,20 +805,10 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
 	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 
-	// Declare printf (variadic function)
-	printfType := llvm.FunctionType(
-		c.Context.Int32Type(),
-		[]llvm.Type{llvm.PointerType(c.Context.Int8Type(), 0)},
-		true, // Variadic
-	)
-	printf := c.Module.NamedFunction("printf")
-	if printf.IsNil() {
-		printf = llvm.AddFunction(c.Module, "printf", printfType)
-	}
-
 	// Call printf with all arguments
 	allArgs := append([]llvm.Value{formatPtr}, args...)
-	c.builder.CreateCall(printfType, printf, allArgs, "printf_call")
+	c.printf(allArgs)
+	c.free(toFree)
 }
 
 // Helper function to generate final output

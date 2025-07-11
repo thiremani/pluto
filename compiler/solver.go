@@ -102,6 +102,62 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	PutBulk(ts.Scopes, trueValues)
 }
 
+func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral) []Type {
+	// infer start and stop
+	startT := ts.TypeExpression(r.Start)
+	stopT := ts.TypeExpression(r.Stop)
+	if len(startT) != 1 || len(stopT) != 1 {
+		ce := &token.CompileError{
+			Token: r.Tok(),
+			Msg:   fmt.Sprintf("start and stop in range should be of length 1. start length: %d, stop length: %d", len(startT), len(stopT)),
+		}
+		ts.Errors = append(ts.Errors, ce)
+	}
+	// must be integers
+	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
+		ce := &token.CompileError{
+			Token: r.Tok(),
+			Msg:   fmt.Sprintf("range bounds should be Integer. start type: %s, stop type: %s", startT[0], stopT[0]),
+		}
+		ts.Errors = append(ts.Errors, ce)
+	}
+	// must match
+	if !EqualTypes(startT, stopT) {
+		ce := &token.CompileError{
+			Token: r.Tok(),
+			Msg:   fmt.Sprintf("range start and stop must have same type. start Type: %s, stop Type: %s", startT[0], stopT[0]),
+		}
+		ts.Errors = append(ts.Errors, ce)
+	}
+	// optional step
+	if r.Step != nil {
+		stepT := ts.TypeExpression(r.Step)
+		if len(stepT) != 1 {
+			ce := &token.CompileError{
+				Token: r.Tok(),
+				Msg:   fmt.Sprintf("range step got from expression should have length 1. step length: %d", len(stepT)),
+			}
+			ts.Errors = append(ts.Errors, ce)
+		}
+		if stepT[0].Kind() != IntKind {
+			ce := &token.CompileError{
+				Token: r.Tok(),
+				Msg:   fmt.Sprintf("range bounds should be Integer. got step type: %s", stepT[0]),
+			}
+			ts.Errors = append(ts.Errors, ce)
+		}
+		if !EqualTypes(startT, stepT) {
+			ce := &token.CompileError{
+				Token: r.Tok(),
+				Msg:   fmt.Sprintf("range start and step must have same type. start Type: %s, step Type: %s", startT[0], stepT[0]),
+			}
+			ts.Errors = append(ts.Errors, ce)
+		}
+	}
+	// the whole expression is a Range of that integer type
+	return []Type{Range{Iter: startT[0]}}
+}
+
 func (ts *TypeSolver) TypeExpression(expr ast.Expression) []Type {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -110,6 +166,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression) []Type {
 		return []Type{Float{Width: 64}}
 	case *ast.StringLiteral:
 		return []Type{Str{}}
+	case *ast.RangeLiteral:
+		return ts.TypeRangeExpression(e)
 	case *ast.Identifier:
 		return []Type{ts.TypeIdentifier(e)}
 	case *ast.InfixExpression:
