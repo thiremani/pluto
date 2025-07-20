@@ -321,10 +321,20 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 	return res
 }
 
+// inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 	args := []Type{}
+	innerArgs := []Type{}
 	for _, e := range ce.Arguments {
-		args = append(args, ts.TypeExpression(e)...)
+		argList := ts.TypeExpression(e)
+		for _, arg := range argList {
+			if arg.Kind() == RangeKind {
+				innerArgs = append(innerArgs, arg.(Range).Iter)
+			} else {
+				innerArgs = append(innerArgs, arg)
+			}
+			args = append(args, arg)
+		}
 	}
 
 	fk := ast.FuncKey{
@@ -344,6 +354,10 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 	}
 
 	mangled := mangle(ce.Function.Value, args)
+	return ts.InferFuncTypes(ce, innerArgs, mangled, template)
+}
+
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) []Type {
 	// first check scriptCompiler compiler if that itself has function in its function (perhaps through a previous script compilation)
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if ok && f.AllTypesInferred() {

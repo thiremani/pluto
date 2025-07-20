@@ -1,0 +1,3 @@
+y = triple(x)
+    y = 3x
+    y

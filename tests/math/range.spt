@@ -1,0 +1,7 @@
+n = 5
+a = 0:n
+y = triple(a)
+y
+
+y = triple(1:7:2)
+y

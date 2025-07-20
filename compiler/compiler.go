@@ -595,7 +595,7 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	savedBlock := c.builder.GetInsertBlock()
 	c.builder.SetInsertPointAtEnd(entry)
 
-	c.compileFuncBlock(fn, args, mangled, retStruct, function)
+	c.compileFuncBlock(fn, FuncType, args, retStruct, function)
 
 	c.builder.CreateRetVoid()
 
@@ -607,35 +607,69 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	return function, FuncType.Outputs
 }
 
-func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, args []*Symbol, mangled string, retStruct llvm.Type, function llvm.Value) {
+func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, FuncType *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
 	PushScope(&c.Scopes, FuncScope)
 	defer PopScope(&c.Scopes)
 
 	sretPtr := function.Param(0)
 
 	for i, outIdent := range fn.Outputs {
-		outType := c.FuncCache[mangled].Outputs[i]
+		outType := FuncType.Outputs[i]
 
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
 
 		Put(c.Scopes, outIdent.Value, &Symbol{
-			Val:  fieldPtr,
-			Type: Pointer{Elem: outType},
+			Val:      fieldPtr,
+			Type:     Pointer{Elem: outType},
+			FuncArg:  true,
+			ReadOnly: false,
 		})
 	}
 
-	for i, param := range fn.Parameters {
-		arg := args[i]
-		paramVal := function.Param(i + 1)
-		paramVal.SetName(param.Value) // Good practice to name the LLVM value
+	// collect which param‐indices are ranges
+	rangeIdxs := []int{}
+	// recursive nester: for N ranges, make N loops via createLoop
+	scalars := make(map[string]*Symbol)
+	for i, arg := range args {
+		if arg.Type.Kind() == RangeKind {
+			rangeIdxs = append(rangeIdxs, i)
+			// do nothing as arg will become an iter in createLoop
+			continue
+		}
+		scalars[fn.Parameters[i].Value] = &Symbol{
+			Val:      function.Param(i + 1), // Get the scalar value from the function's params
+			Type:     arg.Type,
+			FuncArg:  true,
+			ReadOnly: false,
+		}
+	}
 
-		// Put the parameter directly into the symbol table as a VALUE, not a pointer.
-		// Parameters in Pluto are assumed to be read-only, so it doesn't need a memory slot.
-		Put(c.Scopes, param.Value, &Symbol{
-			Val:  paramVal,
-			Type: arg.Type,
+	var nest func(level int, iters map[string]*Symbol)
+	nest = func(level int, iters map[string]*Symbol) {
+		if level == len(rangeIdxs) {
+			c.compileBlockWithArgs(fn, scalars, iters, function)
+			return
+		}
+
+		// pick the next range literal & its Symbol
+		idx := rangeIdxs[level]
+		c.createLoop(function.Param(idx+1), func(iter llvm.Value) {
+			iters[fn.Parameters[idx].Value] = &Symbol{
+				Val:      iter,
+				Type:     Int{Width: 64}, // for now assume range has type I64
+				FuncArg:  true,
+				ReadOnly: false,
+			}
+			nest(level+1, iters)
 		})
 	}
+
+	nest(0, make(map[string]*Symbol))
+}
+
+func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol, function llvm.Value) {
+	PutBulk(c.Scopes, scalars)
+	PutBulk(c.Scopes, iters)
 
 	for _, stmt := range fn.Body.Statements {
 		c.compileStatement(stmt)
@@ -662,11 +696,13 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
 	args := []*Symbol{}
 	argTypes := []Type{}
+	argVals := []llvm.Value{}
 	for _, callArg := range ce.Arguments {
 		args = append(args, c.compileExpression(callArg)...)
 	}
 	for _, arg := range args {
 		argTypes = append(argTypes, arg.Type)
+		argVals = append(argVals, arg.Val)
 	}
 
 	mangled := mangle(ce.Function.Value, argTypes)
@@ -700,9 +736,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	funcType := c.getFuncType(retStruct, llvmInputs)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 	llvmArgs := []llvm.Value{sretPtr}
-	for _, arg := range args {
-		llvmArgs = append(llvmArgs, arg.Val)
-	}
+	llvmArgs = append(llvmArgs, argVals...)
 
 	c.builder.CreateCall(funcType, fn, llvmArgs, "")
 
@@ -715,11 +749,57 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	return res
 }
 
+// func (c *Compiler) compileVectorizedBody(fn *ast.FuncStatement, args []ast.Expression, argIndex int, compiledVals map[string]*Symbol) {
+// 	// Base Case: All args processed, compile the body.
+// 	if argIndex >= len(args) {
+// 		PushScope(&c.Scopes, BlockScope)
+// 		defer PopScope(&c.Scopes)
+// 		for name, sym := range compiledVals {
+// 			Put(c.Scopes, name, sym)
+// 		}
+
+// 		for _, stmt := range fn.Body.Statements {
+// 			c.compileStatement(stmt)
+// 		}
+// 		return
+// 	}
+
+// 	// Recursive Step:
+// 	currentArg := args[argIndex]
+// 	currentParam := fn.Parameters[argIndex]
+
+// 	if rng, ok := currentArg.(*ast.RangeLiteral); ok {
+// 		// It's a range. Create a loop and recurse inside it.
+// 		c.createLoop(rng, func(indVar llvm.Value) { // Callback-based loop creator
+// 			loopVarSymbol := &Symbol{Val: indVar, Type: Int{Width: 64}, FuncArg: true, ReadOnly: true}
+// 			compiledVals[currentParam.Value] = loopVarSymbol
+
+// 			c.compileVectorizedBody(fn, args, argIndex+1, compiledVals)
+
+// 			delete(compiledVals, currentParam.Value)
+// 		})
+// 		return
+// 	}
+
+// 	// It's a scalar. Compile it and recurse.
+// 	compiledScalar := c.compileExpression(currentArg)[0]
+// 	compiledVals[currentParam.Value] = compiledScalar
+
+// 	c.compileVectorizedBody(fn, args, argIndex+1, compiledVals)
+
+// 	delete(compiledVals, currentParam.Value)
+// }
+
+// extract numeric fields of a range struct
+func (c *Compiler) rangeComponents(r llvm.Value) (start, stop, step llvm.Value) {
+	start = c.builder.CreateExtractValue(r, 0, "start")
+	stop = c.builder.CreateExtractValue(r, 1, "stop")
+	step = c.builder.CreateExtractValue(r, 2, "step")
+	return
+}
+
 func (c *Compiler) rangeStrArg(s *Symbol) (arg llvm.Value) {
-	// extract numeric fields
-	start := c.builder.CreateExtractValue(s.Val, 0, "")
-	stop := c.builder.CreateExtractValue(s.Val, 1, "")
-	step := c.builder.CreateExtractValue(s.Val, 2, "")
+	start, stop, step := c.rangeComponents(s.Val)
 
 	// call range_i64_str
 	fnType, fn := c.GetCFunc(RANGE_I64_STR)

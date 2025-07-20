@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	// "github.com/thiremani/pluto/ast"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -11,18 +10,8 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
-/*
-func (c *Compiler) createLoop(r *ast.RangeLiteral) {
-	start := c.compileExpression(r.Start)[0].Val
-	stop := c.compileExpression(r.Stop)[0].Val
-
-	var stepVal llvm.Value
-	if r.Step != nil {
-		stepVal = c.compileExpression(r.Step)[0].Val
-	} else {
-		// Default step is 1.
-		stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false) // Assuming range of i64
-	}
+func (c *Compiler) createLoop(r llvm.Value, bodyGen func(indVar llvm.Value)) {
+	start, stop, step := c.rangeComponents(r)
 
 	curr := c.builder.GetInsertBlock()
 	fn := curr.Parent()
@@ -42,14 +31,15 @@ func (c *Compiler) createLoop(r *ast.RangeLiteral) {
 
 	// Call the provided function to generate the main body of the loop.
 	// It uses the current value of the induction variable.
+	c.builder.SetInsertPointAtEnd(body)
 	bodyGen(iter)
 
 	// Now, at the end of the body, perform the increment.
-	iterNext := c.builder.CreateAdd(iter, stepVal, "iter_next")
+	iterNext := c.builder.CreateAdd(iter, step, "iter_next")
 	c.builder.CreateBr(cond)
 
 	// Finally, add the incoming value from the body to the PHI node.
 	iter.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{body})
 
 	c.builder.SetInsertPointAtEnd(exit)
-} */
+}
