@@ -644,30 +644,29 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, FuncType *Func, args 
 		}
 	}
 
-	var nest func(level int, iters map[string]*Symbol)
-	nest = func(level int, iters map[string]*Symbol) {
-		if level == len(rangeIdxs) {
-			c.compileBlockWithArgs(fn, scalars, iters, function)
-			return
-		}
-
-		// pick the next range literal & its Symbol
-		idx := rangeIdxs[level]
-		c.createLoop(function.Param(idx+1), func(iter llvm.Value) {
-			iters[fn.Parameters[idx].Value] = &Symbol{
-				Val:      iter,
-				Type:     Int{Width: 64}, // for now assume range has type I64
-				FuncArg:  true,
-				ReadOnly: false,
-			}
-			nest(level+1, iters)
-		})
-	}
-
-	nest(0, make(map[string]*Symbol))
+	c.nest(fn, scalars, rangeIdxs, function, 0, make(map[string]*Symbol))
 }
 
-func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol, function llvm.Value) {
+func (c *Compiler) nest(fn *ast.FuncStatement, scalars map[string]*Symbol, rangeIdxs []int, function llvm.Value, level int, iters map[string]*Symbol) {
+	if level == len(rangeIdxs) {
+		c.compileBlockWithArgs(fn, scalars, iters)
+		return
+	}
+
+	// pick the next range literal & its Symbol
+	idx := rangeIdxs[level]
+	c.createLoop(function.Param(idx+1), func(iter llvm.Value) {
+		iters[fn.Parameters[idx].Value] = &Symbol{
+			Val:      iter,
+			Type:     Int{Width: 64}, // for now assume range has type I64
+			FuncArg:  true,
+			ReadOnly: false,
+		}
+		c.nest(fn, scalars, rangeIdxs, function, level+1, iters)
+	})
+}
+
+func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
 	PutBulk(c.Scopes, scalars)
 	PutBulk(c.Scopes, iters)
 
@@ -748,47 +747,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	}
 	return res
 }
-
-// func (c *Compiler) compileVectorizedBody(fn *ast.FuncStatement, args []ast.Expression, argIndex int, compiledVals map[string]*Symbol) {
-// 	// Base Case: All args processed, compile the body.
-// 	if argIndex >= len(args) {
-// 		PushScope(&c.Scopes, BlockScope)
-// 		defer PopScope(&c.Scopes)
-// 		for name, sym := range compiledVals {
-// 			Put(c.Scopes, name, sym)
-// 		}
-
-// 		for _, stmt := range fn.Body.Statements {
-// 			c.compileStatement(stmt)
-// 		}
-// 		return
-// 	}
-
-// 	// Recursive Step:
-// 	currentArg := args[argIndex]
-// 	currentParam := fn.Parameters[argIndex]
-
-// 	if rng, ok := currentArg.(*ast.RangeLiteral); ok {
-// 		// It's a range. Create a loop and recurse inside it.
-// 		c.createLoop(rng, func(indVar llvm.Value) { // Callback-based loop creator
-// 			loopVarSymbol := &Symbol{Val: indVar, Type: Int{Width: 64}, FuncArg: true, ReadOnly: true}
-// 			compiledVals[currentParam.Value] = loopVarSymbol
-
-// 			c.compileVectorizedBody(fn, args, argIndex+1, compiledVals)
-
-// 			delete(compiledVals, currentParam.Value)
-// 		})
-// 		return
-// 	}
-
-// 	// It's a scalar. Compile it and recurse.
-// 	compiledScalar := c.compileExpression(currentArg)[0]
-// 	compiledVals[currentParam.Value] = compiledScalar
-
-// 	c.compileVectorizedBody(fn, args, argIndex+1, compiledVals)
-
-// 	delete(compiledVals, currentParam.Value)
-// }
 
 // extract numeric fields of a range struct
 func (c *Compiler) rangeComponents(r llvm.Value) (start, stop, step llvm.Value) {
