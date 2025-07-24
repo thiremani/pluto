@@ -53,18 +53,18 @@ x, y`
 
 	// check func cache
 	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["$isEven$I64"]
-	if isEvenFunc.Outputs[0].Kind() != StrKind {
+	if isEvenFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
-	if isEvenFunc.Outputs[1].Kind() != StrKind {
+	if isEvenFunc.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
 	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
-	if isOddFunc.Outputs[0].Kind() != UnresolvedKind {
+	if isOddFunc.OutTypes[0].Kind() != UnresolvedKind {
 		t.Errorf("isOdd func should strkind for output arg 0")
 	}
-	if isOddFunc.Outputs[1].Kind() != StrKind {
+	if isOddFunc.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isOdd func should strkind for output arg 1")
 	}
 
@@ -81,10 +81,10 @@ x, y`
 	nts.Solve()
 
 	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
-	if nextOddFunc.Outputs[0].Kind() != StrKind {
+	if nextOddFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
-	if nextOddFunc.Outputs[1].Kind() != StrKind {
+	if nextOddFunc.OutTypes[1].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 1")
 	}
 }

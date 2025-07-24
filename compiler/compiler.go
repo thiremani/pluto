@@ -164,7 +164,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr)
+		condSyms := c.compileExpression(expr, nil)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -230,7 +230,7 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 	// compileExpression already derefs any pointers
 	// so don't worry about creating a load here
 	for _, expr := range stmt.Value {
-		ifSymbols = append(ifSymbols, c.compileExpression(expr)...)
+		ifSymbols = append(ifSymbols, c.compileExpression(expr, nil)...)
 	}
 
 	return ifSymbols, c.builder.GetInsertBlock()
@@ -320,31 +320,29 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
-	syms := []*Symbol{}
-	for _, expr := range stmt.Value {
-		syms = append(syms, c.compileExpression(expr)...)
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
+	if len(idents) == 0 {
+		return
 	}
-
-	for i, ident := range stmt.Name {
-		name := ident.Value
-		// This is the new symbol from the right-hand side. It should represent a pure value.
-		newRhsSymbol := syms[i]
+	for i, newRhsSymbol := range syms {
+		name := idents[i].Value
 
 		// Check if the variable on the LEFT-hand side (`name`) already exists
 		// and if it represents a memory location (a pointer).
 		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PointerKind {
-			// CASE A: Storing to an existing memory location.
-			// Example: `res = x * x` where `res` is a function output pointer.
-
-			// `newRhsSymbol.Val` is the value to store (e.g., the result of `x * x`).
-			// `lhsSymbol.Val` is the pointer to the memory location for `res`.
-			// `newRhsSymbol.Type` is the type of the value being stored.
 			c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
 			continue
 		}
 
 		Put(c.Scopes, name, newRhsSymbol)
+	}
+}
+
+func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
+	i := 0
+	for _, expr := range stmt.Value {
+		res := c.compileExpression(expr, stmt.Name[i:])
+		i += len(res)
 	}
 }
 
@@ -359,7 +357,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -381,12 +379,12 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 		s.Type = Range{Iter: Int{Width: 64}}
 		rType := c.mapToLLVMType(s.Type)
 		agg := llvm.Undef(rType)
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start)[0].Val, 0, "start")
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop)[0].Val, 1, "stop")
+		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, nil)[0].Val, 0, "start")
+		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, nil)[0].Val, 1, "stop")
 		// insert step, defaulting to 1 if no step was provided
 		var stepVal llvm.Value
 		if e.Step != nil {
-			stepVal = c.compileExpression(e.Step)[0].Val
+			stepVal = c.compileExpression(e.Step, nil)[0].Val
 		} else {
 			// default step = 1
 			stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
@@ -401,11 +399,12 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 	case *ast.PrefixExpression:
 		res = c.compilePrefixExpression(e)
 	case *ast.CallExpression:
-		res = c.compileCallExpression(e)
+		res = c.compileCallExpression(e, dest)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
 
+	c.writeTo(dest, res)
 	return
 }
 
@@ -459,6 +458,7 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 
 // createStore is a simple helper that creates an LLVM store instruction and sets its alignment.
 // It has NO side effects on the Go compiler state or symbols.
+// the val is the value to be stored and the ptr is the memory location it is to be stored to
 func (c *Compiler) createStore(val llvm.Value, ptr llvm.Value, valType Type) llvm.Value {
 	storeInst := c.builder.CreateStore(val, ptr)
 	setInstAlignment(storeInst, valType)
@@ -509,14 +509,13 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
 	res = []*Symbol{}
-	left := c.compileExpression(expr.Left)
-	right := c.compileExpression(expr.Right)
+	left := c.compileExpression(expr.Left, nil)
+	right := c.compileExpression(expr.Right, nil)
 
 	// Build a key based on the operator literal and the operand types.
 	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
 	for i := 0; i < len(left); i++ {
 		l := c.derefIfPointer(left[i])
-
 		r := c.derefIfPointer(right[i])
 
 		key := opKey{
@@ -534,7 +533,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Sym
 // compilePrefixExpression handles unary operators (prefix expressions).
 func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
 	// First compile the operand
-	operand := c.compileExpression(expr.Right)
+	operand := c.compileExpression(expr.Right, nil)
 
 	for _, op := range operand {
 		// Lookup in the defaultPrefixOps table
@@ -582,7 +581,7 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 		llvmInputs[i] = c.mapToLLVMType(a.Type)
 	}
 
-	retStruct := c.getReturnStruct(mangled, FuncType.Outputs)
+	retStruct := c.getReturnStruct(mangled, FuncType.OutTypes)
 	funcType := c.getFuncType(retStruct, llvmInputs)
 	function := llvm.AddFunction(c.Module, mangled, funcType)
 
@@ -604,7 +603,7 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	return function, FuncType.Outputs
+	return function, FuncType.OutTypes
 }
 
 func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, FuncType *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
@@ -614,7 +613,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, FuncType *Func, args 
 	sretPtr := function.Param(0)
 
 	for i, outIdent := range fn.Outputs {
-		outType := FuncType.Outputs[i]
+		outType := FuncType.OutTypes[i]
 
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
 
@@ -692,12 +691,39 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
+func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type, retStruct llvm.Type, sretPtr llvm.Value) {
+	for i, typ := range outTypes {
+		// if the caller wrote an LHS name for this slot…
+		if i < len(dest) {
+			name := dest[i].Value
+			if sym, ok := Get(c.Scopes, name); ok {
+				fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, name+"_ptr")
+
+				prev := sym.Val
+				if sym.Type.Kind() == PointerKind {
+					// load *that* existing value…
+					prev = c.createLoad(sym.Val, typ, name+"_reuse")
+				}
+
+				// …and store it into our sret field
+				c.createStore(prev, fieldPtr, typ)
+				continue
+			}
+		}
+
+		// otherwise zero‐initialize
+		zero := c.makeZeroValue(typ).Val
+		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("out%d_ptr", i))
+		c.createStore(zero, fieldPtr, typ)
+	}
+}
+
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	args := []*Symbol{}
 	argTypes := []Type{}
 	argVals := []llvm.Value{}
 	for _, callArg := range ce.Arguments {
-		args = append(args, c.compileExpression(callArg)...)
+		args = append(args, c.compileExpression(callArg, nil)...)
 	}
 	for _, arg := range args {
 		argTypes = append(argTypes, arg.Type)
@@ -722,7 +748,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		fn, outTypes = c.compileFunc(template, args, mangled)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	} else {
-		outTypes = c.FuncCache[mangled].Outputs
+		outTypes = c.FuncCache[mangled].OutTypes
 	}
 
 	res = make([]*Symbol, len(outTypes))
@@ -734,6 +760,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	retStruct := c.getReturnStruct(mangled, outTypes)
 	funcType := c.getFuncType(retStruct, llvmInputs)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
+	c.makeOutputs(dest, outTypes, retStruct, sretPtr)
 	llvmArgs := []llvm.Value{sretPtr}
 	llvmArgs = append(llvmArgs, argVals...)
 
@@ -799,7 +826,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		}
 
 		// Compile the expression and get its value and type
-		syms := c.compileExpression(expr)
+		syms := c.compileExpression(expr, nil)
 		for _, s := range syms {
 			spec, err := defaultSpecifier(s.Type)
 			if err != nil {

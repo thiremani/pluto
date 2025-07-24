@@ -1,3 +1,6 @@
 y = triple(x)
     y = 3x
     y
+
+res = sum(x)
+    res = res + x

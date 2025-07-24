@@ -5,3 +5,6 @@ y
 
 y = triple(1:7:2)
 y
+
+res = sum(1:1001)
+res

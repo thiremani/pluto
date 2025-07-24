@@ -202,11 +202,6 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
 		return t
 	}
 
-	ce := &token.CompileError{
-		Token: ident.Token,
-		Msg:   fmt.Sprintf("variable not found in script or code files. Could not infer type. Undefined variable: %q", ident.Token.Literal),
-	}
-	ts.Errors = append(ts.Errors, ce)
 	return Unresolved{}
 }
 
@@ -237,11 +232,27 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 			rightType = ptr.Elem
 		}
 
-		// If either operand's type is unresolved, the result of the
+		// If both operand's type the result of the
 		// operation is also unresolved. We can't proceed.
-		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
+		if leftType.Kind() == UnresolvedKind && rightType.Kind() == UnresolvedKind {
 			res = append(res, Unresolved{})
 			continue // Move to the next pair of operands
+		}
+
+		if leftType.Kind() == UnresolvedKind {
+			leftType = ts.UseOtherType(expr.Left, rightType)
+			if leftType.Kind() == UnresolvedKind {
+				res = append(res, Unresolved{})
+				continue
+			}
+		}
+
+		if rightType.Kind() == UnresolvedKind {
+			rightType = ts.UseOtherType(expr.Right, leftType)
+			if rightType.Kind() == UnresolvedKind {
+				res = append(res, Unresolved{})
+				continue
+			}
 		}
 
 		key := opKey{
@@ -274,6 +285,14 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 	}
 
 	return res
+}
+
+func (ts *TypeSolver) UseOtherType(unknownExpr ast.Expression, other Type) Type {
+	if unknownId, yes := unknownExpr.(*ast.Identifier); yes {
+		Put(ts.Scopes, unknownId.Value, other)
+		return other
+	}
+	return Unresolved{}
 }
 
 // TypePrefixExpression returns type of prefix expression output if input is not a pointer
@@ -361,17 +380,17 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	// first check scriptCompiler compiler if that itself has function in its function (perhaps through a previous script compilation)
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if ok && f.AllTypesInferred() {
-		return f.Outputs
+		return f.OutTypes
 	}
 
 	if !ok {
 		f = &Func{
-			Name:    ce.Function.Value,
-			Params:  args,
-			Outputs: []Type{},
+			Name:     ce.Function.Value,
+			Params:   args,
+			OutTypes: []Type{},
 		}
 		for range template.Outputs {
-			f.Outputs = append(f.Outputs, Unresolved{})
+			f.OutTypes = append(f.OutTypes, Unresolved{})
 		}
 		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
@@ -381,7 +400,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 			if ts.ScriptFunc == "" {
 				panic("Function in script called with unknown argument type. Func Name:" + f.Name)
 			}
-			return f.Outputs
+			return f.OutTypes
 		}
 	}
 
@@ -390,7 +409,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	ts.TypeFunc(mangled, template, f)
-	return f.Outputs
+	return f.OutTypes
 }
 
 // This is a blocking iterative solver
@@ -407,7 +426,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			panic(fmt.Sprintf("Inferring output types for function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name))
 		}
 		if f.AllTypesInferred() {
-			return f.Outputs
+			return f.OutTypes
 		}
 	}
 	panic("Could not infer output types for function %s in script" + f.Name)
@@ -442,14 +461,14 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 			panic(fmt.Sprintf("Should have either inferred type of output arg or marked it unresolved. Function: %s. output argument: %s", f.Name, id.Value))
 		}
 
-		oldOutArg := f.Outputs[i]
+		oldOutArg := f.OutTypes[i]
 		if oldOutArg.Kind() != UnresolvedKind {
 			continue
 		}
 
 		if outArg.Kind() != UnresolvedKind {
 			ts.Converging = true
-			f.Outputs[i] = outArg
+			f.OutTypes[i] = outArg
 			continue
 		}
 	}

@@ -101,13 +101,13 @@ func (r Range) Kind() Kind {
 }
 
 type Func struct {
-	Name    string
-	Params  []Type
-	Outputs []Type
+	Name     string
+	Params   []Type
+	OutTypes []Type // OutTypes are inferred in the type solver
 }
 
 func (f Func) String() string {
-	return fmt.Sprintf("%s = %s(%s)", typesStr(f.Outputs), f.Name, typesStr(f.Params))
+	return fmt.Sprintf("%s = %s(%s)", typesStr(f.OutTypes), f.Name, typesStr(f.Params))
 }
 
 func (f Func) Kind() Kind {
@@ -115,7 +115,7 @@ func (f Func) Kind() Kind {
 }
 
 func (f Func) AllTypesInferred() bool {
-	for _, ot := range f.Outputs {
+	for _, ot := range f.OutTypes {
 		if ot.Kind() == UnresolvedKind {
 			return false
 		}
