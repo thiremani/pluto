@@ -221,38 +221,23 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 	}
 
 	res := []Type{}
+	var ok bool
+	var ptr Pointer
 	for i := range left {
 		leftType := left[i]
-		if ptr, ok := leftType.(Pointer); ok {
+		if ptr, ok = leftType.(Pointer); ok {
 			leftType = ptr.Elem
 		}
 
 		rightType := right[i]
-		if ptr, ok := rightType.(Pointer); ok {
+		if ptr, ok = rightType.(Pointer); ok {
 			rightType = ptr.Elem
 		}
 
-		// If both operand's type the result of the
-		// operation is also unresolved. We can't proceed.
-		if leftType.Kind() == UnresolvedKind && rightType.Kind() == UnresolvedKind {
+		leftType, rightType, ok = ts.InferInfixType(expr, leftType, rightType)
+		if !ok {
 			res = append(res, Unresolved{})
-			continue // Move to the next pair of operands
-		}
-
-		if leftType.Kind() == UnresolvedKind {
-			leftType = ts.UseOtherType(expr.Left, rightType)
-			if leftType.Kind() == UnresolvedKind {
-				res = append(res, Unresolved{})
-				continue
-			}
-		}
-
-		if rightType.Kind() == UnresolvedKind {
-			rightType = ts.UseOtherType(expr.Right, leftType)
-			if rightType.Kind() == UnresolvedKind {
-				res = append(res, Unresolved{})
-				continue
-			}
+			continue
 		}
 
 		key := opKey{
@@ -285,6 +270,30 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 	}
 
 	return res
+}
+
+func (ts *TypeSolver) InferInfixType(expr *ast.InfixExpression, left, right Type) (newLeft, newRight Type, ok bool) {
+	// If both operand's type the result of the
+	// operation is also unresolved. We can't proceed.
+	if left.Kind() == UnresolvedKind && right.Kind() == UnresolvedKind {
+		return left, right, false
+	}
+
+	if left.Kind() == UnresolvedKind {
+		left = ts.UseOtherType(expr.Left, right)
+		if left.Kind() == UnresolvedKind {
+			return left, right, false
+		}
+	}
+
+	if right.Kind() == UnresolvedKind {
+		right = ts.UseOtherType(expr.Right, left)
+		if right.Kind() == UnresolvedKind {
+			return left, right, false
+		}
+	}
+
+	return left, right, true
 }
 
 func (ts *TypeSolver) UseOtherType(unknownExpr ast.Expression, other Type) Type {
