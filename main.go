@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -30,8 +31,11 @@ const (
 
 	MOD_FILE = "pt.mod"
 
-	OPT_LEVEL = "-O2" // Can be configured via flag
+	OPT_LEVEL = "-O3" // Can be configured via flag
 )
+
+//go:embed runtime/runtime.c
+var runtimeCSource []byte
 
 // Pluto holds the state of a single pluto invocation.
 // You can initialize it from the working directory and then
@@ -274,9 +278,13 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
 	binFile := filepath.Join(p.Cwd, bin)
 
-	runtimeC := filepath.Join(p.RootDir, "runtime", "runtime.c")
+	runtimeC := filepath.Join(p.CacheDir, SCRIPT_DIR, "runtime.c")
+	if err := os.WriteFile(runtimeC, runtimeCSource, 0644); err != nil {
+		return err
+	}
+
 	runtimeObj := filepath.Join(p.CacheDir, SCRIPT_DIR, "runtime.o")
-	rtCmd := exec.Command("clang", OPT_LEVEL, "-c", runtimeC, "-o", runtimeObj)
+	rtCmd := exec.Command("clang", OPT_LEVEL, "-march=native", "-c", runtimeC, "-o", runtimeObj)
 	if out, err := rtCmd.CombinedOutput(); err != nil {
 		fmt.Printf("runtime compile failed: %s\n%s\n", err, string(out))
 		return err
