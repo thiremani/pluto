@@ -348,7 +348,6 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
-	// TODO check type of variable has not changed
 	if !hasConditions {
 		c.compileSimpleStatement(stmt)
 		return
