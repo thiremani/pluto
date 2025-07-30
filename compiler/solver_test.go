@@ -90,10 +90,6 @@ x, y`
 }
 
 func TestCycles(t *testing.T) {
-	// Use defer to set up a panic handler. This function will run
-	// right before TestCycles exits, either normally or via a panic.
-	defer noConvergeRecover(t)
-
 	codeStr := `# define cyclic recursion
 y = f(x)
     y = g(x)
@@ -127,11 +123,16 @@ y`
 	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
+
+	if len(ts.Errors) != 1 {
+		t.Error("Expected a cyclic recursion error, but got none")
+	}
+	if !strings.Contains(ts.Errors[0].Msg, "Function f is not converging. Check for cyclic recursion and that each function has a base case") {
+		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
+	}
 }
 
 func TestNoBaseCase(t *testing.T) {
-	defer noConvergeRecover(t)
-
 	codeStr := `# define cyclic recursion
 y = f(x)
     y = f(x-1)
@@ -160,6 +161,14 @@ y`
 	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
+
+	if len(ts.Errors) != 1 {
+		t.Error("Expected a cyclic recursion error, but got none")
+	}
+
+	if !strings.Contains(ts.Errors[0].Msg, "Function f is not converging. Check for cyclic recursion and that each function has a base case") {
+		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
+	}
 }
 
 func noConvergeRecover(t *testing.T) {

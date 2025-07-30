@@ -40,6 +40,7 @@ type CFG struct {
 	Blocks       []*BasicBlock
 	Scopes       []Scope[VarEvent] // Used ONLY by the forward pass
 	Errors       []*token.CompileError
+	CheckedFuncs map[ast.FuncKey]struct{} // Map of validated functions
 }
 
 // PushBlock creates and returns a new, empty basic block
@@ -62,6 +63,7 @@ func NewCFG(cc *CodeCompiler) *CFG {
 		Blocks:       make([]*BasicBlock, 0),
 		Scopes:       []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
 		Errors:       make([]*token.CompileError, 0),
+		CheckedFuncs: make(map[ast.FuncKey]struct{}),
 	}
 }
 
@@ -178,12 +180,8 @@ func (cfg *CFG) collectSpecifierReads(sl *ast.StringLiteral, runes []rune, start
 	return evs
 }
 
-// extractEvents pulls VarEvent from a single AST statement.
-// For a LetStatement: first collects all reads on the RHS, then writes on the LHS.
-// For a PrintStatement: collects all reads.
-// extractEvents is now the single source of truth for a statement's events.
-func (cfg *CFG) extractEvents(stmt ast.Statement) []VarEvent {
-	var evs []VarEvent
+func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
+	var evs []VarEvent // Holds all events for this statement
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
 		// A LetStatement always follows the same order:
@@ -215,7 +213,6 @@ func (cfg *CFG) extractEvents(stmt ast.Statement) []VarEvent {
 	return evs
 }
 
-// Analyze performs all data-flow checks on the CFG.
 func (cfg *CFG) Analyze(statements []ast.Statement) {
 	if len(statements) == 0 {
 		return
@@ -224,7 +221,7 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 
-	PushScope(&cfg.Scopes, FuncScope)
+	PushScope(&cfg.Scopes, BlockScope) // Start with a global scope
 	// cannot pop global scope
 
 	cfg.forwardPass(statements)                 // Forward pass for use-before-definition and write-after-write
@@ -232,74 +229,81 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 }
 
 func (cfg *CFG) AnalyzeFuncs() {
-	validatedFuncs := make(map[ast.FuncKey]struct{})
 	for fk, fn := range cfg.CodeCompiler.Code.Func.Map {
-		if _, ok := validatedFuncs[fk]; ok {
+		if _, ok := cfg.CheckedFuncs[fk]; ok {
 			continue
 		}
 
-		prevLen := len(cfg.Errors)
 		cfg.validateFunc(fn)
-		if len(cfg.Errors) > prevLen {
-			// If there are errors, we don't add the function to the validated set.
-			continue
+		cfg.CheckedFuncs[fk] = struct{}{}
+	}
+}
+
+func (cfg *CFG) checkInputParam(inParam *ast.Identifier) {
+	// scan once for both reads and illegal writes
+	wasRead := false
+	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
+	for _, sn := range block.Stmts {
+		for _, ev := range sn.Events {
+			if ev.Name != inParam.Value {
+				continue
+			}
+			switch ev.Kind {
+			case Read:
+				wasRead = true
+				// keep scanning to catch a write if it exists
+			case Write, ConditionalWrite:
+				cfg.addError(ev.Token,
+					fmt.Sprintf("cannot write to input parameter %q", inParam.Value))
+				// still want to record whether it was ever read, so don’t break out completely
+			}
 		}
-		validatedFuncs[fk] = struct{}{}
+	}
+
+	if !wasRead {
+		cfg.addError(inParam.Tok(),
+			fmt.Sprintf("input parameter %q is never read", inParam.Value))
 	}
 }
 
 // Combined “write‐to‐input” and “unused‐input” check
-func (cfg *CFG) checkInputParams(params []*ast.Identifier, stmts []*StmtNode) {
+func (cfg *CFG) checkInputParams(params []*ast.Identifier) {
 	for _, inParam := range params {
-		wasRead := false
-
-		// scan once for both reads and illegal writes
-		for _, sn := range stmts {
-			for _, ev := range sn.Events {
-				if ev.Name != inParam.Value {
-					continue
-				}
-				switch ev.Kind {
-				case Read:
-					wasRead = true
-					// keep scanning to catch a write if it exists
-				case Write, ConditionalWrite:
-					cfg.addError(ev.Token,
-						fmt.Sprintf("cannot write to input parameter %q", inParam.Value))
-					// still want to record whether it was ever read, so don’t break out completely
-				}
-			}
-		}
-
-		if !wasRead {
-			cfg.addError(inParam.Tok(),
-				fmt.Sprintf("input parameter %q is never read", inParam.Value))
-		}
+		cfg.checkInputParam(inParam)
 	}
 }
 
-func (cfg *CFG) checkOutputParams(outputs []*ast.Identifier, stmts []*StmtNode) {
-	for _, outParam := range outputs {
-		sawWrite := false
-	WriteLoop:
-		for _, sn := range stmts {
-			for _, ev := range sn.Events {
-				if ev.Name == outParam.Value && (ev.Kind == Write || ev.Kind == ConditionalWrite) {
-					sawWrite = true
-					break WriteLoop
-				}
+func (cfg *CFG) checkOutputParam(outParam *ast.Identifier) {
+	// scan once for both writes and reads
+	sawWrite := false
+	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
+	for _, sn := range block.Stmts {
+		for _, ev := range sn.Events {
+			if ev.Name != outParam.Value {
+				continue
+			}
+			switch ev.Kind {
+			case Write, ConditionalWrite:
+				sawWrite = true
+				return
 			}
 		}
+	}
 
-		if !sawWrite {
-			cfg.addError(outParam.Tok(), fmt.Sprintf(
-				"output parameter %q is never assigned", outParam.Value))
-		}
+	if !sawWrite {
+		cfg.addError(outParam.Tok(),
+			fmt.Sprintf("output parameter %q is never assigned", outParam.Value))
+	}
+}
+
+func (cfg *CFG) checkOutputParams(outputs []*ast.Identifier) {
+	for _, outParam := range outputs {
+		cfg.checkOutputParam(outParam)
 	}
 }
 
 func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
-	cfg.PushBlock() // Start a new block for the function
+	cfg.PushBlock()
 	defer cfg.PopBlock()
 
 	PushScope(&cfg.Scopes, FuncScope)
@@ -307,15 +311,14 @@ func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 
 	// add the input arguments to the scope
 	for _, param := range fn.Parameters {
-		ve := VarEvent{Name: param.Value, Kind: Read, Token: param.Tok()}
+		ve := VarEvent{Name: param.Value, Kind: Write, Token: param.Tok()}
 		Put(cfg.Scopes, param.Value, ve)
 	}
 
 	cfg.forwardPass(fn.Body.Statements)
 
-	stmts := cfg.Blocks[len(cfg.Blocks)-1].Stmts
-	cfg.checkInputParams(fn.Parameters, stmts)
-	cfg.checkOutputParams(fn.Outputs, stmts)
+	cfg.checkInputParams(fn.Parameters)
+	cfg.checkOutputParams(fn.Outputs)
 
 	// seed the live map in backward pass with output parameters
 	// as the output parameters will be used later.
@@ -333,7 +336,7 @@ func (cfg *CFG) forwardPass(statements []ast.Statement) {
 	lastWrites := make(map[string]VarEvent)
 
 	for _, stmt := range statements {
-		evs := cfg.extractEvents(stmt)
+		evs := cfg.extractStmtEvents(stmt)
 		for _, e := range evs {
 			switch e.Kind {
 			case Read:

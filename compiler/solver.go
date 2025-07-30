@@ -44,8 +44,12 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 
 func (ts *TypeSolver) Solve() {
 	program := ts.ScriptCompiler.Program
+	oldErrs := len(ts.Errors)
 	for _, stmt := range program.Statements {
 		ts.TypeStatement(stmt)
+		if len(ts.Errors) > oldErrs {
+			return
+		}
 	}
 }
 
@@ -65,7 +69,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	if len(stmt.Name) != len(types) {
 		ce := &token.CompileError{
 			Token: stmt.Token,
-			Msg:   fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d. Stmt %q", len(stmt.Name), len(types), stmt.Token.Literal),
+			Msg:   fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d. Stmt %q", len(stmt.Name), len(types), stmt),
 		}
 		ts.Errors = append(ts.Errors, ce)
 		return
@@ -201,6 +205,11 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
 		}
 		return t
 	}
+	cerr := &token.CompileError{
+		Token: ident.Token,
+		Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
+	}
+	ts.Errors = append(ts.Errors, cerr)
 
 	return Unresolved{}
 }
@@ -234,8 +243,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 			rightType = ptr.Elem
 		}
 
-		leftType, rightType, ok = ts.InferInfixType(expr, leftType, rightType)
-		if !ok {
+		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
 			res = append(res, Unresolved{})
 			continue
 		}
@@ -254,6 +262,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 				Msg:   fmt.Sprintf("unsupported operator: %q for types: %s, %s", expr.Token, leftType, rightType),
 			}
 			ts.Errors = append(ts.Errors, cerr)
+			return []Type{Unresolved{}}
 		}
 
 		leftSym := &Symbol{
@@ -270,38 +279,6 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 	}
 
 	return res
-}
-
-func (ts *TypeSolver) InferInfixType(expr *ast.InfixExpression, left, right Type) (newLeft, newRight Type, ok bool) {
-	// If both operand's type the result of the
-	// operation is also unresolved. We can't proceed.
-	if left.Kind() == UnresolvedKind && right.Kind() == UnresolvedKind {
-		return left, right, false
-	}
-
-	if left.Kind() == UnresolvedKind {
-		left = ts.UseOtherType(expr.Left, right)
-		if left.Kind() == UnresolvedKind {
-			return left, right, false
-		}
-	}
-
-	if right.Kind() == UnresolvedKind {
-		right = ts.UseOtherType(expr.Right, left)
-		if right.Kind() == UnresolvedKind {
-			return left, right, false
-		}
-	}
-
-	return left, right, true
-}
-
-func (ts *TypeSolver) UseOtherType(unknownExpr ast.Expression, other Type) Type {
-	if unknownId, yes := unknownExpr.(*ast.Identifier); yes {
-		Put(ts.Scopes, unknownId.Value, other)
-		return other
-	}
-	return Unresolved{}
 }
 
 // TypePrefixExpression returns type of prefix expression output if input is not a pointer
@@ -379,6 +356,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
 			Msg:   fmt.Sprintf("undefined function: %s", ce.Function.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
+		return []Type{}
 	}
 
 	mangled := mangle(ce.Function.Value, args)
@@ -404,13 +382,21 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
 
-	for _, arg := range args {
+	canType := true
+	for i, arg := range args {
 		if arg.Kind() == UnresolvedKind {
 			if ts.ScriptFunc == "" {
-				panic("Function in script called with unknown argument type. Func Name:" + f.Name)
+				ce := &token.CompileError{
+					Token: ce.Token,
+					Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
+				}
+				ts.Errors = append(ts.Errors, ce)
+				canType = false
 			}
-			return f.OutTypes
 		}
+	}
+	if !canType {
+		return f.OutTypes
 	}
 
 	if ts.ScriptFunc == "" {
@@ -432,7 +418,12 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		ts.Converging = false
 		ts.TypeFunc(mangled, template, f)
 		if !ts.Converging {
-			panic(fmt.Sprintf("Inferring output types for function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name))
+			ce := &token.CompileError{
+				Token: template.Token,
+				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+			}
+			ts.Errors = append(ts.Errors, ce)
+			return f.OutTypes
 		}
 		if f.AllTypesInferred() {
 			return f.OutTypes
@@ -460,14 +451,23 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 		Put(ts.Scopes, id.Value, f.Params[i])
 	}
 
+	oldErrs := len(ts.Errors)
 	for _, stmt := range template.Body.Statements {
 		ts.TypeStatement(stmt)
+		if len(ts.Errors) > oldErrs {
+			return
+		}
 	}
 
 	for i, id := range template.Outputs {
 		outArg, ok := Get(ts.Scopes, id.Value)
 		if !ok {
-			panic(fmt.Sprintf("Should have either inferred type of output arg or marked it unresolved. Function: %s. output argument: %s", f.Name, id.Value))
+			ce := &token.CompileError{
+				Token: id.Token,
+				Msg:   fmt.Sprintf("Should have either inferred type of output or marked it unresolved. Function %s. output argument: %s", f.Name, id.Value),
+			}
+			ts.Errors = append(ts.Errors, ce)
+			return
 		}
 
 		oldOutArg := f.OutTypes[i]

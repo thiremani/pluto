@@ -2,5 +2,20 @@ y = triple(x)
     y = 3x
     y
 
-res = sum(x)
-    res = res + x
+res = sum(curr, x)
+    "curr is", curr
+    "x is", x
+    res = curr + x
+    "after summation, res is", res
+
+yes = divides(in, y, x)
+    yes = in * (y % x)
+
+ret = primes(num)
+    i = 2:num
+    j = 2:i/2
+    yes = 1
+    yes = divides(yes, i, j)
+    ret = "Is not a prime"
+    ret = yes != 0 "Is a prime"
+    "-num -isPrime"
