@@ -231,7 +231,8 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
 		return "", err
 	}
-	l := lexer.New(p.RelPath+"/"+filepath.Base(script), string(source))
+	fmt.Println("THe file name is", p.RelPath+"/"+filepath.Base(scriptFile))
+	l := lexer.New(p.RelPath+"/"+filepath.Base(scriptFile), string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
 	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache)
@@ -257,7 +258,9 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 
 	errs := sc.Compile()
 	if len(errs) != 0 {
-		fmt.Println(errs)
+		for _, err := range errs {
+			fmt.Println(err)
+		}
 		return "", fmt.Errorf("error compiling scriptFile %s for script %s", scriptFile, script)
 	}
 	ir := sc.Compiler.GenerateIR()

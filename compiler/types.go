@@ -67,7 +67,7 @@ type Pointer struct {
 }
 
 func (p Pointer) String() string {
-	return fmt.Sprintf("*%s", p.Elem.String())
+	return fmt.Sprintf("Ptr_%s", p.Elem.String())
 }
 
 func (p Pointer) Kind() Kind {

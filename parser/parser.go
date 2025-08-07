@@ -142,10 +142,11 @@ func (p *StmtParser) nextToken() {
 	if (p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT) && p.peekToken.Type == token.IDENT && p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column {
 		p.savedToken = p.peekToken
 		p.peekToken = token.Token{
-			Type:    token.OPERATOR,
-			Literal: token.SYM_MUL,
-			Line:    p.savedToken.Line,
-			Column:  p.savedToken.Column,
+			FileName: p.savedToken.FileName,
+			Line:     p.savedToken.Line,
+			Column:   p.savedToken.Column,
+			Type:     token.OPERATOR,
+			Literal:  token.SYM_MUL,
 		}
 	}
 }

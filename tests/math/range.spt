@@ -6,11 +6,11 @@ y
 y = triple(1:7:2)
 y
 
-# res = 0
-# res = sum(res, 1:11)
-# "res is", res
+res = 0
+res = sum(res, 1:6)
+"res is", res
 
-# res = sum(res, 1001:2001)
-# "res after second summation is", res
+res = sum(res, 1996:2001:2)
+"res after second summation is", res
 
 # primes(2:101)
