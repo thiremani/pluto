@@ -18,6 +18,7 @@ type TypeSolver struct {
 	ScriptFunc     string              // this is the current func in the main scope we are inferring type for
 	Converging     bool
 	Errors         []*token.CompileError
+	Ranges         map[ast.Expression][]string
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -28,7 +29,63 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ScriptFunc:     "",
 		Converging:     false,
 		Errors:         []*token.CompileError{},
+		Ranges:         map[ast.Expression][]string{}, // map from expression to named ranges used in the expression
 	}
+}
+
+// helper: append name if new (preserve order)
+func appendUnique(names []string, s string) []string {
+	for _, name := range names {
+		if s == name {
+			return names
+		}
+	}
+	return append(names, s)
+}
+
+func (ts *TypeSolver) mergeUses(a, b []string) []string {
+	out := []string{}
+	for _, n := range a {
+		out = appendUnique(out, n)
+	}
+	for _, n := range b {
+		out = appendUnique(out, n)
+	}
+	return out
+}
+
+func (ts *TypeSolver) AnnotateRangeUses(expr ast.Expression, isRoot bool) (uses []string) {
+	uses = []string{}
+	switch e := expr.(type) {
+	case *ast.Identifier:
+		// If the identifier resolves to a Range, record the name
+		t := ts.TypeIdentifier(e)
+		if !isRoot && t.Kind() == RangeKind {
+			uses = append(uses, e.Value)
+			return
+		}
+		return
+	case *ast.RangeLiteral:
+		// A literal range occurrence
+		return
+	case *ast.InfixExpression:
+		lu := ts.AnnotateRangeUses(e.Left, false)
+		ru := ts.AnnotateRangeUses(e.Right, false)
+		uses = ts.mergeUses(lu, ru)
+		ts.Ranges[e] = uses
+	case *ast.PrefixExpression:
+		uses = ts.AnnotateRangeUses(e.Right, false)
+		ts.Ranges[e] = uses
+	case *ast.CallExpression:
+		uses = []string{}
+		for _, a := range e.Arguments {
+			uses = ts.mergeUses(uses, ts.AnnotateRangeUses(a, isRoot))
+		}
+		return
+	default:
+		return
+	}
+	return
 }
 
 func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
@@ -55,7 +112,8 @@ func (ts *TypeSolver) Solve() {
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	for _, expr := range stmt.Expression {
-		ts.TypeExpression(expr)
+		ts.TypeExpression(expr, true)
+		ts.AnnotateRangeUses(expr, true)
 	}
 }
 
@@ -63,7 +121,8 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in case there may be functions we have to type
 	types := []Type{}
 	for _, expr := range stmt.Value {
-		types = append(types, ts.TypeExpression(expr)...)
+		types = append(types, ts.TypeExpression(expr, true)...)
+		ts.AnnotateRangeUses(expr, true)
 	}
 
 	if len(stmt.Name) != len(types) {
@@ -106,10 +165,10 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	PutBulk(ts.Scopes, trueValues)
 }
 
-func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral) []Type {
+func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
 	// infer start and stop
-	startT := ts.TypeExpression(r.Start)
-	stopT := ts.TypeExpression(r.Stop)
+	startT := ts.TypeExpression(r.Start, false)
+	stopT := ts.TypeExpression(r.Stop, false)
 	if len(startT) != 1 || len(stopT) != 1 {
 		ce := &token.CompileError{
 			Token: r.Tok(),
@@ -135,7 +194,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral) []Type {
 	}
 	// optional step
 	if r.Step != nil {
-		stepT := ts.TypeExpression(r.Step)
+		stepT := ts.TypeExpression(r.Step, false)
 		if len(stepT) != 1 {
 			ce := &token.CompileError{
 				Token: r.Tok(),
@@ -158,11 +217,14 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral) []Type {
 			ts.Errors = append(ts.Errors, ce)
 		}
 	}
+	if !isRoot {
+		return []Type{Int{Width: 64}} // if not root, return integer type as any sub root expression automatically loops over the range
+	}
 	// the whole expression is a Range of that integer type
 	return []Type{Range{Iter: startT[0]}}
 }
 
-func (ts *TypeSolver) TypeExpression(expr ast.Expression) []Type {
+func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) []Type {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		return []Type{Int{Width: 64}}
@@ -171,15 +233,19 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression) []Type {
 	case *ast.StringLiteral:
 		return []Type{Str{}}
 	case *ast.RangeLiteral:
-		return ts.TypeRangeExpression(e)
+		return ts.TypeRangeExpression(e, isRoot)
 	case *ast.Identifier:
-		return []Type{ts.TypeIdentifier(e)}
+		t := ts.TypeIdentifier(e)
+		if !isRoot && t.Kind() == RangeKind {
+			return []Type{t.(Range).Iter}
+		}
+		return []Type{t}
 	case *ast.InfixExpression:
 		return ts.TypeInfixExpression(e)
 	case *ast.PrefixExpression:
 		return ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
-		return ts.TypeCallExpression(e)
+		return ts.TypeCallExpression(e, isRoot)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
@@ -218,8 +284,8 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
-	left := ts.TypeExpression(expr.Left)
-	right := ts.TypeExpression(expr.Right)
+	left := ts.TypeExpression(expr.Left, false)
+	right := ts.TypeExpression(expr.Right, false)
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
@@ -285,7 +351,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 // If input is a pointer then it applies prefix expression to the element pointed to
 // This is because we automatically dereference if it's a pointer
 func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
-	operand := ts.TypeExpression(expr.Right)
+	operand := ts.TypeExpression(expr.Right, false)
 	res := []Type{}
 	for _, opType := range operand {
 		if ptr, yes := opType.(Pointer); yes {
@@ -327,11 +393,11 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 }
 
 // inside a call expression a Range becomes its interior type
-func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression) []Type {
+func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
 	args := []Type{}
 	innerArgs := []Type{}
 	for _, e := range ce.Arguments {
-		argList := ts.TypeExpression(e)
+		argList := ts.TypeExpression(e, isRoot)
 		for _, arg := range argList {
 			if arg.Kind() == RangeKind {
 				innerArgs = append(innerArgs, arg.(Range).Iter)

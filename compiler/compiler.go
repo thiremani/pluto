@@ -31,8 +31,10 @@ type Compiler struct {
 	Module        llvm.Module
 	builder       llvm.Builder
 	formatCounter int           // Track unique format strings
+	tmpCounter    int           // Temporary variable names counter
 	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 	FuncCache     map[string]*Func
+	Ranges        map[ast.Expression][]string // Maps expressions to named ranges
 	Errors        []*token.CompileError
 }
 
@@ -46,8 +48,10 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		Module:        module,
 		builder:       builder,
 		formatCounter: 0,
+		tmpCounter:    0,
 		CodeCompiler:  cc,
 		FuncCache:     make(map[string]*Func),
+		Ranges:        make(map[ast.Expression][]string),
 		Errors:        []*token.CompileError{},
 	}
 }
@@ -57,6 +61,8 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 	case IntKind:
 		intType := t.(Int)
 		switch intType.Width {
+		case 1:
+			return c.Context.Int1Type()
 		case 8:
 			return c.Context.Int8Type()
 		case 16:
@@ -164,7 +170,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr)
+		condSyms := c.compileExpression(expr, false)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -230,7 +236,7 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 	// compileExpression already derefs any pointers
 	// so don't worry about creating a load here
 	for _, expr := range stmt.Value {
-		ifSymbols = append(ifSymbols, c.compileExpression(expr)...)
+		ifSymbols = append(ifSymbols, c.compileExpression(expr, true)...)
 	}
 
 	return ifSymbols, c.builder.GetInsertBlock()
@@ -341,7 +347,7 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
 	for _, expr := range stmt.Value {
-		syms = append(syms, c.compileExpression(expr)...)
+		syms = append(syms, c.compileExpression(expr, true)...)
 	}
 	c.writeTo(stmt.Name, syms)
 }
@@ -356,7 +362,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, isRoot bool) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -375,22 +381,12 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
-		s.Type = Range{Iter: Int{Width: 64}}
-		rType := c.mapToLLVMType(s.Type)
-		agg := llvm.Undef(rType)
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start)[0].Val, 0, "start")
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop)[0].Val, 1, "stop")
-		// insert step, defaulting to 1 if no step was provided
-		var stepVal llvm.Value
-		if e.Step != nil {
-			stepVal = c.compileExpression(e.Step)[0].Val
-		} else {
-			// default step = 1
-			stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+		if isRoot {
+			res = c.compileRangeExpression(e)
+			return
 		}
-		agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
-		s.Val = agg
-		res = []*Symbol{s}
+		// Non-root range literal must be handled by the enclosing operator.
+		panic("internal: unexpanded range literal in non-root position")
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -504,6 +500,31 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	return newS
 }
 
+func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
+	rType := c.mapToLLVMType(typ)
+	agg := llvm.Undef(rType)
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, false)[0].Val, 0, "start")
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, false)[0].Val, 1, "stop")
+	// insert step, defaulting to 1 if no step was provided
+	var stepVal llvm.Value
+	if e.Step != nil {
+		stepVal = c.compileExpression(e.Step, false)[0].Val
+	} else {
+		// default step = 1
+		stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+	}
+	agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
+	return agg
+}
+
+func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
+	s := &Symbol{}
+	s.Type = Range{Iter: Int{Width: 64}}
+	s.Val = c.toRange(e, s.Type)
+	res = []*Symbol{s}
+	return res
+}
+
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, ok := Get(c.Scopes, ident.Value)
 	if ok {
@@ -517,32 +538,64 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
-	res = []*Symbol{}
-	left := c.compileExpression(expr.Left)
-	right := c.compileExpression(expr.Right)
+	// get any named ranges in the expression
+	names, ok := c.Ranges[expr]
+	if !ok {
+		names = []string{}
+	}
+	lits := []loopSpec{}
+	leftRew := c.rewriteLitsUnder(expr.Left, &lits)
+	rightRew := c.rewriteLitsUnder(expr.Right, &lits)
 
-	// Build a key based on the operator literal and the operand types.
-	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
-	for i := 0; i < len(left); i++ {
-		l := c.derefIfPointer(left[i])
-		r := c.derefIfPointer(right[i])
+	specs := c.makeLoopSpecs(names, lits)
+	var acc []*foldAcc
+	c.withLoopNest(specs, func() {
+		left := c.compileExpression(leftRew, false)
+		right := c.compileExpression(rightRew, false)
 
-		key := opKey{
-			Operator:  expr.Operator,
-			LeftType:  l.Type.String(),
-			RightType: r.Type.String(),
+		// allocate one foldAcc per slot on first visit
+		if acc == nil && len(specs) > 0 {
+			acc = make([]*foldAcc, len(left))
+			for i := range acc {
+				acc[i] = c.newFoldAcc()
+			}
 		}
 
-		fn := defaultOps[key]
-		res = append(res, fn(c, l, r, true))
+		for i := 0; i < len(left); i++ {
+
+			l := c.derefIfPointer(left[i])
+			r := c.derefIfPointer(right[i])
+			key := opKey{
+				Operator:  expr.Operator,
+				LeftType:  l.Type.String(),
+				RightType: r.Type.String(),
+			}
+
+			fn := defaultOps[key]
+			term := fn(c, l, r, true)
+			if len(specs) > 0 {
+				c.foldAccAdd(acc[i], expr.Operator, term)
+				continue
+			}
+			res = append(res, term)
+		}
+	})
+
+	if len(specs) > 0 {
+		out := make([]*Symbol, len(acc))
+		for i := range acc {
+			out[i] = c.foldAccFinal(acc[i])
+		}
+		return out
 	}
-	return
+
+	return res
 }
 
 // compilePrefixExpression handles unary operators (prefix expressions).
 func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
 	// First compile the operand
-	operand := c.compileExpression(expr.Right)
+	operand := c.compileExpression(expr.Right, false)
 
 	for _, op := range operand {
 		// Lookup in the defaultPrefixOps table
@@ -692,7 +745,7 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		res := c.compileExpression(callArg)
+		res := c.compileExpression(callArg, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
 			argTypes = append(argTypes, r.Type)
@@ -796,7 +849,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		}
 
 		// Compile the expression and get its value and type
-		syms := c.compileExpression(expr)
+		syms := c.compileExpression(expr, true)
 		for _, s := range syms {
 			spec, err := defaultSpecifier(s.Type)
 			if err != nil {

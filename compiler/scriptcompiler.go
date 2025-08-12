@@ -36,6 +36,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	}
 
 	c := sc.Compiler
+	c.Ranges = ts.Ranges
 	// Create main function
 	c.addMain()
 	for _, stmt := range sc.Program.Statements {
