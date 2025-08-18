@@ -15,7 +15,6 @@ const (
 	LOWEST
 	ASSIGN      // =
 	COMMA       // ,
-	COLON       // :
 	BITWISE_OR  // |
 	BITWISE_XOR // ⊕
 	BITWISE_AND // &
@@ -23,6 +22,7 @@ const (
 	SUM         // +
 	PRODUCT     // *
 	EXP         // ^
+	COLON       // :
 	LESSGREATER // > or <
 	PREFIX      // -X or !X
 	CALL        // myFunction(X)
@@ -31,7 +31,6 @@ const (
 var precedences = map[string]int{
 	token.SYM_ASSIGN: ASSIGN,
 	token.SYM_COMMA:  COMMA,
-	token.SYM_COLON:  COLON,
 	token.SYM_OR:     BITWISE_OR,
 	token.SYM_XOR:    BITWISE_XOR,
 	token.SYM_AND:    BITWISE_AND,
@@ -45,6 +44,7 @@ var precedences = map[string]int{
 	token.SYM_QUO:    PRODUCT,
 	token.SYM_MOD:    PRODUCT,
 	token.SYM_EXP:    EXP,
+	token.SYM_COLON:  COLON,
 	token.SYM_EQL:    LESSGREATER,
 	token.SYM_LSS:    LESSGREATER,
 	token.SYM_GTR:    LESSGREATER,

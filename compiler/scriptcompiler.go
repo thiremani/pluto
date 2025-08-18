@@ -36,7 +36,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	}
 
 	c := sc.Compiler
-	c.Ranges = ts.Ranges
+	c.ExprCache = ts.ExprCache
 	// Create main function
 	c.addMain()
 	for _, stmt := range sc.Program.Statements {

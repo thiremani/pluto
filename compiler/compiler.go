@@ -34,7 +34,7 @@ type Compiler struct {
 	tmpCounter    int           // Temporary variable names counter
 	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 	FuncCache     map[string]*Func
-	Ranges        map[ast.Expression][]string // Maps expressions to named ranges
+	ExprCache     map[ast.Expression]*ExprInfo
 	Errors        []*token.CompileError
 }
 
@@ -51,7 +51,7 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		tmpCounter:    0,
 		CodeCompiler:  cc,
 		FuncCache:     make(map[string]*Func),
-		Ranges:        make(map[ast.Expression][]string),
+		ExprCache:     make(map[ast.Expression]*ExprInfo),
 		Errors:        []*token.CompileError{},
 	}
 }
@@ -405,6 +405,11 @@ func (c *Compiler) compileExpression(expr ast.Expression, isRoot bool) (res []*S
 func setInstAlignment(inst llvm.Value, t Type) {
 	switch typ := t.(type) {
 	case Int:
+		// I1 is a special case
+		if typ.Width == 1 {
+			inst.SetAlignment(int(typ.Width))
+			return
+		}
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
 	case Float:
@@ -539,49 +544,76 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
 	// get any named ranges in the expression
-	names, ok := c.Ranges[expr]
+	info, ok := c.ExprCache[expr]
 	if !ok {
-		names = []string{}
+		info = &ExprInfo{
+			Ranges: []*RangeInfo{},
+		}
 	}
-	lits := []loopSpec{}
-	leftRew := c.rewriteLitsUnder(expr.Left, &lits)
-	rightRew := c.rewriteLitsUnder(expr.Right, &lits)
 
-	specs := c.makeLoopSpecs(names, lits)
+	iters := info.Ranges
 	var acc []*foldAcc
-	c.withLoopNest(specs, func() {
-		left := c.compileExpression(leftRew, false)
-		right := c.compileExpression(rightRew, false)
+	leftRew := expr.Left
+	rightRew := expr.Right
+	isRightSeeded := info.LeftVar && !info.RightVar
+	isLeftSeeded := !info.LeftVar && info.RightVar
+	if len(iters) > 0 {
+		leftRew = info.Rewrite.(*ast.InfixExpression).Left
+		rightRew = info.Rewrite.(*ast.InfixExpression).Right
+		acc = make([]*foldAcc, info.ExprLen)
+		for i := range acc {
+			acc[i] = c.newFoldAcc()
+		}
 
-		// allocate one foldAcc per slot on first visit
-		if acc == nil && len(specs) > 0 {
-			acc = make([]*foldAcc, len(left))
+		if isLeftSeeded {
+			seedSyms := c.compileExpression(expr.Left, false)
 			for i := range acc {
-				acc[i] = c.newFoldAcc()
+				c.foldAccInitWithSeed(acc[i], seedSyms[i])
 			}
 		}
 
-		for i := 0; i < len(left); i++ {
-
-			l := c.derefIfPointer(left[i])
-			r := c.derefIfPointer(right[i])
-			key := opKey{
-				Operator:  expr.Operator,
-				LeftType:  l.Type.String(),
-				RightType: r.Type.String(),
+		if isRightSeeded {
+			seedSyms := c.compileExpression(expr.Right, false)
+			for i := range acc {
+				c.foldAccInitWithSeed(acc[i], seedSyms[i])
 			}
+		}
 
-			fn := defaultOps[key]
-			term := fn(c, l, r, true)
-			if len(specs) > 0 {
-				c.foldAccAdd(acc[i], expr.Operator, term)
+	}
+	c.withLoopNest(info.Ranges, func() {
+		var left, right []*Symbol
+		switch {
+		case isLeftSeeded:
+			// Only right varies: acc = acc ⊕ right
+			right = c.compileExpression(rightRew, false)
+			left = make([]*Symbol, len(right)) // dummy, same length for downstream loops
+
+		case isRightSeeded:
+			// Only left varies: acc = acc ⊕ left
+			left = c.compileExpression(leftRew, false)
+			right = make([]*Symbol, len(left)) // dummy
+
+		default:
+			// Both vary: need both
+			left = c.compileExpression(leftRew, false)
+			right = c.compileExpression(rightRew, false)
+		}
+
+		terms := c.getAccTerm(isLeftSeeded, isRightSeeded, left, right, expr.Operator)
+		for i := 0; i < len(left); i++ {
+			if len(info.Ranges) > 0 {
+				if isLeftSeeded || isRightSeeded {
+					c.foldAccCombine(acc[i], expr.Operator, terms[i])
+					continue
+				}
+				c.foldAccAdd(acc[i], expr.Operator, terms[i])
 				continue
 			}
-			res = append(res, term)
+			res = append(res, terms[i])
 		}
 	})
 
-	if len(specs) > 0 {
+	if len(iters) > 0 {
 		out := make([]*Symbol, len(acc))
 		for i := range acc {
 			out[i] = c.foldAccFinal(acc[i])
@@ -590,6 +622,31 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Sym
 	}
 
 	return res
+}
+
+func (c *Compiler) getAccTerm(isLeftSeeded bool, isRightSeeded bool, left, right []*Symbol, op string) (terms []*Symbol) {
+	terms = make([]*Symbol, len(left))
+	for i := 0; i < len(left); i++ {
+		if isLeftSeeded {
+			terms[i] = c.derefIfPointer(right[i])
+			continue
+		}
+
+		if isRightSeeded {
+			terms[i] = c.derefIfPointer(left[i])
+			continue
+		}
+
+		l := c.derefIfPointer(left[i])
+		r := c.derefIfPointer(right[i])
+		key := opKey{
+			Operator:  op,
+			LeftType:  l.Type.String(),
+			RightType: r.Type.String(),
+		}
+		terms[i] = defaultOps[key](c, l, r, true)
+	}
+	return
 }
 
 // compilePrefixExpression handles unary operators (prefix expressions).

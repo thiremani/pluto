@@ -8,6 +8,19 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+type RangeInfo struct {
+	Name string
+	Lit  *ast.RangeLiteral // if Lit is nil then it is an identifier and compiler must get the value from its scope
+}
+
+type ExprInfo struct {
+	Ranges   []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite  ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen  int
+	LeftVar  bool // true means left has ranges in its sub expressions so it is variable
+	RightVar bool // true means right has ranges in its sub expressions so it is variablel
+}
+
 // TypeSolver infers the types of various expressions
 // It is mainly needed to infer the output types of a function
 // given input arguments
@@ -18,7 +31,8 @@ type TypeSolver struct {
 	ScriptFunc     string              // this is the current func in the main scope we are inferring type for
 	Converging     bool
 	Errors         []*token.CompileError
-	Ranges         map[ast.Expression][]string
+	ExprCache      map[ast.Expression]*ExprInfo
+	TmpCounter     int // tmpCounter for uniquely naming temporary variables
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -29,63 +43,132 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ScriptFunc:     "",
 		Converging:     false,
 		Errors:         []*token.CompileError{},
-		Ranges:         map[ast.Expression][]string{}, // map from expression to named ranges used in the expression
+		ExprCache:      make(map[ast.Expression]*ExprInfo),
+		TmpCounter:     0,
 	}
 }
 
-// helper: append name if new (preserve order)
-func appendUnique(names []string, s string) []string {
-	for _, name := range names {
-		if s == name {
-			return names
-		}
+// appendUses appends one occurrence s to out, respecting the policy:
+// - Identifiers (named ranges): dedupe by name (first one wins)
+// - Range literals: keep every occurrence
+// 'seen' tracks which identifier names we've already added.
+func appendUses(out []*RangeInfo, ri *RangeInfo, seen map[string]struct{}) []*RangeInfo {
+	if _, ok := seen[ri.Name]; ok {
+		return out
 	}
-	return append(names, s)
+	seen[ri.Name] = struct{}{}
+	return append(out, ri)
 }
 
-func (ts *TypeSolver) mergeUses(a, b []string) []string {
-	out := []string{}
-	for _, n := range a {
-		out = appendUnique(out, n)
+// mergeUses merges two ordered occurrence lists, preserving order,
+// deduping identifiers by name, and keeping all literal occurrences.
+func mergeUses(a, b []*RangeInfo) []*RangeInfo {
+	out := []*RangeInfo{}
+	seen := make(map[string]struct{}) // identifier names we've already added
+
+	for _, e := range a {
+		out = appendUses(out, e, seen)
 	}
-	for _, n := range b {
-		out = appendUnique(out, n)
+	for _, e := range b {
+		out = appendUses(out, e, seen)
 	}
 	return out
 }
 
-func (ts *TypeSolver) AnnotateRangeUses(expr ast.Expression, isRoot bool) (uses []string) {
-	uses = []string{}
-	switch e := expr.(type) {
-	case *ast.Identifier:
-		// If the identifier resolves to a Range, record the name
-		t := ts.TypeIdentifier(e)
-		if !isRoot && t.Kind() == RangeKind {
-			uses = append(uses, e.Value)
+func (ts *TypeSolver) FreshIterName() string {
+	n := ts.TmpCounter
+	ts.TmpCounter++
+	return fmt.Sprintf("tmpIter$%d", n)
+}
+
+func (ts *TypeSolver) RewriteLitsUnder(e ast.Expression, isRoot bool, exprLen int) (ranges []*RangeInfo, rew ast.Expression) {
+	rew = e
+	switch t := e.(type) {
+	case *ast.RangeLiteral:
+		if isRoot {
+			// do not rewrite a root rangeLiteral
 			return
 		}
-		return
-	case *ast.RangeLiteral:
-		// A literal range occurrence
+		nm := ts.FreshIterName()
+		ri := &RangeInfo{
+			Name: nm,
+			Lit:  t,
+		}
+		ranges = []*RangeInfo{ri}
+		rew = &ast.Identifier{Value: nm, Token: t.Tok()}
 		return
 	case *ast.InfixExpression:
-		lu := ts.AnnotateRangeUses(e.Left, false)
-		ru := ts.AnnotateRangeUses(e.Right, false)
-		uses = ts.mergeUses(lu, ru)
-		ts.Ranges[e] = uses
-	case *ast.PrefixExpression:
-		uses = ts.AnnotateRangeUses(e.Right, false)
-		ts.Ranges[e] = uses
-	case *ast.CallExpression:
-		uses = []string{}
-		for _, a := range e.Arguments {
-			uses = ts.mergeUses(uses, ts.AnnotateRangeUses(a, isRoot))
+		lRanges, l := ts.RewriteLitsUnder(t.Left, false, exprLen)
+		rRanges, r := ts.RewriteLitsUnder(t.Right, false, exprLen)
+		ranges = mergeUses(lRanges, rRanges)
+		if l == t.Left && r == t.Right {
+			rew = e
+		} else {
+			cp := *t
+			cp.Left, cp.Right = l, r
+			rew = &cp
 		}
+		if isRoot {
+			ts.ExprCache[t] = &ExprInfo{
+				Ranges:   ranges,
+				Rewrite:  rew,
+				ExprLen:  exprLen,
+				LeftVar:  len(lRanges) > 0,
+				RightVar: len(rRanges) > 0,
+			}
+		}
+		return
+	case *ast.PrefixExpression:
+		var r ast.Expression
+		ranges, r = ts.RewriteLitsUnder(t.Right, false, exprLen)
+		if r == t.Right {
+			rew = e
+		} else {
+			cp := *t
+			cp.Right = r
+			rew = &cp
+		}
+		if isRoot {
+			ts.ExprCache[t] = &ExprInfo{
+				Ranges:  ranges,
+				Rewrite: rew,
+				ExprLen: exprLen,
+			}
+		}
+		return
+	case *ast.CallExpression:
+		changed := false
+		args := make([]ast.Expression, len(t.Arguments))
+		for i, a := range t.Arguments {
+			aRanges, a2 := ts.RewriteLitsUnder(a, isRoot, exprLen)
+			args[i] = a2
+			changed = changed || (a2 != a)
+			ranges = mergeUses(ranges, aRanges)
+		}
+		if !changed {
+			rew = e
+		} else {
+			cp := *t
+			cp.Arguments = args
+			rew = &cp
+		}
+		return
+	case *ast.Identifier:
+		if !isRoot {
+			typ, ok := ts.GetIdentifier(t.Value)
+			if ok && typ.Kind() == RangeKind {
+				ri := &RangeInfo{
+					Name: t.Value,
+					Lit:  nil,
+				}
+				ranges = []*RangeInfo{ri}
+			}
+		}
+		rew = e
 		return
 	default:
 		return
 	}
-	return
 }
 
 func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
@@ -112,8 +195,8 @@ func (ts *TypeSolver) Solve() {
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	for _, expr := range stmt.Expression {
-		ts.TypeExpression(expr, true)
-		ts.AnnotateRangeUses(expr, true)
+		types := ts.TypeExpression(expr, true)
+		ts.RewriteLitsUnder(expr, true, len(types))
 	}
 }
 
@@ -121,8 +204,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in case there may be functions we have to type
 	types := []Type{}
 	for _, expr := range stmt.Value {
-		types = append(types, ts.TypeExpression(expr, true)...)
-		ts.AnnotateRangeUses(expr, true)
+		exprTypes := ts.TypeExpression(expr, true)
+		types = append(types, exprTypes...)
+		ts.RewriteLitsUnder(expr, true, len(exprTypes))
 	}
 
 	if len(stmt.Name) != len(types) {
@@ -224,66 +308,77 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	return []Type{Range{Iter: startT[0]}}
 }
 
-func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) []Type {
+func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []Type) {
+	types = []Type{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
-		return []Type{Int{Width: 64}}
+		types = append(types, Int{Width: 64})
 	case *ast.FloatLiteral:
-		return []Type{Float{Width: 64}}
+		types = append(types, Float{Width: 64})
 	case *ast.StringLiteral:
-		return []Type{Str{}}
+		types = append(types, Str{})
 	case *ast.RangeLiteral:
-		return ts.TypeRangeExpression(e, isRoot)
+		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:
 		t := ts.TypeIdentifier(e)
 		if !isRoot && t.Kind() == RangeKind {
-			return []Type{t.(Range).Iter}
+			types = append(types, t.(Range).Iter)
+			return
 		}
-		return []Type{t}
+		types = append(types, t)
 	case *ast.InfixExpression:
-		return ts.TypeInfixExpression(e)
+		types = ts.TypeInfixExpression(e)
 	case *ast.PrefixExpression:
-		return ts.TypePrefixExpression(e)
+		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
-		return ts.TypeCallExpression(e, isRoot)
+		types = ts.TypeCallExpression(e, isRoot)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
+	return
+}
+
+func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
+	if t, ok := Get(ts.Scopes, name); ok {
+		if ptr, yes := t.(Pointer); yes {
+			return ptr.Elem, true
+		}
+		return t, true
+	}
+
+	compiler := ts.ScriptCompiler.Compiler
+	cc := compiler.CodeCompiler.Compiler
+	if s, ok := Get(cc.Scopes, name); ok {
+		t := s.Type
+		if ptr, yes := t.(Pointer); yes {
+			return ptr.Elem, true
+		}
+		return t, true
+	}
+
+	return Unresolved{}, false
 }
 
 // Type Identifier returns type of identifier if it is not a pointer
 // If it is a pointer then returns type of the element it points to
 // This is because we automatically dereference if it's a pointer
-func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) Type {
-	if t, ok := Get(ts.Scopes, ident.Value); ok {
-		if ptr, yes := t.(Pointer); yes {
-			return ptr.Elem
+func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
+	var ok bool
+	t, ok = ts.GetIdentifier(ident.Value)
+	if !ok {
+		cerr := &token.CompileError{
+			Token: ident.Token,
+			Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
 		}
-		return t
+		ts.Errors = append(ts.Errors, cerr)
 	}
-
-	compiler := ts.ScriptCompiler.Compiler
-	cc := compiler.CodeCompiler.Compiler
-	if s, ok := Get(cc.Scopes, ident.Value); ok {
-		t := s.Type
-		if ptr, yes := t.(Pointer); yes {
-			return ptr.Elem
-		}
-		return t
-	}
-	cerr := &token.CompileError{
-		Token: ident.Token,
-		Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
-	}
-	ts.Errors = append(ts.Errors, cerr)
-
-	return Unresolved{}
+	return
 }
 
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
-func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
+func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
 	if len(left) != len(right) {
@@ -295,7 +390,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 		return []Type{Unresolved{}}
 	}
 
-	res := []Type{}
+	types = []Type{}
 	var ok bool
 	var ptr Pointer
 	for i := range left {
@@ -310,7 +405,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 		}
 
 		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
-			res = append(res, Unresolved{})
+			types = append(types, Unresolved{})
 			continue
 		}
 
@@ -341,18 +436,18 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) []Type {
 		}
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to fn
-		res = append(res, fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type)
+		types = append(types, fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type)
 	}
 
-	return res
+	return
 }
 
 // TypePrefixExpression returns type of prefix expression output if input is not a pointer
 // If input is a pointer then it applies prefix expression to the element pointed to
 // This is because we automatically dereference if it's a pointer
-func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
+func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []Type) {
 	operand := ts.TypeExpression(expr.Right, false)
-	res := []Type{}
+	types = []Type{}
 	for _, opType := range operand {
 		if ptr, yes := opType.(Pointer); yes {
 			opType = ptr.Elem
@@ -361,7 +456,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 		// If either operand's type is unresolved, the result of the
 		// operation is also unresolved. We can't proceed.
 		if opType.Kind() == UnresolvedKind {
-			res = append(res, Unresolved{})
+			types = append(types, Unresolved{})
 			continue // Move to the next pair of operands
 		}
 
@@ -386,19 +481,20 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) []Type {
 		}
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to function
-		res = append(res, fn(ts.ScriptCompiler.Compiler, opSym, false).Type)
+		types = append(types, fn(ts.ScriptCompiler.Compiler, opSym, false).Type)
 	}
 
-	return res
+	return
 }
 
 // inside a call expression a Range becomes its interior type
-func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
+func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) (types []Type) {
+	types = []Type{}
 	args := []Type{}
 	innerArgs := []Type{}
 	for _, e := range ce.Arguments {
-		argList := ts.TypeExpression(e, isRoot)
-		for _, arg := range argList {
+		exprArgs := ts.TypeExpression(e, isRoot)
+		for _, arg := range exprArgs {
 			if arg.Kind() == RangeKind {
 				innerArgs = append(innerArgs, arg.(Range).Iter)
 			} else {
@@ -422,7 +518,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 			Msg:   fmt.Sprintf("undefined function: %s", ce.Function.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
-		return []Type{}
+		return
 	}
 
 	mangled := mangle(ce.Function.Value, args)
