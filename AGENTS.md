@@ -14,7 +14,7 @@
 - Full suite: `make test` (runs `test.sh` → builds, unit tests, and E2E via `test.py`).
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).
 
-Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew path example: `/opt/homebrew/opt/llvm@20/bin`.
+Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
 
 ## Architecture Overview
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
@@ -33,6 +33,7 @@ Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
   - Inputs: `.spt` (scripts) and optional `.pt` (shared code).
   - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes).
   - Run: `./test.sh` or `python3 test.py [--keep]`.
+  - Focused run: `python3 test.py tests/math`.
 
 CI: GitHub Actions builds with Go 1.24, installs LLVM 20, and runs `./test.sh` on pushes/PRs.
 
