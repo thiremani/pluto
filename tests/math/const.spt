@@ -2,6 +2,6 @@ pi, greeting
 x = answer + 0.0
 x = x + 5 + pi
 y = 0.5g*100
-x, 2x, x / e
+x, 2x, x / exp
 y
 "constants in math.pt are pi = -pi, greeting = -greeting, ansewr = -answer while in physics.pt is g = -g"

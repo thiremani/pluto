@@ -317,7 +317,21 @@ func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 
 	cfg.forwardPass(fn.Body.Statements)
 
-	cfg.checkInputParams(fn.Parameters)
+	// Build set of output names
+	outSet := make(map[string]struct{}, len(fn.Outputs))
+	for _, o := range fn.Outputs {
+		outSet[o.Value] = struct{}{}
+	}
+
+	// Filter the params: inputsOnly = params that are NOT outputs
+	var inputsOnly []*ast.Identifier
+	for _, p := range fn.Parameters {
+		if _, isOutput := outSet[p.Value]; !isOutput {
+			inputsOnly = append(inputsOnly, p)
+		}
+	}
+
+	cfg.checkInputParams(inputsOnly)
 	cfg.checkOutputParams(fn.Outputs)
 
 	// seed the live map in backward pass with output parameters

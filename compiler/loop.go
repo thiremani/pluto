@@ -135,35 +135,68 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 	preheader := c.builder.GetInsertBlock()
 	fn := preheader.Parent()
 
-	cond := c.Context.AddBasicBlock(fn, "loop_cond")
+	// Blocks
+	dispatch := c.Context.AddBasicBlock(fn, "loop_dispatch")
+	condPos := c.Context.AddBasicBlock(fn, "loop_cond_pos") // step >= 0
+	condNeg := c.Context.AddBasicBlock(fn, "loop_cond_neg") // step < 0
 	body := c.Context.AddBasicBlock(fn, "loop_body")
 	exit := c.Context.AddBasicBlock(fn, "loop_exit")
 
-	// preheader -> cond
-	c.builder.CreateBr(cond)
-	c.builder.SetInsertPointAtEnd(cond)
+	// preheader -> dispatch
+	c.builder.CreateBr(dispatch)
+	c.builder.SetInsertPointAtEnd(dispatch)
 
-	iter := c.builder.CreatePHI(c.Context.Int64Type(), "iter")
-	iter.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{preheader})
+	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	isNeg := c.builder.CreateICmp(llvm.IntSLT, step, zero, "step_is_neg")
+	// Choose header once based on sign of step
+	c.builder.CreateCondBr(isNeg, condNeg, condPos)
 
-	loopCond := c.builder.CreateICmp(llvm.IntSLT, iter, stop, "loop_cond")
-	c.builder.CreateCondBr(loopCond, body, exit)
+	// ----------------------
+	// Positive / non-negative header: iter < stop
+	// ----------------------
+	c.builder.SetInsertPointAtEnd(condPos)
+	iterPos := c.builder.CreatePHI(c.Context.Int64Type(), "iter_pos")
+	iterPos.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{dispatch})
 
-	// Call the provided function to generate the main body of the loop.
-	// It uses the current value of the induction variable.
+	cmpPos := c.builder.CreateICmp(llvm.IntSLT, iterPos, stop, "loop_cond_pos")
+	c.builder.CreateCondBr(cmpPos, body, exit)
+
+	// ----------------------
+	// Negative header: iter > stop
+	// ----------------------
+	c.builder.SetInsertPointAtEnd(condNeg)
+	iterNeg := c.builder.CreatePHI(c.Context.Int64Type(), "iter_neg")
+	iterNeg.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{dispatch})
+
+	cmpNeg := c.builder.CreateICmp(llvm.IntSGT, iterNeg, stop, "loop_cond_neg")
+	c.builder.CreateCondBr(cmpNeg, body, exit)
+
+	// ----------------------
+	// Body
+	// ----------------------
 	c.builder.SetInsertPointAtEnd(body)
+
+	// Unify the iterator coming from either header
+	iter := c.builder.CreatePHI(c.Context.Int64Type(), "iter")
+	iter.AddIncoming([]llvm.Value{iterPos}, []llvm.BasicBlock{condPos})
+	iter.AddIncoming([]llvm.Value{iterNeg}, []llvm.BasicBlock{condNeg})
+
+	// Generate user body with the unified iterator
 	bodyGen(iter)
 
-	// IMPORTANT: use the block where bodyGen left us as the latch
+	// Latch (where bodyGen left us)
 	latch := c.builder.GetInsertBlock()
 
-	// Now, at the end of the body, perform the increment.
+	// Induction step
 	iterNext := c.builder.CreateAdd(iter, step, "iter_next")
-	c.builder.CreateBr(cond)
 
-	// Finally, add the incoming value from the body to the PHI node.
-	// backedge is from latch, not necessarily 'body'
-	iter.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
+	// Backedge to the originally chosen header (no extra compare per trip)
+	c.builder.CreateCondBr(isNeg, condNeg, condPos)
 
+	// Feed the next value to the correct header PHI
+	iterPos.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
+	iterNeg.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
+
+	// Exit
 	c.builder.SetInsertPointAtEnd(exit)
 }

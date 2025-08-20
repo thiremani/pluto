@@ -97,18 +97,8 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 	// Duplicate Output Parameters
 	cp.p.checkNoDuplicates(s.Outputs)
 
-	// Input/Output Name Conflicts (NEW & Optional but Recommended)
-	paramNames := make(map[string]struct{})
-	for _, p := range s.Parameters {
-		paramNames[p.Value] = struct{}{}
-	}
-	for _, o := range s.Outputs {
-		if _, exists := paramNames[o.Value]; exists {
-			msg := fmt.Sprintf("identifier: %s cannot be used as both an input and an output parameter", o.Value)
-			ce := &token.CompileError{Token: o.Token, Msg: msg}
-			cp.p.errors = append(cp.p.errors, ce)
-		}
-	}
+	// Allow the same variable to be used in both input and output parameters
+	// This enables accumulator patterns like: res = sum(res, x)
 
 	if len(cp.p.errors) > prevLen {
 		// If there are errors, we don't add the statement to the code.

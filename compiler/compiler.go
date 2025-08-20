@@ -748,17 +748,21 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 	defer PopScope(&c.Scopes)
 
 	sretPtr := function.Param(0)
+
+	// 1) Install outputs into scope and remember their storage
+	outSyms := make(map[string]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		outType := outTypes[i]
-
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
 
-		Put(c.Scopes, outIdent.Value, &Symbol{
+		sym := &Symbol{
 			Val:      fieldPtr,
 			Type:     Pointer{Elem: outType},
 			FuncArg:  true,
 			ReadOnly: false,
-		})
+		}
+		Put(c.Scopes, outIdent.Value, sym)
+		outSyms[outIdent.Value] = sym
 	}
 
 	// collect which param‐indices are ranges
@@ -766,11 +770,24 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 	// recursive nester: for N ranges, make N loops via createLoop
 	scalars := make(map[string]*Symbol)
 	for i, arg := range args {
+		name := fn.Parameters[i].Value
+
 		if arg.Type.Kind() == RangeKind {
 			rangeIdxs = append(rangeIdxs, i)
 			// do nothing as arg will become an iter in createLoop
 			continue
 		}
+
+		// Scalar param value (after sret)
+		paramVal := function.Param(i + 1)
+
+		// If this param is also an output, seed the output storage and don't add a scalar
+		if outSym, isOut := outSyms[name]; isOut {
+			elemT := outSym.Type.(Pointer).Elem
+			c.createStore(paramVal, outSym.Val, elemT)
+			continue
+		}
+
 		scalars[fn.Parameters[i].Value] = &Symbol{
 			Val:      function.Param(i + 1), // Get the scalar value from the function's params
 			Type:     arg.Type,

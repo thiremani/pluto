@@ -1,0 +1,2 @@
+res = acc(res, x)
+    res = res + x
