@@ -13,17 +13,15 @@ res = sum(res, 1:6)
 res = sum(res, 1996:2001:2)
 "res after second summation is", res
 
-# primes(2:101)
-
 # Test named ranges in expressions
 i = 0:4
 s = 1 + i      # scalar + named range
 t = i + 1      # named range + scalar
 
-# Multiple named ranges - test seeding logic
+# Multiple named ranges
 j = 1:3
 k = 2:4
-result = j + k  # both operands are named ranges (first should be seed)
+result = j + k  # both operands are named ranges
 
 # Nested expressions with named ranges
 m = 1:3
@@ -45,4 +43,4 @@ sub, othersub
 i = 3:3
 noop = 1 + i
 othernoop = i - 1
-noop, othernoop
+"noops are", noop, othernoop

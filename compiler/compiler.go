@@ -170,7 +170,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, false)
+		condSyms := c.compileExpression(expr, nil, false)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -235,8 +235,11 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 
 	// compileExpression already derefs any pointers
 	// so don't worry about creating a load here
+	i := 0
 	for _, expr := range stmt.Value {
-		ifSymbols = append(ifSymbols, c.compileExpression(expr, true)...)
+		res := c.compileExpression(expr, stmt.Name[i:], true)
+		ifSymbols = append(ifSymbols, res...)
+		i += len(res)
 	}
 
 	return ifSymbols, c.builder.GetInsertBlock()
@@ -346,8 +349,11 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
+	i := 0
 	for _, expr := range stmt.Value {
-		syms = append(syms, c.compileExpression(expr, true)...)
+		res := c.compileExpression(expr, stmt.Name[i:], true)
+		syms = append(syms, res...)
+		i += len(res)
 	}
 	c.writeTo(stmt.Name, syms)
 }
@@ -362,7 +368,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -390,7 +396,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, isRoot bool) (res []*S
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
-		res = c.compileInfixExpression(e)
+		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
 		res = c.compilePrefixExpression(e)
 	case *ast.CallExpression:
@@ -508,12 +514,12 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
 	rType := c.mapToLLVMType(typ)
 	agg := llvm.Undef(rType)
-	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, false)[0].Val, 0, "start")
-	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, false)[0].Val, 1, "stop")
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, nil, false)[0].Val, 0, "start")
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, nil, false)[0].Val, 1, "stop")
 	// insert step, defaulting to 1 if no step was provided
 	var stepVal llvm.Value
 	if e.Step != nil {
-		stepVal = c.compileExpression(e.Step, false)[0].Val
+		stepVal = c.compileExpression(e.Step, nil, false)[0].Val
 	} else {
 		// default step = 1
 		stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
@@ -542,7 +548,7 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	return c.derefIfPointer(s)
 }
 
-func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
+func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info, ok := c.ExprCache[expr]
 	if !ok {
 		info = &ExprInfo{Ranges: []*RangeInfo{}}
@@ -551,12 +557,12 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Sym
 	if len(info.Ranges) == 0 {
 		return c.compileInfixBasic(expr)
 	}
-	return c.compileInfixRanges(expr, info)
+	return c.compileInfixRanges(expr, info, dest)
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) {
-	left := c.compileExpression(expr.Left, false)
-	right := c.compileExpression(expr.Right, false)
+	left := c.compileExpression(expr.Left, nil, false)
+	right := c.compileExpression(expr.Right, nil, false)
 
 	for i := 0; i < len(left); i++ {
 		l := c.derefIfPointer(left[i])
@@ -571,115 +577,84 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) 
 	return res
 }
 
-func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	acc := c.setupAccs(info.ExprLen)
-	isLeftSeeded := !info.LeftVar && info.RightVar
-	isRightSeeded := info.LeftVar && !info.RightVar
+// Modified compileInfixRanges - cleaner with destinations
+func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+	// Push a new scope for this expression block
+	PushScope(&c.Scopes, BlockScope)
+	defer PopScope(&c.Scopes)
 
-	c.seedAccs(expr, acc, isLeftSeeded, isRightSeeded)
-	c.foldLoop(info, expr, acc, isLeftSeeded, isRightSeeded)
+	// Setup outputs (like function outputs)
+	outputs := c.setupRangeOutputs(dest, info.OutTypes)
 
-	return c.finalizeAccs(acc)
-}
-
-func (c *Compiler) setupAccs(exprLen int) []*foldAcc {
-	acc := make([]*foldAcc, exprLen)
-	for i := range acc {
-		acc[i] = c.newFoldAcc()
-	}
-	return acc
-}
-
-func (c *Compiler) seedAccs(expr *ast.InfixExpression, acc []*foldAcc, isLeftSeeded, isRightSeeded bool) {
-	if isLeftSeeded {
-		seedSyms := c.compileExpression(expr.Left, false)
-		for i := range acc {
-			c.foldAccInitWithSeed(acc[i], seedSyms[i])
-		}
-	}
-
-	if isRightSeeded {
-		seedSyms := c.compileExpression(expr.Right, false)
-		for i := range acc {
-			c.foldAccInitWithSeed(acc[i], seedSyms[i])
-		}
-	}
-}
-
-func (c *Compiler) foldLoop(info *ExprInfo, expr *ast.InfixExpression, acc []*foldAcc, isLeftSeeded, isRightSeeded bool) {
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 
+	// Build nested loops
 	c.withLoopNest(info.Ranges, func() {
-		left, right := c.compileOperands(leftRew, rightRew, isLeftSeeded, isRightSeeded)
-		c.foldTerms(left, right, acc, expr.Operator, isLeftSeeded, isRightSeeded)
-	})
-}
+		// Compile operands (no destinations - internal to loop)
+		left := c.compileExpression(leftRew, nil, false)
+		right := c.compileExpression(rightRew, nil, false)
 
-func (c *Compiler) compileOperands(leftRew, rightRew ast.Expression, isLeftSeeded, isRightSeeded bool) ([]*Symbol, []*Symbol) {
-	var left, right []*Symbol
-	switch {
-	case isLeftSeeded:
-		right = c.compileExpression(rightRew, false)
-		left = make([]*Symbol, len(right)) // dummy
-	case isRightSeeded:
-		left = c.compileExpression(leftRew, false)
-		right = make([]*Symbol, len(left)) // dummy
-	default:
-		left = c.compileExpression(leftRew, false)
-		right = c.compileExpression(rightRew, false)
-	}
-	return left, right
-}
+		// Compute and store results
+		for i := 0; i < len(left); i++ {
+			l := c.derefIfPointer(left[i])
+			r := c.derefIfPointer(right[i])
+			key := opKey{
+				Operator:  expr.Operator,
+				LeftType:  l.Type.String(),
+				RightType: r.Type.String(),
+			}
+			computed := defaultOps[key](c, l, r, true)
 
-func (c *Compiler) foldTerms(left, right []*Symbol, acc []*foldAcc, operator string, isLeftSeeded, isRightSeeded bool) {
-	terms := c.getAccTerm(isLeftSeeded, isRightSeeded, left, right, operator)
-	for i := 0; i < len(left); i++ {
-		if isLeftSeeded || isRightSeeded {
-			c.foldAccCombine(acc[i], operator, terms[i])
-			continue
+			// Store to output
+			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
-		c.foldAccAdd(acc[i], operator, terms[i])
-	}
-}
+	})
 
-func (c *Compiler) finalizeAccs(acc []*foldAcc) []*Symbol {
-	out := make([]*Symbol, len(acc))
-	for i := range acc {
-		out[i] = c.foldAccFinal(acc[i])
+	// Load final values
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Pointer).Elem
+		out[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
+			Type: elemType,
+		}
 	}
 	return out
 }
 
-func (c *Compiler) getAccTerm(isLeftSeeded bool, isRightSeeded bool, left, right []*Symbol, op string) (terms []*Symbol) {
-	terms = make([]*Symbol, len(left))
-	for i := 0; i < len(left); i++ {
-		if isLeftSeeded {
-			terms[i] = c.derefIfPointer(right[i])
-			continue
-		}
+func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	outputs := make([]*Symbol, len(dest))
 
-		if isRightSeeded {
-			terms[i] = c.derefIfPointer(left[i])
-			continue
-		}
+	for i, outType := range outTypes {
+		name := dest[i].Value
 
-		l := c.derefIfPointer(left[i])
-		r := c.derefIfPointer(right[i])
-		key := opKey{
-			Operator:  op,
-			LeftType:  l.Type.String(),
-			RightType: r.Type.String(),
+		// Create temp storage for the loop
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name+"_tmp")
+		var val llvm.Value
+		if sym, ok := Get(c.Scopes, name); ok {
+			val = c.derefIfPointer(sym).Val
+		} else {
+			val = c.makeZeroValue(outType).Val
 		}
-		terms[i] = defaultOps[key](c, l, r, true)
+		c.createStore(val, ptr, outType)
+
+		// Shadow the variable in current scope
+		// Now any reference to 'name' in the expression uses our temp
+		outputs[i] = &Symbol{
+			Val:  ptr,
+			Type: Pointer{Elem: outType},
+		}
+		Put(c.Scopes, name, outputs[i])
 	}
-	return
+
+	return outputs
 }
 
 // compilePrefixExpression handles unary operators (prefix expressions).
 func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
 	// First compile the operand
-	operand := c.compileExpression(expr.Right, false)
+	operand := c.compileExpression(expr.Right, nil, false)
 
 	for _, op := range operand {
 		// Lookup in the defaultPrefixOps table
@@ -846,7 +821,7 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		res := c.compileExpression(callArg, true) // isRoot is true as we want range expressions to be sent as is
+		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
 			argTypes = append(argTypes, r.Type)
@@ -950,7 +925,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		}
 
 		// Compile the expression and get its value and type
-		syms := c.compileExpression(expr, true)
+		syms := c.compileExpression(expr, nil, true)
 		for _, s := range syms {
 			spec, err := defaultSpecifier(s.Type)
 			if err != nil {

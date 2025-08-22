@@ -17,8 +17,7 @@ type ExprInfo struct {
 	Ranges   []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
 	Rewrite  ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
 	ExprLen  int
-	LeftVar  bool // true means left has ranges in its sub expressions so it is variable
-	RightVar bool // true means right has ranges in its sub expressions so it is variablel
+	OutTypes []Type
 }
 
 // TypeSolver infers the types of various expressions
@@ -84,17 +83,17 @@ func (ts *TypeSolver) FreshIterName() string {
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
 // It traverses the AST, replacing range literals with temporary identifiers and collecting
 // range information for later compilation into loops.
-func (ts *TypeSolver) HandleRanges(e ast.Expression, isRoot bool, exprLen int) (ranges []*RangeInfo, rew ast.Expression) {
+func (ts *TypeSolver) HandleRanges(e ast.Expression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
 	rew = e
 	switch t := e.(type) {
 	case *ast.RangeLiteral:
 		return ts.HandleRangeLiteral(t, isRoot)
 	case *ast.InfixExpression:
-		return ts.HandleInfixRanges(t, isRoot, exprLen)
+		return ts.HandleInfixRanges(t, isRoot)
 	case *ast.PrefixExpression:
-		return ts.HandlePrefixRanges(t, isRoot, exprLen)
+		return ts.HandlePrefixRanges(t, isRoot)
 	case *ast.CallExpression:
-		return ts.HandleCallRanges(t, isRoot, exprLen)
+		return ts.HandleCallRanges(t, isRoot)
 	case *ast.Identifier:
 		return ts.HandleIdentifierRanges(t, isRoot)
 	default:
@@ -108,7 +107,7 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, isRoot bool
 	if isRoot {
 		return nil, rangeLit
 	}
-	
+
 	nm := ts.FreshIterName()
 	ri := &RangeInfo{
 		Name: nm,
@@ -121,11 +120,11 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, isRoot bool
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
-func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, isRoot bool, exprLen int) (ranges []*RangeInfo, rew ast.Expression) {
-	lRanges, l := ts.HandleRanges(infix.Left, false, exprLen)
-	rRanges, r := ts.HandleRanges(infix.Right, false, exprLen)
+func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
+	lRanges, l := ts.HandleRanges(infix.Left, false)
+	rRanges, r := ts.HandleRanges(infix.Right, false)
 	ranges = mergeUses(lRanges, rRanges)
-	
+
 	if l == infix.Left && r == infix.Right {
 		rew = infix
 	} else {
@@ -133,24 +132,20 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, isRoot bool,
 		cp.Left, cp.Right = l, r
 		rew = &cp
 	}
-	
+
 	if isRoot {
-		ts.ExprCache[infix] = &ExprInfo{
-			Ranges:   ranges,
-			Rewrite:  rew,
-			ExprLen:  exprLen,
-			LeftVar:  len(lRanges) > 0,
-			RightVar: len(rRanges) > 0,
-		}
+		info := ts.ExprCache[infix]
+		info.Ranges = ranges
+		info.Rewrite = rew
 	}
 	return
 }
 
 // HandlePrefixRanges processes prefix expressions, handling the operand and preserving
 // the prefix operator while rewriting any contained ranges.
-func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, isRoot bool, exprLen int) (ranges []*RangeInfo, rew ast.Expression) {
-	ranges, r := ts.HandleRanges(prefix.Right, false, exprLen)
-	
+func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
+	ranges, r := ts.HandleRanges(prefix.Right, false)
+
 	if r == prefix.Right {
 		rew = prefix
 	} else {
@@ -158,30 +153,28 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, isRoot bo
 		cp.Right = r
 		rew = &cp
 	}
-	
+
 	if isRoot {
-		ts.ExprCache[prefix] = &ExprInfo{
-			Ranges:  ranges,
-			Rewrite: rew,
-			ExprLen: exprLen,
-		}
+		info := ts.ExprCache[prefix]
+		info.Ranges = ranges
+		info.Rewrite = rew
 	}
 	return
 }
 
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
-func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression, isRoot bool, exprLen int) (ranges []*RangeInfo, rew ast.Expression) {
+func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
 	changed := false
 	args := make([]ast.Expression, len(call.Arguments))
-	
+
 	for i, a := range call.Arguments {
-		aRanges, a2 := ts.HandleRanges(a, isRoot, exprLen)
+		aRanges, a2 := ts.HandleRanges(a, isRoot)
 		args[i] = a2
 		changed = changed || (a2 != a)
 		ranges = mergeUses(ranges, aRanges)
 	}
-	
+
 	if !changed {
 		rew = call
 	} else {
@@ -233,8 +226,7 @@ func (ts *TypeSolver) Solve() {
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	for _, expr := range stmt.Expression {
-		types := ts.TypeExpression(expr, true)
-		ts.HandleRanges(expr, true, len(types))
+		ts.TypeExpression(expr, true)
 	}
 }
 
@@ -244,7 +236,6 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
 		types = append(types, exprTypes...)
-		ts.HandleRanges(expr, true, len(exprTypes))
 	}
 
 	if len(stmt.Name) != len(types) {
@@ -373,6 +364,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
+
+	ts.HandleRanges(expr, isRoot)
 	return
 }
 
@@ -477,6 +470,12 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types = append(types, fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type)
 	}
 
+	// Create new entry
+	ts.ExprCache[expr] = &ExprInfo{
+		OutTypes: types,
+		ExprLen:  len(types),
+	}
+
 	return
 }
 
@@ -520,6 +519,12 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to function
 		types = append(types, fn(ts.ScriptCompiler.Compiler, opSym, false).Type)
+	}
+
+	// Create new entry
+	ts.ExprCache[expr] = &ExprInfo{
+		OutTypes: types,
+		ExprLen:  len(types),
 	}
 
 	return
