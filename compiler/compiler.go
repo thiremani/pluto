@@ -31,8 +31,10 @@ type Compiler struct {
 	Module        llvm.Module
 	builder       llvm.Builder
 	formatCounter int           // Track unique format strings
+	tmpCounter    int           // Temporary variable names counter
 	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 	FuncCache     map[string]*Func
+	ExprCache     map[ast.Expression]*ExprInfo
 	Errors        []*token.CompileError
 }
 
@@ -46,8 +48,10 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		Module:        module,
 		builder:       builder,
 		formatCounter: 0,
+		tmpCounter:    0,
 		CodeCompiler:  cc,
 		FuncCache:     make(map[string]*Func),
+		ExprCache:     make(map[ast.Expression]*ExprInfo),
 		Errors:        []*token.CompileError{},
 	}
 }
@@ -57,6 +61,8 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 	case IntKind:
 		intType := t.(Int)
 		switch intType.Width {
+		case 1:
+			return c.Context.Int1Type()
 		case 8:
 			return c.Context.Int8Type()
 		case 16:
@@ -164,7 +170,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr)
+		condSyms := c.compileExpression(expr, nil, false)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -229,8 +235,11 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 
 	// compileExpression already derefs any pointers
 	// so don't worry about creating a load here
+	i := 0
 	for _, expr := range stmt.Value {
-		ifSymbols = append(ifSymbols, c.compileExpression(expr)...)
+		res := c.compileExpression(expr, stmt.Name[i:], true)
+		ifSymbols = append(ifSymbols, res...)
+		i += len(res)
 	}
 
 	return ifSymbols, c.builder.GetInsertBlock()
@@ -340,8 +349,11 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
+	i := 0
 	for _, expr := range stmt.Value {
-		syms = append(syms, c.compileExpression(expr)...)
+		res := c.compileExpression(expr, stmt.Name[i:], true)
+		syms = append(syms, res...)
+		i += len(res)
 	}
 	c.writeTo(stmt.Name, syms)
 }
@@ -356,7 +368,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -375,28 +387,18 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
-		s.Type = Range{Iter: Int{Width: 64}}
-		rType := c.mapToLLVMType(s.Type)
-		agg := llvm.Undef(rType)
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start)[0].Val, 0, "start")
-		agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop)[0].Val, 1, "stop")
-		// insert step, defaulting to 1 if no step was provided
-		var stepVal llvm.Value
-		if e.Step != nil {
-			stepVal = c.compileExpression(e.Step)[0].Val
-		} else {
-			// default step = 1
-			stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+		if isRoot {
+			res = c.compileRangeExpression(e)
+			return
 		}
-		agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
-		s.Val = agg
-		res = []*Symbol{s}
+		// Non-root range literal must be handled by the enclosing operator.
+		panic("internal: unexpanded range literal in non-root position")
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
-		res = c.compileInfixExpression(e)
+		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
-		res = c.compilePrefixExpression(e)
+		res = c.compilePrefixExpression(e, dest)
 	case *ast.CallExpression:
 		res = c.compileCallExpression(e)
 	default:
@@ -409,6 +411,11 @@ func (c *Compiler) compileExpression(expr ast.Expression) (res []*Symbol) {
 func setInstAlignment(inst llvm.Value, t Type) {
 	switch typ := t.(type) {
 	case Int:
+		// I1 is a special case
+		if typ.Width == 1 {
+			inst.SetAlignment(int(typ.Width))
+			return
+		}
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
 	case Float:
@@ -504,6 +511,31 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	return newS
 }
 
+func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
+	rType := c.mapToLLVMType(typ)
+	agg := llvm.Undef(rType)
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, nil, false)[0].Val, 0, "start")
+	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, nil, false)[0].Val, 1, "stop")
+	// insert step, defaulting to 1 if no step was provided
+	var stepVal llvm.Value
+	if e.Step != nil {
+		stepVal = c.compileExpression(e.Step, nil, false)[0].Val
+	} else {
+		// default step = 1
+		stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+	}
+	agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
+	return agg
+}
+
+func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
+	s := &Symbol{}
+	s.Type = Range{Iter: Int{Width: 64}}
+	s.Val = c.toRange(e, s.Type)
+	res = []*Symbol{s}
+	return res
+}
+
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, ok := Get(c.Scopes, ident.Value)
 	if ok {
@@ -516,45 +548,168 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	return c.derefIfPointer(s)
 }
 
-func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression) (res []*Symbol) {
-	res = []*Symbol{}
-	left := c.compileExpression(expr.Left)
-	right := c.compileExpression(expr.Right)
+func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
+	info, ok := c.ExprCache[expr]
+	if !ok {
+		info = &ExprInfo{Ranges: []*RangeInfo{}}
+	}
 
-	// Build a key based on the operator literal and the operand types.
-	// We assume that the String() method for your custom Type returns "I64" for Int{Width: 64} and "F64" for Float{Width: 64}.
+	if len(info.Ranges) == 0 {
+		return c.compileInfixBasic(expr)
+	}
+	return c.compileInfixRanges(expr, info, dest)
+}
+
+func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) {
+	left := c.compileExpression(expr.Left, nil, false)
+	right := c.compileExpression(expr.Right, nil, false)
+
 	for i := 0; i < len(left); i++ {
 		l := c.derefIfPointer(left[i])
 		r := c.derefIfPointer(right[i])
-
 		key := opKey{
 			Operator:  expr.Operator,
 			LeftType:  l.Type.String(),
 			RightType: r.Type.String(),
 		}
-
-		fn := defaultOps[key]
-		res = append(res, fn(c, l, r, true))
+		res = append(res, defaultOps[key](c, l, r, true))
 	}
-	return
+	return res
 }
 
-// compilePrefixExpression handles unary operators (prefix expressions).
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
-	// First compile the operand
-	operand := c.compileExpression(expr.Right)
+// Modified compileInfixRanges - cleaner with destinations
+func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+	// Push a new scope for this expression block
+	PushScope(&c.Scopes, BlockScope)
+	defer PopScope(&c.Scopes)
 
-	for _, op := range operand {
-		// Lookup in the defaultPrefixOps table
-		key := unaryOpKey{
-			Operator:    expr.Operator,
-			OperandType: op.Type.String(),
+	// Setup outputs (like function outputs)
+	outputs := c.setupRangeOutputs(dest, info.OutTypes)
+
+	leftRew := info.Rewrite.(*ast.InfixExpression).Left
+	rightRew := info.Rewrite.(*ast.InfixExpression).Right
+
+	// Build nested loops
+	c.withLoopNest(info.Ranges, func() {
+		// Compile operands (no destinations - internal to loop)
+		left := c.compileExpression(leftRew, nil, false)
+		right := c.compileExpression(rightRew, nil, false)
+
+		// Compute and store results
+		for i := 0; i < len(left); i++ {
+			l := c.derefIfPointer(left[i])
+			r := c.derefIfPointer(right[i])
+			key := opKey{
+				Operator:  expr.Operator,
+				LeftType:  l.Type.String(),
+				RightType: r.Type.String(),
+			}
+			computed := defaultOps[key](c, l, r, true)
+
+			// Store to output
+			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
+	})
 
-		fn := defaultUnaryOps[key]
-		res = append(res, fn(c, c.derefIfPointer(op), true))
+	// Load final values
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Pointer).Elem
+		out[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
+			Type: elemType,
+		}
 	}
-	return
+	return out
+}
+
+func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	outputs := make([]*Symbol, len(dest))
+
+	for i, outType := range outTypes {
+		name := dest[i].Value
+
+		// Create temp storage for the loop
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name+"_tmp")
+		var val llvm.Value
+		if sym, ok := Get(c.Scopes, name); ok {
+			val = c.derefIfPointer(sym).Val
+		} else {
+			val = c.makeZeroValue(outType).Val
+		}
+		c.createStore(val, ptr, outType)
+
+		// Shadow the variable in current scope
+		// Now any reference to 'name' in the expression uses our temp
+		outputs[i] = &Symbol{
+			Val:  ptr,
+			Type: Pointer{Elem: outType},
+		}
+		Put(c.Scopes, name, outputs[i])
+	}
+
+	return outputs
+}
+
+// Destination-aware prefix compilation,
+// mirroring compileInfixExpression/compileInfixRanges.
+
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
+	info, ok := c.ExprCache[expr]
+	if !ok {
+		info = &ExprInfo{Ranges: []*RangeInfo{}}
+	}
+	if len(info.Ranges) == 0 {
+		return c.compilePrefixBasic(expr)
+	}
+	return c.compilePrefixRanges(expr, info, dest)
+}
+
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression) (res []*Symbol) {
+	// No ranges: just apply the unary operator element-wise.
+	operand := c.compileExpression(expr.Right, nil, false)
+	for _, opSym := range operand {
+		key := unaryOpKey{Operator: expr.Operator, OperandType: opSym.Type.String()}
+		fn := defaultUnaryOps[key]
+		res = append(res, fn(c, c.derefIfPointer(opSym), true))
+	}
+	return res
+}
+
+func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+	// New scope so we can temporarily shadow outputs like mini-functions do.
+	PushScope(&c.Scopes, BlockScope)
+	defer PopScope(&c.Scopes)
+
+	// Allocate/seed per-destination temps (seed from existing value or zero).
+	outputs := c.setupRangeOutputs(dest, info.OutTypes)
+
+	// Rewritten operand under tmp iters.
+	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
+
+	// Drive the loops and store into outputs each trip.
+	c.withLoopNest(info.Ranges, func() {
+		ops := c.compileExpression(rightRew, nil, false)
+
+		for i := 0; i < len(ops); i++ {
+			op := c.derefIfPointer(ops[i])
+			key := unaryOpKey{Operator: expr.Operator, OperandType: op.Type.String()}
+			computed := defaultUnaryOps[key](c, op, true)
+
+			c.createStore(computed.Val, outputs[i].Val, computed.Type)
+		}
+	})
+
+	// Materialize final values
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Pointer).Elem
+		out[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
+			Type: elemType,
+		}
+	}
+	return out
 }
 
 func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
@@ -611,17 +766,21 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 	defer PopScope(&c.Scopes)
 
 	sretPtr := function.Param(0)
+
+	// 1) Install outputs into scope and remember their storage
+	outSyms := make(map[string]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		outType := outTypes[i]
-
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
 
-		Put(c.Scopes, outIdent.Value, &Symbol{
+		sym := &Symbol{
 			Val:      fieldPtr,
 			Type:     Pointer{Elem: outType},
 			FuncArg:  true,
 			ReadOnly: false,
-		})
+		}
+		Put(c.Scopes, outIdent.Value, sym)
+		outSyms[outIdent.Value] = sym
 	}
 
 	// collect which param‐indices are ranges
@@ -629,11 +788,24 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 	// recursive nester: for N ranges, make N loops via createLoop
 	scalars := make(map[string]*Symbol)
 	for i, arg := range args {
+		name := fn.Parameters[i].Value
+
 		if arg.Type.Kind() == RangeKind {
 			rangeIdxs = append(rangeIdxs, i)
 			// do nothing as arg will become an iter in createLoop
 			continue
 		}
+
+		// Scalar param value (after sret)
+		paramVal := function.Param(i + 1)
+
+		// If this param is also an output, seed the output storage and don't add a scalar
+		if outSym, isOut := outSyms[name]; isOut {
+			elemT := outSym.Type.(Pointer).Elem
+			c.createStore(paramVal, outSym.Val, elemT)
+			continue
+		}
+
 		scalars[fn.Parameters[i].Value] = &Symbol{
 			Val:      function.Param(i + 1), // Get the scalar value from the function's params
 			Type:     arg.Type,
@@ -692,7 +864,7 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		res := c.compileExpression(callArg)
+		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
 			argTypes = append(argTypes, r.Type)
@@ -796,7 +968,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		}
 
 		// Compile the expression and get its value and type
-		syms := c.compileExpression(expr)
+		syms := c.compileExpression(expr, nil, true)
 		for _, s := range syms {
 			spec, err := defaultSpecifier(s.Type)
 			if err != nil {

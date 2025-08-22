@@ -1,0 +1,19 @@
+a = 5 + 1:11
+b = 0 + 1:11
+c = 1 * 1:11
+d = 1:4 + 1:4
+a, b, c, d
+
+x = 5
+x = x + 1:11
+x
+
+y = 2
+y = y * 3:6
+y
+
+# Test with range identifier
+i = 1:6
+z = 0
+z = 5 + i      # Range identifier (should be conditional write, z not read from previous)
+z

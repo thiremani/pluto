@@ -158,7 +158,7 @@ a = 2`, // redeclaring/writing to const 'a'
 			ctx := llvm.NewContext()
 			cc := NewCodeCompiler(ctx, "TestCFGAnalysis", cp.Parse())
 			cc.Compile()
-			cfg := NewCFG(cc)
+			cfg := NewCFG(nil, cc)
 			cfg.Analyze(prog.Statements)
 
 			if tc.expectError {

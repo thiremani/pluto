@@ -13,4 +13,34 @@ res = sum(res, 1:6)
 res = sum(res, 1996:2001:2)
 "res after second summation is", res
 
-# primes(2:101)
+# Test named ranges in expressions
+i = 0:4
+s = 1 + i      # scalar + named range
+t = i + 1      # named range + scalar
+
+# Multiple named ranges
+j = 1:3
+k = 2:4
+result = j + k  # both operands are named ranges
+
+# Nested expressions with named ranges
+m = 1:3
+nested = 2 * (m + 5)    # named range in nested expression
+reuse = (m * 2) + (m - 1)  # same named range used multiple times
+
+# Mixed scenarios with multiple named ranges
+p = 1:4
+q = 2:3
+complex = p + (q * 3)  # nested expression with multiple named ranges
+
+s, t, result, nested, reuse, complex
+
+i = 1:4
+sub = 10 - i
+othersub = i - 10
+sub, othersub
+
+i = 3:3
+noop = 1 + i
+othernoop = i - 1
+"noops are", noop, othernoop

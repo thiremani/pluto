@@ -1,0 +1,3 @@
+res = 10
+res = acc(res, 1:6)
+res

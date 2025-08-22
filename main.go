@@ -231,7 +231,6 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
 		return "", err
 	}
-	fmt.Println("THe file name is", p.RelPath+"/"+filepath.Base(scriptFile))
 	l := lexer.New(p.RelPath+"/"+filepath.Base(scriptFile), string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()

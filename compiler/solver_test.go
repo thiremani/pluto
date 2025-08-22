@@ -170,30 +170,3 @@ y`
 		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
 	}
 }
-
-func noConvergeRecover(t *testing.T) {
-	// `recover()` catches a panic. If there was no panic, it returns nil.
-	r := recover()
-	if r == nil {
-		// If we get here, it means ts.Solve() completed WITHOUT panicking.
-		// This is an error for this specific test case.
-		t.Errorf("The code did not panic, but was expected to for an unresolvable type cycle.")
-		return
-	}
-
-	// Optionally, you can check if the panic message is what you expect.
-	// `r` holds the value passed to `panic()`.
-	errMsg, ok := r.(string)
-	if !ok {
-		t.Errorf("Panic object is not a string: %v", r)
-		return
-	}
-
-	expectedPanicMsg := "Inferring output types for function f is not converging"
-	if !strings.Contains(errMsg, expectedPanicMsg) {
-		t.Errorf("Expected panic message to contain '%s', but got '%s'", expectedPanicMsg, errMsg)
-	}
-
-	// If we get here, the test passed because it panicked as expected.
-	t.Logf("Successfully caught expected panic: %v", r)
-}

@@ -118,7 +118,7 @@ y, z, y = dupOut(x)
 y, z = inOutOverlap(x, y)
     z = x + y`,
 			params: []string{"x", "y"},
-			errs:   []string{"identifier: y cannot be used as both an input and an output parameter"},
+			errs:   nil, // Now allowed for accumulator patterns
 		},
 		{
 			name: "dupInAndOut",
@@ -153,6 +153,14 @@ _, b, _ = blankOut(x)
 y = blankIn(_, x, _)
     y = x`,
 			params: []string{"_", "x", "_"},
+			errs:   nil,
+		},
+		{
+			name: "sum",
+			input: `
+res = sum(res, x)
+    res = res + x`,
+			params: []string{"res", "x"},
 			errs:   nil,
 		},
 	}

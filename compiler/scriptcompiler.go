@@ -14,6 +14,7 @@ type ScriptCompiler struct {
 func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func) *ScriptCompiler {
 	compiler := NewCompiler(ctx, moduleName, cc)
 	compiler.FuncCache = funcCache
+	compiler.ExprCache = make(map[ast.Expression]*ExprInfo)
 	return &ScriptCompiler{
 		Compiler: compiler,
 		Program:  program,
@@ -28,7 +29,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 		return ts.Errors
 	}
 
-	cfg := NewCFG(sc.Compiler.CodeCompiler)
+	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)
 	cfg.Analyze(sc.Program.Statements)
 	if len(cfg.Errors) != 0 {
 		// return any data‐flow errors (use‐before‐def, dead stores, etc.)

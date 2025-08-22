@@ -25,7 +25,7 @@ func (cc *CodeCompiler) Compile() []*token.CompileError {
 		cc.Compiler.compileConstStatement(stmt)
 	}
 
-	cfg := NewCFG(cc)
+	cfg := NewCFG(nil, cc)
 	cfg.AnalyzeFuncs()
 	cc.Compiler.Errors = append(cc.Compiler.Errors, cfg.Errors...)
 
