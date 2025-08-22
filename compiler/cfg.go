@@ -239,7 +239,7 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	if cfg.ScriptCompiler == nil {
 		return false
 	}
-	
+
 	switch t := e.(type) {
 	case *ast.InfixExpression, *ast.PrefixExpression:
 		// Check ExprCache for this expression
@@ -261,7 +261,6 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		return false
 	}
 }
-
 
 func (cfg *CFG) Analyze(statements []ast.Statement) {
 	if len(statements) == 0 {
