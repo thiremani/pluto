@@ -398,7 +398,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
-		res = c.compilePrefixExpression(e)
+		res = c.compilePrefixExpression(e, dest)
 	case *ast.CallExpression:
 		res = c.compileCallExpression(e)
 	default:
@@ -651,22 +651,65 @@ func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []
 	return outputs
 }
 
-// compilePrefixExpression handles unary operators (prefix expressions).
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression) (res []*Symbol) {
-	// First compile the operand
-	operand := c.compileExpression(expr.Right, nil, false)
+// Destination-aware prefix compilation,
+// mirroring compileInfixExpression/compileInfixRanges.
 
-	for _, op := range operand {
-		// Lookup in the defaultPrefixOps table
-		key := unaryOpKey{
-			Operator:    expr.Operator,
-			OperandType: op.Type.String(),
-		}
-
-		fn := defaultUnaryOps[key]
-		res = append(res, fn(c, c.derefIfPointer(op), true))
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
+	info, ok := c.ExprCache[expr]
+	if !ok {
+		info = &ExprInfo{Ranges: []*RangeInfo{}}
 	}
-	return
+	if len(info.Ranges) == 0 {
+		return c.compilePrefixBasic(expr)
+	}
+	return c.compilePrefixRanges(expr, info, dest)
+}
+
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression) (res []*Symbol) {
+	// No ranges: just apply the unary operator element-wise.
+	operand := c.compileExpression(expr.Right, nil, false)
+	for _, opSym := range operand {
+		key := unaryOpKey{Operator: expr.Operator, OperandType: opSym.Type.String()}
+		fn := defaultUnaryOps[key]
+		res = append(res, fn(c, c.derefIfPointer(opSym), true))
+	}
+	return res
+}
+
+func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+	// New scope so we can temporarily shadow outputs like mini-functions do.
+	PushScope(&c.Scopes, BlockScope)
+	defer PopScope(&c.Scopes)
+
+	// Allocate/seed per-destination temps (seed from existing value or zero).
+	outputs := c.setupRangeOutputs(dest, info.OutTypes)
+
+	// Rewritten operand under tmp iters.
+	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
+
+	// Drive the loops and store into outputs each trip.
+	c.withLoopNest(info.Ranges, func() {
+		ops := c.compileExpression(rightRew, nil, false)
+
+		for i := 0; i < len(ops); i++ {
+			op := c.derefIfPointer(ops[i])
+			key := unaryOpKey{Operator: expr.Operator, OperandType: op.Type.String()}
+			computed := defaultUnaryOps[key](c, op, true)
+
+			c.createStore(computed.Val, outputs[i].Val, computed.Type)
+		}
+	})
+
+	// Materialize final values
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Pointer).Elem
+		out[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
+			Type: elemType,
+		}
+	}
+	return out
 }
 
 func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
