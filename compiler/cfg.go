@@ -34,13 +34,14 @@ type BasicBlock struct {
 	Stmts []*StmtNode
 }
 
-// CFG holds all blocks for a function (or “main”).
+// CFG holds all blocks for a function (or "main").
 type CFG struct {
-	CodeCompiler *CodeCompiler // The context to look up globals
-	Blocks       []*BasicBlock
-	Scopes       []Scope[VarEvent] // Used ONLY by the forward pass
-	Errors       []*token.CompileError
-	CheckedFuncs map[ast.FuncKey]struct{} // Map of validated functions
+	ScriptCompiler *ScriptCompiler // The context to look up globals, ExprCache, FuncCache (can be nil for CodeCompiler use)
+	CodeCompiler   *CodeCompiler   // The context to look up globals (for backward compatibility)
+	Blocks         []*BasicBlock
+	Scopes         []Scope[VarEvent] // Used ONLY by the forward pass
+	Errors         []*token.CompileError
+	CheckedFuncs   map[ast.FuncKey]struct{} // Map of validated functions
 }
 
 // PushBlock creates and returns a new, empty basic block
@@ -57,13 +58,14 @@ func (cfg *CFG) PopBlock() {
 	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
 }
 
-func NewCFG(cc *CodeCompiler) *CFG {
+func NewCFG(sc *ScriptCompiler, cc *CodeCompiler) *CFG {
 	return &CFG{
-		CodeCompiler: cc,
-		Blocks:       make([]*BasicBlock, 0),
-		Scopes:       []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
-		Errors:       make([]*token.CompileError, 0),
-		CheckedFuncs: make(map[ast.FuncKey]struct{}),
+		ScriptCompiler: sc,
+		CodeCompiler:   cc,
+		Blocks:         make([]*BasicBlock, 0),
+		Scopes:         []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
+		Errors:         make([]*token.CompileError, 0),
+		CheckedFuncs:   make(map[ast.FuncKey]struct{}),
 	}
 }
 
@@ -196,7 +198,7 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 		// 3. Write to the destination variable(s).
 		// Determine the type of write
 		writeKind := Write
-		if len(s.Condition) > 0 {
+		if len(s.Condition) > 0 || cfg.HasRangeExpr(s.Value) {
 			writeKind = ConditionalWrite
 		}
 		for _, lhs := range s.Name {
@@ -212,6 +214,54 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 	}
 	return evs
 }
+
+// HasRangeExpr returns true if any RHS expression has a range
+// used in a non-root position, mirroring the solver's isRoot behavior.
+// Examples that return true:
+//   - y = y + 1:5
+//   - y = f(x) + 2:3
+//   - y = f(1:5)
+//
+// Example that returns false:
+//   - i = 1:5 (root range literal, just a plain write of a range value)
+func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
+	for _, v := range values {
+		if cfg.hasRangeExpr(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRangeExpr checks if an expression contains ranges by looking at ExprCache
+func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
+	// Only possible when we have ScriptCompiler with ExprCache
+	if cfg.ScriptCompiler == nil {
+		return false
+	}
+	
+	switch t := e.(type) {
+	case *ast.InfixExpression, *ast.PrefixExpression:
+		// Check ExprCache for this expression
+		if info, ok := cfg.ScriptCompiler.Compiler.ExprCache[t]; ok {
+			// If this expression has any ranges, it's conditional
+			return len(info.Ranges) > 0
+		}
+		return false
+	case *ast.CallExpression:
+		// Check if any argument contains ranges
+		for _, arg := range t.Arguments {
+			if cfg.hasRangeExpr(arg) {
+				return true
+			}
+		}
+		return false
+	default:
+		// Identifiers, literals, etc. are not conditional at root level
+		return false
+	}
+}
+
 
 func (cfg *CFG) Analyze(statements []ast.Statement) {
 	if len(statements) == 0 {

@@ -42,7 +42,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ScriptFunc:     "",
 		Converging:     false,
 		Errors:         []*token.CompileError{},
-		ExprCache:      make(map[ast.Expression]*ExprInfo),
+		ExprCache:      sc.Compiler.ExprCache,
 		TmpCounter:     0,
 	}
 }

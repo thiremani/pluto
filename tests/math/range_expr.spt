@@ -11,3 +11,9 @@ x
 y = 2
 y = y * 3:6
 y
+
+# Test with range identifier
+i = 1:6
+z = 0
+z = 5 + i      # Range identifier (should be conditional write, z not read from previous)
+z

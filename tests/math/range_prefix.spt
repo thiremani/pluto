@@ -20,7 +20,10 @@ y = -(i + 1)
 x, y
 
 x = 42
-x
 i = 3:3
 x = -i
+x
+
+x = 42          # Initial write
+x = -(1:4)      # Range literal (should be conditional write)
 x
