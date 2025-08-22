@@ -11,6 +11,7 @@ import (
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/token"
 )
 
 // The helper function now uses require to stop immediately if parsing fails.
@@ -25,119 +26,118 @@ func parseInput(t *testing.T, name, input string) *ast.Program {
 }
 
 func TestCFGAnalysis(t *testing.T) {
-	testCases := []struct {
-		name          string
-		input         string
-		code          string
-		expectError   bool
-		errorContains string
-	}{
-		// --- Valid Cases ---
+	validCases := getValidTestCases()
+	errorCases := getErrorTestCases()
+	
+	t.Run("ValidCases", func(t *testing.T) {
+		for _, tc := range validCases {
+			t.Run(tc.name, func(t *testing.T) {
+				runCFGTest(t, tc, false)
+			})
+		}
+	})
+	
+	t.Run("ErrorCases", func(t *testing.T) {
+		for _, tc := range errorCases {
+			t.Run(tc.name, func(t *testing.T) {
+				runCFGTest(t, tc, true)
+			})
+		}
+	})
+}
+
+func getValidTestCases() []cfgTestCase {
+	return []cfgTestCase{
 		{
-			name:        "Correct Simple Program",
-			input:       "x = 1\ny = x + 1\ny",
-			expectError: false,
+			name:  "Correct Simple Program",
+			input: "x = 1\ny = x + 1\ny",
 		},
 		{
-			name:        "Allowed Write then ConditionalWrite",
-			input:       "x = 100\nx = 1 > 2 99\nx",
-			expectError: false,
+			name:  "Allowed Write then ConditionalWrite",
+			input: "x = 100\nx = 1 > 2 99\nx",
 		},
 		{
-			name:        "Allowed ConditionalWrite then ConditionalWrite",
-			input:       "x = 1 > 3 1\nx = 2 > 1 2\nx",
-			expectError: false,
+			name:  "Allowed ConditionalWrite then ConditionalWrite", 
+			input: "x = 1 > 3 1\nx = 2 > 1 2\nx",
 		},
 		{
-			name:        "Read after ConditionalWrite",
-			input:       "x = 5 > 2 1\ny = x + 1\ny",
-			expectError: false,
+			name:  "Read after ConditionalWrite",
+			input: "x = 5 > 2 1\ny = x + 1\ny",
 		},
 		{
-			name:        "Write Read Write",
-			input:       "x = 1\nx\nx = 2\nx",
-			expectError: false,
+			name:  "Write Read Write",
+			input: "x = 1\nx\nx = 2\nx",
 		},
 		{
-			name:        "PrintOnly",
-			input:       `"hello"`,
-			expectError: false,
+			name:  "PrintOnly",
+			input: `"hello"`,
 		},
 		{
-			name:        "EmptyProgram",
-			input:       ``,
-			expectError: false,
+			name:  "EmptyProgram",
+			input: ``,
 		},
 		{
 			name: "FormatMarker After Def",
 			input: `x = 42
 "Answer: -x"`, // x defined before marker
-			expectError: false,
 		},
 		{
-			name:        "Var Not Defined",
-			input:       `"Value: -x%s"`,
-			expectError: false,
+			name:  "Var Not Defined",
+			input: `"Value: -x%s"`,
 		},
-		// --- Error Cases ---
+	}
+}
+
+func getErrorTestCases() []cfgTestCase {
+	return []cfgTestCase{
 		{
 			name:          "Use Before Definition",
 			input:         "x = y + 1",
-			expectError:   true,
 			errorContains: `variable "y" has not been defined`,
 		},
 		{
 			name:          "Use cond Before definition",
 			input:         "a = b > 2 1",
-			expectError:   true,
 			errorContains: `variable "b" has not been defined`,
 		},
 		{
 			name:          "Unconditional Write After Unconditional Write",
 			input:         "x = 1\nx = 2\nx",
-			expectError:   true,
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used. It was previously written at line 1:1`,
 		},
 		{
 			name:          "Simple Dead Store (Unused Variable)",
 			input:         "x = 1",
-			expectError:   true,
 			errorContains: `value assigned to "x" is never used`,
 		},
 		{
 			name:          "Complex Dead Store",
 			input:         "a = 1\nb = 2\nb",
-			expectError:   true,
 			errorContains: `value assigned to "a" is never used`,
 		},
 		{
 			name:          "Conditional Write then Unconditional Write",
 			input:         "x = 1 > 0 10\nx = 20\nx",
-			expectError:   true,
 			errorContains: `value assigned to "x" in conditional statement is never used`,
 		},
 		{
 			name:          "Conditional Write then Unconditional Write (Dead Store)",
 			input:         "a = 1\nx = a > 0 10\nx = 20",
-			expectError:   true,
 			errorContains: `value assigned to "x" is never used`,
 		},
 		{
 			name:          "Read after write but still a dead store later",
 			input:         "a = 1\nb = a\na = 2\nb", // The write 'a = 2' is a dead store
-			expectError:   true,
 			errorContains: `value assigned to "a" is never used`,
 		},
 		{
 			name:          "Multi-variable Dead Store",
 			input:         "a=1\nb=2\nc=3\na, b",
-			expectError:   true,
 			errorContains: `value assigned to "c" is never used`,
 		},
 		{
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
-			expectError:   true,
 			errorContains: `variable "x" has not been defined`,
 		},
 		{
@@ -146,37 +146,39 @@ func TestCFGAnalysis(t *testing.T) {
 			input: `
 x = a
 a = 2`, // redeclaring/writing to const 'a'
-			expectError:   true,
 			errorContains: `cannot write to constant "a"`,
 		},
 	}
+}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			prog := parseInput(t, tc.name, tc.input)
-			cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
-			ctx := llvm.NewContext()
-			cc := NewCodeCompiler(ctx, "TestCFGAnalysis", cp.Parse())
-			cc.Compile()
-			cfg := NewCFG(nil, cc)
-			cfg.Analyze(prog.Statements)
+type cfgTestCase struct {
+	name          string
+	input         string
+	code          string
+	errorContains string
+}
 
-			if tc.expectError {
-				// Assert that we have at least one error.
-				assert.NotEmpty(t, cfg.Errors, "Expected an error, but got none.")
+func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
+	prog := parseInput(t, tc.name, tc.input)
+	cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", cp.Parse())
+	cc.Compile()
+	cfg := NewCFG(nil, cc)
+	cfg.Analyze(prog.Statements)
 
-				// Optional: Check if we have *exactly* one error if that's expected.
-				// assert.Len(t, cfg.Errors, 1)
+	if expectError {
+		assertHasExpectedError(t, cfg.Errors, tc.errorContains)
+	} else {
+		assert.Empty(t, cfg.Errors, "Expected no errors, but got some.")
+	}
+}
 
-				// Assert that the error message contains the expected substring.
-				if len(cfg.Errors) > 0 {
-					assert.Contains(t, cfg.Errors[0].Msg, tc.errorContains, "Error message mismatch")
-				}
-			} else {
-				// Assert that the Errors slice is empty. This is much cleaner.
-				assert.Empty(t, cfg.Errors, "Expected no errors, but got some.")
-			}
-		})
+func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expectedMessage string) {
+	assert.NotEmpty(t, errors, "Expected an error, but got none.")
+	
+	if len(errors) > 0 {
+		assert.Contains(t, errors[0].Msg, expectedMessage, "Error message mismatch")
 	}
 }
 
@@ -268,11 +270,17 @@ func TestValidateFuncEdgeCases(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	tests := []struct {
-		name     string
-		code     string
-		wantMsgs []string
-	}{
+	tests := getFuncEdgeCaseTests()
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runFuncEdgeCaseTest(t, ctx, tc)
+		})
+	}
+}
+
+func getFuncEdgeCaseTests() []funcEdgeCaseTest {
+	return []funcEdgeCaseTest{
 		{
 			name: "WriteToInputParam",
 			code: `
@@ -292,7 +300,7 @@ res = readFirst(x)
     res = x * 2
 `,
 			wantMsgs: []string{
-				`variable "res" has not been defined`, // or your specific “use before definition” text
+				`variable "res" has not been defined`, // or your specific "use before definition" text
 			},
 		},
 		{
@@ -319,35 +327,51 @@ a, b = bothBad(x)
 			},
 		},
 	}
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// parse
-			cp := parser.NewCodeParser(lexer.New(tc.name+".pt", tc.code))
-			codeAST := cp.Parse()
-			require.Empty(t, cp.Errors(), "parser errors in %s", tc.name)
+type funcEdgeCaseTest struct {
+	name     string
+	code     string
+	wantMsgs []string
+}
 
-			// compile & validate
-			cc := NewCodeCompiler(ctx, tc.name, codeAST)
-			errs := cc.Compile()
+func runFuncEdgeCaseTest(t *testing.T, ctx llvm.Context, tc funcEdgeCaseTest) {
+	// parse
+	cp := parser.NewCodeParser(lexer.New(tc.name+".pt", tc.code))
+	codeAST := cp.Parse()
+	require.Empty(t, cp.Errors(), "parser errors in %s", tc.name)
 
-			// collect just the messages for easier comparison
-			got := make([]string, len(errs))
-			for i, e := range errs {
-				got[i] = e.Msg
-			}
+	// compile & validate
+	cc := NewCodeCompiler(ctx, tc.name, codeAST)
+	errs := cc.Compile()
 
-			// each expected substring must appear
-			for _, want := range tc.wantMsgs {
-				assert.Condition(t, func() bool {
-					for _, m := range got {
-						if strings.Contains(m, want) {
-							return true
-						}
-					}
-					return false
-				}, "expected an error containing %q, got: %v", want, got)
-			}
-		})
+	// Verify expected error messages
+	assertContainsExpectedMessages(t, errs, tc.wantMsgs)
+}
+
+func assertContainsExpectedMessages(t *testing.T, errs []*token.CompileError, expectedMsgs []string) {
+	got := extractErrorMessages(errs)
+	
+	for _, want := range expectedMsgs {
+		assertMessageFound(t, got, want)
 	}
+}
+
+func extractErrorMessages(errs []*token.CompileError) []string {
+	got := make([]string, len(errs))
+	for i, e := range errs {
+		got[i] = e.Msg
+	}
+	return got
+}
+
+func assertMessageFound(t *testing.T, messages []string, expectedMessage string) {
+	found := false
+	for _, m := range messages {
+		if strings.Contains(m, expectedMessage) {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected an error containing %q, got: %v", expectedMessage, messages)
 }
