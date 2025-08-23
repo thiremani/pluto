@@ -11,7 +11,8 @@
 ## Build, Test, and Development Commands
 - Build compiler: `go build -o pluto main.go`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
-- Full suite: `make test` (runs `test.sh` → builds, unit tests, and E2E via `test.py`).
+- Full suite: `./test.sh` (builds compiler, runs unit and integration tests)
+- Python test runner: `python3 test.py` (use `--keep` to retain artifacts)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).
 
 Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
@@ -48,3 +49,6 @@ CI: GitHub Actions builds with Go 1.24, installs LLVM 20, and runs `./test.sh` o
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 20 tools.
+
+## Instructions for AI Assistants
+- NEVER add "🤖 Generated with..." footers to git commits.
