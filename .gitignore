@@ -7,6 +7,9 @@ test
 *.ll
 .DS_Store
 
+# Python virtual environment
+.venv/
+
 # only ignore built binaries in tests
 tests/**
 

@@ -14,7 +14,7 @@ go build -o pluto main.go
 # Full test suite (builds compiler, runs unit tests, runs integration tests)
 ./test.sh
 
-# Python test runner with options
+# Python test runner with options (auto-installs dependencies if missing)
 python test.py              # Run all tests
 python test.py --keep       # Keep build artifacts for debugging
 ```

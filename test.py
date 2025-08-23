@@ -6,6 +6,58 @@ import shutil
 import sys
 from pathlib import Path
 from difflib import Differ
+
+def ensure_dependencies():
+    """Ensure required dependencies from requirements.txt are installed"""
+    requirements_file = Path(__file__).parent / "requirements.txt"
+    if not requirements_file.exists():
+        return
+    
+    # Try importing each package to check if already installed
+    requirements = requirements_file.read_text().strip().split('\n')
+    missing_packages = []
+    
+    for requirement in requirements:
+        package_name = requirement.strip().split('==')[0].split('>=')[0].split('<')[0]
+        try:
+            __import__(package_name)
+        except ImportError:
+            missing_packages.append(requirement)
+    
+    if not missing_packages:
+        return
+    
+    print(f"Missing dependencies: {', '.join(missing_packages)}")
+    print("Creating virtual environment and installing dependencies...")
+    
+    venv_path = Path(__file__).parent / ".venv"
+    
+    try:
+        # Create virtual environment if it doesn't exist
+        if not venv_path.exists():
+            subprocess.check_call([sys.executable, "-m", "venv", str(venv_path)])
+        
+        # Determine the python executable in the venv
+        if os.name == 'nt':  # Windows
+            venv_python = venv_path / "Scripts" / "python.exe"
+        else:  # Unix-like
+            venv_python = venv_path / "bin" / "python"
+        
+        # Install dependencies in the virtual environment
+        subprocess.check_call([str(venv_python), "-m", "pip", "install"] + missing_packages)
+        print("Dependencies installed successfully in virtual environment!")
+        
+        # Re-exec this script using the venv python
+        os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install dependencies: {e}")
+        print("Please install manually:")
+        print(f"python3 -m venv .venv && source .venv/bin/activate && pip install -r {requirements_file}")
+        sys.exit(1)
+
+# Ensure dependencies before importing
+ensure_dependencies()
 from colorama import Fore, Style
 
 TEST_DIR = Path("tests")
@@ -14,11 +66,12 @@ PLUTO_EXE = "pluto"
 KEEP_BUILD = False
 
 class TestRunner:
-    def __init__(self):
+    def __init__(self, test_dir: Path = None):
         self.passed = 0
         self.failed = 0
         self.project_root = Path(__file__).parent.resolve()
         self.llvm_bin = self.detect_llvm_path()
+        self.test_dir = test_dir
 
     def detect_llvm_path(self) -> Path:
         # Try common LLVM 20 paths
@@ -149,9 +202,24 @@ class TestRunner:
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
         
-        test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
+        if self.test_dir:
+            # Run tests for specific directory
+            if not self.test_dir.exists():
+                print(f"{Fore.RED}❌ Test directory {self.test_dir} does not exist{Style.RESET_ALL}")
+                return
+            
+            exp_files = list(self.test_dir.glob("*.exp"))
+            if not exp_files:
+                print(f"{Fore.RED}❌ No .exp files found in {self.test_dir}{Style.RESET_ALL}")
+                return
+            
+            test_dirs = [self.test_dir]
+        else:
+            # Run all tests
+            test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
+            test_dirs = sorted(test_dirs)  # Sorting provides deterministic order
         
-        for test_dir in sorted(list(test_dirs)): # Sorting provides deterministic order
+        for test_dir in test_dirs:
             print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
             
             # 1. Compile the entire directory
@@ -165,7 +233,7 @@ class TestRunner:
                 continue
 
             # 2. Run each test in the directory
-            for exp_file in sorted(list(test_dir.glob("*.exp"))):
+            for exp_file in sorted(test_dir.glob("*.exp")):
                 self._run_single_test(test_dir, exp_file)
 
     def show_diff(self, expected: str, actual: str):
@@ -198,7 +266,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="Keep build artifacts")
+    parser.add_argument("test_dir", nargs="?", help="Specific test directory to run")
     args = parser.parse_args()
 
     KEEP_BUILD = args.keep
-    TestRunner().run()
+    test_dir = Path(args.test_dir) if args.test_dir else None
+    runner = TestRunner(test_dir)
+    runner.run()
