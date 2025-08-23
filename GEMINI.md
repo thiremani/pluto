@@ -11,6 +11,7 @@ This project is a compiler for the Pluto programming language, written in Go. It
 *   `Makefile`: Contains helper commands for building and testing the project.
 *   `test.sh`: The main test script, which orchestrates the entire test process.
 *   `test.py`: A Python script used by `test.sh` to run integration tests.
+*   `requirements.txt`: Lists the Python dependencies for the test runner.
 *   `ast/`: Defines the Abstract Syntax Tree (AST) for the Pluto language.
 *   `lexer/`: Handles tokenization of the Pluto source code, including support for indentation-based syntax.
 *   `parser/`: Parses the token stream from the lexer and builds the AST. It uses a recursive descent approach and supports operator precedence.
@@ -25,10 +26,17 @@ This project is a compiler for the Pluto programming language, written in Go. It
 
 *   Go 1.24+
 *   LLVM 20 (including `clang`, `opt`, `llc`, and `lld`)
+*   Python 3.x
+*   pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add it to your path.
 
 ### Commands
+
+*   **Install Python dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 *   **Build the compiler:**
     ```bash
@@ -40,6 +48,12 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add
     ./test.sh
     ```
     This script builds the compiler, runs unit tests, and executes the integration tests via the `test.py` script.
+
+*   **Run the Python test runner directly:**
+    ```bash
+    python3 test.py              # Run all tests
+    python3 test.py --keep       # Keep build artifacts for debugging
+    ```
 
 *   **Run unit tests:**
     ```bash
@@ -54,7 +68,7 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add
 
 *   **Run specific integration tests:**
     ```bash
-    python test.py tests/math
+    python3 test.py tests/math
     ```
 
 ## Compilation Process
@@ -91,3 +105,6 @@ To clear the cache, you can delete the appropriate directory.
 
 *   **Commits:** Use the [Conventional Commits](https://www.conventionalcommits.org/) specification.
 *   **Pull Requests:** Provide a clear description of the changes, link to any relevant issues, and include tests for your changes.
+
+## Instructions for AI Assistants
+- NEVER add "🤖 Generated with..." footer to git commits

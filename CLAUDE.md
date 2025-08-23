@@ -110,3 +110,6 @@ Pluto is a compiled programming language that generates LLVM IR and produces nat
 - Uses `PTCACHE` environment variable or platform-specific cache directories
 - Stores intermediate LLVM IR files organized by module path
 - Separate `code/` and `script/` subdirectories for different compilation phases
+
+## Instructions for AI Assistants
+- NEVER add "🤖 Generated with [Claude Code]..." footer to git commits
