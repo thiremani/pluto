@@ -278,7 +278,11 @@ func (pe *PrefixExpression) String() string {
 
 	out.WriteString("(")
 	out.WriteString(pe.Operator)
-	out.WriteString(pe.Right.String())
+	if pe.Right != nil {
+		out.WriteString(pe.Right.String())
+	} else {
+		out.WriteString("<nil>")
+	}
 	out.WriteString(")")
 
 	return out.String()
@@ -297,9 +301,17 @@ func (ie *InfixExpression) String() string {
 	var out bytes.Buffer
 
 	out.WriteString("(")
-	out.WriteString(ie.Left.String())
+	if ie.Left != nil {
+		out.WriteString(ie.Left.String())
+	} else {
+		out.WriteString("<nil>")
+	}
 	out.WriteString(" " + ie.Operator + " ")
-	out.WriteString(ie.Right.String())
+	if ie.Right != nil {
+		out.WriteString(ie.Right.String())
+	} else {
+		out.WriteString("<nil>")
+	}
 	out.WriteString(")")
 
 	return out.String()

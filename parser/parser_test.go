@@ -9,6 +9,22 @@ import (
 	"github.com/thiremani/pluto/lexer"
 )
 
+func testPrefixExpression(t *testing.T, exp ast.Expression, operator string, right interface{}) bool {
+	pe, ok := exp.(*ast.PrefixExpression)
+	if !ok {
+		t.Errorf("exp is not *ast.PrefixExpression. got=%T(%s)", exp, exp)
+		return false
+	}
+	if pe.Operator != operator {
+		t.Errorf("prefix operator mismatch. expected %q, got %q", operator, pe.Operator)
+		return false
+	}
+	if !testLiteralExpression(t, pe.Right, right) { // uses your helper
+		return false
+	}
+	return true
+}
+
 func testInfixExpression(t *testing.T, exp ast.Expression, left interface{},
 	operator string, right interface{}) bool {
 
@@ -141,6 +157,21 @@ func testLiteral(t *testing.T, lit ast.Expression, exp interface{}) {
 	default:
 		t.Errorf("type of exp not handled. got=%T", lit)
 	}
+}
+
+// --- tiny local utility to parse a single expression print ---
+
+func parseOneExpr(t *testing.T, src string) ast.Expression {
+	l := lexer.New("test", src)
+	sp := NewScriptParser(l)
+	prog := sp.Parse()
+	checkParserErrors(t, sp.p)
+
+	require.Len(t, prog.Statements, 1)
+	ps, ok := prog.Statements[0].(*ast.PrintStatement)
+	require.True(t, ok, "expected print statement, got %T", prog.Statements[0])
+	require.Len(t, ps.Expression, 1)
+	return ps.Expression[0]
 }
 
 func TestParseRangeLiteral(t *testing.T) {

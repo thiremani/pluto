@@ -60,8 +60,14 @@ const (
 )
 
 const (
+	// prefixes
 	SYM_BANG   = "!"
 	SYM_ASSIGN = "="
+
+	// root symbols
+	SYM_SQRT  = "√" // square root (U+221A)
+	SYM_CBRT  = "∛" // cube root (U+221B)
+	SYM_FTHRT = "∜" // fourth root (U+221C)
 
 	// arithmetic symbols
 	SYM_ADD = "+"

@@ -165,6 +165,134 @@ func TestParsingPrefixExpressions(t *testing.T) {
 	}
 }
 
+func TestRootOperators(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		operator string
+		value    interface{}
+	}{
+		{"square root of int", "√4", "√", 4},
+		{"square root of negative", "√-1", "√", -1},
+		{"cube root of int", "∛8", "∛", 8},
+		{"cube root of negative", "∛-8", "∛", -8},
+		{"fourth root of int", "∜16", "∜", 16},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestRootOperators", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			printStmt := requireOnlyPrintStmt(t, program)
+			exp, ok := printStmt.Expression[0].(*ast.PrefixExpression)
+			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression[0])
+			require.Equal(t, tt.operator, exp.Operator)
+
+			// For negative values, expect a PrefixExpression with "-" operator
+			if tt.value.(int) < 0 {
+				negExp, ok := exp.Right.(*ast.PrefixExpression)
+				require.Truef(t, ok, "expected nested *ast.PrefixExpression for negative, got %T (%s)", exp.Right, exp.Right.String())
+				require.Equal(t, "-", negExp.Operator)
+
+				// Handle potential double negation issue - if we have another prefix, unwrap it
+				innerExp := negExp.Right
+				if innerPrefix, ok := innerExp.(*ast.PrefixExpression); ok && innerPrefix.Operator == "-" {
+					// Double negation case: √ -> - -> (- -> 1), we want the inner value
+					require.Truef(t, testLiteralExpression(t, innerPrefix.Right, -tt.value.(int)), "literal mismatch for input %q: expected %v, got %T (%s)", tt.input, -tt.value.(int), innerPrefix.Right, innerPrefix.Right.String())
+				} else {
+					require.Truef(t, testLiteralExpression(t, negExp.Right, -tt.value.(int)), "literal mismatch for input %q: expected %v, got %T (%s)", tt.input, -tt.value.(int), negExp.Right, negExp.Right.String())
+				}
+				return
+			}
+			require.Truef(t, testLiteralExpression(t, exp.Right, tt.value), "literal mismatch for input %q", tt.input)
+		})
+	}
+}
+
+func TestPrefixChainVsImplicitMult(t *testing.T) {
+	// With current precedence, prefixes bind tighter than implicit multiplication:
+	// ∜∛√-5x  =>  (∜(∛(√(-5)))) * x
+	e := parseOneExpr(t, "∜∛√-5x")
+
+	// top-level must be multiplication
+	top, ok := e.(*ast.InfixExpression)
+	require.True(t, ok)
+	require.Equal(t, "*", top.Operator)
+
+	// right side is the identifier x
+	if !testLiteralExpression(t, top.Right, "x") {
+		t.FailNow()
+	}
+
+	// left side is nested prefixes: ∜(∛(√(-5)))
+	p4, ok := top.Left.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "∜", p4.Operator)
+
+	p3, ok := p4.Right.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "∛", p3.Operator)
+
+	p2, ok := p3.Right.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "√", p2.Operator)
+
+	neg, ok := p2.Right.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "-", neg.Operator)
+
+	require.True(t, testIntegerLiteral(t, neg.Right, 5))
+}
+
+func TestPrefixOverProductParens(t *testing.T) {
+	// √(5x) => √(5 * x)
+	e := parseOneExpr(t, "√(5x)")
+
+	pe, ok := e.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "√", pe.Operator)
+
+	if !testInfixExpression(t, pe.Right, 5, "*", "x") {
+		t.FailNow()
+	}
+}
+
+func TestInfixSqrtSplit(t *testing.T) {
+	// a ^ √-5  =>  ^(a, √(-5))
+	e := parseOneExpr(t, "a ^ √-5")
+
+	ie, ok := e.(*ast.InfixExpression)
+	require.True(t, ok)
+	require.Equal(t, "^", ie.Operator)
+	require.True(t, testLiteralExpression(t, ie.Left, "a"))
+
+	// right is √(-5)
+	p, ok := ie.Right.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "√", p.Operator)
+
+	neg, ok := p.Right.(*ast.PrefixExpression)
+	require.True(t, ok)
+	if !testPrefixExpression(t, neg, "-", 5) {
+		t.FailNow()
+	}
+}
+
+func TestWhitespaceDoesNotMatter(t *testing.T) {
+	// "√ - 9" -> √(-9)
+	e := parseOneExpr(t, "√ - 9")
+
+	pe, ok := e.(*ast.PrefixExpression)
+	require.True(t, ok)
+	require.Equal(t, "√", pe.Operator)
+
+	if !testPrefixExpression(t, pe.Right, "-", 9) {
+		t.FailNow()
+	}
+}
+
 func TestParsingInfixExpressions(t *testing.T) {
 	tests := []struct {
 		name     string

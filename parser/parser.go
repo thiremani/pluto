@@ -2,12 +2,14 @@ package parser
 
 import (
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
-	"reflect"
-	"strconv"
-	"unicode/utf8"
 )
 
 const (
@@ -24,7 +26,7 @@ const (
 	EXP         // ^
 	COLON       // :
 	LESSGREATER // > or <
-	PREFIX      // -X or !X
+	PREFIX      // -X or !X or √X
 	CALL        // myFunction(X)
 )
 
@@ -59,13 +61,22 @@ type (
 	infixParseFn  func(ast.Expression) ast.Expression
 )
 
+// Token Management System for Pluto Parser
+//
+// Token flow: [Lexer] -> peekToken -> curToken
+//                ↑                        ↓
+//            savedTokens <─────────── (processing)
+//
+// savedTokens acts as a buffer for tokens that need to be processed
+// before getting the next token from the lexer.
+
 type StmtParser struct {
 	l      *lexer.Lexer
 	errors []*token.CompileError
 
-	curToken   token.Token
-	peekToken  token.Token
-	savedToken token.Token
+	curToken    token.Token
+	peekToken   token.Token
+	savedTokens []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
 
 	prefixParseFns map[string]prefixParseFn
 	infixParseFns  map[string]infixParseFn
@@ -86,6 +97,9 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.SYM_BANG, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SUB, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_TILDE, p.parsePrefixExpression)
+	p.registerPrefix(token.SYM_SQRT, p.parsePrefixExpression)
+	p.registerPrefix(token.SYM_CBRT, p.parsePrefixExpression)
+	p.registerPrefix(token.SYM_FTHRT, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_LPAREN, p.parseGroupedExpression)
 
 	p.infixParseFns = make(map[string]infixParseFn)
@@ -119,36 +133,152 @@ func New(l *lexer.Lexer) *StmtParser {
 }
 
 func (p *StmtParser) nextToken() {
-	if p.savedToken != (token.Token{}) {
-		p.curToken = p.peekToken
-		p.peekToken = p.savedToken
-		p.savedToken = token.Token{}
+	// always advance current token
+	p.curToken = p.peekToken
+
+	// get new peek token from queue or lexer
+	if len(p.savedTokens) > 0 {
+		p.peekToken = p.savedTokens[0]
+		p.savedTokens = p.savedTokens[1:]
+	} else {
+		var err *token.CompileError
+		p.peekToken, err = p.l.NextToken()
+		if err != nil {
+			p.errors = append(p.errors, err)
+		}
+	}
+
+	p.handleImplicitMult()
+}
+
+// Handle implicit multiplication:
+// If the current token is an INT or FLOAT and the following token is an IDENT,
+// and there is no whitespace between them (i.e., the current token's ending column
+// equals the next token's starting column), then we assume an implicit multiplication.
+// In this case, we save the IDENT token in 'savedToken', and substitute the next token
+// with a multiplication operator '*' token. This way, an input like "5var" is treated as "5 * var".
+func (p *StmtParser) handleImplicitMult() {
+	// Check: number followed immediately by identifier
+	isNumber := p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT
+	isIdentNext := p.peekToken.Type == token.IDENT
+	noSpace := p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column
+
+	if !isNumber || !isIdentNext || !noSpace {
 		return
 	}
 
-	var err *token.CompileError
-	p.curToken = p.peekToken
-	p.peekToken, err = p.l.NextToken()
-	if err != nil {
-		p.errors = append(p.errors, err)
+	// Create multiplication token
+	mul := token.Token{
+		Type:     token.OPERATOR,
+		Literal:  token.SYM_MUL,
+		FileName: p.peekToken.FileName,
+		Line:     p.peekToken.Line,
+		Column:   p.peekToken.Column,
 	}
 
-	// Handle implicit multiplication:
-	// If the current token is an INT or FLOAT and the following token is an IDENT,
-	// and there is no whitespace between them (i.e., the current token's ending column
-	// equals the next token's starting column), then we assume an implicit multiplication.
-	// In this case, we save the IDENT token in 'savedToken', and substitute the next token
-	// with a multiplication operator '*' token. This way, an input like "5var" is treated as "5 * var".
-	if (p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT) && p.peekToken.Type == token.IDENT && p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column {
-		p.savedToken = p.peekToken
-		p.peekToken = token.Token{
-			FileName: p.savedToken.FileName,
-			Line:     p.savedToken.Line,
-			Column:   p.savedToken.Column,
-			Type:     token.OPERATOR,
-			Literal:  token.SYM_MUL,
+	// Insert: cur | * | ident
+	p.savedTokens = append([]token.Token{p.peekToken}, p.savedTokens...)
+	p.peekToken = mul
+}
+
+// ============ Operator Splitting ============
+
+type OpType int
+
+const (
+	PrefixOp OpType = iota
+	InfixOp
+)
+
+// findLongestOp finds the longest matching operator in the parse function map
+func (p *StmtParser) findLongestOp(lit string, opType OpType) string {
+	best := ""
+	switch opType {
+	case PrefixOp:
+		for op := range p.prefixParseFns {
+			if strings.HasPrefix(lit, op) && len(op) > len(best) {
+				best = op
+			}
+		}
+	case InfixOp:
+		for op := range p.infixParseFns {
+			if strings.HasPrefix(lit, op) && len(op) > len(best) {
+				best = op
+			}
 		}
 	}
+	return best
+}
+
+// splitOperator splits "√-" -> ["√", "-"]
+func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token {
+	if tok.Type != token.OPERATOR {
+		return []token.Token{tok}
+	}
+
+	match := p.findLongestOp(tok.Literal, opType)
+	if match == "" || match == tok.Literal {
+		return []token.Token{tok} // No split needed
+	}
+
+	// Split into matched part and remainder
+	result := []token.Token{
+		{
+			Type:     token.OPERATOR,
+			Literal:  match,
+			FileName: tok.FileName,
+			Line:     tok.Line,
+			Column:   tok.Column,
+		},
+	}
+
+	remainder := tok.Literal[len(match):]
+	if remainder != "" {
+		result = append(result, token.Token{
+			Type:     token.OPERATOR,
+			Literal:  remainder,
+			FileName: tok.FileName,
+			Line:     tok.Line,
+			Column:   tok.Column + utf8.RuneCountInString(match),
+		})
+	}
+
+	return result
+}
+
+// normalizeCurrentPrefixOperator splits current token for prefix parsing
+func (p *StmtParser) normalizeCurrentPrefixOperator() {
+	tokens := p.splitOperator(p.curToken, PrefixOp)
+	if len(tokens) <= 1 {
+		return
+	}
+
+	// Update current to matched part, queue the rest
+	p.curToken = tokens[0]
+
+	// Set next token to the immediate remainder part, and queue the original peek
+	// plus any further remainder (avoiding duplicating tokens[1]).
+	originalPeek := p.peekToken
+	p.peekToken = tokens[1]
+
+	queue := []token.Token{}
+	if len(tokens) > 2 {
+		queue = append(queue, tokens[2:]...)
+	}
+	queue = append(queue, originalPeek)
+	p.savedTokens = append(queue, p.savedTokens...)
+}
+
+// normalizePeekInfixOperator splits peek token for infix parsing
+func (p *StmtParser) normalizePeekInfixOperator() {
+	tokens := p.splitOperator(p.peekToken, InfixOp)
+	if len(tokens) <= 1 {
+		return
+	}
+
+	// Replace peek with matched part, queue the rest
+	p.peekToken = tokens[0]
+	p.savedTokens = append(tokens[1:], p.savedTokens...)
 }
 
 func (p *StmtParser) curTokenIs(t token.TokenType) bool {
@@ -449,6 +579,11 @@ func (p *StmtParser) parseExpression(precedence int) ast.Expression {
 		p.nextToken()
 	}
 
+	// If current token is an OPERATOR run, split it for prefix use (e.g., "√-1").
+	if p.curToken.Type == token.OPERATOR {
+		p.normalizeCurrentPrefixOperator()
+	}
+
 	prefix := p.prefixParseFns[p.curToken.TokenTypeWithOp()]
 	if prefix == nil {
 		p.noPrefixParseFnError(p.curToken)
@@ -461,6 +596,10 @@ func (p *StmtParser) parseExpression(precedence int) ast.Expression {
 		leftExp = p.parseCallExpression(leftExp)
 	}
 
+	// Normalize peek token for infix parsing before checking infix function
+	if p.peekToken.Type == token.OPERATOR {
+		p.normalizePeekInfixOperator()
+	}
 	for precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
 		if infix == nil {

@@ -721,6 +721,77 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = c.builder.CreateZExt(cmp, c.Context.Int64Type(), "not_bool")
 		return
 	},
+
+	// Square root (√)
+	{Operator: token.SYM_SQRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = operand.Type
+		if !compile {
+			return
+		}
+
+		s.Val = floatSqrt(c, operand.Val)
+		return
+	},
+	{Operator: token.SYM_SQRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = Float{Width: 64}
+		if !compile {
+			return
+		}
+
+		floatVal := c.builder.CreateSIToFP(operand.Val, c.Context.DoubleType(), "int_to_float")
+		s.Val = floatSqrt(c, floatVal)
+		return
+	},
+
+	// Cube root (∛)
+	{Operator: token.SYM_CBRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = operand.Type
+		if !compile {
+			return
+		}
+
+		s.Val = floatCbrt(c, operand.Val)
+		return
+	},
+	{Operator: token.SYM_CBRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = Float{Width: 64}
+		if !compile {
+			return
+		}
+
+		floatVal := c.builder.CreateSIToFP(operand.Val, c.Context.DoubleType(), "int_to_float")
+		s.Val = floatCbrt(c, floatVal)
+		return
+	},
+
+	// Fourth root (∜)
+	{Operator: token.SYM_FTHRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = operand.Type
+		if !compile {
+			return
+		}
+
+		sqrt := floatSqrt(c, operand.Val)
+		s.Val = floatSqrt(c, sqrt)
+		return
+	},
+	{Operator: token.SYM_FTHRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = Float{Width: 64}
+		if !compile {
+			return
+		}
+
+		floatVal := c.builder.CreateSIToFP(operand.Val, c.Context.DoubleType(), "int_to_float")
+		sqrt := floatSqrt(c, floatVal)
+		s.Val = floatSqrt(c, sqrt)
+		return
+	},
 }
 
 // float = float ÷ float via truncation
@@ -746,4 +817,26 @@ func floatExp(c *Compiler, left, right llvm.Value) llvm.Value {
 		powFunc = llvm.AddFunction(c.Module, "llvm.pow.f64", powType)
 	}
 	return c.builder.CreateCall(powType, powFunc, []llvm.Value{left, right}, "pow_tmp")
+}
+
+// floatSqrt assumes operand is of type F64
+func floatSqrt(c *Compiler, x llvm.Value) llvm.Value {
+	// Use LLVM sqrt intrinsic for best performance
+	sqrtType := llvm.FunctionType(c.Context.DoubleType(), []llvm.Type{c.Context.DoubleType()}, false)
+	sqrtFunc := c.Module.NamedFunction("llvm.sqrt.f64")
+	if sqrtFunc.IsNil() {
+		sqrtFunc = llvm.AddFunction(c.Module, "llvm.sqrt.f64", sqrtType)
+	}
+	return c.builder.CreateCall(sqrtType, sqrtFunc, []llvm.Value{x}, "sqrt_tmp")
+}
+
+func floatCbrt(c *Compiler, x llvm.Value) llvm.Value {
+	cbrtType := llvm.FunctionType(c.Context.DoubleType(),
+		[]llvm.Type{c.Context.DoubleType()}, false)
+	cbrtFunc := c.Module.NamedFunction("cbrt")
+	if cbrtFunc.IsNil() {
+		cbrtFunc = llvm.AddFunction(c.Module, "cbrt", cbrtType)
+	}
+	// Optionally mark "nounwind", "readnone" if your toolchain’s libm allows.
+	return c.builder.CreateCall(cbrtType, cbrtFunc, []llvm.Value{x}, "cbrt_tmp")
 }
