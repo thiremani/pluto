@@ -939,6 +939,16 @@ func (c *Compiler) rangeStrArg(s *Symbol) (arg llvm.Value) {
 	return
 }
 
+func (c *Compiler) floatStrArg(s *Symbol) llvm.Value {
+	if s.Type.(Float).Width == 32 {
+		fnTy, fn := c.GetCFunc(F32_STR) // char* f32_str(float)
+		return c.builder.CreateCall(fnTy, fn, []llvm.Value{s.Val}, "f32_str")
+	}
+	// default to 64-bit path
+	fnTy, fn := c.GetCFunc(F64_STR) // char* f64_str(double)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{s.Val}, "f64_str")
+}
+
 func (c *Compiler) free(ptrs []llvm.Value) {
 	fnType, fn := c.GetCFunc(FREE)
 	for _, ptr := range ptrs {
@@ -961,9 +971,10 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	for _, expr := range ps.Expression {
 		// If the expression is a string literal, check for embedded markers.
 		if strLit, ok := expr.(*ast.StringLiteral); ok {
-			processed, newArgs := c.formatString(strLit)
+			processed, newArgs, toFreeArgs := c.formatString(strLit)
 			formatStr += processed + " " // separate expressions with a space
 			args = append(args, newArgs...)
+			toFree = append(toFree, toFreeArgs...)
 			continue
 		}
 
@@ -981,14 +992,18 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 			}
 
 			formatStr += spec + " "
-			if s.Type.Kind() == RangeKind {
-				arg := c.rangeStrArg(s)
-				args = append(args, arg)
-				toFree = append(toFree, arg)
-				continue
+			switch s.Type.Kind() {
+			case RangeKind:
+				strPtr := c.rangeStrArg(s) // returns i8*
+				args = append(args, strPtr)
+				toFree = append(toFree, strPtr)
+			case FloatKind:
+				strPtr := c.floatStrArg(s) // returns i8*
+				args = append(args, strPtr)
+				toFree = append(toFree, strPtr)
+			default:
+				args = append(args, s.Val)
 			}
-
-			args = append(args, s.Val)
 		}
 	}
 

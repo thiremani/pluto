@@ -44,7 +44,8 @@ func defaultSpecifier(t Type) (string, error) {
 	case IntKind:
 		return "%ld", nil
 	case FloatKind:
-		return "%.15g", nil
+		// Floats are converted to char* via runtime helpers (f64_str/f32_str)
+		return "%s", nil
 	case StrKind:
 		return "%s", nil
 	case RangeKind:
@@ -148,11 +149,7 @@ func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (main
 		specSyms, customSpec, end, err = c.parseSpecifier(sl, runes, specStart)
 	}
 
-	if mainSym.Type.Kind() == RangeKind {
-		syms = append(syms, &Symbol{Val: c.rangeStrArg(mainSym), Type: Str{}})
-	} else {
-		syms = append(syms, mainSym)
-	}
+	syms = append(syms, mainSym)
 	syms = append(syms, specSyms...)
 	newIndex = end
 	return
@@ -187,10 +184,11 @@ func (c *Compiler) getRawSym(id string) (*Symbol, bool) {
 
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
 // if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
-func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, err *token.CompileError) {
+func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
 	var builder strings.Builder
 	mainSym := syms[0]
 	valArgs = []llvm.Value{}
+	toFree = []llvm.Value{}
 	// Use the custom specifier if provided; otherwise, use the default.
 	for _, specSym := range syms[1:] {
 		valArgs = append(valArgs, specSym.Val)
@@ -223,19 +221,36 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 		mainSym, _ = c.getRawSym(mainId)
 	}
 	mainType := mainSym.Type
+
+	formattedStr = builder.String()
+	if specRune == 'n' {
+		s := c.promoteToMemory(mainId)
+		valArgs = append(valArgs, s.Val)
+		return
+	}
+
+	// If we're using %s with a FloatKind, convert the float to a char* via runtime
+	if specRune == 's' {
+		switch mainType.Kind() {
+		case FloatKind:
+			strPtr := c.floatStrArg(mainSym)
+			valArgs = append(valArgs, strPtr)
+			toFree = append(toFree, strPtr)
+			return
+		case RangeKind:
+			strPtr := c.rangeStrArg(mainSym)
+			valArgs = append(valArgs, strPtr)
+			toFree = append(toFree, strPtr)
+			return
+		}
+	}
+
 	if specToKind[specRune] != mainType.Kind() {
 		err = &token.CompileError{
 			Token: sl.Token,
 			Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
 		}
 		c.Errors = append(c.Errors, err)
-		return
-	}
-
-	formattedStr = builder.String()
-	if len(customSpec) > 0 && customSpec[len(customSpec)-1] == 'n' {
-		s := c.promoteToMemory(mainId)
-		valArgs = append(valArgs, s.Val)
 		return
 	}
 
@@ -250,12 +265,13 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 // it additionally supports specifiers %d, %f etc as defined by the printf function
 // the * option for the width and precision should be replaced by their corresponding variables within parentheses and with the marker
 // eg: -a%(-w)d prints the integer variable a with width given by the variable w
-func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value) {
+func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value, []llvm.Value) {
 	var builder strings.Builder
 	var args []llvm.Value
+	var toFree []llvm.Value
 
 	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
-	runes := []rune(sl.String())
+	runes := []rune(sl.Value)
 	i := 0
 	for i < len(runes) {
 		if !(maybeMarker(runes, i)) {
@@ -278,20 +294,21 @@ func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value) {
 			continue
 		}
 		if err != nil {
-			return "", args
+			return "", args, nil
 		}
-		formattedStr, idArgs, err := c.parseFormatting(sl, mainId, syms, customSpec)
+		formattedStr, idArgs, idToFree, err := c.parseFormatting(sl, mainId, syms, customSpec)
 		if err != nil {
-			return "", args
+			return "", args, nil
 		}
 		builder.WriteString(formattedStr)
 		args = append(args, idArgs...)
+		toFree = append(toFree, idToFree...)
 		// Advance past the marker.
 		i = newIndex
 	}
 
 	st := builder.String()
-	return st, args
+	return st, args, toFree
 }
 
 func maybeMarker(runes []rune, i int) bool {

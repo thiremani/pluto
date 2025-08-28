@@ -148,22 +148,22 @@ digits = 4
 			input: `x = 3
 y = 3.2
 "x = -x%ld-y"`,
-			// float default format is "%.15g"
-			expectOutput: "x = %ld%.15g",
+			// float default format is "%s"
+			expectOutput: "x = %ld%s",
 		},
 		{
 			name: "MixedBackToBackSpecifiers",
 			input: `x = 3
 y = 3.2
 "x = -x%ld-y%f"`,
-			// float default format is "%.15g"
+			// float default format is "%s"
 			expectOutput: "x = %ld%f",
 		},
 		{
 			name: "MixedBackToBackOneVar",
 			input: `x = 3
 "x = -x%ld-y%f"`,
-			// float default format is "%.15g"
+			// float default format is "%s"
 			expectOutput: "x = %ld-y%%f",
 		},
 		{

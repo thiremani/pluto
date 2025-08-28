@@ -6,6 +6,8 @@ const (
 	PRINTF        = "printf"
 	FREE          = "free"
 	RANGE_I64_STR = "range_i64_str"
+	F64_STR       = "f64_str"
+	F32_STR       = "f32_str"
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
@@ -33,6 +35,24 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 			false, // not variadic
 		)
 		return fnType
+	case F64_STR:
+		{
+			charPtrTy := llvm.PointerType(c.Context.Int8Type(), 0) // char*
+			return llvm.FunctionType(
+				charPtrTy,
+				[]llvm.Type{c.Context.DoubleType()}, // double
+				false,
+			)
+		}
+	case F32_STR:
+		{
+			charPtrTy := llvm.PointerType(c.Context.Int8Type(), 0) // char*
+			return llvm.FunctionType(
+				charPtrTy,
+				[]llvm.Type{c.Context.FloatType()}, // float
+				false,
+			)
+		}
 	default:
 		panic("Unknown function name")
 	}
