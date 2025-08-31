@@ -35,13 +35,14 @@ func New(fileName, input string) *Lexer {
 	return l
 }
 
-func (l *Lexer) createToken(tokenType token.TokenType, literal string) token.Token {
+func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace bool) token.Token {
 	return token.Token{
 		FileName: l.FileName,
 		Type:     tokenType,
 		Literal:  literal,
 		Line:     l.lineOffset,
 		Column:   l.column,
+		HadSpace: hadSpace,
 	}
 }
 
@@ -51,9 +52,8 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 
 	if l.onNewline {
 		return l.indentToken()
-	} else {
-		l.skipWhitespace()
 	}
+	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
 		l.skipComment()
@@ -61,60 +61,66 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 
 	switch l.curr {
 	case '\n':
-		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE)
+		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
 		l.newLine()
 		l.onNewline = true
+	case '\\':
+		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
 	case '"':
-		tok = l.createToken(token.STRING, token.SYM_DQUOTE)
+		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
 		tok.Literal = l.readString()
 	case ':':
-		tok = l.createToken(token.COLON, token.SYM_COLON)
+		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':
-		tok = l.createToken(token.COMMA, token.SYM_COMMA)
+		tok = l.createToken(token.COMMA, token.SYM_COMMA, hadSpace)
 	case '(':
-		tok = l.createToken(token.LPAREN, token.SYM_LPAREN)
+		tok = l.createToken(token.LPAREN, token.SYM_LPAREN, hadSpace)
 	case ')':
-		tok = l.createToken(token.RPAREN, token.SYM_RPAREN)
+		tok = l.createToken(token.RPAREN, token.SYM_RPAREN, hadSpace)
+	case '[':
+		tok = l.createToken(token.LBRACK, token.SYM_LBRACK, hadSpace)
+	case ']':
+		tok = l.createToken(token.RBRACK, token.SYM_RBRACK, hadSpace)
 	case 0:
 		fallthrough
 	case eof:
-		tok = l.createToken(token.EOF, "")
+		tok = l.createToken(token.EOF, "", hadSpace)
 	case '=':
 		if l.peekRune() == '=' {
-			tok = l.createToken(token.EQL, token.SYM_EQL)
+			tok = l.createToken(token.EQL, token.SYM_EQL, hadSpace)
 			l.readRune()
 		} else {
-			tok = l.createToken(token.ASSIGN, token.SYM_ASSIGN)
+			tok = l.createToken(token.ASSIGN, token.SYM_ASSIGN, hadSpace)
 		}
 	case '<':
 		if l.peekRune() == '=' {
-			tok = l.createToken(token.LEQ, token.SYM_LEQ)
+			tok = l.createToken(token.LEQ, token.SYM_LEQ, hadSpace)
 			l.readRune()
 		} else if l.peekRune() == '<' {
-			tok = l.createToken(token.OPERATOR, token.SYM_SHL)
+			tok = l.createToken(token.OPERATOR, token.SYM_SHL, hadSpace)
 			l.readRune()
 		} else {
-			tok = l.createToken(token.LSS, token.SYM_LSS)
+			tok = l.createToken(token.LSS, token.SYM_LSS, hadSpace)
 		}
 	case '>':
 		if l.peekRune() == '=' {
-			tok = l.createToken(token.GEQ, token.SYM_GEQ)
+			tok = l.createToken(token.GEQ, token.SYM_GEQ, hadSpace)
 			l.readRune()
 		} else if l.peekRune() == '>' {
 			l.readRune()
 			if l.peekRune() == '>' {
-				tok = l.createToken(token.OPERATOR, token.SYM_SHR)
+				tok = l.createToken(token.OPERATOR, token.SYM_SHR, hadSpace)
 				l.readRune()
 			} else {
-				tok = l.createToken(token.OPERATOR, token.SYM_ASR)
+				tok = l.createToken(token.OPERATOR, token.SYM_ASR, hadSpace)
 			}
 		} else {
-			tok = l.createToken(token.GTR, token.SYM_GTR)
+			tok = l.createToken(token.GTR, token.SYM_GTR, hadSpace)
 		}
 	case '!':
 		if l.peekRune() == '=' {
-			tok = l.createToken(token.NEQ, token.SYM_NEQ)
+			tok = l.createToken(token.NEQ, token.SYM_NEQ, hadSpace)
 			l.readRune()
 			l.readRune()
 			return tok, nil
@@ -122,11 +128,11 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		fallthrough
 	default:
 		if IsLetter(l.curr) {
-			tok = l.createToken(token.IDENT, "")
+			tok = l.createToken(token.IDENT, "", hadSpace)
 			tok.Literal = l.readIdentifier()
 			return tok, nil
 		} else if IsDecimal(l.curr) || (l.curr == '.' && IsDecimal(l.peekRune())) {
-			tok = l.createToken(token.INT, "")
+			tok = l.createToken(token.INT, "", hadSpace)
 			var isFloat bool
 			tok.Literal, isFloat = l.readNumber()
 			if isFloat {
@@ -135,12 +141,12 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 			return tok, nil
 		} else if IsOperator(l.curr) {
 			// Read a maximal sequence of operator characters.
-			tok = l.createToken(token.OPERATOR, "")
+			tok = l.createToken(token.OPERATOR, "", hadSpace)
 			tok.Literal = l.readOperator()
 			return tok, nil
 		} else {
 			ch := string(l.curr)
-			tok = l.createToken(token.ILLEGAL, ch)
+			tok = l.createToken(token.ILLEGAL, ch, hadSpace)
 			err = &token.CompileError{
 				Token: tok,
 				Msg:   "Illegal character '" + ch + "'",
@@ -160,7 +166,7 @@ func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
 	indent, err := l.indentLevel()
 
 	if err != nil {
-		return l.createToken(token.ILLEGAL, string(l.curr)), err
+		return l.createToken(token.ILLEGAL, string(l.curr), false), err
 	}
 
 	if l.toDeindent > 0 {
@@ -169,7 +175,7 @@ func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
 
 	l.onNewline = false
 	if indent {
-		return l.createToken(token.INDENT, string(l.curr)), nil
+		return l.createToken(token.INDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
 	}
 
 	return l.NextToken()
@@ -184,11 +190,10 @@ func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
 		l.onNewline = false
 	}
 
-	return l.createToken(token.DEINDENT, string(l.curr)), nil
+	return l.createToken(token.DEINDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
 }
 
-func (l *Lexer) skipNewlineSpaces() *token.CompileError {
-	var err *token.CompileError
+func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 	for {
 		for l.curr == ' ' {
 			l.readRune()
@@ -201,7 +206,7 @@ func (l *Lexer) skipNewlineSpaces() *token.CompileError {
 		for l.curr == '\t' {
 			l.readRune()
 			err = &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr)),
+				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
 				Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
 			}
 		}
@@ -209,11 +214,13 @@ func (l *Lexer) skipNewlineSpaces() *token.CompileError {
 		if l.curr != '\n' {
 			break
 		}
+
 		err = nil
 		l.newLine()
 		l.readRune()
 	}
-	return err
+
+	return
 }
 
 func (l *Lexer) indentLevel() (bool, *token.CompileError) {
@@ -252,7 +259,7 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 			return false, nil
 		} else if l.column > level {
 			return false, &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr)),
+				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
 				Msg:   INDENT_ERR + ". At char: " + string(l.curr),
 			}
 		}
@@ -260,7 +267,7 @@ func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 
 	// column in > 1 but does not match any level in the indentStack
 	return false, &token.CompileError{
-		Token: l.createToken(token.ILLEGAL, string(l.curr)),
+		Token: l.createToken(token.ILLEGAL, string(l.curr), false),
 		Msg:   INDENT_ERR + ". At char: " + string(l.curr),
 	}
 }
@@ -274,10 +281,13 @@ func (l *Lexer) skipComment() {
 	}
 }
 
-func (l *Lexer) skipWhitespace() {
+func (l *Lexer) skipWhitespace() bool {
+	hadSpace := false
 	for l.curr == ' ' || l.curr == '\t' || l.curr == '\r' {
+		hadSpace = true
 		l.readRune()
 	}
+	return hadSpace
 }
 
 func (l *Lexer) newLine() {

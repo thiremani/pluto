@@ -159,6 +159,33 @@ func testLiteral(t *testing.T, lit ast.Expression, exp interface{}) {
 	}
 }
 
+// Helper functions for testing literals
+func testStringLiteral(t *testing.T, exp ast.Expression, expected string) bool {
+	str, ok := exp.(*ast.StringLiteral)
+	if !ok {
+		t.Errorf("expected *ast.StringLiteral, got %T", exp)
+		return false
+	}
+	if str.Value != expected {
+		t.Errorf("expected string %q, got %q", expected, str.Value)
+		return false
+	}
+	return true
+}
+
+func testFloatLiteral(t *testing.T, exp ast.Expression, expected float64) bool {
+	fl, ok := exp.(*ast.FloatLiteral)
+	if !ok {
+		t.Errorf("expected *ast.FloatLiteral, got %T", exp)
+		return false
+	}
+	if fl.Value != expected {
+		t.Errorf("expected float %f, got %f", expected, fl.Value)
+		return false
+	}
+	return true
+}
+
 // --- tiny local utility to parse a single expression print ---
 
 func parseOneExpr(t *testing.T, src string) ast.Expression {

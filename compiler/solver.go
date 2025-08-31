@@ -451,7 +451,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		if fn, ok = defaultOps[key]; !ok {
 			cerr := &token.CompileError{
 				Token: expr.Token,
-				Msg:   fmt.Sprintf("unsupported operator: %q for types: %s, %s", expr.Token, leftType, rightType),
+				Msg:   fmt.Sprintf("unsupported operator: %+v for types: %s, %s", expr.Token, leftType, rightType),
 			}
 			ts.Errors = append(ts.Errors, cerr)
 			return []Type{Unresolved{}}

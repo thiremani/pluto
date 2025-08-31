@@ -265,6 +265,55 @@ func (rl *RangeLiteral) String() string {
 	return fmt.Sprintf("%s:%s", rl.Start.String(), rl.Stop.String())
 }
 
+type ArrayLiteral struct {
+	Token   token.Token   // the '[' token
+	Headers []string      // column headers (empty for matrices)
+	Rows    [][]Expression // row data
+	Indices map[string][]int // named row indices like "books": [2,3]
+}
+
+func (al *ArrayLiteral) expressionNode()  {}
+func (al *ArrayLiteral) Tok() token.Token { return al.Token }
+func (al *ArrayLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString("[")
+	
+	// Print headers if present
+	if len(al.Headers) > 0 {
+		out.WriteString("\n  :  ") // 2 spaces after :
+		for j, header := range al.Headers {
+			if j > 0 {
+				out.WriteString(" ")
+			}
+			out.WriteString(header)
+		}
+		out.WriteString("\n")
+	}
+	
+	// Print rows
+	for _, row := range al.Rows {
+		if len(al.Headers) > 0 {
+			out.WriteString("     ") // 5 spaces for header tables
+		} else {
+			out.WriteString("    ") // 4 spaces for matrices
+		}
+		for j, expr := range row {
+			if j > 0 {
+				out.WriteString(" ")
+			}
+			if expr != nil {
+				out.WriteString(expr.String())
+			} else {
+				out.WriteString("<nil>")
+			}
+		}
+		out.WriteString("\n")
+	}
+	
+	out.WriteString("]")
+	return out.String()
+}
+
 type PrefixExpression struct {
 	Token    token.Token // The prefix token, e.g. !
 	Operator string

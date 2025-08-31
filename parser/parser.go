@@ -101,6 +101,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.SYM_CBRT, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_FTHRT, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_LPAREN, p.parseGroupedExpression)
+	p.registerPrefix(token.SYM_LBRACK, p.parseArrayLiteral)
 
 	p.infixParseFns = make(map[string]infixParseFn)
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
@@ -531,7 +532,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 		return stmt
 	}
 
-	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %q", p.peekToken)
+	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %+v", p.peekToken)
 	ce := &token.CompileError{
 		Token: p.curToken,
 		Msg:   msg,
@@ -563,16 +564,16 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 }
 
 func (p *StmtParser) parseExpList() []ast.Expression {
-	expList := []ast.Expression{p.parseExpression(LOWEST)}
+	expList := []ast.Expression{p.parseExpression(LOWEST, false)}
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		expList = append(expList, p.parseExpression(LOWEST))
+		expList = append(expList, p.parseExpression(LOWEST, false))
 	}
 	return expList
 }
 
-func (p *StmtParser) parseExpression(precedence int) ast.Expression {
+func (p *StmtParser) parseExpression(precedence int, spacesMatter bool) ast.Expression {
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -590,6 +591,9 @@ func (p *StmtParser) parseExpression(precedence int) ast.Expression {
 		return nil
 	}
 	leftExp := prefix()
+	if leftExp == nil {
+		return nil
+	}
 
 	if leftExp.Tok().Type == token.IDENT && p.peekToken.Type == token.LPAREN {
 		p.nextToken()
@@ -600,7 +604,11 @@ func (p *StmtParser) parseExpression(precedence int) ast.Expression {
 	if p.peekToken.Type == token.OPERATOR {
 		p.normalizePeekInfixOperator()
 	}
+
 	for precedence < p.peekPrecedence() {
+		if spacesMatter && p.peekToken.HadSpace {
+			break
+		}
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
 		if infix == nil {
 			return leftExp
@@ -672,6 +680,119 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 	}
 }
 
+func (p *StmtParser) parseArrayLiteral() ast.Expression {
+	arr := &ast.ArrayLiteral{
+		Token:   p.curToken, // the '[' token
+		Headers: []string{},
+		Rows:    [][]ast.Expression{},
+		Indices: make(map[string][]int),
+	}
+
+	p.nextToken() // consume the '[' token
+
+	for p.curTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+
+	// Skip any whitespace/indentation after opening bracket
+	p.skipArrayFormatting()
+
+	// Parse headers if present
+	if p.curTokenIs(token.COLON) {
+		p.nextToken() // consume ':'
+		if !p.parseHeader(arr) {
+			return nil
+		}
+	}
+
+	// Parse rows
+	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) {
+		p.skipArrayFormatting()
+
+		if p.curTokenIs(token.RBRACK) {
+			break
+		}
+
+		row := p.parseRow()
+		if len(row) > 0 {
+			arr.Rows = append(arr.Rows, row)
+		}
+	}
+
+	if !p.curTokenIs(token.RBRACK) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "expected ']' to close array literal",
+		})
+		return nil
+	}
+
+	p.nextToken() // consume ']'
+	return arr
+}
+
+func (p *StmtParser) skipArrayFormatting() {
+	for p.curTokenIs(token.NEWLINE) ||
+		p.curTokenIs(token.INDENT) ||
+		p.curTokenIs(token.DEINDENT) {
+		p.nextToken()
+	}
+}
+
+// parseHeader parses column headers after ':'
+func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
+	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
+		// handle line continuation first
+		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
+			// Line continuation for long headers
+			p.nextToken()
+			p.nextToken()
+			continue
+		}
+
+		if p.curTokenIs(token.IDENT) {
+			arr.Headers = append(arr.Headers, p.curToken.Literal)
+			p.nextToken()
+			continue
+		}
+
+		// Expected identifier for column header
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   fmt.Sprintf("expected identifier for column header, got %s", p.curToken.Type),
+		})
+		return false
+	}
+	return true
+}
+
+// parseRow parses a single data row and returns it
+func (p *StmtParser) parseRow() []ast.Expression {
+	row := []ast.Expression{}
+
+	// Parse elements in this row until newline or ']'
+	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
+		// handle line continuation first
+		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
+			// Line continuation for long rows
+			p.nextToken()
+			p.nextToken()
+			p.skipArrayFormatting() // Skip any indentation on continued line
+			continue
+		}
+
+		expr := p.parseExpression(LOWEST, true)
+		if expr != nil {
+			row = append(row, expr)
+		}
+
+		// Advance to next token for the next element
+		p.nextToken()
+	}
+
+	return row
+}
+
 // parseRangeLiteral is called when we encounter a ':' in an infix position.
 // The `left` argument is the expression that was just parsed before the ':'.
 func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
@@ -686,7 +807,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	precedence := p.curPrecedence()
 	p.nextToken() // Consume the ':'
 
-	rl.Stop = p.parseExpression(precedence)
+	rl.Stop = p.parseExpression(precedence, false)
 	if rl.Stop == nil {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
@@ -698,7 +819,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	if p.peekTokenIs(token.COLON) {
 		p.nextToken()
 		p.nextToken()
-		rl.Step = p.parseExpression(precedence)
+		rl.Step = p.parseExpression(precedence, false)
 		if rl.Step == nil {
 			p.errors = append(p.errors, &token.CompileError{
 				Token: p.curToken,
@@ -719,7 +840,7 @@ func (p *StmtParser) parsePrefixExpression() ast.Expression {
 
 	p.nextToken()
 
-	expression.Right = p.parseExpression(PREFIX)
+	expression.Right = p.parseExpression(PREFIX, false)
 
 	return expression
 }
@@ -733,7 +854,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 
 	precedence := p.curPrecedence()
 	p.nextToken()
-	expression.Right = p.parseExpression(precedence)
+	expression.Right = p.parseExpression(precedence, false)
 
 	return expression
 }
@@ -741,7 +862,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	p.nextToken()
 
-	exp := p.parseExpression(LOWEST)
+	exp := p.parseExpression(LOWEST, false)
 
 	if !p.expectPeek(token.RPAREN) {
 		return nil
@@ -856,12 +977,12 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 	}
 
 	p.nextToken()
-	args = append(args, p.parseExpression(LOWEST))
+	args = append(args, p.parseExpression(LOWEST, false))
 
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		args = append(args, p.parseExpression(LOWEST))
+		args = append(args, p.parseExpression(LOWEST, false))
 	}
 
 	if !p.expectPeek(token.RPAREN) {

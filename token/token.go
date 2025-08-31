@@ -55,6 +55,7 @@ const (
 
 	// Other tokens.
 	NEWLINE
+	BACKSLASH
 	INDENT
 	DEINDENT
 )
@@ -109,12 +110,12 @@ const (
 	SYM_RBRACK = "]"
 	SYM_RBRACE = "}"
 
-	SYM_DQUOTE  = "\""
-	SYM_SQUOTE  = "'"
-	SYM_ACCENT  = "`"
-	SYM_NEWLINE = "\n"
-	SYM_TAB     = "\t"
-	SYM_BSLASH  = "\\"
+	SYM_DQUOTE    = "\""
+	SYM_SQUOTE    = "'"
+	SYM_ACCENT    = "`"
+	SYM_BACKSLASH = "\\"
+	SYM_NEWLINE   = "\n"
+	SYM_TAB       = "\t"
 
 	SYM_COMMENT = "#"
 )
@@ -179,6 +180,7 @@ type Token struct {
 	Literal  string
 	Line     int
 	Column   int
+	HadSpace bool // true if there was any space before this token
 }
 
 type CompileErrors []*CompileError

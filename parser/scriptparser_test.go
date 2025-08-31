@@ -593,3 +593,156 @@ func TestLetStatementDuplicateIdentifiers(t *testing.T) {
 		})
 	}
 }
+
+func TestArrayLiterals(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectError bool
+		errorMsg    string
+		checkResult func(t *testing.T, arr *ast.ArrayLiteral)
+	}{
+		{
+			name:  "empty array",
+			input: "[]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers")
+				require.Empty(t, arr.Rows, "expected no rows")
+			},
+		},
+		{
+			name: "simple matrix without headers",
+			input: `[
+    1 2 3
+    4 5 6
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers for matrix")
+				require.Len(t, arr.Rows, 2, "expected 2 rows")
+				require.Len(t, arr.Rows[0], 3, "expected 3 elements in first row")
+				require.Len(t, arr.Rows[1], 3, "expected 3 elements in second row")
+
+				// Check first row: 1 2 3
+				require.True(t, testIntegerLiteral(t, arr.Rows[0][0], 1))
+				require.True(t, testIntegerLiteral(t, arr.Rows[0][1], 2))
+				require.True(t, testIntegerLiteral(t, arr.Rows[0][2], 3))
+
+				// Check second row: 4 5 6
+				require.True(t, testIntegerLiteral(t, arr.Rows[1][0], 4))
+				require.True(t, testIntegerLiteral(t, arr.Rows[1][1], 5))
+				require.True(t, testIntegerLiteral(t, arr.Rows[1][2], 6))
+			},
+		},
+		{
+			name: "array with headers",
+			input: `[
+  :  Day Product Price
+     "Monday" "Phone" 200
+     "Tuesday" "Laptop" 300
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Equal(t, []string{"Day", "Product", "Price"}, arr.Headers)
+				require.Len(t, arr.Rows, 2, "expected 2 rows")
+
+				// Check first row: "Monday" "Phone" 200
+				require.True(t, testStringLiteral(t, arr.Rows[0][0], "Monday"))
+				require.True(t, testStringLiteral(t, arr.Rows[0][1], "Phone"))
+				require.True(t, testIntegerLiteral(t, arr.Rows[0][2], 200))
+
+				// Check second row: "Tuesday" "Laptop" 300
+				require.True(t, testStringLiteral(t, arr.Rows[1][0], "Tuesday"))
+				require.True(t, testStringLiteral(t, arr.Rows[1][1], "Laptop"))
+				require.True(t, testIntegerLiteral(t, arr.Rows[1][2], 300))
+			},
+		},
+		{
+			name: "mixed type rows",
+			input: `[
+    1 "hello" 3.14
+    "world" 42 2.71
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers")
+				require.Len(t, arr.Rows, 2, "expected 2 rows")
+
+				// Check first row: 1 "hello" 3.14
+				require.True(t, testIntegerLiteral(t, arr.Rows[0][0], 1))
+				require.True(t, testStringLiteral(t, arr.Rows[0][1], "hello"))
+				require.True(t, testFloatLiteral(t, arr.Rows[0][2], 3.14))
+
+				// Check second row: "world" 42 2.71
+				require.True(t, testStringLiteral(t, arr.Rows[1][0], "world"))
+				require.True(t, testIntegerLiteral(t, arr.Rows[1][1], 42))
+				require.True(t, testFloatLiteral(t, arr.Rows[1][2], 2.71))
+			},
+		},
+		{
+			name:        "missing closing bracket",
+			input:       "[1 2 3",
+			expectError: true,
+			errorMsg:    "expected ']' to close array literal",
+		},
+		{
+			name:        "invalid header token",
+			input:       "[: 123 Product]",
+			expectError: true,
+			errorMsg:    "expected identifier for column header",
+		},
+		{
+			name: "line continuation with unary operators",
+			input: `[
+    a -b \
+    -c d
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers")
+				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
+				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
+				
+				// Check that we have: a, (-b), (-c), d
+				require.True(t, testIdentifier(t, arr.Rows[0][0], "a"))
+				
+				// Check -b is a prefix expression (unary minus)
+				prefixB, ok := arr.Rows[0][1].(*ast.PrefixExpression)
+				require.Truef(t, ok, "expected *ast.PrefixExpression for -b, got %T", arr.Rows[0][1])
+				require.Equal(t, "-", prefixB.Operator)
+				require.True(t, testIdentifier(t, prefixB.Right, "b"))
+				
+				// Check -c is a prefix expression (unary minus)
+				prefixC, ok := arr.Rows[0][2].(*ast.PrefixExpression)
+				require.Truef(t, ok, "expected *ast.PrefixExpression for -c, got %T", arr.Rows[0][2])
+				require.Equal(t, "-", prefixC.Operator)
+				require.True(t, testIdentifier(t, prefixC.Right, "c"))
+				
+				// Check d is just an identifier
+				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestArrayLiterals", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+
+			if tt.expectError {
+				require.NotEmpty(t, sp.Errors(), "expected parser errors for input %q", tt.input)
+				require.Contains(t, sp.Errors()[0], tt.errorMsg, "error message mismatch")
+				return
+			}
+
+			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyPrintStmt(t, program)
+			require.Len(t, stmt.Expression, 1, "expected one expression in print statement")
+
+			arr, ok := stmt.Expression[0].(*ast.ArrayLiteral)
+			require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Expression[0])
+
+			if tt.checkResult != nil {
+				tt.checkResult(t, arr)
+			}
+		})
+	}
+}
