@@ -113,6 +113,16 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 		}
 		return evs
 
+	case *ast.ArrayLiteral:
+		// Collect reads from every cell expression in all rows
+		var evs []VarEvent
+		for _, row := range e.Rows {
+			for _, cell := range row {
+				evs = append(evs, cfg.collectReads(cell)...)
+			}
+		}
+		return evs
+
 	default:
 		panic(fmt.Sprintf("unhandled expression type: %T", e))
 	}
@@ -202,6 +212,11 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 			writeKind = ConditionalWrite
 		}
 		for _, lhs := range s.Name {
+			// Treat '_' as a discard target: do not record writes or liveness.
+			if lhs.Value == "_" {
+				continue
+			}
+
 			ve := VarEvent{Name: lhs.Value, Kind: writeKind, Token: lhs.Tok()}
 			Put(cfg.Scopes, lhs.Value, ve)
 			evs = append(evs, ve)
@@ -253,6 +268,15 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		for _, arg := range t.Arguments {
 			if cfg.hasRangeExpr(arg) {
 				return true
+			}
+		}
+		return false
+	case *ast.ArrayLiteral:
+		for _, row := range t.Rows {
+			for _, cell := range row {
+				if cfg.hasRangeExpr(cell) {
+					return true
+				}
 			}
 		}
 		return false

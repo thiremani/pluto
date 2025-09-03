@@ -1,0 +1,11 @@
+/* suffix , ctype     , PublicName   */
+PT_XNUM(i1 , uint8_t  , PtArrayI1 )   /* Pluto i1 mapped to 1-byte bool (0/1); no bit-packing */
+PT_XNUM(i8 , int8_t   , PtArrayI8 )
+PT_XNUM(i16, int16_t  , PtArrayI16)
+PT_XNUM(i32, int32_t  , PtArrayI32)
+PT_XNUM(i64, int64_t  , PtArrayI64)
+PT_XNUM(u8 , uint8_t  , PtArrayU8 )
+PT_XNUM(u16, uint16_t , PtArrayU16)
+PT_XNUM(u32, uint32_t , PtArrayU32)
+PT_XNUM(u64, uint64_t , PtArrayU64)
+PT_XNUM(f64, double   , PtArrayF64)

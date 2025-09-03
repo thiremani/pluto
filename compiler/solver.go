@@ -278,6 +278,148 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	PutBulk(ts.Scopes, trueValues)
 }
 
+// TypeArrayLiteral infers the type of an Array literal. Columns must be
+// homogeneous and of primitive types: I64, F64 (promotion from I64 allowed), or Str.
+// The returned type slice contains a single Array type value.
+func (ts *TypeSolver) TypeArrayLiteral(al *ast.ArrayLiteral) []Type {
+    // Vector special-case: single row, no headers → treat as 1-column vector
+    if len(al.Headers) == 0 && len(al.Rows) == 1 {
+        colTypes := []Type{Unresolved{}}
+        row := al.Rows[0]
+        for col := 0; col < len(row); col++ {
+            cellT, ok := ts.typeCell(row[col], al.Tok())
+            if !ok {
+                continue
+            }
+            colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
+        }
+        // Length = number of elements in the row (for vectors)
+        arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
+        ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+        return []Type{arr}
+    }
+
+    // 1. Determine number of columns
+    numCols := ts.arrayNumCols(al)
+    if numCols == 0 {
+        return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
+    }
+
+	// 2. Initialize column types
+	colTypes := ts.initColTypes(numCols)
+
+	// 3. Walk rows/cells and merge types per column
+	for _, row := range al.Rows {
+		for col := 0; col < numCols; col++ {
+			if col >= len(row) {
+				break // ragged row; remaining cells are missing
+			}
+			cellT, ok := ts.typeCell(row[col], al.Tok())
+			if !ok {
+				continue
+			}
+			colTypes[col] = ts.mergeColType(colTypes[col], cellT, col, al.Tok())
+		}
+	}
+
+    // 4. Build final Array type (no defaulting of unresolved columns)
+    arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
+
+    // Cache this expression's resolved type for the compiler
+    ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+    return []Type{arr}
+}
+
+// arrayNumCols returns column count based on headers or max row width.
+func (ts *TypeSolver) arrayNumCols(al *ast.ArrayLiteral) int {
+	if len(al.Headers) > 0 {
+		return len(al.Headers)
+	}
+	maxW := 0
+	for _, row := range al.Rows {
+		if l := len(row); l > maxW {
+			maxW = l
+		}
+	}
+	return maxW
+}
+
+func (ts *TypeSolver) initColTypes(n int) []Type {
+	out := make([]Type, n)
+	for i := 0; i < n; i++ {
+		out[i] = Unresolved{}
+	}
+	return out
+}
+
+// typeCell infers the type of a single cell expression. Returns (type, ok).
+func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
+	tps := ts.TypeExpression(expr, false)
+	if len(tps) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("array cell produced %d types; expected 1", len(tps)),
+		})
+		return Unresolved{}, false
+	}
+	if tps[0].Kind() == UnresolvedKind {
+		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "array cell type could not be resolved"})
+		return Unresolved{}, false
+	}
+	return tps[0], true
+}
+
+// mergeColType merges a new cell type into the running column type, enforcing
+// allowed schemas and numeric promotion (I64 -> F64). Reports errors against tok.
+func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.Token) Type {
+	// If the cell type is unresolved, skip it.
+	if newT.Kind() == UnresolvedKind {
+		return cur
+	}
+
+	// Only allow I64, F64, or Str as array elements.
+	if !AllowedArrayElem(newT) {
+		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("unsupported array element type %s in column %d", newT.String(), colIdx)})
+		return cur
+	}
+
+	// If column schema not yet set, adopt the new type.
+	if cur.Kind() == UnresolvedKind {
+		return newT
+	}
+
+	// Exact match: stable.
+	if cur.String() == newT.String() {
+		return cur
+	}
+
+	// Only numeric promotion to F64 is allowed; any Str/numeric mix is invalid.
+	if cur.Kind() == IntKind && newT.Kind() == FloatKind {
+		return newT
+	}
+	if cur.Kind() == FloatKind && newT.Kind() == IntKind {
+		return cur
+	}
+
+	// Otherwise, incompatible column schema.
+	ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("cannot mix %s and %s in column %d", cur.String(), newT.String(), colIdx)})
+	return cur
+}
+
+// AllowedArrayElem returns true only for I64, F64, and Str cells.
+func AllowedArrayElem(t Type) bool {
+	switch v := t.(type) {
+	case Int:
+		return v.Width == 64
+	case Float:
+		return v.Width == 64
+	case Str:
+		return true
+	default:
+		return false
+	}
+}
+
 func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
 	// infer start and stop
 	startT := ts.TypeExpression(r.Start, false)
@@ -346,6 +488,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, Float{Width: 64})
 	case *ast.StringLiteral:
 		types = append(types, Str{})
+	case *ast.ArrayLiteral:
+		types = append(types, ts.TypeArrayLiteral(e)...)
 	case *ast.RangeLiteral:
 		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:

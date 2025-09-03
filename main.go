@@ -275,37 +275,49 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 }
 
 func (p *Pluto) GenBinary(scriptLL, bin string) error {
-	// Create temp files
 	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
 	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OBJ_SUFFIX)
 	binFile := filepath.Join(p.Cwd, bin)
 
-	runtimeC := filepath.Join(p.CacheDir, SCRIPT_DIR, "runtime.c")
-	if err := os.WriteFile(runtimeC, runtimeCSource, 0644); err != nil {
+	// 1) Optimize IR
+	if out, err := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
+		fmt.Printf("optimization failed: %v\n%s\n", err, out)
 		return err
 	}
 
-	runtimeObj := filepath.Join(p.CacheDir, SCRIPT_DIR, "runtime.o")
-	rtCmd := exec.Command("clang", OPT_LEVEL, "-march=native", "-c", runtimeC, "-o", runtimeObj)
-	if out, err := rtCmd.CombinedOutput(); err != nil {
-		fmt.Printf("runtime compile failed: %s\n%s\n", err, string(out))
+	// 2) Lower to object
+	if out, err := exec.Command("llc", "-filetype=obj", "-relocation-model=pic", optFile, "-o", objFile).CombinedOutput(); err != nil {
+		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
 		return err
 	}
 
-	// Optimization pass
-	optCmd := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile)
-	if output, err := optCmd.CombinedOutput(); err != nil {
-		fmt.Printf("optimization failed: %s\n%s\n", err, string(output))
-		return err
+    // 3) Compile runtime sources from repo/runtime/*.c (always from project root)
+    rtDir := filepath.Join(p.RootDir, "runtime")
+	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
+	if err != nil {
+		return fmt.Errorf("glob runtime sources: %w", err)
+	}
+	if len(rtSrcs) == 0 {
+		return fmt.Errorf("no runtime .c files found under %s", rtDir)
 	}
 
-	// Compile to object file
-	llcCmd := exec.Command("llc", "-filetype=obj", "-relocation-model=pic", optFile, "-o", objFile)
-	if output, err := llcCmd.CombinedOutput(); err != nil {
-		fmt.Printf("llc compilation failed: %s\n%s\n", err, string(output))
-		return err
+	var rtObjs []string
+	for _, src := range rtSrcs {
+		outObj := filepath.Join(p.CacheDir, SCRIPT_DIR, filepath.Base(src)+".o")
+		args := []string{
+			OPT_LEVEL, "-std=c11", "-march=native",
+			"-flto", "-fPIC",
+			"-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
+			"-c", src, "-o", outObj,
+		}
+		if out, err := exec.Command("clang", args...).CombinedOutput(); err != nil {
+			fmt.Printf("runtime compile failed for %s: %v\n%s\n", src, err, out)
+			return err
+		}
+		rtObjs = append(rtObjs, outObj)
 	}
 
+	// 4) Link everything
 	linkArgs := []string{"-flto", "-fuse-ld=lld"}
 
 	if runtime.GOOS == "darwin" {
@@ -315,19 +327,12 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		// ELF linkers (ld, lld) accept --gc-sections
 		linkArgs = append(linkArgs, "-Wl,--gc-sections")
 	}
+	linkArgs = append(linkArgs, objFile)
+	linkArgs = append(linkArgs, rtObjs...)
+	linkArgs = append(linkArgs, "-o", binFile, "-lm")
 
-	linkArgs = append(linkArgs,
-		objFile,
-		runtimeObj,
-		"-o",
-		binFile,
-		"-lm", // link against the standard math library
-	)
-
-	// Link executable (with dead code elimination)
-	clangCmd := exec.Command("clang", linkArgs...)
-	if output, err := clangCmd.CombinedOutput(); err != nil {
-		fmt.Printf("linking failed: %s\n%s\n", err, string(output))
+	if out, err := exec.Command("clang", linkArgs...).CombinedOutput(); err != nil {
+		fmt.Printf("linking failed: %v\n%s\n", err, out)
 		return err
 	}
 

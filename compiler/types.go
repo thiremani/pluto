@@ -16,7 +16,7 @@ const (
 	StrKind
 	RangeKind
 	FuncKind
-	ArrayKind
+    ArrayKind
 )
 
 const (
@@ -123,19 +123,28 @@ func (f Func) AllTypesInferred() bool {
 	return true
 }
 
-// Array represents an array type with a fixed length.
+// Array represents a tabular array with optional headers and typed columns.
+// Each column has a primitive element type (I64, F64, or Str). Length is the
+// number of rows. Headers may be empty (for matrices without named columns).
 type Array struct {
-	Elem   Type // Element type
-	Length int  // Fixed length
+    Headers  []string // column headers (may be empty)
+    ColTypes []Type   // element type per column (must be Int{64}, Float{64}, or Str)
+    Length   int      // number of rows
 }
 
 func (a Array) String() string {
-	return fmt.Sprintf("%d * [%s]", a.Length, a.Elem.String())
+    // Type identity ignores headers and length; show schema only.
+    if len(a.ColTypes) == 0 {
+        return "[]"
+    }
+    var cols []string
+    for _, ct := range a.ColTypes {
+        cols = append(cols, ct.String())
+    }
+    return "[" + strings.Join(cols, " ") + "]"
 }
 
-func (a Array) Kind() Kind {
-	return ArrayKind
-}
+func (a Array) Kind() Kind { return ArrayKind }
 
 func typesStr(types []Type) string {
 	if len(types) == 0 {
