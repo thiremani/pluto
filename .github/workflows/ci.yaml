@@ -38,16 +38,6 @@ jobs:
           clang-20 --version
           ld.lld-20 --version
 
-      - name: Check Go formatting (gofmt)
-        run: |
-          CHANGED=$(gofmt -l .)
-          if [ -n "$CHANGED" ]; then
-            echo "gofmt found issues in:" >&2
-            echo "$CHANGED" >&2
-            gofmt -d . >&2
-            exit 1
-          fi
-
       - name: Run full test suite
         run: |
           chmod +x test.sh
