@@ -1066,30 +1066,30 @@ func (c *Compiler) floatStrArg(s *Symbol) llvm.Value {
 }
 
 func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
-    arr := s.Type.(Array)
-    if len(arr.ColTypes) != 1 {
-        panic("internal: arrayStrArg supports only single-column vectors")
-    }
-    // Bitcast the opaque i8* to the appropriate named opaque pointer
-    switch arr.ColTypes[0].Kind() {
-    case IntKind:
-        pt := c.namedOpaquePtr("PtArrayI64")
-        cast := c.builder.CreateBitCast(s.Val, pt, "arr_i64p")
-        fnTy, fn := c.GetCFunc(ARR_I64_STR)
-        return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_i64_str")
-    case FloatKind:
-        pt := c.namedOpaquePtr("PtArrayF64")
-        cast := c.builder.CreateBitCast(s.Val, pt, "arr_f64p")
-        fnTy, fn := c.GetCFunc(ARR_F64_STR)
-        return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_f64_str")
-    case StrKind:
-        pt := c.namedOpaquePtr("PtArrayStr")
-        cast := c.builder.CreateBitCast(s.Val, pt, "arr_strp")
-        fnTy, fn := c.GetCFunc(ARR_STR_STR)
-        return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_str_str")
-    default:
-        panic("internal: unsupported array element kind for printing")
-    }
+	arr := s.Type.(Array)
+	if len(arr.ColTypes) != 1 {
+		panic("internal: arrayStrArg supports only single-column vectors")
+	}
+	// Bitcast the opaque i8* to the appropriate named opaque pointer
+	switch arr.ColTypes[0].Kind() {
+	case IntKind:
+		pt := c.namedOpaquePtr("PtArrayI64")
+		cast := c.builder.CreateBitCast(s.Val, pt, "arr_i64p")
+		fnTy, fn := c.GetCFunc(ARR_I64_STR)
+		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_i64_str")
+	case FloatKind:
+		pt := c.namedOpaquePtr("PtArrayF64")
+		cast := c.builder.CreateBitCast(s.Val, pt, "arr_f64p")
+		fnTy, fn := c.GetCFunc(ARR_F64_STR)
+		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_f64_str")
+	case StrKind:
+		pt := c.namedOpaquePtr("PtArrayStr")
+		cast := c.builder.CreateBitCast(s.Val, pt, "arr_strp")
+		fnTy, fn := c.GetCFunc(ARR_STR_STR)
+		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_str_str")
+	default:
+		panic("internal: unsupported array element kind for printing")
+	}
 }
 
 func (c *Compiler) free(ptrs []llvm.Value) {

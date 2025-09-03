@@ -40,23 +40,23 @@ var specToKind = map[rune]Kind{
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
 func defaultSpecifier(t Type) (string, error) {
-    switch t.Kind() {
-    case IntKind:
-        return "%ld", nil
-    case FloatKind:
-        // Floats are converted to char* via runtime helpers (f64_str/f32_str)
-        return "%s", nil
-    case StrKind:
-        return "%s", nil
-    case RangeKind:
-        return "%s", nil
-    case ArrayKind:
-        // Arrays are converted to char* via runtime helpers
-        return "%s", nil
-    default:
-        err := fmt.Errorf("unsupported type in print statement %s", t.String())
-        return "", err
-    }
+	switch t.Kind() {
+	case IntKind:
+		return "%ld", nil
+	case FloatKind:
+		// Floats are converted to char* via runtime helpers (f64_str/f32_str)
+		return "%s", nil
+	case StrKind:
+		return "%s", nil
+	case RangeKind:
+		return "%s", nil
+	case ArrayKind:
+		// Arrays are converted to char* via runtime helpers
+		return "%s", nil
+	default:
+		err := fmt.Errorf("unsupported type in print statement %s", t.String())
+		return "", err
+	}
 }
 
 // parseSpecifier assumes runes[start] == '%'
