@@ -25,6 +25,7 @@ Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
+- Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
 - Go formatting: `go fmt ./...`; basic checks: `go vet ./...`.
 - Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions.
 - Filenames: lowercase with underscores where needed (Go convention).
