@@ -1,6 +1,7 @@
 #include "array.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <limits.h>   /* INT_MAX, SIZE_MAX */
 
 #include "third_party/klib/kvec.h"
@@ -207,4 +208,64 @@ void pt_str_swap(PtArrayStr* a, size_t i, size_t j){
 
 const char* const* pt_str_data(const PtArrayStr* a){
     return a ? (const char* const*)a->v.a : NULL;
+}
+
+/* -------- Stringification helpers (malloc'ed char*) -------- */
+static size_t safe_strlen(const char* s){ return s ? strlen(s) : 0; }
+
+const char* array_i64_str(const PtArrayI64* a){
+    size_t n = a ? (size_t)a->v.n : 0;
+    size_t cap = 2 + n * (21 + 1) + 1; /* '[', elements, ']', NUL */
+    char* buf = (char*)malloc(cap);
+    if (!buf){ return NULL; }
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (size_t i = 0; i < n; ++i){
+        long long v = (long long)a->v.a[i];
+        int wrote = snprintf(buf + pos, cap - pos, (i + 1 == n ? "%lld" : "%lld "), v);
+        if (wrote < 0 || (size_t)wrote >= cap - pos){ free(buf); return NULL; }
+        pos += (size_t)wrote;
+    }
+    buf[pos++] = ']';
+    buf[pos++] = '\0';
+    return buf;
+}
+
+const char* array_f64_str(const PtArrayF64* a){
+    size_t n = a ? (size_t)a->v.n : 0;
+    size_t cap = 2 + n * (24 + 1) + 1; /* '[', elements, ']', NUL */
+    char* buf = (char*)malloc(cap);
+    if (!buf){ return NULL; }
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (size_t i = 0; i < n; ++i){
+        double v = (double)a->v.a[i];
+        int wrote = snprintf(buf + pos, cap - pos, (i + 1 == n ? "%g" : "%g "), v);
+        if (wrote < 0 || (size_t)wrote >= cap - pos){ free(buf); return NULL; }
+        pos += (size_t)wrote;
+    }
+    buf[pos++] = ']';
+    buf[pos++] = '\0';
+    return buf;
+}
+
+const char* array_str_str(const PtArrayStr* a){
+    size_t n = a ? (size_t)a->v.n : 0;
+    size_t cap = 2; /* '[' and ']' */
+    for (size_t i = 0; i < n; ++i){ cap += safe_strlen(a->v.a[i]) + 1; }
+    cap += 1; /* NUL */
+    char* buf = (char*)malloc(cap);
+    if (!buf){ return NULL; }
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (size_t i = 0; i < n; ++i){
+        const char* s = a->v.a[i] ? a->v.a[i] : "";
+        size_t len = strlen(s);
+        memcpy(buf + pos, s, len);
+        pos += len;
+        if (i + 1 != n){ buf[pos++] = ' '; }
+    }
+    buf[pos++] = ']';
+    buf[pos++] = '\0';
+    return buf;
 }

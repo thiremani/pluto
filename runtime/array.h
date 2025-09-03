@@ -56,6 +56,11 @@ int                  pt_str_set(PtArrayStr* a, size_t i, const char* s);
 void                 pt_str_swap(PtArrayStr* a, size_t i, size_t j);
 const char* const*   pt_str_data(const PtArrayStr* a);  /* contiguous, read-only view */
 
+/* -------- Stringification helpers (malloc'ed char*) -------- */
+const char* array_i64_str(const PtArrayI64* a);
+const char* array_f64_str(const PtArrayF64* a);
+const char* array_str_str(const PtArrayStr* a);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

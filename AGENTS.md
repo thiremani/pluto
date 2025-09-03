@@ -56,8 +56,3 @@ CI: GitHub Actions builds with Go 1.24, installs LLVM 20, and runs `./test.sh` o
 - Keep changes minimal and focused; avoid reflowing or reindenting unrelated lines.
 - Use tabs for indentation (preserve existing indentation style).
 - NEVER add "🤖 Generated with..." footers to git commits.
-
-### Local Git Hooks
-- To enforce gofmt (tabs for leading indentation) on push, enable repo-local hooks:
-  - `git config --local core.hooksPath .githooks`
-  - The `.githooks/pre-push` script blocks pushes if `gofmt -l` reports issues.
