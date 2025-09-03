@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <limits.h>   /* INT_MAX, SIZE_MAX */
 
 #include "third_party/klib/kvec.h"
@@ -211,61 +212,82 @@ const char* const* pt_str_data(const PtArrayStr* a){
 }
 
 /* -------- Stringification helpers (malloc'ed char*) -------- */
-static size_t safe_strlen(const char* s){ return s ? strlen(s) : 0; }
 
-const char* array_i64_str(const PtArrayI64* a){
-    size_t n = a ? (size_t)a->v.n : 0;
-    size_t cap = 2 + n * (21 + 1) + 1; /* '[', elements, ']', NUL */
-    char* buf = (char*)malloc(cap);
-    if (!buf){ return NULL; }
-    size_t pos = 0;
-    buf[pos++] = '[';
-    for (size_t i = 0; i < n; ++i){
-        long long v = (long long)a->v.a[i];
-        int wrote = snprintf(buf + pos, cap - pos, (i + 1 == n ? "%lld" : "%lld "), v);
-        if (wrote < 0 || (size_t)wrote >= cap - pos){ free(buf); return NULL; }
-        pos += (size_t)wrote;
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} StrBuf;
+
+static int strbuf_printf(StrBuf* sb, const char* fmt, ...) {
+    va_list args, args_copy;
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    
+    size_t avail = sb->cap - sb->len;
+    int needed = vsnprintf(sb->data + sb->len, avail, fmt, args);
+    if (needed < 0) {
+        va_end(args);
+        va_end(args_copy);
+        return -1;
     }
-    buf[pos++] = ']';
-    buf[pos++] = '\0';
-    return buf;
+    
+    if ((size_t)needed >= avail) {
+        // Grow buffer
+        size_t new_cap = sb->cap * 2;
+        while (new_cap < sb->len + (size_t)needed + 1) new_cap *= 2;
+        char* new_data = realloc(sb->data, new_cap);
+        if (!new_data) { va_end(args); va_end(args_copy); return -1; }
+        sb->data = new_data;
+        sb->cap = new_cap;
+        
+        // Retry
+        int needed2 = vsnprintf(sb->data + sb->len, sb->cap - sb->len, fmt, args_copy);
+        if (needed2 < 0) { va_end(args); va_end(args_copy); return -1; }
+        needed = needed2;
+    }
+
+    sb->len += needed;
+    va_end(args);
+    va_end(args_copy);
+    return 0;
 }
 
-const char* array_f64_str(const PtArrayF64* a){
-    size_t n = a ? (size_t)a->v.n : 0;
-    size_t cap = 2 + n * (24 + 1) + 1; /* '[', elements, ']', NUL */
-    char* buf = (char*)malloc(cap);
-    if (!buf){ return NULL; }
-    size_t pos = 0;
-    buf[pos++] = '[';
-    for (size_t i = 0; i < n; ++i){
-        double v = (double)a->v.a[i];
-        int wrote = snprintf(buf + pos, cap - pos, (i + 1 == n ? "%g" : "%g "), v);
-        if (wrote < 0 || (size_t)wrote >= cap - pos){ free(buf); return NULL; }
-        pos += (size_t)wrote;
+const char* array_i64_str(const PtArrayI64* a) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    for (size_t i = 0; i < pt_i64_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        if (strbuf_printf(&sb, "%lld", (long long)pt_i64_get(a, i)) < 0) { free(sb.data); return NULL; }
     }
-    buf[pos++] = ']';
-    buf[pos++] = '\0';
-    return buf;
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
 }
 
-const char* array_str_str(const PtArrayStr* a){
-    size_t n = a ? (size_t)a->v.n : 0;
-    size_t cap = 2; /* '[' and ']' */
-    for (size_t i = 0; i < n; ++i){ cap += safe_strlen(a->v.a[i]) + 1; }
-    cap += 1; /* NUL */
-    char* buf = (char*)malloc(cap);
-    if (!buf){ return NULL; }
-    size_t pos = 0;
-    buf[pos++] = '[';
-    for (size_t i = 0; i < n; ++i){
-        const char* s = a->v.a[i] ? a->v.a[i] : "";
-        size_t len = strlen(s);
-        memcpy(buf + pos, s, len);
-        pos += len;
-        if (i + 1 != n){ buf[pos++] = ' '; }
+const char* array_f64_str(const PtArrayF64* a) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    for (size_t i = 0; i < pt_f64_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        if (strbuf_printf(&sb, "%g", (double)pt_f64_get(a, i)) < 0) { free(sb.data); return NULL; }
     }
-    buf[pos++] = ']';
-    buf[pos++] = '\0';
-    return buf;
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
+}
+
+const char* array_str_str(const PtArrayStr* a) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    size_t n = pt_str_len(a);
+    for (size_t i = 0; i < n; ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        const char* s = pt_str_get(a, i);
+        if (!s) s = "";
+        if (strbuf_printf(&sb, "%s", s) < 0) { free(sb.data); return NULL; }
+    }
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
 }
