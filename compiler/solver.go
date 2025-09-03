@@ -282,28 +282,28 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // homogeneous and of primitive types: I64, F64 (promotion from I64 allowed), or Str.
 // The returned type slice contains a single Array type value.
 func (ts *TypeSolver) TypeArrayLiteral(al *ast.ArrayLiteral) []Type {
-    // Vector special-case: single row, no headers → treat as 1-column vector
-    if len(al.Headers) == 0 && len(al.Rows) == 1 {
-        colTypes := []Type{Unresolved{}}
-        row := al.Rows[0]
-        for col := 0; col < len(row); col++ {
-            cellT, ok := ts.typeCell(row[col], al.Tok())
-            if !ok {
-                continue
-            }
-            colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
-        }
-        // Length = number of elements in the row (for vectors)
-        arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
-        ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
-        return []Type{arr}
-    }
+	// Vector special-case: single row, no headers → treat as 1-column vector
+	if len(al.Headers) == 0 && len(al.Rows) == 1 {
+		colTypes := []Type{Unresolved{}}
+		row := al.Rows[0]
+		for col := 0; col < len(row); col++ {
+			cellT, ok := ts.typeCell(row[col], al.Tok())
+			if !ok {
+				continue
+			}
+			colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
+		}
+		// Length = number of elements in the row (for vectors)
+		arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
+		ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+		return []Type{arr}
+	}
 
-    // 1. Determine number of columns
-    numCols := ts.arrayNumCols(al)
-    if numCols == 0 {
-        return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
-    }
+	// 1. Determine number of columns
+	numCols := ts.arrayNumCols(al)
+	if numCols == 0 {
+		return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
+	}
 
 	// 2. Initialize column types
 	colTypes := ts.initColTypes(numCols)
@@ -322,12 +322,12 @@ func (ts *TypeSolver) TypeArrayLiteral(al *ast.ArrayLiteral) []Type {
 		}
 	}
 
-    // 4. Build final Array type (no defaulting of unresolved columns)
-    arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
+	// 4. Build final Array type (no defaulting of unresolved columns)
+	arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
 
-    // Cache this expression's resolved type for the compiler
-    ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
-    return []Type{arr}
+	// Cache this expression's resolved type for the compiler
+	ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+	return []Type{arr}
 }
 
 // arrayNumCols returns column count based on headers or max row width.

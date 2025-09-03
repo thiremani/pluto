@@ -266,9 +266,9 @@ func (rl *RangeLiteral) String() string {
 }
 
 type ArrayLiteral struct {
-	Token   token.Token   // the '[' token
-	Headers []string      // column headers (empty for matrices)
-	Rows    [][]Expression // row data
+	Token   token.Token      // the '[' token
+	Headers []string         // column headers (empty for matrices)
+	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
 }
 
@@ -277,7 +277,7 @@ func (al *ArrayLiteral) Tok() token.Token { return al.Token }
 func (al *ArrayLiteral) String() string {
 	var out bytes.Buffer
 	out.WriteString("[")
-	
+
 	// Print headers if present
 	if len(al.Headers) > 0 {
 		out.WriteString("\n  :  ") // 2 spaces after :
@@ -289,7 +289,7 @@ func (al *ArrayLiteral) String() string {
 		}
 		out.WriteString("\n")
 	}
-	
+
 	// Print rows
 	for _, row := range al.Rows {
 		if len(al.Headers) > 0 {
@@ -309,7 +309,7 @@ func (al *ArrayLiteral) String() string {
 		}
 		out.WriteString("\n")
 	}
-	
+
 	out.WriteString("]")
 	return out.String()
 }

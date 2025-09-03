@@ -16,7 +16,7 @@ const (
 	StrKind
 	RangeKind
 	FuncKind
-    ArrayKind
+	ArrayKind
 )
 
 const (
@@ -127,21 +127,21 @@ func (f Func) AllTypesInferred() bool {
 // Each column has a primitive element type (I64, F64, or Str). Length is the
 // number of rows. Headers may be empty (for matrices without named columns).
 type Array struct {
-    Headers  []string // column headers (may be empty)
-    ColTypes []Type   // element type per column (must be Int{64}, Float{64}, or Str)
-    Length   int      // number of rows
+	Headers  []string // column headers (may be empty)
+	ColTypes []Type   // element type per column (must be Int{64}, Float{64}, or Str)
+	Length   int      // number of rows
 }
 
 func (a Array) String() string {
-    // Type identity ignores headers and length; show schema only.
-    if len(a.ColTypes) == 0 {
-        return "[]"
-    }
-    var cols []string
-    for _, ct := range a.ColTypes {
-        cols = append(cols, ct.String())
-    }
-    return "[" + strings.Join(cols, " ") + "]"
+	// Type identity ignores headers and length; show schema only.
+	if len(a.ColTypes) == 0 {
+		return "[]"
+	}
+	var cols []string
+	for _, ct := range a.ColTypes {
+		cols = append(cols, ct.String())
+	}
+	return "[" + strings.Join(cols, " ") + "]"
 }
 
 func (a Array) Kind() Kind { return ArrayKind }

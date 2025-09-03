@@ -28,7 +28,7 @@ func parseInput(t *testing.T, name, input string) *ast.Program {
 func TestCFGAnalysis(t *testing.T) {
 	validCases := getValidTestCases()
 	errorCases := getErrorTestCases()
-	
+
 	t.Run("ValidCases", func(t *testing.T) {
 		for _, tc := range validCases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCFGAnalysis(t *testing.T) {
 			})
 		}
 	})
-	
+
 	t.Run("ErrorCases", func(t *testing.T) {
 		for _, tc := range errorCases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -57,7 +57,7 @@ func getValidTestCases() []cfgTestCase {
 			input: "x = 100\nx = 1 > 2 99\nx",
 		},
 		{
-			name:  "Allowed ConditionalWrite then ConditionalWrite", 
+			name:  "Allowed ConditionalWrite then ConditionalWrite",
 			input: "x = 1 > 3 1\nx = 2 > 1 2\nx",
 		},
 		{
@@ -176,7 +176,7 @@ func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
 
 func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expectedMessage string) {
 	assert.NotEmpty(t, errors, "Expected an error, but got none.")
-	
+
 	if len(errors) > 0 {
 		assert.Contains(t, errors[0].Msg, expectedMessage, "Error message mismatch")
 	}
@@ -351,7 +351,7 @@ func runFuncEdgeCaseTest(t *testing.T, ctx llvm.Context, tc funcEdgeCaseTest) {
 
 func assertContainsExpectedMessages(t *testing.T, errs []*token.CompileError, expectedMsgs []string) {
 	got := extractErrorMessages(errs)
-	
+
 	for _, want := range expectedMsgs {
 		assertMessageFound(t, got, want)
 	}

@@ -698,22 +698,22 @@ func TestArrayLiterals(t *testing.T) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
 				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
-				
+
 				// Check that we have: a, (-b), (-c), d
 				require.True(t, testIdentifier(t, arr.Rows[0][0], "a"))
-				
+
 				// Check -b is a prefix expression (unary minus)
 				prefixB, ok := arr.Rows[0][1].(*ast.PrefixExpression)
 				require.Truef(t, ok, "expected *ast.PrefixExpression for -b, got %T", arr.Rows[0][1])
 				require.Equal(t, "-", prefixB.Operator)
 				require.True(t, testIdentifier(t, prefixB.Right, "b"))
-				
+
 				// Check -c is a prefix expression (unary minus)
 				prefixC, ok := arr.Rows[0][2].(*ast.PrefixExpression)
 				require.Truef(t, ok, "expected *ast.PrefixExpression for -c, got %T", arr.Rows[0][2])
 				require.Equal(t, "-", prefixC.Operator)
 				require.True(t, testIdentifier(t, prefixC.Right, "c"))
-				
+
 				// Check d is just an identifier
 				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
 			},

@@ -416,7 +416,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 // compileArrayExpression materializes simple array literals into runtime vectors.
 // Currently supports only a single row with no headers, e.g. [1 2 3 4].
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral) (res []*Symbol) {
-    s := &Symbol{}
+	s := &Symbol{}
 
 	// Only support vector form for now
 	if !(len(e.Headers) == 0 && len(e.Rows) == 1) {
@@ -433,99 +433,92 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral) (res []*Symbol) {
 		cells[i] = c.derefIfPointer(vals[0])
 	}
 
-    // Use the solver's inferred array schema; require it to exist.
-    info, ok := c.ExprCache[e]
-    if !ok || len(info.OutTypes) != 1 {
-        c.Errors = append(c.Errors, &token.CompileError{Token: e.Tok(), Msg: "array type not resolved by solver"})
-        return nil
-    }
-    arr, yes := info.OutTypes[0].(Array)
-    if !yes || len(arr.ColTypes) != 1 {
-        c.Errors = append(c.Errors, &token.CompileError{Token: e.Tok(), Msg: "multi-column arrays not implemented yet"})
-        return nil
-    }
-    kind := arr.ColTypes[0].Kind()
+	// Use the solver's inferred array schema
+	info := c.ExprCache[e]
+	arr := info.OutTypes[0].(Array)
+	kind := arr.ColTypes[0].Kind()
 
 	n := len(row)
 	nConst := llvm.ConstInt(c.Context.Int64Type(), uint64(n), false)
 
-    switch kind {
-    case StrKind:
-        arrVal := c.createArrayStr(nConst)
-        c.setArrayStr(arrVal, cells)
-        s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-        s.Type = Array{Headers: nil, ColTypes: []Type{Str{}}, Length: n}
-    case FloatKind:
-        arrVal := c.createArrayF64(nConst)
-        c.setArrayF64(arrVal, cells)
-        s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-        s.Type = Array{Headers: nil, ColTypes: []Type{Float{Width: 64}}, Length: n}
-    case IntKind, UnresolvedKind:
-        arrVal := c.createArrayI64(nConst)
-        c.setArrayI64(arrVal, cells)
-        s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-        s.Type = Array{Headers: nil, ColTypes: []Type{Int{Width: 64}}, Length: n}
-    }
+	// The solver has already fixed the array schema; assign type once.
+	s.Type = arr
+	switch kind {
+	case StrKind:
+		arrVal := c.createArrayStr(nConst)
+		c.setArrayStr(arrVal, cells)
+		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+	case FloatKind:
+		arrVal := c.createArrayF64(nConst)
+		c.setArrayF64(arrVal, cells)
+		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+	case IntKind:
+		arrVal := c.createArrayI64(nConst)
+		c.setArrayI64(arrVal, cells)
+		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+	default:
+		panic("internal: unresolved array element type in compileArrayExpression")
+	}
 
 	return []*Symbol{s}
 }
 
 // Array helpers (I64/F64/Str)
 func (c *Compiler) createArrayI64(n llvm.Value) llvm.Value {
-    _, newFn := c.GetCFunc(PT_I64_NEW)
-    vec := c.builder.CreateCall(c.GetFnType(PT_I64_NEW), newFn, nil, "i64_new")
-    _, rezFn := c.GetCFunc(PT_I64_RESIZE)
-    zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
-    c.builder.CreateCall(c.GetFnType(PT_I64_RESIZE), rezFn, []llvm.Value{vec, n, zero}, "i64_resize")
-    return vec
+	_, newFn := c.GetCFunc(PT_I64_NEW)
+	vec := c.builder.CreateCall(c.GetFnType(PT_I64_NEW), newFn, nil, "i64_new")
+	_, rezFn := c.GetCFunc(PT_I64_RESIZE)
+	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	c.builder.CreateCall(c.GetFnType(PT_I64_RESIZE), rezFn, []llvm.Value{vec, n, zero}, "i64_resize")
+	return vec
 }
 
 func (c *Compiler) setArrayI64(vec llvm.Value, cells []*Symbol) {
-    _, setFn := c.GetCFunc(PT_I64_SET)
-    for i, cs := range cells {
-        idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-        val := cs.Val
-        if cs.Type.Kind() == FloatKind {
-            val = c.builder.CreateFPToSI(cs.Val, c.Context.Int64Type(), "f64_to_i64")
-        }
-        c.builder.CreateCall(c.GetFnType(PT_I64_SET), setFn, []llvm.Value{vec, idx, val}, "i64_set")
-    }
+	_, setFn := c.GetCFunc(PT_I64_SET)
+	for i, cs := range cells {
+		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
+		val := cs.Val
+		if cs.Type.Kind() == FloatKind {
+			val = c.builder.CreateFPToSI(cs.Val, c.Context.Int64Type(), "f64_to_i64")
+		}
+		c.builder.CreateCall(c.GetFnType(PT_I64_SET), setFn, []llvm.Value{vec, idx, val}, "i64_set")
+	}
 }
 
 func (c *Compiler) createArrayF64(n llvm.Value) llvm.Value {
-    _, newFn := c.GetCFunc(PT_F64_NEW)
-    vec := c.builder.CreateCall(c.GetFnType(PT_F64_NEW), newFn, nil, "f64_new")
-    _, rezFn := c.GetCFunc(PT_F64_RESIZE)
-    c.builder.CreateCall(c.GetFnType(PT_F64_RESIZE), rezFn, []llvm.Value{vec, n, llvm.ConstFloat(c.Context.DoubleType(), 0.0)}, "f64_resize")
-    return vec
+	_, newFn := c.GetCFunc(PT_F64_NEW)
+	vec := c.builder.CreateCall(c.GetFnType(PT_F64_NEW), newFn, nil, "f64_new")
+	_, rezFn := c.GetCFunc(PT_F64_RESIZE)
+	c.builder.CreateCall(c.GetFnType(PT_F64_RESIZE), rezFn, []llvm.Value{vec, n, llvm.ConstFloat(c.Context.DoubleType(), 0.0)}, "f64_resize")
+	return vec
 }
 
 func (c *Compiler) setArrayF64(vec llvm.Value, cells []*Symbol) {
-    _, setFn := c.GetCFunc(PT_F64_SET)
-    for i, cs := range cells {
-        idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-        val := cs.Val
-        if cs.Type.Kind() == IntKind {
-            val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
-        }
-        c.builder.CreateCall(c.GetFnType(PT_F64_SET), setFn, []llvm.Value{vec, idx, val}, "f64_set")
-    }
+	_, setFn := c.GetCFunc(PT_F64_SET)
+	for i, cs := range cells {
+		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
+		val := cs.Val
+		if cs.Type.Kind() == IntKind {
+			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
+		}
+		c.builder.CreateCall(c.GetFnType(PT_F64_SET), setFn, []llvm.Value{vec, idx, val}, "f64_set")
+	}
 }
 
 func (c *Compiler) createArrayStr(n llvm.Value) llvm.Value {
-    _, newFn := c.GetCFunc(PT_STR_NEW)
-    vec := c.builder.CreateCall(c.GetFnType(PT_STR_NEW), newFn, nil, "str_new")
-    _, rezFn := c.GetCFunc(PT_STR_RESIZE)
-    c.builder.CreateCall(c.GetFnType(PT_STR_RESIZE), rezFn, []llvm.Value{vec, n}, "str_resize")
-    return vec
+	_, newFn := c.GetCFunc(PT_STR_NEW)
+	vec := c.builder.CreateCall(c.GetFnType(PT_STR_NEW), newFn, nil, "str_new")
+	_, rezFn := c.GetCFunc(PT_STR_RESIZE)
+	c.builder.CreateCall(c.GetFnType(PT_STR_RESIZE), rezFn, []llvm.Value{vec, n}, "str_resize")
+	return vec
 }
 
 func (c *Compiler) setArrayStr(vec llvm.Value, cells []*Symbol) {
-    _, setFn := c.GetCFunc(PT_STR_SET)
-    for i, cs := range cells {
-        idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-        c.builder.CreateCall(c.GetFnType(PT_STR_SET), setFn, []llvm.Value{vec, idx, cs.Val}, "str_set")
-    }
+	_, setFn := c.GetCFunc(PT_STR_SET)
+	for i, cs := range cells {
+		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
+		c.builder.CreateCall(c.GetFnType(PT_STR_SET), setFn, []llvm.Value{vec, idx, cs.Val}, "str_set")
+	}
 }
 
 func setInstAlignment(inst llvm.Value, t Type) {

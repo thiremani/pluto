@@ -291,8 +291,8 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		return err
 	}
 
-    // 3) Compile runtime sources from repo/runtime/*.c (always from project root)
-    rtDir := filepath.Join(p.RootDir, "runtime")
+	// 3) Compile runtime sources from repo/runtime/*.c (always from project root)
+	rtDir := filepath.Join(p.RootDir, "runtime")
 	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
 	if err != nil {
 		return fmt.Errorf("glob runtime sources: %w", err)
