@@ -232,7 +232,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 		return
 	}
 
-	// If we're using %s with a FloatKind, convert the float to a char* via runtime
+	// If we're using %s, convert non-string types to char* via runtime helpers
 	if specRune == 's' {
 		switch mainType.Kind() {
 		case FloatKind:
@@ -242,6 +242,11 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 			return
 		case RangeKind:
 			strPtr := c.rangeStrArg(mainSym)
+			valArgs = append(valArgs, strPtr)
+			toFree = append(toFree, strPtr)
+			return
+		case ArrayKind:
+			strPtr := c.arrayStrArg(mainSym)
 			valArgs = append(valArgs, strPtr)
 			toFree = append(toFree, strPtr)
 			return

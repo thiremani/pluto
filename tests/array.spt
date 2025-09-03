@@ -1,5 +1,32 @@
-_ =
+arrInt =
 [
   1 2 3 4
 ]
-"ok"
+arrInt
+"arr is -arrInt"
+
+arrFloat =
+[
+  1.5 -2.5 3 4.25
+]
+arrFloat
+"arr is -arrFloat"
+
+arrStr =
+[
+  "foo" "bar" "baz"
+]
+arrStr
+"arr is -arrStr"
+
+# inline vector (no newline inside)
+arr2 = [1 2 3 4]
+arr2
+"arr2 is -arr2"
+
+# bracket on same line, then rows on next line(s)
+arr3 = [
+  1.1 2.3 4 2.1
+]
+arr3
+"arr3 is -arr3"
