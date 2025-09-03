@@ -26,7 +26,9 @@ static char* pt_dup_cstr(const char* s) {
    - avoid kv_push so we can report OOM explicitly (return -1)
    - never overflow size computations (SIZE_MAX guards) */
 #define PT_DEF_ENSURE_CAP(NAME, T)                                       \
-static int NAME##_ensure_cap(kvec_t(T)* v, size_t add) {                 \
+static int NAME##_ensure_cap(void* vv, size_t add) {                     \
+    typedef kvec_t(T) kv_t;                                             \
+    kv_t* v = (kv_t*)vv;                                                \
     /* add may be 0; we only grow */                                     \
     size_t n = (size_t)(v->n > 0 ? v->n : 0);                            \
     if (add > SIZE_MAX - n) return -1;                                   \
