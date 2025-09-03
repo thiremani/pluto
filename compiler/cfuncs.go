@@ -139,3 +139,4 @@ func (c *Compiler) namedOpaquePtr(name string) llvm.Type {
     }
     return llvm.PointerType(st, 0)
 }
+

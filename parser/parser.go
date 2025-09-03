@@ -522,14 +522,9 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 			return nil
 		}
 	}
-	// Treat end-of-line as end of RHS as well as peek NEWLINE/EOF.
-	if p.curTokenIs(token.NEWLINE) || p.stmtEnded() {
+	if p.stmtEnded() {
 		stmt.Value = expList
-		// If we are already positioned on NEWLINE, do not advance here;
-		// the caller's parse loop will advance to the next statement start.
-		if !p.curTokenIs(token.NEWLINE) {
-			p.nextToken()
-		}
+		p.nextToken()
 		return stmt
 	}
 
@@ -734,17 +729,17 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 		}
 	}
 
-    if !p.curTokenIs(token.RBRACK) {
-        p.errors = append(p.errors, &token.CompileError{
-            Token: p.curToken,
-            Msg:   "expected ']' to close array literal",
-        })
-        return nil
-    }
-    // Do not consume the closing ']' here. Align with grouped-expression
-    // behavior and leave curToken at the closing token; callers (statement
-    // parsing) will advance past newline/EOF as appropriate.
-    return arr
+	if !p.curTokenIs(token.RBRACK) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "expected ']' to close array literal",
+		})
+		return nil
+	}
+	// Do not consume the closing ']' here. Align with grouped-expression
+	// behavior and leave curToken at the closing token; callers (statement
+	// parsing) will advance past newline/EOF as appropriate.
+	return arr
 }
 
 func (p *StmtParser) skipArrayFormatting() {
