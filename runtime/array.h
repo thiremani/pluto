@@ -1,4 +1,3 @@
-#pragma once
 #ifndef PLUTO_RUNTIME_ARRAY_H
 #define PLUTO_RUNTIME_ARRAY_H
 
