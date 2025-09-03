@@ -30,21 +30,20 @@ static int NAME##_ensure_cap(void* vv, size_t add) {                     \
     typedef kvec_t(T) kv_t;                                             \
     kv_t* v = (kv_t*)vv;                                                \
     /* add may be 0; we only grow */                                     \
-    size_t n = (size_t)(v->n > 0 ? v->n : 0);                            \
+    size_t n = v->n;                                                     \
     if (add > SIZE_MAX - n) return -1;                                   \
     size_t need = n + add;                                               \
-    size_t curm = (size_t)(v->m > 0 ? v->m : 0);                         \
+    size_t curm = v->m;                                                  \
     if (need <= curm) return 0;                                          \
     size_t newm = PT_MAX((size_t)2, curm);                               \
     while (newm < need) {                                                \
         if (newm > SIZE_MAX / 2u) { newm = need; break; }                \
         newm <<= 1;                                                      \
     }                                                                    \
-    if (newm > (size_t)INT_MAX) return -1;                               \
     if (sizeof(T) != 0 && newm > SIZE_MAX / sizeof(T)) return -1;        \
     T* a = (T*)realloc(v->a, newm * sizeof(T));                          \
     if (!a && newm) return -1;                                           \
-    v->a = a; v->m = (int)newm;                                          \
+    v->a = a; v->m = newm;                                               \
     return 0;                                                            \
 }
 
@@ -68,21 +67,18 @@ size_t pt_##SUF##_len(const NAME* a){ return a ? (size_t)a->v.n : 0; }   \
 size_t pt_##SUF##_cap(const NAME* a){ return a ? (size_t)a->v.m : 0; }   \
 int pt_##SUF##_reserve(NAME* a, size_t cap){                             \
     if (!a) return -1;                                                   \
-    /* kvec limits m to INT_MAX; if cap already within current m -> ok */\
     if (cap <= (size_t)a->v.m) return 0;                                 \
-    if (cap > (size_t)INT_MAX) return -1;                                \
     size_t n = (size_t)a->v.n;                                           \
     return SUF##_ensure_cap(&a->v, cap > n ? (cap - n) : 0);             \
 }                                                                        \
 int pt_##SUF##_resize(NAME* a, size_t new_len, T fill){                  \
     if (!a) return -1;                                                   \
-    if (new_len > (size_t)INT_MAX) return -1;                            \
     size_t n = (size_t)a->v.n;                                           \
-    if (new_len <= n) { a->v.n = (int)new_len; return 0; }               \
+    if (new_len <= n) { a->v.n = new_len; return 0; }                    \
     size_t add = new_len - n;                                            \
     if (SUF##_ensure_cap(&a->v, add) != 0) return -1;                    \
     for (size_t i = 0; i < add; ++i) a->v.a[n + i] = fill;               \
-    a->v.n = (int)new_len;                                               \
+    a->v.n = new_len;                                                    \
     return 0;                                                            \
 }                                                                        \
 int pt_##SUF##_push(NAME* a, T v){                                       \
@@ -146,18 +142,16 @@ size_t pt_str_cap(const PtArrayStr* a){ return a ? (size_t)a->v.m : 0; }
 int pt_str_reserve(PtArrayStr* a, size_t cap){
     if (!a) return -1;
     if (cap <= (size_t)a->v.m) return 0;
-    if (cap > (size_t)INT_MAX) return -1;
     size_t n = (size_t)a->v.n;
     return str_ensure_cap(&a->v, cap > n ? (cap - n) : 0);
 }
 
 int pt_str_resize(PtArrayStr* a, size_t new_len){
     if (!a) return -1;
-    if (new_len > (size_t)INT_MAX) return -1;
     size_t n = (size_t)a->v.n;
     if (new_len <= n) {
         pt_str_free_range(a, new_len, n);
-        a->v.n = (int)new_len;
+        a->v.n = new_len;
         return 0;
     }
     size_t add = new_len - n;
@@ -174,7 +168,7 @@ int pt_str_resize(PtArrayStr* a, size_t new_len){
         pt_str_free_range(a, n, n + i);
         return -1;
     }
-    a->v.n = (int)new_len;
+    a->v.n = new_len;
     return 0;
 }
 
