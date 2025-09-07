@@ -1,5 +1,7 @@
-pluto
+Pluto
 ===== 
+
+Taking programming to another planet 🚀
 
 This project builds a native compiler that shells out to LLVM 20 tools. Below
 are quick start instructions to build and run on the primary development
