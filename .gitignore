@@ -4,6 +4,10 @@ a.out
 pluto
 pluto.exe
 test
+
+# Python bytecode
+__pycache__/
+*.pyc
 *.o
 *.ll
 .DS_Store
