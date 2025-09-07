@@ -195,6 +195,10 @@ func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
 
 func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 	for {
+		// Skip Windows CR in CRLF sequences without treating it as indentation.
+		for l.curr == '\r' {
+			l.readRune()
+		}
 		for l.curr == ' ' {
 			l.readRune()
 		}

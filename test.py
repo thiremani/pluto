@@ -59,10 +59,17 @@ def ensure_dependencies():
 # Ensure dependencies before importing
 ensure_dependencies()
 from colorama import Fore, Style
+MSYS2 = os.environ.get("MSYSTEM") is not None
+try:
+    from scripts.msys2_build import build_pluto  # type: ignore
+except Exception:
+    build_pluto = None
 
 TEST_DIR = Path("tests")
 BUILD_DIR = Path("build")
-PLUTO_EXE = "pluto"
+# On Windows (including MSYS2), the built binary is an .exe
+IS_WINDOWS_ENV = (os.name == "nt") or (os.environ.get("MSYSTEM") is not None)
+PLUTO_EXE = "pluto.exe" if IS_WINDOWS_ENV else "pluto"
 KEEP_BUILD = False
 
 class TestRunner:
@@ -70,10 +77,34 @@ class TestRunner:
         self.passed = 0
         self.failed = 0
         self.project_root = Path(__file__).parent.resolve()
-        self.llvm_bin = self.detect_llvm_path()
+        # Keep simple: prefer MSYS2-provided LLVM_BIN if present; otherwise fall back.
+        if os.name == 'nt':
+            self.llvm_bin = self.detect_llvm_path_windows()
+        else:
+            self.llvm_bin = self.detect_llvm_path_unix()
         self.test_dir = test_dir
 
-    def detect_llvm_path(self) -> Path:
+    def detect_llvm_path_windows(self) -> Path:
+        # Prefer MSYS2 UCRT64/MINGW64 paths if present, then LLVM_HOME, then Program Files
+        env_bin = os.environ.get("LLVM_BIN", "").strip()
+        if env_bin:
+            p = Path(env_bin)
+            if p.exists():
+                return p
+        paths = [
+            Path("C:/msys64/ucrt64/bin"),
+            Path("C:/msys64/mingw64/bin"),
+            Path(os.environ.get("LLVM_HOME", "")) / "bin",
+            Path("C:/Program Files/LLVM/bin"),
+        ]
+        for p in paths:
+            if p.exists():
+                return p
+        raise RuntimeError(
+            "LLVM 20 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
+        )
+
+    def detect_llvm_path_unix(self) -> Path:
         # Try common LLVM 20 paths
         paths = [
             Path("/usr/lib/llvm-20/bin"),  # Linux
@@ -83,15 +114,27 @@ class TestRunner:
         for p in paths:
             if p.exists():
                 return p
-        raise RuntimeError("LLVM 20 not found. Install with:\n"
-                           "Linux: https://apt.llvm.org/\n"
+        raise RuntimeError("LLVM 20 not found. Install with:\n" 
+                           "Linux: https://apt.llvm.org/\n" 
                            "macOS: brew install llvm@20")
+
         
     def run_command(self, cmd: list, cwd: Path = None) -> str:
         """Execute a command and return its output"""
-        # Prepend LLVM bin to PATH
+        # Merge MSYS2 LLVM/CGO env when running inside MSYS2 so go build/test works consistently.
         env = os.environ.copy()
-        env["PATH"] = f"{self.llvm_bin}:{env['PATH']}"
+        if MSYS2:
+            try:
+                sys.path.insert(0, str((self.project_root / "scripts").resolve()))
+                from msys2_env import compute_env  # type: ignore
+                env.update(compute_env())
+            except Exception:
+                pass
+        # Prepend LLVM bin to PATH, but let existing LLVM_BIN (e.g., from MSYS2) take precedence.
+        prepend = env.get("LLVM_BIN") or str(self.llvm_bin)
+        if prepend:
+            env["PATH"] = f"{prepend}{os.pathsep}{env['PATH']}"
+
         str_cmd = [str(c) for c in cmd]
         try:
             result = subprocess.run(
@@ -101,6 +144,8 @@ class TestRunner:
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd) if cwd else None,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=True
             )
             return result.stdout
@@ -112,7 +157,12 @@ class TestRunner:
     def build_compiler(self):
         """Build the Pluto compiler"""
         print(f"{Fore.YELLOW}=== Building Compiler ==={Style.RESET_ALL}")
-        self.run_command(["go", "build", "-o", str(PLUTO_EXE), "main.go"], self.project_root)
+        # If MSYS2 build function is available (Windows UCRT64), use it to unify flags.
+        if os.name == 'nt' and build_pluto is not None and os.environ.get('MSYSTEM'):
+            build_pluto(self.project_root)
+            return
+        build_command = ["go", "build", "-o", str(PLUTO_EXE), "main.go"]
+        self.run_command(build_command, self.project_root)
 
     def run_unit_tests(self):
         """Run Go unit tests"""
@@ -186,7 +236,7 @@ class TestRunner:
         try:
             executable_path = str(test_dir / test_name)
             actual_output = self.run_command([executable_path])
-            expected_output = exp_file.read_text()
+            expected_output = exp_file.read_text(encoding="utf-8")
 
             if self._compare_outputs(expected_output, actual_output):
                 print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")

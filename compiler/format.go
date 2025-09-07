@@ -42,7 +42,7 @@ var specToKind = map[rune]Kind{
 func defaultSpecifier(t Type) (string, error) {
 	switch t.Kind() {
 	case IntKind:
-		return "%ld", nil
+		return "%lld", nil
 	case FloatKind:
 		// Floats are converted to char* via runtime helpers (f64_str/f32_str)
 		return "%s", nil
@@ -213,6 +213,8 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 		builder.WriteString(spec)
 	}
 	// customSpec %% is written here
+	// any other customSpec we replce %d -> %lld etc
+	customSpec = upgradeIntSpec(customSpec)
 	builder.WriteString(customSpec)
 
 	finalSpec := customSpec
@@ -251,6 +253,27 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 			toFree = append(toFree, strPtr)
 			return
 		}
+	}
+
+	// Make %p consistent across platforms: print as 0x<lowercase-hex>
+	// by converting the pointer to an unsigned 64-bit integer and using %llx.
+	if specRune == 'p' {
+		// Validate type: %p requires a pointer.
+		if mainType.Kind() != PointerKind {
+			err = &token.CompileError{
+				Token: sl.Token,
+				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
+			}
+			c.Errors = append(c.Errors, err)
+			return
+		}
+		// Use the raw symbol to ensure we have the pointer, not a dereferenced value.
+		mainSym, _ = c.getRawSym(mainId)
+		// Cast pointer to i64 and format with 0x%llx
+		ptrAsInt := c.builder.CreatePtrToInt(mainSym.Val, c.Context.Int64Type(), "ptr_as_i64")
+		formattedStr = "0x%llx"
+		valArgs = append(valArgs, ptrAsInt)
+		return
 	}
 
 	if specToKind[specRune] != mainType.Kind() {
@@ -317,6 +340,46 @@ func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value, []
 
 	st := builder.String()
 	return st, args, toFree
+}
+
+// upgradeIntSpec rewrites a single printf conversion specifier to include
+// the 64-bit length modifier "ll" for integer-like conversions when no
+// standard length modifier is already present. It preserves flags/width/
+// precision and positional parameters.
+// Examples:
+//
+//	%d   -> %lld
+//	%*d  -> %*lld
+//	%-08d -> %-08lld
+//	%n   -> %lln
+//
+// Leaves existing length modifiers untouched: hh, h, l, ll, j, z, t.
+func upgradeIntSpec(spec string) string {
+	if len(spec) < 2 || spec[0] != '%' {
+		return spec
+	}
+	conv := spec[len(spec)-1]
+	switch conv {
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'n':
+		// eligible for upgrade
+	default:
+		return spec
+	}
+	body := spec[1 : len(spec)-1]
+	// If already has "ll", leave as-is.
+	if strings.Contains(body, "ll") {
+		return spec
+	}
+	// If other standard length modifiers are present, leave as-is.
+	if strings.Contains(body, "hh") || strings.ContainsAny(body, "hjzt") {
+		return spec
+	}
+	// If single 'l' exists, upgrade to 'll' by adding one more 'l'.
+	if strings.Contains(body, "l") {
+		return spec[:len(spec)-1] + "l" + string(conv)
+	}
+	// No length modifier: insert "ll" immediately before the conversion rune.
+	return spec[:len(spec)-1] + "ll" + string(conv)
 }
 
 func maybeMarker(runes []rune, i int) bool {

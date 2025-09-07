@@ -2,6 +2,7 @@ a.o
 a.out
 /main.s
 pluto
+pluto.exe
 test
 *.o
 *.ll

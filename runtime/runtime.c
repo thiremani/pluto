@@ -21,10 +21,12 @@ char *range_i64_str(int64_t s, int64_t t, int64_t p) {
     char *buf = malloc(65);
     if (!buf) return NULL;
     if (p == 1) {
-        // omit the default “:1”
-        sprintf(buf, "%" PRId64 ":%" PRId64, s, t);
+        // omit the default ":1"
+        /* bounded print to avoid CRT warnings/overflow */
+        snprintf(buf, 65, "%" PRId64 ":%" PRId64, s, t);
     } else {
-        sprintf(buf, "%" PRId64 ":%" PRId64 ":%" PRId64, s, t, p);
+        /* bounded print to avoid CRT warnings/overflow */
+        snprintf(buf, 65, "%" PRId64 ":%" PRId64 ":%" PRId64, s, t, p);
     }
     return buf;
 }
@@ -75,3 +77,12 @@ char *f32_str(float xf) {
     memcpy(out, tmp, (size_t)n + 1);
     return out;
 }
+
+/* Enable %n in printf on Windows UCRT (disabled by default for security).
+   This matches POSIX behavior relied upon by tests like fmt_ptr. */
+#ifdef _WIN32
+__declspec(dllimport) int _set_printf_count_output(int);
+__attribute__((constructor)) static void pluto_enable_printf_n(void) {
+    _set_printf_count_output(1);
+}
+#endif
