@@ -275,15 +275,15 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 }
 
 func (p *Pluto) GenBinary(scriptLL, bin string) error {
-    optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
-    // Use the default object suffix (".o") on all platforms, including
-    // Windows when using the MinGW/UCRT toolchain.
-    objExt := OBJ_SUFFIX
-    objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+objExt)
-    binFile := filepath.Join(p.Cwd, bin)
-    if runtime.GOOS == "windows" {
-        binFile = binFile + ".exe"
-    }
+	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
+	// Use the default object suffix (".o") on all platforms, including
+	// Windows when using the MinGW/UCRT toolchain.
+	objExt := OBJ_SUFFIX
+	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+objExt)
+	binFile := filepath.Join(p.Cwd, bin)
+	if runtime.GOOS == "windows" {
+		binFile = binFile + ".exe"
+	}
 
 	// 1) Optimize IR
 	if out, err := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
@@ -292,11 +292,11 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	}
 
 	// 2) Lower to object
-    llcArgs := []string{"-filetype=obj"}
-    // PIC is ELF/Mach-O specific; avoid on Windows COFF
-    if runtime.GOOS != "windows" {
-        llcArgs = append(llcArgs, "-relocation-model=pic")
-    }
+	llcArgs := []string{"-filetype=obj"}
+	// PIC is ELF/Mach-O specific; avoid on Windows COFF
+	if runtime.GOOS != "windows" {
+		llcArgs = append(llcArgs, "-relocation-model=pic")
+	}
 	llcArgs = append(llcArgs, optFile, "-o", objFile)
 	if out, err := exec.Command("llc", llcArgs...).CombinedOutput(); err != nil {
 		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
@@ -316,18 +316,18 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	var rtObjs []string
 	for _, src := range rtSrcs {
 		outObj := filepath.Join(p.CacheDir, SCRIPT_DIR, filepath.Base(src)+objExt)
-        args := []string{
-            OPT_LEVEL, "-std=c11", "-march=native",
-            "-flto",
-        }
-        args = append(args,
-            "-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
-            "-c", src, "-o", outObj,
-        )
-        // PIC not applicable on Windows COFF
-        if runtime.GOOS != "windows" {
-            args = append(args, "-fPIC")
-        }
+		args := []string{
+			OPT_LEVEL, "-std=c11", "-march=native",
+			"-flto",
+		}
+		args = append(args,
+			"-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
+			"-c", src, "-o", outObj,
+		)
+		// PIC not applicable on Windows COFF
+		if runtime.GOOS != "windows" {
+			args = append(args, "-fPIC")
+		}
 		if out, err := exec.Command("clang", args...).CombinedOutput(); err != nil {
 			fmt.Printf("runtime compile failed for %s: %v\n%s\n", src, err, out)
 			return err
@@ -335,22 +335,22 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		rtObjs = append(rtObjs, outObj)
 	}
 
-    // 4) Link everything
-    // Use lld with LTO across platforms, including Windows under MinGW/UCRT.
-    linkArgs := []string{"-flto", "-fuse-ld=lld"}
+	// 4) Link everything
+	// Use lld with LTO across platforms, including Windows under MinGW/UCRT.
+	linkArgs := []string{"-flto", "-fuse-ld=lld"}
 
-    switch runtime.GOOS {
-    case "darwin":
-        // Mach-O linker (ld64.lld) wants -dead_strip
-        linkArgs = append(linkArgs, "-Wl,-dead_strip")
-    case "windows":
-        // MinGW/COFF linker flags
-        linkArgs = append(linkArgs, "-Wl,--gc-sections")
-    default:
-        // ELF linkers (ld, lld) accept --gc-sections
-        linkArgs = append(linkArgs, "-Wl,--gc-sections")
-    }
-    linkArgs = append(linkArgs, objFile)
+	switch runtime.GOOS {
+	case "darwin":
+		// Mach-O linker (ld64.lld) wants -dead_strip
+		linkArgs = append(linkArgs, "-Wl,-dead_strip")
+	case "windows":
+		// MinGW/COFF linker flags
+		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+	default:
+		// ELF linkers (ld, lld) accept --gc-sections
+		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+	}
+	linkArgs = append(linkArgs, objFile)
 	linkArgs = append(linkArgs, rtObjs...)
 	linkArgs = append(linkArgs, "-o", binFile)
 	// libm is only needed/available on ELF-based systems

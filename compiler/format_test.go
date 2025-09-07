@@ -111,13 +111,13 @@ func TestValidFormatString(t *testing.T) {
 			name: "ValidFormatString",
 			input: `x = 5
 "x = -x%ld"`,
-        expectOutput: "x = %lld",
+			expectOutput: "x = %lld",
 		},
 		{
 			name: "Escape%%",
 			input: `x = 5
 "Value: %%-x%%`,
-        expectOutput: "Value: %%%%%lld%%",
+			expectOutput: "Value: %%%%%lld%%",
 		},
 		{
 			name:         "NoIdentifier",
@@ -128,7 +128,7 @@ func TestValidFormatString(t *testing.T) {
 			name: "SpaceAfterVar",
 			input: `x = 5
 "x = -x %d"`,
-        expectOutput: "x = %lld %%d",
+			expectOutput: "x = %lld %%d",
 		},
 		{
 			name: "PercentAfterSpecifier",
@@ -149,7 +149,7 @@ digits = 4
 y = 3.2
 "x = -x%ld-y"`,
 			// float default format is "%s"
-        expectOutput: "x = %lld%s",
+			expectOutput: "x = %lld%s",
 		},
 		{
 			name: "MixedBackToBackSpecifiers",
@@ -157,20 +157,20 @@ y = 3.2
 y = 3.2
 "x = -x%ld-y%f"`,
 			// float default format is "%s"
-        expectOutput: "x = %lld%f",
+			expectOutput: "x = %lld%f",
 		},
 		{
 			name: "MixedBackToBackOneVar",
 			input: `x = 3
 "x = -x%ld-y%f"`,
 			// float default format is "%s"
-        expectOutput: "x = %lld-y%%f",
+			expectOutput: "x = %lld-y%%f",
 		},
 		{
 			name: "CountPointer",
 			input: `x = 5
 "x = -x%n"`,
-        expectOutput: "x = %lln",
+			expectOutput: "x = %lln",
 		},
 		{
 			name:         "VarNotDefined",
