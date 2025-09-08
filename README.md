@@ -62,6 +62,9 @@ Quick Start
 - Build compiler: `go build -o pluto main.go`
 - Run unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Run full suite: `python3 test.py`
+- New project setup: add a `pt.mod` at your repo root to define the module path (project root). Minimal example:
+  - `pt.mod` first non‑comment line: `module github.com/you/yourproject`
+  - Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
 - Compile a directory: `./pluto [directory]` (writes binaries next to sources)
 
 Requirements
