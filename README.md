@@ -3,6 +3,17 @@ The Pluto Programming Language
 
 *Taking programming to another planet 🚀*
 
+Pluto is a compiled language that aims for the readability of scripting languages with the safety and performance of C/Go. A Go front‑end lowers .pt/.spt to LLVM 20 and native binaries. Features include range‑driven auto‑vectorization, array/link semantics, scope‑based memory (no nulls, no out‑of‑bounds, no GC), and concurrency by construction.
+
+Highlights
+----------
+- Go front‑end, LLVM 20 back‑end; emits native binaries
+- Range literals with auto‑vectorized execution
+- First‑class arrays (safe slicing) and link semantics
+- Scope‑based memory: no nulls, no OOB, no garbage collector
+- printf‑style formatting with markers; arrays/ranges printable
+- Cross‑platform; GitHub Actions CI (Go 1.25 + LLVM 20)
+
 This project builds a native compiler that shells out to LLVM 20 tools. Below
 are quick start instructions to build and run on the primary development
 environments.
