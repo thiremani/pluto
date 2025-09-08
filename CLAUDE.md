@@ -2,7 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Requirements
+
+- Go 1.25+
+- LLVM 20 (including `clang`, `opt`, `llc`, and `lld`)
+- Python 3.x
+- pip (for installing Python dependencies)
+
+On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add it to your path. The paths are `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
+
 ## Development Commands
+
+### Install Python dependencies
+```bash
+pip install -r requirements.txt
+```
 
 ### Building the compiler
 ```bash
@@ -12,37 +26,36 @@ go build -o pluto main.go
 ### Running tests
 ```bash
 # Full test suite (builds compiler, runs unit tests, runs integration tests)
-./test.sh
+python3 test.py              # Run all tests
+python3 test.py --keep       # Keep build artifacts for debugging
 
-# Python test runner with options (auto-installs dependencies if missing)
-python test.py              # Run all tests
-python test.py --keep       # Keep build artifacts for debugging
+# Run specific integration tests
+python3 test.py tests/math
 ```
 
 ### Running unit tests only
 ```bash
-go test -race ./lexer
-go test -race ./parser  
-go test -race ./compiler
+go test -race ./lexer ./parser ./compiler
 ```
 
 ### Running the compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
 ```
+This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
 ### Debugging and Development
 ```bash
-# Check for compilation errors with verbose output
+# Check for compilation errors with verbose output (quick smoke check)
 ./pluto tests/
 
 # Clear cache when debugging compilation issues
-rm -rf $HOME/Library/Caches/pluto  # macOS
-rm -rf $HOME/.cache/pluto          # Linux
-rm -rf %LocalAppData%/pluto        # Windows
+rm -rf "$HOME/Library/Caches/pluto"  # macOS
+rm -rf "$HOME/.cache/pluto"          # Linux
+rd /s /q %LocalAppData%\pluto        # Windows
 
 # Run integration tests for specific directory
-python test.py tests/math
+python3 test.py tests/math
 ```
 
 ## Project Architecture
@@ -79,14 +92,17 @@ Pluto is a compiled programming language that generates LLVM IR and produces nat
 
 ### Compilation Process
 
-1. **Module resolution**: Finds `pt.mod` file to determine project root and module path
-2. **Code compilation**: Compiles all `.pt` files in directory to LLVM IR
-3. **Script compilation**: For each `.spt` file:
-   - Links with code module
-   - Generates LLVM IR  
-   - Optimizes with `-O3`
-   - Compiles to object file with `llc`
-   - Links with runtime to create executable
+The compilation process consists of two main phases:
+
+1. **Code Compilation**: All `.pt` files in the target directory are compiled into a single LLVM IR module. These files are intended for reusable functions and constants.
+2. **Script Compilation**: For each `.spt` file, the compiler performs the following steps:
+   - Links the code module (from the `.pt` files) into the script's module
+   - Generates LLVM IR for the script
+   - Optimizes the IR using `opt -O3`
+   - Compiles the optimized IR into an object file using `llc`
+   - Links the object file with the C runtime to create a native executable
+
+**Module resolution**: Walks up to find `pt.mod` file to determine project root and module path; cache key based on module path.
 
 ### File Extensions and Structure
 - `.pt`: Code files (functions, constants)
@@ -94,22 +110,42 @@ Pluto is a compiled programming language that generates LLVM IR and produces nat
 - `.exp`: Expected output files for tests
 - `pt.mod`: Module declaration file (similar to `go.mod`)
 
-### Dependencies
-- Go 1.24+
-- LLVM 20 (required for IR generation and optimization)
-- clang, opt, llc tools for compilation pipeline
-- lld linker for final executable generation
-
 ### Testing Infrastructure
+- Unit tests live under each package; run with `go test -race`
+- End-to-end tests live in `tests/`:
+  - Inputs: `.spt` (scripts) and optional `.pt` (shared code)
+  - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes)
 - Python-based test runner (`test.py`) with colorized output
 - Integration tests compare actual vs expected program output
-- Supports regex patterns in `.exp` files with `re:` prefix
-- Unit tests for individual components using Go's testing framework
+- Run: `python3 test.py [--keep]` or focused run: `python3 test.py tests/math`
+
+CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test.py` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
-- Stores intermediate LLVM IR files organized by module path
-- Separate `code/` and `script/` subdirectories for different compilation phases
+- If `PTCACHE` is not set, it defaults to:
+  - macOS: `$HOME/Library/Caches/pluto`
+  - Linux: `$HOME/.cache/pluto`
+  - Windows: `%LocalAppData%\pluto`
+- Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores intermediate LLVM IR files and objects
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 20 tools
+
+## Coding Style & Naming Conventions
+- Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
+- Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
+- Go formatting: `go fmt ./...`; basic checks: `go vet ./...`
+- Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions
+- Filenames: lowercase with underscores where needed (Go convention)
+
+## Commit & Pull Request Guidelines
+- Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`)
+- PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant
 
 ## Instructions for AI Assistants
+- Keep changes minimal and focused; avoid reflowing or reindenting unrelated lines
+- Use tabs for indentation (preserve existing indentation style)
 - NEVER add "🤖 Generated with [Claude Code]..." footer to git commits
+- Do what has been asked; nothing more, nothing less
+- NEVER create files unless they're absolutely necessary for achieving your goal
+- ALWAYS prefer editing an existing file to creating a new one
+- NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User
