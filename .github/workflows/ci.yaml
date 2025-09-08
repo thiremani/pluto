@@ -50,5 +50,5 @@ jobs:
 
       - name: Run full test suite
         run: |
-          chmod +x test.sh
-          ./test.sh
+          python3 --version
+          python3 test.py

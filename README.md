@@ -1,5 +1,5 @@
-Pluto
-===== 
+The Pluto Programming Language
+============================== 
 
 Taking programming to another planet 🚀
 

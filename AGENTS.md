@@ -11,8 +11,7 @@
 ## Build, Test, and Development Commands
 - Build compiler: `go build -o pluto main.go`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
-- Full suite: `./test.sh` (builds compiler, runs unit and integration tests)
-- Python test runner: `python3 test.py` (use `--keep` to retain artifacts)
+- Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).
 
 Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
@@ -35,10 +34,10 @@ Requirements: Go `1.24`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 - E2E tests live in `tests/`:
   - Inputs: `.spt` (scripts) and optional `.pt` (shared code).
   - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes).
-  - Run: `./test.sh` or `python3 test.py [--keep]`.
+- Run: `python3 test.py [--keep]`.
   - Focused run: `python3 test.py tests/math`.
 
-CI: GitHub Actions builds with Go 1.24, installs LLVM 20, and runs `./test.sh` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.24, installs LLVM 20, and runs `python3 test.py` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
