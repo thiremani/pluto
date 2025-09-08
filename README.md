@@ -11,7 +11,7 @@ Build and Run
 -------------
 
 **Linux/macOS (primary)**
-- Requirements: Go 1.24+ and LLVM 20 (tools: opt, llc, clang, ld.lld)
+- Requirements: Go 1.25+ and LLVM 20 (tools: opt, llc, clang, ld.lld)
 - Install and set PATH:
   - Linux:
     - See https://apt.llvm.org for instructions. Typical flow:
