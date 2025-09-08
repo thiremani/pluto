@@ -173,3 +173,8 @@ Contributing
 Further Reading
 ---------------
 - Language overview and design notes: see `CLAUDE.md` for the philosophy (no nulls, no OOB, vectorization, conditional statements, concurrency model, arrays/links, etc.).
+
+License
+-------
+- Pluto is licensed under the MIT License. See `LICENSE`.
+- Vendored third‑party: `runtime/third_party/klib/` (klib by Attractive Chaos) is MIT‑licensed; its license is preserved in `runtime/third_party/klib/LICENSE.txt`.
