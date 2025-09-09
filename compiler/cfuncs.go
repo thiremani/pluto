@@ -14,13 +14,9 @@ const (
 	PT_I64_NEW    = "pt_i64_new"
 	PT_I64_RESIZE = "pt_i64_resize"
 	PT_I64_SET    = "pt_i64_set"
-	PT_I64_LEN    = "pt_i64_len"
-	PT_I64_GET    = "pt_i64_get"
 	PT_F64_NEW    = "pt_f64_new"
 	PT_F64_RESIZE = "pt_f64_resize"
 	PT_F64_SET    = "pt_f64_set"
-	PT_F64_LEN    = "pt_f64_len"
-	PT_F64_GET    = "pt_f64_get"
 	PT_STR_NEW    = "pt_str_new"
 	PT_STR_RESIZE = "pt_str_resize"
 	PT_STR_SET    = "pt_str_set"
@@ -49,18 +45,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(c.namedOpaquePtr("PtArrayI64"), nil, false)
 	case PT_I64_RESIZE, PT_I64_SET:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayI64"), i64, i64}, false)
-	case PT_I64_LEN:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
-	case PT_I64_GET:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayI64"), i64}, false)
 	case PT_F64_NEW:
 		return llvm.FunctionType(c.namedOpaquePtr("PtArrayF64"), nil, false)
 	case PT_F64_RESIZE, PT_F64_SET:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayF64"), i64, f64}, false)
-	case PT_F64_LEN:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayF64")}, false)
-	case PT_F64_GET:
-		return llvm.FunctionType(f64, []llvm.Type{c.namedOpaquePtr("PtArrayF64"), i64}, false)
 	case PT_STR_NEW:
 		return llvm.FunctionType(c.namedOpaquePtr("PtArrayStr"), nil, false)
 	case PT_STR_RESIZE:

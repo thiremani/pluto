@@ -579,43 +579,6 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			rightType = ptr.Elem
 		}
 
-		// Phase 1: Support Array (+, -, *, /, etc.) Scalar broadcasting
-		if leftType.Kind() == ArrayKind && (rightType.Kind() == IntKind || rightType.Kind() == FloatKind) {
-			arr := leftType.(Array)
-			// only numeric arrays allowed for arithmetic
-			if len(arr.ColTypes) != 1 || (arr.ColTypes[0].Kind() != IntKind && arr.ColTypes[0].Kind() != FloatKind) {
-				ts.Errors = append(ts.Errors, &token.CompileError{Token: expr.Token, Msg: "arithmetic on non-numeric array not supported"})
-				return []Type{Unresolved{}}
-			}
-			// promote element type with scalar type
-			var elem Type
-			if arr.ColTypes[0].Kind() == FloatKind || rightType.Kind() == FloatKind {
-				elem = Float{Width: 64}
-			} else {
-				elem = Int{Width: 64}
-			}
-			res := arr
-			res.ColTypes = []Type{elem}
-			types = append(types, res)
-			continue
-		}
-		if (leftType.Kind() == IntKind || leftType.Kind() == FloatKind) && rightType.Kind() == ArrayKind {
-			arr := rightType.(Array)
-			if len(arr.ColTypes) != 1 || (arr.ColTypes[0].Kind() != IntKind && arr.ColTypes[0].Kind() != FloatKind) {
-				ts.Errors = append(ts.Errors, &token.CompileError{Token: expr.Token, Msg: "arithmetic on non-numeric array not supported"})
-				return []Type{Unresolved{}}
-			}
-			var elem Type
-			if arr.ColTypes[0].Kind() == FloatKind || leftType.Kind() == FloatKind {
-				elem = Float{Width: 64}
-			} else {
-				elem = Int{Width: 64}
-			}
-			res := arr
-			res.ColTypes = []Type{elem}
-			types = append(types, res)
-			continue
-		}
 
 		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
 			types = append(types, Unresolved{})
