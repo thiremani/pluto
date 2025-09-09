@@ -579,6 +579,60 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			rightType = ptr.Elem
 		}
 
+		// Array ⊕ Scalar (or Scalar ⊕ Array): result is an Array whose element
+		// type is the result of typing (elemType ⊕ scalarType) via defaultOps.
+		// We keep the array "shape" (headers/length) from the array operand.
+		if (leftType.Kind() == ArrayKind) != (rightType.Kind() == ArrayKind) {
+			var arr Array
+			arrOnLeft := leftType.Kind() == ArrayKind
+			if arrOnLeft {
+				arr = leftType.(Array)
+			} else {
+				arr = rightType.(Array)
+			}
+
+			// For now only 1-column numeric/primitive vectors are supported by arrays.
+			if len(arr.ColTypes) != 1 {
+				cerr := &token.CompileError{Token: expr.Token, Msg: "multi-column arrays in infix not supported yet"}
+				ts.Errors = append(ts.Errors, cerr)
+				return []Type{Unresolved{}}
+			}
+
+			opLeft := leftType
+			opRight := rightType
+			if arrOnLeft {
+				opLeft = arr.ColTypes[0]
+			} else {
+				opRight = arr.ColTypes[0]
+			}
+
+			key := opKey{
+				Operator:  expr.Operator,
+				LeftType:  opLeft.String(),
+				RightType: opRight.String(),
+			}
+
+			fn, ok := defaultOps[key]
+			if !ok {
+				cerr := &token.CompileError{
+					Token: expr.Token,
+					Msg:   fmt.Sprintf("unsupported operator: %+v for types: %s, %s", expr.Token, opLeft, opRight),
+				}
+				ts.Errors = append(ts.Errors, cerr)
+				return []Type{Unresolved{}}
+			}
+
+			// Ask operator for its result type (no codegen, compile=false)
+			lSym := &Symbol{Type: opLeft}
+			rSym := &Symbol{Type: opRight}
+			resType := fn(ts.ScriptCompiler.Compiler, lSym, rSym, false).Type
+
+			arrRes := arr
+			arrRes.ColTypes = []Type{resType}
+			types = append(types, arrRes)
+			continue
+		}
+
 
 		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
 			types = append(types, Unresolved{})
