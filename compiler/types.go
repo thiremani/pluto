@@ -25,6 +25,7 @@ const (
 type Type interface {
 	String() string
 	Kind() Kind
+	Mangle() string
 }
 
 // Common concrete types (aliases) for readability.
@@ -40,6 +41,7 @@ type Unresolved struct{}
 
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // or "Unresolved"
+func (u Unresolved) Mangle() string { return "?" }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -53,6 +55,7 @@ func (i Int) String() string {
 func (i Int) Kind() Kind {
 	return IntKind
 }
+func (i Int) Mangle() string { return i.String() }
 
 // Float represents a floating-point type with a given precision.
 type Float struct {
@@ -66,15 +69,15 @@ func (f Float) String() string {
 func (f Float) Kind() Kind {
 	return FloatKind
 }
+func (f Float) Mangle() string { return f.String() }
 
 // Ptr represents a pointer type to some element type.
 type Ptr struct {
 	Elem Type // The type of the element being pointed to.
 }
 
-func (p Ptr) String() string {
-	return "Ptr_" + PREFIX + p.Elem.String()
-}
+func (p Ptr) String() string { return "Ptr_" + p.Elem.String() }
+func (p Ptr) Mangle() string { return "Ptr" + PREFIX + p.Elem.Mangle() }
 
 func (p Ptr) Kind() Kind {
 	return PtrKind
@@ -93,14 +96,14 @@ func (s Str) String() string {
 func (s Str) Kind() Kind {
 	return StrKind
 }
+func (s Str) Mangle() string { return "Str" }
 
 type Range struct {
 	Iter Type
 }
 
-func (r Range) String() string {
-	return "Range_" + PREFIX + r.Iter.String()
-}
+func (r Range) String() string { return "Range_" + r.Iter.String() }
+func (r Range) Mangle() string { return "Range" + PREFIX + r.Iter.Mangle() }
 
 func (r Range) Kind() Kind {
 	return RangeKind
@@ -118,6 +121,17 @@ func (f Func) String() string {
 
 func (f Func) Kind() Kind {
 	return FuncKind
+}
+func (f Func) Mangle() string {
+	s := "Fn"
+	for _, p := range f.Params {
+		s += PREFIX + p.Mangle()
+	}
+	s += PREFIX + "ret"
+	for _, o := range f.OutTypes {
+		s += PREFIX + o.Mangle()
+	}
+	return s
 }
 
 func (f Func) AllTypesInferred() bool {
@@ -151,6 +165,13 @@ func (a Array) String() string {
 }
 
 func (a Array) Kind() Kind { return ArrayKind }
+func (a Array) Mangle() string {
+	s := "Array"
+	for _, ct := range a.ColTypes {
+		s += PREFIX + ct.Mangle()
+	}
+	return s
+}
 
 func typesStr(types []Type) string {
 	if len(types) == 0 {
