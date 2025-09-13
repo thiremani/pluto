@@ -3,15 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "util.h"
 
-// Local strdup (ISO C compatible). Define BEFORE use to avoid implicit decls.
-static char *dup_cstr(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = (char *)malloc(n);
-    if (!p) return NULL;
-    memcpy(p, s, n);
-    return p;
-}
+// dup_cstr in util.h provides a portable strdup-like helper.
 
 // Convert a range [s..t) with step p into a NUL-terminated string.
 // Caller is responsible for free()ing the returned buffer.
