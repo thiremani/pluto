@@ -183,63 +183,95 @@ func EqualTypes(left []Type, right []Type) bool {
 }
 
 // TypeEqual performs structural equality on types, avoiding brittle String() comparison.
+// TypeEqual performs structural equality on types with a dispatcher by Kind.
 func TypeEqual(a, b Type) bool {
-	// Assumes non-nil types. First compare kinds to short-circuit mismatches.
 	if a.Kind() != b.Kind() {
 		return false
 	}
+	cmp := typeComparer(a.Kind())
+	return cmp(a, b)
+}
 
-	switch a.Kind() {
+func typeComparer(k Kind) func(a, b Type) bool {
+	switch k {
 	case UnresolvedKind:
-		return true
+		return eqUnresolved
 	case IntKind:
-		ai := a.(Int)
-		bi := b.(Int)
-		return ai.Width == bi.Width
+		return eqInt
 	case FloatKind:
-		af := a.(Float)
-		bf := b.(Float)
-		return af.Width == bf.Width
+		return eqFloat
 	case StrKind:
-		return true
+		return eqStr
 	case PointerKind:
-		ap := a.(Pointer)
-		bp := b.(Pointer)
-		return TypeEqual(ap.Elem, bp.Elem)
+		return eqPointer
 	case RangeKind:
-		ar := a.(Range)
-		br := b.(Range)
-		return TypeEqual(ar.Iter, br.Iter)
+		return eqRange
 	case FuncKind:
-		af := a.(Func)
-		bf := b.(Func)
-		if af.Name != bf.Name || len(af.Params) != len(bf.Params) || len(af.OutTypes) != len(bf.OutTypes) {
-			return false
-		}
-		for i := range af.Params {
-			if !TypeEqual(af.Params[i], bf.Params[i]) {
-				return false
-			}
-		}
-		for i := range af.OutTypes {
-			if !TypeEqual(af.OutTypes[i], bf.OutTypes[i]) {
-				return false
-			}
-		}
-		return true
+		return eqFunc
 	case ArrayKind:
-		aa := a.(Array)
-		ba := b.(Array)
-		if len(aa.ColTypes) != len(ba.ColTypes) {
+		return eqArray
+	default:
+		return func(a, b Type) bool { panic(fmt.Sprintf("TypeEqual: unhandled kind %v", k)) }
+	}
+}
+
+func eqUnresolved(a, b Type) bool { return true }
+
+func eqInt(a, b Type) bool {
+	ai := a.(Int)
+	bi := b.(Int)
+	return ai.Width == bi.Width
+}
+
+func eqFloat(a, b Type) bool {
+	af := a.(Float)
+	bf := b.(Float)
+	return af.Width == bf.Width
+}
+
+func eqStr(a, b Type) bool { return true }
+
+func eqPointer(a, b Type) bool {
+	ap := a.(Pointer)
+	bp := b.(Pointer)
+	return TypeEqual(ap.Elem, bp.Elem)
+}
+
+func eqRange(a, b Type) bool {
+	ar := a.(Range)
+	br := b.(Range)
+	return TypeEqual(ar.Iter, br.Iter)
+}
+
+func eqFunc(a, b Type) bool {
+	af := a.(Func)
+	bf := b.(Func)
+	if len(af.Params) != len(bf.Params) || len(af.OutTypes) != len(bf.OutTypes) {
+		return false
+	}
+	if !equalTypeSlices(af.Params, bf.Params) {
+		return false
+	}
+	return equalTypeSlices(af.OutTypes, bf.OutTypes)
+}
+
+func eqArray(a, b Type) bool {
+	aa := a.(Array)
+	ba := b.(Array)
+	if len(aa.ColTypes) != len(ba.ColTypes) {
+		return false
+	}
+	return equalTypeSlices(aa.ColTypes, ba.ColTypes)
+}
+
+func equalTypeSlices(xs, ys []Type) bool {
+	if len(xs) != len(ys) {
+		return false
+	}
+	for i := range xs {
+		if !TypeEqual(xs[i], ys[i]) {
 			return false
 		}
-		for i := range aa.ColTypes {
-			if !TypeEqual(aa.ColTypes[i], ba.ColTypes[i]) {
-				return false
-			}
-		}
-		return true
-	default:
-		panic(fmt.Sprintf("TypeEqual: unhandled kind %v", a.Kind()))
 	}
+	return true
 }
