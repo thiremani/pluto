@@ -73,7 +73,7 @@ type Ptr struct {
 }
 
 func (p Ptr) String() string {
-	return fmt.Sprintf("Ptr_%s", p.Elem.String())
+	return "Ptr_" + PREFIX + p.Elem.String()
 }
 
 func (p Ptr) Kind() Kind {
@@ -99,7 +99,7 @@ type Range struct {
 }
 
 func (r Range) String() string {
-	return "Range_" + r.Iter.String()
+	return "Range_" + PREFIX + r.Iter.String()
 }
 
 func (r Range) Kind() Kind {
