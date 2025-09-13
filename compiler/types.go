@@ -184,63 +184,62 @@ func EqualTypes(left []Type, right []Type) bool {
 
 // TypeEqual performs structural equality on types, avoiding brittle String() comparison.
 func TypeEqual(a, b Type) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
+	// Assumes non-nil types. First compare kinds to short-circuit mismatches.
 	if a.Kind() != b.Kind() {
 		return false
 	}
-	switch at := a.(type) {
-	case Unresolved:
-		_, ok := b.(Unresolved)
-		return ok
-	case Int:
-		bt, ok := b.(Int)
-		return ok && at.Width == bt.Width
-	case Float:
-		bt, ok := b.(Float)
-		return ok && at.Width == bt.Width
-	case Str:
-		_, ok := b.(Str)
-		return ok
-	case Pointer:
-		bt, ok := b.(Pointer)
-		return ok && TypeEqual(at.Elem, bt.Elem)
-	case Range:
-		bt, ok := b.(Range)
-		return ok && TypeEqual(at.Iter, bt.Iter)
-	case Func:
-		bt, ok := b.(Func)
-		if !ok || at.Name != bt.Name || len(at.Params) != len(bt.Params) || len(at.OutTypes) != len(bt.OutTypes) {
+
+	switch a.Kind() {
+	case UnresolvedKind:
+		return true
+	case IntKind:
+		ai := a.(Int)
+		bi := b.(Int)
+		return ai.Width == bi.Width
+	case FloatKind:
+		af := a.(Float)
+		bf := b.(Float)
+		return af.Width == bf.Width
+	case StrKind:
+		return true
+	case PointerKind:
+		ap := a.(Pointer)
+		bp := b.(Pointer)
+		return TypeEqual(ap.Elem, bp.Elem)
+	case RangeKind:
+		ar := a.(Range)
+		br := b.(Range)
+		return TypeEqual(ar.Iter, br.Iter)
+	case FuncKind:
+		af := a.(Func)
+		bf := b.(Func)
+		if af.Name != bf.Name || len(af.Params) != len(bf.Params) || len(af.OutTypes) != len(bf.OutTypes) {
 			return false
 		}
-		for i := range at.Params {
-			if !TypeEqual(at.Params[i], bt.Params[i]) {
+		for i := range af.Params {
+			if !TypeEqual(af.Params[i], bf.Params[i]) {
 				return false
 			}
 		}
-		for i := range at.OutTypes {
-			if !TypeEqual(at.OutTypes[i], bt.OutTypes[i]) {
+		for i := range af.OutTypes {
+			if !TypeEqual(af.OutTypes[i], bf.OutTypes[i]) {
 				return false
 			}
 		}
 		return true
-	case Array:
-		bt, ok := b.(Array)
-		if !ok {
+	case ArrayKind:
+		aa := a.(Array)
+		ba := b.(Array)
+		if len(aa.ColTypes) != len(ba.ColTypes) {
 			return false
 		}
-		// Ignore headers and length; compare schema only (column types)
-		if len(at.ColTypes) != len(bt.ColTypes) {
-			return false
-		}
-		for i := range at.ColTypes {
-			if !TypeEqual(at.ColTypes[i], bt.ColTypes[i]) {
+		for i := range aa.ColTypes {
+			if !TypeEqual(aa.ColTypes[i], ba.ColTypes[i]) {
 				return false
 			}
 		}
 		return true
 	default:
-		return a.String() == b.String()
+		panic(fmt.Sprintf("TypeEqual: unhandled kind %v", a.Kind()))
 	}
 }
