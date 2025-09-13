@@ -9,8 +9,11 @@ import (
 )
 
 type RangeInfo struct {
-	Name string
-	Lit  *ast.RangeLiteral // if Lit is nil then it is an identifier and compiler must get the value from its scope
+	Name      string
+	RangeLit  *ast.RangeLiteral // if RangeLit is nil then it is an identifier and compiler must get the value from its scope
+	ArrayLit  *ast.ArrayLiteral // if IsArray is true and this is not nil, contains the original array literal
+	ArrayName string            // if IsArray is true, the original array identifier name (for array identifiers)
+	IsArray   bool              // true if this represents an array iteration, not a range
 }
 
 type ExprInfo struct {
@@ -88,6 +91,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression, isRoot bool) (ranges []*Ran
 	switch t := e.(type) {
 	case *ast.RangeLiteral:
 		return ts.HandleRangeLiteral(t, isRoot)
+		// Arrays are values in expressions. Do not create RangeInfo entries for
+		// array literals here. Leave rewriting to ranges only.
 	case *ast.InfixExpression:
 		return ts.HandleInfixRanges(t, isRoot)
 	case *ast.PrefixExpression:
@@ -110,13 +115,16 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, isRoot bool
 
 	nm := ts.FreshIterName()
 	ri := &RangeInfo{
-		Name: nm,
-		Lit:  rangeLit,
+		Name:     nm,
+		RangeLit: rangeLit,
+		IsArray:  false,
 	}
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
 	return
 }
+
+// NOTE: Arrays are treated as values in expressions; no RangeInfo for literals.
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
@@ -192,8 +200,9 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier, isRoot bool)
 		typ, ok := ts.GetIdentifier(ident.Value)
 		if ok && typ.Kind() == RangeKind {
 			ri := &RangeInfo{
-				Name: ident.Value,
-				Lit:  nil,
+				Name:     ident.Value,
+				RangeLit: nil,
+				IsArray:  false,
 			}
 			ranges = []*RangeInfo{ri}
 		}
@@ -278,10 +287,11 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	PutBulk(ts.Scopes, trueValues)
 }
 
-// TypeArrayLiteral infers the type of an Array literal. Columns must be
+// TypeArrayExpression infers the type of an Array literal. Columns must be
 // homogeneous and of primitive types: I64, F64 (promotion from I64 allowed), or Str.
 // The returned type slice contains a single Array type value.
-func (ts *TypeSolver) TypeArrayLiteral(al *ast.ArrayLiteral) []Type {
+// Or if it is not a root expression, it returns the underlying element type
+func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral, isRoot bool) []Type {
 	// Vector special-case: single row, no headers → treat as 1-column vector
 	if len(al.Headers) == 0 && len(al.Rows) == 1 {
 		colTypes := []Type{Unresolved{}}
@@ -295,39 +305,49 @@ func (ts *TypeSolver) TypeArrayLiteral(al *ast.ArrayLiteral) []Type {
 		}
 		// Length = number of elements in the row (for vectors)
 		arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
+
+		// Cache this expression's resolved type for the compiler
 		ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
 		return []Type{arr}
 	}
+	// unsupported as of now
+	return []Type{Unresolved{}}
+	/*
+	   // 1. Determine number of columns
+	   numCols := ts.arrayNumCols(al)
 
-	// 1. Determine number of columns
-	numCols := ts.arrayNumCols(al)
-	if numCols == 0 {
-		return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
-	}
+	   	if numCols == 0 {
+	   		if !isRoot {
+	   			return []Type{Unresolved{}}
+	   		}
+	   		return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
+	   	}
 
-	// 2. Initialize column types
-	colTypes := ts.initColTypes(numCols)
+	   // 2. Initialize column types
+	   colTypes := ts.initColTypes(numCols)
 
-	// 3. Walk rows/cells and merge types per column
-	for _, row := range al.Rows {
-		for col := 0; col < numCols; col++ {
-			if col >= len(row) {
-				break // ragged row; remaining cells are missing
-			}
-			cellT, ok := ts.typeCell(row[col], al.Tok())
-			if !ok {
-				continue
-			}
-			colTypes[col] = ts.mergeColType(colTypes[col], cellT, col, al.Tok())
-		}
-	}
+	   // 3. Walk rows/cells and merge types per column
 
-	// 4. Build final Array type (no defaulting of unresolved columns)
-	arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
+	   	for _, row := range al.Rows {
+	   		for col := 0; col < numCols; col++ {
+	   			if col >= len(row) {
+	   				break // ragged row; remaining cells are missing
+	   			}
+	   			cellT, ok := ts.typeCell(row[col], al.Tok())
+	   			if !ok {
+	   				continue
+	   			}
+	   			colTypes[col] = ts.mergeColType(colTypes[col], cellT, col, al.Tok())
+	   		}
+	   	}
 
-	// Cache this expression's resolved type for the compiler
-	ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
-	return []Type{arr}
+	   // 4. Build final Array type (no defaulting of unresolved columns)
+	   arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
+
+	   // Cache this expression's resolved type for the compiler
+	   ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+	   return []Type{arr}
+	*/
 }
 
 // arrayNumCols returns column count based on headers or max row width.
@@ -489,7 +509,7 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 	case *ast.StringLiteral:
 		types = append(types, Str{})
 	case *ast.ArrayLiteral:
-		types = append(types, ts.TypeArrayLiteral(e)...)
+		types = append(types, ts.TypeArrayExpression(e, isRoot)...)
 	case *ast.RangeLiteral:
 		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:
@@ -579,94 +599,33 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			rightType = ptr.Elem
 		}
 
-		// Array ⊕ Scalar (or Scalar ⊕ Array): result is an Array whose element
-		// type is the result of typing (elemType ⊕ scalarType) via defaultOps.
-		// We keep the array "shape" (headers/length) from the array operand.
-		if (leftType.Kind() == ArrayKind) != (rightType.Kind() == ArrayKind) {
-			var arr Array
-			arrOnLeft := leftType.Kind() == ArrayKind
-			if arrOnLeft {
-				arr = leftType.(Array)
-			} else {
-				arr = rightType.(Array)
-			}
-
-			// For now only 1-column numeric/primitive vectors are supported by arrays.
-			if len(arr.ColTypes) != 1 {
-				cerr := &token.CompileError{Token: expr.Token, Msg: "multi-column arrays in infix not supported yet"}
-				ts.Errors = append(ts.Errors, cerr)
-				return []Type{Unresolved{}}
-			}
-
-			opLeft := leftType
-			opRight := rightType
-			if arrOnLeft {
-				opLeft = arr.ColTypes[0]
-			} else {
-				opRight = arr.ColTypes[0]
-			}
-
-			key := opKey{
-				Operator:  expr.Operator,
-				LeftType:  opLeft.String(),
-				RightType: opRight.String(),
-			}
-
-			fn, ok := defaultOps[key]
-			if !ok {
-				cerr := &token.CompileError{
-					Token: expr.Token,
-					Msg:   fmt.Sprintf("unsupported operator: %+v for types: %s, %s", expr.Token, opLeft, opRight),
-				}
-				ts.Errors = append(ts.Errors, cerr)
-				return []Type{Unresolved{}}
-			}
-
-			// Ask operator for its result type (no codegen, compile=false)
-			lSym := &Symbol{Type: opLeft}
-			rSym := &Symbol{Type: opRight}
-			resType := fn(ts.ScriptCompiler.Compiler, lSym, rSym, false).Type
-
-			arrRes := arr
-			arrRes.ColTypes = []Type{resType}
-			types = append(types, arrRes)
-			continue
-		}
-
-
 		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
 			types = append(types, Unresolved{})
 			continue
 		}
 
-		key := opKey{
-			Operator:  expr.Operator,
-			LeftType:  leftType.String(),
-			RightType: rightType.String(),
+		var isArrayExpr bool
+		if leftType.Kind() == ArrayKind {
+			isArrayExpr = true
+			leftType = leftType.(Array).ColTypes[0]
 		}
 
-		var fn opFunc
-		var ok bool
-		if fn, ok = defaultOps[key]; !ok {
-			cerr := &token.CompileError{
-				Token: expr.Token,
-				Msg:   fmt.Sprintf("unsupported operator: %+v for types: %s, %s", expr.Token, leftType, rightType),
+		if rightType.Kind() == ArrayKind {
+			isArrayExpr = true
+			rightType = rightType.(Array).ColTypes[0]
+		}
+
+		if isArrayExpr {
+			finalType := Array{
+				Headers:  nil,
+				ColTypes: []Type{ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)},
+				Length:   0,
 			}
-			ts.Errors = append(ts.Errors, cerr)
-			return []Type{Unresolved{}}
+			types = append(types, finalType)
+			continue
 		}
 
-		leftSym := &Symbol{
-			Val:  llvm.Value{},
-			Type: leftType,
-		}
-		rightSym := &Symbol{
-			Val:  llvm.Value{},
-			Type: rightType,
-		}
-		// compiler shouldn't matter as we are only inferring types
-		// need to give compile flag as false to fn
-		types = append(types, fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type)
+		types = append(types, ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token))
 	}
 
 	// Create new entry
@@ -676,6 +635,37 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	return
+}
+
+func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {
+	key := opKey{
+		Operator:  op,
+		LeftType:  left.String(),
+		RightType: right.String(),
+	}
+
+	var fn opFunc
+	var ok bool
+	if fn, ok = defaultOps[key]; !ok {
+		cerr := &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("unsupported operator: %+v for types: %s, %s", tok, left, right),
+		}
+		ts.Errors = append(ts.Errors, cerr)
+		return Unresolved{}
+	}
+
+	leftSym := &Symbol{
+		Val:  llvm.Value{},
+		Type: left,
+	}
+	rightSym := &Symbol{
+		Val:  llvm.Value{},
+		Type: right,
+	}
+	// compiler shouldn't matter as we are only inferring types
+	// need to give compile flag as false to fn
+	return fn(ts.ScriptCompiler.Compiler, leftSym, rightSym, false).Type
 }
 
 // TypePrefixExpression returns type of prefix expression output if input is not a pointer
@@ -689,11 +679,15 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 			opType = ptr.Elem
 		}
 
-		// If either operand's type is unresolved, the result of the
-		// operation is also unresolved. We can't proceed.
 		if opType.Kind() == UnresolvedKind {
 			types = append(types, Unresolved{})
-			continue // Move to the next pair of operands
+			continue
+		}
+
+		var isArrayExpr bool
+		if opType.Kind() == ArrayKind {
+			isArrayExpr = true
+			opType = opType.(Array).ColTypes[0]
 		}
 
 		key := unaryOpKey{
@@ -709,6 +703,8 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 				Msg:   fmt.Sprintf("unsupported unary operator: %q for type: %s", expr.Operator, opType),
 			}
 			ts.Errors = append(ts.Errors, cerr)
+			types = append(types, Unresolved{})
+			continue
 		}
 
 		opSym := &Symbol{
@@ -717,7 +713,19 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 		}
 		// compiler shouldn't matter as we are only inferring types
 		// need to give compile flag as false to function
-		types = append(types, fn(ts.ScriptCompiler.Compiler, opSym, false).Type)
+		resultType := fn(ts.ScriptCompiler.Compiler, opSym, false).Type
+
+		if isArrayExpr {
+			finalType := Array{
+				Headers:  nil,
+				ColTypes: []Type{resultType},
+				Length:   0,
+			}
+			types = append(types, finalType)
+			continue
+		}
+
+		types = append(types, resultType)
 	}
 
 	// Create new entry

@@ -15,8 +15,8 @@ type Loop struct {
 // Build the {start,stop,step} aggregate for either a literal or a named range.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	// Literal occurrence: synthesize the aggregate
-	if ri.Lit != nil {
-		return c.toRange(ri.Lit, Range{Iter: Int{Width: 64}})
+	if ri.RangeLit != nil {
+		return c.toRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
 	}
 
 	// Named occurrence: look it up in scope
