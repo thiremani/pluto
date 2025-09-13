@@ -174,10 +174,73 @@ func EqualTypes(left []Type, right []Type) bool {
 	}
 
 	for i, l := range left {
-		if l.String() != right[i].String() {
+		if !TypeEqual(l, right[i]) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// TypeEqual performs structural equality on types, avoiding brittle String() comparison.
+func TypeEqual(a, b Type) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Kind() != b.Kind() {
+		return false
+	}
+	switch at := a.(type) {
+	case Unresolved:
+		_, ok := b.(Unresolved)
+		return ok
+	case Int:
+		bt, ok := b.(Int)
+		return ok && at.Width == bt.Width
+	case Float:
+		bt, ok := b.(Float)
+		return ok && at.Width == bt.Width
+	case Str:
+		_, ok := b.(Str)
+		return ok
+	case Pointer:
+		bt, ok := b.(Pointer)
+		return ok && TypeEqual(at.Elem, bt.Elem)
+	case Range:
+		bt, ok := b.(Range)
+		return ok && TypeEqual(at.Iter, bt.Iter)
+	case Func:
+		bt, ok := b.(Func)
+		if !ok || at.Name != bt.Name || len(at.Params) != len(bt.Params) || len(at.OutTypes) != len(bt.OutTypes) {
+			return false
+		}
+		for i := range at.Params {
+			if !TypeEqual(at.Params[i], bt.Params[i]) {
+				return false
+			}
+		}
+		for i := range at.OutTypes {
+			if !TypeEqual(at.OutTypes[i], bt.OutTypes[i]) {
+				return false
+			}
+		}
+		return true
+	case Array:
+		bt, ok := b.(Array)
+		if !ok {
+			return false
+		}
+		// Ignore headers and length; compare schema only (column types)
+		if len(at.ColTypes) != len(bt.ColTypes) {
+			return false
+		}
+		for i := range at.ColTypes {
+			if !TypeEqual(at.ColTypes[i], bt.ColTypes[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return a.String() == b.String()
+	}
 }
