@@ -27,6 +27,15 @@ type Type interface {
 	Kind() Kind
 }
 
+// Common concrete types (aliases) for readability.
+// These are value-typed singletons; using them in maps/keys is safe since
+// Int and Float are comparable by value.
+var (
+	I1  Type = Int{Width: 1}
+	I64 Type = Int{Width: 64}
+	F64 Type = Float{Width: 64}
+)
+
 type Unresolved struct{}
 
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
