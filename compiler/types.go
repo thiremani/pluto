@@ -12,7 +12,7 @@ const (
 	IntKind
 	UintKind
 	FloatKind
-	PointerKind
+	PtrKind
 	StrKind
 	RangeKind
 	FuncKind
@@ -67,17 +67,17 @@ func (f Float) Kind() Kind {
 	return FloatKind
 }
 
-// Pointer represents a pointer type to some element type.
-type Pointer struct {
+// Ptr represents a pointer type to some element type.
+type Ptr struct {
 	Elem Type // The type of the element being pointed to.
 }
 
-func (p Pointer) String() string {
+func (p Ptr) String() string {
 	return fmt.Sprintf("Ptr_%s", p.Elem.String())
 }
 
-func (p Pointer) Kind() Kind {
-	return PointerKind
+func (p Ptr) Kind() Kind {
+	return PtrKind
 }
 
 // Str represents a string type.
@@ -202,7 +202,7 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFloat
 	case StrKind:
 		return eqStr
-	case PointerKind:
+	case PtrKind:
 		return eqPointer
 	case RangeKind:
 		return eqRange
@@ -232,8 +232,8 @@ func eqFloat(a, b Type) bool {
 func eqStr(a, b Type) bool { return true }
 
 func eqPointer(a, b Type) bool {
-	ap := a.(Pointer)
-	bp := b.(Pointer)
+	ap := a.(Ptr)
+	bp := b.(Ptr)
 	return TypeEqual(ap.Elem, bp.Elem)
 }
 

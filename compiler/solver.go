@@ -535,7 +535,7 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 
 func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
 	if t, ok := Get(ts.Scopes, name); ok {
-		if ptr, yes := t.(Pointer); yes {
+		if ptr, yes := t.(Ptr); yes {
 			return ptr.Elem, true
 		}
 		return t, true
@@ -545,7 +545,7 @@ func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
 	cc := compiler.CodeCompiler.Compiler
 	if s, ok := Get(cc.Scopes, name); ok {
 		t := s.Type
-		if ptr, yes := t.(Pointer); yes {
+		if ptr, yes := t.(Ptr); yes {
 			return ptr.Elem, true
 		}
 		return t, true
@@ -587,15 +587,15 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 	types = []Type{}
 	var ok bool
-	var ptr Pointer
+	var ptr Ptr
 	for i := range left {
 		leftType := left[i]
-		if ptr, ok = leftType.(Pointer); ok {
+		if ptr, ok = leftType.(Ptr); ok {
 			leftType = ptr.Elem
 		}
 
 		rightType := right[i]
-		if ptr, ok = rightType.(Pointer); ok {
+		if ptr, ok = rightType.(Ptr); ok {
 			rightType = ptr.Elem
 		}
 
@@ -675,7 +675,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 	operand := ts.TypeExpression(expr.Right, false)
 	types = []Type{}
 	for _, opType := range operand {
-		if ptr, yes := opType.(Pointer); yes {
+		if ptr, yes := opType.(Ptr); yes {
 			opType = ptr.Elem
 		}
 

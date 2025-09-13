@@ -34,8 +34,8 @@ var specToKind = map[rune]Kind{
 	'a': FloatKind,
 	'c': IntKind, // maybe character code
 	's': StrKind,
-	'p': PointerKind, // if you introduce a PtrKind
-	'n': IntKind,     // byte‐count pointer
+	'p': PtrKind, // pointer kind
+	'n': IntKind, // byte‐count pointer
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
@@ -173,7 +173,7 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 }
 
 // gets the raw symbol WITHOUT deref if pointer
-// in case it is a PointerKind will return alloca and Type should be PointerKind
+// in case it is a PtrKind will return alloca and Type should be PtrKind
 func (c *Compiler) getRawSym(id string) (*Symbol, bool) {
 	s, ok := Get(c.Scopes, id)
 	if ok {
@@ -259,7 +259,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 	// by converting the pointer to an unsigned 64-bit integer and using %llx.
 	if specRune == 'p' {
 		// Validate type: %p requires a pointer.
-		if mainType.Kind() != PointerKind {
+		if mainType.Kind() != PtrKind {
 			err = &token.CompileError{
 				Token: sl.Token,
 				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),

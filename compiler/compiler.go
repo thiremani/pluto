@@ -97,8 +97,8 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 			[]llvm.Type{elemLLVM, elemLLVM, elemLLVM},
 			false,
 		)
-	case PointerKind:
-		ptrType := t.(Pointer)
+	case PtrKind:
+		ptrType := t.(Ptr)
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
 		return llvm.PointerType(elemLLVM, 0)
 	case ArrayKind:
@@ -142,12 +142,12 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
 			val = llvm.ConstInt(c.Context.Int64Type(), uint64(v.Value), false)
-			sym.Type = Pointer{Elem: Int{Width: 64}}
+			sym.Type = Ptr{Elem: Int{Width: 64}}
 			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
 
 		case *ast.FloatLiteral:
 			val = llvm.ConstFloat(c.Context.DoubleType(), v.Value)
-			sym.Type = Pointer{Elem: Float{Width: 64}}
+			sym.Type = Ptr{Elem: Float{Width: 64}}
 			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), name, val, linkage)
 
 		case *ast.StringLiteral:
@@ -302,7 +302,7 @@ func (c *Compiler) compileMergeBlock(
 
 		// if the variable was stack-allocated, store back
 		orig, _ := Get(c.Scopes, name)
-		if ptr, ok := orig.Type.(Pointer); ok {
+		if ptr, ok := orig.Type.(Ptr); ok {
 			// orig.Val holds the alloca
 			c.createStore(phi, orig.Val, ptr.Elem)
 		} else {
@@ -341,7 +341,7 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 
 		// Check if the variable on the LEFT-hand side (`name`) already exists
 		// and if it represents a memory location (a pointer).
-		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PointerKind {
+		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PtrKind {
 			c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
 			continue
 		}
@@ -537,7 +537,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 	case Str:
 		// We assume Str is i8* or u8*
 		inst.SetAlignment(8)
-	case Pointer:
+	case Ptr:
 		inst.SetAlignment(8)
 	case Range:
 		setInstAlignment(inst, typ.Iter)
@@ -550,7 +550,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 }
 
 func (c *Compiler) makePtr(name string, s *Symbol) (ptr *Symbol, alreadyPtr bool) {
-	if s.Type.Kind() == PointerKind {
+	if s.Type.Kind() == PtrKind {
 		return s, true
 	}
 
@@ -562,7 +562,7 @@ func (c *Compiler) makePtr(name string, s *Symbol) (ptr *Symbol, alreadyPtr bool
 	// Create the new symbol that represents the pointer to this memory.
 	ptr = &Symbol{
 		Val:  alloca,
-		Type: Pointer{Elem: s.Type},
+		Type: Ptr{Elem: s.Type},
 	}
 
 	return ptr, false
@@ -611,9 +611,9 @@ func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.V
 // representing the value loaded from that pointer. Otherwise, it returns the
 // original symbol unmodified. It has NO side effects.
 func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
-	var ptrType Pointer
+	var ptrType Ptr
 	var ok bool
-	if ptrType, ok = s.Type.(Pointer); !ok {
+	if ptrType, ok = s.Type.(Ptr); !ok {
 		return s
 	}
 
@@ -731,7 +731,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	// Load final values
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		elemType := outputs[i].Type.(Pointer).Elem
+		elemType := outputs[i].Type.(Ptr).Elem
 		out[i] = &Symbol{
 			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
 			Type: elemType,
@@ -760,7 +760,7 @@ func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []
 		// Now any reference to 'name' in the expression uses our temp
 		outputs[i] = &Symbol{
 			Val:  ptr,
-			Type: Pointer{Elem: outType},
+			Type: Ptr{Elem: outType},
 		}
 		Put(c.Scopes, name, outputs[i])
 	}
@@ -820,7 +820,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	// Materialize final values
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		elemType := outputs[i].Type.(Pointer).Elem
+		elemType := outputs[i].Type.(Ptr).Elem
 		out[i] = &Symbol{
 			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
 			Type: elemType,
@@ -892,7 +892,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 
 		sym := &Symbol{
 			Val:      fieldPtr,
-			Type:     Pointer{Elem: outType},
+			Type:     Ptr{Elem: outType},
 			FuncArg:  true,
 			ReadOnly: false,
 		}
@@ -918,7 +918,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args
 
 		// If this param is also an output, seed the output storage and don't add a scalar
 		if outSym, isOut := outSyms[name]; isOut {
-			elemT := outSym.Type.(Pointer).Elem
+			elemT := outSym.Type.(Ptr).Elem
 			c.createStore(paramVal, outSym.Val, elemT)
 			continue
 		}
