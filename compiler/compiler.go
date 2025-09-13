@@ -686,8 +686,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) 
 
 		key := opKey{
 			Operator:  expr.Operator,
-			LeftType:  l.Type.String(),
-			RightType: r.Type.String(),
+			LeftType:  l.Type,
+			RightType: r.Type,
 		}
 		res = append(res, defaultOps[key](c, l, r, true))
 	}
@@ -718,8 +718,8 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			r := c.derefIfPointer(right[i])
 			key := opKey{
 				Operator:  expr.Operator,
-				LeftType:  l.Type.String(),
-				RightType: r.Type.String(),
+				LeftType:  l.Type,
+				RightType: r.Type,
 			}
 			computed := defaultOps[key](c, l, r, true)
 
@@ -786,7 +786,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression) (res []*Symbol
 	// No ranges: just apply the unary operator element-wise.
 	operand := c.compileExpression(expr.Right, nil, false)
 	for _, opSym := range operand {
-		key := unaryOpKey{Operator: expr.Operator, OperandType: opSym.Type.String()}
+		key := unaryOpKey{Operator: expr.Operator, OperandType: opSym.Type}
 		fn := defaultUnaryOps[key]
 		res = append(res, fn(c, c.derefIfPointer(opSym), true))
 	}
@@ -810,7 +810,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 		for i := 0; i < len(ops); i++ {
 			op := c.derefIfPointer(ops[i])
-			key := unaryOpKey{Operator: expr.Operator, OperandType: op.Type.String()}
+			key := unaryOpKey{Operator: expr.Operator, OperandType: op.Type}
 			computed := defaultUnaryOps[key](c, op, true)
 
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)

@@ -640,8 +640,8 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {
 	key := opKey{
 		Operator:  op,
-		LeftType:  left.String(),
-		RightType: right.String(),
+		LeftType:  left,
+		RightType: right,
 	}
 
 	var fn opFunc
@@ -692,7 +692,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 		key := unaryOpKey{
 			Operator:    expr.Operator,
-			OperandType: opType.String(),
+			OperandType: opType,
 		}
 
 		var fn unaryOpFunc

@@ -19,10 +19,7 @@ const (
 	ArrayKind
 )
 
-const (
-	I64 = "I64"
-	F64 = "F64"
-)
+// Convenience, if needed in tests or messages, is handled by String() of types.
 
 // Type is the interface for all types in our language.
 type Type interface {

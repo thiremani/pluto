@@ -8,13 +8,13 @@ import (
 // opKey is used as the key for operator functions.
 type opKey struct {
 	Operator  string
-	LeftType  string
-	RightType string
+	LeftType  Type
+	RightType Type
 }
 
 type unaryOpKey struct {
 	Operator    string
-	OperandType string
+	OperandType Type
 }
 
 // opFunc defines the function signature for an operator function.
@@ -25,13 +25,13 @@ type opFunc func(c *Compiler, left, right *Symbol, compile bool) *Symbol
 // It takes one *Symbol and returns a new *Symbol
 type unaryOpFunc func(c *Compiler, operand *Symbol, compile bool) *Symbol
 
-// defaultOps is a map between operator, types and the corresponding operator function
-// For simplicity, we assume that the *Symbol type’s Type field's String() method returns
-// I64 for integers and F64 for floats.
+// defaultOps maps (operator, left type, right type) to the lowering function.
+// Keys use concrete Type values (e.g., Int{Width:64}, Float{Width:64}) instead of strings
+// to avoid brittleness from relying on String() formatting.
 var defaultOps = map[opKey]opFunc{
 	// --- Arithmetic Operators ---
 	// Addition:
-	{Operator: token.SYM_ADD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_ADD, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -41,7 +41,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateAdd(left.Val, right.Val, "add_tmp")
 		return
 	},
-	{Operator: token.SYM_ADD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_ADD, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -52,7 +52,7 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	{Operator: token.SYM_ADD, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_ADD, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -62,7 +62,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFAdd(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fadd_if_tmp")
 		return
 	},
-	{Operator: token.SYM_ADD, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_ADD, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -74,7 +74,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Subtraction:
-	{Operator: token.SYM_SUB, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -84,7 +84,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateSub(left.Val, right.Val, "sub_tmp")
 		return
 	},
-	{Operator: token.SYM_SUB, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -94,7 +94,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFSub(left.Val, right.Val, "fsub_tmp")
 		return
 	},
-	{Operator: token.SYM_SUB, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -104,7 +104,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFSub(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fsub_if_tmp")
 		return
 	},
-	{Operator: token.SYM_SUB, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -116,7 +116,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Multiplication:
-	{Operator: token.SYM_MUL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MUL, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -126,7 +126,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
 		return
 	},
-	{Operator: token.SYM_MUL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MUL, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -136,7 +136,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
 		return
 	},
-	{Operator: token.SYM_MUL, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MUL, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -146,7 +146,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFMul(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fmul_if_tmp")
 		return
 	},
-	{Operator: token.SYM_MUL, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MUL, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -160,7 +160,7 @@ var defaultOps = map[opKey]opFunc{
 	// Division:
 	// For integers, this example uses integer division (CreateSDiv).
 	// For ÷ operator
-	{Operator: token.SYM_QUO, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_QUO, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -170,7 +170,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateSDiv(left.Val, right.Val, "div_tmp")
 		return
 	},
-	{Operator: token.SYM_QUO, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_QUO, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -180,7 +180,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = floatQuo(c, left.Val, right.Val)
 		return
 	},
-	{Operator: token.SYM_QUO, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_QUO, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -190,7 +190,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = floatQuo(c, c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val)
 		return
 	},
-	{Operator: token.SYM_QUO, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_QUO, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -202,7 +202,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// For division, if both operands are integers, promote them to float and do float division.
-	{Operator: token.SYM_DIV, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_DIV, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Float{Width: 64}
 		if !compile {
@@ -214,7 +214,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFDiv(leftFP, rightFP, "fdiv_ii_tmp")
 		return
 	},
-	{Operator: token.SYM_DIV, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_DIV, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -224,7 +224,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFDiv(left.Val, right.Val, "fdiv_tmp")
 		return
 	},
-	{Operator: token.SYM_DIV, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_DIV, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -235,7 +235,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFDiv(leftFP, right.Val, "fdiv_if_tmp")
 		return
 	},
-	{Operator: token.SYM_DIV, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_DIV, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -248,7 +248,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Exponentiation (^):
-	{Operator: token.SYM_EXP, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EXP, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Float{Width: 64}
 		if !compile {
@@ -260,7 +260,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = floatExp(c, leftFP, rightFP)
 		return
 	},
-	{Operator: token.SYM_EXP, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EXP, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -270,7 +270,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = floatExp(c, left.Val, right.Val)
 		return
 	},
-	{Operator: token.SYM_EXP, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EXP, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -281,7 +281,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = floatExp(c, leftFP, right.Val)
 		return
 	},
-	{Operator: token.SYM_EXP, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EXP, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -295,7 +295,7 @@ var defaultOps = map[opKey]opFunc{
 
 	// --- Comparison Operators ---
 	// Equality (==)
-	{Operator: token.SYM_EQL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EQL, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -305,7 +305,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntEQ, left.Val, right.Val, "eq_I64")
 		return
 	},
-	{Operator: token.SYM_EQL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EQL, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -315,7 +315,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOEQ, left.Val, right.Val, "eq_F64")
 		return
 	},
-	{Operator: token.SYM_EQL, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EQL, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -326,7 +326,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOEQ, leftFP, right.Val, "eq_I64_F64")
 		return
 	},
-	{Operator: token.SYM_EQL, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_EQL, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -339,7 +339,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Not Equal (!=)
-	{Operator: token.SYM_NEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_NEQ, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -349,7 +349,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntNE, left.Val, right.Val, "neq_I64")
 		return
 	},
-	{Operator: token.SYM_NEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_NEQ, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -359,7 +359,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatONE, left.Val, right.Val, "neq_F64")
 		return
 	},
-	{Operator: token.SYM_NEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_NEQ, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -370,7 +370,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatONE, leftFP, right.Val, "neq_I64_F64")
 		return
 	},
-	{Operator: token.SYM_NEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_NEQ, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -383,7 +383,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Less Than (<)
-	{Operator: token.SYM_LSS, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LSS, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -392,7 +392,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntSLT, left.Val, right.Val, "lt_I64")
 		return
 	},
-	{Operator: token.SYM_LSS, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LSS, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -401,7 +401,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOLT, left.Val, right.Val, "lt_F64")
 		return
 	},
-	{Operator: token.SYM_LSS, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LSS, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -412,7 +412,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOLT, leftFP, right.Val, "lt_I64_F64")
 		return
 	},
-	{Operator: token.SYM_LSS, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LSS, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -425,7 +425,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Less Than or Equal (<=)
-	{Operator: token.SYM_LEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LEQ, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -435,7 +435,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntSLE, left.Val, right.Val, "le_I64")
 		return
 	},
-	{Operator: token.SYM_LEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LEQ, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -444,7 +444,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOLE, left.Val, right.Val, "le_F64")
 		return
 	},
-	{Operator: token.SYM_LEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LEQ, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -455,7 +455,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOLE, leftFP, right.Val, "le_I64_F64")
 		return
 	},
-	{Operator: token.SYM_LEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_LEQ, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -468,7 +468,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Greater Than (>)
-	{Operator: token.SYM_GTR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GTR, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -478,7 +478,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntSGT, left.Val, right.Val, "gt_I64")
 		return
 	},
-	{Operator: token.SYM_GTR, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GTR, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -487,7 +487,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOGT, left.Val, right.Val, "gt_F64")
 		return
 	},
-	{Operator: token.SYM_GTR, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GTR, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -498,7 +498,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOGT, leftFP, right.Val, "gt_I64_F64")
 		return
 	},
-	{Operator: token.SYM_GTR, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GTR, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -511,7 +511,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Greater Than or Equal (>=)
-	{Operator: token.SYM_GEQ, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GEQ, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -521,7 +521,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateICmp(llvm.IntSGE, left.Val, right.Val, "ge_I64")
 		return
 	},
-	{Operator: token.SYM_GEQ, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GEQ, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -530,7 +530,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOGE, left.Val, right.Val, "ge_F64")
 		return
 	},
-	{Operator: token.SYM_GEQ, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GEQ, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -541,7 +541,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFCmp(llvm.FloatOGE, leftFP, right.Val, "ge_I64_F64")
 		return
 	},
-	{Operator: token.SYM_GEQ, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_GEQ, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Int{Width: 1}
 		if !compile {
@@ -554,7 +554,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Bitwise AND
-	{Operator: token.SYM_AND, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_AND, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -566,7 +566,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Bitwise OR
-	{Operator: token.SYM_OR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_OR, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -578,7 +578,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Bitwise XOR
-	{Operator: token.SYM_XOR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_XOR, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -590,7 +590,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Integer Modulo (Signed)
-	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MOD, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -602,7 +602,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Floating-Point Modulo
-	{Operator: token.SYM_MOD, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MOD, LeftType: Float{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -612,7 +612,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFRem(left.Val, right.Val, "frem_tmp")
 		return
 	},
-	{Operator: token.SYM_MOD, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MOD, LeftType: Int{Width: 64}, RightType: Float{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = right.Type
 		if !compile {
@@ -623,7 +623,7 @@ var defaultOps = map[opKey]opFunc{
 		s.Val = c.builder.CreateFRem(leftFP, right.Val, "frem_if_tmp")
 		return
 	},
-	{Operator: token.SYM_MOD, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_MOD, LeftType: Float{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -636,7 +636,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Left Shift
-	{Operator: token.SYM_SHL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SHL, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -648,7 +648,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Arithmetic Right Shift (Signed)
-	{Operator: token.SYM_ASR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_ASR, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -660,7 +660,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Logical Right Shift
-	{Operator: token.SYM_SHR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SHR, LeftType: Int{Width: 64}, RightType: Int{Width: 64}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
 		if !compile {
@@ -674,7 +674,7 @@ var defaultOps = map[opKey]opFunc{
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	// Unary Minus (-)
-	{Operator: token.SYM_SUB, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -684,7 +684,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = c.builder.CreateNeg(operand.Val, "neg_tmp")
 		return
 	},
-	{Operator: token.SYM_SUB, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SUB, OperandType: Float{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -696,7 +696,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Bitwise NOT
-	{Operator: token.SYM_TILDE, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_TILDE, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -709,7 +709,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Logical NOT
-	{Operator: token.SYM_BANG, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_BANG, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -723,7 +723,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Square root (√)
-	{Operator: token.SYM_SQRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SQRT, OperandType: Float{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -733,7 +733,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = floatSqrt(c, operand.Val)
 		return
 	},
-	{Operator: token.SYM_SQRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_SQRT, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Float{Width: 64}
 		if !compile {
@@ -746,7 +746,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Cube root (∛)
-	{Operator: token.SYM_CBRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_CBRT, OperandType: Float{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -756,7 +756,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = floatCbrt(c, operand.Val)
 		return
 	},
-	{Operator: token.SYM_CBRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_CBRT, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Float{Width: 64}
 		if !compile {
@@ -769,7 +769,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 	},
 
 	// Fourth root (∜)
-	{Operator: token.SYM_FTHRT, OperandType: F64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_FTHRT, OperandType: Float{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = operand.Type
 		if !compile {
@@ -780,7 +780,7 @@ var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
 		s.Val = floatSqrt(c, sqrt)
 		return
 	},
-	{Operator: token.SYM_FTHRT, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	{Operator: token.SYM_FTHRT, OperandType: Int{Width: 64}}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = Float{Width: 64}
 		if !compile {
