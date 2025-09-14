@@ -279,10 +279,10 @@ func eqFunc(a, b Type) bool {
 	if len(af.Params) != len(bf.Params) || len(af.OutTypes) != len(bf.OutTypes) {
 		return false
 	}
-	if !equalTypeSlices(af.Params, bf.Params) {
+	if !EqualTypes(af.Params, bf.Params) {
 		return false
 	}
-	return equalTypeSlices(af.OutTypes, bf.OutTypes)
+	return EqualTypes(af.OutTypes, bf.OutTypes)
 }
 
 func eqArray(a, b Type) bool {
@@ -291,17 +291,7 @@ func eqArray(a, b Type) bool {
 	if len(aa.ColTypes) != len(ba.ColTypes) {
 		return false
 	}
-	return equalTypeSlices(aa.ColTypes, ba.ColTypes)
+	return EqualTypes(aa.ColTypes, ba.ColTypes)
 }
 
-func equalTypeSlices(xs, ys []Type) bool {
-	if len(xs) != len(ys) {
-		return false
-	}
-	for i := range xs {
-		if !TypeEqual(xs[i], ys[i]) {
-			return false
-		}
-	}
-	return true
-}
+// equalTypeSlices removed in favor of EqualTypes
