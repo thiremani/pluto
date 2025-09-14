@@ -42,7 +42,7 @@ type Unresolved struct{}
 
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
-func (u Unresolved) Mangle() string { return "Unresolved" }
+func (u Unresolved) Mangle() string { return PREFIX + "Unresolved" }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -56,7 +56,7 @@ func (i Int) String() string {
 func (i Int) Kind() Kind {
 	return IntKind
 }
-func (i Int) Mangle() string { return i.String() }
+func (i Int) Mangle() string { return PREFIX + i.String() }
 
 // Float represents a floating-point type with a given precision.
 type Float struct {
@@ -70,7 +70,7 @@ func (f Float) String() string {
 func (f Float) Kind() Kind {
 	return FloatKind
 }
-func (f Float) Mangle() string { return f.String() }
+func (f Float) Mangle() string { return PREFIX + f.String() }
 
 // Ptr represents a pointer type to some element type.
 type Ptr struct {
@@ -78,7 +78,7 @@ type Ptr struct {
 }
 
 func (p Ptr) String() string { return "*" + p.Elem.String() }
-func (p Ptr) Mangle() string { return "Ptr" + PREFIX + "1" + PREFIX + p.Elem.Mangle() }
+func (p Ptr) Mangle() string { return PREFIX + "Ptr" + PREFIX + "1" + p.Elem.Mangle() }
 
 func (p Ptr) Kind() Kind {
 	return PtrKind
@@ -97,7 +97,7 @@ func (s Str) String() string {
 func (s Str) Kind() Kind {
 	return StrKind
 }
-func (s Str) Mangle() string { return "Str" }
+func (s Str) Mangle() string { return PREFIX + "Str" }
 
 type Range struct {
 	Iter Type
@@ -108,7 +108,7 @@ func (r Range) String() string {
 	t := r.Iter.String()
 	return t + ":" + t + ":" + t
 }
-func (r Range) Mangle() string { return "Range" + PREFIX + "1" + PREFIX + r.Iter.Mangle() }
+func (r Range) Mangle() string { return PREFIX + "Range" + PREFIX + "1" + r.Iter.Mangle() }
 
 func (r Range) Kind() Kind {
 	return RangeKind
@@ -132,14 +132,14 @@ func (f Func) Mangle() string {
 	// Params
 	s += PREFIX + "P" + strconv.Itoa(len(f.Params))
 	for _, p := range f.Params {
-		s += PREFIX + p.Mangle()
+		s += p.Mangle()
 	}
 	// Outputs
 	s += PREFIX + "O" + strconv.Itoa(len(f.OutTypes))
 	for _, o := range f.OutTypes {
-		s += PREFIX + o.Mangle()
+		s += o.Mangle()
 	}
-	return s
+	return PREFIX + s
 }
 
 func (f Func) AllTypesInferred() bool {
@@ -177,9 +177,9 @@ func (a Array) Mangle() string {
 	s := "Array"
 	s += PREFIX + strconv.Itoa(len(a.ColTypes))
 	for _, ct := range a.ColTypes {
-		s += PREFIX + ct.Mangle()
+		s += ct.Mangle()
 	}
-	return s
+	return PREFIX + s
 }
 
 func typesStr(types []Type) string {

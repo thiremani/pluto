@@ -9,7 +9,7 @@ const (
 func mangle(funcName string, args []Type) string {
 	mangledName := PREFIX + funcName
 	for i := 0; i < len(args); i++ {
-		mangledName += PREFIX + args[i].Mangle()
+		mangledName += args[i].Mangle()
 	}
 	return mangledName
 }
