@@ -271,7 +271,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 				trueValues[ident.Value] = newType
 				continue
 			}
-			if newType.String() != typ.String() {
+			if !TypeEqual(newType, typ) {
 				ce := &token.CompileError{
 					Token: ident.Token,
 					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
@@ -409,7 +409,7 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 	}
 
 	// Exact match: stable.
-	if cur.String() == newT.String() {
+	if TypeEqual(cur, newT) {
 		return cur
 	}
 
