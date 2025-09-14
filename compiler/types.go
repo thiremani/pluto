@@ -20,8 +20,6 @@ const (
 	ArrayKind
 )
 
-// Convenience, if needed in tests or messages, is handled by String() of types.
-
 // Type is the interface for all types in our language.
 type Type interface {
 	String() string
@@ -293,5 +291,3 @@ func eqArray(a, b Type) bool {
 	}
 	return EqualTypes(aa.ColTypes, ba.ColTypes)
 }
-
-// equalTypeSlices removed in favor of EqualTypes
