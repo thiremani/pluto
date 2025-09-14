@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -40,8 +41,8 @@ var (
 type Unresolved struct{}
 
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
-func (u Unresolved) String() string { return "?" } // or "Unresolved"
-func (u Unresolved) Mangle() string { return "?" }
+func (u Unresolved) String() string { return "?" } // human-friendly
+func (u Unresolved) Mangle() string { return "Unresolved" }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -76,8 +77,8 @@ type Ptr struct {
 	Elem Type // The type of the element being pointed to.
 }
 
-func (p Ptr) String() string { return "Ptr_" + p.Elem.String() }
-func (p Ptr) Mangle() string { return "Ptr" + PREFIX + p.Elem.Mangle() }
+func (p Ptr) String() string { return "*" + p.Elem.String() }
+func (p Ptr) Mangle() string { return "Ptr" + PREFIX + "1" + PREFIX + p.Elem.Mangle() }
 
 func (p Ptr) Kind() Kind {
 	return PtrKind
@@ -102,8 +103,12 @@ type Range struct {
 	Iter Type
 }
 
-func (r Range) String() string { return "Range_" + r.Iter.String() }
-func (r Range) Mangle() string { return "Range" + PREFIX + r.Iter.Mangle() }
+func (r Range) String() string {
+	// Represent a range's schema as T:T:T (start:stop:step)
+	t := r.Iter.String()
+	return t + ":" + t + ":" + t
+}
+func (r Range) Mangle() string { return "Range" + PREFIX + "1" + PREFIX + r.Iter.Mangle() }
 
 func (r Range) Kind() Kind {
 	return RangeKind
@@ -124,10 +129,13 @@ func (f Func) Kind() Kind {
 }
 func (f Func) Mangle() string {
 	s := "Fn"
+	// Params
+	s += PREFIX + "P" + strconv.Itoa(len(f.Params))
 	for _, p := range f.Params {
 		s += PREFIX + p.Mangle()
 	}
-	s += PREFIX + "ret"
+	// Outputs
+	s += PREFIX + "O" + strconv.Itoa(len(f.OutTypes))
 	for _, o := range f.OutTypes {
 		s += PREFIX + o.Mangle()
 	}
@@ -167,6 +175,7 @@ func (a Array) String() string {
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
 	s := "Array"
+	s += PREFIX + strconv.Itoa(len(a.ColTypes))
 	for _, ct := range a.ColTypes {
 		s += PREFIX + ct.Mangle()
 	}
