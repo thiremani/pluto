@@ -684,6 +684,16 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) 
 		l := c.derefIfPointer(left[i])
 		r := c.derefIfPointer(right[i])
 
+		// Array op Scalar or Scalar op Array broadcasting
+		if l.Type.Kind() == ArrayKind && r.Type.Kind() != ArrayKind {
+			res = append(res, c.compileArrayScalarInfix(expr.Operator, l, r, true))
+			continue
+		}
+		if r.Type.Kind() == ArrayKind && l.Type.Kind() != ArrayKind {
+			res = append(res, c.compileArrayScalarInfix(expr.Operator, r, l, false))
+			continue
+		}
+
 		key := opKey{
 			Operator:  expr.Operator,
 			LeftType:  l.Type,
@@ -692,6 +702,152 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) 
 		res = append(res, defaultOps[key](c, l, r, true))
 	}
 	return res
+}
+
+// compileArrayScalarInfix lowers an infix op between an array and a scalar by
+// broadcasting the scalar over the array and applying the scalar op element-wise.
+// If arrOnLeft is true, the operation is arr OP scalar; otherwise scalar OP arr.
+func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, arrOnLeft bool) *Symbol {
+	arrType := arr.Type.(Array)
+	if len(arrType.ColTypes) != 1 {
+		panic("internal: only 1-D numeric arrays supported for broadcasting")
+	}
+
+	arrElem := arrType.ColTypes[0]
+	// Only numeric supported for now
+	if !(arrElem.Kind() == IntKind || arrElem.Kind() == FloatKind) {
+		panic("array-scalar operations supported only for numeric arrays")
+	}
+	if !(scalar.Type.Kind() == IntKind || scalar.Type.Kind() == FloatKind) {
+		panic("array-scalar operations supported only for numeric scalars")
+	}
+
+	// Determine result element type via simple promotion: if any side is float -> F64 else I64
+	var resElem Type = I64
+	if arrElem.Kind() == FloatKind || scalar.Type.Kind() == FloatKind {
+		resElem = F64
+	}
+
+	// Create result array of resElem type
+	var resVec llvm.Value
+	if resElem.Kind() == FloatKind {
+		resVec = c.createArrayF64(c.constI64(0)) // resized later
+	} else {
+		resVec = c.createArrayI64(c.constI64(0)) // resized later
+	}
+
+	// Get length of array
+	lenVal := c.arrayLen(arr, arrElem)
+	// Resize result to len
+	if resElem.Kind() == FloatKind {
+		_, rez := c.GetCFunc(ARR_F64_RESIZE)
+		c.builder.CreateCall(c.GetFnType(ARR_F64_RESIZE), rez, []llvm.Value{resVec, lenVal, llvm.ConstFloat(c.Context.DoubleType(), 0.0)}, "arr_f64_resize")
+	} else {
+		_, rez := c.GetCFunc(ARR_I64_RESIZE)
+		c.builder.CreateCall(c.GetFnType(ARR_I64_RESIZE), rez, []llvm.Value{resVec, lenVal, c.constI64(0)}, "arr_i64_resize")
+	}
+
+	// Loop i in [0, len)
+	r := c.rangeZeroToN(lenVal)
+	c.createLoop(r, func(iter llvm.Value) {
+		idx := iter
+		// Load array element
+		lv := c.arrayGet(arr, arrElem, idx)
+
+		// Prepare scalar values and types for scalar op
+		var lSym, rSym *Symbol
+		var lVal, rVal llvm.Value
+		if arrOnLeft {
+			lVal = lv
+			rVal = scalar.Val
+		} else {
+			lVal = scalar.Val
+			rVal = lv
+		}
+		// Cast to result element type as needed
+		if resElem.Kind() == FloatKind {
+			if arrElem.Kind() == IntKind && arrOnLeft {
+				lVal = c.builder.CreateSIToFP(lVal, c.Context.DoubleType(), "ai_to_f")
+			}
+			if scalar.Type.Kind() == IntKind {
+				rVal = c.builder.CreateSIToFP(rVal, c.Context.DoubleType(), "s_to_f")
+			}
+		} // for int result no cast needed as both must be ints
+
+		// Build symbols and compute scalar op
+		if resElem.Kind() == FloatKind {
+			lSym = &Symbol{Val: lVal, Type: F64}
+			rSym = &Symbol{Val: rVal, Type: F64}
+		} else {
+			lSym = &Symbol{Val: lVal, Type: I64}
+			rSym = &Symbol{Val: rVal, Type: I64}
+		}
+		key := opKey{Operator: op, LeftType: lSym.Type, RightType: rSym.Type}
+		computed := defaultOps[key](c, lSym, rSym, true)
+
+		// Store into result
+		if resElem.Kind() == FloatKind {
+			_, set := c.GetCFunc(ARR_F64_SET)
+			c.builder.CreateCall(c.GetFnType(ARR_F64_SET), set, []llvm.Value{resVec, idx, computed.Val}, "arr_f64_set")
+		} else {
+			_, set := c.GetCFunc(ARR_I64_SET)
+			c.builder.CreateCall(c.GetFnType(ARR_I64_SET), set, []llvm.Value{resVec, idx, computed.Val}, "arr_i64_set")
+		}
+	})
+
+	// Return as opaque i8* with Array type
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
+	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
+	return resSym
+}
+
+func (c *Compiler) constI64(v int64) llvm.Value {
+	return llvm.ConstInt(c.Context.Int64Type(), uint64(v), false)
+}
+
+// rangeZeroToN builds a Range{start:0, stop:n, step:1} aggregate
+func (c *Compiler) rangeZeroToN(n llvm.Value) llvm.Value {
+	rType := c.mapToLLVMType(Range{Iter: Int{Width: 64}})
+	agg := llvm.Undef(rType)
+	agg = c.builder.CreateInsertValue(agg, c.constI64(0), 0, "start")
+	agg = c.builder.CreateInsertValue(agg, n, 1, "stop")
+	agg = c.builder.CreateInsertValue(agg, c.constI64(1), 2, "step")
+	return agg
+}
+
+// arrayLen returns length of a numeric array
+func (c *Compiler) arrayLen(arr *Symbol, elem Type) llvm.Value {
+	ptName := ""
+	name := ""
+	if elem.Kind() == FloatKind {
+		ptName = "PtArrayF64"
+		name = ARR_F64_LEN
+	} else {
+		ptName = "PtArrayI64"
+		name = ARR_I64_LEN
+	}
+	pt := c.namedOpaquePtr(ptName)
+	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
+	fnTy, fn := c.GetCFunc(name)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
+}
+
+// arrayGet returns element at idx from numeric array
+func (c *Compiler) arrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+	ptName := ""
+	name := ""
+	if elem.Kind() == FloatKind {
+		ptName = "PtArrayF64"
+		name = ARR_F64_GET
+	} else {
+		ptName = "PtArrayI64"
+		name = ARR_I64_GET
+	}
+	pt := c.namedOpaquePtr(ptName)
+	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
+	fnTy, fn := c.GetCFunc(name)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
 // Modified compileInfixRanges - cleaner with destinations
