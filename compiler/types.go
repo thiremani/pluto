@@ -128,7 +128,7 @@ func (f Func) Kind() Kind {
 	return FuncKind
 }
 func (f Func) Mangle() string {
-	s := "Fn"
+	s := PREFIX + "Fn"
 	// Params
 	s += PREFIX + "P" + strconv.Itoa(len(f.Params))
 	for _, p := range f.Params {
@@ -139,7 +139,7 @@ func (f Func) Mangle() string {
 	for _, o := range f.OutTypes {
 		s += o.Mangle()
 	}
-	return PREFIX + s
+	return s
 }
 
 func (f Func) AllTypesInferred() bool {
@@ -174,12 +174,12 @@ func (a Array) String() string {
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	s := "Array"
+	s := PREFIX + "Array"
 	s += PREFIX + strconv.Itoa(len(a.ColTypes))
 	for _, ct := range a.ColTypes {
 		s += ct.Mangle()
 	}
-	return PREFIX + s
+	return s
 }
 
 func typesStr(types []Type) string {
