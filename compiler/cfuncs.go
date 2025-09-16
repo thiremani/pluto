@@ -20,6 +20,8 @@ const (
 	ARR_STR_NEW    = "arr_str_new"
 	ARR_STR_RESIZE = "arr_str_resize"
 	ARR_STR_SET    = "arr_str_set"
+	ARR_STR_LEN    = "arr_str_len"
+	ARR_STR_GET    = "arr_str_get"
 	ARR_I64_LEN    = "arr_i64_len"
 	ARR_I64_GET    = "arr_i64_get"
 	ARR_F64_LEN    = "arr_f64_len"
@@ -67,6 +69,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_SET:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
+	case ARR_STR_LEN:
+		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayStr")}, false)
+	case ARR_STR_GET:
+		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_I64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
 	case ARR_F64_STR:

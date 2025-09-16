@@ -665,137 +665,71 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info, ok := c.ExprCache[expr]
-	if !ok {
-		info = &ExprInfo{Ranges: []*RangeInfo{}}
+	info := c.ExprCache[expr]
+	if info == nil {
+		info = &ExprInfo{}
 	}
-
 	if len(info.Ranges) == 0 {
-		return c.compileInfixBasic(expr)
+		return c.compileInfixBasic(expr, info)
 	}
 	return c.compileInfixRanges(expr, info, dest)
 }
 
-func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression) (res []*Symbol) {
+// compileInfix compiles a single binary operation between two symbols.
+// It handles pointer operands, array-scalar broadcasting, and delegates to
+// the default operator table for scalar work.
+func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
+	l := c.derefIfPointer(left)
+	r := c.derefIfPointer(right)
+
+	if expectedArr, ok := expected.(Array); ok {
+		arr := l
+		scalar := r
+		if arr.Type.Kind() != ArrayKind {
+			arr, scalar = scalar, arr
+		}
+		return c.compileArrayScalarInfix(op, arr, scalar, expectedArr.ColTypes[0])
+	}
+
+	key := opKey{
+		Operator:  op,
+		LeftType:  l.Type,
+		RightType: r.Type,
+	}
+	return defaultOps[key](c, l, r, true)
+}
+
+func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
 	left := c.compileExpression(expr.Left, nil, false)
 	right := c.compileExpression(expr.Right, nil, false)
 
 	for i := 0; i < len(left); i++ {
-		l := c.derefIfPointer(left[i])
-		r := c.derefIfPointer(right[i])
-
-		// Array op Scalar or Scalar op Array broadcasting
-		if l.Type.Kind() == ArrayKind && r.Type.Kind() != ArrayKind {
-			res = append(res, c.compileArrayScalarInfix(expr.Operator, l, r, true))
-			continue
-		}
-		if r.Type.Kind() == ArrayKind && l.Type.Kind() != ArrayKind {
-			res = append(res, c.compileArrayScalarInfix(expr.Operator, r, l, false))
-			continue
-		}
-
-		key := opKey{
-			Operator:  expr.Operator,
-			LeftType:  l.Type,
-			RightType: r.Type,
-		}
-		res = append(res, defaultOps[key](c, l, r, true))
+		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 	}
 	return res
 }
 
 // compileArrayScalarInfix lowers an infix op between an array and a scalar by
 // broadcasting the scalar over the array and applying the scalar op element-wise.
-// If arrOnLeft is true, the operation is arr OP scalar; otherwise scalar OP arr.
-func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, arrOnLeft bool) *Symbol {
+func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type) *Symbol {
 	arrType := arr.Type.(Array)
-	if len(arrType.ColTypes) != 1 {
-		panic("internal: only 1-D numeric arrays supported for broadcasting")
-	}
-
 	arrElem := arrType.ColTypes[0]
-	// Only numeric supported for now
-	if !(arrElem.Kind() == IntKind || arrElem.Kind() == FloatKind) {
-		panic("array-scalar operations supported only for numeric arrays")
-	}
-	if !(scalar.Type.Kind() == IntKind || scalar.Type.Kind() == FloatKind) {
-		panic("array-scalar operations supported only for numeric scalars")
-	}
 
-	// Determine result element type via simple promotion: if any side is float -> F64 else I64
-	var resElem Type = I64
-	if arrElem.Kind() == FloatKind || scalar.Type.Kind() == FloatKind {
-		resElem = F64
-	}
-
-	// Create result array of resElem type
-	var resVec llvm.Value
-	if resElem.Kind() == FloatKind {
-		resVec = c.createArrayF64(c.constI64(0)) // resized later
-	} else {
-		resVec = c.createArrayI64(c.constI64(0)) // resized later
-	}
-
-	// Get length of array
 	lenVal := c.arrayLen(arr, arrElem)
-	// Resize result to len
-	if resElem.Kind() == FloatKind {
-		_, rez := c.GetCFunc(ARR_F64_RESIZE)
-		c.builder.CreateCall(c.GetFnType(ARR_F64_RESIZE), rez, []llvm.Value{resVec, lenVal, llvm.ConstFloat(c.Context.DoubleType(), 0.0)}, "arr_f64_resize")
-	} else {
-		_, rez := c.GetCFunc(ARR_I64_RESIZE)
-		c.builder.CreateCall(c.GetFnType(ARR_I64_RESIZE), rez, []llvm.Value{resVec, lenVal, c.constI64(0)}, "arr_i64_resize")
-	}
+	resVec := c.createArrayForType(resElem, lenVal)
 
-	// Loop i in [0, len)
+	scalarSym := c.derefIfPointer(scalar)
+
 	r := c.rangeZeroToN(lenVal)
 	c.createLoop(r, func(iter llvm.Value) {
 		idx := iter
-		// Load array element
-		lv := c.arrayGet(arr, arrElem, idx)
+		val := c.arrayGet(arr, arrElem, idx)
+		elemSym := &Symbol{Val: val, Type: arrElem}
 
-		// Prepare scalar values and types for scalar op
-		var lSym, rSym *Symbol
-		var lVal, rVal llvm.Value
-		if arrOnLeft {
-			lVal = lv
-			rVal = scalar.Val
-		} else {
-			lVal = scalar.Val
-			rVal = lv
-		}
-		// Cast to result element type as needed
-		if resElem.Kind() == FloatKind {
-			if arrElem.Kind() == IntKind && arrOnLeft {
-				lVal = c.builder.CreateSIToFP(lVal, c.Context.DoubleType(), "ai_to_f")
-			}
-			if scalar.Type.Kind() == IntKind {
-				rVal = c.builder.CreateSIToFP(rVal, c.Context.DoubleType(), "s_to_f")
-			}
-		} // for int result no cast needed as both must be ints
-
-		// Build symbols and compute scalar op
-		if resElem.Kind() == FloatKind {
-			lSym = &Symbol{Val: lVal, Type: F64}
-			rSym = &Symbol{Val: rVal, Type: F64}
-		} else {
-			lSym = &Symbol{Val: lVal, Type: I64}
-			rSym = &Symbol{Val: rVal, Type: I64}
-		}
-		key := opKey{Operator: op, LeftType: lSym.Type, RightType: rSym.Type}
-		computed := defaultOps[key](c, lSym, rSym, true)
-
-		// Store into result
-		if resElem.Kind() == FloatKind {
-			_, set := c.GetCFunc(ARR_F64_SET)
-			c.builder.CreateCall(c.GetFnType(ARR_F64_SET), set, []llvm.Value{resVec, idx, computed.Val}, "arr_f64_set")
-		} else {
-			_, set := c.GetCFunc(ARR_I64_SET)
-			c.builder.CreateCall(c.GetFnType(ARR_I64_SET), set, []llvm.Value{resVec, idx, computed.Val}, "arr_i64_set")
-		}
+		computed := c.compileInfix(op, elemSym, scalarSym, resElem)
+		c.arraySetForType(resElem, resVec, idx, computed.Val)
 	})
 
-	// Return as opaque i8* with Array type
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
 	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
@@ -814,40 +748,6 @@ func (c *Compiler) rangeZeroToN(n llvm.Value) llvm.Value {
 	agg = c.builder.CreateInsertValue(agg, n, 1, "stop")
 	agg = c.builder.CreateInsertValue(agg, c.constI64(1), 2, "step")
 	return agg
-}
-
-// arrayLen returns length of a numeric array
-func (c *Compiler) arrayLen(arr *Symbol, elem Type) llvm.Value {
-	ptName := ""
-	name := ""
-	if elem.Kind() == FloatKind {
-		ptName = "PtArrayF64"
-		name = ARR_F64_LEN
-	} else {
-		ptName = "PtArrayI64"
-		name = ARR_I64_LEN
-	}
-	pt := c.namedOpaquePtr(ptName)
-	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
-	fnTy, fn := c.GetCFunc(name)
-	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
-}
-
-// arrayGet returns element at idx from numeric array
-func (c *Compiler) arrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
-	ptName := ""
-	name := ""
-	if elem.Kind() == FloatKind {
-		ptName = "PtArrayF64"
-		name = ARR_F64_GET
-	} else {
-		ptName = "PtArrayI64"
-		name = ARR_I64_GET
-	}
-	pt := c.namedOpaquePtr(ptName)
-	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
-	fnTy, fn := c.GetCFunc(name)
-	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
 // Modified compileInfixRanges - cleaner with destinations
@@ -870,14 +770,11 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 		// Compute and store results
 		for i := 0; i < len(left); i++ {
-			l := c.derefIfPointer(left[i])
-			r := c.derefIfPointer(right[i])
-			key := opKey{
-				Operator:  expr.Operator,
-				LeftType:  l.Type,
-				RightType: r.Type,
+			var expected Type
+			if i < len(info.OutTypes) {
+				expected = info.OutTypes[i]
 			}
-			computed := defaultOps[key](c, l, r, true)
+			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
 
 			// Store to output
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
@@ -933,20 +830,51 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 		info = &ExprInfo{Ranges: []*RangeInfo{}}
 	}
 	if len(info.Ranges) == 0 {
-		return c.compilePrefixBasic(expr)
+		return c.compilePrefixBasic(expr, info)
 	}
 	return c.compilePrefixRanges(expr, info, dest)
 }
 
-func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression) (res []*Symbol) {
-	// No ranges: just apply the unary operator element-wise.
+// compilePrefix compiles a unary operation on a symbol, delegating array
+// broadcasting to compileArrayUnaryPrefix and scalar lowering to defaultUnaryOps.
+func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Symbol {
+	sym := c.derefIfPointer(operand)
+	if expectedArr, ok := expected.(Array); ok {
+		return c.compileArrayUnaryPrefix(op, sym, expectedArr)
+	}
+	key := unaryOpKey{Operator: op, OperandType: sym.Type}
+	return defaultUnaryOps[key](c, sym, true)
+}
+
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
 	operand := c.compileExpression(expr.Right, nil, false)
-	for _, opSym := range operand {
-		key := unaryOpKey{Operator: expr.Operator, OperandType: opSym.Type}
-		fn := defaultUnaryOps[key]
-		res = append(res, fn(c, c.derefIfPointer(opSym), true))
+	for i, opSym := range operand {
+		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
 	return res
+}
+
+// compileArrayUnaryPrefix broadcasts a unary operator over a numeric array.
+func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
+	arrType := arr.Type.(Array)
+	elem := arrType.ColTypes[0]
+	resElem := result.ColTypes[0]
+	n := c.arrayLen(arr, elem)
+	resVec := c.createArrayForType(resElem, n)
+
+	r := c.rangeZeroToN(n)
+	c.createLoop(r, func(iter llvm.Value) {
+		idx := iter
+		v := c.arrayGet(arr, elem, idx)
+		opSym := &Symbol{Val: v, Type: elem}
+		computed := c.compilePrefix(op, opSym, resElem)
+		c.arraySetForType(resElem, resVec, idx, computed.Val)
+	})
+
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	resSym := &Symbol{Type: result}
+	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
+	return resSym
 }
 
 func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
@@ -965,10 +893,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		ops := c.compileExpression(rightRew, nil, false)
 
 		for i := 0; i < len(ops); i++ {
-			op := c.derefIfPointer(ops[i])
-			key := unaryOpKey{Operator: expr.Operator, OperandType: op.Type}
-			computed := defaultUnaryOps[key](c, op, true)
-
+			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 	})

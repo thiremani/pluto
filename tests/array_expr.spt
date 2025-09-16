@@ -1,0 +1,64 @@
+# Test array operations with scalars and ranges
+
+# Array + Scalar operations  
+arr1 = [10 20 30]
+res1 = arr1 + 5
+"Array + Scalar: -res1"
+
+# Scalar + Array operations
+res2 = 3 + arr1
+"Scalar + Array: -res2"
+
+# Array - Scalar
+res3 = arr1 - 2
+"Array - Scalar: -res3"
+
+# Array * Scalar
+res4 = arr1 * 2
+"Array * Scalar: -res4"
+
+# Prefix operations on arrays
+arr2 = [1 -2 3]
+res5 = -arr2
+"Negation of array: -res5"
+
+# Array with floats + scalar
+arrFloat = [1.5 2.5 3.5]
+res6 = arrFloat + 0.5
+"Float Array + Scalar: -res6"
+
+arrFloat2 = [1.25 2.75 3.25]
+res6b = arrFloat2 + 2
+"Float Array + Int Scalar: -res6b"
+
+# Mixed expressions: Array + Range
+arr3 = [1 2 3]
+res7 = arr3 + (10:13)
+"Array + Range: -res7"
+
+# Range + Array
+res8 = (5:8) + arr3
+"Range + Array: -res8"
+
+# Complex expression: Array + Range * Scalar
+res9 = arr1 + (1:4) * 5
+"Array + (Range * Scalar): -res9"
+
+# Nested operations with arrays and ranges
+res10 = (arr1 + 1) * (2:5)
+"(Array + Scalar) * Range: -res10"
+
+# In-place accumulation with range assignment
+arr4 = [1 2 3]
+arr4 = arr4 + (1:4)
+"In-place Array + Range: -arr4"
+
+# Mixed numeric operations
+res11 = arrFloat / 2
+"Float Array / Int Scalar: -res11"
+
+res12 = arr1 / 2.0
+"Int Array / Float Scalar: -res12"
+
+res13 = arrFloat * 1.5
+"Float Array * Float Scalar: -res13"
