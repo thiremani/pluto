@@ -57,6 +57,34 @@ func arrayInfoForType(t Type) (ArrayInfo, bool) {
 	return info, ok
 }
 
+func (c *Compiler) castArrayElement(val llvm.Value, from, to Type) llvm.Value {
+	if from.Kind() == to.Kind() {
+		return val
+	}
+	switch {
+	case from.Kind() == IntKind && to.Kind() == FloatKind:
+		return c.builder.CreateSIToFP(val, c.Context.DoubleType(), "i64_to_f64")
+	case from.Kind() == FloatKind && to.Kind() == IntKind:
+		return c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
+	default:
+		panic(fmt.Sprintf("unsupported array element cast: %s -> %s", from.String(), to.String()))
+	}
+}
+
+func (c *Compiler) copyArrayInto(vec llvm.Value, src *Symbol, srcElem, resElem Type, offset llvm.Value, applyOffset bool) {
+	length := c.arrayLen(src, srcElem)
+	r := c.rangeZeroToN(length)
+	c.createLoop(r, func(iter llvm.Value) {
+		dstIdx := iter
+		if applyOffset {
+			dstIdx = c.builder.CreateAdd(iter, offset, "concat_idx")
+		}
+		elem := c.arrayGet(src, srcElem, iter)
+		elem = c.castArrayElement(elem, srcElem, resElem)
+		c.arraySetForType(resElem, vec, dstIdx, elem)
+	})
+}
+
 // arrayBitCast casts an array value to the appropriate named opaque pointer type
 func (c *Compiler) arrayBitCast(arr llvm.Value, info ArrayInfo, name string) llvm.Value {
 	pt := c.namedOpaquePtr(info.PtrName)
@@ -212,42 +240,8 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	// Create new array with total length
 	resVec := c.createArrayForType(resElem, totalLen)
 
-	// Copy elements from left array
-	leftRange := c.rangeZeroToN(leftLen)
-	c.createLoop(leftRange, func(iter llvm.Value) {
-		idx := iter
-		val := c.arrayGet(leftArr, leftElem, idx)
-
-		// Convert element type if needed
-		if leftElem.Kind() != resElem.Kind() {
-			if resElem.Kind() == FloatKind && leftElem.Kind() == IntKind {
-				val = c.builder.CreateSIToFP(val, c.Context.DoubleType(), "i64_to_f64")
-			} else if resElem.Kind() == IntKind && leftElem.Kind() == FloatKind {
-				val = c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
-			}
-		}
-
-		c.arraySetForType(resElem, resVec, idx, val)
-	})
-
-	// Copy elements from right array, offset by left array length
-	rightRange := c.rangeZeroToN(rightLen)
-	c.createLoop(rightRange, func(iter llvm.Value) {
-		idx := iter
-		offsetIdx := c.builder.CreateAdd(idx, leftLen, "offset_idx")
-		val := c.arrayGet(rightArr, rightElem, idx)
-
-		// Convert element type if needed
-		if rightElem.Kind() != resElem.Kind() {
-			if resElem.Kind() == FloatKind && rightElem.Kind() == IntKind {
-				val = c.builder.CreateSIToFP(val, c.Context.DoubleType(), "i64_to_f64")
-			} else if resElem.Kind() == IntKind && rightElem.Kind() == FloatKind {
-				val = c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
-			}
-		}
-
-		c.arraySetForType(resElem, resVec, offsetIdx, val)
-	})
+	c.copyArrayInto(resVec, leftArr, leftElem, resElem, llvm.Value{}, false)
+	c.copyArrayInto(resVec, rightArr, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
