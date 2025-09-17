@@ -174,3 +174,71 @@ y`
 		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
 	}
 }
+
+func TestArrayConcatTypeErrors(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayConcatErrors", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+
+	cases := []struct {
+		name        string
+		script      string
+		expectError string
+	}{
+		{
+			name:        "StringPlusIntArray",
+			script:      "arr1 = [\"foo\" \"bar\"]\narr2 = [1 2]\nres = arr1 + arr2",
+			expectError: "cannot concatenate arrays with incompatible element types",
+		},
+		{
+			name:        "FloatPlusStringArray",
+			script:      "arr1 = [1.5 2.5]\narr2 = [\"foo\"]\nres = arr1 + arr2",
+			expectError: "cannot concatenate arrays with incompatible element types",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+
+			sc := NewScriptCompiler(ctx, tc.name, program, cc, funcCache, exprCache)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			if len(ts.Errors) == 0 {
+				t.Fatalf("expected type error for %s, but got none", tc.name)
+			}
+			last := ts.Errors[len(ts.Errors)-1]
+			if !strings.Contains(last.Msg, tc.expectError) {
+				t.Fatalf("error message %q does not contain %q", last.Msg, tc.expectError)
+			}
+		})
+	}
+
+	script := "arr1 = [1 2]\narr2 = [3.5 4.5]\nres = arr1 + arr2"
+	sl := lexer.New("MixedNumericConcat.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+
+	sc := NewScriptCompiler(ctx, "MixedNumericConcat", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	resType, ok := ts.GetIdentifier("res")
+	if !ok {
+		t.Fatalf("expected concatenation result type")
+	}
+	arrType, ok := resType.(Array)
+	if !ok {
+		t.Fatalf("expected array type, got %T", resType)
+	}
+	if len(arrType.ColTypes) != 1 {
+		t.Fatalf("expected single-column array type")
+	}
+	if arrType.ColTypes[0].Kind() != FloatKind {
+		t.Fatalf("expected float array result, got %s", arrType.ColTypes[0].String())
+	}
+}
