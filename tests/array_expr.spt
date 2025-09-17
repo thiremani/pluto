@@ -62,3 +62,40 @@ res12 = arr1 / 2.0
 
 res13 = arrFloat * 1.5
 "Float Array * Float Scalar: -res13"
+
+# Int array to float conversion
+arrF = arr1 * 1.33
+"Int Array * Float Scalar (conversion): -arrF"
+
+# Nested expressions - infix operations with arrays
+res14 = (arr1 + 5) * 2
+"(Array + Scalar) * Scalar: -res14"
+
+res15 = arr1 * (2 + 3)
+"Array * (Scalar + Scalar): -res15"
+
+res16 = (arrFloat / 2) + 1.0
+"(Float Array / Scalar) + Scalar: -res16"
+
+res17 = 3 * (arr1 - 1)
+"Scalar * (Array - Scalar): -res17"
+
+# Nested expressions - prefix operations with arrays
+res18 = -(arr1 + 5)
+"Negation of (Array + Scalar): -res18"
+
+res19 = -(-arr2)
+"Double negation of array: -res19"
+
+res20 = -(arrFloat * 2.0)
+"Negation of (Float Array * Scalar): -res20"
+
+# Complex nested expressions combining multiple operations
+res21 = (arr1 * 2) + 5
+"(Int Array * Scalar) + Scalar: -res21"
+
+res22 = -(arr1 - 5) + 10
+"Negation of (Array - Scalar) + Scalar: -res22"
+
+res23 = (arr1 + 1) * ((1:4) + 2)
+"(Array + Scalar) * (Range + Scalar): -res23"
