@@ -8,35 +8,47 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+const (
+	unsupportedArrayTypeMsg = "unsupported array element type: %s"
+)
+
 type ArrayInfo struct {
-	PtrName string
-	LenName string
-	GetName string
-	SetName string
-	Create  func(*Compiler, llvm.Value) llvm.Value
+	PtrName    string
+	LenName    string
+	GetName    string
+	SetName    string
+	ResizeName string
+	StrName    string
+	NewName    string
 }
 
 var arrayInfos = map[Kind]ArrayInfo{
 	IntKind: {
-		PtrName: "PtArrayI64",
-		LenName: ARR_I64_LEN,
-		GetName: ARR_I64_GET,
-		SetName: ARR_I64_SET,
-		Create:  (*Compiler).createArrayI64,
+		PtrName:    "PtArrayI64",
+		LenName:    ARR_I64_LEN,
+		GetName:    ARR_I64_GET,
+		SetName:    ARR_I64_SET,
+		ResizeName: ARR_I64_RESIZE,
+		StrName:    ARR_I64_STR,
+		NewName:    ARR_I64_NEW,
 	},
 	FloatKind: {
-		PtrName: "PtArrayF64",
-		LenName: ARR_F64_LEN,
-		GetName: ARR_F64_GET,
-		SetName: ARR_F64_SET,
-		Create:  (*Compiler).createArrayF64,
+		PtrName:    "PtArrayF64",
+		LenName:    ARR_F64_LEN,
+		GetName:    ARR_F64_GET,
+		SetName:    ARR_F64_SET,
+		ResizeName: ARR_F64_RESIZE,
+		StrName:    ARR_F64_STR,
+		NewName:    ARR_F64_NEW,
 	},
 	StrKind: {
-		PtrName: "PtArrayStr",
-		LenName: ARR_STR_LEN,
-		GetName: ARR_STR_GET,
-		SetName: ARR_STR_SET,
-		Create:  (*Compiler).createArrayStr,
+		PtrName:    "PtArrayStr",
+		LenName:    ARR_STR_LEN,
+		GetName:    ARR_STR_GET,
+		SetName:    ARR_STR_SET,
+		ResizeName: ARR_STR_RESIZE,
+		StrName:    ARR_STR_STR,
+		NewName:    ARR_STR_NEW,
 	},
 }
 
@@ -45,19 +57,42 @@ func arrayInfoForType(t Type) (ArrayInfo, bool) {
 	return info, ok
 }
 
+// arrayBitCast casts an array value to the appropriate named opaque pointer type
+func (c *Compiler) arrayBitCast(arr llvm.Value, info ArrayInfo, name string) llvm.Value {
+	pt := c.namedOpaquePtr(info.PtrName)
+	return c.builder.CreateBitCast(arr, pt, name)
+}
+
 func (c *Compiler) createArrayForType(elem Type, length llvm.Value) llvm.Value {
 	info, ok := arrayInfoForType(elem)
 	if !ok {
-		panic(fmt.Sprintf("unsupported array element type: %s", elem.String()))
+		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
 	}
 
-	return info.Create(c, length)
+	// Create new array
+	_, newFn := c.GetCFunc(info.NewName)
+	vec := c.builder.CreateCall(c.GetFnType(info.NewName), newFn, nil, "arr_new")
+
+	// Resize array
+	_, rezFn := c.GetCFunc(info.ResizeName)
+	switch elem.Kind() {
+	case IntKind:
+		zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
+	case FloatKind:
+		zero := llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
+	case StrKind:
+		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize")
+	}
+
+	return vec
 }
 
 func (c *Compiler) arraySetForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
 	info, ok := arrayInfoForType(elem)
 	if !ok {
-		panic(fmt.Sprintf("unsupported array element type: %s", elem.String()))
+		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
 	}
 
 	fnTy, fn := c.GetCFunc(info.SetName)
@@ -67,11 +102,10 @@ func (c *Compiler) arraySetForType(elem Type, vec llvm.Value, idx llvm.Value, va
 func (c *Compiler) arrayLen(arr *Symbol, elem Type) llvm.Value {
 	info, ok := arrayInfoForType(elem)
 	if !ok {
-		panic(fmt.Sprintf("unsupported array element type: %s", elem.String()))
+		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
 	}
 
-	pt := c.namedOpaquePtr(info.PtrName)
-	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
+	cast := c.arrayBitCast(arr.Val, info, "arrp")
 	fnTy, fn := c.GetCFunc(info.LenName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
 }
@@ -79,13 +113,40 @@ func (c *Compiler) arrayLen(arr *Symbol, elem Type) llvm.Value {
 func (c *Compiler) arrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	info, ok := arrayInfoForType(elem)
 	if !ok {
-		panic(fmt.Sprintf("unsupported array element type: %s", elem.String()))
+		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
 	}
 
-	pt := c.namedOpaquePtr(info.PtrName)
-	cast := c.builder.CreateBitCast(arr.Val, pt, "arrp")
+	cast := c.arrayBitCast(arr.Val, info, "arrp")
 	fnTy, fn := c.GetCFunc(info.GetName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
+}
+
+// arraySetCells populates an array with cell values, handling type conversions
+func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type) {
+	info, ok := arrayInfoForType(elemType)
+	if !ok {
+		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elemType.String()))
+	}
+
+	_, setFn := c.GetCFunc(info.SetName)
+	for i, cs := range cells {
+		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
+		val := cs.Val
+
+		// Handle type conversions
+		switch elemType.Kind() {
+		case IntKind:
+			if cs.Type.Kind() == FloatKind {
+				val = c.builder.CreateFPToSI(cs.Val, c.Context.Int64Type(), "f64_to_i64")
+			}
+		case FloatKind:
+			if cs.Type.Kind() == IntKind {
+				val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
+			}
+		}
+
+		c.builder.CreateCall(c.GetFnType(info.SetName), setFn, []llvm.Value{vec, idx, val}, "arr_set")
+	}
 }
 
 // Array compilation functions
@@ -111,90 +172,20 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral) (res []*Symbol) {
 	// Use the solver's inferred array schema
 	info := c.ExprCache[e]
 	arr := info.OutTypes[0].(Array)
-	kind := arr.ColTypes[0].Kind()
+	elemType := arr.ColTypes[0]
 
 	n := len(row)
 	nConst := llvm.ConstInt(c.Context.Int64Type(), uint64(n), false)
 
-	// The solver has already fixed the array schema; assign type once.
+	// Create array and populate it
+	arrVal := c.createArrayForType(elemType, nConst)
+	c.arraySetCells(arrVal, cells, elemType)
+
+	// Set symbol type and value
 	s.Type = arr
-	switch kind {
-	case StrKind:
-		arrVal := c.createArrayStr(nConst)
-		c.setArrayStr(arrVal, cells)
-		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-	case FloatKind:
-		arrVal := c.createArrayF64(nConst)
-		c.setArrayF64(arrVal, cells)
-		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-	case IntKind:
-		arrVal := c.createArrayI64(nConst)
-		c.setArrayI64(arrVal, cells)
-		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-	default:
-		panic("internal: unresolved array element type in compileArrayExpression")
-	}
+	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
 
 	return []*Symbol{s}
-}
-
-// Array creation and manipulation functions
-
-func (c *Compiler) createArrayI64(n llvm.Value) llvm.Value {
-	_, newFn := c.GetCFunc(ARR_I64_NEW)
-	vec := c.builder.CreateCall(c.GetFnType(ARR_I64_NEW), newFn, nil, "arr_i64_new")
-	_, rezFn := c.GetCFunc(ARR_I64_RESIZE)
-	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
-	c.builder.CreateCall(c.GetFnType(ARR_I64_RESIZE), rezFn, []llvm.Value{vec, n, zero}, "arr_i64_resize")
-	return vec
-}
-
-func (c *Compiler) setArrayI64(vec llvm.Value, cells []*Symbol) {
-	_, setFn := c.GetCFunc(ARR_I64_SET)
-	for i, cs := range cells {
-		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-		val := cs.Val
-		if cs.Type.Kind() == FloatKind {
-			val = c.builder.CreateFPToSI(cs.Val, c.Context.Int64Type(), "f64_to_i64")
-		}
-		c.builder.CreateCall(c.GetFnType(ARR_I64_SET), setFn, []llvm.Value{vec, idx, val}, "arr_i64_set")
-	}
-}
-
-func (c *Compiler) createArrayF64(n llvm.Value) llvm.Value {
-	_, newFn := c.GetCFunc(ARR_F64_NEW)
-	vec := c.builder.CreateCall(c.GetFnType(ARR_F64_NEW), newFn, nil, "arr_f64_new")
-	_, rezFn := c.GetCFunc(ARR_F64_RESIZE)
-	c.builder.CreateCall(c.GetFnType(ARR_F64_RESIZE), rezFn, []llvm.Value{vec, n, llvm.ConstFloat(c.Context.DoubleType(), 0.0)}, "arr_f64_resize")
-	return vec
-}
-
-func (c *Compiler) setArrayF64(vec llvm.Value, cells []*Symbol) {
-	_, setFn := c.GetCFunc(ARR_F64_SET)
-	for i, cs := range cells {
-		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-		val := cs.Val
-		if cs.Type.Kind() == IntKind {
-			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
-		}
-		c.builder.CreateCall(c.GetFnType(ARR_F64_SET), setFn, []llvm.Value{vec, idx, val}, "arr_f64_set")
-	}
-}
-
-func (c *Compiler) createArrayStr(n llvm.Value) llvm.Value {
-	_, newFn := c.GetCFunc(ARR_STR_NEW)
-	vec := c.builder.CreateCall(c.GetFnType(ARR_STR_NEW), newFn, nil, "arr_str_new")
-	_, rezFn := c.GetCFunc(ARR_STR_RESIZE)
-	c.builder.CreateCall(c.GetFnType(ARR_STR_RESIZE), rezFn, []llvm.Value{vec, n}, "arr_str_resize")
-	return vec
-}
-
-func (c *Compiler) setArrayStr(vec llvm.Value, cells []*Symbol) {
-	_, setFn := c.GetCFunc(ARR_STR_SET)
-	for i, cs := range cells {
-		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
-		c.builder.CreateCall(c.GetFnType(ARR_STR_SET), setFn, []llvm.Value{vec, idx, cs.Val}, "arr_str_set")
-	}
 }
 
 // Array operation functions
@@ -253,24 +244,14 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	if len(arr.ColTypes) != 1 {
 		panic("internal: arrayStrArg supports only single-column vectors")
 	}
-	// Bitcast the opaque i8* to the appropriate named opaque pointer
-	switch arr.ColTypes[0].Kind() {
-	case IntKind:
-		pt := c.namedOpaquePtr("PtArrayI64")
-		cast := c.builder.CreateBitCast(s.Val, pt, "arr_i64p")
-		fnTy, fn := c.GetCFunc(ARR_I64_STR)
-		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_i64_str")
-	case FloatKind:
-		pt := c.namedOpaquePtr("PtArrayF64")
-		cast := c.builder.CreateBitCast(s.Val, pt, "arr_f64p")
-		fnTy, fn := c.GetCFunc(ARR_F64_STR)
-		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_f64_str")
-	case StrKind:
-		pt := c.namedOpaquePtr("PtArrayStr")
-		cast := c.builder.CreateBitCast(s.Val, pt, "arr_strp")
-		fnTy, fn := c.GetCFunc(ARR_STR_STR)
-		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str_str")
-	default:
+
+	elemType := arr.ColTypes[0]
+	info, ok := arrayInfoForType(elemType)
+	if !ok {
 		panic("internal: unsupported array element kind for printing")
 	}
+
+	cast := c.arrayBitCast(s.Val, info, "arr_cast")
+	fnTy, fn := c.GetCFunc(info.StrName)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
