@@ -1,0 +1,11 @@
+res = concatInt(arr, other)
+    res = arr + other
+
+res = concatFloat(arr, other)
+    res = arr + other
+
+res = concatMixed(arr, other)
+    res = arr + other
+
+res = concatStr(arr, other)
+    res = arr + other

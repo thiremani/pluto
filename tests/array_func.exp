@@ -1,0 +1,5 @@
+ConcatInt: [1 2 3 4]
+ConcatIntInPlace: [1 2 3 4]
+ConcatFloat: [1.5 2.5 3.5 4.5]
+ConcatMixed: [1 2 3.5 4.5]
+ConcatStr: [foo bar baz qux]
