@@ -575,6 +575,11 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 	r := c.derefIfPointer(right)
 
 	if expectedArr, ok := expected.(Array); ok {
+		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
+			return c.compileArrayArrayInfix(op, l, r, expectedArr.ColTypes[0])
+		}
+
+		// Handle Array-Scalar operations
 		arr := l
 		scalar := r
 		if arr.Type.Kind() != ArrayKind {
