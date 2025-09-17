@@ -648,10 +648,10 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 	if left.Kind() == ArrayKind && right.Kind() == ArrayKind && op == token.SYM_ADD {
 		leftArr := left.(Array)
 		rightArr := right.(Array)
-		
+
 		leftElemType := leftArr.ColTypes[0]
 		rightElemType := rightArr.ColTypes[0]
-		
+
 		// Both are the same type
 		if leftElemType.Kind() == rightElemType.Kind() {
 			return Array{
@@ -660,17 +660,17 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 				Length:   0,
 			}
 		}
-		
+
 		// Int + Float promotion -> Float
 		if (leftElemType.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
-		   (leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
+			(leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
 			return Array{
 				Headers:  nil,
 				ColTypes: []Type{Float{Width: 64}},
 				Length:   0,
 			}
 		}
-		
+
 		// Incompatible types (e.g., string + float)
 		ce := &token.CompileError{
 			Token: tok,
@@ -679,22 +679,22 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 		ts.Errors = append(ts.Errors, ce)
 		return Unresolved{}
 	}
-	
+
 	// Handle Array-Scalar operations (extract element types)
 	leftType := left
 	rightType := right
-	
+
 	if left.Kind() == ArrayKind {
 		leftType = left.(Array).ColTypes[0]
 	}
-	
+
 	if right.Kind() == ArrayKind {
 		rightType = right.(Array).ColTypes[0]
 	}
-	
+
 	// Get the result element type
 	elemType := ts.TypeInfixOp(leftType, rightType, op, tok)
-	
+
 	// Return as array
 	return Array{
 		Headers:  nil,

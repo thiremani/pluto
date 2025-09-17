@@ -194,30 +194,30 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	if op != token.SYM_ADD {
 		panic(fmt.Sprintf("unsupported array-array operation: %s", op))
 	}
-	
+
 	// Array concatenation: arr1 + arr2
 	leftArrType := leftArr.Type.(Array)
 	rightArrType := rightArr.Type.(Array)
-	
+
 	leftElem := leftArrType.ColTypes[0]
 	rightElem := rightArrType.ColTypes[0]
-	
+
 	// Get lengths of both arrays
 	leftLen := c.arrayLen(leftArr, leftElem)
 	rightLen := c.arrayLen(rightArr, rightElem)
-	
+
 	// Calculate total length
 	totalLen := c.builder.CreateAdd(leftLen, rightLen, "concat_len")
-	
+
 	// Create new array with total length
 	resVec := c.createArrayForType(resElem, totalLen)
-	
+
 	// Copy elements from left array
 	leftRange := c.rangeZeroToN(leftLen)
 	c.createLoop(leftRange, func(iter llvm.Value) {
 		idx := iter
 		val := c.arrayGet(leftArr, leftElem, idx)
-		
+
 		// Convert element type if needed
 		if leftElem.Kind() != resElem.Kind() {
 			if resElem.Kind() == FloatKind && leftElem.Kind() == IntKind {
@@ -226,17 +226,17 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 				val = c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
 			}
 		}
-		
+
 		c.arraySetForType(resElem, resVec, idx, val)
 	})
-	
+
 	// Copy elements from right array, offset by left array length
 	rightRange := c.rangeZeroToN(rightLen)
 	c.createLoop(rightRange, func(iter llvm.Value) {
 		idx := iter
 		offsetIdx := c.builder.CreateAdd(idx, leftLen, "offset_idx")
 		val := c.arrayGet(rightArr, rightElem, idx)
-		
+
 		// Convert element type if needed
 		if rightElem.Kind() != resElem.Kind() {
 			if resElem.Kind() == FloatKind && rightElem.Kind() == IntKind {
@@ -245,10 +245,10 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 				val = c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
 			}
 		}
-		
+
 		c.arraySetForType(resElem, resVec, offsetIdx, val)
 	})
-	
+
 	// Return concatenated array
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
