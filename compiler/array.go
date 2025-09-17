@@ -14,41 +14,41 @@ const (
 
 type ArrayInfo struct {
 	PtrName    string
-	LenName    string
-	GetName    string
-	SetName    string
-	ResizeName string
-	StrName    string
 	NewName    string
+	ResizeName string
+	SetName    string
+	GetName    string
+	LenName    string
+	StrName    string
 }
 
 var arrayInfos = map[Kind]ArrayInfo{
 	IntKind: {
 		PtrName:    "PtArrayI64",
-		LenName:    ARR_I64_LEN,
-		GetName:    ARR_I64_GET,
-		SetName:    ARR_I64_SET,
-		ResizeName: ARR_I64_RESIZE,
-		StrName:    ARR_I64_STR,
 		NewName:    ARR_I64_NEW,
+		ResizeName: ARR_I64_RESIZE,
+		SetName:    ARR_I64_SET,
+		GetName:    ARR_I64_GET,
+		LenName:    ARR_I64_LEN,
+		StrName:    ARR_I64_STR,
 	},
 	FloatKind: {
 		PtrName:    "PtArrayF64",
-		LenName:    ARR_F64_LEN,
-		GetName:    ARR_F64_GET,
-		SetName:    ARR_F64_SET,
-		ResizeName: ARR_F64_RESIZE,
-		StrName:    ARR_F64_STR,
 		NewName:    ARR_F64_NEW,
+		ResizeName: ARR_F64_RESIZE,
+		SetName:    ARR_F64_SET,
+		GetName:    ARR_F64_GET,
+		LenName:    ARR_F64_LEN,
+		StrName:    ARR_F64_STR,
 	},
 	StrKind: {
 		PtrName:    "PtArrayStr",
-		LenName:    ARR_STR_LEN,
-		GetName:    ARR_STR_GET,
-		SetName:    ARR_STR_SET,
-		ResizeName: ARR_STR_RESIZE,
-		StrName:    ARR_STR_STR,
 		NewName:    ARR_STR_NEW,
+		ResizeName: ARR_STR_RESIZE,
+		SetName:    ARR_STR_SET,
+		GetName:    ARR_STR_GET,
+		LenName:    ARR_STR_LEN,
+		StrName:    ARR_STR_STR,
 	},
 }
 
