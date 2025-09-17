@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
 	"tinygo.org/x/go-llvm"
@@ -47,7 +48,8 @@ x, y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, "TestMutualRecursionScript", program, cc, funcCache)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+	sc := NewScriptCompiler(ctx, "TestMutualRecursionScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -76,7 +78,7 @@ x, y`
 	nsp := parser.NewScriptParser(nsl)
 	nextProgram := nsp.Parse()
 
-	nsc := NewScriptCompiler(ctx, "testNext", nextProgram, cc, funcCache)
+	nsc := NewScriptCompiler(ctx, "testNext", nextProgram, cc, funcCache, exprCache)
 	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
@@ -120,7 +122,8 @@ y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -158,7 +161,8 @@ y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 

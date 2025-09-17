@@ -88,7 +88,7 @@ func TestFormatStringErrors(t *testing.T) {
 			cc := NewCodeCompiler(ctx, "TestFormatStringErrors", ast.NewCode())
 
 			funcCache := make(map[string]*Func)
-			sc := NewScriptCompiler(ctx, "TestFormatErrors", program, cc, funcCache)
+			sc := NewScriptCompiler(ctx, "TestFormatErrors", program, cc, funcCache, cc.Compiler.ExprCache)
 			errs := sc.Compile()
 
 			if len(errs) == 0 {
@@ -188,7 +188,7 @@ y = 3.2
 			cc := NewCodeCompiler(ctx, "TestValidFormatString", ast.NewCode())
 
 			funcCache := make(map[string]*Func)
-			sc := NewScriptCompiler(ctx, "TestValidFormatString", program, cc, funcCache)
+			sc := NewScriptCompiler(ctx, "TestValidFormatString", program, cc, funcCache, cc.Compiler.ExprCache)
 			sc.Compile()
 			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {

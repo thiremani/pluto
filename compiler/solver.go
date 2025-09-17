@@ -139,6 +139,14 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, isRoot bool)
 		cp := *infix
 		cp.Left, cp.Right = l, r
 		rew = &cp
+		// Create a simple ExprCache entry for the rewritten expression
+		// It should have no ranges since temporary iterators are scalars
+		originalInfo := ts.ExprCache[infix]
+		ts.ExprCache[rew.(*ast.InfixExpression)] = &ExprInfo{
+			OutTypes: originalInfo.OutTypes, // Same output types as original
+			ExprLen:  originalInfo.ExprLen,
+			Ranges:   nil, // No ranges for rewritten expressions
+		}
 	}
 
 	if isRoot {
@@ -160,6 +168,14 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, isRoot bo
 		cp := *prefix
 		cp.Right = r
 		rew = &cp
+		// Create a simple ExprCache entry for the rewritten expression
+		// It should have no ranges since temporary iterators are scalars
+		originalInfo := ts.ExprCache[prefix]
+		ts.ExprCache[rew.(*ast.PrefixExpression)] = &ExprInfo{
+			OutTypes: originalInfo.OutTypes, // Same output types as original
+			ExprLen:  originalInfo.ExprLen,
+			Ranges:   nil, // No ranges for rewritten expressions
+		}
 	}
 
 	if isRoot {
@@ -241,6 +257,10 @@ func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in case there may be functions we have to type
+	for _, expr := range stmt.Condition {
+		ts.TypeExpression(expr, false)
+	}
+	
 	types := []Type{}
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)

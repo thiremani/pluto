@@ -666,9 +666,6 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[expr]
-	if info == nil {
-		info = &ExprInfo{}
-	}
 	if len(info.Ranges) == 0 {
 		return c.compileInfixBasic(expr, info)
 	}

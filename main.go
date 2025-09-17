@@ -34,9 +34,6 @@ const (
 	OPT_LEVEL = "-O3" // Can be configured via flag
 )
 
-//go:embed runtime/runtime.c
-var runtimeCSource []byte
-
 // Pluto holds the state of a single pluto invocation.
 // You can initialize it from the working directory and then
 type Pluto struct {
@@ -225,7 +222,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 	return cc, codeLL, nil
 }
 
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func) (string, error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[ast.Expression]*compiler.ExprInfo) (string, error) {
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
@@ -234,7 +231,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	l := lexer.New(p.RelPath+"/"+filepath.Base(scriptFile), string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
-	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache)
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache, exprCache)
 
 	// Only link if code module has content
 	if codeLL != "" {
@@ -447,10 +444,11 @@ func main() {
 	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
+	exprCache := make(map[ast.Expression]*compiler.ExprInfo)
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache)
+		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
