@@ -260,7 +260,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	for _, expr := range stmt.Condition {
 		ts.TypeExpression(expr, false)
 	}
-	
+
 	types := []Type{}
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
