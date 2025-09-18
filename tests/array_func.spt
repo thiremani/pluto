@@ -1,0 +1,32 @@
+arr1 = [1 2]
+arr2 = [3 4]
+res1 = concatInt(arr1, arr2)
+"ConcatInt: -res1"
+
+arr1 = concatInt(arr1, arr2)
+"ConcatIntInPlace: -arr1"
+
+arrf1 = [1.5 2.5]
+arrf2 = [3.5 4.5]
+res2 = concatFloat(arrf1, arrf2)
+"ConcatFloat: -res2"
+
+res3 = concatMixed([1 2], arrf2)
+"ConcatMixed: -res3"
+
+arrs1 = ["foo" "bar"]
+arrs2 = ["baz" "qux"]
+res4 = concatStr(arrs1, arrs2)
+"ConcatStr: -res4"
+
+res5 = multAddInt([1 2 3], 2, 10)
+"MultAddInt: -res5"
+
+res6 = multAddFloat([1.5 2.5], 0.5, -1.0)
+"MultAddFloat: -res6"
+
+res7 = mixedMultAdd([1 2], [3.5 4.5], 2)
+"MixedMultAdd: -res7"
+
+res8 = scaleAndConcat([1 2], 3, [10 20])
+"ScaleConcat: -res8"

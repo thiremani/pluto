@@ -43,12 +43,13 @@ c = add(a, b)
 
 	// This is the shared cache that will persist across compilations.
 	funcCache := make(map[string]*Func)
+	exprCache := codeCompiler.Compiler.ExprCache
 
 	t.Run("Compile with Ints to populate cache", func(t *testing.T) {
 		scriptA := `x = add(1, 2)
 x`
 		progA := mustParseScript(t, scriptA)
-		scA := NewScriptCompiler(ctx, "A", progA, codeCompiler, funcCache)
+		scA := NewScriptCompiler(ctx, "A", progA, codeCompiler, funcCache, exprCache)
 
 		errs := scA.Compile()
 		require.Empty(t, errs, "First script compilation should succeed")
@@ -69,7 +70,7 @@ x`
 		scriptB := `y = add(3, 4)
 y`
 		progB := mustParseScript(t, scriptB)
-		scB := NewScriptCompiler(ctx, "B", progB, codeCompiler, funcCache)
+		scB := NewScriptCompiler(ctx, "B", progB, codeCompiler, funcCache, exprCache)
 
 		errs := scB.Compile()
 		require.Empty(t, errs, "Second script compilation should succeed")
@@ -85,7 +86,7 @@ y`
 		scriptC := `z = add(1.0, 2.5)
 z`
 		progC := mustParseScript(t, scriptC)
-		scC := NewScriptCompiler(ctx, "C", progC, codeCompiler, funcCache)
+		scC := NewScriptCompiler(ctx, "C", progC, codeCompiler, funcCache, exprCache)
 
 		errs := scC.Compile()
 		require.Empty(t, errs, "Third script compilation should succeed")

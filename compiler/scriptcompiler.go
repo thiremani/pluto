@@ -11,15 +11,10 @@ type ScriptCompiler struct {
 	Program  *ast.Program
 }
 
-func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func) *ScriptCompiler {
+func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ast.Expression]*ExprInfo) *ScriptCompiler {
 	compiler := NewCompiler(ctx, moduleName, cc)
 	compiler.FuncCache = funcCache
-	compiler.ExprCache = make(map[ast.Expression]*ExprInfo)
-	if cc != nil && cc.Compiler != nil {
-		for expr, info := range cc.Compiler.ExprCache {
-			compiler.ExprCache[expr] = info
-		}
-	}
+	compiler.ExprCache = exprCache
 	return &ScriptCompiler{
 		Compiler: compiler,
 		Program:  program,
@@ -32,11 +27,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	ts.Solve()
 	if len(ts.Errors) != 0 {
 		return ts.Errors
-	}
-	if sc.Compiler.CodeCompiler != nil && sc.Compiler.CodeCompiler.Compiler != nil {
-		for expr, info := range sc.Compiler.ExprCache {
-			sc.Compiler.CodeCompiler.Compiler.ExprCache[expr] = info
-		}
 	}
 
 	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)

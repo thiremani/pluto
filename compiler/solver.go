@@ -139,6 +139,14 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, isRoot bool)
 		cp := *infix
 		cp.Left, cp.Right = l, r
 		rew = &cp
+		// Create a simple ExprCache entry for the rewritten expression
+		// It should have no ranges since temporary iterators are scalars
+		originalInfo := ts.ExprCache[infix]
+		ts.ExprCache[rew.(*ast.InfixExpression)] = &ExprInfo{
+			OutTypes: originalInfo.OutTypes, // Same output types as original
+			ExprLen:  originalInfo.ExprLen,
+			Ranges:   nil, // No ranges for rewritten expressions
+		}
 	}
 
 	if isRoot {
@@ -160,6 +168,14 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, isRoot bo
 		cp := *prefix
 		cp.Right = r
 		rew = &cp
+		// Create a simple ExprCache entry for the rewritten expression
+		// It should have no ranges since temporary iterators are scalars
+		originalInfo := ts.ExprCache[prefix]
+		ts.ExprCache[rew.(*ast.PrefixExpression)] = &ExprInfo{
+			OutTypes: originalInfo.OutTypes, // Same output types as original
+			ExprLen:  originalInfo.ExprLen,
+			Ranges:   nil, // No ranges for rewritten expressions
+		}
 	}
 
 	if isRoot {
@@ -241,6 +257,10 @@ func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in case there may be functions we have to type
+	for _, expr := range stmt.Condition {
+		ts.TypeExpression(expr, false)
+	}
+
 	types := []Type{}
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
@@ -604,23 +624,9 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			continue
 		}
 
-		var isArrayExpr bool
-		if leftType.Kind() == ArrayKind {
-			isArrayExpr = true
-			leftType = leftType.(Array).ColTypes[0]
-		}
-
-		if rightType.Kind() == ArrayKind {
-			isArrayExpr = true
-			rightType = rightType.(Array).ColTypes[0]
-		}
-
-		if isArrayExpr {
-			finalType := Array{
-				Headers:  nil,
-				ColTypes: []Type{ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)},
-				Length:   0,
-			}
+		// Handle any expression involving arrays
+		if leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind {
+			finalType := ts.TypeArrayInfix(leftType, rightType, expr.Operator, expr.Token)
 			types = append(types, finalType)
 			continue
 		}
@@ -635,6 +641,66 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	return
+}
+
+func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
+	// Handle Array + Array concatenation
+	if left.Kind() == ArrayKind && right.Kind() == ArrayKind && op == token.SYM_ADD {
+		leftArr := left.(Array)
+		rightArr := right.(Array)
+
+		leftElemType := leftArr.ColTypes[0]
+		rightElemType := rightArr.ColTypes[0]
+
+		// Both are the same type
+		if leftElemType.Kind() == rightElemType.Kind() {
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{leftElemType},
+				Length:   0,
+			}
+		}
+
+		// Int + Float promotion -> Float
+		if (leftElemType.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
+			(leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{Float{Width: 64}},
+				Length:   0,
+			}
+		}
+
+		// Incompatible types (e.g., string + float)
+		ce := &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("cannot concatenate arrays with incompatible element types: %s and %s", leftElemType.String(), rightElemType.String()),
+		}
+		ts.Errors = append(ts.Errors, ce)
+		return Unresolved{}
+	}
+
+	// Handle Array-Scalar operations (extract element types)
+	leftType := left
+	rightType := right
+
+	if left.Kind() == ArrayKind {
+		leftType = left.(Array).ColTypes[0]
+	}
+
+	if right.Kind() == ArrayKind {
+		rightType = right.(Array).ColTypes[0]
+	}
+
+	// Get the result element type
+	elemType := ts.TypeInfixOp(leftType, rightType, op, tok)
+
+	// Return as array
+	return Array{
+		Headers:  nil,
+		ColTypes: []Type{elemType},
+		Length:   0,
+	}
 }
 
 func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {

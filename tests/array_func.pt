@@ -1,0 +1,27 @@
+res = concatInt(arr, other)
+    res = arr + other
+
+res = concatFloat(arr, other)
+    res = arr + other
+
+res = concatMixed(arr, other)
+    res = arr + other
+
+res = concatStr(arr, other)
+    res = arr + other
+
+res = multAddInt(arr, multiplier, bias)
+    tmp = arr * multiplier
+    res = tmp + bias
+
+res = multAddFloat(arr, multiplier, bias)
+    tmp = arr * multiplier
+    res = tmp + bias
+
+res = mixedMultAdd(intArr, floatArr, multiplier)
+    scaled = intArr * multiplier
+    res = scaled + floatArr
+
+res = scaleAndConcat(arr, multiplier, other)
+    scaled = arr * multiplier
+    res = scaled + other
