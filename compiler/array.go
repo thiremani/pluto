@@ -70,13 +70,7 @@ func arrayInfoForType(t Type) (ArrayInfo, bool) {
 }
 
 func (c *Compiler) newArrayRangeAccumulator(arr Array) *arrayRangeAccumulator {
-	if len(arr.ColTypes) == 0 {
-		panic("internal: array output missing element type")
-	}
-	info, ok := arrayInfoForType(arr.ColTypes[0])
-	if !ok {
-		panic(fmt.Sprintf("internal: unsupported array element type %s", arr.ColTypes[0].String()))
-	}
+	info, _ := arrayInfoForType(arr.ColTypes[0])
 	fnTy, fn := c.GetCFunc(info.NewName)
 	vec := c.builder.CreateCall(fnTy, fn, nil, "range_arr_new")
 	return &arrayRangeAccumulator{
@@ -369,10 +363,6 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, d
 }
 
 func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
-	if len(info.OutTypes) == 0 {
-		panic("internal: array range expression missing output types")
-	}
-
 	PushScope(&c.Scopes, BlockScope)
 	defer PopScope(&c.Scopes)
 
@@ -414,30 +404,14 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 }
 
 func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
-	baseSyms := c.compileExpression(expr.Array, nil, false)
-	if len(baseSyms) != 1 {
-		panic("internal: array index expects single base value")
-	}
-	base := c.derefIfPointer(baseSyms[0])
-
-	arrType, ok := base.Type.(Array)
-	if !ok || len(arrType.ColTypes) == 0 {
-		panic("internal: array index on non-array value")
-	}
+	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, false)[0])
+	arrType := base.Type.(Array)
 	elemType := arrType.ColTypes[0]
 
-	indexSyms := c.compileExpression(expr.Range, nil, false)
-	if len(indexSyms) != 1 {
-		panic("internal: array index expects single index value")
-	}
-	idxSym := c.derefIfPointer(indexSyms[0])
+	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil, false)[0])
 	idxVal := idxSym.Val
-	if intType, ok := idxSym.Type.(Int); ok {
-		if intType.Width != 64 {
-			idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
-		}
-	} else {
-		panic("internal: array index did not resolve to integer type")
+	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
+		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 	}
 
 	elemVal := c.arrayGet(base, elemType, idxVal)
