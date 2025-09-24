@@ -21,6 +21,7 @@ const (
 	ARR_I64_GET    = "arr_i64_get"
 	ARR_I64_LEN    = "arr_i64_len"
 	ARR_I64_STR    = "arr_i64_str"
+	ARR_I64_PUSH   = "arr_i64_push"
 
 	// Array F64 functions
 	ARR_F64_NEW    = "arr_f64_new"
@@ -29,6 +30,7 @@ const (
 	ARR_F64_GET    = "arr_f64_get"
 	ARR_F64_LEN    = "arr_f64_len"
 	ARR_F64_STR    = "arr_f64_str"
+	ARR_F64_PUSH   = "arr_f64_push"
 
 	// Array STR functions
 	ARR_STR_NEW    = "arr_str_new"
@@ -37,6 +39,7 @@ const (
 	ARR_STR_GET    = "arr_str_get"
 	ARR_STR_LEN    = "arr_str_len"
 	ARR_STR_STR    = "arr_str_str"
+	ARR_STR_PUSH   = "arr_str_push"
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
@@ -75,6 +78,9 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
+	case ARR_I64_PUSH:
+		pt := c.namedOpaquePtr("PtArrayI64")
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, i64}, false)
 
 	// Array F64 functions
 	case ARR_F64_NEW:
@@ -87,6 +93,9 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayF64")}, false)
+	case ARR_F64_PUSH:
+		pt := c.namedOpaquePtr("PtArrayF64")
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, f64}, false)
 
 	// Array STR functions
 	case ARR_STR_NEW:
@@ -101,6 +110,9 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayStr")}, false)
+	case ARR_STR_PUSH:
+		pt := c.namedOpaquePtr("PtArrayStr")
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, charPtr}, false)
 
 	default:
 		panic("Unknown function name")

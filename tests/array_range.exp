@@ -1,0 +1,9 @@
+Index: 30
+RangeAssign: 40
+RangeReduce: 150
+RangeInfix: 51
+RangeRoot: 50
+NestedOp: 103
+DirectLiteral: 7
+IdentRange: 50
+PrefixRange: -40

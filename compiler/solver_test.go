@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
@@ -241,4 +242,53 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	if arrType.ColTypes[0].Kind() != FloatKind {
 		t.Fatalf("expected float array result, got %s", arrType.ColTypes[0].String())
 	}
+}
+
+func TestArrayRangeTyping(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := ast.NewCode()
+	cc := NewCodeCompiler(ctx, "arrayRangeTyping", code)
+	cc.Compile()
+
+	script := "arr = [1 2 3]\nvalue = arr[0:2]\nsum = 0\nsum = sum + arr[0:2]"
+	sl := lexer.New("ArrayRangeTyping.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+	sc := NewScriptCompiler(ctx, "ArrayRangeTyping", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	valueType, ok := ts.GetIdentifier("value")
+	require.True(t, ok, "expected value identifier")
+	valueInt, ok := valueType.(Int)
+	require.Truef(t, ok, "expected value to be Int, got %T", valueType)
+	require.EqualValues(t, 64, valueInt.Width)
+
+	sumType, ok := ts.GetIdentifier("sum")
+	require.True(t, ok, "expected sum identifier")
+	sumInt, ok := sumType.(Int)
+	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
+	require.EqualValues(t, 64, sumInt.Width)
+
+	letStmt := program.Statements[1].(*ast.LetStatement)
+	rangeExpr, ok := letStmt.Value[0].(*ast.ArrayRangeExpression)
+	require.Truef(t, ok, "expected array range expression, got %T", letStmt.Value[0])
+
+	info := ts.ExprCache[rangeExpr]
+	require.NotNil(t, info, "expected ExprInfo for array range expression")
+	require.Len(t, info.OutTypes, 1)
+	outInt, ok := info.OutTypes[0].(Int)
+	require.Truef(t, ok, "expected array range out type to be Int, got %T", info.OutTypes[0])
+	require.EqualValues(t, 64, outInt.Width)
+	require.NotEmpty(t, info.Ranges, "expected ranges recorded for array range expression")
+	require.NotNil(t, info.Rewrite, "expected rewrite expression for array range")
+
+	rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression)
+	require.Truef(t, ok, "expected rewrite to be ArrayRangeExpression, got %T", info.Rewrite)
+	_, isIdent := rewritten.Range.(*ast.Identifier)
+	require.True(t, isIdent, "expected range rewrite to introduce iterator identifier")
 }

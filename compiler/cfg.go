@@ -123,6 +123,11 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 		}
 		return evs
 
+	case *ast.ArrayRangeExpression:
+		evs := cfg.collectReads(e.Array)
+		evs = append(evs, cfg.collectReads(e.Range)...)
+		return evs
+
 	default:
 		panic(fmt.Sprintf("unhandled expression type: %T", e))
 	}
@@ -260,6 +265,11 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		// Check ExprCache for this expression
 		if info, ok := cfg.ScriptCompiler.Compiler.ExprCache[t]; ok {
 			// If this expression has any ranges, it's conditional
+			return len(info.Ranges) > 0
+		}
+		return false
+	case *ast.ArrayRangeExpression:
+		if info, ok := cfg.ScriptCompiler.Compiler.ExprCache[t]; ok {
 			return len(info.Ranges) > 0
 		}
 		return false

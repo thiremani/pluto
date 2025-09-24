@@ -746,3 +746,74 @@ func TestArrayLiterals(t *testing.T) {
 		})
 	}
 }
+
+func TestArrayRangeExpression(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		check func(t *testing.T, idx *ast.ArrayRangeExpression)
+	}{
+		{
+			name:  "array range literal",
+			input: "res = data[0:5]",
+			check: func(t *testing.T, idx *ast.ArrayRangeExpression) {
+				require.IsType(t, &ast.Identifier{}, idx.Array)
+				require.Equal(t, "data", idx.Array.(*ast.Identifier).Value)
+
+				rangeLit, ok := idx.Range.(*ast.RangeLiteral)
+				require.Truef(t, ok, "expected range literal index, got %T", idx.Range)
+				require.True(t, testIntegerLiteral(t, rangeLit.Start, 0))
+				require.True(t, testIntegerLiteral(t, rangeLit.Stop, 5))
+				require.Nil(t, rangeLit.Step, "expected default step")
+			},
+		},
+		{
+			name: "array range identifier",
+			input: `i = 0:5
+val = data[i]`,
+			check: func(t *testing.T, idx *ast.ArrayRangeExpression) {
+				require.IsType(t, &ast.Identifier{}, idx.Range)
+				require.Equal(t, "i", idx.Range.(*ast.Identifier).Value)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestArrayIndex", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			var stmt *ast.LetStatement
+			if len(program.Statements) == 1 {
+				stmt = requireOnlyLetStmt(t, program)
+			} else {
+				require.Len(t, program.Statements, 2, "expected two statements for identifier slice case")
+				stmt = program.Statements[1].(*ast.LetStatement)
+			}
+			require.Len(t, stmt.Value, 1, "expected single RHS expression")
+			idxExpr, ok := stmt.Value[0].(*ast.ArrayRangeExpression)
+			require.Truef(t, ok, "expected *ast.ArrayRangeExpression, got %T", stmt.Value[0])
+
+			if tt.check != nil {
+				tt.check(t, idxExpr)
+			}
+		})
+	}
+
+	// Ensure slices inside expressions parse correctly.
+	l := lexer.New("TestArrayIndexInfix", "res = data[0:3] + 1")
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	inf, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	idxExpr, ok := inf.Left.(*ast.ArrayRangeExpression)
+	require.Truef(t, ok, "expected array range on left side, got %T", inf.Left)
+	_, isRangeLiteral := idxExpr.Range.(*ast.RangeLiteral)
+	require.True(t, isRangeLiteral)
+}

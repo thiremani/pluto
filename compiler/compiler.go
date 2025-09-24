@@ -398,6 +398,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		panic("internal: unexpanded range literal in non-root position")
 	case *ast.ArrayLiteral:
 		return c.compileArrayExpression(e)
+	case *ast.ArrayRangeExpression:
+		return c.compileArrayRangeExpression(e, dest, isRoot)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -623,6 +625,18 @@ func (c *Compiler) rangeZeroToN(n llvm.Value) llvm.Value {
 	return agg
 }
 
+func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*arrayRangeAccumulator {
+	accs := make([]*arrayRangeAccumulator, len(outTypes))
+	for i, outType := range outTypes {
+		arrType, ok := outType.(Array)
+		if !ok {
+			continue
+		}
+		accs[i] = c.newArrayRangeAccumulator(arrType)
+	}
+	return accs
+}
+
 // Modified compileInfixRanges - cleaner with destinations
 func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
 	// Push a new scope for this expression block
@@ -631,32 +645,35 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	// Setup outputs (like function outputs)
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
+	arrayAccs := c.initRangeArrayAccumulators(info.OutTypes)
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 
 	// Build nested loops
 	c.withLoopNest(info.Ranges, func() {
-		// Compile operands (no destinations - internal to loop)
 		left := c.compileExpression(leftRew, nil, false)
 		right := c.compileExpression(rightRew, nil, false)
 
-		// Compute and store results
 		for i := 0; i < len(left); i++ {
-			var expected Type
-			if i < len(info.OutTypes) {
-				expected = info.OutTypes[i]
-			}
+			expected := info.OutTypes[i]
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
 
-			// Store to output
+			if acc := arrayAccs[i]; acc != nil && computed.Type.Kind() != ArrayKind {
+				c.pushArrayRangeValue(acc, computed)
+				continue
+			}
+
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 	})
 
-	// Load final values
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
+		if acc := arrayAccs[i]; acc != nil && acc.used {
+			out[i] = c.arrayRangeResult(acc)
+			continue
+		}
 		elemType := outputs[i].Type.(Ptr).Elem
 		out[i] = &Symbol{
 			Val:  c.createLoad(outputs[i].Val, elemType, "final"),

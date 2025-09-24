@@ -91,6 +91,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression, isRoot bool) (ranges []*Ran
 	switch t := e.(type) {
 	case *ast.RangeLiteral:
 		return ts.HandleRangeLiteral(t, isRoot)
+	case *ast.ArrayRangeExpression:
+		return ts.HandleArrayRangeExpression(t, isRoot)
 		// Arrays are values in expressions. Do not create RangeInfo entries for
 		// array literals here. Leave rewriting to ranges only.
 	case *ast.InfixExpression:
@@ -125,6 +127,30 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, isRoot bool
 }
 
 // NOTE: Arrays are treated as values in expressions; no RangeInfo for literals.
+
+func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
+	info := ts.ExprCache[ar]
+
+	arrRanges, arrRew := ts.HandleRanges(ar.Array, false)
+	idxRanges, rangeRew := ts.HandleRanges(ar.Range, false)
+
+	ranges = mergeUses(arrRanges, idxRanges)
+
+	rew = ar
+	if arrRew != ar.Array || rangeRew != ar.Range {
+		newExpr := &ast.ArrayRangeExpression{Token: ar.Token, Array: arrRew, Range: rangeRew}
+		ts.ExprCache[newExpr] = &ExprInfo{
+			OutTypes: info.OutTypes,
+			ExprLen:  info.ExprLen,
+		}
+		rew = newExpr
+	}
+
+	info.Ranges = ranges
+	info.Rewrite = rew
+
+	return ranges, rew
+}
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
@@ -519,6 +545,61 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	return []Type{Range{Iter: startT[0]}}
 }
 
+func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isRoot bool) []Type {
+	arrayTypes := ts.TypeExpression(ax.Array, false)
+	if len(arrayTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array access expects a single array value, got %d", len(arrayTypes)),
+		})
+		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+		return []Type{Unresolved{}}
+	}
+
+	arrType, ok := arrayTypes[0].(Array)
+	if !ok {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("expression %s is not an array", ax.Array.String()),
+		})
+		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+		return []Type{Unresolved{}}
+	}
+	if len(arrType.ColTypes) == 0 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   "array type has no element columns",
+		})
+		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+		return []Type{Unresolved{}}
+	}
+
+	elemType := arrType.ColTypes[0]
+
+	idxTypes := ts.TypeExpression(ax.Range, false)
+	if len(idxTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array index expects a single value, got %d", len(idxTypes)),
+		})
+		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+		return []Type{Unresolved{}}
+	}
+
+	idxType := idxTypes[0]
+	if idxType.Kind() != IntKind {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array index must be an integer, got %s", idxType.String()),
+		})
+		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+		return []Type{Unresolved{}}
+	}
+
+	ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{elemType}, ExprLen: 1}
+	return []Type{elemType}
+}
+
 func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []Type) {
 	types = []Type{}
 	switch e := expr.(type) {
@@ -530,6 +611,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, Str{})
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e, isRoot)...)
+	case *ast.ArrayRangeExpression:
+		types = append(types, ts.TypeArrayRangeExpression(e, isRoot)...)
 	case *ast.RangeLiteral:
 		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:

@@ -20,6 +20,15 @@ type ArrayInfo struct {
 	GetName    string
 	LenName    string
 	StrName    string
+	PushName   string
+}
+
+type arrayRangeAccumulator struct {
+	vec       llvm.Value
+	elemType  Type
+	arrayType Array
+	info      ArrayInfo
+	used      bool
 }
 
 var arrayInfos = map[Kind]ArrayInfo{
@@ -31,6 +40,7 @@ var arrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_I64_GET,
 		LenName:    ARR_I64_LEN,
 		StrName:    ARR_I64_STR,
+		PushName:   ARR_I64_PUSH,
 	},
 	FloatKind: {
 		PtrName:    "PtArrayF64",
@@ -40,6 +50,7 @@ var arrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_F64_GET,
 		LenName:    ARR_F64_LEN,
 		StrName:    ARR_F64_STR,
+		PushName:   ARR_F64_PUSH,
 	},
 	StrKind: {
 		PtrName:    "PtArrayStr",
@@ -49,12 +60,46 @@ var arrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_STR_GET,
 		LenName:    ARR_STR_LEN,
 		StrName:    ARR_STR_STR,
+		PushName:   ARR_STR_PUSH,
 	},
 }
 
 func arrayInfoForType(t Type) (ArrayInfo, bool) {
 	info, ok := arrayInfos[t.Kind()]
 	return info, ok
+}
+
+func (c *Compiler) newArrayRangeAccumulator(arr Array) *arrayRangeAccumulator {
+	if len(arr.ColTypes) == 0 {
+		panic("internal: array output missing element type")
+	}
+	info, ok := arrayInfoForType(arr.ColTypes[0])
+	if !ok {
+		panic(fmt.Sprintf("internal: unsupported array element type %s", arr.ColTypes[0].String()))
+	}
+	fnTy, fn := c.GetCFunc(info.NewName)
+	vec := c.builder.CreateCall(fnTy, fn, nil, "range_arr_new")
+	return &arrayRangeAccumulator{
+		vec:       vec,
+		elemType:  arr.ColTypes[0],
+		arrayType: arr,
+		info:      info,
+	}
+}
+
+func (c *Compiler) pushArrayRangeValue(acc *arrayRangeAccumulator, value *Symbol) {
+	valSym := c.derefIfPointer(value)
+	pushTy, pushFn := c.GetCFunc(acc.info.PushName)
+	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.vec, valSym.Val}, "range_arr_push")
+	acc.used = true
+}
+
+func (c *Compiler) arrayRangeResult(acc *arrayRangeAccumulator) *Symbol {
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	return &Symbol{
+		Val:  c.builder.CreateBitCast(acc.vec, i8p, "range_arr_result"),
+		Type: acc.arrayType,
+	}
 }
 
 func (c *Compiler) castArrayElement(val llvm.Value, from, to Type) llvm.Value {
@@ -314,4 +359,87 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	cast := c.arrayBitCast(s.Val, info, "arr_cast")
 	fnTy, fn := c.GetCFunc(info.StrName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
+}
+
+func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, isRoot bool) []*Symbol {
+	if info, ok := c.ExprCache[expr]; ok && len(info.Ranges) > 0 && isRoot {
+		return c.compileArrayRangeWithLoops(expr, info, dest)
+	}
+	return []*Symbol{c.compileArrayRangeElement(expr)}
+}
+
+func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+	if len(info.OutTypes) == 0 {
+		panic("internal: array range expression missing output types")
+	}
+
+	PushScope(&c.Scopes, BlockScope)
+	defer PopScope(&c.Scopes)
+
+	var outputs []*Symbol
+	if len(dest) >= len(info.OutTypes) && len(dest) > 0 {
+		outputs = c.setupRangeOutputs(dest, info.OutTypes)
+	} else {
+		outputs = make([]*Symbol, len(info.OutTypes))
+		for i, outType := range info.OutTypes {
+			ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("arr_range_tmp_%d", i))
+			zero := c.makeZeroValue(outType)
+			c.createStore(zero.Val, ptr, outType)
+			outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: outType}}
+		}
+	}
+
+	rewritten, _ := info.Rewrite.(*ast.ArrayRangeExpression)
+	if rewritten == nil {
+		rewritten = expr
+	}
+
+	c.withLoopNest(info.Ranges, func() {
+		syms := c.compileExpression(rewritten, nil, false)
+		for i := range syms {
+			c.createStore(syms[i].Val, outputs[i].Val, syms[i].Type)
+		}
+	})
+
+	results := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Ptr).Elem
+		results[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, "arr_range_result"),
+			Type: elemType,
+		}
+	}
+
+	return results
+}
+
+func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
+	baseSyms := c.compileExpression(expr.Array, nil, false)
+	if len(baseSyms) != 1 {
+		panic("internal: array index expects single base value")
+	}
+	base := c.derefIfPointer(baseSyms[0])
+
+	arrType, ok := base.Type.(Array)
+	if !ok || len(arrType.ColTypes) == 0 {
+		panic("internal: array index on non-array value")
+	}
+	elemType := arrType.ColTypes[0]
+
+	indexSyms := c.compileExpression(expr.Range, nil, false)
+	if len(indexSyms) != 1 {
+		panic("internal: array index expects single index value")
+	}
+	idxSym := c.derefIfPointer(indexSyms[0])
+	idxVal := idxSym.Val
+	if intType, ok := idxSym.Type.(Int); ok {
+		if intType.Width != 64 {
+			idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
+		}
+	} else {
+		panic("internal: array index did not resolve to integer type")
+	}
+
+	elemVal := c.arrayGet(base, elemType, idxVal)
+	return &Symbol{Type: elemType, Val: elemVal}
 }

@@ -314,6 +314,20 @@ func (al *ArrayLiteral) String() string {
 	return out.String()
 }
 
+// ArrayRangeExpression represents arr[expr] accesses, where expr can be either
+// a single index or a range literal (e.g., arr[0:5]).
+type ArrayRangeExpression struct {
+	Token token.Token // the '[' token
+	Array Expression  // base array expression
+	Range Expression  // index or range expression inside the brackets
+}
+
+func (ar *ArrayRangeExpression) expressionNode()  {}
+func (ar *ArrayRangeExpression) Tok() token.Token { return ar.Token }
+func (ar *ArrayRangeExpression) String() string {
+	return fmt.Sprintf("%s[%s]", ar.Array.String(), ar.Range.String())
+}
+
 type PrefixExpression struct {
 	Token    token.Token // The prefix token, e.g. !
 	Operator string
