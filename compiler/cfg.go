@@ -266,7 +266,7 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	case *ast.ArrayRangeExpression:
 		return len(cfg.ScriptCompiler.Compiler.ExprCache[t].Ranges) > 0
 	case *ast.CallExpression:
-		if len(cfg.ScriptCompiler.Compiler.ExprCache[t].Ranges) > 0 {
+		if info, ok := cfg.ScriptCompiler.Compiler.ExprCache[t]; ok && len(info.Ranges) > 0 {
 			return true
 		}
 		// Check if any argument contains ranges

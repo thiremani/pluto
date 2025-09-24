@@ -921,7 +921,12 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) (t
 	}
 
 	mangled := mangle(ce.Function.Value, args)
-	return ts.InferFuncTypes(ce, innerArgs, mangled, template)
+	out := ts.InferFuncTypes(ce, innerArgs, mangled, template)
+	if len(out) > 0 {
+		ts.ExprCache[ce] = &ExprInfo{OutTypes: out, ExprLen: len(out)}
+		types = append(types, out...)
+	}
+	return
 }
 
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) []Type {
