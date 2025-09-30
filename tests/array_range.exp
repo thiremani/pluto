@@ -7,3 +7,4 @@ NestedOp: 103
 DirectLiteral: 7
 IdentRange: 50
 PrefixRange: -40
+LiteralIterChain: [1 1 1 1 1 1]

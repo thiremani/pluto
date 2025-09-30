@@ -28,3 +28,7 @@ viaIdent = arr[idx]
 
 pref = -arr[1:4]
 "PrefixRange: -pref"
+
+chain = [1]
+chain = chain + [chain[idx]]
+"LiteralIterChain: -chain"

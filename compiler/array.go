@@ -218,41 +218,82 @@ func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral) (res []*Symbol) {
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, isRoot bool) (res []*Symbol) {
+	lit := e
+	info := c.ExprCache[e]
+	if info.Rewrite != nil {
+		if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
+			lit = rew
+		}
+	}
+
+	if alt, ok := c.ExprCache[lit]; ok && alt != nil {
+		info = alt
+	}
+
+	if !isRoot || len(info.Ranges) == 0 {
+		return c.compileArrayLiteralImmediate(lit, info)
+	}
+
+	return c.compileArrayLiteralWithLoops(lit, info)
+}
+
+func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
 	s := &Symbol{}
 
-	// Only support vector form for now
-	if !(len(e.Headers) == 0 && len(e.Rows) == 1) {
-		c.Errors = append(c.Errors, &token.CompileError{Token: e.Tok(), Msg: "2D arrays/tables not implemented yet"})
+	if !(len(lit.Headers) == 0 && len(lit.Rows) == 1) {
+		c.Errors = append(c.Errors, &token.CompileError{Token: lit.Tok(), Msg: "2D arrays/tables not implemented yet"})
 		return nil
 	}
 
-	row := e.Rows[0]
-	// Compile cells
+	row := lit.Rows[0]
 	cells := make([]*Symbol, len(row))
 	for i, cell := range row {
 		vals := c.compileExpression(cell, nil, false)
-		// type solver ensures exactly one value per cell
 		cells[i] = c.derefIfPointer(vals[0])
 	}
 
-	// Use the solver's inferred array schema
-	info := c.ExprCache[e]
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 
 	n := len(row)
 	nConst := llvm.ConstInt(c.Context.Int64Type(), uint64(n), false)
 
-	// Create array and populate it
 	arrVal := c.createArrayForType(elemType, nConst)
 	c.arraySetCells(arrVal, cells, elemType)
 
-	// Set symbol type and value
 	s.Type = arr
 	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
 
 	return []*Symbol{s}
+}
+
+func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
+	if !(len(lit.Headers) == 0 && len(lit.Rows) == 1) {
+		c.Errors = append(c.Errors, &token.CompileError{Token: lit.Tok(), Msg: "2D arrays/tables not implemented yet"})
+		return nil
+	}
+
+	arr := info.OutTypes[0].(Array)
+	elemType := arr.ColTypes[0]
+	acc := c.newArrayRangeAccumulator(arr)
+	row := lit.Rows[0]
+
+	c.withLoopNest(info.Ranges, func() {
+		for _, cell := range row {
+			vals := c.compileExpression(cell, nil, false)
+			valSym := c.derefIfPointer(vals[0])
+
+			val := valSym.Val
+			if valSym.Type.Kind() != elemType.Kind() {
+				val = c.castArrayElement(val, valSym.Type, elemType)
+			}
+
+			c.pushArrayRangeValue(acc, &Symbol{Val: val, Type: elemType})
+		}
+	})
+
+	return []*Symbol{c.arrayRangeResult(acc)}
 }
 
 // Array operation functions

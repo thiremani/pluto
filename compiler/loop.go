@@ -34,6 +34,7 @@ func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
 func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
+	ranges = c.pendingLoopRanges(ranges)
 	var rec func(i int)
 	rec = func(i int) {
 		if i == len(ranges) {
@@ -49,6 +50,21 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 		})
 	}
 	rec(0)
+}
+
+func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
+	if len(ranges) == 0 {
+		return ranges
+	}
+	filtered := make([]*RangeInfo, 0, len(ranges))
+	for _, ri := range ranges {
+		sym, ok := Get(c.Scopes, ri.Name)
+		if ok && sym.Type.Kind() == IntKind {
+			continue
+		}
+		filtered = append(filtered, ri)
+	}
+	return filtered
 }
 
 func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {

@@ -244,6 +244,38 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	}
 }
 
+func TestArrayLiteralRangesRecording(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+
+	script := `idx = 0:5
+res = [idx]`
+
+	sl := lexer.New("ArrayLiteralRanges", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	sc := NewScriptCompiler(ctx, "ArrayLiteralRanges", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	letStmt, ok := program.Statements[1].(*ast.LetStatement)
+	require.True(t, ok)
+
+	arrLit, ok := letStmt.Value[0].(*ast.ArrayLiteral)
+	require.True(t, ok)
+
+	info := ts.ExprCache[arrLit]
+	require.NotNil(t, info)
+	require.Len(t, info.Ranges, 1)
+	require.NotNil(t, info.Rewrite)
+	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
+}
+
 func TestArrayRangeTyping(t *testing.T) {
 	ctx := llvm.NewContext()
 	code := ast.NewCode()

@@ -91,10 +91,10 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression, isRoot bool) (ranges []*Ran
 	switch t := e.(type) {
 	case *ast.RangeLiteral:
 		return ts.HandleRangeLiteral(t, isRoot)
+	case *ast.ArrayLiteral:
+		return ts.HandleArrayLiteralRanges(t, isRoot)
 	case *ast.ArrayRangeExpression:
 		return ts.HandleArrayRangeExpression(t, isRoot)
-		// Arrays are values in expressions. Do not create RangeInfo entries for
-		// array literals here. Leave rewriting to ranges only.
 	case *ast.InfixExpression:
 		return ts.HandleInfixRanges(t, isRoot)
 	case *ast.PrefixExpression:
@@ -126,7 +126,64 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, isRoot bool
 	return
 }
 
-// NOTE: Arrays are treated as values in expressions; no RangeInfo for literals.
+func cloneArrayIndices(indices map[string][]int) map[string][]int {
+	if len(indices) == 0 {
+		return nil
+	}
+	out := make(map[string][]int, len(indices))
+	for name, idxs := range indices {
+		copyIdxs := make([]int, len(idxs))
+		copy(copyIdxs, idxs)
+		out[name] = copyIdxs
+	}
+	return out
+}
+
+func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
+	info := ts.ExprCache[al]
+
+	// Only 1D array literals are currently supported by the compiler.
+	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
+		info.Ranges = nil
+		info.Rewrite = al
+		return nil, al
+	}
+
+	row := al.Rows[0]
+	changed := false
+	newRow := make([]ast.Expression, len(row))
+	for i, cell := range row {
+		cellRanges, cellRew := ts.HandleRanges(cell, false)
+		ranges = mergeUses(ranges, cellRanges)
+		newRow[i] = cellRew
+		if cellRew != cell {
+			changed = true
+		}
+	}
+
+	rew = al
+	if changed {
+		newLit := &ast.ArrayLiteral{
+			Token:   al.Token,
+			Headers: append([]string(nil), al.Headers...),
+			Rows:    [][]ast.Expression{newRow},
+			Indices: cloneArrayIndices(al.Indices),
+		}
+		infoCopy := &ExprInfo{
+			OutTypes: info.OutTypes,
+			ExprLen:  info.ExprLen,
+			Ranges:   append([]*RangeInfo(nil), ranges...),
+			Rewrite:  newLit,
+		}
+		ts.ExprCache[newLit] = infoCopy
+		rew = newLit
+	}
+
+	info.Ranges = ranges
+	info.Rewrite = rew
+
+	return ranges, rew
+}
 
 func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
 	info := ts.ExprCache[ar]

@@ -397,7 +397,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		// Non-root range literal must be handled by the enclosing operator.
 		panic("internal: unexpanded range literal in non-root position")
 	case *ast.ArrayLiteral:
-		return c.compileArrayExpression(e)
+		return c.compileArrayExpression(e, isRoot)
 	case *ast.ArrayRangeExpression:
 		return c.compileArrayRangeExpression(e, dest, isRoot)
 	case *ast.Identifier:

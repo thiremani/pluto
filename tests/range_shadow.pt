@@ -1,0 +1,3 @@
+res = useShadow(x)
+    i = 5
+    res = x * i
