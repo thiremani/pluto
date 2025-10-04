@@ -630,8 +630,19 @@ func (p *StmtParser) parseExpressionTail(precedence int, spacesMatter bool, left
 			break
 		}
 
+		// If spaces matter and there's a space before the next token,
+		// we need to decide: continue current expression, or start new element?
+		// Strategy: if the next token CAN start a new expression, treat space as separator
 		if spacesMatter && p.peekToken.HadSpace {
-			break
+			// Check if next token can start a new expression
+			prefix := p.prefixParseFns[p.peekToken.TokenTypeWithOp()]
+			if prefix != nil {
+				// Can start new expression (prefix op, literal, ident, etc)
+				// Prefer starting new element over continuing as infix
+				break
+			}
+			// Next token cannot start an expression, so it must be infix/postfix
+			// Continue parsing the current expression despite the space
 		}
 
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]

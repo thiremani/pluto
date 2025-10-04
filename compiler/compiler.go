@@ -121,6 +121,15 @@ func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) 
 	return c.makeGlobalConst(arrType, name, strConst, linkage)
 }
 
+func (c *Compiler) constCString(value string) llvm.Value {
+	globalName := fmt.Sprintf("static_str_%d", c.formatCounter)
+	c.formatCounter++
+	global := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
+	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	arrayType := llvm.ArrayType(c.Context.Int8Type(), len(value)+1)
+	return c.builder.CreateGEP(arrayType, global, []llvm.Value{zero, zero}, "static_str_ptr")
+}
+
 func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
 	// Create a global LLVM variable
 	global := llvm.AddGlobal(c.Module, llvmType, name)
@@ -1069,6 +1078,11 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 				args = append(args, strPtr)
 				toFree = append(toFree, strPtr)
 			case ArrayKind:
+				arrType := s.Type.(Array)
+				if len(arrType.ColTypes) == 0 || arrType.ColTypes[0].Kind() == UnresolvedKind {
+					args = append(args, c.constCString("[]"))
+					continue
+				}
 				strPtr := c.arrayStrArg(s)
 				args = append(args, strPtr)
 				toFree = append(toFree, strPtr)

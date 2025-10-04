@@ -26,27 +26,104 @@ type ExprInfo struct {
 // TypeSolver infers the types of various expressions
 // It is mainly needed to infer the output types of a function
 // given input arguments
+type pendingExpr struct {
+	expr       ast.Expression
+	outTypeIdx int
+}
+
+func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
+	info := ts.ExprCache[expr]
+	if info == nil {
+		ts.ExprCache[expr] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+	} else {
+		info.OutTypes[0] = arr
+	}
+
+	if ident, ok := expr.(*ast.Identifier); ok {
+		// resolve any previously unresolved uses now that we know the concrete array type
+		ts.resolveTrackedExprs(ident.Value, arr)
+		return
+	}
+
+	switch e := expr.(type) {
+	case *ast.InfixExpression:
+		ts.bindArrayOperand(e.Left, arr)
+		ts.bindArrayOperand(e.Right, arr)
+	case *ast.PrefixExpression:
+		ts.bindArrayOperand(e.Right, arr)
+	case *ast.ArrayRangeExpression:
+		ts.bindArrayOperand(e.Array, arr)
+	}
+}
+
+func (ts *TypeSolver) handleInfixArrays(expr *ast.InfixExpression, leftType, rightType Type) (Type, bool) {
+	if leftType.Kind() != ArrayKind && rightType.Kind() != ArrayKind {
+		return nil, false
+	}
+	finalType := ts.TypeArrayInfix(leftType, rightType, expr.Operator, expr.Token)
+	if arr, ok := finalType.(Array); ok {
+		if leftType.Kind() == ArrayKind {
+			ts.bindArrayOperand(expr.Left, arr)
+		}
+		if rightType.Kind() == ArrayKind {
+			ts.bindArrayOperand(expr.Right, arr)
+		}
+	}
+	return finalType, true
+}
+
+func (ts *TypeSolver) bindArrayOperands(expr *ast.InfixExpression, leftType, rightType Type, final Type) {
+	arr, ok := final.(Array)
+	if !ok {
+		return
+	}
+	if leftType.Kind() == ArrayKind {
+		ts.bindArrayOperand(expr.Left, arr)
+	}
+	if rightType.Kind() == ArrayKind {
+		ts.bindArrayOperand(expr.Right, arr)
+	}
+}
+
+func (ts *TypeSolver) bindArrayAssignment(name string, expr ast.Expression, idx int, t Type) {
+	arrType, ok := t.(Array)
+	if !ok {
+		return
+	}
+
+	if len(arrType.ColTypes) > 0 && arrType.ColTypes[0].Kind() != UnresolvedKind {
+		info := ts.ExprCache[expr]
+		info.OutTypes[idx] = arrType
+		ts.resolveTrackedExprs(name, arrType)
+		return
+	}
+
+	ts.UnresolvedExprs[name] = append(ts.UnresolvedExprs[name], pendingExpr{expr: expr, outTypeIdx: idx})
+}
+
 type TypeSolver struct {
-	ScriptCompiler *ScriptCompiler
-	Scopes         []Scope[Type]
-	InProgress     map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc     string              // this is the current func in the main scope we are inferring type for
-	Converging     bool
-	Errors         []*token.CompileError
-	ExprCache      map[ast.Expression]*ExprInfo
-	TmpCounter     int // tmpCounter for uniquely naming temporary variables
+	ScriptCompiler  *ScriptCompiler
+	Scopes          []Scope[Type]
+	InProgress      map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
+	ScriptFunc      string              // this is the current func in the main scope we are inferring type for
+	Converging      bool
+	Errors          []*token.CompileError
+	ExprCache       map[ast.Expression]*ExprInfo
+	TmpCounter      int // tmpCounter for uniquely naming temporary variables
+	UnresolvedExprs map[string][]pendingExpr
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		ScriptCompiler: sc,
-		Scopes:         []Scope[Type]{NewScope[Type](FuncScope)},
-		InProgress:     map[string]struct{}{},
-		ScriptFunc:     "",
-		Converging:     false,
-		Errors:         []*token.CompileError{},
-		ExprCache:      sc.Compiler.ExprCache,
-		TmpCounter:     0,
+		ScriptCompiler:  sc,
+		Scopes:          []Scope[Type]{NewScope[Type](FuncScope)},
+		InProgress:      map[string]struct{}{},
+		ScriptFunc:      "",
+		Converging:      false,
+		Errors:          []*token.CompileError{},
+		ExprCache:       sc.Compiler.ExprCache,
+		TmpCounter:      0,
+		UnresolvedExprs: make(map[string][]pendingExpr),
 	}
 }
 
@@ -81,6 +158,22 @@ func (ts *TypeSolver) FreshIterName() string {
 	n := ts.TmpCounter
 	ts.TmpCounter++
 	return fmt.Sprintf("tmpIter$%d", n)
+}
+
+func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
+	entries, ok := ts.UnresolvedExprs[name]
+	if ok {
+		for _, pending := range entries {
+			ts.ExprCache[pending.expr].OutTypes[pending.outTypeIdx] = t
+		}
+		delete(ts.UnresolvedExprs, name)
+	}
+
+	if typ, ok := Get(ts.Scopes, name); ok {
+		if CanRefineType(typ, t) {
+			SetExisting(ts.Scopes, name, t)
+		}
+	}
 }
 
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
@@ -141,6 +234,11 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 
 func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, isRoot bool) (ranges []*RangeInfo, rew ast.Expression) {
 	info := ts.ExprCache[al]
+
+	// If no ExprCache entry exists (e.g., empty array with unresolved type), nothing to handle
+	if info == nil {
+		return nil, al
+	}
 
 	// Only 1D array literals are currently supported by the compiler.
 	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
@@ -330,6 +428,16 @@ func (ts *TypeSolver) Solve() {
 			return
 		}
 	}
+
+	for name, entries := range ts.UnresolvedExprs {
+		for _, pending := range entries {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: pending.expr.Tok(),
+				Msg:   fmt.Sprintf("array %q element type could not be resolved", name),
+			})
+		}
+	}
+
 }
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
@@ -345,9 +453,15 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	types := []Type{}
+	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
+	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
-		types = append(types, exprTypes...)
+		for idx := range exprTypes {
+			types = append(types, exprTypes[idx])
+			exprRefs = append(exprRefs, expr)
+			exprIdxs = append(exprIdxs, idx)
+		}
 	}
 
 	if len(stmt.Name) != len(types) {
@@ -362,6 +476,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
 		newType := types[i]
+		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 		var typ Type
 		var ok bool
 		if typ, ok = Get(ts.Scopes, ident.Value); ok {
@@ -369,21 +484,20 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			if newType.Kind() == UnresolvedKind {
 				continue
 			}
-			// allow for type reassignment from unknown type to concrete type
-			if typ.Kind() == UnresolvedKind {
+			// allow for type refinement (e.g., Unresolved -> Concrete, [?] -> [I64])
+			if CanRefineType(typ, newType) {
 				trueValues[ident.Value] = newType
 				continue
 			}
-			if !TypeEqual(newType, typ) {
-				ce := &token.CompileError{
-					Token: ident.Token,
-					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				return
+			// types are incompatible
+			ce := &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
 			}
-			continue
+			ts.Errors = append(ts.Errors, ce)
+			return
 		}
+
 		trueValues[ident.Value] = newType
 	}
 
@@ -395,6 +509,13 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // The returned type slice contains a single Array type value.
 // Or if it is not a root expression, it returns the underlying element type
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral, isRoot bool) []Type {
+	// Empty array literal: [] (no rows)
+	if len(al.Headers) == 0 && len(al.Rows) == 0 {
+		arr := Array{Headers: nil, ColTypes: []Type{Unresolved{}}, Length: 0}
+		ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+		return []Type{arr}
+	}
+
 	// Vector special-case: single row, no headers → treat as 1-column vector
 	if len(al.Headers) == 0 && len(al.Rows) == 1 {
 		colTypes := []Type{Unresolved{}}
@@ -726,7 +847,10 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 			Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
+		return
 	}
+
+	ts.ExprCache[ident] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
 	return
 }
 
@@ -765,8 +889,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		}
 
 		// Handle any expression involving arrays
-		if leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind {
-			finalType := ts.TypeArrayInfix(leftType, rightType, expr.Operator, expr.Token)
+		if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
 			types = append(types, finalType)
 			continue
 		}
@@ -791,6 +914,24 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 
 		leftElemType := leftArr.ColTypes[0]
 		rightElemType := rightArr.ColTypes[0]
+
+		// If left is unresolved (empty array), use right's type
+		if leftElemType.Kind() == UnresolvedKind {
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{rightElemType},
+				Length:   0,
+			}
+		}
+
+		// If right is unresolved (empty array), use left's type
+		if rightElemType.Kind() == UnresolvedKind {
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{leftElemType},
+				Length:   0,
+			}
+		}
 
 		// Both are the same type
 		if leftElemType.Kind() == rightElemType.Kind() {

@@ -241,9 +241,30 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, isRoot bool) (res
 func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
 	s := &Symbol{}
 
-	if !(len(lit.Headers) == 0 && len(lit.Rows) == 1) {
+	if !(len(lit.Headers) == 0 && (len(lit.Rows) == 0 || len(lit.Rows) == 1)) {
 		c.Errors = append(c.Errors, &token.CompileError{Token: lit.Tok(), Msg: "2D arrays/tables not implemented yet"})
 		return nil
+	}
+
+	// Handle empty array literal: []
+	if len(lit.Rows) == 0 {
+		arr := info.OutTypes[0].(Array)
+		elemType := arr.ColTypes[0]
+
+		// If element type is unresolved, create a null pointer
+		// The actual array will be created when the variable is used with a concrete type
+		if elemType.Kind() == UnresolvedKind {
+			s.Type = arr
+			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+			return []*Symbol{s}
+		}
+
+		nConst := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		arrVal := c.createArrayForType(elemType, nConst)
+
+		s.Type = arr
+		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+		return []*Symbol{s}
 	}
 
 	row := lit.Rows[0]

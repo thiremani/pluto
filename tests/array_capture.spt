@@ -1,0 +1,23 @@
+i = 0:5
+
+arr = [i]
+"CaptureLiteral: -arr"
+
+arr1 = []
+arr1 = arr1 + [i]
+"LeftConcat: -arr1"
+
+arr2 = []
+arr2 = [i] + arr2 + []
+"RightConcat: -arr2"
+
+arr3 = []
+arr3 = []+ arr3 + [i]
+"LeftConcatExtra: -arr3"
+
+arr4 = [2.3 * i]
+"ScaledCapture: -arr4"
+
+j = 1:6:3
+arr6 = [3j]
+"ScaledWithoutSpace: -arr6"

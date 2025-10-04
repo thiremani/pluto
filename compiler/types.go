@@ -220,6 +220,36 @@ func TypeEqual(a, b Type) bool {
 	return cmp(a, b)
 }
 
+// CanRefineType checks if oldType can be refined to newType by replacing
+// unresolved components with concrete types.
+// Returns true if refinement is possible (including when types are already equal).
+func CanRefineType(oldType, newType Type) bool {
+	// Completely unresolved type can be refined to anything
+	if oldType.Kind() == UnresolvedKind {
+		return true
+	}
+
+	// If kinds differ, can't refine
+	if oldType.Kind() != newType.Kind() {
+		return false
+	}
+
+	// Check type-specific refinement
+	switch oldType.Kind() {
+	case ArrayKind:
+		oldArr := oldType.(Array)
+		// Can refine if old has unresolved element type
+		return oldArr.ColTypes[0].Kind() == UnresolvedKind || TypeEqual(oldType, newType)
+	case PtrKind:
+		oldPtr := oldType.(Ptr)
+		newPtr := newType.(Ptr)
+		return CanRefineType(oldPtr.Elem, newPtr.Elem)
+	default:
+		// For other types, must be equal
+		return TypeEqual(oldType, newType)
+	}
+}
+
 func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
