@@ -950,43 +950,153 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
-	args, argTypes := c.compileArgs(ce)
-	mangled := mangle(ce.Function.Value, argTypes)
+	info := c.ExprCache[ce]
+	args, _ := c.compileArgs(ce)
+
+	var arrayArgs []CallArrayArg
+	var mangled string
+	if info != nil {
+		arrayArgs = info.ArrayArgs
+		mangled = info.FuncMangled
+	}
+	if mangled == "" {
+		types := make([]Type, len(args))
+		for i, arg := range args {
+			types[i] = arg.Type
+		}
+		mangled = mangle(ce.Function.Value, types)
+	}
 	Func := c.FuncCache[mangled]
 	retStruct := c.getReturnStruct(mangled, Func.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
-	llvmInputs := []llvm.Type{}
-	llvmArgs := []llvm.Value{sretPtr}
-	for _, a := range args {
-		llvmInputs = append(llvmInputs, c.mapToLLVMType(a.Type))
-		llvmArgs = append(llvmArgs, a.Val)
+	if len(arrayArgs) == 0 {
+		llvmInputs := make([]llvm.Type, len(args))
+		for i, a := range args {
+			llvmInputs[i] = c.mapToLLVMType(a.Type)
+		}
+		funcType := c.getFuncType(retStruct, llvmInputs)
+		fn := c.Module.NamedFunction(mangled)
+		if fn.IsNil() {
+			fk := ast.FuncKey{
+				FuncName: ce.Function.Value,
+				Arity:    len(args),
+			}
+			template := c.CodeCompiler.Code.Func.Map[fk]
+			savedBlock := c.builder.GetInsertBlock()
+			fn = c.compileFunc(template, args, mangled, Func.OutTypes, retStruct, funcType)
+			c.builder.SetInsertPointAtEnd(savedBlock)
+		}
+		return c.callFunctionDirect(fn, funcType, retStruct, Func.OutTypes, args, sretPtr)
 	}
 
-	fn := c.Module.NamedFunction(mangled)
+	arrayIndexMap := make(map[int]Array)
+	for _, ai := range arrayArgs {
+		arrayIndexMap[ai.Index] = ai.ArrayType
+	}
+
+	paramTypes := make([]Type, len(args))
+	for i, arg := range args {
+		if arr, ok := arrayIndexMap[i]; ok {
+			paramTypes[i] = arr.ColTypes[0]
+		} else {
+			paramTypes[i] = arg.Type
+		}
+	}
+
+	llvmInputs := make([]llvm.Type, len(paramTypes))
+	for i, pt := range paramTypes {
+		llvmInputs[i] = c.mapToLLVMType(pt)
+	}
 	funcType := c.getFuncType(retStruct, llvmInputs)
+	fn := c.Module.NamedFunction(mangled)
 	if fn.IsNil() {
-		// attempt to compile existing function template from Code
 		fk := ast.FuncKey{
 			FuncName: ce.Function.Value,
-			Arity:    len(args),
+			Arity:    len(paramTypes),
 		}
-
-		code := c.CodeCompiler.Code
-		// no need to check for ok as typesolver does that
-		template := code.Func.Map[fk]
-
+		template := c.CodeCompiler.Code.Func.Map[fk]
+		dummyArgs := make([]*Symbol, len(args))
+		for i := range args {
+			if arr, ok := arrayIndexMap[i]; ok {
+				dummyArgs[i] = &Symbol{Type: arr.ColTypes[0]}
+				continue
+			}
+			dummyArgs[i] = args[i]
+		}
 		savedBlock := c.builder.GetInsertBlock()
-		fn = c.compileFunc(template, args, mangled, Func.OutTypes, retStruct, funcType)
+		fn = c.compileFunc(template, dummyArgs, mangled, Func.OutTypes, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	c.builder.CreateCall(funcType, fn, llvmArgs, "") // don't name the call as it returns void. those instructions cannot be named as per llvm
+	arrayInfos := arrayArgs
+	arraySymbols := make([]*Symbol, len(arrayInfos))
+	arrayTypes := make([]Array, len(arrayInfos))
+	indexMap := make(map[int]int, len(arrayInfos))
+	for idx, ai := range arrayInfos {
+		arraySymbols[idx] = args[ai.Index]
+		arrayTypes[idx] = ai.ArrayType
+		indexMap[ai.Index] = idx
+	}
 
-	res = make([]*Symbol, len(Func.OutTypes))
-	for i, typ := range Func.OutTypes {
+	accs := make([]*arrayRangeAccumulator, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		arr := outType.(Array)
+		accs[i] = c.newArrayRangeAccumulator(arr)
+	}
+
+	elementSyms := make([]*Symbol, len(arrayInfos))
+	var loop func(depth int)
+	loop = func(depth int) {
+		if depth == len(arrayInfos) {
+			callArgs := make([]*Symbol, len(args))
+			for i := range args {
+				if pos, ok := indexMap[i]; ok {
+					callArgs[i] = elementSyms[pos]
+				} else {
+					callArgs[i] = args[i]
+				}
+			}
+			callRes := c.callFunctionDirect(fn, funcType, retStruct, Func.OutTypes, callArgs, sretPtr)
+			for i, acc := range accs {
+				c.pushArrayRangeValue(acc, callRes[i])
+			}
+			return
+		}
+
+		sym := arraySymbols[depth]
+		arrType := arrayTypes[depth]
+		lenVal := c.arrayLen(sym, arrType.ColTypes[0])
+		r := c.rangeZeroToN(lenVal)
+		c.createLoop(r, func(iter llvm.Value) {
+			elemVal := c.arrayGet(sym, arrType.ColTypes[0], iter)
+			elementSyms[depth] = &Symbol{Val: elemVal, Type: arrType.ColTypes[0]}
+			loop(depth + 1)
+		})
+	}
+
+	loop(0)
+
+	res = make([]*Symbol, len(accs))
+	for i, acc := range accs {
+		res[i] = c.arrayRangeResult(acc)
+	}
+	return res
+}
+
+func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStruct llvm.Type, outTypes []Type, args []*Symbol, sretPtr llvm.Value) []*Symbol {
+	llvmArgs := []llvm.Value{sretPtr}
+	for _, arg := range args {
+		llvmArgs = append(llvmArgs, arg.Val)
+	}
+
+	c.builder.CreateCall(funcType, fn, llvmArgs, "")
+
+	res := make([]*Symbol, len(outTypes))
+	for i, typ := range outTypes {
+		ptr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("ret_gep_%d", i))
 		res[i] = &Symbol{
-			Val:  c.createLoad(c.builder.CreateStructGEP(retStruct, sretPtr, i, "ret_gep"), typ, ""),
+			Val:  c.createLoad(ptr, typ, fmt.Sprintf("ret_val_%d", i)),
 			Type: typ,
 		}
 	}

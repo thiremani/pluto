@@ -1,9 +1,11 @@
-ConcatInt: [1 2 3 4]
-ConcatIntInPlace: [1 2 3 4]
-ConcatFloat: [1.5 2.5 3.5 4.5]
-ConcatMixed: [1 2 3.5 4.5]
-ConcatStr: [foo bar baz qux]
-MultAddInt: [12 14 16]
-MultAddFloat: [-0.25 0.25]
-MixedMultAdd: [2 4 3.5 4.5]
-ScaleConcat: [3 6 10 20]
+Square: [1 4 9]
+Sum: [4 5 5 6]
+Prod: [3 4 6 8]
+BiasScale: [22 24 26]
+SumProductMixed: [6 7]
+ProdMixed: [5 10]
+SumProductReverse: [6 7]
+ProdReverse: [5 10]
+SumProductScalar: 5
+ProdScalar: 6
+SquareScalar: 49
