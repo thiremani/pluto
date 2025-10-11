@@ -22,3 +22,9 @@ scalar_sum, scalar_prod = sum_and_product(2, 3)
 
 scalar = square(7)
 "SquareScalar: -scalar"
+
+arr1 = ConstVec(0)
+"ConstVecScalar: -arr1"
+
+arr2 = ConstVec(0:5)
+"ConstVecRange: -arr2"

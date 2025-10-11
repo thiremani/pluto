@@ -16,6 +16,14 @@ type Symbol struct {
 	ReadOnly bool
 }
 
+type funcIterParam struct {
+	idx      int
+	over     IterOver
+	rng      Range
+	arr      Array
+	arrRange ArrayRange
+}
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -97,6 +105,11 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 			[]llvm.Type{elemLLVM, elemLLVM, elemLLVM},
 			false,
 		)
+	case ArrayRangeKind:
+		slice := t.(ArrayRange)
+		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
+		rangeTy := c.mapToLLVMType(slice.Range)
+		return llvm.StructType([]llvm.Type{arrayPtr, rangeTy}, false)
 	case PtrKind:
 		ptrType := t.(Ptr)
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
@@ -406,7 +419,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		// Non-root range literal must be handled by the enclosing operator.
 		panic("internal: unexpanded range literal in non-root position")
 	case *ast.ArrayLiteral:
-		return c.compileArrayExpression(e, isRoot)
+		return c.compileArrayExpression(e, dest, isRoot)
 	case *ast.ArrayRangeExpression:
 		return c.compileArrayRangeExpression(e, dest, isRoot)
 	case *ast.Identifier:
@@ -813,7 +826,7 @@ func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Typ
 	return funcType
 }
 
-func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string, outTypes []Type, retStruct llvm.Type, funcType llvm.Type) llvm.Value {
+func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string, f *Func, retStruct llvm.Type, funcType llvm.Type) llvm.Value {
 	function := llvm.AddFunction(c.Module, mangled, funcType)
 
 	sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
@@ -825,7 +838,7 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	savedBlock := c.builder.GetInsertBlock()
 	c.builder.SetInsertPointAtEnd(entry)
 
-	c.compileFuncBlock(fn, outTypes, args, retStruct, function)
+	c.compileFuncBlock(fn, f, args, retStruct, function)
 
 	c.builder.CreateRetVoid()
 
@@ -837,60 +850,207 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	return function
 }
 
-func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, outTypes []Type, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
+func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
 	PushScope(&c.Scopes, FuncScope)
 	defer PopScope(&c.Scopes)
 
 	sretPtr := function.Param(0)
+	finalOutTypes := f.OutTypes
+	loopOutTypes := make([]Type, len(finalOutTypes))
+	for i, outType := range finalOutTypes {
+		if arr, ok := outType.(Array); ok {
+			loopOutTypes[i] = arr.ColTypes[0]
+			continue
+		}
+		loopOutTypes[i] = outType
+	}
 
-	// 1) Install outputs into scope and remember their storage
-	outSyms := make(map[string]*Symbol, len(fn.Outputs))
+	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
-		outType := outTypes[i]
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
-
-		sym := &Symbol{
+		retPtrs[i] = &Symbol{
 			Val:      fieldPtr,
-			Type:     Ptr{Elem: outType},
+			Type:     Ptr{Elem: finalOutTypes[i]},
 			FuncArg:  true,
 			ReadOnly: false,
 		}
-		Put(c.Scopes, outIdent.Value, sym)
-		outSyms[outIdent.Value] = sym
 	}
 
-	// collect which param‐indices are ranges
-	rangeIdxs := []int{}
-	// recursive nester: for N ranges, make N loops via createLoop
+	iterParams := []funcIterParam{}
 	scalars := make(map[string]*Symbol)
+	arrayArgs := make(map[int]*Symbol)
+	outputSeeds := make(map[int]*Symbol)
+	outputIndex := make(map[string]int, len(fn.Outputs))
+	for i, outIdent := range fn.Outputs {
+		outputIndex[outIdent.Value] = i
+	}
+
 	for i, arg := range args {
 		name := fn.Parameters[i].Value
-
-		if arg.Type.Kind() == RangeKind {
-			rangeIdxs = append(rangeIdxs, i)
-			// do nothing as arg will become an iter in createLoop
-			continue
-		}
-
-		// Scalar param value (after sret)
-		paramVal := function.Param(i + 1)
-
-		// If this param is also an output, seed the output storage and don't add a scalar
-		if outSym, isOut := outSyms[name]; isOut {
-			elemT := outSym.Type.(Ptr).Elem
-			c.createStore(paramVal, outSym.Val, elemT)
-			continue
-		}
-
-		scalars[fn.Parameters[i].Value] = &Symbol{
-			Val:      function.Param(i + 1), // Get the scalar value from the function's params
-			Type:     arg.Type,
-			FuncArg:  true,
-			ReadOnly: true,
+		switch arg.Type.Kind() {
+		case RangeKind:
+			rangeType := arg.Type.(Range)
+			iterParams = append(iterParams, funcIterParam{idx: i, over: IterRange, rng: rangeType})
+		case ArrayKind:
+			arrType := arg.Type.(Array)
+			iterParams = append(iterParams, funcIterParam{idx: i, over: IterArray, arr: arrType})
+			arrayArgs[i] = &Symbol{
+				Val:      function.Param(i + 1),
+				Type:     arrType,
+				FuncArg:  true,
+				ReadOnly: true,
+			}
+		case ArrayRangeKind:
+			arrRangeType := arg.Type.(ArrayRange)
+			iterParams = append(iterParams, funcIterParam{idx: i, over: IterArrayRange, arr: arrRangeType.Array, arrRange: arrRangeType})
+			arrayArgs[i] = &Symbol{
+				Val:      function.Param(i + 1),
+				Type:     arrRangeType,
+				FuncArg:  true,
+				ReadOnly: true,
+			}
+		default:
+			paramVal := function.Param(i + 1)
+			if idx, ok := outputIndex[name]; ok {
+				outputSeeds[idx] = &Symbol{
+					Val:      paramVal,
+					Type:     arg.Type,
+					FuncArg:  true,
+					ReadOnly: true,
+				}
+				continue
+			}
+			scalars[name] = &Symbol{
+				Val:      paramVal,
+				Type:     arg.Type,
+				FuncArg:  true,
+				ReadOnly: true,
+			}
 		}
 	}
 
-	c.nest(fn, scalars, rangeIdxs, function, 0, make(map[string]*Symbol))
+	if len(iterParams) == 0 {
+		outputBindings := make(map[string]*Symbol, len(fn.Outputs))
+		for i, outIdent := range fn.Outputs {
+			outputBindings[outIdent.Value] = retPtrs[i]
+			if seed, ok := outputSeeds[i]; ok {
+				c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
+			}
+		}
+		PutBulk(c.Scopes, outputBindings)
+		c.compileBlockWithArgs(fn, scalars, map[string]*Symbol{})
+		return
+	}
+
+	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
+	for idx, seed := range outputSeeds {
+		elemType := loopOutTypes[idx]
+		c.createStore(seed.Val, outputs[idx].Val, elemType)
+	}
+	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
+
+	iters := make(map[string]*Symbol)
+	c.funcLoopNest(fn, iterParams, args, scalars, iters, outputs, arrayAccs, loopOutTypes, arrayArgs, function, 0)
+
+	for i := range retPtrs {
+		if acc := arrayAccs[i]; acc != nil {
+			arrSym := c.arrayRangeResult(acc)
+			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
+			continue
+		}
+		elemType := loopOutTypes[i]
+		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
+		c.createStore(finalVal, retPtrs[i].Val, elemType)
+	}
+}
+
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterParam, args []*Symbol, scalars map[string]*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*arrayRangeAccumulator, elemOutTypes []Type, arrayArgs map[int]*Symbol, function llvm.Value, level int) {
+	if level == len(iterParams) {
+		c.compileBlockWithArgs(fn, scalars, iters)
+		for i, acc := range arrayAccs {
+			if acc == nil {
+				continue
+			}
+			elemType := elemOutTypes[i]
+			val := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_iter")
+			c.pushArrayRangeValue(acc, &Symbol{Val: val, Type: elemType})
+		}
+		return
+	}
+
+	param := iterParams[level]
+	name := fn.Parameters[param.idx].Value
+
+	switch param.over {
+	case IterRange:
+		rangeVal := function.Param(param.idx + 1)
+		iterType := param.rng.Iter
+		c.createLoop(rangeVal, func(iter llvm.Value) {
+			iters[name] = &Symbol{
+				Val:      iter,
+				Type:     iterType,
+				FuncArg:  true,
+				ReadOnly: false,
+			}
+			c.funcLoopNest(fn, iterParams, args, scalars, iters, outputs, arrayAccs, elemOutTypes, arrayArgs, function, level+1)
+		})
+	case IterArray, IterArrayRange:
+		if param.over == IterArray {
+			arrSym := arrayArgs[param.idx]
+			if arrSym == nil {
+				arrSym = &Symbol{
+					Val:      function.Param(param.idx + 1),
+					Type:     args[param.idx].Type,
+					FuncArg:  true,
+					ReadOnly: true,
+				}
+				arrayArgs[param.idx] = arrSym
+			}
+			elemType := param.arr.ColTypes[0]
+			lenVal := c.arrayLen(arrSym, elemType)
+			r := c.rangeZeroToN(lenVal)
+			c.createLoop(r, func(idx llvm.Value) {
+				elemVal := c.arrayGet(arrSym, elemType, idx)
+				iters[name] = &Symbol{
+					Val:      elemVal,
+					Type:     elemType,
+					FuncArg:  true,
+					ReadOnly: false,
+				}
+				c.funcLoopNest(fn, iterParams, args, scalars, iters, outputs, arrayAccs, elemOutTypes, arrayArgs, function, level+1)
+			})
+			break
+		}
+
+		arrRangeSym := arrayArgs[param.idx]
+		if arrRangeSym == nil {
+			arrRangeSym = &Symbol{
+				Val:      function.Param(param.idx + 1),
+				Type:     args[param.idx].Type,
+				FuncArg:  true,
+				ReadOnly: true,
+			}
+			arrayArgs[param.idx] = arrRangeSym
+		}
+		arrRangeType := param.arrRange
+		arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
+		rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
+		arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
+		elemType := arrRangeType.Array.ColTypes[0]
+		c.createLoop(rangeVal, func(iter llvm.Value) {
+			elemVal := c.arrayGet(arraySym, elemType, iter)
+			iters[name] = &Symbol{
+				Val:      elemVal,
+				Type:     elemType,
+				FuncArg:  true,
+				ReadOnly: false,
+			}
+			c.funcLoopNest(fn, iterParams, args, scalars, iters, outputs, arrayAccs, elemOutTypes, arrayArgs, function, level+1)
+		})
+	default:
+		panic("unsupported iterator kind in funcLoopNest")
+	}
+	delete(iters, name)
 }
 
 func (c *Compiler) nest(fn *ast.FuncStatement, scalars map[string]*Symbol, rangeIdxs []int, function llvm.Value, level int, iters map[string]*Symbol) {
@@ -940,6 +1100,13 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
+		if arrRangeExpr, ok := callArg.(*ast.ArrayRangeExpression); ok {
+			sym := c.compileArrayRangeArg(arrRangeExpr)
+			args = append(args, sym)
+			argTypes = append(argTypes, sym.Type)
+			continue
+		}
+
 		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
@@ -949,60 +1116,46 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes
 	return
 }
 
+func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
+	arraySyms := c.compileExpression(expr.Array, nil, true)
+	if len(arraySyms) != 1 {
+		panic("compiler internal: array range produced multiple values")
+	}
+	arraySym := arraySyms[0]
+	if arraySym.Type.Kind() != ArrayKind {
+		panic("compiler internal: array range target is not an array")
+	}
+
+	rangeSyms := c.compileExpression(expr.Range, nil, true)
+	if len(rangeSyms) != 1 {
+		panic("compiler internal: array range bounds produced multiple values")
+	}
+	rangeSym := rangeSyms[0]
+	if rangeSym.Type.Kind() != RangeKind {
+		panic("compiler internal: array range index is not a range")
+	}
+
+	arrType := arraySym.Type.(Array)
+	arrRange := ArrayRange{Array: arrType, Range: rangeSym.Type.(Range)}
+	llvmTy := c.mapToLLVMType(arrRange)
+	agg := llvm.Undef(llvmTy)
+	agg = c.builder.CreateInsertValue(agg, arraySym.Val, 0, "array_range_arr")
+	agg = c.builder.CreateInsertValue(agg, rangeSym.Val, 1, "array_range_rng")
+	return &Symbol{Val: agg, Type: arrRange}
+}
+
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
-	info := c.ExprCache[ce]
 	args, _ := c.compileArgs(ce)
-
-	var arrayArgs []CallArrayArg
-	var mangled string
-	if info != nil {
-		arrayArgs = info.ArrayArgs
-		mangled = info.FuncMangled
-	}
-	if mangled == "" {
-		types := make([]Type, len(args))
-		for i, arg := range args {
-			types[i] = arg.Type
-		}
-		mangled = mangle(ce.Function.Value, types)
-	}
-	Func := c.FuncCache[mangled]
-	retStruct := c.getReturnStruct(mangled, Func.OutTypes)
-	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
-
-	if len(arrayArgs) == 0 {
-		llvmInputs := make([]llvm.Type, len(args))
-		for i, a := range args {
-			llvmInputs[i] = c.mapToLLVMType(a.Type)
-		}
-		funcType := c.getFuncType(retStruct, llvmInputs)
-		fn := c.Module.NamedFunction(mangled)
-		if fn.IsNil() {
-			fk := ast.FuncKey{
-				FuncName: ce.Function.Value,
-				Arity:    len(args),
-			}
-			template := c.CodeCompiler.Code.Func.Map[fk]
-			savedBlock := c.builder.GetInsertBlock()
-			fn = c.compileFunc(template, args, mangled, Func.OutTypes, retStruct, funcType)
-			c.builder.SetInsertPointAtEnd(savedBlock)
-		}
-		return c.callFunctionDirect(fn, funcType, retStruct, Func.OutTypes, args, sretPtr)
-	}
-
-	arrayIndexMap := make(map[int]Array)
-	for _, ai := range arrayArgs {
-		arrayIndexMap[ai.Index] = ai.ArrayType
-	}
 
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
-		if arr, ok := arrayIndexMap[i]; ok {
-			paramTypes[i] = arr.ColTypes[0]
-		} else {
-			paramTypes[i] = arg.Type
-		}
+		paramTypes[i] = arg.Type
 	}
+
+	mangled := mangle(ce.Function.Value, paramTypes)
+	fnInfo := c.FuncCache[mangled]
+	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
+	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
 	llvmInputs := make([]llvm.Type, len(paramTypes))
 	for i, pt := range paramTypes {
@@ -1016,72 +1169,12 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 			Arity:    len(paramTypes),
 		}
 		template := c.CodeCompiler.Code.Func.Map[fk]
-		dummyArgs := make([]*Symbol, len(args))
-		for i := range args {
-			if arr, ok := arrayIndexMap[i]; ok {
-				dummyArgs[i] = &Symbol{Type: arr.ColTypes[0]}
-				continue
-			}
-			dummyArgs[i] = args[i]
-		}
 		savedBlock := c.builder.GetInsertBlock()
-		fn = c.compileFunc(template, dummyArgs, mangled, Func.OutTypes, retStruct, funcType)
+		fn = c.compileFunc(template, args, mangled, fnInfo, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	arrayInfos := arrayArgs
-	arraySymbols := make([]*Symbol, len(arrayInfos))
-	arrayTypes := make([]Array, len(arrayInfos))
-	indexMap := make(map[int]int, len(arrayInfos))
-	for idx, ai := range arrayInfos {
-		arraySymbols[idx] = args[ai.Index]
-		arrayTypes[idx] = ai.ArrayType
-		indexMap[ai.Index] = idx
-	}
-
-	accs := make([]*arrayRangeAccumulator, len(info.OutTypes))
-	for i, outType := range info.OutTypes {
-		arr := outType.(Array)
-		accs[i] = c.newArrayRangeAccumulator(arr)
-	}
-
-	elementSyms := make([]*Symbol, len(arrayInfos))
-	var loop func(depth int)
-	loop = func(depth int) {
-		if depth == len(arrayInfos) {
-			callArgs := make([]*Symbol, len(args))
-			for i := range args {
-				if pos, ok := indexMap[i]; ok {
-					callArgs[i] = elementSyms[pos]
-				} else {
-					callArgs[i] = args[i]
-				}
-			}
-			callRes := c.callFunctionDirect(fn, funcType, retStruct, Func.OutTypes, callArgs, sretPtr)
-			for i, acc := range accs {
-				c.pushArrayRangeValue(acc, callRes[i])
-			}
-			return
-		}
-
-		sym := arraySymbols[depth]
-		arrType := arrayTypes[depth]
-		lenVal := c.arrayLen(sym, arrType.ColTypes[0])
-		r := c.rangeZeroToN(lenVal)
-		c.createLoop(r, func(iter llvm.Value) {
-			elemVal := c.arrayGet(sym, arrType.ColTypes[0], iter)
-			elementSyms[depth] = &Symbol{Val: elemVal, Type: arrType.ColTypes[0]}
-			loop(depth + 1)
-		})
-	}
-
-	loop(0)
-
-	res = make([]*Symbol, len(accs))
-	for i, acc := range accs {
-		res[i] = c.arrayRangeResult(acc)
-	}
-	return res
+	return c.callFunctionDirect(fn, funcType, retStruct, fnInfo.OutTypes, args, sretPtr)
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStruct llvm.Type, outTypes []Type, args []*Symbol, sretPtr llvm.Value) []*Symbol {

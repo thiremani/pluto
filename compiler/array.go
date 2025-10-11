@@ -218,7 +218,7 @@ func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
 	lit := e
 	info := c.ExprCache[e]
 	if info.Rewrite != nil {
@@ -229,6 +229,16 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, isRoot bool) (res
 
 	if alt, ok := c.ExprCache[lit]; ok && alt != nil {
 		info = alt
+	}
+
+	if len(dest) > 0 {
+		if sym, ok := Get(c.Scopes, dest[0].Value); ok {
+			if ptr, ok := sym.Type.(Ptr); ok && ptr.Elem.Kind() != ArrayKind {
+				if len(lit.Rows) == 1 && len(lit.Rows[0]) == 1 {
+					return c.compileExpression(lit.Rows[0][0], nil, false)
+				}
+			}
+		}
 	}
 
 	if !isRoot || len(info.Ranges) == 0 {

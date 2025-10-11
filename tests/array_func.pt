@@ -8,3 +8,6 @@ res, prod = sum_and_product(a, b)
 res = bias_and_scale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
+
+res = ConstVec(i)
+    res = [i]
