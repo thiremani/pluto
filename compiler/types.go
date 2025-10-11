@@ -18,6 +18,7 @@ const (
 	RangeKind
 	FuncKind
 	ArrayKind
+	ArrayRangeKind
 )
 
 // Type is the interface for all types in our language.
@@ -115,7 +116,7 @@ func (r Range) Kind() Kind {
 type Func struct {
 	Name     string
 	Params   []Type
-	OutTypes []Type // OutTypes are inferred in the type solver
+	OutTypes []Type // Final function output types (after wrapping for array types)
 }
 
 func (f Func) String() string {
@@ -175,6 +176,29 @@ func (a Array) Mangle() string {
 	s := PREFIX + "Array"
 	s += PREFIX + strconv.Itoa(len(a.ColTypes))
 	for _, ct := range a.ColTypes {
+		s += ct.Mangle()
+	}
+	return s
+}
+
+// ArrayRange represents an iteration over a range of an array.
+// It carries the underlying array schema so type comparisons and mangling
+// can remain structural; the actual range bounds are runtime values.
+type ArrayRange struct {
+	Array Array
+	Range Range
+}
+
+func (ar ArrayRange) String() string {
+	return fmt.Sprintf("%s[%s]", ar.Array.String(), ar.Range.String())
+}
+
+func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
+
+func (ar ArrayRange) Mangle() string {
+	s := PREFIX + "ArrayRange"
+	s += PREFIX + strconv.Itoa(len(ar.Array.ColTypes))
+	for _, ct := range ar.Array.ColTypes {
 		s += ct.Mangle()
 	}
 	return s
@@ -240,6 +264,10 @@ func CanRefineType(oldType, newType Type) bool {
 		oldArr := oldType.(Array)
 		// Can refine if old has unresolved element type
 		return oldArr.ColTypes[0].Kind() == UnresolvedKind || TypeEqual(oldType, newType)
+	case ArrayRangeKind:
+		oldSlice := oldType.(ArrayRange)
+		newSlice := newType.(ArrayRange)
+		return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
 	case PtrKind:
 		oldPtr := oldType.(Ptr)
 		newPtr := newType.(Ptr)
@@ -268,6 +296,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFunc
 	case ArrayKind:
 		return eqArray
+	case ArrayRangeKind:
+		return eqArrayRange
 	default:
 		return func(a, b Type) bool { panic(fmt.Sprintf("TypeEqual: unhandled kind %v", k)) }
 	}
@@ -320,4 +350,10 @@ func eqArray(a, b Type) bool {
 		return false
 	}
 	return EqualTypes(aa.ColTypes, ba.ColTypes)
+}
+
+func eqArrayRange(a, b Type) bool {
+	aar := a.(ArrayRange)
+	bar := b.(ArrayRange)
+	return eqArray(aar.Array, bar.Array) && eqRange(aar.Range, bar.Range)
 }

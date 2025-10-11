@@ -21,3 +21,11 @@ arr4 = [2.3 * i]
 j = 1:6:3
 arr6 = [3j]
 "ScaledWithoutSpace: -arr6"
+
+arrBase = [1 2 3 4 5]
+arrRangeCapture = [arrBase[1:4]]
+"ArrayRangeCapture: -arrRangeCapture"
+
+arrRangeConcat = []
+arrRangeConcat = arrRangeConcat + [arrBase[2:5]]
+"ArrayRangeConcat: -arrRangeConcat"
