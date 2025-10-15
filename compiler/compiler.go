@@ -106,9 +106,9 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 			false,
 		)
 	case ArrayRangeKind:
-		slice := t.(ArrayRange)
+		arrRange := t.(ArrayRange)
 		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
-		rangeTy := c.mapToLLVMType(slice.Range)
+		rangeTy := c.mapToLLVMType(arrRange.Range)
 		return llvm.StructType([]llvm.Type{arrayPtr, rangeTy}, false)
 	case PtrKind:
 		ptrType := t.(Ptr)
@@ -138,7 +138,7 @@ func (c *Compiler) constCString(value string) llvm.Value {
 	globalName := fmt.Sprintf("static_str_%d", c.formatCounter)
 	c.formatCounter++
 	global := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
-	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	zero := c.ConstI64(0)
 	arrayType := llvm.ArrayType(c.Context.Int8Type(), len(value)+1)
 	return c.builder.CreateGEP(arrayType, global, []llvm.Value{zero, zero}, "static_str_ptr")
 }
@@ -163,12 +163,12 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
-			val = llvm.ConstInt(c.Context.Int64Type(), uint64(v.Value), false)
+			val = c.ConstI64(v.Value)
 			sym.Type = Ptr{Elem: Int{Width: 64}}
 			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
 
 		case *ast.FloatLiteral:
-			val = llvm.ConstFloat(c.Context.DoubleType(), v.Value)
+			val = c.ConstF64(v.Value)
 			sym.Type = Ptr{Elem: Float{Width: 64}}
 			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), name, val, linkage)
 
@@ -340,14 +340,23 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	}
 	switch symType.Kind() {
 	case IntKind:
-		s.Val = llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		s.Val = c.ConstI64(0)
 	case FloatKind:
-		s.Val = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+		s.Val = c.ConstF64(0)
 	case StrKind:
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
 		// Arrays are modeled as opaque pointers; null is a valid zero.
 		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+	case RangeKind:
+		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
+	case ArrayRangeKind:
+		arrRangeType := symType.(ArrayRange)
+		// Create zero value for the array part
+		arraySym := c.makeZeroValue(arrRangeType.Array)
+		// Create zero value for the range part
+		rangeSym := c.makeZeroValue(arrRangeType.Range)
+		s.Val = c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRangeType)
 	default:
 		panic(fmt.Sprintf("unsupported type for zero value: %s", symType.String()))
 	}
@@ -398,11 +407,11 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		s.Type = Int{Width: 64}
-		s.Val = llvm.ConstInt(c.Context.Int64Type(), uint64(e.Value), false)
+		s.Val = c.ConstI64(e.Value)
 		res = []*Symbol{s}
 	case *ast.FloatLiteral:
 		s.Type = Float{Width: 64}
-		s.Val = llvm.ConstFloat(c.Context.DoubleType(), e.Value)
+		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
 		s.Type = Str{}
@@ -462,6 +471,9 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		setInstAlignment(inst, typ.Iter)
 	case Array:
 		// Arrays are represented as opaque pointers to runtime vectors
+		inst.SetAlignment(8)
+	case ArrayRange:
+		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
 		inst.SetAlignment(8)
 	default:
 		panic("Unsupported type for alignment" + typ.String())
@@ -547,20 +559,17 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 }
 
 func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
-	rType := c.mapToLLVMType(typ)
-	agg := llvm.Undef(rType)
-	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Start, nil, false)[0].Val, 0, "start")
-	agg = c.builder.CreateInsertValue(agg, c.compileExpression(e.Stop, nil, false)[0].Val, 1, "stop")
-	// insert step, defaulting to 1 if no step was provided
+	start := c.compileExpression(e.Start, nil, false)[0].Val
+	stop := c.compileExpression(e.Stop, nil, false)[0].Val
 	var stepVal llvm.Value
 	if e.Step != nil {
 		stepVal = c.compileExpression(e.Step, nil, false)[0].Val
 	} else {
 		// default step = 1
-		stepVal = llvm.ConstInt(c.Context.Int64Type(), 1, false)
+		stepVal = c.ConstI64(1)
 	}
-	agg = c.builder.CreateInsertValue(agg, stepVal, 2, "step")
-	return agg
+
+	return c.CreateRange(start, stop, stepVal, typ)
 }
 
 func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
@@ -633,17 +642,33 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 // compileArrayScalarInfix lowers an infix op between an array and a scalar by
 // broadcasting the scalar over the array and applying the scalar op element-wise.
 
-func (c *Compiler) constI64(v int64) llvm.Value {
+func (c *Compiler) ConstI64(v int64) llvm.Value {
 	return llvm.ConstInt(c.Context.Int64Type(), uint64(v), false)
+}
+
+func (c *Compiler) ConstF64(v float64) llvm.Value {
+	return llvm.ConstFloat(c.Context.DoubleType(), v)
 }
 
 // rangeZeroToN builds a Range{start:0, stop:n, step:1} aggregate
 func (c *Compiler) rangeZeroToN(n llvm.Value) llvm.Value {
-	rType := c.mapToLLVMType(Range{Iter: Int{Width: 64}})
+	return c.CreateRange(c.ConstI64(0), n, c.ConstI64(1), Range{Iter: Int{Width: 64}})
+}
+
+func (c *Compiler) CreateRange(start, stop, step llvm.Value, typ Type) llvm.Value {
+	rType := c.mapToLLVMType(typ)
 	agg := llvm.Undef(rType)
-	agg = c.builder.CreateInsertValue(agg, c.constI64(0), 0, "start")
-	agg = c.builder.CreateInsertValue(agg, n, 1, "stop")
-	agg = c.builder.CreateInsertValue(agg, c.constI64(1), 2, "step")
+	agg = c.builder.CreateInsertValue(agg, start, 0, "start")
+	agg = c.builder.CreateInsertValue(agg, stop, 1, "stop")
+	agg = c.builder.CreateInsertValue(agg, step, 2, "step")
+	return agg
+}
+
+func (c *Compiler) CreateArrayRange(arrayVal llvm.Value, rangeVal llvm.Value, arrRange ArrayRange) llvm.Value {
+	llvmTy := c.mapToLLVMType(arrRange)
+	agg := llvm.Undef(llvmTy)
+	agg = c.builder.CreateInsertValue(agg, arrayVal, 0, "array_range_arr")
+	agg = c.builder.CreateInsertValue(agg, rangeVal, 1, "array_range_rng")
 	return agg
 }
 
@@ -1100,13 +1125,6 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		if arrRangeExpr, ok := callArg.(*ast.ArrayRangeExpression); ok {
-			sym := c.compileArrayRangeArg(arrRangeExpr)
-			args = append(args, sym)
-			argTypes = append(argTypes, sym.Type)
-			continue
-		}
-
 		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
@@ -1122,7 +1140,21 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol 
 		panic("compiler internal: array range produced multiple values")
 	}
 	arraySym := arraySyms[0]
-	if arraySym.Type.Kind() != ArrayKind {
+	info, _ := c.ExprCache[expr]
+	var arrType Array
+	if arraySym.Type.Kind() == ArrayKind {
+		arrType = arraySym.Type.(Array)
+	} else if info != nil {
+		for _, ri := range info.Ranges {
+			if ri.ArrayType.ColTypes != nil {
+				arrType = ri.ArrayType
+				break
+			}
+		}
+		if arrType.ColTypes == nil {
+			panic("compiler internal: array range target is not an array")
+		}
+	} else {
 		panic("compiler internal: array range target is not an array")
 	}
 
@@ -1132,16 +1164,30 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol 
 	}
 	rangeSym := rangeSyms[0]
 	if rangeSym.Type.Kind() != RangeKind {
-		panic("compiler internal: array range index is not a range")
+		if info != nil {
+			for _, ri := range info.Ranges {
+				if ri.Over != IterRange {
+					continue
+				}
+				rngVal := c.rangeAggregateForRI(ri)
+				rangeSym = &Symbol{
+					Val:  rngVal,
+					Type: Range{Iter: Int{Width: 64}},
+				}
+				break
+			}
+		}
+		if rangeSym.Type.Kind() != RangeKind {
+			panic("compiler internal: array range index is not a range")
+		}
 	}
 
-	arrType := arraySym.Type.(Array)
 	arrRange := ArrayRange{Array: arrType, Range: rangeSym.Type.(Range)}
-	llvmTy := c.mapToLLVMType(arrRange)
-	agg := llvm.Undef(llvmTy)
-	agg = c.builder.CreateInsertValue(agg, arraySym.Val, 0, "array_range_arr")
-	agg = c.builder.CreateInsertValue(agg, rangeSym.Val, 1, "array_range_rng")
-	return &Symbol{Val: agg, Type: arrRange}
+	arrRangeSym := &Symbol{
+		Val:  c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRange),
+		Type: arrRange,
+	}
+	return arrRangeSym
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
@@ -1260,6 +1306,14 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		// Compile the expression and get its value and type
 		syms := c.compileExpression(expr, nil, true)
 		for _, s := range syms {
+			if s.Type.Kind() == ArrayRangeKind {
+				arrStr, rngStr := c.arrayRangeStrArgs(s)
+				formatStr += "%s[%s] "
+				args = append(args, arrStr, rngStr)
+				toFree = append(toFree, arrStr, rngStr)
+				continue
+			}
+
 			spec, err := defaultSpecifier(s.Type)
 			if err != nil {
 				cerr := &token.CompileError{
@@ -1312,7 +1366,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	formatGlobal.SetGlobalConstant(true)
 
 	// Get pointer to the format string
-	zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	zero := c.ConstI64(0)
 	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 
 	// Call printf with all arguments

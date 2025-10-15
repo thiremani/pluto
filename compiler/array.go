@@ -144,10 +144,10 @@ func (c *Compiler) createArrayForType(elem Type, length llvm.Value) llvm.Value {
 	_, rezFn := c.GetCFunc(info.ResizeName)
 	switch elem.Kind() {
 	case IntKind:
-		zero := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		zero := c.ConstI64(0)
 		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
 	case FloatKind:
-		zero := llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+		zero := c.ConstF64(0)
 		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
 	case StrKind:
 		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize")
@@ -197,7 +197,7 @@ func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 	_, setFn := c.GetCFunc(info.SetName)
 	for i, cs := range cells {
-		idx := llvm.ConstInt(c.Context.Int64Type(), uint64(i), false)
+		idx := c.ConstI64(int64(i))
 		val := cs.Val
 
 		// Handle type conversions
@@ -269,7 +269,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 			return []*Symbol{s}
 		}
 
-		nConst := llvm.ConstInt(c.Context.Int64Type(), 0, false)
+		nConst := c.ConstI64(0)
 		arrVal := c.createArrayForType(elemType, nConst)
 
 		s.Type = arr
@@ -287,8 +287,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 
-	n := len(row)
-	nConst := llvm.ConstInt(c.Context.Int64Type(), uint64(n), false)
+	nConst := c.ConstI64(int64(len(row)))
 
 	arrVal := c.createArrayForType(elemType, nConst)
 	c.arraySetCells(arrVal, cells, elemType)
@@ -427,9 +426,44 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
 
+func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr llvm.Value) {
+	arrRange := s.Type.(ArrayRange)
+	agg := s.Val
+	arrPtr := c.builder.CreateExtractValue(agg, 0, "array_range_arr")
+	arrSym := &Symbol{Val: arrPtr, Type: arrRange.Array}
+	arrayStr = c.arrayStrArg(arrSym)
+
+	rangeVal := c.builder.CreateExtractValue(agg, 1, "array_range_rng")
+	rangeSym := &Symbol{Val: rangeVal, Type: arrRange.Range}
+	rangeStr = c.rangeStrArg(rangeSym)
+	return
+}
+
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, isRoot bool) []*Symbol {
-	if info, ok := c.ExprCache[expr]; ok && len(info.Ranges) > 0 && isRoot {
-		return c.compileArrayRangeWithLoops(expr, info, dest)
+	origExpr := expr
+	if info, ok := c.ExprCache[expr]; ok {
+		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil && rewritten != expr {
+			if newInfo, ok2 := c.ExprCache[rewritten]; ok2 {
+				info = newInfo
+			}
+			expr = rewritten
+		}
+		for _, ri := range info.Ranges {
+			if ri.Over == IterArrayRange {
+				sym := c.compileArrayRangeArg(expr)
+				return []*Symbol{sym}
+			}
+		}
+		if len(info.OutTypes) == 0 {
+			return []*Symbol{c.compileArrayRangeElement(expr)}
+		}
+		if isRoot && len(info.OutTypes) == 1 && info.OutTypes[0].Kind() == ArrayRangeKind {
+			sym := c.compileArrayRangeArg(origExpr)
+			return []*Symbol{sym}
+		}
+		if len(info.Ranges) > 0 && isRoot {
+			return c.compileArrayRangeWithLoops(expr, info, dest)
+		}
 	}
 	return []*Symbol{c.compileArrayRangeElement(expr)}
 }
@@ -476,6 +510,11 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 }
 
 func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
+	if info, ok := c.ExprCache[expr]; ok {
+		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil {
+			expr = rewritten
+		}
+	}
 	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, false)[0])
 	arrType := base.Type.(Array)
 	elemType := arrType.ColTypes[0]

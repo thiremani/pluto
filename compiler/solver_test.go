@@ -296,31 +296,14 @@ func TestArrayRangeTyping(t *testing.T) {
 
 	valueType, ok := ts.GetIdentifier("value")
 	require.True(t, ok, "expected value identifier")
-	valueInt, ok := valueType.(Int)
-	require.Truef(t, ok, "expected value to be Int, got %T", valueType)
-	require.EqualValues(t, 64, valueInt.Width)
+	value, ok := valueType.(ArrayRange)
+	require.Truef(t, ok, "expected value to be ArrayRange, got %T", valueType)
+	require.EqualValues(t, value.Array.ColTypes[0], Int{Width: 64})
+	require.EqualValues(t, value.Range, Range{Iter: Int{Width: 64}})
 
 	sumType, ok := ts.GetIdentifier("sum")
 	require.True(t, ok, "expected sum identifier")
 	sumInt, ok := sumType.(Int)
 	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
 	require.EqualValues(t, 64, sumInt.Width)
-
-	letStmt := program.Statements[1].(*ast.LetStatement)
-	rangeExpr, ok := letStmt.Value[0].(*ast.ArrayRangeExpression)
-	require.Truef(t, ok, "expected array range expression, got %T", letStmt.Value[0])
-
-	info := ts.ExprCache[rangeExpr]
-	require.NotNil(t, info, "expected ExprInfo for array range expression")
-	require.Len(t, info.OutTypes, 1)
-	outInt, ok := info.OutTypes[0].(Int)
-	require.Truef(t, ok, "expected array range out type to be Int, got %T", info.OutTypes[0])
-	require.EqualValues(t, 64, outInt.Width)
-	require.NotEmpty(t, info.Ranges, "expected ranges recorded for array range expression")
-	require.NotNil(t, info.Rewrite, "expected rewrite expression for array range")
-
-	rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression)
-	require.Truef(t, ok, "expected rewrite to be ArrayRangeExpression, got %T", info.Rewrite)
-	_, isIdent := rewritten.Range.(*ast.Identifier)
-	require.True(t, isIdent, "expected range rewrite to introduce iterator identifier")
 }

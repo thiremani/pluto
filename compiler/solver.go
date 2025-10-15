@@ -39,6 +39,99 @@ type pendingExpr struct {
 	outTypeIdx int
 }
 
+type TypeSolver struct {
+	ScriptCompiler  *ScriptCompiler
+	Scopes          []Scope[Type]
+	InProgress      map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
+	ScriptFunc      string              // this is the current func in the main scope we are inferring type for
+	Converging      bool
+	Errors          []*token.CompileError
+	ExprCache       map[ast.Expression]*ExprInfo
+	TmpCounter      int // tmpCounter for uniquely naming temporary variables
+	UnresolvedExprs map[string][]pendingExpr
+}
+
+func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
+	return &TypeSolver{
+		ScriptCompiler:  sc,
+		Scopes:          []Scope[Type]{NewScope[Type](FuncScope)},
+		InProgress:      map[string]struct{}{},
+		ScriptFunc:      "",
+		Converging:      false,
+		Errors:          []*token.CompileError{},
+		ExprCache:       sc.Compiler.ExprCache,
+		TmpCounter:      0,
+		UnresolvedExprs: make(map[string][]pendingExpr),
+	}
+}
+
+func cloneArrayHeaders(src []string) []string {
+	if len(src) == 0 {
+		return nil
+	}
+	return append([]string(nil), src...)
+}
+
+func arrayWithMetadata(base Array, elem Type) Array {
+	return Array{
+		Headers:  cloneArrayHeaders(base.Headers),
+		ColTypes: []Type{elem},
+		Length:   base.Length,
+	}
+}
+
+func concatWithMetadata(leftArr, rightArr Array, elem Type) Array {
+	headers := cloneArrayHeaders(leftArr.Headers)
+	if len(headers) == 0 {
+		headers = cloneArrayHeaders(rightArr.Headers)
+	}
+
+	length := 0
+	switch {
+	case leftArr.Length > 0 && rightArr.Length > 0:
+		length = leftArr.Length + rightArr.Length
+	case leftArr.Length > 0:
+		length = leftArr.Length
+	case rightArr.Length > 0:
+		length = rightArr.Length
+	}
+
+	return Array{
+		Headers:  headers,
+		ColTypes: []Type{elem},
+		Length:   length,
+	}
+}
+
+func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token) Type {
+	leftElemType := leftArr.ColTypes[0]
+	rightElemType := rightArr.ColTypes[0]
+
+	if leftElemType.Kind() == UnresolvedKind {
+		return concatWithMetadata(leftArr, rightArr, rightElemType)
+	}
+
+	if rightElemType.Kind() == UnresolvedKind {
+		return concatWithMetadata(leftArr, rightArr, leftElemType)
+	}
+
+	if leftElemType.Kind() == rightElemType.Kind() {
+		return concatWithMetadata(leftArr, rightArr, leftElemType)
+	}
+
+	if (leftElemType.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
+		(leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
+		return concatWithMetadata(leftArr, rightArr, Float{Width: 64})
+	}
+
+	ce := &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("cannot concatenate arrays with incompatible element types: %s and %s", leftElemType.String(), rightElemType.String()),
+	}
+	ts.Errors = append(ts.Errors, ce)
+	return Unresolved{}
+}
+
 func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
 	info := ts.ExprCache[expr]
 	if info == nil {
@@ -94,32 +187,6 @@ func (ts *TypeSolver) bindArrayAssignment(name string, expr ast.Expression, idx 
 	}
 
 	ts.UnresolvedExprs[name] = append(ts.UnresolvedExprs[name], pendingExpr{expr: expr, outTypeIdx: idx})
-}
-
-type TypeSolver struct {
-	ScriptCompiler  *ScriptCompiler
-	Scopes          []Scope[Type]
-	InProgress      map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc      string              // this is the current func in the main scope we are inferring type for
-	Converging      bool
-	Errors          []*token.CompileError
-	ExprCache       map[ast.Expression]*ExprInfo
-	TmpCounter      int // tmpCounter for uniquely naming temporary variables
-	UnresolvedExprs map[string][]pendingExpr
-}
-
-func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
-	return &TypeSolver{
-		ScriptCompiler:  sc,
-		Scopes:          []Scope[Type]{NewScope[Type](FuncScope)},
-		InProgress:      map[string]struct{}{},
-		ScriptFunc:      "",
-		Converging:      false,
-		Errors:          []*token.CompileError{},
-		ExprCache:       sc.Compiler.ExprCache,
-		TmpCounter:      0,
-		UnresolvedExprs: make(map[string][]pendingExpr),
-	}
 }
 
 // appendUses appends one occurrence s to out, respecting the policy:
@@ -292,6 +359,7 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression, i
 		ts.ExprCache[newExpr] = &ExprInfo{
 			OutTypes: info.OutTypes,
 			ExprLen:  info.ExprLen,
+			Ranges:   append([]*RangeInfo(nil), ranges...),
 		}
 		rew = newExpr
 	}
@@ -719,44 +787,75 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 }
 
 func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isRoot bool) []Type {
+	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+	ts.ExprCache[ax] = info
+
 	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
 	if !ok {
-		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-		return []Type{Unresolved{}}
+		return info.OutTypes
 	}
 	if len(arrType.ColTypes) == 0 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
 			Msg:   "array type has no element columns",
 		})
-		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-		return []Type{Unresolved{}}
+		return info.OutTypes
 	}
 
 	elemType := arrType.ColTypes[0]
 
-	idxTypes := ts.TypeExpression(ax.Range, false)
+	idxTypes := ts.TypeExpression(ax.Range, true)
 	if len(idxTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
 			Msg:   fmt.Sprintf("array index expects a single value, got %d", len(idxTypes)),
 		})
-		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-		return []Type{Unresolved{}}
+		return info.OutTypes
 	}
 
 	idxType := idxTypes[0]
-	if idxType.Kind() != IntKind {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   fmt.Sprintf("array index must be an integer, got %s", idxType.String()),
-		})
-		ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-		return []Type{Unresolved{}}
+	var rangeType Type
+	if idxType.Kind() == RangeKind {
+		rangeType = idxType.(Range).Iter
 	}
 
-	ts.ExprCache[ax] = &ExprInfo{OutTypes: []Type{elemType}, ExprLen: 1}
-	return []Type{elemType}
+	if rangeType != nil && rangeType.Kind() != IntKind {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
+		})
+		return info.OutTypes
+	}
+
+	if !isRoot {
+		// if not root, return the element type since any sub root expression automatically loops over the range
+		info.OutTypes = []Type{elemType}
+		info.ExprLen = 1
+		return info.OutTypes
+	}
+
+	if idxType.Kind() == IntKind {
+		// single index access returns the element type
+		info.OutTypes = []Type{elemType}
+		info.ExprLen = 1
+		return info.OutTypes
+	}
+
+	if rangeType == nil {
+		// index is unresolved, cannot determine output type
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
+		})
+		return info.OutTypes
+	}
+
+	info.OutTypes = []Type{ArrayRange{
+		Array: arrType,
+		Range: idxType.(Range),
+	}}
+	info.ExprLen = 1
+	return info.OutTypes
 }
 
 func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []Type) {
@@ -803,6 +902,7 @@ func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
 		return t, true
 	}
 
+	// get any constants from the code compiler
 	compiler := ts.ScriptCompiler.Compiler
 	cc := compiler.CodeCompiler.Compiler
 	if s, ok := Get(cc.Scopes, name); ok {
@@ -888,80 +988,49 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
-	// Handle Array + Array concatenation
-	if left.Kind() == ArrayKind && right.Kind() == ArrayKind && op == token.SYM_ADD {
-		leftArr := left.(Array)
-		rightArr := right.(Array)
+	var leftArr, rightArr Array
+	leftIsArr := left.Kind() == ArrayKind
+	rightIsArr := right.Kind() == ArrayKind
 
-		leftElemType := leftArr.ColTypes[0]
-		rightElemType := rightArr.ColTypes[0]
+	if leftIsArr {
+		leftArr = left.(Array)
+	}
+	if rightIsArr {
+		rightArr = right.(Array)
+	}
 
-		// If left is unresolved (empty array), use right's type
-		if leftElemType.Kind() == UnresolvedKind {
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{rightElemType},
-				Length:   0,
-			}
+	if leftIsArr && rightIsArr {
+		if op == token.SYM_ADD {
+			return ts.concatArrayTypes(leftArr, rightArr, tok)
 		}
-
-		// If right is unresolved (empty array), use left's type
-		if rightElemType.Kind() == UnresolvedKind {
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{leftElemType},
-				Length:   0,
-			}
-		}
-
-		// Both are the same type
-		if leftElemType.Kind() == rightElemType.Kind() {
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{leftElemType},
-				Length:   0,
-			}
-		}
-
-		// Int + Float promotion -> Float
-		if (leftElemType.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
-			(leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{Float{Width: 64}},
-				Length:   0,
-			}
-		}
-
-		// Incompatible types (e.g., string + float)
-		ce := &token.CompileError{
+		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
-			Msg:   fmt.Sprintf("cannot concatenate arrays with incompatible element types: %s and %s", leftElemType.String(), rightElemType.String()),
-		}
-		ts.Errors = append(ts.Errors, ce)
+			Msg:   fmt.Sprintf("unsupported operator: %q for two array types", op),
+		})
 		return Unresolved{}
 	}
 
-	// Handle Array-Scalar operations (extract element types)
+	// Handle array-like with scalar operations
 	leftType := left
 	rightType := right
 
-	if left.Kind() == ArrayKind {
-		leftType = left.(Array).ColTypes[0]
+	if leftIsArr {
+		leftType = leftArr.ColTypes[0]
 	}
 
-	if right.Kind() == ArrayKind {
-		rightType = right.(Array).ColTypes[0]
+	if rightIsArr {
+		rightType = rightArr.ColTypes[0]
 	}
 
-	// Get the result element type
 	elemType := ts.TypeInfixOp(leftType, rightType, op, tok)
 
-	// Return as array
-	return Array{
-		Headers:  nil,
-		ColTypes: []Type{elemType},
-		Length:   0,
+	switch {
+	case leftIsArr:
+		return arrayWithMetadata(leftArr, elemType)
+	case rightIsArr:
+		return arrayWithMetadata(rightArr, elemType)
+	default:
+		return elemType
 	}
 }
 
@@ -1012,10 +1081,12 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 			continue
 		}
 
-		var isArrayExpr bool
+		isArrayExpr := false
+		origArrayType := Array{}
 		if opType.Kind() == ArrayKind {
 			isArrayExpr = true
-			opType = opType.(Array).ColTypes[0]
+			origArrayType = opType.(Array)
+			opType = origArrayType.ColTypes[0]
 		}
 
 		key := unaryOpKey{
@@ -1045,9 +1116,9 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 		if isArrayExpr {
 			finalType := Array{
-				Headers:  nil,
+				Headers:  origArrayType.Headers,
 				ColTypes: []Type{resultType},
-				Length:   0,
+				Length:   origArrayType.Length,
 			}
 			types = append(types, finalType)
 			continue
@@ -1080,54 +1151,12 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, arrayIters []*RangeInfo) {
 	for _, e := range ce.Arguments {
-		if arrRangeExpr, ok := e.(*ast.ArrayRangeExpression); ok {
-			if err := ts.appendArrayRangeCallArg(arrRangeExpr, &args, &innerArgs, &arrayIters); err != nil {
-				return nil, nil, nil
-			}
-			continue
-		}
 		exprArgs := ts.TypeExpression(e, isRoot)
 		for _, arg := range exprArgs {
 			ts.appendStandardCallArg(arg, e, &args, &innerArgs, &arrayIters)
 		}
 	}
 	return args, innerArgs, arrayIters
-}
-
-func (ts *TypeSolver) appendArrayRangeCallArg(expr *ast.ArrayRangeExpression, args *[]Type, innerArgs *[]Type, arrayIters *[]*RangeInfo) error {
-	arrType, ok := ts.expectSingleArray(expr.Array, expr.Tok(), "array range")
-	if !ok {
-		return fmt.Errorf("array range target")
-	}
-
-	rangeTypes := ts.TypeExpression(expr.Range, true)
-	if len(rangeTypes) != 1 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   fmt.Sprintf("array range expects a single range value, got %d", len(rangeTypes)),
-		})
-		return fmt.Errorf("array range range count")
-	}
-
-	progRange, ok := rangeTypes[0].(Range)
-	if !ok {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   "array range index is not a range",
-		})
-		return fmt.Errorf("array range range type")
-	}
-
-	paramType := ArrayRange{Array: arrType, Range: progRange}
-	*args = append(*args, paramType)
-	*innerArgs = append(*innerArgs, arrType.ColTypes[0])
-	*arrayIters = append(*arrayIters, &RangeInfo{
-		Name:      ts.FreshIterName(),
-		ArrayExpr: expr,
-		ArrayType: arrType,
-		Over:      IterArrayRange,
-	})
-	return nil
 }
 
 func (ts *TypeSolver) appendStandardCallArg(arg Type, expr ast.Expression, args *[]Type, innerArgs *[]Type, arrayIters *[]*RangeInfo) {
@@ -1145,6 +1174,16 @@ func (ts *TypeSolver) appendStandardCallArg(arg Type, expr ast.Expression, args 
 			ArrayExpr: expr,
 			ArrayType: arr,
 			Over:      IterArray,
+		})
+	case ArrayRangeKind:
+		arrRange := arg.(ArrayRange)
+		paramType = arrRange
+		*innerArgs = append(*innerArgs, arrRange.Array.ColTypes[0])
+		*arrayIters = append(*arrayIters, &RangeInfo{
+			Name:      ts.FreshIterName(),
+			ArrayExpr: expr,
+			ArrayType: arrRange.Array,
+			Over:      IterArrayRange,
 		})
 	default:
 		paramType = arg
@@ -1207,7 +1246,8 @@ func (ts *TypeSolver) finishCallTypes(f *Func, ce *ast.CallExpression, arrayIter
 		finalOut = wrapped
 	}
 
-	info := &ExprInfo{OutTypes: finalOut, ExprLen: len(finalOut), Ranges: arrayIters}
+	rangesCopy := append([]*RangeInfo(nil), arrayIters...)
+	info := &ExprInfo{OutTypes: finalOut, ExprLen: len(finalOut), Ranges: rangesCopy}
 	ts.ExprCache[ce] = info
 	f.OutTypes = finalOut
 	return finalOut

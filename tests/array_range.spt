@@ -2,7 +2,6 @@ arr = [10 20 30 40 50]
 value = arr[2]
 "Index: -value"
 
-current = -1
 current = arr[1:4]
 "RangeAssign: -current"
 
@@ -32,3 +31,9 @@ pref = -arr[1:4]
 chain = [1]
 chain = chain + [chain[idx]]
 "LiteralIterChain: -chain"
+
+callRoot = double(arr[0:5])
+"CallRangeRoot: -callRoot"
+
+callInfix = double(arr[0:5]) + idx
+"CallRangeInfix: -callInfix"
