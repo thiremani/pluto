@@ -8,10 +8,6 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-const (
-	unsupportedArrayTypeMsg = "unsupported array element type: %s"
-)
-
 type ArrayInfo struct {
 	PtrName    string
 	NewName    string
@@ -23,15 +19,15 @@ type ArrayInfo struct {
 	PushName   string
 }
 
-type arrayRangeAccumulator struct {
-	vec       llvm.Value
-	elemType  Type
-	arrayType Array
-	info      ArrayInfo
-	used      bool
+type ArrayAccumulator struct {
+	Vec       llvm.Value
+	ElemType  Type
+	ArrayType Array
+	Info      ArrayInfo
+	Used      bool
 }
 
-var arrayInfos = map[Kind]ArrayInfo{
+var ArrayInfos = map[Kind]ArrayInfo{
 	IntKind: {
 		PtrName:    "PtArrayI64",
 		NewName:    ARR_I64_NEW,
@@ -64,77 +60,71 @@ var arrayInfos = map[Kind]ArrayInfo{
 	},
 }
 
-func arrayInfoForType(t Type) (ArrayInfo, bool) {
-	info, ok := arrayInfos[t.Kind()]
-	return info, ok
-}
-
-func (c *Compiler) newArrayRangeAccumulator(arr Array) *arrayRangeAccumulator {
-	info, _ := arrayInfoForType(arr.ColTypes[0])
+func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
+	info := ArrayInfos[arr.ColTypes[0].Kind()]
 	fnTy, fn := c.GetCFunc(info.NewName)
 	vec := c.builder.CreateCall(fnTy, fn, nil, "range_arr_new")
-	return &arrayRangeAccumulator{
-		vec:       vec,
-		elemType:  arr.ColTypes[0],
-		arrayType: arr,
-		info:      info,
+	return &ArrayAccumulator{
+		Vec:       vec,
+		ElemType:  arr.ColTypes[0],
+		ArrayType: arr,
+		Info:      info,
 	}
 }
 
-func (c *Compiler) pushArrayRangeValue(acc *arrayRangeAccumulator, value *Symbol) {
+func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value)
-	pushTy, pushFn := c.GetCFunc(acc.info.PushName)
-	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.vec, valSym.Val}, "range_arr_push")
-	acc.used = true
+	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
+	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
+	acc.Used = true
 }
 
-func (c *Compiler) arrayRangeResult(acc *arrayRangeAccumulator) *Symbol {
+func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	return &Symbol{
-		Val:  c.builder.CreateBitCast(acc.vec, i8p, "range_arr_result"),
-		Type: acc.arrayType,
+		Val:  c.builder.CreateBitCast(acc.Vec, i8p, "range_arr_result"),
+		Type: acc.ArrayType,
 	}
 }
 
-func (c *Compiler) castArrayElement(val llvm.Value, from, to Type) llvm.Value {
+func (c *Compiler) CastArrayElem(val llvm.Value, from, to Type) llvm.Value {
 	if from.Kind() == to.Kind() {
 		return val
 	}
 	switch {
 	case from.Kind() == IntKind && to.Kind() == FloatKind:
+		// Safe: lossless widening conversion
 		return c.builder.CreateSIToFP(val, c.Context.DoubleType(), "i64_to_f64")
-	case from.Kind() == FloatKind && to.Kind() == IntKind:
-		return c.builder.CreateFPToSI(val, c.Context.Int64Type(), "f64_to_i64")
 	default:
+		// Note: Float→Int cast is intentionally NOT supported here.
+		// The type solver always promotes int→float to prevent lossy conversions.
+		// If explicit conversion is needed in the future, add an int() function.
 		panic(fmt.Sprintf("unsupported array element cast: %s -> %s", from.String(), to.String()))
 	}
 }
 
-func (c *Compiler) copyArrayInto(vec llvm.Value, src *Symbol, srcElem, resElem Type, offset llvm.Value, applyOffset bool) {
-	length := c.arrayLen(src, srcElem)
+func (c *Compiler) CopyArrayInto(vec llvm.Value, src *Symbol, srcElem, resElem Type, offset llvm.Value, applyOffset bool) {
+	length := c.ArrayLen(src, srcElem)
 	r := c.rangeZeroToN(length)
 	c.createLoop(r, func(iter llvm.Value) {
 		dstIdx := iter
 		if applyOffset {
 			dstIdx = c.builder.CreateAdd(iter, offset, "concat_idx")
 		}
-		elem := c.arrayGet(src, srcElem, iter)
-		elem = c.castArrayElement(elem, srcElem, resElem)
-		c.arraySetForType(resElem, vec, dstIdx, elem)
+		elem := c.ArrayGet(src, srcElem, iter)
+		elem = c.CastArrayElem(elem, srcElem, resElem)
+		c.ArraySetForType(resElem, vec, dstIdx, elem)
 	})
 }
 
-// arrayBitCast casts an array value to the appropriate named opaque pointer type
-func (c *Compiler) arrayBitCast(arr llvm.Value, info ArrayInfo, name string) llvm.Value {
-	pt := c.namedOpaquePtr(info.PtrName)
+// ArrayBitCast casts an array value to the appropriate named opaque pointer type
+func (c *Compiler) ArrayBitCast(arr llvm.Value, info ArrayInfo, name string) llvm.Value {
+	pt := c.NamedOpaquePtr(info.PtrName)
 	return c.builder.CreateBitCast(arr, pt, name)
 }
 
-func (c *Compiler) createArrayForType(elem Type, length llvm.Value) llvm.Value {
-	info, ok := arrayInfoForType(elem)
-	if !ok {
-		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
-	}
+func (c *Compiler) CreateArrayForType(elem Type, length llvm.Value) llvm.Value {
+	info := ArrayInfos[elem.Kind()]
 
 	// Create new array
 	_, newFn := c.GetCFunc(info.NewName)
@@ -156,48 +146,36 @@ func (c *Compiler) createArrayForType(elem Type, length llvm.Value) llvm.Value {
 	return vec
 }
 
-func (c *Compiler) arraySetForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
-	info, ok := arrayInfoForType(elem)
-	if !ok {
-		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
-	}
+func (c *Compiler) ArraySetForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
+	info := ArrayInfos[elem.Kind()]
 
 	fnTy, fn := c.GetCFunc(info.SetName)
 	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, info.SetName)
 }
 
-func (c *Compiler) arrayLen(arr *Symbol, elem Type) llvm.Value {
-	info, ok := arrayInfoForType(elem)
-	if !ok {
-		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
-	}
+func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
+	info := ArrayInfos[elem.Kind()]
 
-	cast := c.arrayBitCast(arr.Val, info, "arrp")
+	cast := c.ArrayBitCast(arr.Val, info, "arrp")
 	fnTy, fn := c.GetCFunc(info.LenName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
 }
 
-func (c *Compiler) arrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
-	info, ok := arrayInfoForType(elem)
-	if !ok {
-		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elem.String()))
-	}
+func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+	info := ArrayInfos[elem.Kind()]
 
-	cast := c.arrayBitCast(arr.Val, info, "arrp")
+	cast := c.ArrayBitCast(arr.Val, info, "arrp")
 	fnTy, fn := c.GetCFunc(info.GetName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
-// arraySetCells populates an array with cell values, handling type conversions
-func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type) {
-	info, ok := arrayInfoForType(elemType)
-	if !ok {
-		panic(fmt.Sprintf(unsupportedArrayTypeMsg, elemType.String()))
-	}
+// ArraySetCells populates an array with cell values, handling type conversions
+func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type) {
+	info := ArrayInfos[elemType.Kind()]
 
 	_, setFn := c.GetCFunc(info.SetName)
 	for i, cs := range cells {
-		idx := c.ConstI64(int64(i))
+		idx := c.ConstI64(uint64(i))
 		val := cs.Val
 
 		// Handle type conversions
@@ -218,28 +196,8 @@ func (c *Compiler) arraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
-	lit := e
-	info := c.ExprCache[e]
-	if info.Rewrite != nil {
-		if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
-			lit = rew
-		}
-	}
-
-	if alt, ok := c.ExprCache[lit]; ok && alt != nil {
-		info = alt
-	}
-
-	if len(dest) > 0 {
-		if sym, ok := Get(c.Scopes, dest[0].Value); ok {
-			if ptr, ok := sym.Type.(Ptr); ok && ptr.Elem.Kind() != ArrayKind {
-				if len(lit.Rows) == 1 && len(lit.Rows[0]) == 1 {
-					return c.compileExpression(lit.Rows[0][0], nil, false)
-				}
-			}
-		}
-	}
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, isRoot bool) (res []*Symbol) {
+	lit, info := c.resolveArrayLiteralRewrite(e)
 
 	if !isRoot || len(info.Ranges) == 0 {
 		return c.compileArrayLiteralImmediate(lit, info)
@@ -247,6 +205,28 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, dest []*ast.Ident
 
 	return c.compileArrayLiteralWithLoops(lit, info)
 }
+
+// resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
+// The type solver may rewrite array literals to replace range expressions with temporary iterators.
+func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLiteral, *ExprInfo) {
+	lit := e
+	info := c.ExprCache[e]
+
+	// Check if the expression was rewritten by the type solver
+	if info.Rewrite != nil {
+		if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
+			lit = rew
+		}
+	}
+
+	// Use the rewritten literal's cache entry if available
+	if alt, ok := c.ExprCache[lit]; ok && alt != nil {
+		info = alt
+	}
+
+	return lit, info
+}
+
 
 func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
 	s := &Symbol{}
@@ -270,7 +250,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 		}
 
 		nConst := c.ConstI64(0)
-		arrVal := c.createArrayForType(elemType, nConst)
+		arrVal := c.CreateArrayForType(elemType, nConst)
 
 		s.Type = arr
 		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
@@ -287,10 +267,10 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 
-	nConst := c.ConstI64(int64(len(row)))
+	nConst := c.ConstI64(uint64(len(row)))
 
-	arrVal := c.createArrayForType(elemType, nConst)
-	c.arraySetCells(arrVal, cells, elemType)
+	arrVal := c.CreateArrayForType(elemType, nConst)
+	c.ArraySetCells(arrVal, cells, elemType)
 
 	s.Type = arr
 	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
@@ -306,7 +286,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
-	acc := c.newArrayRangeAccumulator(arr)
+	acc := c.NewArrayAccumulator(arr)
 	row := lit.Rows[0]
 
 	c.withLoopNest(info.Ranges, func() {
@@ -316,14 +296,14 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 			val := valSym.Val
 			if valSym.Type.Kind() != elemType.Kind() {
-				val = c.castArrayElement(val, valSym.Type, elemType)
+				val = c.CastArrayElem(val, valSym.Type, elemType)
 			}
 
-			c.pushArrayRangeValue(acc, &Symbol{Val: val, Type: elemType})
+			c.PushVal(acc, &Symbol{Val: val, Type: elemType})
 		}
 	})
 
-	return []*Symbol{c.arrayRangeResult(acc)}
+	return []*Symbol{c.ArrayAccResult(acc)}
 }
 
 // Array operation functions
@@ -341,17 +321,17 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	rightElem := rightArrType.ColTypes[0]
 
 	// Get lengths of both arrays
-	leftLen := c.arrayLen(leftArr, leftElem)
-	rightLen := c.arrayLen(rightArr, rightElem)
+	leftLen := c.ArrayLen(leftArr, leftElem)
+	rightLen := c.ArrayLen(rightArr, rightElem)
 
 	// Calculate total length
 	totalLen := c.builder.CreateAdd(leftLen, rightLen, "concat_len")
 
 	// Create new array with total length
-	resVec := c.createArrayForType(resElem, totalLen)
+	resVec := c.CreateArrayForType(resElem, totalLen)
 
-	c.copyArrayInto(resVec, leftArr, leftElem, resElem, llvm.Value{}, false)
-	c.copyArrayInto(resVec, rightArr, rightElem, resElem, leftLen, true)
+	c.CopyArrayInto(resVec, leftArr, leftElem, resElem, llvm.Value{}, false)
+	c.CopyArrayInto(resVec, rightArr, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -364,19 +344,19 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	arrType := arr.Type.(Array)
 	arrElem := arrType.ColTypes[0]
 
-	lenVal := c.arrayLen(arr, arrElem)
-	resVec := c.createArrayForType(resElem, lenVal)
+	lenVal := c.ArrayLen(arr, arrElem)
+	resVec := c.CreateArrayForType(resElem, lenVal)
 
 	scalarSym := c.derefIfPointer(scalar)
 
 	r := c.rangeZeroToN(lenVal)
 	c.createLoop(r, func(iter llvm.Value) {
 		idx := iter
-		val := c.arrayGet(arr, arrElem, idx)
+		val := c.ArrayGet(arr, arrElem, idx)
 		elemSym := &Symbol{Val: val, Type: arrElem}
 
 		computed := c.compileInfix(op, elemSym, scalarSym, resElem)
-		c.arraySetForType(resElem, resVec, idx, computed.Val)
+		c.ArraySetForType(resElem, resVec, idx, computed.Val)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -389,16 +369,16 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 	arrType := arr.Type.(Array)
 	elem := arrType.ColTypes[0]
 	resElem := result.ColTypes[0]
-	n := c.arrayLen(arr, elem)
-	resVec := c.createArrayForType(resElem, n)
+	n := c.ArrayLen(arr, elem)
+	resVec := c.CreateArrayForType(resElem, n)
 
 	r := c.rangeZeroToN(n)
 	c.createLoop(r, func(iter llvm.Value) {
 		idx := iter
-		v := c.arrayGet(arr, elem, idx)
+		v := c.ArrayGet(arr, elem, idx)
 		opSym := &Symbol{Val: v, Type: elem}
 		computed := c.compilePrefix(op, opSym, resElem)
-		c.arraySetForType(resElem, resVec, idx, computed.Val)
+		c.ArraySetForType(resElem, resVec, idx, computed.Val)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -416,12 +396,12 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	}
 
 	elemType := arr.ColTypes[0]
-	info, ok := arrayInfoForType(elemType)
+	info, ok := ArrayInfos[elemType.Kind()]
 	if !ok {
 		panic("internal: unsupported array element kind for printing")
 	}
 
-	cast := c.arrayBitCast(s.Val, info, "arr_cast")
+	cast := c.ArrayBitCast(s.Val, info, "arr_cast")
 	fnTy, fn := c.GetCFunc(info.StrName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
@@ -525,6 +505,6 @@ func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Sym
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 	}
 
-	elemVal := c.arrayGet(base, elemType, idxVal)
+	elemVal := c.ArrayGet(base, elemType, idxVal)
 	return &Symbol{Type: elemType, Val: elemVal}
 }

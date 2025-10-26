@@ -16,7 +16,7 @@ type Loop struct {
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	// Literal occurrence: synthesize the aggregate
 	if ri.RangeLit != nil {
-		return c.toRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
+		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
 	}
 
 	// Named occurrence: look it up in scope

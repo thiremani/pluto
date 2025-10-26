@@ -69,49 +69,49 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 
 	// Array I64 functions
 	case ARR_I64_NEW:
-		return llvm.FunctionType(c.namedOpaquePtr("PtArrayI64"), nil, false)
+		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayI64"), nil, false)
 	case ARR_I64_RESIZE, ARR_I64_SET:
-		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayI64"), i64, i64}, false)
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64, i64}, false)
 	case ARR_I64_GET:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayI64"), i64}, false)
+		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64}, false)
 	case ARR_I64_LEN:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
+		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_STR:
-		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayI64")}, false)
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_PUSH:
-		pt := c.namedOpaquePtr("PtArrayI64")
+		pt := c.NamedOpaquePtr("PtArrayI64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, i64}, false)
 
 	// Array F64 functions
 	case ARR_F64_NEW:
-		return llvm.FunctionType(c.namedOpaquePtr("PtArrayF64"), nil, false)
+		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayF64"), nil, false)
 	case ARR_F64_RESIZE, ARR_F64_SET:
-		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayF64"), i64, f64}, false)
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64, f64}, false)
 	case ARR_F64_GET:
-		return llvm.FunctionType(f64, []llvm.Type{c.namedOpaquePtr("PtArrayF64"), i64}, false)
+		return llvm.FunctionType(f64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64}, false)
 	case ARR_F64_LEN:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayF64")}, false)
+		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_STR:
-		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayF64")}, false)
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_PUSH:
-		pt := c.namedOpaquePtr("PtArrayF64")
+		pt := c.NamedOpaquePtr("PtArrayF64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, f64}, false)
 
 	// Array STR functions
 	case ARR_STR_NEW:
-		return llvm.FunctionType(c.namedOpaquePtr("PtArrayStr"), nil, false)
+		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayStr"), nil, false)
 	case ARR_STR_RESIZE:
-		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64}, false)
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_SET:
-		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
+		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
 	case ARR_STR_GET:
-		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayStr"), i64}, false)
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_LEN:
-		return llvm.FunctionType(i64, []llvm.Type{c.namedOpaquePtr("PtArrayStr")}, false)
+		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_STR:
-		return llvm.FunctionType(charPtr, []llvm.Type{c.namedOpaquePtr("PtArrayStr")}, false)
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_PUSH:
-		pt := c.namedOpaquePtr("PtArrayStr")
+		pt := c.NamedOpaquePtr("PtArrayStr")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, charPtr}, false)
 
 	default:
@@ -129,8 +129,8 @@ func (c *Compiler) GetCFunc(name string) (llvm.Type, llvm.Value) {
 	return fnType, fn
 }
 
-// namedOpaquePtr returns a pointer type to a named opaque struct, creating it if needed.
-func (c *Compiler) namedOpaquePtr(name string) llvm.Type {
+// NamedOpaquePtr returns a pointer type to a named opaque struct, creating it if needed.
+func (c *Compiler) NamedOpaquePtr(name string) llvm.Type {
 	st := c.Module.GetTypeByName(name)
 	if st.IsNil() {
 		st = c.Context.StructCreateNamed(name)

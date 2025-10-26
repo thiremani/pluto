@@ -16,14 +16,6 @@ type Symbol struct {
 	ReadOnly bool
 }
 
-type funcIterParam struct {
-	idx      int
-	over     IterOver
-	rng      Range
-	arr      Array
-	arrRange ArrayRange
-}
-
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -62,6 +54,14 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		ExprCache:     make(map[ast.Expression]*ExprInfo),
 		Errors:        []*token.CompileError{},
 	}
+}
+
+type funcIterParam struct {
+	idx      int
+	over     IterOver
+	rng      Range
+	arr      Array
+	arrRange ArrayRange
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -163,7 +163,7 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
-			val = c.ConstI64(v.Value)
+			val = c.ConstI64(uint64(v.Value))
 			sym.Type = Ptr{Elem: Int{Width: 64}}
 			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
 
@@ -371,14 +371,70 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 		name := idents[i].Value
 
 		// Check if the variable on the LEFT-hand side (`name`) already exists
-		// and if it represents a memory location (a pointer).
-		if lhsSymbol, ok := Get(c.Scopes, name); ok && lhsSymbol.Type.Kind() == PtrKind {
-			c.createStore(newRhsSymbol.Val, lhsSymbol.Val, newRhsSymbol.Type)
+		if lhsSymbol, ok := Get(c.Scopes, name); ok {
+			// Handle type coercion if needed (e.g., single-element array to scalar)
+			valueToStore := c.coerceValueForAssignment(lhsSymbol.Type, newRhsSymbol)
+
+			// If it's a pointer, store through the pointer
+			if lhsSymbol.Type.Kind() == PtrKind {
+				c.createStore(valueToStore.Val, lhsSymbol.Val, valueToStore.Type)
+				continue
+			}
+
+			// Otherwise, update the symbol directly in scope
+			Put(c.Scopes, name, valueToStore)
 			continue
 		}
 
+		// Variable doesn't exist yet - bind it in scope
 		Put(c.Scopes, name, newRhsSymbol)
 	}
+}
+
+// coerceValueForAssignment handles type coercion when assigning values.
+// Currently handles single-element array unwrapping for scalar accumulation in function iterations.
+//
+// When a function iterates over range/array parameters, output variables are allocated
+// as scalar temporaries. If the function body assigns a single-element array like [i],
+// we extract the scalar value for proper accumulation.
+//
+// Example:
+//
+//	res = ConstVec(i)
+//	    res = [i]
+//
+// When called with ConstVec(0:5), each iteration assigns [0], [1], etc. to a scalar temp.
+// This function extracts the scalar values 0, 1, 2, 3, 4 for accumulation.
+func (c *Compiler) coerceValueForAssignment(targetType Type, value *Symbol) *Symbol {
+	// Unwrap pointer type to get the actual target type
+	actualTargetType := targetType
+	if ptr, ok := targetType.(Ptr); ok {
+		actualTargetType = ptr.Elem
+	}
+
+	// Check if we're assigning an array to a scalar
+	if actualTargetType.Kind() != ArrayKind && value.Type.Kind() == ArrayKind {
+		return c.unwrapSingleElementArray(value)
+	}
+
+	return value
+}
+
+// unwrapSingleElementArray extracts the first element from a single-element array.
+// If the array is empty or has multiple columns, returns the array unchanged.
+func (c *Compiler) unwrapSingleElementArray(arrSym *Symbol) *Symbol {
+	arrType := arrSym.Type.(Array)
+
+	// Safety: check array is non-empty (has at least one element)
+	// Note: For dynamically sized arrays, Length may be 0 even if non-empty
+	// We rely on the type system to ensure this is only called for non-empty arrays
+	elemType := arrType.ColTypes[0]
+
+	// Extract array[0]
+	zero := c.ConstI64(0)
+	elemVal := c.ArrayGet(arrSym, elemType, zero)
+
+	return &Symbol{Val: elemVal, Type: elemType}
 }
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
@@ -407,7 +463,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		s.Type = Int{Width: 64}
-		s.Val = c.ConstI64(e.Value)
+		s.Val = c.ConstI64(uint64(e.Value))
 		res = []*Symbol{s}
 	case *ast.FloatLiteral:
 		s.Type = Float{Width: 64}
@@ -558,7 +614,7 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	return newS
 }
 
-func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
+func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
 	start := c.compileExpression(e.Start, nil, false)[0].Val
 	stop := c.compileExpression(e.Stop, nil, false)[0].Val
 	var stepVal llvm.Value
@@ -575,7 +631,7 @@ func (c *Compiler) toRange(e *ast.RangeLiteral, typ Type) llvm.Value {
 func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
 	s := &Symbol{}
 	s.Type = Range{Iter: Int{Width: 64}}
-	s.Val = c.toRange(e, s.Type)
+	s.Val = c.ToRange(e, s.Type)
 	res = []*Symbol{s}
 	return res
 }
@@ -642,8 +698,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 // compileArrayScalarInfix lowers an infix op between an array and a scalar by
 // broadcasting the scalar over the array and applying the scalar op element-wise.
 
-func (c *Compiler) ConstI64(v int64) llvm.Value {
-	return llvm.ConstInt(c.Context.Int64Type(), uint64(v), false)
+func (c *Compiler) ConstI64(v uint64) llvm.Value {
+	return llvm.ConstInt(c.Context.Int64Type(), v, false)
 }
 
 func (c *Compiler) ConstF64(v float64) llvm.Value {
@@ -672,14 +728,14 @@ func (c *Compiler) CreateArrayRange(arrayVal llvm.Value, rangeVal llvm.Value, ar
 	return agg
 }
 
-func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*arrayRangeAccumulator {
-	accs := make([]*arrayRangeAccumulator, len(outTypes))
+func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulator {
+	accs := make([]*ArrayAccumulator, len(outTypes))
 	for i, outType := range outTypes {
 		arrType, ok := outType.(Array)
 		if !ok {
 			continue
 		}
-		accs[i] = c.newArrayRangeAccumulator(arrType)
+		accs[i] = c.NewArrayAccumulator(arrType)
 	}
 	return accs
 }
@@ -707,7 +763,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
 
 			if acc := arrayAccs[i]; acc != nil && computed.Type.Kind() != ArrayKind {
-				c.pushArrayRangeValue(acc, computed)
+				c.PushVal(acc, computed)
 				continue
 			}
 
@@ -717,8 +773,8 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		if acc := arrayAccs[i]; acc != nil && acc.used {
-			out[i] = c.arrayRangeResult(acc)
+		if acc := arrayAccs[i]; acc != nil && acc.Used {
+			out[i] = c.ArrayAccResult(acc)
 			continue
 		}
 		elemType := outputs[i].Type.(Ptr).Elem
@@ -979,7 +1035,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 
 	for i := range retPtrs {
 		if acc := arrayAccs[i]; acc != nil {
-			arrSym := c.arrayRangeResult(acc)
+			arrSym := c.ArrayAccResult(acc)
 			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
 			continue
 		}
@@ -989,7 +1045,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	}
 }
 
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterParam, args []*Symbol, scalars map[string]*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*arrayRangeAccumulator, elemOutTypes []Type, arrayArgs map[int]*Symbol, function llvm.Value, level int) {
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterParam, args []*Symbol, scalars map[string]*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*ArrayAccumulator, elemOutTypes []Type, arrayArgs map[int]*Symbol, function llvm.Value, level int) {
 	if level == len(iterParams) {
 		c.compileBlockWithArgs(fn, scalars, iters)
 		for i, acc := range arrayAccs {
@@ -998,7 +1054,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterPara
 			}
 			elemType := elemOutTypes[i]
 			val := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_iter")
-			c.pushArrayRangeValue(acc, &Symbol{Val: val, Type: elemType})
+			c.PushVal(acc, &Symbol{Val: val, Type: elemType})
 		}
 		return
 	}
@@ -1032,10 +1088,10 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterPara
 				arrayArgs[param.idx] = arrSym
 			}
 			elemType := param.arr.ColTypes[0]
-			lenVal := c.arrayLen(arrSym, elemType)
+			lenVal := c.ArrayLen(arrSym, elemType)
 			r := c.rangeZeroToN(lenVal)
 			c.createLoop(r, func(idx llvm.Value) {
-				elemVal := c.arrayGet(arrSym, elemType, idx)
+				elemVal := c.ArrayGet(arrSym, elemType, idx)
 				iters[name] = &Symbol{
 					Val:      elemVal,
 					Type:     elemType,
@@ -1063,7 +1119,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterParams []funcIterPara
 		arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 		elemType := arrRangeType.Array.ColTypes[0]
 		c.createLoop(rangeVal, func(iter llvm.Value) {
-			elemVal := c.arrayGet(arraySym, elemType, iter)
+			elemVal := c.ArrayGet(arraySym, elemType, iter)
 			iters[name] = &Symbol{
 				Val:      elemVal,
 				Type:     elemType,

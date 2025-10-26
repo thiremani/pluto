@@ -1,0 +1,39 @@
+# Test array assignment and coercion edge cases
+#
+# This test covers various array assignment scenarios including:
+# - Single-element vs multi-element arrays
+# - Array creation from ranges
+# - Array reassignment
+# - Array concatenation
+# - Empty array handling
+#
+# These tests ensure the array unwrapping logic in compiler.go:coerceValueForAssignment
+# handles edge cases correctly without breaking normal array assignment.
+
+# Test 1: Single-element array literal
+arr1 = [42]
+"Single element array: -arr1"
+
+# Test 2: Multi-element array literal
+arr2 = [1 2 3]
+"Multi element array: -arr2"
+
+# Test 3: Array from range
+arr3 = [10:13]
+"Array from range: -arr3"
+
+# Test 4: Reassignment to same array variable
+arr4 = [5]
+"Initial value: -arr4"
+arr4 = [10]
+"Reassigned single element: -arr4"
+
+# Test 5: Array concatenation and reassignment
+arr5 = [1 2]
+arr5 = arr5 + [3 4]
+"Concatenated array: -arr5"
+
+# Test 6: Empty array (if type can be inferred)
+arr6 = [1 2 3]
+arr6 = arr6 + []
+"Array plus empty: -arr6"
