@@ -179,15 +179,10 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 		val := cs.Val
 
 		// Handle type conversions
-		switch elemType.Kind() {
-		case IntKind:
-			if cs.Type.Kind() == FloatKind {
-				val = c.builder.CreateFPToSI(cs.Val, c.Context.Int64Type(), "f64_to_i64")
-			}
-		case FloatKind:
-			if cs.Type.Kind() == IntKind {
-				val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
-			}
+		// Note: Only safe int→float promotion is supported.
+		// The type solver prevents lossy float→int conversions.
+		if elemType.Kind() == FloatKind && cs.Type.Kind() == IntKind {
+			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
 		}
 
 		c.builder.CreateCall(c.GetFnType(info.SetName), setFn, []llvm.Value{vec, idx, val}, "arr_set")
