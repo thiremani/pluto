@@ -227,7 +227,6 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	return lit, info
 }
 
-
 func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
 	s := &Symbol{}
 
