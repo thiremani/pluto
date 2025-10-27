@@ -273,11 +273,6 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 }
 
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
-	if !(len(lit.Headers) == 0 && len(lit.Rows) == 1) {
-		c.Errors = append(c.Errors, &token.CompileError{Token: lit.Tok(), Msg: "2D arrays/tables not implemented yet"})
-		return nil
-	}
-
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)

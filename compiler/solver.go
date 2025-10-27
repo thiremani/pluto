@@ -1178,13 +1178,10 @@ func (ts *TypeSolver) appendStandardCallArg(arg Type, expr ast.Expression, args 
 	case ArrayRangeKind:
 		arrRange := arg.(ArrayRange)
 		paramType = arrRange
+		// Like Range parameters, ArrayRange parameters are passed as-is to the function.
+		// The function will handle iteration internally via funcLoopNest.
+		// We pass the element type as innerArgs so the function body is typed correctly.
 		*innerArgs = append(*innerArgs, arrRange.Array.ColTypes[0])
-		*arrayIters = append(*arrayIters, &RangeInfo{
-			Name:      ts.FreshIterName(),
-			ArrayExpr: expr,
-			ArrayType: arrRange.Array,
-			Over:      IterArrayRange,
-		})
 	default:
 		paramType = arg
 		*innerArgs = append(*innerArgs, arg)
