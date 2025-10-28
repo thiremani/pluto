@@ -1041,9 +1041,6 @@ func (p *StmtParser) parseCallExpression(f ast.Expression) ast.Expression {
 	}
 
 	ce.Arguments = p.parseCallArguments()
-	if ce.Arguments == nil {
-		return nil
-	}
 	return ce
 }
 
