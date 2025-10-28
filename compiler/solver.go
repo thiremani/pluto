@@ -1151,6 +1151,11 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, arrayIters []*RangeInfo) {
 	for _, e := range ce.Arguments {
+		if e == nil {
+			// Nil argument indicates a parse error; skip it
+			// Parser errors are already recorded
+			continue
+		}
 		exprArgs := ts.TypeExpression(e, isRoot)
 		for _, arg := range exprArgs {
 			ts.appendStandardCallArg(arg, e, &args, &innerArgs, &arrayIters)

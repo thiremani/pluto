@@ -410,29 +410,18 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, isRoot bool) []*Symbol {
 	origExpr := expr
-	if info, ok := c.ExprCache[expr]; ok {
-		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil && rewritten != expr {
-			if newInfo, ok2 := c.ExprCache[rewritten]; ok2 {
-				info = newInfo
-			}
-			expr = rewritten
+	info := c.ExprCache[expr]
+	if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok {
+		expr = rewritten
+		if newInfo, ok := c.ExprCache[rewritten]; ok {
+			info = newInfo
 		}
-		for _, ri := range info.Ranges {
-			if ri.Over == IterArrayRange {
-				sym := c.compileArrayRangeArg(expr)
-				return []*Symbol{sym}
-			}
-		}
-		if len(info.OutTypes) == 0 {
-			return []*Symbol{c.compileArrayRangeElement(expr)}
-		}
-		if isRoot && len(info.OutTypes) == 1 && info.OutTypes[0].Kind() == ArrayRangeKind {
-			sym := c.compileArrayRangeArg(origExpr)
-			return []*Symbol{sym}
-		}
-		if len(info.Ranges) > 0 && isRoot {
-			return c.compileArrayRangeWithLoops(expr, info, dest)
-		}
+	}
+	if info.OutTypes[0].Kind() == ArrayRangeKind {
+		return []*Symbol{c.compileArrayRangeArg(origExpr)}
+	}
+	if len(info.Ranges) > 0 && isRoot {
+		return c.compileArrayRangeWithLoops(expr, info, dest)
 	}
 	return []*Symbol{c.compileArrayRangeElement(expr)}
 }

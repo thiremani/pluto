@@ -43,3 +43,6 @@ callInfix = double(arr[0:5]) + idx
 
 callInfixVec = [double(arr[0:5]) + idx]
 "CallInfixVec: -callInfixVec"
+
+callInfixVecSingleRange = [double(arr[idx]) + idx]
+"CallInfixVecSingleRange: -callInfixVecSingleRange"

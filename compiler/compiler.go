@@ -1181,6 +1181,11 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
+		if callArg == nil {
+			// Nil argument indicates a parse error; skip it
+			// Parser errors should have been caught before compilation
+			continue
+		}
 		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
 		for _, r := range res {
 			args = append(args, r)
@@ -1191,59 +1196,19 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes
 }
 
 func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
+	info := c.ExprCache[expr]
+	arrRange := info.OutTypes[0].(ArrayRange)
+
 	arraySyms := c.compileExpression(expr.Array, nil, true)
-	if len(arraySyms) != 1 {
-		panic("compiler internal: array range produced multiple values")
-	}
 	arraySym := arraySyms[0]
-	info, _ := c.ExprCache[expr]
-	var arrType Array
-	if arraySym.Type.Kind() == ArrayKind {
-		arrType = arraySym.Type.(Array)
-	} else if info != nil {
-		for _, ri := range info.Ranges {
-			if ri.ArrayType.ColTypes != nil {
-				arrType = ri.ArrayType
-				break
-			}
-		}
-		if arrType.ColTypes == nil {
-			panic("compiler internal: array range target is not an array")
-		}
-	} else {
-		panic("compiler internal: array range target is not an array")
-	}
 
 	rangeSyms := c.compileExpression(expr.Range, nil, true)
-	if len(rangeSyms) != 1 {
-		panic("compiler internal: array range bounds produced multiple values")
-	}
 	rangeSym := rangeSyms[0]
-	if rangeSym.Type.Kind() != RangeKind {
-		if info != nil {
-			for _, ri := range info.Ranges {
-				if ri.Over != IterRange {
-					continue
-				}
-				rngVal := c.rangeAggregateForRI(ri)
-				rangeSym = &Symbol{
-					Val:  rngVal,
-					Type: Range{Iter: Int{Width: 64}},
-				}
-				break
-			}
-		}
-		if rangeSym.Type.Kind() != RangeKind {
-			panic("compiler internal: array range index is not a range")
-		}
-	}
 
-	arrRange := ArrayRange{Array: arrType, Range: rangeSym.Type.(Range)}
-	arrRangeSym := &Symbol{
+	return &Symbol{
 		Val:  c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRange),
 		Type: arrRange,
 	}
-	return arrRangeSym
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
