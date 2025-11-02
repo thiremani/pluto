@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
@@ -104,4 +105,43 @@ greeting = "hello"`
 	if !strings.Contains(ir, expGreeting) {
 		t.Errorf("IR does not contain global constant for greeting. Exp: %s, ir: \n%s", expGreeting, ir)
 	}
+}
+
+func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "ptr_seed_module", ast.NewCode())
+	c := NewCompiler(ctx, "ptr_seed_module", cc)
+
+	// Simulate the entry block state used by compileFuncBlock.
+	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
+	fn := llvm.AddFunction(c.Module, "ptr_seed_fn", fnType)
+	entry := ctx.AddBasicBlock(fn, "entry")
+	c.builder.SetInsertPointAtEnd(entry)
+
+	// Function scope with an existing pointer-typed value named "seed"
+	PushScope(&c.Scopes, FuncScope)
+	ptrType := Ptr{Elem: Int{Width: 64}}
+	global := llvm.AddGlobal(c.Module, ctx.Int64Type(), "seed_global")
+	global.SetInitializer(llvm.ConstInt(ctx.Int64Type(), 5, false))
+	Put(c.Scopes, "seed", &Symbol{
+		Val:      global,
+		Type:     ptrType,
+		FuncArg:  true,
+		ReadOnly: true,
+	})
+
+	// Act: seed a loop temporary for a pointer-valued output.
+	dest := []*ast.Identifier{{Value: "seed"}}
+	outTypes := []Type{ptrType}
+	outputs := c.setupRangeOutputs(dest, outTypes)
+
+	require.Len(t, outputs, 1, "expect a single output symbol")
+
+	c.builder.CreateRetVoid()
+
+	ir := c.Module.String()
+	require.Contains(t, ir, "store ptr @seed_global", "expected pointer seed to be stored without load")
+	require.NotContains(t, ir, "load i64, ptr @seed_global", "pointer seed should not be dereferenced")
 }
