@@ -811,10 +811,7 @@ func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []
 // mirroring compileInfixExpression/compileInfixRanges.
 
 func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info, ok := c.ExprCache[expr]
-	if !ok {
-		info = &ExprInfo{Ranges: []*RangeInfo{}}
-	}
+	info := c.ExprCache[expr]
 	if len(info.Ranges) == 0 {
 		return c.compilePrefixBasic(expr, info)
 	}
@@ -924,12 +921,7 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	return function
 }
 
-func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
-	PushScope(&c.Scopes, FuncScope)
-	defer PopScope(&c.Scopes)
-
-	sretPtr := function.Param(0)
-	finalOutTypes := f.OutTypes
+func (c *Compiler) getLoopOutTypes(finalOutTypes []Type) []Type {
 	loopOutTypes := make([]Type, len(finalOutTypes))
 	for i, outType := range finalOutTypes {
 		if arr, ok := outType.(Array); ok {
@@ -938,7 +930,10 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 		}
 		loopOutTypes[i] = outType
 	}
+	return loopOutTypes
+}
 
+func (c *Compiler) createRetPtrs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
@@ -949,10 +944,11 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 			ReadOnly: false,
 		}
 	}
+	return retPtrs
+}
 
+func (c *Compiler) processParams(fn *ast.FuncStatement, args []*Symbol, function llvm.Value) []int {
 	iterIndices := []int{}
-
-	// Put scalar params directly into scope as we process them
 	for i, arg := range args {
 		name := fn.Parameters[i].Value
 		kind := arg.Type.Kind()
@@ -968,19 +964,21 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 			ReadOnly: true,
 		})
 	}
+	return iterIndices
+}
 
-	if len(iterIndices) == 0 {
-		// For each output, initialize retPtr with param value (if exists) then rebind to retPtr
-		for i, outIdent := range fn.Outputs {
-			if seed, ok := Get(c.Scopes, outIdent.Value); ok {
-				c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
-			}
-			Put(c.Scopes, outIdent.Value, retPtrs[i]) // Overwrites param binding
+func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, finalOutTypes []Type) {
+	// For each output, initialize retPtr with param value (if exists) then rebind to retPtr
+	for i, outIdent := range fn.Outputs {
+		if seed, ok := Get(c.Scopes, outIdent.Value); ok {
+			c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
 		}
-		c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
-		return
+		Put(c.Scopes, outIdent.Value, retPtrs[i]) // Overwrites param binding
 	}
+	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
+}
 
+func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
 	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
 	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
@@ -998,6 +996,54 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
 	}
+}
+
+func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
+	PushScope(&c.Scopes, FuncScope)
+	defer PopScope(&c.Scopes)
+
+	sretPtr := function.Param(0)
+	finalOutTypes := f.OutTypes
+	loopOutTypes := c.getLoopOutTypes(finalOutTypes)
+	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
+	iterIndices := c.processParams(fn, args, function)
+
+	if len(iterIndices) == 0 {
+		c.compileFuncNonIter(fn, retPtrs, finalOutTypes)
+		return
+	}
+
+	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function)
+}
+
+func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
+	iterType := rangeType.Iter
+	c.createLoop(rangeVal, func(iter llvm.Value) {
+		body(iter, iterType)
+	})
+}
+
+func (c *Compiler) iterOverArray(arrSym *Symbol, body func(llvm.Value, Type)) {
+	arrType := arrSym.Type.(Array)
+	elemType := arrType.ColTypes[0]
+	lenVal := c.ArrayLen(arrSym, elemType)
+	r := c.rangeZeroToN(lenVal)
+	c.createLoop(r, func(idx llvm.Value) {
+		elemVal := c.ArrayGet(arrSym, elemType, idx)
+		body(elemVal, elemType)
+	})
+}
+
+func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value, Type)) {
+	arrRangeType := arrRangeSym.Type.(ArrayRange)
+	arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
+	rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
+	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
+	elemType := arrRangeType.Array.ColTypes[0]
+	c.createLoop(rangeVal, func(iter llvm.Value) {
+		elemVal := c.ArrayGet(arraySym, elemType, iter)
+		body(elemVal, elemType)
+	})
 }
 
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args []*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*ArrayAccumulator, elemOutTypes []Type, function llvm.Value, level int) {
@@ -1018,86 +1064,41 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args [
 	arg := args[paramIdx]
 	name := fn.Parameters[paramIdx].Value
 
+	next := func(iterVal llvm.Value, iterType Type) {
+		iters[name] = &Symbol{
+			Val:      iterVal,
+			Type:     iterType,
+			FuncArg:  true,
+			ReadOnly: false,
+		}
+		c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, elemOutTypes, function, level+1)
+	}
+
 	switch arg.Type.Kind() {
 	case RangeKind:
 		rangeType := arg.Type.(Range)
 		rangeVal := function.Param(paramIdx + 1)
-		iterType := rangeType.Iter
-		c.createLoop(rangeVal, func(iter llvm.Value) {
-			iters[name] = &Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  true,
-				ReadOnly: false,
-			}
-			c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, elemOutTypes, function, level+1)
-		})
+		c.iterOverRange(rangeType, rangeVal, next)
 	case ArrayKind:
-		arrType := arg.Type.(Array)
 		arrSym := &Symbol{
 			Val:      function.Param(paramIdx + 1),
 			Type:     arg.Type,
 			FuncArg:  true,
 			ReadOnly: true,
 		}
-		elemType := arrType.ColTypes[0]
-		lenVal := c.ArrayLen(arrSym, elemType)
-		r := c.rangeZeroToN(lenVal)
-		c.createLoop(r, func(idx llvm.Value) {
-			elemVal := c.ArrayGet(arrSym, elemType, idx)
-			iters[name] = &Symbol{
-				Val:      elemVal,
-				Type:     elemType,
-				FuncArg:  true,
-				ReadOnly: false,
-			}
-			c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, elemOutTypes, function, level+1)
-		})
+		c.iterOverArray(arrSym, next)
 	case ArrayRangeKind:
-		arrRangeType := arg.Type.(ArrayRange)
 		arrRangeSym := &Symbol{
 			Val:      function.Param(paramIdx + 1),
 			Type:     arg.Type,
 			FuncArg:  true,
 			ReadOnly: true,
 		}
-		arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
-		rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
-		arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
-		elemType := arrRangeType.Array.ColTypes[0]
-		c.createLoop(rangeVal, func(iter llvm.Value) {
-			elemVal := c.ArrayGet(arraySym, elemType, iter)
-			iters[name] = &Symbol{
-				Val:      elemVal,
-				Type:     elemType,
-				FuncArg:  true,
-				ReadOnly: false,
-			}
-			c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, elemOutTypes, function, level+1)
-		})
+		c.iterOverArrayRange(arrRangeSym, next)
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
 	delete(iters, name)
-}
-
-func (c *Compiler) nest(fn *ast.FuncStatement, scalars map[string]*Symbol, rangeIdxs []int, function llvm.Value, level int, iters map[string]*Symbol) {
-	if level == len(rangeIdxs) {
-		c.compileBlockWithArgs(fn, scalars, iters)
-		return
-	}
-
-	// pick the next range literal & its Symbol
-	idx := rangeIdxs[level]
-	c.createLoop(function.Param(idx+1), func(iter llvm.Value) {
-		iters[fn.Parameters[idx].Value] = &Symbol{
-			Val:      iter,
-			Type:     Int{Width: 64}, // for now assume range has type I64
-			FuncArg:  true,
-			ReadOnly: false,
-		}
-		c.nest(fn, scalars, rangeIdxs, function, level+1, iters)
-	})
 }
 
 func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
