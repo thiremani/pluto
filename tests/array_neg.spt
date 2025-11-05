@@ -1,0 +1,20 @@
+a = 5
+b = 3
+
+# Subtraction with spaces on both sides
+[a - b]
+
+# Two elements: a and -b (no space after minus)
+[a -b]
+
+# Subtraction without spaces
+[a-b]
+
+# Two elements with multiple spaces before minus
+[a  -b]
+
+# Multiple negative elements
+[a -b -b]
+
+# Mix of positive and negative
+[a b -b]

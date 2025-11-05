@@ -172,6 +172,24 @@ func (p *StmtParser) nextToken() {
 	p.handleImplicitMult()
 }
 
+// peekNextToken looks ahead to see what token comes after peekToken.
+// If not available in savedTokens, it loads it from the lexer.
+func (p *StmtParser) peekNextToken() token.Token {
+	if len(p.savedTokens) > 0 {
+		return p.savedTokens[0]
+	}
+	// Load next token from lexer and save it
+	var err *token.CompileError
+	nextTok, err := p.l.NextToken()
+	if err != nil {
+		p.errors = append(p.errors, err)
+		return token.Token{Type: token.ILLEGAL}
+	}
+	// Save it so nextToken() will get it later
+	p.savedTokens = append(p.savedTokens, nextTok)
+	return nextTok
+}
+
 // Handle implicit multiplication:
 // If the current token is an INT or FLOAT and the following token is an IDENT,
 // and there is no whitespace between them (i.e., the current token's ending column
@@ -647,17 +665,28 @@ func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, 
 
 		// If spaces matter and there's a space before the next token,
 		// we need to decide: continue current expression, or start new element?
-		// Strategy: if the next token CAN start a new expression, treat space as separator
 		if spacesMatter && p.peekToken.HadSpace {
-			// Check if next token can start a new expression
 			prefix := p.prefixParseFns[p.peekToken.TokenTypeWithOp()]
-			if prefix != nil {
-				// Can start new expression (prefix op, literal, ident, etc)
-				// Prefer starting new element over continuing as infix
+			infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
+
+			// If token can be both prefix and infix, use spacing to disambiguate:
+			// - Space on both sides → infix (continue expression)
+			// - Space before but not after → prefix (start new element)
+			if prefix != nil && infix != nil {
+				nextTok := p.peekNextToken()
+				if nextTok.Type != token.ILLEGAL && nextTok.HadSpace {
+					// Space after operator, treat as infix (e.g., `a - b`)
+					// Continue with infix parsing
+				} else {
+					// No space after operator, treat as prefix (e.g., `a -b`)
+					break
+				}
+			} else if prefix != nil {
+				// Only has prefix, not infix → start new element
 				break
 			}
-			// Next token cannot start an expression, so it must be infix/postfix
-			// Continue parsing the current expression despite the space
+			// Token cannot start an expression, must be infix/postfix
+			// Continue parsing current expression
 		}
 
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
