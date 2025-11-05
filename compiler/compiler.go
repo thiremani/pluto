@@ -984,7 +984,7 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
 
 	iters := make(map[string]*Symbol)
-	c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, loopOutTypes, function, 0)
+	c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, function, 0)
 
 	for i := range retPtrs {
 		if acc := arrayAccs[i]; acc != nil {
@@ -1046,16 +1046,15 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args []*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*ArrayAccumulator, elemOutTypes []Type, function llvm.Value, level int) {
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args []*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*ArrayAccumulator, function llvm.Value, level int) {
 	if level == len(iterIndices) {
 		c.compileBlockWithArgs(fn, map[string]*Symbol{}, iters)
 		for i, acc := range arrayAccs {
 			if acc == nil {
 				continue
 			}
-			elemType := elemOutTypes[i]
-			val := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_iter")
-			c.PushVal(acc, &Symbol{Val: val, Type: elemType})
+			val := c.createLoad(outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
+			c.PushVal(acc, &Symbol{Val: val, Type: acc.ElemType})
 		}
 		return
 	}
@@ -1071,7 +1070,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args [
 			FuncArg:  true,
 			ReadOnly: false,
 		}
-		c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, elemOutTypes, function, level+1)
+		c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, function, level+1)
 	}
 
 	switch arg.Type.Kind() {
