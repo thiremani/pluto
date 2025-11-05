@@ -16,6 +16,14 @@ type Symbol struct {
 	ReadOnly bool
 }
 
+type funcArgs struct {
+	args        []*Symbol
+	outputs     []*Symbol
+	iterIndices []int
+	iters       map[string]*Symbol
+	arrayAccs   []*ArrayAccumulator
+}
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -983,8 +991,14 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
 	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
 
-	iters := make(map[string]*Symbol)
-	c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, function, 0)
+	fa := &funcArgs{
+		args:        args,
+		outputs:     outputs,
+		iterIndices: iterIndices,
+		iters:       make(map[string]*Symbol),
+		arrayAccs:   arrayAccs,
+	}
+	c.funcLoopNest(fn, fa, function, 0)
 
 	for i := range retPtrs {
 		if acc := arrayAccs[i]; acc != nil {
@@ -1046,31 +1060,31 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args []*Symbol, iters map[string]*Symbol, outputs []*Symbol, arrayAccs []*ArrayAccumulator, function llvm.Value, level int) {
-	if level == len(iterIndices) {
-		c.compileBlockWithArgs(fn, map[string]*Symbol{}, iters)
-		for i, acc := range arrayAccs {
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
+	if level == len(fa.iterIndices) {
+		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
+		for i, acc := range fa.arrayAccs {
 			if acc == nil {
 				continue
 			}
-			val := c.createLoad(outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
+			val := c.createLoad(fa.outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
 			c.PushVal(acc, &Symbol{Val: val, Type: acc.ElemType})
 		}
 		return
 	}
 
-	paramIdx := iterIndices[level]
-	arg := args[paramIdx]
+	paramIdx := fa.iterIndices[level]
+	arg := fa.args[paramIdx]
 	name := fn.Parameters[paramIdx].Value
 
 	next := func(iterVal llvm.Value, iterType Type) {
-		iters[name] = &Symbol{
+		fa.iters[name] = &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
 			FuncArg:  true,
 			ReadOnly: false,
 		}
-		c.funcLoopNest(fn, iterIndices, args, iters, outputs, arrayAccs, function, level+1)
+		c.funcLoopNest(fn, fa, function, level+1)
 	}
 
 	switch arg.Type.Kind() {
@@ -1097,7 +1111,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, iterIndices []int, args [
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
-	delete(iters, name)
+	delete(fa.iters, name)
 }
 
 func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
