@@ -1,27 +1,13 @@
-res = concatInt(arr, other)
-    res = arr + other
+res = square(x)
+    res = x * x
 
-res = concatFloat(arr, other)
-    res = arr + other
+res, prod = sum_and_product(a, b)
+    res = a + b
+    prod = a * b
 
-res = concatMixed(arr, other)
-    res = arr + other
+res = bias_and_scale(x, bias, scale)
+    tmp = x + bias
+    res = tmp * scale
 
-res = concatStr(arr, other)
-    res = arr + other
-
-res = multAddInt(arr, multiplier, bias)
-    tmp = arr * multiplier
-    res = tmp + bias
-
-res = multAddFloat(arr, multiplier, bias)
-    tmp = arr * multiplier
-    res = tmp + bias
-
-res = mixedMultAdd(intArr, floatArr, multiplier)
-    scaled = intArr * multiplier
-    res = scaled + floatArr
-
-res = scaleAndConcat(arr, multiplier, other)
-    scaled = arr * multiplier
-    res = scaled + other
+res = ConstVec(i)
+    res = [i]

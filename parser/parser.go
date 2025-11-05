@@ -57,8 +57,9 @@ var precedences = map[string]int{
 }
 
 type (
-	prefixParseFn func() ast.Expression
-	infixParseFn  func(ast.Expression) ast.Expression
+	prefixParseFn  func() ast.Expression
+	infixParseFn   func(ast.Expression) ast.Expression
+	postfixParseFn func(ast.Expression) ast.Expression
 )
 
 // Token Management System for Pluto Parser
@@ -78,8 +79,9 @@ type StmtParser struct {
 	peekToken   token.Token
 	savedTokens []token.Token // FIFO queue of synthetic tokens from operator splits or inserting a * in something like 9x
 
-	prefixParseFns map[string]prefixParseFn
-	infixParseFns  map[string]infixParseFn
+	prefixParseFns  map[string]prefixParseFn
+	infixParseFns   map[string]infixParseFn
+	postfixParseFns map[string]postfixParseFn
 }
 
 func New(l *lexer.Lexer) *StmtParser {
@@ -125,6 +127,10 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerInfix(token.SYM_NEQ, p.parseInfixExpression)
 	p.registerInfix(token.SYM_LEQ, p.parseInfixExpression)
 	p.registerInfix(token.SYM_GEQ, p.parseInfixExpression)
+
+	p.postfixParseFns = make(map[string]postfixParseFn)
+	p.registerPostfix(token.SYM_LPAREN, p.parseCallPostfix)
+	p.registerPostfix(token.SYM_LBRACK, p.parseArrayRangePostfix)
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -605,29 +611,88 @@ func (p *StmtParser) parseExpression(precedence int, spacesMatter bool) ast.Expr
 		return nil
 	}
 
-	if leftExp.Tok().Type == token.IDENT && p.peekToken.Type == token.LPAREN {
-		p.nextToken()
-		leftExp = p.parseCallExpression(leftExp)
-	}
+	return p.parseExpressionTail(precedence, spacesMatter, leftExp)
+}
 
-	// Normalize peek token for infix parsing before checking infix function
-	if p.peekToken.Type == token.OPERATOR {
-		p.normalizePeekInfixOperator()
-	}
+func (p *StmtParser) parseExpressionTail(precedence int, spacesMatter bool, left ast.Expression) ast.Expression {
+	for {
+		var consumed bool
+		left, consumed = p.tryPostfix(left)
+		if consumed {
+			continue
+		}
 
-	for precedence < p.peekPrecedence() {
-		if spacesMatter && p.peekToken.HadSpace {
+		if p.peekToken.Type == token.OPERATOR {
+			p.normalizePeekInfixOperator()
+		}
+
+		if precedence >= p.peekPrecedence() {
 			break
 		}
+
+		// If spaces matter and there's a space before the next token,
+		// we need to decide: continue current expression, or start new element?
+		// Strategy: if the next token CAN start a new expression, treat space as separator
+		if spacesMatter && p.peekToken.HadSpace {
+			// Check if next token can start a new expression
+			prefix := p.prefixParseFns[p.peekToken.TokenTypeWithOp()]
+			if prefix != nil {
+				// Can start new expression (prefix op, literal, ident, etc)
+				// Prefer starting new element over continuing as infix
+				break
+			}
+			// Next token cannot start an expression, so it must be infix/postfix
+			// Continue parsing the current expression despite the space
+		}
+
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
 		if infix == nil {
-			return leftExp
+			return left
 		}
 		p.nextToken()
-		leftExp = infix(leftExp)
+		left = infix(left)
+	}
+	return left
+}
+
+func (p *StmtParser) allowCallPostfix(left ast.Expression) bool {
+	switch left.(type) {
+	case *ast.InfixExpression:
+		return false
+	default:
+		return true
+	}
+}
+
+func (p *StmtParser) tryPostfix(left ast.Expression) (ast.Expression, bool) {
+	key := p.peekToken.TokenTypeWithOp()
+	postfix := p.postfixParseFns[key]
+	if postfix == nil {
+		return left, false
+	}
+	if key == token.SYM_LPAREN && !p.allowCallPostfix(left) {
+		return left, false
+	}
+	p.nextToken()
+	return postfix(left), true
+}
+
+func (p *StmtParser) parseArrayRangeExpression(array ast.Expression) ast.Expression {
+	rangeExpr := &ast.ArrayRangeExpression{Token: p.curToken, Array: array}
+
+	// Parse the expression inside the brackets.
+	p.nextToken()
+	idx := p.parseExpression(LOWEST, false)
+	if idx == nil {
+		return nil
+	}
+	rangeExpr.Range = idx
+
+	if !p.expectPeek(token.RBRACK) {
+		return nil
 	}
 
-	return leftExp
+	return rangeExpr
 }
 
 func (p *StmtParser) peekPrecedence() int {
@@ -979,6 +1044,18 @@ func (p *StmtParser) parseCallExpression(f ast.Expression) ast.Expression {
 	return ce
 }
 
+func (p *StmtParser) parseCallPostfix(base ast.Expression) ast.Expression {
+	if _, ok := base.(*ast.Identifier); !ok {
+		p.errors = append(p.errors, &token.CompileError{Token: base.Tok(), Msg: "function calls must target identifiers"})
+		return base
+	}
+	return p.parseCallExpression(base)
+}
+
+func (p *StmtParser) parseArrayRangePostfix(array ast.Expression) ast.Expression {
+	return p.parseArrayRangeExpression(array)
+}
+
 func (p *StmtParser) parseCallArguments() []ast.Expression {
 	args := []ast.Expression{}
 
@@ -1009,6 +1086,10 @@ func (p *StmtParser) registerPrefix(op string, fn prefixParseFn) {
 
 func (p *StmtParser) registerInfix(op string, fn infixParseFn) {
 	p.infixParseFns[op] = fn
+}
+
+func (p *StmtParser) registerPostfix(op string, fn postfixParseFn) {
+	p.postfixParseFns[op] = fn
 }
 
 // checkNoDuplicates walks a slice of identifiers and returns

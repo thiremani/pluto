@@ -44,18 +44,32 @@ func PutBulk[T any](scopes []Scope[T], elems map[string]T) {
 	maps.Copy(scopes[len(scopes)-1].Elems, elems)
 }
 
-func Get[T any](scopes []Scope[T], name string) (T, bool) {
-	// Search from innermost scope outward
-	// if in func we only search until func scope
+func findScopeIndex[T any](scopes []Scope[T], name string) (int, bool) {
 	for i := len(scopes) - 1; i >= 0; i-- {
-		if e, ok := scopes[i].Elems[name]; ok {
-			return e, true
+		if _, ok := scopes[i].Elems[name]; ok {
+			return i, true
 		}
 		if scopes[i].ScopeKind == FuncScope {
 			break
 		}
 	}
+	return -1, false
+}
 
+// SetExisting updates the innermost scope (up to the nearest FuncScope) where name is defined.
+// Returns true if the name was found and updated.
+func SetExisting[T any](scopes []Scope[T], name string, elem T) bool {
+	if idx, ok := findScopeIndex(scopes, name); ok {
+		scopes[idx].Elems[name] = elem
+		return true
+	}
+	return false
+}
+
+func Get[T any](scopes []Scope[T], name string) (T, bool) {
+	if idx, ok := findScopeIndex(scopes, name); ok {
+		return scopes[idx].Elems[name], true
+	}
 	var zero T
 	return zero, false
 }

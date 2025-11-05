@@ -231,6 +231,13 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	l := lexer.New(p.RelPath+"/"+filepath.Base(scriptFile), string(source))
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
+	if errs := sp.Errors(); len(errs) > 0 {
+		for _, err := range errs {
+			fmt.Println(err)
+		}
+		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
+		return "", fmt.Errorf("parser errors for %s", scriptFile)
+	}
 	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache, exprCache)
 
 	// Only link if code module has content

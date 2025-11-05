@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
@@ -241,4 +242,68 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	if arrType.ColTypes[0].Kind() != FloatKind {
 		t.Fatalf("expected float array result, got %s", arrType.ColTypes[0].String())
 	}
+}
+
+func TestArrayLiteralRangesRecording(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+
+	script := `idx = 0:5
+res = [idx]`
+
+	sl := lexer.New("ArrayLiteralRanges", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	sc := NewScriptCompiler(ctx, "ArrayLiteralRanges", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	letStmt, ok := program.Statements[1].(*ast.LetStatement)
+	require.True(t, ok)
+
+	arrLit, ok := letStmt.Value[0].(*ast.ArrayLiteral)
+	require.True(t, ok)
+
+	info := ts.ExprCache[arrLit]
+	require.NotNil(t, info)
+	require.Len(t, info.Ranges, 1)
+	require.NotNil(t, info.Rewrite)
+	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
+}
+
+func TestArrayRangeTyping(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := ast.NewCode()
+	cc := NewCodeCompiler(ctx, "arrayRangeTyping", code)
+	cc.Compile()
+
+	script := "arr = [1 2 3]\nvalue = arr[0:2]\nsum = 0\nsum = sum + arr[0:2]"
+	sl := lexer.New("ArrayRangeTyping.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+	sc := NewScriptCompiler(ctx, "ArrayRangeTyping", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	valueType, ok := ts.GetIdentifier("value")
+	require.True(t, ok, "expected value identifier")
+	value, ok := valueType.(ArrayRange)
+	require.Truef(t, ok, "expected value to be ArrayRange, got %T", valueType)
+	require.EqualValues(t, value.Array.ColTypes[0], Int{Width: 64})
+	require.EqualValues(t, value.Range, Range{Iter: Int{Width: 64}})
+
+	sumType, ok := ts.GetIdentifier("sum")
+	require.True(t, ok, "expected sum identifier")
+	sumInt, ok := sumType.(Int)
+	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
+	require.EqualValues(t, 64, sumInt.Width)
 }

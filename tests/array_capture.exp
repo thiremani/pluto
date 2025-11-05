@@ -1,0 +1,8 @@
+CaptureLiteral: [0 1 2 3 4]
+LeftConcat: [0 1 2 3 4]
+RightConcat: [4 3 2 1 0]
+LeftConcatExtra: [0 1 2 3 4]
+ScaledCapture: [0 2.3 4.6 6.9 9.2]
+ScaledWithoutSpace: [3 12]
+ArrayRangeCapture: [2 3 4]
+ArrayRangeConcat: [3 4 5]

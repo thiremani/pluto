@@ -18,6 +18,7 @@ const (
 	RangeKind
 	FuncKind
 	ArrayKind
+	ArrayRangeKind
 )
 
 // Type is the interface for all types in our language.
@@ -115,7 +116,7 @@ func (r Range) Kind() Kind {
 type Func struct {
 	Name     string
 	Params   []Type
-	OutTypes []Type // OutTypes are inferred in the type solver
+	OutTypes []Type // Final function output types (after wrapping for array types)
 }
 
 func (f Func) String() string {
@@ -180,6 +181,29 @@ func (a Array) Mangle() string {
 	return s
 }
 
+// ArrayRange represents an iteration over a range of an array.
+// It carries the underlying array schema so type comparisons and mangling
+// can remain structural; the actual range bounds are runtime values.
+type ArrayRange struct {
+	Array Array
+	Range Range
+}
+
+func (ar ArrayRange) String() string {
+	return fmt.Sprintf("%s[%s]", ar.Array.String(), ar.Range.String())
+}
+
+func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
+
+func (ar ArrayRange) Mangle() string {
+	s := PREFIX + "ArrayRange"
+	s += PREFIX + strconv.Itoa(len(ar.Array.ColTypes))
+	for _, ct := range ar.Array.ColTypes {
+		s += ct.Mangle()
+	}
+	return s
+}
+
 func typesStr(types []Type) string {
 	if len(types) == 0 {
 		return ""
@@ -220,6 +244,40 @@ func TypeEqual(a, b Type) bool {
 	return cmp(a, b)
 }
 
+// CanRefineType checks if oldType can be refined to newType by replacing
+// unresolved components with concrete types.
+// Returns true if refinement is possible (including when types are already equal).
+func CanRefineType(oldType, newType Type) bool {
+	// Completely unresolved type can be refined to anything
+	if oldType.Kind() == UnresolvedKind {
+		return true
+	}
+
+	// If kinds differ, can't refine
+	if oldType.Kind() != newType.Kind() {
+		return false
+	}
+
+	// Check type-specific refinement
+	switch oldType.Kind() {
+	case ArrayKind:
+		oldArr := oldType.(Array)
+		// Can refine if old has unresolved element type
+		return oldArr.ColTypes[0].Kind() == UnresolvedKind || TypeEqual(oldType, newType)
+	case ArrayRangeKind:
+		oldSlice := oldType.(ArrayRange)
+		newSlice := newType.(ArrayRange)
+		return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
+	case PtrKind:
+		oldPtr := oldType.(Ptr)
+		newPtr := newType.(Ptr)
+		return CanRefineType(oldPtr.Elem, newPtr.Elem)
+	default:
+		// For other types, must be equal
+		return TypeEqual(oldType, newType)
+	}
+}
+
 func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
@@ -238,6 +296,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFunc
 	case ArrayKind:
 		return eqArray
+	case ArrayRangeKind:
+		return eqArrayRange
 	default:
 		return func(a, b Type) bool { panic(fmt.Sprintf("TypeEqual: unhandled kind %v", k)) }
 	}
@@ -290,4 +350,10 @@ func eqArray(a, b Type) bool {
 		return false
 	}
 	return EqualTypes(aa.ColTypes, ba.ColTypes)
+}
+
+func eqArrayRange(a, b Type) bool {
+	aar := a.(ArrayRange)
+	bar := b.(ArrayRange)
+	return eqArray(aar.Array, bar.Array) && eqRange(aar.Range, bar.Range)
 }

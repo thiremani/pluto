@@ -1,0 +1,7 @@
+Single element array: [42]
+Multi element array: [1 2 3]
+Array from range: [10 11 12]
+Initial value: [5]
+Reassigned single element: [10]
+Concatenated array: [1 2 3 4]
+Array plus empty: [1 2 3]

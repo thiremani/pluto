@@ -1,0 +1,10 @@
+arr = [10 20 30 40 50]
+i = 0:5
+
+total = 0
+total = total + useShadow(i)
+"ShadowFunc: -total"
+
+combined = [0]
+combined = combined + i + arr[i] + [i]
+"PendingRanges: -combined"

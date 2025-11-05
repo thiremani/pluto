@@ -53,6 +53,8 @@ func defaultSpecifier(t Type) (string, error) {
 	case ArrayKind:
 		// Arrays are converted to char* via runtime helpers
 		return "%s", nil
+	case ArrayRangeKind:
+		return "%s", nil
 	default:
 		err := fmt.Errorf("unsupported type in print statement %s", t.String())
 		return "", err
@@ -251,6 +253,12 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 			strPtr := c.arrayStrArg(mainSym)
 			valArgs = append(valArgs, strPtr)
 			toFree = append(toFree, strPtr)
+			return
+		case ArrayRangeKind:
+			arrStr, rangeStr := c.arrayRangeStrArgs(mainSym)
+			formattedStr = builder.String() + "[%s]"
+			valArgs = append(valArgs, arrStr, rangeStr)
+			toFree = append(toFree, arrStr, rangeStr)
 			return
 		}
 	}

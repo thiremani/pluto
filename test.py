@@ -241,6 +241,9 @@ class TestRunner:
             if self._compare_outputs(expected_output, actual_output):
                 print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                 self.passed += 1
+                # Clean up executable after successful test
+                if not KEEP_BUILD:
+                    Path(executable_path).unlink(missing_ok=True)
             else:
                 self.failed += 1
 

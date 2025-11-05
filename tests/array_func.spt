@@ -1,32 +1,30 @@
-arr1 = [1 2]
-arr2 = [3 4]
-res1 = concatInt(arr1, arr2)
-"ConcatInt: -res1"
+square_res = square([1 2 3])
+"Square: -square_res"
 
-arr1 = concatInt(arr1, arr2)
-"ConcatIntInPlace: -arr1"
+sum_vals, prod_vals = sum_and_product([1 2], [3 4])
+"Sum: -sum_vals"
+"Prod: -prod_vals"
 
-arrf1 = [1.5 2.5]
-arrf2 = [3.5 4.5]
-res2 = concatFloat(arrf1, arrf2)
-"ConcatFloat: -res2"
+biased = bias_and_scale([1 2 3], 10, 2)
+"BiasScale: -biased"
 
-res3 = concatMixed([1 2], arrf2)
-"ConcatMixed: -res3"
+mixed_sum, mixed_prod = sum_and_product([1 2], 5)
+"SumProductMixed: -mixed_sum"
+"ProdMixed: -mixed_prod"
 
-arrs1 = ["foo" "bar"]
-arrs2 = ["baz" "qux"]
-res4 = concatStr(arrs1, arrs2)
-"ConcatStr: -res4"
+rev_sum, rev_prod = sum_and_product(5, [1 2])
+"SumProductReverse: -rev_sum"
+"ProdReverse: -rev_prod"
 
-res5 = multAddInt([1 2 3], 2, 10)
-"MultAddInt: -res5"
+scalar_sum, scalar_prod = sum_and_product(2, 3)
+"SumProductScalar: -scalar_sum"
+"ProdScalar: -scalar_prod"
 
-res6 = multAddFloat([1.5 2.5], 0.5, -1.0)
-"MultAddFloat: -res6"
+scalar = square(7)
+"SquareScalar: -scalar"
 
-res7 = mixedMultAdd([1 2], [3.5 4.5], 2)
-"MixedMultAdd: -res7"
+arr1 = ConstVec(0)
+"ConstVecScalar: -arr1"
 
-res8 = scaleAndConcat([1 2], 3, [10 20])
-"ScaleConcat: -res8"
+arr2 = ConstVec(0:5)
+"ConstVecRange: -arr2"

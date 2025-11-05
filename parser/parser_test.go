@@ -264,3 +264,34 @@ func TestParseRangeLiteral(t *testing.T) {
 		})
 	}
 }
+
+func TestMalformedCallArguments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "missing closing bracket in array access",
+			input: "result = double(arr[idx)",
+		},
+		{
+			name:  "missing closing paren in nested call",
+			input: "result = outer(inner(x)",
+		},
+		{
+			name:  "missing closing bracket in first arg",
+			input: "result = func(arr[0, other)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("malformed_test", tt.input)
+			p := New(l)
+			_ = p.ParseProgram()
+
+			// Should have parser errors for malformed syntax
+			require.NotEmpty(t, p.Errors(), "expected parser errors but got none")
+		})
+	}
+}

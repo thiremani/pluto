@@ -31,3 +31,8 @@ tests/**
 
 # ignore diff.txt files
 diff.txt
+
+# local Go build caches
+.gocache/
+.gotmp/
+.gomodcache/
