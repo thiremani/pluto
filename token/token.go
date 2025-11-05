@@ -71,13 +71,14 @@ const (
 	SYM_FTHRT = "∜" // fourth root (U+221C)
 
 	// arithmetic symbols
-	SYM_ADD = "+"
-	SYM_SUB = "-"
-	SYM_MUL = "*"
-	SYM_DIV = "/"
-	SYM_QUO = "÷"
-	SYM_MOD = "%"
-	SYM_EXP = "^"
+	SYM_ADD      = "+"
+	SYM_SUB      = "-"
+	SYM_MUL      = "*"
+	SYM_IMPL_MUL = "⋅" // implicit multiplication (e.g., 2x) - higher precedence than regular *
+	SYM_DIV      = "/"
+	SYM_QUO      = "÷"
+	SYM_MOD      = "%"
+	SYM_EXP      = "^"
 
 	// comparison symbols
 	SYM_EQL = "=="

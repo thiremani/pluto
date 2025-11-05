@@ -216,10 +216,10 @@ func TestPrefixChainVsImplicitMult(t *testing.T) {
 	// ∜∛√-5x  =>  (∜(∛(√(-5)))) * x
 	e := parseOneExpr(t, "∜∛√-5x")
 
-	// top-level must be multiplication
+	// top-level must be implicit multiplication
 	top, ok := e.(*ast.InfixExpression)
 	require.True(t, ok)
-	require.Equal(t, "*", top.Operator)
+	require.Equal(t, "⋅", top.Operator)
 
 	// right side is the identifier x
 	if !testLiteralExpression(t, top.Right, "x") {
@@ -247,14 +247,14 @@ func TestPrefixChainVsImplicitMult(t *testing.T) {
 }
 
 func TestPrefixOverProductParens(t *testing.T) {
-	// √(5x) => √(5 * x)
+	// √(5x) => √(5 ⋅ x)
 	e := parseOneExpr(t, "√(5x)")
 
 	pe, ok := e.(*ast.PrefixExpression)
 	require.True(t, ok)
 	require.Equal(t, "√", pe.Operator)
 
-	if !testInfixExpression(t, pe.Right, 5, "*", "x") {
+	if !testInfixExpression(t, pe.Right, 5, "⋅", "x") {
 		t.FailNow()
 	}
 }
@@ -385,10 +385,10 @@ func TestImplicitMultParsing(t *testing.T) {
 		input  string
 		expStr string
 	}{
-		{"simple", "x = 5a", "x = (5 * a)"},
-		{"add after mult", "y = 5x + 2", "y = ((5 * x) + 2)"},
-		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 * x)) + 1)"},
-		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 * x)) + (3.11 * (x ^ 2))) + (2.03 * (x3 ^ 3))) + (7 * (x3ab ^ 4)))"},
+		{"simple", "x = 5a", "x = (5 ⋅ a)"},
+		{"add after mult", "y = 5x + 2", "y = ((5 ⋅ x) + 2)"},
+		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 ⋅ x)) + 1)"},
+		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 ⋅ x)) + (3.11 ⋅ (x ^ 2))) + (2.03 ⋅ (x3 ^ 3))) + (7 ⋅ (x3ab ^ 4)))"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

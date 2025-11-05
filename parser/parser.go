@@ -12,49 +12,62 @@ import (
 	"github.com/thiremani/pluto/token"
 )
 
+// Precedence levels - using floats to allow inserting any intermediate level
 const (
-	_ int = iota
-	LOWEST
-	ASSIGN      // =
-	COMMA       // ,
-	BITWISE_OR  // |
-	BITWISE_XOR // ⊕
-	BITWISE_AND // &
-	SHIFT       // << >> >>>
-	SUM         // +
-	PRODUCT     // *
-	EXP         // ^
-	COLON       // :
-	LESSGREATER // > or <
-	PREFIX      // -X or !X or √X
-	CALL        // myFunction(X)
+	LOWEST      = 0.0 + iota // iota works with floats when used in a float expression
+	ASSIGN                   // =
+	COMMA                    // ,
+	BITWISE_OR               // |
+	BITWISE_XOR              // ⊕
+	BITWISE_AND              // &
+	SHIFT                    // << >> >>>
+	SUM                      // + -
+	PRODUCT                  // * / ÷ %
+	EXP                      // ^
+	IMPLICIT                 // ⋅ (implicit multiplication)
+	COLON                    // :
+	LESSGREATER              // < > == != <= >=
+	PREFIX                   // -X !X √X
+	CALL                     // myFunction(X)
 )
 
-var precedences = map[string]int{
-	token.SYM_ASSIGN: ASSIGN,
-	token.SYM_COMMA:  COMMA,
-	token.SYM_OR:     BITWISE_OR,
-	token.SYM_XOR:    BITWISE_XOR,
-	token.SYM_AND:    BITWISE_AND,
-	token.SYM_SHL:    SHIFT,
-	token.SYM_SHR:    SHIFT,
-	token.SYM_ASR:    SHIFT,
-	token.SYM_ADD:    SUM,
-	token.SYM_SUB:    SUM,
-	token.SYM_MUL:    PRODUCT,
-	token.SYM_DIV:    PRODUCT,
-	token.SYM_QUO:    PRODUCT,
-	token.SYM_MOD:    PRODUCT,
-	token.SYM_EXP:    EXP,
-	token.SYM_COLON:  COLON,
-	token.SYM_EQL:    LESSGREATER,
-	token.SYM_LSS:    LESSGREATER,
-	token.SYM_GTR:    LESSGREATER,
-	token.SYM_NEQ:    LESSGREATER,
-	token.SYM_LEQ:    LESSGREATER,
-	token.SYM_GEQ:    LESSGREATER,
-	token.SYM_LPAREN: CALL,
+// leftBindingPower: how strongly an operator binds to its left operand
+var leftBindingPower = map[string]float64{
+	token.SYM_ASSIGN:   ASSIGN,
+	token.SYM_COMMA:    COMMA,
+	token.SYM_OR:       BITWISE_OR,
+	token.SYM_XOR:      BITWISE_XOR,
+	token.SYM_AND:      BITWISE_AND,
+	token.SYM_SHL:      SHIFT,
+	token.SYM_SHR:      SHIFT,
+	token.SYM_ASR:      SHIFT,
+	token.SYM_ADD:      SUM,
+	token.SYM_SUB:      SUM,
+	token.SYM_MUL:      PRODUCT,
+	token.SYM_DIV:      PRODUCT,
+	token.SYM_QUO:      PRODUCT,
+	token.SYM_MOD:      PRODUCT,
+	token.SYM_IMPL_MUL: EXP - 0.25, // 8.75: Between RBP(^)=8.5 and EXP=9, allows ⋅ in exponents but not on left of ^
+	token.SYM_EXP:      EXP,
+	token.SYM_COLON:    COLON,
+	token.SYM_EQL:      LESSGREATER,
+	token.SYM_LSS:      LESSGREATER,
+	token.SYM_GTR:      LESSGREATER,
+	token.SYM_NEQ:      LESSGREATER,
+	token.SYM_LEQ:      LESSGREATER,
+	token.SYM_GEQ:      LESSGREATER,
+	token.SYM_LPAREN:   CALL,
 }
+
+// rightBindingPower: how strongly an operator binds to its right operand
+// Only include operators where RBP != LBP (non-left-associative operators)
+// For left-associative operators, RBP defaults to LBP
+var rightBindingPower = map[string]float64{
+	token.SYM_EXP: EXP - 0.5, // 8.5: Right-associative, blocks * but allows ⋅ in exponents
+}
+
+// Kept for compatibility, now uses leftBindingPower
+var precedences = leftBindingPower
 
 type (
 	prefixParseFn  func() ast.Expression
@@ -117,10 +130,11 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerInfix(token.SYM_ADD, p.parseInfixExpression)
 	p.registerInfix(token.SYM_SUB, p.parseInfixExpression)
 	p.registerInfix(token.SYM_MUL, p.parseInfixExpression)
+	p.registerInfix(token.SYM_IMPL_MUL, p.parseInfixExpression)
 	p.registerInfix(token.SYM_DIV, p.parseInfixExpression)
 	p.registerInfix(token.SYM_QUO, p.parseInfixExpression)
 	p.registerInfix(token.SYM_MOD, p.parseInfixExpression)
-	p.registerInfix(token.SYM_EXP, p.parseInfixExpression)
+	p.registerInfix(token.SYM_EXP, p.parseInfixExpression) // Right-associative via rightBindingPower
 	p.registerInfix(token.SYM_EQL, p.parseInfixExpression)
 	p.registerInfix(token.SYM_LSS, p.parseInfixExpression)
 	p.registerInfix(token.SYM_GTR, p.parseInfixExpression)
@@ -163,7 +177,8 @@ func (p *StmtParser) nextToken() {
 // and there is no whitespace between them (i.e., the current token's ending column
 // equals the next token's starting column), then we assume an implicit multiplication.
 // In this case, we save the IDENT token in 'savedToken', and substitute the next token
-// with a multiplication operator '*' token. This way, an input like "5var" is treated as "5 * var".
+// with an implicit multiplication operator '⋅' token. This way, an input like "5var" is
+// treated as "5 ⋅ var" with higher precedence than regular multiplication.
 func (p *StmtParser) handleImplicitMult() {
 	// Check: number followed immediately by identifier
 	isNumber := p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT
@@ -174,16 +189,16 @@ func (p *StmtParser) handleImplicitMult() {
 		return
 	}
 
-	// Create multiplication token
+	// Create implicit multiplication token with higher precedence than regular *
 	mul := token.Token{
 		Type:     token.OPERATOR,
-		Literal:  token.SYM_MUL,
+		Literal:  token.SYM_IMPL_MUL,
 		FileName: p.peekToken.FileName,
 		Line:     p.peekToken.Line,
 		Column:   p.peekToken.Column,
 	}
 
-	// Insert: cur | * | ident
+	// Insert: cur | ⋅ | ident
 	p.savedTokens = append([]token.Token{p.peekToken}, p.savedTokens...)
 	p.peekToken = mul
 }
@@ -589,7 +604,7 @@ func (p *StmtParser) parseExpList() []ast.Expression {
 	return expList
 }
 
-func (p *StmtParser) parseExpression(precedence int, spacesMatter bool) ast.Expression {
+func (p *StmtParser) parseExpression(precedence float64, spacesMatter bool) ast.Expression {
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -614,7 +629,7 @@ func (p *StmtParser) parseExpression(precedence int, spacesMatter bool) ast.Expr
 	return p.parseExpressionTail(precedence, spacesMatter, leftExp)
 }
 
-func (p *StmtParser) parseExpressionTail(precedence int, spacesMatter bool, left ast.Expression) ast.Expression {
+func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, left ast.Expression) ast.Expression {
 	for {
 		var consumed bool
 		left, consumed = p.tryPostfix(left)
@@ -695,17 +710,17 @@ func (p *StmtParser) parseArrayRangeExpression(array ast.Expression) ast.Express
 	return rangeExpr
 }
 
-func (p *StmtParser) peekPrecedence() int {
-	if p, ok := precedences[p.peekToken.TokenTypeWithOp()]; ok {
-		return p
+func (p *StmtParser) peekPrecedence() float64 {
+	if prec, ok := precedences[p.peekToken.TokenTypeWithOp()]; ok {
+		return prec
 	}
 
 	return LOWEST
 }
 
-func (p *StmtParser) curPrecedence() int {
-	if p, ok := precedences[p.curToken.TokenTypeWithOp()]; ok {
-		return p
+func (p *StmtParser) curPrecedence() float64 {
+	if prec, ok := precedences[p.curToken.TokenTypeWithOp()]; ok {
+		return prec
 	}
 
 	return LOWEST
@@ -928,9 +943,14 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 		Left:     left,
 	}
 
-	precedence := p.curPrecedence()
+	// Use right binding power if defined, otherwise use left binding power (left-associative)
+	rbp, hasRBP := rightBindingPower[p.curToken.Literal]
+	if !hasRBP {
+		rbp = p.curPrecedence() // Default: RBP = LBP (left-associative)
+	}
+
 	p.nextToken()
-	expression.Right = p.parseExpression(precedence, false)
+	expression.Right = p.parseExpression(rbp, false)
 
 	return expression
 }
