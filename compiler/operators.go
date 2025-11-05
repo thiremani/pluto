@@ -25,6 +25,48 @@ type opFunc func(c *Compiler, left, right *Symbol, compile bool) *Symbol
 // It takes one *Symbol and returns a new *Symbol
 type unaryOpFunc func(c *Compiler, operand *Symbol, compile bool) *Symbol
 
+// --- Multiplication helper functions (shared by * and ⋅) ---
+
+var mulI64I64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = left.Type
+	if !compile {
+		return
+	}
+	s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
+	return
+}
+
+var mulF64F64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = left.Type
+	if !compile {
+		return
+	}
+	s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
+	return
+}
+
+var mulI64F64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = right.Type
+	if !compile {
+		return
+	}
+	s.Val = c.builder.CreateFMul(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fmul_if_tmp")
+	return
+}
+
+var mulF64I64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = left.Type
+	if !compile {
+		return
+	}
+	s.Val = c.builder.CreateFMul(left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"), "fmul_fi_tmp")
+	return
+}
+
 // defaultOps maps (operator, left type, right type) to the lowering function.
 // Keys use concrete Type values (e.g., I64, F64) instead of strings
 // to avoid brittleness from relying on String() formatting.
@@ -115,47 +157,15 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	// Multiplication:
-	{Operator: token.SYM_MUL, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = left.Type
-		if !compile {
-			return
-		}
-
-		s.Val = c.builder.CreateMul(left.Val, right.Val, "mul_tmp")
-		return
-	},
-	{Operator: token.SYM_MUL, LeftType: F64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = left.Type
-		if !compile {
-			return
-		}
-
-		s.Val = c.builder.CreateFMul(left.Val, right.Val, "fmul_tmp")
-		return
-	},
-	{Operator: token.SYM_MUL, LeftType: I64, RightType: F64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = right.Type
-		if !compile {
-			return
-		}
-
-		s.Val = c.builder.CreateFMul(c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_float"), right.Val, "fmul_if_tmp")
-		return
-	},
-	{Operator: token.SYM_MUL, LeftType: F64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = left.Type
-		if !compile {
-			return
-		}
-
-		s.Val = c.builder.CreateFMul(left.Val, c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_float"), "fmul_fi_tmp")
-		return
-	},
+	// Multiplication (* and ⋅): Both use the same implementation
+	{Operator: token.SYM_MUL, LeftType: I64, RightType: I64}:      mulI64I64,
+	{Operator: token.SYM_MUL, LeftType: F64, RightType: F64}:      mulF64F64,
+	{Operator: token.SYM_MUL, LeftType: I64, RightType: F64}:      mulI64F64,
+	{Operator: token.SYM_MUL, LeftType: F64, RightType: I64}:      mulF64I64,
+	{Operator: token.SYM_IMPL_MUL, LeftType: I64, RightType: I64}: mulI64I64,
+	{Operator: token.SYM_IMPL_MUL, LeftType: F64, RightType: F64}: mulF64F64,
+	{Operator: token.SYM_IMPL_MUL, LeftType: I64, RightType: F64}: mulI64F64,
+	{Operator: token.SYM_IMPL_MUL, LeftType: F64, RightType: I64}: mulF64I64,
 
 	// Division:
 	// For integers, this example uses integer division (CreateSDiv).

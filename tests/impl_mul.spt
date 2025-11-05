@@ -1,0 +1,38 @@
+x = 2
+y = 3
+a = 2
+b = 3
+
+# Basic implicit multiplication with exponentiation
+# Test: 2x^3 = 2*(x^3) = 2*8 = 16
+2x^3
+
+# Test: a^2b = a^(2*b) = 2^6 = 64
+a^2b
+
+# Test: 2^3x = 2^(3*x) = 2^6 = 64
+2^3x
+
+# Right-associativity of exponentiation
+# Test: 2^3^2 = 2^(3^2) = 2^9 = 512
+2^3^2
+
+# Explicit vs implicit multiplication precedence
+# Test: x^2*y = (x^2)*y = 4*3 = 12 (explicit * blocked from exponent)
+x^2*y
+
+# Test: x^2y = x^(2*y) = 2^6 = 64 (implicit ⋅ allowed in exponent)
+x^2y
+
+# Complex expressions
+# Test: x^2y^3 = x^(2*y^3) = x^(2*27) = 2^54 ≈ 1.8e+16
+x^2y^3
+
+# Test: x^2*y^3 = (x^2)*(y^3) = 4*27 = 108
+x^2*y^3
+
+# Test: 2x^3y = 2*(x^(3*y)) = 2*(2^9) = 2*512 = 1024
+2x^3y
+
+# Test: 2x^3*y = 2*(x^3)*y = 2*8*3 = 48
+2x^3*y
