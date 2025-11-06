@@ -14,7 +14,7 @@
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).
 
-Requirements: Go `1.25`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
+Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 
 ## Architecture Overview
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
@@ -37,7 +37,7 @@ Requirements: Go `1.25`, LLVM `20` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 - Run: `python3 test.py [--keep]`.
   - Focused run: `python3 test.py tests/math`.
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
@@ -49,7 +49,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 20 tools.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
 
 ## Instructions for AI Assistants
 - Keep changes minimal and focused; avoid reflowing or reindenting unrelated lines.

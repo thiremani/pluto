@@ -5,11 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Requirements
 
 - Go 1.25+
-- LLVM 20 (including `clang`, `opt`, `llc`, and `lld`)
+- LLVM 21 (including `clang`, `opt`, `llc`, and `lld`)
 - Python 3.x
 - pip (for installing Python dependencies)
 
-On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add it to your path. The paths are `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
+On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 
 ## Development Commands
 
@@ -119,7 +119,7 @@ The compilation process consists of two main phases:
 - Integration tests compare actual vs expected program output
 - Run: `python3 test.py [--keep]` or focused run: `python3 test.py tests/math`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
@@ -128,7 +128,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test
   - Linux: `$HOME/.cache/pluto`
   - Windows: `%LocalAppData%\pluto`
 - Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores intermediate LLVM IR files and objects
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 20 tools
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.

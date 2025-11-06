@@ -24,11 +24,11 @@ This project is a compiler for the Pluto programming language, written in Go. It
 ### Requirements
 
 *   Go 1.25+
-*   LLVM 20 (including `clang`, `opt`, `llc`, and `lld`)
+*   LLVM 21 (including `clang`, `opt`, `llc`, and `lld`)
 *   Python 3.x
 *   pip (for installing Python dependencies)
 
-On macOS with Homebrew, you can install LLVM with `brew install llvm@20` and add it to your path. The paths are `/opt/homebrew/opt/llvm@20/bin` (ARM) or `/usr/local/opt/llvm@20/bin` (Intel).
+On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 
 ### Commands
 
@@ -97,7 +97,7 @@ The compiler uses a cache to store intermediate build artifacts (LLVM IR and obj
 To clear the cache, you can delete the appropriate directory.
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 20 tools.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
@@ -114,7 +114,7 @@ To clear the cache, you can delete the appropriate directory.
 - Run: `python3 test.py [--keep]`.
   - Focused run: `python3 test.py tests/math`.
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 20, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
