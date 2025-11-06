@@ -101,22 +101,22 @@ class TestRunner:
             if p.exists():
                 return p
         raise RuntimeError(
-            "LLVM 20 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
+            "LLVM 21 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
         )
 
     def detect_llvm_path_unix(self) -> Path:
-        # Try common LLVM 20 paths
+        # Try common LLVM 21 paths
         paths = [
-            Path("/usr/lib/llvm-20/bin"),  # Linux
-            Path("/usr/local/opt/llvm@20/bin"),  # macOS
-            Path("/opt/homebrew/opt/llvm@20/bin")  # macOS ARM
+            Path("/usr/lib/llvm-21/bin"),  # Linux
+            Path("/usr/local/opt/llvm/bin"),  # macOS Intel
+            Path("/opt/homebrew/opt/llvm/bin")  # macOS ARM
         ]
         for p in paths:
             if p.exists():
                 return p
-        raise RuntimeError("LLVM 20 not found. Install with:\n" 
-                           "Linux: https://apt.llvm.org/\n" 
-                           "macOS: brew install llvm@20")
+        raise RuntimeError("LLVM 21 not found. Install with:\n"
+                           "Linux: https://apt.llvm.org/\n"
+                           "macOS: brew install llvm")
 
         
     def run_command(self, cmd: list, cwd: Path = None) -> str:
