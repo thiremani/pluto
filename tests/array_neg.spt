@@ -1,5 +1,5 @@
-a = 5
-b = 3
+a = 16
+b = 4
 
 # Subtraction with spaces on both sides
 [a - b]
@@ -18,3 +18,27 @@ b = 3
 
 # Mix of positive and negative
 [a b -b]
+
+# Subtraction result followed by literal
+[a-b 5]
+
+# Subtraction with spaces followed by literal
+[a - b 5]
+
+# Two elements (a, -b) followed by literal
+[a -b 3]
+
+# Subtraction with space after minus but not before
+[a- b 4]
+
+# Prefix-only operator (sqrt) - spacing shouldn't matter
+[a √b]
+[a √ b]
+
+# Complex expressions with both operators
+[a + √b a -√b]
+[a + √ b a -√ b]
+
+# Minus followed by sqrt with spaces - should be subtraction
+[a - √ b]
+[a - √b]
