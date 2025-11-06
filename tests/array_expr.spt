@@ -113,8 +113,6 @@ val3 = 0arr1
 val4 = 2arr1 * 3
 "Implicit mult then explicit mult (2arr1 * 3): -val4"
 
-# NOTE: This reveals a bug - should be [150 300 450] but produces [0 0 0]
-# When explicit mult precedes implicit mult, parsing/compilation fails
 val5 = 2.5 * 2arr1 * 3
 "Explicit mult before implicit mult (2.5 * 2arr1 * 3): -val5"
 
