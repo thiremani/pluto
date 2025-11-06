@@ -172,6 +172,24 @@ func (p *StmtParser) nextToken() {
 	p.handleImplicitMult()
 }
 
+// peekNextToken looks ahead to see what token comes after peekToken.
+// If not available in savedTokens, it loads it from the lexer.
+func (p *StmtParser) peekNextToken() token.Token {
+	if len(p.savedTokens) > 0 {
+		return p.savedTokens[0]
+	}
+	// Load next token from lexer and save it
+	var err *token.CompileError
+	nextTok, err := p.l.NextToken()
+	if err != nil {
+		p.errors = append(p.errors, err)
+		return token.Token{Type: token.ILLEGAL}
+	}
+	// Save it so nextToken() will get it later
+	p.savedTokens = append(p.savedTokens, nextTok)
+	return nextTok
+}
+
 // Handle implicit multiplication:
 // If the current token is an INT or FLOAT and the following token is an IDENT,
 // and there is no whitespace between them (i.e., the current token's ending column
@@ -629,6 +647,22 @@ func (p *StmtParser) parseExpression(precedence float64, spacesMatter bool) ast.
 	return p.parseExpressionTail(precedence, spacesMatter, leftExp)
 }
 
+// parseExpressionTail continues parsing an expression using precedence climbing.
+// It handles infix/postfix operators and, when spacesMatter is true, uses spacing
+// to disambiguate operators that can be both prefix and infix (e.g., `-` for subtraction vs negation).
+//
+// Parameters:
+//   - precedence: minimum binding power - stops when next operator has lower precedence
+//   - spacesMatter: if true, uses spacing to decide when to start new array elements
+//   - left: the left-hand expression already parsed
+//
+// Spacing rules (when spacesMatter is true):
+//   - `a - b` (space before and after `-`) → subtraction (infix)
+//   - `a -b` (space before, not after `-`) → two elements: a and -b (prefix)
+//   - `a-b` (no space before `-`) → subtraction (infix, normal precedence)
+//
+// This allows natural array syntax like `[1 -2 3]` for `[1, -2, 3]` while
+// still supporting `[1 - 2 3]` for `[-1, 3]`.
 func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, left ast.Expression) ast.Expression {
 	for {
 		var consumed bool
@@ -637,33 +671,32 @@ func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, 
 			continue
 		}
 
-		if p.peekToken.Type == token.OPERATOR {
-			p.normalizePeekInfixOperator()
-		}
-
 		if precedence >= p.peekPrecedence() {
 			break
 		}
 
-		// If spaces matter and there's a space before the next token,
-		// we need to decide: continue current expression, or start new element?
-		// Strategy: if the next token CAN start a new expression, treat space as separator
-		if spacesMatter && p.peekToken.HadSpace {
-			// Check if next token can start a new expression
-			prefix := p.prefixParseFns[p.peekToken.TokenTypeWithOp()]
-			if prefix != nil {
-				// Can start new expression (prefix op, literal, ident, etc)
-				// Prefer starting new element over continuing as infix
-				break
-			}
-			// Next token cannot start an expression, so it must be infix/postfix
-			// Continue parsing the current expression despite the space
+		// Normalize operator first to get its true form
+		if p.peekToken.Type == token.OPERATOR {
+			p.normalizePeekInfixOperator()
 		}
 
 		infix := p.infixParseFns[p.peekToken.TokenTypeWithOp()]
 		if infix == nil {
 			return left
 		}
+
+		// When spaces matter, check if operator should start a new element
+		// If operator has space before it but not after (e.g., `a -b`),
+		// it starts a new element as a prefix operator
+		if spacesMatter && p.peekToken.HadSpace {
+			peekNextTok := p.peekNextToken()
+			if !peekNextTok.HadSpace {
+				// Operator is directly attached to next token → prefix (new element)
+				break
+			}
+		}
+
+		// Process as infix operator
 		p.nextToken()
 		left = infix(left)
 	}
