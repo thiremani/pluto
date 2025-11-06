@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/stretchr/testify v1.10.0
-	tinygo.org/x/go-llvm v0.0.0-20250422114502-b8f170971e74
+	tinygo.org/x/go-llvm v0.0.0-20250929104024-00fb4309ddd2
 )
 
 require (

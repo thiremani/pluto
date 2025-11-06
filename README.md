@@ -3,17 +3,17 @@ The Pluto Programming Language
 
 *Taking programming to another planet 🚀*
 
-Pluto is a compiled language that aims for the readability of scripting languages with the safety and performance of C/Go. A Go front‑end lowers `.pt` (code) and `.spt` (script) to LLVM 20 IR and emits native binaries. Functions are 'Templates' defined in `.pt` files, and can be compiled for different argument types used in `.spt` scripts — generics by use. Design highlights include range‑driven auto‑vectorization, safe arrays and slices, scope‑based memory (no nulls, no out‑of‑bounds, no GC), and concurrency by construction.
+Pluto is a compiled language that aims for the readability of scripting languages with the safety and performance of C/Go. A Go front‑end lowers `.pt` (code) and `.spt` (script) to LLVM 21 IR and emits native binaries. Functions are 'Templates' defined in `.pt` files, and can be compiled for different argument types used in `.spt` scripts — generics by use. Design highlights include range‑driven auto‑vectorization, safe arrays and slices, scope‑based memory (no nulls, no out‑of‑bounds, no GC), and concurrency by construction.
 
 Highlights
 ----------
-- Go front‑end, LLVM 20 back‑end; emits native binaries
+- Go front‑end, LLVM 21 back‑end; emits native binaries
 - Template functions in `.pt`: specialized per argument types (generic by use)
 - Range literals with auto‑vectorized execution
 - First‑class arrays (safe slicing) and link semantics
 - Scope‑based memory: no nulls, no OOB, no garbage collector
 - printf‑style formatting; arrays/ranges printable
-- Cross‑platform; GitHub Actions CI (Go 1.25 + LLVM 20)
+- Cross‑platform; GitHub Actions CI (Go 1.25 + LLVM 21)
 
 Examples
 --------
@@ -71,25 +71,25 @@ Quick Start
 Requirements
 ------------
 - Go `1.25` on PATH
-- LLVM `20` tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
+- LLVM `21` tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
 - macOS Homebrew paths:
-  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm@20/bin:$PATH`
-  - Intel: `export PATH=/usr/local/opt/llvm@20/bin:$PATH`
+  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm/bin:$PATH`
+  - Intel: `export PATH=/usr/local/opt/llvm/bin:$PATH`
 
 Build and Run
 -------------
 
 Linux/macOS (primary)
-- Requirements: Go 1.25+ and LLVM 20 (`opt`, `llc`, `clang`, `ld.lld`)
+- Requirements: Go 1.25+ and LLVM 21 (`opt`, `llc`, `clang`, `ld.lld`)
 - Linux install and set PATH:
   - See https://apt.llvm.org for instructions. Typical flow:
-    - `wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 20`
-    - `sudo apt install lld-20`
-    - `export PATH=/usr/lib/llvm-20/bin:$PATH`
+    - `wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 21`
+    - `sudo apt install lld-21`
+    - `export PATH=/usr/lib/llvm-21/bin:$PATH`
 - macOS (Homebrew):
-  - `brew install llvm@20`
-  - Intel: `export PATH=/usr/local/opt/llvm@20/bin:$PATH`
-  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm@20/bin:$PATH`
+  - `brew install llvm`
+  - Intel: `export PATH=/usr/local/opt/llvm/bin:$PATH`
+  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm/bin:$PATH`
 - Build & test end‑to‑end:
   - `python3 test.py`
 - Unit tests only:
@@ -101,8 +101,8 @@ Windows (MSYS2 UCRT64)
 - Packages: `pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}`
 - Quick build: `python scripts/msys2_build.py` → creates `pluto.exe`
 - Tests: `python test.py` (or `python test.py tests/math` for a subset)
-- Manual build/test: ensure `clang`, `lld`, and LLVM 20 libs are active in the UCRT64 env; for BYO LLVM builds you may need `GOFLAGS='-tags=byollvm'` and `CGO_*` flags from `llvm-config`.
- - Verify LLVM 20 tools are present (e.g., `C:\\msys64\\ucrt64\\bin`).
+- Manual build/test: ensure `clang`, `lld`, and LLVM 21 libs are active in the UCRT64 env; for BYO LLVM builds you may need `GOFLAGS='-tags=byollvm'` and `CGO_*` flags from `llvm-config`.
+ - Verify LLVM 21 tools are present (e.g., `C:\\msys64\\ucrt64\\bin`).
  - The Windows runner automatically applies the correct MSYS2 environment (CGO + LLVM) so `go build` and `go test` work consistently.
 
 Manual go build/test (MSYS2)
@@ -150,7 +150,7 @@ Troubleshooting
 - Encoding issues / mojibake in test output (Windows):
   - Run from the MSYS2 UCRT64 shell; the runner decodes output as UTF‑8.
 - Missing LLVM tools:
-  - Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 20 are on PATH.
+  - Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH.
 - Clear Pluto cache if behavior seems stale:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"` (or `XDG_CACHE_HOME`)
