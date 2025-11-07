@@ -329,7 +329,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	return resSym
 }
 
-func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type) *Symbol {
+func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
 	arrType := arr.Type.(Array)
 	arrElem := arrType.ColTypes[0]
 
@@ -344,7 +344,13 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		val := c.ArrayGet(arr, arrElem, idx)
 		elemSym := &Symbol{Val: val, Type: arrElem}
 
-		computed := c.compileInfix(op, elemSym, scalarSym, resElem)
+		// Respect the original operand order for non-commutative operations
+		var computed *Symbol
+		if arrayOnLeft {
+			computed = c.compileInfix(op, elemSym, scalarSym, resElem)
+		} else {
+			computed = c.compileInfix(op, scalarSym, elemSym, resElem)
+		}
 
 		// Convert to result element type if needed
 		resultVal := computed.Val
