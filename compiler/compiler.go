@@ -669,12 +669,12 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		}
 
 		// Handle Array-Scalar operations
-		arr := l
-		scalar := r
-		if arr.Type.Kind() != ArrayKind {
-			arr, scalar = scalar, arr
+		if l.Type.Kind() == ArrayKind {
+			// Array on left: array op scalar
+			return c.compileArrayScalarInfix(op, l, r, expectedArr.ColTypes[0], true)
 		}
-		return c.compileArrayScalarInfix(op, arr, scalar, expectedArr.ColTypes[0])
+		// Array on right: scalar op array
+		return c.compileArrayScalarInfix(op, r, l, expectedArr.ColTypes[0], false)
 	}
 
 	key := opKey{

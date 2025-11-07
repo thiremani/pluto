@@ -329,7 +329,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	return resSym
 }
 
-func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type) *Symbol {
+func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
 	arrType := arr.Type.(Array)
 	arrElem := arrType.ColTypes[0]
 
@@ -344,8 +344,21 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		val := c.ArrayGet(arr, arrElem, idx)
 		elemSym := &Symbol{Val: val, Type: arrElem}
 
-		computed := c.compileInfix(op, elemSym, scalarSym, resElem)
-		c.ArraySetForType(resElem, resVec, idx, computed.Val)
+		// Respect the original operand order for non-commutative operations
+		var computed *Symbol
+		if arrayOnLeft {
+			computed = c.compileInfix(op, elemSym, scalarSym, resElem)
+		} else {
+			computed = c.compileInfix(op, scalarSym, elemSym, resElem)
+		}
+
+		// Convert to result element type if needed
+		resultVal := computed.Val
+		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
+		}
+
+		c.ArraySetForType(resElem, resVec, idx, resultVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -367,7 +380,14 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 		v := c.ArrayGet(arr, elem, idx)
 		opSym := &Symbol{Val: v, Type: elem}
 		computed := c.compilePrefix(op, opSym, resElem)
-		c.ArraySetForType(resElem, resVec, idx, computed.Val)
+
+		// Convert to result element type if needed
+		resultVal := computed.Val
+		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
+		}
+
+		c.ArraySetForType(resElem, resVec, idx, resultVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
