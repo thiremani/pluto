@@ -43,6 +43,7 @@ var leftBindingPower = map[string]float64{
 	token.SYM_ASR:      SHIFT,
 	token.SYM_ADD:      SUM,
 	token.SYM_SUB:      SUM,
+	token.SYM_CONCAT:   SUM, // ⊕ array concatenation
 	token.SYM_MUL:      PRODUCT,
 	token.SYM_DIV:      PRODUCT,
 	token.SYM_QUO:      PRODUCT,
@@ -129,6 +130,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerInfix(token.SYM_ASR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_ADD, p.parseInfixExpression)
 	p.registerInfix(token.SYM_SUB, p.parseInfixExpression)
+	p.registerInfix(token.SYM_CONCAT, p.parseInfixExpression)
 	p.registerInfix(token.SYM_MUL, p.parseInfixExpression)
 	p.registerInfix(token.SYM_IMPL_MUL, p.parseInfixExpression)
 	p.registerInfix(token.SYM_DIV, p.parseInfixExpression)

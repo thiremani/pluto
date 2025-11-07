@@ -1,0 +1,78 @@
+# Test element-wise array-array operations
+# Result length is max(len(arr1), len(arr2))
+# Element-wise operation on overlapping indices, then keep tail from longer array
+
+# Same length arrays
+arr1 = [1 2 3]
+arr2 = [4 5 6]
+res1 = arr1 + arr2
+"Same length addition: -res1"
+
+res2 = arr1 * arr2
+"Same length multiplication: -res2"
+
+res3 = arr1 - arr2
+"Same length subtraction: -res3"
+
+# Different length arrays - left longer
+arr3 = [10 20 30 40]
+arr4 = [1 2]
+res4 = arr3 + arr4
+"Left longer addition: -res4"
+
+res5 = arr3 - arr4
+"Left longer subtraction: -res5"
+
+res6 = arr3 * arr4
+"Left longer multiplication: -res6"
+
+# Different length arrays - right longer
+arr5 = [100 200]
+arr6 = [1 2 3 4 5]
+res7 = arr5 + arr6
+"Right longer addition: -res7"
+
+res8 = arr5 * arr6
+"Right longer multiplication: -res8"
+
+# Single element with array
+arr7 = [5]
+arr8 = [1 2 3 4]
+res9 = arr7 + arr8
+"Single + Array: -res9"
+
+res10 = arr7 * arr8
+"Single * Array: -res10"
+
+# Float arrays with different lengths
+arrF1 = [1.5 2.5 3.5]
+arrF2 = [10.0 20.0]
+res11 = arrF1 + arrF2
+"Float left longer: -res11"
+
+res12 = arrF1 * arrF2
+"Float multiplication: -res12"
+
+# Mixed int and float arrays
+arrI = [10 20 30]
+arrF = [1.5 2.5]
+res13 = arrI + arrF
+"Int + Float mixed: -res13"
+
+res14 = arrF + arrI
+"Float + Int mixed: -res14"
+
+# Division
+arr9 = [100 200 300]
+arr10 = [10 20]
+res15 = arr9 / arr10
+"Division with tail: -res15"
+
+# Non-commutative operation preserves order
+arr11 = [10 20 30]
+arr12 = [3 5]
+res16 = arr11 - arr12
+"A - B: -res16"
+
+res17 = arr12 - arr11
+"B - A: -res17"

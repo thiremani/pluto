@@ -1011,14 +1011,53 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 	}
 
 	if leftIsArr && rightIsArr {
-		if op == token.SYM_ADD {
+		leftElemType := leftArr.ColTypes[0]
+		rightElemType := rightArr.ColTypes[0]
+
+		// Concatenation operator: arr1 ⊕ arr2
+		if op == token.SYM_CONCAT {
 			return ts.concatArrayTypes(leftArr, rightArr, tok)
 		}
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("unsupported operator: %q for two array types", op),
-		})
-		return Unresolved{}
+
+		// Element-wise operations on arrays
+		// Handle empty arrays (unresolved element types)
+		if leftElemType.Kind() == UnresolvedKind && rightElemType.Kind() == UnresolvedKind {
+			// Both arrays are empty - result is empty array with unresolved type
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{Unresolved{}},
+				Length:   0,
+			}
+		}
+
+		if leftElemType.Kind() == UnresolvedKind {
+			// Left is empty, use right's type
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{rightElemType},
+				Length:   0,
+			}
+		}
+
+		if rightElemType.Kind() == UnresolvedKind {
+			// Right is empty, use left's type
+			return Array{
+				Headers:  nil,
+				ColTypes: []Type{leftElemType},
+				Length:   0,
+			}
+		}
+
+		// Both have resolved types - perform element-wise type inference
+		elemType := ts.TypeInfixOp(leftElemType, rightElemType, op, tok)
+
+		// Return array type with the computed element type
+		// Length will be max(leftLen, rightLen) at runtime
+		return Array{
+			Headers:  nil,
+			ColTypes: []Type{elemType},
+			Length:   0, // Dynamic length determined at runtime
+		}
 	}
 
 	// Handle array-like with scalar operations

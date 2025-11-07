@@ -1,33 +1,27 @@
-# Integer concatenation
+# Element-wise integer addition (was concatenation)
 arr1 = [10 20]
 arr2 = [30 40]
 res1 = arr1 + arr2
-"Int concat: -res1"
+"Int element-wise: -res1"
 
-# Float concatenation
+# Element-wise float addition
 arrf1 = [1.5 2.5]
 arrf2 = [3.0 4.25]
 res2 = arrf1 + arrf2
-"Float concat: -res2"
+"Float element-wise: -res2"
 
-# Mixed int and float concatenation
+# Mixed int and float element-wise
 mixedInt = [1 2]
 mixedFloat = [3.5 4.5]
 res3 = mixedInt + mixedFloat
-"Int+Float concat: -res3"
+"Int+Float element-wise: -res3"
 res4 = mixedFloat + mixedInt
-"Float+Int concat: -res4"
+"Float+Int element-wise: -res4"
 
-# String concatenation
-arrs1 = ["foo" "bar"]
-arrs2 = ["baz" "qux"]
-res5 = arrs1 + arrs2
-"String concat: -res5"
-
-# Nested expressions
+# Nested expressions with element-wise operations
 res6 = (arr1 + arr2) + [50 60]
-"Nested concat left: -res6"
+"Nested element-wise left: -res6"
 res7 = arr1 + (arr2 + [50 60])
-"Nested concat right: -res7"
+"Nested element-wise right: -res7"
 res8 = (arrf1 + mixedInt) + (mixedFloat + arrf2)
-"Nested mixed concat: -res8"
+"Nested mixed element-wise: -res8"

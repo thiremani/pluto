@@ -190,12 +190,12 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 		{
 			name:        "StringPlusIntArray",
 			script:      "arr1 = [\"foo\" \"bar\"]\narr2 = [1 2]\nres = arr1 + arr2",
-			expectError: "cannot concatenate arrays with incompatible element types",
+			expectError: "unsupported operator",
 		},
 		{
 			name:        "FloatPlusStringArray",
 			script:      "arr1 = [1.5 2.5]\narr2 = [\"foo\"]\nres = arr1 + arr2",
-			expectError: "cannot concatenate arrays with incompatible element types",
+			expectError: "unsupported operator",
 		},
 	}
 

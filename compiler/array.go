@@ -298,16 +298,110 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 // Array operation functions
 
 func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *Symbol, resElem Type) *Symbol {
-	if op != token.SYM_ADD {
-		panic(fmt.Sprintf("unsupported array-array operation: %s", op))
-	}
-
-	// Array concatenation: arr1 + arr2
 	leftArrType := leftArr.Type.(Array)
 	rightArrType := rightArr.Type.(Array)
 
 	leftElem := leftArrType.ColTypes[0]
 	rightElem := rightArrType.ColTypes[0]
+
+	// Array concatenation: arr1 ⊕ arr2
+	if op == token.SYM_CONCAT {
+		return c.compileArrayConcat(leftArr, rightArr, leftElem, rightElem, resElem)
+	}
+
+	// Element-wise array operation: arr1 op arr2
+	// Result length is max(len(arr1), len(arr2))
+	// Element-wise operation on overlapping indices, then keep tail from longer array
+
+	// Get lengths of both arrays
+	leftLen := c.ArrayLen(leftArr, leftElem)
+	rightLen := c.ArrayLen(rightArr, rightElem)
+
+	// Calculate max length for result
+	maxLen := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "cmp_len"),
+		leftLen,
+		rightLen,
+		"max_len",
+	)
+
+	// Calculate min length (overlap region)
+	minLen := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
+		leftLen,
+		rightLen,
+		"min_len",
+	)
+
+	// Create new array with max length
+	resVec := c.CreateArrayForType(resElem, maxLen)
+
+	// Process overlapping region with element-wise operation
+	r := c.rangeZeroToN(minLen)
+	c.createLoop(r, func(iter llvm.Value) {
+		idx := iter
+		leftVal := c.ArrayGet(leftArr, leftElem, idx)
+		rightVal := c.ArrayGet(rightArr, rightElem, idx)
+
+		leftSym := &Symbol{Val: leftVal, Type: leftElem}
+		rightSym := &Symbol{Val: rightVal, Type: rightElem}
+
+		computed := c.compileInfix(op, leftSym, rightSym, resElem)
+
+		// Convert to result element type if needed
+		resultVal := computed.Val
+		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
+		}
+
+		c.ArraySetForType(resElem, resVec, idx, resultVal)
+	})
+
+	// Copy tail from longer array
+	// Check which array is longer and copy its remaining elements
+	endBB := c.builder.GetInsertBlock()
+	fn := endBB.Parent()
+
+	leftLongerBB := llvm.AddBasicBlock(fn, "left_longer")
+	rightLongerBB := llvm.AddBasicBlock(fn, "right_longer")
+	doneBB := llvm.AddBasicBlock(fn, "tail_done")
+
+	isLeftLonger := c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "is_left_longer")
+	c.builder.CreateCondBr(isLeftLonger, leftLongerBB, rightLongerBB)
+
+	// Copy tail from left array
+	c.builder.SetInsertPointAtEnd(leftLongerBB)
+	rLeft := c.CreateRange(minLen, leftLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
+	c.createLoop(rLeft, func(iter llvm.Value) {
+		val := c.ArrayGet(leftArr, leftElem, iter)
+		val = c.CastArrayElem(val, leftElem, resElem)
+		c.ArraySetForType(resElem, resVec, iter, val)
+	})
+	c.builder.CreateBr(doneBB)
+
+	// Copy tail from right array
+	c.builder.SetInsertPointAtEnd(rightLongerBB)
+	rRight := c.CreateRange(minLen, rightLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
+	c.createLoop(rRight, func(iter llvm.Value) {
+		val := c.ArrayGet(rightArr, rightElem, iter)
+		val = c.CastArrayElem(val, rightElem, resElem)
+		c.ArraySetForType(resElem, resVec, iter, val)
+	})
+	c.builder.CreateBr(doneBB)
+
+	// Continue
+	c.builder.SetInsertPointAtEnd(doneBB)
+
+	// Return result array
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
+	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
+	return resSym
+}
+
+func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
+	// Array concatenation: arr1 ⊕ arr2
+	// Result is [arr1..., arr2...]
 
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(leftArr, leftElem)
@@ -319,7 +413,10 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	// Create new array with total length
 	resVec := c.CreateArrayForType(resElem, totalLen)
 
+	// Copy left array elements
 	c.CopyArrayInto(resVec, leftArr, leftElem, resElem, llvm.Value{}, false)
+
+	// Copy right array elements with offset
 	c.CopyArrayInto(resVec, rightArr, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array

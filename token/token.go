@@ -92,8 +92,11 @@ const (
 	// bitwise symbols
 	SYM_AND   = "&"
 	SYM_OR    = "|"
-	SYM_XOR   = "⊕"
+	SYM_XOR   = "⊻"
 	SYM_TILDE = "~"
+
+	// array concatenation
+	SYM_CONCAT = "⊕"
 
 	// shift symbols
 	SYM_SHL = "<<"
