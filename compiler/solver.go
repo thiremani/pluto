@@ -133,12 +133,11 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 }
 
 func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
+	// Update the ExprCache with refined array metadata (headers, length).
+	// Note: handleInfixArrays only calls this when expr is already array-typed,
+	// so we can unconditionally update.
 	info := ts.ExprCache[expr]
-	if info == nil {
-		ts.ExprCache[expr] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
-	} else {
-		info.OutTypes[0] = arr
-	}
+	info.OutTypes[0] = arr
 
 	if ident, ok := expr.(*ast.Identifier); ok {
 		// resolve any previously unresolved uses now that we know the concrete array type
@@ -148,11 +147,20 @@ func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
 
 	switch e := expr.(type) {
 	case *ast.InfixExpression:
-		ts.bindArrayOperand(e.Left, arr)
-		ts.bindArrayOperand(e.Right, arr)
+		// Only recurse if the subexpressions are themselves array-typed
+		if ts.ExprCache[e.Left].OutTypes[0].Kind() == ArrayKind {
+			ts.bindArrayOperand(e.Left, arr)
+		}
+		if ts.ExprCache[e.Right].OutTypes[0].Kind() == ArrayKind {
+			ts.bindArrayOperand(e.Right, arr)
+		}
 	case *ast.PrefixExpression:
-		ts.bindArrayOperand(e.Right, arr)
+		// Only recurse if the operand is array-typed
+		if ts.ExprCache[e.Right].OutTypes[0].Kind() == ArrayKind {
+			ts.bindArrayOperand(e.Right, arr)
+		}
 	case *ast.ArrayRangeExpression:
+		// For array slicing like arr[1:3], the array itself must be array-typed
 		ts.bindArrayOperand(e.Array, arr)
 	}
 }
@@ -863,10 +871,13 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		types = append(types, Int{Width: 64})
+		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.FloatLiteral:
 		types = append(types, Float{Width: 64})
+		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
 		types = append(types, Str{})
+		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e, isRoot)...)
 	case *ast.ArrayRangeExpression:

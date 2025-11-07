@@ -119,3 +119,17 @@ val5 = 2.5 * 2arr1 * 3
 val6 = -2arr1
 "Prefix negation before implicit mult (-2arr1): -val6"
 
+val7 = -2arr1 + 3
+"Prefix on implicit mult with addition (-2arr1 + 3): -val7"
+
+# Complex expressions with multiple operations
+arr2 = [2 3 4]
+val8 = -1 - 2arr2
+"Negative constant minus implicit mult (-1 - 2arr2): -val8"
+
+val9 = 3arr2 - 1
+"Implicit mult with subtraction (3arr2 - 1): -val9"
+
+val10 = -3arr2 + 5
+"Negation of implicit mult with addition (-3arr2 + 5): -val10"
+
