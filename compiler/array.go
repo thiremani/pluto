@@ -430,6 +430,11 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	arrType := arr.Type.(Array)
 	arrElem := arrType.ColTypes[0]
 
+	// Special case: concatenation with scalar
+	if op == token.SYM_CONCAT {
+		return c.compileArrayScalarConcat(arr, scalar, arrElem, resElem, arrayOnLeft)
+	}
+
 	lenVal := c.ArrayLen(arr, arrElem)
 	resVec := c.CreateArrayForType(resElem, lenVal)
 
@@ -457,6 +462,72 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 
 		c.ArraySetForType(resElem, resVec, idx, resultVal)
 	})
+
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
+	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
+	return resSym
+}
+
+func (c *Compiler) compileArrayScalarConcat(arr *Symbol, scalar *Symbol, arrElem Type, resElem Type, arrayOnLeft bool) *Symbol {
+	// Concatenation: arr ⊕ scalar or scalar ⊕ arr
+	// Treat scalar as a single-element array
+
+	arrLen := c.ArrayLen(arr, arrElem)
+	one := c.ConstI64(1)
+	totalLen := c.builder.CreateAdd(arrLen, one, "concat_len")
+
+	resVec := c.CreateArrayForType(resElem, totalLen)
+
+	scalarSym := c.derefIfPointer(scalar)
+
+	// Convert scalar to result element type if needed
+	scalarVal := scalarSym.Val
+	if scalarSym.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+		scalarVal = c.builder.CreateSIToFP(scalarVal, c.Context.DoubleType(), "scalar_to_float")
+	}
+
+	if arrayOnLeft {
+		// arr ⊕ scalar: copy array then append scalar
+		c.CopyArrayInto(resVec, arr, arrElem, resElem, llvm.Value{}, false)
+		c.ArraySetForType(resElem, resVec, arrLen, scalarVal)
+	} else {
+		// scalar ⊕ arr: set scalar at index 0, then copy array starting at index 1
+		c.ArraySetForType(resElem, resVec, c.ConstI64(0), scalarVal)
+		c.CopyArrayInto(resVec, arr, arrElem, resElem, one, true)
+	}
+
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
+	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
+	return resSym
+}
+
+func (c *Compiler) compileScalarScalarConcat(left *Symbol, right *Symbol, resElem Type) *Symbol {
+	// Concatenation: scalar ⊕ scalar
+	// Treat both scalars as single-element arrays, resulting in a 2-element array
+
+	two := c.ConstI64(2)
+	resVec := c.CreateArrayForType(resElem, two)
+
+	leftSym := c.derefIfPointer(left)
+	rightSym := c.derefIfPointer(right)
+
+	// Convert left scalar to result element type if needed
+	leftVal := leftSym.Val
+	if leftSym.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+		leftVal = c.builder.CreateSIToFP(leftVal, c.Context.DoubleType(), "left_to_float")
+	}
+
+	// Convert right scalar to result element type if needed
+	rightVal := rightSym.Val
+	if rightSym.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+		rightVal = c.builder.CreateSIToFP(rightVal, c.Context.DoubleType(), "right_to_float")
+	}
+
+	// Set both elements
+	c.ArraySetForType(resElem, resVec, c.ConstI64(0), leftVal)
+	c.ArraySetForType(resElem, resVec, c.ConstI64(1), rightVal)
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}

@@ -6,5 +6,5 @@ total = total + useShadow(i)
 "ShadowFunc: -total"
 
 combined = [0]
-combined = combined ⊕ [i] ⊕ [arr[i]] ⊕ [i]
+combined = combined ⊕ i ⊕ arr[i] ⊕ [i]
 "PendingRanges: -combined"

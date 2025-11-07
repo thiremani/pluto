@@ -1,8 +1,0 @@
-Int concat: [10 20 30 40]
-Float concat: [1.5 2.5 3 4.25]
-Int+Float concat: [1 2 3.5 4.5]
-Long + Short: [100 200 300 1]
-Short + Long: [1 100 200 300]
-Array + Empty: [1 2 3]
-Empty + Array: [1 2 3]
-Built array: [0 1 2 3 4]

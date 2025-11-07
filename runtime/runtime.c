@@ -7,6 +7,24 @@
 
 // dup_cstr in util.h provides a portable strdup-like helper.
 
+// Concatenate two strings and return a newly allocated string.
+// Caller is responsible for free()ing the returned buffer.
+char *str_concat(const char *left, const char *right) {
+    if (!left || !right) return NULL;
+
+    size_t left_len = strlen(left);
+    size_t right_len = strlen(right);
+    size_t total_len = left_len + right_len;
+
+    char *result = (char *)malloc(total_len + 1);
+    if (!result) return NULL;
+
+    memcpy(result, left, left_len);
+    memcpy(result + left_len, right, right_len + 1);  // +1 to include null terminator
+
+    return result;
+}
+
 // Convert a range [s..t) with step p into a NUL-terminated string.
 // Caller is responsible for free()ing the returned buffer.
 char *range_i64_str(int64_t s, int64_t t, int64_t p) {
