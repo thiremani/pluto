@@ -62,13 +62,17 @@ res13 = arrI + arrF
 res14 = arrF + arrI
 "Float + Int mixed: -res14"
 
-# Division
+# Division and Modulo
 arr9 = [100 200 300]
 arr10 = [10 20]
 res15 = arr9 / arr10
 "Division with tail: -res15"
-resmod = arr9 % arr10
-"Mod with tail: -resmod"
+
+# Modulo (same length to avoid division by zero)
+arrM1 = [17 25 33]
+arrM2 = [5 7 10]
+resmod = arrM1 % arrM2
+"Modulo same length: -resmod"
 
 # Non-commutative operation preserves order
 arr11 = [10 20 30]
