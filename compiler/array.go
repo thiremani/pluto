@@ -297,15 +297,6 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // Array operation functions
 
-// getIdentityElement returns the identity element for an operator
-// All operators extend with 0 for consistency
-func (c *Compiler) getIdentityElement(op string, elemType Type) llvm.Value {
-	if elemType.Kind() == FloatKind {
-		return llvm.ConstFloat(c.Context.DoubleType(), 0.0)
-	}
-	return llvm.ConstInt(c.Context.Int64Type(), 0, false)
-}
-
 func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *Symbol, resElem Type) *Symbol {
 	leftArrType := leftArr.Type.(Array)
 	rightArrType := rightArr.Type.(Array)
@@ -319,8 +310,8 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	}
 
 	// Element-wise array operation: arr1 op arr2
+	// Strategy: extend the shorter array with zeros, then do element-wise operation
 	// Result length is max(len(arr1), len(arr2))
-	// Element-wise operation on overlapping indices, then keep tail from longer array
 
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(leftArr, leftElem)
@@ -334,23 +325,19 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 		"max_len",
 	)
 
-	// Calculate min length (overlap region)
-	minLen := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
-		leftLen,
-		rightLen,
-		"min_len",
-	)
+	// Extend shorter array with zeros
+	// Identity element is always 0 (or 0.0 for floats)
+	leftExtended := c.extendArrayWithZeros(leftArr, leftElem, maxLen)
+	rightExtended := c.extendArrayWithZeros(rightArr, rightElem, maxLen)
 
-	// Create new array with max length
+	// Create result array
 	resVec := c.CreateArrayForType(resElem, maxLen)
 
-	// Process overlapping region with element-wise operation
-	r := c.rangeZeroToN(minLen)
+	// Element-wise operation over the full length
+	r := c.rangeZeroToN(maxLen)
 	c.createLoop(r, func(iter llvm.Value) {
-		idx := iter
-		leftVal := c.ArrayGet(leftArr, leftElem, idx)
-		rightVal := c.ArrayGet(rightArr, rightElem, idx)
+		leftVal := c.ArrayGet(leftExtended, leftElem, iter)
+		rightVal := c.ArrayGet(rightExtended, rightElem, iter)
 
 		leftSym := &Symbol{Val: leftVal, Type: leftElem}
 		rightSym := &Symbol{Val: rightVal, Type: rightElem}
@@ -363,67 +350,69 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
 		}
 
-		c.ArraySetForType(resElem, resVec, idx, resultVal)
-	})
-
-	// Process tail from longer array with identity element
-	// For +/-, extend shorter array with zeros
-	// For */÷, extend shorter array with ones
-	endBB := c.builder.GetInsertBlock()
-	fn := endBB.Parent()
-
-	leftLongerBB := llvm.AddBasicBlock(fn, "left_longer")
-	rightLongerBB := llvm.AddBasicBlock(fn, "right_longer")
-	doneBB := llvm.AddBasicBlock(fn, "tail_done")
-
-	isLeftLonger := c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "is_left_longer")
-	c.builder.CreateCondBr(isLeftLonger, leftLongerBB, rightLongerBB)
-
-	// Get identity element for this operator
-	identityVal := c.getIdentityElement(op, resElem)
-
-	// Left array is longer: compute leftArr[i] op identity
-	c.builder.SetInsertPointAtEnd(leftLongerBB)
-	rLeft := c.CreateRange(minLen, leftLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
-	c.createLoop(rLeft, func(iter llvm.Value) {
-		leftVal := c.ArrayGet(leftArr, leftElem, iter)
-		leftSym := &Symbol{Val: leftVal, Type: leftElem}
-		identitySym := &Symbol{Val: identityVal, Type: resElem}
-
-		computed := c.compileInfix(op, leftSym, identitySym, resElem)
-		resultVal := computed.Val
-		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
-			resultVal = c.builder.CreateSIToFP(resultVal, c.Context.DoubleType(), "cast_to_resElem")
-		}
 		c.ArraySetForType(resElem, resVec, iter, resultVal)
 	})
-	c.builder.CreateBr(doneBB)
-
-	// Right array is longer: compute identity op rightArr[i]
-	c.builder.SetInsertPointAtEnd(rightLongerBB)
-	rRight := c.CreateRange(minLen, rightLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
-	c.createLoop(rRight, func(iter llvm.Value) {
-		rightVal := c.ArrayGet(rightArr, rightElem, iter)
-		rightSym := &Symbol{Val: rightVal, Type: rightElem}
-		identitySym := &Symbol{Val: identityVal, Type: resElem}
-
-		computed := c.compileInfix(op, identitySym, rightSym, resElem)
-		resultVal := computed.Val
-		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
-			resultVal = c.builder.CreateSIToFP(resultVal, c.Context.DoubleType(), "cast_to_resElem")
-		}
-		c.ArraySetForType(resElem, resVec, iter, resultVal)
-	})
-	c.builder.CreateBr(doneBB)
-
-	// Continue
-	c.builder.SetInsertPointAtEnd(doneBB)
 
 	// Return result array
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
 	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
 	return resSym
+}
+
+// extendArrayWithZeros extends an array to the target length by padding with zeros
+// If the array is already >= targetLen, returns the original array
+func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen llvm.Value) *Symbol {
+	currentLen := c.ArrayLen(arr, elemType)
+
+	// Check if extension is needed
+	endBB := c.builder.GetInsertBlock()
+	fn := endBB.Parent()
+
+	needsExtensionBB := llvm.AddBasicBlock(fn, "needs_extension")
+	noExtensionBB := llvm.AddBasicBlock(fn, "no_extension")
+	doneBB := llvm.AddBasicBlock(fn, "extend_done")
+
+	needsExtension := c.builder.CreateICmp(llvm.IntULT, currentLen, targetLen, "needs_extension")
+	c.builder.CreateCondBr(needsExtension, needsExtensionBB, noExtensionBB)
+
+	// Case 1: Need to extend
+	c.builder.SetInsertPointAtEnd(needsExtensionBB)
+	extendedVec := c.CreateArrayForType(elemType, targetLen)
+
+	// Copy original elements
+	c.CopyArrayInto(extendedVec, arr, elemType, elemType, llvm.Value{}, false)
+
+	// Fill remaining elements with zero
+	zeroVal := llvm.Value{}
+	if elemType.Kind() == FloatKind {
+		zeroVal = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+	} else {
+		zeroVal = llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	}
+
+	fillRange := c.CreateRange(currentLen, targetLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
+	c.createLoop(fillRange, func(iter llvm.Value) {
+		c.ArraySetForType(elemType, extendedVec, iter, zeroVal)
+	})
+
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	extendedPtr := c.builder.CreateBitCast(extendedVec, i8p, "extended_i8p")
+	// Capture the actual predecessor block after the loop
+	extendedBB := c.builder.GetInsertBlock()
+	c.builder.CreateBr(doneBB)
+
+	// Case 2: No extension needed
+	c.builder.SetInsertPointAtEnd(noExtensionBB)
+	originalPtr := arr.Val
+	c.builder.CreateBr(doneBB)
+
+	// Phi node to select the result
+	c.builder.SetInsertPointAtEnd(doneBB)
+	phi := c.builder.CreatePHI(i8p, "extended_arr")
+	phi.AddIncoming([]llvm.Value{extendedPtr, originalPtr}, []llvm.BasicBlock{extendedBB, noExtensionBB})
+
+	return &Symbol{Val: phi, Type: arr.Type}
 }
 
 func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
