@@ -52,12 +52,22 @@ char *range_i64_str(int64_t s, int64_t t, int64_t p) {
    For normal numbers we use round-trip precisions: %.15g for f64, %.9g for f32.
    Caller must free() the returned string. */
 
-char *f64_str(double x) {
+/* Returns a constant string for NaN/Inf values, or NULL for normal numbers.
+   The returned pointer is to a string literal and should NOT be freed. */
+const char *f64_special_str(double x) {
     if (isnan(x)) {
-        return dup_cstr("NaN");
+        return "NaN";
     }
     if (isinf(x)) {
-        return dup_cstr(signbit(x) ? "-Inf" : "+Inf");
+        return signbit(x) ? "-Inf" : "+Inf";
+    }
+    return NULL;
+}
+
+char *f64_str(double x) {
+    const char *special = f64_special_str(x);
+    if (special) {
+        return dup_cstr(special);
     }
 
     /* Print with round-trip precision */
@@ -73,11 +83,9 @@ char *f64_str(double x) {
 
 char *f32_str(float xf) {
     double x = (double)xf; /* format via double routines */
-    if (isnan(x)) {
-        return dup_cstr("NaN");
-    }
-    if (isinf(x)) {
-        return dup_cstr(signbit(x) ? "-Inf" : "+Inf");
+    const char *special = f64_special_str(x);
+    if (special) {
+        return dup_cstr(special);
     }
 
     char tmp[48];

@@ -17,5 +17,11 @@ static inline char* dup_cstr(const char* s) {
 	return p;
 }
 
+/*
+ * f64_special_str: Returns a constant string for NaN/Inf values, or NULL for normal numbers.
+ * The returned pointer is to a string literal and should NOT be freed.
+ */
+const char *f64_special_str(double x);
+
 #endif /* PLUTO_RUNTIME_UTIL_H */
 
