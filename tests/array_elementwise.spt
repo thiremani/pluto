@@ -1,6 +1,6 @@
 # Test element-wise array-array operations
 # Result length is max(len(arr1), len(arr2))
-# Element-wise operation on overlapping indices, then keep tail from longer array
+# Shorter arrays are extended with zeros, then element-wise operation is applied
 
 # Same length arrays
 arr1 = [1 2 3]
