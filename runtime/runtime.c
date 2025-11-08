@@ -1,5 +1,6 @@
 #include <inttypes.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +97,37 @@ char *f32_str(float xf) {
     if (!out) return NULL;
     memcpy(out, tmp, (size_t)n + 1);
     return out;
+}
+
+// Format a string using snprintf with variadic arguments.
+// Uses snprintf to determine size, then allocates exact buffer needed.
+// Returns a newly allocated string that the caller must free().
+char *sprintf_alloc(const char *fmt, ...) {
+    va_list args1, args2;
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+
+    // Determine required buffer size
+    int size = vsnprintf(NULL, 0, fmt, args1);
+    va_end(args1);
+
+    if (size < 0) {
+        va_end(args2);
+        return NULL;
+    }
+
+    // Allocate exact buffer needed
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) {
+        va_end(args2);
+        return NULL;
+    }
+
+    // Format into buffer
+    vsnprintf(buf, (size_t)size + 1, fmt, args2);
+    va_end(args2);
+
+    return buf;
 }
 
 /* Enable %n in printf on Windows UCRT (disabled by default for security).

@@ -476,7 +476,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 
 		// If there are markers to evaluate, build the formatted string at runtime
 		if len(args) > 0 {
-			// Build format string
+			// Build format string global
 			formatConst := llvm.ConstString(formatted, true)
 			globalName := fmt.Sprintf("str_fmt_%d", c.formatCounter)
 			c.formatCounter++
@@ -490,21 +490,13 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 			zero := c.ConstI64(0)
 			formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 
-			// Allocate buffer for result string (generous size estimate)
-			bufSize := 1024
-			bufType := llvm.ArrayType(c.Context.Int8Type(), bufSize)
-			bufPtr := c.createEntryBlockAlloca(bufType, "str_buf")
-
-			// Cast to i8* for sprintf
-			buf8Ptr := c.builder.CreateBitCast(bufPtr, llvm.PointerType(c.Context.Int8Type(), 0), "buf8ptr")
-
-			// Call sprintf to format the string
-			sprintfArgs := append([]llvm.Value{buf8Ptr, formatPtr}, args...)
-			fnType, fn := c.GetCFunc(SPRINTF)
-			c.builder.CreateCall(fnType, fn, sprintfArgs, SPRINTF)
+			// Call sprintf_alloc to format with dynamic allocation
+			sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
+			fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
+			resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
 			c.free(toFree)
 
-			s.Val = buf8Ptr
+			s.Val = resultPtr
 		} else {
 			// No markers, create a regular string literal
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
