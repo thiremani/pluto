@@ -1,0 +1,6 @@
+# Test division by zero behavior
+a = 100 / 0
+"Scalar div by zero: -a"
+
+b = [100 200 300] / [10 20 0]
+"Array with div by zero: -b"

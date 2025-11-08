@@ -298,23 +298,12 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 // Array operation functions
 
 // getIdentityElement returns the identity element for an operator
-// Most operators extend with 0; multiplication/division extend with 1
+// All operators extend with 0 for consistency
 func (c *Compiler) getIdentityElement(op string, elemType Type) llvm.Value {
-	switch op {
-	case token.SYM_MUL, token.SYM_QUO, token.SYM_DIV, token.SYM_MOD:
-		// Multiplicative operations: extend with 1
-		if elemType.Kind() == FloatKind {
-			return llvm.ConstFloat(c.Context.DoubleType(), 1.0)
-		}
-		return llvm.ConstInt(c.Context.Int64Type(), 1, false)
-
-	default:
-		// All other operations (arithmetic, bitwise, shifts): extend with 0
-		if elemType.Kind() == FloatKind {
-			return llvm.ConstFloat(c.Context.DoubleType(), 0.0)
-		}
-		return llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	if elemType.Kind() == FloatKind {
+		return llvm.ConstFloat(c.Context.DoubleType(), 0.0)
 	}
+	return llvm.ConstInt(c.Context.Int64Type(), 0, false)
 }
 
 func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *Symbol, resElem Type) *Symbol {

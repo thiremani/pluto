@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <limits.h>   /* INT_MAX, SIZE_MAX */
+#include <math.h>     /* isnan, isinf, signbit */
 
 #include "third_party/klib/kvec.h"
 
@@ -259,7 +260,15 @@ const char* arr_f64_str(const PtArrayF64* a) {
     if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
     for (size_t i = 0; i < arr_f64_len(a); ++i) {
         if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_printf(&sb, "%g", (double)arr_f64_get(a, i)) < 0) { free(sb.data); return NULL; }
+        double val = (double)arr_f64_get(a, i);
+        // Handle special values to match scalar formatting
+        if (isnan(val)) {
+            if (strbuf_printf(&sb, "NaN") < 0) { free(sb.data); return NULL; }
+        } else if (isinf(val)) {
+            if (strbuf_printf(&sb, signbit(val) ? "-Inf" : "+Inf") < 0) { free(sb.data); return NULL; }
+        } else {
+            if (strbuf_printf(&sb, "%g", val) < 0) { free(sb.data); return NULL; }
+        }
     }
     if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
     return sb.data;
