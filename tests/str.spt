@@ -25,3 +25,8 @@ two = 2
 
 var = 22
 "Var is -var%d, x is", x, "Now y is -y%8d and two is", two
+
+eager = 123
+msg = "eager = -eager%4d"
+eager = 999
+msg, eager
