@@ -297,6 +297,33 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // Array operation functions
 
+// getIdentityElement returns the identity element for an operator
+// For +/-, returns 0; for */÷, returns 1
+func (c *Compiler) getIdentityElement(op string, elemType Type) llvm.Value {
+	switch op {
+	case token.SYM_ADD, token.SYM_SUB:
+		// Additive identity is 0
+		if elemType.Kind() == FloatKind {
+			return llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+		}
+		return llvm.ConstInt(c.Context.Int64Type(), 0, false)
+
+	case token.SYM_MUL, token.SYM_QUO, token.SYM_DIV, token.SYM_MOD:
+		// Multiplicative identity is 1
+		if elemType.Kind() == FloatKind {
+			return llvm.ConstFloat(c.Context.DoubleType(), 1.0)
+		}
+		return llvm.ConstInt(c.Context.Int64Type(), 1, false)
+
+	default:
+		// For other operators (bitwise, etc.), use 0 as default
+		if elemType.Kind() == FloatKind {
+			return llvm.ConstFloat(c.Context.DoubleType(), 0.0)
+		}
+		return llvm.ConstInt(c.Context.Int64Type(), 0, false)
+	}
+}
+
 func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *Symbol, resElem Type) *Symbol {
 	leftArrType := leftArr.Type.(Array)
 	rightArrType := rightArr.Type.(Array)
@@ -357,8 +384,9 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 		c.ArraySetForType(resElem, resVec, idx, resultVal)
 	})
 
-	// Copy tail from longer array
-	// Check which array is longer and copy its remaining elements
+	// Process tail from longer array with identity element
+	// For +/-, extend shorter array with zeros
+	// For */÷, extend shorter array with ones
 	endBB := c.builder.GetInsertBlock()
 	fn := endBB.Parent()
 
@@ -369,23 +397,40 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	isLeftLonger := c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "is_left_longer")
 	c.builder.CreateCondBr(isLeftLonger, leftLongerBB, rightLongerBB)
 
-	// Copy tail from left array
+	// Get identity element for this operator
+	identityVal := c.getIdentityElement(op, resElem)
+
+	// Left array is longer: compute leftArr[i] op identity
 	c.builder.SetInsertPointAtEnd(leftLongerBB)
 	rLeft := c.CreateRange(minLen, leftLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
 	c.createLoop(rLeft, func(iter llvm.Value) {
-		val := c.ArrayGet(leftArr, leftElem, iter)
-		val = c.CastArrayElem(val, leftElem, resElem)
-		c.ArraySetForType(resElem, resVec, iter, val)
+		leftVal := c.ArrayGet(leftArr, leftElem, iter)
+		leftSym := &Symbol{Val: leftVal, Type: leftElem}
+		identitySym := &Symbol{Val: identityVal, Type: resElem}
+
+		computed := c.compileInfix(op, leftSym, identitySym, resElem)
+		resultVal := computed.Val
+		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+			resultVal = c.builder.CreateSIToFP(resultVal, c.Context.DoubleType(), "cast_to_resElem")
+		}
+		c.ArraySetForType(resElem, resVec, iter, resultVal)
 	})
 	c.builder.CreateBr(doneBB)
 
-	// Copy tail from right array
+	// Right array is longer: compute identity op rightArr[i]
 	c.builder.SetInsertPointAtEnd(rightLongerBB)
 	rRight := c.CreateRange(minLen, rightLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
 	c.createLoop(rRight, func(iter llvm.Value) {
-		val := c.ArrayGet(rightArr, rightElem, iter)
-		val = c.CastArrayElem(val, rightElem, resElem)
-		c.ArraySetForType(resElem, resVec, iter, val)
+		rightVal := c.ArrayGet(rightArr, rightElem, iter)
+		rightSym := &Symbol{Val: rightVal, Type: rightElem}
+		identitySym := &Symbol{Val: identityVal, Type: resElem}
+
+		computed := c.compileInfix(op, identitySym, rightSym, resElem)
+		resultVal := computed.Val
+		if computed.Type.Kind() == IntKind && resElem.Kind() == FloatKind {
+			resultVal = c.builder.CreateSIToFP(resultVal, c.Context.DoubleType(), "cast_to_resElem")
+		}
+		c.ArraySetForType(resElem, resVec, iter, resultVal)
 	})
 	c.builder.CreateBr(doneBB)
 
