@@ -600,6 +600,7 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Integer Modulo (Signed)
+	// Note: Modulo by zero has undefined behavior (uses LLVM SRem)
 	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
 		s.Type = left.Type
@@ -678,6 +679,27 @@ var defaultOps = map[opKey]opFunc{
 		}
 
 		s.Val = c.builder.CreateLShr(left.Val, right.Val, "lshr_tmp")
+		return
+	},
+
+	// --- String Concatenation ---
+	{Operator: token.SYM_CONCAT, LeftType: Str{}, RightType: Str{}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = Str{}
+		if !compile {
+			return
+		}
+
+		// Call runtime str_concat function
+		// Signature: char* str_concat(const char* left, const char* right)
+		charPtrType := llvm.PointerType(c.Context.Int8Type(), 0)
+		strConcatType := llvm.FunctionType(charPtrType, []llvm.Type{charPtrType, charPtrType}, false)
+		strConcatFunc := c.Module.NamedFunction("str_concat")
+		if strConcatFunc.IsNil() {
+			strConcatFunc = llvm.AddFunction(c.Module, "str_concat", strConcatType)
+		}
+
+		s.Val = c.builder.CreateCall(strConcatType, strConcatFunc, []llvm.Value{left.Val, right.Val}, "str_concat_result")
 		return
 	},
 }

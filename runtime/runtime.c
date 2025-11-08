@@ -7,6 +7,24 @@
 
 // dup_cstr in util.h provides a portable strdup-like helper.
 
+// Concatenate two strings and return a newly allocated string.
+// Caller is responsible for free()ing the returned buffer.
+char *str_concat(const char *left, const char *right) {
+    if (!left || !right) return NULL;
+
+    size_t left_len = strlen(left);
+    size_t right_len = strlen(right);
+    size_t total_len = left_len + right_len;
+
+    char *result = (char *)malloc(total_len + 1);
+    if (!result) return NULL;
+
+    memcpy(result, left, left_len);
+    memcpy(result + left_len, right, right_len + 1);  // +1 to include null terminator
+
+    return result;
+}
+
 // Convert a range [s..t) with step p into a NUL-terminated string.
 // Caller is responsible for free()ing the returned buffer.
 char *range_i64_str(int64_t s, int64_t t, int64_t p) {
@@ -34,12 +52,22 @@ char *range_i64_str(int64_t s, int64_t t, int64_t p) {
    For normal numbers we use round-trip precisions: %.15g for f64, %.9g for f32.
    Caller must free() the returned string. */
 
-char *f64_str(double x) {
+/* Returns a constant string for NaN/Inf values, or NULL for normal numbers.
+   The returned pointer is to a string literal and should NOT be freed. */
+const char *f64_special_str(double x) {
     if (isnan(x)) {
-        return dup_cstr("NaN");
+        return "NaN";
     }
     if (isinf(x)) {
-        return dup_cstr(signbit(x) ? "-Inf" : "+Inf");
+        return signbit(x) ? "-Inf" : "+Inf";
+    }
+    return NULL;
+}
+
+char *f64_str(double x) {
+    const char *special = f64_special_str(x);
+    if (special) {
+        return dup_cstr(special);
     }
 
     /* Print with round-trip precision */
@@ -55,11 +83,9 @@ char *f64_str(double x) {
 
 char *f32_str(float xf) {
     double x = (double)xf; /* format via double routines */
-    if (isnan(x)) {
-        return dup_cstr("NaN");
-    }
-    if (isinf(x)) {
-        return dup_cstr(signbit(x) ? "-Inf" : "+Inf");
+    const char *special = f64_special_str(x);
+    if (special) {
+        return dup_cstr(special);
     }
 
     char tmp[48];

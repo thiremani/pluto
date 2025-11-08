@@ -1,0 +1,18 @@
+# Test division by zero behavior
+a = 100 / 0
+"Scalar div by zero: -a"
+
+b = [100 200 300] / [10 20 0]
+"Array with div by zero: -b"
+
+# Shorter divisor extends with zeros
+c = [100 200 300] / [10 20]
+"Shorter divisor: -c"
+
+# Negative array divided by shorter array (extends with zeros)
+d = -[10 20 30 40] / [10 20]
+"Negative array / shorter: -d"
+
+# Negative array divided by float array
+e = [-33 -30] / [3.3]
+"Negative int / float: -e"

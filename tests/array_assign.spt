@@ -28,10 +28,10 @@ arr4 = [5]
 arr4 = [10]
 "Reassigned single element: -arr4"
 
-# Test 5: Array concatenation and reassignment
+# Test 5: Array element-wise sum and reassignment
 arr5 = [1 2]
 arr5 = arr5 + [3 4]
-"Concatenated array: -arr5"
+"Summed array: -arr5"
 
 # Test 6: Empty array (if type can be inferred)
 arr6 = [1 2 3]
