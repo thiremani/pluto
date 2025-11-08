@@ -7,3 +7,5 @@ Nested concat left: [10 20 30 40 50 60]
 Nested concat right: [10 20 30 40 50 60]
 Nested mixed concat: [1.5 2.5 1 2 3.5 4.5 3 4.25]
 String concat: helloworld
+Left empty concat: world
+Right empty concat: hello
