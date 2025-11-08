@@ -76,3 +76,10 @@ res16 = arr11 - arr12
 
 res17 = arr12 - arr11
 "B - A: -res17"
+
+# Polynomials
+res18 = 1.2 + 2.5arr12 - 4.7arr12^2
+"Polynomial 1 (Float): -res18"
+
+res19 = -1 + 2arr12 -3arr12^3
+"Polynomial 2 (Int): -res19"
