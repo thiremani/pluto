@@ -362,6 +362,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 
 // extendArrayWithZeros extends an array to the target length by padding with zeros
 // If the array is already >= targetLen, returns the original array
+// Uses concatenation with a zero-filled array to reuse existing logic
 func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen llvm.Value) *Symbol {
 	currentLen := c.ArrayLen(arr, elemType)
 
@@ -376,14 +377,14 @@ func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen ll
 	needsExtension := c.builder.CreateICmp(llvm.IntULT, currentLen, targetLen, "needs_extension")
 	c.builder.CreateCondBr(needsExtension, needsExtensionBB, noExtensionBB)
 
-	// Case 1: Need to extend
+	// Case 1: Need to extend - concatenate with array of zeros
 	c.builder.SetInsertPointAtEnd(needsExtensionBB)
-	extendedVec := c.CreateArrayForType(elemType, targetLen)
 
-	// Copy original elements
-	c.CopyArrayInto(extendedVec, arr, elemType, elemType, llvm.Value{}, false)
+	// Calculate padding length: targetLen - currentLen
+	paddingLen := c.builder.CreateSub(targetLen, currentLen, "padding_len")
 
-	// Fill remaining elements with zero
+	// Create array of zeros with paddingLen
+	zeroArray := c.CreateArrayForType(elemType, paddingLen)
 	zeroVal := llvm.Value{}
 	if elemType.Kind() == FloatKind {
 		zeroVal = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
@@ -391,14 +392,18 @@ func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen ll
 		zeroVal = llvm.ConstInt(c.Context.Int64Type(), 0, false)
 	}
 
-	fillRange := c.CreateRange(currentLen, targetLen, c.ConstI64(1), Range{Iter: Int{Width: 64}})
+	// Fill with zeros
+	fillRange := c.rangeZeroToN(paddingLen)
 	c.createLoop(fillRange, func(iter llvm.Value) {
-		c.ArraySetForType(elemType, extendedVec, iter, zeroVal)
+		c.ArraySetForType(elemType, zeroArray, iter, zeroVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	extendedPtr := c.builder.CreateBitCast(extendedVec, i8p, "extended_i8p")
-	// Capture the actual predecessor block after the loop
+	zeroArrayPtr := c.builder.CreateBitCast(zeroArray, i8p, "zero_array_i8p")
+	zeroArraySym := &Symbol{Val: zeroArrayPtr, Type: Array{Headers: nil, ColTypes: []Type{elemType}, Length: 0}}
+
+	// Concatenate: arr ⊕ zeroArray
+	extendedSym := c.compileArrayConcat(arr, zeroArraySym, elemType, elemType, elemType)
 	extendedBB := c.builder.GetInsertBlock()
 	c.builder.CreateBr(doneBB)
 
@@ -410,7 +415,7 @@ func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen ll
 	// Phi node to select the result
 	c.builder.SetInsertPointAtEnd(doneBB)
 	phi := c.builder.CreatePHI(i8p, "extended_arr")
-	phi.AddIncoming([]llvm.Value{extendedPtr, originalPtr}, []llvm.BasicBlock{extendedBB, noExtensionBB})
+	phi.AddIncoming([]llvm.Value{extendedSym.Val, originalPtr}, []llvm.BasicBlock{extendedBB, noExtensionBB})
 
 	return &Symbol{Val: phi, Type: arr.Type}
 }
