@@ -1065,66 +1065,15 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 		}
 	}
 
-	// Special handling for concatenation with scalars
+	// Concatenation only works on arrays (and strings, handled above)
+	// Scalars must be wrapped in [...] to become arrays
 	if op == token.SYM_CONCAT {
-		// For concatenation, we treat scalars as single-element arrays
-		if leftIsArr && !rightIsArr {
-			// arr ⊕ scalar: determine result element type
-			leftElemType := leftArr.ColTypes[0]
-			var elemType Type
-			if leftElemType.Kind() == right.Kind() {
-				elemType = leftElemType
-			} else if (leftElemType.Kind() == IntKind && right.Kind() == FloatKind) ||
-				(leftElemType.Kind() == FloatKind && right.Kind() == IntKind) {
-				elemType = Float{Width: 64}
-			} else {
-				elemType = leftElemType
-			}
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{elemType},
-				Length:   0,
-			}
+		cerr := &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("concatenation requires array operands (wrap scalars in [...]), got: %s ⊕ %s", left, right),
 		}
-		if !leftIsArr && rightIsArr {
-			// scalar ⊕ arr: determine result element type
-			rightElemType := rightArr.ColTypes[0]
-			var elemType Type
-			if left.Kind() == rightElemType.Kind() {
-				elemType = rightElemType
-			} else if (left.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
-				(left.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
-				elemType = Float{Width: 64}
-			} else {
-				elemType = rightElemType
-			}
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{elemType},
-				Length:   0,
-			}
-		}
-		// scalar ⊕ scalar: also valid, treat both as single-element arrays
-		var elemType Type
-		if left.Kind() == right.Kind() {
-			elemType = left
-		} else if (left.Kind() == IntKind && right.Kind() == FloatKind) ||
-			(left.Kind() == FloatKind && right.Kind() == IntKind) {
-			elemType = Float{Width: 64}
-		} else {
-			// Incompatible types
-			cerr := &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("cannot concatenate incompatible types: %s, %s", left, right),
-			}
-			ts.Errors = append(ts.Errors, cerr)
-			return Unresolved{}
-		}
-		return Array{
-			Headers:  nil,
-			ColTypes: []Type{elemType},
-			Length:   0,
-		}
+		ts.Errors = append(ts.Errors, cerr)
+		return Unresolved{}
 	}
 
 	// Handle array-like with scalar operations

@@ -668,7 +668,7 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 			return c.compileArrayArrayInfix(op, l, r, expectedArr.ColTypes[0])
 		}
 
-		// Handle Array-Scalar operations
+		// Handle Array-Scalar operations (for element-wise ops, not concatenation)
 		if l.Type.Kind() == ArrayKind {
 			// Array on left: array op scalar
 			return c.compileArrayScalarInfix(op, l, r, expectedArr.ColTypes[0], true)
@@ -676,11 +676,6 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		if r.Type.Kind() == ArrayKind {
 			// Array on right: scalar op array
 			return c.compileArrayScalarInfix(op, r, l, expectedArr.ColTypes[0], false)
-		}
-
-		// Handle Scalar-Scalar concatenation resulting in array
-		if op == token.SYM_CONCAT {
-			return c.compileScalarScalarConcat(l, r, expectedArr.ColTypes[0])
 		}
 	}
 
