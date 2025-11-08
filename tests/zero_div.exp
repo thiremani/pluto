@@ -1,0 +1,2 @@
+Scalar div by zero: +Inf
+Array with div by zero: [10 10 +Inf]
