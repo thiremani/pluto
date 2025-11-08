@@ -600,14 +600,17 @@ var defaultOps = map[opKey]opFunc{
 	},
 
 	// Integer Modulo (Signed)
+	// Promote to float to handle modulo by zero consistently (returns NaN)
 	{Operator: token.SYM_MOD, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
-		s.Type = left.Type
+		s.Type = Float{Width: 64}
 		if !compile {
 			return
 		}
 
-		s.Val = c.builder.CreateSRem(left.Val, right.Val, "srem_tmp")
+		leftFP := c.builder.CreateSIToFP(left.Val, c.Context.DoubleType(), "cast_to_F64")
+		rightFP := c.builder.CreateSIToFP(right.Val, c.Context.DoubleType(), "cast_to_F64")
+		s.Val = c.builder.CreateFRem(leftFP, rightFP, "frem_ii_tmp")
 		return
 	},
 
