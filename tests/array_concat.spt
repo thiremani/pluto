@@ -43,3 +43,6 @@ res10 = "" ⊕ str2
 str3 = ""
 res11 = str1 ⊕ str3
 "Right empty concat: -res11"
+
+res12 = "" ⊕ str3
+"Both empty str concat: -res12"
