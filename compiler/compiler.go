@@ -143,6 +143,21 @@ func (c *Compiler) constCString(value string) llvm.Value {
 	return c.builder.CreateGEP(arrayType, global, []llvm.Value{zero, zero}, "static_str_ptr")
 }
 
+func (c *Compiler) createFormatStringGlobal(formatted string) llvm.Value {
+	formatConst := llvm.ConstString(formatted, true)
+	globalName := fmt.Sprintf("str_fmt_%d", c.formatCounter)
+	c.formatCounter++
+
+	arrayLength := len(formatted) + 1
+	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
+	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
+	formatGlobal.SetInitializer(formatConst)
+	formatGlobal.SetGlobalConstant(true)
+
+	zero := c.ConstI64(0)
+	return c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
+}
+
 func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
 	// Create a global LLVM variable
 	global := llvm.AddGlobal(c.Module, llvmType, name)
@@ -474,35 +489,23 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		// Process markers eagerly at string creation time
 		formatted, args, toFree := c.formatString(e)
 
-		// If there are markers to evaluate, build the formatted string at runtime
-		if len(args) > 0 {
-			// Build format string global
-			formatConst := llvm.ConstString(formatted, true)
-			globalName := fmt.Sprintf("str_fmt_%d", c.formatCounter)
-			c.formatCounter++
-
-			arrayLength := len(formatted) + 1
-			arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
-			formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
-			formatGlobal.SetInitializer(formatConst)
-			formatGlobal.SetGlobalConstant(true)
-
-			zero := c.ConstI64(0)
-			formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
-
-			// Call sprintf_alloc to format with dynamic allocation
-			sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
-			fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
-			resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
-			c.free(toFree)
-
-			s.Val = resultPtr
-		} else {
-			// No markers, create a regular string literal
+		// No markers, create a regular string literal
+		if len(args) == 0 {
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+			res = []*Symbol{s}
+			return
 		}
+
+		// Build formatted string with sprintf_alloc
+		formatPtr := c.createFormatStringGlobal(formatted)
+		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
+		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
+		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
+		c.free(toFree)
+
+		s.Val = resultPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
 		if isRoot {

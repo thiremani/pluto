@@ -102,6 +102,10 @@ char *f32_str(float xf) {
 // Format a string using snprintf with variadic arguments.
 // Uses snprintf to determine size, then allocates exact buffer needed.
 // Returns a newly allocated string that the caller must free().
+// NOTE: Currently, formatted strings are not automatically freed and will
+// leak unless explicitly freed by the caller or at program exit.
+// TODO: Implement proper string lifetime management with reference counting
+// or scope-based cleanup.
 char *sprintf_alloc(const char *fmt, ...) {
     va_list args1, args2;
     va_start(args1, fmt);
