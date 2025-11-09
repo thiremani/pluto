@@ -143,6 +143,21 @@ func (c *Compiler) constCString(value string) llvm.Value {
 	return c.builder.CreateGEP(arrayType, global, []llvm.Value{zero, zero}, "static_str_ptr")
 }
 
+func (c *Compiler) createFormatStringGlobal(formatted string) llvm.Value {
+	formatConst := llvm.ConstString(formatted, true)
+	globalName := fmt.Sprintf("str_fmt_%d", c.formatCounter)
+	c.formatCounter++
+
+	arrayLength := len(formatted) + 1
+	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
+	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
+	formatGlobal.SetInitializer(formatConst)
+	formatGlobal.SetGlobalConstant(true)
+
+	zero := c.ConstI64(0)
+	return c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
+}
+
 func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Value, linkage llvm.Linkage) llvm.Value {
 	// Create a global LLVM variable
 	global := llvm.AddGlobal(c.Module, llvmType, name)
@@ -471,10 +486,26 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
 		s.Type = Str{}
-		// create a global name for the literal
-		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
-		c.formatCounter++
-		s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+		// Process markers eagerly at string creation time
+		formatted, args, toFree := c.formatString(e)
+
+		// No markers, create a regular string literal
+		if len(args) == 0 {
+			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+			c.formatCounter++
+			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+			res = []*Symbol{s}
+			return
+		}
+
+		// Build formatted string with sprintf_alloc
+		formatPtr := c.createFormatStringGlobal(formatted)
+		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
+		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
+		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
+		c.free(toFree)
+
+		s.Val = resultPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
 		if isRoot {
@@ -1266,92 +1297,106 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-	// Track format specifiers and arguments
 	var formatStr string
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Generate format string based on expression types
+	// Process each expression and build format string + args
 	for _, expr := range ps.Expression {
-		// If the expression is a string literal, check for embedded markers.
-		if strLit, ok := expr.(*ast.StringLiteral); ok {
-			processed, newArgs, toFreeArgs := c.formatString(strLit)
-			formatStr += processed + " " // separate expressions with a space
-			args = append(args, newArgs...)
-			toFree = append(toFree, toFreeArgs...)
-			continue
-		}
-
-		// Compile the expression and get its value and type
-		syms := c.compileExpression(expr, nil, true)
-		for _, s := range syms {
-			if s.Type.Kind() == ArrayRangeKind {
-				arrStr, rngStr := c.arrayRangeStrArgs(s)
-				formatStr += "%s[%s] "
-				args = append(args, arrStr, rngStr)
-				toFree = append(toFree, arrStr, rngStr)
-				continue
-			}
-
-			spec, err := defaultSpecifier(s.Type)
-			if err != nil {
-				cerr := &token.CompileError{
-					Token: expr.Tok(),
-					Msg:   err.Error(),
-				}
-				c.Errors = append(c.Errors, cerr)
-				continue
-			}
-
-			formatStr += spec + " "
-			switch s.Type.Kind() {
-			case RangeKind:
-				strPtr := c.rangeStrArg(s) // returns i8*
-				args = append(args, strPtr)
-				toFree = append(toFree, strPtr)
-			case FloatKind:
-				strPtr := c.floatStrArg(s) // returns i8*
-				args = append(args, strPtr)
-				toFree = append(toFree, strPtr)
-			case ArrayKind:
-				arrType := s.Type.(Array)
-				if len(arrType.ColTypes) == 0 || arrType.ColTypes[0].Kind() == UnresolvedKind {
-					args = append(args, c.constCString("[]"))
-					continue
-				}
-				strPtr := c.arrayStrArg(s)
-				args = append(args, strPtr)
-				toFree = append(toFree, strPtr)
-			default:
-				args = append(args, s.Val)
-			}
-		}
+		c.appendPrintExpression(expr, &formatStr, &args, &toFree)
 	}
 
-	// Add newline and null terminator
-	formatStr = strings.TrimSuffix(formatStr, " ") + "\n" // Remove trailing space
-	formatConst := llvm.ConstString(formatStr, true)      // true = add \0
-
-	// Create unique global variable for the format string
-	globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)
-	c.formatCounter++
-
-	// Define global array with exact length
-	arrayLength := len(formatStr) + 1 // +1 for null terminator
-	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
-	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
-	formatGlobal.SetInitializer(formatConst)
-	// It is essential to mark this as constant. Else a printf like %n which writes to pointer will fail
-	formatGlobal.SetGlobalConstant(true)
-
-	// Get pointer to the format string
-	zero := c.ConstI64(0)
-	formatPtr := c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
-
-	// Call printf with all arguments
+	// Create format string global and call printf
+	formatPtr := c.createPrintFormatGlobal(formatStr)
 	allArgs := append([]llvm.Value{formatPtr}, args...)
 	c.printf(allArgs)
 	c.free(toFree)
+}
+
+// appendPrintExpression handles one print expression (string literal or compiled expression)
+func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	// String literals with markers are processed specially
+	if strLit, ok := expr.(*ast.StringLiteral); ok {
+		processed, newArgs, toFreeArgs := c.formatString(strLit)
+		*formatStr += processed + " "
+		*args = append(*args, newArgs...)
+		*toFree = append(*toFree, toFreeArgs...)
+		return
+	}
+
+	// Compile expression and process each resulting symbol
+	syms := c.compileExpression(expr, nil, true)
+	for _, s := range syms {
+		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
+	}
+}
+
+// appendPrintSymbol handles printing one symbol based on its type
+func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	// ArrayRange needs special handling (two string args)
+	if s.Type.Kind() == ArrayRangeKind {
+		arrStr, rngStr := c.arrayRangeStrArgs(s)
+		*formatStr += "%s[%s] "
+		*args = append(*args, arrStr, rngStr)
+		*toFree = append(*toFree, arrStr, rngStr)
+		return
+	}
+
+	// Get format specifier for this type
+	spec, err := defaultSpecifier(s.Type)
+	if err != nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   err.Error(),
+		})
+		return
+	}
+
+	*formatStr += spec + " "
+
+	// Handle types that need string conversion
+	switch s.Type.Kind() {
+	case RangeKind:
+		strPtr := c.rangeStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
+	case FloatKind:
+		strPtr := c.floatStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
+	case ArrayKind:
+		arrType := s.Type.(Array)
+		if len(arrType.ColTypes) == 0 || arrType.ColTypes[0].Kind() == UnresolvedKind {
+			*args = append(*args, c.constCString("[]"))
+			return
+		}
+		strPtr := c.arrayStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
+	default:
+		*args = append(*args, s.Val)
+	}
+}
+
+// createPrintFormatGlobal creates a global constant for the printf format string
+func (c *Compiler) createPrintFormatGlobal(formatStr string) llvm.Value {
+	// Add newline and create string constant
+	formatStr = strings.TrimSuffix(formatStr, " ") + "\n"
+	formatConst := llvm.ConstString(formatStr, true)
+
+	// Create unique global variable
+	globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)
+	c.formatCounter++
+
+	arrayLength := len(formatStr) + 1
+	arrayType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
+	formatGlobal := llvm.AddGlobal(c.Module, arrayType, globalName)
+	formatGlobal.SetInitializer(formatConst)
+	formatGlobal.SetGlobalConstant(true)
+
+	// Return pointer to the format string
+	zero := c.ConstI64(0)
+	return c.builder.CreateGEP(arrayType, formatGlobal, []llvm.Value{zero, zero}, "fmt_ptr")
 }
 
 // Helper function to generate final output

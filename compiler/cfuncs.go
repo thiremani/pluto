@@ -4,8 +4,9 @@ import "tinygo.org/x/go-llvm"
 
 const (
 	// System functions
-	PRINTF = "printf"
-	FREE   = "free"
+	PRINTF        = "printf"
+	SPRINTF_ALLOC = "sprintf_alloc"
+	FREE          = "free"
 
 	// Range functions
 	RANGE_I64_STR = "range_i64_str"
@@ -54,6 +55,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	// System functions
 	case PRINTF:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{charPtr}, true)
+	case SPRINTF_ALLOC:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, true)
 	case FREE:
 		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{charPtr}, false)
 

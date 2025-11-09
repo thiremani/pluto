@@ -72,14 +72,6 @@ func cloneArrayHeaders(src []string) []string {
 	return append([]string(nil), src...)
 }
 
-func arrayWithMetadata(base Array, elem Type) Array {
-	return Array{
-		Headers:  cloneArrayHeaders(base.Headers),
-		ColTypes: []Type{elem},
-		Length:   base.Length,
-	}
-}
-
 func concatWithMetadata(leftArr, rightArr Array, elem Type) Array {
 	headers := cloneArrayHeaders(leftArr.Headers)
 	if len(headers) == 0 {
@@ -999,74 +991,72 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
-	// Handle string concatenation
+	// Handle string concatenation early
 	if op == token.SYM_CONCAT && left.Kind() == StrKind && right.Kind() == StrKind {
 		return Str{}
 	}
 
-	var leftArr, rightArr Array
 	leftIsArr := left.Kind() == ArrayKind
 	rightIsArr := right.Kind() == ArrayKind
 
-	if leftIsArr {
-		leftArr = left.(Array)
-	}
-	if rightIsArr {
-		rightArr = right.(Array)
-	}
-
+	// Route to specialized handlers based on operand types
 	if leftIsArr && rightIsArr {
-		leftElemType := leftArr.ColTypes[0]
-		rightElemType := rightArr.ColTypes[0]
-
-		// Concatenation operator: arr1 ⊕ arr2
-		if op == token.SYM_CONCAT {
-			return ts.concatArrayTypes(leftArr, rightArr, tok)
-		}
-
-		// Element-wise operations on arrays
-		// Handle empty arrays (unresolved element types)
-		if leftElemType.Kind() == UnresolvedKind && rightElemType.Kind() == UnresolvedKind {
-			// Both arrays are empty - result is empty array with unresolved type
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{Unresolved{}},
-				Length:   0,
-			}
-		}
-
-		if leftElemType.Kind() == UnresolvedKind {
-			// Left is empty, use right's type
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{rightElemType},
-				Length:   0,
-			}
-		}
-
-		if rightElemType.Kind() == UnresolvedKind {
-			// Right is empty, use left's type
-			return Array{
-				Headers:  nil,
-				ColTypes: []Type{leftElemType},
-				Length:   0,
-			}
-		}
-
-		// Both have resolved types - perform element-wise type inference
-		elemType := ts.TypeInfixOp(leftElemType, rightElemType, op, tok)
-
-		// Return array type with the computed element type
-		// Length will be max(leftLen, rightLen) at runtime
-		return Array{
-			Headers:  nil,
-			ColTypes: []Type{elemType},
-			Length:   0, // Dynamic length determined at runtime
-		}
+		return ts.typeArrayArrayInfix(left.(Array), right.(Array), op, tok)
 	}
 
-	// Concatenation only works on arrays (and strings, handled above)
-	// Scalars must be wrapped in [...] to become arrays
+	if leftIsArr || rightIsArr {
+		return ts.typeArrayScalarInfix(left, right, leftIsArr, op, tok)
+	}
+
+	// Both are scalars - use standard scalar type inference
+	return ts.TypeInfixOp(left, right, op, tok)
+}
+
+// typeArrayArrayInfix handles operations where both operands are arrays
+func (ts *TypeSolver) typeArrayArrayInfix(leftArr, rightArr Array, op string, tok token.Token) Type {
+	if op == token.SYM_CONCAT {
+		return ts.concatArrayTypes(leftArr, rightArr, tok)
+	}
+
+	// Element-wise operations - resolve element types
+	leftElem := leftArr.ColTypes[0]
+	rightElem := rightArr.ColTypes[0]
+
+	resultElem := ts.resolveArrayElemTypes(leftElem, rightElem, op, tok)
+
+	// Return array type with dynamic length (determined at runtime)
+	return Array{
+		Headers:  nil,
+		ColTypes: []Type{resultElem},
+		Length:   0,
+	}
+}
+
+// resolveArrayElemTypes handles unresolved element types and type inference for array operations
+func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string, tok token.Token) Type {
+	leftUnresolved := leftElem.Kind() == UnresolvedKind
+	rightUnresolved := rightElem.Kind() == UnresolvedKind
+
+	// Both unresolved - result is unresolved
+	if leftUnresolved && rightUnresolved {
+		return Unresolved{}
+	}
+
+	// One side unresolved - use the resolved type
+	if leftUnresolved {
+		return rightElem
+	}
+	if rightUnresolved {
+		return leftElem
+	}
+
+	// Both resolved - perform element-wise type inference
+	return ts.TypeInfixOp(leftElem, rightElem, op, tok)
+}
+
+// typeArrayScalarInfix handles operations where one operand is an array and the other is a scalar
+func (ts *TypeSolver) typeArrayScalarInfix(left, right Type, leftIsArr bool, op string, tok token.Token) Type {
+	// Concatenation only works on arrays (and strings)
 	if op == token.SYM_CONCAT {
 		cerr := &token.CompileError{
 			Token: tok,
@@ -1076,27 +1066,28 @@ func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Toke
 		return Unresolved{}
 	}
 
-	// Handle array-like with scalar operations
-	leftType := left
-	rightType := right
+	// Extract element types for type inference
+	var arrType Array
+	var leftType, rightType Type
 
 	if leftIsArr {
-		leftType = leftArr.ColTypes[0]
+		arrType = left.(Array)
+		leftType = arrType.ColTypes[0]
+		rightType = right
+	} else {
+		arrType = right.(Array)
+		leftType = left
+		rightType = arrType.ColTypes[0]
 	}
 
-	if rightIsArr {
-		rightType = rightArr.ColTypes[0]
-	}
-
+	// Compute result element type
 	elemType := ts.TypeInfixOp(leftType, rightType, op, tok)
 
-	switch {
-	case leftIsArr:
-		return arrayWithMetadata(leftArr, elemType)
-	case rightIsArr:
-		return arrayWithMetadata(rightArr, elemType)
-	default:
-		return elemType
+	// Return array with computed element type
+	return Array{
+		Headers:  cloneArrayHeaders(arrType.Headers),
+		ColTypes: []Type{elemType},
+		Length:   arrType.Length,
 	}
 }
 
