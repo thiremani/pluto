@@ -381,7 +381,6 @@ func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
 	scriptFiles := []string{}
 	for _, entry := range dirEntries {
 		if entry.IsDir() {
-			// TODO we can check if this dir is in pt.mod. If so then compile the directory also
 			continue
 		}
 		name := entry.Name()
