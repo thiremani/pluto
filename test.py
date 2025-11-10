@@ -270,15 +270,25 @@ class TestRunner:
             self.run_command([relative_pluto, test_script], cwd=test_dir)
 
             # Check that binary was created
-            if test_binary.exists():
-                print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
-                self.passed += 1
-                # Clean up
-                if not KEEP_BUILD:
-                    test_binary.unlink(missing_ok=True)
-            else:
+            if not test_binary.exists():
                 print(f"{Fore.RED}❌ Binary not created for relative path compilation{Style.RESET_ALL}")
                 self.failed += 1
+                return
+
+            # Run the binary and verify output
+            actual_output = self.run_command([test_binary])
+            exp_file = test_dir / "sample.exp"
+            expected_output = exp_file.read_text(encoding="utf-8")
+
+            if self._compare_outputs(expected_output, actual_output):
+                print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
+                self.passed += 1
+            else:
+                self.failed += 1
+
+            # Clean up
+            if not KEEP_BUILD:
+                test_binary.unlink(missing_ok=True)
 
         except Exception as e:
             print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
