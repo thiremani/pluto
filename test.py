@@ -234,8 +234,11 @@ class TestRunner:
         test_name = exp_file.stem
         print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
         try:
-            executable_path = str(test_dir / test_name)
-            actual_output = self.run_command([executable_path])
+            executable_path = test_dir / test_name
+            if IS_WINDOWS_ENV:
+                executable_path = test_dir / f"{test_name}.exe"
+
+            actual_output = self.run_command([str(executable_path)])
             expected_output = exp_file.read_text(encoding="utf-8")
 
             if self._compare_outputs(expected_output, actual_output):
@@ -243,7 +246,7 @@ class TestRunner:
                 self.passed += 1
                 # Clean up executable after successful test
                 if not KEEP_BUILD:
-                    Path(executable_path).unlink(missing_ok=True)
+                    executable_path.unlink(missing_ok=True)
             else:
                 self.failed += 1
 
@@ -260,35 +263,15 @@ class TestRunner:
         # This simulates: cd tests/relpath && ../../pluto sample.spt
         test_dir = self.project_root / "tests" / "relpath"
         test_script = "sample.spt"
-        test_binary = test_dir / "sample"
-        if IS_WINDOWS_ENV:
-            test_binary = test_dir / "sample.exe"
 
         try:
             # Change to tests/relpath directory and compile with relative path to pluto
             relative_pluto = self.project_root / PLUTO_EXE
             self.run_command([relative_pluto, test_script], cwd=test_dir)
 
-            # Check that binary was created
-            if not test_binary.exists():
-                print(f"{Fore.RED}❌ Binary not created for relative path compilation{Style.RESET_ALL}")
-                self.failed += 1
-                return
-
-            # Run the binary and verify output
-            actual_output = self.run_command([test_binary])
+            # Reuse _run_single_test to verify and clean up
             exp_file = test_dir / "sample.exp"
-            expected_output = exp_file.read_text(encoding="utf-8")
-
-            if self._compare_outputs(expected_output, actual_output):
-                print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
-                self.passed += 1
-            else:
-                self.failed += 1
-
-            # Clean up
-            if not KEEP_BUILD:
-                test_binary.unlink(missing_ok=True)
+            self._run_single_test(test_dir, exp_file)
 
         except Exception as e:
             print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
