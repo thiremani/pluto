@@ -234,8 +234,11 @@ class TestRunner:
         test_name = exp_file.stem
         print(f"{Fore.CYAN}Testing {test_name}:{Style.RESET_ALL}")
         try:
-            executable_path = str(test_dir / test_name)
-            actual_output = self.run_command([executable_path])
+            executable_path = test_dir / test_name
+            if IS_WINDOWS_ENV:
+                executable_path = test_dir / f"{test_name}.exe"
+
+            actual_output = self.run_command([str(executable_path)])
             expected_output = exp_file.read_text(encoding="utf-8")
 
             if self._compare_outputs(expected_output, actual_output):
@@ -243,7 +246,7 @@ class TestRunner:
                 self.passed += 1
                 # Clean up executable after successful test
                 if not KEEP_BUILD:
-                    Path(executable_path).unlink(missing_ok=True)
+                    executable_path.unlink(missing_ok=True)
             else:
                 self.failed += 1
 
@@ -251,30 +254,53 @@ class TestRunner:
             print(f"{Fore.RED}❌ Failed with exception: {e}{Style.RESET_ALL}")
             self.failed += 1
 
+    def test_relative_path_compilation(self):
+        """Test that compiling with relative paths works correctly"""
+        print(f"\n{Fore.YELLOW}=== Testing Relative Path Compilation ==={Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Testing: cd tests/relpath && ../../pluto sample.spt{Style.RESET_ALL}")
+
+        # Test compiling a single file with a relative path from a different directory
+        # This simulates: cd tests/relpath && ../../pluto sample.spt
+        test_dir = self.project_root / "tests" / "relpath"
+        test_script = "sample.spt"
+
+        try:
+            # Change to tests/relpath directory and compile with relative path to pluto
+            relative_pluto = self.project_root / PLUTO_EXE
+            self.run_command([relative_pluto, test_script], cwd=test_dir)
+
+            # Reuse _run_single_test to verify and clean up
+            exp_file = test_dir / "sample.exp"
+            self._run_single_test(test_dir, exp_file)
+
+        except Exception as e:
+            print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
+            self.failed += 1
+
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
-        
+
         if self.test_dir:
             # Run tests for specific directory
             if not self.test_dir.exists():
                 print(f"{Fore.RED}❌ Test directory {self.test_dir} does not exist{Style.RESET_ALL}")
                 return
-            
+
             exp_files = list(self.test_dir.glob("*.exp"))
             if not exp_files:
                 print(f"{Fore.RED}❌ No .exp files found in {self.test_dir}{Style.RESET_ALL}")
                 return
-            
+
             test_dirs = [self.test_dir]
         else:
             # Run all tests
             test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
             test_dirs = sorted(test_dirs)  # Sorting provides deterministic order
-        
+
         for test_dir in test_dirs:
             print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
-            
+
             # 1. Compile the entire directory
             try:
                 self.compile(test_dir)
@@ -288,6 +314,10 @@ class TestRunner:
             # 2. Run each test in the directory
             for exp_file in sorted(test_dir.glob("*.exp")):
                 self._run_single_test(test_dir, exp_file)
+
+        # 3. Test relative path compilation (only when running all tests)
+        if not self.test_dir:
+            self.test_relative_path_compilation()
 
     def show_diff(self, expected: str, actual: str):
         """Show colored diff output"""

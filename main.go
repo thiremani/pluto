@@ -489,19 +489,25 @@ func main() {
 // resolveTarget determines if target is a file or directory
 // Returns (cwd, specificScript, error)
 func resolveTarget(target string) (string, string, error) {
-	info, err := os.Stat(target)
+	// Convert to absolute path first
+	absTarget, err := filepath.Abs(target)
 	if err != nil {
-		return "", "", fmt.Errorf("error accessing %s: %w", target, err)
+		return "", "", fmt.Errorf("error resolving absolute path for %s: %w", target, err)
+	}
+
+	info, err := os.Stat(absTarget)
+	if err != nil {
+		return "", "", fmt.Errorf("error accessing %s: %w", absTarget, err)
 	}
 
 	if info.IsDir() {
-		return target, "", nil
+		return absTarget, "", nil
 	}
 
 	// Target is a file - must be a .spt file
-	if !strings.HasSuffix(target, SPT_SUFFIX) {
-		return "", "", fmt.Errorf("error: %s is not a .spt script file", target)
+	if !strings.HasSuffix(absTarget, SPT_SUFFIX) {
+		return "", "", fmt.Errorf("error: %s is not a .spt script file", absTarget)
 	}
 
-	return filepath.Dir(target), filepath.Base(target), nil
+	return filepath.Dir(absTarget), filepath.Base(absTarget), nil
 }
