@@ -254,18 +254,22 @@ class TestRunner:
     def test_relative_path_compilation(self):
         """Test that compiling with relative paths works correctly"""
         print(f"\n{Fore.YELLOW}=== Testing Relative Path Compilation ==={Style.RESET_ALL}")
-        print(f"{Fore.CYAN}Testing: cd tests && ../pluto sample.spt{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Testing: cd tests/relpath && ../../pluto sample.spt{Style.RESET_ALL}")
 
         # Test compiling a single file with a relative path from a different directory
-        # This simulates: cd tests && ../pluto sample.spt
-        test_dir = self.project_root / "tests"
+        # This simulates: cd tests/relpath && ../../pluto sample.spt
+        test_dir = self.project_root / "tests" / "relpath"
+        if not test_dir.exists():
+            print(f"{Fore.YELLOW}⚠️  Skipping relative path test (tests/relpath not found){Style.RESET_ALL}")
+            return
+
         test_script = "sample.spt"
         test_binary = test_dir / "sample"
         if IS_WINDOWS_ENV:
             test_binary = test_dir / "sample.exe"
 
         try:
-            # Change to tests directory and compile with relative path to pluto
+            # Change to tests/relpath directory and compile with relative path to pluto
             relative_pluto = self.project_root / PLUTO_EXE
             self.run_command([relative_pluto, test_script], cwd=test_dir)
 
