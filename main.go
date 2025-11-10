@@ -370,7 +370,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	return nil
 }
 
-func (p *Pluto) ScanPlutoFiles() ([]string, []string) {
+func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
 	dirEntries, err := os.ReadDir(p.Cwd)
 	if err != nil {
 		fmt.Printf("Error reading current directory: %v\n", err)
@@ -387,9 +387,16 @@ func (p *Pluto) ScanPlutoFiles() ([]string, []string) {
 		name := entry.Name()
 		if strings.HasSuffix(name, PT_SUFFIX) {
 			codeFiles = append(codeFiles, filepath.Join(p.Cwd, name))
-		} else if strings.HasSuffix(name, SPT_SUFFIX) {
-			scriptFiles = append(scriptFiles, filepath.Join(p.Cwd, name))
+			continue
 		}
+		if !strings.HasSuffix(name, SPT_SUFFIX) {
+			continue
+		}
+		// If a specific script is requested, only include that one
+		if specificScript != "" && name != specificScript {
+			continue
+		}
+		scriptFiles = append(scriptFiles, filepath.Join(p.Cwd, name))
 	}
 	return codeFiles, scriptFiles
 }
@@ -423,20 +430,25 @@ func New(cwd string) *Pluto {
 }
 
 func main() {
-	var cwd string
-	var err error
+	// Determine target path (file or directory)
+	target, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current working directory: %v\n", err)
+		os.Exit(1)
+	}
 	if len(os.Args) > 1 {
-		cwd = os.Args[1]
-	} else {
-		cwd, err = os.Getwd()
-		if err != nil {
-			fmt.Printf("Error getting current working directory: %v\n", err)
-			os.Exit(1)
-		}
+		target = os.Args[1]
+	}
+
+	// Resolve target to cwd and optional specific script
+	cwd, specificScript, err := resolveTarget(target)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	p := New(cwd)
-	codeFiles, scriptFiles := p.ScanPlutoFiles()
+	codeFiles, scriptFiles := p.ScanPlutoFiles(specificScript)
 	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
 		fmt.Println(err)
@@ -473,4 +485,24 @@ func main() {
 	if compileErr > 0 || binErr > 0 {
 		os.Exit(1)
 	}
+}
+
+// resolveTarget determines if target is a file or directory
+// Returns (cwd, specificScript, error)
+func resolveTarget(target string) (string, string, error) {
+	info, err := os.Stat(target)
+	if err != nil {
+		return "", "", fmt.Errorf("error accessing %s: %w", target, err)
+	}
+
+	if info.IsDir() {
+		return target, "", nil
+	}
+
+	// Target is a file - must be a .spt file
+	if !strings.HasSuffix(target, SPT_SUFFIX) {
+		return "", "", fmt.Errorf("error: %s is not a .spt script file", target)
+	}
+
+	return filepath.Dir(target), filepath.Base(target), nil
 }
