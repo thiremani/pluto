@@ -259,10 +259,6 @@ class TestRunner:
         # Test compiling a single file with a relative path from a different directory
         # This simulates: cd tests/relpath && ../../pluto sample.spt
         test_dir = self.project_root / "tests" / "relpath"
-        if not test_dir.exists():
-            print(f"{Fore.YELLOW}⚠️  Skipping relative path test (tests/relpath not found){Style.RESET_ALL}")
-            return
-
         test_script = "sample.spt"
         test_binary = test_dir / "sample"
         if IS_WINDOWS_ENV:
