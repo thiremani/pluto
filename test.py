@@ -251,30 +251,87 @@ class TestRunner:
             print(f"{Fore.RED}❌ Failed with exception: {e}{Style.RESET_ALL}")
             self.failed += 1
 
+    def test_relative_path_compilation(self):
+        """Test that compiling with relative paths works correctly"""
+        print(f"\n{Fore.YELLOW}=== Testing Relative Path Compilation ==={Style.RESET_ALL}")
+
+        # Test compiling a single file with a relative path from a different directory
+        # This simulates: cd tests/array && ../../pluto array.spt
+        test_dir = self.project_root / "tests" / "array"
+        if not test_dir.exists():
+            print(f"{Fore.YELLOW}⚠️  Skipping relative path test (tests/array not found){Style.RESET_ALL}")
+            return
+
+        test_script = "array.spt"
+        test_binary = test_dir / "array"
+
+        # Clean up any existing binary
+        test_binary.unlink(missing_ok=True)
+
+        print(f"{Fore.CYAN}Testing relative path compilation: cd tests/array && ../../pluto array.spt{Style.RESET_ALL}")
+
+        try:
+            # Change to tests/array directory and compile with relative path to pluto
+            relative_pluto = self.project_root / PLUTO_EXE
+            compiler_output = self.run_command(
+                [relative_pluto, test_script],
+                cwd=test_dir
+            )
+
+            # Check that binary was created
+            if not test_binary.exists():
+                print(f"{Fore.RED}❌ Binary not created for relative path compilation{Style.RESET_ALL}")
+                self.failed += 1
+                return
+
+            # Run the binary to ensure it works
+            actual_output = self.run_command([test_binary])
+
+            # Compare with expected output
+            exp_file = test_dir / "array.exp"
+            if exp_file.exists():
+                expected_output = exp_file.read_text(encoding="utf-8")
+                if self._compare_outputs(expected_output, actual_output):
+                    print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
+                    self.passed += 1
+                else:
+                    self.failed += 1
+            else:
+                print(f"{Fore.GREEN}✅ Relative path compilation succeeded (no .exp to verify){Style.RESET_ALL}")
+                self.passed += 1
+
+            # Clean up
+            if not KEEP_BUILD:
+                test_binary.unlink(missing_ok=True)
+
+        except Exception as e:
+            print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
+            self.failed += 1
+
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
-        
+
         if self.test_dir:
             # Run tests for specific directory
             if not self.test_dir.exists():
                 print(f"{Fore.RED}❌ Test directory {self.test_dir} does not exist{Style.RESET_ALL}")
                 return
-            
+
             exp_files = list(self.test_dir.glob("*.exp"))
             if not exp_files:
                 print(f"{Fore.RED}❌ No .exp files found in {self.test_dir}{Style.RESET_ALL}")
                 return
-            
+
             test_dirs = [self.test_dir]
         else:
             # Run all tests
             test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
             test_dirs = sorted(test_dirs)  # Sorting provides deterministic order
-        
+
         for test_dir in test_dirs:
             print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
-            
+
             # 1. Compile the entire directory
             try:
                 self.compile(test_dir)
@@ -288,6 +345,10 @@ class TestRunner:
             # 2. Run each test in the directory
             for exp_file in sorted(test_dir.glob("*.exp")):
                 self._run_single_test(test_dir, exp_file)
+
+        # 3. Test relative path compilation (only when running all tests)
+        if not self.test_dir:
+            self.test_relative_path_compilation()
 
     def show_diff(self, expected: str, actual: str):
         """Show colored diff output"""
