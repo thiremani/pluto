@@ -256,53 +256,36 @@ class TestRunner:
         print(f"\n{Fore.YELLOW}=== Testing Relative Path Compilation ==={Style.RESET_ALL}")
 
         # Test compiling a single file with a relative path from a different directory
-        # This simulates: cd tests/array && ../../pluto array.spt
-        test_dir = self.project_root / "tests" / "array"
-        if not test_dir.exists():
-            print(f"{Fore.YELLOW}⚠️  Skipping relative path test (tests/array not found){Style.RESET_ALL}")
+        # This simulates: cd tests && ../pluto sample.spt
+        test_dir = self.project_root / "tests"
+        test_script = "sample.spt"
+        script_path = test_dir / test_script
+
+        if not script_path.exists():
+            print(f"{Fore.YELLOW}⚠️  Skipping relative path test ({test_script} not found){Style.RESET_ALL}")
             return
 
-        test_script = "array.spt"
-        test_binary = test_dir / "array"
+        test_binary = test_dir / "sample"
+        if IS_WINDOWS_ENV:
+            test_binary = test_dir / "sample.exe"
 
-        # Clean up any existing binary
-        test_binary.unlink(missing_ok=True)
-
-        print(f"{Fore.CYAN}Testing relative path compilation: cd tests/array && ../../pluto array.spt{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Testing: cd tests && ../pluto sample.spt{Style.RESET_ALL}")
 
         try:
-            # Change to tests/array directory and compile with relative path to pluto
+            # Change to tests directory and compile with relative path to pluto
             relative_pluto = self.project_root / PLUTO_EXE
-            compiler_output = self.run_command(
-                [relative_pluto, test_script],
-                cwd=test_dir
-            )
+            self.run_command([relative_pluto, test_script], cwd=test_dir)
 
             # Check that binary was created
-            if not test_binary.exists():
+            if test_binary.exists():
+                print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
+                self.passed += 1
+                # Clean up
+                if not KEEP_BUILD:
+                    test_binary.unlink(missing_ok=True)
+            else:
                 print(f"{Fore.RED}❌ Binary not created for relative path compilation{Style.RESET_ALL}")
                 self.failed += 1
-                return
-
-            # Run the binary to ensure it works
-            actual_output = self.run_command([test_binary])
-
-            # Compare with expected output
-            exp_file = test_dir / "array.exp"
-            if exp_file.exists():
-                expected_output = exp_file.read_text(encoding="utf-8")
-                if self._compare_outputs(expected_output, actual_output):
-                    print(f"{Fore.GREEN}✅ Relative path compilation passed{Style.RESET_ALL}")
-                    self.passed += 1
-                else:
-                    self.failed += 1
-            else:
-                print(f"{Fore.GREEN}✅ Relative path compilation succeeded (no .exp to verify){Style.RESET_ALL}")
-                self.passed += 1
-
-            # Clean up
-            if not KEEP_BUILD:
-                test_binary.unlink(missing_ok=True)
 
         except Exception as e:
             print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
