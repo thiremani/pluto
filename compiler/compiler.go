@@ -38,13 +38,13 @@ type Compiler struct {
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
-	formatCounter int                    // Track unique format strings
-	tmpCounter    int                    // Temporary variable names counter
-	CodeCompiler  *CodeCompiler          // Optional reference for script compilation
+	formatCounter int           // Track unique format strings
+	tmpCounter    int           // Temporary variable names counter
+	CodeCompiler  *CodeCompiler // Optional reference for script compilation
 	FuncCache     map[string]*Func
 	ExprCache     map[ast.Expression]*ExprInfo
 	Errors        []*token.CompileError
-	StaticValues  map[llvm.Value]bool    // Track static/global values that should not be freed
+	StaticValues  map[llvm.Value]bool // Track static/global values that should not be freed
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -649,7 +649,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-			s.ReadOnly = true // Mark as read-only constant
+			s.ReadOnly = true            // Mark as read-only constant
 			c.StaticValues[s.Val] = true // Mark as static - should not be freed
 			res = []*Symbol{s}
 			return
