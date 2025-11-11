@@ -13,6 +13,7 @@ extern "C" {
     typedef struct NAME NAME;                           \
     NAME*   arr_##SUF##_new(void);                      \
     void    arr_##SUF##_free(NAME* a);                  \
+    NAME*   arr_##SUF##_copy(const NAME* a);            \
     size_t  arr_##SUF##_len(const NAME* a);             \
     size_t  arr_##SUF##_cap(const NAME* a);             \
     int     arr_##SUF##_reserve(NAME* a, size_t cap);   \
@@ -38,6 +39,7 @@ typedef struct PtArrayStr PtArrayStr;
 
 PtArrayStr*          arr_str_new(void);
 void                 arr_str_free(PtArrayStr* a);
+PtArrayStr*          arr_str_copy(const PtArrayStr* a);
 
 size_t               arr_str_len(const PtArrayStr* a);
 size_t               arr_str_cap(const PtArrayStr* a);

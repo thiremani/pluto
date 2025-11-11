@@ -387,8 +387,24 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 
 		// Check if the variable on the LEFT-hand side (`name`) already exists
 		if lhsSymbol, ok := Get(c.Scopes, name); ok {
+			// Free the old value if it's heap-allocated (and not a function argument)
+			if !lhsSymbol.FuncArg && !lhsSymbol.ReadOnly {
+				switch lhsSymbol.Type.Kind() {
+				case StrKind:
+					c.free([]llvm.Value{lhsSymbol.Val})
+				case ArrayKind:
+					arrayType := lhsSymbol.Type.(Array)
+					if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+						c.freeArray(lhsSymbol.Val, arrayType.ColTypes[0])
+					}
+				}
+			}
+
 			// Handle type coercion if needed (e.g., single-element array to scalar)
 			valueToStore := c.coerceValueForAssignment(lhsSymbol.Type, newRhsSymbol)
+
+			// Deep copy strings and arrays for value semantics
+			valueToStore = c.deepCopyIfNeeded(valueToStore)
 
 			// If it's a pointer, store through the pointer
 			if lhsSymbol.Type.Kind() == PtrKind {
@@ -401,8 +417,9 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 			continue
 		}
 
-		// Variable doesn't exist yet - bind it in scope
-		Put(c.Scopes, name, newRhsSymbol)
+		// Variable doesn't exist yet - deep copy if needed for value semantics
+		newSymbol := c.deepCopyIfNeeded(newRhsSymbol)
+		Put(c.Scopes, name, newSymbol)
 	}
 }
 
@@ -777,7 +794,7 @@ func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulat
 func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
 	// Push a new scope for this expression block
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	// Setup outputs (like function outputs)
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
@@ -883,7 +900,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
 	// New scope so we can temporarily shadow outputs like mini-functions do.
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
@@ -1047,7 +1064,7 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 
 func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
 	PushScope(&c.Scopes, FuncScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
@@ -1289,6 +1306,107 @@ func (c *Compiler) free(ptrs []llvm.Value) {
 	for _, ptr := range ptrs {
 		c.builder.CreateCall(fnType, fn, []llvm.Value{ptr}, "") // name should be empty as it returns a void
 	}
+}
+
+// copyString creates a deep copy of a string using strdup
+func (c *Compiler) copyString(str llvm.Value) llvm.Value {
+	fnType, fn := c.GetCFunc(STRDUP)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{str}, "str_copy")
+}
+
+// copyArray creates a deep copy of an array
+func (c *Compiler) copyArray(arr llvm.Value, elemType Type) llvm.Value {
+	var fnType llvm.Type
+	var fn llvm.Value
+	switch elemType.Kind() {
+	case IntKind:
+		fnType, fn = c.GetCFunc(ARR_I64_COPY)
+	case FloatKind:
+		fnType, fn = c.GetCFunc(ARR_F64_COPY)
+	case StrKind:
+		fnType, fn = c.GetCFunc(ARR_STR_COPY)
+	default:
+		panic(fmt.Sprintf("unsupported array element type for copying: %s", elemType.String()))
+	}
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{arr}, "arr_copy")
+}
+
+// deepCopyIfNeeded creates a deep copy if the symbol is a string or array
+// This ensures value semantics for assignments
+func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
+	switch sym.Type.Kind() {
+	case StrKind:
+		// Deep copy the string
+		copiedStr := c.copyString(sym.Val)
+		return &Symbol{Val: copiedStr, Type: sym.Type, FuncArg: false, ReadOnly: false}
+	case ArrayKind:
+		// Deep copy the array
+		arrayType := sym.Type.(Array)
+		if len(arrayType.ColTypes) > 0 {
+			// Skip copying if the element type is unresolved (will be resolved later)
+			if arrayType.ColTypes[0].Kind() == UnresolvedKind {
+				return sym
+			}
+			copiedArr := c.copyArray(sym.Val, arrayType.ColTypes[0])
+			return &Symbol{Val: copiedArr, Type: sym.Type, FuncArg: false, ReadOnly: false}
+		}
+	}
+	// For other types (int, float, range), just return as-is (they're value types)
+	return sym
+}
+
+func (c *Compiler) freeArray(arr llvm.Value, elemType Type) {
+	var fnType llvm.Type
+	var fn llvm.Value
+	switch elemType.Kind() {
+	case IntKind:
+		fnType, fn = c.GetCFunc(ARR_I64_FREE)
+	case FloatKind:
+		fnType, fn = c.GetCFunc(ARR_F64_FREE)
+	case StrKind:
+		fnType, fn = c.GetCFunc(ARR_STR_FREE)
+	default:
+		panic(fmt.Sprintf("unsupported array element type for cleanup: %s", elemType.String()))
+	}
+	c.builder.CreateCall(fnType, fn, []llvm.Value{arr}, "")
+}
+
+// cleanupScope generates cleanup code for all heap-allocated variables in the current scope
+// This should be called before PopScope to free memory for strings and arrays
+func (c *Compiler) cleanupScope() {
+	if len(c.Scopes) == 0 {
+		return
+	}
+	currentScope := c.Scopes[len(c.Scopes)-1]
+	for _, sym := range currentScope.Elems {
+		// Skip function arguments - they're borrowed, not owned
+		if sym.FuncArg {
+			continue
+		}
+		// Skip read-only symbols (constants)
+		if sym.ReadOnly {
+			continue
+		}
+		// Clean up based on type
+		switch sym.Type.Kind() {
+		case StrKind:
+			// Strings are malloc'd pointers that need freeing
+			c.free([]llvm.Value{sym.Val})
+		case ArrayKind:
+			// Arrays need their specific cleanup function
+			arrayType := sym.Type.(Array)
+			if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+				c.freeArray(sym.Val, arrayType.ColTypes[0])
+			}
+		}
+	}
+}
+
+// popScope is the compiler-specific scope pop that includes cleanup
+// Use this instead of PopScope(&c.Scopes) to ensure memory is freed
+func (c *Compiler) popScope() {
+	c.cleanupScope()
+	PopScope(&c.Scopes)
 }
 
 func (c *Compiler) printf(args []llvm.Value) {

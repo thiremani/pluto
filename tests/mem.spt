@@ -1,0 +1,23 @@
+s1 = "hello"
+s2 = s1
+s1, s2
+s2 = "world"
+s1, s2
+
+arr1 = [1 2 3]
+arr2 = arr1
+arr1, arr2
+arr2 = [4 5 6]
+arr1, arr2
+
+arr3 = [1.5 2.5]
+arr4 = arr3
+arr3, arr4
+arr4 = [3.5 4.5]
+arr3, arr4
+
+strs1 = ["a" "b"]
+strs2 = strs1
+strs1, strs2
+strs2 = ["c" "d"]
+strs1, strs2

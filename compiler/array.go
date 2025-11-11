@@ -566,7 +566,7 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, d
 
 func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	var outputs []*Symbol
 	if len(dest) >= len(info.OutTypes) && len(dest) > 0 {

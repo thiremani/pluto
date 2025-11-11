@@ -7,6 +7,7 @@ const (
 	PRINTF        = "printf"
 	SPRINTF_ALLOC = "sprintf_alloc"
 	FREE          = "free"
+	STRDUP        = "strdup"
 
 	// Range functions
 	RANGE_I64_STR = "range_i64_str"
@@ -23,6 +24,8 @@ const (
 	ARR_I64_LEN    = "arr_i64_len"
 	ARR_I64_STR    = "arr_i64_str"
 	ARR_I64_PUSH   = "arr_i64_push"
+	ARR_I64_FREE   = "arr_i64_free"
+	ARR_I64_COPY   = "arr_i64_copy"
 
 	// Array F64 functions
 	ARR_F64_NEW    = "arr_f64_new"
@@ -32,6 +35,8 @@ const (
 	ARR_F64_LEN    = "arr_f64_len"
 	ARR_F64_STR    = "arr_f64_str"
 	ARR_F64_PUSH   = "arr_f64_push"
+	ARR_F64_FREE   = "arr_f64_free"
+	ARR_F64_COPY   = "arr_f64_copy"
 
 	// Array STR functions
 	ARR_STR_NEW    = "arr_str_new"
@@ -41,6 +46,8 @@ const (
 	ARR_STR_LEN    = "arr_str_len"
 	ARR_STR_STR    = "arr_str_str"
 	ARR_STR_PUSH   = "arr_str_push"
+	ARR_STR_FREE   = "arr_str_free"
+	ARR_STR_COPY   = "arr_str_copy"
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
@@ -59,6 +66,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, true)
 	case FREE:
 		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{charPtr}, false)
+	case STRDUP:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, false)
 
 	// Range functions
 	case RANGE_I64_STR:
@@ -84,6 +93,11 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	case ARR_I64_PUSH:
 		pt := c.NamedOpaquePtr("PtArrayI64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, i64}, false)
+	case ARR_I64_FREE:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
+	case ARR_I64_COPY:
+		pt := c.NamedOpaquePtr("PtArrayI64")
+		return llvm.FunctionType(pt, []llvm.Type{pt}, false)
 
 	// Array F64 functions
 	case ARR_F64_NEW:
@@ -99,6 +113,11 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	case ARR_F64_PUSH:
 		pt := c.NamedOpaquePtr("PtArrayF64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, f64}, false)
+	case ARR_F64_FREE:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
+	case ARR_F64_COPY:
+		pt := c.NamedOpaquePtr("PtArrayF64")
+		return llvm.FunctionType(pt, []llvm.Type{pt}, false)
 
 	// Array STR functions
 	case ARR_STR_NEW:
@@ -116,6 +135,11 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	case ARR_STR_PUSH:
 		pt := c.NamedOpaquePtr("PtArrayStr")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, charPtr}, false)
+	case ARR_STR_FREE:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
+	case ARR_STR_COPY:
+		pt := c.NamedOpaquePtr("PtArrayStr")
+		return llvm.FunctionType(pt, []llvm.Type{pt}, false)
 
 	default:
 		panic("Unknown function name")

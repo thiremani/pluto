@@ -46,7 +46,7 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 			PushScope(&c.Scopes, BlockScope)
 			Put(c.Scopes, ranges[i].Name, &Symbol{Type: Int{Width: 64}, Val: iter})
 			rec(i + 1)
-			PopScope(&c.Scopes)
+			c.popScope()
 		})
 	}
 	rec(0)

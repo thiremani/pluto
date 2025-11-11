@@ -56,6 +56,23 @@ void arr_##SUF##_free(NAME* a){                                          \
     kv_destroy(a->v);                                                    \
     free(a);                                                             \
 }                                                                        \
+NAME* arr_##SUF##_copy(const NAME* a){                                   \
+    if (!a) return NULL;                                                 \
+    NAME* copy = arr_##SUF##_new();                                      \
+    if (!copy) return NULL;                                              \
+    size_t len = (size_t)a->v.n;                                         \
+    if (len > 0) {                                                       \
+        if (SUF##_ensure_cap(&copy->v, len) != 0) {                      \
+            arr_##SUF##_free(copy);                                      \
+            return NULL;                                                 \
+        }                                                                \
+        for (size_t i = 0; i < len; ++i) {                               \
+            copy->v.a[i] = a->v.a[i];                                    \
+        }                                                                \
+        copy->v.n = len;                                                 \
+    }                                                                    \
+    return copy;                                                         \
+}                                                                        \
 size_t arr_##SUF##_len(const NAME* a){ return a ? (size_t)a->v.n : 0; }  \
 size_t arr_##SUF##_cap(const NAME* a){ return a ? (size_t)a->v.m : 0; }  \
 int arr_##SUF##_reserve(NAME* a, size_t cap){                            \
@@ -127,6 +144,32 @@ void arr_str_free(PtArrayStr* a){
     pt_str_free_range(a, 0, (size_t)a->v.n);
     kv_destroy(a->v);
     free(a);
+}
+
+PtArrayStr* arr_str_copy(const PtArrayStr* a){
+    if (!a) return NULL;
+    PtArrayStr* copy = arr_str_new();
+    if (!copy) return NULL;
+    size_t len = (size_t)a->v.n;
+    if (len > 0) {
+        if (str_ensure_cap(&copy->v, len) != 0) {
+            arr_str_free(copy);
+            return NULL;
+        }
+        /* Deep copy each string */
+        for (size_t i = 0; i < len; ++i) {
+            char* dup = dup_cstr(a->v.a[i]);
+            if (!dup) {
+                /* Cleanup on failure */
+                pt_str_free_range(copy, 0, i);
+                arr_str_free(copy);
+                return NULL;
+            }
+            copy->v.a[i] = dup;
+        }
+        copy->v.n = len;
+    }
+    return copy;
 }
 
 size_t arr_str_len(const PtArrayStr* a){ return a ? (size_t)a->v.n : 0; }
