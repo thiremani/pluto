@@ -38,12 +38,13 @@ type Compiler struct {
 	Context       llvm.Context
 	Module        llvm.Module
 	builder       llvm.Builder
-	formatCounter int           // Track unique format strings
-	tmpCounter    int           // Temporary variable names counter
-	CodeCompiler  *CodeCompiler // Optional reference for script compilation
+	formatCounter int                    // Track unique format strings
+	tmpCounter    int                    // Temporary variable names counter
+	CodeCompiler  *CodeCompiler          // Optional reference for script compilation
 	FuncCache     map[string]*Func
 	ExprCache     map[ast.Expression]*ExprInfo
 	Errors        []*token.CompileError
+	StaticValues  map[llvm.Value]bool    // Track static/global values that should not be freed
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -61,6 +62,7 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		FuncCache:     make(map[string]*Func),
 		ExprCache:     make(map[ast.Expression]*ExprInfo),
 		Errors:        []*token.CompileError{},
+		StaticValues:  make(map[llvm.Value]bool),
 	}
 }
 
@@ -320,7 +322,31 @@ func (c *Compiler) compileMergeBlock(
 		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	// --- Phase 2: hook them up and do the stores/updates
+	// --- Phase 2: Copy static values in their respective blocks before merging
+	for i := range stmt.Name {
+		// If if-branch value is static (ReadOnly), copy it
+		if ifSyms[i].ReadOnly || c.StaticValues[ifSyms[i].Val] {
+			// Position builder before the terminator of if-block to insert copy
+			// We know there's a terminator (the br instruction added earlier)
+			terminator := ifEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+		}
+
+		// If else-branch value is static (ReadOnly), copy it
+		if elseSyms[i].ReadOnly || c.StaticValues[elseSyms[i].Val] {
+			// Position builder before the terminator of else-block to insert copy
+			// We know there's a terminator (the br instruction added earlier)
+			terminator := elseEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+		}
+	}
+
+	// --- Phase 3: Hook up PHIs and do the stores/updates
+	// Position builder at end of continue block
+	c.builder.SetInsertPointAtEnd(contBlk)
+
 	for i, ident := range stmt.Name {
 		name := ident.Value
 		phi := phis[i]
@@ -382,44 +408,156 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 	if len(idents) == 0 {
 		return
 	}
-	for i, newRhsSymbol := range syms {
-		name := idents[i].Value
 
-		// Check if the variable on the LEFT-hand side (`name`) already exists
-		if lhsSymbol, ok := Get(c.Scopes, name); ok {
-			// Free the old value if it's heap-allocated (and not a function argument)
-			if !lhsSymbol.FuncArg && !lhsSymbol.ReadOnly {
-				switch lhsSymbol.Type.Kind() {
-				case StrKind:
-					c.free([]llvm.Value{lhsSymbol.Val})
-				case ArrayKind:
-					arrayType := lhsSymbol.Type.(Array)
-					if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-						c.freeArray(lhsSymbol.Val, arrayType.ColTypes[0])
-					}
+	// Build ownership map and determine copy requirements
+	beforeOwners := c.buildOwnershipMap(idents)
+	needsCopy := c.determineCopyRequirements(idents, syms, beforeOwners)
+
+	// Process assignments in two phases to avoid use-after-free
+	for phase := 0; phase < 2; phase++ {
+		for i, ident := range idents {
+			shouldProcess := (phase == 0 && !needsCopy[i]) || (phase == 1 && needsCopy[i])
+			if shouldProcess {
+				c.performAssignment(ident.Value, syms[i], needsCopy[i])
+			}
+		}
+	}
+}
+
+// buildOwnershipMap tracks which variable owns which memory
+func (c *Compiler) buildOwnershipMap(idents []*ast.Identifier) map[llvm.Value]string {
+	beforeOwners := make(map[llvm.Value]string)
+
+	// Scan all variables in scope to build ownership map
+	for i := len(c.Scopes) - 1; i >= 0; i-- {
+		scope := c.Scopes[i]
+		for name, sym := range scope.Elems {
+			if sym.Type.Kind() == StrKind || sym.Type.Kind() == ArrayKind {
+				// Only record if not already in map (inner scopes shadow outer scopes)
+				if _, exists := beforeOwners[sym.Val]; !exists {
+					beforeOwners[sym.Val] = name
 				}
 			}
+		}
+		// Stop at function scope boundary
+		if scope.ScopeKind == FuncScope {
+			break
+		}
+	}
 
-			// Handle type coercion if needed (e.g., single-element array to scalar)
-			valueToStore := c.coerceValueForAssignment(lhsSymbol.Type, newRhsSymbol)
+	return beforeOwners
+}
 
-			// Deep copy strings and arrays for value semantics
-			valueToStore = c.deepCopyIfNeeded(valueToStore)
+// determineCopyRequirements decides which RHS values need copying vs can be transferred
+func (c *Compiler) determineCopyRequirements(idents []*ast.Identifier, syms []*Symbol, beforeOwners map[llvm.Value]string) []bool {
+	needsCopy := make([]bool, len(syms))
 
-			// If it's a pointer, store through the pointer
-			if lhsSymbol.Type.Kind() == PtrKind {
-				c.createStore(valueToStore.Val, lhsSymbol.Val, valueToStore.Type)
-				continue
-			}
-
-			// Otherwise, update the symbol directly in scope
-			Put(c.Scopes, name, valueToStore)
+	for i, rhsSym := range syms {
+		// Static values (like string literals) always need to be copied since we can't take ownership
+		if c.StaticValues[rhsSym.Val] {
+			needsCopy[i] = true
 			continue
 		}
 
-		// Variable doesn't exist yet - deep copy if needed for value semantics
-		newSymbol := c.deepCopyIfNeeded(newRhsSymbol)
-		Put(c.Scopes, name, newSymbol)
+		owner, isOwned := beforeOwners[rhsSym.Val]
+
+		if !isOwned {
+			needsCopy[i] = false // Fresh allocation, can take ownership
+			continue
+		}
+
+		if !c.isOwnerBeingOverwritten(owner, idents) {
+			needsCopy[i] = true // Owner keeps it, must copy
+			continue
+		}
+
+		// Owner is being overwritten - check if multiple LHS want this memory
+		useCount := c.countMemoryUses(rhsSym.Val, syms)
+		needsCopy[i] = (useCount > 1 && i < len(syms)-1)
+	}
+
+	return needsCopy
+}
+
+// isOwnerBeingOverwritten checks if a variable will be overwritten in this statement
+func (c *Compiler) isOwnerBeingOverwritten(owner string, idents []*ast.Identifier) bool {
+	for _, ident := range idents {
+		if ident.Value == owner {
+			return true
+		}
+	}
+	return false
+}
+
+// countMemoryUses counts how many times a memory address is referenced in RHS
+func (c *Compiler) countMemoryUses(mem llvm.Value, syms []*Symbol) int {
+	count := 0
+	for _, sym := range syms {
+		if sym.Val == mem {
+			count++
+		}
+	}
+	return count
+}
+
+// performAssignment executes a single assignment with optional copying
+func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy bool) {
+	if lhsSymbol, ok := Get(c.Scopes, name); ok {
+		c.assignToExisting(name, lhsSymbol, rhsSym, shouldCopy)
+	} else {
+		c.assignToNew(name, rhsSym, shouldCopy)
+	}
+}
+
+// assignToExisting handles assignment to an existing variable
+func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
+	// Free old value if different
+	if lhsSym.Val != rhsSym.Val && !lhsSym.FuncArg && !lhsSym.ReadOnly {
+		c.freeSymbolValue(lhsSym)
+	}
+
+	// Handle type coercion
+	valueToStore := c.coerceValueForAssignment(lhsSym.Type, rhsSym)
+
+	// Copy only if needed
+	if shouldCopy {
+		valueToStore = c.deepCopyIfNeeded(valueToStore)
+	}
+
+	// Store
+	if lhsSym.Type.Kind() == PtrKind {
+		c.createStore(valueToStore.Val, lhsSym.Val, valueToStore.Type)
+	} else {
+		Put(c.Scopes, name, valueToStore)
+	}
+}
+
+// assignToNew handles assignment to a new variable
+func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
+	var newSymbol *Symbol
+	if shouldCopy {
+		newSymbol = c.deepCopyIfNeeded(rhsSym)
+	} else {
+		newSymbol = rhsSym
+	}
+	Put(c.Scopes, name, newSymbol)
+}
+
+// freeSymbolValue frees the memory owned by a symbol
+func (c *Compiler) freeSymbolValue(sym *Symbol) {
+	// Don't free static/global values (like string literals)
+	if c.StaticValues[sym.Val] {
+		return
+	}
+
+	switch sym.Type.Kind() {
+	case StrKind:
+		c.free([]llvm.Value{sym.Val})
+	case ArrayKind:
+		arrayType := sym.Type.(Array)
+		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+			c.freeArray(sym.Val, arrayType.ColTypes[0])
+		}
 	}
 }
 
@@ -511,6 +649,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+			s.ReadOnly = true // Mark as read-only constant
+			c.StaticValues[s.Val] = true // Mark as static - should not be freed
 			res = []*Symbol{s}
 			return
 		}
@@ -1387,18 +1527,8 @@ func (c *Compiler) cleanupScope() {
 		if sym.ReadOnly {
 			continue
 		}
-		// Clean up based on type
-		switch sym.Type.Kind() {
-		case StrKind:
-			// Strings are malloc'd pointers that need freeing
-			c.free([]llvm.Value{sym.Val})
-		case ArrayKind:
-			// Arrays need their specific cleanup function
-			arrayType := sym.Type.(Array)
-			if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-				c.freeArray(sym.Val, arrayType.ColTypes[0])
-			}
-		}
+		// Use centralized free logic that checks StaticValues
+		c.freeSymbolValue(sym)
 	}
 }
 
