@@ -402,12 +402,12 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, symToExpr map[int]ast.Expression) {
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) {
 	if len(idents) == 0 {
 		return
 	}
 
-	// Determine copy requirements by checking if RHS identifiers are in LHS
+	// Determine copy requirements by checking if RHS variables are in LHS
 	needsCopy := make([]bool, len(syms))
 	for i, rhsSym := range syms {
 		// Static values (ReadOnly) always need to be copied
@@ -416,17 +416,15 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, symToExpr m
 			continue
 		}
 
-		// Check if RHS is an identifier that's being overwritten in LHS
+		// Check if RHS is a variable that's being overwritten in LHS
 		canTransfer := false
-		if expr, ok := symToExpr[i]; ok {
-			if rhsIdent, ok := expr.(*ast.Identifier); ok {
-				// RHS is a variable - check if it's in the LHS
-				for _, lhsIdent := range idents {
-					if lhsIdent.Value == rhsIdent.Value {
-						// This variable is being overwritten, can transfer ownership
-						canTransfer = true
-						break
-					}
+		if rhsNames[i] != "" {
+			// RHS is a variable - check if it's in the LHS
+			for _, lhsIdent := range idents {
+				if lhsIdent.Value == rhsNames[i] {
+					// This variable is being overwritten, can transfer ownership
+					canTransfer = true
+					break
 				}
 			}
 		}
@@ -557,18 +555,24 @@ func (c *Compiler) unwrapSingleElementArray(arrSym *Symbol) *Symbol {
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
-	symToExpr := make(map[int]ast.Expression) // Map symbol index to source expression
+	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:], true)
-		// Track which expression each symbol came from
-		for j := range res {
-			symToExpr[i+j] = expr
+
+		// For each result symbol, record the source variable name if it's an identifier
+		var rhsName string
+		if ident, ok := expr.(*ast.Identifier); ok {
+			rhsName = ident.Value
 		}
+		for range res {
+			rhsNames = append(rhsNames, rhsName)
+		}
+
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms, symToExpr)
+	c.writeTo(stmt.Name, syms, rhsNames)
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
