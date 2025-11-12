@@ -44,7 +44,6 @@ type Compiler struct {
 	FuncCache     map[string]*Func
 	ExprCache     map[ast.Expression]*ExprInfo
 	Errors        []*token.CompileError
-	StaticValues  map[llvm.Value]bool // Track static/global values that should not be freed
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -62,7 +61,6 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		FuncCache:     make(map[string]*Func),
 		ExprCache:     make(map[ast.Expression]*ExprInfo),
 		Errors:        []*token.CompileError{},
-		StaticValues:  make(map[llvm.Value]bool),
 	}
 }
 
@@ -325,7 +323,7 @@ func (c *Compiler) compileMergeBlock(
 	// --- Phase 2: Copy static values in their respective blocks before merging
 	for i := range stmt.Name {
 		// If if-branch value is static (ReadOnly), copy it
-		if ifSyms[i].ReadOnly || c.StaticValues[ifSyms[i].Val] {
+		if ifSyms[i].ReadOnly {
 			// Position builder before the terminator of if-block to insert copy
 			// We know there's a terminator (the br instruction added earlier)
 			terminator := ifEnd.LastInstruction()
@@ -334,7 +332,7 @@ func (c *Compiler) compileMergeBlock(
 		}
 
 		// If else-branch value is static (ReadOnly), copy it
-		if elseSyms[i].ReadOnly || c.StaticValues[elseSyms[i].Val] {
+		if elseSyms[i].ReadOnly {
 			// Position builder before the terminator of else-block to insert copy
 			// We know there's a terminator (the br instruction added earlier)
 			terminator := elseEnd.LastInstruction()
@@ -453,8 +451,8 @@ func (c *Compiler) determineCopyRequirements(idents []*ast.Identifier, syms []*S
 	needsCopy := make([]bool, len(syms))
 
 	for i, rhsSym := range syms {
-		// Static values (like string literals) always need to be copied since we can't take ownership
-		if c.StaticValues[rhsSym.Val] {
+		// Static values (ReadOnly) always need to be copied since we can't take ownership
+		if rhsSym.ReadOnly {
 			needsCopy[i] = true
 			continue
 		}
@@ -545,8 +543,9 @@ func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
 
 // freeSymbolValue frees the memory owned by a symbol
 func (c *Compiler) freeSymbolValue(sym *Symbol) {
-	// Don't free static/global values (like string literals)
-	if c.StaticValues[sym.Val] {
+	// Don't free ReadOnly values (constants, string literals from .pt files, etc.)
+	// ReadOnly symbols are either global constants or borrowed references
+	if sym.ReadOnly {
 		return
 	}
 
@@ -649,8 +648,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-			s.ReadOnly = true            // Mark as read-only constant
-			c.StaticValues[s.Val] = true // Mark as static - should not be freed
+			s.ReadOnly = true // Mark as read-only constant - should not be freed
 			res = []*Symbol{s}
 			return
 		}
