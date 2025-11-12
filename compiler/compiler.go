@@ -402,14 +402,39 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, symToExpr map[int]ast.Expression) {
 	if len(idents) == 0 {
 		return
 	}
 
-	// Build ownership map and determine copy requirements
-	beforeOwners := c.buildOwnershipMap(idents)
-	needsCopy := c.determineCopyRequirements(idents, syms, beforeOwners)
+	// Determine copy requirements by checking if RHS identifiers are in LHS
+	needsCopy := make([]bool, len(syms))
+	for i, rhsSym := range syms {
+		// Static values (ReadOnly) always need to be copied
+		if rhsSym.ReadOnly {
+			needsCopy[i] = true
+			continue
+		}
+
+		// Check if RHS is an identifier that's being overwritten in LHS
+		canTransfer := false
+		if expr, ok := symToExpr[i]; ok {
+			if rhsIdent, ok := expr.(*ast.Identifier); ok {
+				// RHS is a variable - check if it's in the LHS
+				for _, lhsIdent := range idents {
+					if lhsIdent.Value == rhsIdent.Value {
+						// This variable is being overwritten, can transfer ownership
+						canTransfer = true
+						break
+					}
+				}
+			}
+		}
+
+		// If RHS is not a variable, or variable is not in LHS, we need to copy
+		// (because the original owner keeps the value)
+		needsCopy[i] = !canTransfer
+	}
 
 	// Process assignments in two phases to avoid use-after-free
 	for phase := 0; phase < 2; phase++ {
@@ -420,82 +445,6 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
 			}
 		}
 	}
-}
-
-// buildOwnershipMap tracks which variable owns which memory
-func (c *Compiler) buildOwnershipMap(idents []*ast.Identifier) map[llvm.Value]string {
-	beforeOwners := make(map[llvm.Value]string)
-
-	// Scan all variables in scope to build ownership map
-	for i := len(c.Scopes) - 1; i >= 0; i-- {
-		scope := c.Scopes[i]
-		for name, sym := range scope.Elems {
-			if sym.Type.Kind() == StrKind || sym.Type.Kind() == ArrayKind {
-				// Only record if not already in map (inner scopes shadow outer scopes)
-				if _, exists := beforeOwners[sym.Val]; !exists {
-					beforeOwners[sym.Val] = name
-				}
-			}
-		}
-		// Stop at function scope boundary
-		if scope.ScopeKind == FuncScope {
-			break
-		}
-	}
-
-	return beforeOwners
-}
-
-// determineCopyRequirements decides which RHS values need copying vs can be transferred
-func (c *Compiler) determineCopyRequirements(idents []*ast.Identifier, syms []*Symbol, beforeOwners map[llvm.Value]string) []bool {
-	needsCopy := make([]bool, len(syms))
-
-	for i, rhsSym := range syms {
-		// Static values (ReadOnly) always need to be copied since we can't take ownership
-		if rhsSym.ReadOnly {
-			needsCopy[i] = true
-			continue
-		}
-
-		owner, isOwned := beforeOwners[rhsSym.Val]
-
-		if !isOwned {
-			needsCopy[i] = false // Fresh allocation, can take ownership
-			continue
-		}
-
-		if !c.isOwnerBeingOverwritten(owner, idents) {
-			needsCopy[i] = true // Owner keeps it, must copy
-			continue
-		}
-
-		// Owner is being overwritten - check if multiple LHS want this memory
-		useCount := c.countMemoryUses(rhsSym.Val, syms)
-		needsCopy[i] = (useCount > 1 && i < len(syms)-1)
-	}
-
-	return needsCopy
-}
-
-// isOwnerBeingOverwritten checks if a variable will be overwritten in this statement
-func (c *Compiler) isOwnerBeingOverwritten(owner string, idents []*ast.Identifier) bool {
-	for _, ident := range idents {
-		if ident.Value == owner {
-			return true
-		}
-	}
-	return false
-}
-
-// countMemoryUses counts how many times a memory address is referenced in RHS
-func (c *Compiler) countMemoryUses(mem llvm.Value, syms []*Symbol) int {
-	count := 0
-	for _, sym := range syms {
-		if sym.Val == mem {
-			count++
-		}
-	}
-	return count
 }
 
 // performAssignment executes a single assignment with optional copying
@@ -608,13 +557,18 @@ func (c *Compiler) unwrapSingleElementArray(arrSym *Symbol) *Symbol {
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
+	symToExpr := make(map[int]ast.Expression) // Map symbol index to source expression
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:], true)
+		// Track which expression each symbol came from
+		for j := range res {
+			symToExpr[i+j] = expr
+		}
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms)
+	c.writeTo(stmt.Name, syms, symToExpr)
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
