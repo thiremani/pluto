@@ -227,6 +227,79 @@ class TestRunner:
         
         return True
 
+    def _check_memory_leaks(self, executable_path: Path, test_name: str) -> bool:
+        """
+        Check for memory leaks using platform-specific tools.
+        Returns True if no leaks detected, False otherwise.
+        """
+        import platform
+        system = platform.system()
+
+        # Only check memory leaks for the 'mem' test to avoid slowdown
+        if test_name != "mem":
+            return True
+
+        try:
+            if system == "Linux":
+                # Use valgrind on Linux
+                result = subprocess.run(
+                    ["valgrind", "--leak-check=full", "--error-exitcode=1",
+                     "--errors-for-leak-kinds=definite,possible", str(executable_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    print(f"{Fore.YELLOW}⚠️  Memory leaks detected by valgrind{Style.RESET_ALL}")
+                    # Print last 20 lines of valgrind output
+                    lines = result.stderr.splitlines()
+                    for line in lines[-20:]:
+                        if "LEAK SUMMARY" in line or "definitely lost" in line or "possibly lost" in line:
+                            print(f"  {line}")
+                    return False
+                else:
+                    print(f"{Fore.GREEN}✓ No memory leaks detected (valgrind){Style.RESET_ALL}")
+                    return True
+
+            elif system == "Darwin":  # macOS
+                # Use leaks on macOS
+                result = subprocess.run(
+                    ["leaks", "--atExit", "--", str(executable_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30
+                )
+                # leaks outputs to stdout, check for "0 leaks"
+                if "0 leaks for 0 total leaked bytes" in result.stdout:
+                    print(f"{Fore.GREEN}✓ No memory leaks detected (leaks){Style.RESET_ALL}")
+                    return True
+                else:
+                    print(f"{Fore.YELLOW}⚠️  Memory leaks detected by leaks{Style.RESET_ALL}")
+                    # Print summary
+                    for line in result.stdout.splitlines():
+                        if "leaks for" in line or "LEAK:" in line:
+                            print(f"  {line}")
+                    return False
+            else:
+                # Windows or other - skip memory leak detection
+                return True
+
+        except FileNotFoundError:
+            # Tool not available - warn but don't fail
+            if system == "Linux":
+                print(f"{Fore.YELLOW}⚠️  valgrind not found, skipping memory leak check{Style.RESET_ALL}")
+            elif system == "Darwin":
+                print(f"{Fore.YELLOW}⚠️  leaks command not found, skipping memory leak check{Style.RESET_ALL}")
+            return True
+        except subprocess.TimeoutExpired:
+            print(f"{Fore.YELLOW}⚠️  Memory leak check timed out{Style.RESET_ALL}")
+            return True
+        except Exception as e:
+            print(f"{Fore.YELLOW}⚠️  Memory leak check failed: {e}{Style.RESET_ALL}")
+            return True
+
     def _run_single_test(self, test_dir: Path, exp_file: Path):
         """
         Runs a single test case (one .exp file) and updates pass/fail counters.
@@ -242,6 +315,11 @@ class TestRunner:
             expected_output = exp_file.read_text(encoding="utf-8")
 
             if self._compare_outputs(expected_output, actual_output):
+                # Check for memory leaks
+                if not self._check_memory_leaks(executable_path, test_name):
+                    print(f"{Fore.YELLOW}⚠️  Test passed but has memory leaks{Style.RESET_ALL}")
+                    # Don't fail the test for memory leaks, just warn
+
                 print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                 self.passed += 1
                 # Clean up executable after successful test
