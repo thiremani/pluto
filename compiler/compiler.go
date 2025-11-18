@@ -410,9 +410,10 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 	// Determine copy requirements by checking if RHS variables are in LHS
 	needsCopy := make([]bool, len(syms))
 	for i, rhsSym := range syms {
-		// Static values (ReadOnly) always need to be copied
+		// ReadOnly values (string literals, function arguments) can be used directly as pointers
+		// No need to copy - they're immutable and live for the program lifetime or are borrowed
 		if rhsSym.ReadOnly {
-			needsCopy[i] = true
+			needsCopy[i] = false
 			continue
 		}
 
