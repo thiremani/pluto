@@ -409,13 +409,7 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 
 	// Determine copy requirements by checking if RHS variables are in LHS
 	needsCopy := make([]bool, len(syms))
-	for i, rhsSym := range syms {
-		// Static values (ReadOnly) always need to be copied
-		if rhsSym.ReadOnly {
-			needsCopy[i] = true
-			continue
-		}
-
+	for i := range syms {
 		// Check if RHS is a variable that's being overwritten in LHS
 		canTransfer := false
 		if rhsNames[i] != "" {
