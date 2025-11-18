@@ -1,0 +1,31 @@
+# Test string swap with function arguments
+s1, s2 = swapStr(a, b)
+    s1, s2 = b, a
+
+# Test array swap with function arguments
+a1, a2 = swapArr(x, y)
+    a1, a2 = y, x
+
+# Create a new string in a function
+result = createStr(prefix, suffix)
+    result = prefix ⊕ suffix
+
+# Create a new array in a function
+arr = createIntArr()
+    arr = [10 20 30]
+
+# Return string from function
+s = returnStr()
+    s = "returned"
+
+# Return array from function
+a = returnArr()
+    a = [100 200]
+
+# Multiple returns with string literals
+s1, s2, s3 = multiStr()
+    s1, s2, s3 = "first", "second", "third"
+
+# Multiple returns with arrays
+a1, a2 = multiArr()
+    a1, a2 = [1.5 2.5], [3.5 4.5]
