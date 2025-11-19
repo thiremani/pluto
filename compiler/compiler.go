@@ -396,9 +396,19 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 		s.ReadOnly = true // Global constant - should never be freed
 	case ArrayKind:
-		// Arrays are modeled as opaque pointers; null is a valid zero.
-		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-		s.ReadOnly = true // Null pointer - should never be freed
+		// Create an actual zero-length array (not null)
+		arrayType := symType.(Array)
+		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+			elemType := arrayType.ColTypes[0]
+			nConst := c.ConstI64(0)
+			arrVal := c.CreateArrayForType(elemType, nConst)
+			s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_zero")
+			s.ReadOnly = false // Heap-allocated array - should be freed
+		} else {
+			// If element type is unresolved, use null pointer temporarily
+			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+			s.ReadOnly = true // Null pointer - should never be freed
+		}
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
 	case ArrayRangeKind:
