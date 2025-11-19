@@ -12,8 +12,8 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool   // Is this a function parameter?
-	ReadOnly bool   // Can this be written to? (for output params vs input params)
+	FuncArg  bool // Is this a function parameter?
+	ReadOnly bool // Can this be written to? (for output params vs input params)
 }
 
 type funcArgs struct {
@@ -320,23 +320,27 @@ func (c *Compiler) compileMergeBlock(
 		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	// --- Phase 2: Handle mixed ownership cases for strings
+	// --- Phase 2: Handle ownership and copying for PHI merges
 	//
-	// PHI nodes merge values from two branches. For strings:
-	// - Both static: result is static (no cleanup needed)
-	// - Both heap: result is heap (will be freed at cleanup)
-	// - Mixed: copy the static string to heap to ensure consistent semantics
+	// PHI nodes merge values from two branches. We need to ensure consistent ownership:
 	//
-	// Arrays are always heap-allocated, so no special handling needed.
-	// Function arguments are always borrowed (checked via FuncArg flag).
+	// For strings:
+	// - Both static: result is static (no copy needed)
+	// - Both heap: need to copy BOTH (only one executes, so copy for value semantics)
+	// - Mixed: copy the static one to heap
+	//
+	// For arrays:
+	// - Always copy BOTH branches (arrays always have value semantics, no ownership transfer)
+	//
+	// Only one branch executes at runtime, so we copy to ensure the result owns its value.
 	for i := range stmt.Name {
-		// Check if we need to copy based on storage class
-		if strType, ok := ifSyms[i].Type.(Str); ok {
-			ifStatic := strType.Static
+		switch t := ifSyms[i].Type.(type) {
+		case Str:
+			ifStatic := t.Static
 			elseStrType, _ := elseSyms[i].Type.(Str)
 			elseStatic := elseStrType.Static
 
-			// Mixed storage class: one static, one heap - copy the static one
+			// Copy based on storage class to ensure consistent ownership
 			if ifStatic && !elseStatic {
 				// If-branch is static, else-branch is heap - copy if-branch to heap
 				terminator := ifEnd.LastInstruction()
@@ -347,8 +351,27 @@ func (c *Compiler) compileMergeBlock(
 				terminator := elseEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
 				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+			} else if !ifStatic && !elseStatic {
+				// Both heap strings - copy both to maintain value semantics
+				terminator := ifEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+
+				terminator = elseEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
 			}
-			// If both static or both heap, no copying needed
+			// If both static, no copy needed (static literals live forever)
+
+		case Array:
+			// Arrays always have value semantics - copy both branches
+			terminator := ifEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+
+			terminator = elseEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
 		}
 	}
 
