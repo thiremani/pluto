@@ -92,9 +92,6 @@ type Str struct {
 }
 
 func (s Str) String() string {
-	if s.Static {
-		return "StaticStr"
-	}
 	return "Str"
 }
 
