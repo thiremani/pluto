@@ -320,35 +320,33 @@ func (c *Compiler) compileMergeBlock(
 		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	// --- Phase 2: Copy ReadOnly values in their respective blocks before merging
+	// --- Phase 2: Handle mixed ownership cases
 	//
-	// IMPORTANT: We only copy ReadOnly values, NOT all heap-allocated values. Here's why:
+	// PHI nodes merge values from two branches. For ownership tracking:
+	// - Both ReadOnly: result is ReadOnly (borrowed reference, no cleanup needed)
+	// - Both owned: result is owned (will be freed at cleanup)
+	// - Mixed: copy the ReadOnly value to make both owned, ensuring consistent semantics
 	//
-	// At runtime, only ONE branch executes (not both). The PHI node is just SSA's way of
-	// representing "this value came from one of two branches, but we don't know which at
-	// compile time." So there's no risk of leaking the "non-selected" value - it never
-	// gets created in the first place.
-	//
-	// ReadOnly values (string literals, function arguments) are borrowed references that
-	// we don't own. We must copy them to create owned values that the result variable can
-	// manage. Non-ReadOnly values are already heap-allocated and owned, so we can transfer
-	// ownership directly through the PHI node without copying.
+	// We only copy when necessary (mixed ownership) to avoid inefficient copying of
+	// static string literals when both branches are static.
 	for i := range stmt.Name {
-		// If if-branch value is ReadOnly (string literal, func arg), copy it
-		if ifSyms[i].ReadOnly {
-			// Position builder before the terminator of if-block to insert copy
+		ifReadOnly := ifSyms[i].ReadOnly
+		elseReadOnly := elseSyms[i].ReadOnly
+
+		// Mixed ownership: one branch is borrowed, the other is owned
+		// Copy the borrowed reference to create an owned value
+		if ifReadOnly && !elseReadOnly {
+			// If-branch is borrowed, else-branch is owned - copy if-branch
 			terminator := ifEnd.LastInstruction()
 			c.builder.SetInsertPointBefore(terminator)
 			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-		}
-
-		// If else-branch value is ReadOnly (string literal, func arg), copy it
-		if elseSyms[i].ReadOnly {
-			// Position builder before the terminator of else-block to insert copy
+		} else if !ifReadOnly && elseReadOnly {
+			// Else-branch is borrowed, if-branch is owned - copy else-branch
 			terminator := elseEnd.LastInstruction()
 			c.builder.SetInsertPointBefore(terminator)
 			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
 		}
+		// If both ReadOnly or both owned, no copying needed
 	}
 
 	// --- Phase 3: Hook up PHIs and do the stores/updates
@@ -371,6 +369,10 @@ func (c *Compiler) compileMergeBlock(
 			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
 
+		// Determine ReadOnly status of PHI result
+		// After phase 2 normalization, both branches have the same ReadOnly status
+		resultReadOnly := ifSyms[i].ReadOnly && elseSyms[i].ReadOnly
+
 		// if the variable was stack-allocated, store back
 		orig, _ := Get(c.Scopes, name)
 		if ptr, ok := orig.Type.(Ptr); ok {
@@ -378,7 +380,11 @@ func (c *Compiler) compileMergeBlock(
 			c.createStore(phi, orig.Val, ptr.Elem)
 		} else {
 			// pure SSA: update the symbol to the PHI
-			Put(c.Scopes, name, &Symbol{Val: phi, Type: ifSyms[i].Type})
+			Put(c.Scopes, name, &Symbol{
+				Val:      phi,
+				Type:     ifSyms[i].Type,
+				ReadOnly: resultReadOnly,
+			})
 		}
 	}
 }
