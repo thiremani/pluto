@@ -84,12 +84,17 @@ func (p Ptr) Kind() Kind {
 }
 
 // Str represents a string type.
-// You can optionally store a maximum length if needed.
+// Static indicates whether this string is static storage (string literal)
+// or heap-allocated (from strdup, sprintf_alloc, etc.)
 type Str struct {
 	Length int
+	Static bool // true for string literals, false for heap strings
 }
 
 func (s Str) String() string {
+	if s.Static {
+		return "StaticStr"
+	}
 	return "Str"
 }
 

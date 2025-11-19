@@ -12,8 +12,8 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool
-	ReadOnly bool
+	FuncArg  bool   // Is this a function parameter?
+	ReadOnly bool   // Can this be written to? (for output params vs input params)
 }
 
 type funcArgs struct {
@@ -320,33 +320,36 @@ func (c *Compiler) compileMergeBlock(
 		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	// --- Phase 2: Handle mixed ownership cases
+	// --- Phase 2: Handle mixed ownership cases for strings
 	//
-	// PHI nodes merge values from two branches. For ownership tracking:
-	// - Both ReadOnly: result is ReadOnly (borrowed reference, no cleanup needed)
-	// - Both owned: result is owned (will be freed at cleanup)
-	// - Mixed: copy the ReadOnly value to make both owned, ensuring consistent semantics
+	// PHI nodes merge values from two branches. For strings:
+	// - Both static: result is static (no cleanup needed)
+	// - Both heap: result is heap (will be freed at cleanup)
+	// - Mixed: copy the static string to heap to ensure consistent semantics
 	//
-	// We only copy when necessary (mixed ownership) to avoid inefficient copying of
-	// static string literals when both branches are static.
+	// Arrays are always heap-allocated, so no special handling needed.
+	// Function arguments are always borrowed (checked via FuncArg flag).
 	for i := range stmt.Name {
-		ifReadOnly := ifSyms[i].ReadOnly
-		elseReadOnly := elseSyms[i].ReadOnly
+		// Check if we need to copy based on storage class
+		if strType, ok := ifSyms[i].Type.(Str); ok {
+			ifStatic := strType.Static
+			elseStrType, _ := elseSyms[i].Type.(Str)
+			elseStatic := elseStrType.Static
 
-		// Mixed ownership: one branch is borrowed, the other is owned
-		// Copy the borrowed reference to create an owned value
-		if ifReadOnly && !elseReadOnly {
-			// If-branch is borrowed, else-branch is owned - copy if-branch
-			terminator := ifEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-		} else if !ifReadOnly && elseReadOnly {
-			// Else-branch is borrowed, if-branch is owned - copy else-branch
-			terminator := elseEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+			// Mixed storage class: one static, one heap - copy the static one
+			if ifStatic && !elseStatic {
+				// If-branch is static, else-branch is heap - copy if-branch to heap
+				terminator := ifEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+			} else if !ifStatic && elseStatic {
+				// Else-branch is static, if-branch is heap - copy else-branch to heap
+				terminator := elseEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+			}
+			// If both static or both heap, no copying needed
 		}
-		// If both ReadOnly or both owned, no copying needed
 	}
 
 	// --- Phase 3: Hook up PHIs and do the stores/updates
@@ -369,9 +372,14 @@ func (c *Compiler) compileMergeBlock(
 			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
 
-		// Determine ReadOnly status of PHI result
-		// After phase 2 normalization, both branches have the same ReadOnly status
-		resultReadOnly := ifSyms[i].ReadOnly && elseSyms[i].ReadOnly
+		// Determine the result type, preserving Str.Static flag
+		// After phase 2 normalization, both branches have the same storage class
+		resultType := ifSyms[i].Type
+		if strType, ok := ifSyms[i].Type.(Str); ok {
+			elseStrType, _ := elseSyms[i].Type.(Str)
+			// Both branches should have same Static flag after phase 2 normalization
+			resultType = Str{Static: strType.Static && elseStrType.Static}
+		}
 
 		// if the variable was stack-allocated, store back
 		orig, _ := Get(c.Scopes, name)
@@ -381,9 +389,8 @@ func (c *Compiler) compileMergeBlock(
 		} else {
 			// pure SSA: update the symbol to the PHI
 			Put(c.Scopes, name, &Symbol{
-				Val:      phi,
-				Type:     ifSyms[i].Type,
-				ReadOnly: resultReadOnly,
+				Val:  phi,
+				Type: resultType,
 			})
 		}
 	}
@@ -399,21 +406,22 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
+		s.Type = Str{Static: true} // Zero value is static empty string
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
-		s.ReadOnly = true // Global constant - should never be freed
 	case ArrayKind:
 		// Create an actual zero-length array (not null)
+		// Arrays are always heap-allocated, even when empty
 		arrayType := symType.(Array)
 		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
 			elemType := arrayType.ColTypes[0]
 			nConst := c.ConstI64(0)
 			arrVal := c.CreateArrayForType(elemType, nConst)
 			s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_zero")
-			s.ReadOnly = false // Heap-allocated array - should be freed
+			// No need for ReadOnly flag - arrays are always heap, always freed (unless FuncArg)
 		} else {
 			// If element type is unresolved, use null pointer temporarily
+			// This should be rare and will be resolved later
 			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-			s.ReadOnly = true // Null pointer - should never be freed
 		}
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
@@ -435,12 +443,17 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		return
 	}
 
-	// Determine copy requirements by checking if RHS variables are in LHS
+	// Determine copy requirements based on storage class and ownership
 	needsCopy := make([]bool, len(syms))
 	for i, rhsSym := range syms {
-		// ReadOnly values (string literals, function arguments) can be used directly as pointers
-		// No need to copy - they're immutable and live for the program lifetime or are borrowed
-		if rhsSym.ReadOnly {
+		// Check if this is a static string (no copy needed - immutable, lives forever)
+		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
+			needsCopy[i] = false
+			continue
+		}
+
+		// Function arguments are borrowed references - no copy needed
+		if rhsSym.FuncArg {
 			needsCopy[i] = false
 			continue
 		}
@@ -485,8 +498,8 @@ func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy boo
 
 // assignToExisting handles assignment to an existing variable
 func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
-	// Free old value if different
-	if lhsSym.Val != rhsSym.Val && !lhsSym.FuncArg && !lhsSym.ReadOnly {
+	// Free old value if different (freeSymbolValue checks Static flag internally)
+	if lhsSym.Val != rhsSym.Val {
 		c.freeSymbolValue(lhsSym)
 	}
 
@@ -519,19 +532,21 @@ func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
 
 // freeSymbolValue frees the memory owned by a symbol
 func (c *Compiler) freeSymbolValue(sym *Symbol) {
-	// Don't free ReadOnly values (constants, string literals from .pt files, etc.)
-	// ReadOnly symbols are either global constants or borrowed references
-	if sym.ReadOnly {
+	// Don't free function arguments - they're borrowed references
+	if sym.FuncArg {
 		return
 	}
 
-	switch sym.Type.Kind() {
-	case StrKind:
-		c.free([]llvm.Value{sym.Val})
-	case ArrayKind:
-		arrayType := sym.Type.(Array)
-		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-			c.freeArray(sym.Val, arrayType.ColTypes[0])
+	switch t := sym.Type.(type) {
+	case Str:
+		// Only free heap-allocated strings, not static literals
+		if !t.Static {
+			c.free([]llvm.Value{sym.Val})
+		}
+	case Array:
+		// Arrays are always heap-allocated (except null pointers for unresolved types)
+		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
+			c.freeArray(sym.Val, t.ColTypes[0])
 		}
 	}
 }
@@ -626,27 +641,27 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		s.Type = Str{}
 		// Process markers eagerly at string creation time
 		formatted, args, toFree := c.formatString(e)
 
-		// No markers, create a regular string literal
+		// No markers, create a regular string literal (static storage)
 		if len(args) == 0 {
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
+			s.Type = Str{Static: true} // Static string literal in .rodata
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-			s.ReadOnly = true // Mark as read-only constant - should not be freed
 			res = []*Symbol{s}
 			return
 		}
 
-		// Build formatted string with sprintf_alloc
+		// Build formatted string with sprintf_alloc (heap-allocated)
 		formatPtr := c.createFormatStringGlobal(formatted)
 		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
 		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
 		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
 		c.free(toFree)
 
+		s.Type = Str{Static: false} // Heap-allocated formatted string
 		s.Val = resultPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
@@ -852,10 +867,20 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		}
 	}
 
+	// Normalize types for operator lookup (ignore Static flag for strings)
+	leftType := l.Type
+	if _, ok := leftType.(Str); ok {
+		leftType = Str{} // Normalize to plain Str{} for lookup
+	}
+	rightType := r.Type
+	if _, ok := rightType.(Str); ok {
+		rightType = Str{} // Normalize to plain Str{} for lookup
+	}
+
 	key := opKey{
 		Operator:  op,
-		LeftType:  l.Type,
-		RightType: r.Type,
+		LeftType:  leftType,
+		RightType: rightType,
 	}
 	return defaultOps[key](c, l, r, true)
 }
@@ -1461,9 +1486,14 @@ func (c *Compiler) copyArray(arr llvm.Value, elemType Type) llvm.Value {
 func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 	switch sym.Type.Kind() {
 	case StrKind:
-		// Deep copy the string
+		// Deep copy the string - result is always heap-allocated
 		copiedStr := c.copyString(sym.Val)
-		return &Symbol{Val: copiedStr, Type: sym.Type, FuncArg: false, ReadOnly: false}
+		return &Symbol{
+			Val:      copiedStr,
+			Type:     Str{Static: false}, // Copied strings are always heap-allocated
+			FuncArg:  false,
+			ReadOnly: false,
+		}
 	case ArrayKind:
 		// Deep copy the array
 		arrayType := sym.Type.(Array)
@@ -1473,7 +1503,12 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 				return sym
 			}
 			copiedArr := c.copyArray(sym.Val, arrayType.ColTypes[0])
-			return &Symbol{Val: copiedArr, Type: sym.Type, FuncArg: false, ReadOnly: false}
+			return &Symbol{
+				Val:      copiedArr,
+				Type:     sym.Type, // Arrays don't have Static flag
+				FuncArg:  false,
+				ReadOnly: false,
+			}
 		}
 	}
 	// For other types (int, float, range), just return as-is (they're value types)
@@ -1504,16 +1539,24 @@ func (c *Compiler) cleanupScope() {
 	}
 	currentScope := c.Scopes[len(c.Scopes)-1]
 	for _, sym := range currentScope.Elems {
-		// Skip function arguments - they're borrowed, not owned
+		// Skip function arguments - they're borrowed references, not owned
 		if sym.FuncArg {
 			continue
 		}
-		// Skip read-only symbols (constants)
-		if sym.ReadOnly {
-			continue
+
+		// Check if this symbol needs cleanup based on type
+		switch t := sym.Type.(type) {
+		case Str:
+			// Only free heap-allocated strings, not static literals
+			if !t.Static {
+				c.free([]llvm.Value{sym.Val})
+			}
+		case Array:
+			// Arrays are always heap-allocated (unless unresolved null pointer)
+			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
+				c.freeArray(sym.Val, t.ColTypes[0])
+			}
 		}
-		// Use centralized free logic that checks StaticValues
-		c.freeSymbolValue(sym)
 	}
 }
 
