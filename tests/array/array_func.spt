@@ -1,26 +1,26 @@
-square_res = square([1 2 3])
+square_res = Square([1 2 3])
 "Square: -square_res"
 
-sum_vals, prod_vals = sum_and_product([1 2], [3 4])
+sum_vals, prod_vals = SumAndProduct([1 2], [3 4])
 "Sum: -sum_vals"
 "Prod: -prod_vals"
 
-biased = bias_and_scale([1 2 3], 10, 2)
+biased = BiasAndScale([1 2 3], 10, 2)
 "BiasScale: -biased"
 
-mixed_sum, mixed_prod = sum_and_product([1 2], 5)
+mixed_sum, mixed_prod = SumAndProduct([1 2], 5)
 "SumProductMixed: -mixed_sum"
 "ProdMixed: -mixed_prod"
 
-rev_sum, rev_prod = sum_and_product(5, [1 2])
+rev_sum, rev_prod = SumAndProduct(5, [1 2])
 "SumProductReverse: -rev_sum"
 "ProdReverse: -rev_prod"
 
-scalar_sum, scalar_prod = sum_and_product(2, 3)
+scalar_sum, scalar_prod = SumAndProduct(2, 3)
 "SumProductScalar: -scalar_sum"
 "ProdScalar: -scalar_prod"
 
-scalar = square(7)
+scalar = Square(7)
 "SquareScalar: -scalar"
 
 arr1 = [] ⊕ [0]
