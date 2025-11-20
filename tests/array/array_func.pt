@@ -9,5 +9,5 @@ res = bias_and_scale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
 
-res = ConstVec(i)
-    res = [i]
+res = Push(vec, x)
+    res = vec ⊕ [x]

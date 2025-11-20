@@ -9,5 +9,5 @@ ProdReverse: [5 10]
 SumProductScalar: 5
 ProdScalar: 6
 SquareScalar: 49
-ConstVecScalar: [0]
-ConstVecRange: [0 1 2 3 4]
+DirectConcatScalar: [0]
+DirectConcatRange: [0 1 2 3 4]

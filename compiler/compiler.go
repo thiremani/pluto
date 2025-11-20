@@ -526,10 +526,8 @@ func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol,
 		c.freeSymbolValue(lhsSym)
 	}
 
-	// Handle type coercion
-	valueToStore := c.coerceValueForAssignment(lhsSym.Type, rhsSym)
-
 	// Copy only if needed
+	valueToStore := rhsSym
 	if shouldCopy {
 		valueToStore = c.deepCopyIfNeeded(valueToStore)
 	}
@@ -574,51 +572,6 @@ func (c *Compiler) freeSymbolValue(sym *Symbol) {
 	}
 }
 
-// coerceValueForAssignment handles type coercion when assigning values.
-// Currently handles single-element array unwrapping for scalar accumulation in function iterations.
-//
-// When a function iterates over range/array parameters, output variables are allocated
-// as scalar temporaries. If the function body assigns a single-element array like [i],
-// we extract the scalar value for proper accumulation.
-//
-// Example:
-//
-//	res = ConstVec(i)
-//	    res = [i]
-//
-// When called with ConstVec(0:5), each iteration assigns [0], [1], etc. to a scalar temp.
-// This function extracts the scalar values 0, 1, 2, 3, 4 for accumulation.
-func (c *Compiler) coerceValueForAssignment(targetType Type, value *Symbol) *Symbol {
-	// Unwrap pointer type to get the actual target type
-	actualTargetType := targetType
-	if ptr, ok := targetType.(Ptr); ok {
-		actualTargetType = ptr.Elem
-	}
-
-	// Check if we're assigning an array to a scalar
-	if actualTargetType.Kind() != ArrayKind && value.Type.Kind() == ArrayKind {
-		return c.unwrapSingleElementArray(value)
-	}
-
-	return value
-}
-
-// unwrapSingleElementArray extracts the first element from a single-element array.
-// If the array is empty or has multiple columns, returns the array unchanged.
-func (c *Compiler) unwrapSingleElementArray(arrSym *Symbol) *Symbol {
-	arrType := arrSym.Type.(Array)
-
-	// Safety: check array is non-empty (has at least one element)
-	// Note: For dynamically sized arrays, Length may be 0 even if non-empty
-	// We rely on the type system to ensure this is only called for non-empty arrays
-	elemType := arrType.ColTypes[0]
-
-	// Extract array[0]
-	zero := c.ConstI64(0)
-	elemVal := c.ArrayGet(arrSym, elemType, zero)
-
-	return &Symbol{Val: elemVal, Type: elemType}
-}
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
@@ -1400,7 +1353,28 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 
 	mangled := mangle(ce.Function.Value, paramTypes)
 	fnInfo := c.FuncCache[mangled]
-	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
+
+	// Get the actual output types from ExprCache (which may have wrapped types for iteration)
+	// For script-level calls, ExprCache has the wrapped types.
+	// For calls within function bodies, ExprCache may not have an entry, so use fnInfo.OutTypes.
+	outTypes := fnInfo.OutTypes
+	if exprInfo, ok := c.ExprCache[ce]; ok {
+		outTypes = exprInfo.OutTypes
+	}
+
+	// Check for unresolved types - this indicates a type inference failure
+	for i, t := range outTypes {
+		if t.Kind() == UnresolvedKind {
+			// If wrapped type is unresolved, check if base type is resolved
+			if i < len(fnInfo.OutTypes) && fnInfo.OutTypes[i].Kind() != UnresolvedKind {
+				// Use base types as fallback
+				outTypes = fnInfo.OutTypes
+				break
+			}
+		}
+	}
+
+	retStruct := c.getReturnStruct(mangled, outTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
 	llvmInputs := make([]llvm.Type, len(paramTypes))
@@ -1416,11 +1390,19 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		}
 		template := c.CodeCompiler.Code.Func.Map[fk]
 		savedBlock := c.builder.GetInsertBlock()
-		fn = c.compileFunc(template, args, mangled, fnInfo, retStruct, funcType)
+
+		// Create a Func with the wrapped output types for compilation
+		// The wrapped types are needed so array accumulators are created for iteration
+		funcForCompile := &Func{
+			Name:     fnInfo.Name,
+			Params:   fnInfo.Params,
+			OutTypes: outTypes,
+		}
+		fn = c.compileFunc(template, args, mangled, funcForCompile, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	return c.callFunctionDirect(fn, funcType, retStruct, fnInfo.OutTypes, args, sretPtr)
+	return c.callFunctionDirect(fn, funcType, retStruct, outTypes, args, sretPtr)
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStruct llvm.Type, outTypes []Type, args []*Symbol, sretPtr llvm.Value) []*Symbol {
