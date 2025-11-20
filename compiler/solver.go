@@ -1308,6 +1308,7 @@ func (ts *TypeSolver) finishCallTypes(f *Func, ce *ast.CallExpression, arrayIter
 	rangesCopy := append([]*RangeInfo(nil), arrayIters...)
 	info := &ExprInfo{OutTypes: finalOut, ExprLen: len(finalOut), Ranges: rangesCopy}
 	ts.ExprCache[ce] = info
+	f.OutTypes = finalOut
 	return finalOut
 }
 

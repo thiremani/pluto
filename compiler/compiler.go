@@ -499,6 +499,24 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		needsCopy[i] = !canTransfer
 	}
 
+	// Validate type compatibility for existing bindings before performing assignments.
+	// In vectorized functions, outputs are scalar temps (Ptr to element type). If a user
+	// assigns an array literal/range to such a temp (e.g., res = [i]), we cannot store
+	// the array into the scalar slot; require explicit concat instead.
+	for i, ident := range idents {
+		if lhsSym, ok := Get(c.Scopes, ident.Value); ok {
+			if ptrType, isPtr := lhsSym.Type.(Ptr); isPtr {
+				if ptrType.Elem.Kind() != ArrayKind && syms[i].Type.Kind() == ArrayKind && ptrType.Elem.Kind() != UnresolvedKind {
+					c.Errors = append(c.Errors, &token.CompileError{
+						Token: ident.Token,
+						Msg:   fmt.Sprintf("cannot assign array to scalar output %q; use concat (⊕) into an array variable instead", ident.Value),
+					})
+					return
+				}
+			}
+		}
+	}
+
 	// Process assignments in two phases to avoid use-after-free
 	for phase := 0; phase < 2; phase++ {
 		for i, ident := range idents {
@@ -571,7 +589,6 @@ func (c *Compiler) freeSymbolValue(sym *Symbol) {
 		}
 	}
 }
-
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
@@ -1354,27 +1371,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 	mangled := mangle(ce.Function.Value, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 
-	// Get the actual output types from ExprCache (which may have wrapped types for iteration)
-	// For script-level calls, ExprCache has the wrapped types.
-	// For calls within function bodies, ExprCache may not have an entry, so use fnInfo.OutTypes.
-	outTypes := fnInfo.OutTypes
-	if exprInfo, ok := c.ExprCache[ce]; ok {
-		outTypes = exprInfo.OutTypes
-	}
-
-	// Check for unresolved types - this indicates a type inference failure
-	for i, t := range outTypes {
-		if t.Kind() == UnresolvedKind {
-			// If wrapped type is unresolved, check if base type is resolved
-			if i < len(fnInfo.OutTypes) && fnInfo.OutTypes[i].Kind() != UnresolvedKind {
-				// Use base types as fallback
-				outTypes = fnInfo.OutTypes
-				break
-			}
-		}
-	}
-
-	retStruct := c.getReturnStruct(mangled, outTypes)
+	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
 	llvmInputs := make([]llvm.Type, len(paramTypes))
@@ -1391,18 +1388,11 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		template := c.CodeCompiler.Code.Func.Map[fk]
 		savedBlock := c.builder.GetInsertBlock()
 
-		// Create a Func with the wrapped output types for compilation
-		// The wrapped types are needed so array accumulators are created for iteration
-		funcForCompile := &Func{
-			Name:     fnInfo.Name,
-			Params:   fnInfo.Params,
-			OutTypes: outTypes,
-		}
-		fn = c.compileFunc(template, args, mangled, funcForCompile, retStruct, funcType)
+		fn = c.compileFunc(template, args, mangled, fnInfo, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	return c.callFunctionDirect(fn, funcType, retStruct, outTypes, args, sretPtr)
+	return c.callFunctionDirect(fn, funcType, retStruct, fnInfo.OutTypes, args, sretPtr)
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStruct llvm.Type, outTypes []Type, args []*Symbol, sretPtr llvm.Value) []*Symbol {
