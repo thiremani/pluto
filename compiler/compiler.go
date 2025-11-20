@@ -513,6 +513,15 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 					})
 					return
 				}
+				continue
+			}
+			// Non-pointer scalar target cannot accept an array value.
+			if lhsSym.Type.Kind() != ArrayKind && syms[i].Type.Kind() == ArrayKind && lhsSym.Type.Kind() != UnresolvedKind {
+				c.Errors = append(c.Errors, &token.CompileError{
+					Token: ident.Token,
+					Msg:   fmt.Sprintf("cannot assign array to scalar %q; use concat (⊕) into an array variable instead", ident.Value),
+				})
+				return
 			}
 		}
 	}
