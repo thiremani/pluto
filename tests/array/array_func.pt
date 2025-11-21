@@ -9,5 +9,6 @@ res = BiasAndScale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
 
-res = Rebuild(i)
+res = Rebuild(vec, i)
     res = [i + 1]
+    res = res + vec
