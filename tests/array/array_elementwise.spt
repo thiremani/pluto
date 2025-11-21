@@ -95,3 +95,7 @@ x = [1 2 3]
 y = [4 5]
 polyZip = 1 + 4x * y^2 + 3x^2 * y + x^3 * y^3
 "Poly zip x*y: -polyZip"
+
+# Multi-variable polynomial with mixed powers and addition (zip-to-min)
+polyAdd = 2x^2 + 3y^3 + 5x * y + 7
+"Poly zip add mix: -polyAdd"
