@@ -8,3 +8,6 @@ res, prod = SumAndProduct(a, b)
 res = BiasAndScale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
+
+res = Rebuild(i)
+    res = [i + 1]

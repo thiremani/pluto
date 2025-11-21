@@ -33,3 +33,7 @@ arr2 = arr2 ⊕ [0:5]
 # Range call in array literal
 squareVec = [Square(0:5)]
 "SquareVecRange: -squareVec"
+
+# Ensure function-internal array assignment builds a fresh array (no accumulation on param)
+rebuilt = Rebuild(0:3)
+"RebuildAssign: -rebuilt"
