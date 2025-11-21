@@ -499,33 +499,6 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		needsCopy[i] = !canTransfer
 	}
 
-	// Validate type compatibility for existing bindings before performing assignments.
-	// In vectorized functions, outputs are scalar temps (Ptr to element type). If a user
-	// assigns an array literal/range to such a temp (e.g., res = [i]), we cannot store
-	// the array into the scalar slot; require explicit concat instead.
-	for i, ident := range idents {
-		if lhsSym, ok := Get(c.Scopes, ident.Value); ok {
-			if ptrType, isPtr := lhsSym.Type.(Ptr); isPtr {
-				if ptrType.Elem.Kind() != ArrayKind && syms[i].Type.Kind() == ArrayKind && ptrType.Elem.Kind() != UnresolvedKind {
-					c.Errors = append(c.Errors, &token.CompileError{
-						Token: ident.Token,
-						Msg:   fmt.Sprintf("cannot assign array to scalar output %q; use concat (⊕) into an array variable instead", ident.Value),
-					})
-					return
-				}
-				continue
-			}
-			// Non-pointer scalar target cannot accept an array value.
-			if lhsSym.Type.Kind() != ArrayKind && syms[i].Type.Kind() == ArrayKind && lhsSym.Type.Kind() != UnresolvedKind {
-				c.Errors = append(c.Errors, &token.CompileError{
-					Token: ident.Token,
-					Msg:   fmt.Sprintf("cannot assign array to scalar %q; use concat (⊕) into an array variable instead", ident.Value),
-				})
-				return
-			}
-		}
-	}
-
 	// Process assignments in two phases to avoid use-after-free
 	for phase := 0; phase < 2; phase++ {
 		for i, ident := range idents {
