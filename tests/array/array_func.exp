@@ -1,6 +1,6 @@
 Square: [1 4 9]
-Sum: [4 5 5 6]
-Prod: [3 4 6 8]
+Sum: [4 6]
+Prod: [3 8]
 BiasScale: [22 24 26]
 SumProductMixed: [6 7]
 ProdMixed: [5 10]

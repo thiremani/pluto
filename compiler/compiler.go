@@ -826,6 +826,28 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 	l := c.derefIfPointer(left)
 	r := c.derefIfPointer(right)
 
+	// Handle array operands early to avoid falling through to scalar op table
+	if l.Type.Kind() == ArrayKind || r.Type.Kind() == ArrayKind {
+		// Determine element type preference: use expected if it's an array, otherwise
+		// use the available array operand's column type.
+		var elem Type
+		if expArr, ok := expected.(Array); ok && len(expArr.ColTypes) > 0 {
+			elem = expArr.ColTypes[0]
+		} else if l.Type.Kind() == ArrayKind {
+			elem = l.Type.(Array).ColTypes[0]
+		} else {
+			elem = r.Type.(Array).ColTypes[0]
+		}
+
+		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
+			return c.compileArrayArrayInfix(op, l, r, elem)
+		}
+		if l.Type.Kind() == ArrayKind {
+			return c.compileArrayScalarInfix(op, l, r, elem, true)
+		}
+		return c.compileArrayScalarInfix(op, r, l, elem, false)
+	}
+
 	if expectedArr, ok := expected.(Array); ok {
 		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
 			return c.compileArrayArrayInfix(op, l, r, expectedArr.ColTypes[0])
