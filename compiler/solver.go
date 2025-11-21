@@ -1227,16 +1227,6 @@ func (ts *TypeSolver) appendStandardCallArg(arg Type, expr ast.Expression, args 
 	case RangeKind:
 		paramType = arg
 		*innerArgs = append(*innerArgs, arg.(Range).Iter)
-	case ArrayKind:
-		arr := arg.(Array)
-		paramType = arr
-		*innerArgs = append(*innerArgs, arr.ColTypes[0])
-		*arrayIters = append(*arrayIters, &RangeInfo{
-			Name:      ts.FreshIterName(),
-			ArrayExpr: expr,
-			ArrayType: arr,
-			Over:      IterArray,
-		})
 	case ArrayRangeKind:
 		arrRange := arg.(ArrayRange)
 		paramType = arrRange
@@ -1297,13 +1287,6 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 func (ts *TypeSolver) finishCallTypes(f *Func, ce *ast.CallExpression, arrayIters []*RangeInfo) []Type {
 	rawOut := append([]Type(nil), f.OutTypes...)
 	finalOut := rawOut
-	if len(arrayIters) > 0 {
-		wrapped := make([]Type, len(rawOut))
-		for i, ot := range rawOut {
-			wrapped[i] = Array{Headers: nil, ColTypes: []Type{ot}, Length: 0}
-		}
-		finalOut = wrapped
-	}
 
 	rangesCopy := append([]*RangeInfo(nil), arrayIters...)
 	info := &ExprInfo{OutTypes: finalOut, ExprLen: len(finalOut), Ranges: rangesCopy}

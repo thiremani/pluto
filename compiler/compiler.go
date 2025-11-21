@@ -1123,7 +1123,7 @@ func (c *Compiler) processParams(fn *ast.FuncStatement, args []*Symbol, function
 	for i, arg := range args {
 		name := fn.Parameters[i].Value
 		kind := arg.Type.Kind()
-		if kind == RangeKind || kind == ArrayKind || kind == ArrayRangeKind {
+		if kind == RangeKind || kind == ArrayRangeKind {
 			iterIndices = append(iterIndices, i)
 			continue
 		}
@@ -1152,26 +1152,17 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value, hasArrayIter bool) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
 	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
-	arrayAccs := make([]*ArrayAccumulator, len(finalOutTypes))
-	if hasArrayIter {
-		arrayAccs = c.initRangeArrayAccumulators(finalOutTypes)
-	}
 
 	fa := &funcArgs{
 		args:        args,
 		outputs:     outputs,
 		iterIndices: iterIndices,
 		iters:       make(map[string]*Symbol),
-		arrayAccs:   arrayAccs,
+		arrayAccs:   nil,
 	}
 	c.funcLoopNest(fn, fa, function, 0)
 
 	for i := range retPtrs {
-		if acc := arrayAccs[i]; acc != nil {
-			arrSym := c.ArrayAccResult(acc)
-			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
-			continue
-		}
 		elemType := loopOutTypes[i]
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
@@ -1197,25 +1188,11 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 }
 
 func (c *Compiler) computeLoopOutTypes(finalOutTypes []Type, iterIndices []int, args []*Symbol) ([]Type, bool) {
-	hasArrayIter := false
-	for _, idx := range iterIndices {
-		if args[idx].Type.Kind() == ArrayKind {
-			hasArrayIter = true
-			break
-		}
-	}
-
 	loopOutTypes := make([]Type, len(finalOutTypes))
 	for i, outType := range finalOutTypes {
-		if hasArrayIter {
-			if arr, ok := outType.(Array); ok {
-				loopOutTypes[i] = arr.ColTypes[0]
-				continue
-			}
-		}
 		loopOutTypes[i] = outType
 	}
-	return loopOutTypes, hasArrayIter
+	return loopOutTypes, true
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
@@ -1280,14 +1257,6 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function ll
 		rangeType := arg.Type.(Range)
 		rangeVal := function.Param(paramIdx + 1)
 		c.iterOverRange(rangeType, rangeVal, next)
-	case ArrayKind:
-		arrSym := &Symbol{
-			Val:      function.Param(paramIdx + 1),
-			Type:     arg.Type,
-			FuncArg:  true,
-			ReadOnly: true,
-		}
-		c.iterOverArray(arrSym, next)
 	case ArrayRangeKind:
 		arrRangeSym := &Symbol{
 			Val:      function.Param(paramIdx + 1),
