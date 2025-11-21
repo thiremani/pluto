@@ -1,5 +1,5 @@
 Scalar div by zero: +Inf
 Array with div by zero: [10 10 +Inf]
-Shorter divisor: [10 10 +Inf]
-Negative array / shorter: [-1 -1 -Inf -Inf]
-Negative int / float: [-10 -Inf]
+Shorter divisor: [10 10]
+Negative array / shorter: [-1 -1]
+Negative int / float: [-10]

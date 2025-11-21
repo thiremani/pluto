@@ -310,34 +310,29 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	}
 
 	// Element-wise array operation: arr1 op arr2
-	// Strategy: extend the shorter array with zeros, then do element-wise operation
-	// Result length is max(len(arr1), len(arr2))
+	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
+	// This mirrors vector-style zip semantics and avoids silently inventing data.
 
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(leftArr, leftElem)
 	rightLen := c.ArrayLen(rightArr, rightElem)
 
-	// Calculate max length for result
-	maxLen := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "cmp_len"),
+	// Calculate min length for result
+	minLen := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
 		leftLen,
 		rightLen,
-		"max_len",
+		"min_len",
 	)
 
-	// Extend shorter array with zeros
-	// Identity element is always 0 (or 0.0 for floats)
-	leftExtended := c.extendArrayWithZeros(leftArr, leftElem, maxLen)
-	rightExtended := c.extendArrayWithZeros(rightArr, rightElem, maxLen)
-
 	// Create result array
-	resVec := c.CreateArrayForType(resElem, maxLen)
+	resVec := c.CreateArrayForType(resElem, minLen)
 
 	// Element-wise operation over the full length
-	r := c.rangeZeroToN(maxLen)
+	r := c.rangeZeroToN(minLen)
 	c.createLoop(r, func(iter llvm.Value) {
-		leftVal := c.ArrayGet(leftExtended, leftElem, iter)
-		rightVal := c.ArrayGet(rightExtended, rightElem, iter)
+		leftVal := c.ArrayGet(leftArr, leftElem, iter)
+		rightVal := c.ArrayGet(rightArr, rightElem, iter)
 
 		leftSym := &Symbol{Val: leftVal, Type: leftElem}
 		rightSym := &Symbol{Val: rightVal, Type: rightElem}

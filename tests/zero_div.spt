@@ -5,11 +5,11 @@ a = 100 / 0
 b = [100 200 300] / [10 20 0]
 "Array with div by zero: -b"
 
-# Shorter divisor extends with zeros
+# Shorter divisor zips to min length (no padding)
 c = [100 200 300] / [10 20]
 "Shorter divisor: -c"
 
-# Negative array divided by shorter array (extends with zeros)
+# Negative array divided by shorter array
 d = -[10 20 30 40] / [10 20]
 "Negative array / shorter: -d"
 
