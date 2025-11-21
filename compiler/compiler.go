@@ -1170,7 +1170,7 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
 }
 
-func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value, hasArrayIter bool) {
+func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
 	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
 
@@ -1196,7 +1196,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
 	iterIndices := c.processParams(fn, args, function)
-	loopOutTypes, hasArrayIter := c.computeLoopOutTypes(finalOutTypes, iterIndices, args)
+	loopOutTypes := finalOutTypes
 	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
 
 	if len(iterIndices) == 0 {
@@ -1204,15 +1204,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 		return
 	}
 
-	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function, hasArrayIter)
-}
-
-func (c *Compiler) computeLoopOutTypes(finalOutTypes []Type, iterIndices []int, args []*Symbol) ([]Type, bool) {
-	loopOutTypes := make([]Type, len(finalOutTypes))
-	for i, outType := range finalOutTypes {
-		loopOutTypes[i] = outType
-	}
-	return loopOutTypes, true
+	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function)
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
