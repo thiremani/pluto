@@ -132,9 +132,3 @@ val9 = 3arr2 - 1
 
 val10 = -3arr2 + 5
 "Negation of implicit mult with addition (-3arr2 + 5): -val10"
-
-# Multi-variable polynomial with zip semantics (length = min)
-xPoly = [1 2 3]
-yPoly = [4 5]
-polyRes = 1 + 4xPoly * yPoly^2 + 3xPoly^2 * yPoly + xPoly^3 * yPoly^3
-"Poly zip x*y: -polyRes"

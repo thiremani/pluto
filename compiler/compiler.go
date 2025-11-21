@@ -1185,6 +1185,18 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
 	iterIndices := c.processParams(fn, args, function)
+	loopOutTypes, hasArrayIter := c.computeLoopOutTypes(finalOutTypes, iterIndices, args)
+	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
+
+	if len(iterIndices) == 0 {
+		c.compileFuncNonIter(fn, retPtrs, finalOutTypes)
+		return
+	}
+
+	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function, hasArrayIter)
+}
+
+func (c *Compiler) computeLoopOutTypes(finalOutTypes []Type, iterIndices []int, args []*Symbol) ([]Type, bool) {
 	hasArrayIter := false
 	for _, idx := range iterIndices {
 		if args[idx].Type.Kind() == ArrayKind {
@@ -1203,14 +1215,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 		}
 		loopOutTypes[i] = outType
 	}
-	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
-
-	if len(iterIndices) == 0 {
-		c.compileFuncNonIter(fn, retPtrs, finalOutTypes)
-		return
-	}
-
-	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function, hasArrayIter)
+	return loopOutTypes, hasArrayIter
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
