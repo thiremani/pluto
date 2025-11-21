@@ -355,66 +355,6 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	return resSym
 }
 
-// extendArrayWithZeros extends an array to the target length by padding with zeros
-// If the array is already >= targetLen, returns the original array
-// Uses concatenation with a zero-filled array to reuse existing logic
-func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen llvm.Value) *Symbol {
-	currentLen := c.ArrayLen(arr, elemType)
-
-	// Check if extension is needed
-	endBB := c.builder.GetInsertBlock()
-	fn := endBB.Parent()
-
-	needsExtensionBB := llvm.AddBasicBlock(fn, "needs_extension")
-	noExtensionBB := llvm.AddBasicBlock(fn, "no_extension")
-	doneBB := llvm.AddBasicBlock(fn, "extend_done")
-
-	needsExtension := c.builder.CreateICmp(llvm.IntULT, currentLen, targetLen, "needs_extension")
-	c.builder.CreateCondBr(needsExtension, needsExtensionBB, noExtensionBB)
-
-	// Case 1: Need to extend - concatenate with array of zeros
-	c.builder.SetInsertPointAtEnd(needsExtensionBB)
-
-	// Calculate padding length: targetLen - currentLen
-	paddingLen := c.builder.CreateSub(targetLen, currentLen, "padding_len")
-
-	// Create array of zeros with paddingLen
-	zeroArray := c.CreateArrayForType(elemType, paddingLen)
-	zeroVal := llvm.Value{}
-	if elemType.Kind() == FloatKind {
-		zeroVal = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
-	} else {
-		zeroVal = llvm.ConstInt(c.Context.Int64Type(), 0, false)
-	}
-
-	// Fill with zeros
-	fillRange := c.rangeZeroToN(paddingLen)
-	c.createLoop(fillRange, func(iter llvm.Value) {
-		c.ArraySetForType(elemType, zeroArray, iter, zeroVal)
-	})
-
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	zeroArrayPtr := c.builder.CreateBitCast(zeroArray, i8p, "zero_array_i8p")
-	zeroArraySym := &Symbol{Val: zeroArrayPtr, Type: Array{Headers: nil, ColTypes: []Type{elemType}, Length: 0}}
-
-	// Concatenate: arr ⊕ zeroArray
-	extendedSym := c.compileArrayConcat(arr, zeroArraySym, elemType, elemType, elemType)
-	extendedBB := c.builder.GetInsertBlock()
-	c.builder.CreateBr(doneBB)
-
-	// Case 2: No extension needed
-	c.builder.SetInsertPointAtEnd(noExtensionBB)
-	originalPtr := arr.Val
-	c.builder.CreateBr(doneBB)
-
-	// Phi node to select the result
-	c.builder.SetInsertPointAtEnd(doneBB)
-	phi := c.builder.CreatePHI(i8p, "extended_arr")
-	phi.AddIncoming([]llvm.Value{extendedSym.Val, originalPtr}, []llvm.BasicBlock{extendedBB, noExtensionBB})
-
-	return &Symbol{Val: phi, Type: arr.Type}
-}
-
 func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
 	// Array concatenation: arr1 ⊕ arr2
 	// Result is [arr1..., arr2...]
