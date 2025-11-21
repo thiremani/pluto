@@ -1195,7 +1195,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 // inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
-	args, innerArgs, arrayIters := ts.collectCallArgs(ce, isRoot)
+	args, innerArgs := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
@@ -1203,10 +1203,12 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	return ts.finishCallTypes(f, ce, arrayIters)
+	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), Ranges: nil}
+	ts.ExprCache[ce] = info
+	return f.OutTypes
 }
 
-func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, arrayIters []*RangeInfo) {
+func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type) {
 	for _, e := range ce.Arguments {
 		if e == nil {
 			// Nil argument indicates a parse error; skip it
@@ -1215,13 +1217,13 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 		exprArgs := ts.TypeExpression(e, isRoot)
 		for _, arg := range exprArgs {
-			ts.appendStandardCallArg(arg, e, &args, &innerArgs, &arrayIters)
+			ts.appendStandardCallArg(arg, &args, &innerArgs)
 		}
 	}
-	return args, innerArgs, arrayIters
+	return args, innerArgs
 }
 
-func (ts *TypeSolver) appendStandardCallArg(arg Type, expr ast.Expression, args *[]Type, innerArgs *[]Type, arrayIters *[]*RangeInfo) {
+func (ts *TypeSolver) appendStandardCallArg(arg Type, args *[]Type, innerArgs *[]Type) {
 	var paramType Type
 	switch arg.Kind() {
 	case RangeKind:
@@ -1282,17 +1284,6 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 
 	mangled := mangle(ce.Function.Value, args)
 	return template, mangled, true
-}
-
-func (ts *TypeSolver) finishCallTypes(f *Func, ce *ast.CallExpression, arrayIters []*RangeInfo) []Type {
-	rawOut := append([]Type(nil), f.OutTypes...)
-	finalOut := rawOut
-
-	rangesCopy := append([]*RangeInfo(nil), arrayIters...)
-	info := &ExprInfo{OutTypes: finalOut, ExprLen: len(finalOut), Ranges: rangesCopy}
-	ts.ExprCache[ce] = info
-	f.OutTypes = finalOut
-	return finalOut
 }
 
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
