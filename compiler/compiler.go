@@ -21,7 +21,6 @@ type funcArgs struct {
 	outputs     []*Symbol
 	iterIndices []int
 	iters       map[string]*Symbol
-	arrayAccs   []*ArrayAccumulator
 }
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
@@ -1180,7 +1179,6 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 		outputs:     outputs,
 		iterIndices: iterIndices,
 		iters:       make(map[string]*Symbol),
-		arrayAccs:   nil,
 	}
 	c.funcLoopNest(fn, fa, function, 0)
 
@@ -1224,17 +1222,6 @@ func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func
 	})
 }
 
-func (c *Compiler) iterOverArray(arrSym *Symbol, body func(llvm.Value, Type)) {
-	arrType := arrSym.Type.(Array)
-	elemType := arrType.ColTypes[0]
-	lenVal := c.ArrayLen(arrSym, elemType)
-	r := c.rangeZeroToN(lenVal)
-	c.createLoop(r, func(idx llvm.Value) {
-		elemVal := c.ArrayGet(arrSym, elemType, idx)
-		body(elemVal, elemType)
-	})
-}
-
 func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value, Type)) {
 	arrRangeType := arrRangeSym.Type.(ArrayRange)
 	arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
@@ -1250,13 +1237,6 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
 	if level == len(fa.iterIndices) {
 		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
-		for i, acc := range fa.arrayAccs {
-			if acc == nil {
-				continue
-			}
-			val := c.createLoad(fa.outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
-			c.PushVal(acc, &Symbol{Val: val, Type: acc.ElemType})
-		}
 		return
 	}
 
