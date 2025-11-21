@@ -1195,7 +1195,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 // inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
-	args, innerArgs := ts.collectCallArgs(ce, isRoot)
+	args, innerArgs, hasIter := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
@@ -1203,12 +1203,25 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), Ranges: nil}
+	outTypes := f.OutTypes
+	if hasIter {
+		wrapped := make([]Type, len(outTypes))
+		for i, ot := range outTypes {
+			if ot.Kind() == ArrayKind {
+				wrapped[i] = ot
+				continue
+			}
+			wrapped[i] = Array{Headers: nil, ColTypes: []Type{ot}, Length: 0}
+		}
+		outTypes = wrapped
+		f.OutTypes = wrapped
+	}
+	info := &ExprInfo{OutTypes: outTypes, ExprLen: len(outTypes), Ranges: nil}
 	ts.ExprCache[ce] = info
-	return f.OutTypes
+	return outTypes
 }
 
-func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type) {
+func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, hasIter bool) {
 	for _, e := range ce.Arguments {
 		if e == nil {
 			// Nil argument indicates a parse error; skip it
@@ -1217,18 +1230,19 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 		exprArgs := ts.TypeExpression(e, isRoot)
 		for _, arg := range exprArgs {
-			ts.appendStandardCallArg(arg, &args, &innerArgs)
+			ts.appendStandardCallArg(arg, &args, &innerArgs, &hasIter)
 		}
 	}
-	return args, innerArgs
+	return args, innerArgs, hasIter
 }
 
-func (ts *TypeSolver) appendStandardCallArg(arg Type, args *[]Type, innerArgs *[]Type) {
+func (ts *TypeSolver) appendStandardCallArg(arg Type, args *[]Type, innerArgs *[]Type, hasIter *bool) {
 	var paramType Type
 	switch arg.Kind() {
 	case RangeKind:
 		paramType = arg
 		*innerArgs = append(*innerArgs, arg.(Range).Iter)
+		*hasIter = true
 	case ArrayRangeKind:
 		arrRange := arg.(ArrayRange)
 		paramType = arrRange
@@ -1236,6 +1250,7 @@ func (ts *TypeSolver) appendStandardCallArg(arg Type, args *[]Type, innerArgs *[
 		// The function will handle iteration internally via funcLoopNest.
 		// We pass the element type as innerArgs so the function body is typed correctly.
 		*innerArgs = append(*innerArgs, arrRange.Array.ColTypes[0])
+		*hasIter = true
 	default:
 		paramType = arg
 		*innerArgs = append(*innerArgs, arg)

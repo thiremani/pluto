@@ -21,6 +21,7 @@ type funcArgs struct {
 	outputs     []*Symbol
 	iterIndices []int
 	iters       map[string]*Symbol
+	arrayAccs   []*ArrayAccumulator
 }
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
@@ -520,6 +521,21 @@ func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy boo
 
 // assignToExisting handles assignment to an existing variable
 func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
+	// If assigning an array to a scalar target, unwrap first element to keep semantics consistent.
+	targetType := lhsSym.Type
+	if ptr, ok := lhsSym.Type.(Ptr); ok {
+		targetType = ptr.Elem
+	}
+	if targetType.Kind() != ArrayKind && rhsSym.Type.Kind() == ArrayKind {
+		arrType := rhsSym.Type.(Array)
+		if len(arrType.ColTypes) > 0 && arrType.ColTypes[0].Kind() != UnresolvedKind {
+			elemType := arrType.ColTypes[0]
+			zero := c.ConstI64(0)
+			elemVal := c.ArrayGet(rhsSym, elemType, zero)
+			rhsSym = &Symbol{Val: elemVal, Type: elemType}
+		}
+	}
+
 	// Free old value if different (freeSymbolValue checks Static flag internally)
 	if lhsSym.Val != rhsSym.Val {
 		c.freeSymbolValue(lhsSym)
@@ -931,6 +947,15 @@ func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulat
 		if !ok {
 			continue
 		}
+		if len(arrType.ColTypes) == 0 || arrType.ColTypes[0] == nil {
+			continue
+		}
+		switch arrType.ColTypes[0].Kind() {
+		case IntKind, FloatKind, StrKind:
+			// ok
+		default:
+			continue
+		}
 		accs[i] = c.NewArrayAccumulator(arrType)
 	}
 	return accs
@@ -1173,16 +1198,23 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
 	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
+	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
 
 	fa := &funcArgs{
 		args:        args,
 		outputs:     outputs,
 		iterIndices: iterIndices,
 		iters:       make(map[string]*Symbol),
+		arrayAccs:   arrayAccs,
 	}
 	c.funcLoopNest(fn, fa, function, 0)
 
 	for i := range retPtrs {
+		if acc := arrayAccs[i]; acc != nil {
+			arrSym := c.ArrayAccResult(acc)
+			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
+			continue
+		}
 		elemType := loopOutTypes[i]
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
@@ -1196,7 +1228,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
 	iterIndices := c.processParams(fn, args, function)
-	loopOutTypes := finalOutTypes
+	loopOutTypes := c.computeLoopOutTypes(finalOutTypes, iterIndices)
 	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
 
 	if len(iterIndices) == 0 {
@@ -1205,6 +1237,21 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	}
 
 	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function)
+}
+
+func (c *Compiler) computeLoopOutTypes(finalOutTypes []Type, iterIndices []int) []Type {
+	if len(iterIndices) == 0 {
+		return finalOutTypes
+	}
+	loopOutTypes := make([]Type, len(finalOutTypes))
+	for i, outType := range finalOutTypes {
+		if arr, ok := outType.(Array); ok {
+			loopOutTypes[i] = arr.ColTypes[0]
+			continue
+		}
+		loopOutTypes[i] = outType
+	}
+	return loopOutTypes
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
@@ -1229,6 +1276,13 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
 	if level == len(fa.iterIndices) {
 		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
+		for i, acc := range fa.arrayAccs {
+			if acc == nil {
+				continue
+			}
+			val := c.createLoad(fa.outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
+			c.PushVal(acc, &Symbol{Val: val, Type: acc.ElemType})
+		}
 		return
 	}
 
