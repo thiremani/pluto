@@ -905,15 +905,6 @@ func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulat
 		if !ok {
 			continue
 		}
-		if len(arrType.ColTypes) == 0 || arrType.ColTypes[0] == nil {
-			continue
-		}
-		switch arrType.ColTypes[0].Kind() {
-		case IntKind, FloatKind, StrKind:
-			// ok
-		default:
-			continue
-		}
 		accs[i] = c.NewArrayAccumulator(arrType)
 	}
 	return accs
@@ -1219,28 +1210,32 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
+func (c *Compiler) executeFuncIterBody(fn *ast.FuncStatement, fa *funcArgs) {
+	c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
+
+	for i, acc := range fa.arrayAccs {
+		if acc == nil {
+			continue
+		}
+
+		outType := fa.outputs[i].Type.(Ptr).Elem
+		if outType.Kind() == ArrayKind {
+			arrType := outType.(Array)
+			elem := arrType.ColTypes[0]
+			arrVal := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter_arr")
+			elemVal := c.ArrayGet(&Symbol{Val: arrVal, Type: outType}, elem, c.ConstI64(0))
+			c.PushVal(acc, &Symbol{Val: elemVal, Type: elem})
+			continue
+		}
+
+		val := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter")
+		c.PushVal(acc, &Symbol{Val: val, Type: outType})
+	}
+}
+
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
 	if level == len(fa.iterIndices) {
-		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
-		for i, acc := range fa.arrayAccs {
-			if acc == nil {
-				continue
-			}
-			outType := fa.outputs[i].Type.(Ptr).Elem
-			if outType.Kind() == ArrayKind {
-				arrType := outType.(Array)
-				if len(arrType.ColTypes) > 0 {
-					elem := arrType.ColTypes[0]
-					arrVal := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter_arr")
-					elemVal := c.ArrayGet(&Symbol{Val: arrVal, Type: outType}, elem, c.ConstI64(0))
-					c.PushVal(acc, &Symbol{Val: elemVal, Type: elem})
-					continue
-				}
-			}
-
-			val := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter")
-			c.PushVal(acc, &Symbol{Val: val, Type: outType})
-		}
+		c.executeFuncIterBody(fn, fa)
 		return
 	}
 
