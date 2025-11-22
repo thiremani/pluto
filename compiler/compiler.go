@@ -848,22 +848,6 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		return c.compileArrayScalarInfix(op, r, l, elem, false)
 	}
 
-	if expectedArr, ok := expected.(Array); ok {
-		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
-			return c.compileArrayArrayInfix(op, l, r, expectedArr.ColTypes[0])
-		}
-
-		// Handle Array-Scalar operations (for element-wise ops, not concatenation)
-		if l.Type.Kind() == ArrayKind {
-			// Array on left: array op scalar
-			return c.compileArrayScalarInfix(op, l, r, expectedArr.ColTypes[0], true)
-		}
-		if r.Type.Kind() == ArrayKind {
-			// Array on right: scalar op array
-			return c.compileArrayScalarInfix(op, r, l, expectedArr.ColTypes[0], false)
-		}
-	}
-
 	// Normalize types for operator lookup (ignore Static flag for strings)
 	leftType := l.Type
 	if _, ok := leftType.(Str); ok {
