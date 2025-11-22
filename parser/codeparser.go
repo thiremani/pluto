@@ -89,16 +89,23 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 		cp.p.errors = append(cp.p.errors, ce)
 		return
 	}
-	// check parameters are distinct and not ""
-
-	// Duplicate Input Parameters
+	// Check parameters are distinct and not blank ("_").
+	// Check outputs are distinct and not blank.
+	// Note: The same identifier CAN appear in both parameters and outputs for
+	// accumulator patterns. When this happens, the output variable is automatically
+	// initialized from the matching parameter value at the call site.
+	//
+	// Example:
+	//   res = acc(res, x)
+	//       res = res + x
+	//
+	// At call site "total = acc(total, 1:5)":
+	//   - Parameter 'res' receives the value of 'total' (e.g., 10)
+	//   - Output 'res' is initialized from parameter 'res' (starts at 10)
+	//   - Body accumulates: res = 10 + 1 + 2 + 3 + 4 + 5 = 25
+	//   - Final value is stored back to 'total'
 	cp.p.checkNoDuplicates(s.Parameters)
-
-	// Duplicate Output Parameters
 	cp.p.checkNoDuplicates(s.Outputs)
-
-	// Allow the same variable to be used in both input and output parameters
-	// This enables accumulator patterns like: res = sum(res, x)
 
 	if len(cp.p.errors) > prevLen {
 		// If there are errors, we don't add the statement to the code.
