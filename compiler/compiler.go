@@ -1184,9 +1184,9 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
 }
 
-func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value) {
+func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
-	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
+	outputs := c.setupRangeOutputs(fn.Outputs, finalOutTypes)
 	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
 
 	fa := &funcArgs{
@@ -1204,7 +1204,7 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
 			continue
 		}
-		elemType := loopOutTypes[i]
+		elemType := outputs[i].Type.(Ptr).Elem
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
 	}
@@ -1217,7 +1217,6 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
 	iterIndices := c.processParams(fn, args, function)
-	loopOutTypes := c.computeLoopOutTypes(finalOutTypes, iterIndices)
 	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
 
 	if len(iterIndices) == 0 {
@@ -1225,11 +1224,7 @@ func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symb
 		return
 	}
 
-	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function)
-}
-
-func (c *Compiler) computeLoopOutTypes(finalOutTypes []Type, iterIndices []int) []Type {
-	return finalOutTypes
+	c.compileFuncIter(fn, args, iterIndices, retPtrs, finalOutTypes, function)
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
