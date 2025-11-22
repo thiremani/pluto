@@ -8,3 +8,10 @@ res, prod = SumAndProduct(a, b)
 res = BiasAndScale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
+
+res = Rebuild(vec, i)
+    res = [i + 1]
+    res = res + vec
+
+res = PairSum(i, j)
+    res = i + j

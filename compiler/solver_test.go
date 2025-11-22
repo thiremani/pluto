@@ -244,6 +244,30 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	}
 }
 
+func TestArrayToScalarAssignmentError(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayToScalar", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ast.Expression]*ExprInfo)
+
+	script := "x = 1\nx = [2 3]"
+	sl := lexer.New("arrayToScalar.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+
+	sc := NewScriptCompiler(ctx, "arrayToScalar", program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	if len(ts.Errors) == 0 {
+		t.Fatalf("expected type error when assigning array to scalar")
+	}
+	last := ts.Errors[len(ts.Errors)-1]
+	if !strings.Contains(last.Msg, "cannot reassign type") {
+		t.Fatalf("unexpected error message: %q", last.Msg)
+	}
+}
+
 func TestArrayLiteralRangesRecording(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", ast.NewCode())
