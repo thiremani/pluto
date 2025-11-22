@@ -848,22 +848,11 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		return c.compileArrayScalarInfix(op, r, l, elem, false)
 	}
 
-	// Normalize types for operator lookup (ignore Static flag for strings)
-	leftType := l.Type
-	if _, ok := leftType.(Str); ok {
-		leftType = Str{} // Normalize to plain Str{} for lookup
-	}
-	rightType := r.Type
-	if _, ok := rightType.(Str); ok {
-		rightType = Str{} // Normalize to plain Str{} for lookup
-	}
-
-	key := opKey{
+	return defaultOps[opKey{
 		Operator:  op,
-		LeftType:  leftType,
-		RightType: rightType,
-	}
-	return defaultOps[key](c, l, r, true)
+		LeftType:  l.Type.Key(),
+		RightType: r.Type.Key(),
+	}](c, l, r, true)
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
