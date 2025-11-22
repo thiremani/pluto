@@ -1,9 +1,0 @@
-s1 = "hello"
-s2 = s1
-s1, s2
-s2 = "world"
-s1, s2
-
-arr1 = [1 2 3]
-arr2 = arr1
-arr1, arr2

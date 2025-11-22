@@ -1,0 +1,2 @@
+res = ArrayScalarAssign(0:2)
+"Result: -res"

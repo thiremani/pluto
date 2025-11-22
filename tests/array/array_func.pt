@@ -1,13 +1,17 @@
-res = square(x)
+res = Square(x)
     res = x * x
 
-res, prod = sum_and_product(a, b)
+res, prod = SumAndProduct(a, b)
     res = a + b
     prod = a * b
 
-res = bias_and_scale(x, bias, scale)
+res = BiasAndScale(x, bias, scale)
     tmp = x + bias
     res = tmp * scale
 
-res = ConstVec(i)
-    res = [i]
+res = Rebuild(vec, i)
+    res = [i + 1]
+    res = res + vec
+
+res = PairSum(i, j)
+    res = i + j
