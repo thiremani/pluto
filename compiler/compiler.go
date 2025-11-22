@@ -1174,6 +1174,10 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 	for i, outIdent := range fn.Outputs {
 		if seed, ok := Get(c.Scopes, outIdent.Value); ok {
 			c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
+		} else {
+			// Initialize with zero value if no seed found
+			zero := c.makeZeroValue(finalOutTypes[i])
+			c.createStore(zero.Val, retPtrs[i].Val, finalOutTypes[i])
 		}
 		Put(c.Scopes, outIdent.Value, retPtrs[i]) // Overwrites param binding
 	}
