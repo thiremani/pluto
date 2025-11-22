@@ -669,11 +669,12 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 		})
 		return Unresolved{}, false
 	}
-	if tps[0].Kind() == UnresolvedKind {
+	cellType := tps[0]
+	if cellType.Kind() == UnresolvedKind {
 		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "array cell type could not be resolved"})
 		return Unresolved{}, false
 	}
-	return tps[0], true
+	return cellType, true
 }
 
 // mergeColType merges a new cell type into the running column type, enforcing
@@ -1195,7 +1196,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 // inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
-	args, innerArgs, hasIter := ts.collectCallArgs(ce, isRoot)
+	args, innerArgs, _ := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
@@ -1203,22 +1204,9 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	outTypes := f.OutTypes
-	if hasIter {
-		wrapped := make([]Type, len(outTypes))
-		for i, ot := range outTypes {
-			if ot.Kind() == ArrayKind {
-				wrapped[i] = ot
-				continue
-			}
-			wrapped[i] = Array{Headers: nil, ColTypes: []Type{ot}, Length: 0}
-		}
-		outTypes = wrapped
-		f.OutTypes = wrapped
-	}
-	info := &ExprInfo{OutTypes: outTypes, ExprLen: len(outTypes), Ranges: nil}
+	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), Ranges: nil}
 	ts.ExprCache[ce] = info
-	return outTypes
+	return f.OutTypes
 }
 
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, hasIter bool) {

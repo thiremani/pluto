@@ -42,3 +42,7 @@ rebuilt = Rebuild(rebuilt, 10:13)
 rebuilt2 = [5 6 7]
 rebuilt2 = Rebuild(rebuilt2, -1:1)
 "RebuildAssign2: -rebuilt2"
+
+# Nested range accumulation via array literal
+pairSum = [PairSum(0:2, 3:5)]
+"PairSumRange: -pairSum"
