@@ -21,7 +21,6 @@ type funcArgs struct {
 	outputs     []*Symbol
 	iterIndices []int
 	iters       map[string]*Symbol
-	arrayAccs   []*ArrayAccumulator
 }
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
@@ -207,7 +206,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, nil, false)
+		condSyms := c.compileExpression(expr, nil, Off)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -274,7 +273,7 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 	// so don't worry about creating a load here
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], true)
+		res := c.compileExpression(expr, stmt.Name[i:], Off)
 		ifSymbols = append(ifSymbols, res...)
 		i += len(res)
 	}
@@ -577,7 +576,7 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], true)
+		res := c.compileExpression(expr, stmt.Name[i:], Off)
 
 		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
@@ -604,7 +603,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -640,24 +639,20 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = resultPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
-		if isRoot {
-			res = c.compileRangeExpression(e)
-			return
-		}
-		// Non-root range literal must be handled by the enclosing operator.
-		panic("internal: unexpanded range literal in non-root position")
+		res = c.compileRangeExpression(e)
+		return
 	case *ast.ArrayLiteral:
-		return c.compileArrayExpression(e, dest, isRoot)
+		return c.compileArrayExpression(e, dest, iterLevel)
 	case *ast.ArrayRangeExpression:
-		return c.compileArrayRangeExpression(e, dest, isRoot)
+		return c.compileArrayRangeExpression(e, dest, iterLevel)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
-		res = c.compilePrefixExpression(e, dest)
+		res = c.compilePrefixExpression(e, dest, iterLevel)
 	case *ast.CallExpression:
-		res = c.compileCallExpression(e)
+		res = c.compileCallExpression(e, iterLevel)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
@@ -778,11 +773,11 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 }
 
 func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
-	start := c.compileExpression(e.Start, nil, false)[0].Val
-	stop := c.compileExpression(e.Stop, nil, false)[0].Val
+	start := c.compileExpression(e.Start, nil, Off)[0].Val
+	stop := c.compileExpression(e.Stop, nil, Off)[0].Val
 	var stepVal llvm.Value
 	if e.Step != nil {
-		stepVal = c.compileExpression(e.Step, nil, false)[0].Val
+		stepVal = c.compileExpression(e.Step, nil, Off)[0].Val
 	} else {
 		// default step = 1
 		stepVal = c.ConstI64(1)
@@ -813,7 +808,9 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[expr]
-	if len(info.Ranges) == 0 {
+	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
+	pending := c.pendingLoopRanges(info.Ranges)
+	if len(pending) == 0 {
 		return c.compileInfixBasic(expr, info)
 	}
 	return c.compileInfixRanges(expr, info, dest)
@@ -856,8 +853,10 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	left := c.compileExpression(expr.Left, nil, false)
-	right := c.compileExpression(expr.Right, nil, false)
+	// For infix operators, both operands are evaluated in non-root context
+	// since they should not independently create loops
+	left := c.compileExpression(expr.Left, nil, IterOutside)
+	right := c.compileExpression(expr.Right, nil, IterOutside)
 
 	for i := 0; i < len(left); i++ {
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
@@ -898,55 +897,34 @@ func (c *Compiler) CreateArrayRange(arrayVal llvm.Value, rangeVal llvm.Value, ar
 	return agg
 }
 
-func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulator {
-	accs := make([]*ArrayAccumulator, len(outTypes))
-	for i, outType := range outTypes {
-		arrType, ok := outType.(Array)
-		if !ok {
-			continue
-		}
-		accs[i] = c.NewArrayAccumulator(arrType)
-	}
-	return accs
-}
-
 // Modified compileInfixRanges - cleaner with destinations
 func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
-	// Push a new scope for this expression block
+	// Infix expressions never accumulate (Accumulates is always false for infix)
+	// They loop and store the final value
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
-	// Setup outputs (like function outputs)
+	// Setup outputs to store values across iterations
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
-	arrayAccs := c.initRangeArrayAccumulators(info.OutTypes)
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 
-	// Build nested loops
+	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
-		left := c.compileExpression(leftRew, nil, false)
-		right := c.compileExpression(rightRew, nil, false)
+		left := c.compileExpression(leftRew, nil, IterOutside)
+		right := c.compileExpression(rightRew, nil, IterOutside)
 
 		for i := 0; i < len(left); i++ {
 			expected := info.OutTypes[i]
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
-
-			if acc := arrayAccs[i]; acc != nil && computed.Type.Kind() != ArrayKind {
-				c.PushVal(acc, computed)
-				continue
-			}
-
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 	})
 
+	// Load final values from outputs
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		if acc := arrayAccs[i]; acc != nil && acc.Used {
-			out[i] = c.ArrayAccResult(acc)
-			continue
-		}
 		elemType := outputs[i].Type.(Ptr).Elem
 		out[i] = &Symbol{
 			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
@@ -988,12 +966,15 @@ func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []
 // Destination-aware prefix compilation,
 // mirroring compileInfixExpression/compileInfixRanges.
 
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	info := c.ExprCache[expr]
-	if len(info.Ranges) == 0 {
-		return c.compilePrefixBasic(expr, info)
+	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
+	pending := c.pendingLoopRanges(info.Ranges)
+	// If the result is an array, let the operand handle any collection itself.
+	if len(pending) == 0 || (len(info.OutTypes) > 0 && info.OutTypes[0].Kind() == ArrayKind) {
+		return c.compilePrefixBasic(expr, info, iterLevel)
 	}
-	return c.compilePrefixRanges(expr, info, dest)
+	return c.compilePrefixRanges(expr, info, dest, iterLevel)
 }
 
 // compilePrefix compiles a unary operation on a symbol, delegating array
@@ -1007,8 +988,12 @@ func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Sym
 	return defaultUnaryOps[key](c, sym, true)
 }
 
-func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
-	operand := c.compileExpression(expr.Right, nil, false)
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo, iterLevel IterLevel) (res []*Symbol) {
+	operandLevel := iterLevel
+	if operandLevel == Off {
+		operandLevel = IterInside
+	}
+	operand := c.compileExpression(expr.Right, nil, operandLevel)
 	for i, opSym := range operand {
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
@@ -1017,7 +1002,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 
 // compileArrayUnaryPrefix broadcasts a unary operator over a numeric array.
 
-func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	// New scope so we can temporarily shadow outputs like mini-functions do.
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
@@ -1030,7 +1015,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Drive the loops and store into outputs each trip.
 	c.withLoopNest(info.Ranges, func() {
-		ops := c.compileExpression(rightRew, nil, false)
+		ops := c.compileExpression(rightRew, nil, IterInside)
 
 		for i := 0; i < len(ops); i++ {
 			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
@@ -1151,23 +1136,18 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
 	outputs := c.setupRangeOutputs(fn.Outputs, finalOutTypes)
-	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
 
+	// No accumulators needed - functions always return the final iteration value
 	fa := &funcArgs{
 		args:        args,
 		outputs:     outputs,
 		iterIndices: iterIndices,
 		iters:       make(map[string]*Symbol),
-		arrayAccs:   arrayAccs,
 	}
 	c.funcLoopNest(fn, fa, function, 0)
 
+	// Store final iteration values for all outputs
 	for i := range retPtrs {
-		if acc := arrayAccs[i]; acc != nil {
-			arrSym := c.ArrayAccResult(acc)
-			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
-			continue
-		}
 		elemType := outputs[i].Type.(Ptr).Elem
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
@@ -1212,25 +1192,8 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 
 func (c *Compiler) executeFuncIterBody(fn *ast.FuncStatement, fa *funcArgs) {
 	c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
-
-	for i, acc := range fa.arrayAccs {
-		if acc == nil {
-			continue
-		}
-
-		outType := fa.outputs[i].Type.(Ptr).Elem
-		if outType.Kind() == ArrayKind {
-			arrType := outType.(Array)
-			elem := arrType.ColTypes[0]
-			arrVal := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter_arr")
-			elemVal := c.ArrayGet(&Symbol{Val: arrVal, Type: outType}, elem, c.ConstI64(0))
-			c.PushVal(acc, &Symbol{Val: elemVal, Type: elem})
-			continue
-		}
-
-		val := c.createLoad(fa.outputs[i].Val, outType, fn.Outputs[i].Value+"_iter")
-		c.PushVal(acc, &Symbol{Val: val, Type: outType})
-	}
+	// No accumulation needed - outputs are updated in place each iteration
+	// The final iteration's value will be returned
 }
 
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
@@ -1298,9 +1261,10 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
+func (c *Compiler) compileArgs(ce *ast.CallExpression, iterLevel IterLevel) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
+		// Always compile args with iterate=false to get complete values (matching solver)
+		res := c.compileExpression(callArg, nil, iterLevel)
 		for _, r := range res {
 			args = append(args, r)
 			argTypes = append(argTypes, r.Type)
@@ -1309,14 +1273,14 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes
 	return
 }
 
-func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
+func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression, iterLevel IterLevel) *Symbol {
 	info := c.ExprCache[expr]
 	arrRange := info.OutTypes[0].(ArrayRange)
 
-	arraySyms := c.compileExpression(expr.Array, nil, true)
+	arraySyms := c.compileExpression(expr.Array, nil, iterLevel)
 	arraySym := arraySyms[0]
 
-	rangeSyms := c.compileExpression(expr.Range, nil, true)
+	rangeSyms := c.compileExpression(expr.Range, nil, iterLevel)
 	rangeSym := rangeSyms[0]
 
 	return &Symbol{
@@ -1325,8 +1289,11 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol 
 	}
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
-	args, _ := c.compileArgs(ce)
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression, iterLevel IterLevel) (res []*Symbol) {
+	if iterLevel == Off {
+		iterLevel = IterInside
+	}
+	args, _ := c.compileArgs(ce, iterLevel)
 
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
@@ -1561,7 +1528,7 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	}
 
 	// Compile expression and process each resulting symbol
-	syms := c.compileExpression(expr, nil, true)
+	syms := c.compileExpression(expr, nil, Off)
 	for _, s := range syms {
 		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
 	}

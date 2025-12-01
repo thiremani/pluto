@@ -21,10 +21,16 @@ func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 
 	// Named occurrence: look it up in scope
 	if sym, ok := Get(c.Scopes, ri.Name); ok {
+		if sym.Type.Kind() != RangeKind {
+			panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
+		}
 		return sym.Val
 	}
 	if c.CodeCompiler != nil && c.CodeCompiler.Compiler != nil {
 		if sym, ok := Get(c.CodeCompiler.Compiler.Scopes, ri.Name); ok {
+			if sym.Type.Kind() != RangeKind {
+				panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
+			}
 			return sym.Val
 		}
 	}
@@ -35,6 +41,10 @@ func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
 func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 	ranges = c.pendingLoopRanges(ranges)
+	if len(ranges) == 0 {
+		body()
+		return
+	}
 	var rec func(i int)
 	rec = func(i int) {
 		if i == len(ranges) {
@@ -59,8 +69,27 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 	filtered := make([]*RangeInfo, 0, len(ranges))
 	for _, ri := range ranges {
 		sym, ok := Get(c.Scopes, ri.Name)
-		if ok && sym.Type.Kind() == IntKind {
-			continue
+		if ok {
+			switch t := sym.Type.(type) {
+			case Int:
+				continue
+			case Ptr:
+				if t.Elem.Kind() == IntKind {
+					continue
+				}
+			}
+		}
+		if !ok && c.CodeCompiler != nil && c.CodeCompiler.Compiler != nil {
+			if sym, ok = Get(c.CodeCompiler.Compiler.Scopes, ri.Name); ok {
+				switch t := sym.Type.(type) {
+				case Int:
+					continue
+				case Ptr:
+					if t.Elem.Kind() == IntKind {
+						continue
+					}
+				}
+			}
 		}
 		filtered = append(filtered, ri)
 	}
@@ -69,6 +98,12 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 
 func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 	start, stop, step := c.rangeComponents(r)
+	if step.IsUndef() || start.IsUndef() || stop.IsUndef() {
+		panic("range aggregate is undefined; likely received non-range value")
+	}
+	if step.IsConstant() && step.ZExtValue() == 0 {
+		panic("range step is zero; would loop forever")
+	}
 
 	preheader := c.builder.GetInsertBlock()
 	fn := preheader.Parent()

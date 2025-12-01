@@ -1,2 +1,9 @@
 res = ArrayScalarAssign(i)
     res = [i]
+
+res = ArrayScalarAdd(i)
+    res = [0:6] + i
+
+res = ArraySetAdd(i)
+    res = [0:i]
+    res = res + 4

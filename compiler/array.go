@@ -24,7 +24,6 @@ type ArrayAccumulator struct {
 	ElemType  Type
 	ArrayType Array
 	Info      ArrayInfo
-	Used      bool
 }
 
 var ArrayInfos = map[Kind]ArrayInfo{
@@ -76,7 +75,6 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value)
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
-	acc.Used = true
 }
 
 func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
@@ -191,14 +189,19 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 
-	if !isRoot || len(info.Ranges) == 0 {
-		return c.compileArrayLiteralImmediate(lit, info)
+	// If ArrayLiteral has ranges, use with-loops path which creates accumulator
+	// pendingLoopRanges will filter already-bound ranges to prevent double-looping
+	if iterLevel == Off {
+		iterLevel = IterInside
+	}
+	if len(info.Ranges) == 0 {
+		return c.compileArrayLiteralImmediate(lit, info, iterLevel)
 	}
 
-	return c.compileArrayLiteralWithLoops(lit, info)
+	return c.compileArrayLiteralWithLoops(lit, info, iterLevel)
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
@@ -222,7 +225,7 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	return lit, info
 }
 
-func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
+func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo, iterLevel IterLevel) (res []*Symbol) {
 	s := &Symbol{}
 
 	if !(len(lit.Headers) == 0 && (len(lit.Rows) == 0 || len(lit.Rows) == 1)) {
@@ -254,7 +257,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	row := lit.Rows[0]
 	cells := make([]*Symbol, len(row))
 	for i, cell := range row {
-		vals := c.compileExpression(cell, nil, false)
+		// Compile cells
+		vals := c.compileExpression(cell, nil, iterLevel)
 		cells[i] = c.derefIfPointer(vals[0])
 	}
 
@@ -272,7 +276,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	return []*Symbol{s}
 }
 
-func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
+func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo, iterLevel IterLevel) []*Symbol {
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
@@ -280,7 +284,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			vals := c.compileExpression(cell, nil, false)
+			vals := c.compileExpression(cell, nil, iterLevel)
 			valSym := c.derefIfPointer(vals[0])
 
 			val := valSym.Val
@@ -481,7 +485,7 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 	return
 }
 
-func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, isRoot bool) []*Symbol {
+func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, iterLevel IterLevel) []*Symbol {
 	origExpr := expr
 	info := c.ExprCache[expr]
 	if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok {
@@ -490,16 +494,17 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, d
 			info = newInfo
 		}
 	}
+	pending := c.pendingLoopRanges(info.Ranges)
 	if info.OutTypes[0].Kind() == ArrayRangeKind {
-		return []*Symbol{c.compileArrayRangeArg(origExpr)}
+		return []*Symbol{c.compileArrayRangeArg(origExpr, iterLevel)}
 	}
-	if len(info.Ranges) > 0 && isRoot {
-		return c.compileArrayRangeWithLoops(expr, info, dest)
+	if len(pending) > 0 && iterLevel != Off {
+		return c.compileArrayRangeWithLoops(expr, info, pending, dest, iterLevel)
 	}
-	return []*Symbol{c.compileArrayRangeElement(expr)}
+	return []*Symbol{c.compileArrayRangeElement(expr, iterLevel)}
 }
 
-func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, loopRanges []*RangeInfo, dest []*ast.Identifier, iterLevel IterLevel) []*Symbol {
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
@@ -521,11 +526,9 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 		rewritten = expr
 	}
 
-	c.withLoopNest(info.Ranges, func() {
-		syms := c.compileExpression(rewritten, nil, false)
-		for i := range syms {
-			c.createStore(syms[i].Val, outputs[i].Val, syms[i].Type)
-		}
+	c.withLoopNest(loopRanges, func() {
+		elem := c.compileArrayRangeElement(rewritten, IterInside)
+		c.createStore(elem.Val, outputs[0].Val, elem.Type)
 	})
 
 	results := make([]*Symbol, len(outputs))
@@ -540,17 +543,17 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 	return results
 }
 
-func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
+func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression, iterLevel IterLevel) *Symbol {
 	if info, ok := c.ExprCache[expr]; ok {
 		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil {
 			expr = rewritten
 		}
 	}
-	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, false)[0])
+	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, iterLevel)[0])
 	arrType := base.Type.(Array)
 	elemType := arrType.ColTypes[0]
 
-	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil, false)[0])
+	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil, iterLevel)[0])
 	idxVal := idxSym.Val
 	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
