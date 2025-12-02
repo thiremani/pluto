@@ -132,4 +132,3 @@ val9 = 3arr2 - 1
 
 val10 = -3arr2 + 5
 "Negation of implicit mult with addition (-3arr2 + 5): -val10"
-

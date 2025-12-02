@@ -322,7 +322,6 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		outObj := filepath.Join(p.CacheDir, SCRIPT_DIR, filepath.Base(src)+objExt)
 		args := []string{
 			OPT_LEVEL, "-std=c11", "-march=native",
-			"-flto",
 		}
 		args = append(args,
 			"-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
@@ -340,12 +339,11 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 	}
 
 	// 4) Link everything
-	// Use lld with LTO across platforms, including Windows under MinGW/UCRT.
-	linkArgs := []string{"-flto", "-fuse-ld=lld"}
+	linkArgs := []string{}
 
 	switch runtime.GOOS {
 	case "darwin":
-		// Mach-O linker (ld64.lld) wants -dead_strip
+		// Mach-O linker wants -dead_strip
 		linkArgs = append(linkArgs, "-Wl,-dead_strip")
 	case "windows":
 		// MinGW/COFF linker flags

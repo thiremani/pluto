@@ -1,0 +1,58 @@
+# Basic copy semantics - strings
+s1 = "hello"
+s2 = s1
+s1, s2
+s2 = "world"
+s1, s2
+
+# Basic copy semantics - integer arrays
+arr1 = [1 2 3]
+arr2 = arr1
+arr1, arr2
+arr2 = [4 5 6]
+arr1, arr2
+
+# Basic copy semantics - float arrays
+arr3 = [1.5 2.5]
+arr4 = arr3
+arr3, arr4
+arr4 = [3.5 4.5]
+arr3, arr4
+
+# Basic copy semantics - string arrays
+strs1 = ["a" "b"]
+strs2 = strs1
+strs1, strs2
+strs2 = ["c" "d"]
+strs1, strs2
+
+# Swap optimization - strings (ownership transfer)
+x = "first"
+y = "second"
+x, y
+x, y = y, x
+x, y
+
+# String swap via function
+p = "alpha"
+q = "beta"
+p, q
+p, q = swapStr(p, q)
+p, q
+
+# String concatenation in function
+base = "test"
+result = createStr(base, "_suffix")
+result
+
+# Return string from function
+s = returnStr()
+s
+
+# Multiple string literals from function
+str1, str2, str3 = multiStr()
+str1, str2, str3
+
+# Multiple arrays from function
+farr1, farr2 = multiArr()
+farr1, farr2

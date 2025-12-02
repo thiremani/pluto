@@ -24,7 +24,6 @@ type ArrayAccumulator struct {
 	ElemType  Type
 	ArrayType Array
 	Info      ArrayInfo
-	Used      bool
 }
 
 var ArrayInfos = map[Kind]ArrayInfo{
@@ -76,7 +75,6 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value)
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
-	acc.Used = true
 }
 
 func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
@@ -191,14 +189,19 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 
-	if !isRoot || len(info.Ranges) == 0 {
-		return c.compileArrayLiteralImmediate(lit, info)
+	// If ArrayLiteral has ranges, use with-loops path which creates accumulator
+	// pendingLoopRanges will filter already-bound ranges to prevent double-looping
+	if iterLevel == Off {
+		iterLevel = IterInside
+	}
+	if len(info.Ranges) == 0 {
+		return c.compileArrayLiteralImmediate(lit, info, iterLevel)
 	}
 
-	return c.compileArrayLiteralWithLoops(lit, info)
+	return c.compileArrayLiteralWithLoops(lit, info, iterLevel)
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
@@ -222,7 +225,7 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	return lit, info
 }
 
-func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
+func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo, iterLevel IterLevel) (res []*Symbol) {
 	s := &Symbol{}
 
 	if !(len(lit.Headers) == 0 && (len(lit.Rows) == 0 || len(lit.Rows) == 1)) {
@@ -254,7 +257,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	row := lit.Rows[0]
 	cells := make([]*Symbol, len(row))
 	for i, cell := range row {
-		vals := c.compileExpression(cell, nil, false)
+		// Compile cells
+		vals := c.compileExpression(cell, nil, iterLevel)
 		cells[i] = c.derefIfPointer(vals[0])
 	}
 
@@ -272,7 +276,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	return []*Symbol{s}
 }
 
-func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
+func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo, iterLevel IterLevel) []*Symbol {
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
@@ -280,7 +284,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			vals := c.compileExpression(cell, nil, false)
+			vals := c.compileExpression(cell, nil, iterLevel)
 			valSym := c.derefIfPointer(vals[0])
 
 			val := valSym.Val
@@ -310,34 +314,29 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	}
 
 	// Element-wise array operation: arr1 op arr2
-	// Strategy: extend the shorter array with zeros, then do element-wise operation
-	// Result length is max(len(arr1), len(arr2))
+	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
+	// This mirrors vector-style zip semantics and avoids silently inventing data.
 
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(leftArr, leftElem)
 	rightLen := c.ArrayLen(rightArr, rightElem)
 
-	// Calculate max length for result
-	maxLen := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntUGT, leftLen, rightLen, "cmp_len"),
+	// Calculate min length for result
+	minLen := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
 		leftLen,
 		rightLen,
-		"max_len",
+		"min_len",
 	)
 
-	// Extend shorter array with zeros
-	// Identity element is always 0 (or 0.0 for floats)
-	leftExtended := c.extendArrayWithZeros(leftArr, leftElem, maxLen)
-	rightExtended := c.extendArrayWithZeros(rightArr, rightElem, maxLen)
-
 	// Create result array
-	resVec := c.CreateArrayForType(resElem, maxLen)
+	resVec := c.CreateArrayForType(resElem, minLen)
 
 	// Element-wise operation over the full length
-	r := c.rangeZeroToN(maxLen)
+	r := c.rangeZeroToN(minLen)
 	c.createLoop(r, func(iter llvm.Value) {
-		leftVal := c.ArrayGet(leftExtended, leftElem, iter)
-		rightVal := c.ArrayGet(rightExtended, rightElem, iter)
+		leftVal := c.ArrayGet(leftArr, leftElem, iter)
+		rightVal := c.ArrayGet(rightArr, rightElem, iter)
 
 		leftSym := &Symbol{Val: leftVal, Type: leftElem}
 		rightSym := &Symbol{Val: rightVal, Type: rightElem}
@@ -358,66 +357,6 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
 	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
 	return resSym
-}
-
-// extendArrayWithZeros extends an array to the target length by padding with zeros
-// If the array is already >= targetLen, returns the original array
-// Uses concatenation with a zero-filled array to reuse existing logic
-func (c *Compiler) extendArrayWithZeros(arr *Symbol, elemType Type, targetLen llvm.Value) *Symbol {
-	currentLen := c.ArrayLen(arr, elemType)
-
-	// Check if extension is needed
-	endBB := c.builder.GetInsertBlock()
-	fn := endBB.Parent()
-
-	needsExtensionBB := llvm.AddBasicBlock(fn, "needs_extension")
-	noExtensionBB := llvm.AddBasicBlock(fn, "no_extension")
-	doneBB := llvm.AddBasicBlock(fn, "extend_done")
-
-	needsExtension := c.builder.CreateICmp(llvm.IntULT, currentLen, targetLen, "needs_extension")
-	c.builder.CreateCondBr(needsExtension, needsExtensionBB, noExtensionBB)
-
-	// Case 1: Need to extend - concatenate with array of zeros
-	c.builder.SetInsertPointAtEnd(needsExtensionBB)
-
-	// Calculate padding length: targetLen - currentLen
-	paddingLen := c.builder.CreateSub(targetLen, currentLen, "padding_len")
-
-	// Create array of zeros with paddingLen
-	zeroArray := c.CreateArrayForType(elemType, paddingLen)
-	zeroVal := llvm.Value{}
-	if elemType.Kind() == FloatKind {
-		zeroVal = llvm.ConstFloat(c.Context.DoubleType(), 0.0)
-	} else {
-		zeroVal = llvm.ConstInt(c.Context.Int64Type(), 0, false)
-	}
-
-	// Fill with zeros
-	fillRange := c.rangeZeroToN(paddingLen)
-	c.createLoop(fillRange, func(iter llvm.Value) {
-		c.ArraySetForType(elemType, zeroArray, iter, zeroVal)
-	})
-
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	zeroArrayPtr := c.builder.CreateBitCast(zeroArray, i8p, "zero_array_i8p")
-	zeroArraySym := &Symbol{Val: zeroArrayPtr, Type: Array{Headers: nil, ColTypes: []Type{elemType}, Length: 0}}
-
-	// Concatenate: arr ⊕ zeroArray
-	extendedSym := c.compileArrayConcat(arr, zeroArraySym, elemType, elemType, elemType)
-	extendedBB := c.builder.GetInsertBlock()
-	c.builder.CreateBr(doneBB)
-
-	// Case 2: No extension needed
-	c.builder.SetInsertPointAtEnd(noExtensionBB)
-	originalPtr := arr.Val
-	c.builder.CreateBr(doneBB)
-
-	// Phi node to select the result
-	c.builder.SetInsertPointAtEnd(doneBB)
-	phi := c.builder.CreatePHI(i8p, "extended_arr")
-	phi.AddIncoming([]llvm.Value{extendedSym.Val, originalPtr}, []llvm.BasicBlock{extendedBB, noExtensionBB})
-
-	return &Symbol{Val: phi, Type: arr.Type}
 }
 
 func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
@@ -546,7 +485,7 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 	return
 }
 
-func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, isRoot bool) []*Symbol {
+func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier, iterLevel IterLevel) []*Symbol {
 	origExpr := expr
 	info := c.ExprCache[expr]
 	if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok {
@@ -555,18 +494,19 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, d
 			info = newInfo
 		}
 	}
+	pending := c.pendingLoopRanges(info.Ranges)
 	if info.OutTypes[0].Kind() == ArrayRangeKind {
-		return []*Symbol{c.compileArrayRangeArg(origExpr)}
+		return []*Symbol{c.compileArrayRangeArg(origExpr, iterLevel)}
 	}
-	if len(info.Ranges) > 0 && isRoot {
-		return c.compileArrayRangeWithLoops(expr, info, dest)
+	if len(pending) > 0 && iterLevel != Off {
+		return c.compileArrayRangeWithLoops(expr, info, pending, dest, iterLevel)
 	}
-	return []*Symbol{c.compileArrayRangeElement(expr)}
+	return []*Symbol{c.compileArrayRangeElement(expr, iterLevel)}
 }
 
-func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, loopRanges []*RangeInfo, dest []*ast.Identifier, iterLevel IterLevel) []*Symbol {
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	var outputs []*Symbol
 	if len(dest) >= len(info.OutTypes) && len(dest) > 0 {
@@ -586,11 +526,9 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 		rewritten = expr
 	}
 
-	c.withLoopNest(info.Ranges, func() {
-		syms := c.compileExpression(rewritten, nil, false)
-		for i := range syms {
-			c.createStore(syms[i].Val, outputs[i].Val, syms[i].Type)
-		}
+	c.withLoopNest(loopRanges, func() {
+		elem := c.compileArrayRangeElement(rewritten, IterInside)
+		c.createStore(elem.Val, outputs[0].Val, elem.Type)
 	})
 
 	results := make([]*Symbol, len(outputs))
@@ -605,17 +543,17 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 	return results
 }
 
-func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
+func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression, iterLevel IterLevel) *Symbol {
 	if info, ok := c.ExprCache[expr]; ok {
 		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil {
 			expr = rewritten
 		}
 	}
-	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, false)[0])
+	base := c.derefIfPointer(c.compileExpression(expr.Array, nil, iterLevel)[0])
 	arrType := base.Type.(Array)
 	elemType := arrType.ColTypes[0]
 
-	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil, false)[0])
+	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil, iterLevel)[0])
 	idxVal := idxSym.Val
 	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")

@@ -1,30 +1,57 @@
-square_res = square([1 2 3])
+square_res = Square([1 2 3])
 "Square: -square_res"
 
-sum_vals, prod_vals = sum_and_product([1 2], [3 4])
+sum_vals, prod_vals = SumAndProduct([1 2], [3 4])
 "Sum: -sum_vals"
 "Prod: -prod_vals"
 
-biased = bias_and_scale([1 2 3], 10, 2)
+biased = BiasAndScale([1 2 3], 10, 2)
 "BiasScale: -biased"
 
-mixed_sum, mixed_prod = sum_and_product([1 2], 5)
+mixed_sum, mixed_prod = SumAndProduct([1 2], 5)
 "SumProductMixed: -mixed_sum"
 "ProdMixed: -mixed_prod"
 
-rev_sum, rev_prod = sum_and_product(5, [1 2])
+rev_sum, rev_prod = SumAndProduct(5, [1 2])
 "SumProductReverse: -rev_sum"
 "ProdReverse: -rev_prod"
 
-scalar_sum, scalar_prod = sum_and_product(2, 3)
+scalar_sum, scalar_prod = SumAndProduct(2, 3)
 "SumProductScalar: -scalar_sum"
 "ProdScalar: -scalar_prod"
 
-scalar = square(7)
+scalar = Square(7)
 "SquareScalar: -scalar"
 
-arr1 = ConstVec(0)
-"ConstVecScalar: -arr1"
+arr1 = [] ⊕ [0]
+"DirectConcatScalar: -arr1"
 
-arr2 = ConstVec(0:5)
-"ConstVecRange: -arr2"
+arr2 = []
+arr2 = arr2 ⊕ [0:5]
+"DirectConcatRange: -arr2"
+
+# Range call in array literal
+squareVec = [Square(0:5)]
+"SquareVecRange: -squareVec"
+
+# Inline literal print should also work
+squareInline = [Square(0:5)]
+"SquareInline: -squareInline"
+
+# Ensure function-internal array assignment builds a fresh array (no accumulation on param)
+rebuilt = [1 2 3]
+rebuilt = Rebuild(rebuilt, 10:13)
+"RebuildAssign: -rebuilt"
+
+rebuilt2 = [5 6 7]
+rebuilt2 = Rebuild(rebuilt2, -1:1)
+"RebuildAssign2: -rebuilt2"
+
+# Nested range accumulation via array literal
+pairSum = [PairSum(0:2, 3:5)]
+"PairSumRange: -pairSum"
+
+# Accumulate in array
+res = [2 3 5]
+res = Acc(res, 0:4)
+res

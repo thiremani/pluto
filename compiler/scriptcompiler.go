@@ -42,6 +42,8 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	for _, stmt := range sc.Program.Statements {
 		c.compileStatement(stmt)
 	}
+	// Clean up main scope before returning
+	c.cleanupScope()
 	// Add explicit return 0
 	c.addRet()
 	return c.Errors

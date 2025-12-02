@@ -26,6 +26,7 @@ type Type interface {
 	String() string
 	Kind() Kind
 	Mangle() string
+	Key() Type
 }
 
 // Common concrete types (aliases) for readability.
@@ -42,6 +43,7 @@ type Unresolved struct{}
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
 func (u Unresolved) Mangle() string { return PREFIX + "Unresolved" }
+func (u Unresolved) Key() Type      { return u }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -56,6 +58,7 @@ func (i Int) Kind() Kind {
 	return IntKind
 }
 func (i Int) Mangle() string { return PREFIX + i.String() }
+func (i Int) Key() Type      { return i }
 
 // Float represents a floating-point type with a given precision.
 type Float struct {
@@ -70,6 +73,7 @@ func (f Float) Kind() Kind {
 	return FloatKind
 }
 func (f Float) Mangle() string { return PREFIX + f.String() }
+func (f Float) Key() Type      { return f }
 
 // Ptr represents a pointer type to some element type.
 type Ptr struct {
@@ -78,15 +82,18 @@ type Ptr struct {
 
 func (p Ptr) String() string { return "*" + p.Elem.String() }
 func (p Ptr) Mangle() string { return PREFIX + "Ptr" + PREFIX + "1" + p.Elem.Mangle() }
+func (p Ptr) Key() Type      { return p }
 
 func (p Ptr) Kind() Kind {
 	return PtrKind
 }
 
 // Str represents a string type.
-// You can optionally store a maximum length if needed.
+// Static indicates whether this string is static storage (string literal)
+// or heap-allocated (from strdup, sprintf_alloc, etc.)
 type Str struct {
 	Length int
+	Static bool // true for string literals, false for heap strings
 }
 
 func (s Str) String() string {
@@ -97,6 +104,7 @@ func (s Str) Kind() Kind {
 	return StrKind
 }
 func (s Str) Mangle() string { return PREFIX + "Str" }
+func (s Str) Key() Type      { return Str{} }
 
 type Range struct {
 	Iter Type
@@ -108,6 +116,7 @@ func (r Range) String() string {
 	return t + ":" + t + ":" + t
 }
 func (r Range) Mangle() string { return PREFIX + "Range" + PREFIX + "1" + r.Iter.Mangle() }
+func (r Range) Key() Type      { return r }
 
 func (r Range) Kind() Kind {
 	return RangeKind
@@ -139,6 +148,17 @@ func (f Func) Mangle() string {
 		s += o.Mangle()
 	}
 	return s
+}
+func (f Func) Key() Type {
+	keyParams := make([]Type, len(f.Params))
+	for i, p := range f.Params {
+		keyParams[i] = p.Key()
+	}
+	keyOutTypes := make([]Type, len(f.OutTypes))
+	for i, o := range f.OutTypes {
+		keyOutTypes[i] = o.Key()
+	}
+	return Func{Params: keyParams, OutTypes: keyOutTypes}
 }
 
 func (f Func) AllTypesInferred() bool {
@@ -180,6 +200,14 @@ func (a Array) Mangle() string {
 	}
 	return s
 }
+func (a Array) Key() Type {
+	// Array keys ignore headers and length, using only column types
+	keyColTypes := make([]Type, len(a.ColTypes))
+	for i, ct := range a.ColTypes {
+		keyColTypes[i] = ct.Key()
+	}
+	return Array{ColTypes: keyColTypes}
+}
 
 // ArrayRange represents an iteration over a range of an array.
 // It carries the underlying array schema so type comparisons and mangling
@@ -202,6 +230,12 @@ func (ar ArrayRange) Mangle() string {
 		s += ct.Mangle()
 	}
 	return s
+}
+func (ar ArrayRange) Key() Type {
+	return ArrayRange{
+		Array: ar.Array.Key().(Array),
+		Range: ar.Range.Key().(Range),
+	}
 }
 
 func typesStr(types []Type) string {

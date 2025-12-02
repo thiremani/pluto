@@ -1,6 +1,6 @@
 # Test element-wise array-array operations
-# Result length is max(len(arr1), len(arr2))
-# Shorter arrays are extended with zeros, then element-wise operation is applied
+# Result length is min(len(arr1), len(arr2)) (zip semantics)
+# No implicit padding; extra elements are ignored.
 
 # Same length arrays
 arr1 = [1 2 3]
@@ -89,3 +89,13 @@ res18 = 1.2 + 2.5arr12 - 4.7arr12^2
 
 res19 = -1 + 2arr12 -3arr12^3
 "Polynomial 2 (Int): -res19"
+
+# Multi-variable polynomial with zip semantics (length = min)
+x = [1 2 3]
+y = [4 5]
+polyZip = 1 + 4x * y^2 + 3x^2 * y + x^3 * y^3
+"Poly zip x*y: -polyZip"
+
+# Multi-variable polynomial with mixed powers and addition (zip-to-min)
+polyAdd = 2x^2 + 3y^3 + 5x * y + 7
+"Poly zip add mix: -polyAdd"

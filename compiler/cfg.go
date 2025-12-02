@@ -236,14 +236,14 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 }
 
 // HasRangeExpr returns true if any RHS expression has a range
-// used in a non-root position, mirroring the solver's isRoot behavior.
+// used in an iterated position, mirroring the solver's iterate behavior.
 // Examples that return true:
 //   - y = y + 1:5
 //   - y = f(x) + 2:3
 //   - y = f(1:5)
 //
 // Example that returns false:
-//   - i = 1:5 (root range literal, just a plain write of a range value)
+//   - i = 1:5 (non-iterated range literal, just a plain write of a range value)
 func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
 	for _, v := range values {
 		if cfg.hasRangeExpr(v) {

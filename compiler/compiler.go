@@ -12,8 +12,8 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool
-	ReadOnly bool
+	FuncArg  bool // Is this a function parameter?
+	ReadOnly bool // Can this be written to? (for output params vs input params)
 }
 
 type funcArgs struct {
@@ -21,7 +21,6 @@ type funcArgs struct {
 	outputs     []*Symbol
 	iterIndices []int
 	iters       map[string]*Symbol
-	arrayAccs   []*ArrayAccumulator
 }
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
@@ -207,7 +206,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, nil, false)
+		condSyms := c.compileExpression(expr, nil, Off)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -274,7 +273,7 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 	// so don't worry about creating a load here
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], true)
+		res := c.compileExpression(expr, stmt.Name[i:], Off)
 		ifSymbols = append(ifSymbols, res...)
 		i += len(res)
 	}
@@ -320,7 +319,65 @@ func (c *Compiler) compileMergeBlock(
 		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
 	}
 
-	// --- Phase 2: hook them up and do the stores/updates
+	// --- Phase 2: Handle ownership and copying for PHI merges
+	//
+	// PHI nodes merge values from two branches. We need to ensure consistent ownership:
+	//
+	// For strings:
+	// - Both static: result is static (no copy needed)
+	// - Both heap: need to copy BOTH (only one executes, so copy for value semantics)
+	// - Mixed: copy the static one to heap
+	//
+	// For arrays:
+	// - Always copy BOTH branches (arrays always have value semantics, no ownership transfer)
+	//
+	// Only one branch executes at runtime, so we copy to ensure the result owns its value.
+	for i := range stmt.Name {
+		switch t := ifSyms[i].Type.(type) {
+		case Str:
+			ifStatic := t.Static
+			elseStrType, _ := elseSyms[i].Type.(Str)
+			elseStatic := elseStrType.Static
+
+			// Copy based on storage class to ensure consistent ownership
+			if ifStatic && !elseStatic {
+				// If-branch is static, else-branch is heap - copy if-branch to heap
+				terminator := ifEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+			} else if !ifStatic && elseStatic {
+				// Else-branch is static, if-branch is heap - copy else-branch to heap
+				terminator := elseEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+			} else if !ifStatic && !elseStatic {
+				// Both heap strings - copy both to maintain value semantics
+				terminator := ifEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+
+				terminator = elseEnd.LastInstruction()
+				c.builder.SetInsertPointBefore(terminator)
+				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+			}
+			// If both static, no copy needed (static literals live forever)
+
+		case Array:
+			// Arrays always have value semantics - copy both branches
+			terminator := ifEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
+
+			terminator = elseEnd.LastInstruction()
+			c.builder.SetInsertPointBefore(terminator)
+			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
+		}
+	}
+
+	// --- Phase 3: Hook up PHIs and do the stores/updates
+	// Position builder at end of continue block
+	c.builder.SetInsertPointAtEnd(contBlk)
+
 	for i, ident := range stmt.Name {
 		name := ident.Value
 		phi := phis[i]
@@ -337,6 +394,15 @@ func (c *Compiler) compileMergeBlock(
 			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
 
+		// Determine the result type, preserving Str.Static flag
+		// After phase 2 normalization, both branches have the same storage class
+		resultType := ifSyms[i].Type
+		if strType, ok := ifSyms[i].Type.(Str); ok {
+			elseStrType, _ := elseSyms[i].Type.(Str)
+			// Both branches should have same Static flag after phase 2 normalization
+			resultType = Str{Static: strType.Static && elseStrType.Static}
+		}
+
 		// if the variable was stack-allocated, store back
 		orig, _ := Get(c.Scopes, name)
 		if ptr, ok := orig.Type.(Ptr); ok {
@@ -344,7 +410,10 @@ func (c *Compiler) compileMergeBlock(
 			c.createStore(phi, orig.Val, ptr.Elem)
 		} else {
 			// pure SSA: update the symbol to the PHI
-			Put(c.Scopes, name, &Symbol{Val: phi, Type: ifSyms[i].Type})
+			Put(c.Scopes, name, &Symbol{
+				Val:  phi,
+				Type: resultType,
+			})
 		}
 	}
 }
@@ -359,10 +428,23 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
+		s.Type = Str{Static: true} // Zero value is static empty string
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
-		// Arrays are modeled as opaque pointers; null is a valid zero.
-		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+		// Create an actual zero-length array (not null)
+		// Arrays are always heap-allocated, even when empty
+		arrayType := symType.(Array)
+		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+			elemType := arrayType.ColTypes[0]
+			nConst := c.ConstI64(0)
+			arrVal := c.CreateArrayForType(elemType, nConst)
+			s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_zero")
+			// No need for ReadOnly flag - arrays are always heap, always freed (unless FuncArg)
+		} else {
+			// If element type is unresolved, use null pointer temporarily
+			// This should be rare and will be resolved later
+			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+		}
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
 	case ArrayRangeKind:
@@ -378,89 +460,137 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol) {
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) {
 	if len(idents) == 0 {
 		return
 	}
-	for i, newRhsSymbol := range syms {
-		name := idents[i].Value
 
-		// Check if the variable on the LEFT-hand side (`name`) already exists
-		if lhsSymbol, ok := Get(c.Scopes, name); ok {
-			// Handle type coercion if needed (e.g., single-element array to scalar)
-			valueToStore := c.coerceValueForAssignment(lhsSymbol.Type, newRhsSymbol)
-
-			// If it's a pointer, store through the pointer
-			if lhsSymbol.Type.Kind() == PtrKind {
-				c.createStore(valueToStore.Val, lhsSymbol.Val, valueToStore.Type)
-				continue
-			}
-
-			// Otherwise, update the symbol directly in scope
-			Put(c.Scopes, name, valueToStore)
+	// Determine copy requirements based on storage class and ownership
+	needsCopy := make([]bool, len(syms))
+	for i, rhsSym := range syms {
+		// Check if this is a static string (no copy needed - immutable, lives forever)
+		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
+			needsCopy[i] = false
 			continue
 		}
 
-		// Variable doesn't exist yet - bind it in scope
-		Put(c.Scopes, name, newRhsSymbol)
+		// Function arguments are borrowed references - no copy needed
+		if rhsSym.FuncArg {
+			needsCopy[i] = false
+			continue
+		}
+
+		// Check if RHS is a variable that's being overwritten in LHS
+		canTransfer := false
+		if rhsNames[i] != "" {
+			// RHS is a variable - check if it's in the LHS
+			for _, lhsIdent := range idents {
+				if lhsIdent.Value == rhsNames[i] {
+					// This variable is being overwritten, can transfer ownership
+					canTransfer = true
+					break
+				}
+			}
+		}
+
+		// If RHS is not a variable, or variable is not in LHS, we need to copy
+		// (because the original owner keeps the value)
+		needsCopy[i] = !canTransfer
+	}
+
+	// Process assignments in two phases to avoid use-after-free
+	for phase := 0; phase < 2; phase++ {
+		for i, ident := range idents {
+			shouldProcess := (phase == 0 && !needsCopy[i]) || (phase == 1 && needsCopy[i])
+			if shouldProcess {
+				c.performAssignment(ident.Value, syms[i], needsCopy[i])
+			}
+		}
 	}
 }
 
-// coerceValueForAssignment handles type coercion when assigning values.
-// Currently handles single-element array unwrapping for scalar accumulation in function iterations.
-//
-// When a function iterates over range/array parameters, output variables are allocated
-// as scalar temporaries. If the function body assigns a single-element array like [i],
-// we extract the scalar value for proper accumulation.
-//
-// Example:
-//
-//	res = ConstVec(i)
-//	    res = [i]
-//
-// When called with ConstVec(0:5), each iteration assigns [0], [1], etc. to a scalar temp.
-// This function extracts the scalar values 0, 1, 2, 3, 4 for accumulation.
-func (c *Compiler) coerceValueForAssignment(targetType Type, value *Symbol) *Symbol {
-	// Unwrap pointer type to get the actual target type
-	actualTargetType := targetType
-	if ptr, ok := targetType.(Ptr); ok {
-		actualTargetType = ptr.Elem
+// performAssignment executes a single assignment with optional copying
+func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy bool) {
+	if lhsSymbol, ok := Get(c.Scopes, name); ok {
+		c.assignToExisting(name, lhsSymbol, rhsSym, shouldCopy)
+	} else {
+		c.assignToNew(name, rhsSym, shouldCopy)
 	}
-
-	// Check if we're assigning an array to a scalar
-	if actualTargetType.Kind() != ArrayKind && value.Type.Kind() == ArrayKind {
-		return c.unwrapSingleElementArray(value)
-	}
-
-	return value
 }
 
-// unwrapSingleElementArray extracts the first element from a single-element array.
-// If the array is empty or has multiple columns, returns the array unchanged.
-func (c *Compiler) unwrapSingleElementArray(arrSym *Symbol) *Symbol {
-	arrType := arrSym.Type.(Array)
+// assignToExisting handles assignment to an existing variable
+func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
+	// Free old value if different (freeSymbolValue checks Static flag internally)
+	if lhsSym.Val != rhsSym.Val {
+		c.freeSymbolValue(lhsSym)
+	}
 
-	// Safety: check array is non-empty (has at least one element)
-	// Note: For dynamically sized arrays, Length may be 0 even if non-empty
-	// We rely on the type system to ensure this is only called for non-empty arrays
-	elemType := arrType.ColTypes[0]
+	// Copy only if needed
+	valueToStore := rhsSym
+	if shouldCopy {
+		valueToStore = c.deepCopyIfNeeded(valueToStore)
+	}
 
-	// Extract array[0]
-	zero := c.ConstI64(0)
-	elemVal := c.ArrayGet(arrSym, elemType, zero)
+	// Store
+	if lhsSym.Type.Kind() == PtrKind {
+		c.createStore(valueToStore.Val, lhsSym.Val, valueToStore.Type)
+	} else {
+		Put(c.Scopes, name, valueToStore)
+	}
+}
 
-	return &Symbol{Val: elemVal, Type: elemType}
+// assignToNew handles assignment to a new variable
+func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
+	var newSymbol *Symbol
+	if shouldCopy {
+		newSymbol = c.deepCopyIfNeeded(rhsSym)
+	} else {
+		newSymbol = rhsSym
+	}
+	Put(c.Scopes, name, newSymbol)
+}
+
+// freeSymbolValue frees the memory owned by a symbol
+func (c *Compiler) freeSymbolValue(sym *Symbol) {
+	// Don't free function arguments - they're borrowed references
+	if sym.FuncArg {
+		return
+	}
+
+	switch t := sym.Type.(type) {
+	case Str:
+		// Only free heap-allocated strings, not static literals
+		if !t.Static {
+			c.free([]llvm.Value{sym.Val})
+		}
+	case Array:
+		// Arrays are always heap-allocated (except null pointers for unresolved types)
+		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
+			c.freeArray(sym.Val, t.ColTypes[0])
+		}
+	}
 }
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	syms := []*Symbol{}
+	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], true)
+		res := c.compileExpression(expr, stmt.Name[i:], Off)
+
+		// For each result symbol, record the source variable name if it's an identifier
+		var rhsName string
+		if ident, ok := expr.(*ast.Identifier); ok {
+			rhsName = ident.Value
+		}
+		for range res {
+			rhsNames = append(rhsNames, rhsName)
+		}
+
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms)
+	c.writeTo(stmt.Name, syms, rhsNames)
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
@@ -473,7 +603,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, isRoot bool) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -485,47 +615,44 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		s.Type = Str{}
 		// Process markers eagerly at string creation time
 		formatted, args, toFree := c.formatString(e)
 
-		// No markers, create a regular string literal
+		// No markers, create a regular string literal (static storage)
 		if len(args) == 0 {
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
+			s.Type = Str{Static: true} // Static string literal in .rodata
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 			res = []*Symbol{s}
 			return
 		}
 
-		// Build formatted string with sprintf_alloc
+		// Build formatted string with sprintf_alloc (heap-allocated)
 		formatPtr := c.createFormatStringGlobal(formatted)
 		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
 		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
 		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
 		c.free(toFree)
 
+		s.Type = Str{Static: false} // Heap-allocated formatted string
 		s.Val = resultPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
-		if isRoot {
-			res = c.compileRangeExpression(e)
-			return
-		}
-		// Non-root range literal must be handled by the enclosing operator.
-		panic("internal: unexpanded range literal in non-root position")
+		res = c.compileRangeExpression(e)
+		return
 	case *ast.ArrayLiteral:
-		return c.compileArrayExpression(e, dest, isRoot)
+		return c.compileArrayExpression(e, dest, iterLevel)
 	case *ast.ArrayRangeExpression:
-		return c.compileArrayRangeExpression(e, dest, isRoot)
+		return c.compileArrayRangeExpression(e, dest, iterLevel)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
-		res = c.compilePrefixExpression(e, dest)
+		res = c.compilePrefixExpression(e, dest, iterLevel)
 	case *ast.CallExpression:
-		res = c.compileCallExpression(e)
+		res = c.compileCallExpression(e, iterLevel)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
@@ -646,11 +773,11 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 }
 
 func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
-	start := c.compileExpression(e.Start, nil, false)[0].Val
-	stop := c.compileExpression(e.Stop, nil, false)[0].Val
+	start := c.compileExpression(e.Start, nil, Off)[0].Val
+	stop := c.compileExpression(e.Stop, nil, Off)[0].Val
 	var stepVal llvm.Value
 	if e.Step != nil {
-		stepVal = c.compileExpression(e.Step, nil, false)[0].Val
+		stepVal = c.compileExpression(e.Step, nil, Off)[0].Val
 	} else {
 		// default step = 1
 		stepVal = c.ConstI64(1)
@@ -681,7 +808,9 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[expr]
-	if len(info.Ranges) == 0 {
+	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
+	pending := c.pendingLoopRanges(info.Ranges)
+	if len(pending) == 0 {
 		return c.compileInfixBasic(expr, info)
 	}
 	return c.compileInfixRanges(expr, info, dest)
@@ -694,33 +823,40 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 	l := c.derefIfPointer(left)
 	r := c.derefIfPointer(right)
 
-	if expectedArr, ok := expected.(Array); ok {
+	// Handle array operands early to avoid falling through to scalar op table
+	if l.Type.Kind() == ArrayKind || r.Type.Kind() == ArrayKind {
+		// Determine element type preference: use expected if it's an array, otherwise
+		// use the available array operand's column type.
+		var elem Type
+		if expArr, ok := expected.(Array); ok && len(expArr.ColTypes) > 0 {
+			elem = expArr.ColTypes[0]
+		} else if l.Type.Kind() == ArrayKind {
+			elem = l.Type.(Array).ColTypes[0]
+		} else {
+			elem = r.Type.(Array).ColTypes[0]
+		}
+
 		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
-			return c.compileArrayArrayInfix(op, l, r, expectedArr.ColTypes[0])
+			return c.compileArrayArrayInfix(op, l, r, elem)
 		}
-
-		// Handle Array-Scalar operations (for element-wise ops, not concatenation)
 		if l.Type.Kind() == ArrayKind {
-			// Array on left: array op scalar
-			return c.compileArrayScalarInfix(op, l, r, expectedArr.ColTypes[0], true)
+			return c.compileArrayScalarInfix(op, l, r, elem, true)
 		}
-		if r.Type.Kind() == ArrayKind {
-			// Array on right: scalar op array
-			return c.compileArrayScalarInfix(op, r, l, expectedArr.ColTypes[0], false)
-		}
+		return c.compileArrayScalarInfix(op, r, l, elem, false)
 	}
 
-	key := opKey{
+	return defaultOps[opKey{
 		Operator:  op,
-		LeftType:  l.Type,
-		RightType: r.Type,
-	}
-	return defaultOps[key](c, l, r, true)
+		LeftType:  l.Type.Key(),
+		RightType: r.Type.Key(),
+	}](c, l, r, true)
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	left := c.compileExpression(expr.Left, nil, false)
-	right := c.compileExpression(expr.Right, nil, false)
+	// For infix operators, both operands are evaluated in non-root context
+	// since they should not independently create loops
+	left := c.compileExpression(expr.Left, nil, IterOutside)
+	right := c.compileExpression(expr.Right, nil, IterOutside)
 
 	for i := 0; i < len(left); i++ {
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
@@ -761,55 +897,34 @@ func (c *Compiler) CreateArrayRange(arrayVal llvm.Value, rangeVal llvm.Value, ar
 	return agg
 }
 
-func (c *Compiler) initRangeArrayAccumulators(outTypes []Type) []*ArrayAccumulator {
-	accs := make([]*ArrayAccumulator, len(outTypes))
-	for i, outType := range outTypes {
-		arrType, ok := outType.(Array)
-		if !ok {
-			continue
-		}
-		accs[i] = c.NewArrayAccumulator(arrType)
-	}
-	return accs
-}
-
 // Modified compileInfixRanges - cleaner with destinations
 func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
-	// Push a new scope for this expression block
+	// Infix expressions never accumulate (Accumulates is always false for infix)
+	// They loop and store the final value
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
-	// Setup outputs (like function outputs)
+	// Setup outputs to store values across iterations
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
-	arrayAccs := c.initRangeArrayAccumulators(info.OutTypes)
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 
-	// Build nested loops
+	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
-		left := c.compileExpression(leftRew, nil, false)
-		right := c.compileExpression(rightRew, nil, false)
+		left := c.compileExpression(leftRew, nil, IterOutside)
+		right := c.compileExpression(rightRew, nil, IterOutside)
 
 		for i := 0; i < len(left); i++ {
 			expected := info.OutTypes[i]
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
-
-			if acc := arrayAccs[i]; acc != nil && computed.Type.Kind() != ArrayKind {
-				c.PushVal(acc, computed)
-				continue
-			}
-
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 	})
 
+	// Load final values from outputs
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		if acc := arrayAccs[i]; acc != nil && acc.Used {
-			out[i] = c.ArrayAccResult(acc)
-			continue
-		}
 		elemType := outputs[i].Type.(Ptr).Elem
 		out[i] = &Symbol{
 			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
@@ -851,12 +966,15 @@ func (c *Compiler) setupRangeOutputs(dest []*ast.Identifier, outTypes []Type) []
 // Destination-aware prefix compilation,
 // mirroring compileInfixExpression/compileInfixRanges.
 
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	info := c.ExprCache[expr]
-	if len(info.Ranges) == 0 {
-		return c.compilePrefixBasic(expr, info)
+	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
+	pending := c.pendingLoopRanges(info.Ranges)
+	// If the result is an array, let the operand handle any collection itself.
+	if len(pending) == 0 || (len(info.OutTypes) > 0 && info.OutTypes[0].Kind() == ArrayKind) {
+		return c.compilePrefixBasic(expr, info, iterLevel)
 	}
-	return c.compilePrefixRanges(expr, info, dest)
+	return c.compilePrefixRanges(expr, info, dest, iterLevel)
 }
 
 // compilePrefix compiles a unary operation on a symbol, delegating array
@@ -870,8 +988,12 @@ func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Sym
 	return defaultUnaryOps[key](c, sym, true)
 }
 
-func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
-	operand := c.compileExpression(expr.Right, nil, false)
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo, iterLevel IterLevel) (res []*Symbol) {
+	operandLevel := iterLevel
+	if operandLevel == Off {
+		operandLevel = IterInside
+	}
+	operand := c.compileExpression(expr.Right, nil, operandLevel)
 	for i, opSym := range operand {
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
@@ -880,10 +1002,10 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 
 // compileArrayUnaryPrefix broadcasts a unary operator over a numeric array.
 
-func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
+func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	// New scope so we can temporarily shadow outputs like mini-functions do.
 	PushScope(&c.Scopes, BlockScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
 	outputs := c.setupRangeOutputs(dest, info.OutTypes)
@@ -893,7 +1015,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Drive the loops and store into outputs each trip.
 	c.withLoopNest(info.Ranges, func() {
-		ops := c.compileExpression(rightRew, nil, false)
+		ops := c.compileExpression(rightRew, nil, IterInside)
 
 		for i := 0; i < len(ops); i++ {
 			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
@@ -962,18 +1084,6 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	return function
 }
 
-func (c *Compiler) getLoopOutTypes(finalOutTypes []Type) []Type {
-	loopOutTypes := make([]Type, len(finalOutTypes))
-	for i, outType := range finalOutTypes {
-		if arr, ok := outType.(Array); ok {
-			loopOutTypes[i] = arr.ColTypes[0]
-			continue
-		}
-		loopOutTypes[i] = outType
-	}
-	return loopOutTypes
-}
-
 func (c *Compiler) createRetPtrs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
@@ -993,7 +1103,7 @@ func (c *Compiler) processParams(fn *ast.FuncStatement, args []*Symbol, function
 	for i, arg := range args {
 		name := fn.Parameters[i].Value
 		kind := arg.Type.Kind()
-		if kind == RangeKind || kind == ArrayKind || kind == ArrayRangeKind {
+		if kind == RangeKind || kind == ArrayRangeKind {
 			iterIndices = append(iterIndices, i)
 			continue
 		}
@@ -1013,33 +1123,32 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 	for i, outIdent := range fn.Outputs {
 		if seed, ok := Get(c.Scopes, outIdent.Value); ok {
 			c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
+		} else {
+			// Initialize with zero value if no seed found
+			zero := c.makeZeroValue(finalOutTypes[i])
+			c.createStore(zero.Val, retPtrs[i].Val, finalOutTypes[i])
 		}
 		Put(c.Scopes, outIdent.Value, retPtrs[i]) // Overwrites param binding
 	}
 	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
 }
 
-func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, loopOutTypes []Type, finalOutTypes []Type, function llvm.Value) {
+func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, finalOutTypes []Type, function llvm.Value) {
 	// For iteration: setupRangeOutputs needs params in scope to initialize from matching names
-	outputs := c.setupRangeOutputs(fn.Outputs, loopOutTypes)
-	arrayAccs := c.initRangeArrayAccumulators(finalOutTypes)
+	outputs := c.setupRangeOutputs(fn.Outputs, finalOutTypes)
 
+	// No accumulators needed - functions always return the final iteration value
 	fa := &funcArgs{
 		args:        args,
 		outputs:     outputs,
 		iterIndices: iterIndices,
 		iters:       make(map[string]*Symbol),
-		arrayAccs:   arrayAccs,
 	}
 	c.funcLoopNest(fn, fa, function, 0)
 
+	// Store final iteration values for all outputs
 	for i := range retPtrs {
-		if acc := arrayAccs[i]; acc != nil {
-			arrSym := c.ArrayAccResult(acc)
-			c.createStore(arrSym.Val, retPtrs[i].Val, arrSym.Type)
-			continue
-		}
-		elemType := loopOutTypes[i]
+		elemType := outputs[i].Type.(Ptr).Elem
 		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
 		c.createStore(finalVal, retPtrs[i].Val, elemType)
 	}
@@ -1047,37 +1156,25 @@ func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIn
 
 func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
 	PushScope(&c.Scopes, FuncScope)
-	defer PopScope(&c.Scopes)
+	defer c.popScope()
 
 	sretPtr := function.Param(0)
 	finalOutTypes := f.OutTypes
-	loopOutTypes := c.getLoopOutTypes(finalOutTypes)
-	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
 	iterIndices := c.processParams(fn, args, function)
+	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
 
 	if len(iterIndices) == 0 {
 		c.compileFuncNonIter(fn, retPtrs, finalOutTypes)
 		return
 	}
 
-	c.compileFuncIter(fn, args, iterIndices, retPtrs, loopOutTypes, finalOutTypes, function)
+	c.compileFuncIter(fn, args, iterIndices, retPtrs, finalOutTypes, function)
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
 	iterType := rangeType.Iter
 	c.createLoop(rangeVal, func(iter llvm.Value) {
 		body(iter, iterType)
-	})
-}
-
-func (c *Compiler) iterOverArray(arrSym *Symbol, body func(llvm.Value, Type)) {
-	arrType := arrSym.Type.(Array)
-	elemType := arrType.ColTypes[0]
-	lenVal := c.ArrayLen(arrSym, elemType)
-	r := c.rangeZeroToN(lenVal)
-	c.createLoop(r, func(idx llvm.Value) {
-		elemVal := c.ArrayGet(arrSym, elemType, idx)
-		body(elemVal, elemType)
 	})
 }
 
@@ -1093,16 +1190,15 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
+func (c *Compiler) executeFuncIterBody(fn *ast.FuncStatement, fa *funcArgs) {
+	c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
+	// No accumulation needed - outputs are updated in place each iteration
+	// The final iteration's value will be returned
+}
+
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
 	if level == len(fa.iterIndices) {
-		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
-		for i, acc := range fa.arrayAccs {
-			if acc == nil {
-				continue
-			}
-			val := c.createLoad(fa.outputs[i].Val, acc.ElemType, fn.Outputs[i].Value+"_iter")
-			c.PushVal(acc, &Symbol{Val: val, Type: acc.ElemType})
-		}
+		c.executeFuncIterBody(fn, fa)
 		return
 	}
 
@@ -1125,14 +1221,6 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function ll
 		rangeType := arg.Type.(Range)
 		rangeVal := function.Param(paramIdx + 1)
 		c.iterOverRange(rangeType, rangeVal, next)
-	case ArrayKind:
-		arrSym := &Symbol{
-			Val:      function.Param(paramIdx + 1),
-			Type:     arg.Type,
-			FuncArg:  true,
-			ReadOnly: true,
-		}
-		c.iterOverArray(arrSym, next)
 	case ArrayRangeKind:
 		arrRangeSym := &Symbol{
 			Val:      function.Param(paramIdx + 1),
@@ -1173,9 +1261,10 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes []Type) {
+func (c *Compiler) compileArgs(ce *ast.CallExpression, iterLevel IterLevel) (args []*Symbol, argTypes []Type) {
 	for _, callArg := range ce.Arguments {
-		res := c.compileExpression(callArg, nil, true) // isRoot is true as we want range expressions to be sent as is
+		// Always compile args with iterate=false to get complete values (matching solver)
+		res := c.compileExpression(callArg, nil, iterLevel)
 		for _, r := range res {
 			args = append(args, r)
 			argTypes = append(argTypes, r.Type)
@@ -1184,14 +1273,14 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) (args []*Symbol, argTypes
 	return
 }
 
-func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
+func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression, iterLevel IterLevel) *Symbol {
 	info := c.ExprCache[expr]
 	arrRange := info.OutTypes[0].(ArrayRange)
 
-	arraySyms := c.compileExpression(expr.Array, nil, true)
+	arraySyms := c.compileExpression(expr.Array, nil, iterLevel)
 	arraySym := arraySyms[0]
 
-	rangeSyms := c.compileExpression(expr.Range, nil, true)
+	rangeSyms := c.compileExpression(expr.Range, nil, iterLevel)
 	rangeSym := rangeSyms[0]
 
 	return &Symbol{
@@ -1200,8 +1289,11 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol 
 	}
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol) {
-	args, _ := c.compileArgs(ce)
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression, iterLevel IterLevel) (res []*Symbol) {
+	if iterLevel == Off {
+		iterLevel = IterInside
+	}
+	args, _ := c.compileArgs(ce, iterLevel)
 
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
@@ -1210,6 +1302,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 
 	mangled := mangle(ce.Function.Value, paramTypes)
 	fnInfo := c.FuncCache[mangled]
+
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
@@ -1226,6 +1319,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression) (res []*Symbol)
 		}
 		template := c.CodeCompiler.Code.Func.Map[fk]
 		savedBlock := c.builder.GetInsertBlock()
+
 		fn = c.compileFunc(template, args, mangled, fnInfo, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
@@ -1291,6 +1385,115 @@ func (c *Compiler) free(ptrs []llvm.Value) {
 	}
 }
 
+// copyString creates a deep copy of a string using strdup
+func (c *Compiler) copyString(str llvm.Value) llvm.Value {
+	fnType, fn := c.GetCFunc(STRDUP)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{str}, "str_copy")
+}
+
+// copyArray creates a deep copy of an array
+func (c *Compiler) copyArray(arr llvm.Value, elemType Type) llvm.Value {
+	var fnType llvm.Type
+	var fn llvm.Value
+	switch elemType.Kind() {
+	case IntKind:
+		fnType, fn = c.GetCFunc(ARR_I64_COPY)
+	case FloatKind:
+		fnType, fn = c.GetCFunc(ARR_F64_COPY)
+	case StrKind:
+		fnType, fn = c.GetCFunc(ARR_STR_COPY)
+	default:
+		panic(fmt.Sprintf("unsupported array element type for copying: %s", elemType.String()))
+	}
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{arr}, "arr_copy")
+}
+
+// deepCopyIfNeeded creates a deep copy if the symbol is a string or array
+// This ensures value semantics for assignments
+func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
+	switch sym.Type.Kind() {
+	case StrKind:
+		// Deep copy the string - result is always heap-allocated
+		copiedStr := c.copyString(sym.Val)
+		return &Symbol{
+			Val:      copiedStr,
+			Type:     Str{Static: false}, // Copied strings are always heap-allocated
+			FuncArg:  false,
+			ReadOnly: false,
+		}
+	case ArrayKind:
+		// Deep copy the array
+		arrayType := sym.Type.(Array)
+		if len(arrayType.ColTypes) > 0 {
+			// Skip copying if the element type is unresolved (will be resolved later)
+			if arrayType.ColTypes[0].Kind() == UnresolvedKind {
+				return sym
+			}
+			copiedArr := c.copyArray(sym.Val, arrayType.ColTypes[0])
+			return &Symbol{
+				Val:      copiedArr,
+				Type:     sym.Type, // Arrays don't have Static flag
+				FuncArg:  false,
+				ReadOnly: false,
+			}
+		}
+	}
+	// For other types (int, float, range), just return as-is (they're value types)
+	return sym
+}
+
+func (c *Compiler) freeArray(arr llvm.Value, elemType Type) {
+	var fnType llvm.Type
+	var fn llvm.Value
+	switch elemType.Kind() {
+	case IntKind:
+		fnType, fn = c.GetCFunc(ARR_I64_FREE)
+	case FloatKind:
+		fnType, fn = c.GetCFunc(ARR_F64_FREE)
+	case StrKind:
+		fnType, fn = c.GetCFunc(ARR_STR_FREE)
+	default:
+		panic(fmt.Sprintf("unsupported array element type for cleanup: %s", elemType.String()))
+	}
+	c.builder.CreateCall(fnType, fn, []llvm.Value{arr}, "")
+}
+
+// cleanupScope generates cleanup code for all heap-allocated variables in the current scope
+// This should be called before PopScope to free memory for strings and arrays
+func (c *Compiler) cleanupScope() {
+	if len(c.Scopes) == 0 {
+		return
+	}
+	currentScope := c.Scopes[len(c.Scopes)-1]
+	for _, sym := range currentScope.Elems {
+		// Skip function arguments - they're borrowed references, not owned
+		if sym.FuncArg {
+			continue
+		}
+
+		// Check if this symbol needs cleanup based on type
+		switch t := sym.Type.(type) {
+		case Str:
+			// Only free heap-allocated strings, not static literals
+			if !t.Static {
+				c.free([]llvm.Value{sym.Val})
+			}
+		case Array:
+			// Arrays are always heap-allocated (unless unresolved null pointer)
+			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
+				c.freeArray(sym.Val, t.ColTypes[0])
+			}
+		}
+	}
+}
+
+// popScope is the compiler-specific scope pop that includes cleanup
+// Use this instead of PopScope(&c.Scopes) to ensure memory is freed
+func (c *Compiler) popScope() {
+	c.cleanupScope()
+	PopScope(&c.Scopes)
+}
+
 func (c *Compiler) printf(args []llvm.Value) {
 	fnType, fn := c.GetCFunc(PRINTF)
 	c.builder.CreateCall(fnType, fn, args, PRINTF)
@@ -1325,7 +1528,7 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	}
 
 	// Compile expression and process each resulting symbol
-	syms := c.compileExpression(expr, nil, true)
+	syms := c.compileExpression(expr, nil, Off)
 	for _, s := range syms {
 		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
 	}

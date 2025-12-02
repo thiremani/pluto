@@ -1,0 +1,8 @@
+res = ArrayScalarAssign(0:2)
+"Result: -res"
+
+res2 = ArrayScalarAdd(0:2)
+"ArrayAdd: -res2"
+
+res3 = ArraySetAdd(1:4)
+"ArraySetAdd: -res3"

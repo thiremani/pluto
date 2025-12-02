@@ -1149,7 +1149,7 @@ func (p *StmtParser) registerPostfix(op string, fn postfixParseFn) {
 
 // checkNoDuplicates walks a slice of identifiers and returns
 // a CompileError for each name that appears more than once.
-// It skips blank‐identifier (“_”).
+// It skips blank‐identifier ("_").
 func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier) {
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
