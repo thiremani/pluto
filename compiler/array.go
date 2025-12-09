@@ -189,6 +189,8 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type)
 
 // Array compilation functions
 
+// compileArrayExpression materializes simple array literals into runtime vectors.
+// Currently supports only a single row with no headers, e.g. [1 2 3 4].
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 
@@ -510,7 +512,7 @@ func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, in
 
 	var outputs []*Symbol
 	if len(dest) >= len(info.OutTypes) && len(dest) > 0 {
-		outputs = c.setupRangeOutputs(dest, info.OutTypes)
+		outputs = c.makeOutputs(dest, info.OutTypes)
 	} else {
 		outputs = make([]*Symbol, len(info.OutTypes))
 		for i, outType := range info.OutTypes {
