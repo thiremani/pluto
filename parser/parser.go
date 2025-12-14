@@ -422,7 +422,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		return nil
 	}
 
-	p.checkNoDuplicates(identList)
+	p.checkNoDuplicates(identList, true) // allow blanks in let statements
 	return p.parseLetStatement(identList)
 }
 
@@ -1149,12 +1149,19 @@ func (p *StmtParser) registerPostfix(op string, fn postfixParseFn) {
 
 // checkNoDuplicates walks a slice of identifiers and returns
 // a CompileError for each name that appears more than once.
-// It skips blank‐identifier ("_").
-func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier) {
+// If allowBlanks is true, it skips blank‐identifier ("_"), otherwise reports an error.
+func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier, allowBlanks bool) {
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		name := id.Value
 		if name == "_" {
+			if allowBlanks {
+				continue
+			}
+			p.errors = append(p.errors, &token.CompileError{
+				Token: id.Token,
+				Msg:   "blank identifier '_' not allowed here",
+			})
 			continue
 		}
 		if _, ok := seen[name]; ok {

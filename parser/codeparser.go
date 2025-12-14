@@ -47,7 +47,7 @@ func (cp *CodeParser) Parse() *ast.Code {
 
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 	prevLen := len(cp.p.errors)
-	cp.p.checkNoDuplicates(s.Name)
+	cp.p.checkNoDuplicates(s.Name, false)
 
 	// Check for global redeclarations against the code map.
 	for _, id := range s.Name {
@@ -89,16 +89,10 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 		cp.p.errors = append(cp.p.errors, ce)
 		return
 	}
-	// check parameters are distinct and not ""
-
-	// Duplicate Input Parameters
-	cp.p.checkNoDuplicates(s.Parameters)
-
-	// Duplicate Output Parameters
-	cp.p.checkNoDuplicates(s.Outputs)
-
-	// Allow the same variable to be used in both input and output parameters
-	// This enables accumulator patterns like: res = sum(res, x)
+	// Check no duplicates among parameters and outputs
+	// The same name CAN appear in both outputs and parameters when we call the function.
+	// Blanks ("_") are not allowed in function definitions.
+	cp.p.checkNoDuplicates(append(s.Parameters, s.Outputs...), false)
 
 	if len(cp.p.errors) > prevLen {
 		// If there are errors, we don't add the statement to the code.

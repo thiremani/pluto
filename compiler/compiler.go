@@ -269,12 +269,14 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 	// Populate IF block.
 	ifSymbols := []*Symbol{}
 
-	// compileExpression already derefs any pointers
-	// so don't worry about creating a load here
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:], Off)
-		ifSymbols = append(ifSymbols, res...)
+		// Dereference pointers to get values for phi node
+		// (function calls return pointer symbols with pass-by-reference)
+		for _, sym := range res {
+			ifSymbols = append(ifSymbols, c.derefIfPointer(sym))
+		}
 		i += len(res)
 	}
 
@@ -945,6 +947,23 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	return out
 }
 
+func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
+	switch t := sym.Type.(type) {
+	case Array:
+		if t.ColTypes[0].Kind() == UnresolvedKind {
+			sym.Type = resolved
+			Put(c.Scopes, name, sym)
+		}
+	case Ptr:
+		if t.Elem.Kind() == UnresolvedKind {
+			sym.Type = Ptr{Elem: resolved}
+			Put(c.Scopes, name, sym)
+		}
+	default:
+		// No action needed for other types
+	}
+}
+
 func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
 	outputs := make([]*Symbol, len(outTypes))
 
@@ -953,7 +972,11 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbo
 		for i, outType := range outTypes {
 			name := dest[i].Value
 			sym, ok := Get(c.Scopes, name)
-			if !ok {
+			if ok {
+				// Update type for non-pointer symbols (sym.Type may be unresolved for empty arrays)
+				// Preserve pointer types as they already have the correct structure
+				c.updateUnresolvedType(name, sym, outType)
+			} else {
 				sym = c.makeZeroValue(outType)
 				Put(c.Scopes, name, sym)
 			}
@@ -1079,7 +1102,6 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnIn
 	sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
 	function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
 
-
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
 	savedBlock := c.builder.GetInsertBlock()
@@ -1143,21 +1165,6 @@ func (c *Compiler) processParams(template *ast.FuncStatement, fnInfo *Func, para
 		Put(c.Scopes, name, inputs[i])
 	}
 	return inputs, iterIndices
-}
-
-func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, finalOutTypes []Type) {
-	// For each output, initialize retPtr with param value (if exists) then rebind to retPtr
-	for i, outIdent := range fn.Outputs {
-		if seed, ok := Get(c.Scopes, outIdent.Value); ok {
-			c.createStore(seed.Val, retPtrs[i].Val, finalOutTypes[i])
-		} else {
-			// Initialize with zero value if no seed found
-			zero := c.makeZeroValue(finalOutTypes[i])
-			c.createStore(zero.Val, retPtrs[i].Val, finalOutTypes[i])
-		}
-		Put(c.Scopes, outIdent.Value, retPtrs[i]) // Overwrites param binding
-	}
-	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
 }
 
 func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, retPtrs []*Symbol, function llvm.Value) {
