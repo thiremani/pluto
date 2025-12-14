@@ -16,11 +16,11 @@ type Symbol struct {
 	ReadOnly bool // Can this be written to? (for output params vs input params)
 }
 
-type funcArgs struct {
-	args        []*Symbol
-	outputs     []*Symbol
-	iterIndices []int
-	iters       map[string]*Symbol
+type FuncArgs struct {
+	Inputs      []*Symbol          // function.Param pointers for all params
+	Outputs     []*Symbol          // retPtrs (pointers to sret slots)
+	IterIndices []int              // Indices of iterator params
+	Iters       map[string]*Symbol // Current iterator values during loop
 }
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
@@ -533,7 +533,8 @@ func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol,
 
 	// Store
 	if lhsSym.Type.Kind() == PtrKind {
-		c.createStore(valueToStore.Val, lhsSym.Val, valueToStore.Type)
+		derefed := c.derefIfPointer(valueToStore)
+		c.createStore(derefed.Val, lhsSym.Val, derefed.Type)
 	} else {
 		Put(c.Scopes, name, valueToStore)
 	}
@@ -652,7 +653,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.PrefixExpression:
 		res = c.compilePrefixExpression(e, dest, iterLevel)
 	case *ast.CallExpression:
-		res = c.compileCallExpression(e, iterLevel)
+		res = c.compileCallExpression(e, dest, iterLevel)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
@@ -945,35 +946,33 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 }
 
 func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
-	outputs := make([]*Symbol, len(dest))
+	outputs := make([]*Symbol, len(outTypes))
 
-	for i, outType := range outTypes {
-		name := dest[i].Value
+	// If we have destinations, use them
+	if len(dest) > 0 {
+		for i, outType := range outTypes {
+			name := dest[i].Value
+			sym, ok := Get(c.Scopes, name)
+			if !ok {
+				sym = c.makeZeroValue(outType)
+				Put(c.Scopes, name, sym)
+			}
 
-		sym, ok := Get(c.Scopes, name)
-		if ok && sym.Type.Kind() == PtrKind {
-			// Already a pointer (e.g., function argument), use it directly
+			if sym.Type.Kind() != PtrKind {
+				sym = c.promoteToMemory(name)
+			}
 			outputs[i] = sym
-			continue
 		}
-
-		// Need to create a new alloca
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name+"_out")
-		var val llvm.Value
-		if ok {
-			val = sym.Val
-		} else {
-			val = c.makeZeroValue(outType).Val
-		}
-		c.createStore(val, ptr, outType)
-
-		outputs[i] = &Symbol{
-			Val:  ptr,
-			Type: Ptr{Elem: outType},
-		}
-		Put(c.Scopes, name, outputs[i])
+		return outputs
 	}
 
+	// No destinations (intermediate value) - create temp allocas without adding to scope
+	for i, outType := range outTypes {
+		name := fmt.Sprintf("tmp_out_%d", c.tmpCounter)
+		c.tmpCounter++
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
+		outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: outType}}
+	}
 	return outputs
 }
 
@@ -1060,7 +1059,7 @@ func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type
 	st := c.Context.StructCreateNamed(retName)
 	fields := make([]llvm.Type, len(outputTypes))
 	for i, t := range outputTypes {
-		fields[i] = c.mapToLLVMType(t)
+		fields[i] = llvm.PointerType(c.mapToLLVMType(t), 0)
 	}
 	st.StructSetBody(fields, false)
 	return st
@@ -1074,19 +1073,19 @@ func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Typ
 	return funcType
 }
 
-func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled string, f *Func, retStruct llvm.Type, funcType llvm.Type) llvm.Value {
+func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnInfo *Func, paramTypes []Type, retStruct llvm.Type, funcType llvm.Type) llvm.Value {
 	function := llvm.AddFunction(c.Module, mangled, funcType)
 
 	sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
 	function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
-	function.AddAttributeAtIndex(1, c.Context.CreateEnumAttribute(llvm.AttributeKindID("noalias"), 0))
+
 
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
 	savedBlock := c.builder.GetInsertBlock()
 	c.builder.SetInsertPointAtEnd(entry)
 
-	c.compileFuncBlock(fn, f, args, retStruct, function)
+	c.compileFuncBlock(template, fnInfo, paramTypes, retStruct, function)
 
 	c.builder.CreateRetVoid()
 
@@ -1098,40 +1097,52 @@ func (c *Compiler) compileFunc(fn *ast.FuncStatement, args []*Symbol, mangled st
 	return function
 }
 
-func (c *Compiler) createRetPtrs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
+func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
-		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_ptr")
+		// GEP to get pointer to sret field (which holds a destination pointer)
+		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, outIdent.Value+"_field")
+		// Load the destination pointer from the sret field
+		ptrType := llvm.PointerType(c.mapToLLVMType(finalOutTypes[i]), 0)
+		destPtr := c.builder.CreateLoad(ptrType, fieldPtr, outIdent.Value+"_dest")
 		retPtrs[i] = &Symbol{
-			Val:      fieldPtr,
+			Val:      destPtr,
 			Type:     Ptr{Elem: finalOutTypes[i]},
 			FuncArg:  true,
 			ReadOnly: false,
 		}
+		// Bind output name to destination pointer so body writes to correct location
+		Put(c.Scopes, outIdent.Value, retPtrs[i])
 	}
 	return retPtrs
 }
 
-func (c *Compiler) processParams(fn *ast.FuncStatement, args []*Symbol, function llvm.Value) []int {
+func (c *Compiler) processParams(template *ast.FuncStatement, fnInfo *Func, paramTypes []Type, function llvm.Value) ([]*Symbol, []int) {
+	inputs := make([]*Symbol, len(paramTypes))
 	iterIndices := []int{}
-	for i, arg := range args {
-		name := fn.Parameters[i].Value
-		// Args are now pointers, so check the element type for Range/ArrayRange
-		elemType := arg.Type.(Ptr).Elem
+
+	for i, param := range template.Parameters {
+		name := param.Value
+		// paramTypes has outer types (includes Range), fnInfo.Params has inner types (Range unwrapped)
+		elemType := paramTypes[i]
+		paramVal := function.Param(i + 1) // +1 because param 0 is sret
+
+		inputs[i] = &Symbol{
+			Val:      paramVal,
+			Type:     Ptr{Elem: elemType},
+			FuncArg:  true,
+			ReadOnly: true,
+		}
+
 		kind := elemType.Kind()
 		if kind == RangeKind || kind == ArrayRangeKind {
 			iterIndices = append(iterIndices, i)
 			continue
 		}
-		paramVal := function.Param(i + 1)
-		Put(c.Scopes, name, &Symbol{
-			Val:      paramVal,
-			Type:     arg.Type,
-			FuncArg:  true,
-			ReadOnly: true,
-		})
+		// Put non-iterator params in scope
+		Put(c.Scopes, name, inputs[i])
 	}
-	return iterIndices
+	return inputs, iterIndices
 }
 
 func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, finalOutTypes []Type) {
@@ -1149,42 +1160,30 @@ func (c *Compiler) compileFuncNonIter(fn *ast.FuncStatement, retPtrs []*Symbol, 
 	c.compileBlockWithArgs(fn, map[string]*Symbol{}, map[string]*Symbol{})
 }
 
-func (c *Compiler) compileFuncIter(fn *ast.FuncStatement, args []*Symbol, iterIndices []int, retPtrs []*Symbol, finalOutTypes []Type, function llvm.Value) {
-	// For iteration: makeOutputs needs params in scope to initialize from matching names
-	outputs := c.makeOutputs(fn.Outputs, finalOutTypes)
-
-	// No accumulators needed - functions always return the final iteration value
-	fa := &funcArgs{
-		args:        args,
-		outputs:     outputs,
-		iterIndices: iterIndices,
-		iters:       make(map[string]*Symbol),
+func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, retPtrs []*Symbol, function llvm.Value) {
+	fa := &FuncArgs{
+		Inputs:      inputs,
+		Outputs:     retPtrs,
+		IterIndices: iterIndices,
+		Iters:       make(map[string]*Symbol),
 	}
-	c.funcLoopNest(fn, fa, function, 0)
-
-	// Store final iteration values for all outputs
-	for i := range retPtrs {
-		elemType := outputs[i].Type.(Ptr).Elem
-		finalVal := c.createLoad(outputs[i].Val, elemType, fn.Outputs[i].Value+"_final")
-		c.createStore(finalVal, retPtrs[i].Val, elemType)
-	}
+	c.funcLoopNest(template, fa, function, 0)
 }
 
-func (c *Compiler) compileFuncBlock(fn *ast.FuncStatement, f *Func, args []*Symbol, retStruct llvm.Type, function llvm.Value) {
+func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, fnInfo *Func, paramTypes []Type, retStruct llvm.Type, function llvm.Value) {
 	PushScope(&c.Scopes, FuncScope)
 	defer c.popScope()
 
 	sretPtr := function.Param(0)
-	finalOutTypes := f.OutTypes
-	iterIndices := c.processParams(fn, args, function)
-	retPtrs := c.createRetPtrs(fn, retStruct, sretPtr, finalOutTypes)
+	inputs, iterIndices := c.processParams(template, fnInfo, paramTypes, function)
+	retPtrs := c.processOutputs(template, retStruct, sretPtr, fnInfo.OutTypes)
 
 	if len(iterIndices) == 0 {
-		c.compileFuncNonIter(fn, retPtrs, finalOutTypes)
+		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
 		return
 	}
 
-	c.compileFuncIter(fn, args, iterIndices, retPtrs, finalOutTypes, function)
+	c.compileFuncIter(template, inputs, iterIndices, retPtrs, function)
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
@@ -1206,24 +1205,18 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
-func (c *Compiler) executeFuncIterBody(fn *ast.FuncStatement, fa *funcArgs) {
-	c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.iters)
-	// No accumulation needed - outputs are updated in place each iteration
-	// The final iteration's value will be returned
-}
-
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function llvm.Value, level int) {
-	if level == len(fa.iterIndices) {
-		c.executeFuncIterBody(fn, fa)
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, function llvm.Value, level int) {
+	if level == len(fa.IterIndices) {
+		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
 		return
 	}
 
-	paramIdx := fa.iterIndices[level]
-	arg := fa.args[paramIdx]
+	paramIdx := fa.IterIndices[level]
+	input := fa.Inputs[paramIdx]
 	name := fn.Parameters[paramIdx].Value
 
 	next := func(iterVal llvm.Value, iterType Type) {
-		fa.iters[name] = &Symbol{
+		fa.Iters[name] = &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
 			FuncArg:  true,
@@ -1232,9 +1225,9 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function ll
 		c.funcLoopNest(fn, fa, function, level+1)
 	}
 
-	// Args are pointers, extract element type and load the value
-	elemType := arg.Type.(Ptr).Elem
-	paramPtr := function.Param(paramIdx + 1)
+	// Inputs are pointers, extract element type and load the value
+	elemType := input.Type.(Ptr).Elem
+	paramPtr := input.Val
 
 	switch elemType.Kind() {
 	case RangeKind:
@@ -1253,7 +1246,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *funcArgs, function ll
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
-	delete(fa.iters, name)
+	delete(fa.Iters, name)
 }
 
 func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
@@ -1325,7 +1318,7 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression, iterLeve
 	}
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression, iterLevel IterLevel) (res []*Symbol) {
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
 	if iterLevel == Off {
 		iterLevel = IterInside
 	}
@@ -1340,8 +1333,15 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, iterLevel IterL
 	mangled := mangle(ce.Function.Value, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 
+	outputs := c.makeOutputs(dest, fnInfo.OutTypes)
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
+
+	// Populate sret with output destination pointers
+	for i, out := range outputs {
+		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
+		c.builder.CreateStore(out.Val, fieldPtr)
+	}
 
 	// LLVM inputs are pointer types since we pass by reference
 	llvmInputs := make([]llvm.Type, len(args))
@@ -1358,14 +1358,14 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, iterLevel IterL
 		template := c.CodeCompiler.Code.Func.Map[fk]
 		savedBlock := c.builder.GetInsertBlock()
 
-		fn = c.compileFunc(template, args, mangled, fnInfo, retStruct, funcType)
+		fn = c.compileFunc(template, mangled, fnInfo, paramTypes, retStruct, funcType)
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	return c.callFunctionDirect(fn, funcType, retStruct, fnInfo.OutTypes, args, sretPtr)
+	return c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
 }
 
-func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStruct llvm.Type, outTypes []Type, args []*Symbol, sretPtr llvm.Value) []*Symbol {
+func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
 	llvmArgs := []llvm.Value{sretPtr}
 	for _, arg := range args {
 		llvmArgs = append(llvmArgs, arg.Val)
@@ -1373,15 +1373,9 @@ func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, retStru
 
 	c.builder.CreateCall(funcType, fn, llvmArgs, "")
 
-	res := make([]*Symbol, len(outTypes))
-	for i, typ := range outTypes {
-		ptr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("ret_gep_%d", i))
-		res[i] = &Symbol{
-			Val:  c.createLoad(ptr, typ, fmt.Sprintf("ret_val_%d", i)),
-			Type: typ,
-		}
-	}
-	return res
+	// Function writes directly through destination pointers in sret
+	// Results are already in outputs, just return them
+	return outputs
 }
 
 // extract numeric fields of a range struct
