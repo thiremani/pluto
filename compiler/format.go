@@ -174,7 +174,6 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	return s, ok
 }
 
-
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
 // if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
 func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
