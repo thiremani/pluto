@@ -954,6 +954,11 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
+	case ArrayRange:
+		if t.Array.ColTypes[0].Kind() == UnresolvedKind {
+			sym.Type = resolved
+			Put(c.Scopes, name, sym)
+		}
 	case Ptr:
 		if t.Elem.Kind() == UnresolvedKind {
 			sym.Type = Ptr{Elem: resolved}
