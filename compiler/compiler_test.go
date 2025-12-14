@@ -134,14 +134,18 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 
 	// Act: seed a loop temporary for a pointer-valued output.
 	dest := []*ast.Identifier{{Value: "seed"}}
-	outTypes := []Type{ptrType}
-	outputs := c.setupRangeOutputs(dest, outTypes)
+	outTypes := []Type{I64}
+	outputs := c.makeOutputs(dest, outTypes)
 
 	require.Len(t, outputs, 1, "expect a single output symbol")
+	// When seed is already a pointer, makeOutputs reuses it directly
+	require.Equal(t, global, outputs[0].Val, "expected existing pointer to be reused")
+	require.Equal(t, ptrType, outputs[0].Type, "expected pointer type to be preserved")
 
 	c.builder.CreateRetVoid()
 
 	ir := c.Module.String()
-	require.Contains(t, ir, "store ptr @seed_global", "expected pointer seed to be stored without load")
+	// No store or load needed - we reuse the existing pointer directly
+	require.NotContains(t, ir, "store", "pointer seed should be reused without store")
 	require.NotContains(t, ir, "load i64, ptr @seed_global", "pointer seed should not be dereferenced")
 }

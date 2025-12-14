@@ -1,277 +1,371 @@
 # Pluto Range Semantics
 
-## Core Principle: Lazy Evaluation & Snapshots
+## Core Principle: Ranges as Loop Syntax
 
-In Pluto, range operations are **Lazy** (they create recipes, not values) and use **Snapshot Semantics** (they capture values, not variables).
+In Pluto, ranges generate loops at **statement boundaries**. When a statement contains a range variable, the compiler generates a loop, and all operations inside (operators, function calls) work on scalar iteration values.
 
+```pluto
+i = 0:5          # Range literal
+x = i + 1        # Loop at statement: for i, x = i+1 → x = 5 (last value)
+x += i           # Loop at statement: for i, x += i → x = 0+1+2+3+4 = 10
+arr = [i * 2]    # Loop at statement: for i, collect i*2 → [0,2,4,6,8]
 ```
-i = 0:5     →  Range{0 5}
-x = i + 1   →  OutRange{ Source: i  Op: Add(1) }
-```
 
-When a function receives a **Range** argument, it returns a **Recipe** (Iterator) rather than executing immediately.
+**Key Insight:** Ranges generate loops at statement boundaries. Everything inside the loop operates on scalar values per iteration.
 
 ---
 
-## Iterators: Lazy Evaluation
+## Range Basics
 
-Any expression involving a Range returns an **Iterator** — a lazy sequence of values.
+A range `start:stop` or `start:stop:step` defines iteration bounds:
 
-```
-i = 0:5
-
-i + 1   → Iterator yielding: 1 2 3 4 5
-√i      → Iterator yielding: 0 1 √2 √3 2
-arr[i]  → Iterator yielding: arr[0] arr[1] arr[2] arr[3] arr[4]
+```pluto
+i = 0:5          # Iterates: 0, 1, 2, 3, 4
+j = 0:10:2       # Iterates: 0, 2, 4, 6, 8
+k = 5:0:-1       # Iterates: 5, 4, 3, 2, 1
 ```
 
-Iterators track their **source ranges**. This is crucial for determining how multiple ranges interact.
+Ranges are just values that describe iteration - they have no operations until used in expressions.
 
 ---
 
-## Three Evaluation Modes
+## Loop Generation Modes
 
-How an Iterator gets evaluated depends on context:
+When a range appears in an expression, the behavior depends on the operator:
 
-| Mode | Trigger | Behavior |
-|------|---------|----------|
-| **Lazy Recipe** | Assignment to variable | Stores the computation recipe. No loop runs. |
-| **Collect** | Wrap in `[...]` | Accumulates all values into a new Array. |
-| **Iteration** | Usage in `for` / `print` | Runs the loop and consumes values. |
+### Mode 1: Assignment (Last Value)
 
-### Mode 1: Lazy Recipe (Snapshot)
+Simple assignment generates a loop and keeps the last value:
 
-When assigning to a variable, we capture the **Recipe** and the **Snapshot** of the inputs.
-
-```
+```pluto
 i = 0:5
 x = i + 1
 ```
 
-**Analysis:**
-*   `x` becomes `OutRange`.
-*   `x` captures the bounds `0:5` (Value Capture).
-*   **Safety:** If `i` is reassigned later, `x` remains unchanged.
-
-### Mode 2: Collect
-
-Wrapping an expression in `[]` forces immediate execution:
-
-```
-i = 0:5
-x = [i + 1]
+**Generated code:**
+```c
+x = 0;  // Zero-value initialization
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    x = i_val + 1;
+}
+// x = 5 (last value)
 ```
 
-**Result:** `x` is `[1 2 3 4 5]` (Array).
+### Mode 2: Compound Assignment (Accumulate)
 
-### Mode 3: Iteration
+Compound operators accumulate across iterations:
 
-Using the variable in a context that needs values triggers the loop:
-
+```pluto
+x = 0
+x += i
 ```
-x       # Implicit print triggers iteration
+
+**Generated code:**
+```c
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    x = x + i_val;
+}
+// x = 0+1+2+3+4 = 10
+```
+
+### Mode 3: Array Literal (Collect)
+
+Wrapping in `[...]` collects values into an array:
+
+```pluto
+arr = [i * 2]
+```
+
+**Generated code:**
+```c
+arr = allocate_array(5);
+size_t idx = 0;
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    arr[idx++] = i_val * 2;
+}
+// arr = [0, 2, 4, 6, 8]
 ```
 
 ---
 
-## Range Deduplication: Same Range = Same Iterator
+## Conditional Assignment
 
-When the same range appears multiple times, all references share a single loop:
+You can add a conditional guard to selectively update values:
 
+```pluto
+res = condition expression
 ```
+
+This desugars to:
+```c
+for each iteration:
+    if (condition):
+        res = expression
+```
+
+### Example: Maximum Value
+
+```pluto
+arr = [3 1 4 1 5]
+i = 0:5
+res = arr[i] > res arr[i]
+```
+
+**Generated code:**
+```c
+res = 0;  // Zero-value init
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    if (arr[i_val] > res) {
+        res = arr[i_val];
+    }
+}
+// res = 5 (maximum)
+```
+
+### Example: Conditional Last Value
+
+```pluto
+res = i * i > 10 i
+```
+
+**Generated code:**
+```c
+res = 0;
+for (int64_t i_val = 0; i_val < 10; i_val++) {
+    if (i_val * i_val > 10) {
+        res = i_val;
+    }
+}
+// res = last i where i² > 10
+```
+
+---
+
+## Multiple Ranges: Zipping vs Cartesian
+
+When multiple ranges appear in the same expression, loop structure depends on **variable names**:
+
+### Same Variable → Zip (Single Loop)
+
+```pluto
 i = 0:3
-x = Process(i, i + 1)
+x = i + 1
+y = i + 2
+result = x / y
 ```
 
-Both arguments derive from range `i`, so they share one loop:
+Both `x` and `y` reference range `i`, so they **zip**:
 
+**Generated code:**
+```c
+// Single loop iterating i
+for (int64_t i_val = 0; i_val < 3; i_val++) {
+    result = (i_val + 1) / (i_val + 2);
+}
 ```
-Process_i(Range r):
-    for iter in r:
-        a = iter           // first arg
-        b = iter + 1       // second arg (same iter!)
-        result = a * b
-    return result
-```
 
----
+### Different Variables → Cartesian (Nested Loops)
 
-## Multiple Ranges: Nested Loops (Cartesian Product)
-
-Different ranges produce nested loops:
-
-```
+```pluto
 i = 0:2
-j = 0:3
-x = [i + j]
+j = 0:2
+result = i + j
 ```
 
-**Result:** `[0 1 2 1 2 3]` (Cartesian Product)
-
----
-
-## ArrayLit: The Collector Function
-
-`[...]` is the **ArrayLit** function — the primary mechanism to turn Iterators into Arrays.
-
-| Expression | Evaluation | Result |
-|------------|-----------|--------|
-| `[i]` | collect i | `[0 1 2 3 4]` |
-| `[i + 1]` | collect (i+1) | `[1 2 3 4 5]` |
-| `[i i + 1]` | collect pairs | `[0 1 1 2 2 3 3 4 4 5]` |
-| `[i + j]` | collect cartesian | `[0 1 2 1 2 3]` |
-
----
-
-## Arrays and Element-wise Operations
-
-When a function receives an **Array** (not a Range), it operates element-wise and returns a new Array.
-
-### Key Insight: `√[i]` vs `[√i]`
-
-Both produce the same result!
-
-**`√[i]` where i = 0:5:**
-1.  `[i]` collects → `[0 1 2 3 4]`
-2.  `√` receives Array → element-wise
-3.  **Result:** `[0 1 √2 √3 2]`
-
-**`[√i]` where i = 0:5:**
-1.  `√i` returns Iterator
-2.  `[...]` collects → `[0 1 √2 √3 2]`
-
----
-
-## Array Ranges: Views vs Copies
-
-This is a critical distinction in Pluto.
-
-| Expression | Type | Semantics | Behavior |
-|------------|------|-----------|----------|
-| `s = arr[i]` | **ArrayRange** | **View** (Ref) | Reference to `arr`. `s[:] = 1` mutates `arr`. |
-| `s = [arr[i]]` | **Array** | **Copy** (Value) | New Array. Independent of `arr`. |
-
-### Example: Mutation via View
-
+**Generated code:**
+```c
+for (int64_t i_val = 0; i_val < 2; i_val++) {
+    for (int64_t j_val = 0; j_val < 2; j_val++) {
+        result = i_val + j_val;
+    }
+}
+// Produces: 0+0, 0+1, 1+0, 1+1 (4 iterations)
 ```
+
+**The Rule:** Same range variable name = related iterations (zip), different names = independent iterations (Cartesian).
+
+---
+
+## Array Indexing with Ranges
+
+Using a range to index an array creates a view or loop:
+
+```pluto
 arr = [10 20 30 40 50]
-i = 0:2
-s = arr[i]      # View
+i = 0:3
+slice = arr[i]         # View (ArrayRange type)
+values = [arr[i]]      # Collect to new array [10, 20, 30]
+```
 
-s[:] = 99       # Mutates arr
-arr             # [99 99 30 40 50]
+**View semantics:**
+```pluto
+arr[i][0] = 99         # Mutates arr[0]
+```
+
+**Loop semantics:**
+```pluto
+res += arr[i]          # Sum: res = 10+20+30 = 60
 ```
 
 ---
 
-## Function Dispatch by Type
+## Zero-Value Initialization
 
-Functions dispatch based on argument types:
+Variables used in range expressions auto-initialize to zero value if undefined:
 
-| Signature | Behavior |
-|-----------|----------|
-| `√(Scalar)` | Returns scalar |
-| `√(Range)` | Returns `OutRange` (Lazy Recipe) |
-| `√(Array)` | Returns Array (element-wise) |
-| `+(Array, Scalar)` | Broadcasts scalar, returns Array |
-| `+(Array, Array)` | Zips arrays, returns Array |
+```pluto
+sum += i          # sum starts at 0
+max = arr[i] > max arr[i]  # max starts at 0
+```
+
+This allows simple accumulation without explicit initialization.
 
 ---
 
-## Complete Examples
+## Functions with Range Parameters
 
-### Example 1: Lazy Range Expression
+When a function receives a range parameter, it generates a loop at the call site:
 
+```pluto
+res = process(a, i)
+    res = a * i
 ```
+
+**Desugars to:**
+```c
+for (int64_t i_val = 0; i_val < N; i_val++) {
+    res = a * i_val;  // Function body executes with scalar i_val
+}
+```
+
+**Key:** The function receives **scalar** values per iteration, not a range type.
+
+---
+
+## Intermediate Values: They Become Scalars!
+
+When you assign a range expression to a variable, the loop executes immediately and the variable stores the **last value** (scalar):
+
+```pluto
 i = 0:5
-x = i * 2
+x = i + 1        # Loop executes NOW: x = 5 (scalar, not lazy)
+y = i + 2        # Loop executes NOW: y = 7 (scalar, not lazy)
+res = x / y      # No loop! Just: res = 5 / 7
 ```
 
-**Analysis:**
-- `i * 2` → `OutRange` (Recipe)
-- Assignment → Stores recipe.
+**This is different from:**
 
-**Result:** `x` is a lazy object. Printing `x` yields `0 2 4 6 8`.
-
-### Example 2: Reassignment Safety (Snapshot)
-
-```
+```pluto
 i = 0:5
-x = i + 1
-i = 100:105
-x
+res = (i + 1) / (i + 2)  # Loop at statement level
 ```
 
-**Analysis:**
-- `x` captured the **value** `0:5`.
-- Changing `i` does not affect `x`.
-
-**Result:** `1 2 3 4 5`
-
-### Example 3: Running Sum (Fold)
-
+**Generated code:**
+```c
+res = 0;
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    res = (i_val + 1) / (i_val + 2);  // Compute per iteration
+}
+// res = (4 + 1) / (4 + 2) = 5/6 (last value)
 ```
-i = 1:5
-sum = 0
-sum = sum + i
-```
-
-**Analysis:**
-- `sum` appears on both sides → fold mode
-
-**Trace:**
-```
-sum = 0 + 1 = 1
-sum = 1 + 2 = 3
-sum = 3 + 3 = 6
-sum = 6 + 4 = 10
-```
-
-**Result:** `sum = 10`
-
-### Example 4: Loop Fusion
-
-```
-i = 0:1000
-x = i + 1
-y = x * 2
-z = [y]
-```
-
-**Analysis:**
-- `x` and `y` are lazy.
-- `z` triggers collection.
-- Compiler generates **one single loop**.
-
-**Result:** Fast execution, no intermediate arrays.
 
 ---
 
-## Summary Table
+## Composition Using Functions
 
-| Expression | Sources | Mode | Result (i=0:5) |
-|------------|---------|------|----------------|
-| `i + 1` | {i} | Lazy | Recipe |
-| `x = i + 1` | {i} | Lazy | Stores Recipe |
-| `[i + 1]` | {i} | Collect | `[1 2 3 4 5]` |
-| `arr[i]` | {i} | View | Reference to `arr` |
-| `[arr[i]]` | {i} | Collect | Copy of elements |
-| `x=0; x=x+i` | {i} | Fold | `10` |
+For complex expressions, use functions instead of intermediate variables:
+
+**Instead of trying to compose intermediates:**
+```pluto
+i = 0:5
+x = i + 1        # x = 5 (scalar)
+y = i + 2        # y = 7 (scalar)
+res += x / y     # Just res += 5/7 (once, not a loop!)
+```
+
+**Use a function for composition:**
+```pluto
+i = 0:5
+res += compute_ratio(i)
+    numerator = i + 1
+    denominator = i + 2
+    res = numerator / denominator
+```
+
+**Generated code:**
+```c
+res = 0;
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    numerator = i_val + 1;
+    denominator = i_val + 2;
+    res += numerator / denominator;
+}
+```
+
+**Or inline the expression:**
+```pluto
+i = 0:5
+res += (i + 1) / (i + 2)  # Simple and clear
+```
 
 ---
 
-## The Complete Model
+## Everything Inside Loops Is Scalar
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. Assignment is Copy (Snapshot)                               │
-│  2. Ranges are Lazy Recipes (OutRange)                          │
-│  3. Arrays are Values (COW)                                     │
-│  4. Slices are Views (ArrayRange) - The only Reference          │
-│  5. [...] collects Iterator → Array                             │
-│  6. Functions on Array → Element-wise (Eager)                   │
-│  7. Functions on Range → Lazy Recipe                            │
-└─────────────────────────────────────────────────────────────────┘
+When a loop is generated at the statement level, **all operations inside work on scalar values**:
+
+```pluto
+i = 0:5
+result = Square(i) + i
 ```
 
-This model is **fully consistent** — safe defaults (Values) with powerful opt-in Views.
+**Generated code:**
+```c
+result = 0;
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    result = Square(i_val) + i_val;  // Square called with scalar!
+}
+```
+
+**Key insights:**
+- ✅ `Square(i)` receives a **scalar** argument (not a range)
+- ✅ The `+` operator works on **scalars** (Square result and i_val)
+- ✅ No special "range-aware" functions or operators needed
+- ✅ Loop is outside all operations
+
+---
+
+## No Reassignment Issues!
+
+Since ranges execute immediately (not lazy), reassignment is perfectly fine:
+
+```pluto
+i = 0:5
+x = i + 1        # Loop executes, x = 5
+i = 0:10         # OK! Reassigning i
+y = i + 1        # New loop executes, y = 10
+```
+
+There's no "captured range" complexity - each expression generates its loop independently.
+
+---
+
+## Summary
+
+Pluto ranges are **simple loop syntax**:
+
+| Expression | Behavior | Result (i = 0:5) |
+|------------|----------|------------------|
+| `x = i + 1` | Loop, last value | `x = 5` |
+| `x += i` | Loop, accumulate | `x = 0+1+2+3+4 = 10` |
+| `[i * 2]` | Loop, collect | `[0,2,4,6,8]` |
+| `res = i > 2 i` | Loop, conditional | `res = 4` (last where i>2) |
+| `arr[i]` | View/loop | View or iterate |
+
+**Core Design:**
+- ✅ Ranges are loop syntax, not lazy types
+- ✅ Expressions execute immediately
+- ✅ Same variable = zip, different = Cartesian
+- ✅ No reassignment restrictions
+- ✅ Zero-value auto-initialization
+- ✅ Simple, predictable semantics

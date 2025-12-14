@@ -16,5 +16,5 @@ res = Rebuild(vec, i)
 res = PairSum(i, j)
     res = i + j
 
-res = Acc(res, x)
-    res = res + x
+res = Acc(a, x)
+    res = a + x

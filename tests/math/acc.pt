@@ -1,2 +1,2 @@
-res = acc(res, x)
-    res = res + x
+res = acc(a, x)
+    res = a + x

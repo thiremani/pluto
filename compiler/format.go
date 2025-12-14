@@ -174,19 +174,6 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	return s, ok
 }
 
-// gets the raw symbol WITHOUT deref if pointer
-// in case it is a PtrKind will return alloca and Type should be PtrKind
-func (c *Compiler) getRawSym(id string) (*Symbol, bool) {
-	s, ok := Get(c.Scopes, id)
-	if ok {
-		return s, ok
-	}
-
-	cc := c.CodeCompiler.Compiler
-	s, ok = Get(cc.Scopes, id)
-	return s, ok
-}
-
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
 // if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
 func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
@@ -225,7 +212,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 	}
 	specRune := rune(finalSpec[len(finalSpec)-1])
 	if specRune == 'p' {
-		mainSym, _ = c.getRawSym(mainId)
+		mainSym, _ = c.compileIdentifierRaw(mainId)
 	}
 	mainType := mainSym.Type
 
@@ -276,7 +263,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 			return
 		}
 		// Use the raw symbol to ensure we have the pointer, not a dereferenced value.
-		mainSym, _ = c.getRawSym(mainId)
+		mainSym, _ = c.compileIdentifierRaw(mainId)
 		// Cast pointer to i64 and format with 0x%llx
 		ptrAsInt := c.builder.CreatePtrToInt(mainSym.Val, c.Context.Int64Type(), "ptr_as_i64")
 		formattedStr = "0x%llx"

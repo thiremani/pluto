@@ -47,7 +47,7 @@ func (cp *CodeParser) Parse() *ast.Code {
 
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 	prevLen := len(cp.p.errors)
-	cp.p.checkNoDuplicates(s.Name)
+	cp.p.checkNoDuplicates(s.Name, false)
 
 	// Check for global redeclarations against the code map.
 	for _, id := range s.Name {
@@ -89,23 +89,10 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 		cp.p.errors = append(cp.p.errors, ce)
 		return
 	}
-	// Check parameters are distinct and not blank ("_").
-	// Check outputs are distinct and not blank.
-	// Note: The same identifier CAN appear in both parameters and outputs for
-	// accumulator patterns. When this happens, the output variable is automatically
-	// initialized from the matching parameter value at the call site.
-	//
-	// Example:
-	//   res = acc(res, x)
-	//       res = res + x
-	//
-	// At call site "total = acc(total, 1:5)":
-	//   - Parameter 'res' receives the value of 'total' (e.g., 10)
-	//   - Output 'res' is initialized from parameter 'res' (starts at 10)
-	//   - Body accumulates: res = 10 + 1 + 2 + 3 + 4 + 5 = 25
-	//   - Final value is stored back to 'total'
-	cp.p.checkNoDuplicates(s.Parameters)
-	cp.p.checkNoDuplicates(s.Outputs)
+	// Check no duplicates among parameters and outputs
+	// The same name CAN appear in both outputs and parameters when we call the function.
+	// Blanks ("_") are not allowed in function definitions.
+	cp.p.checkNoDuplicates(append(s.Parameters, s.Outputs...), false)
 
 	if len(cp.p.errors) > prevLen {
 		// If there are errors, we don't add the statement to the code.

@@ -118,7 +118,7 @@ y, z, y = dupOut(x)
 y, z = inOutOverlap(x, y)
     z = x + y`,
 			params: []string{"x", "y"},
-			errs:   nil, // Now allowed for accumulator patterns
+			errs:   []string{"duplicate identifier: y in this statement"},
 		},
 		{
 			name: "dupInAndOut",
@@ -137,7 +137,9 @@ a, b, a = dupInAndOut(x, y, x)
 			input: `_, _, a = blankOut()
     a = 23`,
 			params: []string{},
-			errs:   nil,
+			errs: []string{
+				"blank identifier '_' not allowed here",
+				"blank identifier '_' not allowed here"},
 		},
 		{
 			name: "blankOut",
@@ -145,7 +147,9 @@ a, b, a = dupInAndOut(x, y, x)
 _, b, _ = blankOut(x)
     b = x`,
 			params: []string{"x"},
-			errs:   nil,
+			errs: []string{
+				"blank identifier '_' not allowed here",
+				"blank identifier '_' not allowed here"},
 		},
 		{
 			name: "blankIn",
@@ -153,7 +157,9 @@ _, b, _ = blankOut(x)
 y = blankIn(_, x, _)
     y = x`,
 			params: []string{"_", "x", "_"},
-			errs:   nil,
+			errs: []string{
+				"blank identifier '_' not allowed here",
+				"blank identifier '_' not allowed here"},
 		},
 		{
 			name: "sum",
@@ -161,7 +167,7 @@ y = blankIn(_, x, _)
 res = sum(res, x)
     res = res + x`,
 			params: []string{"res", "x"},
-			errs:   nil,
+			errs:   []string{"duplicate identifier: res in this statement"},
 		},
 	}
 
