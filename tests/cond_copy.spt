@@ -18,6 +18,9 @@ name = "Jack"
 s = 4 > 3 "hello -name"
 s
 
+t = 3 > 4 "hey -name"
+t
+
 # Test conditional with heap string variable
 s1 = "test" ⊕ "_1"
 s2 = "test" ⊕ "_2"

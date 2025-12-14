@@ -1,2 +1,4 @@
 ShadowFunc: 50
+AddMul res is: 1234
+AddMul res2 with array range arr[i] is: 123450
 PendingRanges: [160 150 130 99 57 4]

@@ -12,26 +12,39 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
+// extractRangeValue extracts the range aggregate from a symbol.
+// Returns the range value and true if successful, or zero value and false if not a range type.
+func (c *Compiler) extractRangeValue(sym *Symbol, name string) (llvm.Value, bool) {
+	switch t := sym.Type.(type) {
+	case Range:
+		return sym.Val, true
+	case Ptr:
+		if t.Elem.Kind() == RangeKind {
+			return c.createLoad(sym.Val, t.Elem, name+"_range"), true
+		}
+	}
+	return llvm.Value{}, false
+}
+
 // Build the {start,stop,step} aggregate for either a literal or a named range.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
-	// Literal occurrence: synthesize the aggregate
 	if ri.RangeLit != nil {
 		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
 	}
 
-	// Named occurrence: look it up in scope
 	if sym, ok := Get(c.Scopes, ri.Name); ok {
-		if sym.Type.Kind() != RangeKind {
-			panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
+		if val, ok := c.extractRangeValue(sym, ri.Name); ok {
+			return val
 		}
-		return sym.Val
+		panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
 	}
+
 	if c.CodeCompiler != nil && c.CodeCompiler.Compiler != nil {
 		if sym, ok := Get(c.CodeCompiler.Compiler.Scopes, ri.Name); ok {
-			if sym.Type.Kind() != RangeKind {
-				panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
+			if val, ok := c.extractRangeValue(sym, ri.Name); ok {
+				return val
 			}
-			return sym.Val
+			panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
 		}
 	}
 
