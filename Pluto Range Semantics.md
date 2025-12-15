@@ -1,17 +1,41 @@
 # Pluto Range Semantics
 
-## Core Principle: Ranges as Loop Syntax
+## Core Principle: Base Function Model
 
-In Pluto, ranges generate loops at **statement boundaries**. When a statement contains a range variable, the compiler generates a loop, and all operations inside (operators, function calls) work on scalar iteration values.
+In Pluto, **every operation is a function**. Each expression has a **base function** that determines where range iteration occurs. Ranges are expanded as loops **inside** the base function's body.
 
-```pluto
-i = 0:5          # Range literal
-x = i + 1        # Loop at statement: for i, x = i+1 → x = 5 (last value)
-x += i           # Loop at statement: for i, x += i → x = 0+1+2+3+4 = 10
-arr = [i * 2]    # Loop at statement: for i, collect i*2 → [0,2,4,6,8]
+### Finding the Base Function
+
+Every expression is a function call. The base function is found by:
+
+```
+findBase(f):
+    if f has exactly one argument AND that argument is a function call g:
+        return findBase(g)  # descend into single-arg function
+    else:
+        return f  # f is base
 ```
 
-**Key Insight:** Ranges generate loops at statement boundaries. Everything inside the loop operates on scalar values per iteration.
+**Rules:**
+1. Start at the root function of the expression
+2. If it has exactly **one argument** that is itself a **function call**, descend into it
+3. Continue until you hit a function with multiple args, or whose single arg is a value (range, variable, literal)
+4. The base function's body contains all range iteration loops
+
+### Examples
+
+| Expression | Tree | Base | Reason |
+|------------|------|------|--------|
+| `f(0:5)` | `f(range)` | `f` | single arg is value |
+| `f(g(0:5))` | `f(g(range))` | `g` | descend through single-arg `f` |
+| `f(g(h(0:5)))` | `f(g(h(range)))` | `h` | keep descending |
+| `f(a, b)` | `f(a, b)` | `f` | multiple args |
+| `a + b` | `Add(a, b)` | `Add` | multiple args |
+| `-x` | `Negate(x)` | `Negate` | single arg is value |
+| `-(0:5)` | `Negate(range)` | `Negate` | single arg is value |
+| `√(x + y)` | `Sqrt(Add(x, y))` | `Add` | descend through single-arg `Sqrt` |
+| `√(x + 0:5)` | `Sqrt(Add(x, range))` | `Add` | descend to `Add` |
+| `arr[0:5] + 1` | `Add(Index(arr, range), 1)` | `Add` | multiple args |
 
 ---
 
@@ -25,17 +49,109 @@ j = 0:10:2       # Iterates: 0, 2, 4, 6, 8
 k = 5:0:-1       # Iterates: 5, 4, 3, 2, 1
 ```
 
-Ranges are just values that describe iteration - they have no operations until used in expressions.
+Ranges are values that describe iteration - they expand when used in expressions.
+
+---
+
+## Loop Generation Inside Base Function
+
+Once the base function is determined, all ranges in its arguments become nested loops around its body:
+
+### Example: Simple Function Call
+
+```pluto
+i = 0:5
+x = Square(i)
+```
+
+- Base function: `Square` (single arg is range value)
+- Range `i` in args → loop inside Square's body
+
+**Generated structure:**
+```
+Square:
+    for i_val in 0:5:
+        x = i_val * i_val
+```
+
+### Example: Nested Single-Arg Functions
+
+```pluto
+x = √(Square(0:5))
+```
+
+- Tree: `Sqrt(Square(range))`
+- `Sqrt` has single arg `Square(...)` which is a function → descend
+- `Square` has single arg `0:5` (value, not function) → **base is `Square`**
+
+**Generated structure:**
+```
+Square:
+    for i_val in 0:5:
+        tmp = i_val * i_val
+Sqrt(tmp)  # Applied to final result
+```
+
+### Example: Multiple Arguments
+
+```pluto
+x = f(0:3, 10:13)
+```
+
+- `f` has 2 args → **base is `f`**
+- Both ranges become nested loops
+
+**Generated structure:**
+```
+f:
+    for tmp1 in 0:3:
+        for tmp2 in 10:13:
+            <body of f>
+```
+
+### Example: Infix with Range
+
+```pluto
+x = a + 0:5
+```
+
+- Tree: `Add(a, range)`
+- `Add` has 2 args → **base is `Add`**
+
+**Generated structure:**
+```
+Add:
+    for i_val in 0:5:
+        x = a + i_val
+```
+
+### Example: Prefix Applied to Infix
+
+```pluto
+x = √(a + 0:5)
+```
+
+- Tree: `Sqrt(Add(a, range))`
+- `Sqrt` has single arg `Add(...)` which is a function → descend
+- `Add` has 2 args → **base is `Add`**
+
+**Generated structure:**
+```
+Add:
+    for i_val in 0:5:
+        tmp = a + i_val
+Sqrt(tmp)  # Applied to final result
+```
 
 ---
 
 ## Loop Generation Modes
 
-When a range appears in an expression, the behavior depends on the operator:
+When ranges expand, the behavior depends on the assignment operator:
 
 ### Mode 1: Assignment (Last Value)
 
-Simple assignment generates a loop and keeps the last value:
+Simple assignment keeps the last iteration value:
 
 ```pluto
 i = 0:5
@@ -44,7 +160,6 @@ x = i + 1
 
 **Generated code:**
 ```c
-x = 0;  // Zero-value initialization
 for (int64_t i_val = 0; i_val < 5; i_val++) {
     x = i_val + 1;
 }
@@ -79,11 +194,48 @@ arr = [i * 2]
 **Generated code:**
 ```c
 arr = allocate_array(5);
-size_t idx = 0;
 for (int64_t i_val = 0; i_val < 5; i_val++) {
-    arr[idx++] = i_val * 2;
+    arr[i_val] = i_val * 2;
 }
 // arr = [0, 2, 4, 6, 8]
+```
+
+---
+
+## Multiple Ranges: Nested Loops
+
+When multiple ranges appear in the base function's arguments, they become **nested loops**:
+
+```pluto
+i = 0:2
+j = 0:3
+result = f(i, j)
+```
+
+**Generated structure:**
+```
+f:
+    for i_val in 0:2:
+        for j_val in 0:3:
+            <body of f>
+```
+
+This produces `2 × 3 = 6` iterations (Cartesian product).
+
+### Same Range Variable = Single Loop (Zip)
+
+If the same range variable appears multiple times, it's a single loop:
+
+```pluto
+i = 0:5
+result = i + i * 2
+```
+
+**Generated code:**
+```c
+for (int64_t i_val = 0; i_val < 5; i_val++) {
+    result = i_val + i_val * 2;
+}
 ```
 
 ---
@@ -96,7 +248,7 @@ You can add a conditional guard to selectively update values:
 res = condition expression
 ```
 
-This desugars to:
+**Desugars to:**
 ```c
 for each iteration:
     if (condition):
@@ -113,7 +265,7 @@ res = arr[i] > res arr[i]
 
 **Generated code:**
 ```c
-res = 0;  // Zero-value init
+res = 0;
 for (int64_t i_val = 0; i_val < 5; i_val++) {
     if (arr[i_val] > res) {
         res = arr[i_val];
@@ -121,68 +273,6 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 }
 // res = 5 (maximum)
 ```
-
-### Example: Conditional Last Value
-
-```pluto
-res = i * i > 10 i
-```
-
-**Generated code:**
-```c
-res = 0;
-for (int64_t i_val = 0; i_val < 10; i_val++) {
-    if (i_val * i_val > 10) {
-        res = i_val;
-    }
-}
-// res = last i where i² > 10
-```
-
----
-
-## Multiple Ranges: Zipping vs Cartesian
-
-When multiple ranges appear in the same expression, loop structure depends on **variable names**:
-
-### Same Variable → Zip (Single Loop)
-
-```pluto
-i = 0:3
-x = i + 1
-y = i + 2
-result = x / y
-```
-
-Both `x` and `y` reference range `i`, so they **zip**:
-
-**Generated code:**
-```c
-// Single loop iterating i
-for (int64_t i_val = 0; i_val < 3; i_val++) {
-    result = (i_val + 1) / (i_val + 2);
-}
-```
-
-### Different Variables → Cartesian (Nested Loops)
-
-```pluto
-i = 0:2
-j = 0:2
-result = i + j
-```
-
-**Generated code:**
-```c
-for (int64_t i_val = 0; i_val < 2; i_val++) {
-    for (int64_t j_val = 0; j_val < 2; j_val++) {
-        result = i_val + j_val;
-    }
-}
-// Produces: 0+0, 0+1, 1+0, 1+1 (4 iterations)
-```
-
-**The Rule:** Same range variable name = related iterations (zip), different names = independent iterations (Cartesian).
 
 ---
 
@@ -195,177 +285,97 @@ arr = [10 20 30 40 50]
 i = 0:3
 slice = arr[i]         # View (ArrayRange type)
 values = [arr[i]]      # Collect to new array [10, 20, 30]
-```
-
-**View semantics:**
-```pluto
-arr[i][0] = 99         # Mutates arr[0]
-```
-
-**Loop semantics:**
-```pluto
 res += arr[i]          # Sum: res = 10+20+30 = 60
 ```
 
 ---
 
-## Zero-Value Initialization
+## Pass-by-Reference Semantics
 
-Variables used in range expressions auto-initialize to zero value if undefined:
+Function arguments are passed by reference. When the same variable is used for input and output, they alias:
 
 ```pluto
-sum += i          # sum starts at 0
-max = arr[i] > max arr[i]  # max starts at 0
+rebuilt = [1 2 3]
+rebuilt = Rebuild(rebuilt, 10:13)  # Input and output alias!
 ```
 
-This allows simple accumulation without explicit initialization.
+**Aliased behavior:** Changes to output affect subsequent reads of input within the same iteration.
+
+**No aliasing (literal array):**
+```pluto
+result = Rebuild([1 2 3], 10:13)  # Fresh array, no aliasing
+```
 
 ---
 
 ## Functions with Range Parameters
 
-When a function receives a range parameter, it generates a loop at the call site:
+When a function receives a range parameter, iteration happens **inside** the function body:
 
 ```pluto
-res = process(a, i)
-    res = a * i
+res = AddMul(x, 0:5)
+    i = 10
+    res = i * x + y  # y iterates over 0:5
 ```
 
-**Desugars to:**
-```c
-for (int64_t i_val = 0; i_val < N; i_val++) {
-    res = a * i_val;  // Function body executes with scalar i_val
-}
+**Generated structure:**
+```
+AddMul:
+    for y_val in 0:5:
+        i = 10
+        res = i * x + y_val
 ```
 
-**Key:** The function receives **scalar** values per iteration, not a range type.
+The function receives the range, and its body contains the loop.
 
 ---
 
-## Intermediate Values: They Become Scalars!
+## Prefix Operators
 
-When you assign a range expression to a variable, the loop executes immediately and the variable stores the **last value** (scalar):
+Prefix operators (`-`, `√`, etc.) are single-argument functions. The base function rule applies:
+
+```pluto
+x = -(0:5)      # Tree: Negate(range) → base is Negate
+x = √(a + 0:5)  # Tree: Sqrt(Add(a, range)) → descend to Add
+```
+
+---
+
+## Intermediate Values Become Scalars
+
+When you assign a range expression to a variable, the loop executes immediately:
 
 ```pluto
 i = 0:5
-x = i + 1        # Loop executes NOW: x = 5 (scalar, not lazy)
-y = i + 2        # Loop executes NOW: y = 7 (scalar, not lazy)
+x = i + 1        # Loop executes NOW: x = 5 (scalar)
+y = i + 2        # Loop executes NOW: y = 7 (scalar)
 res = x / y      # No loop! Just: res = 5 / 7
 ```
 
-**This is different from:**
-
+**For iteration over both:**
 ```pluto
 i = 0:5
-res = (i + 1) / (i + 2)  # Loop at statement level
+res = (i + 1) / (i + 2)  # Single loop, both computed per iteration
 ```
-
-**Generated code:**
-```c
-res = 0;
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    res = (i_val + 1) / (i_val + 2);  // Compute per iteration
-}
-// res = (4 + 1) / (4 + 2) = 5/6 (last value)
-```
-
----
-
-## Composition Using Functions
-
-For complex expressions, use functions instead of intermediate variables:
-
-**Instead of trying to compose intermediates:**
-```pluto
-i = 0:5
-x = i + 1        # x = 5 (scalar)
-y = i + 2        # y = 7 (scalar)
-res += x / y     # Just res += 5/7 (once, not a loop!)
-```
-
-**Use a function for composition:**
-```pluto
-i = 0:5
-res += compute_ratio(i)
-    numerator = i + 1
-    denominator = i + 2
-    res = numerator / denominator
-```
-
-**Generated code:**
-```c
-res = 0;
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    numerator = i_val + 1;
-    denominator = i_val + 2;
-    res += numerator / denominator;
-}
-```
-
-**Or inline the expression:**
-```pluto
-i = 0:5
-res += (i + 1) / (i + 2)  # Simple and clear
-```
-
----
-
-## Everything Inside Loops Is Scalar
-
-When a loop is generated at the statement level, **all operations inside work on scalar values**:
-
-```pluto
-i = 0:5
-result = Square(i) + i
-```
-
-**Generated code:**
-```c
-result = 0;
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    result = Square(i_val) + i_val;  // Square called with scalar!
-}
-```
-
-**Key insights:**
-- ✅ `Square(i)` receives a **scalar** argument (not a range)
-- ✅ The `+` operator works on **scalars** (Square result and i_val)
-- ✅ No special "range-aware" functions or operators needed
-- ✅ Loop is outside all operations
-
----
-
-## No Reassignment Issues!
-
-Since ranges execute immediately (not lazy), reassignment is perfectly fine:
-
-```pluto
-i = 0:5
-x = i + 1        # Loop executes, x = 5
-i = 0:10         # OK! Reassigning i
-y = i + 1        # New loop executes, y = 10
-```
-
-There's no "captured range" complexity - each expression generates its loop independently.
 
 ---
 
 ## Summary
 
-Pluto ranges are **simple loop syntax**:
-
-| Expression | Behavior | Result (i = 0:5) |
-|------------|----------|------------------|
-| `x = i + 1` | Loop, last value | `x = 5` |
-| `x += i` | Loop, accumulate | `x = 0+1+2+3+4 = 10` |
-| `[i * 2]` | Loop, collect | `[0,2,4,6,8]` |
-| `res = i > 2 i` | Loop, conditional | `res = 4` (last where i>2) |
-| `arr[i]` | View/loop | View or iterate |
+| Concept | Rule |
+|---------|------|
+| **Base function** | Descend through single-arg function calls until multiple args or value arg |
+| **Range expansion** | Nested loops inside base function's body |
+| **Multiple ranges** | Nested loops (Cartesian product) |
+| **Same variable** | Single loop (zip behavior) |
+| **Assignment** | Last value kept |
+| **Compound assignment** | Accumulate across iterations |
+| **Array literal** | Collect all values |
+| **Pass-by-reference** | Input/output can alias |
 
 **Core Design:**
-- ✅ Ranges are loop syntax, not lazy types
-- ✅ Expressions execute immediately
-- ✅ Same variable = zip, different = Cartesian
-- ✅ No reassignment restrictions
-- ✅ Zero-value auto-initialization
-- ✅ Simple, predictable semantics
+- Every operation is a function
+- Deterministic base function selection
+- Ranges expand as loops inside base function
+- No side effects in functions
+- Simple, predictable semantics
