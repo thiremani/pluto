@@ -35,7 +35,7 @@ squareVec = [Square(0:5)]
 "SquareVecRange: -squareVec"
 
 # Inline literal print should also work
-squareInline = [Square(0:5)]
+squareInline = Square([0:5])
 "SquareInline: -squareInline"
 
 # Ensure function-internal array assignment builds a fresh array (no accumulation on param)
@@ -43,9 +43,17 @@ rebuilt = [1 2 3]
 rebuilt = Rebuild(rebuilt, 10:13)
 "RebuildAssign: -rebuilt"
 
+# Same but with literal array (no aliasing between input and output)
+rebuiltNoAlias = Rebuild([1 2 3], 10:13)
+"RebuildNoAlias: -rebuiltNoAlias"
+
 rebuilt2 = [5 6 7]
 rebuilt2 = Rebuild(rebuilt2, -1:1)
 "RebuildAssign2: -rebuilt2"
+
+# Same but with literal array (no aliasing)
+rebuiltNoAlias2 = Rebuild([5 6 7], -1:1)
+"RebuildNoAlias2: -rebuiltNoAlias2"
 
 # Nested range accumulation via array literal
 pairSum = [PairSum(0:2, 3:5)]

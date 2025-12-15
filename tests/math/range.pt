@@ -1,12 +1,12 @@
-y = triple(x)
+y = Triple(x)
     y = 3x
     y
 
-res = sum(curr, x)
+res = Sum(curr, x)
     res = curr + x
     res
 
-yes = divides(in, y, x)
+yes = Divides(in, y, x)
     yes = in * (y % x)
 
 # ret = primes(num)

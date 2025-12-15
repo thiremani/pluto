@@ -1,22 +1,22 @@
-pi = 3.14159
-exp = 2.71828
+pi = 3.141592653589793
+exp = 2.718281828459045
 answer = 42
 greeting = "hello"
 
 # define a generic “square” function
-res = square(x)
+res = Square(x)
     res = x * x
 
-quo, rem = div(dividend, divisor)
+quo, rem = Div(dividend, divisor)
     quo = dividend ÷ divisor
     rem = dividend % divisor
 
-mod, res = isDiv(x, y)
+mod, res = IsDiv(x, y)
     mod, res = x % y, "no"
     res = mod == 0 "yes"
 
-x, y = f(i)
+x, y = F(i)
     x, y = 2 + i, 3 + i
 
-a, b = g(i)
+a, b = G(i)
     a, b = 2.3 * i, 5.6 * i

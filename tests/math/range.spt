@@ -1,16 +1,16 @@
 n = 5
 a = 0:n
-y = triple(a)
+y = Triple(a)
 y
 
-y = triple(1:7:2)
+y = Triple(1:7:2)
 y
 
 res = 0
-res = sum(res, 1:6)
+res = Sum(res, 1:6)
 "res is", res
 
-res = sum(res, 1996:2001:2)
+res = Sum(res, 1996:2001:2)
 "res after second summation is", res
 
 # Test named ranges in expressions

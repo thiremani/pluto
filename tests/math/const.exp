@@ -1,4 +1,4 @@
-3.14159 hello
-50.14159 100.28318 18.4460725164442
+3.14159265358979 hello
+50.1415926535898 100.28318530718 18.4460610848487
 490
-constants in math.pt are pi = 3.14159, greeting = hello, ansewr = 42 while in physics.pt is g = 9.8
+constants in math.pt are pi = 3.14159265358979, greeting = hello, answer = 42 while in physics.pt is g = 9.8
