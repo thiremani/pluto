@@ -7,6 +7,9 @@ greeting = "hello"
 res = Square(x)
     res = x * x
 
+z = SumSquares(a, b)
+    z = Square(a) + Square(b)
+
 quo, rem = Div(dividend, divisor)
     quo = dividend ÷ divisor
     rem = dividend % divisor

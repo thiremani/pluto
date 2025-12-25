@@ -33,16 +33,17 @@ func GetCopy(s *Symbol) (newSym *Symbol) {
 }
 
 type Compiler struct {
-	Scopes        []Scope[*Symbol]
-	Context       llvm.Context
-	Module        llvm.Module
-	builder       llvm.Builder
-	formatCounter int           // Track unique format strings
-	tmpCounter    int           // Temporary variable names counter
-	CodeCompiler  *CodeCompiler // Optional reference for script compilation
-	FuncCache     map[string]*Func
-	ExprCache     map[ast.Expression]*ExprInfo
-	Errors        []*token.CompileError
+	Scopes          []Scope[*Symbol]
+	Context         llvm.Context
+	Module          llvm.Module
+	builder         llvm.Builder
+	formatCounter   int           // Track unique format strings
+	tmpCounter      int           // Temporary variable names counter
+	CodeCompiler    *CodeCompiler // Optional reference for script compilation
+	FuncCache       map[string]*Func
+	ExprCache       map[ExprKey]*ExprInfo
+	FuncNameMangled string // current function's mangled name ("" for script level)
+	Errors          []*token.CompileError
 }
 
 func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
@@ -50,16 +51,17 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
-		Scopes:        []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
-		Context:       ctx,
-		Module:        module,
-		builder:       builder,
-		formatCounter: 0,
-		tmpCounter:    0,
-		CodeCompiler:  cc,
-		FuncCache:     make(map[string]*Func),
-		ExprCache:     make(map[ast.Expression]*ExprInfo),
-		Errors:        []*token.CompileError{},
+		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
+		Context:         ctx,
+		Module:          module,
+		builder:         builder,
+		formatCounter:   0,
+		tmpCounter:      0,
+		CodeCompiler:    cc,
+		FuncCache:       make(map[string]*Func),
+		ExprCache:       make(map[ExprKey]*ExprInfo),
+		FuncNameMangled: "",
+		Errors:          []*token.CompileError{},
 	}
 }
 
@@ -206,7 +208,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, nil, Off)
+		condSyms := c.compileExpression(expr, nil)
 		for idx, condSym := range condSyms {
 			if i == 0 && idx == 0 {
 				cond = condSym.Val
@@ -271,7 +273,7 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, llvm.BasicB
 
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], Off)
+		res := c.compileExpression(expr, stmt.Name[i:])
 		// Dereference pointers to get values for phi node
 		// (function calls return pointer symbols with pass-by-reference)
 		for _, sym := range res {
@@ -579,7 +581,7 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	i := 0
 	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:], Off)
+		res := c.compileExpression(expr, stmt.Name[i:])
 
 		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
@@ -606,7 +608,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.compileCondStatement(stmt, cond)
 }
 
-func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
+func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
 	s := &Symbol{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -645,17 +647,17 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = c.compileRangeExpression(e)
 		return
 	case *ast.ArrayLiteral:
-		return c.compileArrayExpression(e, dest, iterLevel)
+		return c.compileArrayExpression(e, dest)
 	case *ast.ArrayRangeExpression:
-		return c.compileArrayRangeExpression(e, dest, iterLevel)
+		return c.compileArrayRangeExpression(e, dest)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
-		res = c.compilePrefixExpression(e, dest, iterLevel)
+		res = c.compilePrefixExpression(e, dest)
 	case *ast.CallExpression:
-		res = c.compileCallExpression(e, dest, iterLevel)
+		res = c.compileCallExpression(e, dest)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T", e))
 	}
@@ -773,11 +775,11 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 }
 
 func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
-	start := c.compileExpression(e.Start, nil, Off)[0].Val
-	stop := c.compileExpression(e.Stop, nil, Off)[0].Val
+	start := c.compileExpression(e.Start, nil)[0].Val
+	stop := c.compileExpression(e.Stop, nil)[0].Val
 	var stepVal llvm.Value
 	if e.Step != nil {
-		stepVal = c.compileExpression(e.Step, nil, Off)[0].Val
+		stepVal = c.compileExpression(e.Step, nil)[0].Val
 	} else {
 		// default step = 1
 		stepVal = c.ConstI64(1)
@@ -820,7 +822,7 @@ func (c *Compiler) compileIdentifierRaw(id string) (*Symbol, bool) {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info := c.ExprCache[expr]
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
@@ -868,8 +870,8 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
-	left := c.compileExpression(expr.Left, nil, IterOutside)
-	right := c.compileExpression(expr.Right, nil, IterOutside)
+	left := c.compileExpression(expr.Left, nil)
+	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
@@ -925,8 +927,8 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
-		left := c.compileExpression(leftRew, nil, IterOutside)
-		right := c.compileExpression(rightRew, nil, IterOutside)
+		left := c.compileExpression(leftRew, nil)
+		right := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(left); i++ {
 			expected := info.OutTypes[i]
@@ -1007,15 +1009,15 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbo
 // Destination-aware prefix compilation,
 // mirroring compileInfixExpression/compileInfixRanges.
 
-func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
-	info := c.ExprCache[expr]
+func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	// If the result is an array, let the operand handle any collection itself.
 	if len(pending) == 0 || (len(info.OutTypes) > 0 && info.OutTypes[0].Kind() == ArrayKind) {
-		return c.compilePrefixBasic(expr, info, iterLevel)
+		return c.compilePrefixBasic(expr, info)
 	}
-	return c.compilePrefixRanges(expr, info, dest, iterLevel)
+	return c.compilePrefixRanges(expr, info, dest)
 }
 
 // compilePrefix compiles a unary operation on a symbol, delegating array
@@ -1029,12 +1031,8 @@ func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Sym
 	return defaultUnaryOps[key](c, sym, true)
 }
 
-func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo, iterLevel IterLevel) (res []*Symbol) {
-	operandLevel := iterLevel
-	if operandLevel == Off {
-		operandLevel = IterInside
-	}
-	operand := c.compileExpression(expr.Right, nil, operandLevel)
+func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
+	operand := c.compileExpression(expr.Right, nil)
 	for i, opSym := range operand {
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
@@ -1043,7 +1041,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 
 // compileArrayUnaryPrefix broadcasts a unary operator over a numeric array.
 
-func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
+func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
 	// New scope so we can temporarily shadow outputs like mini-functions do.
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
@@ -1056,7 +1054,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Drive the loops and store into outputs each trip.
 	c.withLoopNest(info.Ranges, func() {
-		ops := c.compileExpression(rightRew, nil, IterInside)
+		ops := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(ops); i++ {
 			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
@@ -1112,7 +1110,11 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnIn
 	savedBlock := c.builder.GetInsertBlock()
 	c.builder.SetInsertPointAtEnd(entry)
 
+	// Set FuncNameMangled so ExprCache entries are keyed to this function
+	savedFuncNameMangled := c.FuncNameMangled
+	c.FuncNameMangled = mangled
 	c.compileFuncBlock(template, fnInfo, paramTypes, retStruct, function)
+	c.FuncNameMangled = savedFuncNameMangled
 
 	c.builder.CreateRetVoid()
 
@@ -1287,7 +1289,7 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
-func (c *Compiler) compileArgs(ce *ast.CallExpression, iterLevel IterLevel) []*Symbol {
+func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 	funcName := ce.Function.Value
 	var args []*Symbol
 	for idx, callArg := range ce.Arguments {
@@ -1302,7 +1304,7 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression, iterLevel IterLevel) []*S
 			continue
 		}
 		// Expression: evaluate, then wrap in pointer if needed
-		res := c.compileExpression(callArg, nil, iterLevel)
+		res := c.compileExpression(callArg, nil)
 		for _, r := range res {
 			if r.Type.Kind() != PtrKind {
 				name := fmt.Sprintf("%s_arg_%d", funcName, idx)
@@ -1314,14 +1316,14 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression, iterLevel IterLevel) []*S
 	return args
 }
 
-func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression, iterLevel IterLevel) *Symbol {
-	info := c.ExprCache[expr]
+func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	arrRange := info.OutTypes[0].(ArrayRange)
 
-	arraySyms := c.compileExpression(expr.Array, nil, iterLevel)
+	arraySyms := c.compileExpression(expr.Array, nil)
 	arraySym := arraySyms[0]
 
-	rangeSyms := c.compileExpression(expr.Range, nil, iterLevel)
+	rangeSyms := c.compileExpression(expr.Range, nil)
 	rangeSym := rangeSyms[0]
 
 	return &Symbol{
@@ -1330,22 +1332,48 @@ func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression, iterLeve
 	}
 }
 
-func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier, iterLevel IterLevel) (res []*Symbol) {
-	if iterLevel == Off {
-		iterLevel = IterInside
-	}
-	args := c.compileArgs(ce, iterLevel)
+func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
+	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	outputs := c.makeOutputs(dest, info.OutTypes)
 
-	// Extract element types from pointer args for mangling (matches solver)
+	// If LoopInside=false, wrap call in loops for all ranges
+	if !info.LoopInside && len(info.Ranges) > 0 {
+		rewCall := info.Rewrite.(*ast.CallExpression)
+		c.withLoopNest(info.Ranges, func() {
+			// Inside loop, ranges are shadowed as scalars
+			c.compileCallInner(ce.Function.Value, rewCall, outputs)
+		})
+
+		// Load final values from outputs
+		out := make([]*Symbol, len(outputs))
+		for i := range outputs {
+			elemType := outputs[i].Type.(Ptr).Elem
+			out[i] = &Symbol{
+				Val:  c.createLoad(outputs[i].Val, elemType, "final"),
+				Type: elemType,
+			}
+		}
+		return out
+	}
+
+	// LoopInside=true or no ranges: direct call
+	c.compileCallInner(ce.Function.Value, ce, outputs)
+	return outputs
+}
+
+// compileCallInner compiles the actual function call
+func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, outputs []*Symbol) {
+	args := c.compileArgs(ce)
+
+	// Extract element types from pointer args for mangling
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
 		paramTypes[i] = arg.Type.(Ptr).Elem
 	}
 
-	mangled := mangle(ce.Function.Value, paramTypes)
+	mangled := mangle(funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 
-	outputs := c.makeOutputs(dest, fnInfo.OutTypes)
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
 
@@ -1364,7 +1392,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	fn := c.Module.NamedFunction(mangled)
 	if fn.IsNil() {
 		fk := ast.FuncKey{
-			FuncName: ce.Function.Value,
+			FuncName: funcName,
 			Arity:    len(paramTypes),
 		}
 		template := c.CodeCompiler.Code.Func.Map[fk]
@@ -1374,7 +1402,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	return c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
@@ -1572,7 +1600,7 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	}
 
 	// Compile expression and process each resulting symbol
-	syms := c.compileExpression(expr, nil, Off)
+	syms := c.compileExpression(expr, nil)
 	for _, s := range syms {
 		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
 	}
