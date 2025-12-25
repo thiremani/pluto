@@ -1296,7 +1296,6 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-
 /*
 // getInnerType returns the type that operations work with when given a Range/ArrayRange.
 // Range → Range.Iter, ArrayRange → element type, other → unchanged
