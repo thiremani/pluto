@@ -1014,7 +1014,7 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	// If the result is an array, let the operand handle any collection itself.
-	if len(pending) == 0 || (len(info.OutTypes) > 0 && info.OutTypes[0].Kind() == ArrayKind) {
+	if len(pending) == 0 {
 		return c.compilePrefixBasic(expr, info)
 	}
 	return c.compilePrefixRanges(expr, info, dest)
