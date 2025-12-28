@@ -26,29 +26,21 @@ func (c *Compiler) extractRangeValue(sym *Symbol, name string) (llvm.Value, bool
 	return llvm.Value{}, false
 }
 
-// Build the {start,stop,step} aggregate for either a literal or a named range.
+// rangeAggregateForRI builds the {start,stop,step} aggregate for either a literal or a named range.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	if ri.RangeLit != nil {
 		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
 	}
 
-	if sym, ok := Get(c.Scopes, ri.Name); ok {
-		if val, ok := c.extractRangeValue(sym, ri.Name); ok {
-			return val
-		}
-		panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
+	sym, ok := c.getRawSymbol(ri.Name)
+	if !ok {
+		panic(fmt.Sprintf("internal: range %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
 
-	if c.CodeCompiler != nil && c.CodeCompiler.Compiler != nil {
-		if sym, ok := Get(c.CodeCompiler.Compiler.Scopes, ri.Name); ok {
-			if val, ok := c.extractRangeValue(sym, ri.Name); ok {
-				return val
-			}
-			panic(fmt.Sprintf("range %q expected Range kind, got %s", ri.Name, sym.Type.String()))
-		}
+	if val, ok := c.extractRangeValue(sym, ri.Name); ok {
+		return val
 	}
-
-	panic(fmt.Sprintf("range %q not found in scope", ri.Name))
+	panic(fmt.Sprintf("internal: range %q expected Range kind, got %s (should have been caught by type solver)", ri.Name, sym.Type.String()))
 }
 
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
@@ -81,7 +73,7 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 	}
 	filtered := make([]*RangeInfo, 0, len(ranges))
 	for _, ri := range ranges {
-		sym, ok := Get(c.Scopes, ri.Name)
+		sym, ok := c.getRawSymbol(ri.Name)
 		if ok {
 			switch t := sym.Type.(type) {
 			case Int:
@@ -89,18 +81,6 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 			case Ptr:
 				if t.Elem.Kind() == IntKind {
 					continue
-				}
-			}
-		}
-		if !ok && c.CodeCompiler != nil && c.CodeCompiler.Compiler != nil {
-			if sym, ok = Get(c.CodeCompiler.Compiler.Scopes, ri.Name); ok {
-				switch t := sym.Type.(type) {
-				case Int:
-					continue
-				case Ptr:
-					if t.Elem.Kind() == IntKind {
-						continue
-					}
 				}
 			}
 		}

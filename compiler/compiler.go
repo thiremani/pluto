@@ -808,16 +808,14 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	return c.derefIfPointer(s)
 }
 
-// compileIdentifierRaw gets the raw symbol WITHOUT deref if pointer.
+// getRawSymbol looks up a symbol by name without dereferencing pointers.
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
-func (c *Compiler) compileIdentifierRaw(id string) (*Symbol, bool) {
-	s, ok := Get(c.Scopes, id)
+func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
+	s, ok := Get(c.Scopes, name)
 	if ok {
 		return s, ok
 	}
-
-	cc := c.CodeCompiler.Compiler
-	s, ok = Get(cc.Scopes, id)
+	s, ok = Get(c.CodeCompiler.Compiler.Scopes, name)
 	return s, ok
 }
 
@@ -1295,7 +1293,7 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 	for idx, callArg := range ce.Arguments {
 		if ident, ok := callArg.(*ast.Identifier); ok {
 			// Identifier: get raw symbol without dereferencing
-			sym, _ := c.compileIdentifierRaw(ident.Value)
+			sym, _ := c.getRawSymbol(ident.Value)
 			// If not already a pointer, promote to memory
 			if sym.Type.Kind() != PtrKind {
 				sym = c.promoteToMemory(ident.Value)
