@@ -2,15 +2,19 @@ package main
 
 import (
 	"bufio"
-	_ "embed"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/gofrs/flock"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/compiler"
 	"github.com/thiremani/pluto/lexer"
@@ -31,8 +35,101 @@ const (
 
 	MOD_FILE = "pt.mod"
 
-	OPT_LEVEL = "-O3" // Can be configured via flag
+	// Compiler settings
+	CC        = "clang"
+	C_STD     = "-std=c11"
+	OPT_LEVEL = "-O3"
 )
+
+//go:embed runtime
+var runtimeFS embed.FS
+
+// runtimeHash computes a SHA256 hash of all embedded runtime file contents.
+func runtimeHash() string {
+	h := sha256.New()
+	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, _ error) error {
+		if !d.IsDir() {
+			data, _ := runtimeFS.ReadFile(path)
+			h.Write(data)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// extractRuntime writes the embedded runtime files to rtDir.
+func extractRuntime(rtDir string) error {
+	if err := os.MkdirAll(rtDir, 0755); err != nil {
+		return fmt.Errorf("create runtime dir: %w", err)
+	}
+	return fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk %s: %w", path, err)
+		}
+		relPath, _ := filepath.Rel("runtime", path)
+		destPath := filepath.Join(rtDir, relPath)
+		if d.IsDir() {
+			return os.MkdirAll(destPath, 0755)
+		}
+		data, err := runtimeFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", path, err)
+		}
+		return os.WriteFile(destPath, data, 0644)
+	})
+}
+
+// compileRuntime compiles .c files in rtDir and returns paths to .o files.
+func compileRuntime(rtDir string) ([]string, error) {
+	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
+	if err != nil {
+		return nil, fmt.Errorf("glob runtime sources: %w", err)
+	}
+	if len(rtSrcs) == 0 {
+		return nil, fmt.Errorf("no runtime .c files found under %s", rtDir)
+	}
+
+	var rtObjs []string
+	for _, src := range rtSrcs {
+		outObj := filepath.Join(rtDir, filepath.Base(src)+OBJ_SUFFIX)
+		args := []string{OPT_LEVEL, C_STD, "-march=native", "-I", rtDir, "-c", src, "-o", outObj}
+		if runtime.GOOS != "windows" {
+			args = append(args, "-fPIC")
+		}
+		if out, err := exec.Command(CC, args...).CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("compile %s: %v\n%s", src, err, out)
+		}
+		rtObjs = append(rtObjs, outObj)
+	}
+	return rtObjs, nil
+}
+
+// prepareRuntime extracts embedded runtime files and compiles them to object files.
+// Uses a hash-based directory to cache compiled objects across runs.
+// A file lock ensures concurrent processes see either fully compiled runtime or build it.
+func prepareRuntime(cacheDir string) ([]string, error) {
+	runtimeDir := filepath.Join(cacheDir, "runtime")
+	os.MkdirAll(runtimeDir, 0755)
+
+	// Lock the entire operation
+	lock := flock.New(filepath.Join(runtimeDir, ".lock"))
+	if err := lock.Lock(); err != nil {
+		return nil, fmt.Errorf("acquire runtime lock: %w", err)
+	}
+	defer lock.Unlock()
+
+	// Check if already compiled
+	rtDir := filepath.Join(runtimeDir, runtimeHash())
+	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) > 0 {
+		return rtObjs, nil
+	}
+
+	// Extract and compile
+	if err := extractRuntime(rtDir); err != nil {
+		return nil, err
+	}
+	return compileRuntime(rtDir)
+}
 
 // Pluto holds the state of a single pluto invocation.
 // You can initialize it from the working directory and then
@@ -43,7 +140,8 @@ type Pluto struct {
 	ModPath string // The module path declared in pt.mod + any relative subdirectory
 	RelPath string // The path relative to the module path declared in pt.mod
 
-	CacheDir string // Cache directory (<PTCACHE>/<modulePath>)
+	PtCache  string // Root cache directory (PTCACHE)
+	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
@@ -278,7 +376,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	return scriptLL, nil
 }
 
-func (p *Pluto) GenBinary(scriptLL, bin string) error {
+func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
 	// Use the default object suffix (".o") on all platforms, including
 	// Windows when using the MinGW/UCRT toolchain.
@@ -307,38 +405,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		return err
 	}
 
-	// 3) Compile runtime sources from repo/runtime/*.c (always from project root)
-	rtDir := filepath.Join(p.RootDir, "runtime")
-	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
-	if err != nil {
-		return fmt.Errorf("glob runtime sources: %w", err)
-	}
-	if len(rtSrcs) == 0 {
-		return fmt.Errorf("no runtime .c files found under %s", rtDir)
-	}
-
-	var rtObjs []string
-	for _, src := range rtSrcs {
-		outObj := filepath.Join(p.CacheDir, SCRIPT_DIR, filepath.Base(src)+objExt)
-		args := []string{
-			OPT_LEVEL, "-std=c11", "-march=native",
-		}
-		args = append(args,
-			"-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
-			"-c", src, "-o", outObj,
-		)
-		// PIC not applicable on Windows COFF
-		if runtime.GOOS != "windows" {
-			args = append(args, "-fPIC")
-		}
-		if out, err := exec.Command("clang", args...).CombinedOutput(); err != nil {
-			fmt.Printf("runtime compile failed for %s: %v\n%s\n", src, err, out)
-			return err
-		}
-		rtObjs = append(rtObjs, outObj)
-	}
-
-	// 4) Link everything
+	// 3) Link everything
 	linkArgs := []string{}
 
 	switch runtime.GOOS {
@@ -360,7 +427,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		linkArgs = append(linkArgs, "-lm")
 	}
 
-	if out, err := exec.Command("clang", linkArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(CC, linkArgs...).CombinedOutput(); err != nil {
 		fmt.Printf("linking failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -409,8 +476,9 @@ func New(cwd string) *Pluto {
 	}
 
 	p := &Pluto{
-		Cwd: cwd,
-		Ctx: llvm.NewContext(),
+		Cwd:     cwd,
+		PtCache: ptcache,
+		Ctx:     llvm.NewContext(),
 	}
 
 	err := p.resolveModPaths(cwd)
@@ -419,7 +487,7 @@ func New(cwd string) *Pluto {
 	}
 
 	// Use module path (slashes) as unique cache key
-	p.CacheDir = filepath.Join(ptcache, filepath.FromSlash(p.ModPath))
+	p.CacheDir = filepath.Join(p.PtCache, filepath.FromSlash(p.ModPath))
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
 	fmt.Println()
 
@@ -457,6 +525,13 @@ func main() {
 		return
 	}
 
+	// Prepare runtime once (in PtCache root, shared across all projects)
+	rtObjs, err := prepareRuntime(p.PtCache)
+	if err != nil {
+		fmt.Printf("Error preparing runtime: %v\n", err)
+		os.Exit(1)
+	}
+
 	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
@@ -472,7 +547,7 @@ func main() {
 			continue
 		}
 
-		if err := p.GenBinary(scriptLL, script); err != nil {
+		if err := p.GenBinary(scriptLL, script, rtObjs); err != nil {
 			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
 			binErr++
 		} else {
