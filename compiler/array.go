@@ -492,10 +492,10 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) []*Symbol {
 	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0])
 	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil)[0])
+	arrType := arraySym.Type.(Array)
 
 	// Check actual compiled index type to determine ArrayRange vs element access
 	if idxSym.Type.Kind() == RangeKind {
-		arrType := arraySym.Type.(Array)
 		arrRange := ArrayRange{
 			Array: arrType,
 			Range: idxSym.Type.(Range),
@@ -507,9 +507,7 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 	}
 
 	// Scalar index - element access
-	arrType := arraySym.Type.(Array)
 	elemType := arrType.ColTypes[0]
-
 	idxVal := idxSym.Val
 	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")

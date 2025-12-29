@@ -21,9 +21,12 @@ sumNested = SumSquares([i][j], [i][k])
 arr = [10 20 30 40 50]
 m = 0:3
 n = 1:4
-stored = [i]
-# arr[m] is ArrayRange (loop inside), stored[n+0] loops outside giving 3
-# SumSquares(30, 3) = 900 + 9 = 909
-# Note: Using stored array because inline [i][n+0] has a known bug
-mixedNested = SumSquares(arr[m], stored[n + 0])
+arr2 = [i]
+# arr[m] is ArrayRange (loop inside), [i][n+0] loops outside giving 0
+# SumSquares(30, 3) = 900 + 0 = 900
+mixedNested = SumSquares(arr[m], [i][n + 0])
 "SumSquares(arr[m], stored[n+0]): -mixedNested"
+
+# Below function should loop inside as both array ranges are direct
+mixedNested2 = SumSquares(arr[m], arr2[n])
+"SumSquares(arr[m], arr2[n]): -mixedNested2"
