@@ -7,8 +7,6 @@
 # - Array concatenation
 # - Empty array handling
 #
-# These tests ensure the array unwrapping logic in compiler.go:coerceValueForAssignment
-# handles edge cases correctly without breaking normal array assignment.
 
 # Test 1: Single-element array literal
 arr1 = [42]
@@ -32,6 +30,8 @@ arr4 = [10]
 arr5 = [1 2]
 arr5 = arr5 + [3 4]
 "Summed array: -arr5"
+arr5 = [10 11]
+"Reassigned multi element: -arr5"
 
 # Test 6: Empty array (if type can be inferred)
 arr6 = [1 2 3]

@@ -222,7 +222,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 	return cc, codeLL, nil
 }
 
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[ast.Expression]*compiler.ExprInfo) (string, error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (string, error) {
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
@@ -460,7 +460,7 @@ func main() {
 	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
-	exprCache := make(map[ast.Expression]*compiler.ExprInfo)
+	exprCache := make(map[compiler.ExprKey]*compiler.ExprInfo)
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)

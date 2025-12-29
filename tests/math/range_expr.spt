@@ -15,5 +15,5 @@ y
 # Test with range identifier
 i = 1:6
 z = 0
-z = 5 + i      # Range identifier (should be conditional write, z not read from previous)
+z = 5 + i      # Range identifier (should overwrite, z not read from previous. It also does not accumulate)
 z

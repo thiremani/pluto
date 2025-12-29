@@ -1,3 +1,7 @@
 res = useShadow(x)
     i = 5
     res = x * i
+
+res = AddMul(x, y)
+    i = 10
+    res = i * x + y

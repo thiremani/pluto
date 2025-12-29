@@ -8,34 +8,32 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-type IterOver int
-type IterLevel int
-
-const (
-	IterRange IterOver = iota
-	IterArrayRange
-	IterArray
-)
-
-const (
-	Off IterLevel = iota
-	IterInside
-	IterOutside
-)
-
 type RangeInfo struct {
 	Name      string
 	RangeLit  *ast.RangeLiteral
 	ArrayExpr ast.Expression
 	ArrayType Array
-	Over      IterOver
 }
 
 type ExprInfo struct {
-	Ranges   []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	Rewrite  ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
-	ExprLen  int
-	OutTypes []Type
+	Ranges     []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite    ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen    int
+	OutTypes   []Type
+	HasRanges  bool // True if expression involves ranges (propagated upward during typing)
+	LoopInside bool // For CallExpression: true if function handles iteration, false if call site handles it
+}
+
+// ExprKey is the key for ExprCache, combining function context with expression.
+// FuncNameMangled is the mangled function name ("" for script-level expressions).
+type ExprKey struct {
+	FuncNameMangled string
+	Expr            ast.Expression
+}
+
+// key constructs an ExprKey for cache lookups
+func key(funcNameMangled string, expr ast.Expression) ExprKey {
+	return ExprKey{FuncNameMangled: funcNameMangled, Expr: expr}
 }
 
 // TypeSolver infers the types of various expressions
@@ -51,9 +49,10 @@ type TypeSolver struct {
 	Scopes          []Scope[Type]
 	InProgress      map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
 	ScriptFunc      string              // this is the current func in the main scope we are inferring type for
+	FuncNameMangled string              // current function's mangled name ("" for script level)
 	Converging      bool
 	Errors          []*token.CompileError
-	ExprCache       map[ast.Expression]*ExprInfo
+	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int // tmpCounter for uniquely naming temporary variables
 	UnresolvedExprs map[string][]pendingExpr
 }
@@ -64,6 +63,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		Scopes:          []Scope[Type]{NewScope[Type](FuncScope)},
 		InProgress:      map[string]struct{}{},
 		ScriptFunc:      "",
+		FuncNameMangled: "",
 		Converging:      false,
 		Errors:          []*token.CompileError{},
 		ExprCache:       sc.Compiler.ExprCache,
@@ -135,7 +135,7 @@ func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
 	// Update the ExprCache with refined array metadata (headers, length).
 	// Note: handleInfixArrays only calls this when expr is already array-typed,
 	// so we can unconditionally update.
-	info := ts.ExprCache[expr]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	info.OutTypes[0] = arr
 
 	if ident, ok := expr.(*ast.Identifier); ok {
@@ -147,15 +147,15 @@ func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
 	switch e := expr.(type) {
 	case *ast.InfixExpression:
 		// Only recurse if the subexpressions are themselves array-typed
-		if ts.ExprCache[e.Left].OutTypes[0].Kind() == ArrayKind {
+		if ts.ExprCache[key(ts.FuncNameMangled, e.Left)].OutTypes[0].Kind() == ArrayKind {
 			ts.bindArrayOperand(e.Left, arr)
 		}
-		if ts.ExprCache[e.Right].OutTypes[0].Kind() == ArrayKind {
+		if ts.ExprCache[key(ts.FuncNameMangled, e.Right)].OutTypes[0].Kind() == ArrayKind {
 			ts.bindArrayOperand(e.Right, arr)
 		}
 	case *ast.PrefixExpression:
 		// Only recurse if the operand is array-typed
-		if ts.ExprCache[e.Right].OutTypes[0].Kind() == ArrayKind {
+		if ts.ExprCache[key(ts.FuncNameMangled, e.Right)].OutTypes[0].Kind() == ArrayKind {
 			ts.bindArrayOperand(e.Right, arr)
 		}
 	case *ast.ArrayRangeExpression:
@@ -187,7 +187,7 @@ func (ts *TypeSolver) bindArrayAssignment(name string, expr ast.Expression, idx 
 	}
 
 	if len(arrType.ColTypes) > 0 && arrType.ColTypes[0].Kind() != UnresolvedKind {
-		info := ts.ExprCache[expr]
+		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 		info.OutTypes[idx] = arrType
 		ts.resolveTrackedExprs(name, arrType)
 		return
@@ -233,7 +233,7 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 	entries, ok := ts.UnresolvedExprs[name]
 	if ok {
 		for _, pending := range entries {
-			ts.ExprCache[pending.expr].OutTypes[pending.outTypeIdx] = t
+			ts.ExprCache[key(ts.FuncNameMangled, pending.expr)].OutTypes[pending.outTypeIdx] = t
 		}
 		delete(ts.UnresolvedExprs, name)
 	}
@@ -248,40 +248,35 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
 // It traverses the AST, replacing range literals with temporary identifiers and collecting
 // range information for later compilation into loops.
-func (ts *TypeSolver) HandleRanges(e ast.Expression, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
+func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew ast.Expression) {
 	rew = e
 	switch t := e.(type) {
 	case *ast.RangeLiteral:
-		return ts.HandleRangeLiteral(t, iterLevel)
+		return ts.HandleRangeLiteral(t)
 	case *ast.ArrayLiteral:
-		return ts.HandleArrayLiteralRanges(t, iterLevel)
+		return ts.HandleArrayLiteralRanges(t)
 	case *ast.ArrayRangeExpression:
-		return ts.HandleArrayRangeExpression(t, iterLevel)
+		return ts.HandleArrayRangeExpression(t)
 	case *ast.InfixExpression:
-		return ts.HandleInfixRanges(t, iterLevel)
+		return ts.HandleInfixRanges(t)
 	case *ast.PrefixExpression:
-		return ts.HandlePrefixRanges(t, iterLevel)
+		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
-		return ts.HandleCallRanges(t, iterLevel)
+		return ts.HandleCallRanges(t)
 	case *ast.Identifier:
-		return ts.HandleIdentifierRanges(t, iterLevel)
+		return ts.HandleIdentifierRanges(t)
 	default:
 		return
 	}
 }
 
 // HandleRangeLiteral processes range literal expressions, converting them to temporary
-// identifiers for use in loop generation. When iterate=false, ranges are preserved as-is.
-func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	if iterLevel == Off {
-		return nil, rangeLit
-	}
-
+// identifiers for use in loop generation.
+func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*RangeInfo, rew ast.Expression) {
 	nm := ts.FreshIterName()
 	ri := &RangeInfo{
 		Name:     nm,
 		RangeLit: rangeLit,
-		Over:     IterRange,
 	}
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
@@ -301,8 +296,8 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 	return out
 }
 
-func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	info := ts.ExprCache[al]
+func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*RangeInfo, rew ast.Expression) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
 	// If no ExprCache entry exists (e.g., empty array with unresolved type), nothing to handle
 	if info == nil {
@@ -321,8 +316,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, iterLevel I
 	newRow := make([]ast.Expression, len(row))
 	for i, cell := range row {
 		// Cells always iterate to extract ranges and create scalars
-		// inner [i] gets compiled with iterLevel=IterInner inside that loop
-		cellRanges, cellRew := ts.HandleRanges(cell, IterInside)
+		cellRanges, cellRew := ts.HandleRanges(cell)
 		ranges = mergeUses(ranges, cellRanges)
 		newRow[i] = cellRew
 		if cellRew != cell {
@@ -344,7 +338,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, iterLevel I
 			Ranges:   append([]*RangeInfo(nil), ranges...),
 			Rewrite:  newLit,
 		}
-		ts.ExprCache[newLit] = infoCopy
+		ts.ExprCache[key(ts.FuncNameMangled, newLit)] = infoCopy
 		rew = newLit
 	}
 
@@ -354,18 +348,18 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral, iterLevel I
 	return ranges, rew
 }
 
-func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	info := ts.ExprCache[ar]
+func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (ranges []*RangeInfo, rew ast.Expression) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, ar)]
 
-	arrRanges, arrRew := ts.HandleRanges(ar.Array, iterLevel)
-	idxRanges, rangeRew := ts.HandleRanges(ar.Range, iterLevel)
+	arrRanges, arrRew := ts.HandleRanges(ar.Array)
+	idxRanges, rangeRew := ts.HandleRanges(ar.Range)
 
 	ranges = mergeUses(arrRanges, idxRanges)
 
 	rew = ar
 	if arrRew != ar.Array || rangeRew != ar.Range {
 		newExpr := &ast.ArrayRangeExpression{Token: ar.Token, Array: arrRew, Range: rangeRew}
-		ts.ExprCache[newExpr] = &ExprInfo{
+		ts.ExprCache[key(ts.FuncNameMangled, newExpr)] = &ExprInfo{
 			OutTypes: info.OutTypes,
 			ExprLen:  info.ExprLen,
 			Ranges:   append([]*RangeInfo(nil), ranges...),
@@ -381,9 +375,9 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression, i
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
-func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	lRanges, l := ts.HandleRanges(infix.Left, IterOutside)
-	rRanges, r := ts.HandleRanges(infix.Right, IterOutside)
+func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*RangeInfo, rew ast.Expression) {
+	lRanges, l := ts.HandleRanges(infix.Left)
+	rRanges, r := ts.HandleRanges(infix.Right)
 	ranges = mergeUses(lRanges, rRanges)
 
 	if l == infix.Left && r == infix.Right {
@@ -394,27 +388,24 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression, iterLevel It
 		rew = &cp
 		// Create a simple ExprCache entry for the rewritten expression
 		// It should have no ranges since temporary iterators are scalars
-		originalInfo := ts.ExprCache[infix]
-		ts.ExprCache[rew.(*ast.InfixExpression)] = &ExprInfo{
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.InfixExpression))] = &ExprInfo{
 			OutTypes: originalInfo.OutTypes, // Same output types as original
 			ExprLen:  originalInfo.ExprLen,
 			Ranges:   nil, // No ranges for rewritten expressions
 		}
 	}
 
-	if iterLevel == Off {
-		info := ts.ExprCache[infix]
-		info.Ranges = ranges
-		info.Rewrite = rew
-	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+	info.Ranges = ranges
+	info.Rewrite = rew
 	return
 }
 
 // HandlePrefixRanges processes prefix expressions, handling the operand and preserving
 // the prefix operator while rewriting any contained ranges.
-func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	// Always expand ranges in the operand using IterOutside so tmp iters are created.
-	ranges, r := ts.HandleRanges(prefix.Right, IterOutside)
+func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges []*RangeInfo, rew ast.Expression) {
+	ranges, r := ts.HandleRanges(prefix.Right)
 
 	if r == prefix.Right {
 		rew = prefix
@@ -422,61 +413,80 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression, iterLevel
 		cp := *prefix
 		cp.Right = r
 		rew = &cp
-		// Create a simple ExprCache entry for the rewritten expression
-		// It should have no ranges since temporary iterators are scalars
-		originalInfo := ts.ExprCache[prefix]
-		ts.ExprCache[rew.(*ast.PrefixExpression)] = &ExprInfo{
-			OutTypes: originalInfo.OutTypes, // Same output types as original
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrefixExpression))] = &ExprInfo{
+			OutTypes: originalInfo.OutTypes,
 			ExprLen:  originalInfo.ExprLen,
-			Ranges:   nil, // No ranges for rewritten expressions
+			Ranges:   nil,
 		}
 	}
 
-	if iterLevel == Off {
-		info := ts.ExprCache[prefix]
-		info.Ranges = ranges
-		info.Rewrite = rew
-	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+	info.Ranges = ranges
+	info.Rewrite = rew
 	return
 }
 
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
-func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
+func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	changed := false
 	args := make([]ast.Expression, len(call.Arguments))
 
 	for i, a := range call.Arguments {
-		// Functions pass through iterate to arguments
-		aRanges, a2 := ts.HandleRanges(a, iterLevel)
+		aRanges, a2 := ts.HandleRanges(a)
 		args[i] = a2
 		changed = changed || (a2 != a)
 		ranges = mergeUses(ranges, aRanges)
 	}
 
+	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 	if !changed {
 		rew = call
 	} else {
 		cp := *call
 		cp.Arguments = args
 		rew = &cp
+		// Cache the rewritten expression with no ranges (ranges have been extracted)
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
+			OutTypes: info.OutTypes,
+			ExprLen:  info.ExprLen,
+			Ranges:   nil,
+		}
 	}
+
+	info.Ranges = ranges
+	info.Rewrite = rew
 	return
+}
+
+// isBareRangeExpr checks if expression is a bare range expression.
+// These are "simple" range arguments that can be passed to specialized functions.
+// For ArrayRangeExpression, it's only bare if the array part doesn't have ranges
+// and the index is itself bare (e.g., arr[i] is bare, but [i][j] or arr[i+1] is not).
+func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
+		return true
+	case *ast.ArrayRangeExpression:
+		// Only bare if array doesn't have ranges and index is bare
+		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
+		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
+	default:
+		return false
+	}
 }
 
 // HandleIdentifierRanges processes identifier expressions, detecting if they refer
 // to range-typed variables and including them in range tracking.
-func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier, iterLevel IterLevel) (ranges []*RangeInfo, rew ast.Expression) {
-	if iterLevel > Off {
-		typ, ok := ts.GetIdentifier(ident.Value)
-		if ok && typ.Kind() == RangeKind {
-			ri := &RangeInfo{
-				Name:     ident.Value,
-				RangeLit: nil,
-				Over:     IterRange,
-			}
-			ranges = []*RangeInfo{ri}
+func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
+	typ, ok := ts.GetIdentifier(ident.Value)
+	if ok && (typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind) {
+		ri := &RangeInfo{
+			Name:     ident.Value,
+			RangeLit: nil,
 		}
+		ranges = []*RangeInfo{ri}
 	}
 	rew = ident
 	return
@@ -516,21 +526,21 @@ func (ts *TypeSolver) Solve() {
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	for _, expr := range stmt.Expression {
-		ts.TypeExpression(expr, Off)
+		ts.TypeExpression(expr, true)
 	}
 }
 
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in case there may be functions we have to type
 	for _, expr := range stmt.Condition {
-		ts.TypeExpression(expr, Off)
+		ts.TypeExpression(expr, true)
 	}
 
 	types := []Type{}
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
-		exprTypes := ts.TypeExpression(expr, Off)
+		exprTypes := ts.TypeExpression(expr, true)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)
@@ -581,34 +591,35 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // TypeArrayExpression infers the type of an Array literal. Columns must be
 // homogeneous and of primitive types: I64, F64 (promotion from I64 allowed), or Str.
 // The returned type slice contains a single Array type value.
-func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral, iterLevel IterLevel) []Type {
+func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	// Empty array literal: [] (no rows)
 	if len(al.Headers) == 0 && len(al.Rows) == 0 {
 		arr := Array{Headers: nil, ColTypes: []Type{Unresolved{}}, Length: 0}
-		ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
-	}
-
-	if iterLevel == Off {
-		iterLevel = IterInside
 	}
 
 	// Vector special-case: single row, no headers → treat as 1-column vector
 	if len(al.Headers) == 0 && len(al.Rows) == 1 {
 		colTypes := []Type{Unresolved{}}
 		row := al.Rows[0]
+		hasRanges := false
 		for col := 0; col < len(row); col++ {
-			cellT, ok := ts.typeCell(row[col], al.Tok(), iterLevel)
+			cellT, ok := ts.typeCell(row[col], al.Tok())
 			if !ok {
 				continue
 			}
 			colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
+			// Propagate HasRanges from cells
+			if ts.ExprCache[key(ts.FuncNameMangled, row[col])].HasRanges {
+				hasRanges = true
+			}
 		}
 		// Length = number of elements in the row (for vectors)
 		arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
 
 		// Cache this expression's resolved type for the compiler
-		ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: hasRanges}
 		return []Type{arr}
 	}
 	// unsupported as of now
@@ -674,8 +685,8 @@ func (ts *TypeSolver) initColTypes(n int) []Type {
 }
 
 // typeCell infers the type of a single cell expression. Returns (type, ok).
-func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token, iterLevel IterLevel) (Type, bool) {
-	tps := ts.TypeExpression(expr, iterLevel)
+func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
+	tps := ts.TypeExpression(expr, false) // cells are nested, not root
 	if len(tps) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
@@ -742,10 +753,10 @@ func AllowedArrayElem(t Type) bool {
 	}
 }
 
-func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, iterLevel IterLevel) []Type {
-	// infer start and stop - these are always scalars, don't iterate
-	startT := ts.TypeExpression(r.Start, Off)
-	stopT := ts.TypeExpression(r.Stop, Off)
+func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
+	// infer start and stop - these are nested expressions
+	startT := ts.TypeExpression(r.Start, false)
+	stopT := ts.TypeExpression(r.Stop, false)
 	if len(startT) != 1 || len(stopT) != 1 {
 		ce := &token.CompileError{
 			Token: r.Tok(),
@@ -771,7 +782,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, iterLevel IterLev
 	}
 	// optional step
 	if r.Step != nil {
-		stepT := ts.TypeExpression(r.Step, Off)
+		stepT := ts.TypeExpression(r.Step, false)
 		if len(stepT) != 1 {
 			ce := &token.CompileError{
 				Token: r.Tok(),
@@ -794,18 +805,22 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, iterLevel IterLev
 			ts.Errors = append(ts.Errors, ce)
 		}
 	}
-	if iterLevel > Off {
-		return []Type{Int{Width: 64}} // if iterate, return integer type as any iterated expression automatically loops over the range
+	if !isRoot {
+		types := []Type{Int{Width: 64}}
+		ts.ExprCache[key(ts.FuncNameMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
+		return types // nested: return inner type
 	}
-	// the whole expression is a Range of that integer type
-	return []Type{Range{Iter: startT[0]}}
+	// root: return Range type
+	types := []Type{Range{Iter: startT[0]}}
+	ts.ExprCache[key(ts.FuncNameMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
+	return types
 }
 
-func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, iterLevel IterLevel) []Type {
+func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isRoot bool) []Type {
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-	ts.ExprCache[ax] = info
+	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
-	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access", iterLevel)
+	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
 	if !ok {
 		return info.OutTypes
 	}
@@ -819,7 +834,8 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, ite
 
 	elemType := arrType.ColTypes[0]
 
-	idxTypes := ts.TypeExpression(ax.Range, iterLevel)
+	idxTypes := ts.TypeExpression(ax.Range, isRoot)
+	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
 	if len(idxTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
@@ -829,12 +845,7 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, ite
 	}
 
 	idxType := idxTypes[0]
-	var rangeType Type
-	if idxType.Kind() == RangeKind {
-		rangeType = idxType.(Range).Iter
-	}
-
-	if rangeType != nil && rangeType.Kind() != IntKind {
+	if idxType.Kind() != IntKind && idxType.Kind() != RangeKind {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
 			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
@@ -842,8 +853,8 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, ite
 		return info.OutTypes
 	}
 
-	if iterLevel > Off {
-		// if iterate, return the element type since any iterated expression automatically loops over the range
+	if !isRoot {
+		// nested: return element type (iterating)
 		info.OutTypes = []Type{elemType}
 		info.ExprLen = 1
 		return info.OutTypes
@@ -856,15 +867,6 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, ite
 		return info.OutTypes
 	}
 
-	if rangeType == nil {
-		// index is unresolved, cannot determine output type
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
-		})
-		return info.OutTypes
-	}
-
 	info.OutTypes = []Type{ArrayRange{
 		Array: arrType,
 		Range: idxType.(Range),
@@ -873,27 +875,28 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, ite
 	return info.OutTypes
 }
 
-func (ts *TypeSolver) TypeExpression(expr ast.Expression, iterLevel IterLevel) (types []Type) {
+func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []Type) {
 	types = []Type{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		types = append(types, Int{Width: 64})
-		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.FloatLiteral:
 		types = append(types, Float{Width: 64})
-		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
 		types = append(types, Str{})
-		ts.ExprCache[e] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
-		types = append(types, ts.TypeArrayExpression(e, iterLevel)...)
+		types = append(types, ts.TypeArrayExpression(e)...)
 	case *ast.ArrayRangeExpression:
-		types = append(types, ts.TypeArrayRangeExpression(e, iterLevel)...)
+		types = append(types, ts.TypeArrayRangeExpression(e, isRoot)...)
 	case *ast.RangeLiteral:
-		types = append(types, ts.TypeRangeExpression(e, iterLevel)...)
+		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:
 		t := ts.TypeIdentifier(e)
-		if iterLevel > Off && t.Kind() == RangeKind {
+		// At root level, keep Range type; nested, extract inner type
+		if !isRoot && t.Kind() == RangeKind {
 			types = append(types, t.(Range).Iter)
 			return
 		}
@@ -901,14 +904,16 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, iterLevel IterLevel) (
 	case *ast.InfixExpression:
 		types = ts.TypeInfixExpression(e)
 	case *ast.PrefixExpression:
-		types = ts.TypePrefixExpression(e, iterLevel)
+		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
-		types = ts.TypeCallExpression(e, iterLevel)
+		types = ts.TypeCallExpression(e, isRoot)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
 
-	ts.HandleRanges(expr, iterLevel)
+	if isRoot {
+		ts.HandleRanges(expr)
+	}
 	return
 }
 
@@ -949,7 +954,7 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 		return
 	}
 
-	ts.ExprCache[ident] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind || t.Kind() == ArrayRangeKind}
 	return
 }
 
@@ -957,8 +962,8 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
-	left := ts.TypeExpression(expr.Left, IterOutside)
-	right := ts.TypeExpression(expr.Right, IterOutside)
+	left := ts.TypeExpression(expr.Left, false)
+	right := ts.TypeExpression(expr.Right, false)
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
@@ -997,9 +1002,10 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	// Create new entry
-	ts.ExprCache[expr] = &ExprInfo{
-		OutTypes: types,
-		ExprLen:  len(types),
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:  types,
+		ExprLen:   len(types),
+		HasRanges: ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
 	}
 
 	return
@@ -1140,13 +1146,9 @@ func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) 
 // TypePrefixExpression returns type of prefix expression output if input is not a pointer
 // If input is a pointer then it applies prefix expression to the element pointed to
 // This is because we automatically dereference if it's a pointer
-func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression, iterLevel IterLevel) (types []Type) {
-	operandLevel := iterLevel
-	if operandLevel == Off {
-		// When anchoring a prefix, type the operand in iterating mode to get the element type.
-		operandLevel = IterOutside
-	}
-	operand := ts.TypeExpression(expr.Right, operandLevel)
+func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []Type) {
+	// Operand is nested, so ranges become their inner type
+	operand := ts.TypeExpression(expr.Right, false)
 	types = []Type{}
 	for _, opType := range operand {
 		if ptr, yes := opType.(Ptr); yes {
@@ -1166,14 +1168,14 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression, iterLevel
 			opType = origArrayType.ColTypes[0]
 		}
 
-		key := unaryOpKey{
+		opKey := unaryOpKey{
 			Operator:    expr.Operator,
 			OperandType: opType,
 		}
 
 		var fn unaryOpFunc
 		var ok bool
-		if fn, ok = defaultUnaryOps[key]; !ok {
+		if fn, ok = defaultUnaryOps[opKey]; !ok {
 			cerr := &token.CompileError{
 				Token: expr.Token,
 				Msg:   fmt.Sprintf("unsupported unary operator: %q for type: %s", expr.Operator, opType),
@@ -1205,53 +1207,74 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression, iterLevel
 	}
 
 	// Create new entry
-	ts.ExprCache[expr] = &ExprInfo{
-		OutTypes: types,
-		ExprLen:  len(types),
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:  types,
+		ExprLen:   len(types),
+		HasRanges: ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
 	}
 
 	return
 }
 
 // inside a call expression a Range becomes its interior type
-func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, iterLevel IterLevel) []Type {
-	args, innerArgs, _ := ts.collectCallArgs(ce, iterLevel)
+func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
+	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
 		return nil
 	}
 
+	// Compute hasRanges from all arguments
+	hasRanges := false
+	for _, e := range ce.Arguments {
+		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges {
+			hasRanges = true
+			break
+		}
+	}
+
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), Ranges: nil}
-	ts.ExprCache[ce] = info
+	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), HasRanges: hasRanges, LoopInside: loopInside}
+	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 	return f.OutTypes
 }
 
-func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, iterLevel IterLevel) (args []Type, innerArgs []Type, hasIter bool) {
-	for _, e := range ce.Arguments {
-		if e == nil {
-			// Nil argument indicates a parse error; skip it
-			// Parser errors are already recorded
-			continue
+func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
+	// First pass: type all args and determine loopInside
+	loopInside = true
+	outerTypesPerArg := make([][]Type, len(ce.Arguments))
+	for i, e := range ce.Arguments {
+		// Use return value of TypeExpression, not ExprCache
+		// When isRoot=false, Range identifiers return inner type (Int)
+		outerTypesPerArg[i] = ts.TypeExpression(e, isRoot)
+		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges && !ts.isBareRangeExpr(e) {
+			loopInside = false
 		}
+	}
 
-		outerTypes := ts.TypeExpression(e, iterLevel)
+	// Second pass: build args and innerArgs
+	// If loopInside=false, ALL range args become their inner type (loop outside)
+	for _, outerTypes := range outerTypesPerArg {
 		for _, outerType := range outerTypes {
-			args = append(args, outerType)
 			innerType := outerType
 			switch outerType.Kind() {
 			case RangeKind:
 				innerType = outerType.(Range).Iter
-				hasIter = true
 			case ArrayRangeKind:
 				innerType = outerType.(ArrayRange).Array.ColTypes[0]
-				hasIter = true
 			}
 			innerArgs = append(innerArgs, innerType)
+
+			// If loopInside, keep Range types; otherwise use inner types for all
+			if loopInside {
+				args = append(args, outerType)
+			} else {
+				args = append(args, innerType)
+			}
 		}
 	}
-	return args, innerArgs, hasIter
+	return
 }
 
 /*
@@ -1291,8 +1314,8 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, iterLevel IterLeve
 		*args = append(*args, paramType)
 	}
 */
-func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string, iterLevel IterLevel) (Array, bool) {
-	arrayTypes := ts.TypeExpression(source, iterLevel)
+func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string) (Array, bool) {
+	arrayTypes := ts.TypeExpression(source, false) // nested expression
 	if len(arrayTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
@@ -1412,6 +1435,12 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	}
 	ts.InProgress[mangled] = struct{}{}
 	defer func() { delete(ts.InProgress, mangled) }()
+
+	// Set FuncNameMangled so ExprCache entries are keyed to this function
+	savedFuncNameMangled := ts.FuncNameMangled
+	ts.FuncNameMangled = mangled
+	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
+
 	ts.TypeBlock(template, f)
 }
 

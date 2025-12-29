@@ -36,3 +36,4 @@ diff.txt
 .gocache/
 .gotmp/
 .gomodcache/
+.claude/settings.local.json

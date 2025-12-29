@@ -1,2 +1,6 @@
 ShadowFunc: 50
+AddMul res is: 1234
+AddMul res with negative step is: 542
+AddMul res2 with array range arr[i] is: 123450
+AddMul res2 with array range negative step arr[j] is: 2030
 PendingRanges: [160 150 130 99 57 4]

@@ -49,7 +49,7 @@ x, y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "TestMutualRecursionScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
@@ -123,7 +123,7 @@ y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
@@ -162,7 +162,7 @@ y`
 	program := sp.Parse()
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
@@ -180,7 +180,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayConcatErrors", ast.NewCode())
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 
 	cases := []struct {
 		name        string
@@ -248,7 +248,7 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayToScalar", ast.NewCode())
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 
 	script := "x = 1\nx = [2 3]"
 	sl := lexer.New("arrayToScalar.spt", script)
@@ -272,7 +272,7 @@ func TestArrayLiteralRangesRecording(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", ast.NewCode())
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 
 	script := `idx = 0:5
 res = [idx]`
@@ -293,7 +293,7 @@ res = [idx]`
 	arrLit, ok := letStmt.Value[0].(*ast.ArrayLiteral)
 	require.True(t, ok)
 
-	info := ts.ExprCache[arrLit]
+	info := ts.ExprCache[key(ts.FuncNameMangled, arrLit)]
 	require.NotNil(t, info)
 	require.Len(t, info.Ranges, 1)
 	require.NotNil(t, info.Rewrite)
@@ -313,7 +313,7 @@ func TestArrayRangeTyping(t *testing.T) {
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "ArrayRangeTyping", program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()

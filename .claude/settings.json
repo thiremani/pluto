@@ -1,0 +1,8 @@
+{
+  "enabledPlugins": {
+    "gopls-lsp@claude-plugins-official": true,
+    "clangd-lsp@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true
+  }
+}

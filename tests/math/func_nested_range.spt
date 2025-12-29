@@ -1,0 +1,32 @@
+# Test nested range: [i][j] iterates both i and j as outer loops
+i = 0:5
+j = 0:3
+
+# Nested loops: for i in 0:5, for j in 0:3
+# [i] is [current_i] (single element), [i][j] accesses index j
+# Only j=0 is valid, j>0 is OOB (returns 0)
+# Last iteration: i=4, j=2 -> [4][2] = 0 (OOB) -> Square(0) = 0
+nested = Square([i][j])
+"Square([i][j]): -nested"
+
+# Similar with SumSquares - both args are [i][j] style
+k = 1:4
+# Last iteration: i=4, j=2, k=3
+# [4][2] = 0 (OOB), [4][3] = 0 (OOB)
+# SumSquares(0, 0) = 0 + 0 = 0
+sumNested = SumSquares([i][j], [i][k])
+"SumSquares([i][j], [i][k]): -sumNested"
+
+# Mix: first arg is bare range arr[m], second is stored array with expr index
+arr = [10 20 30 40 50]
+m = 0:3
+n = 1:4
+arr2 = [i]
+# arr[m] is ArrayRange (loop inside), [i][n+0] loops outside giving 0
+# SumSquares(30, 3) = 900 + 0 = 900
+mixedNested = SumSquares(arr[m], [i][n + 0])
+"SumSquares(arr[m], stored[n+0]): -mixedNested"
+
+# Below function should loop inside as both array ranges are direct
+mixedNested2 = SumSquares(arr[m], arr2[n])
+"SumSquares(arr[m], arr2[n]): -mixedNested2"

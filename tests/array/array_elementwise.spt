@@ -68,7 +68,7 @@ arr10 = [10 20]
 res15 = arr9 / arr10
 "Division with tail: -res15"
 
-# Modulo (same length to avoid division by zero)
+# Modulo (same length)
 arrM1 = [17 25 33]
 arrM2 = [5 7 10]
 resmod = arrM1 % arrM2

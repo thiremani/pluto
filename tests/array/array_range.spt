@@ -32,17 +32,17 @@ chain = [1]
 chain = chain ⊕ [chain[idx]]
 "LiteralIterChain: -chain"
 
-callRoot = double(arr[0:5])
+callRoot = Double(arr[0:5])
 "CallRangeRoot: -callRoot"
 
-callRootVec = [double(arr[0:5])]
+callRootVec = [Double(arr[0:5])]
 "CallRootVec: -callRootVec"
 
-callInfix = double(arr[0:5]) + idx
+callInfix = Double(arr[0:5]) + idx
 "CallRangeInfix: -callInfix"
 
-callInfixVec = [double(arr[0:5]) + idx]
+callInfixVec = [Double(arr[0:5]) + idx]
 "CallInfixVec: -callInfixVec"
 
-callInfixVecSingleRange = [double(arr[idx]) + idx]
+callInfixVecSingleRange = [Double(arr[idx]) + idx]
 "CallInfixVecSingleRange: -callInfixVecSingleRange"

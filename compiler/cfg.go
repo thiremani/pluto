@@ -259,14 +259,15 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	if cfg.ScriptCompiler == nil {
 		return false
 	}
+	c := cfg.ScriptCompiler.Compiler
 
 	switch t := e.(type) {
 	case *ast.InfixExpression, *ast.PrefixExpression:
-		return len(cfg.ScriptCompiler.Compiler.ExprCache[t].Ranges) > 0
+		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.ArrayRangeExpression:
-		return len(cfg.ScriptCompiler.Compiler.ExprCache[t].Ranges) > 0
+		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.CallExpression:
-		if len(cfg.ScriptCompiler.Compiler.ExprCache[t].Ranges) > 0 {
+		if len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0 {
 			return true
 		}
 		// Check if any argument contains ranges

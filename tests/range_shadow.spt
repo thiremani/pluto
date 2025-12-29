@@ -1,9 +1,26 @@
 arr = [10 20 30 40 50]
 i = 0:5
+j = 4:1:-2
 
 total = 0
 total = total + useShadow(i)
 "ShadowFunc: -total"
+
+res = 0
+res = AddMul(res, i)
+"AddMul res is: -res"
+
+res = 5
+res = AddMul(res, j)
+"AddMul res with negative step is: -res"
+
+res2 = 0
+res2 = AddMul(res2, arr[i])
+"AddMul res2 with array range arr[i] is: -res2"
+
+res2 = 15
+res2 = AddMul(res2, arr[j])
+"AddMul res2 with array range negative step arr[j] is: -res2"
 
 combined = [0]
 combined = combined + i + arr[i] ⊕ [i]

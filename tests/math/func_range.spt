@@ -1,0 +1,13 @@
+i = 0:5
+loopInside = Square(i)
+"Square of 0:5 with loop inside: -loopInside"
+
+loopOutside = Square(i + 1)
+"Square of 0:5 with loop outside: -loopOutside"
+
+j = 0:5
+sumLoopInside = SumSquares(i, j)
+"SumSquares of 0:5, 0:5 with loop inside: -sumLoopInside"
+
+sumLoopOutside = SumSquares(i, (j + 1) / (j + 2))
+"SumSquares of 0:5, 0:5 with loop outside: -sumLoopOutside"

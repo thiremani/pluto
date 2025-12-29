@@ -22,7 +22,7 @@ func TestStringCompile(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "testStringCompile", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "test", program, cc, funcCache, exprCache)
 	sc.Compile()
 	ir := sc.Compiler.GenerateIR()
@@ -46,7 +46,7 @@ x, six`
 	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
-	exprCache := make(map[ast.Expression]*ExprInfo)
+	exprCache := make(map[ExprKey]*ExprInfo)
 	sc := NewScriptCompiler(ctx, "TestFormatIdentifiers", program, cc, funcCache, exprCache)
 	sc.Compile()
 	testStr := "x = -x, six = -six"

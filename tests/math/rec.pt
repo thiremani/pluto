@@ -1,28 +1,28 @@
-y = fac(n)
-    y = n != 1, n != 0 n * fac(n-1)
+y = Fac(n)
+    y = n != 1, n != 0 n * Fac(n-1)
     y = n == 0 1
     y = n == 1 1
 
-y = fib(n)
-    y = fibAux(n, 0, 1)
+y = Fib(n)
+    y = FibAux(n, 0, 1)
 
-y = fibAux(n, a, b)
+y = FibAux(n, a, b)
     y = n == 0 a
-    y = n != 0 fibAux(n - 1, b, a + b)
+    y = n != 0 FibAux(n - 1, b, a + b)
 
-# define isEven: returns (x, y) = (is-even?, is-odd?)
-x, y = isEven(n)
-    # recursive step: if n≠0, flip the pair returned by isOdd(n-1)
-    x, y = n != 0 isOdd(n - 1)
+# define IsEven: returns (x, y) = (is-even?, is-odd?)
+x, y = IsEven(n)
+    # recursive step: if n≠0, flip the pair returned by IsOdd(n-1)
+    x, y = n != 0 IsOdd(n - 1)
     # base case: 0 is even, not odd
     x = n == 1 "no"
     x = n == 0 "yes"
 
-# define isOdd: returns (x, y) = (is-odd?, is-even?)
+# define IsOdd: returns (x, y) = (is-odd?, is-even?)
 # this function only infers type for y
-x, y = isOdd(n)
-    # recursive step: if n≠0, flip the pair returned by isEven(n-1)
-    x, y = n != 0 isEven(n - 1)
+x, y = IsOdd(n)
+    # recursive step: if n≠0, flip the pair returned by IsEven(n-1)
+    x, y = n != 0 IsEven(n - 1)
     # base case: 0 is not odd, but even
     y = n == 1 "no"
     y = n == 0 "yes"

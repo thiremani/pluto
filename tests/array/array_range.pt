@@ -1,2 +1,2 @@
-res = double(x)
+res = Double(x)
     res = x * 2

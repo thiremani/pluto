@@ -212,7 +212,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 	}
 	specRune := rune(finalSpec[len(finalSpec)-1])
 	if specRune == 'p' {
-		mainSym, _ = c.compileIdentifierRaw(mainId)
+		mainSym, _ = c.getRawSymbol(mainId)
 	}
 	mainType := mainSym.Type
 
@@ -263,7 +263,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 			return
 		}
 		// Use the raw symbol to ensure we have the pointer, not a dereferenced value.
-		mainSym, _ = c.compileIdentifierRaw(mainId)
+		mainSym, _ = c.getRawSymbol(mainId)
 		// Cast pointer to i64 and format with 0x%llx
 		ptrAsInt := c.builder.CreatePtrToInt(mainSym.Val, c.Context.Int64Type(), "ptr_as_i64")
 		formattedStr = "0x%llx"
