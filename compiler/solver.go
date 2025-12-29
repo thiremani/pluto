@@ -462,10 +462,16 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 
 // isBareRangeExpr checks if expression is a bare range expression.
 // These are "simple" range arguments that can be passed to specialized functions.
-func isBareRangeExpr(expr ast.Expression) bool {
-	switch expr.(type) {
-	case *ast.Identifier, *ast.RangeLiteral, *ast.ArrayRangeExpression:
+// For ArrayRangeExpression, it's only bare if the array part doesn't have ranges
+// and the index is itself bare (e.g., arr[i] is bare, but [i][j] or arr[i+1] is not).
+func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
 		return true
+	case *ast.ArrayRangeExpression:
+		// Only bare if array doesn't have ranges and index is bare
+		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
+		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
 	}
@@ -1242,7 +1248,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		// Use return value of TypeExpression, not ExprCache
 		// When isRoot=false, Range identifiers return inner type (Int)
 		outerTypesPerArg[i] = ts.TypeExpression(e, isRoot)
-		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges && !isBareRangeExpr(e) {
+		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges && !ts.isBareRangeExpr(e) {
 			loopInside = false
 		}
 	}

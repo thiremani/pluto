@@ -1,0 +1,3 @@
+Square([i][j]): 0
+SumSquares([i][j], [i][k]): 0
+SumSquares(arr[m], stored[n+0]): 909

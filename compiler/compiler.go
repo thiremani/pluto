@@ -649,7 +649,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.ArrayLiteral:
 		return c.compileArrayExpression(e, dest)
 	case *ast.ArrayRangeExpression:
-		return c.compileArrayRangeExpression(e, dest)
+		return c.compileArrayRangeExpression(e)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -1312,22 +1312,6 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 		}
 	}
 	return args
-}
-
-func (c *Compiler) compileArrayRangeArg(expr *ast.ArrayRangeExpression) *Symbol {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	arrRange := info.OutTypes[0].(ArrayRange)
-
-	arraySyms := c.compileExpression(expr.Array, nil)
-	arraySym := arraySyms[0]
-
-	rangeSyms := c.compileExpression(expr.Range, nil)
-	rangeSym := rangeSyms[0]
-
-	return &Symbol{
-		Val:  c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRange),
-		Type: arrRange,
-	}
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {

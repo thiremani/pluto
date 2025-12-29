@@ -484,80 +484,37 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 	return
 }
 
-func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier) []*Symbol {
-	origExpr := expr
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok {
-		expr = rewritten
-		if newInfo, ok := c.ExprCache[key(c.FuncNameMangled, rewritten)]; ok {
-			info = newInfo
+// compileArrayRangeExpression compiles an array indexing expression.
+// If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
+// If the index is a scalar (e.g., arr[4]), returns the element.
+// We check the actual compiled index type, not cached OutTypes, because
+// inside a loop the index may be bound to a scalar even if originally a range.
+func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) []*Symbol {
+	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0])
+	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil)[0])
+
+	// Check actual compiled index type to determine ArrayRange vs element access
+	if idxSym.Type.Kind() == RangeKind {
+		arrType := arraySym.Type.(Array)
+		arrRange := ArrayRange{
+			Array: arrType,
+			Range: idxSym.Type.(Range),
 		}
-	}
-	pending := c.pendingLoopRanges(info.Ranges)
-	if info.OutTypes[0].Kind() == ArrayRangeKind {
-		return []*Symbol{c.compileArrayRangeArg(origExpr)}
-	}
-	if len(pending) > 0 {
-		return c.compileArrayRangeWithLoops(expr, info, pending, dest)
-	}
-	return []*Symbol{c.compileArrayRangeElement(expr)}
-}
-
-func (c *Compiler) compileArrayRangeWithLoops(expr *ast.ArrayRangeExpression, info *ExprInfo, loopRanges []*RangeInfo, dest []*ast.Identifier) []*Symbol {
-	PushScope(&c.Scopes, BlockScope)
-	defer c.popScope()
-
-	var outputs []*Symbol
-	if len(dest) >= len(info.OutTypes) && len(dest) > 0 {
-		outputs = c.makeOutputs(dest, info.OutTypes)
-	} else {
-		outputs = make([]*Symbol, len(info.OutTypes))
-		for i, outType := range info.OutTypes {
-			ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("arr_range_tmp_%d", i))
-			zero := c.makeZeroValue(outType)
-			c.createStore(zero.Val, ptr, outType)
-			outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: outType}}
-		}
+		return []*Symbol{{
+			Val:  c.CreateArrayRange(arraySym.Val, idxSym.Val, arrRange),
+			Type: arrRange,
+		}}
 	}
 
-	rewritten, _ := info.Rewrite.(*ast.ArrayRangeExpression)
-	if rewritten == nil {
-		rewritten = expr
-	}
-
-	c.withLoopNest(loopRanges, func() {
-		elem := c.compileArrayRangeElement(rewritten)
-		c.createStore(elem.Val, outputs[0].Val, elem.Type)
-	})
-
-	results := make([]*Symbol, len(outputs))
-	for i := range outputs {
-		elemType := outputs[i].Type.(Ptr).Elem
-		results[i] = &Symbol{
-			Val:  c.createLoad(outputs[i].Val, elemType, "arr_range_result"),
-			Type: elemType,
-		}
-	}
-
-	return results
-}
-
-func (c *Compiler) compileArrayRangeElement(expr *ast.ArrayRangeExpression) *Symbol {
-	if info, ok := c.ExprCache[key(c.FuncNameMangled, expr)]; ok {
-		if rewritten, ok := info.Rewrite.(*ast.ArrayRangeExpression); ok && rewritten != nil {
-			expr = rewritten
-		}
-	}
-	base := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0])
-	arrType := base.Type.(Array)
+	// Scalar index - element access
+	arrType := arraySym.Type.(Array)
 	elemType := arrType.ColTypes[0]
 
-	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil)[0])
 	idxVal := idxSym.Val
 	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 	}
 
-	elemVal := c.ArrayGet(base, elemType, idxVal)
-	return &Symbol{Type: elemType, Val: elemVal}
+	elemVal := c.ArrayGet(arraySym, elemType, idxVal)
+	return []*Symbol{{Type: elemType, Val: elemVal}}
 }
