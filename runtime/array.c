@@ -103,7 +103,10 @@ int arr_##SUF##_pop(NAME* a, T* out){                                    \
     if (out) *out = v;                                                   \
     return 0;                                                            \
 }                                                                        \
-T arr_##SUF##_get(const NAME* a, size_t i){ return a->v.a[i]; }          \
+T arr_##SUF##_get(const NAME* a, size_t i){ \
+    if (!a || i >= (size_t)a->v.n) return (T)0; \
+    return a->v.a[i]; \
+}          \
 int arr_##SUF##_set(NAME* a, size_t i, T v){                             \
     if (!a || i >= (size_t)a->v.n) return -1;                            \
     a->v.a[i] = v;                                                       \
@@ -224,7 +227,10 @@ int arr_str_pop(PtArrayStr* a, char** out){
     return 0;
 }
 
-const char* arr_str_get(const PtArrayStr* a, size_t i){ return a->v.a[i]; }
+const char* arr_str_get(const PtArrayStr* a, size_t i){
+    if (!a || i >= (size_t)a->v.n) return NULL;
+    return a->v.a[i];
+}
 
 int arr_str_set(PtArrayStr* a, size_t i, const char* s){
     if (!a || i >= (size_t)a->v.n) return -1;
