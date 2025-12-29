@@ -8,20 +8,11 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-type IterOver int
-
-const (
-	IterRange IterOver = iota
-	IterArrayRange
-	IterArray
-)
-
 type RangeInfo struct {
 	Name      string
 	RangeLit  *ast.RangeLiteral
 	ArrayExpr ast.Expression
 	ArrayType Array
-	Over      IterOver
 }
 
 type ExprInfo struct {
@@ -286,7 +277,6 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*
 	ri := &RangeInfo{
 		Name:     nm,
 		RangeLit: rangeLit,
-		Over:     IterRange,
 	}
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
@@ -489,7 +479,6 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 		ri := &RangeInfo{
 			Name:     ident.Value,
 			RangeLit: nil,
-			Over:     IterRange,
 		}
 		ranges = []*RangeInfo{ri}
 	}
@@ -850,12 +839,7 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	}
 
 	idxType := idxTypes[0]
-	var rangeType Type
-	if idxType.Kind() == RangeKind {
-		rangeType = idxType.(Range).Iter
-	}
-
-	if rangeType != nil && rangeType.Kind() != IntKind {
+	if idxType.Kind() != IntKind && idxType.Kind() != RangeKind {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
 			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
@@ -874,15 +858,6 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		// single index access returns the element type
 		info.OutTypes = []Type{elemType}
 		info.ExprLen = 1
-		return info.OutTypes
-	}
-
-	if rangeType == nil {
-		// index is unresolved, cannot determine output type
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
-		})
 		return info.OutTypes
 	}
 
