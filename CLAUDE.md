@@ -20,7 +20,14 @@ pip install -r requirements.txt
 
 ### Building the compiler
 ```bash
-go build -o pluto
+# Production build (with version from git tag)
+make build
+
+# Development build (faster, version shows as "dev")
+make dev
+
+# Or manually with version injection:
+go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto
 ```
 
 ### Running tests
@@ -41,6 +48,8 @@ go test -race ./lexer ./parser ./compiler
 ### Running the compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
+./pluto version        # Show version information
+./pluto clean          # Clear cache for current version
 ```
 This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
@@ -49,7 +58,10 @@ This will compile all `.pt` and `.spt` files in the specified directory and gene
 # Check for compilation errors with verbose output (quick smoke check)
 ./pluto tests/
 
-# Clear cache when debugging compilation issues
+# Clear cache for current version
+./pluto clean
+
+# Clear entire cache manually (all versions)
 rm -rf "$HOME/Library/Caches/pluto"  # macOS
 rm -rf "$HOME/.cache/pluto"          # Linux
 rd /s /q %LocalAppData%\pluto        # Windows
@@ -127,8 +139,11 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
   - macOS: `$HOME/Library/Caches/pluto`
   - Linux: `$HOME/.cache/pluto`
   - Windows: `%LocalAppData%\pluto`
-- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects
+- Cache layout (versioned to isolate different compiler versions):
+  - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
+  - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
+- Use `pluto clean` to clear cache for current version
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.

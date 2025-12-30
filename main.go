@@ -374,15 +374,17 @@ func New(cwd string) *Pluto {
 	fmt.Println("Current working directory is", cwd)
 
 	ptcache := defaultPTCache()
-	fmt.Printf("Using PTCACHE: %s\n", ptcache)
-	if err := os.MkdirAll(ptcache, 0755); err != nil {
+	// Include version in cache path to isolate different compiler versions
+	versionedCache := filepath.Join(ptcache, Version)
+	fmt.Printf("Using PTCACHE: %s\n", versionedCache)
+	if err := os.MkdirAll(versionedCache, 0755); err != nil {
 		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
 		os.Exit(1)
 	}
 
 	p := &Pluto{
 		Cwd:     cwd,
-		PtCache: ptcache,
+		PtCache: versionedCache,
 		Ctx:     llvm.NewContext(),
 	}
 
@@ -400,6 +402,50 @@ func New(cwd string) *Pluto {
 }
 
 func main() {
+	// Handle subcommands
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version":
+			printVersion()
+			return
+		case "clean":
+			runClean()
+			return
+		}
+	}
+
+	// Default: compile
+	runCompile()
+}
+
+// runClean removes the cache directory for the current version.
+func runClean() {
+	ptcache := defaultPTCache()
+	versionCache := filepath.Join(ptcache, Version)
+
+	info, err := os.Stat(versionCache)
+	if os.IsNotExist(err) {
+		fmt.Printf("Cache directory does not exist: %s\n", versionCache)
+		return
+	}
+	if err != nil {
+		fmt.Printf("Error accessing cache: %v\n", err)
+		os.Exit(1)
+	}
+	if !info.IsDir() {
+		fmt.Printf("Cache path is not a directory: %s\n", versionCache)
+		os.Exit(1)
+	}
+
+	if err := os.RemoveAll(versionCache); err != nil {
+		fmt.Printf("Error removing cache: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Removed cache for %s: %s\n", Version, versionCache)
+}
+
+// runCompile is the main compilation workflow.
+func runCompile() {
 	// Determine target path (file or directory)
 	target, err := os.Getwd()
 	if err != nil {

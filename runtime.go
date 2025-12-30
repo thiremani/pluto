@@ -33,7 +33,8 @@ func metadataHash(h hash.Hash) {
 // runtimeInfo computes SHA256 hash and counts top-level .c files.
 // Hash includes all files (headers in subdirs matter) but only counts
 // top-level .c files since compileRuntime only compiles those.
-func runtimeInfo() (hashStr string, srcCount int, err error) {
+// Returns short hash (8 chars for directory name) and full hash (for collision check).
+func runtimeInfo() (shortHash, fullHash string, srcCount int, err error) {
 	h := sha256.New()
 	metadataHash(h)
 	err = fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, walkErr error) error {
@@ -56,9 +57,11 @@ func runtimeInfo() (hashStr string, srcCount int, err error) {
 	if err != nil {
 		err = fmt.Errorf("walk embedded runtime: %w", err)
 		fmt.Println(err)
-		return "", 0, err
+		return "", "", 0, err
 	}
-	return hex.EncodeToString(h.Sum(nil)), srcCount, nil
+	fullHash = hex.EncodeToString(h.Sum(nil))
+	shortHash = fullHash[:8]
+	return shortHash, fullHash, srcCount, nil
 }
 
 // extractRuntime writes the embedded runtime files to rtDir.
@@ -164,16 +167,23 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	}
 	defer lock.Unlock()
 
-	hash, srcCount, err := runtimeInfo()
+	shortHash, fullHash, srcCount, err := runtimeInfo()
 	if err != nil {
 		return nil, err
 	}
-	rtDir := filepath.Join(runtimeDir, hash)
+	rtDir := filepath.Join(runtimeDir, shortHash)
+	hashFile := filepath.Join(rtDir, ".hash")
 
-	// Check if already compiled (verify .o count matches .c count)
+	// Check if already compiled (verify .o count and full hash match)
 	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) == srcCount {
-		fmt.Printf("Using cached runtime: %s\n", rtDir)
-		return rtObjs, nil
+		// Verify full hash to detect collisions
+		if storedHash, err := os.ReadFile(hashFile); err == nil && string(storedHash) == fullHash {
+			fmt.Printf("Using cached runtime: %s\n", rtDir)
+			return rtObjs, nil
+		}
+		// Hash collision or corrupted cache - rebuild
+		fmt.Printf("Runtime hash mismatch, rebuilding: %s\n", rtDir)
+		os.RemoveAll(rtDir)
 	}
 
 	// Cleanup old runtime versions (keep 5 most recent, only delete if older than 1 week)
@@ -184,5 +194,13 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	if err := extractRuntime(rtDir); err != nil {
 		return nil, err
 	}
-	return compileRuntime(rtDir)
+	rtObjs, err := compileRuntime(rtDir)
+	if err != nil {
+		return nil, err
+	}
+	// Store full hash after successful compilation (acts as completion marker)
+	if err := os.WriteFile(hashFile, []byte(fullHash), 0644); err != nil {
+		return nil, fmt.Errorf("write hash file: %w", err)
+	}
+	return rtObjs, nil
 }
