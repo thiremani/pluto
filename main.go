@@ -34,6 +34,7 @@ const (
 	MOD_FILE = "pt.mod"
 
 	// Platform
+	OS_DARWIN  = "darwin"
 	OS_WINDOWS = "windows"
 
 	// Compiler binaries
@@ -99,7 +100,7 @@ func defaultPTCache() string {
 		}
 		ptcache = filepath.Join(homeDir, "AppData", "Local", "pluto")
 
-	case "darwin":
+	case OS_DARWIN:
 		ptcache = filepath.Join(homeDir, "Library", "Caches", "pluto")
 
 	default: // Linux and others
@@ -345,7 +346,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	linkArgs := []string{}
 
 	switch runtime.GOOS {
-	case "darwin":
+	case OS_DARWIN:
 		// Mach-O linker wants -dead_strip
 		linkArgs = append(linkArgs, LINK_DEAD_STRIP)
 	case OS_WINDOWS:
