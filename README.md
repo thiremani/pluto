@@ -60,7 +60,7 @@ Run it:
 
 Quick Start
 -----------
-- Build compiler: `go build -o pluto main.go`
+- Build compiler: `go build -o pluto`
 - Run unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Run full suite: `python3 test.py`
 - New project setup: add a `pt.mod` at your repo root to define the module path (project root). Minimal example:
@@ -114,7 +114,7 @@ Manual go build/test (MSYS2)
   - `export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"`
   - `export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"`
   - `export PATH="/ucrt64/bin:$PATH"`  # already set by the UCRT64 shell
-  - Now: `go test -race ./compiler` or `go build -o pluto.exe main.go`.
+  - Now: `go test -race ./compiler` or `go build -o pluto.exe`.
 
 Repository Structure
 --------------------

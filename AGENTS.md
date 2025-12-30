@@ -9,7 +9,7 @@
 - `pt.mod`: Module declaration at the repo root.
 
 ## Build, Test, and Development Commands
-- Build compiler: `go build -o pluto main.go`
+- Build compiler: `go build -o pluto`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).

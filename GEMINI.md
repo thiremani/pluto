@@ -39,7 +39,7 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 
 *   **Build the compiler:**
     ```bash
-    go build -o pluto main.go
+    go build -o pluto
     ```
 
 *   **Run the full test suite:**
