@@ -145,7 +145,9 @@ func cleanupOldRuntimes(runtimeDir string, keep int) {
 // A file lock ensures concurrent processes see either fully compiled runtime or build it.
 func prepareRuntime(cacheDir string) ([]string, error) {
 	runtimeDir := filepath.Join(cacheDir, "runtime")
-	os.MkdirAll(runtimeDir, 0755)
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		return nil, fmt.Errorf("create runtime dir: %w", err)
+	}
 
 	// Lock the entire operation
 	lock := flock.New(filepath.Join(runtimeDir, ".lock"))
