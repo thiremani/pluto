@@ -53,9 +53,18 @@ type Pluto struct {
 }
 
 // sanitizeVersion returns a filesystem-safe version string.
-// Uses URL path encoding to ensure uniqueness (different inputs → different outputs).
+// Uses URL-style hex encoding for unsafe characters to ensure uniqueness and prevent path traversal.
 func sanitizeVersion(v string) string {
-	return url.PathEscape(v)
+	escaped := url.PathEscape(v)
+	// Validate that the escaped version doesn't escape the parent directory
+	// by checking that filepath.Join("/x", escaped) stays under "/x"
+	joined := filepath.Join("/x", escaped)
+	rel, err := filepath.Rel("/x", joined)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		// Fall back to hex encoding the entire string
+		return fmt.Sprintf("%x", v)
+	}
+	return escaped
 }
 
 // getDefaultPTCache gets env variable PTCACHE
