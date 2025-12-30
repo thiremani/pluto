@@ -117,14 +117,14 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 		return
 	}
 
-	// Filter to hash directories (64 char hex) with their mod times
+	// Filter to hash directories with their mod times
 	type dirInfo struct {
 		name  string
 		mtime int64
 	}
 	var dirs []dirInfo
 	for _, e := range entries {
-		if e.IsDir() && len(e.Name()) == 64 {
+		if e.IsDir() {
 			if info, err := e.Info(); err == nil {
 				dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
 			}
@@ -140,7 +140,10 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime < dirs[j].mtime })
 	for i := 0; i < len(dirs)-keep; i++ {
 		if dirs[i].mtime < cutoff {
-			os.RemoveAll(filepath.Join(runtimeDir, dirs[i].name))
+			path := filepath.Join(runtimeDir, dirs[i].name)
+			if err := os.RemoveAll(path); err != nil {
+				fmt.Printf("warning: failed to remove old runtime %s: %v\n", path, err)
+			}
 		}
 	}
 }
@@ -169,12 +172,14 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 
 	// Check if already compiled (verify .o count matches .c count)
 	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) == srcCount {
+		fmt.Printf("Using cached runtime: %s\n", rtDir)
 		return rtObjs, nil
 	}
 
 	// Cleanup old runtime versions (keep 5 most recent, only delete if older than 1 week)
 	cleanupOldRuntimes(runtimeDir, 5, 7*24*60*60)
 
+	fmt.Printf("Compiling runtime: %s\n", rtDir)
 	// Extract and compile
 	if err := extractRuntime(rtDir); err != nil {
 		return nil, err
