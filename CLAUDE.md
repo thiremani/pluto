@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 ### Building the compiler
 ```bash
-go build -o pluto main.go
+go build -o pluto
 ```
 
 ### Running tests

@@ -29,16 +29,24 @@ func metadataHash(h hash.Hash) {
 	h.Write([]byte(runtime.GOARCH))
 }
 
-// runtimeInfo computes SHA256 hash and counts .c files in a single walk.
-// Hash includes compiler settings and platform to ensure recompilation when these change.
+// runtimeInfo computes SHA256 hash and counts top-level .c files.
+// Hash includes all files (headers in subdirs matter) but only counts
+// top-level .c files since compileRuntime only compiles those.
 func runtimeInfo() (hashStr string, srcCount int) {
 	h := sha256.New()
 	metadataHash(h)
-	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, _ error) error {
+	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		if !d.IsDir() {
-			data, _ := runtimeFS.ReadFile(path)
+			data, err := runtimeFS.ReadFile(path)
+			if err != nil {
+				return err
+			}
 			h.Write(data)
-			if strings.HasSuffix(path, ".c") {
+			// Only count top-level .c files (e.g., "runtime/array.c")
+			if strings.HasSuffix(path, ".c") && filepath.Dir(path) == "runtime" {
 				srcCount++
 			}
 		}
