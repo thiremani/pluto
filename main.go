@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,16 +53,8 @@ type Pluto struct {
 }
 
 // sanitizeVersion returns a filesystem-safe version string.
-// Handles path traversal attempts and converts path separators.
 func sanitizeVersion(v string) string {
-	// Handle empty or path traversal cases
-	if v == "" || v == "." || v == ".." {
-		return hex.EncodeToString([]byte(v))
-	}
-	// Replace path separators to prevent nested directories
-	safe := strings.ReplaceAll(v, "/", "-")
-	safe = strings.ReplaceAll(safe, "\\", "-")
-	return safe
+	return url.PathEscape(v)
 }
 
 // getDefaultPTCache gets env variable PTCACHE
