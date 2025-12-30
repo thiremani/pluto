@@ -145,9 +145,12 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 	var dirs []dirInfo
 	for _, e := range entries {
 		if e.IsDir() && isHashDir(e.Name()) {
-			if info, err := e.Info(); err == nil {
-				dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
+			info, err := e.Info()
+			if err != nil {
+				fmt.Printf("warning: failed to get info for runtime dir %s: %v\n", e.Name(), err)
+				continue
 			}
+			dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
 		}
 	}
 
@@ -159,11 +162,12 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 	cutoff := time.Now().Unix() - minAge
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime < dirs[j].mtime })
 	for i := 0; i < len(dirs)-keep; i++ {
-		if dirs[i].mtime < cutoff {
-			path := filepath.Join(runtimeDir, dirs[i].name)
-			if err := os.RemoveAll(path); err != nil {
-				fmt.Printf("warning: failed to remove old runtime %s: %v\n", path, err)
-			}
+		if dirs[i].mtime > cutoff {
+			continue
+		}
+		path := filepath.Join(runtimeDir, dirs[i].name)
+		if err := os.RemoveAll(path); err != nil {
+			fmt.Printf("warning: failed to remove old runtime %s: %v\n", path, err)
 		}
 	}
 }
