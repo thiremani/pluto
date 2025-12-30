@@ -30,14 +30,21 @@ func isHashDir(name string) bool {
 //go:embed runtime
 var runtimeFS embed.FS
 
+// runtimeCompileFlags returns the compiler flags used for runtime compilation.
+// Used by both compileRuntime and metadataHash to keep them in sync.
+func runtimeCompileFlags() []string {
+	flags := []string{OPT_LEVEL, C_STD, MARCH}
+	if runtime.GOOS != OS_WINDOWS {
+		flags = append(flags, FPIC)
+	}
+	return flags
+}
+
 // metadataHash hashes compiler settings and platform that affect runtime compilation.
 func metadataHash(h hash.Hash) {
 	h.Write([]byte(CC))
-	h.Write([]byte(OPT_LEVEL))
-	h.Write([]byte(C_STD))
-	h.Write([]byte(MARCH))
-	if runtime.GOOS != OS_WINDOWS {
-		h.Write([]byte(FPIC))
+	for _, flag := range runtimeCompileFlags() {
+		h.Write([]byte(flag))
 	}
 	h.Write([]byte(runtime.GOOS))
 	h.Write([]byte(runtime.GOARCH))
@@ -112,10 +119,7 @@ func compileRuntime(rtDir string) ([]string, error) {
 	var rtObjs []string
 	for _, src := range rtSrcs {
 		outObj := filepath.Join(rtDir, filepath.Base(src)+OBJ_SUFFIX)
-		args := []string{OPT_LEVEL, C_STD, MARCH, "-I", rtDir, "-c", src, "-o", outObj}
-		if runtime.GOOS != OS_WINDOWS {
-			args = append(args, FPIC)
-		}
+		args := append(runtimeCompileFlags(), "-I", rtDir, "-c", src, "-o", outObj)
 		if out, err := exec.Command(CC, args...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("compile %s: %v\n%s", src, err, out)
 		}
