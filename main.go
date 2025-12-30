@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -45,9 +46,20 @@ const (
 //go:embed runtime
 var runtimeFS embed.FS
 
+// metadataHash hashes compiler settings and platform that affect runtime compilation.
+func metadataHash(h hash.Hash) {
+	h.Write([]byte(CC))
+	h.Write([]byte(OPT_LEVEL))
+	h.Write([]byte(C_STD))
+	h.Write([]byte(runtime.GOOS))
+	h.Write([]byte(runtime.GOARCH))
+}
+
 // runtimeInfo computes SHA256 hash and counts .c files in a single walk.
-func runtimeInfo() (hash string, srcCount int) {
+// Hash includes compiler settings and platform to ensure recompilation when these change.
+func runtimeInfo() (hashStr string, srcCount int) {
 	h := sha256.New()
+	metadataHash(h)
 	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, _ error) error {
 		if !d.IsDir() {
 			data, _ := runtimeFS.ReadFile(path)
