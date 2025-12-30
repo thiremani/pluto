@@ -623,7 +623,9 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 		return []Type{arr}
 	}
 	// unsupported as of now
-	return []Type{Unresolved{}}
+	types := []Type{Unresolved{}}
+	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+	return types
 	/*
 	   // 1. Determine number of columns
 	   numCols := ts.arrayNumCols(al)
@@ -876,6 +878,7 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 }
 
 func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []Type) {
+	oldErrs := len(ts.Errors)
 	types = []Type{}
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -909,6 +912,10 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = ts.TypeCallExpression(e, isRoot)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
+	}
+
+	if len(ts.Errors) > oldErrs {
+		return
 	}
 
 	if isRoot {
@@ -951,6 +958,8 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 			Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
+		t = Unresolved{}
+		ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
 		return
 	}
 
@@ -970,7 +979,9 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			Msg:   fmt.Sprintf("left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d. Operator: %q", expr.Left, len(left), expr.Right, len(right), expr.Token.Literal),
 		}
 		ts.Errors = append(ts.Errors, ce)
-		return []Type{Unresolved{}}
+		types = []Type{Unresolved{}}
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		return
 	}
 
 	types = []Type{}
@@ -1218,11 +1229,14 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 
 // inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
+	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
+
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
-		return nil
+		return info.OutTypes
 	}
 
 	// Compute hasRanges from all arguments
@@ -1235,8 +1249,10 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info := &ExprInfo{OutTypes: f.OutTypes, ExprLen: len(f.OutTypes), HasRanges: hasRanges, LoopInside: loopInside}
-	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
+	info.OutTypes = f.OutTypes
+	info.ExprLen = len(f.OutTypes)
+	info.HasRanges = hasRanges
+	info.LoopInside = loopInside
 	return f.OutTypes
 }
 
