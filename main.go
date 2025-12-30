@@ -464,6 +464,14 @@ func runCompile() {
 	}
 
 	p := New(cwd)
+
+	// Prepare runtime once (in PtCache root, shared across all projects)
+	rtObjs, err := prepareRuntime(p.PtCache)
+	if err != nil {
+		fmt.Printf("Error preparing runtime: %v\n", err)
+		os.Exit(1)
+	}
+
 	codeFiles, scriptFiles := p.ScanPlutoFiles(specificScript)
 	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
@@ -474,13 +482,6 @@ func runCompile() {
 	if len(scriptFiles) == 0 {
 		fmt.Println("😱 No script file to compile!")
 		return
-	}
-
-	// Prepare runtime once (in PtCache root, shared across all projects)
-	rtObjs, err := prepareRuntime(p.PtCache)
-	if err != nil {
-		fmt.Printf("Error preparing runtime: %v\n", err)
-		os.Exit(1)
 	}
 
 	compileErr := 0
