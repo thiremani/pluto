@@ -53,8 +53,13 @@ type Pluto struct {
 }
 
 // sanitizeVersion returns a filesystem-safe version string.
-func sanitizeVersion(v string) string {
-	return url.PathEscape(v)
+// Returns error for path traversal attempts.
+func sanitizeVersion(v string) (string, error) {
+	escaped := url.PathEscape(v)
+	if escaped == "." || escaped == ".." {
+		return "", fmt.Errorf("invalid version: %q", v)
+	}
+	return escaped, nil
 }
 
 // getDefaultPTCache gets env variable PTCACHE
@@ -381,7 +386,12 @@ func New(cwd string) *Pluto {
 
 	ptcache := defaultPTCache()
 	// Include version in cache path to isolate different compiler versions
-	versionedCache := filepath.Join(ptcache, sanitizeVersion(Version))
+	safeVersion, err := sanitizeVersion(Version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	versionedCache := filepath.Join(ptcache, safeVersion)
 	fmt.Printf("Using PTCACHE: %s\n", versionedCache)
 	if err := os.MkdirAll(versionedCache, 0755); err != nil {
 		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
@@ -394,7 +404,7 @@ func New(cwd string) *Pluto {
 		Ctx:     llvm.NewContext(),
 	}
 
-	err := p.resolveModPaths(cwd)
+	err = p.resolveModPaths(cwd)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -427,7 +437,12 @@ func main() {
 // runClean removes the cache directory for the current version.
 func runClean() {
 	ptcache := defaultPTCache()
-	versionCache := filepath.Join(ptcache, sanitizeVersion(Version))
+	safeVersion, err := sanitizeVersion(Version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	versionCache := filepath.Join(ptcache, safeVersion)
 
 	info, err := os.Stat(versionCache)
 	if os.IsNotExist(err) {
