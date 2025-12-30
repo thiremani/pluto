@@ -25,16 +25,33 @@ const (
 	IR_SUFFIX  = ".ll"
 	OPT_SUFFIX = ".opt"
 	OBJ_SUFFIX = ".o"
+	EXE_SUFFIX = ".exe"
 
-	SCRIPT_DIR = "script"
-	CODE_DIR   = "code"
+	SCRIPT_DIR  = "script"
+	CODE_DIR    = "code"
+	RUNTIME_DIR = "runtime"
 
 	MOD_FILE = "pt.mod"
 
-	// Compiler settings
-	CC        = "clang"
-	C_STD     = "-std=c11"
-	OPT_LEVEL = "-O3"
+	// Platform
+	OS_WINDOWS = "windows"
+
+	// Compiler binaries
+	CC      = "clang"
+	OPT_BIN = "opt"
+	LLC_BIN = "llc"
+
+	// Compiler flags
+	C_STD        = "-std=c11"
+	OPT_LEVEL    = "-O3"
+	MARCH        = "-march=native"
+	FPIC         = "-fPIC"
+	FILETYPE_OBJ = "-filetype=obj"
+	RELOC_PIC    = "-relocation-model=pic"
+
+	// Linker flags
+	LINK_DEAD_STRIP  = "-Wl,-dead_strip"
+	LINK_GC_SECTIONS = "-Wl,--gc-sections"
 )
 
 // Pluto holds the state of a single pluto invocation.
@@ -53,8 +70,11 @@ type Pluto struct {
 }
 
 // sanitizeVersion returns a filesystem-safe version string.
-// Returns error for path traversal attempts.
+// Returns error for path traversal attempts or empty versions.
 func sanitizeVersion(v string) (string, error) {
+	if v == "" {
+		return "", fmt.Errorf("invalid version: empty string")
+	}
 	escaped := url.PathEscape(v)
 	if escaped == "." || escaped == ".." {
 		return "", fmt.Errorf("invalid version: %q", v)
@@ -72,7 +92,7 @@ func defaultPTCache() string {
 	homeDir, _ := os.UserHomeDir()
 	var ptcache string
 	switch runtime.GOOS {
-	case "windows":
+	case OS_WINDOWS:
 		if localAppData := os.Getenv("LocalAppData"); localAppData != "" {
 			ptcache = filepath.Join(localAppData, "pluto")
 			return ptcache
@@ -299,24 +319,24 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	objExt := OBJ_SUFFIX
 	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+objExt)
 	binFile := filepath.Join(p.Cwd, bin)
-	if runtime.GOOS == "windows" {
-		binFile = binFile + ".exe"
+	if runtime.GOOS == OS_WINDOWS {
+		binFile = binFile + EXE_SUFFIX
 	}
 
 	// 1) Optimize IR
-	if out, err := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(OPT_BIN, OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
 		fmt.Printf("optimization failed: %v\n%s\n", err, out)
 		return err
 	}
 
 	// 2) Lower to object
-	llcArgs := []string{"-filetype=obj"}
+	llcArgs := []string{FILETYPE_OBJ}
 	// PIC is ELF/Mach-O specific; avoid on Windows COFF
-	if runtime.GOOS != "windows" {
-		llcArgs = append(llcArgs, "-relocation-model=pic")
+	if runtime.GOOS != OS_WINDOWS {
+		llcArgs = append(llcArgs, RELOC_PIC)
 	}
 	llcArgs = append(llcArgs, optFile, "-o", objFile)
-	if out, err := exec.Command("llc", llcArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(LLC_BIN, llcArgs...).CombinedOutput(); err != nil {
 		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -327,19 +347,19 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		// Mach-O linker wants -dead_strip
-		linkArgs = append(linkArgs, "-Wl,-dead_strip")
-	case "windows":
+		linkArgs = append(linkArgs, LINK_DEAD_STRIP)
+	case OS_WINDOWS:
 		// MinGW/COFF linker flags
-		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+		linkArgs = append(linkArgs, LINK_GC_SECTIONS)
 	default:
 		// ELF linkers (ld, lld) accept --gc-sections
-		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+		linkArgs = append(linkArgs, LINK_GC_SECTIONS)
 	}
 	linkArgs = append(linkArgs, objFile)
 	linkArgs = append(linkArgs, rtObjs...)
 	linkArgs = append(linkArgs, "-o", binFile)
 	// libm is only needed/available on ELF-based systems
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != OS_WINDOWS {
 		linkArgs = append(linkArgs, "-lm")
 	}
 

@@ -35,6 +35,10 @@ func metadataHash(h hash.Hash) {
 	h.Write([]byte(CC))
 	h.Write([]byte(OPT_LEVEL))
 	h.Write([]byte(C_STD))
+	h.Write([]byte(MARCH))
+	if runtime.GOOS != OS_WINDOWS {
+		h.Write([]byte(FPIC))
+	}
 	h.Write([]byte(runtime.GOOS))
 	h.Write([]byte(runtime.GOARCH))
 }
@@ -46,7 +50,7 @@ func metadataHash(h hash.Hash) {
 func runtimeInfo() (shortHash, fullHash string, srcCount int, err error) {
 	h := sha256.New()
 	metadataHash(h)
-	err = fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(runtimeFS, RUNTIME_DIR, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -57,7 +61,7 @@ func runtimeInfo() (shortHash, fullHash string, srcCount int, err error) {
 			}
 			h.Write(data)
 			// Only count top-level .c files (e.g., "runtime/array.c")
-			if strings.HasSuffix(path, ".c") && filepath.Dir(path) == "runtime" {
+			if strings.HasSuffix(path, ".c") && filepath.Dir(path) == RUNTIME_DIR {
 				srcCount++
 			}
 		}
@@ -78,11 +82,11 @@ func extractRuntime(rtDir string) error {
 	if err := os.MkdirAll(rtDir, 0755); err != nil {
 		return fmt.Errorf("create runtime dir: %w", err)
 	}
-	return fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(runtimeFS, RUNTIME_DIR, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("walk %s: %w", path, err)
 		}
-		relPath, _ := filepath.Rel("runtime", path)
+		relPath, _ := filepath.Rel(RUNTIME_DIR, path)
 		destPath := filepath.Join(rtDir, relPath)
 		if d.IsDir() {
 			return os.MkdirAll(destPath, 0755)
@@ -108,9 +112,9 @@ func compileRuntime(rtDir string) ([]string, error) {
 	var rtObjs []string
 	for _, src := range rtSrcs {
 		outObj := filepath.Join(rtDir, filepath.Base(src)+OBJ_SUFFIX)
-		args := []string{OPT_LEVEL, C_STD, "-march=native", "-I", rtDir, "-c", src, "-o", outObj}
-		if runtime.GOOS != "windows" {
-			args = append(args, "-fPIC")
+		args := []string{OPT_LEVEL, C_STD, MARCH, "-I", rtDir, "-c", src, "-o", outObj}
+		if runtime.GOOS != OS_WINDOWS {
+			args = append(args, FPIC)
 		}
 		if out, err := exec.Command(CC, args...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("compile %s: %v\n%s", src, err, out)
@@ -164,7 +168,7 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 // Uses a hash-based directory to cache compiled objects across runs.
 // A file lock ensures concurrent processes see either fully compiled runtime or build it.
 func prepareRuntime(cacheDir string) ([]string, error) {
-	runtimeDir := filepath.Join(cacheDir, "runtime")
+	runtimeDir := filepath.Join(cacheDir, RUNTIME_DIR)
 	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
 		return nil, fmt.Errorf("create runtime dir: %w", err)
 	}
