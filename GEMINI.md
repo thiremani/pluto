@@ -82,7 +82,7 @@ The compilation process consists of two main phases:
     e.  Links the object file with the C runtime to create a native executable.
 
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
-- Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores IR/objects.
+- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects.
 
 ## Debugging & Configuration Tips
 

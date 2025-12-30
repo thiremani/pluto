@@ -127,7 +127,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
   - macOS: `$HOME/Library/Caches/pluto`
   - Linux: `$HOME/.cache/pluto`
   - Windows: `%LocalAppData%\pluto`
-- Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores intermediate LLVM IR files and objects
+- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
 
 ## Coding Style & Naming Conventions

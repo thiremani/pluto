@@ -130,7 +130,7 @@ Architecture
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
 - Pipeline: generate IR → optimize `-O3` via `opt` → object via `llc` → link with runtime via `clang`/`lld`.
 - Module resolution: walks up from CWD to find `pt.mod` and derives module path.
-- Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores IR/objects.
+- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects.
 
 Usage
 -----
