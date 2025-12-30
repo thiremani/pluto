@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,16 +25,34 @@ const (
 	IR_SUFFIX  = ".ll"
 	OPT_SUFFIX = ".opt"
 	OBJ_SUFFIX = ".o"
+	EXE_SUFFIX = ".exe"
 
-	SCRIPT_DIR = "script"
-	CODE_DIR   = "code"
+	SCRIPT_DIR  = "script"
+	CODE_DIR    = "code"
+	RUNTIME_DIR = "runtime"
 
 	MOD_FILE = "pt.mod"
 
-	// Compiler settings
-	CC        = "clang"
-	C_STD     = "-std=c11"
-	OPT_LEVEL = "-O3"
+	// Platform
+	OS_DARWIN  = "darwin"
+	OS_WINDOWS = "windows"
+
+	// Compiler binaries
+	CC      = "clang"
+	OPT_BIN = "opt"
+	LLC_BIN = "llc"
+
+	// Compiler flags
+	C_STD        = "-std=c11"
+	OPT_LEVEL    = "-O3"
+	MARCH        = "-march=native"
+	FPIC         = "-fPIC"
+	FILETYPE_OBJ = "-filetype=obj"
+	RELOC_PIC    = "-relocation-model=pic"
+
+	// Linker flags
+	LINK_DEAD_STRIP  = "-Wl,-dead_strip"
+	LINK_GC_SECTIONS = "-Wl,--gc-sections"
 )
 
 // Pluto holds the state of a single pluto invocation.
@@ -51,6 +70,19 @@ type Pluto struct {
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
 
+// sanitizeVersion returns a filesystem-safe version string.
+// Returns error for path traversal attempts or empty versions.
+func sanitizeVersion(v string) (string, error) {
+	if v == "" {
+		return "", fmt.Errorf("invalid version: empty string")
+	}
+	escaped := url.PathEscape(v)
+	if escaped == "." || escaped == ".." {
+		return "", fmt.Errorf("invalid version: %q", v)
+	}
+	return escaped, nil
+}
+
 // getDefaultPTCache gets env variable PTCACHE
 // if it is not set sets it to default value for windows, mac, linux
 func defaultPTCache() string {
@@ -61,14 +93,14 @@ func defaultPTCache() string {
 	homeDir, _ := os.UserHomeDir()
 	var ptcache string
 	switch runtime.GOOS {
-	case "windows":
+	case OS_WINDOWS:
 		if localAppData := os.Getenv("LocalAppData"); localAppData != "" {
 			ptcache = filepath.Join(localAppData, "pluto")
 			return ptcache
 		}
 		ptcache = filepath.Join(homeDir, "AppData", "Local", "pluto")
 
-	case "darwin":
+	case OS_DARWIN:
 		ptcache = filepath.Join(homeDir, "Library", "Caches", "pluto")
 
 	default: // Linux and others
@@ -288,24 +320,24 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	objExt := OBJ_SUFFIX
 	objFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+objExt)
 	binFile := filepath.Join(p.Cwd, bin)
-	if runtime.GOOS == "windows" {
-		binFile = binFile + ".exe"
+	if runtime.GOOS == OS_WINDOWS {
+		binFile = binFile + EXE_SUFFIX
 	}
 
 	// 1) Optimize IR
-	if out, err := exec.Command("opt", OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(OPT_BIN, OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
 		fmt.Printf("optimization failed: %v\n%s\n", err, out)
 		return err
 	}
 
 	// 2) Lower to object
-	llcArgs := []string{"-filetype=obj"}
+	llcArgs := []string{FILETYPE_OBJ}
 	// PIC is ELF/Mach-O specific; avoid on Windows COFF
-	if runtime.GOOS != "windows" {
-		llcArgs = append(llcArgs, "-relocation-model=pic")
+	if runtime.GOOS != OS_WINDOWS {
+		llcArgs = append(llcArgs, RELOC_PIC)
 	}
 	llcArgs = append(llcArgs, optFile, "-o", objFile)
-	if out, err := exec.Command("llc", llcArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(LLC_BIN, llcArgs...).CombinedOutput(); err != nil {
 		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -314,21 +346,21 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	linkArgs := []string{}
 
 	switch runtime.GOOS {
-	case "darwin":
+	case OS_DARWIN:
 		// Mach-O linker wants -dead_strip
-		linkArgs = append(linkArgs, "-Wl,-dead_strip")
-	case "windows":
+		linkArgs = append(linkArgs, LINK_DEAD_STRIP)
+	case OS_WINDOWS:
 		// MinGW/COFF linker flags
-		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+		linkArgs = append(linkArgs, LINK_GC_SECTIONS)
 	default:
 		// ELF linkers (ld, lld) accept --gc-sections
-		linkArgs = append(linkArgs, "-Wl,--gc-sections")
+		linkArgs = append(linkArgs, LINK_GC_SECTIONS)
 	}
 	linkArgs = append(linkArgs, objFile)
 	linkArgs = append(linkArgs, rtObjs...)
 	linkArgs = append(linkArgs, "-o", binFile)
 	// libm is only needed/available on ELF-based systems
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != OS_WINDOWS {
 		linkArgs = append(linkArgs, "-lm")
 	}
 
@@ -374,19 +406,26 @@ func New(cwd string) *Pluto {
 	fmt.Println("Current working directory is", cwd)
 
 	ptcache := defaultPTCache()
-	fmt.Printf("Using PTCACHE: %s\n", ptcache)
-	if err := os.MkdirAll(ptcache, 0755); err != nil {
+	// Include version in cache path to isolate different compiler versions
+	safeVersion, err := sanitizeVersion(Version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	versionedCache := filepath.Join(ptcache, safeVersion)
+	fmt.Printf("Using PTCACHE: %s\n", versionedCache)
+	if err := os.MkdirAll(versionedCache, 0755); err != nil {
 		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
 		os.Exit(1)
 	}
 
 	p := &Pluto{
 		Cwd:     cwd,
-		PtCache: ptcache,
+		PtCache: versionedCache,
 		Ctx:     llvm.NewContext(),
 	}
 
-	err := p.resolveModPaths(cwd)
+	err = p.resolveModPaths(cwd)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -400,6 +439,55 @@ func New(cwd string) *Pluto {
 }
 
 func main() {
+	// Handle flags
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-v", "--version":
+			printVersion()
+			return
+		case "-c", "--clean":
+			runClean()
+			return
+		}
+	}
+
+	// Default: compile
+	runCompile()
+}
+
+// runClean removes the cache directory for the current version.
+func runClean() {
+	ptcache := defaultPTCache()
+	safeVersion, err := sanitizeVersion(Version)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	versionCache := filepath.Join(ptcache, safeVersion)
+
+	info, err := os.Stat(versionCache)
+	if os.IsNotExist(err) {
+		fmt.Printf("Cache directory does not exist: %s\n", versionCache)
+		return
+	}
+	if err != nil {
+		fmt.Printf("Error accessing cache: %v\n", err)
+		os.Exit(1)
+	}
+	if !info.IsDir() {
+		fmt.Printf("Cache path is not a directory: %s\n", versionCache)
+		os.Exit(1)
+	}
+
+	if err := os.RemoveAll(versionCache); err != nil {
+		fmt.Printf("Error removing cache: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Removed cache for %s: %s\n", Version, versionCache)
+}
+
+// runCompile is the main compilation workflow.
+func runCompile() {
 	// Determine target path (file or directory)
 	target, err := os.Getwd()
 	if err != nil {
@@ -418,6 +506,14 @@ func main() {
 	}
 
 	p := New(cwd)
+
+	// Prepare runtime once (in PtCache root, shared across all projects)
+	rtObjs, err := prepareRuntime(p.PtCache)
+	if err != nil {
+		fmt.Printf("Error preparing runtime: %v\n", err)
+		os.Exit(1)
+	}
+
 	codeFiles, scriptFiles := p.ScanPlutoFiles(specificScript)
 	codeCompiler, codeLL, err := p.CompileCode(codeFiles)
 	if err != nil {
@@ -428,13 +524,6 @@ func main() {
 	if len(scriptFiles) == 0 {
 		fmt.Println("😱 No script file to compile!")
 		return
-	}
-
-	// Prepare runtime once (in PtCache root, shared across all projects)
-	rtObjs, err := prepareRuntime(p.PtCache)
-	if err != nil {
-		fmt.Printf("Error preparing runtime: %v\n", err)
-		os.Exit(1)
 	}
 
 	compileErr := 0

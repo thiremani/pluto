@@ -9,10 +9,14 @@
 - `pt.mod`: Module declaration at the repo root.
 
 ## Build, Test, and Development Commands
+
 - Build compiler: `go build -o pluto`
+- Production build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
-- Run compiler: `./pluto [directory]` (writes binaries next to sources).
+- Run compiler: `./pluto [directory]` (writes binaries next to sources)
+- Show version: `./pluto --version` (or `-v`)
+- Clear cache: `./pluto --clean` (or `-c`, clears cache for current version)
 
 Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 
@@ -20,7 +24,9 @@ Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
 - Pipeline: generate IR → optimize `-O3` (`opt`) → object (`llc`) → link with runtime via `clang`/`lld`.
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
-- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects.
+- Cache layout (versioned to isolate different compiler versions):
+  - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
+  - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
@@ -45,7 +51,8 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
 
 ## Debugging & Configuration Tips
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- Clear cache if behavior seems stale:
+- Clear cache for current version: `./pluto --clean`
+- Clear entire cache manually:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
