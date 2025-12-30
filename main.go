@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -31,7 +30,10 @@ const (
 
 	MOD_FILE = "pt.mod"
 
-	OPT_LEVEL = "-O3" // Can be configured via flag
+	// Compiler settings
+	CC        = "clang"
+	C_STD     = "-std=c11"
+	OPT_LEVEL = "-O3"
 )
 
 // Pluto holds the state of a single pluto invocation.
@@ -43,7 +45,8 @@ type Pluto struct {
 	ModPath string // The module path declared in pt.mod + any relative subdirectory
 	RelPath string // The path relative to the module path declared in pt.mod
 
-	CacheDir string // Cache directory (<PTCACHE>/<modulePath>)
+	PtCache  string // Root cache directory (PTCACHE)
+	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
@@ -278,7 +281,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	return scriptLL, nil
 }
 
-func (p *Pluto) GenBinary(scriptLL, bin string) error {
+func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
 	// Use the default object suffix (".o") on all platforms, including
 	// Windows when using the MinGW/UCRT toolchain.
@@ -307,38 +310,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		return err
 	}
 
-	// 3) Compile runtime sources from repo/runtime/*.c (always from project root)
-	rtDir := filepath.Join(p.RootDir, "runtime")
-	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
-	if err != nil {
-		return fmt.Errorf("glob runtime sources: %w", err)
-	}
-	if len(rtSrcs) == 0 {
-		return fmt.Errorf("no runtime .c files found under %s", rtDir)
-	}
-
-	var rtObjs []string
-	for _, src := range rtSrcs {
-		outObj := filepath.Join(p.CacheDir, SCRIPT_DIR, filepath.Base(src)+objExt)
-		args := []string{
-			OPT_LEVEL, "-std=c11", "-march=native",
-		}
-		args = append(args,
-			"-I", rtDir, // lets #include "array.h" and "third_party/klib/kvec.h" resolve
-			"-c", src, "-o", outObj,
-		)
-		// PIC not applicable on Windows COFF
-		if runtime.GOOS != "windows" {
-			args = append(args, "-fPIC")
-		}
-		if out, err := exec.Command("clang", args...).CombinedOutput(); err != nil {
-			fmt.Printf("runtime compile failed for %s: %v\n%s\n", src, err, out)
-			return err
-		}
-		rtObjs = append(rtObjs, outObj)
-	}
-
-	// 4) Link everything
+	// 3) Link everything
 	linkArgs := []string{}
 
 	switch runtime.GOOS {
@@ -360,7 +332,7 @@ func (p *Pluto) GenBinary(scriptLL, bin string) error {
 		linkArgs = append(linkArgs, "-lm")
 	}
 
-	if out, err := exec.Command("clang", linkArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(CC, linkArgs...).CombinedOutput(); err != nil {
 		fmt.Printf("linking failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -409,8 +381,9 @@ func New(cwd string) *Pluto {
 	}
 
 	p := &Pluto{
-		Cwd: cwd,
-		Ctx: llvm.NewContext(),
+		Cwd:     cwd,
+		PtCache: ptcache,
+		Ctx:     llvm.NewContext(),
 	}
 
 	err := p.resolveModPaths(cwd)
@@ -419,7 +392,7 @@ func New(cwd string) *Pluto {
 	}
 
 	// Use module path (slashes) as unique cache key
-	p.CacheDir = filepath.Join(ptcache, filepath.FromSlash(p.ModPath))
+	p.CacheDir = filepath.Join(p.PtCache, filepath.FromSlash(p.ModPath))
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
 	fmt.Println()
 
@@ -457,6 +430,13 @@ func main() {
 		return
 	}
 
+	// Prepare runtime once (in PtCache root, shared across all projects)
+	rtObjs, err := prepareRuntime(p.PtCache)
+	if err != nil {
+		fmt.Printf("Error preparing runtime: %v\n", err)
+		os.Exit(1)
+	}
+
 	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
@@ -472,7 +452,7 @@ func main() {
 			continue
 		}
 
-		if err := p.GenBinary(scriptLL, script); err != nil {
+		if err := p.GenBinary(scriptLL, script, rtObjs); err != nil {
 			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
 			binErr++
 		} else {

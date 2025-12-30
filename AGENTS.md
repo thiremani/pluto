@@ -9,7 +9,7 @@
 - `pt.mod`: Module declaration at the repo root.
 
 ## Build, Test, and Development Commands
-- Build compiler: `go build -o pluto main.go`
+- Build compiler: `go build -o pluto`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources).
@@ -20,7 +20,7 @@ Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
 - Pipeline: generate IR → optimize `-O3` (`opt`) → object (`llc`) → link with runtime via `clang`/`lld`.
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
-- Cache layout: `<PTCACHE>/<module-path>/{code,script}` stores IR/objects.
+- Cache layout: `<PTCACHE>/runtime/<hash>/` for compiled runtime objects; `<PTCACHE>/<module-path>/{code,script}` for IR/objects.
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
