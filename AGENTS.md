@@ -10,8 +10,8 @@
 
 ## Build, Test, and Development Commands
 
-- Build compiler: `make build` (production) or `make dev` (faster dev builds)
-- Manual build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
+- Build compiler: `go build -o pluto`
+- Production build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)

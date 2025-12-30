@@ -61,7 +61,7 @@ Run it:
 Quick Start
 -----------
 
-- Build compiler: `make build` (or `make dev` for faster dev builds)
+- Build compiler: `go build -o pluto`
 - Run unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Run full suite: `python3 test.py`
 - Check version: `./pluto version`

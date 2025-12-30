@@ -39,13 +39,10 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 
 *   **Build the compiler:**
     ```bash
-    # Production build (with version from git tag)
-    make build
+    # Development build (version shows as "dev")
+    go build -o pluto
 
-    # Development build (faster, version shows as "dev")
-    make dev
-
-    # Or manually with version injection:
+    # Production build with version from git tag (optional, used for releases)
     go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto
     ```
 
