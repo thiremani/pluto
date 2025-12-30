@@ -64,8 +64,8 @@ Quick Start
 - Build compiler: `go build -o pluto`
 - Run unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Run full suite: `python3 test.py`
-- Check version: `./pluto version`
-- Clear cache: `./pluto clean`
+- Check version: `./pluto --version` (or `-v`)
+- Clear cache: `./pluto --clean` (or `-c`)
 - New project setup: add a `pt.mod` at your repo root to define the module path (project root). Minimal example:
   - `pt.mod` first non‑comment line: `module github.com/you/yourproject`
   - Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
@@ -141,8 +141,8 @@ Usage
 -----
 - From a directory with `.pt`/`.spt`: `./pluto` (or `./pluto path/to/dir`)
 - Outputs a native binary for each `.spt` next to the source file.
-- `./pluto version` — show version information
-- `./pluto clean` — clear cache for current version
+- `./pluto --version` — show version information
+- `./pluto --clean` — clear cache for current version
 
 Testing
 -------
@@ -159,7 +159,7 @@ Troubleshooting
 - Missing LLVM tools:
   - Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH.
 - Clear Pluto cache if behavior seems stale:
-  - Current version: `./pluto clean`
+  - Current version: `./pluto --clean`
   - All versions (macOS): `rm -rf "$HOME/Library/Caches/pluto"`
   - All versions (Linux): `rm -rf "$HOME/.cache/pluto"` (or `XDG_CACHE_HOME`)
   - All versions (Windows): `rd /s /q %LocalAppData%\pluto`

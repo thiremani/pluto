@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +50,12 @@ type Pluto struct {
 	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
+}
+
+// sanitizeVersion returns a filesystem-safe version string.
+// Uses URL path encoding to ensure uniqueness (different inputs → different outputs).
+func sanitizeVersion(v string) string {
+	return url.PathEscape(v)
 }
 
 // getDefaultPTCache gets env variable PTCACHE
@@ -375,7 +382,7 @@ func New(cwd string) *Pluto {
 
 	ptcache := defaultPTCache()
 	// Include version in cache path to isolate different compiler versions
-	versionedCache := filepath.Join(ptcache, Version)
+	versionedCache := filepath.Join(ptcache, sanitizeVersion(Version))
 	fmt.Printf("Using PTCACHE: %s\n", versionedCache)
 	if err := os.MkdirAll(versionedCache, 0755); err != nil {
 		fmt.Printf("Error creating PTCACHE directory: %v\n", err)
@@ -402,13 +409,13 @@ func New(cwd string) *Pluto {
 }
 
 func main() {
-	// Handle subcommands
+	// Handle flags
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "version":
+		case "-v", "--version":
 			printVersion()
 			return
-		case "clean":
+		case "-c", "--clean":
 			runClean()
 			return
 		}
@@ -421,7 +428,7 @@ func main() {
 // runClean removes the cache directory for the current version.
 func runClean() {
 	ptcache := defaultPTCache()
-	versionCache := filepath.Join(ptcache, Version)
+	versionCache := filepath.Join(ptcache, sanitizeVersion(Version))
 
 	info, err := os.Stat(versionCache)
 	if os.IsNotExist(err) {

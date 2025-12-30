@@ -18,6 +18,15 @@ import (
 	"github.com/gofrs/flock"
 )
 
+// isHashDir returns true if name is an 8-char hex string (matches shortHash format).
+func isHashDir(name string) bool {
+	if len(name) != 8 {
+		return false
+	}
+	_, err := hex.DecodeString(name)
+	return err == nil
+}
+
 //go:embed runtime
 var runtimeFS embed.FS
 
@@ -120,14 +129,14 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 		return
 	}
 
-	// Filter to hash directories with their mod times
+	// Filter to hash directories (8-char hex names) with their mod times
 	type dirInfo struct {
 		name  string
 		mtime int64
 	}
 	var dirs []dirInfo
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && isHashDir(e.Name()) {
 			if info, err := e.Info(); err == nil {
 				dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
 			}

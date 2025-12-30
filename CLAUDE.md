@@ -45,8 +45,8 @@ go test -race ./lexer ./parser ./compiler
 ### Running the compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
-./pluto version        # Show version information
-./pluto clean          # Clear cache for current version
+./pluto --version      # Show version information (or -v)
+./pluto --clean        # Clear cache for current version (or -c)
 ```
 This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
@@ -56,7 +56,7 @@ This will compile all `.pt` and `.spt` files in the specified directory and gene
 ./pluto tests/
 
 # Clear cache for current version
-./pluto clean
+./pluto --clean
 
 # Clear entire cache manually (all versions)
 rm -rf "$HOME/Library/Caches/pluto"  # macOS
@@ -140,7 +140,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
-- Use `pluto clean` to clear cache for current version
+- Use `pluto --clean` to clear cache for current version
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
