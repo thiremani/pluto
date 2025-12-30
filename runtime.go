@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gofrs/flock"
 )
@@ -32,17 +33,17 @@ func metadataHash(h hash.Hash) {
 // runtimeInfo computes SHA256 hash and counts top-level .c files.
 // Hash includes all files (headers in subdirs matter) but only counts
 // top-level .c files since compileRuntime only compiles those.
-func runtimeInfo() (hashStr string, srcCount int) {
+func runtimeInfo() (hashStr string, srcCount int, err error) {
 	h := sha256.New()
 	metadataHash(h)
-	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err = fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if !d.IsDir() {
-			data, err := runtimeFS.ReadFile(path)
-			if err != nil {
-				return err
+			data, readErr := runtimeFS.ReadFile(path)
+			if readErr != nil {
+				return readErr
 			}
 			h.Write(data)
 			// Only count top-level .c files (e.g., "runtime/array.c")
@@ -52,7 +53,12 @@ func runtimeInfo() (hashStr string, srcCount int) {
 		}
 		return nil
 	})
-	return hex.EncodeToString(h.Sum(nil)), srcCount
+	if err != nil {
+		err = fmt.Errorf("walk embedded runtime: %w", err)
+		fmt.Println(err)
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), srcCount, nil
 }
 
 // extractRuntime writes the embedded runtime files to rtDir.
@@ -102,8 +108,10 @@ func compileRuntime(rtDir string) ([]string, error) {
 	return rtObjs, nil
 }
 
-// cleanupOldRuntimes removes old runtime hash directories, keeping only the most recent ones.
-func cleanupOldRuntimes(runtimeDir string, keep int) {
+// cleanupOldRuntimes removes old runtime hash directories.
+// Only deletes directories older than minAge AND keeps at least 'keep' most recent.
+// This prevents deleting runtime dirs that may still be in use by concurrent processes.
+func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 	entries, err := os.ReadDir(runtimeDir)
 	if err != nil || len(entries) <= keep {
 		return
@@ -127,10 +135,13 @@ func cleanupOldRuntimes(runtimeDir string, keep int) {
 		return
 	}
 
-	// Sort by mtime ascending (oldest first), remove oldest
+	// Sort by mtime ascending (oldest first), remove oldest if older than minAge
+	cutoff := time.Now().Unix() - minAge
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime < dirs[j].mtime })
 	for i := 0; i < len(dirs)-keep; i++ {
-		os.RemoveAll(filepath.Join(runtimeDir, dirs[i].name))
+		if dirs[i].mtime < cutoff {
+			os.RemoveAll(filepath.Join(runtimeDir, dirs[i].name))
+		}
 	}
 }
 
@@ -150,7 +161,10 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	}
 	defer lock.Unlock()
 
-	hash, srcCount := runtimeInfo()
+	hash, srcCount, err := runtimeInfo()
+	if err != nil {
+		return nil, err
+	}
 	rtDir := filepath.Join(runtimeDir, hash)
 
 	// Check if already compiled (verify .o count matches .c count)
@@ -158,8 +172,8 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 		return rtObjs, nil
 	}
 
-	// Cleanup old runtime versions (keep 5 most recent)
-	cleanupOldRuntimes(runtimeDir, 5)
+	// Cleanup old runtime versions (keep 5 most recent, only delete if older than 1 week)
+	cleanupOldRuntimes(runtimeDir, 5, 7*24*60*60)
 
 	// Extract and compile
 	if err := extractRuntime(rtDir); err != nil {
