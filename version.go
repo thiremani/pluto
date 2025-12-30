@@ -8,9 +8,7 @@ import (
 // Build-time variables injected via linker flags (ldflags).
 //
 // These defaults are used for development builds (go build -o pluto).
-// Production builds use: make build
-//
-// The Makefile runs:
+// Production builds inject version info:
 //
 //	go build -ldflags "-X main.Version=$(git describe --tags) ..." -o pluto
 //
