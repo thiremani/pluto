@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/gofrs/flock"
@@ -44,17 +45,20 @@ const (
 //go:embed runtime
 var runtimeFS embed.FS
 
-// runtimeHash computes a SHA256 hash of all embedded runtime file contents.
-func runtimeHash() string {
+// runtimeInfo computes SHA256 hash and counts .c files in a single walk.
+func runtimeInfo() (hash string, srcCount int) {
 	h := sha256.New()
 	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, _ error) error {
 		if !d.IsDir() {
 			data, _ := runtimeFS.ReadFile(path)
 			h.Write(data)
+			if strings.HasSuffix(path, ".c") {
+				srcCount++
+			}
 		}
 		return nil
 	})
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), srcCount
 }
 
 // extractRuntime writes the embedded runtime files to rtDir.
@@ -104,6 +108,38 @@ func compileRuntime(rtDir string) ([]string, error) {
 	return rtObjs, nil
 }
 
+// cleanupOldRuntimes removes old runtime hash directories, keeping only the most recent ones.
+func cleanupOldRuntimes(runtimeDir string, keep int) {
+	entries, err := os.ReadDir(runtimeDir)
+	if err != nil || len(entries) <= keep {
+		return
+	}
+
+	// Filter to hash directories (64 char hex) with their mod times
+	type dirInfo struct {
+		name  string
+		mtime int64
+	}
+	var dirs []dirInfo
+	for _, e := range entries {
+		if e.IsDir() && len(e.Name()) == 64 {
+			if info, err := e.Info(); err == nil {
+				dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
+			}
+		}
+	}
+
+	if len(dirs) <= keep {
+		return
+	}
+
+	// Sort by mtime ascending (oldest first), remove oldest
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime < dirs[j].mtime })
+	for i := 0; i < len(dirs)-keep; i++ {
+		os.RemoveAll(filepath.Join(runtimeDir, dirs[i].name))
+	}
+}
+
 // prepareRuntime extracts embedded runtime files and compiles them to object files.
 // Uses a hash-based directory to cache compiled objects across runs.
 // A file lock ensures concurrent processes see either fully compiled runtime or build it.
@@ -118,11 +154,16 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	}
 	defer lock.Unlock()
 
-	// Check if already compiled
-	rtDir := filepath.Join(runtimeDir, runtimeHash())
-	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) > 0 {
+	hash, srcCount := runtimeInfo()
+	rtDir := filepath.Join(runtimeDir, hash)
+
+	// Check if already compiled (verify .o count matches .c count)
+	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) == srcCount {
 		return rtObjs, nil
 	}
+
+	// Cleanup old runtime versions (keep 5 most recent)
+	cleanupOldRuntimes(runtimeDir, 5)
 
 	// Extract and compile
 	if err := extractRuntime(rtDir); err != nil {
