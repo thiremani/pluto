@@ -2,21 +2,14 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/compiler"
 	"github.com/thiremani/pluto/lexer"
@@ -42,149 +35,6 @@ const (
 	C_STD     = "-std=c11"
 	OPT_LEVEL = "-O3"
 )
-
-//go:embed runtime
-var runtimeFS embed.FS
-
-// metadataHash hashes compiler settings and platform that affect runtime compilation.
-func metadataHash(h hash.Hash) {
-	h.Write([]byte(CC))
-	h.Write([]byte(OPT_LEVEL))
-	h.Write([]byte(C_STD))
-	h.Write([]byte(runtime.GOOS))
-	h.Write([]byte(runtime.GOARCH))
-}
-
-// runtimeInfo computes SHA256 hash and counts .c files in a single walk.
-// Hash includes compiler settings and platform to ensure recompilation when these change.
-func runtimeInfo() (hashStr string, srcCount int) {
-	h := sha256.New()
-	metadataHash(h)
-	fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, _ error) error {
-		if !d.IsDir() {
-			data, _ := runtimeFS.ReadFile(path)
-			h.Write(data)
-			if strings.HasSuffix(path, ".c") {
-				srcCount++
-			}
-		}
-		return nil
-	})
-	return hex.EncodeToString(h.Sum(nil)), srcCount
-}
-
-// extractRuntime writes the embedded runtime files to rtDir.
-func extractRuntime(rtDir string) error {
-	if err := os.MkdirAll(rtDir, 0755); err != nil {
-		return fmt.Errorf("create runtime dir: %w", err)
-	}
-	return fs.WalkDir(runtimeFS, "runtime", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk %s: %w", path, err)
-		}
-		relPath, _ := filepath.Rel("runtime", path)
-		destPath := filepath.Join(rtDir, relPath)
-		if d.IsDir() {
-			return os.MkdirAll(destPath, 0755)
-		}
-		data, err := runtimeFS.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read embedded %s: %w", path, err)
-		}
-		return os.WriteFile(destPath, data, 0644)
-	})
-}
-
-// compileRuntime compiles .c files in rtDir and returns paths to .o files.
-func compileRuntime(rtDir string) ([]string, error) {
-	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
-	if err != nil {
-		return nil, fmt.Errorf("glob runtime sources: %w", err)
-	}
-	if len(rtSrcs) == 0 {
-		return nil, fmt.Errorf("no runtime .c files found under %s", rtDir)
-	}
-
-	var rtObjs []string
-	for _, src := range rtSrcs {
-		outObj := filepath.Join(rtDir, filepath.Base(src)+OBJ_SUFFIX)
-		args := []string{OPT_LEVEL, C_STD, "-march=native", "-I", rtDir, "-c", src, "-o", outObj}
-		if runtime.GOOS != "windows" {
-			args = append(args, "-fPIC")
-		}
-		if out, err := exec.Command(CC, args...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("compile %s: %v\n%s", src, err, out)
-		}
-		rtObjs = append(rtObjs, outObj)
-	}
-	return rtObjs, nil
-}
-
-// cleanupOldRuntimes removes old runtime hash directories, keeping only the most recent ones.
-func cleanupOldRuntimes(runtimeDir string, keep int) {
-	entries, err := os.ReadDir(runtimeDir)
-	if err != nil || len(entries) <= keep {
-		return
-	}
-
-	// Filter to hash directories (64 char hex) with their mod times
-	type dirInfo struct {
-		name  string
-		mtime int64
-	}
-	var dirs []dirInfo
-	for _, e := range entries {
-		if e.IsDir() && len(e.Name()) == 64 {
-			if info, err := e.Info(); err == nil {
-				dirs = append(dirs, dirInfo{e.Name(), info.ModTime().Unix()})
-			}
-		}
-	}
-
-	if len(dirs) <= keep {
-		return
-	}
-
-	// Sort by mtime ascending (oldest first), remove oldest
-	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime < dirs[j].mtime })
-	for i := 0; i < len(dirs)-keep; i++ {
-		os.RemoveAll(filepath.Join(runtimeDir, dirs[i].name))
-	}
-}
-
-// prepareRuntime extracts embedded runtime files and compiles them to object files.
-// Uses a hash-based directory to cache compiled objects across runs.
-// A file lock ensures concurrent processes see either fully compiled runtime or build it.
-func prepareRuntime(cacheDir string) ([]string, error) {
-	runtimeDir := filepath.Join(cacheDir, "runtime")
-	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
-		return nil, fmt.Errorf("create runtime dir: %w", err)
-	}
-
-	// Lock the entire operation
-	lock := flock.New(filepath.Join(runtimeDir, ".lock"))
-	if err := lock.Lock(); err != nil {
-		return nil, fmt.Errorf("acquire runtime lock: %w", err)
-	}
-	defer lock.Unlock()
-
-	hash, srcCount := runtimeInfo()
-	rtDir := filepath.Join(runtimeDir, hash)
-
-	// Check if already compiled (verify .o count matches .c count)
-	if rtObjs, err := filepath.Glob(filepath.Join(rtDir, "*.o")); err == nil && len(rtObjs) == srcCount {
-		return rtObjs, nil
-	}
-
-	// Cleanup old runtime versions (keep 5 most recent)
-	cleanupOldRuntimes(runtimeDir, 5)
-
-	// Extract and compile
-	if err := extractRuntime(rtDir); err != nil {
-		return nil, err
-	}
-	return compileRuntime(rtDir)
-}
 
 // Pluto holds the state of a single pluto invocation.
 // You can initialize it from the working directory and then

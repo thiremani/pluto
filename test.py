@@ -161,7 +161,7 @@ class TestRunner:
         if os.name == 'nt' and build_pluto is not None and os.environ.get('MSYSTEM'):
             build_pluto(self.project_root)
             return
-        build_command = ["go", "build", "-o", str(PLUTO_EXE), "main.go"]
+        build_command = ["go", "build", "-o", str(PLUTO_EXE), "."]
         self.run_command(build_command, self.project_root)
 
     def run_unit_tests(self):
