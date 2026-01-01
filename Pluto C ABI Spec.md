@@ -150,11 +150,14 @@ Path       := ('_' Ident ('_' Separator '_' PathTail)?)?
 PathTail   := (Ident | NumericSeg) ('_' Separator '_' PathTail)?
 Ident      := [1-9][0-9]* [A-Za-z_][A-Za-z0-9_]*   (* length + payload *)
 Separator  := [dsh]+
-NumericSeg := 'n' [0-9]+
+NumericSeg := 'n' Num
+Num        := '0' | [1-9][0-9]*                    (* no leading zeros *)
+
+Arity  := Num
 
 Opcode := 'add' | 'sub' | 'neg' | 'mul' | 'div' | 'mod'
         | 'eq' | 'neq' | 'lt' | 'gt' | 'le' | 'ge'
-Fixity := 'in' | 'pre' | 'suf' | 'cir' [0-9]+
+Fixity := 'in' | 'pre' | 'suf' | 'cir' Num
 
 Types      := ('_' Type)*
 Type       := Primitive | Qualified | Generic
@@ -168,5 +171,6 @@ Generic    := (Qualified | Ident) '_t' [0-9]+ Types
 * Identifier payload must satisfy §2.1 rules
 * Path grammar enforces: starts with Ident, alternates Separator/(Ident|NumericSeg)
 * Empty path only valid for builtins; user symbols always have a package path
+* `Num` rule enforces no leading zeros for all numeric suffixes (fN, tN, nX, cirN)
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
