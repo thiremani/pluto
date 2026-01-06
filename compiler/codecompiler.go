@@ -8,12 +8,20 @@ import (
 
 type CodeCompiler struct {
 	Compiler *Compiler
+	ModName  string // Module name from pt.mod (e.g., "github.com/user/math")
+	RelPath  string // Relative path from module root (e.g., "stats/integral")
 	Code     *ast.Code
 }
 
-func NewCodeCompiler(ctx llvm.Context, moduleName string, code *ast.Code) *CodeCompiler {
+func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
+	// Combine for display, using "$" to distinguish relPath from module path.
+	// This avoids ambiguity: "mod/sub$rel" vs "mod/sub/rel$" are distinct.
+	// Note: "$" is valid in LLVM identifiers (unlike ":").
+	displayName := modName + "$" + relPath
 	return &CodeCompiler{
-		Compiler: NewCompiler(ctx, moduleName, nil),
+		Compiler: NewCompiler(ctx, displayName, nil),
+		ModName:  modName,
+		RelPath:  relPath,
 		Code:     code,
 	}
 }

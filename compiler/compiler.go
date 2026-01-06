@@ -1353,7 +1353,7 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 		paramTypes[i] = arg.Type.(Ptr).Elem
 	}
 
-	mangled := mangle(funcName, paramTypes)
+	mangled := Mangle(c.CodeCompiler.ModName, c.CodeCompiler.RelPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)

@@ -38,11 +38,34 @@ var (
 	F64 Type = Float{Width: 64}
 )
 
+// PrimitiveTypeNames lists all primitive type mangle names (for demangling).
+// Update this when adding new primitive types.
+// IMPORTANT: Longer types must come before shorter prefixes (I64 before I6, I16 before I1)
+// to ensure correct prefix matching in demangleType.
+var PrimitiveTypeNames = []string{
+	"I64", "I32", "I16", "I8", "I1",
+	"U64", "U32", "U16", "U8",
+	"F64", "F32",
+	"Str",
+	"X", // Unresolved placeholder
+}
+
+// CompoundTypePrefixes lists all compound type prefixes (for demangling).
+// These are types that use the _tN_[types...] pattern.
+// Update this when adding new compound types.
+var CompoundTypePrefixes = []string{
+	"ArrayRange", // Must come before "Array" for prefix matching
+	"Array",
+	"Range",
+	"Ptr",
+	"Func",
+}
+
 type Unresolved struct{}
 
 func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
-func (u Unresolved) Mangle() string { return PREFIX + "Unresolved" }
+func (u Unresolved) Mangle() string { return "X" } // placeholder for unresolved
 func (u Unresolved) Key() Type      { return u }
 
 // Int represents an integer type with a given bit width.
@@ -57,7 +80,7 @@ func (i Int) String() string {
 func (i Int) Kind() Kind {
 	return IntKind
 }
-func (i Int) Mangle() string { return PREFIX + i.String() }
+func (i Int) Mangle() string { return i.String() }
 func (i Int) Key() Type      { return i }
 
 // Float represents a floating-point type with a given precision.
@@ -72,7 +95,7 @@ func (f Float) String() string {
 func (f Float) Kind() Kind {
 	return FloatKind
 }
-func (f Float) Mangle() string { return PREFIX + f.String() }
+func (f Float) Mangle() string { return f.String() }
 func (f Float) Key() Type      { return f }
 
 // Ptr represents a pointer type to some element type.
@@ -81,7 +104,7 @@ type Ptr struct {
 }
 
 func (p Ptr) String() string { return "*" + p.Elem.String() }
-func (p Ptr) Mangle() string { return PREFIX + "Ptr" + PREFIX + "1" + p.Elem.Mangle() }
+func (p Ptr) Mangle() string { return "Ptr" + SEP + T + "1" + SEP + p.Elem.Mangle() }
 func (p Ptr) Key() Type      { return p }
 
 func (p Ptr) Kind() Kind {
@@ -103,7 +126,7 @@ func (s Str) String() string {
 func (s Str) Kind() Kind {
 	return StrKind
 }
-func (s Str) Mangle() string { return PREFIX + "Str" }
+func (s Str) Mangle() string { return "Str" }
 func (s Str) Key() Type      { return Str{} }
 
 type Range struct {
@@ -115,7 +138,7 @@ func (r Range) String() string {
 	t := r.Iter.String()
 	return t + ":" + t + ":" + t
 }
-func (r Range) Mangle() string { return PREFIX + "Range" + PREFIX + "1" + r.Iter.Mangle() }
+func (r Range) Mangle() string { return "Range" + SEP + T + "1" + SEP + r.Iter.Mangle() }
 func (r Range) Key() Type      { return r }
 
 func (r Range) Kind() Kind {
@@ -136,16 +159,11 @@ func (f Func) Kind() Kind {
 	return FuncKind
 }
 func (f Func) Mangle() string {
-	s := PREFIX + "Fn"
-	// Params
-	s += PREFIX + "P" + strconv.Itoa(len(f.Params))
+	// Follow _tN_ pattern like other compound types (Ptr, Range, Array)
+	// Per spec: return types are NOT mangled
+	s := "Func" + SEP + T + strconv.Itoa(len(f.Params))
 	for _, p := range f.Params {
-		s += p.Mangle()
-	}
-	// Outputs
-	s += PREFIX + "O" + strconv.Itoa(len(f.OutTypes))
-	for _, o := range f.OutTypes {
-		s += o.Mangle()
+		s += SEP + p.Mangle()
 	}
 	return s
 }
@@ -193,10 +211,9 @@ func (a Array) String() string {
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	s := PREFIX + "Array"
-	s += PREFIX + strconv.Itoa(len(a.ColTypes))
+	s := "Array" + SEP + T + strconv.Itoa(len(a.ColTypes))
 	for _, ct := range a.ColTypes {
-		s += ct.Mangle()
+		s += SEP + ct.Mangle()
 	}
 	return s
 }
@@ -224,10 +241,9 @@ func (ar ArrayRange) String() string {
 func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
 
 func (ar ArrayRange) Mangle() string {
-	s := PREFIX + "ArrayRange"
-	s += PREFIX + strconv.Itoa(len(ar.Array.ColTypes))
+	s := "ArrayRange" + SEP + T + strconv.Itoa(len(ar.Array.ColTypes))
 	for _, ct := range ar.Array.ColTypes {
-		s += ct.Mangle()
+		s += SEP + ct.Mangle()
 	}
 	return s
 }

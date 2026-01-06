@@ -162,7 +162,7 @@ func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
 	prog := parseInput(t, tc.name, tc.input)
 	cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", cp.Parse())
+	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", "", cp.Parse())
 	cc.Compile()
 	cfg := NewCFG(nil, cc)
 	cfg.Analyze(prog.Statements)
@@ -195,7 +195,7 @@ res = onlyOut(x)
 	codeAST := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	cc := NewCodeCompiler(ctx, "onlyOut", codeAST)
+	cc := NewCodeCompiler(ctx, "onlyOut", "", codeAST)
 	errs := cc.Compile()
 	// No errors because "res" is an output and seeded live
 	assert.Empty(t, errs, "output-only write should not trigger dead-store")
@@ -215,7 +215,7 @@ res = withLocal(x)
 	codeAST := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	cc := NewCodeCompiler(ctx, "withLocal", codeAST)
+	cc := NewCodeCompiler(ctx, "withLocal", "", codeAST)
 	errs := cc.Compile()
 
 	// We expect exactly one dead-store error on "tmp"
@@ -236,7 +236,7 @@ res = noUse(x)
 	codeAST := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	cc := NewCodeCompiler(ctx, "noUse", codeAST)
+	cc := NewCodeCompiler(ctx, "noUse", "", codeAST)
 	errs := cc.Compile()
 
 	// we expect exactly one error about the unused input parameter "x"
@@ -258,7 +258,7 @@ res = neverWrite(x)
 	codeAST := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	cc := NewCodeCompiler(ctx, "neverWrite", codeAST)
+	cc := NewCodeCompiler(ctx, "neverWrite", "", codeAST)
 	errs := cc.Compile()
 
 	// we expect exactly one error about the output parameter “res” never being assigned
@@ -342,7 +342,7 @@ func runFuncEdgeCaseTest(t *testing.T, ctx llvm.Context, tc funcEdgeCaseTest) {
 	require.Empty(t, cp.Errors(), "parser errors in %s", tc.name)
 
 	// compile & validate
-	cc := NewCodeCompiler(ctx, tc.name, codeAST)
+	cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
 	errs := cc.Compile()
 
 	// Verify expected error messages

@@ -207,7 +207,7 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 
 func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
 	pkgCode := ast.NewCode()
-	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
+	cc := compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
 	if len(codeFiles) == 0 {
 		return cc, "", nil
 	}

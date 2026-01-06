@@ -39,7 +39,7 @@ c = add(a, b)
     c = a + b
 `
 	codeAST := mustParseCode(t, codeSrc)
-	codeCompiler := NewCodeCompiler(ctx, "cacheTestCode", codeAST)
+	codeCompiler := NewCodeCompiler(ctx, "cacheTestCode", "", codeAST)
 
 	// This is the shared cache that will persist across compilations.
 	funcCache := make(map[string]*Func)
@@ -57,13 +57,13 @@ x`
 		// Assert that the cache is now populated correctly.
 		require.Len(t, funcCache, 1, "Cache size should be 1 after first compile")
 
-		key := "$add$I64$I64"
+		key := "Pt_13cacheTestCode_3add_f2_I64_I64"
 		assert.Contains(t, funcCache, key, "Cache should contain the integer version of add")
 	})
 
 	t.Run("Compile with Ints again to test cache hit", func(t *testing.T) {
 		// Get the original *Func pointer from the cache to compare against later.
-		key := "$add$I64$I64"
+		key := "Pt_13cacheTestCode_3add_f2_I64_I64"
 		f1 := funcCache[key]
 		require.NotNil(t, f1, "Func instance from first compile should exist")
 
@@ -94,7 +94,7 @@ z`
 		// Assert that a NEW entry was added to the cache.
 		assert.Len(t, funcCache, 2, "Cache size should be 2 after compiling a new type")
 
-		mangledFloatKey := "$add$F64$F64" // Assuming float is F64
+		mangledFloatKey := "Pt_13cacheTestCode_3add_f2_F64_F64"
 		assert.Contains(t, funcCache, mangledFloatKey, "Cache should now contain the float version of add")
 	})
 }

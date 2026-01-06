@@ -19,7 +19,7 @@ func TestStringCompile(t *testing.T) {
 	program := sp.Parse()
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "testStringCompile", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "testStringCompile", "", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
@@ -43,7 +43,7 @@ x, six`
 	program := sp.Parse()
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", "", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
@@ -86,7 +86,7 @@ greeting = "hello"`
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
-	c := NewCodeCompiler(llvm.NewContext(), "testConst", code)
+	c := NewCodeCompiler(llvm.NewContext(), "testConst", "", code)
 	c.Compile()
 	ir := c.Compiler.GenerateIR()
 
@@ -111,7 +111,7 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "ptr_seed_module", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "ptr_seed_module", "", ast.NewCode())
 	c := NewCompiler(ctx, "ptr_seed_module", cc)
 
 	// Simulate the entry block state used by compileFuncBlock.

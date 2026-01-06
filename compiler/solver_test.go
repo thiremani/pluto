@@ -38,7 +38,7 @@ x, y = isOdd(n)
 	}
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "test", code)
+	cc := NewCodeCompiler(ctx, "test", "", code)
 	cc.Compile()
 
 	script := `x, y = isEven(3)
@@ -55,7 +55,7 @@ x, y`
 	ts.Solve()
 
 	// check func cache
-	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["$isEven$I64"]
+	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_6isEven_f1_I64"]
 	if isEvenFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
@@ -63,7 +63,7 @@ x, y`
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
-	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
+	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_5isOdd_f1_I64"]
 	if isOddFunc.OutTypes[0].Kind() != UnresolvedKind {
 		t.Errorf("isOdd func should strkind for output arg 0")
 	}
@@ -83,7 +83,7 @@ x, y`
 	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
-	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["$isOdd$I64"]
+	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["Pt_4test_5isOdd_f1_I64"]
 	if nextOddFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
@@ -112,7 +112,7 @@ y = h(x)
 	}
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "test", code)
+	cc := NewCodeCompiler(ctx, "test", "", code)
 	cc.Compile()
 
 	script := `x = 6
@@ -151,7 +151,7 @@ y = f(x)
 	}
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "test", code)
+	cc := NewCodeCompiler(ctx, "test", "", code)
 	cc.Compile()
 
 	script := `x = 6
@@ -178,7 +178,7 @@ y`
 
 func TestArrayConcatTypeErrors(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "arrayConcatErrors", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "arrayConcatErrors", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
 
@@ -246,7 +246,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 
 func TestArrayToScalarAssignmentError(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "arrayToScalar", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "arrayToScalar", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
 
@@ -270,7 +270,7 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 
 func TestArrayLiteralRangesRecording(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
 
@@ -303,7 +303,7 @@ res = [idx]`
 func TestArrayRangeTyping(t *testing.T) {
 	ctx := llvm.NewContext()
 	code := ast.NewCode()
-	cc := NewCodeCompiler(ctx, "arrayRangeTyping", code)
+	cc := NewCodeCompiler(ctx, "arrayRangeTyping", "", code)
 	cc.Compile()
 
 	script := "arr = [1 2 3]\nvalue = arr[0:2]\nsum = 0\nsum = sum + arr[0:2]"

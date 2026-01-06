@@ -10,10 +10,16 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 
 | Kind | Template |
 |------|----------|
-| Function | `Pt_[Path]_[Name]_f[N]_[Types...]` |
-| Method | `Pt_[Path]_[Type]_m_[Name]_f[N]_[Types...]` |
-| Operator | `Pt_[Path]_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
-| Constant | `Pt_[Path]_p_[Name]` |
+| Function | `Pt_[ModPath]_p_[RelPath]_[Name]_f[N]_[Types...]` |
+| Method | `Pt_[ModPath]_p_[RelPath]_[Type]_m_[Name]_f[N]_[Types...]` |
+| Operator | `Pt_[ModPath]_p_[RelPath]_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
+| Constant | `Pt_[ModPath]_p_[RelPath]_p_[Name]` |
+
+**Path structure:**
+* `[ModPath]` = module path from `pt.mod` (e.g., `github.com/user/math`)
+* `[RelPath]` = relative subdirectory path (may be empty)
+* When `[RelPath]` is empty, omit `_p_[RelPath]` entirely
+* When `[RelPath]` is present, format as `_p_[mangled_relpath]` (the `_p_` implies `/` separator)
 
 **Arity rules:**
 * N = number of Pluto arguments (methods include self, SRET excluded)
@@ -58,9 +64,24 @@ Consecutive separators MUST combine into single component:
 
 ### 2.3 Numeric Segments
 
-Version numbers and numeric path segments use `n` prefix: `2` → `n2`
+Version numbers and numeric path segments use `n` prefix.
 
-No leading zeros: use `n2`, not `n02`.
+| Type | Format | Example |
+|------|--------|---------|
+| Pure numeric | `n<digits>` | `123` → `n123` |
+| Mixed (digit-prefix) | `n<digits>_<len><alpha>` | `45abc` → `n45_3abc` |
+
+**Rules:**
+* No leading zeros: use `n2`, not `n02`
+* Mixed segments: leading digits go after `n`, alpha suffix is length-prefixed
+* Disambiguation: After `n<digits>`, continuation `_<len><alpha>` only if payload starts with non-digit
+
+**Examples:**
+| Path | Mangled |
+|------|---------|
+| `v1.2.3` | `2v1_d_n2_d_n3` |
+| `v1.2.34abc` | `2v1_d_n2_d_n34_3abc` |
+| `v2.45-abhijk` | `2v2_d_n45_h_6abhijk` |
 
 ### 2.4 Structure Markers
 
@@ -68,7 +89,7 @@ No leading zeros: use `n2`, not `n02`.
 |--------|---------|-----------------|
 | `fN` | Function, N args | Name before marker |
 | `m` | Method separator | Type before, method after |
-| `p` | Constant | Name after marker |
+| `p` | Path/Constant separator | RelPath or Constant name after marker |
 | `tN` | Generic, N type params | Type before marker |
 | `op` | Operator prefix | Opcode follows |
 | `in` | Infix (2 operands) | `a + b` |
@@ -108,16 +129,52 @@ github.com/user/math.Vector → 6github_d_3com_s_4user_s_4math_6Vector
 
 `[Type]_t[N]_[Args...]` — e.g., `Map<Str, I64>` → `3Map_t2_Str_I64`
 
+### 3.4 Compound Types
+
+Built-in compound types use the `_tN_` pattern:
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Pointer | `Ptr_t1_[Elem]` | `Ptr_t1_I64` |
+| Range | `Range_t1_[Iter]` | `Range_t1_I64` |
+| Array | `Array_tN_[ColTypes...]` | `Array_t2_I64_F64` |
+| ArrayRange | `ArrayRange_tN_[ColTypes...]` | `ArrayRange_t1_I64` |
+| Function | `Func_tN_[ParamTypes...]` | `Func_t2_I64_F64` |
+
+**Note:** Function types only mangle parameter types; return types are NOT included (per §2.4 Arity rules).
+
 ---
 
 ## 4. Examples
 
+### 4.1 Module Root (no relative path)
+
 | Source | Mangled |
 |--------|---------|
 | `math.Square(I64)` | `Pt_6github_d_3com_s_4user_s_4math_6Square_f1_I64` |
+| `math.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_2pi` |
+
+### 4.2 With Relative Subdirectory
+
+Module: `github.com/user/math`, RelPath: `stats`
+
+| Source | Mangled |
+|--------|---------|
+| `stats.Mean(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_4Mean_f1_I64` |
+| `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_p_2pi` |
+
+Module: `github.com/user/math`, RelPath: `stats/integral`
+
+| Source | Mangled |
+|--------|---------|
+| `integral.Quad(F64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_s_8integral_4Quad_f1_F64` |
+
+### 4.3 Other Examples
+
+| Source | Mangled |
+|--------|---------|
 | `Player.Move(I64, I64)` | `Pt_..._6Player_m_4Move_f3_..._6Player_I64_I64` |
 | `Vector + Vector` | `Pt_..._6Vector_m_op_add_in_..._6Vector_..._6Vector` |
-| `math.pi` | `Pt_6github_d_3com_s_4user_s_4math_p_2pi` |
 | `/v1.2.3` (version) | `..._s_2v1_d_n2_d_n3_...` |
 
 ---
@@ -141,12 +198,15 @@ void Pt_..._6Person_m_5Clone_f2_..._6Person_I64(
 ## 6. Grammar
 
 ```ebnf
-FunctionSym := 'Pt' Path '_' Ident '_f' Arity Types
-MethodSym   := 'Pt' Path '_' Ident '_m_' Ident '_f' Arity Types
-OperatorSym := 'Pt' Path '_' Ident '_m_op_' Opcode '_' Fixity Types
-ConstantSym := 'Pt' Path '_p_' Ident
+FunctionSym := 'Pt' FullPath '_' Ident '_f' Arity Types
+MethodSym   := 'Pt' FullPath '_' Ident '_m_' Ident '_f' Arity Types
+OperatorSym := 'Pt' FullPath '_' Ident '_m_op_' Opcode '_' Fixity Types
+ConstantSym := 'Pt' FullPath '_p_' Ident
 
-Path       := ('_' Ident ('_' Separator '_' PathTail)?)?
+FullPath   := ModPath ('_p_' RelPath)?
+ModPath    := '_' Path
+RelPath    := Path
+Path       := Ident ('_' Separator '_' PathTail)?
 PathTail   := (Ident | NumericSeg) ('_' Separator '_' PathTail)?
 Ident      := [1-9][0-9]* [A-Za-z_][A-Za-z0-9_]*   (* length + payload *)
 Separator  := [dsh]+
