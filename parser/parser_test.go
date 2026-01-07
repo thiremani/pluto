@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -292,6 +293,110 @@ func TestMalformedCallArguments(t *testing.T) {
 
 			// Should have parser errors for malformed syntax
 			require.NotEmpty(t, p.Errors(), "expected parser errors but got none")
+		})
+	}
+}
+
+func TestIdentifierValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expectErr bool
+		errMsg    string
+	}{
+		// Valid identifiers
+		{
+			name:      "valid simple identifier",
+			input:     "x = 1",
+			expectErr: false,
+		},
+		{
+			name:      "valid identifier with underscore",
+			input:     "foo_bar = 1",
+			expectErr: false,
+		},
+		{
+			name:      "valid single underscore (discard)",
+			input:     "_ = 1",
+			expectErr: false,
+		},
+		{
+			name:      "valid leading underscore",
+			input:     "_private = 1",
+			expectErr: false,
+		},
+		// Invalid identifiers
+		{
+			name:      "invalid double underscore",
+			input:     "foo__bar = 1",
+			expectErr: true,
+			errMsg:    "identifier cannot contain '__'",
+		},
+		{
+			name:      "invalid trailing underscore",
+			input:     "foo_ = 1",
+			expectErr: true,
+			errMsg:    "identifier cannot end with '_'",
+		},
+		{
+			name:      "invalid double underscore at start",
+			input:     "__foo = 1",
+			expectErr: true,
+			errMsg:    "identifier cannot contain '__'",
+		},
+		{
+			name:      "invalid double underscore at end",
+			input:     "foo__ = 1",
+			expectErr: true,
+			errMsg:    "identifier cannot contain '__'",
+		},
+		// Invalid: blank identifier in value expressions (only allowed on LHS)
+		{
+			name:      "invalid blank in RHS",
+			input:     "x = _",
+			expectErr: true,
+			errMsg:    "blank identifier '_' cannot be used as a value",
+		},
+		{
+			name:      "invalid blank in print",
+			input:     "_",
+			expectErr: true,
+			errMsg:    "blank identifier '_' cannot be used as a value",
+		},
+		{
+			name:      "invalid blank in expression",
+			input:     "_ * 5",
+			expectErr: true,
+			errMsg:    "blank identifier '_' cannot be used as a value",
+		},
+		{
+			name:      "invalid blank in function call",
+			input:     "x = foo(_)",
+			expectErr: true,
+			errMsg:    "blank identifier '_' cannot be used as a value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("ident_test", tt.input)
+			p := New(l)
+			_ = p.ParseProgram()
+
+			if tt.expectErr {
+				require.NotEmpty(t, p.Errors(), "expected parser errors but got none")
+				// Check that the error message contains the expected message
+				found := false
+				for _, err := range p.Errors() {
+					if strings.Contains(err, tt.errMsg) {
+						found = true
+						break
+					}
+				}
+				require.True(t, found, "expected error containing %q, got %v", tt.errMsg, p.Errors())
+			} else {
+				require.Empty(t, p.Errors(), "expected no errors but got: %v", p.Errors())
+			}
 		})
 	}
 }
