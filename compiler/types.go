@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -40,8 +41,7 @@ var (
 
 // PrimitiveTypeNames lists all primitive type mangle names (for demangling).
 // Update this when adding new primitive types.
-// IMPORTANT: Longer types must come before shorter prefixes (I64 before I6, I16 before I1)
-// to ensure correct prefix matching in demangleType.
+// Sorted by descending length in init() for correct prefix matching.
 var PrimitiveTypeNames = []string{
 	"I64", "I32", "I16", "I8", "I1",
 	"U64", "U32", "U16", "U8",
@@ -53,12 +53,25 @@ var PrimitiveTypeNames = []string{
 // CompoundTypePrefixes lists all compound type prefixes (for demangling).
 // These are types that use the _tN_[types...] pattern.
 // Update this when adding new compound types.
+// Sorted by descending length in init() for correct prefix matching.
 var CompoundTypePrefixes = []string{
-	"ArrayRange", // Must come before "Array" for prefix matching
+	"ArrayRange",
 	"Array",
 	"Range",
 	"Ptr",
 	"Func",
+}
+
+func init() {
+	// Sort by descending length to ensure longer prefixes match first
+	// (e.g., "ArrayRange" before "Array", "I64" before "I6")
+	sortByLengthDesc := func(slice []string) {
+		sort.Slice(slice, func(i, j int) bool {
+			return len(slice[i]) > len(slice[j])
+		})
+	}
+	sortByLengthDesc(PrimitiveTypeNames)
+	sortByLengthDesc(CompoundTypePrefixes)
 }
 
 type Unresolved struct{}
