@@ -160,7 +160,11 @@ func (f Func) Kind() Kind {
 }
 func (f Func) Mangle() string {
 	// Follow _tN_ pattern like other compound types (Ptr, Range, Array)
-	// Per spec: return types are NOT mangled
+	// Per spec: return types are NOT mangled in function symbols.
+	// This means function types differing only by return type will have
+	// the same mangled form. This is intentional: Pluto disallows function
+	// overloading by return type alone, so collisions cannot occur.
+	// Note: Key() includes output types for internal type equality checks.
 	s := "Func" + SEP + T + strconv.Itoa(len(f.Params))
 	for _, p := range f.Params {
 		s += SEP + p.Mangle()

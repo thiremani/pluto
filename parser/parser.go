@@ -1084,7 +1084,6 @@ func (p *StmtParser) parseIdentifiers() []*ast.Identifier {
 	return identifiers
 }
 
-
 func (p *StmtParser) parseFunctionParameters() []*ast.Identifier {
 	if p.peekTokenIs(token.RPAREN) {
 		p.nextToken()
@@ -1219,4 +1218,3 @@ func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier) {
 		seen[name] = struct{}{}
 	}
 }
-

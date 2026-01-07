@@ -13,7 +13,7 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 | Function | `Pt_[ModPath]_p_[RelPath]_[Name]_f[N]_[Types...]` |
 | Method | `Pt_[ModPath]_p_[RelPath]_[Type]_m_[Name]_f[N]_[Types...]` |
 | Operator | `Pt_[ModPath]_p_[RelPath]_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
-| Constant | `Pt_[ModPath]_p_[RelPath]_p_[Name]` |
+| Constant | `Pt_[ModPath]_p_[RelPath]_d_[Name]` |
 
 **Path structure:**
 * `[ModPath]` = module path from `pt.mod` (e.g., `github.com/user/math`)
@@ -161,7 +161,7 @@ Module: `github.com/user/math`, RelPath: `stats`
 | Source | Mangled |
 |--------|---------|
 | `stats.Mean(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_4Mean_f1_I64` |
-| `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_p_2pi` |
+| `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_d_2pi` |
 
 Module: `github.com/user/math`, RelPath: `stats/integral`
 
@@ -201,7 +201,8 @@ void Pt_..._6Person_m_5Clone_f2_..._6Person_I64(
 FunctionSym := 'Pt' FullPath '_' Ident '_f' Arity Types
 MethodSym   := 'Pt' FullPath '_' Ident '_m_' Ident '_f' Arity Types
 OperatorSym := 'Pt' FullPath '_' Ident '_m_op_' Opcode '_' Fixity Types
-ConstantSym := 'Pt' FullPath '_p_' Ident
+ConstantSym := 'Pt' ModPath '_p_' Ident
+            |  'Pt' ModPath '_p_' RelPath '_d_' Ident
 
 FullPath   := ModPath ('_p_' RelPath)?
 ModPath    := '_' Path

@@ -184,12 +184,14 @@ func Demangle(mangled string) string {
 //
 // Symbol structure:
 //   - Function: Pt_ModPath[_p_RelPath]_Name_fN[_Type]*
-//   - Constant: Pt_ModPath[_p_RelPath]_Name (no _f marker)
+//   - Constant (module root): Pt_ModPath_p_Name
+//   - Constant (with relpath): Pt_ModPath_p_RelPath_d_Name
 //
 // Path disambiguation:
 //   - Path segments are connected by separator codes (d=., s=/, h=-)
 //   - When we see sep followed by a digit (length-prefixed ident), path ends
-//   - _p_ marker indicates relative path follows (implies / separator)
+//   - _p_ marker indicates end of module path
+//   - For constants with relpath, _d_ separates relpath from constant name
 func DemangleParsed(mangled string) *Demangled {
 	prefix := PT + SEP
 	if !strings.HasPrefix(mangled, prefix) {
@@ -202,16 +204,37 @@ func DemangleParsed(mangled string) *Demangled {
 	// Parse module path (segments connected by separator codes)
 	result.ModPath, rest = demanglePath(rest)
 
-	// Check for relative path marker (_p_)
+	// Check for _p_ marker (end of module path)
 	pMarker := SEP + P + SEP
 	if strings.HasPrefix(rest, pMarker) {
 		rest = rest[len(pMarker):]
-		result.RelPath, rest = demanglePath(rest)
-	}
 
-	// Parse symbol name (after SEP)
-	rest = strings.TrimPrefix(rest, SEP)
-	result.Name, rest = demangleIdent(rest)
+		// Check if this is a function (has _f marker later)
+		if strings.Contains(rest, SEP+F) {
+			// Function: parse relpath, then name
+			result.RelPath, rest = demanglePath(rest)
+			rest = strings.TrimPrefix(rest, SEP)
+			result.Name, rest = demangleIdent(rest)
+		} else {
+			// Constant: check for _d_ separator (relpath present)
+			// Find _d_ followed by length-prefixed ident at the end
+			dMarker := SEP + "d" + SEP
+			if idx := strings.LastIndex(rest, dMarker); idx >= 0 {
+				// Has relpath: everything before _d_ is relpath
+				relpathPart := rest[:idx]
+				namePart := rest[idx+len(dMarker):]
+				result.RelPath, _ = demanglePath(relpathPart)
+				result.Name, rest = demangleIdent(namePart)
+			} else {
+				// No relpath: everything after _p_ is the constant name
+				result.Name, rest = demangleIdent(rest)
+			}
+		}
+	} else {
+		// No _p_ marker - parse name directly (function without relpath)
+		rest = strings.TrimPrefix(rest, SEP)
+		result.Name, rest = demangleIdent(rest)
+	}
 
 	// Parse function arity marker (_fN) - if present, it's a function
 	fMarker := SEP + F
@@ -246,16 +269,28 @@ func DemangleParsed(mangled string) *Demangled {
 // demanglePath converts a mangled path back to original form.
 // Returns the demangled path and the remaining string.
 //
-// Path structure: ident (_separator_ ident)*
+// Path structure: [separator*] ident (_separator_ ident)*
 // - Separator codes: d=., s=/, h=-
 // - Path ends when we see Sep followed by non-separator (function name, _p_, _f, etc.)
 //
 // Example: "6github_d_3com_s_4user" -> "github.com/user"
+// Example: "s_3foo" -> "/foo" (leading separator)
 func demanglePath(s string) (string, string) {
 	var result strings.Builder
 	rest := s
 
-	// Parse first segment
+	// Handle leading separators (e.g., "s_3foo" -> "/foo")
+	for len(rest) > 0 {
+		sepChar := demangleSeparator(rune(rest[0]))
+		if sepChar == 0 {
+			break
+		}
+		result.WriteRune(sepChar)
+		rest = rest[1:]
+	}
+	rest = strings.TrimPrefix(rest, SEP)
+
+	// Parse first segment (if any)
 	rest = demanglePathSegment(&result, rest)
 
 	// Parse subsequent segments: _separators_segment

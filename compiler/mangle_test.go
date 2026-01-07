@@ -323,15 +323,15 @@ func TestDemangle(t *testing.T) {
 			expected: "a.-b.f()",
 		},
 
-		// Constants (no _f marker, just symbol name)
+		// Constants (_p_ marks end of modpath, _d_ separates relpath from name)
 		{
 			name:     "constant at module root",
-			mangled:  "Pt_6github_d_3com_s_4user_s_4math_2pi",
+			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_2pi",
 			expected: "github.com/user/math.pi",
 		},
 		{
 			name:     "constant with relPath",
-			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_5stats_2pi",
+			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_5stats_d_2pi",
 			expected: "github.com/user/math/stats.pi",
 		},
 

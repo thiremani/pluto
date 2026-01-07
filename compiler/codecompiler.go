@@ -15,9 +15,12 @@ type CodeCompiler struct {
 
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
 	// Combine for display, using "$" to distinguish relPath from module path.
-	// This avoids ambiguity: "mod/sub$rel" vs "mod/sub/rel$" are distinct.
+	// This avoids ambiguity: "mod/sub$rel" vs "mod/sub/rel" are distinct.
 	// Note: "$" is valid in LLVM identifiers (unlike ":").
-	displayName := modName + "$" + relPath
+	displayName := modName
+	if relPath != "" {
+		displayName += "$" + relPath
+	}
 	return &CodeCompiler{
 		Compiler: NewCompiler(ctx, displayName, nil),
 		ModName:  modName,
