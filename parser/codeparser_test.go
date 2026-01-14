@@ -169,6 +169,20 @@ res = sum(res, x)
 			params: []string{"res", "x"},
 			errs:   []string{"duplicate identifier: res in this statement"},
 		},
+		{
+			name: "doubleUnderscore",
+			input: `y = bad__func(x)
+    y = x`,
+			params: nil,
+			errs:   []string{"identifier cannot contain '__'"},
+		},
+		{
+			name: "trailingUnderscore",
+			input: `y = bad_func_(x)
+    y = x`,
+			params: nil,
+			errs:   []string{"identifier cannot end with '_'"},
+		},
 	}
 
 	for _, tt := range tests {

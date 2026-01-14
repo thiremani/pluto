@@ -50,12 +50,12 @@ x, y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "TestMutualRecursionScript", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
 	// check func cache
-	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_6isEven_f1_I64"]
+	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_6isEven_f1_I64"]
 	if isEvenFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
@@ -63,7 +63,7 @@ x, y`
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
-	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_5isOdd_f1_I64"]
+	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	if isOddFunc.OutTypes[0].Kind() != UnresolvedKind {
 		t.Errorf("isOdd func should strkind for output arg 0")
 	}
@@ -79,11 +79,11 @@ x, y`
 	nsp := parser.NewScriptParser(nsl)
 	nextProgram := nsp.Parse()
 
-	nsc := NewScriptCompiler(ctx, "testNext", nextProgram, cc, funcCache, exprCache)
+	nsc := NewScriptCompiler(ctx, nextProgram, cc, funcCache, exprCache)
 	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
-	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["Pt_4test_5isOdd_f1_I64"]
+	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	if nextOddFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
@@ -124,7 +124,7 @@ y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "TestCyclesScript", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -163,7 +163,7 @@ y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "TestNoBaseCaseScript", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -205,7 +205,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 			sp := parser.NewScriptParser(sl)
 			program := sp.Parse()
 
-			sc := NewScriptCompiler(ctx, tc.name, program, cc, funcCache, exprCache)
+			sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -224,7 +224,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(ctx, "MixedNumericConcat", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -255,7 +255,7 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(ctx, "arrayToScalar", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -282,7 +282,7 @@ res = [idx]`
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
 
-	sc := NewScriptCompiler(ctx, "ArrayLiteralRanges", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -314,7 +314,7 @@ func TestArrayRangeTyping(t *testing.T) {
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "ArrayRangeTyping", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 

@@ -11,8 +11,8 @@ type ScriptCompiler struct {
 	Program  *ast.Program
 }
 
-func NewScriptCompiler(ctx llvm.Context, moduleName string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
-	compiler := NewCompiler(ctx, moduleName, cc)
+func NewScriptCompiler(ctx llvm.Context, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
+	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
 	compiler.FuncCache = funcCache
 	compiler.ExprCache = exprCache
 	return &ScriptCompiler{

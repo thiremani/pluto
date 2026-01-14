@@ -10,16 +10,20 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 
 | Kind | Template |
 |------|----------|
-| Function | `Pt_[ModPath]_p_[RelPath]_[Name]_f[N]_[Types...]` |
-| Method | `Pt_[ModPath]_p_[RelPath]_[Type]_m_[Name]_f[N]_[Types...]` |
-| Operator | `Pt_[ModPath]_p_[RelPath]_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
-| Constant | `Pt_[ModPath]_p_[RelPath]_d_[Name]` |
+| Function (no relpath) | `Pt_[ModPath]_p_[Name]_f[N]_[Types...]` |
+| Function (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Name]_f[N]_[Types...]` |
+| Method (no relpath) | `Pt_[ModPath]_p_[Type]_m_[Name]_f[N]_[Types...]` |
+| Method (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Type]_m_[Name]_f[N]_[Types...]` |
+| Operator (no relpath) | `Pt_[ModPath]_p_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
+| Operator (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
+| Constant (no relpath) | `Pt_[ModPath]_p_[Name]` |
+| Constant (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Name]` |
 
 **Path structure:**
 * `[ModPath]` = module path from `pt.mod` (e.g., `github.com/user/math`)
 * `[RelPath]` = relative subdirectory path (may be empty)
-* When `[RelPath]` is empty, omit `_p_[RelPath]` entirely
-* When `[RelPath]` is present, format as `_p_[mangled_relpath]` (the `_p_` implies `/` separator)
+* **All symbols:** Always include `_p_` after module path (marks end of module path)
+* **Symbols with relpath:** Always include `_r_` after relpath (marks end of relpath; `d` is reserved for `.` separator)
 
 **Arity rules:**
 * N = number of Pluto arguments (methods include self, SRET excluded)
@@ -31,19 +35,57 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 
 ### 2.1 Identifiers
 
-Length-prefixed, ASCII-only. Must satisfy:
+Identifiers support both ASCII and Unicode characters. The mangled form uses length-prefixed ASCII segments with inline Unicode escapes.
+
+**ASCII rules:**
 
 * Start with letter or `_`, end with letter/digit
 * No `__`, no trailing `_`, single `_` reserved
 * No leading zeros in length prefix
+
+**Structure:** `(<len><ASCII> | u<count>_<hex6>...) (u<count>_<hex6>... (<len><ASCII> | n<digits>(_<len><alpha> | _)?))*`
+
+* ASCII segment: `<length><chars>` where length is char count
+* Unicode segment: `u<count>_` followed by `count` consecutive 6-digit hex values (uppercase)
+* Identifiers can start with either ASCII or Unicode segment directly
+* After Unicode, if ASCII starts with digit: use `n<digits>` followed by:
+  * Nothing if end of identifier
+  * `_` if more Unicode follows
+  * `_<len><alpha>` if ASCII follows
 
 | Identifier | Mangled |
 |------------|---------|
 | `foo` | `3foo` |
 | `_private` | `8_private` |
 | `foo_bar` | `7foo_bar` |
+| `π` | `u1_0003C0` |
+| `foo_π` | `4foo_u1_0003C0` |
+| `aπb` | `1au1_0003C01b` |
+| `⊕` | `u1_002295` |
+| `😀` | `u1_01F600` |
+| `foo😀bar` | `3foou1_01F6003bar` |
+| `α2` | `u1_0003B1n2` |
+| `α2y` | `u1_0003B1n2_1y` |
+| `x1α2βz3` | `2x1u1_0003B1n2_u1_0003B22z3` |
 
-**Parsing:** Read the length prefix, then consume exactly that many characters as payload. Underscores inside payload are NOT separators (e.g., `7foo_bar` is one identifier, not `foo` + `bar`).
+**Parsing (ASCII-only):** Read the length prefix, then consume exactly that many characters as payload. Underscores inside payload are NOT separators (e.g., `7foo_bar` is one identifier, not `foo` + `bar`).
+
+**Parsing (with Unicode):**
+
+1. If starts with `u` + digit: parse Unicode segment, go to step 2
+   Otherwise: read length N, read N ASCII chars
+2. If next is `u` followed by digit and `_`, parse Unicode segment:
+   * Read count M after `u`
+   * Skip the `_`, then read M×6 consecutive hex digits (M codepoints)
+3. If next is digit `[0-9]`, repeat from step 1 (more ASCII)
+3a. If next is `n` followed by digit, parse numeric segment:
+   * Read digits after `n`
+   * If followed by `_` + digit: parse ASCII segment (`<len><alpha>`)
+   * If followed by `_` + `u` + digit: consume `_`, continue to step 2
+   * Otherwise: numeric segment complete
+4. Otherwise, identifier is complete
+
+**Note:** The `n` prefix for digits after Unicode avoids ambiguity: without it, `α2` would mangle to `u1_0003B112` where `12` is ambiguous (length=1,char='2' or length=12). With `n` prefix, it becomes `u1_0003B1n2` which is unambiguous.
 
 ### 2.2 Separators
 
@@ -89,7 +131,8 @@ Version numbers and numeric path segments use `n` prefix.
 |--------|---------|-----------------|
 | `fN` | Function, N args | Name before marker |
 | `m` | Method separator | Type before, method after |
-| `p` | Path/Constant separator | RelPath or Constant name after marker |
+| `p` | End of module path | RelPath or name follows |
+| `r` | End of relative path | Constant name follows |
 | `tN` | Generic, N type params | Type before marker |
 | `op` | Operator prefix | Opcode follows |
 | `in` | Infix (2 operands) | `a + b` |
@@ -151,7 +194,7 @@ Built-in compound types use the `_tN_` pattern:
 
 | Source | Mangled |
 |--------|---------|
-| `math.Square(I64)` | `Pt_6github_d_3com_s_4user_s_4math_6Square_f1_I64` |
+| `math.Square(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64` |
 | `math.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_2pi` |
 
 ### 4.2 With Relative Subdirectory
@@ -160,14 +203,14 @@ Module: `github.com/user/math`, RelPath: `stats`
 
 | Source | Mangled |
 |--------|---------|
-| `stats.Mean(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_4Mean_f1_I64` |
-| `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_d_2pi` |
+| `stats.Mean(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_4Mean_f1_I64` |
+| `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_2pi` |
 
 Module: `github.com/user/math`, RelPath: `stats/integral`
 
 | Source | Mangled |
 |--------|---------|
-| `integral.Quad(F64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_s_8integral_4Quad_f1_F64` |
+| `integral.Quad(F64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_s_8integral_r_4Quad_f1_F64` |
 
 ### 4.3 Other Examples
 
@@ -198,21 +241,31 @@ void Pt_..._6Person_m_5Clone_f2_..._6Person_I64(
 ## 6. Grammar
 
 ```ebnf
-FunctionSym := 'Pt' FullPath '_' Ident '_f' Arity Types
-MethodSym   := 'Pt' FullPath '_' Ident '_m_' Ident '_f' Arity Types
-OperatorSym := 'Pt' FullPath '_' Ident '_m_op_' Opcode '_' Fixity Types
+FunctionSym := 'Pt' ModPath '_p_' Ident '_f' Arity Types
+            |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_f' Arity Types
+MethodSym   := 'Pt' ModPath '_p_' Ident '_m_' Ident '_f' Arity Types
+            |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_m_' Ident '_f' Arity Types
+OperatorSym := 'Pt' ModPath '_p_' Ident '_m_op_' Opcode '_' Fixity Types
+            |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_m_op_' Opcode '_' Fixity Types
 ConstantSym := 'Pt' ModPath '_p_' Ident
-            |  'Pt' ModPath '_p_' RelPath '_d_' Ident
+            |  'Pt' ModPath '_p_' RelPath '_r_' Ident
 
-FullPath   := ModPath ('_p_' RelPath)?
 ModPath    := '_' Path
 RelPath    := Path
 Path       := Ident ('_' Separator '_' PathTail)?
 PathTail   := (Ident | NumericSeg) ('_' Separator '_' PathTail)?
-Ident      := [1-9][0-9]* [A-Za-z_][A-Za-z0-9_]*   (* length + payload *)
 Separator  := [dsh]+
 NumericSeg := 'n' Num
 Num        := '0' | [1-9][0-9]*                    (* no leading zeros *)
+
+(* Identifier with Unicode support - see §2.1 for details *)
+Ident      := (ASCIISeg | UnicodeSeg) (UnicodeSeg PostUniSeg)*
+PostUniSeg := ASCIISeg | DigitSeg                  (* after Unicode: length-prefixed OR n-prefixed *)
+DigitSeg   := 'n' [0-9]+ ('_' ASCIISeg?)?          (* n<digits>[_[<len><alpha>]] - _ alone if unicode follows *)
+ASCIISeg   := Num ASCIIChars                       (* length-prefixed ASCII *)
+ASCIIChars := [A-Za-z0-9_]*                        (* 0 to N ASCII chars *)
+UnicodeSeg := 'u' [1-9][0-9]* '_' HexCode+         (* u<count>_<hex6><hex6>... *)
+HexCode    := [0-9A-F]{6}                          (* 6 uppercase hex digits *)
 
 Arity  := Num
 
@@ -229,9 +282,10 @@ Generic    := (Qualified | Ident) '_t' [0-9]+ Types
 
 **Notes:**
 
-* Identifier payload must satisfy §2.1 rules
+* Identifier grammar: `Ident` can start with either ASCII or Unicode segment; after Unicode, digit-starting ASCII uses `DigitSeg` (n-prefix) to avoid length-prefix ambiguity; `DigitSeg` uses `_` alone if more Unicode follows, `_<len><chars>` if ASCII follows, or nothing at end
 * Path grammar enforces: starts with Ident, alternates Separator/(Ident|NumericSeg)
 * Empty path only valid for builtins; user symbols always have a package path
 * `Num` rule enforces no leading zeros for all numeric suffixes (fN, tN, nX, cirN)
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
+* All symbols always have `_p_` after ModPath (marks end of module path); all symbols with relpath use `_r_` to mark end of relpath

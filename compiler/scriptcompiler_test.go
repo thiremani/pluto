@@ -49,7 +49,7 @@ c = add(a, b)
 		scriptA := `x = add(1, 2)
 x`
 		progA := mustParseScript(t, scriptA)
-		scA := NewScriptCompiler(ctx, "A", progA, codeCompiler, funcCache, exprCache)
+		scA := NewScriptCompiler(ctx, progA, codeCompiler, funcCache, exprCache)
 
 		errs := scA.Compile()
 		require.Empty(t, errs, "First script compilation should succeed")
@@ -57,20 +57,20 @@ x`
 		// Assert that the cache is now populated correctly.
 		require.Len(t, funcCache, 1, "Cache size should be 1 after first compile")
 
-		key := "Pt_13cacheTestCode_3add_f2_I64_I64"
+		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		assert.Contains(t, funcCache, key, "Cache should contain the integer version of add")
 	})
 
 	t.Run("Compile with Ints again to test cache hit", func(t *testing.T) {
 		// Get the original *Func pointer from the cache to compare against later.
-		key := "Pt_13cacheTestCode_3add_f2_I64_I64"
+		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		f1 := funcCache[key]
 		require.NotNil(t, f1, "Func instance from first compile should exist")
 
 		scriptB := `y = add(3, 4)
 y`
 		progB := mustParseScript(t, scriptB)
-		scB := NewScriptCompiler(ctx, "B", progB, codeCompiler, funcCache, exprCache)
+		scB := NewScriptCompiler(ctx, progB, codeCompiler, funcCache, exprCache)
 
 		errs := scB.Compile()
 		require.Empty(t, errs, "Second script compilation should succeed")
@@ -86,7 +86,7 @@ y`
 		scriptC := `z = add(1.0, 2.5)
 z`
 		progC := mustParseScript(t, scriptC)
-		scC := NewScriptCompiler(ctx, "C", progC, codeCompiler, funcCache, exprCache)
+		scC := NewScriptCompiler(ctx, progC, codeCompiler, funcCache, exprCache)
 
 		errs := scC.Compile()
 		require.Empty(t, errs, "Third script compilation should succeed")
@@ -94,7 +94,7 @@ z`
 		// Assert that a NEW entry was added to the cache.
 		assert.Len(t, funcCache, 2, "Cache size should be 2 after compiling a new type")
 
-		mangledFloatKey := "Pt_13cacheTestCode_3add_f2_F64_F64"
+		mangledFloatKey := "Pt_13cacheTestCode_p_3add_f2_F64_F64"
 		assert.Contains(t, funcCache, mangledFloatKey, "Cache should now contain the float version of add")
 	})
 }

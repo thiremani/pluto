@@ -1374,7 +1374,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	}
 
 	cc := ts.ScriptCompiler.Compiler.CodeCompiler
-	mangled := Mangle(cc.ModName, cc.RelPath, ce.Function.Value, args)
+	mangled := Mangle(cc.Compiler.MangledPath, ce.Function.Value, args)
 	return template, mangled, true
 }
 

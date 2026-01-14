@@ -1034,6 +1034,10 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 }
 
 func (p *StmtParser) parseFuncStatement(fTok token.Token, outputs []*ast.Identifier) *ast.FuncStatement {
+	// Validate function name (no __, no trailing _, no blank)
+	p.validateIdentifier(fTok)
+	p.errorOnBlanks()
+
 	f := &ast.FuncStatement{
 		Token:      fTok,
 		Parameters: []*ast.Identifier{},
