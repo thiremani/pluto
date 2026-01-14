@@ -1351,6 +1351,10 @@ func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, 
 	return arrType, true
 }
 
+// lookupCallTemplate finds the function template and generates its mangled name.
+// TODO: Currently only supports functions in the current module. When the module
+// system is built, extend this to look up functions from imported packages and
+// use the imported package's ModName/RelPath for mangling (not the caller's).
 func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*ast.FuncStatement, string, bool) {
 	fk := ast.FuncKey{
 		FuncName: ce.Function.Value,
@@ -1369,7 +1373,8 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 		return nil, "", false
 	}
 
-	mangled := mangle(ce.Function.Value, args)
+	cc := ts.ScriptCompiler.Compiler.CodeCompiler
+	mangled := Mangle(cc.Compiler.MangledPath, ce.Function.Value, args)
 	return template, mangled, true
 }
 

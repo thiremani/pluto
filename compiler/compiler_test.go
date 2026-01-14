@@ -19,11 +19,11 @@ func TestStringCompile(t *testing.T) {
 	program := sp.Parse()
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "testStringCompile", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "testStringCompile", "", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "test", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	sc.Compile()
 	ir := sc.Compiler.GenerateIR()
 
@@ -43,11 +43,11 @@ x, six`
 	program := sp.Parse()
 
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", "", ast.NewCode())
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, "TestFormatIdentifiers", program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	sc.Compile()
 	testStr := "x = -x, six = -six"
 	sl := &ast.StringLiteral{
@@ -86,21 +86,22 @@ greeting = "hello"`
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
 
-	c := NewCodeCompiler(llvm.NewContext(), "testConst", code)
+	c := NewCodeCompiler(llvm.NewContext(), "testConst", "", code)
 	c.Compile()
 	ir := c.Compiler.GenerateIR()
 
-	expPi := "@pi = unnamed_addr constant double 0x400921FB54411744"
+	// Constants are now mangled per C ABI spec: Pt_[ModPath]_p_[Name]
+	expPi := "@Pt_9testConst_p_2pi = unnamed_addr constant double 0x400921FB54411744"
 	if !strings.Contains(ir, expPi) {
 		t.Errorf("IR does not contain global constant for pi. Exp: %s, ir: \n%s", expPi, ir)
 	}
 
-	expAns := "@answer = unnamed_addr constant i64 42"
+	expAns := "@Pt_9testConst_p_6answer = unnamed_addr constant i64 42"
 	if !strings.Contains(ir, expAns) {
 		t.Errorf("IR does not contain global constant for answer. Exp: %s, ir: \n%s", expAns, ir)
 	}
 
-	expGreeting := `@greeting = unnamed_addr constant [6 x i8] c"hello\00"`
+	expGreeting := `@Pt_9testConst_p_8greeting = unnamed_addr constant [6 x i8] c"hello\00"`
 
 	if !strings.Contains(ir, expGreeting) {
 		t.Errorf("IR does not contain global constant for greeting. Exp: %s, ir: \n%s", expGreeting, ir)
@@ -111,8 +112,8 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "ptr_seed_module", ast.NewCode())
-	c := NewCompiler(ctx, "ptr_seed_module", cc)
+	cc := NewCodeCompiler(ctx, "ptr_seed_module", "", ast.NewCode())
+	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
 
 	// Simulate the entry block state used by compileFuncBlock.
 	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)

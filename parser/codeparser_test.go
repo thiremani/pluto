@@ -138,8 +138,8 @@ a, b, a = dupInAndOut(x, y, x)
     a = 23`,
 			params: []string{},
 			errs: []string{
-				"blank identifier '_' not allowed here",
-				"blank identifier '_' not allowed here"},
+				"blank identifier '_' cannot be used as a value",
+				"blank identifier '_' cannot be used as a value"},
 		},
 		{
 			name: "blankOut",
@@ -148,8 +148,8 @@ _, b, _ = blankOut(x)
     b = x`,
 			params: []string{"x"},
 			errs: []string{
-				"blank identifier '_' not allowed here",
-				"blank identifier '_' not allowed here"},
+				"blank identifier '_' cannot be used as a value",
+				"blank identifier '_' cannot be used as a value"},
 		},
 		{
 			name: "blankIn",
@@ -158,8 +158,8 @@ y = blankIn(_, x, _)
     y = x`,
 			params: []string{"_", "x", "_"},
 			errs: []string{
-				"blank identifier '_' not allowed here",
-				"blank identifier '_' not allowed here"},
+				"blank identifier '_' cannot be used as a value",
+				"blank identifier '_' cannot be used as a value"},
 		},
 		{
 			name: "sum",
@@ -168,6 +168,20 @@ res = sum(res, x)
     res = res + x`,
 			params: []string{"res", "x"},
 			errs:   []string{"duplicate identifier: res in this statement"},
+		},
+		{
+			name: "doubleUnderscore",
+			input: `y = bad__func(x)
+    y = x`,
+			params: nil,
+			errs:   []string{"identifier cannot contain '__'"},
+		},
+		{
+			name: "trailingUnderscore",
+			input: `y = bad_func_(x)
+    y = x`,
+			params: nil,
+			errs:   []string{"identifier cannot end with '_'"},
 		},
 	}
 

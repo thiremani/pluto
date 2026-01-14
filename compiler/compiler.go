@@ -39,6 +39,7 @@ type Compiler struct {
 	builder         llvm.Builder
 	formatCounter   int           // Track unique format strings
 	tmpCounter      int           // Temporary variable names counter
+	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
@@ -46,8 +47,8 @@ type Compiler struct {
 	Errors          []*token.CompileError
 }
 
-func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compiler {
-	module := ctx.NewModule(moduleName)
+func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
+	module := ctx.NewModule(mangledPath)
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
@@ -57,6 +58,7 @@ func NewCompiler(ctx llvm.Context, moduleName string, cc *CodeCompiler) *Compile
 		builder:         builder,
 		formatCounter:   0,
 		tmpCounter:      0,
+		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
@@ -177,19 +179,22 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 		sym := &Symbol{}
 		var val llvm.Value
 
+		// Mangle constant name for C ABI compliance
+		mangledName := MangleConst(c.MangledPath, name)
+
 		switch v := valueExpr.(type) {
 		case *ast.IntegerLiteral:
 			val = c.ConstI64(uint64(v.Value))
 			sym.Type = Ptr{Elem: Int{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), name, val, linkage)
+			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), mangledName, val, linkage)
 
 		case *ast.FloatLiteral:
 			val = c.ConstF64(v.Value)
 			sym.Type = Ptr{Elem: Float{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), name, val, linkage)
+			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
 
 		case *ast.StringLiteral:
-			sym.Val = c.createGlobalString(name, v.Value, linkage)
+			sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
 			sym.Type = Str{}
 
 		default:
@@ -1353,7 +1358,7 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 		paramTypes[i] = arg.Type.(Ptr).Elem
 	}
 
-	mangled := mangle(funcName, paramTypes)
+	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)

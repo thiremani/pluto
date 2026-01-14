@@ -11,11 +11,13 @@ type CodeCompiler struct {
 	Code     *ast.Code
 }
 
-func NewCodeCompiler(ctx llvm.Context, moduleName string, code *ast.Code) *CodeCompiler {
-	return &CodeCompiler{
-		Compiler: NewCompiler(ctx, moduleName, nil),
+func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
+	mangledPath := MangleDirPath(modName, relPath)
+	cc := &CodeCompiler{
+		Compiler: NewCompiler(ctx, mangledPath, nil),
 		Code:     code,
 	}
+	return cc
 }
 
 // compile compiles the constants in the AST and adds them to the compiler's symbol table.

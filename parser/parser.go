@@ -96,6 +96,8 @@ type StmtParser struct {
 	prefixParseFns  map[string]prefixParseFn
 	infixParseFns   map[string]infixParseFn
 	postfixParseFns map[string]postfixParseFn
+
+	blankIdents []token.Token // tracks blank identifiers during parsing
 }
 
 func New(l *lexer.Lexer) *StmtParser {
@@ -180,14 +182,11 @@ func (p *StmtParser) peekNextToken() token.Token {
 	if len(p.savedTokens) > 0 {
 		return p.savedTokens[0]
 	}
-	// Load next token from lexer and save it
-	var err *token.CompileError
 	nextTok, err := p.l.NextToken()
 	if err != nil {
 		p.errors = append(p.errors, err)
 		return token.Token{Type: token.ILLEGAL}
 	}
-	// Save it so nextToken() will get it later
 	p.savedTokens = append(p.savedTokens, nextTok)
 	return nextTok
 }
@@ -402,10 +401,13 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 
 func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
+	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList()
 
 	if p.stmtEnded() {
 		p.nextToken()
+		// Print statement - blanks not allowed
+		p.errorOnBlanks()
 		return &ast.PrintStatement{
 			Token:      firstToken,
 			Expression: expList,
@@ -416,13 +418,16 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		return nil
 	}
 
+	// It's an assignment - LHS blanks are valid (discard pattern)
+	p.blankIdents = nil
+
 	identList, ce := p.toIdentList(expList)
 	if ce != nil {
 		p.errors = append(p.errors, ce)
 		return nil
 	}
 
-	p.checkNoDuplicates(identList, true) // allow blanks in let statements
+	p.checkNoDuplicates(identList)
 	return p.parseLetStatement(identList)
 }
 
@@ -556,6 +561,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	// so multi-line constructs (arrays, grouped expressions) work naturally.
 	p.skipArrayFormatting()
 	expList := p.parseExpList()
+	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
 	// to avoid panics downstream; errors are already recorded.
 	for _, e := range expList {
@@ -577,6 +583,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 
 	p.nextToken()
 	stmt.Value = p.parseExpList()
+	p.errorOnBlanks()
 
 	if p.stmtEnded() {
 		p.nextToken()
@@ -762,6 +769,7 @@ func (p *StmtParser) curPrecedence() float64 {
 }
 
 func (p *StmtParser) parseIdentifier() ast.Expression {
+	p.validateIdentifier(p.curToken)
 	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 }
 
@@ -877,6 +885,7 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 		}
 
 		if p.curTokenIs(token.IDENT) {
+			p.validateIdentifier(p.curToken)
 			arr.Headers = append(arr.Headers, p.curToken.Literal)
 			p.nextToken()
 			continue
@@ -889,6 +898,7 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 		})
 		return false
 	}
+	p.errorOnBlanks() // headers cannot be blank
 	return true
 }
 
@@ -1024,6 +1034,10 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 }
 
 func (p *StmtParser) parseFuncStatement(fTok token.Token, outputs []*ast.Identifier) *ast.FuncStatement {
+	// Validate function name (no __, no trailing _, no blank)
+	p.validateIdentifier(fTok)
+	p.errorOnBlanks()
+
 	f := &ast.FuncStatement{
 		Token:      fTok,
 		Parameters: []*ast.Identifier{},
@@ -1052,9 +1066,11 @@ func (p *StmtParser) parseFuncStatement(fTok token.Token, outputs []*ast.Identif
 
 // parseIdentifiers expects curToken to be an identifier
 // it checks if the remaining tokens are identifiers
+// Used for code declarations (function outputs, params) where blank "_" is not allowed
 func (p *StmtParser) parseIdentifiers() []*ast.Identifier {
 	identifiers := []*ast.Identifier{}
 
+	p.validateIdentifier(p.curToken)
 	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	identifiers = append(identifiers, ident)
 
@@ -1063,10 +1079,12 @@ func (p *StmtParser) parseIdentifiers() []*ast.Identifier {
 		if !p.expectPeek(token.IDENT) {
 			return nil
 		}
+		p.validateIdentifier(p.curToken)
 		ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		identifiers = append(identifiers, ident)
 	}
 
+	p.errorOnBlanks() // code declarations cannot use blank identifiers
 	return identifiers
 }
 
@@ -1147,21 +1165,51 @@ func (p *StmtParser) registerPostfix(op string, fn postfixParseFn) {
 	p.postfixParseFns[op] = fn
 }
 
-// checkNoDuplicates walks a slice of identifiers and returns
+// validateIdentifier checks identifier naming rules per C ABI spec.
+// Rules:
+//   - "__" is not allowed anywhere
+//   - Trailing "_" is not allowed (except for single "_")
+//   - Single "_" (blank) is tracked for later decision by caller
+func (p *StmtParser) validateIdentifier(tok token.Token) {
+	ident := tok.Literal
+	if ident == "_" {
+		p.blankIdents = append(p.blankIdents, tok)
+		return
+	}
+	if strings.Contains(ident, "__") {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: tok,
+			Msg:   "identifier cannot contain '__'",
+		})
+	}
+	if strings.HasSuffix(ident, "_") {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: tok,
+			Msg:   "identifier cannot end with '_'",
+		})
+	}
+}
+
+// errorOnBlanks converts tracked blank identifiers to errors and clears the list.
+func (p *StmtParser) errorOnBlanks() {
+	for _, tok := range p.blankIdents {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: tok,
+			Msg:   "blank identifier '_' cannot be used as a value",
+		})
+	}
+	p.blankIdents = nil
+}
+
+// checkNoDuplicates walks a slice of identifiers and reports
 // a CompileError for each name that appears more than once.
-// If allowBlanks is true, it skips blank‐identifier ("_"), otherwise reports an error.
-func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier, allowBlanks bool) {
+// Blank identifiers ("_") are skipped - for let statements they're valid discards,
+// and for code declarations they're already caught by parseIdentifiers/errorOnBlanks.
+func (p *StmtParser) checkNoDuplicates(ids []*ast.Identifier) {
 	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		name := id.Value
 		if name == "_" {
-			if allowBlanks {
-				continue
-			}
-			p.errors = append(p.errors, &token.CompileError{
-				Token: id.Token,
-				Msg:   "blank identifier '_' not allowed here",
-			})
 			continue
 		}
 		if _, ok := seen[name]; ok {

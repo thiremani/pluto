@@ -207,7 +207,7 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 
 func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
 	pkgCode := ast.NewCode()
-	cc := compiler.NewCodeCompiler(p.Ctx, p.ModPath, pkgCode)
+	cc := compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
 	if len(codeFiles) == 0 {
 		return cc, "", nil
 	}
@@ -273,7 +273,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
 		return "", fmt.Errorf("parser errors for %s", scriptFile)
 	}
-	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache, exprCache)
+	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
 
 	// Only link if code module has content
 	if codeLL != "" {
