@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Mangling constants per Pluto C ABI Spec
 const (
 	PT  = "Pt" // Pluto symbol prefix
-	P   = "p"  // Path marker (relpath follows)
+	P   = "p"  // Path marker (end of module path)
+	R   = "r"  // Relpath end marker (for constants with relpath)
 	F   = "f"  // Function arity marker
 	T   = "t"  // Generic type params marker
 	M   = "m"  // Method separator
@@ -82,16 +84,10 @@ func (d *Demangled) String() string {
 }
 
 // Mangle generates C ABI-compliant function name per Pluto C ABI Spec.
-// Format: Pt_[ModPath][_p_RelPath]_[Name]_f[N]_[Types...]
-// where ModPath and RelPath are mangled per ManglePath, Name per MangleIdent.
-// The _p_ marker indicates a relative path follows (implies / separator).
-func Mangle(modName, relPath, funcName string, args []Type) string {
-	parts := []string{PT, ManglePath(modName)}
-	if relPath != "" {
-		parts = append(parts, P, ManglePath(relPath))
-	}
-	parts = append(parts, MangleIdent(funcName))
-	parts = append(parts, F+strconv.Itoa(len(args)))
+// Format: [MangledPath]_[Name]_f[N]_[Types...]
+// mangledPath is pre-computed via MangleDirPath.
+func Mangle(mangledPath, funcName string, args []Type) string {
+	parts := []string{mangledPath, MangleIdent(funcName), F + strconv.Itoa(len(args))}
 	for _, arg := range args {
 		parts = append(parts, arg.Mangle())
 	}
@@ -112,7 +108,7 @@ func ManglePath(path string) string {
 		// Handle separators: flush current identifier, accumulate separator codes
 		if sep := separatorCode(r); sep != 0 {
 			if current.Len() > 0 {
-				parts = append(parts, mangleSegment(current.String()))
+				parts = append(parts, MangleIdent(current.String()))
 				current.Reset()
 			}
 			seps.WriteRune(sep)
@@ -129,10 +125,21 @@ func ManglePath(path string) string {
 
 	// Flush final identifier
 	if current.Len() > 0 {
-		parts = append(parts, mangleSegment(current.String()))
+		parts = append(parts, MangleIdent(current.String()))
 	}
 
 	return strings.Join(parts, "_")
+}
+
+// MangleDirPath generates the mangled directory path prefix.
+// Format: Pt_[ModPath]_p_[RelPath]_r (with relpath) or Pt_[ModPath]_p (without)
+// Used for LLVM module naming and as base for symbol mangling.
+func MangleDirPath(modName, relPath string) string {
+	parts := []string{PT, ManglePath(modName), P}
+	if relPath != "" {
+		parts = append(parts, ManglePath(relPath), R)
+	}
+	return strings.Join(parts, SEP)
 }
 
 // separatorCode returns the mangled separator code, or 0 if not a separator.
@@ -149,110 +156,216 @@ func separatorCode(r rune) rune {
 	}
 }
 
-// mangleSegment mangles a path segment:
-// - Pure numeric: n<digits>
-// - Pure identifier: <len><payload>
-// - Mixed (digit-prefix): n<digits>_<len><alpha>
-func mangleSegment(s string) string {
-	if s[0] < '0' || s[0] > '9' {
-		return MangleIdent(s)
+// MangleIdent converts an identifier or path segment to mangled form with Unicode support.
+// Digit-starting: n<digits>[_<rest>] (e.g., "123" -> "n123", "2abc" -> "n2_3abc")
+// ASCII-only: "<len><chars>" (e.g., "foo" -> "3foo")
+// With Unicode: alternating ASCII and Unicode segments
+//   - ASCII segment: <len><chars>
+//   - Unicode segment: u<count>_<hex6><hex6>... (consecutive hex values after single _)
+//   - After Unicode, if ASCII starts with digit: n<digits>[_<len><alpha>] to avoid ambiguity
+//
+// Example: "123" -> "n123"
+// Example: "2abc" -> "n2_3abc"
+// Example: "foo" -> "3foo"
+// Example: "π" -> "u1_0003C0"
+// Example: "foo_π" -> "4foo_u1_0003C0"
+// Example: "aπb" -> "1au1_0003C01b"
+// Example: "αβ" -> "u2_0003B10003B2"
+// Example: "α2" -> "u1_0003B1n2" (digit after Unicode uses n-prefix)
+// Example: "α2y" -> "u1_0003B1n2_1y" (mixed: digit-prefix + alpha)
+func MangleIdent(ident string) string {
+	if ident == "" {
+		return ""
 	}
-	// Find where leading digits end
+
+	var result strings.Builder
 	i := 0
+
+	// Simple dispatch: at each position, route to ASCII or Unicode handler
+	for i < len(ident) {
+		if ident[i] < 128 {
+			i = mangleASCIIOrDigits(&result, ident, i)
+			continue
+		}
+		i = mangleUnicode(&result, ident, i)
+	}
+
+	return result.String()
+}
+
+// mangleASCIIOrDigits writes either n-prefixed digits or length-prefixed ASCII.
+//
+// For digit-starting segments after Unicode, we use n-prefix to avoid ambiguity.
+// Without n-prefix, "α2" would mangle to "...12" where "12" is ambiguous
+// (length=1 char='2', or length=12?). With n-prefix: "...n2" is unambiguous.
+//
+// The separator logic after n<digits>:
+//   - Nothing if end of identifier (e.g., "α2" → "...n2")
+//   - "_" if Unicode follows (e.g., "α2β" → "...n2_...", _ consumed before next Unicode)
+//   - "_<len><chars>" if ASCII follows (e.g., "α2y" → "...n2_1y")
+func mangleASCIIOrDigits(result *strings.Builder, s string, i int) int {
+	hadDigits := false
+	if s[i] >= '0' && s[i] <= '9' {
+		i = mangleDigits(result, s, i)
+		hadDigits = true
+	}
+
+	if i < len(s) {
+		if hadDigits {
+			result.WriteString(SEP)
+		}
+		if s[i] < 128 {
+			i = mangleASCII(result, s, i)
+		}
+	}
+
+	return i
+}
+
+// mangleDigits writes n<digits> and returns position after digits.
+func mangleDigits(result *strings.Builder, s string, start int) int {
+	i := start + 1
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 		i++
 	}
-	if i == len(s) {
-		return N + s // Pure numeric
-	}
-	return N + s[:i] + SEP + MangleIdent(s[i:]) // Mixed: digit-prefix
+	result.WriteString(N)
+	result.WriteString(s[start:i])
+	return i
 }
 
-// MangleIdent converts an identifier to length-prefixed form.
-// Example: "foo" -> "3foo"
-func MangleIdent(ident string) string {
-	return fmt.Sprintf("%d%s", len(ident), ident)
+// mangleASCII writes <len><chars> and returns new position.
+func mangleASCII(result *strings.Builder, s string, start int) int {
+	i := start
+	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r >= 128 {
+			break
+		}
+		i += size
+	}
+	result.WriteString(strconv.Itoa(i - start))
+	result.WriteString(s[start:i])
+	return i
+}
+
+// mangleUnicode writes u<count>_<hex6>... and returns new position.
+func mangleUnicode(result *strings.Builder, s string, start int) int {
+	var runes []rune
+	i := start
+	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r < 128 {
+			break
+		}
+		runes = append(runes, r)
+		i += size
+	}
+	if len(runes) > 0 {
+		writeUnicodeSegment(result, runes)
+	}
+	return i
+}
+
+// writeUnicodeSegment writes a Unicode segment: u<count>_<hex6><hex6>...
+// Each codepoint is encoded as exactly 6 uppercase hex digits.
+func writeUnicodeSegment(w *strings.Builder, runes []rune) {
+	w.WriteString("u")
+	w.WriteString(strconv.Itoa(len(runes)))
+	w.WriteString("_")
+	for _, r := range runes {
+		fmt.Fprintf(w, "%06X", r)
+	}
+}
+
+// MangleConst generates C ABI-compliant constant name per Pluto C ABI Spec.
+// Format: [MangledPath]_[Name]
+// mangledPath is pre-computed via MangleDirPath (includes _r suffix when relpath present).
+func MangleConst(mangledPath, constName string) string {
+	return mangledPath + SEP + MangleIdent(constName)
 }
 
 // Demangle converts a mangled symbol back to human-readable form.
-// Example: "Pt_6github_d_3com_s_4user_s_4math_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
+// Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
+// For malformed Pluto symbols, returns the error message.
 func Demangle(mangled string) string {
-	return DemangleParsed(mangled).String()
+	d, err := DemangleParsed(mangled)
+	if err != nil {
+		return fmt.Sprintf("<error: %s>", err)
+	}
+	return d.String()
 }
 
 // DemangleParsed converts a mangled symbol to a structured Demangled.
 //
-// Symbol structure:
-//   - Function: Pt_ModPath[_p_RelPath]_Name_fN[_Type]*
-//   - Constant (module root): Pt_ModPath_p_Name
-//   - Constant (with relpath): Pt_ModPath_p_RelPath_d_Name
+// Symbol structure (all symbols have _p_ after ModPath, _r_ marks end of relpath):
+//   - Function (no relpath): Pt_ModPath_p_Name_fN[_Type]*
+//   - Function (with relpath): Pt_ModPath_p_RelPath_r_Name_fN[_Type]*
+//   - Constant (no relpath): Pt_ModPath_p_Name
+//   - Constant (with relpath): Pt_ModPath_p_RelPath_r_Name
 //
-// Path disambiguation:
-//   - Path segments are connected by separator codes (d=., s=/, h=-)
-//   - When we see sep followed by a digit (length-prefixed ident), path ends
-//   - _p_ marker indicates end of module path
-//   - For constants with relpath, _d_ separates relpath from constant name
-func DemangleParsed(mangled string) *Demangled {
+// Flow after _p_:
+//  1. Parse path (could be relpath or name)
+//  2. If _r_ follows: what we parsed was relpath, parse ident for name
+//  3. If _f<digit> follows: it's a function, parse arity and types
+//  4. Otherwise: it's a constant
+//
+// Returns error if symbol starts with Pt_ but is malformed (missing _p_ marker).
+// Non-Pluto symbols (no Pt_ prefix) pass through without error.
+func DemangleParsed(mangled string) (*Demangled, error) {
 	prefix := PT + SEP
 	if !strings.HasPrefix(mangled, prefix) {
-		return &Demangled{Name: mangled, Kind: SymbolConst}
+		return &Demangled{Name: mangled, Kind: SymbolConst}, nil
 	}
 
 	rest := mangled[len(prefix):]
-	result := &Demangled{Kind: SymbolConst} // Default to constant (no _f marker)
+	result := &Demangled{Kind: SymbolConst}
 
-	// Parse module path (segments connected by separator codes)
+	// Parse module path
 	result.ModPath, rest = demanglePath(rest)
 
-	// Check for _p_ marker (end of module path)
+	// All symbols have _p_ after ModPath
 	pMarker := SEP + P + SEP
-	if strings.HasPrefix(rest, pMarker) {
-		rest = rest[len(pMarker):]
+	if !strings.HasPrefix(rest, pMarker) {
+		return nil, fmt.Errorf("malformed Pluto symbol: missing _p_ marker in %q", mangled)
+	}
+	rest = rest[len(pMarker):]
 
-		// Check if this is a function (has _f marker later)
-		if strings.Contains(rest, SEP+F) {
-			// Function: parse relpath, then name
-			result.RelPath, rest = demanglePath(rest)
-			rest = strings.TrimPrefix(rest, SEP)
-			result.Name, rest = demangleIdent(rest)
-		} else {
-			// Constant: check for _d_ separator (relpath present)
-			// Find _d_ followed by length-prefixed ident at the end
-			dMarker := SEP + "d" + SEP
-			if idx := strings.LastIndex(rest, dMarker); idx >= 0 {
-				// Has relpath: everything before _d_ is relpath
-				relpathPart := rest[:idx]
-				namePart := rest[idx+len(dMarker):]
-				result.RelPath, _ = demanglePath(relpathPart)
-				result.Name, rest = demangleIdent(namePart)
-			} else {
-				// No relpath: everything after _p_ is the constant name
-				result.Name, rest = demangleIdent(rest)
-			}
-		}
-	} else {
-		// No _p_ marker - parse name directly (function without relpath)
-		rest = strings.TrimPrefix(rest, SEP)
+	// Parse first path segment (could be relpath or name)
+	firstPath, rest := demanglePath(rest)
+
+	// Check for _r_ marker (relpath present)
+	rMarker := SEP + R + SEP
+	if strings.HasPrefix(rest, rMarker) {
+		result.RelPath = firstPath
+		rest = rest[len(rMarker):]
 		result.Name, rest = demangleIdent(rest)
+	} else {
+		result.Name = firstPath
 	}
 
-	// Parse function arity marker (_fN) - if present, it's a function
+	// Parse function signature if present
+	demangleFunc(result, rest)
+
+	return result, nil
+}
+
+// demangleFunc parses function signature: _fN[_Type]* and populates result.
+// Sets Kind to SymbolFunc and parses arity and argument types.
+func demangleFunc(result *Demangled, rest string) {
 	fMarker := SEP + F
-	if strings.HasPrefix(rest, fMarker) {
-		result.Kind = SymbolFunc
-		rest = rest[len(fMarker):]
-		// Parse arity number
-		arityStr := ""
-		for len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-			arityStr += string(rest[0])
-			rest = rest[1:]
-		}
-		if arityStr != "" {
-			result.Arity, _ = strconv.Atoi(arityStr)
-		}
+	if !strings.HasPrefix(rest, fMarker) {
+		return
 	}
 
-	// Parse argument types (only for functions)
+	after := rest[len(fMarker):]
+	if len(after) == 0 || after[0] < '0' || after[0] > '9' {
+		return
+	}
+
+	result.Kind = SymbolFunc
+	result.Arity, rest = parseArity(after)
+
+	// Parse argument types
 	for strings.HasPrefix(rest, SEP) {
 		rest = rest[len(SEP):]
 		typeName, remaining := demangleType(rest)
@@ -262,8 +375,16 @@ func DemangleParsed(mangled string) *Demangled {
 		result.ArgTypes = append(result.ArgTypes, typeName)
 		rest = remaining
 	}
+}
 
-	return result
+// parseArity parses arity digits from s.
+func parseArity(s string) (arity int, remaining string) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	arity, _ = strconv.Atoi(s[:i])
+	return arity, s[i:]
 }
 
 // demanglePath converts a mangled path back to original form.
@@ -279,45 +400,43 @@ func demanglePath(s string) (string, string) {
 	var result strings.Builder
 	rest := s
 
-	// Handle leading separators (e.g., "s_3foo" -> "/foo")
-	for len(rest) > 0 {
-		sepChar := demangleSeparator(rune(rest[0]))
-		if sepChar == 0 {
-			break
-		}
-		result.WriteRune(sepChar)
-		rest = rest[1:]
-	}
-	rest = strings.TrimPrefix(rest, SEP)
-
-	// Parse first segment (if any)
-	rest = demanglePathSegment(&result, rest)
+	// Parse first segment (may have leading separators like "/foo")
+	rest = demangleSepsAndSegment(&result, rest)
 
 	// Parse subsequent segments: _separators_segment
 	for strings.HasPrefix(rest, SEP) {
 		afterSep := rest[len(SEP):]
-
-		// Consume all consecutive separator codes (d, s, h)
-		i := 0
-		for i < len(afterSep) {
-			sepChar := demangleSeparator(rune(afterSep[i]))
-			if sepChar == 0 {
-				break
-			}
-			result.WriteRune(sepChar)
-			i++
-		}
-		if i == 0 {
-			// No separator code - path ends here (function name, marker, etc.)
+		remaining := demangleSepsAndSegment(&result, afterSep)
+		if remaining == afterSep {
+			// Nothing consumed - path ends here (hit _p_, _f, etc.)
 			break
 		}
-
-		rest = afterSep[i:]
-		rest = strings.TrimPrefix(rest, SEP)
-		rest = demanglePathSegment(&result, rest)
+		rest = remaining
 	}
 
 	return result.String(), rest
+}
+
+// demangleSepsAndSegment consumes separator codes (d/s/h), writes corresponding chars,
+// then parses the following segment. Returns s unchanged if nothing can be parsed.
+func demangleSepsAndSegment(result *strings.Builder, s string) string {
+	// Consume separator codes (d, s, h) and write chars (., /, -)
+	i := 0
+	for i < len(s) {
+		sepChar := demangleSeparator(rune(s[i]))
+		if sepChar == 0 {
+			break
+		}
+		result.WriteRune(sepChar)
+		i++
+	}
+
+	// Trim underscore after separators, then parse segment
+	rest := s[i:]
+	if i > 0 {
+		rest = strings.TrimPrefix(rest, SEP)
+	}
+	return demanglePathSegment(result, rest)
 }
 
 // demanglePathSegment parses a single path segment (identifier or numeric).
@@ -338,16 +457,20 @@ func demanglePathSegment(result *strings.Builder, rest string) string {
 	return rest
 }
 
+// consumeDigits reads consecutive digits from s, writes them to result, and returns the rest.
+func consumeDigits(result *strings.Builder, s string) string {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	result.WriteString(s[:i])
+	return s[i:]
+}
+
 // demangleNumericSegment handles n<digits>[_<len><alpha>] patterns.
 // rest should start after the 'n' prefix (i.e., starts with digits).
 func demangleNumericSegment(result *strings.Builder, rest string) string {
-	// Consume digits
-	i := 0
-	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
-		i++
-	}
-	result.WriteString(rest[:i])
-	rest = rest[i:]
+	rest = consumeDigits(result, rest)
 
 	// Check for mixed segment continuation: _<len><alpha>
 	if !strings.HasPrefix(rest, SEP) {
@@ -361,21 +484,135 @@ func demangleNumericSegment(result *strings.Builder, rest string) string {
 	return remaining
 }
 
-// demangleIdent extracts a length-prefixed identifier.
-// Callers must verify s starts with a digit 1-9 before calling.
+// demangleIdent extracts an identifier with Unicode support.
+// ASCII-only: <len><chars>
+// Unicode-only: u<count>_<hex6>...
+// Mixed: alternating ASCII and Unicode segments
+//   - ASCII segment: <len><chars>
+//   - Unicode segment: u<count>_<hex6><hex6>... (consecutive hex values after single _)
+//   - After Unicode, digit-starting ASCII uses: n<digits>[_<len><alpha>]
+//
+// Parsing algorithm:
+//  1. If starts with `u` + digit, parse Unicode segment first
+//  2. If starts with digit, parse ASCII segment
+//  3. After any segment, check for more Unicode or ASCII
+//  4. Identifier is complete when neither follows
 func demangleIdent(s string) (string, string) {
-	// Parse length prefix
+	if len(s) == 0 {
+		return "", s
+	}
+
+	var result strings.Builder
+	rest := s
+
+	// Parse segments in a loop: Unicode, n-prefixed numeric, or length-prefixed ASCII
+	for len(rest) > 0 {
+		switch {
+		case rest[0] == 'u' && len(rest) > 1 && rest[1] >= '1' && rest[1] <= '9':
+			// Unicode segment
+			runes, remaining, ok := parseUnicodeSegment(rest)
+			if !ok {
+				return result.String(), rest
+			}
+			for _, r := range runes {
+				result.WriteRune(r)
+			}
+			rest = remaining
+
+		case rest[0] == 'n' && len(rest) > 1 && rest[1] >= '0' && rest[1] <= '9':
+			// n-prefixed numeric (e.g., "123" -> "n123")
+			rest = consumeDigits(&result, rest[1:])
+
+		case rest[0] >= '0' && rest[0] <= '9':
+			// Length-prefixed ASCII
+			ascii, remaining, ok := parseASCIISegment(rest)
+			if !ok {
+				return result.String(), rest
+			}
+			result.WriteString(ascii)
+			rest = remaining
+
+		case rest[0] == '_' && len(rest) > 1 && isIdentContinuation(rest[1:]):
+			// Separator within identifier (after n-prefix, before ASCII/Unicode)
+			rest = rest[1:]
+
+		default:
+			// Unrecognized character - if nothing parsed yet, return failure
+			if result.Len() == 0 {
+				return "", s
+			}
+			return result.String(), rest
+		}
+	}
+
+	return result.String(), rest
+}
+
+// isIdentContinuation checks if s starts with a valid identifier segment.
+func isIdentContinuation(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// Digit: ASCII segment follows
+	if s[0] >= '0' && s[0] <= '9' {
+		return true
+	}
+	// Unicode segment follows
+	if s[0] == 'u' && len(s) > 1 && s[1] >= '1' && s[1] <= '9' {
+		return true
+	}
+	return false
+}
+
+// parseASCIISegment parses <len><chars> and returns the chars.
+func parseASCIISegment(s string) (ascii, remaining string, ok bool) {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 		i++
 	}
-
-	length, _ := strconv.Atoi(s[:i])
-	if i+length > len(s) {
-		return "", s // Truncated input
+	if i == 0 {
+		return "", s, false
 	}
 
-	return s[i : i+length], s[i+length:]
+	length, _ := strconv.Atoi(s[:i])
+	s = s[i:]
+
+	if length > len(s) {
+		return "", s, false
+	}
+	return s[:length], s[length:], true
+}
+
+// parseUnicodeSegment parses u<count>_<hex6><hex6>... and returns the runes.
+// Format: u<count>_<consecutive hex values> where each hex value is exactly 6 chars.
+// Caller must verify s starts with 'u' followed by digit 1-9.
+func parseUnicodeSegment(s string) (runes []rune, remaining string, ok bool) {
+	// Find where count digits end (start at 1, skip 'u')
+	j := 1
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j >= len(s) || s[j] != '_' {
+		return nil, s, false
+	}
+
+	count, _ := strconv.Atoi(s[1:j])
+	s = s[j+1:] // Skip past the underscore
+
+	// Read count consecutive hex values (each 6 chars)
+	needed := count * 6
+	if len(s) < needed {
+		return nil, s, false
+	}
+	for i := range count {
+		codepoint, err := strconv.ParseInt(s[i*6:i*6+6], 16, 32)
+		if err != nil {
+			return nil, s, false
+		}
+		runes = append(runes, rune(codepoint))
+	}
+
+	return runes, s[needed:], true
 }
 
 // demangleType extracts a type string, passing it through as-is.
