@@ -1,3 +1,26 @@
 "hello world"
 x = "hello 🙏"
 x, "👍"
+
+# Unicode identifiers with digits - Devanagari (Hindi)
+# String contains Devanagari digits: १२३
+प्रतीक१ = "नमस्ते १२३ 🙏"
+प्रतीक१
+
+# Unicode identifiers with digits - Arabic (letter first, digit suffix)
+# Note: Quotes may appear misplaced due to RTL Bidi rendering - bytes are correct
+# String contains Arabic-Indic digits: ٧٨٩
+مرحبا٧ = "أهلاً ٧٨٩ 😊"
+مرحبا٧
+
+# Unicode identifiers - CJK (Chinese)
+你好 = "世界 🌍"
+你好
+
+# Unicode identifiers with digits - Greek
+πι2 = 3.14159
+"π =", πι2
+
+# Unicode identifiers - Mixed with combining marks
+café = "☕ time"
+café
