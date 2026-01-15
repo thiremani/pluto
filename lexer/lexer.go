@@ -344,12 +344,12 @@ func (l *Lexer) peekRune() rune {
 }
 
 // readIdentifier reads a Unicode identifier from the input.
-// it assumes first character (rune) is a letter
+// It assumes the first rune is a valid identifier start.
 func (l *Lexer) readIdentifier() string {
 	startPos := l.position
 	l.readRune() // Consume first character
 
-	// Read subsequent valid characters (letters, digits, `_`)
+	// Read subsequent valid characters (letters, digits, combining marks, `_`)
 	for IsLetterOrDigit(l.curr) {
 		l.readRune()
 	}
@@ -386,16 +386,24 @@ func (l *Lexer) readOperator() string {
 	return string(l.input[startPos:l.position])
 }
 
-// isLetter checks if a rune is a valid start of an identifier (Unicode letter or `_`).
-// this function is optimized and referenced from the implementation in scanner.go of the Go compiler.
-// optimization is the if condition that quickly returns for ASCII characters
+// IsLetter checks if a rune is a valid start of an identifier (Unicode letter or `_`).
+// This function is optimized and referenced from the implementation in scanner.go of the Go compiler.
 func IsLetter(ch rune) bool {
 	return 'a' <= lower(ch) && lower(ch) <= 'z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
 }
 
-// isLetterOrDigit checks if a rune can be part of an identifier (Unicode letter, digit, `_`).
+// IsLetterOrDigit checks if a rune can be part of an identifier
+// (Unicode letter, digit, combining mark, or `_`).
+// Combining marks (Mn, Mc, Me) are allowed after any identifier character.
+// This is inspired by UAX #31 but is a simplified subset, not full XID_Continue.
 func IsLetterOrDigit(ch rune) bool {
-	return IsLetter(ch) || IsDigit(ch)
+	if IsLetter(ch) || IsDigit(ch) {
+		return true
+	}
+	if ch < utf8.RuneSelf {
+		return false
+	}
+	return unicode.Is(unicode.Mn, ch) || unicode.Is(unicode.Mc, ch) || unicode.Is(unicode.Me, ch)
 }
 
 // this function is optimized and referenced from the implementation in scanner.go of the Go compiler.

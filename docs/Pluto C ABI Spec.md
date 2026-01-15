@@ -29,6 +29,29 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 * N = number of Pluto arguments (methods include self, SRET excluded)
 * Return type is NOT mangled; overloads differing only by return type are disallowed
 
+### 1.1 Module Path Validation
+
+Module paths declared in `pt.mod` must satisfy these rules before mangling:
+
+| Rule | Description |
+|------|-------------|
+| Lowercase only | No uppercase letters (`A-Z`) |
+| Segment separator | Only `/` separates segments (maps to directories) |
+| Valid characters | ASCII lowercase letters, digits, `_`, `.`, `-` |
+| No `__` | Double underscores forbidden |
+| No trailing `_` | Segments cannot end with underscore |
+| No trailing `.` | Segments cannot end with dot (Windows compatibility) |
+| No empty segments | No `//` or leading/trailing `/` |
+| No Windows reserved | Base name before first `.` cannot be `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` |
+
+**Note on Windows reserved names:** Windows treats `con.txt` as `CON`, so we check the base name before the first dot. This means `con.txt.zip` is invalid, but `foo.con` and `.con` are valid (base is `foo` and empty respectively).
+
+**Valid examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`, `.hidden`, `.con`, `-flag`
+
+**Invalid examples:** `MyPkg` (uppercase), `my__pkg` (double underscore), `pkg_` (trailing underscore), `foo.` (trailing dot), `foo//bar` (empty segment), `con` (reserved), `con.txt` (base=con)
+
+**Note on segment separator vs mangling:** Validation uses only `/` to split segments, but mangling encodes all of `.`, `/`, `-` as separator codes for C-safe symbol names. These are separate concerns: validation determines what paths are legal, mangling determines how they're encoded.
+
 ---
 
 ## 2. Components
