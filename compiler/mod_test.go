@@ -81,9 +81,9 @@ func TestValidateModulePath(t *testing.T) {
 		{"windows nul.", "nul.", true, "ends with dot"}, // trailing dot rejected first
 		{"windows prn.exe", "pkg/prn.exe", true, "Windows reserved"},
 		{"windows con.txt.zip", "con.txt.zip", true, "Windows reserved"}, // multi-extension also rejected
-		{"windows .con", ".con", true, "Windows reserved"},               // leading dot stripped, base=con
-		{"windows .nul", ".nul", true, "Windows reserved"},               // leading dot stripped, base=nul
-		{"windows ..con", "..con", true, "Windows reserved"},             // multiple leading dots stripped
+		{"dot-prefixed .con valid", ".con", false, ""},                   // base=empty before dot, not reserved
+		{"dot-prefixed .nul valid", ".nul", false, ""},                   // base=empty before dot, not reserved
+		{"dot-prefixed ..con valid", "..con", false, ""},                 // base=empty before dot, not reserved
 		{"foo.con valid", "foo.con", false, ""},                          // base=foo, not reserved
 
 		// Invalid: trailing dot (invalid on Windows)

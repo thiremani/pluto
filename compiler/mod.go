@@ -71,20 +71,12 @@ func checkSegment(seg string) error {
 		return fmt.Errorf("segment %q ends with dot", seg)
 	}
 	// Windows treats "con.txt" as "CON" - check base name before first dot
-	base := baseNameBeforeDot(seg)
+	base := seg
+	if i := strings.IndexByte(seg, '.'); i >= 0 {
+		base = seg[:i]
+	}
 	if windowsReservedNames[strings.ToLower(base)] {
 		return fmt.Errorf("segment %q has Windows reserved base name %q", seg, base)
 	}
 	return nil
-}
-
-// baseNameBeforeDot returns the portion of seg before the first dot,
-// after stripping any leading dots. Windows may treat ".con" as reserved.
-func baseNameBeforeDot(seg string) string {
-	// Strip leading dots (Windows may treat .con as CON)
-	s := strings.TrimLeft(seg, ".")
-	if i := strings.IndexByte(s, '.'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
