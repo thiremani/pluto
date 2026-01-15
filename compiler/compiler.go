@@ -1559,16 +1559,48 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+	// Collect all ranges from all expressions in the print statement
+	var allRanges []*RangeInfo
+	var rewrites []ast.Expression // rewritten expressions with iterator variables
+
+	for _, expr := range ps.Expression {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if info != nil && info.HasRanges && len(info.Ranges) > 0 {
+			allRanges = append(allRanges, info.Ranges...)
+			if info.Rewrite != nil {
+				rewrites = append(rewrites, info.Rewrite)
+			} else {
+				rewrites = append(rewrites, expr)
+			}
+		} else {
+			rewrites = append(rewrites, expr)
+		}
+	}
+
+	// Filter out already-bound ranges
+	pending := c.pendingLoopRanges(allRanges)
+
+	if len(pending) > 0 {
+		// Wrap the entire print in loop nest - each iteration prints all expressions on one line
+		c.withLoopNest(allRanges, func() {
+			c.printAllExpressions(rewrites)
+		})
+	} else {
+		// No ranges - print all expressions on one line (original behavior)
+		c.printAllExpressions(ps.Expression)
+	}
+}
+
+// printAllExpressions prints all expressions on a single line
+func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	var formatStr string
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Process each expression and build format string + args
-	for _, expr := range ps.Expression {
+	for _, expr := range exprs {
 		c.appendPrintExpression(expr, &formatStr, &args, &toFree)
 	}
 
-	// Create format string global and call printf
 	formatPtr := c.createPrintFormatGlobal(formatStr)
 	allArgs := append([]llvm.Value{formatPtr}, args...)
 	c.printf(allArgs)
