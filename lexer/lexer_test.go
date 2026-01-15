@@ -292,6 +292,8 @@ func TestUnicodeIdentifiers(t *testing.T) {
 		{"_hidden", "_hidden"}, // Leading underscore
 		{"i123", "i123"},       // Latin letter with digits
 		{"ñandú", "ñandú"},     // Latin letters with diacritics
+		{"तु", "तु"},           // Devanagari letter + vowel sign
+		{"هذا", "هذا"},         // Arabic letters
 	}
 
 	for _, tt := range tests {

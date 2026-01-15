@@ -151,7 +151,13 @@ func parseModuleName(modFile string) (string, error) {
 		}
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && parts[0] == "module" {
-			return parts[1], nil
+			modPath := parts[1]
+			if err := compiler.ValidateModulePath(modPath); err != nil {
+				err = fmt.Errorf("invalid module path in %s: %w", modFile, err)
+				fmt.Println(err)
+				return "", err
+			}
+			return modPath, nil
 		}
 		err := fmt.Errorf("invalid module line in %s: %q. The module should begin with keyword module followed by module name", modFile, line)
 		fmt.Println(err)

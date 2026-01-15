@@ -16,13 +16,13 @@ var windowsReservedNames = map[string]bool{
 
 // ValidateModulePath validates a module path from pt.mod.
 // Rules:
-//   - Only separators: . / -
-//   - ASCII lowercase letters, digits, and underscore only
+//   - Segment separator: / only (maps to directory structure)
+//   - Allowed in segments: ASCII lowercase letters, digits, underscore, dot, hyphen
 //   - Lowercase letters only (no uppercase)
 //   - No double underscores (__)
-//   - No trailing underscores
-//   - No empty segments
-//   - No Windows reserved names
+//   - No trailing underscores in segments
+//   - No empty segments (no // or leading/trailing /)
+//   - No Windows reserved segment names
 func ValidateModulePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("module path cannot be empty")
@@ -31,7 +31,8 @@ func ValidateModulePath(path string) error {
 	segStart := 0 // Start index of current segment
 
 	for i, r := range path {
-		if SeparatorCode(r) != 0 {
+		// Only / is a segment separator
+		if r == '/' {
 			if err := checkSegment(path[segStart:i]); err != nil {
 				return err
 			}
@@ -48,6 +49,8 @@ func ValidateModulePath(path string) error {
 			if i > segStart && path[i-1] == '_' {
 				return fmt.Errorf("double underscore at position %d", i)
 			}
+		case r == '.' || r == '-':
+			// valid within segments (e.g., github.com, my-pkg)
 		default:
 			return fmt.Errorf("invalid character %q at position %d in module path", r, i)
 		}

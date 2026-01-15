@@ -394,6 +394,8 @@ func IsLetter(ch rune) bool {
 
 // IsLetterOrDigit checks if a rune can be part of an identifier
 // (Unicode letter, digit, combining mark, or `_`).
+// Combining marks (Mn, Mc, Me) are allowed after any identifier character,
+// matching UAX #31 XID_Continue and Go's identifier rules.
 func IsLetterOrDigit(ch rune) bool {
 	if IsLetter(ch) || IsDigit(ch) {
 		return true

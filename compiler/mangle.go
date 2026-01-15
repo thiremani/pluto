@@ -106,7 +106,7 @@ func ManglePath(path string) string {
 
 	for _, r := range path {
 		// Handle separators: flush current identifier, accumulate separator codes
-		if sep := separatorCode(r); sep != 0 {
+		if sep := SeparatorCode(r); sep != 0 {
 			if current.Len() > 0 {
 				parts = append(parts, MangleIdent(current.String()))
 				current.Reset()
@@ -142,8 +142,8 @@ func MangleDirPath(modName, relPath string) string {
 	return strings.Join(parts, SEP)
 }
 
-// separatorCode returns the mangled separator code, or 0 if not a separator.
-func separatorCode(r rune) rune {
+// SeparatorCode returns the mangled separator code, or 0 if not a separator.
+func SeparatorCode(r rune) rune {
 	switch r {
 	case DOT:
 		return DOT_CODE

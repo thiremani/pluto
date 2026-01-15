@@ -29,6 +29,24 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 * N = number of Pluto arguments (methods include self, SRET excluded)
 * Return type is NOT mangled; overloads differing only by return type are disallowed
 
+### 1.1 Module Path Validation
+
+Module paths declared in `pt.mod` must satisfy these rules before mangling:
+
+| Rule | Description |
+|------|-------------|
+| Lowercase only | No uppercase letters (`A-Z`) |
+| Segment separator | Only `/` separates segments (maps to directories) |
+| Valid characters | ASCII lowercase letters, digits, `_`, `.`, `-` |
+| No `__` | Double underscores forbidden |
+| No trailing `_` | Segments cannot end with underscore |
+| No empty segments | No `//` or leading/trailing `/` |
+| No Windows reserved | `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` forbidden as segments |
+
+**Valid examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`
+
+**Invalid examples:** `MyPkg` (uppercase), `my__pkg` (double underscore), `pkg_` (trailing underscore), `foo//bar` (empty segment), `con` (Windows reserved)
+
 ---
 
 ## 2. Components

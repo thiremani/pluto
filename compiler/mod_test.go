@@ -25,6 +25,13 @@ func TestValidateModulePath(t *testing.T) {
 		{"complex path", "github.com/user/my-pkg/v2", false, ""},
 		{"mixed segment", "pkg/2foo", false, ""},
 		{"pure numeric", "pkg/123", false, ""},
+		// With new rules: . and - are valid in segments, so these are now valid
+		{"hyphen in name", "foo-con", false, ""},          // foo-con is ONE segment
+		{"hyphen separated", "my-con-pkg", false, ""},     // my-con-pkg is ONE segment
+		{"leading hyphen in segment", "-foo", false, ""},  // -foo is valid
+		{"trailing hyphen in segment", "foo-", false, ""}, // foo- is valid
+		{"double hyphen", "foo--bar", false, ""},          // foo--bar is valid (no __ rule for -)
+		{"double dot", "foo..bar", false, ""},             // foo..bar is valid (no __ rule for .)
 
 		// Invalid: empty
 		{"empty path", "", true, "cannot be empty"},
@@ -42,14 +49,10 @@ func TestValidateModulePath(t *testing.T) {
 		{"trailing underscore", "pkg_", true, "ends with underscore"},
 		{"trailing underscore in segment", "github.com/user_/pkg", true, "ends with underscore"},
 
-		// Invalid: empty segments
+		// Invalid: empty segments (only / creates segments now)
 		{"double slash", "foo//bar", true, "empty segment"},
-		{"double dot empty", "foo..bar", true, "empty segment"},
 		{"leading slash", "/foo", true, "empty segment"},
 		{"trailing slash", "foo/", true, "empty segment"},
-		{"leading hyphen", "-foo", true, "empty segment"},
-		{"trailing hyphen", "foo-", true, "empty segment"},
-		{"double hyphen empty", "foo--bar", true, "empty segment"},
 
 		// Invalid: underscore edge cases
 		{"underscore only segment", "_", true, "ends with underscore"},
@@ -68,7 +71,7 @@ func TestValidateModulePath(t *testing.T) {
 		{"unicode digit start", "pkg/٣foo", true, "invalid character"},
 		{"unicode in middle", "foo٣bar", true, "invalid character"},
 
-		// Invalid: Windows reserved names
+		// Invalid: Windows reserved names (only exact segment matches)
 		{"windows con", "con", true, "Windows reserved"},
 		{"windows nul", "github.com/nul/pkg", true, "Windows reserved"},
 		{"windows com1", "com1", true, "Windows reserved"},
