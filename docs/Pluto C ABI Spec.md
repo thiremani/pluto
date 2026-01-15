@@ -40,12 +40,17 @@ Module paths declared in `pt.mod` must satisfy these rules before mangling:
 | Valid characters | ASCII lowercase letters, digits, `_`, `.`, `-` |
 | No `__` | Double underscores forbidden |
 | No trailing `_` | Segments cannot end with underscore |
+| No trailing `.` | Segments cannot end with dot (Windows compatibility) |
 | No empty segments | No `//` or leading/trailing `/` |
-| No Windows reserved | `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` forbidden as segments |
+| No Windows reserved | Base name before first `.` cannot be `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` |
 
-**Valid examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`
+**Note on Windows reserved names:** Windows treats `con.txt` as `CON`, so we check the base name before the first dot. This means `con.txt.zip` is also invalid (base=`con`), but `foo.con` is valid (base=`foo`).
 
-**Invalid examples:** `MyPkg` (uppercase), `my__pkg` (double underscore), `pkg_` (trailing underscore), `foo//bar` (empty segment), `con` (Windows reserved)
+**Valid examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`, `.hidden`, `-flag`
+
+**Invalid examples:** `MyPkg` (uppercase), `my__pkg` (double underscore), `pkg_` (trailing underscore), `foo.` (trailing dot), `foo//bar` (empty segment), `con` (Windows reserved), `con.txt` (base=con)
+
+**Note on segment separator vs mangling:** Validation uses only `/` to split segments, but mangling encodes all of `.`, `/`, `-` as separator codes for C-safe symbol names. These are separate concerns: validation determines what paths are legal, mangling determines how they're encoded.
 
 ---
 

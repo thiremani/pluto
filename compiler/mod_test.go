@@ -29,6 +29,7 @@ func TestValidateModulePath(t *testing.T) {
 		{"hyphen in name", "foo-con", false, ""},          // foo-con is ONE segment
 		{"hyphen separated", "my-con-pkg", false, ""},     // my-con-pkg is ONE segment
 		{"leading hyphen in segment", "-foo", false, ""},  // -foo is valid
+		{"leading dot in segment", ".hidden", false, ""},  // .hidden is valid (Unix hidden files)
 		{"trailing hyphen in segment", "foo-", false, ""}, // foo- is valid
 		{"double hyphen", "foo--bar", false, ""},          // foo--bar is valid (no __ rule for -)
 		{"double dot", "foo..bar", false, ""},             // foo..bar is valid (no __ rule for .)
