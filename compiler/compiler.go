@@ -1559,14 +1559,34 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-	// Collect all ranges from all expressions in the print statement
+	// Collect ranges from expressions, but skip CallExpressions with LoopInside=true
+	// (those handle iteration internally and expect Range types)
 	var allRanges []*RangeInfo
-	var rewrites []ast.Expression // rewritten expressions with iterator variables
+	var rewrites []ast.Expression
+	seen := make(map[string]bool) // deduplicate ranges by name
 
 	for _, expr := range ps.Expression {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info != nil && info.HasRanges && len(info.Ranges) > 0 {
-			allRanges = append(allRanges, info.Ranges...)
+		if info == nil {
+			rewrites = append(rewrites, expr)
+			continue
+		}
+
+		// Skip ranges from call expressions that loop internally
+		// They expect Range types and handle iteration themselves
+		if info.LoopInside {
+			rewrites = append(rewrites, expr)
+			continue
+		}
+
+		if info.HasRanges && len(info.Ranges) > 0 {
+			// Deduplicate ranges by name to avoid nested loops for same range
+			for _, r := range info.Ranges {
+				if !seen[r.Name] {
+					seen[r.Name] = true
+					allRanges = append(allRanges, r)
+				}
+			}
 			if info.Rewrite != nil {
 				rewrites = append(rewrites, info.Rewrite)
 			} else {
