@@ -71,11 +71,19 @@ func TestValidateModulePath(t *testing.T) {
 		{"unicode digit start", "pkg/٣foo", true, "invalid character"},
 		{"unicode in middle", "foo٣bar", true, "invalid character"},
 
-		// Invalid: Windows reserved names (only exact segment matches)
+		// Invalid: Windows reserved names (base name before first dot)
 		{"windows con", "con", true, "Windows reserved"},
 		{"windows nul", "github.com/nul/pkg", true, "Windows reserved"},
 		{"windows com1", "com1", true, "Windows reserved"},
 		{"windows lpt1", "pkg/lpt1/sub", true, "Windows reserved"},
+		{"windows con.txt", "con.txt", true, "Windows reserved"},
+		{"windows nul.", "nul.", true, "ends with dot"}, // trailing dot rejected first
+		{"windows prn.exe", "pkg/prn.exe", true, "Windows reserved"},
+		{"foo.con valid", "foo.con", false, ""}, // base=foo, not reserved
+
+		// Invalid: trailing dot (invalid on Windows)
+		{"trailing dot", "foo.", true, "ends with dot"},
+		{"trailing dot in segment", "github.com/foo./bar", true, "ends with dot"},
 	}
 
 	for _, tt := range tests {

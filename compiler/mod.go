@@ -67,8 +67,21 @@ func checkSegment(seg string) error {
 	if seg[len(seg)-1] == '_' {
 		return fmt.Errorf("segment %q ends with underscore", seg)
 	}
-	if windowsReservedNames[strings.ToLower(seg)] {
-		return fmt.Errorf("segment %q is a Windows reserved name", seg)
+	if seg[len(seg)-1] == '.' {
+		return fmt.Errorf("segment %q ends with dot", seg)
+	}
+	// Windows treats "con.txt" as "CON" - check base name before first dot
+	base := baseNameBeforeDot(seg)
+	if windowsReservedNames[strings.ToLower(base)] {
+		return fmt.Errorf("segment %q has Windows reserved base name %q", seg, base)
 	}
 	return nil
+}
+
+// baseNameBeforeDot returns the portion of seg before the first dot.
+func baseNameBeforeDot(seg string) string {
+	if i := strings.IndexByte(seg, '.'); i >= 0 {
+		return seg[:i]
+	}
+	return seg
 }

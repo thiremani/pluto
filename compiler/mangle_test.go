@@ -360,7 +360,7 @@ func TestSeparatorCode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.input), func(t *testing.T) {
-			result := SeparatorCode(tt.input)
+			result := separatorCode(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
