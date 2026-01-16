@@ -1,0 +1,8 @@
+# Test function calls in print with range iteration
+
+# Simple function call
+Square(3)
+
+# Function with range - iterates and calls per value
+m = 0:3
+m + 1, Square(m)
