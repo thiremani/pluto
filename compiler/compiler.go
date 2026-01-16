@@ -1656,6 +1656,13 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		return
 	}
 
+	// Dereference pointers - treat print args like function args
+	if s.Type.Kind() == PtrKind {
+		elemType := s.Type.(Ptr).Elem
+		derefed := c.createLoad(s.Val, elemType, "print_deref")
+		s = &Symbol{Val: derefed, Type: elemType}
+	}
+
 	// Get format specifier for this type
 	spec, err := defaultSpecifier(s.Type)
 	if err != nil {
