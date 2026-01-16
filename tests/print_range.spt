@@ -17,3 +17,7 @@ i = 1:4
 # Duplicate range - should iterate once, not nested
 j = 1:4
 j, j + 10
+
+# Multiple expressions with same range
+k = 0:3
+k + 1, k * k
