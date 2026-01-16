@@ -1360,6 +1360,13 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("function %s not found for argument types; may need to assign to variable first", funcName),
+		})
+		return
+	}
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -1596,6 +1603,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 			rewrites = append(rewrites, expr)
 		}
 	}
+
 
 	// Filter out already-bound ranges
 	pending := c.pendingLoopRanges(allRanges)
