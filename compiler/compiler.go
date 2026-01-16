@@ -1604,7 +1604,6 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		}
 	}
 
-
 	// Filter out already-bound ranges
 	pending := c.pendingLoopRanges(allRanges)
 
