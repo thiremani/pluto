@@ -1655,6 +1655,13 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 
 // appendPrintSymbol handles printing one symbol based on its type
 func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	// Dereference pointers first - treat print args like function args
+	if s.Type.Kind() == PtrKind {
+		elemType := s.Type.(Ptr).Elem
+		derefed := c.createLoad(s.Val, elemType, "print_deref")
+		s = &Symbol{Val: derefed, Type: elemType}
+	}
+
 	// ArrayRange needs special handling (two string args)
 	if s.Type.Kind() == ArrayRangeKind {
 		arrStr, rngStr := c.arrayRangeStrArgs(s)
@@ -1662,13 +1669,6 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*args = append(*args, arrStr, rngStr)
 		*toFree = append(*toFree, arrStr, rngStr)
 		return
-	}
-
-	// Dereference pointers - treat print args like function args
-	if s.Type.Kind() == PtrKind {
-		elemType := s.Type.(Ptr).Elem
-		derefed := c.createLoad(s.Val, elemType, "print_deref")
-		s = &Symbol{Val: derefed, Type: elemType}
 	}
 
 	// Get format specifier for this type
