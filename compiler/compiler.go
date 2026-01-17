@@ -1363,7 +1363,7 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 	if fnInfo == nil {
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: ce.Tok(),
-			Msg:   fmt.Sprintf("function %s not found for argument types; may need to assign to variable first", funcName),
+			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
 		})
 		return
 	}
@@ -1566,8 +1566,7 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-	// Collect ranges from expressions, but skip CallExpressions with LoopInside=true
-	// (those handle iteration internally and expect Range types)
+	// Collect ranges from all expressions for iteration
 	var allRanges []*RangeInfo
 	var rewrites []ast.Expression
 	seen := make(map[string]bool) // deduplicate ranges by name
@@ -1575,13 +1574,6 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	for _, expr := range ps.Expression {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if info == nil {
-			rewrites = append(rewrites, expr)
-			continue
-		}
-
-		// Skip ranges from call expressions that loop internally
-		// They expect Range types and handle iteration themselves
-		if info.LoopInside {
 			rewrites = append(rewrites, expr)
 			continue
 		}

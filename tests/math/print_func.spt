@@ -6,3 +6,31 @@ Square(3)
 # Function with range - iterates and calls per value
 m = 0:3
 m + 1, Square(m)
+
+# Inline range in function call
+Square(1:4)
+
+# Named range in function call
+i = 0:4
+Square(i)
+
+# Named range both direct and in function call
+i, Square(i)
+
+# Two bare ranges - should print as representations
+j = 1:3
+i, j
+
+# One bare range, one expression - should iterate
+i, j + 1
+
+# Different ranges - nested iteration (4 x 2 = 8 lines)
+i, Square(j + 1)
+
+# Same range used bare and in expression - single loop
+j, Square(j + 1)
+
+# Regression test: mixed expression with function not called with scalars before
+# SumSquares(k, k) creates Range variant, but k+1 forces iteration needing scalar variant
+k = 0:2
+k + 1, SumSquares(k, k)

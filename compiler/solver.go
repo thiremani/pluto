@@ -479,6 +479,10 @@ func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 
 // HandleIdentifierRanges processes identifier expressions, detecting if they refer
 // to range-typed variables and including them in range tracking.
+// Note: This returns ranges but does NOT set info.Ranges on the identifier itself.
+// This is intentional - bare identifiers like `i` should print as range representations.
+// Ranges are only extracted when the identifier is used in an expression context
+// (e.g., in a function call or infix operation) that needs scalar values.
 func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
 	typ, ok := ts.GetIdentifier(ident.Value)
 	if ok && (typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind) {
@@ -527,6 +531,82 @@ func (ts *TypeSolver) Solve() {
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 	for _, expr := range stmt.Expression {
 		ts.TypeExpression(expr, true)
+	}
+
+	// Like collectCallArgs: check if any expression has non-bare ranges
+	loopInside := true
+	for _, expr := range stmt.Expression {
+		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+		if info != nil && info.HasRanges && !ts.isBareRangeExpr(expr) {
+			loopInside = false
+			break
+		}
+	}
+
+	// If loopInside=false, the print statement will iterate over ranges.
+	// We need to ensure:
+	// 1. Bare range expressions (identifiers and literals) have Ranges set
+	// 2. Call expressions with LoopInside=true have scalar variants created
+	if !loopInside {
+		for _, expr := range stmt.Expression {
+			info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+			if info == nil {
+				continue
+			}
+			// Set Ranges for bare range expressions that don't have it set yet
+			if info.HasRanges && len(info.Ranges) == 0 {
+				switch e := expr.(type) {
+				case *ast.Identifier:
+					info.Ranges = []*RangeInfo{{Name: e.Value}}
+					info.Rewrite = expr
+				case *ast.RangeLiteral:
+					// For range literals, create iterator name and set ranges
+					ranges, rew := ts.HandleRangeLiteral(e)
+					info.Ranges = ranges
+					info.Rewrite = rew
+				}
+			}
+			// Ensure scalar variants exist for calls with LoopInside=true
+			// (they created Range variants, but compile-time needs scalar variants)
+			if call, ok := expr.(*ast.CallExpression); ok && info.LoopInside {
+				ts.ensureScalarCallVariant(call)
+			}
+		}
+	}
+}
+
+// ensureScalarCallVariant ensures the scalar variant of a function exists.
+// This is needed when a call with LoopInside=true (e.g., Square(m) where m is a bare range)
+// is inside a print statement that iterates - at compile time, ranges are shadowed with scalars.
+func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
+	// Compute scalar types for all arguments
+	scalarArgs := []Type{}
+	for _, arg := range ce.Arguments {
+		argInfo := ts.ExprCache[key(ts.FuncNameMangled, arg)]
+		if argInfo == nil {
+			// This shouldn't happen if TypeExpression was called correctly
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: arg.Tok(),
+				Msg:   "internal: missing type info for call argument",
+			})
+			return
+		}
+		for _, t := range argInfo.OutTypes {
+			innerType := t
+			switch t.Kind() {
+			case RangeKind:
+				innerType = t.(Range).Iter
+			case ArrayRangeKind:
+				innerType = t.(ArrayRange).Array.ColTypes[0]
+			}
+			scalarArgs = append(scalarArgs, innerType)
+		}
+	}
+
+	// Look up and create the scalar variant
+	template, mangled, ok := ts.lookupCallTemplate(ce, scalarArgs)
+	if ok {
+		ts.InferFuncTypes(ce, scalarArgs, mangled, template)
 	}
 }
 
