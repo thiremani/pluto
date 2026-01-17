@@ -1360,6 +1360,13 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
+		})
+		return
+	}
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -1559,16 +1566,60 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+	// Collect ranges from all expressions for iteration
+	var allRanges []*RangeInfo
+	var rewrites []ast.Expression
+	seen := make(map[string]bool) // deduplicate ranges by name
+
+	for _, expr := range ps.Expression {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if info == nil {
+			rewrites = append(rewrites, expr)
+			continue
+		}
+
+		if info.HasRanges && len(info.Ranges) > 0 {
+			// Deduplicate ranges by name to avoid nested loops for same range
+			for _, r := range info.Ranges {
+				if !seen[r.Name] {
+					seen[r.Name] = true
+					allRanges = append(allRanges, r)
+				}
+			}
+			if info.Rewrite != nil {
+				rewrites = append(rewrites, info.Rewrite)
+			} else {
+				rewrites = append(rewrites, expr)
+			}
+		} else {
+			rewrites = append(rewrites, expr)
+		}
+	}
+
+	// Filter out already-bound ranges
+	pending := c.pendingLoopRanges(allRanges)
+
+	if len(pending) > 0 {
+		// Wrap the entire print in loop nest - each iteration prints all expressions on one line
+		c.withLoopNest(allRanges, func() {
+			c.printAllExpressions(rewrites)
+		})
+	} else {
+		// No ranges - print all expressions on one line (original behavior)
+		c.printAllExpressions(ps.Expression)
+	}
+}
+
+// printAllExpressions prints all expressions on a single line
+func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	var formatStr string
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Process each expression and build format string + args
-	for _, expr := range ps.Expression {
+	for _, expr := range exprs {
 		c.appendPrintExpression(expr, &formatStr, &args, &toFree)
 	}
 
-	// Create format string global and call printf
 	formatPtr := c.createPrintFormatGlobal(formatStr)
 	allArgs := append([]llvm.Value{formatPtr}, args...)
 	c.printf(allArgs)
@@ -1595,6 +1646,13 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 
 // appendPrintSymbol handles printing one symbol based on its type
 func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	// Dereference pointers first - treat print args like function args
+	if s.Type.Kind() == PtrKind {
+		elemType := s.Type.(Ptr).Elem
+		derefed := c.createLoad(s.Val, elemType, "print_deref")
+		s = &Symbol{Val: derefed, Type: elemType}
+	}
+
 	// ArrayRange needs special handling (two string args)
 	if s.Type.Kind() == ArrayRangeKind {
 		arrStr, rngStr := c.arrayRangeStrArgs(s)
