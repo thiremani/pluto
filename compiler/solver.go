@@ -1276,8 +1276,8 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
-	// Handle "print" as a builtin - no template lookup, accepts any args
-	if ce.Function.Value == "print" {
+	// Handle Print as a builtin - no template lookup, accepts any args
+	if ce.Function.Value == Print {
 		_, loopInside, hasRanges := ts.typeExprsForIteration(ce.Arguments, isRoot)
 		info.OutTypes = []Type{}
 		info.ExprLen = 0
