@@ -1330,17 +1330,13 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	return f.OutTypes
 }
 
-// TypePrintExpression types a print expression and creates a cache entry for it.
-// Similar to TypeCallExpression, it determines whether ranges should be iterated
-// at the print site (LoopInside=false) or passed through (LoopInside=true).
-func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
-	info := &ExprInfo{OutTypes: []Type{}, ExprLen: 0}
-	ts.ExprCache[key(ts.FuncNameMangled, pe)] = info
-
-	// Type all sub-expressions and determine loopInside
-	loopInside := true
-	hasRanges := false
-	for _, expr := range pe.Expressions {
+// TypeExprsAndLoopType types a list of expressions and determines whether iteration
+// should happen externally (loopInside=false) or be handled by callees (loopInside=true).
+// When loopInside=false, ensures scalar variants exist for any calls that expected
+// to handle ranges internally.
+func (ts *TypeSolver) TypeExprsAndLoopType(exprs []ast.Expression) (loopInside bool, hasRanges bool) {
+	loopInside = true
+	for _, expr := range exprs {
 		ts.TypeExpression(expr, true)
 		exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 		if exprInfo != nil && exprInfo.HasRanges {
@@ -1351,12 +1347,12 @@ func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
 		}
 	}
 
-	// When loopInside=false, print iterates externally via withLoopNest.
+	// When loopInside=false, iteration happens externally via withLoopNest.
 	// Inside that loop, ranges become scalars. But calls like Square(m) where
 	// m is bare were typed with loopInside=true (Range variant only).
 	// We need to ensure scalar variants exist for compile-time lookup.
 	if !loopInside {
-		for _, expr := range pe.Expressions {
+		for _, expr := range exprs {
 			exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 			if exprInfo == nil {
 				continue
@@ -1366,6 +1362,17 @@ func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
 			}
 		}
 	}
+	return
+}
+
+// TypePrintExpression types a print expression and creates a cache entry for it.
+// Similar to TypeCallExpression, it determines whether ranges should be iterated
+// at the print site (LoopInside=false) or passed through (LoopInside=true).
+func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
+	info := &ExprInfo{OutTypes: []Type{}, ExprLen: 0}
+	ts.ExprCache[key(ts.FuncNameMangled, pe)] = info
+
+	loopInside, hasRanges := ts.TypeExprsAndLoopType(pe.Expressions)
 
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
