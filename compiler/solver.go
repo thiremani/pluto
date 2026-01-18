@@ -1309,46 +1309,51 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	return f.OutTypes
 }
 
-// typeExprsForIteration types a list of expressions and determines whether iteration
+// TypeExprsForIter types a list of expressions and determines whether iteration
 // should happen externally (loopInside=false) or be handled by callees (loopInside=true).
 // When loopInside=false, ensures scalar variants exist for any calls that expected
 // to handle ranges internally. Returns the outer types for each expression.
-func (ts *TypeSolver) typeExprsForIteration(exprs []ast.Expression, isRoot bool) (outerTypes [][]Type, loopInside bool, hasRanges bool) {
+func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (outerTypes [][]Type, loopInside bool, hasRanges bool) {
 	loopInside = true
 	outerTypes = make([][]Type, len(exprs))
 	for i, e := range exprs {
 		outerTypes[i] = ts.TypeExpression(e, isRoot)
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if info != nil && info.HasRanges {
-			hasRanges = true
-			if !ts.isBareRangeExpr(e) {
-				loopInside = false
-			}
+		if info == nil || !info.HasRanges {
+			continue
+		}
+		hasRanges = true
+		if !ts.isBareRangeExpr(e) {
+			loopInside = false
 		}
 	}
 
-	// When loopInside=false, iteration happens externally via withLoopNest.
+	if loopInside {
+		return
+	}
+
+	// loopInside=false: iteration happens externally via withLoopNest.
 	// Inside that loop, ranges become scalars. But calls like Square(m) where
 	// m is bare were typed with loopInside=true (Range variant only).
 	// Ensure scalar variants exist for compile-time lookup.
-	if !loopInside {
-		for _, e := range exprs {
-			info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-			if info == nil {
-				continue
-			}
-			if call, ok := e.(*ast.CallExpression); ok && info.LoopInside {
-				ts.ensureScalarCallVariant(call)
-			}
+	for _, e := range exprs {
+		call, ok := e.(*ast.CallExpression)
+		if !ok {
+			continue
 		}
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
+		if info == nil || !info.LoopInside {
+			continue
+		}
+		ts.ensureScalarCallVariant(call)
 	}
 	return
 }
 
 // collectCallArgs types arguments and builds arg type lists for function lookup.
-// Uses the shared typeExprsForIteration for the core logic.
+// Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
-	outerTypesPerArg, loopInside, _ := ts.typeExprsForIteration(ce.Arguments, isRoot)
+	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
