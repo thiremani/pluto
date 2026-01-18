@@ -1276,22 +1276,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
-	// Handle Print as a builtin - no template lookup, accepts any args
-	if ce.Function.Value == Print {
-		_, loopInside, hasRanges := ts.typeExprsForIteration(ce.Arguments, isRoot)
-		info.OutTypes = []Type{}
-		info.ExprLen = 0
-		info.HasRanges = hasRanges
-		info.LoopInside = loopInside
-		return info.OutTypes
-	}
-
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
-
-	template, mangled, ok := ts.lookupCallTemplate(ce, args)
-	if !ok {
-		return info.OutTypes
-	}
 
 	// Compute hasRanges from all arguments
 	hasRanges := false
@@ -1300,6 +1285,20 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 			hasRanges = true
 			break
 		}
+	}
+
+	// Handle builtins - no template lookup needed
+	if builtin, ok := Builtins[ce.Function.Value]; ok {
+		info.OutTypes = builtin.ReturnTypes
+		info.ExprLen = len(builtin.ReturnTypes)
+		info.HasRanges = hasRanges
+		info.LoopInside = loopInside
+		return info.OutTypes
+	}
+
+	template, mangled, ok := ts.lookupCallTemplate(ce, args)
+	if !ok {
+		return info.OutTypes
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
