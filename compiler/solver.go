@@ -447,22 +447,23 @@ func (ts *TypeSolver) collectExprRanges(exprs []ast.Expression) (ranges []*Range
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	ranges, args, changed := ts.collectExprRanges(call.Arguments)
-
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+
 	if !changed {
-		rew = call
-	} else {
-		cp := *call
-		cp.Arguments = args
-		rew = &cp
-		// Cache the rewritten expression with no ranges (ranges have been extracted)
-		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
-			OutTypes: info.OutTypes,
-			ExprLen:  info.ExprLen,
-			Ranges:   nil,
-		}
+		info.Ranges = ranges
+		info.Rewrite = call
+		return ranges, call
 	}
 
+	cp := *call
+	cp.Arguments = args
+	rew = &cp
+	// Cache the rewritten expression with no ranges (ranges have been extracted)
+	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
+		OutTypes: info.OutTypes,
+		ExprLen:  info.ExprLen,
+		Ranges:   nil,
+	}
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
@@ -472,22 +473,23 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandlePrintRanges(pe *ast.PrintExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	ranges, exprs, changed := ts.collectExprRanges(pe.Expressions)
-
 	info := ts.ExprCache[key(ts.FuncNameMangled, pe)]
+
 	if !changed {
-		rew = pe
-	} else {
-		cp := *pe
-		cp.Expressions = exprs
-		rew = &cp
-		// Cache the rewritten expression with no ranges (ranges have been extracted)
-		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrintExpression))] = &ExprInfo{
-			OutTypes: info.OutTypes,
-			ExprLen:  info.ExprLen,
-			Ranges:   nil,
-		}
+		info.Ranges = ranges
+		info.Rewrite = pe
+		return ranges, pe
 	}
 
+	cp := *pe
+	cp.Expressions = exprs
+	rew = &cp
+	// Cache the rewritten expression with no ranges (ranges have been extracted)
+	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrintExpression))] = &ExprInfo{
+		OutTypes: info.OutTypes,
+		ExprLen:  info.ExprLen,
+		Ranges:   nil,
+	}
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
