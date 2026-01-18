@@ -1566,20 +1566,20 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-	pe := ps.Expression
-	info := c.ExprCache[key(c.FuncNameMangled, pe)]
+	ce := ps.Expression
+	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
-		rewPrint := info.Rewrite.(*ast.PrintExpression)
+		rewCall := info.Rewrite.(*ast.CallExpression)
 		c.withLoopNest(info.Ranges, func() {
-			c.printAllExpressions(rewPrint.Expressions)
+			c.printAllExpressions(rewCall.Arguments)
 		})
 		return
 	}
 
 	// LoopInside=true or no ranges: direct print
-	c.printAllExpressions(pe.Expressions)
+	c.printAllExpressions(ce.Arguments)
 }
 
 // printAllExpressions prints all expressions on a single line

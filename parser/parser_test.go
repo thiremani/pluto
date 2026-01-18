@@ -198,8 +198,8 @@ func parseOneExpr(t *testing.T, src string) ast.Expression {
 	require.Len(t, prog.Statements, 1)
 	ps, ok := prog.Statements[0].(*ast.PrintStatement)
 	require.True(t, ok, "expected print statement, got %T", prog.Statements[0])
-	require.Len(t, ps.Expression.Expressions, 1)
-	return ps.Expression.Expressions[0]
+	require.Len(t, ps.Expression.Arguments, 1)
+	return ps.Expression.Arguments[0]
 }
 
 func TestParseRangeLiteral(t *testing.T) {

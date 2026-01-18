@@ -410,9 +410,10 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		p.errorOnBlanks()
 		return &ast.PrintStatement{
 			Token: firstToken,
-			Expression: &ast.PrintExpression{
-				Token:       firstToken,
-				Expressions: expList,
+			Expression: &ast.CallExpression{
+				Token:     firstToken,
+				Function:  &ast.Identifier{Token: firstToken, Value: "print"},
+				Arguments: expList,
 			},
 		}
 	}

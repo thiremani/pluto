@@ -263,8 +263,6 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
 		return ts.HandleCallRanges(t)
-	case *ast.PrintExpression:
-		return ts.HandlePrintRanges(t)
 	case *ast.Identifier:
 		return ts.HandleIdentifierRanges(t)
 	default:
@@ -460,32 +458,6 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	rew = &cp
 	// Cache the rewritten expression with no ranges (ranges have been extracted)
 	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
-		OutTypes: info.OutTypes,
-		ExprLen:  info.ExprLen,
-		Ranges:   nil,
-	}
-	info.Ranges = ranges
-	info.Rewrite = rew
-	return
-}
-
-// HandlePrintRanges processes print expressions, handling all sub-expressions
-// and merging their range information for proper loop generation.
-func (ts *TypeSolver) HandlePrintRanges(pe *ast.PrintExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	ranges, exprs, changed := ts.collectExprRanges(pe.Expressions)
-	info := ts.ExprCache[key(ts.FuncNameMangled, pe)]
-
-	if !changed {
-		info.Ranges = ranges
-		info.Rewrite = pe
-		return ranges, pe
-	}
-
-	cp := *pe
-	cp.Expressions = exprs
-	rew = &cp
-	// Cache the rewritten expression with no ranges (ranges have been extracted)
-	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrintExpression))] = &ExprInfo{
 		OutTypes: info.OutTypes,
 		ExprLen:  info.ExprLen,
 		Ranges:   nil,
@@ -982,8 +954,6 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
 		types = ts.TypeCallExpression(e, isRoot)
-	case *ast.PrintExpression:
-		types = ts.TypePrintExpression(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
@@ -1306,6 +1276,16 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
+	// Handle "print" as a builtin - no template lookup, accepts any args
+	if ce.Function.Value == "print" {
+		_, loopInside, hasRanges := ts.typeExprsForIteration(ce.Arguments, isRoot)
+		info.OutTypes = []Type{}
+		info.ExprLen = 0
+		info.HasRanges = hasRanges
+		info.LoopInside = loopInside
+		return info.OutTypes
+	}
+
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
 
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
@@ -1364,19 +1344,6 @@ func (ts *TypeSolver) typeExprsForIteration(exprs []ast.Expression, isRoot bool)
 		}
 	}
 	return
-}
-
-// TypePrintExpression types a print expression and creates a cache entry for it.
-// Print is essentially a function call, so it follows the same iteration logic.
-func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
-	info := &ExprInfo{OutTypes: []Type{}, ExprLen: 0}
-	ts.ExprCache[key(ts.FuncNameMangled, pe)] = info
-
-	_, loopInside, hasRanges := ts.typeExprsForIteration(pe.Expressions, true)
-
-	info.HasRanges = hasRanges
-	info.LoopInside = loopInside
-	return info.OutTypes
 }
 
 // collectCallArgs types arguments and builds arg type lists for function lookup.

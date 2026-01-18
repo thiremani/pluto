@@ -180,24 +180,13 @@ func (ls *LetStatement) String() string {
 
 type PrintStatement struct {
 	Token      token.Token // the first token of the expression
-	Expression *PrintExpression
+	Expression *CallExpression
 }
 
 func (ps *PrintStatement) statementNode()   {}
 func (ps *PrintStatement) Tok() token.Token { return ps.Token }
 func (ps *PrintStatement) String() string {
-	return ps.Expression.String()
-}
-
-type PrintExpression struct {
-	Token       token.Token // the first token of the expression
-	Expressions []Expression
-}
-
-func (pe *PrintExpression) expressionNode()  {}
-func (pe *PrintExpression) Tok() token.Token { return pe.Token }
-func (pe *PrintExpression) String() string {
-	return printVec(pe.Expressions)
+	return printVec(ps.Expression.Arguments)
 }
 
 type BlockStatement struct {

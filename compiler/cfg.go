@@ -228,7 +228,7 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 		}
 
 	case *ast.PrintStatement:
-		for _, expr := range s.Expression.Expressions {
+		for _, expr := range s.Expression.Arguments {
 			evs = append(evs, cfg.collectReads(expr)...)
 		}
 	}
