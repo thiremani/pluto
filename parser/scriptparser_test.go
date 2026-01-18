@@ -102,8 +102,8 @@ func TestIdentifierExpression(t *testing.T) {
 	require.Empty(t, sp.Errors())
 
 	printStmt := requireOnlyPrintStmt(t, program)
-	ident, ok := printStmt.Expression[0].(*ast.Identifier)
-	require.Truef(t, ok, "expected *ast.Identifier, got %T", printStmt.Expression[0])
+	ident, ok := printStmt.Expression.Expressions[0].(*ast.Identifier)
+	require.Truef(t, ok, "expected *ast.Identifier, got %T", printStmt.Expression.Expressions[0])
 	require.Equal(t, "foobar", ident.Value)
 	require.Equal(t, "foobar", ident.Tok().Literal)
 }
@@ -116,8 +116,8 @@ func TestIntegerLiteralExpression(t *testing.T) {
 	require.Empty(t, sp.Errors())
 
 	printStmt := requireOnlyPrintStmt(t, program)
-	lit, ok := printStmt.Expression[0].(*ast.IntegerLiteral)
-	require.Truef(t, ok, "expected *ast.IntegerLiteral, got %T", printStmt.Expression[0])
+	lit, ok := printStmt.Expression.Expressions[0].(*ast.IntegerLiteral)
+	require.Truef(t, ok, "expected *ast.IntegerLiteral, got %T", printStmt.Expression.Expressions[0])
 	require.Equal(t, int64(5), lit.Value)
 	require.Equal(t, "5", lit.Tok().Literal)
 }
@@ -130,8 +130,8 @@ func TestStringLiteral(t *testing.T) {
 	require.Empty(t, sp.Errors())
 
 	printStmt := requireOnlyPrintStmt(t, program)
-	lit, ok := printStmt.Expression[0].(*ast.StringLiteral)
-	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression[0])
+	lit, ok := printStmt.Expression.Expressions[0].(*ast.StringLiteral)
+	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression.Expressions[0])
 	require.Equal(t, "hello", lit.Value)
 	require.Equal(t, "hello", lit.Token.Literal)
 }
@@ -156,8 +156,8 @@ func TestParsingPrefixExpressions(t *testing.T) {
 			require.Empty(t, sp.Errors())
 
 			printStmt := requireOnlyPrintStmt(t, program)
-			exp, ok := printStmt.Expression[0].(*ast.PrefixExpression)
-			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression[0])
+			exp, ok := printStmt.Expression.Expressions[0].(*ast.PrefixExpression)
+			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression.Expressions[0])
 			require.Equal(t, tt.operator, exp.Operator)
 			// testLiteralExpression is assumed available
 			require.Truef(t, testLiteralExpression(t, exp.Right, tt.value), "literal mismatch for input %q", tt.input)
@@ -186,8 +186,8 @@ func TestRootOperators(t *testing.T) {
 			require.Empty(t, sp.Errors())
 
 			printStmt := requireOnlyPrintStmt(t, program)
-			exp, ok := printStmt.Expression[0].(*ast.PrefixExpression)
-			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression[0])
+			exp, ok := printStmt.Expression.Expressions[0].(*ast.PrefixExpression)
+			require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", printStmt.Expression.Expressions[0])
 			require.Equal(t, tt.operator, exp.Operator)
 
 			// For negative values, expect a PrefixExpression with "-" operator
@@ -327,8 +327,8 @@ func TestParsingInfixExpressions(t *testing.T) {
 			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
 
 			printStmt := requireOnlyPrintStmt(t, program)
-			infix, ok := printStmt.Expression[0].(*ast.InfixExpression)
-			require.Truef(t, ok, "input %q: expected *ast.InfixExpression, got %T", tt.input, printStmt.Expression[0])
+			infix, ok := printStmt.Expression.Expressions[0].(*ast.InfixExpression)
+			require.Truef(t, ok, "input %q: expected *ast.InfixExpression, got %T", tt.input, printStmt.Expression.Expressions[0])
 
 			require.Truef(t, testInfixExpression(t, infix, tt.left, tt.operator, tt.right),
 				"input %q: infix expression mismatch", tt.input)
@@ -735,10 +735,10 @@ func TestArrayLiterals(t *testing.T) {
 			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
 
 			stmt := requireOnlyPrintStmt(t, program)
-			require.Len(t, stmt.Expression, 1, "expected one expression in print statement")
+			require.Len(t, stmt.Expression.Expressions, 1, "expected one expression in print statement")
 
-			arr, ok := stmt.Expression[0].(*ast.ArrayLiteral)
-			require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Expression[0])
+			arr, ok := stmt.Expression.Expressions[0].(*ast.ArrayLiteral)
+			require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Expression.Expressions[0])
 
 			if tt.checkResult != nil {
 				tt.checkResult(t, arr)

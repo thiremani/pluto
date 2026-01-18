@@ -263,6 +263,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
 		return ts.HandleCallRanges(t)
+	case *ast.PrintExpression:
+		return ts.HandlePrintRanges(t)
 	case *ast.Identifier:
 		return ts.HandleIdentifierRanges(t)
 	default:
@@ -427,18 +429,24 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 	return
 }
 
+// collectExprRanges processes a list of expressions, collecting their ranges
+// and building rewritten expressions. Returns the merged ranges, rewritten
+// expressions, and whether any expression was changed.
+func (ts *TypeSolver) collectExprRanges(exprs []ast.Expression) (ranges []*RangeInfo, rewrites []ast.Expression, changed bool) {
+	rewrites = make([]ast.Expression, len(exprs))
+	for i, e := range exprs {
+		eRanges, e2 := ts.HandleRanges(e)
+		rewrites[i] = e2
+		changed = changed || (e2 != e)
+		ranges = mergeUses(ranges, eRanges)
+	}
+	return
+}
+
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	changed := false
-	args := make([]ast.Expression, len(call.Arguments))
-
-	for i, a := range call.Arguments {
-		aRanges, a2 := ts.HandleRanges(a)
-		args[i] = a2
-		changed = changed || (a2 != a)
-		ranges = mergeUses(ranges, aRanges)
-	}
+	ranges, args, changed := ts.collectExprRanges(call.Arguments)
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 	if !changed {
@@ -449,6 +457,31 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 		rew = &cp
 		// Cache the rewritten expression with no ranges (ranges have been extracted)
 		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
+			OutTypes: info.OutTypes,
+			ExprLen:  info.ExprLen,
+			Ranges:   nil,
+		}
+	}
+
+	info.Ranges = ranges
+	info.Rewrite = rew
+	return
+}
+
+// HandlePrintRanges processes print expressions, handling all sub-expressions
+// and merging their range information for proper loop generation.
+func (ts *TypeSolver) HandlePrintRanges(pe *ast.PrintExpression) (ranges []*RangeInfo, rew ast.Expression) {
+	ranges, exprs, changed := ts.collectExprRanges(pe.Expressions)
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, pe)]
+	if !changed {
+		rew = pe
+	} else {
+		cp := *pe
+		cp.Expressions = exprs
+		rew = &cp
+		// Cache the rewritten expression with no ranges (ranges have been extracted)
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrintExpression))] = &ExprInfo{
 			OutTypes: info.OutTypes,
 			ExprLen:  info.ExprLen,
 			Ranges:   nil,
@@ -529,50 +562,7 @@ func (ts *TypeSolver) Solve() {
 }
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
-	for _, expr := range stmt.Expression {
-		ts.TypeExpression(expr, true)
-	}
-
-	// Like collectCallArgs: check if any expression has non-bare ranges
-	loopInside := true
-	for _, expr := range stmt.Expression {
-		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		if info != nil && info.HasRanges && !ts.isBareRangeExpr(expr) {
-			loopInside = false
-			break
-		}
-	}
-
-	// If loopInside=false, the print statement will iterate over ranges.
-	// We need to ensure:
-	// 1. Bare range expressions (identifiers and literals) have Ranges set
-	// 2. Call expressions with LoopInside=true have scalar variants created
-	if !loopInside {
-		for _, expr := range stmt.Expression {
-			info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-			if info == nil {
-				continue
-			}
-			// Set Ranges for bare range expressions that don't have it set yet
-			if info.HasRanges && len(info.Ranges) == 0 {
-				switch e := expr.(type) {
-				case *ast.Identifier:
-					info.Ranges = []*RangeInfo{{Name: e.Value}}
-					info.Rewrite = expr
-				case *ast.RangeLiteral:
-					// For range literals, create iterator name and set ranges
-					ranges, rew := ts.HandleRangeLiteral(e)
-					info.Ranges = ranges
-					info.Rewrite = rew
-				}
-			}
-			// Ensure scalar variants exist for calls with LoopInside=true
-			// (they created Range variants, but compile-time needs scalar variants)
-			if call, ok := expr.(*ast.CallExpression); ok && info.LoopInside {
-				ts.ensureScalarCallVariant(call)
-			}
-		}
-	}
+	ts.TypeExpression(stmt.Expression, true)
 }
 
 // ensureScalarCallVariant ensures the scalar variant of a function exists.
@@ -990,6 +980,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
 		types = ts.TypeCallExpression(e, isRoot)
+	case *ast.PrintExpression:
+		types = ts.TypePrintExpression(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression type %T to infer type", e))
 	}
@@ -1334,6 +1326,46 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
 	return f.OutTypes
+}
+
+// TypePrintExpression types a print expression and creates a cache entry for it.
+// Similar to TypeCallExpression, it determines whether ranges should be iterated
+// at the print site (LoopInside=false) or passed through (LoopInside=true).
+func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
+	info := &ExprInfo{OutTypes: []Type{}, ExprLen: 0}
+	ts.ExprCache[key(ts.FuncNameMangled, pe)] = info
+
+	// Type all sub-expressions and determine loopInside
+	loopInside := true
+	hasRanges := false
+	for _, expr := range pe.Expressions {
+		ts.TypeExpression(expr, true)
+		exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+		if exprInfo != nil && exprInfo.HasRanges {
+			hasRanges = true
+			if !ts.isBareRangeExpr(expr) {
+				loopInside = false
+			}
+		}
+	}
+
+	// If loopInside=false, ensure scalar variants exist for calls
+	if !loopInside {
+		for _, expr := range pe.Expressions {
+			exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+			if exprInfo == nil {
+				continue
+			}
+			// Ensure scalar variants exist for calls with LoopInside=true
+			if call, ok := expr.(*ast.CallExpression); ok && exprInfo.LoopInside {
+				ts.ensureScalarCallVariant(call)
+			}
+		}
+	}
+
+	info.HasRanges = hasRanges
+	info.LoopInside = loopInside
+	return info.OutTypes
 }
 
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {

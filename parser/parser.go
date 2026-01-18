@@ -409,8 +409,11 @@ func (p *StmtParser) parseStatement() ast.Statement {
 		// Print statement - blanks not allowed
 		p.errorOnBlanks()
 		return &ast.PrintStatement{
-			Token:      firstToken,
-			Expression: expList,
+			Token: firstToken,
+			Expression: &ast.PrintExpression{
+				Token:       firstToken,
+				Expressions: expList,
+			},
 		}
 	}
 

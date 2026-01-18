@@ -1566,48 +1566,20 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
-	// Collect ranges from all expressions for iteration
-	var allRanges []*RangeInfo
-	var rewrites []ast.Expression
-	seen := make(map[string]bool) // deduplicate ranges by name
+	pe := ps.Expression
+	info := c.ExprCache[key(c.FuncNameMangled, pe)]
 
-	for _, expr := range ps.Expression {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info == nil {
-			rewrites = append(rewrites, expr)
-			continue
-		}
-
-		if info.HasRanges && len(info.Ranges) > 0 {
-			// Deduplicate ranges by name to avoid nested loops for same range
-			for _, r := range info.Ranges {
-				if !seen[r.Name] {
-					seen[r.Name] = true
-					allRanges = append(allRanges, r)
-				}
-			}
-			if info.Rewrite != nil {
-				rewrites = append(rewrites, info.Rewrite)
-			} else {
-				rewrites = append(rewrites, expr)
-			}
-		} else {
-			rewrites = append(rewrites, expr)
-		}
-	}
-
-	// Filter out already-bound ranges
-	pending := c.pendingLoopRanges(allRanges)
-
-	if len(pending) > 0 {
-		// Wrap the entire print in loop nest - each iteration prints all expressions on one line
-		c.withLoopNest(allRanges, func() {
-			c.printAllExpressions(rewrites)
+	// If LoopInside=false, wrap print in loops for all ranges
+	if !info.LoopInside && len(info.Ranges) > 0 {
+		rewPrint := info.Rewrite.(*ast.PrintExpression)
+		c.withLoopNest(info.Ranges, func() {
+			c.printAllExpressions(rewPrint.Expressions)
 		})
-	} else {
-		// No ranges - print all expressions on one line (original behavior)
-		c.printAllExpressions(ps.Expression)
+		return
 	}
+
+	// LoopInside=true or no ranges: direct print
+	c.printAllExpressions(pe.Expressions)
 }
 
 // printAllExpressions prints all expressions on a single line
