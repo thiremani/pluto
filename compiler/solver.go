@@ -1351,14 +1351,16 @@ func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
 		}
 	}
 
-	// If loopInside=false, ensure scalar variants exist for calls
+	// When loopInside=false, print iterates externally via withLoopNest.
+	// Inside that loop, ranges become scalars. But calls like Square(m) where
+	// m is bare were typed with loopInside=true (Range variant only).
+	// We need to ensure scalar variants exist for compile-time lookup.
 	if !loopInside {
 		for _, expr := range pe.Expressions {
 			exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 			if exprInfo == nil {
 				continue
 			}
-			// Ensure scalar variants exist for calls with LoopInside=true
 			if call, ok := expr.(*ast.CallExpression); ok && exprInfo.LoopInside {
 				ts.ensureScalarCallVariant(call)
 			}
