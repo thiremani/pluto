@@ -1330,18 +1330,19 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	return f.OutTypes
 }
 
-// TypeExprsAndLoopType types a list of expressions and determines whether iteration
+// typeExprsForIteration types a list of expressions and determines whether iteration
 // should happen externally (loopInside=false) or be handled by callees (loopInside=true).
 // When loopInside=false, ensures scalar variants exist for any calls that expected
-// to handle ranges internally.
-func (ts *TypeSolver) TypeExprsAndLoopType(exprs []ast.Expression) (loopInside bool, hasRanges bool) {
+// to handle ranges internally. Returns the outer types for each expression.
+func (ts *TypeSolver) typeExprsForIteration(exprs []ast.Expression, isRoot bool) (outerTypes [][]Type, loopInside bool, hasRanges bool) {
 	loopInside = true
-	for _, expr := range exprs {
-		ts.TypeExpression(expr, true)
-		exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		if exprInfo != nil && exprInfo.HasRanges {
+	outerTypes = make([][]Type, len(exprs))
+	for i, e := range exprs {
+		outerTypes[i] = ts.TypeExpression(e, isRoot)
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
+		if info != nil && info.HasRanges {
 			hasRanges = true
-			if !ts.isBareRangeExpr(expr) {
+			if !ts.isBareRangeExpr(e) {
 				loopInside = false
 			}
 		}
@@ -1350,14 +1351,14 @@ func (ts *TypeSolver) TypeExprsAndLoopType(exprs []ast.Expression) (loopInside b
 	// When loopInside=false, iteration happens externally via withLoopNest.
 	// Inside that loop, ranges become scalars. But calls like Square(m) where
 	// m is bare were typed with loopInside=true (Range variant only).
-	// We need to ensure scalar variants exist for compile-time lookup.
+	// Ensure scalar variants exist for compile-time lookup.
 	if !loopInside {
-		for _, expr := range exprs {
-			exprInfo := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-			if exprInfo == nil {
+		for _, e := range exprs {
+			info := ts.ExprCache[key(ts.FuncNameMangled, e)]
+			if info == nil {
 				continue
 			}
-			if call, ok := expr.(*ast.CallExpression); ok && exprInfo.LoopInside {
+			if call, ok := e.(*ast.CallExpression); ok && info.LoopInside {
 				ts.ensureScalarCallVariant(call)
 			}
 		}
@@ -1366,33 +1367,24 @@ func (ts *TypeSolver) TypeExprsAndLoopType(exprs []ast.Expression) (loopInside b
 }
 
 // TypePrintExpression types a print expression and creates a cache entry for it.
-// Similar to TypeCallExpression, it determines whether ranges should be iterated
-// at the print site (LoopInside=false) or passed through (LoopInside=true).
+// Print is essentially a function call, so it follows the same iteration logic.
 func (ts *TypeSolver) TypePrintExpression(pe *ast.PrintExpression) []Type {
 	info := &ExprInfo{OutTypes: []Type{}, ExprLen: 0}
 	ts.ExprCache[key(ts.FuncNameMangled, pe)] = info
 
-	loopInside, hasRanges := ts.TypeExprsAndLoopType(pe.Expressions)
+	_, loopInside, hasRanges := ts.typeExprsForIteration(pe.Expressions, true)
 
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
 	return info.OutTypes
 }
 
+// collectCallArgs types arguments and builds arg type lists for function lookup.
+// Uses the shared typeExprsForIteration for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
-	// First pass: type all args and determine loopInside
-	loopInside = true
-	outerTypesPerArg := make([][]Type, len(ce.Arguments))
-	for i, e := range ce.Arguments {
-		// Use return value of TypeExpression, not ExprCache
-		// When isRoot=false, Range identifiers return inner type (Int)
-		outerTypesPerArg[i] = ts.TypeExpression(e, isRoot)
-		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges && !ts.isBareRangeExpr(e) {
-			loopInside = false
-		}
-	}
+	outerTypesPerArg, loopInside, _ := ts.typeExprsForIteration(ce.Arguments, isRoot)
 
-	// Second pass: build args and innerArgs
+	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for _, outerTypes := range outerTypesPerArg {
 		for _, outerType := range outerTypes {
@@ -1405,7 +1397,6 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 			}
 			innerArgs = append(innerArgs, innerType)
 
-			// If loopInside, keep Range types; otherwise use inner types for all
 			if loopInside {
 				args = append(args, outerType)
 			} else {
