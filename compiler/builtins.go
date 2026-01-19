@@ -1,7 +1,7 @@
 package compiler
 
 // Builtin function names
-const Print = "Print"
+const Print = ""
 
 // BuiltinFunc describes a builtin function's type signature
 type BuiltinFunc struct {

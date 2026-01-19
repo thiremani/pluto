@@ -412,7 +412,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 			Token: firstToken,
 			Expression: &ast.CallExpression{
 				Token:     firstToken,
-				Function:  &ast.Identifier{Token: firstToken, Value: "Print"},
+				Function:  &ast.Identifier{Token: firstToken, Value: ""},
 				Arguments: expList,
 			},
 		}
