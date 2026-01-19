@@ -427,34 +427,41 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 	return
 }
 
+// collectExprRanges processes a list of expressions, collecting their ranges
+// and building rewritten expressions. Returns the merged ranges, rewritten
+// expressions, and whether any expression was changed.
+func (ts *TypeSolver) collectExprRanges(exprs []ast.Expression) (ranges []*RangeInfo, rewrites []ast.Expression, changed bool) {
+	rewrites = make([]ast.Expression, len(exprs))
+	for i, e := range exprs {
+		eRanges, e2 := ts.HandleRanges(e)
+		rewrites[i] = e2
+		changed = changed || (e2 != e)
+		ranges = mergeUses(ranges, eRanges)
+	}
+	return
+}
+
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	changed := false
-	args := make([]ast.Expression, len(call.Arguments))
-
-	for i, a := range call.Arguments {
-		aRanges, a2 := ts.HandleRanges(a)
-		args[i] = a2
-		changed = changed || (a2 != a)
-		ranges = mergeUses(ranges, aRanges)
-	}
-
+	ranges, args, changed := ts.collectExprRanges(call.Arguments)
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+
 	if !changed {
-		rew = call
-	} else {
-		cp := *call
-		cp.Arguments = args
-		rew = &cp
-		// Cache the rewritten expression with no ranges (ranges have been extracted)
-		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
-			OutTypes: info.OutTypes,
-			ExprLen:  info.ExprLen,
-			Ranges:   nil,
-		}
+		info.Ranges = ranges
+		info.Rewrite = call
+		return ranges, call
 	}
 
+	cp := *call
+	cp.Arguments = args
+	rew = &cp
+	// Cache the rewritten expression with no ranges (ranges have been extracted)
+	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
+		OutTypes: info.OutTypes,
+		ExprLen:  info.ExprLen,
+		Ranges:   nil,
+	}
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
@@ -479,6 +486,10 @@ func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 
 // HandleIdentifierRanges processes identifier expressions, detecting if they refer
 // to range-typed variables and including them in range tracking.
+// Note: This returns ranges but does NOT set info.Ranges on the identifier itself.
+// This is intentional - bare identifiers like `i` should print as range representations.
+// Ranges are only extracted when the identifier is used in an expression context
+// (e.g., in a function call or infix operation) that needs scalar values.
 func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
 	typ, ok := ts.GetIdentifier(ident.Value)
 	if ok && (typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind) {
@@ -525,8 +536,41 @@ func (ts *TypeSolver) Solve() {
 }
 
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
-	for _, expr := range stmt.Expression {
-		ts.TypeExpression(expr, true)
+	ts.TypeExpression(stmt.Expression, true)
+}
+
+// ensureScalarCallVariant ensures the scalar variant of a function exists.
+// This is needed when a call with LoopInside=true (e.g., Square(m) where m is a bare range)
+// is inside a print statement that iterates - at compile time, ranges are shadowed with scalars.
+func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
+	// Compute scalar types for all arguments
+	scalarArgs := []Type{}
+	for _, arg := range ce.Arguments {
+		argInfo := ts.ExprCache[key(ts.FuncNameMangled, arg)]
+		if argInfo == nil {
+			// This shouldn't happen if TypeExpression was called correctly
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: arg.Tok(),
+				Msg:   "internal: missing type info for call argument",
+			})
+			return
+		}
+		for _, t := range argInfo.OutTypes {
+			innerType := t
+			switch t.Kind() {
+			case RangeKind:
+				innerType = t.(Range).Iter
+			case ArrayRangeKind:
+				innerType = t.(ArrayRange).Array.ColTypes[0]
+			}
+			scalarArgs = append(scalarArgs, innerType)
+		}
+	}
+
+	// Look up and create the scalar variant
+	template, mangled, ok := ts.lookupCallTemplate(ce, scalarArgs)
+	if ok {
+		ts.InferFuncTypes(ce, scalarArgs, mangled, template)
 	}
 }
 
@@ -1234,11 +1278,6 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
 
-	template, mangled, ok := ts.lookupCallTemplate(ce, args)
-	if !ok {
-		return info.OutTypes
-	}
-
 	// Compute hasRanges from all arguments
 	hasRanges := false
 	for _, e := range ce.Arguments {
@@ -1246,6 +1285,20 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 			hasRanges = true
 			break
 		}
+	}
+
+	// Handle builtins - no template lookup needed
+	if builtin, ok := Builtins[ce.Function.Value]; ok {
+		info.OutTypes = builtin.ReturnTypes
+		info.ExprLen = len(builtin.ReturnTypes)
+		info.HasRanges = hasRanges
+		info.LoopInside = loopInside
+		return info.OutTypes
+	}
+
+	template, mangled, ok := ts.lookupCallTemplate(ce, args)
+	if !ok {
+		return info.OutTypes
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
@@ -1256,20 +1309,53 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	return f.OutTypes
 }
 
-func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
-	// First pass: type all args and determine loopInside
+// TypeExprsForIter types a list of expressions and determines whether iteration
+// should happen externally (loopInside=false) or be handled by callees (loopInside=true).
+// When loopInside=false, ensures scalar variants exist for any calls that expected
+// to handle ranges internally. Returns the outer types for each expression.
+func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (outerTypes [][]Type, loopInside bool, hasRanges bool) {
 	loopInside = true
-	outerTypesPerArg := make([][]Type, len(ce.Arguments))
-	for i, e := range ce.Arguments {
-		// Use return value of TypeExpression, not ExprCache
-		// When isRoot=false, Range identifiers return inner type (Int)
-		outerTypesPerArg[i] = ts.TypeExpression(e, isRoot)
-		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges && !ts.isBareRangeExpr(e) {
+	outerTypes = make([][]Type, len(exprs))
+	for i, e := range exprs {
+		outerTypes[i] = ts.TypeExpression(e, isRoot)
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
+		if info == nil || !info.HasRanges {
+			continue
+		}
+		hasRanges = true
+		if !ts.isBareRangeExpr(e) {
 			loopInside = false
 		}
 	}
 
-	// Second pass: build args and innerArgs
+	if loopInside {
+		return
+	}
+
+	// loopInside=false: iteration happens externally via withLoopNest.
+	// Inside that loop, ranges become scalars. But calls like Square(m) where
+	// m is bare were typed with loopInside=true (Range variant only).
+	// Ensure scalar variants exist for compile-time lookup.
+	for _, e := range exprs {
+		call, ok := e.(*ast.CallExpression)
+		if !ok {
+			continue
+		}
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
+		if info == nil || !info.LoopInside {
+			continue
+		}
+		ts.ensureScalarCallVariant(call)
+	}
+	return
+}
+
+// collectCallArgs types arguments and builds arg type lists for function lookup.
+// Uses the shared TypeExprsForIter for the core logic.
+func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
+	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
+
+	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for _, outerTypes := range outerTypesPerArg {
 		for _, outerType := range outerTypes {
@@ -1282,7 +1368,6 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 			}
 			innerArgs = append(innerArgs, innerType)
 
-			// If loopInside, keep Range types; otherwise use inner types for all
 			if loopInside {
 				args = append(args, outerType)
 			} else {

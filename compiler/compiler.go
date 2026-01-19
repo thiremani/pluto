@@ -1360,6 +1360,13 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
+		})
+		return
+	}
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
 	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -1559,16 +1566,32 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+	ce := ps.Expression
+	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+
+	// If LoopInside=false, wrap print in loops for all ranges
+	if !info.LoopInside && len(info.Ranges) > 0 {
+		rewCall := info.Rewrite.(*ast.CallExpression)
+		c.withLoopNest(info.Ranges, func() {
+			c.printAllExpressions(rewCall.Arguments)
+		})
+		return
+	}
+
+	// LoopInside=true or no ranges: direct print
+	c.printAllExpressions(ce.Arguments)
+}
+
+// printAllExpressions prints all expressions on a single line
+func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	var formatStr string
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Process each expression and build format string + args
-	for _, expr := range ps.Expression {
+	for _, expr := range exprs {
 		c.appendPrintExpression(expr, &formatStr, &args, &toFree)
 	}
 
-	// Create format string global and call printf
 	formatPtr := c.createPrintFormatGlobal(formatStr)
 	allArgs := append([]llvm.Value{formatPtr}, args...)
 	c.printf(allArgs)
@@ -1595,6 +1618,13 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 
 // appendPrintSymbol handles printing one symbol based on its type
 func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
+	// Dereference pointers first - treat print args like function args
+	if s.Type.Kind() == PtrKind {
+		elemType := s.Type.(Ptr).Elem
+		derefed := c.createLoad(s.Val, elemType, "print_deref")
+		s = &Symbol{Val: derefed, Type: elemType}
+	}
+
 	// ArrayRange needs special handling (two string args)
 	if s.Type.Kind() == ArrayRangeKind {
 		arrStr, rngStr := c.arrayRangeStrArgs(s)
