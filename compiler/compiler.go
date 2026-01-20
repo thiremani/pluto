@@ -437,7 +437,9 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
-		s.Type = Str{Static: true} // Zero value is static empty string
+		// Zero value is a static empty string, but preserve the Static flag from symType.
+		// This is important: if symType says Static:false (e.g., for a function that returns
+		// a heap-allocated string), we keep that so cleanup knows to free the actual value later.
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
 		// Create an actual zero-length array (not null)
@@ -474,90 +476,135 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		return
 	}
 
-	// Determine copy requirements based on storage class and ownership
+	// Phase 1: Determine which assignments need copying vs ownership transfer
+	needsCopy := c.computeCopyRequirements(idents, syms, rhsNames)
+
+	// Phase 2: Capture old LHS values before any modifications
+	oldValues := c.captureOldValues(idents)
+
+	// Phase 3: Build set of values being transferred (these must not be freed)
+	transferSet := c.buildTransferSet(syms, needsCopy)
+
+	// Phase 4: Perform all stores (transfers first, then copies)
+	c.performAllStores(idents, syms, needsCopy)
+
+	// Phase 5: Free temporary RHS values that were copied (e.g., array literals)
+	c.freeTemporaries(syms, rhsNames, needsCopy)
+
+	// Phase 6: Free orphaned old values (not transferred to another variable)
+	c.freeOrphanedValues(oldValues, transferSet)
+}
+
+// computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
+func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) []bool {
 	needsCopy := make([]bool, len(syms))
 	for i, rhsSym := range syms {
-		// Check if this is a static string (no copy needed - immutable, lives forever)
+		// Static strings: immutable, live forever - no copy needed
 		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
 			needsCopy[i] = false
 			continue
 		}
 
-		// Function arguments are borrowed references - no copy needed
+		// Function arguments: borrowed references - no copy needed
 		if rhsSym.FuncArg {
 			needsCopy[i] = false
 			continue
 		}
 
-		// Check if RHS is a variable that's being overwritten in LHS
+		// Check if RHS variable is being overwritten in LHS (enables ownership transfer)
 		canTransfer := false
 		if rhsNames[i] != "" {
-			// RHS is a variable - check if it's in the LHS
 			for _, lhsIdent := range idents {
 				if lhsIdent.Value == rhsNames[i] {
-					// This variable is being overwritten, can transfer ownership
 					canTransfer = true
 					break
 				}
 			}
 		}
 
-		// If RHS is not a variable, or variable is not in LHS, we need to copy
-		// (because the original owner keeps the value)
 		needsCopy[i] = !canTransfer
 	}
+	return needsCopy
+}
 
-	// Process assignments in two phases to avoid use-after-free
+// captureOldValues snapshots the current LHS variable values before any modifications.
+func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
+	oldValues := make([]*Symbol, len(idents))
+	for i, ident := range idents {
+		if sym, ok := Get(c.Scopes, ident.Value); ok {
+			oldValues[i] = sym
+		}
+	}
+	return oldValues
+}
+
+// buildTransferSet collects all RHS values that are being transferred (not copied).
+func (c *Compiler) buildTransferSet(syms []*Symbol, needsCopy []bool) map[llvm.Value]bool {
+	transferSet := make(map[llvm.Value]bool)
+	for i, sym := range syms {
+		if !needsCopy[i] {
+			transferSet[sym.Val] = true
+		}
+	}
+	return transferSet
+}
+
+// performAllStores executes all assignments in two phases: transfers first, then copies.
+func (c *Compiler) performAllStores(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
 	for phase := 0; phase < 2; phase++ {
 		for i, ident := range idents {
-			shouldProcess := (phase == 0 && !needsCopy[i]) || (phase == 1 && needsCopy[i])
-			if shouldProcess {
-				c.performAssignment(ident.Value, syms[i], needsCopy[i])
+			isTransfer := !needsCopy[i]
+			if (phase == 0 && isTransfer) || (phase == 1 && !isTransfer) {
+				c.storeValue(ident.Value, syms[i], needsCopy[i])
 			}
 		}
 	}
 }
 
-// performAssignment executes a single assignment with optional copying
-func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy bool) {
-	if lhsSymbol, ok := Get(c.Scopes, name); ok {
-		c.assignToExisting(name, lhsSymbol, rhsSym, shouldCopy)
-	} else {
-		c.assignToNew(name, rhsSym, shouldCopy)
-	}
-}
-
-// assignToExisting handles assignment to an existing variable
-func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
-	// Free old value if different (freeSymbolValue checks Static flag internally)
-	if lhsSym.Val != rhsSym.Val {
-		c.freeSymbolValue(lhsSym)
-	}
-
-	// Copy only if needed
+// storeValue stores a value to a variable, optionally deep-copying first.
+func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	valueToStore := rhsSym
 	if shouldCopy {
-		valueToStore = c.deepCopyIfNeeded(valueToStore)
+		valueToStore = c.deepCopyIfNeeded(rhsSym)
 	}
 
-	// Store
-	if lhsSym.Type.Kind() == PtrKind {
+	if oldSym, exists := Get(c.Scopes, name); exists && oldSym.Type.Kind() == PtrKind {
 		derefed := c.derefIfPointer(valueToStore)
-		c.createStore(derefed.Val, lhsSym.Val, derefed.Type)
+		c.createStore(derefed.Val, oldSym.Val, derefed.Type)
+
+		// Update Ptr's element type if the stored string has a different Static flag
+		oldElem := oldSym.Type.(Ptr).Elem
+		if oldStr, isOldStr := oldElem.(Str); isOldStr {
+			if newStr, isNewStr := derefed.Type.(Str); isNewStr && oldStr.Static != newStr.Static {
+				oldSym.Type = Ptr{Elem: derefed.Type}
+				Put(c.Scopes, name, oldSym)
+			}
+		}
 	} else {
 		Put(c.Scopes, name, valueToStore)
 	}
 }
 
-// assignToNew handles assignment to a new variable
-func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
-	var newSymbol *Symbol
-	if shouldCopy {
-		newSymbol = c.deepCopyIfNeeded(rhsSym)
-	} else {
-		newSymbol = rhsSym
+// freeOrphanedValues frees old LHS values that are no longer owned by any variable.
+func (c *Compiler) freeOrphanedValues(oldValues []*Symbol, transferSet map[llvm.Value]bool) {
+	for _, oldSym := range oldValues {
+		if oldSym == nil {
+			continue
+		}
+		if !transferSet[oldSym.Val] {
+			c.freeSymbolValue(oldSym)
+		}
 	}
-	Put(c.Scopes, name, newSymbol)
+}
+
+// freeTemporaries frees temporary RHS values that were copied during assignment.
+func (c *Compiler) freeTemporaries(syms []*Symbol, rhsNames []string, needsCopy []bool) {
+	for i, sym := range syms {
+		// Only free if we made a copy AND RHS is a temporary (not a named variable)
+		if needsCopy[i] && rhsNames[i] == "" {
+			c.freeSymbolValue(sym)
+		}
+	}
 }
 
 // freeSymbolValue frees the memory owned by a symbol
@@ -949,7 +996,22 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			Type: elemType,
 		}
 	}
+
+	// Remove output symbols from block scope so cleanup doesn't free the returned values
+	c.removeOutputsFromScope(dest)
 	return out
+}
+
+// removeOutputsFromScope removes destination variable symbols from the current scope
+// so that cleanupScope won't free values that have already been loaded and returned.
+func (c *Compiler) removeOutputsFromScope(dest []*ast.Identifier) {
+	if len(dest) == 0 || len(c.Scopes) == 0 {
+		return
+	}
+	currentScope := c.Scopes[len(c.Scopes)-1]
+	for _, ident := range dest {
+		delete(currentScope.Elems, ident.Value)
+	}
 }
 
 func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
@@ -1074,6 +1136,9 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 			Type: elemType,
 		}
 	}
+
+	// Remove output symbols from block scope so cleanup doesn't free the returned values
+	c.removeOutputsFromScope(dest)
 	return out
 }
 
@@ -1321,7 +1386,15 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+
+	// Track which dest variables are new (will have zero values created)
+	isNewVar := c.identifyNewVariables(dest)
+
 	outputs := c.makeOutputs(dest, info.OutTypes)
+
+	// Load initial values from new array outputs BEFORE the function call
+	// These zero values will be overwritten and need to be freed
+	initialArrayVals := c.loadInitialArrayValues(outputs, info.OutTypes, isNewVar)
 
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
@@ -1330,6 +1403,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			// Inside loop, ranges are shadowed as scalars
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
+
+		// Free initial array values that were overwritten
+		c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
 
 		// Load final values from outputs
 		out := make([]*Symbol, len(outputs))
@@ -1345,7 +1421,51 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 
 	// LoopInside=true or no ranges: direct call
 	c.compileCallInner(ce.Function.Value, ce, outputs)
+
+	// Free initial array values that were overwritten
+	c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
+
 	return outputs
+}
+
+// identifyNewVariables checks which dest variables don't exist in scope yet.
+func (c *Compiler) identifyNewVariables(dest []*ast.Identifier) []bool {
+	if dest == nil {
+		return nil
+	}
+	result := make([]bool, len(dest))
+	for i, ident := range dest {
+		_, exists := Get(c.Scopes, ident.Value)
+		result[i] = !exists
+	}
+	return result
+}
+
+// loadInitialArrayValues loads the initial zero values from new array outputs.
+func (c *Compiler) loadInitialArrayValues(outputs []*Symbol, outTypes []Type, isNewVar []bool) []llvm.Value {
+	if isNewVar == nil {
+		return nil
+	}
+	result := make([]llvm.Value, len(outputs))
+	for i, out := range outputs {
+		if i < len(isNewVar) && isNewVar[i] && outTypes[i].Kind() == ArrayKind {
+			elemType := out.Type.(Ptr).Elem
+			result[i] = c.createLoad(out.Val, elemType, "initial_arr")
+		}
+	}
+	return result
+}
+
+// freeInitialArrayValues frees the initial zero-value arrays that were overwritten.
+func (c *Compiler) freeInitialArrayValues(initialVals []llvm.Value, outTypes []Type) {
+	for i, val := range initialVals {
+		if !val.IsNil() && outTypes[i].Kind() == ArrayKind {
+			arrayType := outTypes[i].(Array)
+			if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
+				c.freeArray(val, arrayType.ColTypes[0])
+			}
+		}
+	}
 }
 
 // compileCallInner compiles the actual function call
@@ -1548,6 +1668,20 @@ func (c *Compiler) cleanupScope() {
 			// Arrays are always heap-allocated (unless unresolved null pointer)
 			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
 				c.freeArray(sym.Val, t.ColTypes[0])
+			}
+		case Ptr:
+			// Stack-allocated pointer (e.g., from function output parameters)
+			// Load the value and free it based on the element type
+			loaded := c.builder.CreateLoad(c.mapToLLVMType(t.Elem), sym.Val, "cleanup_load")
+			switch elemT := t.Elem.(type) {
+			case Str:
+				if !elemT.Static {
+					c.free([]llvm.Value{loaded})
+				}
+			case Array:
+				if len(elemT.ColTypes) > 0 && elemT.ColTypes[0].Kind() != UnresolvedKind {
+					c.freeArray(loaded, elemT.ColTypes[0])
+				}
 			}
 		}
 	}

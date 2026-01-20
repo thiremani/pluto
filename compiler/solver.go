@@ -932,7 +932,7 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, Float{Width: 64})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
-		types = append(types, Str{})
+		types = append(types, Str{Static: true})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)
@@ -1067,9 +1067,9 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
-	// Handle string concatenation early
+	// Handle string concatenation early - always returns heap-allocated string
 	if op == token.SYM_CONCAT && left.Kind() == StrKind && right.Kind() == StrKind {
-		return Str{}
+		return Str{Static: false}
 	}
 
 	leftIsArr := left.Kind() == ArrayKind

@@ -56,3 +56,17 @@ str1, str2, str3
 # Multiple arrays from function
 farr1, farr2 = multiArr()
 farr1, farr2
+
+# Heap string swap (strings from concatenation - tests ownership transfer)
+h1 = "foo" ⊕ "bar"
+h2 = "baz" ⊕ "qux"
+h1, h2
+h1, h2 = h2, h1
+h1, h2
+
+# Array swap (tests ownership transfer for arrays)
+a1 = [10 20 30]
+a2 = [40 50 60]
+a1, a2
+a1, a2 = a2, a1
+a1, a2
