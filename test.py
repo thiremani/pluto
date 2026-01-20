@@ -315,8 +315,9 @@ class TestRunner:
                 # Check for memory leaks (if enabled)
                 if LEAK_CHECK:
                     if not self._check_memory_leaks(executable_path, test_name):
-                        print(f"{Fore.YELLOW}⚠️  Test passed but has memory leaks{Style.RESET_ALL}")
-                        # Don't fail the test for memory leaks, just warn
+                        print(f"{Fore.RED}❌ Failed (memory leak){Style.RESET_ALL}")
+                        self.failed += 1
+                        return
 
                 print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                 self.passed += 1
