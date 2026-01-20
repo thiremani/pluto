@@ -528,33 +528,10 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 }
 
 // captureOldValues snapshots the current LHS variable values before any modifications.
-// For Ptr types (stack-allocated variables), we load the value now so we can free it
-// after the new value is stored. This is necessary because the Ptr's storage will be
-// overwritten, and we'd lose track of the old value otherwise.
-//
-// We skip:
-// - FuncArg symbols: function parameters (including outputs) are managed by the caller
-// - Same Ptr: RHS is the same Ptr as LHS (function call output - handled by caller)
 func (c *Compiler) captureOldValues(idents []*ast.Identifier, syms []*Symbol) []*Symbol {
 	oldValues := make([]*Symbol, len(idents))
 	for i, ident := range idents {
-		sym, ok := Get(c.Scopes, ident.Value)
-		if !ok {
-			continue
-		}
-		// Skip function parameters (including outputs) - they're managed by caller
-		if sym.FuncArg {
-			continue
-		}
-		if ptr, isPtr := sym.Type.(Ptr); isPtr {
-			// Skip if RHS is the same Ptr (function call output - handled elsewhere)
-			if i < len(syms) && syms[i].Type.Kind() == PtrKind && syms[i].Val == sym.Val {
-				continue
-			}
-			// Load the value now so we can free it later (after the store)
-			loaded := c.createLoad(sym.Val, ptr.Elem, "old_for_free")
-			oldValues[i] = &Symbol{Val: loaded, Type: ptr.Elem}
-		} else {
+		if sym, ok := Get(c.Scopes, ident.Value); ok {
 			oldValues[i] = sym
 		}
 	}
@@ -950,10 +927,11 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 	}
 
+	// TODO: Fix freeTemporaryOperand - currently causes crashes
 	// Free temporary array operands (literals used in expressions)
 	// Variables are not freed here - they're managed by scope cleanup
-	c.freeTemporaryOperand(expr.Left, left)
-	c.freeTemporaryOperand(expr.Right, right)
+	// c.freeTemporaryOperand(expr.Left, left)
+	// c.freeTemporaryOperand(expr.Right, right)
 
 	return res
 }
@@ -966,6 +944,10 @@ func (c *Compiler) freeTemporaryOperand(expr ast.Expression, syms []*Symbol) {
 		return
 	}
 	for _, sym := range syms {
+		// Skip function arguments - they're borrowed references
+		if sym.FuncArg {
+			continue
+		}
 		if arr, ok := sym.Type.(Array); ok {
 			if len(arr.ColTypes) > 0 && arr.ColTypes[0].Kind() != UnresolvedKind {
 				c.freeArray(sym.Val, arr.ColTypes[0])
