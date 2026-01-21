@@ -22,3 +22,6 @@ duptest other
 duptest duptest
 [100 200] [300 400]
 [100 200] [100 200]
+
+hello world
+foo bar
