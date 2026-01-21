@@ -437,9 +437,10 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
-		// Zero value is a static empty string, but preserve the Static flag from symType.
-		// This is important: if symType says Static:false (e.g., for a function that returns
-		// a heap-allocated string), we keep that so cleanup knows to free the actual value later.
+		// Zero value is a static empty string. Force Static:true because the underlying
+		// value is a global constant that must NOT be freed. Callers expecting non-static
+		// semantics must overwrite this value before cleanup.
+		s.Type = Str{Static: true}
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
 		// Create an actual zero-length array (not null)
@@ -495,6 +496,8 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 // computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
 func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) []bool {
 	needsCopy := make([]bool, len(syms))
+	movedSources := make(map[string]bool) // Track which sources have already transferred ownership
+
 	for i, rhsSym := range syms {
 		// Static strings: immutable, live forever - no copy needed
 		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
@@ -511,10 +514,16 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 		// Check if RHS variable is being overwritten in LHS (enables ownership transfer)
 		canTransfer := false
 		if rhsNames[i] != "" {
-			for _, lhsIdent := range idents {
-				if lhsIdent.Value == rhsNames[i] {
-					canTransfer = true
-					break
+			// Only allow transfer if this source hasn't already been moved.
+			// This prevents double-free in cases like: a, b = a, a
+			// where the second use of 'a' must copy, not transfer.
+			if !movedSources[rhsNames[i]] {
+				for _, lhsIdent := range idents {
+					if lhsIdent.Value == rhsNames[i] {
+						canTransfer = true
+						movedSources[rhsNames[i]] = true
+						break
+					}
 				}
 			}
 		}
