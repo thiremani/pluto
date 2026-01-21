@@ -1077,14 +1077,20 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbo
 			if sym.Type.Kind() != PtrKind {
 				sym = c.promoteToMemory(name)
 				// NOTE: We do NOT update Ptr element type here because outputs may not be written
-				// (empty ranges, or future conditional expressions like `Square(i > 4)`).
+				// (empty ranges, or conditional expressions like `Square(i > 4)`).
 				//
-				// TODO(conditionals): When implementing conditional expressions, use NULL as the
-				// initial value instead of a static zero string. After the loop/condition completes,
-				// generate a runtime check: if output is still NULL, assign the static zero string.
-				// Cleanup should also be a runtime check: only free if value is neither NULL nor
-				// the static zero string. This defers zero value creation until we know the output
-				// wasn't written, and uses runtime checks instead of compile-time type metadata.
+				// Ranges act as conditionals: if the range is empty, the loop body never executes.
+				// The intended design for NEW variables is:
+				//   1. Initialize output to NULL (not static zero value)
+				//   2. Execute loop body (only runs if range is non-empty)
+				//   3. After loop: if output is still NULL, assign static zero value
+				//   4. Cleanup: only free if value is neither NULL nor static zero string
+				//
+				// For EXISTING variables (already in scope), skip the NULL check - they already
+				// have a value from a previous assignment, so no zero value fallback is needed.
+				//
+				// This approach uses runtime checks instead of compile-time type metadata,
+				// deferring zero value creation until we confirm the output wasn't written.
 			}
 			outputs[i] = sym
 		}
@@ -1417,14 +1423,11 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 
-	// Track which dest variables are new (will have zero values created)
-	isNewVar := c.identifyNewVariables(dest)
-
 	outputs := c.makeOutputs(dest, info.OutTypes)
 
-	// Load initial values from new array outputs BEFORE the function call
-	// These zero values will be overwritten and need to be freed
-	initialArrayVals := c.loadInitialArrayValues(outputs, info.OutTypes, isNewVar)
+	// Load initial values from array outputs BEFORE the function call
+	// These will be overwritten and need to be freed (both new zero-values and existing arrays)
+	initialArrayVals := c.loadInitialArrayValues(outputs, info.OutTypes)
 
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
@@ -1455,30 +1458,20 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// Free initial array values that were overwritten
 	c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
 
+	// Update Ptr elem types to reflect actual return types from the function.
+	// This is safe because without ranges, the function always executes and writes all outputs.
+	c.updateOutputTypes(outputs, info.OutTypes, dest)
+
 	return outputs
 }
 
-// identifyNewVariables checks which dest variables don't exist in scope yet.
-func (c *Compiler) identifyNewVariables(dest []*ast.Identifier) []bool {
-	if dest == nil {
-		return nil
-	}
-	result := make([]bool, len(dest))
-	for i, ident := range dest {
-		_, exists := Get(c.Scopes, ident.Value)
-		result[i] = !exists
-	}
-	return result
-}
-
-// loadInitialArrayValues loads the initial zero values from new array outputs.
-func (c *Compiler) loadInitialArrayValues(outputs []*Symbol, outTypes []Type, isNewVar []bool) []llvm.Value {
-	if isNewVar == nil {
-		return nil
-	}
+// loadInitialArrayValues loads the initial values from array outputs before they're overwritten.
+// This captures both zero-value arrays (for new variables) and existing arrays (for variables
+// being reassigned), so they can be freed after the function call writes new values.
+func (c *Compiler) loadInitialArrayValues(outputs []*Symbol, outTypes []Type) []llvm.Value {
 	result := make([]llvm.Value, len(outputs))
 	for i, out := range outputs {
-		if i < len(isNewVar) && isNewVar[i] && outTypes[i].Kind() == ArrayKind {
+		if outTypes[i].Kind() == ArrayKind {
 			elemType := out.Type.(Ptr).Elem
 			result[i] = c.createLoad(out.Val, elemType, "initial_arr")
 		}
@@ -1493,6 +1486,29 @@ func (c *Compiler) freeInitialArrayValues(initialVals []llvm.Value, outTypes []T
 			arrayType := outTypes[i].(Array)
 			if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
 				c.freeArray(val, arrayType.ColTypes[0])
+			}
+		}
+	}
+}
+
+// updateOutputTypes updates Ptr elem types to reflect actual return types from a function call.
+// This ensures cleanup correctly identifies heap-allocated strings vs static strings.
+func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []*ast.Identifier) {
+	for i, out := range outputs {
+		if i >= len(outTypes) {
+			break
+		}
+		// Only update string types - they have the Static flag that affects cleanup.
+		// Arrays don't need this - they're always heap-allocated.
+		if ptrType, ok := out.Type.(Ptr); ok {
+			if oldStr, isOldStr := ptrType.Elem.(Str); isOldStr {
+				if newStr, isNewStr := outTypes[i].(Str); isNewStr && oldStr.Static != newStr.Static {
+					out.Type = Ptr{Elem: outTypes[i]}
+					// Also update the symbol in scope if there's a destination
+					if dest != nil && i < len(dest) {
+						Put(c.Scopes, dest[i].Value, out)
+					}
+				}
 			}
 		}
 	}
