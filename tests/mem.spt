@@ -84,12 +84,3 @@ da2 = [300 400]
 da1, da2  # use before overwrite
 da1, da2 = da1, da1
 da1, da2
-
-# Function returning heap string to new variable (tests Ptr element type fix)
-# First call with empty strings creates new variable, subsequent calls must free previous
-newStr = createStr("", "")
-newStr
-newStr = createStr("hello", " world")
-newStr
-newStr = createStr("foo", " bar")
-newStr

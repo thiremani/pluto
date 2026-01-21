@@ -1076,14 +1076,15 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbo
 
 			if sym.Type.Kind() != PtrKind {
 				sym = c.promoteToMemory(name)
-				// After promotion, ensure Ptr element type matches outType, not zero value's type.
-				// This is critical for strings: makeZeroValue forces Static:true for safety,
-				// but if outType is Static:false (heap string), the Ptr must reflect that
-				// so cleanup correctly frees the actual returned value.
-				if _, isStr := outType.(Str); isStr {
-					sym.Type = Ptr{Elem: outType}
-					Put(c.Scopes, name, sym)
-				}
+				// NOTE: We do NOT update Ptr element type here because outputs may not be written
+				// (empty ranges, or future conditional expressions like `Square(i > 4)`).
+				//
+				// TODO(conditionals): When implementing conditional expressions, use NULL as the
+				// initial value instead of a static zero string. After the loop/condition completes,
+				// generate a runtime check: if output is still NULL, assign the static zero string.
+				// Cleanup should also be a runtime check: only free if value is neither NULL nor
+				// the static zero string. This defers zero value creation until we know the output
+				// wasn't written, and uses runtime checks instead of compile-time type metadata.
 			}
 			outputs[i] = sym
 		}
