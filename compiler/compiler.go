@@ -479,19 +479,16 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 	// Phase 1: Determine which assignments need copying vs ownership transfer
 	needsCopy := c.computeCopyRequirements(idents, syms, rhsNames)
 
-	// Phase 2: Capture old LHS values before any modifications
-	oldValues := c.captureOldValues(idents, syms)
+	// Phase 2: Capture old LHS values and build transfer set
+	oldValues, transferSet := c.captureContext(idents, syms, needsCopy)
 
-	// Phase 3: Build set of values being transferred (these must not be freed)
-	transferSet := c.buildTransferSet(syms, needsCopy)
-
-	// Phase 4: Perform all stores (transfers first, then copies)
+	// Phase 3: Perform all stores
 	c.performAllStores(idents, syms, needsCopy)
 
-	// Phase 5: Free temporary RHS values that were copied (e.g., array literals)
+	// Phase 4: Free temporary RHS values that were copied (e.g., array literals)
 	c.freeTemporaries(syms, rhsNames, needsCopy)
 
-	// Phase 6: Free orphaned old values (not transferred to another variable)
+	// Phase 5: Free orphaned old values (not transferred to another variable)
 	c.freeOrphanedValues(oldValues, transferSet)
 }
 
@@ -527,37 +524,25 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	return needsCopy
 }
 
-// captureOldValues snapshots the current LHS variable values before any modifications.
-func (c *Compiler) captureOldValues(idents []*ast.Identifier, syms []*Symbol) []*Symbol {
+// captureContext snapshots old LHS values and builds the transfer set in one pass.
+func (c *Compiler) captureContext(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) ([]*Symbol, map[llvm.Value]bool) {
 	oldValues := make([]*Symbol, len(idents))
+	transferSet := make(map[llvm.Value]bool)
 	for i, ident := range idents {
 		if sym, ok := Get(c.Scopes, ident.Value); ok {
 			oldValues[i] = sym
 		}
-	}
-	return oldValues
-}
-
-// buildTransferSet collects all RHS values that are being transferred (not copied).
-func (c *Compiler) buildTransferSet(syms []*Symbol, needsCopy []bool) map[llvm.Value]bool {
-	transferSet := make(map[llvm.Value]bool)
-	for i, sym := range syms {
 		if !needsCopy[i] {
-			transferSet[sym.Val] = true
+			transferSet[syms[i].Val] = true
 		}
 	}
-	return transferSet
+	return oldValues, transferSet
 }
 
-// performAllStores executes all assignments in two phases: transfers first, then copies.
+// performAllStores executes all assignments.
 func (c *Compiler) performAllStores(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
-	for phase := 0; phase < 2; phase++ {
-		for i, ident := range idents {
-			isTransfer := !needsCopy[i]
-			if (phase == 0 && isTransfer) || (phase == 1 && !isTransfer) {
-				c.storeValue(ident.Value, syms[i], needsCopy[i])
-			}
-		}
+	for i, ident := range idents {
+		c.storeValue(ident.Value, syms[i], needsCopy[i])
 	}
 }
 
