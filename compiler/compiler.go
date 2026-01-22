@@ -921,22 +921,34 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 	}
 
-	// TODO: Fix freeTemporaryOperand - currently causes crashes
 	// Free temporary array operands (literals used in expressions)
 	// Variables are not freed here - they're managed by scope cleanup
-	// c.freeTemporaryOperand(expr.Left, left)
-	// c.freeTemporaryOperand(expr.Right, right)
+	c.freeTemporaryOperand(expr.Left, left)
+	c.freeTemporaryOperand(expr.Right, right)
 
 	return res
 }
 
-// freeTemporaryOperand frees array operands that are temporaries (literals),
-// not variables which are managed separately.
+// freeTemporaryOperand frees array operands that are temporaries (not variables).
+// Temporaries include: array literals, and results of prefix/infix expressions on arrays.
 func (c *Compiler) freeTemporaryOperand(expr ast.Expression, syms []*Symbol) {
-	// Only free array literals - variables are managed by scope
-	if _, isLiteral := expr.(*ast.ArrayLiteral); !isLiteral {
+	// Determine if this expression produces a temporary that should be freed
+	isTemporary := false
+	switch expr.(type) {
+	case *ast.ArrayLiteral:
+		isTemporary = true
+	case *ast.PrefixExpression:
+		// Prefix on array produces a new temporary array
+		isTemporary = true
+	case *ast.InfixExpression:
+		// Infix with arrays produces a new temporary array
+		isTemporary = true
+	}
+
+	if !isTemporary {
 		return
 	}
+
 	for _, sym := range syms {
 		// Skip function arguments - they're borrowed references
 		if sym.FuncArg {
@@ -1137,6 +1149,10 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 	for i, opSym := range operand {
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
+
+	// Free temporary array operand (literal) after use - the result is a new array
+	c.freeTemporaryOperand(expr.Right, operand)
+
 	return res
 }
 
