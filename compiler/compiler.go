@@ -505,12 +505,6 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 			continue
 		}
 
-		// Function arguments: borrowed references - no copy needed
-		if rhsSym.FuncArg {
-			needsCopy[i] = false
-			continue
-		}
-
 		// Check if RHS variable is being overwritten in LHS (enables ownership transfer)
 		canTransfer := false
 		if rhsNames[i] != "" {
