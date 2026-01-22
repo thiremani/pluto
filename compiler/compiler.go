@@ -1425,9 +1425,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 
 	outputs := c.makeOutputs(dest, info.OutTypes)
 
-	// Load initial values from array outputs BEFORE the function call
-	// These will be overwritten and need to be freed (both new zero-values and existing arrays)
-	initialArrayVals := c.loadInitialArrayValues(outputs, info.OutTypes)
+	// Load initial values from array outputs BEFORE the function call, but only when
+	// we can safely free them (i.e., no ranges that might be empty at runtime).
+	// When HasRanges=true, we skip loading to avoid unnecessary work since we won't free.
+	var initialArrayVals []llvm.Value
+	if !info.HasRanges {
+		initialArrayVals = c.loadInitialArrayValues(outputs, info.OutTypes)
+	}
 
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
@@ -1437,8 +1441,20 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// Free initial array values that were overwritten
-		c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
+		// NOTE: We intentionally do NOT free initial array values here, which means
+		// arrays WILL LEAK when ranges are non-empty and outputs are overwritten.
+		// This is a deliberate tradeoff: leaks are safer than UAF/crashes.
+		//
+		// When ranges exist, the loop may be empty at runtime, meaning outputs
+		// retain their original values. Freeing would corrupt live data (UAF).
+		//
+		// TODO(conditionals): When implementing conditionals, add runtime tracking
+		// for "was output written". The intended semantics for empty ranges:
+		//   - Empty range → function is a no-op
+		//   - NEW variable: initialize to NULL, set to zero value after loop if still NULL
+		//   - EXISTING variable: retains its previous value
+		// At that point, we can safely free the initial value only when we confirm
+		// the output was actually overwritten, eliminating both UAF and leaks.
 
 		// Load final values from outputs
 		out := make([]*Symbol, len(outputs))
@@ -1455,12 +1471,15 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// LoopInside=true or no ranges: direct call
 	c.compileCallInner(ce.Function.Value, ce, outputs)
 
-	// Free initial array values that were overwritten
-	c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
-
-	// Update Ptr elem types to reflect actual return types from the function.
-	// This is safe because without ranges, the function always executes and writes all outputs.
-	c.updateOutputTypes(outputs, info.OutTypes, dest)
+	// Only free initial values and update types when there are no ranges.
+	// With LoopInside=true and HasRanges=true, the function handles iteration internally,
+	// but if the range is empty at runtime, outputs won't be written. Skipping the free
+	// causes arrays to LEAK when ranges are non-empty, but avoids UAF when empty.
+	// See TODO above for the planned conditionals-based solution.
+	if !info.HasRanges {
+		c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
+		c.updateOutputTypes(outputs, info.OutTypes, dest)
+	}
 
 	return outputs
 }
