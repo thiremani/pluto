@@ -478,10 +478,10 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 	}
 
 	// Phase 1: Determine which assignments need copying vs ownership transfer
-	needsCopy := c.computeCopyRequirements(idents, syms, rhsNames)
+	needsCopy, movedSources := c.computeCopyRequirements(idents, syms, rhsNames)
 
-	// Phase 2: Capture old LHS values and build transfer set
-	oldValues, transferSet := c.captureContext(idents, syms, needsCopy)
+	// Phase 2: Capture old LHS values
+	oldValues := c.captureOldValues(idents)
 
 	// Phase 3: Perform all stores
 	c.performAllStores(idents, syms, needsCopy)
@@ -490,56 +490,55 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 	c.freeTemporaries(syms, rhsNames, needsCopy)
 
 	// Phase 5: Free orphaned old values (not transferred to another variable)
-	c.freeOrphanedValues(oldValues, transferSet)
+	c.freeOrphanedValues(idents, oldValues, movedSources)
 }
 
 // computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
-func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) []bool {
+// It also returns movedSources - the set of RHS variable names whose ownership was transferred.
+func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) ([]bool, map[string]struct{}) {
 	needsCopy := make([]bool, len(syms))
-	movedSources := make(map[string]bool) // Track which sources have already transferred ownership
+	movedSources := make(map[string]struct{})
 
 	for i, rhsSym := range syms {
 		// Static strings: immutable, live forever - no copy needed
 		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
-			needsCopy[i] = false
 			continue
 		}
 
-		// Check if RHS variable is being overwritten in LHS (enables ownership transfer)
-		canTransfer := false
-		if rhsNames[i] != "" {
-			// Only allow transfer if this source hasn't already been moved.
-			// This prevents double-free in cases like: a, b = a, a
-			// where the second use of 'a' must copy, not transfer.
-			if !movedSources[rhsNames[i]] {
-				for _, lhsIdent := range idents {
-					if lhsIdent.Value == rhsNames[i] {
-						canTransfer = true
-						movedSources[rhsNames[i]] = true
-						break
-					}
-				}
-			}
+		needsCopy[i] = true
+
+		// Check if RHS variable is being overwritten in LHS (enables ownership transfer).
+		// Only allow transfer if this source hasn't already been moved.
+		// This prevents double-free in cases like: a, b = a, a
+		// where the second use of 'a' must copy, not transfer.
+		if rhsNames[i] == "" {
+			continue
 		}
 
-		needsCopy[i] = !canTransfer
+		if _, moved := movedSources[rhsNames[i]]; moved {
+			continue
+		}
+
+		for _, lhsIdent := range idents {
+			if lhsIdent.Value == rhsNames[i] {
+				needsCopy[i] = false
+				movedSources[rhsNames[i]] = struct{}{}
+				break
+			}
+		}
 	}
-	return needsCopy
+	return needsCopy, movedSources
 }
 
-// captureContext snapshots old LHS values and builds the transfer set in one pass.
-func (c *Compiler) captureContext(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) ([]*Symbol, map[llvm.Value]bool) {
+// captureOldValues snapshots old LHS values before assignment.
+func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 	oldValues := make([]*Symbol, len(idents))
-	transferSet := make(map[llvm.Value]bool)
 	for i, ident := range idents {
 		if sym, ok := Get(c.Scopes, ident.Value); ok {
 			oldValues[i] = sym
 		}
-		if !needsCopy[i] {
-			transferSet[syms[i].Val] = true
-		}
 	}
-	return oldValues, transferSet
+	return oldValues
 }
 
 // performAllStores executes all assignments.
@@ -574,12 +573,13 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 }
 
 // freeOrphanedValues frees old LHS values that are no longer owned by any variable.
-func (c *Compiler) freeOrphanedValues(oldValues []*Symbol, transferSet map[llvm.Value]bool) {
-	for _, oldSym := range oldValues {
+// An old value is orphaned if its variable name is not in movedSources (i.e., not transferred).
+func (c *Compiler) freeOrphanedValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}) {
+	for i, oldSym := range oldValues {
 		if oldSym == nil {
 			continue
 		}
-		if !transferSet[oldSym.Val] {
+		if _, moved := movedSources[idents[i].Value]; !moved {
 			c.freeSymbolValue(oldSym)
 		}
 	}
