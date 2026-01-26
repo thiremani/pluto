@@ -505,26 +505,30 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 			continue
 		}
 
+		// Temporaries (array literals, function results, expressions): transfer ownership directly.
+		// No copy needed - the temporary's memory becomes owned by the LHS variable.
+		if rhsNames[i] == "" {
+			continue
+		}
+
+		// Named variable on RHS - default to copying for safety
 		needsCopy[i] = true
 
 		// Check if RHS variable is being overwritten in LHS (enables ownership transfer).
 		// Only allow transfer if this source hasn't already been moved.
 		// This prevents double-free in cases like: a, b = a, a
 		// where the second use of 'a' must copy, not transfer.
-		if rhsNames[i] == "" {
-			continue
-		}
-
 		if _, moved := movedSources[rhsNames[i]]; moved {
 			continue
 		}
 
 		for _, lhsIdent := range idents {
-			if lhsIdent.Value == rhsNames[i] {
-				needsCopy[i] = false
-				movedSources[rhsNames[i]] = struct{}{}
-				break
+			if lhsIdent.Value != rhsNames[i] {
+				continue
 			}
+			needsCopy[i] = false
+			movedSources[rhsNames[i]] = struct{}{}
+			break
 		}
 	}
 	return needsCopy, movedSources
