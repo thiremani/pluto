@@ -538,9 +538,11 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 	oldValues := make([]*Symbol, len(idents))
 	for i, ident := range idents {
-		if sym, ok := Get(c.Scopes, ident.Value); ok {
-			oldValues[i] = sym
+		sym, ok := Get(c.Scopes, ident.Value)
+		if !ok {
+			continue
 		}
+		oldValues[i] = sym
 	}
 	return oldValues
 }
