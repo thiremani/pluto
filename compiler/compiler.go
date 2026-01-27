@@ -505,8 +505,6 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 
 		c.storeValue(ident.Value, syms[i], needsCopy[i])
 	}
-
-	c.freeTemporaries(syms, rhsNames, needsCopy)
 }
 
 // freeOldValue frees the old value of a variable being reassigned.
@@ -556,7 +554,6 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	return needsCopy, movedSources
 }
 
-
 // storeValue stores a value to a variable, optionally deep-copying first.
 func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	valueToStore := rhsSym
@@ -580,16 +577,6 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	}
 	oldSym.Type = Ptr{Elem: derefed.Type}
 	Put(c.Scopes, name, oldSym)
-}
-
-// freeTemporaries frees temporary RHS values that were copied during assignment.
-func (c *Compiler) freeTemporaries(syms []*Symbol, rhsNames []string, needsCopy []bool) {
-	for i, sym := range syms {
-		// Only free if we made a copy AND RHS is a temporary (not a named variable)
-		if needsCopy[i] && rhsNames[i] == "" {
-			c.freeValue(sym.Val, sym.Type)
-		}
-	}
 }
 
 // freeValue frees heap-allocated memory for the given value based on its type.
