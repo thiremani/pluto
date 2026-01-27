@@ -1,0 +1,101 @@
+# Test string memory management: Static flag transitions
+# Static = string literal (read-only memory)
+# Heap = concatenation result (dynamically allocated)
+
+# Case 1: Static -> Static
+x = "hello"
+x  # use before overwrite
+x = "world"
+x
+
+# Case 2: Static -> Heap (from temporary - ownership transfer, no copy)
+x  # use before overwrite
+x = "heap" ⊕ "str"
+x
+
+# Case 3: Heap -> Static (no copy needed for literals)
+x = "make" ⊕ "heap"
+x  # use before overwrite
+x = "back to static"
+x
+
+# Case 4: Heap -> Heap (from temporary - ownership transfer)
+x = "first" ⊕ "heap"
+x  # use before overwrite
+x = "second" ⊕ "heap"
+x
+
+# Swap: x, y = y, x with static strings
+a = "alpha"
+b = "beta"
+a, b = b, a
+a, b
+
+# Swap: x, y = y, x with heap strings
+a = "one" ⊕ "1"
+b = "two" ⊕ "2"
+a, b = b, a
+a, b
+
+# Swap: x, y = y, x mixed (static, heap)
+a = "static"
+b = "heap" ⊕ "val"
+a, b = b, a
+a, b
+
+# Duplicate RHS: x, y = x, x with static
+a = "same"
+b = "different"
+b  # use before overwrite
+a, b = a, a
+a, b
+
+# Duplicate RHS: x, y = x, x with heap
+a = "dup" ⊕ "heap"
+b = "other"
+b  # use before overwrite
+a, b = a, a
+a, b
+
+# Reassignment chain: static -> heap -> static -> heap
+c = "start"
+c  # use
+c = "mid" ⊕ "dle"
+c  # use
+c = "back"
+c  # use
+c = "end" ⊕ "ing"
+c
+
+# Test with function call to promote to Ptr type
+# This should exercise the Static flag update code path
+s = "initial"
+t = identity(s)  # s is now Ptr type after this call
+t
+s  # use s
+s = "new" ⊕ "heap"  # Static -> Heap on Ptr variable
+s
+s  # use s
+s = "static again"  # Heap -> Static on Ptr variable
+s
+
+# Test function returning static string
+r = getStatic()
+r
+r  # use before overwrite
+r = "heap" ⊕ "value"  # Static -> Heap
+r
+r  # use before overwrite
+r = getStatic()  # Heap -> Static (from function)
+r
+
+# Test function returning heap string
+r  # use before overwrite
+r = getHeap()  # Static -> Heap (from function)
+r
+r  # use before overwrite
+r = "literal"  # Heap -> Static
+r
+r  # use before overwrite
+r = getHeap()  # Static -> Heap (from function)
+r

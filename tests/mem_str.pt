@@ -1,0 +1,12 @@
+# Helper function that takes a string argument
+# This promotes the argument to Ptr type
+result = identity(s)
+    result = s
+
+# Return a static string literal
+s = getStatic()
+    s = "static from func"
+
+# Return a heap string (concatenation)
+s = getHeap()
+    s = "heap" ⊕ " from func"

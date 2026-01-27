@@ -477,20 +477,42 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		return
 	}
 
-	// Phase 1: Determine which assignments need copying vs ownership transfer
 	needsCopy, movedSources := c.computeCopyRequirements(idents, syms, rhsNames)
 
-	// Phase 2: Capture old LHS values
-	oldValues := c.captureOldValues(idents)
+	for i, ident := range idents {
+		oldSym, exists := Get(c.Scopes, ident.Value)
 
-	// Phase 3: Perform all stores
-	c.performAllStores(idents, syms, needsCopy)
+		// New variable - just store
+		if !exists {
+			c.storeValue(ident.Value, syms[i], needsCopy[i])
+			continue
+		}
 
-	// Phase 4: Free temporary RHS values that were copied (e.g., array literals)
+		// If old and new symbols are the same object, the value is already in place.
+		// This happens for:
+		// - Function calls with Ptr outputs (makeOutputs returns the same Ptr symbol)
+		// - Self-assignment of non-Ptr variables (a = a)
+		if oldSym == syms[i] {
+			continue
+		}
+
+		_, moved := movedSources[ident.Value]
+
+		// Free old value if orphaned (not transferred to another variable)
+		if !oldSym.FuncArg && !moved {
+			c.freeOldValue(oldSym)
+		}
+
+		c.storeValue(ident.Value, syms[i], needsCopy[i])
+	}
+
 	c.freeTemporaries(syms, rhsNames, needsCopy)
+}
 
-	// Phase 5: Free orphaned old values (not transferred to another variable)
-	c.freeOrphanedValues(idents, oldValues, movedSources)
+// freeOldValue frees the old value of a variable being reassigned.
+func (c *Compiler) freeOldValue(oldSym *Symbol) {
+	derefed := c.derefIfPointer(oldSym)
+	c.freeValue(derefed.Val, derefed.Type)
 }
 
 // computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
@@ -534,25 +556,6 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	return needsCopy, movedSources
 }
 
-// captureOldValues snapshots old LHS values before assignment.
-func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
-	oldValues := make([]*Symbol, len(idents))
-	for i, ident := range idents {
-		sym, ok := Get(c.Scopes, ident.Value)
-		if !ok {
-			continue
-		}
-		oldValues[i] = sym
-	}
-	return oldValues
-}
-
-// performAllStores executes all assignments.
-func (c *Compiler) performAllStores(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
-	for i, ident := range idents {
-		c.storeValue(ident.Value, syms[i], needsCopy[i])
-	}
-}
 
 // storeValue stores a value to a variable, optionally deep-copying first.
 func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
@@ -561,34 +564,22 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 		valueToStore = c.deepCopyIfNeeded(rhsSym)
 	}
 
-	if oldSym, exists := Get(c.Scopes, name); exists && oldSym.Type.Kind() == PtrKind {
-		derefed := c.derefIfPointer(valueToStore)
-		c.createStore(derefed.Val, oldSym.Val, derefed.Type)
-
-		// Update Ptr's element type if the stored string has a different Static flag
-		oldElem := oldSym.Type.(Ptr).Elem
-		if oldStr, isOldStr := oldElem.(Str); isOldStr {
-			if newStr, isNewStr := derefed.Type.(Str); isNewStr && oldStr.Static != newStr.Static {
-				oldSym.Type = Ptr{Elem: derefed.Type}
-				Put(c.Scopes, name, oldSym)
-			}
-		}
-	} else {
+	oldSym, exists := Get(c.Scopes, name)
+	if !exists || oldSym.Type.Kind() != PtrKind {
 		Put(c.Scopes, name, valueToStore)
+		return
 	}
-}
 
-// freeOrphanedValues frees old LHS values that are no longer owned by any variable.
-// An old value is orphaned if its variable name is not in movedSources (i.e., not transferred).
-func (c *Compiler) freeOrphanedValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}) {
-	for i, oldSym := range oldValues {
-		if oldSym == nil {
-			continue
-		}
-		if _, moved := movedSources[idents[i].Value]; !moved {
-			c.freeSymbolValue(oldSym)
-		}
+	derefed := c.derefIfPointer(valueToStore)
+	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
+
+	// Update Ptr's element type if Str.Static flag changed
+	oldStr, isStr := oldSym.Type.(Ptr).Elem.(Str)
+	if !isStr || oldStr.Static == derefed.Type.(Str).Static {
+		return
 	}
+	oldSym.Type = Ptr{Elem: derefed.Type}
+	Put(c.Scopes, name, oldSym)
 }
 
 // freeTemporaries frees temporary RHS values that were copied during assignment.
@@ -596,28 +587,21 @@ func (c *Compiler) freeTemporaries(syms []*Symbol, rhsNames []string, needsCopy 
 	for i, sym := range syms {
 		// Only free if we made a copy AND RHS is a temporary (not a named variable)
 		if needsCopy[i] && rhsNames[i] == "" {
-			c.freeSymbolValue(sym)
+			c.freeValue(sym.Val, sym.Type)
 		}
 	}
 }
 
-// freeSymbolValue frees the memory owned by a symbol
-func (c *Compiler) freeSymbolValue(sym *Symbol) {
-	// Don't free function arguments - they're borrowed references
-	if sym.FuncArg {
-		return
-	}
-
-	switch t := sym.Type.(type) {
+// freeValue frees heap-allocated memory for the given value based on its type.
+func (c *Compiler) freeValue(val llvm.Value, typ Type) {
+	switch t := typ.(type) {
 	case Str:
-		// Only free heap-allocated strings, not static literals
 		if !t.Static {
-			c.free([]llvm.Value{sym.Val})
+			c.free([]llvm.Value{val})
 		}
 	case Array:
-		// Arrays are always heap-allocated (except null pointers for unresolved types)
 		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
-			c.freeArray(sym.Val, t.ColTypes[0])
+			c.freeArray(val, t.ColTypes[0])
 		}
 	}
 }
@@ -1441,12 +1425,12 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 
 	outputs := c.makeOutputs(dest, info.OutTypes)
 
-	// Load initial values from array outputs BEFORE the function call, but only when
+	// Load initial values from Ptr outputs BEFORE the function call, but only when
 	// we can safely free them (i.e., no ranges that might be empty at runtime).
 	// When HasRanges=true, we skip loading to avoid unnecessary work since we won't free.
-	var initialArrayVals []llvm.Value
+	var initialPtrVals []llvm.Value
 	if !info.HasRanges {
-		initialArrayVals = c.loadInitialArrayValues(outputs, info.OutTypes)
+		initialPtrVals = c.loadInitialPtrValues(outputs, info.OutTypes)
 	}
 
 	// If LoopInside=false, wrap call in loops for all ranges
@@ -1457,8 +1441,8 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// NOTE: We intentionally do NOT free initial array values here, which means
-		// arrays WILL LEAK when ranges are non-empty and outputs are overwritten.
+		// NOTE: We intentionally do NOT free initial Ptr values here, which means
+		// strings/arrays WILL LEAK when ranges are non-empty and outputs are overwritten.
 		// This is a deliberate tradeoff: leaks are safer than UAF/crashes.
 		//
 		// When ranges exist, the loop may be empty at runtime, meaning outputs
@@ -1472,7 +1456,11 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		// At that point, we can safely free the initial value only when we confirm
 		// the output was actually overwritten, eliminating both UAF and leaks.
 
-		// Load final values from outputs
+		// For destinations, return Ptr symbols so writeTo sees oldSym == syms[i] and skips freeing.
+		// For intermediate values (no dest), load the final values for use in expressions.
+		if len(dest) > 0 {
+			return outputs
+		}
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
 			elemType := outputs[i].Type.(Ptr).Elem
@@ -1490,39 +1478,41 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// Only free initial values and update types when there are no ranges.
 	// With LoopInside=true and HasRanges=true, the function handles iteration internally,
 	// but if the range is empty at runtime, outputs won't be written. Skipping the free
-	// causes arrays to LEAK when ranges are non-empty, but avoids UAF when empty.
+	// causes Ptr values to LEAK when ranges are non-empty, but avoids UAF when empty.
 	// See TODO above for the planned conditionals-based solution.
 	if !info.HasRanges {
-		c.freeInitialArrayValues(initialArrayVals, info.OutTypes)
+		c.freeInitialPtrValues(initialPtrVals, outputs)
 		c.updateOutputTypes(outputs, info.OutTypes, dest)
 	}
 
 	return outputs
 }
 
-// loadInitialArrayValues loads the initial values from array outputs before they're overwritten.
-// This captures both zero-value arrays (for new variables) and existing arrays (for variables
-// being reassigned), so they can be freed after the function call writes new values.
-func (c *Compiler) loadInitialArrayValues(outputs []*Symbol, outTypes []Type) []llvm.Value {
+// loadInitialPtrValues loads the initial values from Ptr outputs before they're overwritten.
+// This captures both zero-value arrays/strings (for new variables) and existing values (for
+// variables being reassigned), so they can be freed after the function call writes new values.
+func (c *Compiler) loadInitialPtrValues(outputs []*Symbol, outTypes []Type) []llvm.Value {
 	result := make([]llvm.Value, len(outputs))
 	for i, out := range outputs {
-		if outTypes[i].Kind() == ArrayKind {
+		kind := outTypes[i].Kind()
+		if kind == ArrayKind || kind == StrKind {
 			elemType := out.Type.(Ptr).Elem
-			result[i] = c.createLoad(out.Val, elemType, "initial_arr")
+			result[i] = c.createLoad(out.Val, elemType, "initial_ptr")
 		}
 	}
 	return result
 }
 
-// freeInitialArrayValues frees the initial zero-value arrays that were overwritten.
-func (c *Compiler) freeInitialArrayValues(initialVals []llvm.Value, outTypes []Type) {
+// freeInitialPtrValues frees the initial Ptr values (arrays and strings) that were overwritten.
+// Uses the outputs slice to get the OLD type (with correct Static flag for strings).
+func (c *Compiler) freeInitialPtrValues(initialVals []llvm.Value, outputs []*Symbol) {
 	for i, val := range initialVals {
-		if !val.IsNil() && outTypes[i].Kind() == ArrayKind {
-			arrayType := outTypes[i].(Array)
-			if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-				c.freeArray(val, arrayType.ColTypes[0])
-			}
+		if val.IsNil() {
+			continue
 		}
+		// Use the old type from outputs (before updateOutputTypes modifies it)
+		oldType := outputs[i].Type.(Ptr).Elem
+		c.freeValue(val, oldType)
 	}
 }
 
