@@ -514,5 +514,12 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 	}
 
 	elemVal := c.ArrayGet(arraySym, elemType, idxVal)
+
+	// For string arrays, arr_str_get returns an owned copy that must be freed.
+	// Override Static flag since the copy is heap-allocated regardless of original.
+	if elemType.Kind() == StrKind {
+		elemType = Str{Static: false}
+	}
+
 	return []*Symbol{{Type: elemType, Val: elemVal}}
 }

@@ -51,7 +51,7 @@ int                  arr_str_push(PtArrayStr* a, const char* s);
 /* returns 0 on ok, and transfers ownership of the popped string to caller (caller must free) */
 int                  arr_str_pop(PtArrayStr* a, char** out);
 
-const char*          arr_str_get(const PtArrayStr* a, size_t i);
+char*                arr_str_get(const PtArrayStr* a, size_t i);  /* caller owns the copy */
 int                  arr_str_set(PtArrayStr* a, size_t i, const char* s);
 
 void                 arr_str_swap(PtArrayStr* a, size_t i, size_t j);

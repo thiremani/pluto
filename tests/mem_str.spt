@@ -99,3 +99,66 @@ r
 r  # use before overwrite
 r = getHeap()  # Static -> Heap (from function)
 r
+
+# ============================================
+# Finding #1: Array string element assignment
+# x = arr[i] should get an owned copy, not alias internal storage
+# ============================================
+
+# Create array and assign element to variable
+arr = ["first" "second" "third"]
+x = arr[0]  # should copy, not alias
+x
+arr  # array should still be valid
+
+# Modify x, array should be unchanged (independent copy)
+x = "modified"
+x
+arr  # original array unchanged
+
+# Assign from array, then reassign array element
+arr2 = ["hello" "world"]
+y = arr2[1]  # y = "world" (copy)
+y
+arr2
+
+# Multiple assignments from same array
+arr3 = ["a" "b" "c"]
+p = arr3[0]
+q = arr3[1]
+r2 = arr3[2]
+p, q, r2
+
+# ============================================
+# Finding #2: Array element as function argument
+# f(arr[i]) should work without double-free
+# ============================================
+
+# Pass array element to identity function
+arr4 = ["func" "test"]
+z = identity(arr4[0])  # pass arr[i] as argument
+z
+arr4  # array should still be valid
+
+# Use array element directly in expression (print)
+arr5 = ["print" "me"]
+arr5[0]  # direct use as expression
+arr5[1]
+arr5  # array still valid after element access
+
+# ============================================
+# Function cleanup tests
+# Test that array element access in functions is properly managed
+# ============================================
+
+# Get array element from function (local array should be cleaned up)
+elem0 = getArrayElem(0)
+elem0
+elem1 = getArrayElem(1)
+elem1
+elem2 = getArrayElem(2)
+elem2
+
+# Function that uses array elements internally
+result = useArrayElem()
+result

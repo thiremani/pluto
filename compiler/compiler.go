@@ -443,20 +443,10 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		s.Type = Str{Static: true}
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
-		// Create an actual zero-length array (not null)
-		// Arrays are always heap-allocated, even when empty
-		arrayType := symType.(Array)
-		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-			elemType := arrayType.ColTypes[0]
-			nConst := c.ConstI64(0)
-			arrVal := c.CreateArrayForType(elemType, nConst)
-			s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_zero")
-			// No need for ReadOnly flag - arrays are always heap, always freed (unless FuncArg)
-		} else {
-			// If element type is unresolved, use null pointer temporarily
-			// This should be rare and will be resolved later
-			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-		}
+		// Zero value for arrays is null pointer (similar to static empty string for Str).
+		// Runtime functions handle null gracefully: free(null) is no-op, len(null) returns 0.
+		// This avoids heap allocation for zero values that may be immediately overwritten.
+		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
 	case ArrayRangeKind:
@@ -472,7 +462,7 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) {
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string, oldValues []*Symbol) {
 	if len(idents) == 0 {
 		return
 	}
@@ -480,37 +470,20 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 	needsCopy, movedSources := c.computeCopyRequirements(idents, syms, rhsNames)
 
 	for i, ident := range idents {
-		oldSym, exists := Get(c.Scopes, ident.Value)
-
-		// New variable - just store
-		if !exists {
-			c.storeValue(ident.Value, syms[i], needsCopy[i])
-			continue
-		}
-
-		// If old and new symbols are the same object, the value is already in place.
-		// This happens for:
-		// - Function calls with Ptr outputs (makeOutputs returns the same Ptr symbol)
-		// - Self-assignment of non-Ptr variables (a = a)
-		if oldSym == syms[i] {
-			continue
-		}
-
 		_, moved := movedSources[ident.Value]
 
-		// Free old value if orphaned (not transferred to another variable)
-		if !oldSym.FuncArg && !moved {
-			c.freeOldValue(oldSym)
+		// Free old value if:
+		// - It exists (oldValues[i] != nil)
+		// - Not transferred to another variable (moved)
+		// - Not a function output parameter (FuncArg) - caller manages those
+		// oldValues[i] was captured BEFORE RHS compilation, so for Ptr outputs
+		// it contains the actual old value (not the new value written by the function).
+		if oldValues[i] != nil && !moved && !oldValues[i].FuncArg {
+			c.freeValue(oldValues[i].Val, oldValues[i].Type)
 		}
 
 		c.storeValue(ident.Value, syms[i], needsCopy[i])
 	}
-}
-
-// freeOldValue frees the old value of a variable being reassigned.
-func (c *Compiler) freeOldValue(oldSym *Symbol) {
-	derefed := c.derefIfPointer(oldSym)
-	c.freeValue(derefed.Val, derefed.Type)
 }
 
 // computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
@@ -522,6 +495,12 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	for i, rhsSym := range syms {
 		// Static strings: immutable, live forever - no copy needed
 		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
+			continue
+		}
+
+		// Function parameters are borrowed - just alias, don't copy.
+		// Ownership transfers from caller's temp to the output.
+		if rhsSym.FuncArg {
 			continue
 		}
 
@@ -594,6 +573,11 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 }
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
+	// Capture old values BEFORE compiling RHS expressions.
+	// This is critical for function calls with Ptr outputs: by the time RHS compilation
+	// finishes, Ptrs already contain NEW values. We must capture old values first.
+	oldValues := c.captureOldValues(stmt.Name)
+
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	i := 0
@@ -612,7 +596,24 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms, rhsNames)
+	c.writeTo(stmt.Name, syms, rhsNames, oldValues)
+}
+
+// captureOldValues captures the current values of destination variables before RHS compilation.
+// For Ptr variables, loads the actual value; for others, returns the symbol directly.
+// Returns nil for variables that don't exist yet.
+func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
+	result := make([]*Symbol, len(idents))
+	for i, ident := range idents {
+		sym, exists := Get(c.Scopes, ident.Value)
+		if !exists {
+			continue
+		}
+		// For Ptrs, load the actual value so we can free it later.
+		// For non-Ptrs, use the symbol directly.
+		result[i] = c.derefIfPointer(sym)
+	}
+	return result
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
@@ -1381,14 +1382,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 
 	outputs := c.makeOutputs(dest, info.OutTypes)
 
-	// Load initial values from Ptr outputs BEFORE the function call, but only when
-	// we can safely free them (i.e., no ranges that might be empty at runtime).
-	// When HasRanges=true, we skip loading to avoid unnecessary work since we won't free.
-	var initialPtrVals []llvm.Value
-	if !info.HasRanges {
-		initialPtrVals = c.loadInitialPtrValues(outputs, info.OutTypes)
-	}
-
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
 		rewCall := info.Rewrite.(*ast.CallExpression)
@@ -1397,26 +1390,14 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// NOTE: We intentionally do NOT free initial Ptr values here, which means
-		// strings/arrays WILL LEAK when ranges are non-empty and outputs are overwritten.
-		// This is a deliberate tradeoff: leaks are safer than UAF/crashes.
-		//
-		// When ranges exist, the loop may be empty at runtime, meaning outputs
-		// retain their original values. Freeing would corrupt live data (UAF).
+		// NOTE: When ranges exist, the loop may be empty at runtime, meaning outputs
+		// retain their original values. Freeing old values would corrupt live data (UAF).
+		// We return loaded values (not Ptrs) so writeTo treats them as new values and
+		// doesn't try to free old values for existing variables.
+		// This causes strings/arrays to LEAK when ranges are non-empty, but avoids UAF.
 		//
 		// TODO(conditionals): When implementing conditionals, add runtime tracking
-		// for "was output written". The intended semantics for empty ranges:
-		//   - Empty range → function is a no-op
-		//   - NEW variable: initialize to NULL, set to zero value after loop if still NULL
-		//   - EXISTING variable: retains its previous value
-		// At that point, we can safely free the initial value only when we confirm
-		// the output was actually overwritten, eliminating both UAF and leaks.
-
-		// For destinations, return Ptr symbols so writeTo sees oldSym == syms[i] and skips freeing.
-		// For intermediate values (no dest), load the final values for use in expressions.
-		if len(dest) > 0 {
-			return outputs
-		}
+		// for "was output written" to eliminate both UAF and leaks.
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
 			elemType := outputs[i].Type.(Ptr).Elem
@@ -1431,45 +1412,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// LoopInside=true or no ranges: direct call
 	c.compileCallInner(ce.Function.Value, ce, outputs)
 
-	// Only free initial values and update types when there are no ranges.
-	// With LoopInside=true and HasRanges=true, the function handles iteration internally,
-	// but if the range is empty at runtime, outputs won't be written. Skipping the free
-	// causes Ptr values to LEAK when ranges are non-empty, but avoids UAF when empty.
-	// See TODO above for the planned conditionals-based solution.
+	// Update output types (e.g., Static flag for strings) when there are no ranges.
+	// Old value freeing is handled by writeTo using captured old values.
 	if !info.HasRanges {
-		c.freeInitialPtrValues(initialPtrVals, outputs)
 		c.updateOutputTypes(outputs, info.OutTypes, dest)
 	}
 
 	return outputs
-}
-
-// loadInitialPtrValues loads the initial values from Ptr outputs before they're overwritten.
-// This captures both zero-value arrays/strings (for new variables) and existing values (for
-// variables being reassigned), so they can be freed after the function call writes new values.
-func (c *Compiler) loadInitialPtrValues(outputs []*Symbol, outTypes []Type) []llvm.Value {
-	result := make([]llvm.Value, len(outputs))
-	for i, out := range outputs {
-		kind := outTypes[i].Kind()
-		if kind == ArrayKind || kind == StrKind {
-			elemType := out.Type.(Ptr).Elem
-			result[i] = c.createLoad(out.Val, elemType, "initial_ptr")
-		}
-	}
-	return result
-}
-
-// freeInitialPtrValues frees the initial Ptr values (arrays and strings) that were overwritten.
-// Uses the outputs slice to get the OLD type (with correct Static flag for strings).
-func (c *Compiler) freeInitialPtrValues(initialVals []llvm.Value, outputs []*Symbol) {
-	for i, val := range initialVals {
-		if val.IsNil() {
-			continue
-		}
-		// Use the old type from outputs (before updateOutputTypes modifies it)
-		oldType := outputs[i].Type.(Ptr).Elem
-		c.freeValue(val, oldType)
-	}
 }
 
 // updateOutputTypes updates Ptr elem types to reflect actual return types from a function call.
@@ -1545,10 +1494,9 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
 
-	// Free temporary arguments (non-identifier expressions) after the call
-	for i, argExpr := range ce.Arguments {
-		c.freeTemporary(argExpr, []*Symbol{args[i]})
-	}
+	// Don't free temporary arguments - ownership transfers to the function.
+	// If the function assigns input to output, the output takes ownership.
+	// Function inputs have FuncArg:true so cleanupScope skips them (they're borrowed).
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
@@ -1831,6 +1779,15 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		strPtr := c.arrayStrArg(s)
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)
+	case StrKind:
+		*args = append(*args, s.Val)
+		// Free non-static string temporaries (e.g., array element access returns owned copy)
+		// Identifiers reference scope-owned variables; everything else is a temporary
+		if !s.Type.(Str).Static {
+			if _, isIdent := expr.(*ast.Identifier); !isIdent {
+				*toFree = append(*toFree, s.Val)
+			}
+		}
 	default:
 		*args = append(*args, s.Val)
 	}

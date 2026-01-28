@@ -10,3 +10,17 @@ s = getStatic()
 # Return a heap string (concatenation)
 s = getHeap()
     s = "heap" ⊕ " from func"
+
+# Access array element inside function and return it
+# Tests that: 1) local array is cleaned up, 2) returned string is owned copy
+s = getArrayElem(idx)
+    arr = ["zero" "one" "two"]
+    s = arr[idx]
+
+# Use array element inside function without returning it
+# Tests that temporary from arr[i] is freed after use
+s = useArrayElem()
+    arr = ["local" "array" "test"]
+    x = arr[0]  # local copy
+    y = arr[1]  # another local copy
+    s = x ⊕ y   # concat and return

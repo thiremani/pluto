@@ -33,3 +33,19 @@ heap from func
 literal
 literal
 heap from func
+first
+[first second third]
+modified
+[first second third]
+world
+[hello world]
+a b c
+func
+[func test]
+print
+me
+[print me]
+zero
+one
+two
+localarray
