@@ -894,42 +894,33 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 	// Free temporary array operands (literals used in expressions)
 	// Variables are not freed here - they're managed by scope cleanup
-	c.freeTemporaryOperand(expr.Left, left)
-	c.freeTemporaryOperand(expr.Right, right)
+	c.freeTemporary(expr.Left, left)
+	c.freeTemporary(expr.Right, right)
 
 	return res
 }
 
-// freeTemporaryOperand frees array operands that are temporaries (not variables).
-// Temporaries include: array literals, and results of prefix/infix expressions on arrays.
-func (c *Compiler) freeTemporaryOperand(expr ast.Expression, syms []*Symbol) {
-	// Determine if this expression produces a temporary that should be freed
-	isTemporary := false
-	switch expr.(type) {
-	case *ast.ArrayLiteral:
-		isTemporary = true
-	case *ast.PrefixExpression:
-		// Prefix on array produces a new temporary array
-		isTemporary = true
-	case *ast.InfixExpression:
-		// Infix with arrays produces a new temporary array
-		isTemporary = true
-	}
-
-	if !isTemporary {
+// freeTemporary frees operands that are temporaries (not variables).
+// If the expression is an identifier, it references a variable owned by scope - not a temporary.
+// Everything else (literals, call results, infix/prefix results) produces a temporary
+// that must be freed after use if it's a heap type (array or non-static string).
+// Handles both direct values and pointer-wrapped values (loads value from pointer first).
+func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
+	// Identifiers reference variables owned by scope - not temporaries
+	if _, isIdent := expr.(*ast.Identifier); isIdent {
 		return
 	}
 
+	// Everything else is a temporary - free heap types
 	for _, sym := range syms {
-		// Skip function arguments - they're borrowed references
-		if sym.FuncArg {
-			continue
+		// Handle pointer-wrapped values (e.g., function arguments promoted to memory)
+		val := sym.Val
+		typ := sym.Type
+		if ptrType, ok := sym.Type.(Ptr); ok {
+			val = c.createLoad(sym.Val, ptrType.Elem, "temp_free")
+			typ = ptrType.Elem
 		}
-		if arr, ok := sym.Type.(Array); ok {
-			if len(arr.ColTypes) > 0 && arr.ColTypes[0].Kind() != UnresolvedKind {
-				c.freeArray(sym.Val, arr.ColTypes[0])
-			}
-		}
+		c.freeValue(val, typ)
 	}
 }
 
@@ -973,8 +964,12 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
-	// Setup outputs to store values across iterations
+	// Setup outputs to store values across iterations.
+	// Mark as FuncArg so cleanupScope skips them - the values are "returned" via out.
 	outputs := c.makeOutputs(dest, info.OutTypes)
+	for _, o := range outputs {
+		o.FuncArg = true
+	}
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
@@ -1001,21 +996,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		}
 	}
 
-	// Remove output symbols from block scope so cleanup doesn't free the returned values
-	c.removeOutputsFromScope(dest)
 	return out
-}
-
-// removeOutputsFromScope removes destination variable symbols from the current scope
-// so that cleanupScope won't free values that have already been loaded and returned.
-func (c *Compiler) removeOutputsFromScope(dest []*ast.Identifier) {
-	if len(dest) == 0 || len(c.Scopes) == 0 {
-		return
-	}
-	currentScope := c.Scopes[len(c.Scopes)-1]
-	for _, ident := range dest {
-		delete(currentScope.Elems, ident.Value)
-	}
 }
 
 func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
@@ -1043,49 +1024,35 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
 	outputs := make([]*Symbol, len(outTypes))
 
-	// If we have destinations, use them
-	if len(dest) > 0 {
-		for i, outType := range outTypes {
-			name := dest[i].Value
-			sym, ok := Get(c.Scopes, name)
-			if ok {
-				// Update type for non-pointer symbols (sym.Type may be unresolved for empty arrays)
-				// Preserve pointer types as they already have the correct structure
-				c.updateUnresolvedType(name, sym, outType)
-			} else {
-				sym = c.makeZeroValue(outType)
-				Put(c.Scopes, name, sym)
-			}
+	for i, outType := range outTypes {
+		// Determine the name for the alloca
+		var name string
+		if i < len(dest) {
+			name = dest[i].Value
+		} else {
+			name = fmt.Sprintf("tmp_out_%d", c.tmpCounter)
+			c.tmpCounter++
+		}
 
+		// Check if variable already exists in scope
+		sym, exists := Get(c.Scopes, name)
+		if exists {
+			// Existing variable - update type if needed and promote to memory
+			c.updateUnresolvedType(name, sym, outType)
 			if sym.Type.Kind() != PtrKind {
 				sym = c.promoteToMemory(name)
-				// NOTE: We do NOT update Ptr element type here because outputs may not be written
-				// (empty ranges, or conditional expressions like `Square(i > 4)`).
-				//
-				// Ranges act as conditionals: if the range is empty, the loop body never executes.
-				// The intended design for NEW variables is:
-				//   1. Initialize output to NULL (not static zero value)
-				//   2. Execute loop body (only runs if range is non-empty)
-				//   3. After loop: if output is still NULL, assign static zero value
-				//   4. Cleanup: only free if value is neither NULL nor static zero string
-				//
-				// For EXISTING variables (already in scope), skip the NULL check - they already
-				// have a value from a previous assignment, so no zero value fallback is needed.
-				//
-				// This approach uses runtime checks instead of compile-time type metadata,
-				// deferring zero value creation until we confirm the output wasn't written.
 			}
 			outputs[i] = sym
+		} else {
+			// New variable or intermediate value - create temp alloca without adding to scope
+			// The permanent variable will be created by writeTo in FuncScope
+			ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
+			// Initialize with zero value (important for empty ranges where loop body never runs)
+			// Use zero value's type for Ptr.Elem to preserve Static flag for strings
+			zeroVal := c.makeZeroValue(outType)
+			c.createStore(zeroVal.Val, ptr, zeroVal.Type)
+			outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: zeroVal.Type}}
 		}
-		return outputs
-	}
-
-	// No destinations (intermediate value) - create temp allocas without adding to scope
-	for i, outType := range outTypes {
-		name := fmt.Sprintf("tmp_out_%d", c.tmpCounter)
-		c.tmpCounter++
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
-		outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: outType}}
 	}
 	return outputs
 }
@@ -1121,8 +1088,8 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
 
-	// Free temporary array operand (literal) after use - the result is a new array
-	c.freeTemporaryOperand(expr.Right, operand)
+	// Free temporary operand after use - the result is a new value
+	c.freeTemporary(expr.Right, operand)
 
 	return res
 }
@@ -1135,7 +1102,11 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	defer c.popScope()
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
+	// Mark as FuncArg so cleanupScope skips them - the values are "returned" via out.
 	outputs := c.makeOutputs(dest, info.OutTypes)
+	for _, o := range outputs {
+		o.FuncArg = true
+	}
 
 	// Rewritten operand under tmp iters.
 	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
@@ -1160,8 +1131,6 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		}
 	}
 
-	// Remove output symbols from block scope so cleanup doesn't free the returned values
-	c.removeOutputsFromScope(dest)
 	return out
 }
 
@@ -1575,6 +1544,11 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 	}
 
 	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+
+	// Free temporary arguments (non-identifier expressions) after the call
+	for i, argExpr := range ce.Arguments {
+		c.freeTemporary(argExpr, []*Symbol{args[i]})
+	}
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
