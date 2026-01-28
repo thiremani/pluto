@@ -22,20 +22,21 @@ type Symbol struct {
 // scope and passed by reference (Ptr). The function operates on these references
 // but does not own the underlying values.
 //
-// Key invariant: The CFG guarantees that every input is used and every output is
-// written. This means ownership of heap values (strings, arrays) transfers naturally
-// through assignment: input values flow to outputs, and the caller's output variables
-// take ownership.
+// Assignment semantics: Functions behave like expressions. When assigning a FuncArg
+// to any variable (output or local), the value is COPIED, just like `x = s` copies
+// in regular scope. This ensures:
+//   - No aliasing between caller's input and output variables
+//   - Local variables get independent copies (with FuncArg=false)
+//   - Consistent semantics: x = identity(s) behaves like x = s
 //
 // Example: x = f(arr[0])
 //   1. Caller: arr[0] returns owned copy, stored in temp alloca
 //   2. Caller: passes Ptr to temp (input) and Ptr to x (output)
-//   3. Function: loads from input, stores to output (no copy, just alias)
+//   3. Function: copies input value to output (not alias)
 //   4. Function: cleanup skips FuncArg params (borrowed, not owned)
-//   5. Caller: x now owns the value; temp alloca is harmless stack memory
+//   5. Caller: frees temp after call; x owns its independent copy
 //
-// This model avoids copies while ensuring no leaks (CFG guarantees consumption)
-// and no double-frees (only the final owner frees).
+// This ensures no aliasing issues while the caller manages temp lifetimes.
 
 type FuncArgs struct {
 	Inputs      []*Symbol          // function.Param pointers for all params
@@ -514,15 +515,11 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	movedSources := make(map[string]struct{})
 
 	for i, rhsSym := range syms {
-		// Static strings: immutable, live forever - no copy needed
-		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
-			continue
-		}
-
-		// Function parameters are borrowed (see ownership model in Symbol definition).
-		// Alias without copying - CFG guarantees inputs flow to outputs, so ownership
-		// transfers naturally. The caller's output variable becomes the final owner.
-		if rhsSym.FuncArg {
+		// Static strings: immutable, live forever - no copy needed.
+		// EXCEPTION: FuncArg sources may have stale Static flag from function compilation
+		// with different argument types (Str mangling doesn't include Static flag).
+		// For FuncArg, always proceed to copy check to ensure safety.
+		if strType, ok := rhsSym.Type.(Str); ok && strType.Static && !rhsSym.FuncArg {
 			continue
 		}
 
@@ -1515,10 +1512,12 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
 
-	// Don't free temporary arguments here. Function parameters are borrowed, and the
-	// CFG guarantees all inputs are used (flow to outputs). Ownership transfers via
-	// assignment inside the function - caller's output variables become the final owners.
-	// See ownership model in Symbol definition.
+	// Free temporary arguments after the call. Function copies input values to outputs
+	// (see computeCopyRequirements - no FuncArg skip), so temps can be safely freed.
+	// Identifiers are skipped by freeTemporary since they're owned by caller's scope.
+	for i, arg := range ce.Arguments {
+		c.freeTemporary(arg, []*Symbol{args[i]})
+	}
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
