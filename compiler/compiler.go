@@ -12,9 +12,30 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool // Is this a function parameter?
-	ReadOnly bool // Can this be written to? (for output params vs input params)
+	FuncArg  bool // Borrowed function parameter (input or output). See ownership model below.
+	ReadOnly bool // Input parameter (cannot be written to).
 }
+
+// Function argument ownership model:
+//
+// Function parameters are BORROWED, not owned. They are allocated in the caller's
+// scope and passed by reference (Ptr). The function operates on these references
+// but does not own the underlying values.
+//
+// Key invariant: The CFG guarantees that every input is used and every output is
+// written. This means ownership of heap values (strings, arrays) transfers naturally
+// through assignment: input values flow to outputs, and the caller's output variables
+// take ownership.
+//
+// Example: x = f(arr[0])
+//   1. Caller: arr[0] returns owned copy, stored in temp alloca
+//   2. Caller: passes Ptr to temp (input) and Ptr to x (output)
+//   3. Function: loads from input, stores to output (no copy, just alias)
+//   4. Function: cleanup skips FuncArg params (borrowed, not owned)
+//   5. Caller: x now owns the value; temp alloca is harmless stack memory
+//
+// This model avoids copies while ensuring no leaks (CFG guarantees consumption)
+// and no double-frees (only the final owner frees).
 
 type FuncArgs struct {
 	Inputs      []*Symbol          // function.Param pointers for all params
@@ -498,8 +519,9 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 			continue
 		}
 
-		// Function parameters are borrowed - just alias, don't copy.
-		// Ownership transfers from caller's temp to the output.
+		// Function parameters are borrowed (see ownership model in Symbol definition).
+		// Alias without copying - CFG guarantees inputs flow to outputs, so ownership
+		// transfers naturally. The caller's output variable becomes the final owner.
 		if rhsSym.FuncArg {
 			continue
 		}
@@ -1390,14 +1412,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// NOTE: When ranges exist, the loop may be empty at runtime, meaning outputs
-		// retain their original values. Freeing old values would corrupt live data (UAF).
-		// We return loaded values (not Ptrs) so writeTo treats them as new values and
-		// doesn't try to free old values for existing variables.
-		// This causes strings/arrays to LEAK when ranges are non-empty, but avoids UAF.
+		// KNOWN ISSUE: Empty ranges cause UAF. When the loop doesn't execute, outputs
+		// retain their original values. But captureOldValues (called before compilation)
+		// already captured the old value, and writeTo will free it. We then store the
+		// same (now freed) pointer back, causing use-after-free.
 		//
-		// TODO(conditionals): When implementing conditionals, add runtime tracking
-		// for "was output written" to eliminate both UAF and leaks.
+		// TODO(conditionals): Fix by adding runtime "was output written" tracking.
+		// Until then, avoid empty ranges with heap-allocated variables.
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
 			elemType := outputs[i].Type.(Ptr).Elem
@@ -1494,9 +1515,10 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 
 	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
 
-	// Don't free temporary arguments - ownership transfers to the function.
-	// If the function assigns input to output, the output takes ownership.
-	// Function inputs have FuncArg:true so cleanupScope skips them (they're borrowed).
+	// Don't free temporary arguments here. Function parameters are borrowed, and the
+	// CFG guarantees all inputs are used (flow to outputs). Ownership transfers via
+	// assignment inside the function - caller's output variables become the final owners.
+	// See ownership model in Symbol definition.
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
@@ -1632,7 +1654,8 @@ func (c *Compiler) cleanupScope() {
 	}
 	currentScope := c.Scopes[len(c.Scopes)-1]
 	for _, sym := range currentScope.Elems {
-		// Skip function arguments - they're borrowed references, not owned
+		// Skip function arguments - they're borrowed, not owned.
+		// See ownership model in Symbol definition.
 		if sym.FuncArg {
 			continue
 		}
