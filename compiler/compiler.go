@@ -1463,10 +1463,17 @@ func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []
 func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, outputs []*Symbol) {
 	args := c.compileArgs(ce)
 
-	// Extract element types from pointer args for mangling
+	// Extract element types from pointer args for mangling.
+	// String params are normalized to non-static because function arguments are
+	// strdup'd when assigned to outputs (see computeCopyRequirements), so cleanup
+	// must treat them as heap-allocated. This matches TypeSolver's normalization.
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
-		paramTypes[i] = arg.Type.(Ptr).Elem
+		elemType := arg.Type.(Ptr).Elem
+		if elemType.Kind() == StrKind {
+			elemType = Str{Static: false}
+		}
+		paramTypes[i] = elemType
 	}
 
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
@@ -1477,14 +1484,6 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
 		})
 		return
-	}
-
-	// Apply string normalization from TypeSolver (strings marked as non-static
-	// since they're copied when assigned to outputs)
-	for i := range paramTypes {
-		if paramTypes[i].Kind() == StrKind {
-			paramTypes[i] = fnInfo.Params[i]
-		}
 	}
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
