@@ -516,10 +516,7 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 
 	for i, rhsSym := range syms {
 		// Static strings: immutable, live forever - no copy needed.
-		// EXCEPTION: FuncArg sources may have stale Static flag from function compilation
-		// with different argument types (Str mangling doesn't include Static flag).
-		// For FuncArg, always proceed to copy check to ensure safety.
-		if strType, ok := rhsSym.Type.(Str); ok && strType.Static && !rhsSym.FuncArg {
+		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
 			continue
 		}
 
@@ -1480,6 +1477,14 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
 		})
 		return
+	}
+
+	// Apply string normalization from TypeSolver (strings marked as non-static
+	// since they're copied when assigned to outputs)
+	for i := range paramTypes {
+		if paramTypes[i].Kind() == StrKind {
+			paramTypes[i] = fnInfo.Params[i]
+		}
 	}
 
 	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)

@@ -879,6 +879,10 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	}
 
 	elemType := arrType.ColTypes[0]
+	// String array element access does strdup at runtime, so mark as non-static
+	if elemType.Kind() == StrKind {
+		elemType = Str{Static: false}
+	}
 
 	idxTypes := ts.TypeExpression(ax.Range, isRoot)
 	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
@@ -1463,48 +1467,56 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
+// newFunc creates a new Func entry for the given call expression and caches it.
+// String params are normalized to non-static since they're copied (strdup'd) when assigned to outputs.
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
+	for i, arg := range args {
+		if arg.Kind() == StrKind {
+			args[i] = Str{Static: false}
+		}
+	}
+	f := &Func{
+		Name:     ce.Function.Value,
+		Params:   args,
+		OutTypes: make([]Type, len(template.Outputs)),
+	}
+	for i := range f.OutTypes {
+		f.OutTypes[i] = Unresolved{}
+	}
+	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	return f
+}
+
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	// first check scriptCompiler compiler if that itself has function in its function (perhaps through a previous script compilation)
+	// Check if function is already fully typed in cache
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if ok && f.AllTypesInferred() {
 		return f
 	}
 
+	// Create new Func if not cached (ok && !AllTypesInferred means recursive call, reuse f)
 	if !ok {
-		f = &Func{
-			Name:     ce.Function.Value,
-			Params:   args,
-			OutTypes: []Type{},
-		}
-		for range template.Outputs {
-			f.OutTypes = append(f.OutTypes, Unresolved{})
-		}
-		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+		f = ts.newFunc(ce, args, mangled, template)
 	}
 
-	canType := true
+	// Inside a function - unresolved args are allowed (resolved in later passes)
+	if ts.ScriptFunc != "" {
+		ts.TypeFunc(mangled, template, f)
+		return f
+	}
+
+	// At script level, all arg types must be resolved before typing
 	for i, arg := range args {
-		if arg.Kind() == UnresolvedKind {
-			if ts.ScriptFunc == "" {
-				ce := &token.CompileError{
-					Token: ce.Token,
-					Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				canType = false
-			}
+		if arg.Kind() != UnresolvedKind {
+			continue
 		}
-	}
-	if !canType {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ce.Token,
+			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
+		})
 		return f
 	}
-
-	if ts.ScriptFunc == "" {
-		ts.TypeScriptFunc(mangled, template, f)
-		return f
-	}
-
-	ts.TypeFunc(mangled, template, f)
+	ts.TypeScriptFunc(mangled, template, f)
 	return f
 }
 
