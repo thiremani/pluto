@@ -449,9 +449,19 @@ func (c *Compiler) compileMergeBlock(
 	}
 }
 
+// zeroType returns the type for a zero-initialized value.
+// For strings, this is Str{Static: true} because zero values are global constants.
+// This is the single source of truth for zero value types.
+func zeroType(t Type) Type {
+	if t.Kind() == StrKind {
+		return Str{Static: true}
+	}
+	return t
+}
+
 func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	s := &Symbol{
-		Type: symType,
+		Type: zeroType(symType),
 	}
 	switch symType.Kind() {
 	case IntKind:
@@ -459,10 +469,6 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
-		// Zero value is a static empty string. Force Static:true because the underlying
-		// value is a global constant that must NOT be freed. Callers expecting non-static
-		// semantics must overwrite this value before cleanup.
-		s.Type = Str{Static: true}
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
 	case ArrayKind:
 		// Zero value for arrays is null pointer (similar to static empty string for Str).
@@ -1223,9 +1229,12 @@ func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sr
 		// Load the destination pointer from the sret field
 		ptrType := llvm.PointerType(c.mapToLLVMType(finalOutTypes[i]), 0)
 		destPtr := c.builder.CreateLoad(ptrType, fieldPtr, outIdent.Value+"_dest")
+
+		// Use zeroType because the destination is zero-initialized with a static constant.
+		// storeValue will update the type after writing a heap value.
 		retPtrs[i] = &Symbol{
 			Val:      destPtr,
-			Type:     Ptr{Elem: finalOutTypes[i]},
+			Type:     Ptr{Elem: zeroType(finalOutTypes[i])},
 			FuncArg:  true,
 			ReadOnly: false,
 		}
