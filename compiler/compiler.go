@@ -490,31 +490,8 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string, oldValues []*Symbol, skipFreeForCall []bool) {
-	if len(idents) == 0 {
-		return
-	}
-
-	needsCopy, movedSources := c.computeCopyRequirements(idents, syms, rhsNames)
-
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
 	for i, ident := range idents {
-		_, moved := movedSources[ident.Value]
-
-		// Free old value if:
-		// - It exists (oldValues[i] != nil)
-		// - Not transferred to another variable (moved)
-		// - Not a function call destination (callee handles freeing for those)
-		// - Not an input parameter (FuncArg && ReadOnly)
-		//
-		// For function calls, the callee owns the old value and frees it on assignment.
-		// This avoids double-free and fixes the empty-range UAF (caller doesn't free
-		// when callee never writes).
-		isCallDest := len(skipFreeForCall) > i && skipFreeForCall[i]
-		isInputParam := oldValues[i] != nil && oldValues[i].FuncArg && oldValues[i].ReadOnly
-		if oldValues[i] != nil && !moved && !isCallDest && !isInputParam {
-			c.freeValue(oldValues[i].Val, oldValues[i].Type)
-		}
-
 		c.storeValue(ident.Value, syms[i], needsCopy[i])
 	}
 }
@@ -606,31 +583,54 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	oldValues := c.captureOldValues(stmt.Name)
 
 	syms := []*Symbol{}
-	rhsNames := []string{}        // Track RHS variable names (or "" if not a variable)
-	skipFreeForCall := []bool{}   // Track which destinations are from function calls
+	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
+	// Track result counts per expression to identify call destinations
+	resCounts := []int{}
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:])
+		resCounts = append(resCounts, len(res))
 
 		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
 		if ident, ok := expr.(*ast.Identifier); ok {
 			rhsName = ident.Value
 		}
-
-		// If this is a direct function call, callee handles freeing for these destinations.
-		// This avoids double-free (both caller and callee trying to free) and fixes the
-		// empty-range UAF (caller doesn't free when callee never writes).
-		_, isCall := expr.(*ast.CallExpression)
 		for range res {
 			rhsNames = append(rhsNames, rhsName)
-			skipFreeForCall = append(skipFreeForCall, isCall)
 		}
 
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms, rhsNames, oldValues, skipFreeForCall)
+
+	needsCopy, movedSources := c.computeCopyRequirements(stmt.Name, syms, rhsNames)
+	c.writeTo(stmt.Name, syms, needsCopy)
+	c.freeOldValues(stmt.Name, oldValues, movedSources, stmt.Value, resCounts)
+}
+
+// freeOldValues frees old values after stores complete.
+// Skips: nil values (new variables), moved values, call destinations (callee handles freeing).
+func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
+	i := 0
+	for exprIdx, expr := range exprs {
+		// Skip call destinations - callee owns old value and frees on first write
+		if _, isCall := expr.(*ast.CallExpression); isCall {
+			i += resCounts[exprIdx]
+			continue
+		}
+		for j := 0; j < resCounts[exprIdx]; j++ {
+			idx := i + j
+			if oldValues[idx] == nil {
+				continue
+			}
+			if _, moved := movedSources[idents[idx].Value]; moved {
+				continue
+			}
+			c.freeValue(oldValues[idx].Val, oldValues[idx].Type)
+		}
+		i += resCounts[exprIdx]
+	}
 }
 
 // captureOldValues captures the current values of destination variables before RHS compilation.
