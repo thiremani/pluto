@@ -221,6 +221,13 @@ int arr_str_push(PtArrayStr* a, const char* s){
     return 0;
 }
 
+int arr_str_push_own(PtArrayStr* a, char* s){
+    if (!a) return -1;
+    if (str_ensure_cap(&a->v, 1) != 0) return -1;
+    a->v.a[a->v.n++] = s;  // takes ownership; caller must not free s
+    return 0;
+}
+
 int arr_str_pop(PtArrayStr* a, char** out){
     if (!a || a->v.n == 0) return -1;
     char* v = a->v.a[--a->v.n];
@@ -233,12 +240,24 @@ char* arr_str_get(const PtArrayStr* a, size_t i){
     return dup_cstr(a->v.a[i]);  // caller owns the copy
 }
 
+const char* arr_str_borrow(const PtArrayStr* a, size_t i){
+    if (!a || i >= (size_t)a->v.n) return NULL;
+    return a->v.a[i];  // borrowed pointer; caller must NOT free
+}
+
 int arr_str_set(PtArrayStr* a, size_t i, const char* s){
     if (!a || i >= (size_t)a->v.n) return -1;
     char* dup = dup_cstr(s);
     if (!dup) return -1;
     free(a->v.a[i]);
     a->v.a[i] = dup;
+    return 0;
+}
+
+int arr_str_set_own(PtArrayStr* a, size_t i, char* s){
+    if (!a || i >= (size_t)a->v.n) return -1;
+    free(a->v.a[i]);
+    a->v.a[i] = s;  // takes ownership; caller must not free s
     return 0;
 }
 

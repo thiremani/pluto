@@ -77,6 +77,24 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
 
+// PushValOwn pushes a value to an array accumulator, transferring ownership for strings.
+// Only use this for heap-allocated temporaries (e.g., str_concat results), NOT for
+// identifiers or borrowed values which would leave the original variable dangling.
+func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
+	valSym := c.derefIfPointer(value)
+
+	// For strings, use push_own to transfer ownership without duplicating
+	if acc.ElemType.Kind() == StrKind {
+		pushTy, pushFn := c.GetCFunc(ARR_STR_PUSH_OWN)
+		c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own")
+		return
+	}
+
+	// For value types (int, float), regular push is fine
+	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
+	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
+}
+
 func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	return &Symbol{
@@ -109,7 +127,8 @@ func (c *Compiler) CopyArrayInto(vec llvm.Value, src *Symbol, srcElem, resElem T
 		if applyOffset {
 			dstIdx = c.builder.CreateAdd(iter, offset, "concat_idx")
 		}
-		elem := c.ArrayGet(src, srcElem, iter)
+		// Use borrowed get for internal copy - set will make its own copy for strings
+		elem := c.ArrayGetBorrowed(src, srcElem, iter)
 		elem = c.CastArrayElem(elem, srcElem, resElem)
 		c.ArraySetForType(resElem, vec, dstIdx, elem)
 	})
@@ -151,6 +170,24 @@ func (c *Compiler) ArraySetForType(elem Type, vec llvm.Value, idx llvm.Value, va
 	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, info.SetName)
 }
 
+// ArraySetOwnForType sets an array element, taking ownership of the value for strings.
+// For strings, this uses arr_str_set_own which avoids the duplicate strdup.
+// For value types (int, float), this is identical to ArraySetForType.
+func (c *Compiler) ArraySetOwnForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
+	info := ArrayInfos[elem.Kind()]
+
+	// For strings, use set_own to transfer ownership without duplicating
+	if elem.Kind() == StrKind {
+		fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
+		c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, ARR_STR_SET_OWN)
+		return
+	}
+
+	// For value types, regular set is fine
+	fnTy, fn := c.GetCFunc(info.SetName)
+	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, info.SetName)
+}
+
 func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
 	info := ArrayInfos[elem.Kind()]
 
@@ -167,23 +204,53 @@ func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
-// ArraySetCells populates an array with cell values, handling type conversions
-func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, elemType Type) {
+// ArrayGetBorrowed returns a borrowed reference to an array element.
+// For string arrays, this avoids the strdup that ArrayGet performs.
+// For int/float arrays, this is identical to ArrayGet (value types have no ownership).
+// Use this for internal operations where the value is immediately passed to set/push.
+func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+	info := ArrayInfos[elem.Kind()]
+	cast := c.ArrayBitCast(arr.Val, info, "arrp")
+
+	// For strings, use the borrow function to avoid unnecessary strdup
+	if elem.Kind() == StrKind {
+		fnTy, fn := c.GetCFunc(ARR_STR_BORROW)
+		return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "borrow")
+	}
+
+	// For value types (int, float), regular get is fine - no ownership issues
+	fnTy, fn := c.GetCFunc(info.GetName)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
+}
+
+// ArraySetCells populates an array with cell values, using ownership transfer
+// for heap-allocated temporaries (non-identifier expressions) to avoid double-allocation.
+// Identifiers and static strings are copied to preserve the original value.
+func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Expression, elemType Type) {
 	info := ArrayInfos[elemType.Kind()]
 
-	_, setFn := c.GetCFunc(info.SetName)
 	for i, cs := range cells {
 		idx := c.ConstI64(uint64(i))
 		val := cs.Val
 
 		// Handle type conversions
-		// Note: Only safe int→float promotion is supported.
-		// The type solver prevents lossy float→int conversions.
 		if elemType.Kind() == FloatKind && cs.Type.Kind() == IntKind {
 			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
 		}
 
-		c.builder.CreateCall(c.GetFnType(info.SetName), setFn, []llvm.Value{vec, idx, val}, "arr_set")
+		// For strings: use set_own only for heap-allocated temporaries (non-identifiers)
+		// Identifiers and borrowed values must be copied to preserve their original
+		if elemType.Kind() == StrKind {
+			_, isIdent := exprs[i].(*ast.Identifier)
+			if strType, ok := cs.Type.(Str); ok && !strType.Static && !isIdent {
+				fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
+				c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set_own")
+				continue
+			}
+		}
+
+		fnTy, fn := c.GetCFunc(info.SetName)
+		c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set")
 	}
 }
 
@@ -267,7 +334,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	nConst := c.ConstI64(uint64(len(row)))
 
 	arrVal := c.CreateArrayForType(elemType, nConst)
-	c.ArraySetCells(arrVal, cells, elemType)
+	// Use expression-aware set to transfer ownership for temporaries only
+	c.ArraySetCells(arrVal, cells, row, elemType)
 
 	s.Type = arr
 	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
@@ -287,11 +355,25 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 			valSym := c.derefIfPointer(vals[0])
 
 			val := valSym.Val
+			valType := valSym.Type // Preserve original type for ownership info
 			if valSym.Type.Kind() != elemType.Kind() {
 				val = c.CastArrayElem(val, valSym.Type, elemType)
+				valType = elemType // Cast changes the type
 			}
 
-			c.PushVal(acc, &Symbol{Val: val, Type: elemType})
+			sym := &Symbol{Val: val, Type: valType}
+
+			// For strings: use push_own only for heap-allocated temporaries (non-identifiers)
+			// Identifiers must be copied to preserve the original variable's value
+			_, isIdent := cell.(*ast.Identifier)
+			if elemType.Kind() == StrKind {
+				if strType, ok := valType.(Str); ok && !strType.Static && !isIdent {
+					c.PushValOwn(acc, sym)
+					continue
+				}
+			}
+
+			c.PushVal(acc, sym)
 		}
 	})
 
@@ -334,8 +416,9 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	// Element-wise operation over the full length
 	r := c.rangeZeroToN(minLen)
 	c.createLoop(r, func(iter llvm.Value) {
-		leftVal := c.ArrayGet(leftArr, leftElem, iter)
-		rightVal := c.ArrayGet(rightArr, rightElem, iter)
+		// Use borrowed get - compileInfix reads values and produces new result
+		leftVal := c.ArrayGetBorrowed(leftArr, leftElem, iter)
+		rightVal := c.ArrayGetBorrowed(rightArr, rightElem, iter)
 
 		leftSym := &Symbol{Val: leftVal, Type: leftElem}
 		rightSym := &Symbol{Val: rightVal, Type: rightElem}
@@ -348,7 +431,8 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
 		}
 
-		c.ArraySetForType(resElem, resVec, iter, resultVal)
+		// Use set_own for strings to transfer ownership without double-strdup
+		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
 	// Return result array
@@ -397,7 +481,8 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	r := c.rangeZeroToN(lenVal)
 	c.createLoop(r, func(iter llvm.Value) {
 		idx := iter
-		val := c.ArrayGet(arr, arrElem, idx)
+		// Use borrowed get - compileInfix reads values and produces new result
+		val := c.ArrayGetBorrowed(arr, arrElem, idx)
 		elemSym := &Symbol{Val: val, Type: arrElem}
 
 		// Respect the original operand order for non-commutative operations
@@ -414,7 +499,8 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
 		}
 
-		c.ArraySetForType(resElem, resVec, idx, resultVal)
+		// Use set_own for strings to transfer ownership without double-strdup
+		c.ArraySetOwnForType(resElem, resVec, idx, resultVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -433,7 +519,8 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 	r := c.rangeZeroToN(n)
 	c.createLoop(r, func(iter llvm.Value) {
 		idx := iter
-		v := c.ArrayGet(arr, elem, idx)
+		// Use borrowed get - compilePrefix reads value and produces new result
+		v := c.ArrayGetBorrowed(arr, elem, idx)
 		opSym := &Symbol{Val: v, Type: elem}
 		computed := c.compilePrefix(op, opSym, resElem)
 
@@ -443,7 +530,8 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 			resultVal = c.builder.CreateSIToFP(computed.Val, c.Context.DoubleType(), "cast_to_resElem")
 		}
 
-		c.ArraySetForType(resElem, resVec, idx, resultVal)
+		// Use set_own for strings to transfer ownership without double-strdup
+		c.ArraySetOwnForType(resElem, resVec, idx, resultVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)

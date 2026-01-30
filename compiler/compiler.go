@@ -484,7 +484,7 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string, oldValues []*Symbol) {
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string, oldValues []*Symbol, skipFreeForCall []bool) {
 	if len(idents) == 0 {
 		return
 	}
@@ -497,10 +497,15 @@ func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []
 		// Free old value if:
 		// - It exists (oldValues[i] != nil)
 		// - Not transferred to another variable (moved)
-		// - Not a function output parameter (FuncArg) - caller manages those
-		// oldValues[i] was captured BEFORE RHS compilation, so for Ptr outputs
-		// it contains the actual old value (not the new value written by the function).
-		if oldValues[i] != nil && !moved && !oldValues[i].FuncArg {
+		// - Not a function call destination (callee handles freeing for those)
+		// - Not an input parameter (FuncArg && ReadOnly)
+		//
+		// For function calls, the callee owns the old value and frees it on assignment.
+		// This avoids double-free and fixes the empty-range UAF (caller doesn't free
+		// when callee never writes).
+		isCallDest := len(skipFreeForCall) > i && skipFreeForCall[i]
+		isInputParam := oldValues[i] != nil && oldValues[i].FuncArg && oldValues[i].ReadOnly
+		if oldValues[i] != nil && !moved && !isCallDest && !isInputParam {
 			c.freeValue(oldValues[i].Val, oldValues[i].Type)
 		}
 
@@ -595,7 +600,8 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 	oldValues := c.captureOldValues(stmt.Name)
 
 	syms := []*Symbol{}
-	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
+	rhsNames := []string{}        // Track RHS variable names (or "" if not a variable)
+	skipFreeForCall := []bool{}   // Track which destinations are from function calls
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:])
@@ -605,14 +611,20 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 		if ident, ok := expr.(*ast.Identifier); ok {
 			rhsName = ident.Value
 		}
+
+		// If this is a direct function call, callee handles freeing for these destinations.
+		// This avoids double-free (both caller and callee trying to free) and fixes the
+		// empty-range UAF (caller doesn't free when callee never writes).
+		_, isCall := expr.(*ast.CallExpression)
 		for range res {
 			rhsNames = append(rhsNames, rhsName)
+			skipFreeForCall = append(skipFreeForCall, isCall)
 		}
 
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms, rhsNames, oldValues)
+	c.writeTo(stmt.Name, syms, rhsNames, oldValues, skipFreeForCall)
 }
 
 // captureOldValues captures the current values of destination variables before RHS compilation.
@@ -1291,7 +1303,8 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 	elemType := arrRangeType.Array.ColTypes[0]
 	c.createLoop(rangeVal, func(iter llvm.Value) {
-		elemVal := c.ArrayGet(arraySym, elemType, iter)
+		// Use borrowed get - iterator values are read-only during iteration
+		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
 		body(elemVal, elemType)
 	})
 }
@@ -1415,7 +1428,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		// Until then, avoid empty ranges with heap-allocated variables.
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
-			elemType := outputs[i].Type.(Ptr).Elem
+			// Use info.OutTypes[i] for correct Static flag on strings, not outputs[i].Type
+			// which may retain stale flags from existing variables.
+			elemType := info.OutTypes[i]
 			out[i] = &Symbol{
 				Val:  c.createLoad(outputs[i].Val, elemType, "final"),
 				Type: elemType,
