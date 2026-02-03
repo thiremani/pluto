@@ -394,3 +394,38 @@ func hasSpecifier(runes []rune, i int) bool {
 func specIdAhead(runes []rune, i int) bool {
 	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
 }
+
+// hasValidMarkers checks if a format string contains any markers (-identifier)
+// where the identifier is defined according to the provided isDefined callback.
+// Also handles specifier identifiers like %(-width)d.
+func hasValidMarkers(value string, isDefined func(string) bool) bool {
+	runes := []rune(value)
+	for i := 0; i < len(runes); i++ {
+		if !maybeMarker(runes, i) {
+			continue
+		}
+		// Parse the identifier after the '-'
+		mainId, end := parseIdentifier(runes, i+1)
+		// Check if this identifier is defined
+		if isDefined(mainId) {
+			return true
+		}
+		// Even if main identifier is invalid, check specifier identifiers
+		// For cases like "-undefined%(-width)d" where width might be defined
+		if hasSpecifier(runes, end) {
+			for it := end + 1; it < len(runes); it++ {
+				if specIdAhead(runes, it) {
+					specId, _ := parseIdentifier(runes, it+2)
+					if isDefined(specId) {
+						return true
+					}
+				}
+				if formatSpecifierEnd(runes[it]) {
+					break
+				}
+			}
+		}
+		i = end - 1 // -1 because loop will increment
+	}
+	return false
+}

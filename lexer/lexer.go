@@ -70,6 +70,13 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
 		tok.Literal = l.readString()
+		// Check for trailing '.' to make it a heap string ("abc".)
+		if l.peekRune() == '.' {
+			l.readRune() // consume the closing "
+			l.readRune() // consume the '.'
+			tok.Type = token.HEAP_STRING
+			return tok, nil
+		}
 	case ':':
 		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':

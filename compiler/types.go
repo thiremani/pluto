@@ -15,7 +15,7 @@ const (
 	UintKind
 	FloatKind
 	PtrKind
-	StrKind
+	StrKind // String type (StrG or StrH)
 	RangeKind
 	FuncKind
 	ArrayKind
@@ -46,7 +46,7 @@ var PrimitiveTypeNames = []string{
 	"I64", "I32", "I16", "I8", "I1",
 	"U64", "U32", "U16", "U8",
 	"F64", "F32",
-	"Str",
+	"StrG", "StrH", // StrG = global/static (.rodata), StrH = heap
 	"X", // Unresolved placeholder
 }
 
@@ -124,23 +124,35 @@ func (p Ptr) Kind() Kind {
 	return PtrKind
 }
 
-// Str represents a string type.
-// Static indicates whether this string is static storage (string literal)
-// or heap-allocated (from strdup, sprintf_alloc, etc.)
-type Str struct {
-	Length int
-	Static bool // true for string literals, false for heap strings
+// StrG represents a global/static string stored in .rodata.
+// These strings are never freed and cannot be concatenated.
+type StrG struct{}
+
+func (s StrG) String() string { return "StrG" }
+func (s StrG) Kind() Kind     { return StrKind }
+func (s StrG) Mangle() string { return "StrG" }
+func (s StrG) Key() Type      { return s }
+
+// StrH represents a heap-allocated string.
+// These strings must be freed and can be concatenated.
+type StrH struct{}
+
+func (s StrH) String() string { return "StrH" }
+func (s StrH) Kind() Kind     { return StrKind }
+func (s StrH) Mangle() string { return "StrH" }
+func (s StrH) Key() Type      { return s }
+
+// IsStrG returns true if the type is a global/static string.
+func IsStrG(t Type) bool {
+	_, ok := t.(StrG)
+	return ok
 }
 
-func (s Str) String() string {
-	return "Str"
+// IsStrH returns true if the type is a heap-allocated string.
+func IsStrH(t Type) bool {
+	_, ok := t.(StrH)
+	return ok
 }
-
-func (s Str) Kind() Kind {
-	return StrKind
-}
-func (s Str) Mangle() string { return "Str" }
-func (s Str) Key() Type      { return Str{} }
 
 type Range struct {
 	Iter Type
@@ -384,7 +396,10 @@ func eqFloat(a, b Type) bool {
 	return af.Width == bf.Width
 }
 
-func eqStr(a, b Type) bool { return true }
+// eqStr checks if both string types are the same (both StrG or both StrH)
+func eqStr(a, b Type) bool {
+	return (IsStrG(a) && IsStrG(b)) || (IsStrH(a) && IsStrH(b))
+}
 
 func eqPointer(a, b Type) bool {
 	ap := a.(Ptr)

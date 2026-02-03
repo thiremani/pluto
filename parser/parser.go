@@ -111,6 +111,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.STR_INT, p.parseIntegerLiteral)
 	p.registerPrefix(token.STR_FLOAT, p.parseFloatLiteral)
 	p.registerPrefix(token.STR_STRING, p.parseStringLiteral)
+	p.registerPrefix(token.STR_HEAP_STRING, p.parseHeapStringLiteral)
 
 	p.registerPrefix(token.SYM_BANG, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SUB, p.parsePrefixExpression)
@@ -533,6 +534,8 @@ func (p *StmtParser) parseConstant() ast.Expression {
 		return p.parseFloatLiteral()
 	case token.STRING:
 		return p.parseStringLiteral()
+	case token.HEAP_STRING:
+		return p.parseHeapStringLiteral()
 	}
 	return nil
 }
@@ -812,6 +815,13 @@ func (p *StmtParser) parseFloatLiteral() ast.Expression {
 
 func (p *StmtParser) parseStringLiteral() ast.Expression {
 	return &ast.StringLiteral{
+		Token: p.curToken,
+		Value: p.curToken.Literal,
+	}
+}
+
+func (p *StmtParser) parseHeapStringLiteral() ast.Expression {
+	return &ast.HeapStringLiteral{
 		Token: p.curToken,
 		Value: p.curToken.Literal,
 	}

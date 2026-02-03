@@ -1,29 +1,19 @@
-# Test string memory management: Static flag transitions
-# Static = string literal (read-only memory)
-# Heap = concatenation result (dynamically allocated)
+# Test string memory management with StrG/StrH types
+# StrG = global/static string literal (read-only memory, no free)
+# StrH = heap-allocated string (requires free)
 
-# Case 1: Static -> Static
+# Case 1: Static -> Static (StrG reassignment)
 x = "hello"
 x  # use before overwrite
 x = "world"
 x
 
-# Case 2: Static -> Heap (from temporary - ownership transfer, no copy)
-x  # use before overwrite
-x = "heap" ⊕ "str"
-x
-
-# Case 3: Heap -> Static (no copy needed for literals)
-x = "make" ⊕ "heap"
-x  # use before overwrite
-x = "back to static"
-x
-
-# Case 4: Heap -> Heap (from temporary - ownership transfer)
-x = "first" ⊕ "heap"
-x  # use before overwrite
-x = "second" ⊕ "heap"
-x
+# Case 2: Heap -> Heap (StrH reassignment with concatenation)
+y = "heap". ⊕ "str".
+y
+y  # use before overwrite
+y = "second". ⊕ "heap".
+y
 
 # Swap: x, y = y, x with static strings
 a = "alpha"
@@ -32,16 +22,10 @@ a, b = b, a
 a, b
 
 # Swap: x, y = y, x with heap strings
-a = "one" ⊕ "1"
-b = "two" ⊕ "2"
-a, b = b, a
-a, b
-
-# Swap: x, y = y, x mixed (static, heap)
-a = "static"
-b = "heap" ⊕ "val"
-a, b = b, a
-a, b
+ha = "one". ⊕ "1".
+hb = "two". ⊕ "2".
+ha, hb = hb, ha
+ha, hb
 
 # Duplicate RHS: x, y = x, x with static
 a = "same"
@@ -51,75 +35,60 @@ a, b = a, a
 a, b
 
 # Duplicate RHS: x, y = x, x with heap
-a = "dup" ⊕ "heap"
-b = "other"
-b  # use before overwrite
-a, b = a, a
-a, b
+ha = "dup". ⊕ "heap".
+hb = "other".
+hb  # use before overwrite
+ha, hb = ha, ha
+ha, hb
 
-# Reassignment chain: static -> heap -> static -> heap
-c = "start"
+# Reassignment chain: heap -> heap
+c = "start". ⊕ "1".
 c  # use
-c = "mid" ⊕ "dle"
+c = "mid". ⊕ "dle".
 c  # use
-c = "back"
-c  # use
-c = "end" ⊕ "ing"
+c = "end". ⊕ "ing".
 c
 
 # Test with function call to promote to Ptr type
-# This should exercise the Static flag update code path
 s = "initial"
 t = identity(s)  # s is now Ptr type after this call
 t
 s  # use s
-s = "new" ⊕ "heap"  # Static -> Heap on Ptr variable
-s
-s  # use s
-s = "static again"  # Heap -> Static on Ptr variable
-s
 
 # Test function returning static string
 r = getStatic()
 r
 r  # use before overwrite
-r = "heap" ⊕ "value"  # Static -> Heap
-r
-r  # use before overwrite
-r = getStatic()  # Heap -> Static (from function)
+r = getStatic()  # StrG -> StrG
 r
 
 # Test function returning heap string
-r  # use before overwrite
-r = getHeap()  # Static -> Heap (from function)
-r
-r  # use before overwrite
-r = "literal"  # Heap -> Static
-r
-r  # use before overwrite
-r = getHeap()  # Static -> Heap (from function)
-r
+rh = getHeap()
+rh
+rh  # use before overwrite
+rh = getHeap()  # StrH -> StrH (from function)
+rh
 
 # ============================================
-# Finding #1: Array string element assignment
-# x = arr[i] should get an owned copy, not alias internal storage
+# Array string element tests
+# arr[i] returns an owned StrH copy
 # ============================================
 
 # Create array and assign element to variable
 arr = ["first" "second" "third"]
-x = arr[0]  # should copy, not alias
-x
+ax = arr[0]  # gets StrH copy
+ax
 arr  # array should still be valid
 
-# Modify x, array should be unchanged (independent copy)
-x = "modified"
-x
+# Modify ax, array should be unchanged (independent copy)
+ax = "modified".  # ax is StrH, can only assign StrH
+ax
 arr  # original array unchanged
 
-# Assign from array, then reassign array element
+# Assign from array, then reassign
 arr2 = ["hello" "world"]
-y = arr2[1]  # y = "world" (copy)
-y
+ay = arr2[1]  # ay = "world" (StrH copy)
+ay
 arr2
 
 # Multiple assignments from same array
@@ -130,7 +99,7 @@ r2 = arr3[2]
 p, q, r2
 
 # ============================================
-# Finding #2: Array element as function argument
+# Array element as function argument
 # f(arr[i]) should work without double-free
 # ============================================
 

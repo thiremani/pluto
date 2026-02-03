@@ -12,8 +12,8 @@ arr2, arr3
 arr2 = 1 > 2 arr3
 arr2, arr3
 
-# Test conditional with formatted string
-s = "hello"
+# Test conditional with formatted string (heap strings)
+s = "hello".
 name = "Jack"
 s = 4 > 3 "hello -name"
 s
@@ -22,8 +22,8 @@ t = 3 > 4 "hey -name"
 t
 
 # Test conditional with heap string variable
-s1 = "test" ⊕ "_1"
-s2 = "test" ⊕ "_2"
+s1 = "test". ⊕ "_1".
+s2 = "test". ⊕ "_2".
 s1, s2
 s1 = 5 > 4 s2
 s1, s2

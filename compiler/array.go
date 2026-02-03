@@ -242,7 +242,7 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Ex
 		// Identifiers and borrowed values must be copied to preserve their original
 		if elemType.Kind() == StrKind {
 			_, isIdent := exprs[i].(*ast.Identifier)
-			if strType, ok := cs.Type.(Str); ok && !strType.Static && !isIdent {
+			if IsStrH(cs.Type) && !isIdent {
 				fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
 				c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set_own")
 				continue
@@ -367,7 +367,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 			// Identifiers must be copied to preserve the original variable's value
 			_, isIdent := cell.(*ast.Identifier)
 			if elemType.Kind() == StrKind {
-				if strType, ok := valType.(Str); ok && !strType.Static && !isIdent {
+				if IsStrH(valType) && !isIdent {
 					c.PushValOwn(acc, sym)
 					continue
 				}
@@ -604,9 +604,9 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 	elemVal := c.ArrayGet(arraySym, elemType, idxVal)
 
 	// For string arrays, arr_str_get returns an owned copy that must be freed.
-	// Override Static flag since the copy is heap-allocated regardless of original.
+	// String copies are heap-allocated regardless of original type.
 	if elemType.Kind() == StrKind {
-		elemType = Str{Static: false}
+		elemType = StrH{}
 	}
 
 	return []*Symbol{{Type: elemType, Val: elemVal}}

@@ -243,6 +243,15 @@ func (sl *StringLiteral) expressionNode()  {}
 func (sl *StringLiteral) Tok() token.Token { return sl.Token }
 func (sl *StringLiteral) String() string   { return sl.Token.Literal }
 
+type HeapStringLiteral struct {
+	Token token.Token
+	Value string
+}
+
+func (hl *HeapStringLiteral) expressionNode()  {}
+func (hl *HeapStringLiteral) Tok() token.Token { return hl.Token }
+func (hl *HeapStringLiteral) String() string   { return hl.Token.Literal }
+
 // RangeLiteral represents start:stop[:step]
 type RangeLiteral struct {
 	Token token.Token // the first ':' token

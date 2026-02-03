@@ -269,8 +269,8 @@ func TestMangle(t *testing.T) {
 			modName:  "mymod",
 			relPath:  "",
 			funcName: "process",
-			args:     []Type{I64, F64, Str{}},
-			expected: "Pt_5mymod_p_7process_f3_I64_F64_Str",
+			args:     []Type{I64, F64, StrG{}},
+			expected: "Pt_5mymod_p_7process_f3_I64_F64_StrG",
 		},
 
 		// Complex types
@@ -390,8 +390,8 @@ func TestDemangle(t *testing.T) {
 		},
 		{
 			name:     "function with 11 args",
-			mangled:  "Pt_4math_p_6bigfun_f11_I64_F64_Str_I32_U8_F32_I16_U64_I8_U32_U16",
-			expected: "math.bigfun(I64, F64, Str, I32, U8, F32, I16, U64, I8, U32, U16)",
+			mangled:  "Pt_4math_p_6bigfun_f11_I64_F64_StrG_I32_U8_F32_I16_U64_I8_U32_U16",
+			expected: "math.bigfun(I64, F64, StrG, I32, U8, F32, I16, U64, I8, U32, U16)",
 		},
 
 		// GitHub paths

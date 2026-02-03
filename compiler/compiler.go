@@ -217,7 +217,14 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 
 		case *ast.StringLiteral:
 			sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
-			sym.Type = Str{}
+			sym.Type = StrG{} // Global constants are static strings
+
+		case *ast.HeapStringLiteral:
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: v.Token,
+				Msg:   "heap string literals cannot be used as global constants",
+			})
+			return
 
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
@@ -364,24 +371,25 @@ func (c *Compiler) compileMergeBlock(
 	//
 	// Only one branch executes at runtime, so we copy to ensure the result owns its value.
 	for i := range stmt.Name {
-		switch t := ifSyms[i].Type.(type) {
-		case Str:
-			ifStatic := t.Static
-			elseStrType, _ := elseSyms[i].Type.(Str)
-			elseStatic := elseStrType.Static
+		ifIsStrG := IsStrG(ifSyms[i].Type)
+		ifIsStrH := IsStrH(ifSyms[i].Type)
+		elseIsStrG := IsStrG(elseSyms[i].Type)
+		elseIsStrH := IsStrH(elseSyms[i].Type)
 
+		switch {
+		case ifIsStrG || ifIsStrH:
 			// Copy based on storage class to ensure consistent ownership
-			if ifStatic && !elseStatic {
+			if ifIsStrG && elseIsStrH {
 				// If-branch is static, else-branch is heap - copy if-branch to heap
 				terminator := ifEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
 				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-			} else if !ifStatic && elseStatic {
+			} else if ifIsStrH && elseIsStrG {
 				// Else-branch is static, if-branch is heap - copy else-branch to heap
 				terminator := elseEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
 				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
-			} else if !ifStatic && !elseStatic {
+			} else if ifIsStrH && elseIsStrH {
 				// Both heap strings - copy both to maintain value semantics
 				terminator := ifEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
@@ -391,9 +399,9 @@ func (c *Compiler) compileMergeBlock(
 				c.builder.SetInsertPointBefore(terminator)
 				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
 			}
-			// If both static, no copy needed (static literals live forever)
+			// If both StrG, no copy needed (static literals live forever)
 
-		case Array:
+		case ifSyms[i].Type.Kind() == ArrayKind:
 			// Arrays always have value semantics - copy both branches
 			terminator := ifEnd.LastInstruction()
 			c.builder.SetInsertPointBefore(terminator)
@@ -425,13 +433,12 @@ func (c *Compiler) compileMergeBlock(
 			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
 
-		// Determine the result type, preserving Str.Static flag
+		// Determine the result type
 		// After phase 2 normalization, both branches have the same storage class
 		resultType := ifSyms[i].Type
-		if strType, ok := ifSyms[i].Type.(Str); ok {
-			elseStrType, _ := elseSyms[i].Type.(Str)
-			// Both branches should have same Static flag after phase 2 normalization
-			resultType = Str{Static: strType.Static && elseStrType.Static}
+		// If either branch was StrH (or became StrH after copy), result is StrH
+		if IsStrH(ifSyms[i].Type) || IsStrH(elseSyms[i].Type) {
+			resultType = StrH{}
 		}
 
 		// if the variable was stack-allocated, store back
@@ -449,19 +456,9 @@ func (c *Compiler) compileMergeBlock(
 	}
 }
 
-// zeroType returns the type for a zero-initialized value.
-// For strings, this is Str{Static: true} because zero values are global constants.
-// This is the single source of truth for zero value types.
-func zeroType(t Type) Type {
-	if t.Kind() == StrKind {
-		return Str{Static: true}
-	}
-	return t
-}
-
 func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	s := &Symbol{
-		Type: zeroType(symType),
+		Type: symType,
 	}
 	switch symType.Kind() {
 	case IntKind:
@@ -469,7 +466,11 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
+		// For StrH, allocate a heap empty string so callee can free it.
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
+		if IsStrH(symType) {
+			s.Val = c.copyString(s.Val)
+		}
 	case ArrayKind:
 		// Zero value for arrays is null pointer (similar to static empty string for Str).
 		// Runtime functions handle null gracefully: free(null) is no-op, len(null) returns 0.
@@ -503,8 +504,8 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	movedSources := make(map[string]struct{})
 
 	for i, rhsSym := range syms {
-		// Static strings: immutable, live forever - no copy needed.
-		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
+		// StrG (static strings): immutable, live forever - no copy needed.
+		if IsStrG(rhsSym.Type) {
 			continue
 		}
 
@@ -553,10 +554,15 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	derefed := c.derefIfPointer(valueToStore)
 	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
 
-	// Update Ptr's element type if Str.Static flag changed
-	oldStr, isStr := oldSym.Type.(Ptr).Elem.(Str)
-	if !isStr || oldStr.Static == derefed.Type.(Str).Static {
-		return
+	// Update Ptr's element type if string type changed (StrG <-> StrH)
+	oldElem := oldSym.Type.(Ptr).Elem
+	oldIsStr := IsStrG(oldElem) || IsStrH(oldElem)
+	newIsStr := IsStrG(derefed.Type) || IsStrH(derefed.Type)
+	if !oldIsStr || !newIsStr {
+		return // not strings
+	}
+	if IsStrG(oldElem) == IsStrG(derefed.Type) {
+		return // same type, no update needed
 	}
 	oldSym.Type = Ptr{Elem: derefed.Type}
 	Put(c.Scopes, name, oldSym)
@@ -565,10 +571,10 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 // freeValue frees heap-allocated memory for the given value based on its type.
 func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 	switch t := typ.(type) {
-	case Str:
-		if !t.Static {
-			c.free([]llvm.Value{val})
-		}
+	case StrH:
+		c.free([]llvm.Value{val})
+	case StrG:
+		// Static strings live forever, no free needed
 	case Array:
 		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
 			c.freeArray(val, t.ColTypes[0])
@@ -679,7 +685,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		if len(args) == 0 {
 			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 			c.formatCounter++
-			s.Type = Str{Static: true} // Static string literal in .rodata
+			s.Type = StrG{} // Static string literal in .rodata
 			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
 			res = []*Symbol{s}
 			return
@@ -692,8 +698,18 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
 		c.free(toFree)
 
-		s.Type = Str{Static: false} // Heap-allocated formatted string
+		s.Type = StrH{} // Heap-allocated formatted string
 		s.Val = resultPtr
+		res = []*Symbol{s}
+	case *ast.HeapStringLiteral:
+		// Heap string literal: create global constant and strdup it
+		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+		c.formatCounter++
+		globalPtr := c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
+		fnType, fn := c.GetCFunc(STRDUP)
+		heapPtr := c.builder.CreateCall(fnType, fn, []llvm.Value{globalPtr}, "str_copy")
+		s.Type = StrH{} // Heap-allocated string
+		s.Val = heapPtr
 		res = []*Symbol{s}
 	case *ast.RangeLiteral:
 		res = c.compileRangeExpression(e)
@@ -730,8 +746,8 @@ func setInstAlignment(inst llvm.Value, t Type) {
 	case Float:
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
-	case Str:
-		// We assume Str is i8* or u8*
+	case StrG, StrH:
+		// Strings are i8* (char*)
 		inst.SetAlignment(8)
 	case Ptr:
 		inst.SetAlignment(8)
@@ -1230,11 +1246,11 @@ func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sr
 		ptrType := llvm.PointerType(c.mapToLLVMType(finalOutTypes[i]), 0)
 		destPtr := c.builder.CreateLoad(ptrType, fieldPtr, outIdent.Value+"_dest")
 
-		// Use zeroType because the destination is zero-initialized with a static constant.
-		// storeValue will update the type after writing a heap value.
+		// Use the type solver's output type. For strings, this includes the Static flag
+		// which tells the callee whether the old value is heap-allocated.
 		retPtrs[i] = &Symbol{
 			Val:      destPtr,
-			Type:     Ptr{Elem: zeroType(finalOutTypes[i])},
+			Type:     Ptr{Elem: finalOutTypes[i]},
 			FuncArg:  true,
 			ReadOnly: false,
 		}
@@ -1460,26 +1476,15 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	return outputs
 }
 
-// updateOutputTypes updates Ptr elem types to reflect actual return types from a function call.
-// This ensures cleanup correctly identifies heap-allocated strings vs static strings.
+// updateOutputTypes updates the destination symbols in scope to reference the output values.
+// With StrG/StrH types, the type is determined at type-solving time and doesn't change.
 func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []*ast.Identifier) {
 	for i, out := range outputs {
-		if i >= len(outTypes) {
-			break
+		if i >= len(outTypes) || dest == nil || i >= len(dest) {
+			continue
 		}
-		// Only update string types - they have the Static flag that affects cleanup.
-		// Arrays don't need this - they're always heap-allocated.
-		if ptrType, ok := out.Type.(Ptr); ok {
-			if oldStr, isOldStr := ptrType.Elem.(Str); isOldStr {
-				if newStr, isNewStr := outTypes[i].(Str); isNewStr && oldStr.Static != newStr.Static {
-					out.Type = Ptr{Elem: outTypes[i]}
-					// Also update the symbol in scope if there's a destination
-					if dest != nil && i < len(dest) {
-						Put(c.Scopes, dest[i].Value, out)
-					}
-				}
-			}
-		}
+		// Update the symbol in scope to reference this output
+		Put(c.Scopes, dest[i].Value, out)
 	}
 }
 
@@ -1488,16 +1493,10 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 	args := c.compileArgs(ce)
 
 	// Extract element types from pointer args for mangling.
-	// String params are normalized to non-static because function arguments are
-	// strdup'd when assigned to outputs (see computeCopyRequirements), so cleanup
-	// must treat them as heap-allocated. This matches TypeSolver's normalization.
+	// Functions are mangled separately for StrG/StrH, so no normalization needed.
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
-		elemType := arg.Type.(Ptr).Elem
-		if elemType.Kind() == StrKind {
-			elemType = Str{Static: false}
-		}
-		paramTypes[i] = elemType
+		paramTypes[i] = arg.Type.(Ptr).Elem
 	}
 
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
@@ -1632,7 +1631,7 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 		copiedStr := c.copyString(sym.Val)
 		return &Symbol{
 			Val:      copiedStr,
-			Type:     Str{Static: false}, // Copied strings are always heap-allocated
+			Type:     StrH{}, // Copied strings are always heap-allocated
 			FuncArg:  false,
 			ReadOnly: false,
 		}
@@ -1689,11 +1688,9 @@ func (c *Compiler) cleanupScope() {
 
 		// Check if this symbol needs cleanup based on type
 		switch t := sym.Type.(type) {
-		case Str:
-			// Only free heap-allocated strings, not static literals
-			if !t.Static {
-				c.free([]llvm.Value{sym.Val})
-			}
+		case StrH:
+			// Only free heap-allocated strings, not static literals (StrG)
+			c.free([]llvm.Value{sym.Val})
 		case Array:
 			// Arrays are always heap-allocated (unless unresolved null pointer)
 			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
@@ -1704,10 +1701,9 @@ func (c *Compiler) cleanupScope() {
 			// Load the value and free it based on the element type
 			loaded := c.builder.CreateLoad(c.mapToLLVMType(t.Elem), sym.Val, "cleanup_load")
 			switch elemT := t.Elem.(type) {
-			case Str:
-				if !elemT.Static {
-					c.free([]llvm.Value{loaded})
-				}
+			case StrH:
+				// Only free heap-allocated strings, not static literals (StrG)
+				c.free([]llvm.Value{loaded})
 			case Array:
 				if len(elemT.ColTypes) > 0 && elemT.ColTypes[0].Kind() != UnresolvedKind {
 					c.freeArray(loaded, elemT.ColTypes[0])
@@ -1831,9 +1827,9 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*toFree = append(*toFree, strPtr)
 	case StrKind:
 		*args = append(*args, s.Val)
-		// Free non-static string temporaries (e.g., array element access returns owned copy)
+		// Free heap string temporaries (e.g., array element access returns owned copy)
 		// Identifiers reference scope-owned variables; everything else is a temporary
-		if !s.Type.(Str).Static {
+		if IsStrH(s.Type) {
 			if _, isIdent := expr.(*ast.Identifier); !isIdent {
 				*toFree = append(*toFree, s.Val)
 			}

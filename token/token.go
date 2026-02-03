@@ -21,8 +21,9 @@ const (
 	INT    // 1343456
 	FLOAT  // 123.45
 	IMAG   // 123.45i
-	RUNE   // 'a'
-	STRING // "abc"
+	RUNE        // 'a'
+	STRING      // "abc" (static/global string)
+	HEAP_STRING // "abc". (heap-allocated string)
 	const_end
 	literal_end
 
@@ -132,9 +133,10 @@ const (
 	STR_INT      = "INT"
 	STR_FLOAT    = "FLOAT"
 	STR_IMAG     = "IMAG"
-	STR_RUNE     = "RUNE"
-	STR_STRING   = "STRING"
-	STR_OPERATOR = "OPERATOR"
+	STR_RUNE        = "RUNE"
+	STR_STRING      = "STRING"
+	STR_HEAP_STRING = "HEAP_STRING"
+	STR_OPERATOR    = "OPERATOR"
 	STR_INDENT   = "INDENT"
 	STR_DEINDENT = "DEINDENT"
 )
@@ -149,8 +151,9 @@ var tokens = [...]string{
 	INT:    STR_INT,
 	FLOAT:  STR_FLOAT,
 	IMAG:   STR_IMAG,
-	RUNE:   STR_RUNE,
-	STRING: STR_STRING,
+	RUNE:        STR_RUNE,
+	STRING:      STR_STRING,
+	HEAP_STRING: STR_HEAP_STRING,
 
 	OPERATOR: STR_OPERATOR,
 

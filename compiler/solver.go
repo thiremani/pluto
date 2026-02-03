@@ -792,7 +792,7 @@ func AllowedArrayElem(t Type) bool {
 		return v.Width == 64
 	case Float:
 		return v.Width == 64
-	case Str:
+	case StrG, StrH:
 		return true
 	default:
 		return false
@@ -879,9 +879,9 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	}
 
 	elemType := arrType.ColTypes[0]
-	// String array element access does strdup at runtime, so mark as non-static
+	// String array element access does strdup at runtime, so result is heap-allocated
 	if elemType.Kind() == StrKind {
-		elemType = Str{Static: false}
+		elemType = StrH{}
 	}
 
 	idxTypes := ts.TypeExpression(ax.Range, isRoot)
@@ -936,7 +936,16 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, Float{Width: 64})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
-		types = append(types, Str{Static: true})
+		// Check if string has valid format markers - if so, it's a heap string
+		isDefined := func(name string) bool { _, ok := ts.GetIdentifier(name); return ok }
+		var strType Type = StrG{}
+		if hasValidMarkers(e.Value, isDefined) {
+			strType = StrH{}
+		}
+		types = append(types, strType)
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+	case *ast.HeapStringLiteral:
+		types = append(types, StrH{})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)
@@ -1073,7 +1082,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
 	// Handle string concatenation early - always returns heap-allocated string
 	if op == token.SYM_CONCAT && left.Kind() == StrKind && right.Kind() == StrKind {
-		return Str{Static: false}
+		return StrH{}
 	}
 
 	leftIsArr := left.Kind() == ArrayKind
@@ -1468,13 +1477,8 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 }
 
 // newFunc creates a new Func entry for the given call expression and caches it.
-// String params are normalized to non-static since they're copied (strdup'd) when assigned to outputs.
+// String params keep their StrG/StrH type - functions are mangled separately for each.
 func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	for i, arg := range args {
-		if arg.Kind() == StrKind {
-			args[i] = Str{Static: false}
-		}
-	}
 	f := &Func{
 		Name:     ce.Function.Value,
 		Params:   args,

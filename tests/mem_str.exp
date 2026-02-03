@@ -1,37 +1,24 @@
 hello
 world
-world
 heapstr
-makeheap
-back to static
-firstheap
+heapstr
 secondheap
 beta alpha
 two2 one1
-heapval static
 different
 same same
 other
 dupheap dupheap
-start
+start1
 middle
-back
 ending
 initial
 initial
-newheap
-newheap
-static again
 static from func
-static from func
-heapvalue
-heapvalue
 static from func
 static from func
 heap from func
 heap from func
-literal
-literal
 heap from func
 first
 [first second third]
