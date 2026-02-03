@@ -18,9 +18,9 @@ const (
 	literal_beg
 	IDENT // add, foobar, x, y, ...
 	const_beg
-	INT    // 1343456
-	FLOAT  // 123.45
-	IMAG   // 123.45i
+	INT         // 1343456
+	FLOAT       // 123.45
+	IMAG        // 123.45i
 	RUNE        // 'a'
 	STRING      // "abc" (static/global string)
 	HEAP_STRING // "abc". (heap-allocated string)
@@ -126,19 +126,19 @@ const (
 )
 
 const (
-	STR_ILLEGAL  = "ILLEGAL"
-	STR_EOF      = "EOF"
-	STR_COMMENT  = "COMMENT"
-	STR_IDENT    = "IDENT"
-	STR_INT      = "INT"
-	STR_FLOAT    = "FLOAT"
-	STR_IMAG     = "IMAG"
+	STR_ILLEGAL     = "ILLEGAL"
+	STR_EOF         = "EOF"
+	STR_COMMENT     = "COMMENT"
+	STR_IDENT       = "IDENT"
+	STR_INT         = "INT"
+	STR_FLOAT       = "FLOAT"
+	STR_IMAG        = "IMAG"
 	STR_RUNE        = "RUNE"
 	STR_STRING      = "STRING"
 	STR_HEAP_STRING = "HEAP_STRING"
 	STR_OPERATOR    = "OPERATOR"
-	STR_INDENT   = "INDENT"
-	STR_DEINDENT = "DEINDENT"
+	STR_INDENT      = "INDENT"
+	STR_DEINDENT    = "DEINDENT"
 )
 
 var tokens = [...]string{
@@ -147,10 +147,10 @@ var tokens = [...]string{
 	EOF:     STR_EOF,
 	COMMENT: STR_COMMENT,
 
-	IDENT:  STR_IDENT,
-	INT:    STR_INT,
-	FLOAT:  STR_FLOAT,
-	IMAG:   STR_IMAG,
+	IDENT:       STR_IDENT,
+	INT:         STR_INT,
+	FLOAT:       STR_FLOAT,
+	IMAG:        STR_IMAG,
 	RUNE:        STR_RUNE,
 	STRING:      STR_STRING,
 	HEAP_STRING: STR_HEAP_STRING,
