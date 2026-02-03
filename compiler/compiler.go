@@ -553,19 +553,6 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 
 	derefed := c.derefIfPointer(valueToStore)
 	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
-
-	// Update Ptr's element type if string type changed (StrG <-> StrH)
-	oldElem := oldSym.Type.(Ptr).Elem
-	oldIsStr := IsStrG(oldElem) || IsStrH(oldElem)
-	newIsStr := IsStrG(derefed.Type) || IsStrH(derefed.Type)
-	if !oldIsStr || !newIsStr {
-		return // not strings
-	}
-	if IsStrG(oldElem) == IsStrG(derefed.Type) {
-		return // same type, no update needed
-	}
-	oldSym.Type = Ptr{Elem: derefed.Type}
-	Put(c.Scopes, name, oldSym)
 }
 
 // freeValue frees heap-allocated memory for the given value based on its type.
@@ -678,39 +665,9 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		// Process markers eagerly at string creation time
-		formatted, args, toFree := c.formatString(e)
-
-		// No markers, create a regular string literal (static storage)
-		if len(args) == 0 {
-			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
-			c.formatCounter++
-			s.Type = StrG{} // Static string literal in .rodata
-			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-			res = []*Symbol{s}
-			return
-		}
-
-		// Build formatted string with sprintf_alloc (heap-allocated)
-		formatPtr := c.createFormatStringGlobal(formatted)
-		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
-		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
-		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
-		c.free(toFree)
-
-		s.Type = StrH{} // Heap-allocated formatted string
-		s.Val = resultPtr
-		res = []*Symbol{s}
+		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, false)}
 	case *ast.HeapStringLiteral:
-		// Heap string literal: create global constant and strdup it
-		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
-		c.formatCounter++
-		globalPtr := c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-		fnType, fn := c.GetCFunc(STRDUP)
-		heapPtr := c.builder.CreateCall(fnType, fn, []llvm.Value{globalPtr}, "str_copy")
-		s.Type = StrH{} // Heap-allocated string
-		s.Val = heapPtr
-		res = []*Symbol{s}
+		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, true)}
 	case *ast.RangeLiteral:
 		res = c.compileRangeExpression(e)
 		return
@@ -862,6 +819,34 @@ func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
 	s.Val = c.ToRange(e, s.Type)
 	res = []*Symbol{s}
 	return res
+}
+
+// compileStringLiteral compiles a string literal (regular or heap).
+// If forceHeap is true, the string is always heap-allocated (for HeapStringLiteral).
+// If forceHeap is false, only strings with format markers are heap-allocated.
+func (c *Compiler) compileStringLiteral(tok token.Token, value string, forceHeap bool) *Symbol {
+	formatted, args, toFree := c.formatString(tok, value)
+
+	// No markers
+	if len(args) == 0 {
+		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+		c.formatCounter++
+		globalPtr := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
+		if forceHeap {
+			// Heap string literal: strdup the static string
+			return &Symbol{Type: StrH{}, Val: c.copyString(globalPtr)}
+		}
+		// Regular string literal: static storage
+		return &Symbol{Type: StrG{}, Val: globalPtr}
+	}
+
+	// Has markers: build formatted string with sprintf_alloc (heap-allocated)
+	formatPtr := c.createFormatStringGlobal(formatted)
+	sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
+	fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
+	resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
+	c.free(toFree)
+	return &Symbol{Type: StrH{}, Val: resultPtr}
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
@@ -1758,11 +1743,22 @@ func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	c.free(toFree)
 }
 
+// asStringLiteral extracts token and value from string literal expressions (regular or heap).
+func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok bool) {
+	switch e := expr.(type) {
+	case *ast.StringLiteral:
+		return e.Token, e.Value, true
+	case *ast.HeapStringLiteral:
+		return e.Token, e.Value, true
+	}
+	return token.Token{}, "", false
+}
+
 // appendPrintExpression handles one print expression (string literal or compiled expression)
 func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
-	// String literals with markers are processed specially
-	if strLit, ok := expr.(*ast.StringLiteral); ok {
-		processed, newArgs, toFreeArgs := c.formatString(strLit)
+	// String literals (regular or heap) with markers are processed specially
+	if tok, value, ok := asStringLiteral(expr); ok {
+		processed, newArgs, toFreeArgs := c.formatString(tok, value)
 		*formatStr += processed + " "
 		*args = append(*args, newArgs...)
 		*toFree = append(*toFree, toFreeArgs...)

@@ -60,7 +60,7 @@ x, six`
 		},
 		Value: testStr,
 	}
-	res, vals, _ := sc.Compiler.formatString(sl)
+	res, vals, _ := sc.Compiler.formatString(sl.Token, sl.Value)
 	expStr := "x = %lld, six = %lld"
 	if res != expStr {
 		t.Errorf("formattedStr does not match expected. got: %s, expected: %s", res, expStr)
