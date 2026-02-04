@@ -1679,39 +1679,28 @@ func (c *Compiler) freeArray(arr llvm.Value, elemType Type) {
 // cleanupScope generates cleanup code for all heap-allocated variables in the current scope
 // This should be called before PopScope to free memory for strings and arrays
 func (c *Compiler) cleanupScope() {
-	if len(c.Scopes) == 0 {
-		return
-	}
 	currentScope := c.Scopes[len(c.Scopes)-1]
 	for _, sym := range currentScope.Elems {
 		// Skip function arguments - they're borrowed, not owned.
-		// See ownership model in Symbol definition.
 		if sym.FuncArg {
 			continue
 		}
 
-		// Check if this symbol needs cleanup based on type
-		switch t := sym.Type.(type) {
+		val := sym.Val
+		typ := sym.Type
+
+		// Dereference pointer first
+		if ptr, ok := typ.(Ptr); ok {
+			val = c.builder.CreateLoad(c.mapToLLVMType(ptr.Elem), val, "cleanup_load")
+			typ = ptr.Elem
+		}
+
+		switch t := typ.(type) {
 		case StrH:
-			// Only free heap-allocated strings, not static literals (StrG)
-			c.free([]llvm.Value{sym.Val})
+			c.free([]llvm.Value{val})
 		case Array:
-			// Arrays are always heap-allocated (unless unresolved null pointer)
-			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
-				c.freeArray(sym.Val, t.ColTypes[0])
-			}
-		case Ptr:
-			// Stack-allocated pointer (e.g., from function output parameters)
-			// Load the value and free it based on the element type
-			loaded := c.builder.CreateLoad(c.mapToLLVMType(t.Elem), sym.Val, "cleanup_load")
-			switch elemT := t.Elem.(type) {
-			case StrH:
-				// Only free heap-allocated strings, not static literals (StrG)
-				c.free([]llvm.Value{loaded})
-			case Array:
-				if len(elemT.ColTypes) > 0 && elemT.ColTypes[0].Kind() != UnresolvedKind {
-					c.freeArray(loaded, elemT.ColTypes[0])
-				}
+			if !val.IsConstant() || !val.IsNull() {
+				c.freeArray(val, t.ColTypes[0])
 			}
 		}
 	}

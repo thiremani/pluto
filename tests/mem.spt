@@ -58,8 +58,8 @@ farr1, farr2 = multiArr()
 farr1, farr2
 
 # Heap string swap (strings from concatenation - tests ownership transfer)
-h1 = "foo". ⊕ "bar".
-h2 = "baz". ⊕ "qux".
+h1 = "foo" ⊕ "bar"
+h2 = "baz" ⊕ "qux"
 h1, h2
 h1, h2 = h2, h1
 h1, h2
@@ -72,7 +72,7 @@ a1, a2 = a2, a1
 a1, a2
 
 # Duplicate RHS - string (a,b = a,a should copy second use to avoid double-free)
-d1 = "dup". ⊕ "test".
+d1 = "dup" ⊕ "test"
 d2 = "other".
 d1, d2  # use before overwrite
 d1, d2 = d1, d1

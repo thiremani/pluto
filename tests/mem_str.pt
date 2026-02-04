@@ -9,7 +9,7 @@ s = getStatic()
 
 # Return a heap string (concatenation)
 s = getHeap()
-    s = "heap". ⊕ " from func".
+    s = "heap" ⊕ " from func"
 
 # Access array element inside function and return it
 # Tests that: 1) local array is cleaned up, 2) returned string is owned copy

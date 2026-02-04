@@ -9,10 +9,10 @@ x = "world"
 x
 
 # Case 2: Heap -> Heap (StrH reassignment with concatenation)
-y = "heap". ⊕ "str".
+y = "heap" ⊕ "str"
 y
 y  # use before overwrite
-y = "second". ⊕ "heap".
+y = "second" ⊕ "heap"
 y
 
 # Swap: x, y = y, x with static strings
@@ -21,9 +21,9 @@ b = "beta"
 a, b = b, a
 a, b
 
-# Swap: x, y = y, x with heap strings
-ha = "one". ⊕ "1".
-hb = "two". ⊕ "2".
+# Swap: x, y = y, x with heap strings (mixed: StrH ⊕ StrG, StrG ⊕ StrH)
+ha = "one". ⊕ "1"
+hb = "two" ⊕ "2".
 ha, hb = hb, ha
 ha, hb
 
@@ -34,7 +34,7 @@ b  # use before overwrite
 a, b = a, a
 a, b
 
-# Duplicate RHS: x, y = x, x with heap
+# Duplicate RHS: x, y = x, x with heap (StrH ⊕ StrH)
 ha = "dup". ⊕ "heap".
 hb = "other".
 hb  # use before overwrite
@@ -42,11 +42,11 @@ ha, hb = ha, ha
 ha, hb
 
 # Reassignment chain: heap -> heap
-c = "start". ⊕ "1".
+c = "start" ⊕ "1"
 c  # use
-c = "mid". ⊕ "dle".
+c = "mid" ⊕ "dle"
 c  # use
-c = "end". ⊕ "ing".
+c = "end" ⊕ "ing"
 c
 
 # Test with function call to promote to Ptr type

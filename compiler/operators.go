@@ -67,6 +67,25 @@ var mulF64I64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol)
 	return
 }
 
+// strConcatOp concatenates two strings (StrG or StrH) and returns StrH
+var strConcatOp = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = StrH{}
+	if !compile {
+		return
+	}
+
+	charPtrType := llvm.PointerType(c.Context.Int8Type(), 0)
+	strConcatType := llvm.FunctionType(charPtrType, []llvm.Type{charPtrType, charPtrType}, false)
+	strConcatFunc := c.Module.NamedFunction("str_concat")
+	if strConcatFunc.IsNil() {
+		strConcatFunc = llvm.AddFunction(c.Module, "str_concat", strConcatType)
+	}
+
+	s.Val = c.builder.CreateCall(strConcatType, strConcatFunc, []llvm.Value{left.Val, right.Val}, "str_concat_result")
+	return
+}
+
 // defaultOps maps (operator, left type, right type) to the lowering function.
 // Keys use concrete Type values (e.g., I64, F64) instead of strings
 // to avoid brittleness from relying on String() formatting.
@@ -682,26 +701,11 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	// --- String Concatenation (StrH only - StrG cannot be concatenated) ---
-	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrH{}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = StrH{} // Concatenation creates heap-allocated string
-		if !compile {
-			return
-		}
-
-		// Call runtime str_concat function
-		// Signature: char* str_concat(const char* left, const char* right)
-		charPtrType := llvm.PointerType(c.Context.Int8Type(), 0)
-		strConcatType := llvm.FunctionType(charPtrType, []llvm.Type{charPtrType, charPtrType}, false)
-		strConcatFunc := c.Module.NamedFunction("str_concat")
-		if strConcatFunc.IsNil() {
-			strConcatFunc = llvm.AddFunction(c.Module, "str_concat", strConcatType)
-		}
-
-		s.Val = c.builder.CreateCall(strConcatType, strConcatFunc, []llvm.Value{left.Val, right.Val}, "str_concat_result")
-		return
-	},
+	// --- String Concatenation (all combinations produce StrH) ---
+	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrH{}}: strConcatOp,
+	{Operator: token.SYM_CONCAT, LeftType: StrG{}, RightType: StrG{}}: strConcatOp,
+	{Operator: token.SYM_CONCAT, LeftType: StrG{}, RightType: StrH{}}: strConcatOp,
+	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrG{}}: strConcatOp,
 }
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
