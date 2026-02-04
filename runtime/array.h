@@ -48,11 +48,14 @@ int                  arr_str_reserve(PtArrayStr* a, size_t cap);
 int                  arr_str_resize(PtArrayStr* a, size_t new_len);   /* grows with "" */
 
 int                  arr_str_push(PtArrayStr* a, const char* s);
+int                  arr_str_push_own(PtArrayStr* a, char* s); /* takes ownership; do NOT free s */
 /* returns 0 on ok, and transfers ownership of the popped string to caller (caller must free) */
 int                  arr_str_pop(PtArrayStr* a, char** out);
 
-const char*          arr_str_get(const PtArrayStr* a, size_t i);
+char*                arr_str_get(const PtArrayStr* a, size_t i);  /* caller owns the copy */
+const char*          arr_str_borrow(const PtArrayStr* a, size_t i); /* borrowed; do NOT free */
 int                  arr_str_set(PtArrayStr* a, size_t i, const char* s);
+int                  arr_str_set_own(PtArrayStr* a, size_t i, char* s); /* takes ownership; do NOT free s */
 
 void                 arr_str_swap(PtArrayStr* a, size_t i, size_t j);
 const char* const*   arr_str_data(const PtArrayStr* a);  /* contiguous, read-only view */

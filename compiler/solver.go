@@ -115,6 +115,11 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 	}
 
 	if leftElemType.Kind() == rightElemType.Kind() {
+		// For string arrays, normalize to StrH if either side is StrH.
+		// This ensures consistent ownership semantics (runtime always heap-copies).
+		if leftElemType.Kind() == StrKind && (IsStrH(leftElemType) || IsStrH(rightElemType)) {
+			return concatWithMetadata(leftArr, rightArr, StrH{})
+		}
 		return concatWithMetadata(leftArr, rightArr, leftElemType)
 	}
 
@@ -756,6 +761,11 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 		return cur
 	}
 
+	// Normalize strings to StrH since runtime always heap-copies into arrays.
+	if newT.Kind() == StrKind {
+		newT = StrH{}
+	}
+
 	// Only allow I64, F64, or Str as array elements.
 	if !AllowedArrayElem(newT) {
 		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("unsupported array element type %s in column %d", newT.String(), colIdx)})
@@ -772,7 +782,7 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 		return cur
 	}
 
-	// Only numeric promotion to F64 is allowed; any Str/numeric mix is invalid.
+	// Numeric promotion to F64 is allowed.
 	if cur.Kind() == IntKind && newT.Kind() == FloatKind {
 		return newT
 	}
@@ -792,7 +802,7 @@ func AllowedArrayElem(t Type) bool {
 		return v.Width == 64
 	case Float:
 		return v.Width == 64
-	case Str:
+	case StrG, StrH:
 		return true
 	default:
 		return false
@@ -879,6 +889,10 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	}
 
 	elemType := arrType.ColTypes[0]
+	// String array element access does strdup at runtime, so result is heap-allocated
+	if elemType.Kind() == StrKind {
+		elemType = StrH{}
+	}
 
 	idxTypes := ts.TypeExpression(ax.Range, isRoot)
 	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
@@ -932,7 +946,15 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, Float{Width: 64})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
-		types = append(types, Str{})
+		// Check if string has valid format markers - if so, it's a heap string
+		var strType Type = StrG{}
+		if hasValidMarkers(e.Value, ts.isDefined) {
+			strType = StrH{}
+		}
+		types = append(types, strType)
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+	case *ast.HeapStringLiteral:
+		types = append(types, StrH{})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)
@@ -988,6 +1010,11 @@ func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
 	}
 
 	return Unresolved{}, false
+}
+
+func (ts *TypeSolver) isDefined(name string) bool {
+	_, ok := ts.GetIdentifier(name)
+	return ok
 }
 
 // Type Identifier returns type of identifier if it is not a pointer
@@ -1067,9 +1094,9 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
-	// Handle string concatenation early
+	// Handle string concatenation early - always returns heap-allocated string
 	if op == token.SYM_CONCAT && left.Kind() == StrKind && right.Kind() == StrKind {
-		return Str{}
+		return StrH{}
 	}
 
 	leftIsArr := left.Kind() == ArrayKind
@@ -1463,48 +1490,51 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
+// newFunc creates a new Func entry for the given call expression and caches it.
+// String params keep their StrG/StrH type - functions are mangled separately for each.
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
+	f := &Func{
+		Name:     ce.Function.Value,
+		Params:   args,
+		OutTypes: make([]Type, len(template.Outputs)),
+	}
+	for i := range f.OutTypes {
+		f.OutTypes[i] = Unresolved{}
+	}
+	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	return f
+}
+
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	// first check scriptCompiler compiler if that itself has function in its function (perhaps through a previous script compilation)
+	// Check if function is already fully typed in cache
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if ok && f.AllTypesInferred() {
 		return f
 	}
 
+	// Create new Func if not cached (ok && !AllTypesInferred means recursive call, reuse f)
 	if !ok {
-		f = &Func{
-			Name:     ce.Function.Value,
-			Params:   args,
-			OutTypes: []Type{},
-		}
-		for range template.Outputs {
-			f.OutTypes = append(f.OutTypes, Unresolved{})
-		}
-		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+		f = ts.newFunc(ce, args, mangled, template)
 	}
 
-	canType := true
+	// Inside a function - unresolved args are allowed (resolved in later passes)
+	if ts.ScriptFunc != "" {
+		ts.TypeFunc(mangled, template, f)
+		return f
+	}
+
+	// At script level, all arg types must be resolved before typing
 	for i, arg := range args {
-		if arg.Kind() == UnresolvedKind {
-			if ts.ScriptFunc == "" {
-				ce := &token.CompileError{
-					Token: ce.Token,
-					Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				canType = false
-			}
+		if arg.Kind() != UnresolvedKind {
+			continue
 		}
-	}
-	if !canType {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ce.Token,
+			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
+		})
 		return f
 	}
-
-	if ts.ScriptFunc == "" {
-		ts.TypeScriptFunc(mangled, template, f)
-		return f
-	}
-
-	ts.TypeFunc(mangled, template, f)
+	ts.TypeScriptFunc(mangled, template, f)
 	return f
 }
 

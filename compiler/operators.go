@@ -682,10 +682,10 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	// --- String Concatenation ---
-	{Operator: token.SYM_CONCAT, LeftType: Str{}, RightType: Str{}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+	// --- String Concatenation (StrH only - StrG cannot be concatenated) ---
+	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrH{}}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}
-		s.Type = Str{Static: false} // Concatenation creates heap-allocated string
+		s.Type = StrH{} // Concatenation creates heap-allocated string
 		if !compile {
 			return
 		}

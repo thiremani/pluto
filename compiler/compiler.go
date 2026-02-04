@@ -12,9 +12,47 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool // Is this a function parameter?
-	ReadOnly bool // Can this be written to? (for output params vs input params)
+	FuncArg  bool // Function parameter passed by reference. See ownership model below.
+	ReadOnly bool // Input parameter (cannot be written to).
 }
+
+// Function argument ownership model:
+//
+// Function parameters are passed by reference (Ptr) to caller-owned storage.
+// The caller retains ownership; the function gets read/write access to slots.
+//
+//   - Input params (ReadOnly=true): read-only reference to caller's value
+//   - Output params (ReadOnly=false): write reference to caller's storage
+//
+// Assignment semantics: When assigning a FuncArg to a local variable, the value
+// is COPIED, just like `x = s` copies in regular scope. This ensures:
+//   - No aliasing between caller's input and output variables
+//   - Local variables get independent copies (with FuncArg=false)
+//   - Consistent semantics: x = identity(s) behaves like x = s
+//
+// Memory management:
+//
+//   For function calls (x = f(y)):
+//     - Function produces a new value and writes it to output slot
+//     - This value is MOVED to the destination (ownership transferred)
+//     - Old value in destination is NOT freed (see freeOldValues)
+//     - Temps passed as inputs are freed by caller after call returns
+//     - Function cleanup skips FuncArg params (caller owns slots)
+//
+//   For other expressions (x = y + z):
+//     - Old value in destination IS freed after store completes
+//     - New value ownership transfers to destination
+//
+//   Scope cleanup:
+//     - Final values are freed when scope ends (normal cleanup)
+//     - FuncArg symbols are skipped (caller owns them)
+//
+// Example: x = f(arr[0])
+//   1. Caller: arr[0] returns owned copy, stored in temp alloca
+//   2. Caller: passes Ptr to temp (input) and Ptr to x (output)
+//   3. Function: computes result and writes to output slot
+//   4. Function: cleanup skips FuncArg params (caller owns slots)
+//   5. Caller: frees temp; x now owns the function's result
 
 type FuncArgs struct {
 	Inputs      []*Symbol          // function.Param pointers for all params
@@ -195,7 +233,14 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 
 		case *ast.StringLiteral:
 			sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
-			sym.Type = Str{}
+			sym.Type = StrG{} // Global constants are static strings
+
+		case *ast.HeapStringLiteral:
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: v.Token,
+				Msg:   "heap string literals cannot be used as global constants",
+			})
+			return
 
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
@@ -342,24 +387,25 @@ func (c *Compiler) compileMergeBlock(
 	//
 	// Only one branch executes at runtime, so we copy to ensure the result owns its value.
 	for i := range stmt.Name {
-		switch t := ifSyms[i].Type.(type) {
-		case Str:
-			ifStatic := t.Static
-			elseStrType, _ := elseSyms[i].Type.(Str)
-			elseStatic := elseStrType.Static
+		ifIsStrG := IsStrG(ifSyms[i].Type)
+		ifIsStrH := IsStrH(ifSyms[i].Type)
+		elseIsStrG := IsStrG(elseSyms[i].Type)
+		elseIsStrH := IsStrH(elseSyms[i].Type)
 
+		switch {
+		case ifIsStrG || ifIsStrH:
 			// Copy based on storage class to ensure consistent ownership
-			if ifStatic && !elseStatic {
+			if ifIsStrG && elseIsStrH {
 				// If-branch is static, else-branch is heap - copy if-branch to heap
 				terminator := ifEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
 				ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-			} else if !ifStatic && elseStatic {
+			} else if ifIsStrH && elseIsStrG {
 				// Else-branch is static, if-branch is heap - copy else-branch to heap
 				terminator := elseEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
 				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
-			} else if !ifStatic && !elseStatic {
+			} else if ifIsStrH && elseIsStrH {
 				// Both heap strings - copy both to maintain value semantics
 				terminator := ifEnd.LastInstruction()
 				c.builder.SetInsertPointBefore(terminator)
@@ -369,9 +415,9 @@ func (c *Compiler) compileMergeBlock(
 				c.builder.SetInsertPointBefore(terminator)
 				elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
 			}
-			// If both static, no copy needed (static literals live forever)
+			// If both StrG, no copy needed (static literals live forever)
 
-		case Array:
+		case ifSyms[i].Type.Kind() == ArrayKind:
 			// Arrays always have value semantics - copy both branches
 			terminator := ifEnd.LastInstruction()
 			c.builder.SetInsertPointBefore(terminator)
@@ -403,13 +449,12 @@ func (c *Compiler) compileMergeBlock(
 			[]llvm.BasicBlock{ifEnd, elseEnd},
 		)
 
-		// Determine the result type, preserving Str.Static flag
+		// Determine the result type
 		// After phase 2 normalization, both branches have the same storage class
 		resultType := ifSyms[i].Type
-		if strType, ok := ifSyms[i].Type.(Str); ok {
-			elseStrType, _ := elseSyms[i].Type.(Str)
-			// Both branches should have same Static flag after phase 2 normalization
-			resultType = Str{Static: strType.Static && elseStrType.Static}
+		// If either branch was StrH (or became StrH after copy), result is StrH
+		if IsStrH(ifSyms[i].Type) || IsStrH(elseSyms[i].Type) {
+			resultType = StrH{}
 		}
 
 		// if the variable was stack-allocated, store back
@@ -437,23 +482,16 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	case FloatKind:
 		s.Val = c.ConstF64(0)
 	case StrKind:
-		s.Type = Str{Static: true} // Zero value is static empty string
+		// For StrH, allocate a heap empty string so callee can free it.
 		s.Val = c.createGlobalString("zero_str", "", llvm.PrivateLinkage)
-	case ArrayKind:
-		// Create an actual zero-length array (not null)
-		// Arrays are always heap-allocated, even when empty
-		arrayType := symType.(Array)
-		if len(arrayType.ColTypes) > 0 && arrayType.ColTypes[0].Kind() != UnresolvedKind {
-			elemType := arrayType.ColTypes[0]
-			nConst := c.ConstI64(0)
-			arrVal := c.CreateArrayForType(elemType, nConst)
-			s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_zero")
-			// No need for ReadOnly flag - arrays are always heap, always freed (unless FuncArg)
-		} else {
-			// If element type is unresolved, use null pointer temporarily
-			// This should be rare and will be resolved later
-			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+		if IsStrH(symType) {
+			s.Val = c.copyString(s.Val)
 		}
+	case ArrayKind:
+		// Zero value for arrays is null pointer (similar to static empty string for Str).
+		// Runtime functions handle null gracefully: free(null) is no-op, len(null) returns 0.
+		// This avoids heap allocation for zero values that may be immediately overwritten.
+		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
 	case ArrayRangeKind:
@@ -469,124 +507,98 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) {
-	if len(idents) == 0 {
-		return
+func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
+	for i, ident := range idents {
+		c.storeValue(ident.Value, syms[i], needsCopy[i])
 	}
+}
 
-	// Determine copy requirements based on storage class and ownership
+// computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
+// It also returns movedSources - the set of RHS variable names whose ownership was transferred.
+func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) ([]bool, map[string]struct{}) {
 	needsCopy := make([]bool, len(syms))
+	movedSources := make(map[string]struct{})
+
 	for i, rhsSym := range syms {
-		// Check if this is a static string (no copy needed - immutable, lives forever)
-		if strType, ok := rhsSym.Type.(Str); ok && strType.Static {
-			needsCopy[i] = false
+		// StrG (static strings): immutable, live forever - no copy needed.
+		if IsStrG(rhsSym.Type) {
 			continue
 		}
 
-		// Function arguments are borrowed references - no copy needed
-		if rhsSym.FuncArg {
-			needsCopy[i] = false
+		// Temporaries (array literals, function results, expressions): transfer ownership directly.
+		// No copy needed - the temporary's memory becomes owned by the LHS variable.
+		if rhsNames[i] == "" {
 			continue
 		}
 
-		// Check if RHS is a variable that's being overwritten in LHS
-		canTransfer := false
-		if rhsNames[i] != "" {
-			// RHS is a variable - check if it's in the LHS
-			for _, lhsIdent := range idents {
-				if lhsIdent.Value == rhsNames[i] {
-					// This variable is being overwritten, can transfer ownership
-					canTransfer = true
-					break
-				}
-			}
+		// Named variable on RHS - default to copying for safety
+		needsCopy[i] = true
+
+		// Check if RHS variable is being overwritten in LHS (enables ownership transfer).
+		// Only allow transfer if this source hasn't already been moved.
+		// This prevents double-free in cases like: a, b = a, a
+		// where the second use of 'a' must copy, not transfer.
+		if _, moved := movedSources[rhsNames[i]]; moved {
+			continue
 		}
 
-		// If RHS is not a variable, or variable is not in LHS, we need to copy
-		// (because the original owner keeps the value)
-		needsCopy[i] = !canTransfer
-	}
-
-	// Process assignments in two phases to avoid use-after-free
-	for phase := 0; phase < 2; phase++ {
-		for i, ident := range idents {
-			shouldProcess := (phase == 0 && !needsCopy[i]) || (phase == 1 && needsCopy[i])
-			if shouldProcess {
-				c.performAssignment(ident.Value, syms[i], needsCopy[i])
+		for _, lhsIdent := range idents {
+			if lhsIdent.Value != rhsNames[i] {
+				continue
 			}
+			needsCopy[i] = false
+			movedSources[rhsNames[i]] = struct{}{}
+			break
 		}
 	}
+	return needsCopy, movedSources
 }
 
-// performAssignment executes a single assignment with optional copying
-func (c *Compiler) performAssignment(name string, rhsSym *Symbol, shouldCopy bool) {
-	if lhsSymbol, ok := Get(c.Scopes, name); ok {
-		c.assignToExisting(name, lhsSymbol, rhsSym, shouldCopy)
-	} else {
-		c.assignToNew(name, rhsSym, shouldCopy)
-	}
-}
-
-// assignToExisting handles assignment to an existing variable
-func (c *Compiler) assignToExisting(name string, lhsSym *Symbol, rhsSym *Symbol, shouldCopy bool) {
-	// Free old value if different (freeSymbolValue checks Static flag internally)
-	if lhsSym.Val != rhsSym.Val {
-		c.freeSymbolValue(lhsSym)
-	}
-
-	// Copy only if needed
+// storeValue stores a value to a variable, optionally deep-copying first.
+func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	valueToStore := rhsSym
 	if shouldCopy {
-		valueToStore = c.deepCopyIfNeeded(valueToStore)
+		valueToStore = c.deepCopyIfNeeded(rhsSym)
 	}
 
-	// Store
-	if lhsSym.Type.Kind() == PtrKind {
-		derefed := c.derefIfPointer(valueToStore)
-		c.createStore(derefed.Val, lhsSym.Val, derefed.Type)
-	} else {
+	oldSym, exists := Get(c.Scopes, name)
+	if !exists || oldSym.Type.Kind() != PtrKind {
 		Put(c.Scopes, name, valueToStore)
-	}
-}
-
-// assignToNew handles assignment to a new variable
-func (c *Compiler) assignToNew(name string, rhsSym *Symbol, shouldCopy bool) {
-	var newSymbol *Symbol
-	if shouldCopy {
-		newSymbol = c.deepCopyIfNeeded(rhsSym)
-	} else {
-		newSymbol = rhsSym
-	}
-	Put(c.Scopes, name, newSymbol)
-}
-
-// freeSymbolValue frees the memory owned by a symbol
-func (c *Compiler) freeSymbolValue(sym *Symbol) {
-	// Don't free function arguments - they're borrowed references
-	if sym.FuncArg {
 		return
 	}
 
-	switch t := sym.Type.(type) {
-	case Str:
-		// Only free heap-allocated strings, not static literals
-		if !t.Static {
-			c.free([]llvm.Value{sym.Val})
-		}
+	derefed := c.derefIfPointer(valueToStore)
+	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
+}
+
+// freeValue frees heap-allocated memory for the given value based on its type.
+func (c *Compiler) freeValue(val llvm.Value, typ Type) {
+	switch t := typ.(type) {
+	case StrH:
+		c.free([]llvm.Value{val})
+	case StrG:
+		// Static strings live forever, no free needed
 	case Array:
-		// Arrays are always heap-allocated (except null pointers for unresolved types)
 		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
-			c.freeArray(sym.Val, t.ColTypes[0])
+			c.freeArray(val, t.ColTypes[0])
 		}
 	}
 }
 
 func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
+	// Capture old values BEFORE compiling RHS expressions.
+	// This is critical for function calls with Ptr outputs: by the time RHS compilation
+	// finishes, Ptrs already contain NEW values. We must capture old values first.
+	oldValues := c.captureOldValues(stmt.Name)
+
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
+	// Track result counts per expression to identify call destinations
+	resCounts := []int{}
 	i := 0
 	for _, expr := range stmt.Value {
 		res := c.compileExpression(expr, stmt.Name[i:])
+		resCounts = append(resCounts, len(res))
 
 		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
@@ -600,7 +612,54 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 		syms = append(syms, res...)
 		i += len(res)
 	}
-	c.writeTo(stmt.Name, syms, rhsNames)
+
+	needsCopy, movedSources := c.computeCopyRequirements(stmt.Name, syms, rhsNames)
+	c.writeTo(stmt.Name, syms, needsCopy)
+	c.freeOldValues(stmt.Name, oldValues, movedSources, stmt.Value, resCounts)
+}
+
+// freeOldValues frees old values after stores complete.
+// Skips: nil values (new variables), moved values, call results.
+//
+// Call results are skipped because function return values are moved (ownership
+// transferred) to the destination identifiers - they should not be freed here.
+func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
+	i := 0
+	for exprIdx, expr := range exprs {
+		// Skip call results - ownership is moved to destination
+		if _, isCall := expr.(*ast.CallExpression); isCall {
+			i += resCounts[exprIdx]
+			continue
+		}
+		for j := 0; j < resCounts[exprIdx]; j++ {
+			idx := i + j
+			if oldValues[idx] == nil {
+				continue
+			}
+			if _, moved := movedSources[idents[idx].Value]; moved {
+				continue
+			}
+			c.freeValue(oldValues[idx].Val, oldValues[idx].Type)
+		}
+		i += resCounts[exprIdx]
+	}
+}
+
+// captureOldValues captures the current values of destination variables before RHS compilation.
+// For Ptr variables, loads the actual value; for others, returns the symbol directly.
+// Returns nil for variables that don't exist yet.
+func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
+	result := make([]*Symbol, len(idents))
+	for i, ident := range idents {
+		sym, exists := Get(c.Scopes, ident.Value)
+		if !exists {
+			continue
+		}
+		// For Ptrs, load the actual value so we can free it later.
+		// For non-Ptrs, use the symbol directly.
+		result[i] = c.derefIfPointer(sym)
+	}
+	return result
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
@@ -625,29 +684,9 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		// Process markers eagerly at string creation time
-		formatted, args, toFree := c.formatString(e)
-
-		// No markers, create a regular string literal (static storage)
-		if len(args) == 0 {
-			globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
-			c.formatCounter++
-			s.Type = Str{Static: true} // Static string literal in .rodata
-			s.Val = c.createGlobalString(globalName, e.Value, llvm.PrivateLinkage)
-			res = []*Symbol{s}
-			return
-		}
-
-		// Build formatted string with sprintf_alloc (heap-allocated)
-		formatPtr := c.createFormatStringGlobal(formatted)
-		sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
-		fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
-		resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
-		c.free(toFree)
-
-		s.Type = Str{Static: false} // Heap-allocated formatted string
-		s.Val = resultPtr
-		res = []*Symbol{s}
+		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, false)}
+	case *ast.HeapStringLiteral:
+		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, true)}
 	case *ast.RangeLiteral:
 		res = c.compileRangeExpression(e)
 		return
@@ -683,8 +722,8 @@ func setInstAlignment(inst llvm.Value, t Type) {
 	case Float:
 		// divide by 8 as we want num bytes
 		inst.SetAlignment(int(typ.Width >> 3))
-	case Str:
-		// We assume Str is i8* or u8*
+	case StrG, StrH:
+		// Strings are i8* (char*)
 		inst.SetAlignment(8)
 	case Ptr:
 		inst.SetAlignment(8)
@@ -801,6 +840,34 @@ func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
 	return res
 }
 
+// compileStringLiteral compiles a string literal (regular or heap).
+// If forceHeap is true, the string is always heap-allocated (for HeapStringLiteral).
+// If forceHeap is false, only strings with format markers are heap-allocated.
+func (c *Compiler) compileStringLiteral(tok token.Token, value string, forceHeap bool) *Symbol {
+	formatted, args, toFree := c.formatString(tok, value)
+
+	// No markers
+	if len(args) == 0 {
+		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
+		c.formatCounter++
+		globalPtr := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
+		if forceHeap {
+			// Heap string literal: strdup the static string
+			return &Symbol{Type: StrH{}, Val: c.copyString(globalPtr)}
+		}
+		// Regular string literal: static storage
+		return &Symbol{Type: StrG{}, Val: globalPtr}
+	}
+
+	// Has markers: build formatted string with sprintf_alloc (heap-allocated)
+	formatPtr := c.createFormatStringGlobal(formatted)
+	sprintfAllocArgs := append([]llvm.Value{formatPtr}, args...)
+	fnType, fn := c.GetCFunc(SPRINTF_ALLOC)
+	resultPtr := c.builder.CreateCall(fnType, fn, sprintfAllocArgs, "str_result")
+	c.free(toFree)
+	return &Symbol{Type: StrH{}, Val: resultPtr}
+}
+
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, ok := Get(c.Scopes, ident.Value)
 	if ok {
@@ -879,7 +946,37 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	for i := 0; i < len(left); i++ {
 		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 	}
+
+	// Free temporary array operands (literals used in expressions)
+	// Variables are not freed here - they're managed by scope cleanup
+	c.freeTemporary(expr.Left, left)
+	c.freeTemporary(expr.Right, right)
+
 	return res
+}
+
+// freeTemporary frees operands that are temporaries (not variables).
+// If the expression is an identifier, it references a variable owned by scope - not a temporary.
+// Everything else (literals, call results, infix/prefix results) produces a temporary
+// that must be freed after use if it's a heap type (array or non-static string).
+// Handles both direct values and pointer-wrapped values (loads value from pointer first).
+func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
+	// Identifiers reference variables owned by scope - not temporaries
+	if _, isIdent := expr.(*ast.Identifier); isIdent {
+		return
+	}
+
+	// Everything else is a temporary - free heap types
+	for _, sym := range syms {
+		// Handle pointer-wrapped values (e.g., function arguments promoted to memory)
+		val := sym.Val
+		typ := sym.Type
+		if ptrType, ok := sym.Type.(Ptr); ok {
+			val = c.createLoad(sym.Val, ptrType.Elem, "temp_free")
+			typ = ptrType.Elem
+		}
+		c.freeValue(val, typ)
+	}
 }
 
 // compileArrayScalarInfix lowers an infix op between an array and a scalar by
@@ -922,8 +1019,12 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
-	// Setup outputs to store values across iterations
+	// Setup outputs to store values across iterations.
+	// Mark as FuncArg so cleanupScope skips them - the values are "returned" via out.
 	outputs := c.makeOutputs(dest, info.OutTypes)
+	for _, o := range outputs {
+		o.FuncArg = true
+	}
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
@@ -949,6 +1050,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			Type: elemType,
 		}
 	}
+
 	return out
 }
 
@@ -977,34 +1079,35 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
 	outputs := make([]*Symbol, len(outTypes))
 
-	// If we have destinations, use them
-	if len(dest) > 0 {
-		for i, outType := range outTypes {
-			name := dest[i].Value
-			sym, ok := Get(c.Scopes, name)
-			if ok {
-				// Update type for non-pointer symbols (sym.Type may be unresolved for empty arrays)
-				// Preserve pointer types as they already have the correct structure
-				c.updateUnresolvedType(name, sym, outType)
-			} else {
-				sym = c.makeZeroValue(outType)
-				Put(c.Scopes, name, sym)
-			}
+	for i, outType := range outTypes {
+		// Determine the name for the alloca
+		var name string
+		if i < len(dest) {
+			name = dest[i].Value
+		} else {
+			name = fmt.Sprintf("tmp_out_%d", c.tmpCounter)
+			c.tmpCounter++
+		}
 
+		// Check if variable already exists in scope
+		sym, exists := Get(c.Scopes, name)
+		if exists {
+			// Existing variable - update type if needed and promote to memory
+			c.updateUnresolvedType(name, sym, outType)
 			if sym.Type.Kind() != PtrKind {
 				sym = c.promoteToMemory(name)
 			}
 			outputs[i] = sym
+		} else {
+			// New variable or intermediate value - create temp alloca without adding to scope
+			// The permanent variable will be created by writeTo in FuncScope
+			ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
+			// Initialize with zero value (important for empty ranges where loop body never runs)
+			// Use zero value's type for Ptr.Elem to preserve Static flag for strings
+			zeroVal := c.makeZeroValue(outType)
+			c.createStore(zeroVal.Val, ptr, zeroVal.Type)
+			outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: zeroVal.Type}}
 		}
-		return outputs
-	}
-
-	// No destinations (intermediate value) - create temp allocas without adding to scope
-	for i, outType := range outTypes {
-		name := fmt.Sprintf("tmp_out_%d", c.tmpCounter)
-		c.tmpCounter++
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
-		outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: outType}}
 	}
 	return outputs
 }
@@ -1039,6 +1142,10 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 	for i, opSym := range operand {
 		res = append(res, c.compilePrefix(expr.Operator, opSym, info.OutTypes[i]))
 	}
+
+	// Free temporary operand after use - the result is a new value
+	c.freeTemporary(expr.Right, operand)
+
 	return res
 }
 
@@ -1050,7 +1157,11 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	defer c.popScope()
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
+	// Mark as FuncArg so cleanupScope skips them - the values are "returned" via out.
 	outputs := c.makeOutputs(dest, info.OutTypes)
+	for _, o := range outputs {
+		o.FuncArg = true
+	}
 
 	// Rewritten operand under tmp iters.
 	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
@@ -1074,6 +1185,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 			Type: elemType,
 		}
 	}
+
 	return out
 }
 
@@ -1137,6 +1249,9 @@ func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sr
 		// Load the destination pointer from the sret field
 		ptrType := llvm.PointerType(c.mapToLLVMType(finalOutTypes[i]), 0)
 		destPtr := c.builder.CreateLoad(ptrType, fieldPtr, outIdent.Value+"_dest")
+
+		// Use the type solver's output type. For strings, this includes the Static flag
+		// which tells the callee whether the old value is heap-allocated.
 		retPtrs[i] = &Symbol{
 			Val:      destPtr,
 			Type:     Ptr{Elem: finalOutTypes[i]},
@@ -1217,7 +1332,8 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 	elemType := arrRangeType.Array.ColTypes[0]
 	c.createLoop(rangeVal, func(iter llvm.Value) {
-		elemVal := c.ArrayGet(arraySym, elemType, iter)
+		// Use borrowed get - iterator values are read-only during iteration
+		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
 		body(elemVal, elemType)
 	})
 }
@@ -1321,6 +1437,7 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+
 	outputs := c.makeOutputs(dest, info.OutTypes)
 
 	// If LoopInside=false, wrap call in loops for all ranges
@@ -1331,10 +1448,18 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// Load final values from outputs
+		// KNOWN ISSUE: Empty ranges cause UAF. When the loop doesn't execute, outputs
+		// retain their original values. But captureOldValues (called before compilation)
+		// already captured the old value, and writeTo will free it. We then store the
+		// same (now freed) pointer back, causing use-after-free.
+		//
+		// TODO(conditionals): Fix by adding runtime "was output written" tracking.
+		// Until then, avoid empty ranges with heap-allocated variables.
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
-			elemType := outputs[i].Type.(Ptr).Elem
+			// Use info.OutTypes[i] for correct Static flag on strings, not outputs[i].Type
+			// which may retain stale flags from existing variables.
+			elemType := info.OutTypes[i]
 			out[i] = &Symbol{
 				Val:  c.createLoad(outputs[i].Val, elemType, "final"),
 				Type: elemType,
@@ -1345,14 +1470,34 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 
 	// LoopInside=true or no ranges: direct call
 	c.compileCallInner(ce.Function.Value, ce, outputs)
+
+	// Update output types (e.g., Static flag for strings) when there are no ranges.
+	// Old value freeing is handled by writeTo using captured old values.
+	if !info.HasRanges {
+		c.updateOutputTypes(outputs, info.OutTypes, dest)
+	}
+
 	return outputs
+}
+
+// updateOutputTypes updates the destination symbols in scope to reference the output values.
+// With StrG/StrH types, the type is determined at type-solving time and doesn't change.
+func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []*ast.Identifier) {
+	for i, out := range outputs {
+		if i >= len(outTypes) || dest == nil || i >= len(dest) {
+			continue
+		}
+		// Update the symbol in scope to reference this output
+		Put(c.Scopes, dest[i].Value, out)
+	}
 }
 
 // compileCallInner compiles the actual function call
 func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, outputs []*Symbol) {
 	args := c.compileArgs(ce)
 
-	// Extract element types from pointer args for mangling
+	// Extract element types from pointer args for mangling.
+	// Functions are mangled separately for StrG/StrH, so no normalization needed.
 	paramTypes := make([]Type, len(args))
 	for i, arg := range args {
 		paramTypes[i] = arg.Type.(Ptr).Elem
@@ -1397,6 +1542,13 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 	}
 
 	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+
+	// Free temporary arguments after the call. Function copies input values to outputs
+	// (see computeCopyRequirements - no FuncArg skip), so temps can be safely freed.
+	// Identifiers are skipped by freeTemporary since they're owned by caller's scope.
+	for i, arg := range ce.Arguments {
+		c.freeTemporary(arg, []*Symbol{args[i]})
+	}
 }
 
 func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
@@ -1483,7 +1635,7 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 		copiedStr := c.copyString(sym.Val)
 		return &Symbol{
 			Val:      copiedStr,
-			Type:     Str{Static: false}, // Copied strings are always heap-allocated
+			Type:     StrH{}, // Copied strings are always heap-allocated
 			FuncArg:  false,
 			ReadOnly: false,
 		}
@@ -1532,22 +1684,34 @@ func (c *Compiler) cleanupScope() {
 	}
 	currentScope := c.Scopes[len(c.Scopes)-1]
 	for _, sym := range currentScope.Elems {
-		// Skip function arguments - they're borrowed references, not owned
+		// Skip function arguments - they're borrowed, not owned.
+		// See ownership model in Symbol definition.
 		if sym.FuncArg {
 			continue
 		}
 
 		// Check if this symbol needs cleanup based on type
 		switch t := sym.Type.(type) {
-		case Str:
-			// Only free heap-allocated strings, not static literals
-			if !t.Static {
-				c.free([]llvm.Value{sym.Val})
-			}
+		case StrH:
+			// Only free heap-allocated strings, not static literals (StrG)
+			c.free([]llvm.Value{sym.Val})
 		case Array:
 			// Arrays are always heap-allocated (unless unresolved null pointer)
 			if !sym.Val.IsConstant() || !sym.Val.IsNull() {
 				c.freeArray(sym.Val, t.ColTypes[0])
+			}
+		case Ptr:
+			// Stack-allocated pointer (e.g., from function output parameters)
+			// Load the value and free it based on the element type
+			loaded := c.builder.CreateLoad(c.mapToLLVMType(t.Elem), sym.Val, "cleanup_load")
+			switch elemT := t.Elem.(type) {
+			case StrH:
+				// Only free heap-allocated strings, not static literals (StrG)
+				c.free([]llvm.Value{loaded})
+			case Array:
+				if len(elemT.ColTypes) > 0 && elemT.ColTypes[0].Kind() != UnresolvedKind {
+					c.freeArray(loaded, elemT.ColTypes[0])
+				}
 			}
 		}
 	}
@@ -1598,11 +1762,22 @@ func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	c.free(toFree)
 }
 
+// asStringLiteral extracts token and value from string literal expressions (regular or heap).
+func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok bool) {
+	switch e := expr.(type) {
+	case *ast.StringLiteral:
+		return e.Token, e.Value, true
+	case *ast.HeapStringLiteral:
+		return e.Token, e.Value, true
+	}
+	return token.Token{}, "", false
+}
+
 // appendPrintExpression handles one print expression (string literal or compiled expression)
 func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
-	// String literals with markers are processed specially
-	if strLit, ok := expr.(*ast.StringLiteral); ok {
-		processed, newArgs, toFreeArgs := c.formatString(strLit)
+	// String literals (regular or heap) with markers are processed specially
+	if tok, value, ok := asStringLiteral(expr); ok {
+		processed, newArgs, toFreeArgs := c.formatString(tok, value)
 		*formatStr += processed + " "
 		*args = append(*args, newArgs...)
 		*toFree = append(*toFree, toFreeArgs...)
@@ -1665,6 +1840,15 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		strPtr := c.arrayStrArg(s)
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)
+	case StrKind:
+		*args = append(*args, s.Val)
+		// Free heap string temporaries (e.g., array element access returns owned copy)
+		// Identifiers reference scope-owned variables; everything else is a temporary
+		if IsStrH(s.Type) {
+			if _, isIdent := expr.(*ast.Identifier); !isIdent {
+				*toFree = append(*toFree, s.Val)
+			}
+		}
 	default:
 		*args = append(*args, s.Val)
 	}

@@ -31,18 +31,18 @@ res7 = arr1 ⊕ (arr2 ⊕ [50 60])
 res8 = (arrf1 ⊕ mixedInt) ⊕ (mixedFloat ⊕ arrf2)
 "Nested mixed concat: -res8"
 
-# String concatenation
-str1 = "hello"
-str2 = "world"
+# String concatenation (requires heap strings)
+str1 = "hello".
+str2 = "world".
 res9 = str1 ⊕ str2
 "String concat: -res9"
 
-res10 = "" ⊕ str2
+res10 = "". ⊕ str2
 "Left empty concat: -res10"
 
-str3 = ""
+str3 = "".
 res11 = str1 ⊕ str3
 "Right empty concat: -res11"
 
-res12 = "" ⊕ str3
+res12 = "". ⊕ str3
 "Both empty str concat: -res12"

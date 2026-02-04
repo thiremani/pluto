@@ -113,6 +113,7 @@ int arr_##SUF##_set(NAME* a, size_t i, T v){                             \
     return 0;                                                            \
 }                                                                        \
 void arr_##SUF##_swap(NAME* a, size_t i, size_t j){                      \
+    if (!a) return;                                                      \
     T t = a->v.a[i]; a->v.a[i] = a->v.a[j]; a->v.a[j] = t;               \
 }                                                                        \
 T* arr_##SUF##_data(NAME* a){ return a ? a->v.a : NULL; }
@@ -220,6 +221,13 @@ int arr_str_push(PtArrayStr* a, const char* s){
     return 0;
 }
 
+int arr_str_push_own(PtArrayStr* a, char* s){
+    if (!a) return -1;
+    if (str_ensure_cap(&a->v, 1) != 0) return -1;
+    a->v.a[a->v.n++] = s;  // takes ownership; caller must not free s
+    return 0;
+}
+
 int arr_str_pop(PtArrayStr* a, char** out){
     if (!a || a->v.n == 0) return -1;
     char* v = a->v.a[--a->v.n];
@@ -227,9 +235,14 @@ int arr_str_pop(PtArrayStr* a, char** out){
     return 0;
 }
 
-const char* arr_str_get(const PtArrayStr* a, size_t i){
+char* arr_str_get(const PtArrayStr* a, size_t i){
     if (!a || i >= (size_t)a->v.n) return NULL;
-    return a->v.a[i];
+    return dup_cstr(a->v.a[i]);  // caller owns the copy
+}
+
+const char* arr_str_borrow(const PtArrayStr* a, size_t i){
+    if (!a || i >= (size_t)a->v.n) return NULL;
+    return a->v.a[i];  // borrowed pointer; caller must NOT free
 }
 
 int arr_str_set(PtArrayStr* a, size_t i, const char* s){
@@ -241,7 +254,16 @@ int arr_str_set(PtArrayStr* a, size_t i, const char* s){
     return 0;
 }
 
+int arr_str_set_own(PtArrayStr* a, size_t i, char* s){
+    if (!a || i >= (size_t)a->v.n) return -1;
+    if (a->v.a[i] == s) return 0;  // no-op for self-assignment
+    free(a->v.a[i]);
+    a->v.a[i] = s;  // takes ownership; caller must not free s
+    return 0;
+}
+
 void arr_str_swap(PtArrayStr* a, size_t i, size_t j){
+    if (!a) return;
     char* t = a->v.a[i]; a->v.a[i] = a->v.a[j]; a->v.a[j] = t;
 }
 
@@ -329,9 +351,11 @@ const char* arr_str_str(const PtArrayStr* a) {
     size_t n = arr_str_len(a);
     for (size_t i = 0; i < n; ++i) {
         if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        const char* s = arr_str_get(a, i);
-        if (!s) s = "";
-        if (strbuf_printf(&sb, "%s", s) < 0) { free(sb.data); return NULL; }
+        char* s = arr_str_get(a, i);  // owned copy
+        const char* to_print = s ? s : "";
+        int ok = strbuf_printf(&sb, "%s", to_print);
+        free(s);  // free the copy
+        if (ok < 0) { free(sb.data); return NULL; }
     }
     if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
     return sb.data;

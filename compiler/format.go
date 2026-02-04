@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
@@ -65,15 +64,15 @@ func defaultSpecifier(t Type) (string, error) {
 // for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
 // these are then returned as specIds. (-identifier) is replaced with *
 // endIndex is one index after specifier ends, or after an invalid rune
-func (c *Compiler) parseSpecifier(sl *ast.StringLiteral, runes []rune, start int) (specSyms []*Symbol, spec string, endIndex int, err *token.CompileError) {
+func (c *Compiler) parseSpecifier(tok token.Token, value string, runes []rune, start int) (specSyms []*Symbol, spec string, endIndex int, err *token.CompileError) {
 	// Read until we encounter a conversion specifier end char (like d, f, etc.)
 	err = nil
 	specRunes := []rune{runes[start]}
 	for it := start + 1; it < len(runes); it++ {
 		if runes[it] == '*' {
 			err = &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", sl.Value),
+				Token: tok,
+				Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", value),
 			}
 			c.Errors = append(c.Errors, err)
 			it += 1
@@ -102,8 +101,8 @@ func (c *Compiler) parseSpecifier(sl *ast.StringLiteral, runes []rune, start int
 	}
 
 	err = &token.CompileError{
-		Token: sl.Token,
-		Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), sl.Value),
+		Token: tok,
+		Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), value),
 	}
 	c.Errors = append(c.Errors, err)
 	endIndex = len(runes)
@@ -127,7 +126,7 @@ func parseIdentifier(runes []rune, start int) (identifier string, end int) {
 // It returns the parsed symbols from symbol table (using ids), the custom specifier (if any), and the new index.
 // If the main identifier is not in the symbol table, the bool markerSymValid is false
 // If subsequent identifiers within the specifier are not found in symbol table, it gives an error
-func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (mainId string, syms []*Symbol, customSpec string, newIndex int, markerSymValid bool, err *token.CompileError) {
+func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i int) (mainId string, syms []*Symbol, customSpec string, newIndex int, markerSymValid bool, err *token.CompileError) {
 	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start (isLetter).
 	markerSymValid = false
 	err = nil
@@ -143,15 +142,15 @@ func (c *Compiler) parseMarker(sl *ast.StringLiteral, runes []rune, i int) (main
 	if hasSpecifier(runes, end) {
 		if end+1 == len(runes) {
 			err = &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier is incomplete. Str: %s", sl.Value),
+				Token: tok,
+				Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier is incomplete. Str: %s", value),
 			}
 			c.Errors = append(c.Errors, err)
 			newIndex = end + 1
 			return
 		}
 		specStart := end
-		specSyms, customSpec, end, err = c.parseSpecifier(sl, runes, specStart)
+		specSyms, customSpec, end, err = c.parseSpecifier(tok, value, runes, specStart)
 	}
 
 	syms = append(syms, mainSym)
@@ -176,7 +175,7 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
 // if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
-func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
+func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
 	var builder strings.Builder
 	mainSym := syms[0]
 	valArgs = []llvm.Value{}
@@ -193,8 +192,8 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 		spec, err1 = defaultSpecifier(mainSym.Type)
 		if err1 != nil {
 			err = &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("Error formatting string. String: %s. Err: %s", sl.Value, err),
+				Token: tok,
+				Msg:   fmt.Sprintf("Error formatting string. String: %s. Err: %s", value, err),
 			}
 			c.Errors = append(c.Errors, err)
 			return
@@ -256,7 +255,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 		// Validate type: %p requires a pointer.
 		if mainType.Kind() != PtrKind {
 			err = &token.CompileError{
-				Token: sl.Token,
+				Token: tok,
 				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
 			}
 			c.Errors = append(c.Errors, err)
@@ -273,7 +272,7 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 
 	if specToKind[specRune] != mainType.Kind() {
 		err = &token.CompileError{
-			Token: sl.Token,
+			Token: tok,
 			Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
 		}
 		c.Errors = append(c.Errors, err)
@@ -291,13 +290,13 @@ func (c *Compiler) parseFormatting(sl *ast.StringLiteral, mainId string, syms []
 // it additionally supports specifiers %d, %f etc as defined by the printf function
 // the * option for the width and precision should be replaced by their corresponding variables within parentheses and with the marker
 // eg: -a%(-w)d prints the integer variable a with width given by the variable w
-func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value, []llvm.Value) {
+func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.Value, []llvm.Value) {
 	var builder strings.Builder
 	var args []llvm.Value
 	var toFree []llvm.Value
 
 	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
-	runes := []rune(sl.Value)
+	runes := []rune(value)
 	i := 0
 	for i < len(runes) {
 		if !(maybeMarker(runes, i)) {
@@ -312,7 +311,7 @@ func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value, []
 		}
 		// If we see a '-' and the next rune is a valid identifier start...
 		// Parse the marker.
-		mainId, syms, customSpec, newIndex, markerSymValid, err := c.parseMarker(sl, runes, i)
+		mainId, syms, customSpec, newIndex, markerSymValid, err := c.parseMarker(tok, value, runes, i)
 		if !markerSymValid {
 			builder.WriteRune('-')
 			builder.WriteString(mainId)
@@ -322,7 +321,7 @@ func (c *Compiler) formatString(sl *ast.StringLiteral) (string, []llvm.Value, []
 		if err != nil {
 			return "", args, nil
 		}
-		formattedStr, idArgs, idToFree, err := c.parseFormatting(sl, mainId, syms, customSpec)
+		formattedStr, idArgs, idToFree, err := c.parseFormatting(tok, value, mainId, syms, customSpec)
 		if err != nil {
 			return "", args, nil
 		}
@@ -393,4 +392,26 @@ func hasSpecifier(runes []rune, i int) bool {
 
 func specIdAhead(runes []rune, i int) bool {
 	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
+}
+
+// hasValidMarkers checks if a format string contains any markers (-identifier)
+// where the main identifier is defined according to the provided isDefined callback.
+// This aligns with parseMarker/formatString semantics: a marker is only valid when
+// its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
+// only width is defined) are not considered valid markers.
+func hasValidMarkers(value string, isDefined func(string) bool) bool {
+	runes := []rune(value)
+	for i := 0; i < len(runes); i++ {
+		if !maybeMarker(runes, i) {
+			continue
+		}
+		// Parse the identifier after the '-'
+		mainId, end := parseIdentifier(runes, i+1)
+		// Only the main identifier matters - aligns with parseMarker behavior
+		if isDefined(mainId) {
+			return true
+		}
+		i = end - 1 // -1 because loop will increment
+	}
+	return false
 }

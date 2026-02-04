@@ -14,3 +14,11 @@ test_suffix
 returned
 first second third
 [1.5 2.5] [3.5 4.5]
+foobar bazqux
+bazqux foobar
+[10 20 30] [40 50 60]
+[40 50 60] [10 20 30]
+duptest other
+duptest duptest
+[100 200] [300 400]
+[100 200] [100 200]

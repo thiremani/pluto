@@ -80,7 +80,11 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 
 	case *ast.StringLiteral:
 		// Collect any identifiers within the format string.
-		return cfg.collectStringReads(e)
+		return cfg.collectStringReads(e.Value, e.Token)
+
+	case *ast.HeapStringLiteral:
+		// Collect any identifiers within the format string.
+		return cfg.collectStringReads(e.Value, e.Token)
 
 	case *ast.RangeLiteral:
 		// a range literal “start:stop[:step]” reads start, stop, and optionally step
@@ -133,13 +137,13 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	}
 }
 
-func (cfg *CFG) collectStringReads(sl *ast.StringLiteral) []VarEvent {
+func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	// Collects all identifiers in the format string.
 	var evs []VarEvent
-	runes := []rune(sl.Value)
+	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if maybeMarker(runes, i) {
-			evs = append(evs, cfg.collectMarkerReads(sl, runes, i)...)
+			evs = append(evs, cfg.collectMarkerReads(value, tok, runes, i)...)
 		}
 	}
 	return evs
@@ -147,7 +151,7 @@ func (cfg *CFG) collectStringReads(sl *ast.StringLiteral) []VarEvent {
 
 // collectMarkerReads collects any identifiers used after marker `-` in the format string.
 // it assumes start is at marker
-func (cfg *CFG) collectMarkerReads(sl *ast.StringLiteral, runes []rune, start int) []VarEvent {
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
 	mainId, end := parseIdentifier(runes, start+1)
 	exists := cfg.isDefined(mainId)
 	if !exists {
@@ -155,17 +159,17 @@ func (cfg *CFG) collectMarkerReads(sl *ast.StringLiteral, runes []rune, start in
 		return nil
 	}
 
-	evs := []VarEvent{{Name: mainId, Kind: Read, Token: sl.Tok()}}
+	evs := []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
 	// now collect any format specifier identifier reads
 	if hasSpecifier(runes, end) {
-		evs = append(evs, cfg.collectSpecifierReads(sl, runes, end)...)
+		evs = append(evs, cfg.collectSpecifierReads(value, tok, runes, end)...)
 	}
 	return evs
 }
 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
-func (cfg *CFG) collectSpecifierReads(sl *ast.StringLiteral, runes []rune, start int) []VarEvent {
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
 	var evs []VarEvent
 	for it := start + 1; it < len(runes); it++ {
 		if !specIdAhead(runes, it) {
@@ -175,8 +179,8 @@ func (cfg *CFG) collectSpecifierReads(sl *ast.StringLiteral, runes []rune, start
 		specId, end := parseIdentifier(runes, it+2)
 		if end >= len(runes) || runes[end] != ')' {
 			err := &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, sl.Value),
+				Token: tok,
+				Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, value),
 			}
 			cfg.Errors = append(cfg.Errors, err)
 			return nil
@@ -185,14 +189,14 @@ func (cfg *CFG) collectSpecifierReads(sl *ast.StringLiteral, runes []rune, start
 		ok := cfg.isDefined(specId)
 		if !ok {
 			err := &token.CompileError{
-				Token: sl.Token,
-				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, sl.Value),
+				Token: tok,
+				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
 			}
 			cfg.Errors = append(cfg.Errors, err)
 			return nil
 		}
 
-		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: sl.Tok()})
+		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
 	}
 	return evs
 }

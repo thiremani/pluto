@@ -1,0 +1,133 @@
+# Test string memory management with StrG/StrH types
+# StrG = global/static string literal (read-only memory, no free)
+# StrH = heap-allocated string (requires free)
+
+# Case 1: Static -> Static (StrG reassignment)
+x = "hello"
+x  # use before overwrite
+x = "world"
+x
+
+# Case 2: Heap -> Heap (StrH reassignment with concatenation)
+y = "heap". ⊕ "str".
+y
+y  # use before overwrite
+y = "second". ⊕ "heap".
+y
+
+# Swap: x, y = y, x with static strings
+a = "alpha"
+b = "beta"
+a, b = b, a
+a, b
+
+# Swap: x, y = y, x with heap strings
+ha = "one". ⊕ "1".
+hb = "two". ⊕ "2".
+ha, hb = hb, ha
+ha, hb
+
+# Duplicate RHS: x, y = x, x with static
+a = "same"
+b = "different"
+b  # use before overwrite
+a, b = a, a
+a, b
+
+# Duplicate RHS: x, y = x, x with heap
+ha = "dup". ⊕ "heap".
+hb = "other".
+hb  # use before overwrite
+ha, hb = ha, ha
+ha, hb
+
+# Reassignment chain: heap -> heap
+c = "start". ⊕ "1".
+c  # use
+c = "mid". ⊕ "dle".
+c  # use
+c = "end". ⊕ "ing".
+c
+
+# Test with function call to promote to Ptr type
+s = "initial"
+t = identity(s)  # s is now Ptr type after this call
+t
+s  # use s
+
+# Test function returning static string
+r = getStatic()
+r
+r  # use before overwrite
+r = getStatic()  # StrG -> StrG
+r
+
+# Test function returning heap string
+rh = getHeap()
+rh
+rh  # use before overwrite
+rh = getHeap()  # StrH -> StrH (from function)
+rh
+
+# ============================================
+# Array string element tests
+# arr[i] returns an owned StrH copy
+# ============================================
+
+# Create array and assign element to variable
+arr = ["first" "second" "third"]
+ax = arr[0]  # gets StrH copy
+ax
+arr  # array should still be valid
+
+# Modify ax, array should be unchanged (independent copy)
+ax = "modified".  # ax is StrH, can only assign StrH
+ax
+arr  # original array unchanged
+
+# Assign from array, then reassign
+arr2 = ["hello" "world"]
+ay = arr2[1]  # ay = "world" (StrH copy)
+ay
+arr2
+
+# Multiple assignments from same array
+arr3 = ["a" "b" "c"]
+p = arr3[0]
+q = arr3[1]
+r2 = arr3[2]
+p, q, r2
+
+# ============================================
+# Array element as function argument
+# f(arr[i]) should work without double-free
+# ============================================
+
+# Pass array element to identity function
+arr4 = ["func" "test"]
+z = identity(arr4[0])  # pass arr[i] as argument
+z
+arr4  # array should still be valid
+
+# Use array element directly in expression (print)
+arr5 = ["print" "me"]
+arr5[0]  # direct use as expression
+arr5[1]
+arr5  # array still valid after element access
+
+# ============================================
+# Function cleanup tests
+# Test that array element access in functions is properly managed
+# ============================================
+
+# Get array element from function (local array should be cleaned up)
+elem0 = getArrayElem(0)
+elem0
+elem1 = getArrayElem(1)
+elem1
+elem2 = getArrayElem(2)
+elem2
+
+# Function that uses array elements internally
+result = useArrayElem()
+result

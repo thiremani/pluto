@@ -71,6 +71,7 @@ BUILD_DIR = Path("build")
 IS_WINDOWS_ENV = (os.name == "nt") or (os.environ.get("MSYSTEM") is not None)
 PLUTO_EXE = "pluto.exe" if IS_WINDOWS_ENV else "pluto"
 KEEP_BUILD = False
+LEAK_CHECK = False  # Run memory leak checks on all tests
 
 class TestRunner:
     def __init__(self, test_dir: Path = None):
@@ -235,10 +236,6 @@ class TestRunner:
         import platform
         system = platform.system()
 
-        # Only check memory leaks for the 'mem' test to avoid slowdown
-        if test_name != "mem":
-            return True
-
         try:
             if system == "Linux":
                 # Use valgrind on Linux
@@ -315,10 +312,12 @@ class TestRunner:
             expected_output = exp_file.read_text(encoding="utf-8")
 
             if self._compare_outputs(expected_output, actual_output):
-                # Check for memory leaks
-                if not self._check_memory_leaks(executable_path, test_name):
-                    print(f"{Fore.YELLOW}⚠️  Test passed but has memory leaks{Style.RESET_ALL}")
-                    # Don't fail the test for memory leaks, just warn
+                # Check for memory leaks (if enabled)
+                if LEAK_CHECK:
+                    if not self._check_memory_leaks(executable_path, test_name):
+                        print(f"{Fore.RED}❌ Failed (memory leak){Style.RESET_ALL}")
+                        self.failed += 1
+                        return
 
                 print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
                 self.passed += 1
@@ -427,10 +426,12 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="Keep build artifacts")
+    parser.add_argument("--leak-check", action="store_true", help="Run memory leak checks (valgrind/leaks)")
     parser.add_argument("test_dir", nargs="?", help="Specific test directory to run")
     args = parser.parse_args()
 
     KEEP_BUILD = args.keep
+    LEAK_CHECK = args.leak_check
     test_dir = Path(args.test_dir) if args.test_dir else None
     runner = TestRunner(test_dir)
     runner.run()

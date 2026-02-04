@@ -39,15 +39,18 @@ const (
 	ARR_F64_COPY   = "arr_f64_copy"
 
 	// Array STR functions
-	ARR_STR_NEW    = "arr_str_new"
-	ARR_STR_RESIZE = "arr_str_resize"
-	ARR_STR_SET    = "arr_str_set"
-	ARR_STR_GET    = "arr_str_get"
-	ARR_STR_LEN    = "arr_str_len"
-	ARR_STR_STR    = "arr_str_str"
-	ARR_STR_PUSH   = "arr_str_push"
-	ARR_STR_FREE   = "arr_str_free"
-	ARR_STR_COPY   = "arr_str_copy"
+	ARR_STR_NEW      = "arr_str_new"
+	ARR_STR_RESIZE   = "arr_str_resize"
+	ARR_STR_SET      = "arr_str_set"
+	ARR_STR_SET_OWN  = "arr_str_set_own"
+	ARR_STR_GET      = "arr_str_get"
+	ARR_STR_BORROW   = "arr_str_borrow"
+	ARR_STR_LEN      = "arr_str_len"
+	ARR_STR_STR      = "arr_str_str"
+	ARR_STR_PUSH     = "arr_str_push"
+	ARR_STR_PUSH_OWN = "arr_str_push_own"
+	ARR_STR_FREE     = "arr_str_free"
+	ARR_STR_COPY     = "arr_str_copy"
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
@@ -124,15 +127,15 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayStr"), nil, false)
 	case ARR_STR_RESIZE:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
-	case ARR_STR_SET:
+	case ARR_STR_SET, ARR_STR_SET_OWN:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
-	case ARR_STR_GET:
+	case ARR_STR_GET, ARR_STR_BORROW:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_LEN:
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
-	case ARR_STR_PUSH:
+	case ARR_STR_PUSH, ARR_STR_PUSH_OWN:
 		pt := c.NamedOpaquePtr("PtArrayStr")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, charPtr}, false)
 	case ARR_STR_FREE:
