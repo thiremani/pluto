@@ -223,6 +223,16 @@ func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
+// isStrHTemporary returns true if the expression is a heap string temporary
+// whose ownership can be transferred (not an identifier that needs to retain ownership).
+func isStrHTemporary(sym *Symbol, expr ast.Expression) bool {
+	if !IsStrH(sym.Type) {
+		return false
+	}
+	_, isIdent := expr.(*ast.Identifier)
+	return !isIdent
+}
+
 // ArraySetCells populates an array with cell values, using ownership transfer
 // for heap-allocated temporaries (non-identifier expressions) to avoid double-allocation.
 // Identifiers and static strings are copied to preserve the original value.
@@ -238,15 +248,11 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Ex
 			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
 		}
 
-		// For strings: use set_own only for heap-allocated temporaries (non-identifiers)
-		// Identifiers and borrowed values must be copied to preserve their original
-		if elemType.Kind() == StrKind {
-			_, isIdent := exprs[i].(*ast.Identifier)
-			if IsStrH(cs.Type) && !isIdent {
-				fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
-				c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set_own")
-				continue
-			}
+		// For StrH temporaries, transfer ownership; all other values get copied
+		if isStrHTemporary(cs, exprs[i]) {
+			fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
+			c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set_own")
+			continue
 		}
 
 		fnTy, fn := c.GetCFunc(info.SetName)

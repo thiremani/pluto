@@ -115,6 +115,11 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 	}
 
 	if leftElemType.Kind() == rightElemType.Kind() {
+		// For string arrays, normalize to StrH if either side is StrH.
+		// This ensures consistent ownership semantics (runtime always heap-copies).
+		if leftElemType.Kind() == StrKind && (IsStrH(leftElemType) || IsStrH(rightElemType)) {
+			return concatWithMetadata(leftArr, rightArr, StrH{})
+		}
 		return concatWithMetadata(leftArr, rightArr, leftElemType)
 	}
 
@@ -772,12 +777,17 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 		return cur
 	}
 
-	// Only numeric promotion to F64 is allowed; any Str/numeric mix is invalid.
+	// Numeric promotion to F64 is allowed.
 	if cur.Kind() == IntKind && newT.Kind() == FloatKind {
 		return newT
 	}
 	if cur.Kind() == FloatKind && newT.Kind() == IntKind {
 		return cur
+	}
+
+	// String promotion: StrG + StrH -> StrH (runtime always heap-copies).
+	if cur.Kind() == StrKind && newT.Kind() == StrKind {
+		return StrH{}
 	}
 
 	// Otherwise, incompatible column schema.

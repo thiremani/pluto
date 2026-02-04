@@ -395,8 +395,10 @@ func specIdAhead(runes []rune, i int) bool {
 }
 
 // hasValidMarkers checks if a format string contains any markers (-identifier)
-// where the identifier is defined according to the provided isDefined callback.
-// Also handles specifier identifiers like %(-width)d.
+// where the main identifier is defined according to the provided isDefined callback.
+// This aligns with parseMarker/formatString semantics: a marker is only valid when
+// its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
+// only width is defined) are not considered valid markers.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
@@ -405,24 +407,9 @@ func hasValidMarkers(value string, isDefined func(string) bool) bool {
 		}
 		// Parse the identifier after the '-'
 		mainId, end := parseIdentifier(runes, i+1)
-		// Check if this identifier is defined
+		// Only the main identifier matters - aligns with parseMarker behavior
 		if isDefined(mainId) {
 			return true
-		}
-		// Even if main identifier is invalid, check specifier identifiers
-		// For cases like "-undefined%(-width)d" where width might be defined
-		if hasSpecifier(runes, end) {
-			for it := end + 1; it < len(runes); it++ {
-				if specIdAhead(runes, it) {
-					specId, _ := parseIdentifier(runes, it+2)
-					if isDefined(specId) {
-						return true
-					}
-				}
-				if formatSpecifierEnd(runes[it]) {
-					break
-				}
-			}
 		}
 		i = end - 1 // -1 because loop will increment
 	}

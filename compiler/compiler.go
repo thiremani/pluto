@@ -12,31 +12,47 @@ import (
 type Symbol struct {
 	Val      llvm.Value
 	Type     Type
-	FuncArg  bool // Borrowed function parameter (input or output). See ownership model below.
+	FuncArg  bool // Function parameter passed by reference. See ownership model below.
 	ReadOnly bool // Input parameter (cannot be written to).
 }
 
 // Function argument ownership model:
 //
-// Function parameters are BORROWED, not owned. They are allocated in the caller's
-// scope and passed by reference (Ptr). The function operates on these references
-// but does not own the underlying values.
+// Function parameters are passed by reference (Ptr) to caller-owned storage.
+// The caller retains ownership; the function gets read/write access to slots.
 //
-// Assignment semantics: Functions behave like expressions. When assigning a FuncArg
-// to any variable (output or local), the value is COPIED, just like `x = s` copies
-// in regular scope. This ensures:
+//   - Input params (ReadOnly=true): read-only reference to caller's value
+//   - Output params (ReadOnly=false): write reference to caller's storage
+//
+// Assignment semantics: When assigning a FuncArg to a local variable, the value
+// is COPIED, just like `x = s` copies in regular scope. This ensures:
 //   - No aliasing between caller's input and output variables
 //   - Local variables get independent copies (with FuncArg=false)
 //   - Consistent semantics: x = identity(s) behaves like x = s
 //
+// Memory management:
+//
+//   For function calls (x = f(y)):
+//     - Function produces a new value and writes it to output slot
+//     - This value is MOVED to the destination (ownership transferred)
+//     - Old value in destination is NOT freed (see freeOldValues)
+//     - Temps passed as inputs are freed by caller after call returns
+//     - Function cleanup skips FuncArg params (caller owns slots)
+//
+//   For other expressions (x = y + z):
+//     - Old value in destination IS freed after store completes
+//     - New value ownership transfers to destination
+//
+//   Scope cleanup:
+//     - Final values are freed when scope ends (normal cleanup)
+//     - FuncArg symbols are skipped (caller owns them)
+//
 // Example: x = f(arr[0])
 //   1. Caller: arr[0] returns owned copy, stored in temp alloca
 //   2. Caller: passes Ptr to temp (input) and Ptr to x (output)
-//   3. Function: copies input value to output (not alias)
-//   4. Function: cleanup skips FuncArg params (borrowed, not owned)
-//   5. Caller: frees temp after call; x owns its independent copy
-//
-// This ensures no aliasing issues while the caller manages temp lifetimes.
+//   3. Function: computes result and writes to output slot
+//   4. Function: cleanup skips FuncArg params (caller owns slots)
+//   5. Caller: frees temp; x now owns the function's result
 
 type FuncArgs struct {
 	Inputs      []*Symbol          // function.Param pointers for all params
@@ -603,11 +619,14 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 }
 
 // freeOldValues frees old values after stores complete.
-// Skips: nil values (new variables), moved values, call destinations (callee handles freeing).
+// Skips: nil values (new variables), moved values, call results.
+//
+// Call results are skipped because function return values are moved (ownership
+// transferred) to the destination identifiers - they should not be freed here.
 func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
 	i := 0
 	for exprIdx, expr := range exprs {
-		// Skip call destinations - callee owns old value and frees on first write
+		// Skip call results - ownership is moved to destination
 		if _, isCall := expr.(*ast.CallExpression); isCall {
 			i += resCounts[exprIdx]
 			continue
