@@ -947,9 +947,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
 		// Check if string has valid format markers - if so, it's a heap string
-		isDefined := func(name string) bool { _, ok := ts.GetIdentifier(name); return ok }
 		var strType Type = StrG{}
-		if hasValidMarkers(e.Value, isDefined) {
+		if hasValidMarkers(e.Value, ts.isDefined) {
 			strType = StrH{}
 		}
 		types = append(types, strType)
@@ -1011,6 +1010,11 @@ func (ts *TypeSolver) GetIdentifier(name string) (Type, bool) {
 	}
 
 	return Unresolved{}, false
+}
+
+func (ts *TypeSolver) isDefined(name string) bool {
+	_, ok := ts.GetIdentifier(name)
+	return ok
 }
 
 // Type Identifier returns type of identifier if it is not a pointer
