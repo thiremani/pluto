@@ -256,6 +256,7 @@ int arr_str_set(PtArrayStr* a, size_t i, const char* s){
 
 int arr_str_set_own(PtArrayStr* a, size_t i, char* s){
     if (!a || i >= (size_t)a->v.n) return -1;
+    if (a->v.a[i] == s) return 0;  // no-op for self-assignment
     free(a->v.a[i]);
     a->v.a[i] = s;  // takes ownership; caller must not free s
     return 0;

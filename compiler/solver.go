@@ -761,6 +761,11 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 		return cur
 	}
 
+	// Normalize strings to StrH since runtime always heap-copies into arrays.
+	if newT.Kind() == StrKind {
+		newT = StrH{}
+	}
+
 	// Only allow I64, F64, or Str as array elements.
 	if !AllowedArrayElem(newT) {
 		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("unsupported array element type %s in column %d", newT.String(), colIdx)})
@@ -783,11 +788,6 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 	}
 	if cur.Kind() == FloatKind && newT.Kind() == IntKind {
 		return cur
-	}
-
-	// String promotion: StrG + StrH -> StrH (runtime always heap-copies).
-	if cur.Kind() == StrKind && newT.Kind() == StrKind {
-		return StrH{}
 	}
 
 	// Otherwise, incompatible column schema.
