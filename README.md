@@ -1,22 +1,34 @@
-The Pluto Programming Language
-==============================
+# The Pluto Programming Language
 
 *Taking programming to another planet 🚀*
 
-Pluto is a compiled language that aims for the readability of scripting languages with the safety and performance of C/Go. A Go front‑end lowers `.pt` (code) and `.spt` (script) to LLVM 21 IR and emits native binaries. Functions are 'Templates' defined in `.pt` files, and can be compiled for different argument types used in `.spt` scripts — generics by use. Design highlights include range‑driven auto‑vectorization, safe arrays and slices, scope‑based memory (no nulls, no out‑of‑bounds, no GC), and concurrency by construction.
+Pluto is a compiled language that combines the clarity of scripting languages with the type-safety, performance, and determinism of systems languages.
 
-Highlights
-----------
-- Go front‑end, LLVM 21 back‑end; emits native binaries
-- Template functions in `.pt`: specialized per argument types (generic by use)
-- Range literals with auto‑vectorized execution
-- First‑class arrays (safe slicing) and link semantics
-- Scope‑based memory: no nulls, no OOB, no garbage collector
-- printf‑style formatting; arrays/ranges printable
-- Cross‑platform; GitHub Actions CI (Go 1.25 + LLVM 21)
+Functions in Pluto are **templates** defined in `.pt` files. Call a template with different argument types and Pluto generates specialized native code for each — no generics syntax, no runtime dispatch. Write concise programs that compile into efficient, fully specialized executables.
 
-Examples
---------
+**Design highlights:**
+
+**Purity:** Functions have read-only inputs and writable outputs; structs are raw data with no hidden pointers.
+
+Range-driven auto-vectorization, safe arrays and slices.
+
+Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by construction.
+
+---
+
+## Highlights
+
+- Go front-end, LLVM back-end; emits native binaries
+- Template functions in `.pt`: specialized per argument types (generics by use)
+- Range literals with auto-vectorized execution
+- First-class arrays (safe slicing) and link semantics
+- Scope-based memory: no nulls, no out-of-bounds, no garbage collector
+- printf-style formatting; arrays/ranges printable
+- Cross-platform (Linux/macOS/Windows)
+
+---
+
+## Quick example
 
 Hello world (`tests/helloworld.spt`):
 
@@ -26,167 +38,387 @@ x = "hello 🙏"
 x, "👍"
 ```
 
-Run it (Pluto compiles directories, not single files):
+No `main()`, no `print()`, no imports. Values on a line get printed.
+
+Compile and run:
 
 ```
-# compile all scripts in the tests/ folder
-./pluto tests
-# run the produced binary for helloworld.spt
+./pluto tests/helloworld.spt
 ./tests/helloworld
 ```
 
-Code + script (`tests/math`):
-
-`tests/math/math.pt`
-```
-res = square(x)
-	res = x * x
-```
-
-`tests/math/func.spt`
-```
-y = square(2)
-z = square(5.6)
-y
-z
-```
-
-Run it:
+Output:
 
 ```
-./pluto tests/math
-./tests/math/func
+hello world
+hello 🙏 👍
 ```
 
-Quick Start
------------
+Pluto can compile a single `.spt` file or an entire directory — each `.spt` produces a native executable.
 
-- Build compiler: `go build -o pluto`
-- Run unit tests (race): `go test -race ./lexer ./parser ./compiler`
-- Run full suite: `python3 test.py`
-- Check version: `./pluto --version` (or `-v`)
-- Clear cache: `./pluto --clean` (or `-c`)
-- New project setup: add a `pt.mod` at your repo root to define the module path (project root). Minimal example:
-  - `pt.mod` first non‑comment line: `module github.com/you/yourproject`
-  - Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
-- Compile a directory: `./pluto [directory]` (writes binaries next to sources)
+---
 
-Requirements
-------------
-- Go `1.25` on PATH
-- LLVM `21` tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
-- macOS Homebrew paths:
-  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm/bin:$PATH`
-  - Intel: `export PATH=/usr/local/opt/llvm/bin:$PATH`
+## How Pluto programs are structured
 
-Build and Run
--------------
+Pluto separates reusable templates from executable scripts:
 
-Linux/macOS (primary)
-- Requirements: Go 1.25+ and LLVM 21 (`opt`, `llc`, `clang`, `ld.lld`)
-- Linux install and set PATH:
-  - See https://apt.llvm.org for instructions. Typical flow:
-    - `wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 21`
-    - `sudo apt install lld-21`
-    - `export PATH=/usr/lib/llvm-21/bin:$PATH`
-- macOS (Homebrew):
-  - `brew install llvm`
-  - Intel: `export PATH=/usr/local/opt/llvm/bin:$PATH`
-  - Apple Silicon: `export PATH=/opt/homebrew/opt/llvm/bin:$PATH`
-- Build & test end‑to‑end:
-  - `python3 test.py`
-- Unit tests only:
-  - `go test -race ./lexer ./parser ./compiler`
+| Extension | Purpose                                                                      |
+|-----------|------------------------------------------------------------------------------|
+| `.pt`     | Template files — functions, operators, structs, constants (act as libraries) |
+| `.spt`    | Script files — executable programs that compile to native binaries           |
 
-Windows (MSYS2 UCRT64)
-----------------------
-- Install MSYS2 and use the "MSYS2 UCRT64" shell: https://www.msys2.org
-- Packages: `pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}`
-- Quick build: `python scripts/msys2_build.py` → creates `pluto.exe`
-- Tests: `python test.py` (or `python test.py tests/math` for a subset)
-- Manual build/test: ensure `clang`, `lld`, and LLVM 21 libs are active in the UCRT64 env; for BYO LLVM builds you may need `GOFLAGS='-tags=byollvm'` and `CGO_*` flags from `llvm-config`.
- - Verify LLVM 21 tools are present (e.g., `C:\\msys64\\ucrt64\\bin`).
- - The Windows runner automatically applies the correct MSYS2 environment (CGO + LLVM) so `go build` and `go test` work consistently.
+A directory is the unit of compilation:
 
-Manual go build/test (MSYS2)
-- If you want to run `go build` or `go test` yourself in the UCRT64 shell, set:
-  - `export CGO_ENABLED=1`
-  - `export CC=clang CXX=clang++`
-  - `export GOFLAGS='-tags=byollvm'`
-  - `export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"`
-  - `export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"`
-  - `export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"`
-  - `export PATH="/ucrt64/bin:$PATH"`  # already set by the UCRT64 shell
-  - Now: `go test -race ./compiler` or `go build -o pluto.exe`.
+```
+math/
+├── math.pt      # defines Square, etc.
+└── func.spt     # uses them → compiles to ./math/func
+```
 
-Repository Structure
---------------------
-- `main.go`: CLI entry; scans working dir for `.pt` and `.spt`, emits binaries
-- `ast`, `lexer`, `parser`: Front‑end for the Pluto language
-- `compiler`: Type solving, IR generation, and LLVM emission
-- `runtime`: Embedded C runtime linked into final executables
-- `tests`: End‑to‑end tests (`.spt` inputs with `.exp` expected outputs)
-- `pt.mod`: Module declaration at the repo root
+Compile and run:
 
-Architecture
-------------
-- Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
-- Pipeline: generate IR → optimize `-O3` via `opt` → object via `llc` → link with runtime via `clang`/`lld`.
-- Module resolution: walks up from CWD to find `pt.mod` and derives module path.
-- Cache layout (versioned to isolate different compiler versions):
+```
+./pluto math
+./math/func
+```
+
+---
+
+## Templates and specialization
+
+Templates are defined once with a clear input/output contract. The first line declares the output and input — the indented body describes the transformation.
+
+Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference** — calling a template directly modifies the output variable in the caller's scope.
+
+`math.pt`
+```
+# y is the output (writable), x is the input (read-only)
+y = Square(x)
+	y = x * x
+```
+
+Inputs are read-only — they flow in. Outputs are writable — they flow out. Every function is a transformation.
+
+### Generics by use
+
+Call `Square` with different types — Pluto compiles a specialized version for each:
+
+`func.spt`
+```
+a = Square(2)          # int specialization
+b = Square(5.6)        # float specialization
+arr = [1 2 3 4 5]
+c = Square(arr)        # squares every element
+d = Square(arr > 2)    # squares only elements where arr > 2
+e = Square(1:5)        # range — executes Square over each value
+a, b, c, d, e
+```
+
+No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 2` filters the array to elements greater than 2 and passes that subset through.
+
+Generated code is equivalent to handwritten specialized code. There is no runtime overhead.
+
+---
+
+## Ranges as the execution primitive
+
+Ranges are first-class values:
+
+```
+Square(1:5)
+```
+
+Passing a range to a template executes it across all values. The compiler can map these operations to SIMD instructions — this is range-driven auto-vectorization.
+
+Data-parallel execution without explicit loop syntax.
+
+---
+
+## Arrays
+
+Arrays use bracket syntax with no commas:
+
+```
+x = [1 2 3 4 5]
+y = [1.1 2.2 3.3]
+```
+
+Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce filtered views that work anywhere an array does.
+
+---
+
+## Function model
+
+Functions are pure transformations:
+
+- Inputs are read-only
+- Outputs are writable
+- Global constants allowed
+- No hidden mutation
+
+This keeps behavior predictable and easier to parallelize.
+
+---
+
+## Memory model
+
+Pluto uses deterministic, scope-based memory:
+
+- No garbage collector
+- No null values
+- No out-of-bounds access
+- Memory freed when scope ends
+
+Predictable performance with minimal runtime overhead.
+
+---
+
+## Concurrency direction
+
+Pluto is designed so that:
+
+- Structs are pure data
+- Functions are transformations
+- Inputs are read-only
+
+This enables strong guarantees around race-free execution. The concurrency model is evolving but built around deterministic behavior.
+
+---
+
+## Building and Running
+
+**Build the compiler:**
+
+```bash
+go build -o pluto
+```
+
+**Compile a directory:**
+
+```bash
+./pluto tests           # Compiles all .spt files in tests/
+./tests/helloworld      # Run the compiled executable
+```
+
+**Run tests:**
+
+```bash
+python3 test.py                              # Full E2E suite
+go test -race ./lexer ./parser ./compiler    # Unit tests only
+```
+
+**New project setup:**
+
+Add a `pt.mod` file at your project root to define the module path:
+
+```
+module github.com/you/yourproject
+```
+
+Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
+
+**Other commands:**
+
+- `./pluto --version` (or `-v`) — show version
+- `./pluto --clean` (or `-c`) — clear cache for current version
+
+---
+
+## Requirements
+
+- Go 1.25+
+- LLVM 21 tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
+- Python 3.x (for running tests)
+
+---
+
+## Installation
+
+<details>
+<summary><strong>Linux</strong></summary>
+
+Install LLVM 21 from apt.llvm.org:
+
+```bash
+wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 21
+sudo apt install lld-21
+export PATH=/usr/lib/llvm-21/bin:$PATH
+```
+
+Build and test:
+
+```bash
+go build -o pluto
+python3 test.py
+```
+
+</details>
+
+<details>
+<summary><strong>macOS (Homebrew)</strong></summary>
+
+```bash
+brew install llvm
+```
+
+Set PATH for your architecture:
+
+```bash
+# Apple Silicon
+export PATH=/opt/homebrew/opt/llvm/bin:$PATH
+
+# Intel
+export PATH=/usr/local/opt/llvm/bin:$PATH
+```
+
+Build and test:
+
+```bash
+go build -o pluto
+python3 test.py
+```
+
+</details>
+
+<details>
+<summary><strong>Windows (MSYS2 UCRT64)</strong></summary>
+
+Install [MSYS2](https://www.msys2.org) and use the "MSYS2 UCRT64" shell.
+
+Install packages:
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}
+```
+
+Quick build:
+
+```bash
+python scripts/msys2_build.py
+```
+
+Or manual build with required environment:
+
+```bash
+export CGO_ENABLED=1
+export CC=clang CXX=clang++
+export GOFLAGS='-tags=byollvm'
+export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
+export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+go build -o pluto.exe
+```
+
+Run tests:
+
+```bash
+python test.py
+```
+
+Notes:
+
+- On Windows the produced binary is `pluto.exe`.
+- The runtime enables `%n` on UCRT to match POSIX `printf` behavior.
+
+</details>
+
+---
+
+## Status
+
+Pluto is under active development.
+
+**Working today:**
+
+- 🎯 Template specialization
+- 📊 Arrays and ranges
+- 🖥️ Native binaries
+- 🧞‍♂️ Cross-platform builds
+
+**In progress:**
+
+- 🧵 Concurrency model
+- 🧰 Tooling
+- 📘 Documentation
+
+---
+
+## Philosophy
+
+- 💎 Purity by design — functions have read-only inputs and writable outputs; structs contain raw data with no hidden pointers
+- ✨ The simplicity of scripting
+- ⚡ The type safety and speed of low-level languages
+- 🧠 Deterministic memory
+- 🔧 Automatic specialization
+- 🔒 Predictable concurrency
+
+Intended for performance-sensitive scripting, numerical work, simulation, and systems tools.
+
+---
+
+## Repository structure
+
+| Path | Description |
+|------|-------------|
+| `main.go` | CLI entry point |
+| `ast/` | Abstract syntax tree definitions |
+| `lexer/` | Tokenizer with indentation-based syntax |
+| `parser/` | Recursive descent parser |
+| `compiler/` | Type solving, IR generation, LLVM emission |
+| `runtime/` | Embedded C runtime linked into executables |
+| `tests/` | End-to-end tests (`.spt` inputs, `.exp` expected outputs) |
+
+---
+
+## Architecture
+
+- **Two phases:** CodeCompiler parses `.pt` files and saves function templates and constants; ScriptCompiler compiles specialized versions for each usage in `.spt` files (if not already cached).
+- **Automatic pipeline:** generate IR → optimize `-O3` via `opt` → object via `llc` → link with runtime via `clang`/`lld` — all handled transparently.
+- **Module resolution:** walks up from CWD to find `pt.mod` and derives module path.
+- **Cache layout** (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
 
-Usage
------
-- From a directory with `.pt`/`.spt`: `./pluto` (or `./pluto path/to/dir`)
-- Outputs a native binary for each `.spt` next to the source file.
-- `./pluto --version` — show version information
-- `./pluto --clean` — clear cache for current version
+---
 
-Testing
--------
-- Unit tests: `go test -race ./lexer ./parser ./compiler`
-- E2E: `python3 test.py` builds the compiler, then compiles/executes tests under `tests/` and compares output to `.exp`.
-- Focus a subset: `python3 test.py tests/math`
+## Troubleshooting
 
-Troubleshooting
----------------
-- `undefined: run_build_sh` during `go build/test` (Windows):
-  - Ensure `GOFLAGS='-tags=byollvm'` and CGO flags from `llvm-config` are set (the MSYS2 runner and `test.py` in MSYS2 set these automatically).
-- Encoding issues / mojibake in test output (Windows):
-  - Run from the MSYS2 UCRT64 shell; the runner decodes output as UTF‑8.
-- Missing LLVM tools:
-  - Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH.
-- Clear Pluto cache if behavior seems stale:
-  - Current version: `./pluto --clean`
-  - All versions (macOS): `rm -rf "$HOME/Library/Caches/pluto"`
-  - All versions (Linux): `rm -rf "$HOME/.cache/pluto"` (or `XDG_CACHE_HOME`)
-  - All versions (Windows): `rd /s /q %LocalAppData%\pluto`
-- Override cache location with `PTCACHE` env var.
+<details>
+<summary><strong>Common issues</strong></summary>
 
-Notes
------
-- On Windows the produced binary is `pluto.exe`.
-- The compiler shells out to LLVM tools (`opt`, `llc`, `clang`, `ld.lld`).
-- The runtime enables `%n` on UCRT to match POSIX `printf` behavior.
+**`undefined: run_build_sh` during build (Windows):**
+- Ensure `GOFLAGS='-tags=byollvm'` and CGO flags are set (see Windows installation above)
 
-Coding Style
-------------
-- Go formatting: `go fmt ./...`; vet: `go vet ./...`
-- Indentation: tabs for leading indentation across the repo (default gofmt behavior).
-- Packages: lowercase short names; exports in CamelCase; tests in `*_test.go`.
+**Missing LLVM tools:**
+- Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH
 
-Contributing
-------------
-- Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
-- PRs: include a clear description, linked issues, and unit/E2E tests for changes.
+**Stale cache behavior:**
+- Clear current version: `./pluto --clean`
+- Clear all versions:
+  - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
+  - Linux: `rm -rf "$HOME/.cache/pluto"`
+  - Windows: `rd /s /q %LocalAppData%\pluto`
+- Override cache location with `PTCACHE` environment variable
 
-Further Reading
----------------
-- Language overview and design notes: see `CLAUDE.md` for the philosophy (no nulls, no OOB, vectorization, conditional statements, concurrency model, arrays/links, etc.).
+**Encoding issues on Windows:**
+- Run from the MSYS2 UCRT64 shell; the runner decodes output as UTF-8
 
-License
--------
-- Pluto is licensed under the MIT License. See `LICENSE`.
-- Vendored third‑party: `runtime/third_party/klib/` (klib by Attractive Chaos) is MIT‑licensed; its license is preserved in `runtime/third_party/klib/LICENSE.txt`.
+</details>
+
+---
+
+## Contributing
+
+- Commit style: [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat(parser): ...`, `fix(compiler): ...`)
+- PRs: include a clear description, linked issues, and tests for changes
+- Go formatting: `go fmt ./...`
+- Run tests before submitting: `python3 test.py`
+
+---
+
+## License
+
+Pluto is licensed under the MIT License. See [LICENSE](LICENSE).
+
+**Vendored third-party code:**
+- `runtime/third_party/klib/` (klib by Attractive Chaos) — MIT License, see `runtime/third_party/klib/LICENSE.txt`
