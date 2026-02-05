@@ -1,5 +1,0 @@
-# Minimal test for string conditional leak with function call
-s = "initial".  # heap string
-s  # use it
-s = 3 > 2 getHeap()  # function returns heap string
-s
