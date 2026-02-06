@@ -632,19 +632,8 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	if sym == nil {
 		return
 	}
-
-	val := sym.Val
-	typ := sym.Type
-	if ptr, ok := typ.(Ptr); ok {
-		val = c.createLoad(sym.Val, ptr.Elem, loadName)
-		typ = ptr.Elem
-	}
-	c.freeValue(val, typ)
-}
-
-// freeOldOutput frees the current value in an output slot before overwrite.
-func (c *Compiler) freeOldOutput(sym *Symbol) {
-	c.freeSymbolValue(sym, "old_output")
+	derefed := c.derefIfPointerWithName(sym, loadName)
+	c.freeValue(derefed.Val, derefed.Type)
 }
 
 // shouldSkipOldValueFree returns true when an expression handles destination
@@ -718,8 +707,9 @@ func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, 
 			if oldValues[idx] == nil {
 				continue
 			}
-			// Borrowed non-arg values (for example ArrayRange views) do not own storage.
-			if oldValues[idx].Borrowed && !oldValues[idx].FuncArg {
+			// Borrowed read-only values do not own storage and must not be freed.
+			// Borrowed writable outputs may still own the replaced old value.
+			if oldValues[idx].Borrowed && oldValues[idx].ReadOnly {
 				continue
 			}
 			if _, moved := movedSources[idents[idx].Value]; moved {
@@ -887,17 +877,17 @@ func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.V
 	return loadInst
 }
 
-// derefIfPointer checks a symbol. If it's a pointer, it returns a NEW symbol
-// representing the value loaded from that pointer. Otherwise, it returns the
-// original symbol unmodified. It has NO side effects.
-func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
+// derefIfPointerWithName checks a symbol. If it's a pointer, it returns a NEW symbol
+// representing the value loaded from that pointer with the provided load name.
+// Otherwise, it returns the original symbol unmodified. It has NO side effects.
+func (c *Compiler) derefIfPointerWithName(s *Symbol, loadName string) *Symbol {
 	var ptrType Ptr
 	var ok bool
 	if ptrType, ok = s.Type.(Ptr); !ok {
 		return s
 	}
 
-	loadedVal := c.createLoad(s.Val, ptrType.Elem, "_load") // Use our new helper
+	loadedVal := c.createLoad(s.Val, ptrType.Elem, loadName)
 
 	// Return a BRAND NEW symbol containing the result of the load.
 	// Copy the symbol if we need other data like is it func arg, read only
@@ -905,6 +895,11 @@ func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
 	newS.Val = loadedVal
 	newS.Type = ptrType.Elem
 	return newS
+}
+
+// derefIfPointer uses the default load name for general expression dereference.
+func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
+	return c.derefIfPointerWithName(s, "_load")
 }
 
 func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
@@ -1057,19 +1052,12 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 
 	// Everything else is a temporary - free heap types
 	for _, sym := range syms {
-		// Borrowed non-arg values are views into existing storage, not owners.
-		if sym.Borrowed && !sym.FuncArg {
+		// Borrowed values are views into existing storage, not owners.
+		if sym.Borrowed {
 			continue
 		}
-
-		// Handle pointer-wrapped values (e.g., function arguments promoted to memory)
-		val := sym.Val
-		typ := sym.Type
-		if ptrType, ok := sym.Type.(Ptr); ok {
-			val = c.createLoad(sym.Val, ptrType.Elem, "temp_free")
-			typ = ptrType.Elem
-		}
-		c.freeValue(val, typ)
+		derefed := c.derefIfPointerWithName(sym, "temp_free")
+		c.freeValue(derefed.Val, derefed.Type)
 	}
 }
 
@@ -1133,7 +1121,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
 
 			// Free previous iteration's result before overwriting
-			c.freeOldOutput(outputs[i])
+			c.freeSymbolValue(outputs[i], "old_output")
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 
@@ -1281,7 +1269,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
 
 			// Free previous iteration's result before overwriting
-			c.freeOldOutput(outputs[i])
+			c.freeSymbolValue(outputs[i], "old_output")
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
 		}
 
