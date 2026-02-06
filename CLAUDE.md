@@ -151,18 +151,12 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`)
-- Do not use one-line-only commit messages for non-trivial changes. Add a commit body that explains:
-  - Why the change was needed.
-  - What changed (key behavior/files).
-  - How it was validated (tests/commands run).
-- Preferred format:
-  - Subject: `type(scope): short summary`
-  - Body sections: `Why`, `What`, `Validation`
-  - Example:
-    - `fix(compiler): prevent leaks in range assignment`
-    - `Why: range temporaries could outlive ownership boundaries.`
-    - `What: unify old-value cleanup and mark borrowed views explicitly.`
-    - `Validation: go test ./...; python3 test.py --leak-check tests/math`
+- Production-quality commit expectation for non-trivial changes:
+  - Add a short body describing what changed and the user-visible or behavioral impact.
+  - Include important context needed by future readers (constraints, tradeoffs, or risks) when not obvious from the diff.
+  - Reference issue/ticket IDs when applicable.
+  - Call out breaking changes or migration steps explicitly.
+- Test/validation command details are optional in commit messages; put full verification details in the PR description when possible.
 - PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant
 
 ## Instructions for AI Assistants
