@@ -590,13 +590,18 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 
 	// Check actual compiled index type to determine ArrayRange vs element access
 	if idxSym.Type.Kind() == RangeKind {
+		// ArrayRange from an identifier is a borrowed view into existing storage.
+		_, arrayIsIdent := expr.Array.(*ast.Identifier)
+		borrowed := arrayIsIdent || arraySym.Borrowed
+
 		arrRange := ArrayRange{
 			Array: arrType,
 			Range: idxSym.Type.(Range),
 		}
 		return []*Symbol{{
-			Val:  c.CreateArrayRange(arraySym.Val, idxSym.Val, arrRange),
-			Type: arrRange,
+			Val:      c.CreateArrayRange(arraySym.Val, idxSym.Val, arrRange),
+			Type:     arrRange,
+			Borrowed: borrowed,
 		}}
 	}
 
@@ -608,6 +613,10 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 	}
 
 	elemVal := c.ArrayGet(arraySym, elemType, idxVal)
+
+	// Scalar element access does not retain the source array pointer.
+	// Release temporary array sources immediately.
+	c.freeTemporary(expr.Array, []*Symbol{arraySym})
 
 	// For string arrays, arr_str_get returns an owned copy that must be freed.
 	// String copies are heap-allocated regardless of original type.

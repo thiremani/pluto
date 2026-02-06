@@ -130,6 +130,7 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 		Val:      global,
 		Type:     ptrType,
 		FuncArg:  true,
+		Borrowed: true,
 		ReadOnly: true,
 	})
 
