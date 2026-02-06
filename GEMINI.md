@@ -125,7 +125,19 @@ To clear the cache for the current version, run `./pluto --clean`. To clear the 
 CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
-- Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
+- Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
+- Do not use one-line-only commit messages for non-trivial changes. Add a commit body that explains:
+  - Why the change was needed.
+  - What changed (key behavior/files).
+  - How it was validated (tests/commands run).
+- Preferred format:
+  - Subject: `type(scope): short summary`
+  - Body sections: `Why`, `What`, `Validation`
+  - Example:
+    - `fix(compiler): prevent leaks in range assignment`
+    - `Why: range temporaries could outlive ownership boundaries.`
+    - `What: unify old-value cleanup and mark borrowed views explicitly.`
+    - `Validation: go test ./...; python3 test.py --leak-check tests/math`
 - PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant.
 
 ## Instructions for AI Assistants
