@@ -32,6 +32,7 @@ go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X ma
 # Full test suite (builds compiler, runs unit tests, runs integration tests)
 python3 test.py              # Run all tests
 python3 test.py --keep       # Keep build artifacts for debugging
+python3 test.py --leak-check # Run tests with memory leak detection
 
 # Run specific integration tests
 python3 test.py tests/math
@@ -127,8 +128,10 @@ The compilation process consists of two main phases:
 - Python-based test runner (`test.py`) with colorized output
 - Integration tests compare actual vs expected program output
 - Run: `python3 test.py [--keep]` or focused run: `python3 test.py tests/math`
+- Leak check run: `python3 test.py --leak-check [tests/math]`
+- Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories

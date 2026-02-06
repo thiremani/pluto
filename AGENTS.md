@@ -14,6 +14,7 @@
 - Production build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
+- Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)
 - Show version: `./pluto --version` (or `-v`)
 - Clear cache: `./pluto --clean` (or `-c`, clears cache for current version)
@@ -42,8 +43,12 @@ Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
   - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes).
 - Run: `python3 test.py [--keep]`.
   - Focused run: `python3 test.py tests/math`.
+  - Leak check run: `python3 test.py --leak-check [tests/math]`.
+- Leak tools by platform:
+  - Linux: `valgrind`
+  - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
