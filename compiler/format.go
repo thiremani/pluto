@@ -162,13 +162,13 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	s, ok := Get(c.Scopes, id)
 	if ok {
-		return c.derefIfPointer(s), ok
+		return c.derefIfPointer(s, id+"_load"), ok
 	}
 
 	cc := c.CodeCompiler.Compiler
 	s, ok = Get(cc.Scopes, id)
 	if ok {
-		return c.derefIfPointer(s), ok
+		return c.derefIfPointer(s, id+"_load"), ok
 	}
 	return s, ok
 }

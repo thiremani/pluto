@@ -48,12 +48,14 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 *   **Run the full test suite:**
     ```bash
     python3 test.py
+    python3 test.py --leak-check
     ```
 
 *   **Run the Python test runner directly:**
     ```bash
     python3 test.py              # Run all tests
     python3 test.py --keep       # Keep build artifacts for debugging
+    python3 test.py --leak-check # Run tests with memory leak detection
     ```
 
 *   **Run unit tests:**
@@ -121,11 +123,21 @@ To clear the cache for the current version, run `./pluto --clean`. To clear the 
   - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes).
 - Run: `python3 test.py [--keep]`.
   - Focused run: `python3 test.py tests/math`.
+  - Leak check run: `python3 test.py --leak-check [tests/math]`.
+- Leak tools by platform:
+  - Linux: `valgrind`
+  - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
-- Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
+- Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
+- Production-quality commit expectation for non-trivial changes:
+  - Add a short body describing what changed and the user-visible or behavioral impact.
+  - Include important context needed by future readers (constraints, tradeoffs, or risks) when not obvious from the diff.
+  - Reference issue/ticket IDs when applicable.
+  - Call out breaking changes or migration steps explicitly.
+- Test/validation command details are optional in commit messages; put full verification details in the PR description when possible.
 - PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant.
 
 ## Instructions for AI Assistants

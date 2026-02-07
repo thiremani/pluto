@@ -204,6 +204,7 @@ go build -o pluto
 
 ```bash
 python3 test.py                              # Full E2E suite
+python3 test.py --leak-check                 # Full suite + memory leak detection
 go test -race ./lexer ./parser ./compiler    # Unit tests only
 ```
 
@@ -229,6 +230,9 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 - Go 1.25+
 - LLVM 21 tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
 - Python 3.x (for running tests)
+- Leak check tools (only for `python3 test.py --leak-check`):
+  - Linux: `valgrind`
+  - macOS: `leaks`
 
 ---
 

@@ -13,3 +13,5 @@ CallRootVec: [20 40 60 80 100]
 CallRangeInfix: 104
 CallInfixVec: [20 21 22 23 24 40 41 42 43 44 60 61 62 63 64 80 81 82 83 84 100 101 102 103 104]
 CallInfixVecSingleRange: [20 41 62 83 104]
+BorrowedReassignArr: [10 20 30 40 50]
+BorrowedReassignView: [10 20 30 40 50][1:4]

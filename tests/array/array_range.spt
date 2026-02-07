@@ -46,3 +46,9 @@ callInfixVec = [Double(arr[0:5]) + idx]
 
 callInfixVecSingleRange = [Double(arr[idx]) + idx]
 "CallInfixVecSingleRange: -callInfixVecSingleRange"
+
+# Borrowed ArrayRange reassignment must not free backing array ownership
+view = arr[0:3]
+view = arr[1:4]
+"BorrowedReassignArr: -arr"
+"BorrowedReassignView: -view"

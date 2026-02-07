@@ -32,6 +32,7 @@ go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X ma
 # Full test suite (builds compiler, runs unit tests, runs integration tests)
 python3 test.py              # Run all tests
 python3 test.py --keep       # Keep build artifacts for debugging
+python3 test.py --leak-check # Run tests with memory leak detection
 
 # Run specific integration tests
 python3 test.py tests/math
@@ -127,8 +128,10 @@ The compilation process consists of two main phases:
 - Python-based test runner (`test.py`) with colorized output
 - Integration tests compare actual vs expected program output
 - Run: `python3 test.py [--keep]` or focused run: `python3 test.py tests/math`
+- Leak check run: `python3 test.py --leak-check [tests/math]`
+- Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test.py` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
@@ -150,7 +153,13 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21, and runs `python3 test
 - Filenames: lowercase with underscores where needed (Go convention)
 
 ## Commit & Pull Request Guidelines
-- Commit style: Conventional Commits (e.g., `feat(parser): ...`, `refactor(compiler): ...`)
+- Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`)
+- Production-quality commit expectation for non-trivial changes:
+  - Add a short body describing what changed and the user-visible or behavioral impact.
+  - Include important context needed by future readers (constraints, tradeoffs, or risks) when not obvious from the diff.
+  - Reference issue/ticket IDs when applicable.
+  - Call out breaking changes or migration steps explicitly.
+- Test/validation command details are optional in commit messages; put full verification details in the PR description when possible.
 - PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant
 
 ## Instructions for AI Assistants
