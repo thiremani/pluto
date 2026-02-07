@@ -632,7 +632,7 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	if sym == nil {
 		return
 	}
-	derefed := c.derefIfPointerWithName(sym, loadName)
+	derefed := c.derefIfPointer(sym, loadName)
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
@@ -707,9 +707,7 @@ func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, 
 			if oldValues[idx] == nil {
 				continue
 			}
-			// Borrowed read-only values do not own storage and must not be freed.
-			// Borrowed writable outputs may still own the replaced old value.
-			if oldValues[idx].Borrowed && oldValues[idx].ReadOnly {
+			if c.skipBorrowedOldValueFree(oldValues[idx]) {
 				continue
 			}
 			if _, moved := movedSources[idents[idx].Value]; moved {
@@ -719,6 +717,22 @@ func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, 
 		}
 		i += resCounts[exprIdx]
 	}
+}
+
+// skipBorrowedOldValueFree reports whether overwrite cleanup must skip freeing
+// an old value because this scope does not own its storage.
+func (c *Compiler) skipBorrowedOldValueFree(sym *Symbol) bool {
+	if sym == nil || !sym.Borrowed {
+		return false
+	}
+
+	// Read-only borrowed values are caller-owned inputs.
+	if sym.ReadOnly {
+		return true
+	}
+
+	// Borrowed array ranges are non-owning views into another array payload.
+	return sym.Type.Kind() == ArrayRangeKind
 }
 
 // captureOldValues captures the current values of destination variables before RHS compilation.
@@ -877,17 +891,23 @@ func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.V
 	return loadInst
 }
 
-// derefIfPointerWithName checks a symbol. If it's a pointer, it returns a NEW symbol
-// representing the value loaded from that pointer with the provided load name.
+// derefIfPointer checks a symbol. If it's a pointer, it returns a NEW symbol
+// representing the value loaded from that pointer. An optional load name may be
+// provided for IR readability; otherwise "_load" is used.
 // Otherwise, it returns the original symbol unmodified. It has NO side effects.
-func (c *Compiler) derefIfPointerWithName(s *Symbol, loadName string) *Symbol {
+func (c *Compiler) derefIfPointer(s *Symbol, loadName ...string) *Symbol {
 	var ptrType Ptr
 	var ok bool
 	if ptrType, ok = s.Type.(Ptr); !ok {
 		return s
 	}
 
-	loadedVal := c.createLoad(s.Val, ptrType.Elem, loadName)
+	name := "_load"
+	if len(loadName) > 0 && loadName[0] != "" {
+		name = loadName[0]
+	}
+
+	loadedVal := c.createLoad(s.Val, ptrType.Elem, name)
 
 	// Return a BRAND NEW symbol containing the result of the load.
 	// Copy the symbol if we need other data like is it func arg, read only
@@ -895,11 +915,6 @@ func (c *Compiler) derefIfPointerWithName(s *Symbol, loadName string) *Symbol {
 	newS.Val = loadedVal
 	newS.Type = ptrType.Elem
 	return newS
-}
-
-// derefIfPointer uses the default load name for general expression dereference.
-func (c *Compiler) derefIfPointer(s *Symbol) *Symbol {
-	return c.derefIfPointerWithName(s, "_load")
 }
 
 func (c *Compiler) ToRange(e *ast.RangeLiteral, typ Type) llvm.Value {
@@ -1056,7 +1071,7 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 		if sym.Borrowed {
 			continue
 		}
-		derefed := c.derefIfPointerWithName(sym, "temp_free")
+		derefed := c.derefIfPointer(sym, "temp_free")
 		c.freeValue(derefed.Val, derefed.Type)
 	}
 }
