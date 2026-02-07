@@ -340,8 +340,9 @@ func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, []bool, llv
 		isTemp := !isIdent
 		// Dereference pointers to get values for phi node
 		// (function calls return pointer symbols with pass-by-reference)
-		for _, sym := range res {
-			ifSymbols = append(ifSymbols, c.derefIfPointer(sym))
+		for j, sym := range res {
+			loadName := stmt.Name[i+j].Value + "_load"
+			ifSymbols = append(ifSymbols, c.derefIfPointer(sym, loadName))
 			ifTemps = append(ifTemps, isTemp)
 		}
 		i += len(res)
@@ -367,7 +368,7 @@ func (c *Compiler) compileElseCond(stmt *ast.LetStatement, trueSymbols []*Symbol
 
 		// Dereference pointers into raw values; if prevSym was an alloca, load it,
 		// otherwise a no-op.
-		elseSyms[i] = c.derefIfPointer(prevSym)
+		elseSyms[i] = c.derefIfPointer(prevSym, name+"_load")
 	}
 	return elseSyms, elseTemps, c.builder.GetInsertBlock()
 }
@@ -604,7 +605,7 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 		return
 	}
 
-	derefed := c.derefIfPointer(valueToStore)
+	derefed := c.derefIfPointer(valueToStore, name+"_rhs_load")
 	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
 }
 
@@ -747,7 +748,7 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 		}
 		// For Ptrs, load the actual value so we can free it later.
 		// For non-Ptrs, use the symbol directly.
-		result[i] = c.derefIfPointer(sym)
+		result[i] = c.derefIfPointer(sym, ident.Value+"_old_load")
 	}
 	return result
 }
@@ -892,22 +893,21 @@ func (c *Compiler) createLoad(ptr llvm.Value, elemType Type, name string) llvm.V
 }
 
 // derefIfPointer checks a symbol. If it's a pointer, it returns a NEW symbol
-// representing the value loaded from that pointer. An optional load name may be
-// provided for IR readability; otherwise "_load" is used.
+// representing the value loaded from that pointer with the given load name.
+// Pass an empty string to use the default "_load" name.
 // Otherwise, it returns the original symbol unmodified. It has NO side effects.
-func (c *Compiler) derefIfPointer(s *Symbol, loadName ...string) *Symbol {
+func (c *Compiler) derefIfPointer(s *Symbol, loadName string) *Symbol {
 	var ptrType Ptr
 	var ok bool
 	if ptrType, ok = s.Type.(Ptr); !ok {
 		return s
 	}
 
-	name := "_load"
-	if len(loadName) > 0 && loadName[0] != "" {
-		name = loadName[0]
+	if loadName == "" {
+		loadName = "_load"
 	}
 
-	loadedVal := c.createLoad(s.Val, ptrType.Elem, name)
+	loadedVal := c.createLoad(s.Val, ptrType.Elem, loadName)
 
 	// Return a BRAND NEW symbol containing the result of the load.
 	// Copy the symbol if we need other data like is it func arg, read only
@@ -970,13 +970,13 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string, forceHeap
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, ok := Get(c.Scopes, ident.Value)
 	if ok {
-		return c.derefIfPointer(s)
+		return c.derefIfPointer(s, ident.Value+"_load")
 	}
 
 	cc := c.CodeCompiler.Compiler
 	// no need to check ok as that is done in the typesolver
 	s, _ = Get(cc.Scopes, ident.Value)
-	return c.derefIfPointer(s)
+	return c.derefIfPointer(s, ident.Value+"_load")
 }
 
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
@@ -1004,8 +1004,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 // It handles pointer operands, array-scalar broadcasting, and delegates to
 // the default operator table for scalar work.
 func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
-	l := c.derefIfPointer(left)
-	r := c.derefIfPointer(right)
+	l := c.derefIfPointer(left, "")
+	r := c.derefIfPointer(right, "")
 
 	// Handle array operands early to avoid falling through to scalar op table
 	if l.Type.Kind() == ArrayKind || r.Type.Kind() == ArrayKind {
@@ -1118,10 +1118,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	// Setup outputs to store values across iterations.
 	// Mark as borrowed so cleanupScope skips them - values are returned via out.
-	outputs := c.makeOutputs(dest, info.OutTypes)
-	for _, o := range outputs {
-		o.Borrowed = true
-	}
+	outputs := c.makeOutputs(dest, info.OutTypes, true)
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
@@ -1180,7 +1177,7 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 	}
 }
 
-func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type, borrowed bool) []*Symbol {
 	outputs := make([]*Symbol, len(outTypes))
 
 	for i, outType := range outTypes {
@@ -1193,31 +1190,40 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbo
 			c.tmpCounter++
 		}
 
-		// Check if variable already exists in scope
 		sym, exists := Get(c.Scopes, name)
 		if exists {
 			// Existing variable - update type if needed and promote to memory
 			c.updateUnresolvedType(name, sym, outType)
-			if sym.Type.Kind() != PtrKind {
-				sym = c.promoteToMemory(name)
-			} else {
+			if sym.Type.Kind() == PtrKind {
 				// Shadow existing pointer symbols in the current scope so temporary
 				// ownership flags (e.g. Borrowed during range lowering) do not
 				// mutate outer-scope symbols.
 				sym = GetCopy(sym)
 				Put(c.Scopes, name, sym)
+			} else {
+				sym = c.promoteToMemory(name)
 			}
+			// Preserve existing borrowed ownership and only add temporary borrowed semantics.
+			// Example: function output params are already Borrowed=true (caller-owned slots).
+			// A call path uses borrowed=false, and must not clear that existing ownership.
+			sym.Borrowed = sym.Borrowed || borrowed
 			outputs[i] = sym
-		} else {
-			// New variable or intermediate value - create temp alloca without adding to scope
-			// The permanent variable will be created by writeTo in FuncScope
-			ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
-			// Initialize with zero value (important for empty ranges where loop body never runs)
-			// Use zero value's type for Ptr.Elem to preserve Static flag for strings
-			zeroVal := c.makeZeroValue(outType)
-			c.createStore(zeroVal.Val, ptr, zeroVal.Type)
-			outputs[i] = &Symbol{Val: ptr, Type: Ptr{Elem: zeroVal.Type}}
+			continue
 		}
+
+		// New variable or intermediate value - create temp alloca without adding to scope.
+		// The permanent variable will be created by writeTo in FuncScope.
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
+		// Initialize with zero value (important for empty ranges where loop body never runs).
+		// Use zero value's type for Ptr.Elem to preserve Static flag for strings.
+		zeroVal := c.makeZeroValue(outType)
+		c.createStore(zeroVal.Val, ptr, zeroVal.Type)
+		out := &Symbol{
+			Val:      ptr,
+			Type:     Ptr{Elem: zeroVal.Type},
+			Borrowed: borrowed,
+		}
+		outputs[i] = out
 	}
 	return outputs
 }
@@ -1239,7 +1245,7 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 // compilePrefix compiles a unary operation on a symbol, delegating array
 // broadcasting to compileArrayUnaryPrefix and scalar lowering to defaultUnaryOps.
 func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Symbol {
-	sym := c.derefIfPointer(operand)
+	sym := c.derefIfPointer(operand, "")
 	if expectedArr, ok := expected.(Array); ok {
 		return c.compileArrayUnaryPrefix(op, sym, expectedArr)
 	}
@@ -1268,10 +1274,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
-	outputs := c.makeOutputs(dest, info.OutTypes)
-	for _, o := range outputs {
-		o.Borrowed = true
-	}
+	outputs := c.makeOutputs(dest, info.OutTypes, true)
 
 	// Rewritten operand under tmp iters.
 	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
@@ -1558,7 +1561,7 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 
-	outputs := c.makeOutputs(dest, info.OutTypes)
+	outputs := c.makeOutputs(dest, info.OutTypes, false)
 
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {

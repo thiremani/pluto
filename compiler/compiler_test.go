@@ -137,7 +137,7 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	// Act: seed a loop temporary for a pointer-valued output.
 	dest := []*ast.Identifier{{Value: "seed"}}
 	outTypes := []Type{I64}
-	outputs := c.makeOutputs(dest, outTypes)
+	outputs := c.makeOutputs(dest, outTypes, false)
 
 	require.Len(t, outputs, 1, "expect a single output symbol")
 	// When seed is already a pointer, makeOutputs reuses it directly

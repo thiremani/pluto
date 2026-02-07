@@ -72,7 +72,7 @@ func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 }
 
 func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
-	valSym := c.derefIfPointer(value)
+	valSym := c.derefIfPointer(value, "")
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
@@ -81,7 +81,7 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 // Only use this for heap-allocated temporaries (e.g., str_concat results), NOT for
 // identifiers or borrowed values which would leave the original variable dangling.
 func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
-	valSym := c.derefIfPointer(value)
+	valSym := c.derefIfPointer(value, "")
 
 	// For strings, use push_own to transfer ownership without duplicating
 	if acc.ElemType.Kind() == StrKind {
@@ -331,7 +331,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	for i, cell := range row {
 		// Compile cells
 		vals := c.compileExpression(cell, nil)
-		cells[i] = c.derefIfPointer(vals[0])
+		cells[i] = c.derefIfPointer(vals[0], "")
 	}
 
 	arr := info.OutTypes[0].(Array)
@@ -358,7 +358,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
 			vals := c.compileExpression(cell, nil)
-			valSym := c.derefIfPointer(vals[0])
+			valSym := c.derefIfPointer(vals[0], "")
 
 			val := valSym.Val
 			valType := valSym.Type // Preserve original type for ownership info
@@ -482,7 +482,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	lenVal := c.ArrayLen(arr, arrElem)
 	resVec := c.CreateArrayForType(resElem, lenVal)
 
-	scalarSym := c.derefIfPointer(scalar)
+	scalarSym := c.derefIfPointer(scalar, "")
 
 	r := c.rangeZeroToN(lenVal)
 	c.createLoop(r, func(iter llvm.Value) {
@@ -584,8 +584,17 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 // We check the actual compiled index type, not cached OutTypes, because
 // inside a loop the index may be bound to a scalar even if originally a range.
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) []*Symbol {
-	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0])
-	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil)[0])
+	arrayLoadName := ""
+	if arrayIdent, ok := expr.Array.(*ast.Identifier); ok {
+		arrayLoadName = arrayIdent.Value + "_load"
+	}
+	idxLoadName := ""
+	if idxIdent, ok := expr.Range.(*ast.Identifier); ok {
+		idxLoadName = idxIdent.Value + "_load"
+	}
+
+	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
+	idxSym := c.derefIfPointer(c.compileExpression(expr.Range, nil)[0], idxLoadName)
 	arrType := arraySym.Type.(Array)
 
 	// Check actual compiled index type to determine ArrayRange vs element access
