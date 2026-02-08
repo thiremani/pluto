@@ -1,0 +1,40 @@
+# Conditional expression with empty range should be no-op for existing vars.
+sum = 42
+sum = 1 > 0 sum + 0:-2
+"CondExprEmptyExisting: -sum"
+
+# New var with empty-range expression should keep zero value.
+newSum = 1 > 0 0 + 0:-2
+"CondExprEmptyNew: -newSum"
+
+# Conditional call with empty range should be no-op for existing vars.
+acc = 99
+acc = 1 > 0 AccumER(acc, 0:-2)
+"CondCallEmptyExisting: -acc"
+
+# New var from conditional call with empty range should stay zero.
+newAcc = 1 > 0 AccumER(10, 0:-2)
+"CondCallEmptyNew: -newAcc"
+
+# Conditional false keeps existing value and initializes new values.
+seed = "seed".
+arg = "arg".
+seed = 1 > 2 HeapSuffixER(arg)
+"CondCallFalseHeapExisting: -seed"
+fresh = 1 > 2 HeapSuffixER(arg)
+"CondCallFalseHeapNew: [-fresh]"
+
+# Function called with literal empty range in conditional context.
+x = 7
+x = 1 > 0 RangeTailER(0:-2)
+"CondLiteralRangeExisting: -x"
+y = 1 > 0 RangeTailER(0:-2)
+"CondLiteralRangeNew: -y"
+
+# Mixed outputs: one empty-range no-op and one scalar write.
+a, b = 5, 6
+a, b = 1 > 0 AccumER(a, 0:-2), 123
+"CondMixedExisting: -a -b"
+
+m, n = 1 > 0 AccumER(1, 0:-2), 123
+"CondMixedNew: -m -n"

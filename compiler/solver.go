@@ -609,10 +609,19 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
 		newType := types[i]
-		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 		var typ Type
 		var ok bool
 		if typ, ok = Get(ts.Scopes, ident.Value); ok {
+			// Assignment is an equality constraint. If RHS is unresolved but destination
+			// is already concrete, refine the RHS expression output type immediately.
+			if newType.Kind() == UnresolvedKind && typ.Kind() != UnresolvedKind {
+				ts.refineExprOutputType(exprRefs[i], exprIdxs[i], typ)
+				newType = typ
+				types[i] = typ
+			}
+
+			ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
+
 			// if new type is Unresolved then don't update new type or do a type check
 			if newType.Kind() == UnresolvedKind {
 				continue
@@ -631,10 +640,25 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			return
 		}
 
+		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 		trueValues[ident.Value] = newType
 	}
 
 	PutBulk(ts.Scopes, trueValues)
+}
+
+func (ts *TypeSolver) refineExprOutputType(expr ast.Expression, outIdx int, t Type) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	if info == nil {
+		return
+	}
+	if outIdx < 0 || outIdx >= len(info.OutTypes) {
+		return
+	}
+	if !CanRefineType(info.OutTypes[outIdx], t) {
+		return
+	}
+	info.OutTypes[outIdx] = t
 }
 
 // TypeArrayExpression infers the type of an Array literal. Columns must be
@@ -1548,15 +1572,21 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	for range 100 {
 		ts.Converging = false
 		ts.TypeFunc(mangled, template, f)
+		// Keep iterating after the root function resolves so nested recursive callees
+		// can pick up the newly inferred output types from this pass.
+		if f.AllTypesInferred() {
+			if !ts.Converging {
+				return f.OutTypes
+			}
+			continue
+		}
+
 		if !ts.Converging {
 			ce := &token.CompileError{
 				Token: template.Token,
 				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
 			}
 			ts.Errors = append(ts.Errors, ce)
-			return f.OutTypes
-		}
-		if f.AllTypesInferred() {
 			return f.OutTypes
 		}
 	}

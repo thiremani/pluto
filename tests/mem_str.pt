@@ -24,3 +24,7 @@ s = useArrayElem()
     x = arr[0]  # local copy
     y = arr[1]  # another local copy
     s = x ⊕ y   # concat and return
+
+# Return a heap string for conditional-call branch tests
+out = condCallHeap(s)
+    out = s ⊕ "_cond"

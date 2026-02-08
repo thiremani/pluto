@@ -1,0 +1,8 @@
+res = AccumER(curr, x)
+    res = curr + x
+
+out = HeapSuffixER(s)
+    out = s ⊕ "_cond"
+
+out = RangeTailER(x)
+    out = x

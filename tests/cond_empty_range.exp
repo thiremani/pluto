@@ -1,0 +1,10 @@
+CondExprEmptyExisting: 42
+CondExprEmptyNew: 0
+CondCallEmptyExisting: 99
+CondCallEmptyNew: 0
+CondCallFalseHeapExisting: seed
+CondCallFalseHeapNew: []
+CondLiteralRangeExisting: 7
+CondLiteralRangeNew: 0
+CondMixedExisting: 5 123
+CondMixedNew: 0 123
