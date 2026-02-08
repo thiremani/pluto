@@ -637,8 +637,22 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
-// shouldSkipOldValueFree returns true when an expression handles destination
-// old-value lifetime itself (or returns moved ownership).
+// shouldSkipOldValueFree returns true when an expression delegates destination
+// old-value cleanup to inner assignment logic, avoiding caller-side double-free.
+//
+// Cases:
+//
+//   - CallExpression:
+//     The caller passes output pointers to the callee. The callee then applies
+//     normal assignment cleanup when writing to those output params, so caller
+//     freeOldValues must skip.
+//
+//   - InfixExpression/PrefixExpression with pending ranges:
+//     Range-lowered paths free previous output values per iteration inside the
+//     loop body before storing the next value.
+//
+// All other expressions return false so freeOldValues handles cleanup with full
+// assignment context (moved sources and borrowed/non-owning guards).
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
 	if _, isCall := expr.(*ast.CallExpression); isCall {
 		return true
