@@ -28,13 +28,6 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 	return
 }
 
-func (c *Compiler) addCompileError(tok token.Token, msg string) {
-	c.Errors = append(c.Errors, &token.CompileError{
-		Token: tok,
-		Msg:   msg,
-	})
-}
-
 // collectCallArgIdentifiers walks an expression and records identifiers used as
 // direct call arguments. These identifiers may be promoted to memory by
 // compileArgs, so conditional lowering pre-promotes them in the pre-branch block.
@@ -95,7 +88,10 @@ func (c *Compiler) collectConditionalOutTypes(stmt *ast.LetStatement) ([]Type, b
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if info == nil {
-			c.addCompileError(stmt.Token, fmt.Sprintf("missing type info for conditional expression %T", expr))
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: stmt.Token,
+				Msg:   fmt.Sprintf("missing type info for conditional expression %T", expr),
+			})
 			return nil, false
 		}
 		outTypes = append(outTypes, info.OutTypes...)
@@ -109,24 +105,24 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		return nil, nil, false
 	}
 	if len(outTypes) != len(stmt.Name) {
-		c.addCompileError(
-			stmt.Token,
-			fmt.Sprintf("conditional outputs mismatch: got %d values for %d targets", len(outTypes), len(stmt.Name)),
-		)
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: stmt.Token,
+			Msg:   fmt.Sprintf("conditional outputs mismatch: got %d values for %d targets", len(outTypes), len(stmt.Name)),
+		})
 		return nil, nil, false
 	}
 
 	tempNames := make([]*ast.Identifier, len(stmt.Name))
 	for i, ident := range stmt.Name {
 		if outTypes[i].Kind() == UnresolvedKind {
-			c.addCompileError(
-				ident.Token,
-				fmt.Sprintf("conditional rhs output type for %q is unresolved", ident.Value),
-			)
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("conditional rhs output type for %q is unresolved", ident.Value),
+			})
 			return nil, nil, false
 		}
 
-		tempName := fmt.Sprintf("__cond_tmp_%d_%s", c.tmpCounter, ident.Value)
+		tempName := fmt.Sprintf("condtmp_%d_%s", c.tmpCounter, ident.Value)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
 
@@ -161,7 +157,10 @@ func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []
 	for i, ident := range dest {
 		tempSym, ok := Get(c.Scopes, tempNames[i].Value)
 		if !ok {
-			c.addCompileError(ident.Token, "missing conditional temp output: "+tempNames[i].Value)
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: ident.Token,
+				Msg:   "missing conditional temp output: " + tempNames[i].Value,
+			})
 			return
 		}
 
