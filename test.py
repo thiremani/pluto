@@ -248,12 +248,33 @@ class TestRunner:
                     timeout=30
                 )
                 if result.returncode != 0:
-                    print(f"{Fore.YELLOW}⚠️  Memory leaks detected by valgrind{Style.RESET_ALL}")
-                    # Print last 20 lines of valgrind output
+                    print(f"{Fore.YELLOW}⚠️  Memory check failed under valgrind{Style.RESET_ALL}")
                     lines = result.stderr.splitlines()
-                    for line in lines[-20:]:
-                        if "LEAK SUMMARY" in line or "definitely lost" in line or "possibly lost" in line:
-                            print(f"  {line}")
+                    err_summary = ""
+                    for line in reversed(lines):
+                        if "ERROR SUMMARY" in line:
+                            err_summary = line.strip()
+                            break
+                    if err_summary:
+                        print(f"  {err_summary}")
+
+                    leak_summary = {
+                        "definitely lost": None,
+                        "possibly lost": None,
+                    }
+                    for line in lines:
+                        if "definitely lost" in line:
+                            leak_summary["definitely lost"] = line.strip()
+                        elif "possibly lost" in line:
+                            leak_summary["possibly lost"] = line.strip()
+                    for key in ("definitely lost", "possibly lost"):
+                        if leak_summary[key]:
+                            print(f"  {leak_summary[key]}")
+
+                    # Show a compact tail with the actual failing context.
+                    print("  --- valgrind stderr tail ---")
+                    for line in lines[-30:]:
+                        print(f"  {line}")
                     return False
                 else:
                     print(f"{Fore.GREEN}✓ No memory leaks detected (valgrind){Style.RESET_ALL}")
@@ -315,7 +336,7 @@ class TestRunner:
                 # Check for memory leaks (if enabled)
                 if LEAK_CHECK:
                     if not self._check_memory_leaks(executable_path, test_name):
-                        print(f"{Fore.RED}❌ Failed (memory leak){Style.RESET_ALL}")
+                        print(f"{Fore.RED}❌ Failed (memory check){Style.RESET_ALL}")
                         self.failed += 1
                         return
 

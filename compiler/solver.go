@@ -620,24 +620,21 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 				types[i] = typ
 			}
 
-			ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
-
 			// if new type is Unresolved then don't update new type or do a type check
 			if newType.Kind() == UnresolvedKind {
+				ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 				continue
 			}
 			// allow for type refinement (e.g., Unresolved -> Concrete, [?] -> [I64])
-			if CanRefineType(typ, newType) {
-				trueValues[ident.Value] = newType
-				continue
+			if !CanRefineType(typ, newType) {
+				// types are incompatible
+				ce := &token.CompileError{
+					Token: ident.Token,
+					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
+				}
+				ts.Errors = append(ts.Errors, ce)
+				return
 			}
-			// types are incompatible
-			ce := &token.CompileError{
-				Token: ident.Token,
-				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
-			}
-			ts.Errors = append(ts.Errors, ce)
-			return
 		}
 
 		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)

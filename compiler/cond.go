@@ -133,11 +133,14 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
 		seed := c.makeZeroValue(outTypes[i])
 		if existing, ok := Get(c.Scopes, ident.Value); ok {
-			seed = c.derefIfPointer(existing, ident.Value+"_cond_seed")
-			if seed.Type.Kind() == UnresolvedKind {
-				// If the destination symbol still carries unresolved metadata, use the
-				// resolved output type for this temporary slot.
-				seed.Type = outTypes[i]
+			existingType := existing.Type
+			if ptrType, isPtr := existingType.(Ptr); isPtr {
+				existingType = ptrType.Elem
+			}
+			// Never reinterpret an unresolved old value as a concrete type.
+			// If metadata is unresolved, keep the zero seed for this temp slot.
+			if existingType.Kind() != UnresolvedKind {
+				seed = c.derefIfPointer(existing, ident.Value+"_cond_seed")
 			}
 		}
 		c.createStore(seed.Val, ptr, outTypes[i])
@@ -187,6 +190,8 @@ func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []
 			continue
 		}
 
+		// Non-pointer symbols are replaced directly. Old value ownership is already
+		// handled in the IF branch assignment into temp slots.
 		Put(c.Scopes, ident.Value, finalSym)
 	}
 }
