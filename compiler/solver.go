@@ -609,27 +609,23 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
 		newType := types[i]
-		var typ Type
-		var ok bool
-		if typ, ok = Get(ts.Scopes, ident.Value); ok {
-			// if new type is Unresolved then don't update new type or do a type check
-			if newType.Kind() == UnresolvedKind {
-				ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
-				continue
+		typ, exists := Get(ts.Scopes, ident.Value)
+		if exists && newType.Kind() != UnresolvedKind && !CanRefineType(typ, newType) {
+			// types are incompatible
+			ce := &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
 			}
-			// allow for type refinement (e.g., Unresolved -> Concrete, [?] -> [I64])
-			if !CanRefineType(typ, newType) {
-				// types are incompatible
-				ce := &token.CompileError{
-					Token: ident.Token,
-					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				return
-			}
+			ts.Errors = append(ts.Errors, ce)
+			return
 		}
 
 		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
+		// Preserve prior behavior: existing bindings with unresolved RHS are left as-is,
+		// while new bindings still enter scope as unresolved placeholders.
+		if newType.Kind() == UnresolvedKind && exists {
+			continue
+		}
 		trueValues[ident.Value] = newType
 	}
 
