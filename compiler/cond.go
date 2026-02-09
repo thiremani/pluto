@@ -155,14 +155,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 
 func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []*ast.Identifier, outTypes []Type) {
 	for i, ident := range dest {
-		tempSym, ok := Get(c.Scopes, tempNames[i].Value)
-		if !ok {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: ident.Token,
-				Msg:   "missing conditional temp output: " + tempNames[i].Value,
-			})
-			return
-		}
+		tempSym, _ := Get(c.Scopes, tempNames[i].Value)
 
 		finalType := outTypes[i]
 		finalVal := c.createLoad(tempSym.Val, finalType, ident.Value+"_cond_final")
@@ -195,11 +188,12 @@ func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []
 	}
 }
 
-func (c *Compiler) removeConditionalTemps(tempNames []*ast.Identifier) {
-	current := c.Scopes[len(c.Scopes)-1].Elems
-	for _, ident := range tempNames {
-		delete(current, ident.Value)
+func tempNamesToStrings(tempNames []*ast.Identifier) []string {
+	names := make([]string, len(tempNames))
+	for i, ident := range tempNames {
+		names[i] = ident.Value
 	}
+	return names
 }
 
 // compileCondStatement lowers:
@@ -237,5 +231,5 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
-	c.removeConditionalTemps(tempNames)
+	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }

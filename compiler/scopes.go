@@ -73,3 +73,11 @@ func Get[T any](scopes []Scope[T], name string) (T, bool) {
 	var zero T
 	return zero, false
 }
+
+// DeleteBulk removes names from the current scope only.
+func DeleteBulk[T any](scopes []Scope[T], names []string) {
+	elems := scopes[len(scopes)-1].Elems
+	for _, name := range names {
+		delete(elems, name)
+	}
+}
