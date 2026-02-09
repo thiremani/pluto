@@ -481,10 +481,6 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
 }
 
-func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
-	c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
-}
-
 // freeOldValues frees old values after stores complete.
 // Skips: nil values (new variables), moved values, and expressions that
 // manage old-value cleanup internally.
@@ -552,7 +548,7 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
 	if !hasConditions {
-		c.compileSimpleStatement(stmt)
+		c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
 		return
 	}
 
