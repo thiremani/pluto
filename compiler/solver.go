@@ -612,14 +612,6 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		var typ Type
 		var ok bool
 		if typ, ok = Get(ts.Scopes, ident.Value); ok {
-			// Assignment is an equality constraint. If RHS is unresolved but destination
-			// is already concrete, refine the RHS expression output type immediately.
-			if newType.Kind() == UnresolvedKind && typ.Kind() != UnresolvedKind {
-				ts.refineExprOutputType(exprRefs[i], exprIdxs[i], typ)
-				newType = typ
-				types[i] = typ
-			}
-
 			// if new type is Unresolved then don't update new type or do a type check
 			if newType.Kind() == UnresolvedKind {
 				ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
@@ -642,20 +634,6 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	PutBulk(ts.Scopes, trueValues)
-}
-
-func (ts *TypeSolver) refineExprOutputType(expr ast.Expression, outIdx int, t Type) {
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info == nil {
-		return
-	}
-	if outIdx < 0 || outIdx >= len(info.OutTypes) {
-		return
-	}
-	if !CanRefineType(info.OutTypes[outIdx], t) {
-		return
-	}
-	info.OutTypes[outIdx] = t
 }
 
 // TypeArrayExpression infers the type of an Array literal. Columns must be

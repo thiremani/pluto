@@ -218,15 +218,11 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 
 	fn := c.builder.GetInsertBlock().Parent()
 	ifBlock := c.Context.AddBasicBlock(fn, "if")
-	elseBlock := c.Context.AddBasicBlock(fn, "else")
 	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+	c.builder.CreateCondBr(cond, ifBlock, contBlock)
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.compileAssignments(tempNames, stmt.Name, stmt.Value)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(elseBlock)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
