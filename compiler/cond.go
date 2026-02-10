@@ -28,9 +28,10 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 	return
 }
 
-// collectCallArgIdentifiers walks an expression and records identifiers used as
-// direct call arguments. These identifiers may be promoted to memory by
-// compileArgs, so conditional lowering pre-promotes them in the pre-branch block.
+// collectCallArgIdentifiers walks an expression and records identifiers that
+// appear inside call argument subexpressions. These identifiers may be promoted
+// to memory by compileArgs, so conditional lowering pre-promotes them before
+// branching.
 func collectCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	switch e := expr.(type) {
 	case *ast.CallExpression:
@@ -122,7 +123,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 			return nil, nil, false
 		}
 
-		tempName := fmt.Sprintf("condtmp_%d_%s", c.tmpCounter, ident.Value)
+		tempName := fmt.Sprintf("condtmp_%s_%d", ident.Value, c.tmpCounter)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
 
@@ -207,8 +208,10 @@ func tempNamesToStrings(tempNames []*ast.Identifier) []string {
 // 3. ELSE branch: no-op (seed values already represent the else result)
 // 4. Merge: commit temp slot values to real destinations once
 func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
-	// compileArgs may promote identifier call args to memory. Pre-promote before branching
-	// so both branches observe the same storage model.
+	// compileArgs may promote identifier call args by creating an alloca in entry
+	// and storing the current value at the call site. If promotion happens only in
+	// the IF block, the false path would skip that store and later loads can read
+	// uninitialized memory. Pre-promote here so storage is initialized on all paths.
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	tempNames, outTypes, ok := c.createConditionalTempOutputs(stmt)
