@@ -44,6 +44,11 @@ type pendingExpr struct {
 	outTypeIdx int
 }
 
+type pendingBinding struct {
+	FuncNameMangled string
+	Name            string
+}
+
 type TypeSolver struct {
 	ScriptCompiler  *ScriptCompiler
 	Scopes          []Scope[Type]
@@ -54,7 +59,7 @@ type TypeSolver struct {
 	Errors          []*token.CompileError
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int // tmpCounter for uniquely naming temporary variables
-	UnresolvedExprs map[string][]pendingExpr
+	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -68,7 +73,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		Errors:          []*token.CompileError{},
 		ExprCache:       sc.Compiler.ExprCache,
 		TmpCounter:      0,
-		UnresolvedExprs: make(map[string][]pendingExpr),
+		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
 	}
 }
 
@@ -99,6 +104,31 @@ func concatWithMetadata(leftArr, rightArr Array, elem Type) Array {
 		Headers:  headers,
 		ColTypes: []Type{elem},
 		Length:   length,
+	}
+}
+
+func isFullyResolvedType(t Type) bool {
+	switch tt := t.(type) {
+	case Unresolved:
+		return false
+	case Ptr:
+		return isFullyResolvedType(tt.Elem)
+	case Range:
+		return isFullyResolvedType(tt.Iter)
+	case Array:
+		if len(tt.ColTypes) == 0 {
+			return false
+		}
+		for _, col := range tt.ColTypes {
+			if !isFullyResolvedType(col) {
+				return false
+			}
+		}
+		return true
+	case ArrayRange:
+		return isFullyResolvedType(tt.Array) && isFullyResolvedType(tt.Range)
+	default:
+		return t.Kind() != UnresolvedKind
 	}
 }
 
@@ -185,20 +215,36 @@ func (ts *TypeSolver) handleInfixArrays(expr *ast.InfixExpression, leftType, rig
 	return finalType, true
 }
 
-func (ts *TypeSolver) bindArrayAssignment(name string, expr ast.Expression, idx int, t Type) {
-	arrType, ok := t.(Array)
-	if !ok {
+func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, t Type) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	if info == nil || idx < 0 || idx >= len(info.OutTypes) {
 		return
 	}
 
-	if len(arrType.ColTypes) > 0 && arrType.ColTypes[0].Kind() != UnresolvedKind {
-		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		info.OutTypes[idx] = arrType
-		ts.resolveTrackedExprs(name, arrType)
+	if CanRefineType(info.OutTypes[idx], t) {
+		info.OutTypes[idx] = t
+	}
+
+	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
+	if !isFullyResolvedType(t) {
+		if existingType, ok := Get(ts.Scopes, name); ok && isFullyResolvedType(existingType) {
+			if CanRefineType(info.OutTypes[idx], existingType) {
+				info.OutTypes[idx] = existingType
+			}
+			ts.resolveTrackedExprs(name, existingType)
+			return
+		}
+
+		for _, pending := range ts.UnresolvedExprs[binding] {
+			if pending.outTypeIdx == idx && pending.expr == expr {
+				return
+			}
+		}
+		ts.UnresolvedExprs[binding] = append(ts.UnresolvedExprs[binding], pendingExpr{expr: expr, outTypeIdx: idx})
 		return
 	}
 
-	ts.UnresolvedExprs[name] = append(ts.UnresolvedExprs[name], pendingExpr{expr: expr, outTypeIdx: idx})
+	ts.resolveTrackedExprs(name, t)
 }
 
 // appendUses appends one occurrence s to out, respecting the policy:
@@ -235,12 +281,22 @@ func (ts *TypeSolver) FreshIterName() string {
 }
 
 func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
-	entries, ok := ts.UnresolvedExprs[name]
-	if ok {
+	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
+	if entries, ok := ts.UnresolvedExprs[binding]; ok {
 		for _, pending := range entries {
-			ts.ExprCache[key(ts.FuncNameMangled, pending.expr)].OutTypes[pending.outTypeIdx] = t
+			// Invariant: pending expressions are only registered via bindAssignment
+			// after their ExprCache entry has been created.
+			info := ts.ExprCache[key(ts.FuncNameMangled, pending.expr)]
+			if pending.outTypeIdx < 0 || pending.outTypeIdx >= len(info.OutTypes) {
+				continue
+			}
+			if CanRefineType(info.OutTypes[pending.outTypeIdx], t) {
+				info.OutTypes[pending.outTypeIdx] = t
+			}
 		}
-		delete(ts.UnresolvedExprs, name)
+		if isFullyResolvedType(t) {
+			delete(ts.UnresolvedExprs, binding)
+		}
 	}
 
 	if typ, ok := Get(ts.Scopes, name); ok {
@@ -529,11 +585,17 @@ func (ts *TypeSolver) Solve() {
 		}
 	}
 
-	for name, entries := range ts.UnresolvedExprs {
+	for binding, entries := range ts.UnresolvedExprs {
+		// Intentional: only report unresolved bindings for script scope.
+		// Function-scope unresolved types may be resolved later when that function
+		// is reached by a concrete script-level call.
+		if binding.FuncNameMangled != "" {
+			continue
+		}
 		for _, pending := range entries {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: pending.expr.Tok(),
-				Msg:   fmt.Sprintf("array %q element type could not be resolved", name),
+				Msg:   fmt.Sprintf("type for %q could not be resolved", binding.Name),
 			})
 		}
 	}
@@ -609,7 +671,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
 		newType := types[i]
-		ts.bindArrayAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
+		ts.bindAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if exists {
@@ -1312,8 +1374,8 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 
 	// Handle builtins - no template lookup needed
 	if builtin, ok := Builtins[ce.Function.Value]; ok {
-		info.OutTypes = builtin.ReturnTypes
-		info.ExprLen = len(builtin.ReturnTypes)
+		info.OutTypes = append([]Type(nil), builtin.ReturnTypes...)
+		info.ExprLen = len(info.OutTypes)
 		info.HasRanges = hasRanges
 		info.LoopInside = loopInside
 		return info.OutTypes
@@ -1325,11 +1387,11 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info.OutTypes = f.OutTypes
-	info.ExprLen = len(f.OutTypes)
+	info.OutTypes = append([]Type(nil), f.OutTypes...)
+	info.ExprLen = len(info.OutTypes)
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
-	return f.OutTypes
+	return info.OutTypes
 }
 
 // TypeExprsForIter types a list of expressions and determines whether iteration
@@ -1502,13 +1564,11 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 }
 
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	// Check if function is already fully typed in cache
+	// Fetch existing func cache entry (if any).
+	// Already-inferred fast-path is handled centrally in TypeFunc.
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
-	if ok && f.AllTypesInferred() {
-		return f
-	}
 
-	// Create new Func if not cached (ok && !AllTypesInferred means recursive call, reuse f)
+	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
 		f = ts.newFunc(ce, args, mangled, template)
 	}
@@ -1543,16 +1603,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// multiple passes may be needed to infer types for script level function
 	for range 100 {
 		ts.Converging = false
-		ts.TypeFunc(mangled, template, f)
-		// Keep iterating after the root function resolves so nested recursive callees
-		// can pick up the newly inferred output types from this pass.
-		if f.AllTypesInferred() {
-			if !ts.Converging {
-				return f.OutTypes
-			}
-			continue
+		inferred := ts.TypeFunc(mangled, template, f)
+		// Root script call only depends on this function's concrete outputs.
+		if inferred {
+			return f.OutTypes
 		}
 
+		// no further progress possible
 		if !ts.Converging {
 			ce := &token.CompileError{
 				Token: template.Token,
@@ -1565,11 +1622,42 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	panic("Could not infer output types for function %s in script" + f.Name)
 }
 
-// TyeFunc attempts to walk the function block and infer types for outputs variables
+// refreshInferredFuncExprCache runs one extra local type pass to refresh ExprCache
+// entries after a function first reaches fully inferred outputs.
+// Unresolved callees are temporarily blocked so this pass does not recurse into
+// additional function inference.
+func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast.FuncStatement, f *Func) {
+	blocked := make(map[string]struct{}, len(ts.InProgress)+len(ts.ScriptCompiler.Compiler.FuncCache))
+	// Block this function and unresolved callees so this pass stays local.
+	blocked[mangled] = struct{}{}
+	for fn := range ts.InProgress {
+		blocked[fn] = struct{}{}
+	}
+	for fn, cached := range ts.ScriptCompiler.Compiler.FuncCache {
+		if !cached.AllTypesInferred() {
+			blocked[fn] = struct{}{}
+		}
+	}
+
+	savedInProgress := ts.InProgress
+	savedFuncNameMangled := ts.FuncNameMangled
+	savedConverging := ts.Converging
+	ts.InProgress = blocked
+	ts.FuncNameMangled = mangled
+	ts.TypeBlock(template, f)
+	ts.FuncNameMangled = savedFuncNameMangled
+	ts.InProgress = savedInProgress
+	ts.Converging = savedConverging
+}
+
+// TypeFunc attempts to walk the function block and infer types for output variables.
 // It ASSUMES all output types have not been inferred
-func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) {
+func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
+	if f.AllTypesInferred() {
+		return true
+	}
 	if _, ok := ts.InProgress[mangled]; ok {
-		return
+		return f.AllTypesInferred()
 	}
 	ts.InProgress[mangled] = struct{}{}
 	defer func() { delete(ts.InProgress, mangled) }()
@@ -1580,6 +1668,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
+	inferred := f.AllTypesInferred()
+	if inferred {
+		ts.refreshInferredFuncExprCache(mangled, template, f)
+	}
+	return inferred
 }
 
 func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
