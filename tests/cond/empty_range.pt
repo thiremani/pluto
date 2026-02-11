@@ -1,0 +1,8 @@
+res = Accum(curr, x)
+    res = curr + x
+
+out = HeapSuffix(s)
+    out = s ⊕ "_cond"
+
+out = RangeTail(x)
+    out = x

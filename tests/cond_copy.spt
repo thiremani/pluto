@@ -27,3 +27,14 @@ s2 = "test" ⊕ "_2"
 s1, s2
 s1 = 5 > 4 s2
 s1, s2
+
+# Conditional call expressions must not mutate scope during branch codegen
+seed = "seed".
+arg = "arg".
+seed = 1 > 2 condCallHeap(arg)
+"CondCallFalse: -seed"
+seed = 2 > 1 condCallHeap(arg)
+"CondCallTrue: -seed"
+
+newFalse = 1 > 2 condCallHeap(arg)
+"CondCallNewFalse: -newFalse"

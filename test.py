@@ -248,12 +248,7 @@ class TestRunner:
                     timeout=30
                 )
                 if result.returncode != 0:
-                    print(f"{Fore.YELLOW}⚠️  Memory leaks detected by valgrind{Style.RESET_ALL}")
-                    # Print last 20 lines of valgrind output
-                    lines = result.stderr.splitlines()
-                    for line in lines[-20:]:
-                        if "LEAK SUMMARY" in line or "definitely lost" in line or "possibly lost" in line:
-                            print(f"  {line}")
+                    self._report_valgrind_failure(result.stderr)
                     return False
                 else:
                     print(f"{Fore.GREEN}✓ No memory leaks detected (valgrind){Style.RESET_ALL}")
@@ -273,11 +268,7 @@ class TestRunner:
                     print(f"{Fore.GREEN}✓ No memory leaks detected (leaks){Style.RESET_ALL}")
                     return True
                 else:
-                    print(f"{Fore.YELLOW}⚠️  Memory leaks detected by leaks{Style.RESET_ALL}")
-                    # Print summary
-                    for line in result.stdout.splitlines():
-                        if "leaks for" in line or "LEAK:" in line:
-                            print(f"  {line}")
+                    self._report_leaks_failure(result.stdout)
                     return False
             else:
                 # Windows or other - skip memory leak detection
@@ -297,6 +288,48 @@ class TestRunner:
             print(f"{Fore.YELLOW}⚠️  Memory leak check failed: {e}{Style.RESET_ALL}")
             return True
 
+    def _report_valgrind_failure(self, stderr_output: str):
+        """
+        Print a concise, actionable valgrind failure summary.
+        Note: valgrind failure can be leaks OR other memory errors.
+        """
+        print(f"{Fore.YELLOW}⚠️  Memory check failed under valgrind{Style.RESET_ALL}")
+        lines = stderr_output.splitlines()
+
+        err_summary = ""
+        for line in reversed(lines):
+            if "ERROR SUMMARY" in line:
+                err_summary = line.strip()
+                break
+        if err_summary:
+            print(f"  {err_summary}")
+
+        leak_summary = {
+            "definitely lost": None,
+            "possibly lost": None,
+        }
+        for line in lines:
+            if "definitely lost" in line:
+                leak_summary["definitely lost"] = line.strip()
+            elif "possibly lost" in line:
+                leak_summary["possibly lost"] = line.strip()
+        for key in ("definitely lost", "possibly lost"):
+            if leak_summary[key]:
+                print(f"  {leak_summary[key]}")
+
+        print("  --- valgrind stderr tail ---")
+        for line in lines[-30:]:
+            print(f"  {line}")
+
+    def _report_leaks_failure(self, stdout_output: str):
+        """
+        Print a concise leaks(1) failure summary on macOS.
+        """
+        print(f"{Fore.YELLOW}⚠️  Memory leaks detected by leaks{Style.RESET_ALL}")
+        for line in stdout_output.splitlines():
+            if "leaks for" in line or "LEAK:" in line:
+                print(f"  {line}")
+
     def _run_single_test(self, test_dir: Path, exp_file: Path):
         """
         Runs a single test case (one .exp file) and updates pass/fail counters.
@@ -315,7 +348,7 @@ class TestRunner:
                 # Check for memory leaks (if enabled)
                 if LEAK_CHECK:
                     if not self._check_memory_leaks(executable_path, test_name):
-                        print(f"{Fore.RED}❌ Failed (memory leak){Style.RESET_ALL}")
+                        print(f"{Fore.RED}❌ Failed (memory check){Style.RESET_ALL}")
                         self.failed += 1
                         return
 
@@ -364,12 +397,12 @@ class TestRunner:
                 print(f"{Fore.RED}❌ Test directory {self.test_dir} does not exist{Style.RESET_ALL}")
                 return
 
-            exp_files = list(self.test_dir.glob("*.exp"))
+            exp_files = list(self.test_dir.rglob("*.exp"))
             if not exp_files:
-                print(f"{Fore.RED}❌ No .exp files found in {self.test_dir}{Style.RESET_ALL}")
+                print(f"{Fore.RED}❌ No .exp files found in {self.test_dir} (including subdirectories){Style.RESET_ALL}")
                 return
 
-            test_dirs = [self.test_dir]
+            test_dirs = sorted({exp_path.parent for exp_path in exp_files})
         else:
             # Run all tests
             test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}

@@ -45,7 +45,6 @@ const (
 	// Compiler flags
 	C_STD        = "-std=c11"
 	OPT_LEVEL    = "-O3"
-	MARCH        = "-march=native"
 	FPIC         = "-fPIC"
 	FILETYPE_OBJ = "-filetype=obj"
 	RELOC_PIC    = "-relocation-model=pic"

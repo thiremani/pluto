@@ -209,12 +209,53 @@ func (f Func) Key() Type {
 }
 
 func (f Func) AllTypesInferred() bool {
+	for _, p := range f.Params {
+		if !IsFullyResolvedType(p) {
+			return false
+		}
+	}
+	return f.OutputTypesInferred()
+}
+
+// OutputTypesInferred reports whether all function outputs are fully resolved.
+func (f Func) OutputTypesInferred() bool {
 	for _, ot := range f.OutTypes {
-		if ot.Kind() == UnresolvedKind {
+		if !IsFullyResolvedType(ot) {
 			return false
 		}
 	}
 	return true
+}
+
+// IsFullyResolvedType reports whether a type contains no unresolved components.
+// It recursively checks composite/container types.
+func IsFullyResolvedType(t Type) bool {
+	switch tt := t.(type) {
+	case Unresolved:
+		return false
+	case Int, Float, StrG, StrH:
+		return true
+	case Ptr:
+		return IsFullyResolvedType(tt.Elem)
+	case Range:
+		return IsFullyResolvedType(tt.Iter)
+	case Array:
+		if len(tt.ColTypes) == 0 {
+			return false
+		}
+		for _, col := range tt.ColTypes {
+			if !IsFullyResolvedType(col) {
+				return false
+			}
+		}
+		return true
+	case ArrayRange:
+		return IsFullyResolvedType(tt.Array) && IsFullyResolvedType(tt.Range)
+	case Func:
+		return tt.AllTypesInferred()
+	default:
+		panic(fmt.Sprintf("unhandled type in IsFullyResolvedType: %T (%v)", t, t.Kind()))
+	}
 }
 
 // Array represents a tabular array with optional headers and typed columns.
@@ -326,6 +367,7 @@ func TypeEqual(a, b Type) bool {
 // CanRefineType checks if oldType can be refined to newType by replacing
 // unresolved components with concrete types.
 // Returns true if refinement is possible (including when types are already equal).
+// Composite/container types are checked recursively.
 func CanRefineType(oldType, newType Type) bool {
 	// Completely unresolved type can be refined to anything
 	if oldType.Kind() == UnresolvedKind {
@@ -337,24 +379,50 @@ func CanRefineType(oldType, newType Type) bool {
 		return false
 	}
 
-	// Check type-specific refinement
-	switch oldType.Kind() {
-	case ArrayKind:
-		oldArr := oldType.(Array)
-		// Can refine if old has unresolved element type
-		return oldArr.ColTypes[0].Kind() == UnresolvedKind || TypeEqual(oldType, newType)
-	case ArrayRangeKind:
-		oldSlice := oldType.(ArrayRange)
-		newSlice := newType.(ArrayRange)
-		return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
-	case PtrKind:
-		oldPtr := oldType.(Ptr)
-		newPtr := newType.(Ptr)
-		return CanRefineType(oldPtr.Elem, newPtr.Elem)
+	switch old := oldType.(type) {
+	case Array:
+		newArr, ok := newType.(Array)
+		return ok && canRefineArray(old, newArr)
+	case ArrayRange:
+		newSlice, ok := newType.(ArrayRange)
+		return ok && canRefineArrayRange(old, newSlice)
+	case Ptr:
+		newPtr, ok := newType.(Ptr)
+		return ok && CanRefineType(old.Elem, newPtr.Elem)
+	case Range:
+		newRange, ok := newType.(Range)
+		return ok && CanRefineType(old.Iter, newRange.Iter)
+	case Func:
+		newFunc, ok := newType.(Func)
+		return ok && canRefineFunc(old, newFunc)
 	default:
 		// For other types, must be equal
 		return TypeEqual(oldType, newType)
 	}
+}
+
+func canRefineTypes(oldTypes, newTypes []Type) bool {
+	if len(oldTypes) != len(newTypes) {
+		return false
+	}
+	for i := range oldTypes {
+		if !CanRefineType(oldTypes[i], newTypes[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func canRefineArray(oldArr, newArr Array) bool {
+	return canRefineTypes(oldArr.ColTypes, newArr.ColTypes)
+}
+
+func canRefineArrayRange(oldSlice, newSlice ArrayRange) bool {
+	return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
+}
+
+func canRefineFunc(oldFunc, newFunc Func) bool {
+	return canRefineTypes(oldFunc.Params, newFunc.Params) && canRefineTypes(oldFunc.OutTypes, newFunc.OutTypes)
 }
 
 func typeComparer(k Kind) func(a, b Type) bool {

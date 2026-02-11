@@ -1,0 +1,12 @@
+CondArrayRangeExprTrue: 90
+CondArrayRangeExprFalseExisting: 90
+CondArrayRangeExprFalseNew: 0
+CondArrayRangeExprTrueNew: 40
+CondSelfRefScalarTrue: 15
+CondSelfRefScalarFalseExisting: 15
+CondPrefixTrue: 10
+CondPrefixFalseExisting: 10
+CondPrefixFalseNew: 0
+CondPrefixArrayRangeTrue: -40
+CondPrefixArrayRangeFalseExisting: -40
+CondPrefixArrayRangeFalseNew: 0

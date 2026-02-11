@@ -65,7 +65,7 @@ x, y`
 
 	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	if isOddFunc.OutTypes[0].Kind() != UnresolvedKind {
-		t.Errorf("isOdd func should strkind for output arg 0")
+		t.Errorf("isOdd func should remain unresolved for output arg 0 until called from script")
 	}
 	if isOddFunc.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isOdd func should strkind for output arg 1")

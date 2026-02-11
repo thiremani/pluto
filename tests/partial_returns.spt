@@ -1,0 +1,31 @@
+a, b, c, i = 3, 4, 5, 6
+
+# Partial returns with nested function arg + scalar expression
+x, y, z = FOuter(a, GNested(b, c)), 2 * i
+"PartialNested: -x -y -z"
+
+# Another partial shape from a 2-output call + scalar expression
+m, n, o = PairStep(i), 2 * i
+"PartialPair: -m -n -o"
+
+# Conditional function + expression with partial returns (true branch)
+tx, ty, tz = 1 > 0 FOuter(a, GNested(b, c)), 2 * i
+"CondPartialTrue: -tx -ty -tz"
+
+# Conditional function + expression with existing vars (false branch => no-op)
+ex, ey, ez = 100, 200, 300
+ex, ey, ez = 1 > 2 FOuter(a, GNested(b, c)), 2 * i
+"CondPartialFalseExisting: -ex -ey -ez"
+
+# Conditional function + expression with new vars (false branch => zero values)
+nx, ny, nz = 1 > 2 FOuter(a, GNested(b, c)), 2 * i
+"CondPartialFalseNew: -nx -ny -nz"
+
+# Conditional expression-only counterpart (true branch)
+cx, cy, cz = 1 > 0 10 + a, 20 + b, 2 * i
+"CondExprTrue: -cx -cy -cz"
+
+# Conditional expression-only with existing vars (false branch => no-op)
+cx, cy, cz = 7, 8, 9
+cx, cy, cz = 1 > 2 10 + a, 20 + b, 2 * i
+"CondExprFalseExisting: -cx -cy -cz"

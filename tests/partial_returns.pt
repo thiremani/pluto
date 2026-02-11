@@ -1,0 +1,9 @@
+out = GNested(b, c)
+    out = b + c
+
+x, y = FOuter(a, u)
+    x = a + u
+    y = a * u
+
+m, n = PairStep(i)
+    m, n = i + 1, i + 2

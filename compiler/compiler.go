@@ -255,27 +255,6 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 	}
 }
 
-func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, hasConditions bool) {
-	// Compile condition
-	if len(stmt.Condition) == 0 {
-		hasConditions = false
-		return
-	}
-
-	hasConditions = true
-	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, nil)
-		for idx, condSym := range condSyms {
-			if i == 0 && idx == 0 {
-				cond = condSym.Val
-				continue
-			}
-			cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
-		}
-	}
-	return
-}
-
 func (c *Compiler) addMain() {
 	mainType := llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{}, false)
 	mainFunc := llvm.AddFunction(c.Module, "main", mainType)
@@ -296,213 +275,6 @@ func (c *Compiler) compileStatement(stmt ast.Statement) {
 		c.compilePrintStatement(s)
 	default:
 		panic(fmt.Sprintf("Cannot handle statement type %T", s))
-	}
-}
-
-// does conditional assignment
-func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
-	existed := make([]bool, len(stmt.Name))
-	for i, ident := range stmt.Name {
-		_, existed[i] = Get(c.Scopes, ident.Value)
-	}
-
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "if")
-	elseBlock := c.Context.AddBasicBlock(fn, "else")
-	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
-
-	// Create blocks and branch.
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	ifValues, ifTemps, ifBlockEnd := c.compileIfCond(stmt)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	elseValues, elseTemps, elseBlockEnd := c.compileElseCond(stmt, ifValues)
-	c.builder.CreateBr(contBlock)
-
-	// MERGE the branches.
-	c.compileMergeBlock(stmt, contBlock, ifValues, elseValues, ifBlockEnd, elseBlockEnd, ifTemps, elseTemps, existed)
-
-	// Set the builder's position for the next statement.
-	c.builder.SetInsertPointAtEnd(contBlock)
-}
-
-func (c *Compiler) compileIfCond(stmt *ast.LetStatement) ([]*Symbol, []bool, llvm.BasicBlock) {
-	// Populate IF block.
-	ifSymbols := []*Symbol{}
-	ifTemps := []bool{}
-
-	i := 0
-	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:])
-		_, isIdent := expr.(*ast.Identifier)
-		isTemp := !isIdent
-		// Dereference pointers to get values for phi node
-		// (function calls return pointer symbols with pass-by-reference)
-		for j, sym := range res {
-			loadName := stmt.Name[i+j].Value + "_load"
-			ifSymbols = append(ifSymbols, c.derefIfPointer(sym, loadName))
-			ifTemps = append(ifTemps, isTemp)
-		}
-		i += len(res)
-	}
-
-	return ifSymbols, ifTemps, c.builder.GetInsertBlock()
-}
-
-// ELSE block: pull "previous" symbols from scope and deref pointers
-func (c *Compiler) compileElseCond(stmt *ast.LetStatement, trueSymbols []*Symbol) (elseSyms []*Symbol, elseTemps []bool, elseEnd llvm.BasicBlock) {
-	elseSyms = make([]*Symbol, len(stmt.Name))
-	elseTemps = make([]bool, len(stmt.Name))
-	for i, ident := range stmt.Name {
-		name := ident.Value
-
-		prevSym, ok := Get(c.Scopes, name)
-		if !ok {
-			// first time: give a default zero
-			prevSym = c.makeZeroValue(trueSymbols[i].Type)
-			Put(c.Scopes, name, prevSym)
-			elseTemps[i] = true
-		}
-
-		// Dereference pointers into raw values; if prevSym was an alloca, load it,
-		// otherwise a no-op.
-		elseSyms[i] = c.derefIfPointer(prevSym, name+"_load")
-	}
-	return elseSyms, elseTemps, c.builder.GetInsertBlock()
-}
-
-// MERGE block: build PHIs on the pure value type, then do final store if needed
-func (c *Compiler) compileMergeBlock(
-	stmt *ast.LetStatement,
-	contBlk llvm.BasicBlock,
-	ifSyms, elseSyms []*Symbol,
-	ifEnd, elseEnd llvm.BasicBlock,
-	ifTemps, elseTemps []bool,
-	existed []bool,
-) {
-	// position builder at top of contBlk
-	c.builder.SetInsertPoint(contBlk, contBlk.FirstInstruction())
-
-	// --- Phase 1: create all PHIs first on the value type
-	// the phis MUST be at the top of the block
-	phis := make([]llvm.Value, len(stmt.Name))
-	for i, ident := range stmt.Name {
-		ty := ifSyms[i].Type // both branches must agree
-		phis[i] = c.builder.CreatePHI(c.mapToLLVMType(ty), ident.Value+"_phi")
-	}
-
-	// --- Phase 2: Handle ownership and copying for PHI merges
-	//
-	// PHI nodes merge values from two branches. We need to ensure consistent ownership:
-	//
-	// For strings:
-	// - Both static: result is static (no copy needed)
-	// - Both heap: need to copy BOTH (only one executes, so copy for value semantics)
-	// - Mixed: copy the static one to heap
-	//
-	// For arrays:
-	// - Always copy BOTH branches (arrays always have value semantics, no ownership transfer)
-	//
-	// Only one branch executes at runtime, so we copy to ensure the result owns its value.
-	for i := range stmt.Name {
-		ifIsStrG := IsStrG(ifSyms[i].Type)
-		ifIsStrH := IsStrH(ifSyms[i].Type)
-		elseIsStrG := IsStrG(elseSyms[i].Type)
-
-		switch {
-		case ifIsStrG && elseIsStrG:
-			// Both static strings are immutable and shared.
-		case ifIsStrG || ifIsStrH:
-			// Ensure both branches produce independent values so we can free
-			// the destination before storing the merged PHI value.
-			terminator := ifEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			oldIf := ifSyms[i]
-			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-			if ifTemps[i] {
-				c.freeValue(oldIf.Val, oldIf.Type)
-			}
-
-			terminator = elseEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			oldElse := elseSyms[i]
-			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
-			if elseTemps[i] {
-				c.freeValue(oldElse.Val, oldElse.Type)
-			}
-
-		case ifSyms[i].Type.Kind() == ArrayKind:
-			// Arrays always have value semantics - copy both branches
-			terminator := ifEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			oldIf := ifSyms[i]
-			ifSyms[i] = c.deepCopyIfNeeded(ifSyms[i])
-			if ifTemps[i] {
-				c.freeValue(oldIf.Val, oldIf.Type)
-			}
-
-			terminator = elseEnd.LastInstruction()
-			c.builder.SetInsertPointBefore(terminator)
-			oldElse := elseSyms[i]
-			elseSyms[i] = c.deepCopyIfNeeded(elseSyms[i])
-			if elseTemps[i] {
-				c.freeValue(oldElse.Val, oldElse.Type)
-			}
-		}
-	}
-
-	// --- Phase 3: Hook up PHIs and do the stores/updates
-	// Position builder at end of continue block
-	c.builder.SetInsertPointAtEnd(contBlk)
-
-	for i, ident := range stmt.Name {
-		name := ident.Value
-		phi := phis[i]
-		ifVal := ifSyms[i].Val
-		elseVal := elseSyms[i].Val
-
-		// sanity
-		if ifVal.IsNil() || elseVal.IsNil() {
-			panic("nil incoming to PHI for " + name)
-		}
-
-		phi.AddIncoming(
-			[]llvm.Value{ifVal, elseVal},
-			[]llvm.BasicBlock{ifEnd, elseEnd},
-		)
-
-		// Determine the result type
-		// After phase 2 normalization, both branches have the same storage class
-		resultType := ifSyms[i].Type
-		// If either branch was StrH (or became StrH after copy), result is StrH
-		if IsStrH(ifSyms[i].Type) || IsStrH(elseSyms[i].Type) {
-			resultType = StrH{}
-		}
-
-		// if the variable was stack-allocated, store back
-		orig, _ := Get(c.Scopes, name)
-		if ptr, ok := orig.Type.(Ptr); ok {
-			switch resultType.Kind() {
-			case StrKind, ArrayKind:
-				c.freeSymbolValue(orig, "old_cond")
-			}
-			// orig.Val holds the alloca
-			c.createStore(phi, orig.Val, ptr.Elem)
-		} else {
-			switch resultType.Kind() {
-			case StrKind, ArrayKind:
-				if existed[i] {
-					c.freeSymbolValue(orig, "old_cond")
-				}
-			}
-			// pure SSA: update the symbol to the PHI
-			Put(c.Scopes, name, &Symbol{
-				Val:  phi,
-				Type: resultType,
-			})
-		}
 	}
 }
 
@@ -670,19 +442,29 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
 	}
 }
 
-func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
+// compileAssignments writes expression results into writeIdents while applying
+// ownership/copy rules based on ownershipIdents.
+//
+// In simple assignments writeIdents == ownershipIdents. Conditional lowering can
+// write through temporary output slots while still using destination identifiers
+// for move/copy decisions.
+//
+// Invariant: if an ownership identifier is referenced on RHS (self-reference),
+// that name must resolve to the corresponding write slot during RHS compilation.
+// Conditional lowering guarantees this via compileCondAssignments.
+func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipIdents []*ast.Identifier, exprs []ast.Expression) {
 	// Capture old values BEFORE compiling RHS expressions.
 	// This is critical for function calls with Ptr outputs: by the time RHS compilation
 	// finishes, Ptrs already contain NEW values. We must capture old values first.
-	oldValues := c.captureOldValues(stmt.Name)
+	oldValues := c.captureOldValues(writeIdents)
 
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	// Track result counts per expression to identify call destinations
 	resCounts := []int{}
 	i := 0
-	for _, expr := range stmt.Value {
-		res := c.compileExpression(expr, stmt.Name[i:])
+	for _, expr := range exprs {
+		res := c.compileExpression(expr, writeIdents[i:])
 		resCounts = append(resCounts, len(res))
 
 		// For each result symbol, record the source variable name if it's an identifier
@@ -698,9 +480,9 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 		i += len(res)
 	}
 
-	needsCopy, movedSources := c.computeCopyRequirements(stmt.Name, syms, rhsNames)
-	c.writeTo(stmt.Name, syms, needsCopy)
-	c.freeOldValues(stmt.Name, oldValues, movedSources, stmt.Value, resCounts)
+	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
+	c.writeTo(writeIdents, syms, needsCopy)
+	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
 }
 
 // freeOldValues frees old values after stores complete.
@@ -709,7 +491,7 @@ func (c *Compiler) compileSimpleStatement(stmt *ast.LetStatement) {
 //
 // Call results are skipped because function return values are moved (ownership
 // transferred) to destination identifiers.
-func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
+func (c *Compiler) freeOldValues(ownershipIdents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
 	i := 0
 	for exprIdx, expr := range exprs {
 		// Skip expressions that handle destination old-value ownership themselves.
@@ -725,7 +507,7 @@ func (c *Compiler) freeOldValues(idents []*ast.Identifier, oldValues []*Symbol, 
 			if c.skipBorrowedOldValueFree(oldValues[idx]) {
 				continue
 			}
-			if _, moved := movedSources[idents[idx].Value]; moved {
+			if _, moved := movedSources[ownershipIdents[idx].Value]; moved {
 				continue
 			}
 			c.freeSymbolValue(oldValues[idx], "old_assign")
@@ -770,7 +552,7 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
 	if !hasConditions {
-		c.compileSimpleStatement(stmt)
+		c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
 		return
 	}
 
@@ -1585,13 +1367,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			c.compileCallInner(ce.Function.Value, rewCall, outputs)
 		})
 
-		// KNOWN ISSUE: Empty ranges cause UAF. When the loop doesn't execute, outputs
-		// retain their original values. But captureOldValues (called before compilation)
-		// already captured the old value, and writeTo will free it. We then store the
-		// same (now freed) pointer back, causing use-after-free.
-		//
-		// TODO(conditionals): Fix by adding runtime "was output written" tracking.
-		// Until then, avoid empty ranges with heap-allocated variables.
+		// Loop path materializes final values from output slots after iteration.
+		// Slots are seeded by makeOutputs (existing value or zero for new vars), so
+		// empty ranges naturally preserve no-op semantics for existing destinations.
 		out := make([]*Symbol, len(outputs))
 		for i := range outputs {
 			// Use info.OutTypes[i] for correct Static flag on strings, not outputs[i].Type
