@@ -448,6 +448,10 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
 // In simple assignments writeIdents == ownershipIdents. Conditional lowering can
 // write through temporary output slots while still using destination identifiers
 // for move/copy decisions.
+//
+// Invariant: if an ownership identifier is referenced on RHS (self-reference),
+// that name must resolve to the corresponding write slot during RHS compilation.
+// Conditional lowering guarantees this via compileCondAssignments.
 func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipIdents []*ast.Identifier, exprs []ast.Expression) {
 	// Capture old values BEFORE compiling RHS expressions.
 	// This is critical for function calls with Ptr outputs: by the time RHS compilation

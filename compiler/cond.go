@@ -197,6 +197,42 @@ func tempNamesToStrings(tempNames []*ast.Identifier) []string {
 	return names
 }
 
+// aliasCondDests maps existing destination names to conditional temp slots so
+// RHS reads during IF-branch assignment see the latest temp writes.
+func (c *Compiler) aliasCondDests(dest []*ast.Identifier, tempNames []*ast.Identifier) map[string]*Symbol {
+	aliases := make(map[string]*Symbol, len(dest))
+
+	for i, ident := range dest {
+		oldSym, exists := Get(c.Scopes, ident.Value)
+		if !exists {
+			continue
+		}
+		tempSym, ok := Get(c.Scopes, tempNames[i].Value)
+		if !ok {
+			continue
+		}
+		aliases[ident.Value] = oldSym
+		SetExisting(c.Scopes, ident.Value, tempSym)
+	}
+
+	return aliases
+}
+
+func (c *Compiler) restoreCondDests(aliases map[string]*Symbol) {
+	for name, oldSym := range aliases {
+		SetExisting(c.Scopes, name, oldSym)
+	}
+}
+
+// compileCondAssignments wraps compileAssignments for conditional lowering.
+// Existing destination names are temporarily aliased to temp slots so
+// self-referential RHS expressions read/write the same evolving slot.
+func (c *Compiler) compileCondAssignments(tempNames []*ast.Identifier, dest []*ast.Identifier, exprs []ast.Expression) {
+	aliases := c.aliasCondDests(dest, tempNames)
+	c.compileAssignments(tempNames, dest, exprs)
+	c.restoreCondDests(aliases)
+}
+
 // compileCondStatement lowers:
 //
 //	name = cond value
@@ -204,7 +240,7 @@ func tempNamesToStrings(tempNames []*ast.Identifier) []string {
 // to:
 //
 // 1. Allocate per-output temp slots seeded with current destination value (or zero for new vars)
-// 2. IF branch: compile assignment into temp slots using normal assignment/free rules
+// 2. IF branch: alias existing destination names to temp slots, then compile assignment
 // 3. ELSE branch: no-op (seed values already represent the else result)
 // 4. Merge: commit temp slot values to real destinations once
 func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
@@ -225,7 +261,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	c.builder.CreateCondBr(cond, ifBlock, contBlock)
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
-	c.compileAssignments(tempNames, stmt.Name, stmt.Value)
+	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)

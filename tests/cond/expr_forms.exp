@@ -1,7 +1,9 @@
-CondArrayRangeExprTrue: 40
-CondArrayRangeExprFalseExisting: 40
+CondArrayRangeExprTrue: 90
+CondArrayRangeExprFalseExisting: 90
 CondArrayRangeExprFalseNew: 0
 CondArrayRangeExprTrueNew: 40
+CondSelfRefScalarTrue: 15
+CondSelfRefScalarFalseExisting: 15
 CondPrefixTrue: 0
 CondPrefixFalseExisting: 0
 CondPrefixFalseNew: 0

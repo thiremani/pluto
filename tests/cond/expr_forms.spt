@@ -2,6 +2,7 @@ arr = [10 20 30 40 50]
 
 # Conditional expressions that include ArrayRange operands.
 sum = 0
+# Self-reference: RHS must read from the same temp slot the IF branch writes.
 sum = 2 > 1 sum + arr[1:4]
 "CondArrayRangeExprTrue: -sum"
 sum = 1 > 2 sum + arr[2:5]
@@ -10,6 +11,12 @@ newSum = 1 > 2 0 + arr[1:4]
 "CondArrayRangeExprFalseNew: -newSum"
 newSumTrue = 2 > 1 0 + arr[1:4]
 "CondArrayRangeExprTrueNew: -newSumTrue"
+
+sx = 5
+sx = 2 > 1 sx + 10
+"CondSelfRefScalarTrue: -sx"
+sx = 2 > 3 sx + 1
+"CondSelfRefScalarFalseExisting: -sx"
 
 # Conditional expressions that include prefix operations.
 x = 5
