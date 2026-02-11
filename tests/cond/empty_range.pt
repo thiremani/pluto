@@ -1,8 +1,8 @@
-res = AccumER(curr, x)
+res = Accum(curr, x)
     res = curr + x
 
-out = HeapSuffixER(s)
+out = HeapSuffix(s)
     out = s ⊕ "_cond"
 
-out = RangeTailER(x)
+out = RangeTail(x)
     out = x
