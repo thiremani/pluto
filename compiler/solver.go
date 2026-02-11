@@ -192,7 +192,7 @@ func (ts *TypeSolver) handleInfixArrays(expr *ast.InfixExpression, leftType, rig
 
 func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, t Type) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info == nil || idx < 0 || idx >= len(info.OutTypes) {
+	if idx < 0 || idx >= len(info.OutTypes) {
 		return
 	}
 
@@ -202,14 +202,6 @@ func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, 
 
 	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
 	if !IsFullyResolvedType(t) {
-		if existingType, ok := Get(ts.Scopes, name); ok && IsFullyResolvedType(existingType) {
-			if CanRefineType(info.OutTypes[idx], existingType) {
-				info.OutTypes[idx] = existingType
-			}
-			ts.resolveTrackedExprs(name, existingType)
-			return
-		}
-
 		for _, pending := range ts.UnresolvedExprs[binding] {
 			if pending.outTypeIdx == idx && pending.expr == expr {
 				return
