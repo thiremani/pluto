@@ -192,10 +192,15 @@ func (ts *TypeSolver) handleInfixArrays(expr *ast.InfixExpression, leftType, rig
 
 func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, t Type) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if idx < 0 || idx >= len(info.OutTypes) {
+	if idx >= len(info.OutTypes) {
 		return
 	}
 
+	// Invariant: assignment typing is one-way from RHS -> LHS.
+	// We refine RHS expression output types from RHS-derived type `t` and then
+	// propagate resolved types to tracked LHS bindings. Do not infer RHS types
+	// from existing destination types, because that can corrupt ExprCache output
+	// types for calls/expressions and lead to incorrect solver convergence.
 	if CanRefineType(info.OutTypes[idx], t) {
 		info.OutTypes[idx] = t
 	}
@@ -254,7 +259,7 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 			// Invariant: pending expressions are only registered via bindAssignment
 			// after their ExprCache entry has been created.
 			info := ts.ExprCache[key(ts.FuncNameMangled, pending.expr)]
-			if pending.outTypeIdx < 0 || pending.outTypeIdx >= len(info.OutTypes) {
+			if pending.outTypeIdx >= len(info.OutTypes) {
 				continue
 			}
 			if CanRefineType(info.OutTypes[pending.outTypeIdx], t) {

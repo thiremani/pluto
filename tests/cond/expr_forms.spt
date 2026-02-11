@@ -1,0 +1,29 @@
+arr = [10 20 30 40 50]
+
+# Conditional expressions that include ArrayRange operands.
+sum = 0
+sum = 2 > 1 sum + arr[1:4]
+"CondArrayRangeExprTrue: -sum"
+sum = 1 > 2 sum + arr[2:5]
+"CondArrayRangeExprFalseExisting: -sum"
+newSum = 1 > 2 0 + arr[1:4]
+"CondArrayRangeExprFalseNew: -newSum"
+newSumTrue = 2 > 1 0 + arr[1:4]
+"CondArrayRangeExprTrueNew: -newSumTrue"
+
+# Conditional expressions that include prefix operations.
+x = 5
+y = 1 > 0 x + -x
+"CondPrefixTrue: -y"
+y = 1 > 2 x + -x
+"CondPrefixFalseExisting: -y"
+z = 1 > 2 x + -x
+"CondPrefixFalseNew: -z"
+
+pr = 7
+pr = 1 > 0 0 + -arr[1:4]
+"CondPrefixArrayRangeTrue: -pr"
+pr = 1 > 2 0 + -arr[1:4]
+"CondPrefixArrayRangeFalseExisting: -pr"
+k = 1 > 2 0 + -arr[1:4]
+"CondPrefixArrayRangeFalseNew: -k"

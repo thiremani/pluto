@@ -397,12 +397,12 @@ class TestRunner:
                 print(f"{Fore.RED}❌ Test directory {self.test_dir} does not exist{Style.RESET_ALL}")
                 return
 
-            exp_files = list(self.test_dir.glob("*.exp"))
+            exp_files = list(self.test_dir.rglob("*.exp"))
             if not exp_files:
-                print(f"{Fore.RED}❌ No .exp files found in {self.test_dir}{Style.RESET_ALL}")
+                print(f"{Fore.RED}❌ No .exp files found in {self.test_dir} (including subdirectories){Style.RESET_ALL}")
                 return
 
-            test_dirs = [self.test_dir]
+            test_dirs = sorted({exp_path.parent for exp_path in exp_files})
         else:
             # Run all tests
             test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}

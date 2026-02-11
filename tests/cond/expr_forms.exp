@@ -1,0 +1,10 @@
+CondArrayRangeExprTrue: 40
+CondArrayRangeExprFalseExisting: 40
+CondArrayRangeExprFalseNew: 0
+CondArrayRangeExprTrueNew: 40
+CondPrefixTrue: 0
+CondPrefixFalseExisting: 0
+CondPrefixFalseNew: 0
+CondPrefixArrayRangeTrue: -40
+CondPrefixArrayRangeFalseExisting: -40
+CondPrefixArrayRangeFalseNew: 0
