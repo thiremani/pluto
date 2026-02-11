@@ -107,31 +107,6 @@ func concatWithMetadata(leftArr, rightArr Array, elem Type) Array {
 	}
 }
 
-func isFullyResolvedType(t Type) bool {
-	switch tt := t.(type) {
-	case Unresolved:
-		return false
-	case Ptr:
-		return isFullyResolvedType(tt.Elem)
-	case Range:
-		return isFullyResolvedType(tt.Iter)
-	case Array:
-		if len(tt.ColTypes) == 0 {
-			return false
-		}
-		for _, col := range tt.ColTypes {
-			if !isFullyResolvedType(col) {
-				return false
-			}
-		}
-		return true
-	case ArrayRange:
-		return isFullyResolvedType(tt.Array) && isFullyResolvedType(tt.Range)
-	default:
-		return t.Kind() != UnresolvedKind
-	}
-}
-
 func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token) Type {
 	leftElemType := leftArr.ColTypes[0]
 	rightElemType := rightArr.ColTypes[0]
@@ -226,8 +201,8 @@ func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, 
 	}
 
 	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
-	if !isFullyResolvedType(t) {
-		if existingType, ok := Get(ts.Scopes, name); ok && isFullyResolvedType(existingType) {
+	if !IsFullyResolvedType(t) {
+		if existingType, ok := Get(ts.Scopes, name); ok && IsFullyResolvedType(existingType) {
 			if CanRefineType(info.OutTypes[idx], existingType) {
 				info.OutTypes[idx] = existingType
 			}
@@ -294,7 +269,7 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 				info.OutTypes[pending.outTypeIdx] = t
 			}
 		}
-		if isFullyResolvedType(t) {
+		if IsFullyResolvedType(t) {
 			delete(ts.UnresolvedExprs, binding)
 		}
 	}
@@ -1634,7 +1609,7 @@ func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast
 		blocked[fn] = struct{}{}
 	}
 	for fn, cached := range ts.ScriptCompiler.Compiler.FuncCache {
-		if !cached.AllTypesInferred() {
+		if !cached.OutputTypesInferred() {
 			blocked[fn] = struct{}{}
 		}
 	}
@@ -1653,11 +1628,11 @@ func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast
 // TypeFunc attempts to walk the function block and infer types for output variables.
 // It ASSUMES all output types have not been inferred
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
-	if f.AllTypesInferred() {
+	if f.OutputTypesInferred() {
 		return true
 	}
 	if _, ok := ts.InProgress[mangled]; ok {
-		return f.AllTypesInferred()
+		return f.OutputTypesInferred()
 	}
 	ts.InProgress[mangled] = struct{}{}
 	defer func() { delete(ts.InProgress, mangled) }()
@@ -1668,7 +1643,7 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
-	inferred := f.AllTypesInferred()
+	inferred := f.OutputTypesInferred()
 	if inferred {
 		ts.refreshInferredFuncExprCache(mangled, template, f)
 	}

@@ -209,12 +209,53 @@ func (f Func) Key() Type {
 }
 
 func (f Func) AllTypesInferred() bool {
+	for _, p := range f.Params {
+		if !IsFullyResolvedType(p) {
+			return false
+		}
+	}
+	return f.OutputTypesInferred()
+}
+
+// OutputTypesInferred reports whether all function outputs are fully resolved.
+func (f Func) OutputTypesInferred() bool {
 	for _, ot := range f.OutTypes {
-		if ot.Kind() == UnresolvedKind {
+		if !IsFullyResolvedType(ot) {
 			return false
 		}
 	}
 	return true
+}
+
+// IsFullyResolvedType reports whether a type contains no unresolved components.
+// It recursively checks composite/container types.
+func IsFullyResolvedType(t Type) bool {
+	switch tt := t.(type) {
+	case Unresolved:
+		return false
+	case Int, Float, StrG, StrH:
+		return true
+	case Ptr:
+		return IsFullyResolvedType(tt.Elem)
+	case Range:
+		return IsFullyResolvedType(tt.Iter)
+	case Array:
+		if len(tt.ColTypes) == 0 {
+			return false
+		}
+		for _, col := range tt.ColTypes {
+			if !IsFullyResolvedType(col) {
+				return false
+			}
+		}
+		return true
+	case ArrayRange:
+		return IsFullyResolvedType(tt.Array) && IsFullyResolvedType(tt.Range)
+	case Func:
+		return tt.AllTypesInferred()
+	default:
+		panic(fmt.Sprintf("unhandled type in IsFullyResolvedType: %T (%v)", t, t.Kind()))
+	}
 }
 
 // Array represents a tabular array with optional headers and typed columns.
