@@ -651,7 +651,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if exists {
 			// Existing bindings with unresolved RHS are left as-is.
-			if newType.Kind() == UnresolvedKind {
+			// Use deep resolution so container types (e.g. arrays with unresolved
+			// element types) are also treated as unresolved.
+			if !IsFullyResolvedType(newType) {
 				continue
 			}
 			if !CanRefineType(typ, newType) {
@@ -1678,11 +1680,11 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 		}
 
 		oldOutArg := f.OutTypes[i]
-		if oldOutArg.Kind() != UnresolvedKind {
+		if IsFullyResolvedType(oldOutArg) {
 			continue
 		}
 
-		if outArg.Kind() != UnresolvedKind {
+		if IsFullyResolvedType(outArg) {
 			ts.Converging = true
 			f.OutTypes[i] = outArg
 			continue
