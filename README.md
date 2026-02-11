@@ -3,7 +3,11 @@
 *Taking programming to another planet 🚀*
 
 <p align="center">
-  <img src="assets/pluto-logo-512.png" alt="Pluto language logo" width="360" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/pluto-readme-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/pluto-readme-light.png" />
+    <img src="assets/pluto-readme-light.png" alt="Pluto language logo" width="460" />
+  </picture>
 </p>
 
 Pluto is a compiled language that combines the clarity of scripting languages with the type-safety, performance, and determinism of systems languages.
