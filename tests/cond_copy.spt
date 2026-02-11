@@ -37,4 +37,4 @@ seed = 2 > 1 condCallHeap(arg)
 "CondCallTrue: -seed"
 
 newFalse = 1 > 2 condCallHeap(arg)
-"CondCallNewFalse: [-newFalse]"
+"CondCallNewFalse: -newFalse"
