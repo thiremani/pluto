@@ -20,17 +20,17 @@ sx = 2 > 3 sx + 1
 
 # Conditional expressions that include prefix operations.
 x = 5
-y = 1 > 0 x + -x
+y = 1 > 0 3x + -x
 "CondPrefixTrue: -y"
-y = 1 > 2 x + -x
+y = 1 > 2 3x + -x
 "CondPrefixFalseExisting: -y"
-z = 1 > 2 x + -x
+z = 1 > 2 3x + -x
 "CondPrefixFalseNew: -z"
 
 pr = 7
 pr = 1 > 0 0 + -arr[1:4]
 "CondPrefixArrayRangeTrue: -pr"
-pr = 1 > 2 0 + -arr[1:4]
+pr = 1 > 2 0 + -arr[1:2]
 "CondPrefixArrayRangeFalseExisting: -pr"
 k = 1 > 2 0 + -arr[1:4]
 "CondPrefixArrayRangeFalseNew: -k"
