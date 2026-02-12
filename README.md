@@ -4,9 +4,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/pluto-readme-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="assets/pluto-readme-light.png" />
-    <img src="assets/pluto-readme-light.png" alt="Pluto language logo" width="460" />
+    <source media="(prefers-color-scheme: dark)" srcset="assets/pluto-transparent-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/pluto-transparent-light.png" />
+    <img src="assets/pluto-transparent-light.png" alt="Pluto language logo" width="460" />
   </picture>
 </p>
 
