@@ -1,6 +1,6 @@
 # Releasing Pluto with GoReleaser
 
-This repository now uses GoReleaser via `/Users/tejas/Downloads/pluto/.goreleaser.yaml` and `/Users/tejas/Downloads/pluto/.github/workflows/release.yaml`.
+This repository now uses GoReleaser via `.goreleaser.yaml` and `.github/workflows/release.yaml`.
 
 ## What this setup does
 
@@ -34,7 +34,7 @@ git tag v0.5.0
 git push origin v0.5.0
 ```
 
-3. Wait for `/Users/tejas/Downloads/pluto/.github/workflows/release.yaml` to finish.
+3. Wait for `.github/workflows/release.yaml` to finish.
 4. Open the generated draft release on GitHub.
 5. Verify assets and publish the draft.
 
@@ -71,6 +71,6 @@ Provide these values/secrets when you want to enable publishing:
 - Chocolatey:
   - `CHOCOLATEY_API_KEY`
   - `CHOCOLATEY_SOURCE_REPO` (community feed URL or your internal feed)
-  - Set `skip_publish: false` in `/Users/tejas/Downloads/pluto/.goreleaser.yaml`
+  - Set `skip_publish: false` in `.goreleaser.yaml`
 
 Because each ecosystem has separate moderation/review flows, a practical sequence is: ship GitHub assets first, then enable each package manager one by one.
