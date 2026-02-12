@@ -1,0 +1,144 @@
+name: Pluto Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-macos-arm64:
+    name: Release (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install LLVM
+        run: |
+          brew update
+          brew install llvm lld
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "CGO_CFLAGS=-I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+
+      - name: Release artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
+
+  release-macos-amd64:
+    name: Release (macOS x86_64)
+    runs-on: macos-13
+    needs: release-macos-arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install LLVM
+        run: |
+          brew update
+          brew install llvm lld
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "CGO_CFLAGS=-I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+
+      - name: Release artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
+
+  release-windows:
+    name: Release (Windows)
+    runs-on: windows-2022
+    needs: release-macos-amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-go
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-python
+
+      - name: Release artifacts
+        shell: msys2 {0}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          eval "$(python scripts/msys2_env.py | sed 's/^/export /')"
+          export PATH="$LLVM_BIN:$PATH"
+          go version
+          go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
+
+  release-linux:
+    name: Release (Linux)
+    runs-on: ubuntu-24.04
+    needs: release-windows
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
+      - name: Install LLVM and dependencies
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get install -y llvm-21-dev lld-21 clang-21
+
+      - name: Set LLVM environment
+        run: |
+          echo "CGO_CFLAGS=-I/usr/lib/llvm-21/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L/usr/lib/llvm-21/lib" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+
+      - name: Release artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey
