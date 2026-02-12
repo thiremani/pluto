@@ -2,9 +2,30 @@
 
 *Taking programming to another planet 🚀*
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/pluto-readme-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/pluto-readme-light.png" />
+    <img src="assets/pluto-readme-light.png" alt="Pluto language logo" width="460" />
+  </picture>
+</p>
+
 Pluto is a compiled language that combines the clarity of scripting languages with the type-safety, performance, and determinism of systems languages.
 
 Functions in Pluto are **templates** defined in `.pt` files. Call a template with different argument types and Pluto generates specialized native code for each — no generics syntax, no runtime dispatch. Write concise programs that compile into efficient, fully specialized executables.
+
+## Philosophy
+
+- 💎 Purity by design — functions have read-only inputs and writable outputs; structs contain raw data with no hidden pointers
+- ✨ The simplicity of scripting
+- ⚡ The type safety and speed of low-level languages
+- 🧠 Deterministic memory
+- 🔧 Automatic specialization
+- 🔒 Predictable concurrency
+
+Intended for performance-sensitive scripting, numerical work, simulation, and systems tools.
+
+---
 
 **Design highlights:**
 
@@ -344,19 +365,6 @@ Pluto is under active development.
 - 🧵 Concurrency model
 - 🧰 Tooling
 - 📘 Documentation
-
----
-
-## Philosophy
-
-- 💎 Purity by design — functions have read-only inputs and writable outputs; structs contain raw data with no hidden pointers
-- ✨ The simplicity of scripting
-- ⚡ The type safety and speed of low-level languages
-- 🧠 Deterministic memory
-- 🔧 Automatic specialization
-- 🔒 Predictable concurrency
-
-Intended for performance-sensitive scripting, numerical work, simulation, and systems tools.
 
 ---
 
