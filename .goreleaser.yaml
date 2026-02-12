@@ -219,8 +219,7 @@ nfpms:
 homebrew_casks:
   - name: pluto
     ids:
-      - pluto-darwin-arm64
-      - pluto-darwin-amd64
+      - pluto-archives
     repository:
       owner: '{{ or .Env.HOMEBREW_TAP_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
       name: '{{ or .Env.HOMEBREW_TAP_REPO "homebrew-tap" }}'
@@ -236,12 +235,12 @@ homebrew_casks:
     binaries:
       - pluto
       - plt
-    skip_upload: '{{ ne .Env.PUBLISH_HOMEBREW "1" }}'
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_HOMEBREW") "0") "1" }}'
 
 scoops:
   - name: pluto
     ids:
-      - pluto-windows
+      - pluto-archives
     repository:
       owner: '{{ or .Env.SCOOP_BUCKET_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
       name: '{{ or .Env.SCOOP_BUCKET_REPO "scoop-bucket" }}'
@@ -253,12 +252,12 @@ scoops:
     license: MIT
     depends:
       - llvm
-    skip_upload: '{{ ne .Env.PUBLISH_SCOOP "1" }}'
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_SCOOP") "0") "1" }}'
 
 winget:
   - name: pluto
     ids:
-      - pluto-windows
+      - pluto-archives
     package_identifier: '{{ or .Env.WINGET_PACKAGE_IDENTIFIER "PlutoLang.Pluto" }}'
     publisher: '{{ or .Env.WINGET_PUBLISHER "Pluto Language" }}'
     short_description: Pluto programming language compiler
@@ -272,12 +271,12 @@ winget:
       email: 41898282+github-actions[bot]@users.noreply.github.com
     dependencies:
       - package_identifier: LLVM.LLVM
-    skip_upload: '{{ ne .Env.PUBLISH_WINGET "1" }}'
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_WINGET") "0") "1" }}'
 
 chocolateys:
   - name: pluto
     ids:
-      - pluto-windows
+      - pluto-archives
     title: Pluto
     authors: Pluto Contributors
     project_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
