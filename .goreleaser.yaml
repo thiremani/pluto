@@ -22,9 +22,45 @@ builds:
       - -X main.Commit={{ .Commit }}
       - -X main.BuildDate={{ .Date }}
 
+  - id: plt-linux
+    main: .
+    binary: plt
+    goos:
+      - linux
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
   - id: pluto-darwin-arm64
     main: .
     binary: pluto
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-darwin-arm64
+    main: .
+    binary: plt
     goos:
       - darwin
     goarch:
@@ -58,6 +94,24 @@ builds:
       - -X main.Commit={{ .Commit }}
       - -X main.BuildDate={{ .Date }}
 
+  - id: plt-darwin-amd64
+    main: .
+    binary: plt
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
   - id: pluto-windows
     main: .
     binary: pluto
@@ -66,6 +120,29 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
+    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
+    tags:
+      - byollvm
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+      - PLUTO_WIN_TOOLCHAIN=gnu
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-windows
+    main: .
+    binary: plt
+    goos:
+      - windows
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
+    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
     tags:
       - byollvm
     env:
@@ -83,9 +160,13 @@ archives:
   - id: pluto-archives
     ids:
       - pluto-linux
+      - plt-linux
       - pluto-darwin-arm64
+      - plt-darwin-arm64
       - pluto-darwin-amd64
+      - plt-darwin-amd64
       - pluto-windows
+      - plt-windows
     formats:
       - tar.gz
     format_overrides:
@@ -107,6 +188,7 @@ nfpms:
   - id: pluto-linux-packages
     ids:
       - pluto-linux
+      - plt-linux
     package_name: pluto
     formats:
       - deb
@@ -118,6 +200,21 @@ nfpms:
     description: Pluto programming language compiler (requires LLVM 21 toolchain on target host).
     license: MIT
     bindir: /usr/bin
+    dependencies:
+      - llvm-21
+      - clang-21
+      - lld-21
+    overrides:
+      rpm:
+        dependencies:
+          - llvm
+          - clang
+          - lld
+      apk:
+        dependencies:
+          - llvm
+          - clang
+          - lld
 
 homebrew_casks:
   - name: pluto
@@ -136,6 +233,9 @@ homebrew_casks:
     dependencies:
       - formula: llvm
       - formula: lld
+    binaries:
+      - pluto
+      - plt
     skip_upload: '{{ ne .Env.PUBLISH_HOMEBREW "1" }}'
 
 scoops:
