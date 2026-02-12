@@ -12,7 +12,7 @@ This repository now uses GoReleaser via `.goreleaser.yaml` and `.github/workflow
   - Windows `x86_64` (`amd64`)
 - Ships both command names in release artifacts:
   - `pluto`
-  - `plt`
+  - `plt` (conflict-safe alias)
 - Injects version metadata into the binary:
   - `main.Version`
   - `main.Commit`
