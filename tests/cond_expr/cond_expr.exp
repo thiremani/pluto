@@ -19,3 +19,5 @@ FloatTrue: 3.14
 FloatFalse: 0
 CallTrue: 10
 CallFalse: 0
+NestedCondTrue: 10 5
+NestedCondFalse: 0 0

@@ -78,3 +78,13 @@ res = Double(i < 10)
 j = 15
 res2 = Double(j < 10)
 "CallFalse: -res2"
+
+# Nested: function with cond-expr in body called from cond-expr context
+# Tests that callee's cond-expr compilation doesn't clobber caller's state
+v = 5
+m, n = CondDouble(v > 0), v > 0
+"NestedCondTrue: -m -n"
+
+v2 = -3
+m2, n2 = CondDouble(v2 > 0), v2 > 0
+"NestedCondFalse: -m2 -n2"

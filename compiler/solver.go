@@ -22,7 +22,8 @@ type ExprInfo struct {
 	OutTypes   []Type
 	HasRanges  bool // True if expression involves ranges (propagated upward during typing)
 	LoopInside bool // For CallExpression: true if function handles iteration, false if call site handles it
-	IsCondExpr bool // True if comparison in value position (extracts LHS value, not i1)
+	IsCondExpr bool    // True if comparison in value position (extracts LHS value, not i1)
+	CondLHS    *Symbol // Pre-extracted LHS value set during cascade compilation
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.

@@ -284,6 +284,12 @@ func condExprChildren(expr ast.Expression) []ast.Expression {
 		}
 	case *ast.ArrayRangeExpression:
 		return []ast.Expression{e.Array, e.Range}
+	case *ast.RangeLiteral:
+		children := []ast.Expression{e.Start, e.Stop}
+		if e.Step != nil {
+			children = append(children, e.Step)
+		}
+		return children
 	}
 	return nil
 }
@@ -309,7 +315,7 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 //  2. Compile both operands
 //  3. Emit comparison → i1
 //  4. Branch: true → new cond_pass block, false → skipBlock
-//  5. Store LHS value in condExprValues for later substitution
+//  5. Store LHS value in ExprInfo.CondLHS for later substitution
 func (c *Compiler) cascadeCondExprs(expr ast.Expression, skipBlock llvm.BasicBlock) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if info == nil {
@@ -342,7 +348,7 @@ func (c *Compiler) cascadeCondExprs(expr ast.Expression, skipBlock llvm.BasicBlo
 		c.builder.SetInsertPointAtEnd(passBlock)
 
 		// Store LHS for substitution during value compilation
-		c.condExprValues[infix] = lSym
+		info.CondLHS = lSym
 		return
 	}
 
@@ -376,7 +382,6 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 	}
 
 	// Cascade through embedded conditional expressions
-	c.condExprValues = make(map[ast.Expression]*Symbol)
 	for _, expr := range stmt.Value {
 		c.cascadeCondExprs(expr, contBlock)
 	}
@@ -389,6 +394,4 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 	c.builder.SetInsertPointAtEnd(contBlock)
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
-
-	c.condExprValues = nil
 }
