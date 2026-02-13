@@ -40,6 +40,42 @@ builds:
       - -X main.Commit={{ .Commit }}
       - -X main.BuildDate={{ .Date }}
 
+  - id: pluto-linux-arm64
+    main: .
+    binary: pluto
+    goos:
+      - linux
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-linux-arm64
+    main: .
+    binary: plt
+    goos:
+      - linux
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
   - id: pluto-darwin-arm64
     main: .
     binary: pluto
@@ -161,6 +197,8 @@ archives:
     ids:
       - pluto-linux
       - plt-linux
+      - pluto-linux-arm64
+      - plt-linux-arm64
       - pluto-darwin-arm64
       - plt-darwin-arm64
       - pluto-darwin-amd64
@@ -189,6 +227,8 @@ nfpms:
     ids:
       - pluto-linux
       - plt-linux
+      - pluto-linux-arm64
+      - plt-linux-arm64
     package_name: pluto
     formats:
       - deb

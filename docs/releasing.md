@@ -7,6 +7,7 @@ This repository now uses GoReleaser via `.goreleaser.yaml` and `.github/workflow
 - Creates a GitHub release when a tag like `v0.5.0` is pushed.
 - Builds Pluto natively on each target OS (no CGO cross-compiling):
   - Linux `x86_64` (`amd64`)
+  - Linux `arm64`
   - macOS `arm64`
   - macOS `x86_64` (`amd64`)
   - Windows `x86_64` (`amd64`)
@@ -29,7 +30,7 @@ The release workflow now:
 
 - runs a smoke gate (`go test -race ./lexer ./parser ./compiler`) on the tagged commit
 - ensures the draft release exists first
-- fans out native release jobs in parallel (macOS arm64/amd64, Linux amd64, Windows amd64)
+- fans out native release jobs in parallel (macOS arm64/amd64, Linux amd64/arm64, Windows amd64)
 
 ## Cut a release
 
