@@ -1,0 +1,2 @@
+res = Double(x)
+    res = x * 2

@@ -22,6 +22,7 @@ type ExprInfo struct {
 	OutTypes   []Type
 	HasRanges  bool // True if expression involves ranges (propagated upward during typing)
 	LoopInside bool // For CallExpression: true if function handles iteration, false if call site handles it
+	IsCondExpr bool // True if comparison in value position (extracts LHS value, not i1)
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.
@@ -58,7 +59,8 @@ type TypeSolver struct {
 	Converging      bool
 	Errors          []*token.CompileError
 	ExprCache       map[ExprKey]*ExprInfo
-	TmpCounter      int // tmpCounter for uniquely naming temporary variables
+	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
+	InValueExpr     bool // true when typing Value expressions of a LetStatement
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -614,11 +616,16 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 }
 
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
-	// type conditions in case there may be functions we have to type
+	// type conditions in non-value context (comparisons produce i1 as usual)
+	savedInValueExpr := ts.InValueExpr
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {
 		ts.TypeExpression(expr, true)
 	}
 
+	// type values in value-expression context (comparisons become conditional extractors)
+	ts.InValueExpr = true
 	types := []Type{}
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
@@ -1112,14 +1119,24 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			continue
 		}
 
-		types = append(types, ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token))
+		resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
+
+		// Conditional expression: comparison in value position returns LHS type
+		if ts.InValueExpr && expr.Token.IsComparison() {
+			resultType = leftType
+		}
+
+		types = append(types, resultType)
 	}
+
+	isCondExpr := ts.InValueExpr && expr.Token.IsComparison()
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:  types,
-		ExprLen:   len(types),
-		HasRanges: ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		OutTypes:   types,
+		ExprLen:    len(types),
+		HasRanges:  ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		IsCondExpr: isCondExpr,
 	}
 
 	return

@@ -89,6 +89,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
+	condExprValues  map[ast.Expression]*Symbol // pre-extracted LHS values for conditional expressions
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -551,12 +552,26 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
-	if !hasConditions {
-		c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
+
+	// Check for embedded conditional expressions in value trees
+	hasCondExprs := false
+	for _, expr := range stmt.Value {
+		if c.hasCondExprInTree(expr) {
+			hasCondExprs = true
+			break
+		}
+	}
+
+	if !hasCondExprs {
+		if !hasConditions {
+			c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
+			return
+		}
+		c.compileCondStatement(stmt, cond)
 		return
 	}
 
-	c.compileCondStatement(stmt, cond)
+	c.compileCondExprStatement(stmt, cond, hasConditions)
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
@@ -787,6 +802,13 @@ func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
+	// Return pre-extracted LHS value for conditional expressions
+	if c.condExprValues != nil {
+		if sym, ok := c.condExprValues[expr]; ok {
+			return []*Symbol{sym}
+		}
+	}
+
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)

@@ -1,0 +1,21 @@
+BasicTrue: 5
+BasicFalseNew: 0
+BeforeReassign: 42
+BasicFalseExisting: 42
+BasicTrueExisting: 5
+ArithBothTrue: 10
+ArithOneFalse: 0
+CombinedBothTrue: 5
+CombinedStmtFalse: 0
+CombinedExprFalse: 0
+MultiTrue: 5 7
+MultiFalse: 0 0
+LessThan: 5
+LessEqual: 5
+GreaterEqual: 5
+Equal: 5
+NotEqual: 5
+FloatTrue: 3.14
+FloatFalse: 0
+CallTrue: 10
+CallFalse: 0
