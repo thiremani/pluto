@@ -1,0 +1,352 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+project_name: pluto
+
+builds:
+  - id: pluto-linux
+    main: .
+    binary: pluto
+    goos:
+      - linux
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-linux
+    main: .
+    binary: plt
+    goos:
+      - linux
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: pluto-linux-arm64
+    main: .
+    binary: pluto
+    goos:
+      - linux
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-linux-arm64
+    main: .
+    binary: plt
+    goos:
+      - linux
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: pluto-darwin-arm64
+    main: .
+    binary: pluto
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-darwin-arm64
+    main: .
+    binary: plt
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "arm64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: pluto-darwin-amd64
+    main: .
+    binary: pluto
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-darwin-amd64
+    main: .
+    binary: plt
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "amd64") }}'
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: pluto-windows
+    main: .
+    binary: pluto
+    goos:
+      - windows
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
+    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
+    tags:
+      - byollvm
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+      - PLUTO_WIN_TOOLCHAIN=gnu
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+  - id: plt-windows
+    main: .
+    binary: plt
+    goos:
+      - windows
+    goarch:
+      - amd64
+    skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
+    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
+    tags:
+      - byollvm
+    env:
+      - CGO_ENABLED=1
+      - CC=clang
+      - CXX=clang++
+      - PLUTO_WIN_TOOLCHAIN=gnu
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.BuildDate={{ .Date }}
+
+archives:
+  - id: pluto-archives
+    ids:
+      - pluto-linux
+      - plt-linux
+      - pluto-linux-arm64
+      - plt-linux-arm64
+      - pluto-darwin-arm64
+      - plt-darwin-arm64
+      - pluto-darwin-amd64
+      - plt-darwin-amd64
+      - pluto-windows
+      - plt-windows
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: 'checksums_{{ .Runtime.Goos }}_{{ .Runtime.Goarch }}.txt'
+
+source:
+  enabled: false
+
+nfpms:
+  - id: pluto-linux-packages
+    ids:
+      - pluto-linux
+      - plt-linux
+      - pluto-linux-arm64
+      - plt-linux-arm64
+    package_name: pluto
+    formats:
+      - deb
+      - rpm
+      - apk
+    file_name_template: '{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}'
+    homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    maintainer: '{{ or .Env.NFPM_MAINTAINER "Pluto Contributors <opensource@pluto-lang.org>" }}'
+    description: Pluto programming language compiler (requires LLVM 21 toolchain on target host).
+    license: MIT
+    bindir: /usr/bin
+    dependencies:
+      - llvm-21
+      - clang-21
+      - lld-21
+    overrides:
+      rpm:
+        dependencies:
+          - llvm
+          - clang
+          - lld
+      apk:
+        dependencies:
+          - llvm
+          - clang
+          - lld
+
+homebrew_casks:
+  - name: pluto
+    ids:
+      - pluto-archives
+    repository:
+      owner: '{{ or .Env.HOMEBREW_TAP_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
+      name: '{{ or .Env.HOMEBREW_TAP_REPO "homebrew-tap" }}'
+    commit_author:
+      name: pluto-bot
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    description: Pluto programming language compiler
+    homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    license: MIT
+    dependencies:
+      - formula: llvm
+      - formula: lld
+    binaries:
+      - pluto
+      - plt
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_HOMEBREW") "0") "1" }}'
+
+scoops:
+  - name: pluto
+    ids:
+      - pluto-archives
+    repository:
+      owner: '{{ or .Env.SCOOP_BUCKET_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
+      name: '{{ or .Env.SCOOP_BUCKET_REPO "scoop-bucket" }}'
+    commit_author:
+      name: pluto-bot
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    description: Pluto programming language compiler
+    homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    license: MIT
+    depends:
+      - llvm
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_SCOOP") "0") "1" }}'
+
+winget:
+  - name: pluto
+    ids:
+      - pluto-archives
+    package_identifier: '{{ or .Env.WINGET_PACKAGE_IDENTIFIER "PlutoLang.Pluto" }}'
+    publisher: '{{ or .Env.WINGET_PUBLISHER "Pluto Language" }}'
+    short_description: Pluto programming language compiler
+    license: MIT
+    homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    repository:
+      owner: '{{ or .Env.WINGET_REPO_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
+      name: '{{ or .Env.WINGET_REPO_NAME "winget-pkgs" }}'
+    commit_author:
+      name: pluto-bot
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    dependencies:
+      - package_identifier: LLVM.LLVM
+    skip_upload: '{{ ne (or (index .Env "PUBLISH_WINGET") "0") "1" }}'
+
+chocolateys:
+  - name: pluto
+    ids:
+      - pluto-archives
+    title: Pluto
+    authors: Pluto Contributors
+    project_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    project_source_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
+    docs_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}#readme'
+    bug_tracker_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}/issues'
+    summary: Pluto programming language compiler
+    description: Pluto is a compiled language with a Go front-end and LLVM back-end.
+    license_url: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}/blob/master/LICENSE'
+    require_license_acceptance: false
+    tags: pluto compiler language llvm
+    dependencies:
+      - id: llvm
+    api_key: '{{ .Env.CHOCOLATEY_API_KEY }}'
+    source_repo: '{{ .Env.CHOCOLATEY_SOURCE_REPO }}'
+    skip_publish: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+release:
+  mode: keep-existing
+  use_existing_draft: true
+  replace_existing_artifacts: true
+  draft: true

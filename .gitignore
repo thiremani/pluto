@@ -37,3 +37,5 @@ diff.txt
 .gotmp/
 .gomodcache/
 .claude/settings.local.json
+# Added by goreleaser init:
+dist/

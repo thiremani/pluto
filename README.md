@@ -47,6 +47,15 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - printf-style formatting; arrays/ranges printable
 - Cross-platform (Linux/macOS/Windows)
 
+## Command name
+
+Release artifacts ship both command names:
+
+- `pluto`
+- `plt` (conflict-safe alias)
+
+If `pluto` conflicts on your system, use `plt`.
+
 ---
 
 ## Quick example
@@ -212,6 +221,12 @@ This enables strong guarantees around race-free execution. The concurrency model
 
 ```bash
 go build -o pluto
+```
+
+If you prefer the conflict-safe command name locally:
+
+```bash
+go build -o plt
 ```
 
 **Compile a directory:**
