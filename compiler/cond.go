@@ -309,61 +309,67 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	return false
 }
 
-// cascadeCondExprs walks the expression tree and emits cascading conditional
-// branches for each IsCondExpr comparison. For each comparison:
-//  1. Recurse into operands first (bottom-up for nested cases)
-//  2. Compile both operands
-//  3. Emit comparison → i1
-//  4. Branch: true → new cond_pass block, false → skipBlock
-//  5. Store LHS value in ExprInfo.CondLHS for later substitution
-func (c *Compiler) cascadeCondExprs(expr ast.Expression, skipBlock llvm.BasicBlock) {
+// extractCondExprs walks the expression tree, evaluates each IsCondExpr
+// comparison, ANDs results into cond, and stores LHS values in ExprInfo.CondLHS
+// for substitution during later value compilation.
+func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value) llvm.Value {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if info == nil {
-		return
+		return cond
 	}
 
 	// Handle conditional expression (comparison in value position)
 	if infix, ok := expr.(*ast.InfixExpression); ok && info.IsCondExpr {
 		// Bottom-up: extract conditions from operands first
-		c.cascadeCondExprs(infix.Left, skipBlock)
-		c.cascadeCondExprs(infix.Right, skipBlock)
+		cond = c.extractCondExprs(infix.Left, cond)
+		cond = c.extractCondExprs(infix.Right, cond)
 
 		// Compile both operands (may return pre-extracted values)
 		left := c.compileExpression(infix.Left, nil)
 		right := c.compileExpression(infix.Right, nil)
 
-		// Emit comparison via operator table → i1
-		lSym := c.derefIfPointer(left[0], "")
-		rSym := c.derefIfPointer(right[0], "")
-		cmpResult := defaultOps[opKey{
-			Operator:  infix.Operator,
-			LeftType:  lSym.Type.Key(),
-			RightType: rSym.Type.Key(),
-		}](c, lSym, rSym, true)
+		// Compare each element pair and AND into combined condition
+		lhsSyms := make([]*Symbol, len(left))
+		for i := range left {
+			lSym := c.derefIfPointer(left[i], "")
+			rSym := c.derefIfPointer(right[i], "")
 
-		// Branch: true → continue cascade, false → skip
-		fn := c.builder.GetInsertBlock().Parent()
-		passBlock := c.Context.AddBasicBlock(fn, "cond_pass")
-		c.builder.CreateCondBr(cmpResult.Val, passBlock, skipBlock)
-		c.builder.SetInsertPointAtEnd(passBlock)
+			// Skip array types — array filtering will be implemented separately
+			if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
+				continue
+			}
 
-		// Store LHS for substitution during value compilation
-		info.CondLHS = lSym
-		return
+			cmpResult := defaultOps[opKey{
+				Operator:  infix.Operator,
+				LeftType:  lSym.Type.Key(),
+				RightType: rSym.Type.Key(),
+			}](c, lSym, rSym, true)
+
+			if cond.IsNil() {
+				cond = cmpResult.Val
+			} else {
+				cond = c.builder.CreateAnd(cond, cmpResult.Val, "and_cond")
+			}
+			lhsSyms[i] = lSym
+		}
+
+		info.CondLHS = lhsSyms
+		return cond
 	}
 
 	// Not a conditional expression — recurse into children
 	for _, child := range condExprChildren(expr) {
-		c.cascadeCondExprs(child, skipBlock)
+		cond = c.extractCondExprs(child, cond)
 	}
+	return cond
 }
 
 // compileCondExprStatement handles let statements that have conditional
 // expressions (comparisons) embedded in their value expressions.
-// It cascades through conditions with short-circuit evaluation, then compiles
-// the value expressions in the true path with comparisons replaced by their
-// pre-extracted LHS values.
-func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value, hasStmtCond bool) {
+// It extracts all conditions, ANDs them with statement conditions, then
+// branches once. Value expressions are compiled in the true path with
+// comparisons replaced by their pre-extracted LHS values via CondLHS.
+func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	tempNames, outTypes, ok := c.createConditionalTempOutputs(stmt)
@@ -371,22 +377,19 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		return
 	}
 
-	fn := c.builder.GetInsertBlock().Parent()
-	contBlock := c.Context.AddBasicBlock(fn, "continue")
-
-	// Branch on statement-level condition first (if any)
-	if hasStmtCond {
-		stmtPassBlock := c.Context.AddBasicBlock(fn, "stmt_cond_pass")
-		c.builder.CreateCondBr(stmtCond, stmtPassBlock, contBlock)
-		c.builder.SetInsertPointAtEnd(stmtPassBlock)
-	}
-
-	// Cascade through embedded conditional expressions
+	// Combine statement conditions with embedded conditional expressions
+	cond := stmtCond
 	for _, expr := range stmt.Value {
-		c.cascadeCondExprs(expr, contBlock)
+		cond = c.extractCondExprs(expr, cond)
 	}
 
-	// All conditions passed — compile assignments into temp slots
+	// Single branch on combined condition
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, "if")
+	contBlock := c.Context.AddBasicBlock(fn, "continue")
+	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
 	c.builder.CreateBr(contBlock)
 

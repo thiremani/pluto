@@ -570,7 +570,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 		return
 	}
 
-	c.compileCondExprStatement(stmt, cond, hasConditions)
+	c.compileCondExprStatement(stmt, cond)
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
@@ -803,9 +803,9 @@ func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
-	// Return pre-extracted LHS value for conditional expressions
+	// Return pre-extracted LHS values for conditional expressions
 	if info.CondLHS != nil {
-		return []*Symbol{info.CondLHS}
+		return info.CondLHS
 	}
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)

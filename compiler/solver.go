@@ -20,10 +20,10 @@ type ExprInfo struct {
 	Rewrite    ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
 	ExprLen    int
 	OutTypes   []Type
-	HasRanges  bool    // True if expression involves ranges (propagated upward during typing)
-	LoopInside bool    // For CallExpression: true if function handles iteration, false if call site handles it
-	IsCondExpr bool    // True if comparison in value position (extracts LHS value, not i1)
-	CondLHS    *Symbol // Pre-extracted LHS value set during cascade compilation
+	HasRanges  bool      // True if expression involves ranges (propagated upward during typing)
+	LoopInside bool      // For CallExpression: true if function handles iteration, false if call site handles it
+	IsCondExpr bool      // True if comparison in value position (extracts LHS value, not i1)
+	CondLHS    []*Symbol // Pre-extracted LHS values set during cascade compilation
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.
