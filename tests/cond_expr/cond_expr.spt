@@ -88,3 +88,22 @@ m, n = CondDouble(v > 0), v > 0
 v2 = -3
 m2, n2 = CondDouble(v2 > 0), v2 > 0
 "NestedCondFalse: -m2 -n2"
+
+# Multi-return conditional expression: all true
+px, py = Pair(5, 7) > Pair(1, 2)
+"PairTrue: -px -py"
+
+# Multi-return conditional expression: one false (all-or-nothing skip)
+px2, py2 = Pair(5, 7) > Pair(1, 8)
+"PairOneFalse: -px2 -py2"
+
+# Array comparison in value position (normal infix, not cond-expr)
+arr1 = [1 2 6]
+arr2 = [1 1 3 5 7]
+ax = arr1 > arr2
+"ArrayArray: -ax"
+
+# Array-scalar comparison in value position
+arr3 = [1 2 3 5 6]
+ay = arr3 > 3
+"ArrayScalar: -ay"

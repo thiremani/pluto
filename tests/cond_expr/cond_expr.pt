@@ -4,3 +4,7 @@ res = Double(x)
 res = CondDouble(x)
     tmp = x > 0
     res = tmp * 2
+
+a, b = Pair(x, y)
+    a = x
+    b = y

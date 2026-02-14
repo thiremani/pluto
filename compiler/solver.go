@@ -1096,6 +1096,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	types = []Type{}
+	isComparisonInValueExpr := ts.InValueExpr && expr.Token.IsComparison()
 	var ok bool
 	var ptr Ptr
 	for i := range left {
@@ -1123,14 +1124,22 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
 
 		// Conditional expression: comparison in value position returns LHS type
-		if ts.InValueExpr && expr.Token.IsComparison() {
+		if isComparisonInValueExpr {
 			resultType = leftType
 		}
 
 		types = append(types, resultType)
 	}
 
-	isCondExpr := ts.InValueExpr && expr.Token.IsComparison()
+	isCondExpr := isComparisonInValueExpr
+	if isCondExpr {
+		for _, t := range types {
+			if t.Kind() == UnresolvedKind || t.Kind() == ArrayKind {
+				isCondExpr = false
+				break
+			}
+		}
+	}
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
