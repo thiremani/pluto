@@ -622,7 +622,15 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	defer func() { ts.InValueExpr = savedInValueExpr }()
 	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {
-		ts.TypeExpression(expr, true)
+		condTypes := ts.TypeExpression(expr, true)
+		for _, ct := range condTypes {
+			if ct.Kind() == ArrayKind {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: stmt.Token,
+					Msg:   "statement condition must produce a scalar value, not an array",
+				})
+			}
+		}
 	}
 
 	// type values in value-expression context (comparisons become conditional extractors)
