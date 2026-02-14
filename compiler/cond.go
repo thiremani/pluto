@@ -268,3 +268,133 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }
+
+// condExprChildren returns the immediate child expressions of an AST node.
+func condExprChildren(expr ast.Expression) []ast.Expression {
+	switch e := expr.(type) {
+	case *ast.InfixExpression:
+		return []ast.Expression{e.Left, e.Right}
+	case *ast.PrefixExpression:
+		return []ast.Expression{e.Right}
+	case *ast.CallExpression:
+		return e.Arguments
+	case *ast.ArrayLiteral:
+		if len(e.Rows) == 1 {
+			return e.Rows[0]
+		}
+	case *ast.ArrayRangeExpression:
+		return []ast.Expression{e.Array, e.Range}
+	case *ast.RangeLiteral:
+		children := []ast.Expression{e.Start, e.Stop}
+		if e.Step != nil {
+			children = append(children, e.Step)
+		}
+		return children
+	}
+	return nil
+}
+
+// hasCondExprInTree returns true if any node in the expression tree has
+// IsCondExpr set (a comparison in value position).
+func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if info != nil && info.IsCondExpr {
+		return true
+	}
+	for _, child := range condExprChildren(expr) {
+		if c.hasCondExprInTree(child) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractCondExprs walks the expression tree, evaluates each IsCondExpr
+// comparison, ANDs results into cond, and stores LHS values in ExprInfo.CondLHS
+// for substitution during later value compilation.
+func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value) llvm.Value {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if info == nil {
+		return cond
+	}
+
+	// Handle conditional expression (comparison in value position)
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.IsCondExpr {
+		// Bottom-up: extract conditions from operands first
+		cond = c.extractCondExprs(infix.Left, cond)
+		cond = c.extractCondExprs(infix.Right, cond)
+
+		// Compile both operands (may return pre-extracted values)
+		left := c.compileExpression(infix.Left, nil)
+		right := c.compileExpression(infix.Right, nil)
+
+		// Compare each element pair and AND into combined condition
+		lhsSyms := make([]*Symbol, len(left))
+		for i := range left {
+			lSym := c.derefIfPointer(left[i], "")
+			rSym := c.derefIfPointer(right[i], "")
+
+			// Skip array types — array filtering will be implemented separately
+			if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
+				continue
+			}
+
+			cmpResult := defaultOps[opKey{
+				Operator:  infix.Operator,
+				LeftType:  lSym.Type.Key(),
+				RightType: rSym.Type.Key(),
+			}](c, lSym, rSym, true)
+
+			if cond.IsNil() {
+				cond = cmpResult.Val
+			} else {
+				cond = c.builder.CreateAnd(cond, cmpResult.Val, "and_cond")
+			}
+			lhsSyms[i] = lSym
+		}
+
+		info.CondLHS = lhsSyms
+		return cond
+	}
+
+	// Not a conditional expression — recurse into children
+	for _, child := range condExprChildren(expr) {
+		cond = c.extractCondExprs(child, cond)
+	}
+	return cond
+}
+
+// compileCondExprStatement handles let statements that have conditional
+// expressions (comparisons) embedded in their value expressions.
+// It extracts all conditions, ANDs them with statement conditions, then
+// branches once. Value expressions are compiled in the true path with
+// comparisons replaced by their pre-extracted LHS values via CondLHS.
+func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
+	c.prePromoteConditionalCallArgs(stmt.Value)
+
+	tempNames, outTypes, ok := c.createConditionalTempOutputs(stmt)
+	if !ok {
+		return
+	}
+
+	// Combine statement conditions with embedded conditional expressions
+	cond := stmtCond
+	for _, expr := range stmt.Value {
+		cond = c.extractCondExprs(expr, cond)
+	}
+
+	// Single branch on combined condition
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, "if")
+	contBlock := c.Context.AddBasicBlock(fn, "continue")
+	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+	c.builder.CreateBr(contBlock)
+
+	// Continue block: commit temp values to real destinations
+	c.builder.SetInsertPointAtEnd(contBlock)
+	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
+	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+}

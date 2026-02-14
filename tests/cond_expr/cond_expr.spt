@@ -1,0 +1,109 @@
+# Basic conditional expression: true case (new var)
+a = 5
+x = a > 2
+"BasicTrue: -x"
+
+# Basic conditional expression: false case (new var → 0)
+b = 1
+y = b > 2
+"BasicFalseNew: -y"
+
+# False case with existing var (keeps old value)
+z = 42
+"BeforeReassign: -z"
+z = b > 2
+"BasicFalseExisting: -z"
+
+# True case with existing var (gets new value)
+z = a > 2
+"BasicTrueExisting: -z"
+
+# Arithmetic with two conditional expressions
+c = 3
+d = 7
+s = c > 2 + d < 10
+"ArithBothTrue: -s"
+
+# One condition fails
+e = 1
+s2 = e > 2 + d < 10
+"ArithOneFalse: -s2"
+
+# Combined statement condition + embedded condition
+w = 5 > 3 a > 2
+"CombinedBothTrue: -w"
+
+w2 = 1 > 3 a > 2
+"CombinedStmtFalse: -w2"
+
+w3 = 5 > 3 b > 2
+"CombinedExprFalse: -w3"
+
+# Multiple targets: all-or-nothing
+p, q = a > 2, d < 10
+"MultiTrue: -p -q"
+
+p2, q2 = b > 2, d < 10
+"MultiFalse: -p2 -q2"
+
+# Different comparison operators
+v1 = a < 10
+"LessThan: -v1"
+
+v2 = a <= 5
+"LessEqual: -v2"
+
+v3 = a >= 5
+"GreaterEqual: -v3"
+
+v4 = a == 5
+"Equal: -v4"
+
+v5 = a != 3
+"NotEqual: -v5"
+
+# Float comparison
+f = 3.14
+fv = f > 2.0
+"FloatTrue: -fv"
+
+fv2 = f > 4.0
+"FloatFalse: -fv2"
+
+# Function call with conditional arg
+i = 5
+res = Double(i < 10)
+"CallTrue: -res"
+
+j = 15
+res2 = Double(j < 10)
+"CallFalse: -res2"
+
+# Nested: function with cond-expr in body called from cond-expr context
+# Tests that callee's cond-expr compilation doesn't clobber caller's state
+v = 5
+m, n = CondDouble(v > 0), v > 0
+"NestedCondTrue: -m -n"
+
+v2 = -3
+m2, n2 = CondDouble(v2 > 0), v2 > 0
+"NestedCondFalse: -m2 -n2"
+
+# Multi-return conditional expression: all true
+px, py = Pair(5, 7) > Pair(1, 2)
+"PairTrue: -px -py"
+
+# Multi-return conditional expression: one false (all-or-nothing skip)
+px2, py2 = Pair(5, 7) > Pair(1, 8)
+"PairOneFalse: -px2 -py2"
+
+# Array comparison in value position (normal infix, not cond-expr)
+arr1 = [1 2 6]
+arr2 = [1 1 3 5 7]
+ax = arr1 > arr2
+"ArrayArray: -ax"
+
+# Array-scalar comparison in value position
+arr3 = [1 2 3 5 6]
+ay = arr3 > 3
+"ArrayScalar: -ay"

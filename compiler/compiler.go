@@ -551,12 +551,26 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
-	if !hasConditions {
-		c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
+
+	// Check for embedded conditional expressions in value trees
+	hasCondExprs := false
+	for _, expr := range stmt.Value {
+		if c.hasCondExprInTree(expr) {
+			hasCondExprs = true
+			break
+		}
+	}
+
+	if !hasCondExprs {
+		if !hasConditions {
+			c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
+			return
+		}
+		c.compileCondStatement(stmt, cond)
 		return
 	}
 
-	c.compileCondStatement(stmt, cond)
+	c.compileCondExprStatement(stmt, cond)
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
@@ -788,6 +802,11 @@ func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+
+	// Return pre-extracted LHS values for conditional expressions
+	if info.CondLHS != nil {
+		return info.CondLHS
+	}
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
