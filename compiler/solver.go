@@ -24,6 +24,33 @@ const (
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
 )
 
+// classifyCondMode determines the CondMode for a comparison in value position.
+// It rejects mixed array/scalar outputs (filter and extract-LHS semantics
+// cannot coexist) and falls back to CondNone for unresolved types.
+func (ts *TypeSolver) classifyCondMode(isArrayFilter, isComparisonInValueExpr bool, types []Type, tok token.Token) CondMode {
+	if isArrayFilter {
+		for _, t := range types {
+			if t.Kind() != ArrayKind && t.Kind() != UnresolvedKind {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: tok,
+					Msg:   "comparison in value position cannot mix array and scalar outputs",
+				})
+				break
+			}
+		}
+		return CondArray
+	}
+	if !isComparisonInValueExpr {
+		return CondNone
+	}
+	for _, t := range types {
+		if t.Kind() == UnresolvedKind || t.Kind() == ArrayKind {
+			return CondNone
+		}
+	}
+	return CondScalar
+}
+
 type ExprInfo struct {
 	Ranges      []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
 	Rewrite     ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
@@ -1165,33 +1192,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types = append(types, resultType)
 	}
 
-	// Reject mixed array/scalar outputs in value-position comparisons:
-	// filter semantics (array) and extract-LHS semantics (scalar) cannot
-	// coexist in a single expression.
-	if isArrayFilter {
-		for _, t := range types {
-			if t.Kind() != ArrayKind && t.Kind() != UnresolvedKind {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: expr.Token,
-					Msg:   "comparison in value position cannot mix array and scalar outputs",
-				})
-				break
-			}
-		}
-	}
-
-	compareMode := CondNone
-	if isArrayFilter {
-		compareMode = CondArray
-	} else if isComparisonInValueExpr {
-		compareMode = CondScalar
-		for _, t := range types {
-			if t.Kind() == UnresolvedKind || t.Kind() == ArrayKind {
-				compareMode = CondNone
-				break
-			}
-		}
-	}
+	compareMode := ts.classifyCondMode(isArrayFilter, isComparisonInValueExpr, types, expr.Token)
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{

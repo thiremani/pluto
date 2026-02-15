@@ -534,6 +534,21 @@ func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, ex
 	return c.compileInfix(op, left, right, expected)
 }
 
+// filterPush conditionally appends sym to acc based on cond.
+// Emits a branch: if cond is true, push sym; otherwise skip.
+func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Value) {
+	fn := c.builder.GetInsertBlock().Parent()
+	copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
+	nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
+	c.builder.CreateCondBr(cond, copyBlock, nextBlock)
+
+	c.builder.SetInsertPointAtEnd(copyBlock)
+	c.PushVal(acc, sym)
+	c.builder.CreateBr(nextBlock)
+
+	c.builder.SetInsertPointAtEnd(nextBlock)
+}
+
 func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr *Symbol, acc *ArrayAccumulator) *Symbol {
 	leftElem := leftArr.Type.(Array).ColTypes[0]
 	rightElem := rightArr.Type.(Array).ColTypes[0]
@@ -559,16 +574,7 @@ func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr 
 			RightType: rightSym.Type.Key(),
 		}](c, leftSym, rightSym, true)
 
-		fn := c.builder.GetInsertBlock().Parent()
-		copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
-		nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
-		c.builder.CreateCondBr(cmpResult.Val, copyBlock, nextBlock)
-
-		c.builder.SetInsertPointAtEnd(copyBlock)
-		c.PushVal(acc, leftSym)
-		c.builder.CreateBr(nextBlock)
-
-		c.builder.SetInsertPointAtEnd(nextBlock)
+		c.filterPush(acc, leftSym, cmpResult.Val)
 	})
 
 	return c.ArrayAccResult(acc)
@@ -578,8 +584,6 @@ func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symb
 	arrElem := arr.Type.(Array).ColTypes[0]
 	lenVal := c.ArrayLen(arr, arrElem)
 
-	scalarSym := c.derefIfPointer(scalar, "")
-
 	r := c.rangeZeroToN(lenVal)
 	c.createLoop(r, func(iter llvm.Value) {
 		val := c.ArrayGetBorrowed(arr, arrElem, iter)
@@ -588,19 +592,10 @@ func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symb
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
 			LeftType:  elemSym.Type.Key(),
-			RightType: scalarSym.Type.Key(),
-		}](c, elemSym, scalarSym, true)
+			RightType: scalar.Type.Key(),
+		}](c, elemSym, scalar, true)
 
-		fn := c.builder.GetInsertBlock().Parent()
-		copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
-		nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
-		c.builder.CreateCondBr(cmpResult.Val, copyBlock, nextBlock)
-
-		c.builder.SetInsertPointAtEnd(copyBlock)
-		c.PushVal(acc, elemSym)
-		c.builder.CreateBr(nextBlock)
-
-		c.builder.SetInsertPointAtEnd(nextBlock)
+		c.filterPush(acc, elemSym, cmpResult.Val)
 	})
 
 	return c.ArrayAccResult(acc)

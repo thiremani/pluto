@@ -553,25 +553,21 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
 
-	// Check for embedded conditional expressions in value trees
-	hasCondExprs := false
+	// Embedded conditional expressions (comparisons in value position)
+	// take the most specialized path — they subsume statement conditions.
 	for _, expr := range stmt.Value {
 		if c.hasCondExprInTree(expr) {
-			hasCondExprs = true
-			break
+			c.compileCondExprStatement(stmt, cond)
+			return
 		}
 	}
 
-	if !hasCondExprs {
-		if !hasConditions {
-			c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
-			return
-		}
+	if hasConditions {
 		c.compileCondStatement(stmt, cond)
 		return
 	}
 
-	c.compileCondExprStatement(stmt, cond)
+	c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {

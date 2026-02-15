@@ -72,69 +72,28 @@ func NewCFG(sc *ScriptCompiler, cc *CodeCompiler) *CFG {
 // collectReads walks an expression tree and returns a slice of all
 // the identifier names it finds, put in VarEvent. This is a read-only analysis.
 func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
+	// Leaf cases with special handling
 	switch e := expr.(type) {
-	// Base cases that do NOT contain identifiers.
-	// We do nothing and let the function return the initial nil slice.
 	case *ast.IntegerLiteral, *ast.FloatLiteral:
 		return nil
-
 	case *ast.StringLiteral:
-		// Collect any identifiers within the format string.
 		return cfg.collectStringReads(e.Value, e.Token)
-
 	case *ast.HeapStringLiteral:
-		// Collect any identifiers within the format string.
 		return cfg.collectStringReads(e.Value, e.Token)
-
-	case *ast.RangeLiteral:
-		// a range literal “start:stop[:step]” reads start, stop, and optionally step
-		evs := cfg.collectReads(e.Start)
-		evs = append(cfg.collectReads(e.Stop), evs...)
-		if e.Step != nil {
-			evs = append(cfg.collectReads(e.Step), evs...)
-		}
-		return evs
-	// Base case that IS an identifier.
 	case *ast.Identifier:
-		// Return a new slice
 		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
-
-	// Recursive cases: These nodes contain other expressions.
-	case *ast.PrefixExpression:
-		// The result is whatever we find in the right-hand side.
-		return cfg.collectReads(e.Right)
-
-	case *ast.InfixExpression:
-		leftEvents := cfg.collectReads(e.Left)
-		rightEvents := cfg.collectReads(e.Right)
-		// Efficiently append the non-nil slices.
-		return append(leftEvents, rightEvents...)
-
-	case *ast.CallExpression:
-		var evs []VarEvent // Declares a nil slice
-		for _, arg := range e.Arguments {
-			evs = append(evs, cfg.collectReads(arg)...)
-		}
-		return evs
-
-	case *ast.ArrayLiteral:
-		// Collect reads from every cell expression in all rows
-		var evs []VarEvent
-		for _, row := range e.Rows {
-			for _, cell := range row {
-				evs = append(evs, cfg.collectReads(cell)...)
-			}
-		}
-		return evs
-
-	case *ast.ArrayRangeExpression:
-		evs := cfg.collectReads(e.Array)
-		evs = append(evs, cfg.collectReads(e.Range)...)
-		return evs
-
-	default:
-		panic(fmt.Sprintf("unhandled expression type: %T", e))
 	}
+
+	// Recurse into children for composite expressions
+	children := ast.ExprChildren(expr)
+	if children == nil {
+		panic(fmt.Sprintf("unhandled expression type: %T", expr))
+	}
+	var evs []VarEvent
+	for _, child := range children {
+		evs = append(evs, cfg.collectReads(child)...)
+	}
+	return evs
 }
 
 func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {

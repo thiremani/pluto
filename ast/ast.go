@@ -434,3 +434,32 @@ func (ce *CallExpression) String() string {
 
 	return out.String()
 }
+
+// ExprChildren returns the immediate child expressions of an AST node.
+// Returns nil for leaf nodes (Identifier, IntegerLiteral, FloatLiteral,
+// StringLiteral, HeapStringLiteral).
+func ExprChildren(expr Expression) []Expression {
+	switch e := expr.(type) {
+	case *InfixExpression:
+		return []Expression{e.Left, e.Right}
+	case *PrefixExpression:
+		return []Expression{e.Right}
+	case *CallExpression:
+		return e.Arguments
+	case *ArrayLiteral:
+		children := []Expression{}
+		for _, row := range e.Rows {
+			children = append(children, row...)
+		}
+		return children
+	case *ArrayRangeExpression:
+		return []Expression{e.Array, e.Range}
+	case *RangeLiteral:
+		children := []Expression{e.Start, e.Stop}
+		if e.Step != nil {
+			children = append(children, e.Step)
+		}
+		return children
+	}
+	return nil
+}

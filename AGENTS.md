@@ -60,6 +60,18 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `p
 - Test/validation command details are optional in commit messages; put full verification details in the PR description when possible.
 - PRs: include a clear description, linked issues, unit/E2E tests for changes, and sample before/after output where relevant.
 
+## Code Review Checklist
+
+When reviewing PRs or preparing code for review, check:
+
+1. **Modularity & readability**: Is each function focused on a single responsibility? Can a new reader follow the logic without excessive cross-referencing?
+2. **Placement**: Do changes belong in the functions, arguments, and structs they touch, or should logic be moved to a more natural home?
+3. **Duplication**: Is there code that duplicates existing patterns in the codebase? Extract shared logic into a helper or utility (e.g., `ast.ExprChildren` for tree-walking) rather than repeating type-switches or loop bodies.
+4. **Nesting & control flow**: Can nested `if`/`for` blocks be flattened using early `return`, `continue`, or `break`? Prefer guard clauses over deep indentation.
+5. **Naming**: Are new identifiers clear, consistent with existing conventions, and free of ambiguity? Avoid mixing synonyms (e.g., `tmp` vs `temp`) for the same concept.
+6. **Edge cases**: Are zero-length slices, nil maps, and boundary values handled? Does the code distinguish "absent" from "empty"?
+7. **Resource cleanup**: For compiler code specifically — are heap temporaries freed on all paths (true and false branches)? Are borrowed vs owned semantics respected?
+
 ## Debugging & Configuration Tips
 - Quick smoke check: `./pluto tests/` to see compile/link output.
 - Clear cache for current version: `./pluto --clean`

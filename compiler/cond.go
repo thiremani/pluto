@@ -40,34 +40,15 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 // to memory by compileArgs, so conditional lowering pre-promotes them before
 // branching.
 func collectCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
-	switch e := expr.(type) {
-	case *ast.CallExpression:
-		for _, arg := range e.Arguments {
+	if ce, ok := expr.(*ast.CallExpression); ok {
+		for _, arg := range ce.Arguments {
 			if ident, ok := arg.(*ast.Identifier); ok {
 				out[ident.Value] = struct{}{}
 			}
-			collectCallArgIdentifiers(arg, out)
 		}
-	case *ast.InfixExpression:
-		collectCallArgIdentifiers(e.Left, out)
-		collectCallArgIdentifiers(e.Right, out)
-	case *ast.PrefixExpression:
-		collectCallArgIdentifiers(e.Right, out)
-	case *ast.ArrayLiteral:
-		for _, row := range e.Rows {
-			for _, cell := range row {
-				collectCallArgIdentifiers(cell, out)
-			}
-		}
-	case *ast.ArrayRangeExpression:
-		collectCallArgIdentifiers(e.Array, out)
-		collectCallArgIdentifiers(e.Range, out)
-	case *ast.RangeLiteral:
-		collectCallArgIdentifiers(e.Start, out)
-		collectCallArgIdentifiers(e.Stop, out)
-		if e.Step != nil {
-			collectCallArgIdentifiers(e.Step, out)
-		}
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		collectCallArgIdentifiers(child, out)
 	}
 }
 
@@ -276,31 +257,6 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }
 
-// condExprChildren returns the immediate child expressions of an AST node.
-func condExprChildren(expr ast.Expression) []ast.Expression {
-	switch e := expr.(type) {
-	case *ast.InfixExpression:
-		return []ast.Expression{e.Left, e.Right}
-	case *ast.PrefixExpression:
-		return []ast.Expression{e.Right}
-	case *ast.CallExpression:
-		return e.Arguments
-	case *ast.ArrayLiteral:
-		if len(e.Rows) == 1 {
-			return e.Rows[0]
-		}
-	case *ast.ArrayRangeExpression:
-		return []ast.Expression{e.Array, e.Range}
-	case *ast.RangeLiteral:
-		children := []ast.Expression{e.Start, e.Stop}
-		if e.Step != nil {
-			children = append(children, e.Step)
-		}
-		return children
-	}
-	return nil
-}
-
 // hasCondExprInTree returns true if any node in the expression tree has
 // CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
@@ -308,12 +264,41 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	if info != nil && info.CompareMode == CondScalar {
 		return true
 	}
-	for _, child := range condExprChildren(expr) {
+	for _, child := range ast.ExprChildren(expr) {
 		if c.hasCondExprInTree(child) {
 			return true
 		}
 	}
 	return false
+}
+
+// andScalarComparisons compares each element pair of left and right using op,
+// ANDs the results into cond, and returns the dereferenced LHS symbols.
+// Array-typed pairs are skipped (handled by array filtering).
+func (c *Compiler) andScalarComparisons(op string, left, right []*Symbol, cond llvm.Value) ([]*Symbol, llvm.Value) {
+	lhsSyms := make([]*Symbol, len(left))
+	for i := range left {
+		lSym := c.derefIfPointer(left[i], "")
+		rSym := c.derefIfPointer(right[i], "")
+
+		if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
+			continue
+		}
+
+		cmpResult := defaultOps[opKey{
+			Operator:  op,
+			LeftType:  lSym.Type.Key(),
+			RightType: rSym.Type.Key(),
+		}](c, lSym, rSym, true)
+
+		if cond.IsNil() {
+			cond = cmpResult.Val
+		} else {
+			cond = c.builder.CreateAnd(cond, cmpResult.Val, "and_cond")
+		}
+		lhsSyms[i] = lSym
+	}
+	return lhsSyms, cond
 }
 
 // extractCondExprs walks the expression tree, evaluates each CondScalar
@@ -336,30 +321,8 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 		left := c.compileExpression(infix.Left, nil)
 		right := c.compileExpression(infix.Right, nil)
 
-		// Compare each element pair and AND into combined condition
-		lhsSyms := make([]*Symbol, len(left))
-		for i := range left {
-			lSym := c.derefIfPointer(left[i], "")
-			rSym := c.derefIfPointer(right[i], "")
-
-			// Skip array types — array filtering is handled separately
-			if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
-				continue
-			}
-
-			cmpResult := defaultOps[opKey{
-				Operator:  infix.Operator,
-				LeftType:  lSym.Type.Key(),
-				RightType: rSym.Type.Key(),
-			}](c, lSym, rSym, true)
-
-			if cond.IsNil() {
-				cond = cmpResult.Val
-			} else {
-				cond = c.builder.CreateAnd(cond, cmpResult.Val, "and_cond")
-			}
-			lhsSyms[i] = lSym
-		}
+		var lhsSyms []*Symbol
+		lhsSyms, cond = c.andScalarComparisons(infix.Operator, left, right, cond)
 
 		c.condLHS[key(c.FuncNameMangled, expr)] = lhsSyms
 		temps = append(temps, condTemp{infix.Left, left})
@@ -370,7 +333,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	}
 
 	// Not a conditional expression — recurse into children
-	for _, child := range condExprChildren(expr) {
+	for _, child := range ast.ExprChildren(expr) {
 		cond, temps = c.extractCondExprs(child, cond, temps)
 	}
 	return cond, temps
