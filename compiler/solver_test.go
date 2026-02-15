@@ -268,7 +268,7 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	}
 }
 
-func TestArrayComparisonInValuePositionNotCondExpr(t *testing.T) {
+func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
@@ -293,7 +293,8 @@ func TestArrayComparisonInValuePositionNotCondExpr(t *testing.T) {
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
-	require.False(t, info.IsCondExpr, "array comparison should not be tagged as cond-expr")
+	require.Equal(t, CondArray, info.CompareMode, "array comparison in value position should be tagged as filter")
+	require.NotEqual(t, CondScalar, info.CompareMode, "array comparison should not be tagged as extract-LHS")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {

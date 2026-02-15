@@ -15,15 +15,23 @@ type RangeInfo struct {
 	ArrayType Array
 }
 
+// CondMode classifies how a comparison in value position is lowered.
+type CondMode int
+
+const (
+	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
+	CondScalar                 // Scalar: extract LHS value, branch on condition
+	CondArray                  // Array: element-wise filter, keep LHS where condition holds
+)
+
 type ExprInfo struct {
-	Ranges     []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	Rewrite    ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
-	ExprLen    int
-	OutTypes   []Type
-	HasRanges  bool      // True if expression involves ranges (propagated upward during typing)
-	LoopInside bool      // For CallExpression: true if function handles iteration, false if call site handles it
-	IsCondExpr bool      // True if comparison in value position (extracts LHS value, not i1)
-	CondLHS    []*Symbol // Pre-extracted LHS values set during cascade compilation
+	Ranges      []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite     ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen     int
+	OutTypes    []Type
+	HasRanges   bool     // True if expression involves ranges (propagated upward during typing)
+	LoopInside  bool     // For CallExpression: true if function handles iteration, false if call site handles it
+	CompareMode CondMode // How this comparison-in-value-position is lowered
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.
@@ -1105,6 +1113,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 	types = []Type{}
 	isComparisonInValueExpr := ts.InValueExpr && expr.Token.IsComparison()
+	isArrayFilter := false
 	var ok bool
 	var ptr Ptr
 	for i := range left {
@@ -1120,6 +1129,23 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
 			types = append(types, Unresolved{})
+			continue
+		}
+
+		// Array filter: comparison in value position with array LHS
+		// returns filtered LHS array (elements where comparison holds)
+		if isComparisonInValueExpr && leftType.Kind() == ArrayKind {
+			elemType := leftType.(Array).ColTypes[0]
+			var rhsElemType Type
+			if rightType.Kind() == ArrayKind {
+				rhsElemType = rightType.(Array).ColTypes[0]
+			} else {
+				rhsElemType = rightType
+			}
+			// Validate element-wise comparison is supported
+			ts.TypeInfixOp(elemType, rhsElemType, expr.Operator, expr.Token)
+			isArrayFilter = true
+			types = append(types, leftType)
 			continue
 		}
 
@@ -1139,11 +1165,29 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types = append(types, resultType)
 	}
 
-	isCondExpr := isComparisonInValueExpr
-	if isCondExpr {
+	// Reject mixed array/scalar outputs in value-position comparisons:
+	// filter semantics (array) and extract-LHS semantics (scalar) cannot
+	// coexist in a single expression.
+	if isArrayFilter {
+		for _, t := range types {
+			if t.Kind() != ArrayKind && t.Kind() != UnresolvedKind {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: expr.Token,
+					Msg:   "comparison in value position cannot mix array and scalar outputs",
+				})
+				break
+			}
+		}
+	}
+
+	compareMode := CondNone
+	if isArrayFilter {
+		compareMode = CondArray
+	} else if isComparisonInValueExpr {
+		compareMode = CondScalar
 		for _, t := range types {
 			if t.Kind() == UnresolvedKind || t.Kind() == ArrayKind {
-				isCondExpr = false
+				compareMode = CondNone
 				break
 			}
 		}
@@ -1151,10 +1195,10 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:   types,
-		ExprLen:    len(types),
-		HasRanges:  ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
-		IsCondExpr: isCondExpr,
+		OutTypes:    types,
+		ExprLen:     len(types),
+		HasRanges:   ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		CompareMode: compareMode,
 	}
 
 	return

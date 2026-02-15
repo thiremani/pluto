@@ -79,6 +79,13 @@ j = 15
 res2 = Double(j < 10)
 "CallFalse: -res2"
 
+# Call result as LHS of conditional (exercises false-path temp cleanup)
+cr = Double(5) > 8
+"CallLhsTrue: -cr"
+
+cr2 = Double(5) > 12
+"CallLhsFalse: -cr2"
+
 # Nested: function with cond-expr in body called from cond-expr context
 # Tests that callee's cond-expr compilation doesn't clobber caller's state
 v = 5

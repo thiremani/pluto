@@ -19,9 +19,11 @@ FloatTrue: 3.14
 FloatFalse: 0
 CallTrue: 10
 CallFalse: 0
+CallLhsTrue: 10
+CallLhsFalse: 0
 NestedCondTrue: 10 5
 NestedCondFalse: 0 0
 PairTrue: 5 7
 PairOneFalse: 0 0
-ArrayArray: [0 1 1]
-ArrayScalar: [0 0 0 1 1]
+ArrayArray: [2 6]
+ArrayScalar: [5 6]

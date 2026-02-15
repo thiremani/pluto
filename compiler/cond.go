@@ -8,6 +8,13 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+// condTemp holds a pre-compiled LHS operand and its source expression, used to
+// free heap temporaries on the false branch of conditional expression lowering.
+type condTemp struct {
+	expr ast.Expression
+	syms []*Symbol
+}
+
 func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, hasConditions bool) {
 	if len(stmt.Condition) == 0 {
 		hasConditions = false
@@ -295,10 +302,10 @@ func condExprChildren(expr ast.Expression) []ast.Expression {
 }
 
 // hasCondExprInTree returns true if any node in the expression tree has
-// IsCondExpr set (a comparison in value position).
+// CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info != nil && info.IsCondExpr {
+	if info != nil && info.CompareMode == CondScalar {
 		return true
 	}
 	for _, child := range condExprChildren(expr) {
@@ -309,20 +316,21 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	return false
 }
 
-// extractCondExprs walks the expression tree, evaluates each IsCondExpr
-// comparison, ANDs results into cond, and stores LHS values in ExprInfo.CondLHS
-// for substitution during later value compilation.
-func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value) llvm.Value {
+// extractCondExprs walks the expression tree, evaluates each CondScalar
+// comparison, ANDs results into cond, and stores LHS values in c.condLHS
+// for substitution during later value compilation. LHS temporaries are
+// appended to temps so the caller can free them on the false path.
+func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if info == nil {
-		return cond
+		return cond, temps
 	}
 
 	// Handle conditional expression (comparison in value position)
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.IsCondExpr {
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.CompareMode == CondScalar {
 		// Bottom-up: extract conditions from operands first
-		cond = c.extractCondExprs(infix.Left, cond)
-		cond = c.extractCondExprs(infix.Right, cond)
+		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
+		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
 
 		// Compile both operands (may return pre-extracted values)
 		left := c.compileExpression(infix.Left, nil)
@@ -334,7 +342,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value) llvm.V
 			lSym := c.derefIfPointer(left[i], "")
 			rSym := c.derefIfPointer(right[i], "")
 
-			// Skip array types — array filtering will be implemented separately
+			// Skip array types — array filtering is handled separately
 			if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
 				continue
 			}
@@ -353,22 +361,26 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value) llvm.V
 			lhsSyms[i] = lSym
 		}
 
-		info.CondLHS = lhsSyms
-		return cond
+		c.condLHS[key(c.FuncNameMangled, expr)] = lhsSyms
+		temps = append(temps, condTemp{infix.Left, left})
+		// Free right-side temporaries (only used for comparison).
+		// Left-side values are retained in condLHS for later substitution.
+		c.freeTemporary(infix.Right, right)
+		return cond, temps
 	}
 
 	// Not a conditional expression — recurse into children
 	for _, child := range condExprChildren(expr) {
-		cond = c.extractCondExprs(child, cond)
+		cond, temps = c.extractCondExprs(child, cond, temps)
 	}
-	return cond
+	return cond, temps
 }
 
 // compileCondExprStatement handles let statements that have conditional
 // expressions (comparisons) embedded in their value expressions.
 // It extracts all conditions, ANDs them with statement conditions, then
 // branches once. Value expressions are compiled in the true path with
-// comparisons replaced by their pre-extracted LHS values via CondLHS.
+// comparisons replaced by their pre-extracted LHS values via c.condLHS.
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
@@ -377,24 +389,45 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		return
 	}
 
-	// Combine statement conditions with embedded conditional expressions
+	// Save and initialize statement-local condLHS map for extraction.
+	// Save/restore handles re-entrant calls (e.g. nested cond-expr in callee).
+	savedCondLHS := c.condLHS
+	c.condLHS = make(map[ExprKey][]*Symbol)
+
+	// Combine statement conditions with embedded conditional expressions.
+	// temps collects LHS operands compiled before the branch for false-path cleanup.
+	var temps []condTemp
 	cond := stmtCond
 	for _, expr := range stmt.Value {
-		cond = c.extractCondExprs(expr, cond)
+		cond, temps = c.extractCondExprs(expr, cond, temps)
 	}
 
-	// Single branch on combined condition
+	// Branch: true → compute values, false → free pre-compiled LHS temporaries
 	fn := c.builder.GetInsertBlock().Parent()
 	ifBlock := c.Context.AddBasicBlock(fn, "if")
+	elseBlock := c.Context.AddBasicBlock(fn, "else")
 	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+	c.builder.CreateBr(contBlock)
+
+	// Else block: free LHS temporaries that won't be consumed.
+	// extractCondExprs compiles LHS operands before the branch; on the true
+	// path they are consumed by assignment, but on the false path they are
+	// orphaned and must be freed to avoid leaking heap types (e.g. strings).
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	for _, tmp := range temps {
+		c.freeTemporary(tmp.expr, tmp.syms)
+	}
 	c.builder.CreateBr(contBlock)
 
 	// Continue block: commit temp values to real destinations
 	c.builder.SetInsertPointAtEnd(contBlock)
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+
+	// Restore previous state (supports re-entrant cond-expr compilation)
+	c.condLHS = savedCondLHS
 }

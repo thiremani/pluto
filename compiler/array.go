@@ -515,6 +515,97 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	return resSym
 }
 
+// compileArrayFilter dispatches array filtering to array-array or array-scalar paths.
+// Returns a new array containing only LHS elements where the comparison holds.
+func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
+	l := c.derefIfPointer(left, "")
+	r := c.derefIfPointer(right, "")
+
+	resArr := expected.(Array)
+	acc := c.NewArrayAccumulator(resArr)
+
+	if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
+		return c.compileArrayArrayFilter(op, l, r, acc)
+	}
+	if l.Type.Kind() == ArrayKind {
+		return c.compileArrayScalarFilter(op, l, r, acc)
+	}
+	// Fallback: LHS is not an array (shouldn't reach here if solver is correct)
+	return c.compileInfix(op, left, right, expected)
+}
+
+func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr *Symbol, acc *ArrayAccumulator) *Symbol {
+	leftElem := leftArr.Type.(Array).ColTypes[0]
+	rightElem := rightArr.Type.(Array).ColTypes[0]
+
+	leftLen := c.ArrayLen(leftArr, leftElem)
+	rightLen := c.ArrayLen(rightArr, rightElem)
+	minLen := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
+		leftLen, rightLen, "min_len",
+	)
+
+	r := c.rangeZeroToN(minLen)
+	c.createLoop(r, func(iter llvm.Value) {
+		leftVal := c.ArrayGetBorrowed(leftArr, leftElem, iter)
+		rightVal := c.ArrayGetBorrowed(rightArr, rightElem, iter)
+
+		leftSym := &Symbol{Val: leftVal, Type: leftElem}
+		rightSym := &Symbol{Val: rightVal, Type: rightElem}
+
+		cmpResult := defaultOps[opKey{
+			Operator:  op,
+			LeftType:  leftSym.Type.Key(),
+			RightType: rightSym.Type.Key(),
+		}](c, leftSym, rightSym, true)
+
+		fn := c.builder.GetInsertBlock().Parent()
+		copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
+		nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
+		c.builder.CreateCondBr(cmpResult.Val, copyBlock, nextBlock)
+
+		c.builder.SetInsertPointAtEnd(copyBlock)
+		c.PushVal(acc, leftSym)
+		c.builder.CreateBr(nextBlock)
+
+		c.builder.SetInsertPointAtEnd(nextBlock)
+	})
+
+	return c.ArrayAccResult(acc)
+}
+
+func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator) *Symbol {
+	arrElem := arr.Type.(Array).ColTypes[0]
+	lenVal := c.ArrayLen(arr, arrElem)
+
+	scalarSym := c.derefIfPointer(scalar, "")
+
+	r := c.rangeZeroToN(lenVal)
+	c.createLoop(r, func(iter llvm.Value) {
+		val := c.ArrayGetBorrowed(arr, arrElem, iter)
+		elemSym := &Symbol{Val: val, Type: arrElem}
+
+		cmpResult := defaultOps[opKey{
+			Operator:  op,
+			LeftType:  elemSym.Type.Key(),
+			RightType: scalarSym.Type.Key(),
+		}](c, elemSym, scalarSym, true)
+
+		fn := c.builder.GetInsertBlock().Parent()
+		copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
+		nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
+		c.builder.CreateCondBr(cmpResult.Val, copyBlock, nextBlock)
+
+		c.builder.SetInsertPointAtEnd(copyBlock)
+		c.PushVal(acc, elemSym)
+		c.builder.CreateBr(nextBlock)
+
+		c.builder.SetInsertPointAtEnd(nextBlock)
+	})
+
+	return c.ArrayAccResult(acc)
+}
+
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
 	arrType := arr.Type.(Array)
 	elem := arrType.ColTypes[0]

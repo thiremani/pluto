@@ -89,6 +89,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
+	condLHS         map[ExprKey][]*Symbol // Statement-local: pre-extracted LHS values during cond-expr lowering
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -804,8 +805,10 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Return pre-extracted LHS values for conditional expressions
-	if info.CondLHS != nil {
-		return info.CondLHS
+	if c.condLHS != nil {
+		if lhs, ok := c.condLHS[key(c.FuncNameMangled, expr)]; ok {
+			return lhs
+		}
 	}
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
@@ -858,7 +861,11 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
-		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		if info.CompareMode == CondArray && info.OutTypes[i].Kind() == ArrayKind {
+			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		} else {
+			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		}
 	}
 
 	// Free temporary array operands (literals used in expressions)
