@@ -697,23 +697,26 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		ts.bindAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 
 		typ, exists := Get(ts.Scopes, ident.Value)
-		if exists {
-			// Existing bindings with unresolved RHS are left as-is.
-			// Use deep resolution so container types (e.g. arrays with unresolved
-			// element types) are also treated as unresolved.
-			if !IsFullyResolvedType(newType) {
-				continue
-			}
-			if !CanRefineType(typ, newType) {
-				ce := &token.CompileError{
-					Token: ident.Token,
-					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				return
-			}
+		if !exists {
+			trueValues[ident.Value] = newType
+			continue
 		}
 
+		// Existing bindings with unresolved RHS are left as-is.
+		// Use deep resolution so container types (e.g. arrays with unresolved
+		// element types) are also treated as unresolved.
+		if !IsFullyResolvedType(newType) {
+			continue
+		}
+
+		if !CanRefineType(typ, newType) {
+			ce := &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
+			}
+			ts.Errors = append(ts.Errors, ce)
+			return
+		}
 		trueValues[ident.Value] = newType
 	}
 
