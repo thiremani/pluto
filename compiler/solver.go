@@ -25,31 +25,6 @@ const (
 )
 
 // classifyCondMode determines the CondMode for a comparison in value position.
-// It rejects mixed array/scalar outputs (filter and extract-LHS semantics
-// cannot coexist) and falls back to CondNone for unresolved types.
-func (ts *TypeSolver) classifyCondMode(isArrayFilter, isComparisonInValueExpr bool, types []Type, tok token.Token) CondMode {
-	if isArrayFilter {
-		for _, t := range types {
-			if t.Kind() != ArrayKind && t.Kind() != UnresolvedKind {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: tok,
-					Msg:   "comparison in value position cannot mix array and scalar outputs",
-				})
-				break
-			}
-		}
-		return CondArray
-	}
-	if !isComparisonInValueExpr {
-		return CondNone
-	}
-	for _, t := range types {
-		if t.Kind() == UnresolvedKind || t.Kind() == ArrayKind {
-			return CondNone
-		}
-	}
-	return CondScalar
-}
 
 type ExprInfo struct {
 	Ranges      []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
@@ -1124,6 +1099,17 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 	return
 }
 
+// typeInfixArrayFilter validates that element-wise comparison is supported
+// for an array filter (comparison in value position with array LHS).
+func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, tok token.Token) {
+	elemType := leftType.(Array).ColTypes[0]
+	rhsElemType := rightType
+	if rightType.Kind() == ArrayKind {
+		rhsElemType = rightType.(Array).ColTypes[0]
+	}
+	ts.TypeInfixOp(elemType, rhsElemType, op, tok)
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
@@ -1142,8 +1128,8 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	types = []Type{}
-	isComparisonInValueExpr := ts.InValueExpr && expr.Token.IsComparison()
-	isArrayFilter := false
+	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
+	compareMode := CondNone
 	var ok bool
 	var ptr Ptr
 	for i := range left {
@@ -1163,18 +1149,16 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		}
 
 		// Array filter: comparison in value position with array LHS
-		// returns filtered LHS array (elements where comparison holds)
-		if isComparisonInValueExpr && leftType.Kind() == ArrayKind {
-			elemType := leftType.(Array).ColTypes[0]
-			var rhsElemType Type
-			if rightType.Kind() == ArrayKind {
-				rhsElemType = rightType.(Array).ColTypes[0]
-			} else {
-				rhsElemType = rightType
+		if isValueCmp && leftType.Kind() == ArrayKind {
+			if compareMode == CondScalar {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: expr.Token,
+					Msg:   "comparison in value position cannot mix array and scalar outputs",
+				})
+				continue
 			}
-			// Validate element-wise comparison is supported
-			ts.TypeInfixOp(elemType, rhsElemType, expr.Operator, expr.Token)
-			isArrayFilter = true
+			ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
+			compareMode = CondArray
 			types = append(types, leftType)
 			continue
 		}
@@ -1188,14 +1172,20 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
 
 		// Conditional expression: comparison in value position returns LHS type
-		if isComparisonInValueExpr {
+		if isValueCmp {
+			if compareMode == CondArray {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: expr.Token,
+					Msg:   "comparison in value position cannot mix array and scalar outputs",
+				})
+				continue
+			}
+			compareMode = CondScalar
 			resultType = leftType
 		}
 
 		types = append(types, resultType)
 	}
-
-	compareMode := ts.classifyCondMode(isArrayFilter, isComparisonInValueExpr, types, expr.Token)
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
