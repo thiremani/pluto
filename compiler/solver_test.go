@@ -293,8 +293,8 @@ func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
-	require.Equal(t, CondArray, info.CompareMode, "array comparison in value position should be tagged as filter")
-	require.NotEqual(t, CondScalar, info.CompareMode, "array comparison should not be tagged as extract-LHS")
+	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
+	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as filter")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {

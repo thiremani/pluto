@@ -232,7 +232,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 // CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info.CompareMode == CondScalar {
+	if info.HasCondScalar() {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
@@ -280,7 +280,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Handle conditional expression (comparison in value position)
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.CompareMode == CondScalar {
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() {
 		// Bottom-up: extract conditions from operands first
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)

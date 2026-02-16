@@ -24,16 +24,24 @@ const (
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
 )
 
-// classifyCondMode determines the CondMode for a comparison in value position.
-
 type ExprInfo struct {
-	Ranges      []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	Rewrite     ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
-	ExprLen     int
-	OutTypes    []Type
-	HasRanges   bool     // True if expression involves ranges (propagated upward during typing)
-	LoopInside  bool     // For CallExpression: true if function handles iteration, false if call site handles it
-	CompareMode CondMode // How this comparison-in-value-position is lowered
+	Ranges       []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite      ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen      int
+	OutTypes     []Type
+	HasRanges    bool       // True if expression involves ranges (propagated upward during typing)
+	LoopInside   bool       // For CallExpression: true if function handles iteration, false if call site handles it
+	CompareModes []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+}
+
+// HasCondScalar returns true if any slot is a scalar conditional expression.
+func (info *ExprInfo) HasCondScalar() bool {
+	for _, m := range info.CompareModes {
+		if m == CondScalar {
+			return true
+		}
+	}
+	return false
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.
@@ -1110,6 +1118,41 @@ func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, 
 	ts.TypeInfixOp(elemType, rhsElemType, op, tok)
 }
 
+// typeInfixSlot types a single slot of an infix expression, returning the
+// result type and the cond-expr lowering mode for that slot.
+func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightType Type, isValueCmp bool) (Type, CondMode) {
+	if ptr, ok := leftType.(Ptr); ok {
+		leftType = ptr.Elem
+	}
+	if ptr, ok := rightType.(Ptr); ok {
+		rightType = ptr.Elem
+	}
+
+	if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
+		return Unresolved{}, CondNone
+	}
+
+	// Array filter: comparison in value position with array LHS
+	if isValueCmp && leftType.Kind() == ArrayKind {
+		ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
+		return leftType, CondArray
+	}
+
+	// Handle any expression involving arrays
+	if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
+		return finalType, CondNone
+	}
+
+	resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
+
+	// Conditional expression: comparison in value position returns LHS type
+	if isValueCmp {
+		return leftType, CondScalar
+	}
+
+	return resultType, CondNone
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
@@ -1127,72 +1170,19 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		return
 	}
 
-	types = []Type{}
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
-	compareMode := CondNone
-	var ok bool
-	var ptr Ptr
+	types = make([]Type, len(left))
+	compareModes := make([]CondMode, len(left))
 	for i := range left {
-		leftType := left[i]
-		if ptr, ok = leftType.(Ptr); ok {
-			leftType = ptr.Elem
-		}
-
-		rightType := right[i]
-		if ptr, ok = rightType.(Ptr); ok {
-			rightType = ptr.Elem
-		}
-
-		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
-			types = append(types, Unresolved{})
-			continue
-		}
-
-		// Array filter: comparison in value position with array LHS
-		if isValueCmp && leftType.Kind() == ArrayKind {
-			if compareMode == CondScalar {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: expr.Token,
-					Msg:   "comparison in value position cannot mix array and scalar outputs",
-				})
-				continue
-			}
-			ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
-			compareMode = CondArray
-			types = append(types, leftType)
-			continue
-		}
-
-		// Handle any expression involving arrays
-		if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
-			types = append(types, finalType)
-			continue
-		}
-
-		resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
-
-		// Conditional expression: comparison in value position returns LHS type
-		if isValueCmp {
-			if compareMode == CondArray {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: expr.Token,
-					Msg:   "comparison in value position cannot mix array and scalar outputs",
-				})
-				continue
-			}
-			compareMode = CondScalar
-			resultType = leftType
-		}
-
-		types = append(types, resultType)
+		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
 	}
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:    types,
-		ExprLen:     len(types),
-		HasRanges:   ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
-		CompareMode: compareMode,
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		CompareModes: compareModes,
 	}
 
 	return

@@ -857,7 +857,7 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
-		if info.CompareMode == CondArray && info.OutTypes[i].Kind() == ArrayKind {
+		if len(info.CompareModes) > i && info.CompareModes[i] == CondArray {
 			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		} else {
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
