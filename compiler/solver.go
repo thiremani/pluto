@@ -651,21 +651,21 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	}
 }
 
+// RejectKind appends a compile error for every type in types whose Kind matches kind.
+func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok token.Token, msg string) {
+	for _, t := range types {
+		if t.Kind() == kind {
+			*errors = append(*errors, &token.CompileError{Token: tok, Msg: msg})
+		}
+	}
+}
+
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	// type conditions in non-value context (comparisons produce i1 as usual)
-	savedInValueExpr := ts.InValueExpr
-	defer func() { ts.InValueExpr = savedInValueExpr }()
 	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {
 		condTypes := ts.TypeExpression(expr, true)
-		for _, ct := range condTypes {
-			if ct.Kind() == ArrayKind {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: stmt.Token,
-					Msg:   "statement condition must produce a scalar value, not an array",
-				})
-			}
-		}
+		RejectKind(&ts.Errors, condTypes, ArrayKind, stmt.Token, "statement condition must produce a scalar value, not an array")
 	}
 
 	// type values in value-expression context (comparisons become conditional extractors)
