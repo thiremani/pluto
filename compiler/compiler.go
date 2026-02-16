@@ -845,8 +845,8 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 
 	return defaultOps[opKey{
 		Operator:  op,
-		LeftType:  l.Type.Key(),
-		RightType: r.Type.Key(),
+		LeftType:  opType(l.Type.Key()),
+		RightType: opType(r.Type.Key()),
 	}](c, l, r, true)
 }
 

@@ -570,8 +570,8 @@ func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr 
 
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
-			LeftType:  leftSym.Type.Key(),
-			RightType: rightSym.Type.Key(),
+			LeftType:  opType(leftSym.Type.Key()),
+			RightType: opType(rightSym.Type.Key()),
 		}](c, leftSym, rightSym, true)
 
 		c.filterPush(acc, leftSym, cmpResult.Val)
@@ -591,8 +591,8 @@ func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symb
 
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
-			LeftType:  elemSym.Type.Key(),
-			RightType: scalar.Type.Key(),
+			LeftType:  opType(elemSym.Type.Key()),
+			RightType: opType(scalar.Type.Key()),
 		}](c, elemSym, scalar, true)
 
 		c.filterPush(acc, elemSym, cmpResult.Val)

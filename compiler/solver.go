@@ -1309,8 +1309,8 @@ func (ts *TypeSolver) typeArrayScalarInfix(left, right Type, leftIsArr bool, op 
 func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {
 	key := opKey{
 		Operator:  op,
-		LeftType:  left.Key(),
-		RightType: right.Key(),
+		LeftType:  opType(left.Key()),
+		RightType: opType(right.Key()),
 	}
 
 	var fn opFunc

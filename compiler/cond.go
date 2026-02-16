@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -72,45 +71,20 @@ func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
 	}
 }
 
-func (c *Compiler) collectConditionalOutTypes(stmt *ast.LetStatement) ([]Type, bool) {
+func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 	outTypes := []Type{}
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info == nil {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: stmt.Token,
-				Msg:   fmt.Sprintf("missing type info for conditional expression %T", expr),
-			})
-			return nil, false
-		}
 		outTypes = append(outTypes, info.OutTypes...)
 	}
-	return outTypes, true
+	return outTypes
 }
 
-func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type, bool) {
-	outTypes, ok := c.collectConditionalOutTypes(stmt)
-	if !ok {
-		return nil, nil, false
-	}
-	if len(outTypes) != len(stmt.Name) {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: stmt.Token,
-			Msg:   fmt.Sprintf("conditional outputs mismatch: got %d values for %d targets", len(outTypes), len(stmt.Name)),
-		})
-		return nil, nil, false
-	}
+func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
+	outTypes := c.collectOutTypes(stmt)
 
 	tempNames := make([]*ast.Identifier, len(stmt.Name))
 	for i, ident := range stmt.Name {
-		if outTypes[i].Kind() == UnresolvedKind {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: ident.Token,
-				Msg:   fmt.Sprintf("conditional rhs output type for %q is unresolved", ident.Value),
-			})
-			return nil, nil, false
-		}
-
 		tempName := fmt.Sprintf("condtmp_%s_%d", ident.Value, c.tmpCounter)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
@@ -139,7 +113,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		})
 		tempNames[i] = tempIdent
 	}
-	return tempNames, outTypes, true
+	return tempNames, outTypes
 }
 
 func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []*ast.Identifier, outTypes []Type) {
@@ -238,10 +212,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	// uninitialized memory. Pre-promote here so storage is initialized on all paths.
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
-	tempNames, outTypes, ok := c.createConditionalTempOutputs(stmt)
-	if !ok {
-		return
-	}
+	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
 	fn := c.builder.GetInsertBlock().Parent()
 	ifBlock := c.Context.AddBasicBlock(fn, "if")
@@ -261,7 +232,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 // CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info != nil && info.CompareMode == CondScalar {
+	if info.CompareMode == CondScalar {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
@@ -287,8 +258,8 @@ func (c *Compiler) andScalarComparisons(op string, left, right []*Symbol, cond l
 
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
-			LeftType:  lSym.Type.Key(),
-			RightType: rSym.Type.Key(),
+			LeftType:  opType(lSym.Type.Key()),
+			RightType: opType(rSym.Type.Key()),
 		}](c, lSym, rSym, true)
 
 		if cond.IsNil() {
@@ -307,9 +278,6 @@ func (c *Compiler) andScalarComparisons(op string, left, right []*Symbol, cond l
 // appended to temps so the caller can free them on the false path.
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info == nil {
-		return cond, temps
-	}
 
 	// Handle conditional expression (comparison in value position)
 	if infix, ok := expr.(*ast.InfixExpression); ok && info.CompareMode == CondScalar {
@@ -347,10 +315,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
-	tempNames, outTypes, ok := c.createConditionalTempOutputs(stmt)
-	if !ok {
-		return
-	}
+	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
 	// Save and initialize statement-local condLHS map for extraction.
 	// Save/restore handles re-entrant calls (e.g. nested cond-expr in callee).

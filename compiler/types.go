@@ -154,6 +154,16 @@ func IsStrH(t Type) bool {
 	return ok
 }
 
+// Str is the canonical string type used as the operator lookup key.
+// All string types (StrG, StrH, etc.) are char* at the LLVM level,
+// so operators only need one registration using Str as the key type.
+type Str struct{}
+
+func (s Str) String() string { return "Str" }
+func (s Str) Kind() Kind     { return StrKind }
+func (s Str) Mangle() string { return "Str" }
+func (s Str) Key() Type      { return s }
+
 type Range struct {
 	Iter Type
 }

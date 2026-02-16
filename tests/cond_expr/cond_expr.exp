@@ -27,3 +27,11 @@ PairTrue: 5 7
 PairOneFalse: 0 0
 ArrayArray: [2 6]
 ArrayScalar: [5 6]
+IntAddTrue: 7
+IntAddFalse: 0
+StrCmpTrue: banana
+re:StrCmpFalse:\s*
+ConcatTrue: hello world
+re:ConcatFalse:\s*
+StrEqTrue: abc
+re:StrEqFalse:\s*

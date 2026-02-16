@@ -114,3 +114,41 @@ ax = arr1 > arr2
 arr3 = [1 2 3 5 6]
 ay = arr3 > 3
 "ArrayScalar: -ay"
+
+# Heap-allocating LHS in cond-expr: (a + b) > threshold
+# The addition creates a temporary; on false path it must be freed.
+ia = 3
+ib = 4
+ic = (ia + ib) > 5
+"IntAddTrue: -ic"
+
+ic2 = (ia + ib) > 10
+"IntAddFalse: -ic2"
+
+# String comparison: basic
+sa = "banana"
+sb = "apple"
+sc = sa > "avocado"
+"StrCmpTrue: -sc"
+
+sc2 = sb > "banana"
+"StrCmpFalse: -sc2"
+
+# String concat cond-expr: (a ⊕ b) > "threshold"
+# Concat allocates a heap string; on false path it must be freed.
+sl = "hello"
+sm = " world"
+sr = (sl ⊕ sm) > "hello w"
+"ConcatTrue: -sr"
+
+sr2 = (sl ⊕ sm) > "hello x"
+"ConcatFalse: -sr2"
+
+# String equality
+se = "abc"
+sf = "abc"
+sg = se == sf
+"StrEqTrue: -sg"
+
+sh = se == "xyz"
+"StrEqFalse: -sh"
