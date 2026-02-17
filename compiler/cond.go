@@ -282,7 +282,9 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Handle conditional expression (comparison in value position)
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() {
+	// Skip range-dependent comparisons here; they must be evaluated inside
+	// their loop context (compileInfixRanges) after range iterators are bound.
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && !info.HasRanges {
 		// Bottom-up: extract conditions from operands first
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)

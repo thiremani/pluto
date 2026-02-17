@@ -444,9 +444,12 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*R
 		// It should have no ranges since temporary iterators are scalars
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.InfixExpression))] = &ExprInfo{
-			OutTypes: originalInfo.OutTypes, // Same output types as original
-			ExprLen:  originalInfo.ExprLen,
-			Ranges:   nil, // No ranges for rewritten expressions
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...), // Same output types as original
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false, // Rewritten operands are scalarized
+			LoopInside:   originalInfo.LoopInside,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...), // Preserve cond lowering mode
+			Ranges:       nil,                                                   // No ranges for rewritten expressions
 		}
 	}
 
@@ -469,9 +472,12 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 		rew = &cp
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
 		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrefixExpression))] = &ExprInfo{
-			OutTypes: originalInfo.OutTypes,
-			ExprLen:  originalInfo.ExprLen,
-			Ranges:   nil,
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false, // Rewritten operand is scalarized
+			LoopInside:   originalInfo.LoopInside,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...),
+			Ranges:       nil,
 		}
 	}
 

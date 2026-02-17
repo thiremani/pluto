@@ -360,3 +360,40 @@ func TestArrayRangeTyping(t *testing.T) {
 	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
 	require.EqualValues(t, 64, sumInt.Width)
 }
+
+func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "prefixRewriteCopy", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "x = -(0:3)"
+	sl := lexer.New("PrefixRewriteCopy.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
+
+	letStmt, ok := program.Statements[0].(*ast.LetStatement)
+	require.True(t, ok)
+	prefix, ok := letStmt.Value[0].(*ast.PrefixExpression)
+	require.True(t, ok)
+
+	origInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+	require.NotNil(t, origInfo)
+	rewPrefix, ok := origInfo.Rewrite.(*ast.PrefixExpression)
+	require.True(t, ok, "expected rewritten prefix expression")
+
+	rewInfo := ts.ExprCache[key(ts.FuncNameMangled, rewPrefix)]
+	require.NotNil(t, rewInfo)
+	require.NotEmpty(t, origInfo.OutTypes)
+	require.NotEmpty(t, rewInfo.OutTypes)
+
+	origBefore := origInfo.OutTypes[0]
+	rewInfo.OutTypes[0] = Float{Width: 64}
+	require.Equal(t, origBefore, origInfo.OutTypes[0], "rewritten prefix OutTypes must not alias original")
+}

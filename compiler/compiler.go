@@ -850,6 +850,47 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 	}](c, l, r, true)
 }
 
+// compileCondScalar lowers a scalar comparison in value position:
+// returns LHS when comparison is true, otherwise zero value of LHS type.
+func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Symbol {
+	lSym := c.derefIfPointer(left, "")
+	rSym := c.derefIfPointer(right, "")
+	cmpResult := defaultOps[opKey{
+		Operator:  op,
+		LeftType:  opType(lSym.Type.Key()),
+		RightType: opType(rSym.Type.Key()),
+	}](c, lSym, rSym, true)
+
+	// Avoid eager zero-value allocation for StrH (heap string). Using select would
+	// evaluate both arms and allocate the false-arm heap value even when unused.
+	if IsStrH(lSym.Type) {
+		outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(lSym.Type), "cond_lhs.mem")
+		fn := c.builder.GetInsertBlock().Parent()
+		trueBlock := c.Context.AddBasicBlock(fn, "cond_lhs_true")
+		falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
+		contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
+
+		c.builder.CreateCondBr(cmpResult.Val, trueBlock, falseBlock)
+
+		c.builder.SetInsertPointAtEnd(trueBlock)
+		c.createStore(lSym.Val, outPtr, lSym.Type)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(falseBlock)
+		zero := c.makeZeroValue(lSym.Type)
+		c.createStore(zero.Val, outPtr, zero.Type)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
+		val := c.createLoad(outPtr, lSym.Type, "cond_lhs")
+		return &Symbol{Val: val, Type: lSym.Type}
+	}
+
+	zero := c.makeZeroValue(lSym.Type)
+	val := c.builder.CreateSelect(cmpResult.Val, lSym.Val, zero.Val, "cond_lhs")
+	return &Symbol{Val: val, Type: lSym.Type}
+}
+
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
@@ -857,8 +898,15 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
-		if len(info.CompareModes) > i && info.CompareModes[i] == CondArray {
+		mode := CondNone
+		if len(info.CompareModes) > i {
+			mode = info.CompareModes[i]
+		}
+
+		if mode == CondArray {
 			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		} else if mode == CondScalar {
+			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
 		} else {
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		}
@@ -885,13 +933,17 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 
 	// Everything else is a temporary - free heap types
 	for _, sym := range syms {
-		// Borrowed values are views into existing storage, not owners.
-		if sym.Borrowed {
-			continue
-		}
-		derefed := c.derefIfPointer(sym, "temp_free")
-		c.freeValue(derefed.Val, derefed.Type)
+		c.freeTemporarySymbol(sym, "temp_free")
 	}
+}
+
+// freeTemporarySymbol frees one temporary symbol if it owns heap data.
+func (c *Compiler) freeTemporarySymbol(sym *Symbol, loadName string) {
+	if sym == nil || sym.Borrowed {
+		return
+	}
+	derefed := c.derefIfPointer(sym, loadName)
+	c.freeValue(derefed.Val, derefed.Type)
 }
 
 // compileArrayScalarInfix lowers an infix op between an array and a scalar by
@@ -940,6 +992,8 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
+	_, leftIsIdent := leftRew.(*ast.Identifier)
+	manualLeftCleanup := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
@@ -948,15 +1002,58 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 		for i := 0; i < len(left); i++ {
 			expected := info.OutTypes[i]
+			mode := CondNone
+			if len(info.CompareModes) > i {
+				mode = info.CompareModes[i]
+			}
+
+			// CondScalar with ranges must be evaluated per-iteration after
+			// iterators are bound. Store LHS only when comparison is true.
+			if mode == CondScalar {
+				lSym := c.derefIfPointer(left[i], "")
+				rSym := c.derefIfPointer(right[i], "")
+				cmpResult := defaultOps[opKey{
+					Operator:  expr.Operator,
+					LeftType:  opType(lSym.Type.Key()),
+					RightType: opType(rSym.Type.Key()),
+				}](c, lSym, rSym, true)
+
+				fn := c.builder.GetInsertBlock().Parent()
+				ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
+				elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
+				contBlock := c.Context.AddBasicBlock(fn, "cond_next")
+				c.builder.CreateCondBr(cmpResult.Val, ifBlock, elseBlock)
+
+				c.builder.SetInsertPointAtEnd(ifBlock)
+				c.freeSymbolValue(outputs[i], "old_output")
+				c.createStore(lSym.Val, outputs[i].Val, lSym.Type)
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(elseBlock)
+				if manualLeftCleanup {
+					c.freeTemporarySymbol(left[i], "cond_lhs_drop")
+				}
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(contBlock)
+				continue
+			}
+
 			computed := c.compileInfix(expr.Operator, left[i], right[i], expected)
 
 			// Free previous iteration's result before overwriting
 			c.freeSymbolValue(outputs[i], "old_output")
 			c.createStore(computed.Val, outputs[i].Val, computed.Type)
+			if manualLeftCleanup {
+				c.freeTemporarySymbol(left[i], "temp_left")
+			}
 		}
 
 		// Range-loop operands are temporary per iteration (except identifiers).
-		c.freeTemporary(leftRew, left)
+		// With CondScalar, left-side ownership is branch-dependent and handled inline.
+		if !manualLeftCleanup {
+			c.freeTemporary(leftRew, left)
+		}
 		c.freeTemporary(rightRew, right)
 	})
 

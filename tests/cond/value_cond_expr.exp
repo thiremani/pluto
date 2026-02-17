@@ -42,4 +42,7 @@ ConcatTrue: hello world
 re:ConcatFalse:\s*
 StrEqTrue: abc
 re:StrEqFalse:\s*
+RangeStrMixed: s3
+RangeStrMixedBranches: s3
+re:RangeStrFalse:\s*
 NonValueCmp: 1

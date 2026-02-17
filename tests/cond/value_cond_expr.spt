@@ -179,6 +179,16 @@ sg = se == sf
 sh = se == "xyz"
 "StrEqFalse: -sh"
 
+# Range CondScalar with heap-string LHS (exercises range false/true ownership paths)
+rg = MkStr(1:4) > "s-2"
+"RangeStrMixed: -rg"
+
+rgm = MkStr(1:4) > "s2"
+"RangeStrMixedBranches: -rgm"
+
+rg2 = MkStr(1:4) > "z"
+"RangeStrFalse: -rg2"
+
 # Comparison in non-value position (function arg) must not be treated as cond-expr
 ga = 1
 gb = Id(ga > 0)

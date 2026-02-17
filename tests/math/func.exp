@@ -1,2 +1,7 @@
-4
-31.36
+SquareInt: 25
+SquareFloat: 4.84
+SquareArr: [1 4 9 25]
+SquareRange: 4
+SquareArrRange: 9
+SquareArrFilter: [25]
+SquareArrRangeFilter: 0

@@ -99,7 +99,7 @@ Pluto separates reusable templates from executable scripts:
 
 A directory is the unit of compilation:
 
-```
+```text
 math/
 ├── math.pt      # defines Square, etc.
 └── func.spt     # uses them → compiles to ./math/func
@@ -107,7 +107,7 @@ math/
 
 Compile and run:
 
-```
+```sh
 ./pluto math
 ./math/func
 ```
@@ -121,7 +121,7 @@ Templates are defined once with a clear input/output contract. The first line de
 Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference** — calling a template directly modifies the output variable in the caller's scope.
 
 `math.pt`
-```
+```pt
 # y is the output (writable), x is the input (read-only)
 y = Square(x)
 	y = x * x
@@ -134,7 +134,7 @@ Inputs are read-only — they flow in. Outputs are writable — they flow out. E
 Call `Square` with different types — Pluto compiles a specialized version for each:
 
 `func.spt`
-```
+```spt
 a = Square(2)          # int specialization
 b = Square(5.6)        # float specialization
 arr = [1 2 3 4 5]
@@ -147,6 +147,20 @@ a, b, c, d, e
 No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 2` filters the array to elements greater than 2 and passes that subset through.
 
 Generated code is equivalent to handwritten specialized code. There is no runtime overhead.
+
+Additional `Square` input forms:
+
+```spt
+arr = [1 2 3 5]
+
+intVal = Square(5)             # 25
+floatVal = Square(2.2)         # 4.84
+arrVal = Square(arr)           # [1 4 9 25]
+rangeVal = Square(1:3)         # 4 (final iteration result)
+arrRangeVal = Square(arr[1:3]) # 9 (final iteration result)
+arrFilterVal = Square(arr > 3) # [25]
+arrRangeFilterVal = Square(arr[1:3] > 3) # 0
+```
 
 ---
 
