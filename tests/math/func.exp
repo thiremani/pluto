@@ -1,12 +1,20 @@
 SquareInt: 25
 SquareFloat: 4.84
 SquareArr: [1 4 9 25]
+
 SquareRange: 4
 SquareArrRange: 9
 SquareArrFilter: [25]
 SquareArrRangeFilter: 0
+
+SquareRangeAcc: [1 4]
+SquareArrRangeAcc: [4 9]
+SquareArrRangeFilterAccFalse: [0 0]
+SquareArrRangeFilterAccMixed: [0 9 25]
+
 NestedFilter: [5]
 NestedSquareFilter: [25]
+
 SumSquaresBothTrue: 74
 SumSquaresOneFalse: 0
 SumSquaresOtherFalse: 0

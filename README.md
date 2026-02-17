@@ -137,20 +137,33 @@ Call `Square` with different types — Pluto compiles a specialized version for 
 ```python
 arr = [1 2 3 5]
 
-a = Square(2)               # int specialization
-b = Square(5.6)             # float specialization
-c = Square(arr)             # squares every element
-d = Square(1:5)             # range — final iteration result
-e = Square(arr[1:3])        # array-range — final iteration result
-f = Square(arr > 3)         # filtered array
-g = Square(arr[1:3] > 3)    # filtered array-range
-a, b, c, d, e, f, g
+# Basic specializations
+a = Square(5)
+b = Square(2.2)
+c = Square(arr)
+a, b, c
+
+# Range and filter (non-accumulated)
+d = Square(1:3)
+e = Square(arr[1:3])
+f = Square(arr > 3)
+g = Square(arr[1:3] > 3)
+d, e, f, g
+
+# Accumulation forms
+h = [Square(1:3)]
+i = [Square(arr[1:3])]
+j = [Square((1:3) > 1)]
+k = [Square(arr[1:4] > 2)]
+h, i, j, k
 ```
 
 Output:
 
 ```text
-4 31.36 [1 4 9 25] 16 9 [25] 0
+25 4.84 [1 4 9 25]
+4 9 [25] 0
+[1 4] [4 9] [0 4] [0 9 25]
 ```
 
 No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 3` filters the array to elements greater than 3 and passes that subset through.

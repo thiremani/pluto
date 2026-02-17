@@ -1,29 +1,54 @@
 arr = [1 2 3 5]
 
+# Basic Square specializations
 intVal = Square(5)
 floatVal = Square(2.2)
 arrVal = Square(arr)
+
+"SquareInt: -intVal"
+"SquareFloat: -floatVal"
+"SquareArr: -arrVal"
+""
+
+# Range and filter (non-accumulated)
 rangeVal = Square(1:3)
 arrRangeVal = Square(arr[1:3])
 arrFilterVal = Square(arr > 3)
 arrRangeFilterVal = Square(arr[1:3] > 3)
+
+"SquareRange: -rangeVal"
+"SquareArrRange: -arrRangeVal"
+"SquareArrFilter: -arrFilterVal"
+"SquareArrRangeFilter: -arrRangeFilterVal"
+""
+
+# Range and array-range accumulation
+rangeAccVal = [Square(1:3)]
+arrRangeAccVal = [Square(arr[1:3])]
+arrRangeFilterAccFalseVal = [Square(arr[1:3] > 3)]
+arrRangeFilterAccMixedVal = [Square(arr[1:4] > 2)]
+
+"SquareRangeAcc: -rangeAccVal"
+"SquareArrRangeAcc: -arrRangeAccVal"
+"SquareArrRangeFilterAccFalse: -arrRangeFilterAccFalseVal"
+"SquareArrRangeFilterAccMixed: -arrRangeFilterAccMixedVal"
+""
+
+# Nested filter composition
 nestedFilterVal = (arr > 3) < 8
 nestedSquareFilterVal = Square((arr > 3) < 8)
+
+"NestedFilter: -nestedFilterVal"
+"NestedSquareFilter: -nestedSquareFilterVal"
+""
+
+# Multi-argument conditional gating
 a = 5
 b = 7
 sumBothTrue = SumSquares(a > 2, b > 3)
 sumOneFalse = SumSquares(a > 2, b > 10)
 sumOtherFalse = SumSquares(a > 10, b > 3)
 
-"SquareInt: -intVal"
-"SquareFloat: -floatVal"
-"SquareArr: -arrVal"
-"SquareRange: -rangeVal"
-"SquareArrRange: -arrRangeVal"
-"SquareArrFilter: -arrFilterVal"
-"SquareArrRangeFilter: -arrRangeFilterVal"
-"NestedFilter: -nestedFilterVal"
-"NestedSquareFilter: -nestedSquareFilterVal"
 "SumSquaresBothTrue: -sumBothTrue"
 "SumSquaresOneFalse: -sumOneFalse"
 "SumSquaresOtherFalse: -sumOtherFalse"
