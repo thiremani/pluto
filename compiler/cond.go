@@ -267,8 +267,7 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 		case CondArray:
 			// compileArrayFilter handles deref internally
 			lhsSyms[i] = c.compileArrayFilter(op, left[i], right[i], info.OutTypes[i])
-			lSym := c.derefIfPointer(left[i], "")
-			c.freeValue(lSym.Val, lSym.Type)
+			c.freeSymbolValue(left[i], "")
 			left[i].Borrowed = true
 		}
 	}
