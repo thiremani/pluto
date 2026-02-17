@@ -850,16 +850,23 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 	}](c, l, r, true)
 }
 
-// compileCondScalar lowers a scalar comparison in value position:
-// returns LHS when comparison is true, otherwise zero value of LHS type.
-func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Symbol {
+// compareScalars derefs both operands and evaluates the comparison,
+// returning the deref'd LHS and the i1 result.
+func (c *Compiler) compareScalars(op string, left, right *Symbol) (*Symbol, llvm.Value) {
 	lSym := c.derefIfPointer(left, "")
 	rSym := c.derefIfPointer(right, "")
-	cmpResult := defaultOps[opKey{
+	result := defaultOps[opKey{
 		Operator:  op,
 		LeftType:  opType(lSym.Type.Key()),
 		RightType: opType(rSym.Type.Key()),
 	}](c, lSym, rSym, true)
+	return lSym, result.Val
+}
+
+// compileCondScalar lowers a scalar comparison in value position:
+// returns LHS when comparison is true, otherwise zero value of LHS type.
+func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Symbol {
+	lSym, cmpVal := c.compareScalars(op, left, right)
 
 	// Avoid eager zero-value allocation for StrH (heap string). Using select would
 	// evaluate both arms and allocate the false-arm heap value even when unused.
@@ -870,7 +877,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 		falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
 		contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
 
-		c.builder.CreateCondBr(cmpResult.Val, trueBlock, falseBlock)
+		c.builder.CreateCondBr(cmpVal, trueBlock, falseBlock)
 
 		c.builder.SetInsertPointAtEnd(trueBlock)
 		c.createStore(lSym.Val, outPtr, lSym.Type)
@@ -887,7 +894,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 	}
 
 	zero := c.makeZeroValue(lSym.Type)
-	val := c.builder.CreateSelect(cmpResult.Val, lSym.Val, zero.Val, "cond_lhs")
+	val := c.builder.CreateSelect(cmpVal, lSym.Val, zero.Val, "cond_lhs")
 	return &Symbol{Val: val, Type: lSym.Type}
 }
 
@@ -1013,19 +1020,13 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			// CondScalar with ranges must be evaluated per-iteration after
 			// iterators are bound. Store LHS only when comparison is true.
 			if mode == CondScalar {
-				lSym := c.derefIfPointer(left[i], "")
-				rSym := c.derefIfPointer(right[i], "")
-				cmpResult := defaultOps[opKey{
-					Operator:  expr.Operator,
-					LeftType:  opType(lSym.Type.Key()),
-					RightType: opType(rSym.Type.Key()),
-				}](c, lSym, rSym, true)
+				lSym, cmpVal := c.compareScalars(expr.Operator, left[i], right[i])
 
 				fn := c.builder.GetInsertBlock().Parent()
 				ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
 				elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
 				contBlock := c.Context.AddBasicBlock(fn, "cond_next")
-				c.builder.CreateCondBr(cmpResult.Val, ifBlock, elseBlock)
+				c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
 
 				c.builder.SetInsertPointAtEnd(ifBlock)
 				c.freeSymbolValue(outputs[i], "old_output")

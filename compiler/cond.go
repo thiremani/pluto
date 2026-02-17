@@ -251,17 +251,11 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 	for i := range left {
 		switch info.CompareModes[i] {
 		case CondScalar:
-			lSym := c.derefIfPointer(left[i], "")
-			rSym := c.derefIfPointer(right[i], "")
-			cmpResult := defaultOps[opKey{
-				Operator:  op,
-				LeftType:  opType(lSym.Type.Key()),
-				RightType: opType(rSym.Type.Key()),
-			}](c, lSym, rSym, true)
+			lSym, cmpVal := c.compareScalars(op, left[i], right[i])
 			if cond.IsNil() {
-				cond = cmpResult.Val
+				cond = cmpVal
 			} else {
-				cond = c.builder.CreateAnd(cond, cmpResult.Val, fmt.Sprintf("and_cond_%d", i))
+				cond = c.builder.CreateAnd(cond, cmpVal, fmt.Sprintf("and_cond_%d", i))
 			}
 			lhsSyms[i] = lSym
 		case CondArray:
