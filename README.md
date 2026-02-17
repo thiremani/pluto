@@ -138,23 +138,23 @@ Call `Square` with different types — Pluto compiles a specialized version for 
 arr = [1 2 3 5]
 
 # Basic specializations
-a = Square(5)
-b = Square(2.2)
-c = Square(arr)
+a = Square(5)            # int specialization
+b = Square(2.2)          # float specialization
+c = Square(arr)          # squares each array element
 a, b, c
 
 # Range and filter (non-accumulated)
-d = Square(1:3)
-e = Square(arr[1:3])
-f = Square(arr > 3)
-g = Square(arr[1:3] > 3)
+d = Square(1:3)          # range: final iteration result
+e = Square(arr[1:3])     # array-range: final iteration result
+f = Square(arr > 3)      # filtered array
+g = Square(arr[1:3] > 3) # filtered array-range
 d, e, f, g
 
 # Accumulation forms
-h = [Square(1:3)]
-i = [Square(arr[1:3])]
-j = [Square((1:3) > 1)]
-k = [Square(arr[1:4] > 2)]
+h = [Square(1:3)]          # range accumulation
+i = [Square(arr[1:3])]     # array-range accumulation
+j = [Square((1:3) > 1)]    # conditional range accumulation
+k = [Square(arr[1:4] > 2)] # conditional array-range accumulation
 h, i, j, k
 ```
 
