@@ -249,11 +249,10 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *ExprInfo, cond llvm.Value) ([]*Symbol, llvm.Value) {
 	lhsSyms := make([]*Symbol, len(left))
 	for i := range left {
-		lSym := c.derefIfPointer(left[i], "")
-		rSym := c.derefIfPointer(right[i], "")
-
 		switch info.CompareModes[i] {
 		case CondScalar:
+			lSym := c.derefIfPointer(left[i], "")
+			rSym := c.derefIfPointer(right[i], "")
 			cmpResult := defaultOps[opKey{
 				Operator:  op,
 				LeftType:  opType(lSym.Type.Key()),
@@ -266,7 +265,9 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 			}
 			lhsSyms[i] = lSym
 		case CondArray:
-			lhsSyms[i] = c.compileArrayFilter(op, lSym, rSym, info.OutTypes[i])
+			// compileArrayFilter handles deref internally
+			lhsSyms[i] = c.compileArrayFilter(op, left[i], right[i], info.OutTypes[i])
+			lSym := c.derefIfPointer(left[i], "")
 			c.freeValue(lSym.Val, lSym.Type)
 			left[i].Borrowed = true
 		}
