@@ -103,11 +103,11 @@ cr2 = Double(5) > 12
 # Nested: function with cond-expr in body called from cond-expr context
 # Tests that callee's cond-expr compilation doesn't clobber caller's state
 v = 5
-m, n = CondDouble(v > 0), v > 0
+m, n = CondDouble(v), v > 0
 "NestedCondTrue: -m -n"
 
 v2 = -3
-m2, n2 = CondDouble(v2 > 0), v2 > 0
+m2, n2 = CondDouble(v2), v2 > 0
 "NestedCondFalse: -m2 -n2"
 
 # Multi-return conditional expression: all true
@@ -125,6 +125,10 @@ px3, py3 = Pair(5, 7) > Pair(6, 2)
 # Mixed array/scalar cond-expr: false case (scalar comparison fails)
 r2, n2 = Mix(1) > Mix(2)
 "MixedFalse: -r2 -n2"
+
+# Mixed array/scalar cond-expr: array slot filtered, scalar slot conditional
+r, n = Mix(2) > Mix(1)
+"MixedTrue: -r -n"
 
 # Array comparison in value position (normal infix, not cond-expr)
 arr1 = [1 2 6]
@@ -174,10 +178,6 @@ sg = se == sf
 
 sh = se == "xyz"
 "StrEqFalse: -sh"
-
-# Mixed array/scalar cond-expr: array slot filtered, scalar slot conditional
-r, n = Mix(2) > Mix(1)
-"MixedTrue: -r -n"
 
 # Comparison in non-value position (function arg) must not be treated as cond-expr
 ga = 1
