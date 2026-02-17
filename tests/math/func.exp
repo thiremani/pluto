@@ -5,3 +5,8 @@ SquareRange: 4
 SquareArrRange: 9
 SquareArrFilter: [25]
 SquareArrRangeFilter: 0
+NestedFilter: [5]
+NestedSquareFilter: [25]
+SumSquaresBothTrue: 74
+SumSquaresOneFalse: 0
+SumSquaresOtherFalse: 0
