@@ -62,7 +62,7 @@ If `pluto` conflicts on your system, use `plt`.
 
 Hello world (`tests/helloworld.spt`):
 
-```
+```python
 "hello world"
 x = "hello 🙏"
 x, "👍"
@@ -72,14 +72,14 @@ No `main()`, no `print()`, no imports. Values on a line get printed.
 
 Compile and run:
 
-```
+```sh
 ./pluto tests/helloworld.spt
 ./tests/helloworld
 ```
 
 Output:
 
-```
+```text
 hello world
 hello 🙏 👍
 ```

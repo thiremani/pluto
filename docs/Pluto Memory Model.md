@@ -43,7 +43,7 @@ x = (i+1 for i in iter)   # Lazy generator
 
 **Pluto:** "Values + Loop Syntax."
 
-```pluto
+```python
 a = [1]; b = a; a[0] = 2  # b sees 1 (independent copy)
 
 i = 0:5
@@ -67,7 +67,7 @@ let s = &a[..];              // Borrow checking prevents mutation
 
 **Pluto:** "Copy on Write."
 
-```pluto
+```python
 a = [1]; b = a               # Both valid and independent
 s = arr[i]                   # Runtime/Compiler checks ownership scope
 ```
@@ -90,7 +90,7 @@ s[0] = 99                    // Mutates arr via s
 
 **Pluto:** "Arrays are Values, Slices are Views with Locking."
 
-```pluto
+```python
 arr = [1 2 3 4 5]
 s = arr[0:2]                 # View (like Go)
 s[0] = 99                    # Mutates arr
@@ -137,7 +137,7 @@ a[1:5]                       # Copy by default
 
 Ranges generate loops at statement boundaries. All operations inside work on scalar values:
 
-```pluto
+```python
 i = 0:5
 x = i + 1      # Loop at statement: x = 5 (last scalar value)
 y = i * 2      # Loop at statement: y = 8 (last scalar value)
@@ -148,7 +148,7 @@ No lazy types - intermediate variables store scalar results.
 
 ### IterName Determines Loop Structure
 
-```pluto
+```python
 i = 0:5
 j = 0:5
 
@@ -175,7 +175,7 @@ result = x * y   # Nested loops: i × j
 
 Guard expressions with conditions:
 
-```pluto
+```python
 # Maximum value
 res = arr[i] > res arr[i]
 
@@ -207,7 +207,7 @@ Functions in Pluto have clear semantics:
 
 ### Parameters and Outputs
 
-```pluto
+```python
 res = sum(a, b)
     res = a + b
 ```
@@ -218,7 +218,7 @@ res = sum(a, b)
 
 ### Call Site
 
-```pluto
+```python
 res = sum(res, 5)
 # - Parameter 'a' receives value of 'res'
 # - Parameter 'b' receives 5
@@ -229,7 +229,7 @@ res = sum(res, 5)
 
 ### Range Parameters
 
-```pluto
+```python
 res = process(a, i)
     res = a * i
 ```
@@ -247,7 +247,7 @@ for (int64_t i_val = 0; i_val < N; i_val++) {
 
 When a statement contains range variables, the loop is generated at the statement level, and all operations work on scalars:
 
-```pluto
+```python
 i = 0:5
 result = Square(i) + i
 ```
@@ -268,7 +268,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 For complex expressions with named intermediates, use functions:
 
-```pluto
+```python
 i = 0:5
 res += compute_ratio(i)
     numerator = i + 1
@@ -278,7 +278,7 @@ res += compute_ratio(i)
 
 This avoids the issue where intermediate assignments execute immediately:
 
-```pluto
+```python
 i = 0:5
 x = i + 1        # Loop NOW: x = 5 (scalar)
 y = i + 2        # Loop NOW: y = 7 (scalar)
