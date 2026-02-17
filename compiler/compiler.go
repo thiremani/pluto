@@ -903,11 +903,14 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			mode = info.CompareModes[i]
 		}
 
-		if mode == CondArray {
+		switch mode {
+		case CondArray:
 			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
-		} else if mode == CondScalar {
+		case CondScalar:
+			// Usually pre-extracted via condLHS, but can still occur when range
+			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
-		} else {
+		default:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		}
 	}
