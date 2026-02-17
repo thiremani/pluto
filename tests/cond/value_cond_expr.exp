@@ -9,7 +9,11 @@ CombinedBothTrue: 5
 CombinedStmtFalse: 0
 CombinedExprFalse: 0
 MultiTrue: 5 7
-MultiFalse: 0 0
+MultiFalse: 0 7
+MixCondTrue: 5 7
+MixCondFalse: 0 7
+MixPlainTrue: 5 7
+MixPlainFalse: 5 0
 LessThan: 5
 LessEqual: 5
 GreaterEqual: 5

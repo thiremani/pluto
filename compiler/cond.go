@@ -311,61 +311,69 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 
 // compileCondExprStatement handles let statements that have conditional
 // expressions (comparisons) embedded in their value expressions.
-// It extracts all conditions, ANDs them with statement conditions, then
-// branches once. Value expressions are compiled in the true path with
-// comparisons replaced by their pre-extracted LHS values via c.condLHS.
+// Each value expression is processed independently: its conditions are
+// ANDed with statement conditions and branched on separately, so
+// p, q = a > 2, d < 10 evaluates each condition independently rather
+// than ANDing them all-or-nothing.
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
-	// Save and initialize statement-local condLHS map for extraction.
-	// Save/restore handles re-entrant calls (e.g. nested cond-expr in callee).
+	// Save condLHS for re-entrant calls (e.g. nested cond-expr in callee).
 	savedCondLHS := c.condLHS
-	c.condLHS = make(map[ExprKey][]*Symbol)
 
-	// Combine statement conditions with embedded conditional expressions.
-	// temps collects LHS operands compiled before the branch for false-path cleanup.
-	var temps []condTemp
-	cond := stmtCond
+	targetIdx := 0
 	for _, expr := range stmt.Value {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+		exprTempNames := tempNames[targetIdx : targetIdx+numOutputs]
+		exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
+		exprValues := []ast.Expression{expr}
+
+		// Reset condLHS per expression so conditions don't leak across expressions.
+		c.condLHS = make(map[ExprKey][]*Symbol)
+
+		// Extract conditions for this expression only, starting from stmtCond.
+		var temps []condTemp
+		cond := stmtCond
 		cond, temps = c.extractCondExprs(expr, cond, temps)
-	}
 
-	// Branch: true → compute values, false → free pre-compiled LHS temporaries
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "if")
-	elseBlock := c.Context.AddBasicBlock(fn, "else")
-	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+		if !cond.IsNil() {
+			fn := c.builder.GetInsertBlock().Parent()
+			ifBlock := c.Context.AddBasicBlock(fn, "if")
+			elseBlock := c.Context.AddBasicBlock(fn, "else")
+			contBlock := c.Context.AddBasicBlock(fn, "continue")
+			c.builder.CreateCondBr(cond, ifBlock, elseBlock)
 
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
-	c.builder.CreateBr(contBlock)
+			c.builder.SetInsertPointAtEnd(ifBlock)
+			c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
+			c.builder.CreateBr(contBlock)
 
-	// Else block: free LHS temporaries that won't be consumed.
-	// extractCondExprs compiles LHS operands before the branch; on the true
-	// path they are consumed by assignment, but on the false path they are
-	// orphaned and must be freed to avoid leaking heap types (e.g. strings).
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	for _, tmp := range temps {
-		c.freeTemporary(tmp.expr, tmp.syms)
-	}
-	// Free CondArray results (filtered arrays) that were created before the
-	// branch. On the true path they are consumed by assignment; on the false
-	// path they are orphaned.
-	for exprKey, lhsSyms := range c.condLHS {
-		info := c.ExprCache[exprKey]
-		for i, mode := range info.CompareModes {
-			if mode == CondArray {
-				c.freeSymbolValue(lhsSyms[i], "")
+			// Else: free LHS temporaries and CondArray results that won't be consumed.
+			c.builder.SetInsertPointAtEnd(elseBlock)
+			for _, tmp := range temps {
+				c.freeTemporary(tmp.expr, tmp.syms)
 			}
-		}
-	}
-	c.builder.CreateBr(contBlock)
+			for exprKey, lhsSyms := range c.condLHS {
+				exprInfo := c.ExprCache[exprKey]
+				for i, mode := range exprInfo.CompareModes {
+					if mode == CondArray {
+						c.freeSymbolValue(lhsSyms[i], "")
+					}
+				}
+			}
+			c.builder.CreateBr(contBlock)
 
-	// Continue block: commit temp values to real destinations
-	c.builder.SetInsertPointAtEnd(contBlock)
+			c.builder.SetInsertPointAtEnd(contBlock)
+		} else {
+			// No condition for this expression: unconditional assignment to temps.
+			c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
+		}
+
+		targetIdx += numOutputs
+	}
+
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 

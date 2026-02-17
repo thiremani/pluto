@@ -39,12 +39,26 @@ w2 = 1 > 3 a > 2
 w3 = 5 > 3 b > 2
 "CombinedExprFalse: -w3"
 
-# Multiple targets: all-or-nothing
+# Multiple targets: independent per expression
 p, q = a > 2, d < 10
 "MultiTrue: -p -q"
 
 p2, q2 = b > 2, d < 10
 "MultiFalse: -p2 -q2"
+
+# Mixed cond-expr + plain value: cond first
+mc1, mc2 = a > 2, d
+"MixCondTrue: -mc1 -mc2"
+
+mc3, mc4 = b > 2, d
+"MixCondFalse: -mc3 -mc4"
+
+# Mixed cond-expr + plain value: plain first
+mc5, mc6 = a, d < 10
+"MixPlainTrue: -mc5 -mc6"
+
+mc7, mc8 = a, d > 10
+"MixPlainFalse: -mc7 -mc8"
 
 # Different comparison operators
 v1 = a < 10
