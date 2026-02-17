@@ -644,6 +644,9 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 }
 
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
+	savedInValueExpr := ts.InValueExpr
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+
 	// type conditions in non-value context (comparisons produce i1 as usual)
 	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {

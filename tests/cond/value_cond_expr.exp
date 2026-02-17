@@ -35,3 +35,5 @@ ConcatTrue: hello world
 re:ConcatFalse:\s*
 StrEqTrue: abc
 re:StrEqFalse:\s*
+MixedTrue: [2 3] 2
+NonValueCmp: 1

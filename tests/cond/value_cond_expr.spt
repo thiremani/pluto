@@ -152,3 +152,12 @@ sg = se == sf
 
 sh = se == "xyz"
 "StrEqFalse: -sh"
+
+# Mixed array/scalar cond-expr: array slot filtered, scalar slot conditional
+r, n = Mix(2) > Mix(1)
+"MixedTrue: -r -n"
+
+# Comparison in non-value position (function arg) must not be treated as cond-expr
+ga = 1
+gb = Id(ga > 0)
+"NonValueCmp: -gb"

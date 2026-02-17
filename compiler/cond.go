@@ -243,31 +243,33 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	return false
 }
 
-// andScalarComparisons compares each element pair of left and right using op,
-// ANDs the results into cond, and returns the dereferenced LHS symbols.
-// Array-typed pairs are skipped (handled by array filtering).
-func (c *Compiler) andScalarComparisons(op string, left, right []*Symbol, cond llvm.Value) ([]*Symbol, llvm.Value) {
+// handleComparisons processes each slot of a multi-return comparison based on
+// its CondMode. CondScalar slots are compared and ANDed into cond. CondArray
+// slots are compiled as array filters (source freed, marked borrowed).
+func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *ExprInfo, cond llvm.Value) ([]*Symbol, llvm.Value) {
 	lhsSyms := make([]*Symbol, len(left))
 	for i := range left {
 		lSym := c.derefIfPointer(left[i], "")
 		rSym := c.derefIfPointer(right[i], "")
 
-		if lSym.Type.Kind() == ArrayKind || rSym.Type.Kind() == ArrayKind {
-			continue
+		switch info.CompareModes[i] {
+		case CondScalar:
+			cmpResult := defaultOps[opKey{
+				Operator:  op,
+				LeftType:  opType(lSym.Type.Key()),
+				RightType: opType(rSym.Type.Key()),
+			}](c, lSym, rSym, true)
+			if cond.IsNil() {
+				cond = cmpResult.Val
+			} else {
+				cond = c.builder.CreateAnd(cond, cmpResult.Val, fmt.Sprintf("and_cond_%d", i))
+			}
+			lhsSyms[i] = lSym
+		case CondArray:
+			lhsSyms[i] = c.compileArrayFilter(op, lSym, rSym, info.OutTypes[i])
+			c.freeValue(lSym.Val, lSym.Type)
+			left[i].Borrowed = true
 		}
-
-		cmpResult := defaultOps[opKey{
-			Operator:  op,
-			LeftType:  opType(lSym.Type.Key()),
-			RightType: opType(rSym.Type.Key()),
-		}](c, lSym, rSym, true)
-
-		if cond.IsNil() {
-			cond = cmpResult.Val
-		} else {
-			cond = c.builder.CreateAnd(cond, cmpResult.Val, "and_cond")
-		}
-		lhsSyms[i] = lSym
 	}
 	return lhsSyms, cond
 }
@@ -290,7 +292,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 		right := c.compileExpression(infix.Right, nil)
 
 		var lhsSyms []*Symbol
-		lhsSyms, cond = c.andScalarComparisons(infix.Operator, left, right, cond)
+		lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
 
 		c.condLHS[key(c.FuncNameMangled, expr)] = lhsSyms
 		temps = append(temps, condTemp{infix.Left, left})
