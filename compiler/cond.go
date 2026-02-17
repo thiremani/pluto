@@ -351,6 +351,17 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 	for _, tmp := range temps {
 		c.freeTemporary(tmp.expr, tmp.syms)
 	}
+	// Free CondArray results (filtered arrays) that were created before the
+	// branch. On the true path they are consumed by assignment; on the false
+	// path they are orphaned.
+	for exprKey, lhsSyms := range c.condLHS {
+		info := c.ExprCache[exprKey]
+		for i, mode := range info.CompareModes {
+			if mode == CondArray {
+				c.freeSymbolValue(lhsSyms[i], "")
+			}
+		}
+	}
 	c.builder.CreateBr(contBlock)
 
 	// Continue block: commit temp values to real destinations
