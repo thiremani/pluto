@@ -17,6 +17,15 @@ type unaryOpKey struct {
 	OperandType Type
 }
 
+// opType normalizes a type for operator lookup. All string types map to Str
+// so operator entries only need one registration per string combination.
+func opType(t Type) Type {
+	if t.Kind() == StrKind {
+		return Str{}
+	}
+	return t
+}
+
 // opFunc defines the function signature for an operator function.
 // It takes two *Symbols and returns a new *Symbol.
 type opFunc func(c *Compiler, left, right *Symbol, compile bool) *Symbol
@@ -84,6 +93,31 @@ var strConcatOp = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbo
 
 	s.Val = c.builder.CreateCall(strConcatType, strConcatFunc, []llvm.Value{left.Val, right.Val}, "str_concat_result")
 	return
+}
+
+// strCmpOp builds a string comparison operator using libc strcmp.
+// pred is the LLVM integer comparison predicate applied to the strcmp result.
+func strCmpOp(pred llvm.IntPredicate) opFunc {
+	return func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
+		s = &Symbol{}
+		s.Type = Int{Width: 1}
+		if !compile {
+			return
+		}
+
+		i32Type := c.Context.Int32Type()
+		charPtrType := llvm.PointerType(c.Context.Int8Type(), 0)
+		strcmpType := llvm.FunctionType(i32Type, []llvm.Type{charPtrType, charPtrType}, false)
+		strcmpFunc := c.Module.NamedFunction("strcmp")
+		if strcmpFunc.IsNil() {
+			strcmpFunc = llvm.AddFunction(c.Module, "strcmp", strcmpType)
+		}
+
+		result := c.builder.CreateCall(strcmpType, strcmpFunc, []llvm.Value{left.Val, right.Val}, "strcmp_result")
+		zero := llvm.ConstInt(i32Type, 0, false)
+		s.Val = c.builder.CreateICmp(pred, result, zero, "str_cmp")
+		return
+	}
 }
 
 // defaultOps maps (operator, left type, right type) to the lowering function.
@@ -701,11 +735,16 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	// --- String Concatenation (all combinations produce StrH) ---
-	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrH{}}: strConcatOp,
-	{Operator: token.SYM_CONCAT, LeftType: StrG{}, RightType: StrG{}}: strConcatOp,
-	{Operator: token.SYM_CONCAT, LeftType: StrG{}, RightType: StrH{}}: strConcatOp,
-	{Operator: token.SYM_CONCAT, LeftType: StrH{}, RightType: StrG{}}: strConcatOp,
+	// --- String Concatenation (Str is canonical key for all string types via opType) ---
+	{Operator: token.SYM_CONCAT, LeftType: Str{}, RightType: Str{}}: strConcatOp,
+
+	// --- String Comparisons via strcmp (single entry per operator) ---
+	{Operator: token.SYM_EQL, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntEQ),
+	{Operator: token.SYM_NEQ, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntNE),
+	{Operator: token.SYM_LSS, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntSLT),
+	{Operator: token.SYM_LEQ, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntSLE),
+	{Operator: token.SYM_GTR, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntSGT),
+	{Operator: token.SYM_GEQ, LeftType: Str{}, RightType: Str{}}: strCmpOp(llvm.IntSGE),
 }
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{

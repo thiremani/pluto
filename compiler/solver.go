@@ -15,13 +15,33 @@ type RangeInfo struct {
 	ArrayType Array
 }
 
+// CondMode classifies how a comparison in value position is lowered.
+type CondMode int
+
+const (
+	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
+	CondScalar                 // Scalar: extract LHS value, branch on condition
+	CondArray                  // Array: element-wise filter, keep LHS where condition holds
+)
+
 type ExprInfo struct {
-	Ranges     []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	Rewrite    ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
-	ExprLen    int
-	OutTypes   []Type
-	HasRanges  bool // True if expression involves ranges (propagated upward during typing)
-	LoopInside bool // For CallExpression: true if function handles iteration, false if call site handles it
+	Ranges       []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite      ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen      int
+	OutTypes     []Type
+	HasRanges    bool       // True if expression involves ranges (propagated upward during typing)
+	LoopInside   bool       // For CallExpression: true if function handles iteration, false if call site handles it
+	CompareModes []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+}
+
+// HasCondScalar returns true if any slot is a scalar conditional expression.
+func (info *ExprInfo) HasCondScalar() bool {
+	for _, m := range info.CompareModes {
+		if m == CondScalar {
+			return true
+		}
+	}
+	return false
 }
 
 // ExprKey is the key for ExprCache, combining function context with expression.
@@ -58,7 +78,8 @@ type TypeSolver struct {
 	Converging      bool
 	Errors          []*token.CompileError
 	ExprCache       map[ExprKey]*ExprInfo
-	TmpCounter      int // tmpCounter for uniquely naming temporary variables
+	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
+	InValueExpr     bool // true when typing Value expressions of a LetStatement
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -613,12 +634,28 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	}
 }
 
+// RejectKind appends a compile error for every type in types whose Kind matches kind.
+func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok token.Token, msg string) {
+	for _, t := range types {
+		if t.Kind() == kind {
+			*errors = append(*errors, &token.CompileError{Token: tok, Msg: msg})
+		}
+	}
+}
+
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
-	// type conditions in case there may be functions we have to type
+	savedInValueExpr := ts.InValueExpr
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+
+	// type conditions in non-value context (comparisons produce i1 as usual)
+	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {
-		ts.TypeExpression(expr, true)
+		condTypes := ts.TypeExpression(expr, true)
+		RejectKind(&ts.Errors, condTypes, ArrayKind, stmt.Token, "statement condition must produce a scalar value, not an array")
 	}
 
+	// type values in value-expression context (comparisons become conditional extractors)
+	ts.InValueExpr = true
 	types := []Type{}
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
@@ -646,23 +683,26 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		ts.bindAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 
 		typ, exists := Get(ts.Scopes, ident.Value)
-		if exists {
-			// Existing bindings with unresolved RHS are left as-is.
-			// Use deep resolution so container types (e.g. arrays with unresolved
-			// element types) are also treated as unresolved.
-			if !IsFullyResolvedType(newType) {
-				continue
-			}
-			if !CanRefineType(typ, newType) {
-				ce := &token.CompileError{
-					Token: ident.Token,
-					Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
-				}
-				ts.Errors = append(ts.Errors, ce)
-				return
-			}
+		if !exists {
+			trueValues[ident.Value] = newType
+			continue
 		}
 
+		// Existing bindings with unresolved RHS are left as-is.
+		// Use deep resolution so container types (e.g. arrays with unresolved
+		// element types) are also treated as unresolved.
+		if !IsFullyResolvedType(newType) {
+			continue
+		}
+
+		if !CanRefineType(typ, newType) {
+			ce := &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
+			}
+			ts.Errors = append(ts.Errors, ce)
+			return
+		}
 		trueValues[ident.Value] = newType
 	}
 
@@ -1070,6 +1110,52 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 	return
 }
 
+// typeInfixArrayFilter validates that element-wise comparison is supported
+// for an array filter (comparison in value position with array LHS).
+func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, tok token.Token) {
+	elemType := leftType.(Array).ColTypes[0]
+	rhsElemType := rightType
+	if rightType.Kind() == ArrayKind {
+		rhsElemType = rightType.(Array).ColTypes[0]
+	}
+	ts.TypeInfixOp(elemType, rhsElemType, op, tok)
+}
+
+// typeInfixSlot types a single slot of an infix expression, returning the
+// result type and the cond-expr lowering mode for that slot.
+func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightType Type, isValueCmp bool) (Type, CondMode) {
+	if ptr, ok := leftType.(Ptr); ok {
+		leftType = ptr.Elem
+	}
+	if ptr, ok := rightType.(Ptr); ok {
+		rightType = ptr.Elem
+	}
+
+	if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
+		return Unresolved{}, CondNone
+	}
+
+	// Array filter: comparison in value position with array LHS
+	if isValueCmp && leftType.Kind() == ArrayKind {
+		ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
+		return leftType, CondArray
+	}
+
+	// Handle any expression involving arrays
+	if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
+		return finalType, CondNone
+	}
+
+	resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
+
+	// Conditional expression: comparison in value position returns LHS type
+	if isValueCmp {
+		return leftType, CondScalar
+	}
+
+	return resultType, CondNone
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
@@ -1087,39 +1173,19 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		return
 	}
 
-	types = []Type{}
-	var ok bool
-	var ptr Ptr
+	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
+	types = make([]Type, len(left))
+	compareModes := make([]CondMode, len(left))
 	for i := range left {
-		leftType := left[i]
-		if ptr, ok = leftType.(Ptr); ok {
-			leftType = ptr.Elem
-		}
-
-		rightType := right[i]
-		if ptr, ok = rightType.(Ptr); ok {
-			rightType = ptr.Elem
-		}
-
-		if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
-			types = append(types, Unresolved{})
-			continue
-		}
-
-		// Handle any expression involving arrays
-		if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
-			types = append(types, finalType)
-			continue
-		}
-
-		types = append(types, ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token))
+		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
 	}
 
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:  types,
-		ExprLen:   len(types),
-		HasRanges: ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
+		CompareModes: compareModes,
 	}
 
 	return
@@ -1229,8 +1295,8 @@ func (ts *TypeSolver) typeArrayScalarInfix(left, right Type, leftIsArr bool, op 
 func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {
 	key := opKey{
 		Operator:  op,
-		LeftType:  left.Key(),
-		RightType: right.Key(),
+		LeftType:  opType(left.Key()),
+		RightType: opType(right.Key()),
 	}
 
 	var fn opFunc

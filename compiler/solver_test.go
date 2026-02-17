@@ -268,6 +268,35 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	}
 }
 
+func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "a = [1 2]\nb = [0 3]\nx = a > b"
+	sl := lexer.New("arrayComparisonValue.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
+
+	letStmt, ok := program.Statements[2].(*ast.LetStatement)
+	require.True(t, ok)
+	infix, ok := letStmt.Value[0].(*ast.InfixExpression)
+	require.True(t, ok)
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+	require.NotNil(t, info)
+	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
+	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as filter")
+}
+
 func TestArrayLiteralRangesRecording(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", "", ast.NewCode())

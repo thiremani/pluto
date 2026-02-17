@@ -1,0 +1,185 @@
+# Basic conditional expression: true case (new var)
+a = 5
+x = a > 2
+"BasicTrue: -x"
+
+# Basic conditional expression: false case (new var → 0)
+b = 1
+y = b > 2
+"BasicFalseNew: -y"
+
+# False case with existing var (keeps old value)
+z = 42
+"BeforeReassign: -z"
+z = b > 2
+"BasicFalseExisting: -z"
+
+# True case with existing var (gets new value)
+z = a > 2
+"BasicTrueExisting: -z"
+
+# Arithmetic with two conditional expressions
+c = 3
+d = 7
+s = c > 2 + d < 10
+"ArithBothTrue: -s"
+
+# One condition fails
+e = 1
+s2 = e > 2 + d < 10
+"ArithOneFalse: -s2"
+
+# Combined statement condition + embedded condition
+w = 5 > 3 a > 2
+"CombinedBothTrue: -w"
+
+w2 = 1 > 3 a > 2
+"CombinedStmtFalse: -w2"
+
+w3 = 5 > 3 b > 2
+"CombinedExprFalse: -w3"
+
+# Multiple targets: independent per expression
+p, q = a > 2, d < 10
+"MultiTrue: -p -q"
+
+p2, q2 = b > 2, d < 10
+"MultiFalse: -p2 -q2"
+
+# Mixed cond-expr + plain value: cond first
+mc1, mc2 = a > 2, d
+"MixCondTrue: -mc1 -mc2"
+
+mc3, mc4 = b > 2, d
+"MixCondFalse: -mc3 -mc4"
+
+# Mixed cond-expr + plain value: plain first
+mc5, mc6 = a, d < 10
+"MixPlainTrue: -mc5 -mc6"
+
+mc7, mc8 = a, d > 10
+"MixPlainFalse: -mc7 -mc8"
+
+# Different comparison operators
+v1 = a < 10
+"LessThan: -v1"
+
+v2 = a <= 5
+"LessEqual: -v2"
+
+v3 = a >= 5
+"GreaterEqual: -v3"
+
+v4 = a == 5
+"Equal: -v4"
+
+v5 = a != 3
+"NotEqual: -v5"
+
+# Float comparison
+f = 3.14
+fv = f > 2.0
+"FloatTrue: -fv"
+
+fv2 = f > 4.0
+"FloatFalse: -fv2"
+
+# Function call with conditional arg
+i = 5
+res = Double(i < 10)
+"CallTrue: -res"
+
+j = 15
+res2 = Double(j < 10)
+"CallFalse: -res2"
+
+# Call result as LHS of conditional (exercises false-path temp cleanup)
+cr = Double(5) > 8
+"CallLhsTrue: -cr"
+
+cr2 = Double(5) > 12
+"CallLhsFalse: -cr2"
+
+# Nested: function with cond-expr in body called from cond-expr context
+# Tests that callee's cond-expr compilation doesn't clobber caller's state
+v = 5
+m, n = CondDouble(v), v > 0
+"NestedCondTrue: -m -n"
+
+v2 = -3
+m2, n2 = CondDouble(v2), v2 > 0
+"NestedCondFalse: -m2 -n2"
+
+# Multi-return conditional expression: all true
+px, py = Pair(5, 7) > Pair(1, 2)
+"PairTrue: -px -py"
+
+# Multi-return conditional expression: one false (all-or-nothing skip)
+px2, py2 = Pair(5, 7) > Pair(1, 8)
+"PairOneFalse: -px2 -py2"
+
+# Multi-return: first slot false, second would pass (AND covers both)
+px3, py3 = Pair(5, 7) > Pair(6, 2)
+"PairFirstFalse: -px3 -py3"
+
+# Mixed array/scalar cond-expr: false case (scalar comparison fails)
+r2, n2 = Mix(1) > Mix(2)
+"MixedFalse: -r2 -n2"
+
+# Mixed array/scalar cond-expr: array slot filtered, scalar slot conditional
+r, n = Mix(2) > Mix(1)
+"MixedTrue: -r -n"
+
+# Array comparison in value position (normal infix, not cond-expr)
+arr1 = [1 2 6]
+arr2 = [1 1 3 5 7]
+ax = arr1 > arr2
+"ArrayArray: -ax"
+
+# Array-scalar comparison in value position
+arr3 = [1 2 3 5 6]
+ay = arr3 > 3
+"ArrayScalar: -ay"
+
+# Heap-allocating LHS in cond-expr: (a + b) > threshold
+# The addition creates a temporary; on false path it must be freed.
+ia = 3
+ib = 4
+ic = (ia + ib) > 5
+"IntAddTrue: -ic"
+
+ic2 = (ia + ib) > 10
+"IntAddFalse: -ic2"
+
+# String comparison: basic
+sa = "banana"
+sb = "apple"
+sc = sa > "avocado"
+"StrCmpTrue: -sc"
+
+sc2 = sb > "banana"
+"StrCmpFalse: -sc2"
+
+# String concat cond-expr: (a ⊕ b) > "threshold"
+# Concat allocates a heap string; on false path it must be freed.
+sl = "hello"
+sm = " world"
+sr = (sl ⊕ sm) > "hello w"
+"ConcatTrue: -sr"
+
+sr2 = (sl ⊕ sm) > "hello x"
+"ConcatFalse: -sr2"
+
+# String equality
+se = "abc"
+sf = "abc"
+sg = se == sf
+"StrEqTrue: -sg"
+
+sh = se == "xyz"
+"StrEqFalse: -sh"
+
+# Comparison in non-value position (function arg) must not be treated as cond-expr
+ga = 1
+gb = Id(ga > 0)
+"NonValueCmp: -gb"

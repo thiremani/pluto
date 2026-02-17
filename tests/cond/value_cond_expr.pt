@@ -1,0 +1,17 @@
+res = Double(x)
+    res = x * 2
+
+res = CondDouble(x)
+    tmp = x > 0
+    res = tmp * 2
+
+a, b = Pair(x, y)
+    a = x
+    b = y
+
+a, b = Mix(x)
+    a = [x x + 1]
+    b = x
+
+res = Id(x)
+    res = x

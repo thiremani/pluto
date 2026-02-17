@@ -89,6 +89,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
+	condLHS         map[ExprKey][]*Symbol // Statement-local: pre-extracted LHS values during cond-expr lowering
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -551,12 +552,22 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	cond, hasConditions := c.compileConditions(stmt)
-	if !hasConditions {
-		c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
+
+	// Embedded conditional expressions (comparisons in value position)
+	// take the most specialized path — they subsume statement conditions.
+	for _, expr := range stmt.Value {
+		if c.hasCondExprInTree(expr) {
+			c.compileCondExprStatement(stmt, cond)
+			return
+		}
+	}
+
+	if hasConditions {
+		c.compileCondStatement(stmt, cond)
 		return
 	}
 
-	c.compileCondStatement(stmt, cond)
+	c.compileAssignments(stmt.Name, stmt.Name, stmt.Value)
 }
 
 func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier) (res []*Symbol) {
@@ -788,6 +799,13 @@ func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+
+	// Return pre-extracted LHS values for conditional expressions
+	if c.condLHS != nil {
+		if lhs, ok := c.condLHS[key(c.FuncNameMangled, expr)]; ok {
+			return lhs
+		}
+	}
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
@@ -827,8 +845,8 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 
 	return defaultOps[opKey{
 		Operator:  op,
-		LeftType:  l.Type.Key(),
-		RightType: r.Type.Key(),
+		LeftType:  opType(l.Type.Key()),
+		RightType: opType(r.Type.Key()),
 	}](c, l, r, true)
 }
 
@@ -839,7 +857,11 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
-		res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		if len(info.CompareModes) > i && info.CompareModes[i] == CondArray {
+			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		} else {
+			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		}
 	}
 
 	// Free temporary array operands (literals used in expressions)
