@@ -357,33 +357,43 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			vals := c.compileExpression(cell, nil)
-			valSym := c.derefIfPointer(vals[0], "")
-
-			val := valSym.Val
-			valType := valSym.Type // Preserve original type for ownership info
-			if valSym.Type.Kind() != elemType.Kind() {
-				val = c.CastArrayElem(val, valSym.Type, elemType)
-				valType = elemType // Cast changes the type
-			}
-
-			sym := &Symbol{Val: val, Type: valType}
-
-			// For strings: use push_own only for heap-allocated temporaries (non-identifiers)
-			// Identifiers must be copied to preserve the original variable's value
-			_, isIdent := cell.(*ast.Identifier)
-			if elemType.Kind() == StrKind {
-				if IsStrH(valType) && !isIdent {
-					c.PushValOwn(acc, sym)
-					continue
-				}
-			}
-
-			c.PushVal(acc, sym)
+			c.compileCondAccumCell(cell, elemType, acc)
 		}
 	})
 
 	return []*Symbol{c.ArrayAccResult(acc)}
+}
+
+// pushAccumCellValue appends one accumulated cell value, handling element casts
+// and string ownership transfer.
+func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, cell ast.Expression, elemType Type) {
+	val := valSym.Val
+	valType := valSym.Type // Preserve original type for ownership info
+	if valSym.Type.Kind() != elemType.Kind() {
+		val = c.CastArrayElem(val, valSym.Type, elemType)
+		valType = elemType // Cast changes the type
+	}
+
+	sym := &Symbol{Val: val, Type: valType}
+
+	// For strings: use push_own only for heap-allocated temporaries (non-identifiers)
+	// Identifiers must be copied to preserve the original variable's value.
+	_, isIdent := cell.(*ast.Identifier)
+	if elemType.Kind() == StrKind && IsStrH(valType) && !isIdent {
+		c.PushValOwn(acc, sym)
+		return
+	}
+
+	c.PushVal(acc, sym)
+}
+
+// compileCondAccumCell compiles one accumulated cell expression with CondScalar
+// semantics in loop context: only true iterations evaluate and push a value.
+func (c *Compiler) compileCondAccumCell(cell ast.Expression, elemType Type, acc *ArrayAccumulator) {
+	c.compileCondExprValue(cell, llvm.Value{}, func() {
+		vals := c.compileExpression(cell, nil)
+		c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), cell, elemType)
+	})
 }
 
 // Array operation functions

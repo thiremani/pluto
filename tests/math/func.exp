@@ -9,8 +9,9 @@ SquareArrRangeFilter: 0
 
 SquareRangeAcc: [1 4]
 SquareArrRangeAcc: [4 9]
-SquareArrRangeFilterAccFalse: [0 0]
-SquareArrRangeFilterAccMixed: [0 9 25]
+SquareArrRangeFilterAccFalse: []
+SquareArrRangeFilterAccMixed: [9 25]
+SquareRangeFilterAcc: [16]
 
 NestedFilter: [5]
 NestedSquareFilter: [25]
