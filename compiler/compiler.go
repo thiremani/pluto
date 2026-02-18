@@ -916,10 +916,7 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	right := c.compileExpression(expr.Right, nil)
 
 	for i := 0; i < len(left); i++ {
-		mode := CondNone
-		if len(info.CompareModes) > i {
-			mode = info.CompareModes[i]
-		}
+		mode := info.CompareModes[i]
 
 		switch mode {
 		case CondArray:
@@ -1023,10 +1020,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 		for i := 0; i < len(left); i++ {
 			expected := info.OutTypes[i]
-			mode := CondNone
-			if len(info.CompareModes) > i {
-				mode = info.CompareModes[i]
-			}
+			mode := info.CompareModes[i]
 
 			// CondScalar with ranges must be evaluated per-iteration after
 			// iterators are bound. Store LHS only when comparison is true.
