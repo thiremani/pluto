@@ -80,6 +80,25 @@ func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 	return outTypes
 }
 
+// resolveConditionalSeed returns the initial value for conditional temp outputs.
+// Existing destinations keep their current value on false branches; new or
+// unresolved destinations start from the type zero value.
+func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *Symbol {
+	existing, ok := Get(c.Scopes, ident.Value)
+	if !ok {
+		return c.makeZeroValue(outType)
+	}
+
+	existingType := existing.Type
+	if ptrType, isPtr := existingType.(Ptr); isPtr {
+		existingType = ptrType.Elem
+	}
+	if existingType.Kind() == UnresolvedKind {
+		return c.makeZeroValue(outType)
+	}
+	return c.derefIfPointer(existing, ident.Value+"_cond_seed")
+}
+
 func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
 	outTypes := c.collectOutTypes(stmt)
 
@@ -90,18 +109,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		tempIdent := &ast.Identifier{Value: tempName}
 
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
-		seed := c.makeZeroValue(outTypes[i])
-		if existing, ok := Get(c.Scopes, ident.Value); ok {
-			existingType := existing.Type
-			if ptrType, isPtr := existingType.(Ptr); isPtr {
-				existingType = ptrType.Elem
-			}
-			// Never reinterpret an unresolved old value as a concrete type.
-			// If metadata is unresolved, keep the zero seed for this temp slot.
-			if existingType.Kind() != UnresolvedKind {
-				seed = c.derefIfPointer(existing, ident.Value+"_cond_seed")
-			}
-		}
+		seed := c.resolveConditionalSeed(ident, outTypes[i])
 		c.createStore(seed.Val, ptr, outTypes[i])
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free

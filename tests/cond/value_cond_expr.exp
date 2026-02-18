@@ -38,6 +38,10 @@ IntAddTrue: 7
 IntAddFalse: 0
 StrCmpTrue: banana
 re:StrCmpFalse:\s*
+StrGStrHTrue: ant
+StrGStrHSeed: keep
+StrGStrHFalseExisting: keep
+StmtFalseExistingStrH: keep_stmt
 ConcatTrue: hello world
 re:ConcatFalse:\s*
 StrEqTrue: abc

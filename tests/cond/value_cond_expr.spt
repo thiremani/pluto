@@ -160,6 +160,20 @@ sc = sa > "avocado"
 sc2 = sb > "banana"
 "StrCmpFalse: -sc2"
 
+# Mixed string kinds in cond-expr (StrG < StrH temp)
+sgth = "ant" < ("a" ⊕ "z")
+"StrGStrHTrue: -sgth"
+
+sgfh = "keep"
+"StrGStrHSeed: -sgfh"
+sgfh = "bee" < ("a" ⊕ "z")
+"StrGStrHFalseExisting: -sgfh"
+
+# Statement condition with existing heap string should keep old value on false
+stmtKeep = "keep_stmt".
+stmtKeep = 1 > 2 "drop".
+"StmtFalseExistingStrH: -stmtKeep"
+
 # String concat cond-expr: (a ⊕ b) > "threshold"
 # Concat allocates a heap string; on false path it must be freed.
 sl = "hello"
