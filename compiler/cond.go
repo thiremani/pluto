@@ -81,19 +81,11 @@ func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 }
 
 // resolveConditionalSeed returns the initial value for conditional temp outputs.
-// Existing destinations keep their current value on false branches; new or
-// unresolved destinations start from the type zero value.
+// Existing destinations keep their current value on false branches; new
+// destinations start from the type zero value.
 func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *Symbol {
 	existing, ok := Get(c.Scopes, ident.Value)
 	if !ok {
-		return c.makeZeroValue(outType)
-	}
-
-	existingType := existing.Type
-	if ptrType, isPtr := existingType.(Ptr); isPtr {
-		existingType = ptrType.Elem
-	}
-	if existingType.Kind() == UnresolvedKind {
 		return c.makeZeroValue(outType)
 	}
 	return c.derefIfPointer(existing, ident.Value+"_cond_seed")
