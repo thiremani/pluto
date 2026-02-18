@@ -180,3 +180,12 @@ func TestCompileCondScalarStrHUsesBranch(t *testing.T) {
 	require.Contains(t, ir, "cond_lhs_false", "StrH CondScalar should lower with explicit branching")
 	require.NotContains(t, ir, "select i1", "StrH CondScalar should not use select")
 }
+
+func TestCanUseCondSelectWhitelist(t *testing.T) {
+	require.True(t, canUseCondSelect(Int{Width: 64}))
+	require.True(t, canUseCondSelect(Float{Width: 64}))
+	require.True(t, canUseCondSelect(StrG{}))
+
+	require.False(t, canUseCondSelect(StrH{}))
+	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
+}

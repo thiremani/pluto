@@ -863,38 +863,49 @@ func (c *Compiler) compareScalars(op string, left, right *Symbol) (*Symbol, llvm
 	return lSym, result.Val
 }
 
+// canUseCondSelect reports whether cond-expr lowering can safely use a select
+// without introducing heap allocations on the false arm.
+func canUseCondSelect(t Type) bool {
+	switch t.(type) {
+	case Int, Float, StrG:
+		return true
+	default:
+		return false
+	}
+}
+
 // compileCondScalar lowers a scalar comparison in value position:
 // returns LHS when comparison is true, otherwise zero value of LHS type.
 func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Symbol {
 	lSym, cmpVal := c.compareScalars(op, left, right)
 
-	// Avoid eager zero-value allocation for StrH (heap string). Using select would
-	// evaluate both arms and allocate the false-arm heap value even when unused.
-	if IsStrH(lSym.Type) {
-		outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(lSym.Type), "cond_lhs.mem")
-		fn := c.builder.GetInsertBlock().Parent()
-		trueBlock := c.Context.AddBasicBlock(fn, "cond_lhs_true")
-		falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
-		contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
-
-		c.builder.CreateCondBr(cmpVal, trueBlock, falseBlock)
-
-		c.builder.SetInsertPointAtEnd(trueBlock)
-		c.createStore(lSym.Val, outPtr, lSym.Type)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(falseBlock)
+	if canUseCondSelect(lSym.Type) {
 		zero := c.makeZeroValue(lSym.Type)
-		c.createStore(zero.Val, outPtr, zero.Type)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
-		val := c.createLoad(outPtr, lSym.Type, "cond_lhs")
+		val := c.builder.CreateSelect(cmpVal, lSym.Val, zero.Val, "cond_lhs")
 		return &Symbol{Val: val, Type: lSym.Type}
 	}
 
+	// Heap-owning or composite types use explicit branching to avoid eager
+	// false-arm materialization (select evaluates both operands).
+	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(lSym.Type), "cond_lhs.mem")
+	fn := c.builder.GetInsertBlock().Parent()
+	trueBlock := c.Context.AddBasicBlock(fn, "cond_lhs_true")
+	falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
+	contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
+
+	c.builder.CreateCondBr(cmpVal, trueBlock, falseBlock)
+
+	c.builder.SetInsertPointAtEnd(trueBlock)
+	c.createStore(lSym.Val, outPtr, lSym.Type)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(falseBlock)
 	zero := c.makeZeroValue(lSym.Type)
-	val := c.builder.CreateSelect(cmpVal, lSym.Val, zero.Val, "cond_lhs")
+	c.createStore(zero.Val, outPtr, zero.Type)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	val := c.createLoad(outPtr, lSym.Type, "cond_lhs")
 	return &Symbol{Val: val, Type: lSym.Type}
 }
 
