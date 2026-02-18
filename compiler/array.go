@@ -388,15 +388,11 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // Array operation functions
 
-// arrayPairLen returns the element-wise iteration length for an array pair:
-// leftLen for array-scalar, min(leftLen, rightLen) for array-array.
-func (c *Compiler) arrayPairLen(left *Symbol, right *Symbol) llvm.Value {
+// arrayPairMinLen returns min(len(left), len(right)) for two arrays.
+func (c *Compiler) arrayPairMinLen(left *Symbol, right *Symbol) llvm.Value {
 	leftElem := left.Type.(Array).ColTypes[0]
-	leftLen := c.ArrayLen(left, leftElem)
-	if right.Type.Kind() != ArrayKind {
-		return leftLen
-	}
 	rightElem := right.Type.(Array).ColTypes[0]
+	leftLen := c.ArrayLen(left, leftElem)
 	rightLen := c.ArrayLen(right, rightElem)
 	return c.builder.CreateSelect(
 		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
@@ -449,7 +445,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	// Element-wise array operation: arr1 op arr2
 	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
 	// This mirrors vector-style zip semantics and avoids silently inventing data.
-	loopLen := c.arrayPairLen(left, right)
+	loopLen := c.arrayPairMinLen(left, right)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		// compileInfix reads values and produces a new result
@@ -500,7 +496,8 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	loopLen := c.arrayPairLen(arr, scalar)
+	arrElem := arr.Type.(Array).ColTypes[0]
+	loopLen := c.ArrayLen(arr, arrElem)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Respect the original operand order for non-commutative operations
@@ -562,7 +559,7 @@ func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Valu
 }
 
 func (c *Compiler) compileArrayArrayFilter(op string, left *Symbol, right *Symbol, acc *ArrayAccumulator) *Symbol {
-	c.forEachArrayPair(left, right, c.arrayPairLen(left, right), func(_ llvm.Value, leftSym *Symbol, rightSym *Symbol) {
+	c.forEachArrayPair(left, right, c.arrayPairMinLen(left, right), func(_ llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
 			LeftType:  opType(leftSym.Type.Key()),
@@ -576,7 +573,8 @@ func (c *Compiler) compileArrayArrayFilter(op string, left *Symbol, right *Symbo
 }
 
 func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator) *Symbol {
-	c.forEachArrayPair(arr, scalar, c.arrayPairLen(arr, scalar), func(_ llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+	arrElem := arr.Type.(Array).ColTypes[0]
+	c.forEachArrayPair(arr, scalar, c.ArrayLen(arr, arrElem), func(_ llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
 			LeftType:  opType(elemSym.Type.Key()),
