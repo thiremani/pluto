@@ -911,7 +911,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 
 // storeRangeCondScalar stores range CondScalar results into output:
 // true branch overwrites output with LHS; false branch preserves previous output.
-func (c *Compiler) storeRangeCondScalar(op string, left *Symbol, right *Symbol, output *Symbol, manualLeftCleanup bool) {
+func (c *Compiler) storeRangeCondScalar(op string, left *Symbol, right *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
 	lSym, cmpVal := c.compareScalars(op, left, right)
 
 	fn := c.builder.GetInsertBlock().Parent()
@@ -926,7 +926,7 @@ func (c *Compiler) storeRangeCondScalar(op string, left *Symbol, right *Symbol, 
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
-	if manualLeftCleanup {
+	if leftTempNeedsCleanup {
 		c.freeTemporarySymbol(left, "cond_lhs_drop")
 	}
 	c.builder.CreateBr(contBlock)
@@ -934,18 +934,18 @@ func (c *Compiler) storeRangeCondScalar(op string, left *Symbol, right *Symbol, 
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) compileRangeInfixSlot(op string, mode CondMode, expected Type, left *Symbol, right *Symbol, output *Symbol, manualLeftCleanup bool) {
+func (c *Compiler) compileRangeInfixSlot(op string, mode CondMode, expected Type, left *Symbol, right *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
 	switch mode {
 	case CondScalar:
 		// Range CondScalar is "keep previous output" on false, not "write zero".
-		c.storeRangeCondScalar(op, left, right, output, manualLeftCleanup)
+		c.storeRangeCondScalar(op, left, right, output, leftTempNeedsCleanup)
 	default:
 		computed := c.compileInfix(op, left, right, expected)
 
 		// Free previous iteration's result before overwriting.
 		c.freeSymbolValue(output, "old_output")
 		c.createStore(computed.Val, output.Val, computed.Type)
-		if manualLeftCleanup {
+		if leftTempNeedsCleanup {
 			c.freeTemporarySymbol(left, "temp_left")
 		}
 	}
@@ -999,7 +999,7 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 
 // freeTemporarySymbol frees one temporary symbol if it owns heap data.
 func (c *Compiler) freeTemporarySymbol(sym *Symbol, loadName string) {
-	if sym == nil || sym.Borrowed {
+	if sym.Borrowed {
 		return
 	}
 	derefed := c.derefIfPointer(sym, loadName)
@@ -1053,7 +1053,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 	_, leftIsIdent := leftRew.(*ast.Identifier)
-	manualLeftCleanup := info.HasCondScalar() && !leftIsIdent
+	leftTempNeedsCleanup := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
@@ -1068,13 +1068,13 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 				left[i],
 				right[i],
 				outputs[i],
-				manualLeftCleanup,
+				leftTempNeedsCleanup,
 			)
 		}
 
 		// Range-loop operands are temporary per iteration (except identifiers).
 		// With CondScalar, left-side ownership is branch-dependent and handled inline.
-		if !manualLeftCleanup {
+		if !leftTempNeedsCleanup {
 			c.freeTemporary(leftRew, left)
 		}
 		c.freeTemporary(rightRew, right)
