@@ -275,10 +275,10 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
-	// Handle conditional expression (comparison in value position)
-	// Skip range-dependent comparisons here; they must be evaluated inside
-	// their loop context (compileInfixRanges) after range iterators are bound.
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && !info.HasRanges {
+	// Handle conditional expression (comparison in value position).
+	// Comparisons with ranges can be extracted only when all required iterators
+	// are already bound by an outer loop (no pending ranges).
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		// Bottom-up: extract conditions from operands first
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
@@ -353,6 +353,14 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// compileCondExprCall runs a call expression under conditional-expression
+// gating, executing the call only when extracted predicates hold.
+func (c *Compiler) compileCondExprCall(callExpr *ast.CallExpression, baseCond llvm.Value, funcName string, outputs []*Symbol) {
+	c.compileCondExprValue(callExpr, baseCond, func() {
+		c.compileCallInner(funcName, callExpr, outputs)
+	})
 }
 
 // compileCondExprStatement handles let statements that have conditional

@@ -909,48 +909,6 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 	return &Symbol{Val: val, Type: lSym.Type}
 }
 
-// storeRangeCondScalar stores range CondScalar results into output:
-// true branch overwrites output with LHS; false branch preserves previous output.
-func (c *Compiler) storeRangeCondScalar(op string, left *Symbol, right *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
-	lSym, cmpVal := c.compareScalars(op, left, right)
-
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
-	elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_next")
-	c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
-
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	c.freeSymbolValue(output, "old_output")
-	c.createStore(lSym.Val, output.Val, lSym.Type)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	if leftTempNeedsCleanup {
-		c.freeTemporarySymbol(left, "cond_lhs_drop")
-	}
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
-}
-
-func (c *Compiler) compileRangeInfixSlot(op string, mode CondMode, expected Type, left *Symbol, right *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
-	switch mode {
-	case CondScalar:
-		// Range CondScalar is "keep previous output" on false, not "write zero".
-		c.storeRangeCondScalar(op, left, right, output, leftTempNeedsCleanup)
-	default:
-		computed := c.compileInfix(op, left, right, expected)
-
-		// Free previous iteration's result before overwriting.
-		c.freeSymbolValue(output, "old_output")
-		c.createStore(computed.Val, output.Val, computed.Type)
-		if leftTempNeedsCleanup {
-			c.freeTemporarySymbol(left, "temp_left")
-		}
-	}
-}
-
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
@@ -1061,15 +1019,38 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		right := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(left); i++ {
-			c.compileRangeInfixSlot(
-				expr.Operator,
-				info.CompareModes[i],
-				info.OutTypes[i],
-				left[i],
-				right[i],
-				outputs[i],
-				leftTempNeedsCleanup,
-			)
+			if info.CompareModes[i] == CondScalar {
+				// Range CondScalar is "keep previous output" on false, not "write zero".
+				lSym, cmpVal := c.compareScalars(expr.Operator, left[i], right[i])
+
+				fn := c.builder.GetInsertBlock().Parent()
+				ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
+				elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
+				contBlock := c.Context.AddBasicBlock(fn, "cond_next")
+				c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
+
+				c.builder.SetInsertPointAtEnd(ifBlock)
+				c.freeSymbolValue(outputs[i], "old_output")
+				c.createStore(lSym.Val, outputs[i].Val, lSym.Type)
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(elseBlock)
+				if leftTempNeedsCleanup {
+					c.freeTemporarySymbol(left[i], "cond_lhs_drop")
+				}
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(contBlock)
+				continue
+			}
+
+			computed := c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i])
+			// Free previous iteration's result before overwriting.
+			c.freeSymbolValue(outputs[i], "old_output")
+			c.createStore(computed.Val, outputs[i].Val, computed.Type)
+			if leftTempNeedsCleanup {
+				c.freeTemporarySymbol(left[i], "temp_left")
+			}
 		}
 
 		// Range-loop operands are temporary per iteration (except identifiers).
@@ -1505,8 +1486,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !info.LoopInside && len(info.Ranges) > 0 {
 		rewCall := info.Rewrite.(*ast.CallExpression)
 		c.withLoopNest(info.Ranges, func() {
-			// Inside loop, ranges are shadowed as scalars
-			c.compileCallInner(ce.Function.Value, rewCall, outputs)
+			// Inside loop, ranges are shadowed as scalars. If call arguments contain
+			// conditional expressions, execute the call only when they hold.
+			c.compileCondExprCall(rewCall, llvm.Value{}, ce.Function.Value, outputs)
 		})
 
 		// Loop path materializes final values from output slots after iteration.
