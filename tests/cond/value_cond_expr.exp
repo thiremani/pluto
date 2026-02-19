@@ -34,12 +34,21 @@ MixedFalse: [] 0
 MixedTrue: [2 3] 2
 ArrayArray: [2 6]
 ArrayScalar: [5 6]
+ScalarArrayGt: [2]
+ScalarArrayLt: [2 2 2]
 IntAddTrue: 7
 IntAddFalse: 0
 StrCmpTrue: banana
 re:StrCmpFalse:\s*
+StrGStrHTrue: ant
+StrGStrHSeed: keep
+StrGStrHFalseExisting: keep
+StmtFalseExistingStrH: keep_stmt
 ConcatTrue: hello world
 re:ConcatFalse:\s*
 StrEqTrue: abc
 re:StrEqFalse:\s*
+RangeStrMixed: s3
+RangeStrMixedBranches: s3
+re:RangeStrFalse:\s*
 NonValueCmp: 1

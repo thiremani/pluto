@@ -141,6 +141,14 @@ arr3 = [1 2 3 5 6]
 ay = arr3 > 3
 "ArrayScalar: -ay"
 
+# Scalar-array comparison in value position keeps scalar LHS values
+az = 2 > arr3
+"ScalarArrayGt: -az"
+
+# Non-commutative direction is preserved
+az2 = 2 < arr3
+"ScalarArrayLt: -az2"
+
 # Heap-allocating LHS in cond-expr: (a + b) > threshold
 # The addition creates a temporary; on false path it must be freed.
 ia = 3
@@ -160,6 +168,20 @@ sc = sa > "avocado"
 sc2 = sb > "banana"
 "StrCmpFalse: -sc2"
 
+# Mixed string kinds in cond-expr (StrG < StrH temp)
+sgth = "ant" < ("a" ⊕ "z")
+"StrGStrHTrue: -sgth"
+
+sgfh = "keep"
+"StrGStrHSeed: -sgfh"
+sgfh = "bee" < ("a" ⊕ "z")
+"StrGStrHFalseExisting: -sgfh"
+
+# Statement condition with existing heap string should keep old value on false
+stmtKeep = "keep_stmt".
+stmtKeep = 1 > 2 "drop".
+"StmtFalseExistingStrH: -stmtKeep"
+
 # String concat cond-expr: (a ⊕ b) > "threshold"
 # Concat allocates a heap string; on false path it must be freed.
 sl = "hello"
@@ -178,6 +200,16 @@ sg = se == sf
 
 sh = se == "xyz"
 "StrEqFalse: -sh"
+
+# Range CondScalar with heap-string LHS (exercises range false/true ownership paths)
+rg = MkStr(1:4) > "s-2"
+"RangeStrMixed: -rg"
+
+rgm = MkStr(1:4) > "s2"
+"RangeStrMixedBranches: -rgm"
+
+rg2 = MkStr(1:4) > "z"
+"RangeStrFalse: -rg2"
 
 # Comparison in non-value position (function arg) must not be treated as cond-expr
 ga = 1

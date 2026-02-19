@@ -151,3 +151,41 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	require.NotContains(t, ir, "store", "pointer seed should be reused without store")
 	require.NotContains(t, ir, "load i64, ptr @seed_global", "pointer seed should not be dereferenced")
 }
+
+func TestCompileCondScalarStrHUsesBranch(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "cond_scalar_strh", "", ast.NewCode())
+	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+
+	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
+	fn := llvm.AddFunction(c.Module, "cond_scalar_strh_fn", fnType)
+	entry := ctx.AddBasicBlock(fn, "entry")
+	c.builder.SetInsertPointAtEnd(entry)
+
+	lhsGlobal := c.createGlobalString("lhs_str", "banana", llvm.PrivateLinkage)
+	rhsGlobal := c.createGlobalString("rhs_str", "apple", llvm.PrivateLinkage)
+	lhs := &Symbol{Type: StrH{}, Val: c.copyString(lhsGlobal)}
+	rhs := &Symbol{Type: StrH{}, Val: c.copyString(rhsGlobal)}
+
+	res := c.compileCondScalar(token.SYM_GTR, lhs, rhs)
+	require.Equal(t, StrH{}, res.Type)
+
+	c.free([]llvm.Value{res.Val})
+	c.builder.CreateRetVoid()
+
+	ir := c.Module.String()
+	require.Contains(t, ir, "cond_lhs_true", "StrH CondScalar should lower with explicit branching")
+	require.Contains(t, ir, "cond_lhs_false", "StrH CondScalar should lower with explicit branching")
+	require.NotContains(t, ir, "select i1", "StrH CondScalar should not use select")
+}
+
+func TestCanUseCondSelectWhitelist(t *testing.T) {
+	require.True(t, canUseCondSelect(Int{Width: 64}))
+	require.True(t, canUseCondSelect(Float{Width: 64}))
+	require.True(t, canUseCondSelect(StrG{}))
+
+	require.False(t, canUseCondSelect(StrH{}))
+	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
+}

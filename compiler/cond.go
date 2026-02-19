@@ -80,6 +80,17 @@ func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 	return outTypes
 }
 
+// resolveConditionalSeed returns the initial value for conditional temp outputs.
+// Existing destinations keep their current value on false branches; new
+// destinations start from the type zero value.
+func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *Symbol {
+	existing, ok := Get(c.Scopes, ident.Value)
+	if !ok {
+		return c.makeZeroValue(outType)
+	}
+	return c.derefIfPointer(existing, ident.Value+"_cond_seed")
+}
+
 func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
 	outTypes := c.collectOutTypes(stmt)
 
@@ -90,18 +101,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		tempIdent := &ast.Identifier{Value: tempName}
 
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
-		seed := c.makeZeroValue(outTypes[i])
-		if existing, ok := Get(c.Scopes, ident.Value); ok {
-			existingType := existing.Type
-			if ptrType, isPtr := existingType.(Ptr); isPtr {
-				existingType = ptrType.Elem
-			}
-			// Never reinterpret an unresolved old value as a concrete type.
-			// If metadata is unresolved, keep the zero seed for this temp slot.
-			if existingType.Kind() != UnresolvedKind {
-				seed = c.derefIfPointer(existing, ident.Value+"_cond_seed")
-			}
-		}
+		seed := c.resolveConditionalSeed(ident, outTypes[i])
 		c.createStore(seed.Val, ptr, outTypes[i])
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
@@ -251,17 +251,11 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 	for i := range left {
 		switch info.CompareModes[i] {
 		case CondScalar:
-			lSym := c.derefIfPointer(left[i], "")
-			rSym := c.derefIfPointer(right[i], "")
-			cmpResult := defaultOps[opKey{
-				Operator:  op,
-				LeftType:  opType(lSym.Type.Key()),
-				RightType: opType(rSym.Type.Key()),
-			}](c, lSym, rSym, true)
+			lSym, cmpVal := c.compareScalars(op, left[i], right[i])
 			if cond.IsNil() {
-				cond = cmpResult.Val
+				cond = cmpVal
 			} else {
-				cond = c.builder.CreateAnd(cond, cmpResult.Val, fmt.Sprintf("and_cond_%d", i))
+				cond = c.builder.CreateAnd(cond, cmpVal, fmt.Sprintf("and_cond_%d", i))
 			}
 			lhsSyms[i] = lSym
 		case CondArray:
@@ -281,8 +275,10 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
-	// Handle conditional expression (comparison in value position)
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() {
+	// Handle conditional expression (comparison in value position).
+	// Comparisons with ranges can be extracted only when all required iterators
+	// are already bound by an outer loop (no pending ranges).
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		// Bottom-up: extract conditions from operands first
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
@@ -309,6 +305,56 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	return cond, temps
 }
 
+// cleanupCondExprElse frees temporaries retained during cond-expr extraction
+// that are not consumed when the condition evaluates to false.
+func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
+	for _, tmp := range temps {
+		c.freeTemporary(tmp.expr, tmp.syms)
+	}
+	for exprKey, lhsSyms := range c.condLHS {
+		exprInfo := c.ExprCache[exprKey]
+		for i, mode := range exprInfo.CompareModes {
+			if mode == CondArray {
+				c.freeSymbolValue(lhsSyms[i], "")
+			}
+		}
+	}
+}
+
+// compileCondExprValue extracts cond-expr predicates for expr, branches on the
+// combined condition (AND with baseCond when provided), and compiles onTrue on
+// the true path only. False path performs standard cond-expr cleanup.
+func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+	savedCondLHS := c.condLHS
+	c.condLHS = make(map[ExprKey][]*Symbol)
+	defer func() { c.condLHS = savedCondLHS }()
+
+	var temps []condTemp
+	cond := baseCond
+	cond, temps = c.extractCondExprs(expr, cond, temps)
+
+	if cond.IsNil() {
+		onTrue()
+		return
+	}
+
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, "cond_if")
+	elseBlock := c.Context.AddBasicBlock(fn, "cond_else")
+	contBlock := c.Context.AddBasicBlock(fn, "cond_cont")
+	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	onTrue()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	c.cleanupCondExprElse(temps)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
 // compileCondExprStatement handles let statements that have conditional
 // expressions (comparisons) embedded in their value expressions.
 // Each value expression is processed independently: its conditions are
@@ -320,9 +366,6 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 
 	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
-	// Save condLHS for re-entrant calls (e.g. nested cond-expr in callee).
-	savedCondLHS := c.condLHS
-
 	targetIdx := 0
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
@@ -331,52 +374,13 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
 		exprValues := []ast.Expression{expr}
 
-		// Reset condLHS per expression so conditions don't leak across expressions.
-		c.condLHS = make(map[ExprKey][]*Symbol)
-
-		// Extract conditions for this expression only, starting from stmtCond.
-		var temps []condTemp
-		cond := stmtCond
-		cond, temps = c.extractCondExprs(expr, cond, temps)
-
-		if !cond.IsNil() {
-			fn := c.builder.GetInsertBlock().Parent()
-			ifBlock := c.Context.AddBasicBlock(fn, "if")
-			elseBlock := c.Context.AddBasicBlock(fn, "else")
-			contBlock := c.Context.AddBasicBlock(fn, "continue")
-			c.builder.CreateCondBr(cond, ifBlock, elseBlock)
-
-			c.builder.SetInsertPointAtEnd(ifBlock)
+		c.compileCondExprValue(expr, stmtCond, func() {
 			c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
-			c.builder.CreateBr(contBlock)
-
-			// Else: free LHS temporaries and CondArray results that won't be consumed.
-			c.builder.SetInsertPointAtEnd(elseBlock)
-			for _, tmp := range temps {
-				c.freeTemporary(tmp.expr, tmp.syms)
-			}
-			for exprKey, lhsSyms := range c.condLHS {
-				exprInfo := c.ExprCache[exprKey]
-				for i, mode := range exprInfo.CompareModes {
-					if mode == CondArray {
-						c.freeSymbolValue(lhsSyms[i], "")
-					}
-				}
-			}
-			c.builder.CreateBr(contBlock)
-
-			c.builder.SetInsertPointAtEnd(contBlock)
-		} else {
-			// No condition for this expression: unconditional assignment to temps.
-			c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
-		}
+		})
 
 		targetIdx += numOutputs
 	}
 
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
-
-	// Restore previous state (supports re-entrant cond-expr compilation)
-	c.condLHS = savedCondLHS
 }

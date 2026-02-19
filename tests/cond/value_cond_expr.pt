@@ -15,3 +15,6 @@ a, b = Mix(x)
 
 res = Id(x)
     res = x
+
+s = MkStr(x)
+    s = "s-x"

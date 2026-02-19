@@ -297,6 +297,39 @@ func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as filter")
 }
 
+func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "a = [1 2]\nx = 3 > a"
+	sl := lexer.New("scalarArrayComparisonValue.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
+
+	letStmt, ok := program.Statements[1].(*ast.LetStatement)
+	require.True(t, ok)
+	infix, ok := letStmt.Value[0].(*ast.InfixExpression)
+	require.True(t, ok)
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+	require.NotNil(t, info)
+	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
+	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as filter")
+
+	outArr, ok := info.OutTypes[0].(Array)
+	require.True(t, ok, "expected scalar-array filter output type to be array")
+	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array filter should keep scalar LHS element type")
+}
+
 func TestArrayLiteralRangesRecording(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayLiteralRanges", "", ast.NewCode())
@@ -359,4 +392,41 @@ func TestArrayRangeTyping(t *testing.T) {
 	sumInt, ok := sumType.(Int)
 	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
 	require.EqualValues(t, 64, sumInt.Width)
+}
+
+func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "prefixRewriteCopy", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "x = -(0:3)"
+	sl := lexer.New("PrefixRewriteCopy.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
+
+	letStmt, ok := program.Statements[0].(*ast.LetStatement)
+	require.True(t, ok)
+	prefix, ok := letStmt.Value[0].(*ast.PrefixExpression)
+	require.True(t, ok)
+
+	origInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+	require.NotNil(t, origInfo)
+	rewPrefix, ok := origInfo.Rewrite.(*ast.PrefixExpression)
+	require.True(t, ok, "expected rewritten prefix expression")
+
+	rewInfo := ts.ExprCache[key(ts.FuncNameMangled, rewPrefix)]
+	require.NotNil(t, rewInfo)
+	require.NotEmpty(t, origInfo.OutTypes)
+	require.NotEmpty(t, rewInfo.OutTypes)
+
+	origBefore := origInfo.OutTypes[0]
+	rewInfo.OutTypes[0] = Float{Width: 64}
+	require.Equal(t, origBefore, origInfo.OutTypes[0], "rewritten prefix OutTypes must not alias original")
 }

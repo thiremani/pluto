@@ -62,7 +62,7 @@ If `pluto` conflicts on your system, use `plt`.
 
 Hello world (`tests/helloworld.spt`):
 
-```
+```python
 "hello world"
 x = "hello 🙏"
 x, "👍"
@@ -72,14 +72,14 @@ No `main()`, no `print()`, no imports. Values on a line get printed.
 
 Compile and run:
 
-```
+```sh
 ./pluto tests/helloworld.spt
 ./tests/helloworld
 ```
 
 Output:
 
-```
+```text
 hello world
 hello 🙏 👍
 ```
@@ -99,7 +99,7 @@ Pluto separates reusable templates from executable scripts:
 
 A directory is the unit of compilation:
 
-```
+```text
 math/
 ├── math.pt      # defines Square, etc.
 └── func.spt     # uses them → compiles to ./math/func
@@ -107,7 +107,7 @@ math/
 
 Compile and run:
 
-```
+```sh
 ./pluto math
 ./math/func
 ```
@@ -121,7 +121,7 @@ Templates are defined once with a clear input/output contract. The first line de
 Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference** — calling a template directly modifies the output variable in the caller's scope.
 
 `math.pt`
-```
+```python
 # y is the output (writable), x is the input (read-only)
 y = Square(x)
 	y = x * x
@@ -134,17 +134,39 @@ Inputs are read-only — they flow in. Outputs are writable — they flow out. E
 Call `Square` with different types — Pluto compiles a specialized version for each:
 
 `func.spt`
-```
-a = Square(2)          # int specialization
-b = Square(5.6)        # float specialization
-arr = [1 2 3 4 5]
-c = Square(arr)        # squares every element
-d = Square(arr > 2)    # squares only elements where arr > 2
-e = Square(1:5)        # range — executes Square over each value
-a, b, c, d, e
+```python
+arr = [1 2 3 5]
+
+# Basic specializations
+a = Square(5)            # int specialization
+b = Square(2.2)          # float specialization
+c = Square(arr)          # squares each array element
+a, b, c
+
+# Range and filter (non-accumulated)
+d = Square(1:3)          # range: final iteration result
+e = Square(arr[1:3])     # array-range: final iteration result
+f = Square(arr > 3)      # filtered array
+g = Square(arr[1:3] > 3) # filtered array-range
+d, e, f, g
+
+# Accumulation forms
+h = [Square(1:3)]          # range accumulation
+i = [Square(arr[1:3])]     # array-range accumulation
+j = [Square((1:3) > 1)]    # conditional range accumulation
+k = [Square(arr[1:4] > 2)] # conditional array-range accumulation
+h, i, j, k
 ```
 
-No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 2` filters the array to elements greater than 2 and passes that subset through.
+Output:
+
+```text
+25 4.84 [1 4 9 25]
+4 9 [25] 0
+[1 4] [4 9] [0 4] [0 9 25]
+```
+
+No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 3` filters the array to elements greater than 3 and passes that subset through.
 
 Generated code is equivalent to handwritten specialized code. There is no runtime overhead.
 
@@ -154,7 +176,7 @@ Generated code is equivalent to handwritten specialized code. There is no runtim
 
 Ranges are first-class values:
 
-```
+```python
 Square(1:5)
 ```
 
@@ -168,7 +190,7 @@ Data-parallel execution without explicit loop syntax.
 
 Arrays use bracket syntax with no commas:
 
-```
+```python
 x = [1 2 3 4 5]
 y = [1.1 2.2 3.3]
 ```

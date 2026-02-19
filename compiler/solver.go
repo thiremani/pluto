@@ -444,9 +444,12 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*R
 		// It should have no ranges since temporary iterators are scalars
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.InfixExpression))] = &ExprInfo{
-			OutTypes: originalInfo.OutTypes, // Same output types as original
-			ExprLen:  originalInfo.ExprLen,
-			Ranges:   nil, // No ranges for rewritten expressions
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...), // Same output types as original
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false, // Rewritten operands are scalarized
+			LoopInside:   originalInfo.LoopInside,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...), // Preserve cond lowering mode
+			Ranges:       nil,                                                   // No ranges for rewritten expressions
 		}
 	}
 
@@ -469,9 +472,12 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 		rew = &cp
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
 		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrefixExpression))] = &ExprInfo{
-			OutTypes: originalInfo.OutTypes,
-			ExprLen:  originalInfo.ExprLen,
-			Ranges:   nil,
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false, // Rewritten operand is scalarized
+			LoopInside:   originalInfo.LoopInside,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...),
+			Ranges:       nil,
 		}
 	}
 
@@ -1111,14 +1117,17 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 }
 
 // typeInfixArrayFilter validates that element-wise comparison is supported
-// for an array filter (comparison in value position with array LHS).
+// for an array filter (comparison in value position with at least one array operand).
 func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, tok token.Token) {
-	elemType := leftType.(Array).ColTypes[0]
-	rhsElemType := rightType
-	if rightType.Kind() == ArrayKind {
-		rhsElemType = rightType.(Array).ColTypes[0]
+	cmpLeft := leftType
+	cmpRight := rightType
+	if leftType.Kind() == ArrayKind {
+		cmpLeft = leftType.(Array).ColTypes[0]
 	}
-	ts.TypeInfixOp(elemType, rhsElemType, op, tok)
+	if rightType.Kind() == ArrayKind {
+		cmpRight = rightType.(Array).ColTypes[0]
+	}
+	ts.TypeInfixOp(cmpLeft, cmpRight, op, tok)
 }
 
 // typeInfixSlot types a single slot of an infix expression, returning the
@@ -1135,10 +1144,15 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		return Unresolved{}, CondNone
 	}
 
-	// Array filter: comparison in value position with array LHS
-	if isValueCmp && leftType.Kind() == ArrayKind {
+	// Array filter: comparison in value position with an array operand.
+	// Keep LHS values where comparison holds. For scalar-array, this means
+	// producing an array of scalar LHS values (one per true element).
+	if isValueCmp && (leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind) {
 		ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
-		return leftType, CondArray
+		if leftType.Kind() == ArrayKind {
+			return leftType, CondArray
+		}
+		return Array{Headers: nil, ColTypes: []Type{leftType}, Length: 0}, CondArray
 	}
 
 	// Handle any expression involving arrays

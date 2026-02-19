@@ -1,2 +1,31 @@
-4
-31.36
+SquareInt: 25
+SquareFloat: 4.84
+SquareArr: [1 4 9 25]
+
+SquareRange: 4
+SquareArrRange: 9
+SquareArrFilter: [25]
+SquareArrRangeFilter: 0
+SquareArrRangeFilterKeepPrev: 99
+SquareArrRangeFilterKeepPrev changed: 9
+SquareRangeFilterTailFalse: 4
+
+SquareRangeAcc: [1 4]
+SquareArrRangeAcc: [4 9]
+SquareArrRangeFilterAccFalse: []
+SquareArrRangeFilterAccMixed: [9 25]
+SquareRangeFilterAcc: [16]
+SquareArrAssignNoMatch: []
+SquareArrSelfNoMatch: []
+SquareArrSelfMixed: [4 9]
+
+NestedFilter: [5]
+NestedSquareFilter: [25]
+
+SumSquaresBothTrue: 74
+SumSquaresOneFalse: 0
+SumSquaresOtherFalse: 0
+SumSquaresRangeBothTrue: 18
+SumSquaresRangeAllFalse: 0
+SumSquaresRangeKeepPrev: 77
+SumSquaresRangeTailFalse: 8

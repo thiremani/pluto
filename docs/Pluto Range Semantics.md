@@ -43,7 +43,7 @@ findBase(f):
 
 A range `start:stop` or `start:stop:step` defines iteration bounds:
 
-```pluto
+```python
 i = 0:5          # Iterates: 0, 1, 2, 3, 4
 j = 0:10:2       # Iterates: 0, 2, 4, 6, 8
 k = 5:0:-1       # Iterates: 5, 4, 3, 2, 1
@@ -59,7 +59,7 @@ Once the base function is determined, all ranges in its arguments become nested 
 
 ### Example: Simple Function Call
 
-```pluto
+```python
 i = 0:5
 x = Square(i)
 ```
@@ -76,7 +76,7 @@ Square:
 
 ### Example: Nested Single-Arg Functions
 
-```pluto
+```python
 x = √(Square(0:5))
 ```
 
@@ -94,7 +94,7 @@ Sqrt(tmp)  # Applied to final result
 
 ### Example: Multiple Arguments
 
-```pluto
+```python
 x = f(0:3, 10:13)
 ```
 
@@ -111,7 +111,7 @@ f:
 
 ### Example: Infix with Range
 
-```pluto
+```python
 x = a + 0:5
 ```
 
@@ -127,7 +127,7 @@ Add:
 
 ### Example: Prefix Applied to Infix
 
-```pluto
+```python
 x = √(a + 0:5)
 ```
 
@@ -153,7 +153,7 @@ When ranges expand, the behavior depends on the assignment operator:
 
 Simple assignment keeps the last iteration value:
 
-```pluto
+```python
 i = 0:5
 x = i + 1
 ```
@@ -170,7 +170,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 Compound operators accumulate across iterations:
 
-```pluto
+```python
 x = 0
 x += i
 ```
@@ -187,7 +187,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 Wrapping in `[...]` collects values into an array:
 
-```pluto
+```python
 arr = [i * 2]
 ```
 
@@ -206,7 +206,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 When multiple ranges appear in the base function's arguments, they become **nested loops**:
 
-```pluto
+```python
 i = 0:2
 j = 0:3
 result = f(i, j)
@@ -226,7 +226,7 @@ This produces `2 × 3 = 6` iterations (Cartesian product).
 
 If the same range variable appears multiple times, it's a single loop:
 
-```pluto
+```python
 i = 0:5
 result = i + i * 2
 ```
@@ -244,7 +244,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 You can add a conditional guard to selectively update values:
 
-```pluto
+```python
 res = condition expression
 ```
 
@@ -257,7 +257,7 @@ for each iteration:
 
 ### Example: Maximum Value
 
-```pluto
+```python
 arr = [3 1 4 1 5]
 i = 0:5
 res = arr[i] > res arr[i]
@@ -280,7 +280,7 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 Using a range to index an array creates a view or loop:
 
-```pluto
+```python
 arr = [10 20 30 40 50]
 i = 0:3
 slice = arr[i]         # View (ArrayRange type)
@@ -294,7 +294,7 @@ res += arr[i]          # Sum: res = 10+20+30 = 60
 
 Function arguments are passed by reference. When the same variable is used for input and output, they alias:
 
-```pluto
+```python
 rebuilt = [1 2 3]
 rebuilt = Rebuild(rebuilt, 10:13)  # Input and output alias!
 ```
@@ -302,7 +302,7 @@ rebuilt = Rebuild(rebuilt, 10:13)  # Input and output alias!
 **Aliased behavior:** Changes to output affect subsequent reads of input within the same iteration.
 
 **No aliasing (literal array):**
-```pluto
+```python
 result = Rebuild([1 2 3], 10:13)  # Fresh array, no aliasing
 ```
 
@@ -312,7 +312,7 @@ result = Rebuild([1 2 3], 10:13)  # Fresh array, no aliasing
 
 When a function receives a range parameter, iteration happens **inside** the function body:
 
-```pluto
+```python
 res = AddMul(x, 0:5)
     i = 10
     res = i * x + y  # y iterates over 0:5
@@ -334,7 +334,7 @@ The function receives the range, and its body contains the loop.
 
 Prefix operators (`-`, `√`, etc.) are single-argument functions. The base function rule applies:
 
-```pluto
+```python
 x = -(0:5)      # Tree: Negate(range) → base is Negate
 x = √(a + 0:5)  # Tree: Sqrt(Add(a, range)) → descend to Add
 ```
@@ -345,7 +345,7 @@ x = √(a + 0:5)  # Tree: Sqrt(Add(a, range)) → descend to Add
 
 When you assign a range expression to a variable, the loop executes immediately:
 
-```pluto
+```python
 i = 0:5
 x = i + 1        # Loop executes NOW: x = 5 (scalar)
 y = i + 2        # Loop executes NOW: y = 7 (scalar)
@@ -353,7 +353,7 @@ res = x / y      # No loop! Just: res = 5 / 7
 ```
 
 **For iteration over both:**
-```pluto
+```python
 i = 0:5
 res = (i + 1) / (i + 2)  # Single loop, both computed per iteration
 ```

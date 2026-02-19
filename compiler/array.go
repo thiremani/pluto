@@ -71,6 +71,9 @@ func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 	}
 }
 
+// PushVal appends using kind-based runtime dispatch.
+// Any future string flavor (e.g. StrS) auto-uses arr_str_push as long as
+// Kind()==StrKind and the LLVM value is char* compatible.
 func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
@@ -83,14 +86,15 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 
-	// For strings, use push_own to transfer ownership without duplicating
-	if acc.ElemType.Kind() == StrKind {
+	// Use push_own only for heap strings. Other string flavors (e.g. StrG/StrS)
+	// must be copied so future string kinds remain auto-supported via PushVal.
+	if acc.ElemType.Kind() == StrKind && IsStrH(valSym.Type) {
 		pushTy, pushFn := c.GetCFunc(ARR_STR_PUSH_OWN)
 		c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own")
 		return
 	}
 
-	// For value types (int, float), regular push is fine
+	// Fallback to copy semantics for non-heap strings and value types.
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
@@ -357,78 +361,112 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			vals := c.compileExpression(cell, nil)
-			valSym := c.derefIfPointer(vals[0], "")
-
-			val := valSym.Val
-			valType := valSym.Type // Preserve original type for ownership info
-			if valSym.Type.Kind() != elemType.Kind() {
-				val = c.CastArrayElem(val, valSym.Type, elemType)
-				valType = elemType // Cast changes the type
-			}
-
-			sym := &Symbol{Val: val, Type: valType}
-
-			// For strings: use push_own only for heap-allocated temporaries (non-identifiers)
-			// Identifiers must be copied to preserve the original variable's value
-			_, isIdent := cell.(*ast.Identifier)
-			if elemType.Kind() == StrKind {
-				if IsStrH(valType) && !isIdent {
-					c.PushValOwn(acc, sym)
-					continue
-				}
-			}
-
-			c.PushVal(acc, sym)
+			c.compileCondExprValue(cell, llvm.Value{}, func() {
+				vals := c.compileExpression(cell, nil)
+				_, isIdent := cell.(*ast.Identifier)
+				c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
+			})
 		}
 	})
 
 	return []*Symbol{c.ArrayAccResult(acc)}
 }
 
+// pushAccumCellValue appends one accumulated cell value, handling element casts
+// and string ownership transfer.
+func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isTemp bool, elemType Type) {
+	val := valSym.Val
+	valType := valSym.Type // Preserve original type for ownership info
+	if valSym.Type.Kind() != elemType.Kind() {
+		val = c.CastArrayElem(val, valSym.Type, elemType)
+		valType = elemType // Cast changes the type
+	}
+
+	sym := &Symbol{Val: val, Type: valType}
+
+	switch elemType.Kind() {
+	case IntKind, FloatKind:
+		c.PushVal(acc, sym)
+		return
+	case StrKind:
+		// For strings, copy by default (works for StrG, StrH, and future string
+		// flavors like StrS). Transfer ownership only for heap temporaries.
+		if IsStrH(valType) && isTemp {
+			c.PushValOwn(acc, sym)
+			return
+		}
+		c.PushVal(acc, sym)
+		return
+	default:
+		// Fail fast for new composite/heap-owning element kinds until explicit
+		// ownership policy is defined (e.g., struct/stack-array element support).
+		panic(fmt.Sprintf("unsupported accumulator element type: %s", elemType))
+	}
+}
+
 // Array operation functions
 
-func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *Symbol, resElem Type) *Symbol {
-	leftArrType := leftArr.Type.(Array)
-	rightArrType := rightArr.Type.(Array)
+// arrayPairMinLen returns min(len(left), len(right)) for two arrays.
+func (c *Compiler) arrayPairMinLen(left *Symbol, right *Symbol) llvm.Value {
+	leftElem := left.Type.(Array).ColTypes[0]
+	rightElem := right.Type.(Array).ColTypes[0]
+	leftLen := c.ArrayLen(left, leftElem)
+	rightLen := c.ArrayLen(right, rightElem)
+	return c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
+		leftLen, rightLen, "min_len",
+	)
+}
+
+// forEachArrayPair iterates element-wise over an array LHS and either an array
+// or scalar RHS, using loopLen as the iteration count.
+func (c *Compiler) forEachArrayPair(
+	left *Symbol,
+	right *Symbol,
+	loopLen llvm.Value,
+	body func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol),
+) {
+	leftElem := left.Type.(Array).ColTypes[0]
+	rightIsArray := right.Type.Kind() == ArrayKind
+	var rightElem Type
+	if rightIsArray {
+		rightElem = right.Type.(Array).ColTypes[0]
+	}
+
+	r := c.rangeZeroToN(loopLen)
+	c.createLoop(r, func(iter llvm.Value) {
+		leftVal := c.ArrayGetBorrowed(left, leftElem, iter)
+		leftSym := &Symbol{Val: leftVal, Type: leftElem}
+
+		currentRight := right
+		if rightIsArray {
+			rightVal := c.ArrayGetBorrowed(right, rightElem, iter)
+			currentRight = &Symbol{Val: rightVal, Type: rightElem}
+		}
+
+		body(iter, leftSym, currentRight)
+	})
+}
+
+func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
+	leftArrType := left.Type.(Array)
+	rightArrType := right.Type.(Array)
 
 	leftElem := leftArrType.ColTypes[0]
 	rightElem := rightArrType.ColTypes[0]
 
 	// Array concatenation: arr1 ⊕ arr2
 	if op == token.SYM_CONCAT {
-		return c.compileArrayConcat(leftArr, rightArr, leftElem, rightElem, resElem)
+		return c.compileArrayConcat(left, right, leftElem, rightElem, resElem)
 	}
 
 	// Element-wise array operation: arr1 op arr2
 	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
 	// This mirrors vector-style zip semantics and avoids silently inventing data.
-
-	// Get lengths of both arrays
-	leftLen := c.ArrayLen(leftArr, leftElem)
-	rightLen := c.ArrayLen(rightArr, rightElem)
-
-	// Calculate min length for result
-	minLen := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
-		leftLen,
-		rightLen,
-		"min_len",
-	)
-
-	// Create result array
-	resVec := c.CreateArrayForType(resElem, minLen)
-
-	// Element-wise operation over the full length
-	r := c.rangeZeroToN(minLen)
-	c.createLoop(r, func(iter llvm.Value) {
-		// Use borrowed get - compileInfix reads values and produces new result
-		leftVal := c.ArrayGetBorrowed(leftArr, leftElem, iter)
-		rightVal := c.ArrayGetBorrowed(rightArr, rightElem, iter)
-
-		leftSym := &Symbol{Val: leftVal, Type: leftElem}
-		rightSym := &Symbol{Val: rightVal, Type: rightElem}
-
+	loopLen := c.arrayPairMinLen(left, right)
+	resVec := c.CreateArrayForType(resElem, loopLen)
+	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
+		// compileInfix reads values and produces a new result
 		computed := c.compileInfix(op, leftSym, rightSym, resElem)
 
 		// Convert to result element type if needed
@@ -448,13 +486,13 @@ func (c *Compiler) compileArrayArrayInfix(op string, leftArr *Symbol, rightArr *
 	return resSym
 }
 
-func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
+func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
 	// Array concatenation: arr1 ⊕ arr2
 	// Result is [arr1..., arr2...]
 
 	// Get lengths of both arrays
-	leftLen := c.ArrayLen(leftArr, leftElem)
-	rightLen := c.ArrayLen(rightArr, rightElem)
+	leftLen := c.ArrayLen(left, leftElem)
+	rightLen := c.ArrayLen(right, rightElem)
 
 	// Calculate total length
 	totalLen := c.builder.CreateAdd(leftLen, rightLen, "concat_len")
@@ -463,10 +501,10 @@ func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftEle
 	resVec := c.CreateArrayForType(resElem, totalLen)
 
 	// Copy left array elements
-	c.CopyArrayInto(resVec, leftArr, leftElem, resElem, llvm.Value{}, false)
+	c.CopyArrayInto(resVec, left, leftElem, resElem, llvm.Value{}, false)
 
 	// Copy right array elements with offset
-	c.CopyArrayInto(resVec, rightArr, rightElem, resElem, leftLen, true)
+	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -476,21 +514,10 @@ func (c *Compiler) compileArrayConcat(leftArr *Symbol, rightArr *Symbol, leftEle
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	arrType := arr.Type.(Array)
-	arrElem := arrType.ColTypes[0]
-
-	lenVal := c.ArrayLen(arr, arrElem)
-	resVec := c.CreateArrayForType(resElem, lenVal)
-
-	scalarSym := c.derefIfPointer(scalar, "")
-
-	r := c.rangeZeroToN(lenVal)
-	c.createLoop(r, func(iter llvm.Value) {
-		idx := iter
-		// Use borrowed get - compileInfix reads values and produces new result
-		val := c.ArrayGetBorrowed(arr, arrElem, idx)
-		elemSym := &Symbol{Val: val, Type: arrElem}
-
+	arrElem := arr.Type.(Array).ColTypes[0]
+	loopLen := c.ArrayLen(arr, arrElem)
+	resVec := c.CreateArrayForType(resElem, loopLen)
+	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Respect the original operand order for non-commutative operations
 		var computed *Symbol
 		if arrayOnLeft {
@@ -506,7 +533,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		}
 
 		// Use set_own for strings to transfer ownership without double-strdup
-		c.ArraySetOwnForType(resElem, resVec, idx, resultVal)
+		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -515,8 +542,9 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	return resSym
 }
 
-// compileArrayFilter dispatches array filtering to array-array or array-scalar paths.
-// Returns a new array containing only LHS elements where the comparison holds.
+// compileArrayFilter dispatches value-position comparison filtering when at least
+// one operand is an array. It keeps LHS values where the comparison holds.
+// For scalar-op-array, the scalar LHS is repeated for each true element.
 func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
@@ -528,10 +556,12 @@ func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, ex
 		return c.compileArrayArrayFilter(op, l, r, acc)
 	}
 	if l.Type.Kind() == ArrayKind {
-		return c.compileArrayScalarFilter(op, l, r, acc)
+		return c.compileArrayScalarFilter(op, l, r, acc, true)
 	}
-	// Fallback: LHS is not an array (shouldn't reach here if solver is correct)
-	return c.compileInfix(op, left, right, expected)
+	if r.Type.Kind() == ArrayKind {
+		return c.compileArrayScalarFilter(op, r, l, acc, false)
+	}
+	panic(fmt.Sprintf("compileArrayFilter expects at least one array operand, got %s and %s", l.Type, r.Type))
 }
 
 // filterPush conditionally appends sym to acc based on cond.
@@ -549,25 +579,8 @@ func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Valu
 	c.builder.SetInsertPointAtEnd(nextBlock)
 }
 
-func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr *Symbol, acc *ArrayAccumulator) *Symbol {
-	leftElem := leftArr.Type.(Array).ColTypes[0]
-	rightElem := rightArr.Type.(Array).ColTypes[0]
-
-	leftLen := c.ArrayLen(leftArr, leftElem)
-	rightLen := c.ArrayLen(rightArr, rightElem)
-	minLen := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
-		leftLen, rightLen, "min_len",
-	)
-
-	r := c.rangeZeroToN(minLen)
-	c.createLoop(r, func(iter llvm.Value) {
-		leftVal := c.ArrayGetBorrowed(leftArr, leftElem, iter)
-		rightVal := c.ArrayGetBorrowed(rightArr, rightElem, iter)
-
-		leftSym := &Symbol{Val: leftVal, Type: leftElem}
-		rightSym := &Symbol{Val: rightVal, Type: rightElem}
-
+func (c *Compiler) compileArrayArrayFilter(op string, left *Symbol, right *Symbol, acc *ArrayAccumulator) *Symbol {
+	c.forEachArrayPair(left, right, c.arrayPairMinLen(left, right), func(_ llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
 			LeftType:  opType(leftSym.Type.Key()),
@@ -580,22 +593,26 @@ func (c *Compiler) compileArrayArrayFilter(op string, leftArr *Symbol, rightArr 
 	return c.ArrayAccResult(acc)
 }
 
-func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator) *Symbol {
+func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator, arrayOnLeft bool) *Symbol {
 	arrElem := arr.Type.(Array).ColTypes[0]
-	lenVal := c.ArrayLen(arr, arrElem)
-
-	r := c.rangeZeroToN(lenVal)
-	c.createLoop(r, func(iter llvm.Value) {
-		val := c.ArrayGetBorrowed(arr, arrElem, iter)
-		elemSym := &Symbol{Val: val, Type: arrElem}
-
+	c.forEachArrayPair(arr, scalar, c.ArrayLen(arr, arrElem), func(_ llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+		leftSym := elemSym
+		rightSym := scalarSym
+		pushSym := elemSym
+		if !arrayOnLeft {
+			// Preserve original operand order for non-commutative comparisons,
+			// and keep scalar LHS values on true comparisons.
+			leftSym = scalarSym
+			rightSym = elemSym
+			pushSym = scalarSym
+		}
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
-			LeftType:  opType(elemSym.Type.Key()),
-			RightType: opType(scalar.Type.Key()),
-		}](c, elemSym, scalar, true)
+			LeftType:  opType(leftSym.Type.Key()),
+			RightType: opType(rightSym.Type.Key()),
+		}](c, leftSym, rightSym, true)
 
-		c.filterPush(acc, elemSym, cmpResult.Val)
+		c.filterPush(acc, pushSym, cmpResult.Val)
 	})
 
 	return c.ArrayAccResult(acc)
