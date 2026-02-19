@@ -363,7 +363,8 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 		for _, cell := range row {
 			c.compileCondExprValue(cell, llvm.Value{}, func() {
 				vals := c.compileExpression(cell, nil)
-				c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), cell, elemType)
+				_, isIdent := cell.(*ast.Identifier)
+				c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
 			})
 		}
 	})
@@ -373,7 +374,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // pushAccumCellValue appends one accumulated cell value, handling element casts
 // and string ownership transfer.
-func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, cell ast.Expression, elemType Type) {
+func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isTemp bool, elemType Type) {
 	val := valSym.Val
 	valType := valSym.Type // Preserve original type for ownership info
 	if valSym.Type.Kind() != elemType.Kind() {
@@ -390,8 +391,7 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, cel
 	case StrKind:
 		// For strings, copy by default (works for StrG, StrH, and future string
 		// flavors like StrS). Transfer ownership only for heap temporaries.
-		_, isIdent := cell.(*ast.Identifier)
-		if IsStrH(valType) && !isIdent {
+		if IsStrH(valType) && isTemp {
 			c.PushValOwn(acc, sym)
 			return
 		}
@@ -542,8 +542,9 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	return resSym
 }
 
-// compileArrayFilter dispatches array filtering to array-array or array-scalar paths.
-// Returns a new array containing only LHS elements where the comparison holds.
+// compileArrayFilter dispatches value-position comparison filtering when at least
+// one operand is an array. It keeps LHS values where the comparison holds.
+// For scalar-op-array, the scalar LHS is repeated for each true element.
 func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
@@ -555,10 +556,12 @@ func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, ex
 		return c.compileArrayArrayFilter(op, l, r, acc)
 	}
 	if l.Type.Kind() == ArrayKind {
-		return c.compileArrayScalarFilter(op, l, r, acc)
+		return c.compileArrayScalarFilter(op, l, r, acc, true)
 	}
-	// Fallback: LHS is not an array (shouldn't reach here if solver is correct)
-	return c.compileInfix(op, left, right, expected)
+	if r.Type.Kind() == ArrayKind {
+		return c.compileArrayScalarFilter(op, r, l, acc, false)
+	}
+	panic(fmt.Sprintf("compileArrayFilter expects at least one array operand, got %s and %s", l.Type, r.Type))
 }
 
 // filterPush conditionally appends sym to acc based on cond.
@@ -590,16 +593,26 @@ func (c *Compiler) compileArrayArrayFilter(op string, left *Symbol, right *Symbo
 	return c.ArrayAccResult(acc)
 }
 
-func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator) *Symbol {
+func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator, arrayOnLeft bool) *Symbol {
 	arrElem := arr.Type.(Array).ColTypes[0]
 	c.forEachArrayPair(arr, scalar, c.ArrayLen(arr, arrElem), func(_ llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+		leftSym := elemSym
+		rightSym := scalarSym
+		pushSym := elemSym
+		if !arrayOnLeft {
+			// Preserve original operand order for non-commutative comparisons,
+			// and keep scalar LHS values on true comparisons.
+			leftSym = scalarSym
+			rightSym = elemSym
+			pushSym = scalarSym
+		}
 		cmpResult := defaultOps[opKey{
 			Operator:  op,
-			LeftType:  opType(elemSym.Type.Key()),
-			RightType: opType(scalarSym.Type.Key()),
-		}](c, elemSym, scalarSym, true)
+			LeftType:  opType(leftSym.Type.Key()),
+			RightType: opType(rightSym.Type.Key()),
+		}](c, leftSym, rightSym, true)
 
-		c.filterPush(acc, elemSym, cmpResult.Val)
+		c.filterPush(acc, pushSym, cmpResult.Val)
 	})
 
 	return c.ArrayAccResult(acc)

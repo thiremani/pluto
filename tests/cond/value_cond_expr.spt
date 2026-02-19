@@ -141,6 +141,14 @@ arr3 = [1 2 3 5 6]
 ay = arr3 > 3
 "ArrayScalar: -ay"
 
+# Scalar-array comparison in value position keeps scalar LHS values
+az = 2 > arr3
+"ScalarArrayGt: -az"
+
+# Non-commutative direction is preserved
+az2 = 2 < arr3
+"ScalarArrayLt: -az2"
+
 # Heap-allocating LHS in cond-expr: (a + b) > threshold
 # The addition creates a temporary; on false path it must be freed.
 ia = 3
