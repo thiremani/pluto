@@ -357,7 +357,10 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			c.compileCondAccumCell(cell, elemType, acc)
+			c.compileCondExprValue(cell, llvm.Value{}, func() {
+				vals := c.compileExpression(cell, nil)
+				c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), cell, elemType)
+			})
 		}
 	})
 
@@ -385,15 +388,6 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, cel
 	}
 
 	c.PushVal(acc, sym)
-}
-
-// compileCondAccumCell compiles one accumulated cell expression with CondScalar
-// semantics in loop context: only true iterations evaluate and push a value.
-func (c *Compiler) compileCondAccumCell(cell ast.Expression, elemType Type, acc *ArrayAccumulator) {
-	c.compileCondExprValue(cell, llvm.Value{}, func() {
-		vals := c.compileExpression(cell, nil)
-		c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), cell, elemType)
-	})
 }
 
 // Array operation functions

@@ -1488,7 +1488,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		c.withLoopNest(info.Ranges, func() {
 			// Inside loop, ranges are shadowed as scalars. If call arguments contain
 			// conditional expressions, execute the call only when they hold.
-			c.compileCondExprCall(rewCall, llvm.Value{}, ce.Function.Value, outputs)
+			c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+				c.compileCallInner(ce.Function.Value, rewCall, outputs)
+			})
 		})
 
 		// Loop path materializes final values from output slots after iteration.

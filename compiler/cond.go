@@ -355,14 +355,6 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-// compileCondExprCall runs a call expression under conditional-expression
-// gating, executing the call only when extracted predicates hold.
-func (c *Compiler) compileCondExprCall(callExpr *ast.CallExpression, baseCond llvm.Value, funcName string, outputs []*Symbol) {
-	c.compileCondExprValue(callExpr, baseCond, func() {
-		c.compileCallInner(funcName, callExpr, outputs)
-	})
-}
-
 // compileCondExprStatement handles let statements that have conditional
 // expressions (comparisons) embedded in their value expressions.
 // Each value expression is processed independently: its conditions are
