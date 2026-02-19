@@ -71,6 +71,9 @@ func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 	}
 }
 
+// PushVal appends using kind-based runtime dispatch.
+// Any future string flavor (e.g. StrS) auto-uses arr_str_push as long as
+// Kind()==StrKind and the LLVM value is char* compatible.
 func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
@@ -379,15 +382,25 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, cel
 
 	sym := &Symbol{Val: val, Type: valType}
 
-	// For strings: use push_own only for heap-allocated temporaries (non-identifiers)
-	// Identifiers must be copied to preserve the original variable's value.
-	_, isIdent := cell.(*ast.Identifier)
-	if elemType.Kind() == StrKind && IsStrH(valType) && !isIdent {
-		c.PushValOwn(acc, sym)
+	switch elemType.Kind() {
+	case IntKind, FloatKind:
+		c.PushVal(acc, sym)
 		return
+	case StrKind:
+		// For strings, copy by default (works for StrG, StrH, and future string
+		// flavors like StrS). Transfer ownership only for heap temporaries.
+		_, isIdent := cell.(*ast.Identifier)
+		if IsStrH(valType) && !isIdent {
+			c.PushValOwn(acc, sym)
+			return
+		}
+		c.PushVal(acc, sym)
+		return
+	default:
+		// Fail fast for new composite/heap-owning element kinds until explicit
+		// ownership policy is defined (e.g., struct/stack-array element support).
+		panic(fmt.Sprintf("unsupported accumulator element type: %s", elemType))
 	}
-
-	c.PushVal(acc, sym)
 }
 
 // Array operation functions
