@@ -86,14 +86,15 @@ func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 
-	// For strings, use push_own to transfer ownership without duplicating
-	if acc.ElemType.Kind() == StrKind {
+	// Use push_own only for heap strings. Other string flavors (e.g. StrG/StrS)
+	// must be copied so future string kinds remain auto-supported via PushVal.
+	if acc.ElemType.Kind() == StrKind && IsStrH(valSym.Type) {
 		pushTy, pushFn := c.GetCFunc(ARR_STR_PUSH_OWN)
 		c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own")
 		return
 	}
 
-	// For value types (int, float), regular push is fine
+	// Fallback to copy semantics for non-heap strings and value types.
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
 	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
