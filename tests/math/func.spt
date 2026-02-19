@@ -23,6 +23,10 @@ rangeFilterTailFalseVal = Square((0:5) < 3)
 "SquareArrFilter: -arrFilterVal"
 "SquareArrRangeFilter: -arrRangeFilterVal"
 "SquareArrRangeFilterKeepPrev: -arrRangeFilterKeepPrev"
+
+arrRangeFilterKeepPrev = Square(arr[1:3] > 2)
+"SquareArrRangeFilterKeepPrev changed: -arrRangeFilterKeepPrev"
+
 "SquareRangeFilterTailFalse: -rangeFilterTailFalseVal\n"
 
 # Range and array-range accumulation
