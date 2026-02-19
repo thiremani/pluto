@@ -1011,7 +1011,9 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
 	_, leftIsIdent := leftRew.(*ast.Identifier)
-	leftTempNeedsCleanup := info.HasCondScalar() && !leftIsIdent
+	// CondScalar makes left-temp ownership branch-dependent (store on true,
+	// drop on false), so handle left temp cleanup inline per slot.
+	leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
 	c.withLoopNest(info.Ranges, func() {
@@ -1026,11 +1028,11 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 				left[i],
 				right[i],
 				outputs[i],
-				leftTempNeedsCleanup,
+				leftTempsHandledInline,
 			)
 		}
 
-		c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempNeedsCleanup)
+		c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempsHandledInline)
 	})
 
 	// Load final values from outputs
@@ -1053,10 +1055,10 @@ func (c *Compiler) compileRangeInfixSlot(
 	leftSym *Symbol,
 	rightSym *Symbol,
 	output *Symbol,
-	leftTempNeedsCleanup bool,
+	leftTempsHandledInline bool,
 ) {
 	if mode == CondScalar {
-		c.storeRangeCondScalar(op, leftSym, rightSym, output, leftTempNeedsCleanup)
+		c.storeRangeCondScalar(op, leftSym, rightSym, output, leftTempsHandledInline)
 		return
 	}
 
@@ -1064,14 +1066,14 @@ func (c *Compiler) compileRangeInfixSlot(
 	// Free previous iteration's result before overwriting.
 	c.freeSymbolValue(output, "old_output")
 	c.createStore(computed.Val, output.Val, computed.Type)
-	if leftTempNeedsCleanup {
+	if leftTempsHandledInline {
 		c.freeTemporarySymbol(leftSym, "temp_left")
 	}
 }
 
 // storeRangeCondScalar updates output for a CondScalar slot inside range lowering.
 // On true, store LHS. On false, keep previous output value.
-func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
+func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Symbol, output *Symbol, leftTempsHandledInline bool) {
 	// Range CondScalar is "keep previous output" on false, not "write zero".
 	lSym, cmpVal := c.compareScalars(op, leftSym, rightSym)
 
@@ -1087,7 +1089,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
-	if leftTempNeedsCleanup {
+	if leftTempsHandledInline {
 		c.freeTemporarySymbol(leftSym, "cond_lhs_drop")
 	}
 	c.builder.CreateBr(contBlock)
@@ -1100,11 +1102,11 @@ func (c *Compiler) cleanupRangeInfixTemps(
 	rightExpr ast.Expression,
 	left []*Symbol,
 	right []*Symbol,
-	leftTempNeedsCleanup bool,
+	leftTempsHandledInline bool,
 ) {
 	// Range-loop operands are temporary per iteration (except identifiers).
-	// With CondScalar, left-side ownership is branch-dependent and handled inline.
-	if !leftTempNeedsCleanup {
+	// When left temps are handled inline, skip batch cleanup to avoid double-free.
+	if !leftTempsHandledInline {
 		c.freeTemporary(leftExpr, left)
 	}
 	c.freeTemporary(rightExpr, right)
