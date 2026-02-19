@@ -1019,46 +1019,18 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		right := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(left); i++ {
-			if info.CompareModes[i] == CondScalar {
-				// Range CondScalar is "keep previous output" on false, not "write zero".
-				lSym, cmpVal := c.compareScalars(expr.Operator, left[i], right[i])
-
-				fn := c.builder.GetInsertBlock().Parent()
-				ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
-				elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
-				contBlock := c.Context.AddBasicBlock(fn, "cond_next")
-				c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
-
-				c.builder.SetInsertPointAtEnd(ifBlock)
-				c.freeSymbolValue(outputs[i], "old_output")
-				c.createStore(lSym.Val, outputs[i].Val, lSym.Type)
-				c.builder.CreateBr(contBlock)
-
-				c.builder.SetInsertPointAtEnd(elseBlock)
-				if leftTempNeedsCleanup {
-					c.freeTemporarySymbol(left[i], "cond_lhs_drop")
-				}
-				c.builder.CreateBr(contBlock)
-
-				c.builder.SetInsertPointAtEnd(contBlock)
-				continue
-			}
-
-			computed := c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i])
-			// Free previous iteration's result before overwriting.
-			c.freeSymbolValue(outputs[i], "old_output")
-			c.createStore(computed.Val, outputs[i].Val, computed.Type)
-			if leftTempNeedsCleanup {
-				c.freeTemporarySymbol(left[i], "temp_left")
-			}
+			c.compileRangeInfixSlot(
+				expr.Operator,
+				info.CompareModes[i],
+				info.OutTypes[i],
+				left[i],
+				right[i],
+				outputs[i],
+				leftTempNeedsCleanup,
+			)
 		}
 
-		// Range-loop operands are temporary per iteration (except identifiers).
-		// With CondScalar, left-side ownership is branch-dependent and handled inline.
-		if !leftTempNeedsCleanup {
-			c.freeTemporary(leftRew, left)
-		}
-		c.freeTemporary(rightRew, right)
+		c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempNeedsCleanup)
 	})
 
 	// Load final values from outputs
@@ -1072,6 +1044,70 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	}
 
 	return out
+}
+
+func (c *Compiler) compileRangeInfixSlot(
+	op string,
+	mode CondMode,
+	expected Type,
+	leftSym *Symbol,
+	rightSym *Symbol,
+	output *Symbol,
+	leftTempNeedsCleanup bool,
+) {
+	if mode == CondScalar {
+		c.storeRangeCondScalar(op, leftSym, rightSym, output, leftTempNeedsCleanup)
+		return
+	}
+
+	computed := c.compileInfix(op, leftSym, rightSym, expected)
+	// Free previous iteration's result before overwriting.
+	c.freeSymbolValue(output, "old_output")
+	c.createStore(computed.Val, output.Val, computed.Type)
+	if leftTempNeedsCleanup {
+		c.freeTemporarySymbol(leftSym, "temp_left")
+	}
+}
+
+// storeRangeCondScalar updates output for a CondScalar slot inside range lowering.
+// On true, store LHS. On false, keep previous output value.
+func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Symbol, output *Symbol, leftTempNeedsCleanup bool) {
+	// Range CondScalar is "keep previous output" on false, not "write zero".
+	lSym, cmpVal := c.compareScalars(op, leftSym, rightSym)
+
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
+	elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
+	contBlock := c.Context.AddBasicBlock(fn, "cond_next")
+	c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	c.freeSymbolValue(output, "old_output")
+	c.createStore(lSym.Val, output.Val, lSym.Type)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	if leftTempNeedsCleanup {
+		c.freeTemporarySymbol(leftSym, "cond_lhs_drop")
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) cleanupRangeInfixTemps(
+	leftExpr ast.Expression,
+	rightExpr ast.Expression,
+	left []*Symbol,
+	right []*Symbol,
+	leftTempNeedsCleanup bool,
+) {
+	// Range-loop operands are temporary per iteration (except identifiers).
+	// With CondScalar, left-side ownership is branch-dependent and handled inline.
+	if !leftTempNeedsCleanup {
+		c.freeTemporary(leftExpr, left)
+	}
+	c.freeTemporary(rightExpr, right)
 }
 
 func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
