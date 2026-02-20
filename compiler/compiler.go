@@ -488,14 +488,8 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		i += len(res)
 	}
 
-	commit := func() {
-		needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
-		c.writeTo(writeIdents, syms, needsCopy)
-		c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
-	}
-
 	if !c.stmtBoundsUsed {
-		commit()
+		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 		return
 	}
 
@@ -511,7 +505,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	c.builder.CreateCondBr(guardOK, writeBlock, skipBlock)
 
 	c.builder.SetInsertPointAtEnd(writeBlock)
-	commit()
+	c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(skipBlock)
@@ -520,6 +514,20 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) commitAssignments(
+	writeIdents []*ast.Identifier,
+	ownershipIdents []*ast.Identifier,
+	syms []*Symbol,
+	rhsNames []string,
+	oldValues []*Symbol,
+	exprs []ast.Expression,
+	resCounts []int,
+) {
+	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
+	c.writeTo(writeIdents, syms, needsCopy)
+	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
 }
 
 func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {

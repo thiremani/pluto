@@ -416,13 +416,8 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	elemType Type,
 	guardPtr llvm.Value,
 ) {
-	pushCell := func() {
-		_, isIdent := cell.(*ast.Identifier)
-		c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
-	}
-
 	if !c.stmtBoundsUsed {
-		pushCell()
+		c.pushAccumCell(acc, vals, cell, elemType)
 		return
 	}
 
@@ -434,7 +429,7 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	c.builder.CreateCondBr(boundsOK, pushBlock, skipBlock)
 
 	c.builder.SetInsertPointAtEnd(pushBlock)
-	pushCell()
+	c.pushAccumCell(acc, vals, cell, elemType)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(skipBlock)
@@ -442,6 +437,11 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) pushAccumCell(acc *ArrayAccumulator, vals []*Symbol, cell ast.Expression, elemType Type) {
+	_, isIdent := cell.(*ast.Identifier)
+	c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
 }
 
 // pushAccumCellValue appends one accumulated cell value, handling element casts
