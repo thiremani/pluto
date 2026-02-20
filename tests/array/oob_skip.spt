@@ -1,0 +1,34 @@
+arr = [10 20 30]
+
+scalar = 7
+scalar = scalar * arr[5]
+"ScalarOOBKeepsPrev: -scalar"
+
+negative = 3
+negative = negative * arr[-1]
+"NegativeOOBKeepsPrev: -negative"
+
+expr = 1
+expr = expr + arr[4]
+"ExprOOBKeepsPrev: -expr"
+
+inBounds = arr[1]
+"InBoundsWrites: -inBounds"
+
+cond = 5
+cond = arr[5] > 0 99
+"CondOOBSkips: -cond"
+
+multi = 100
+multi = multi + arr[10] + arr[20]
+"MultiOOBSkips: -multi"
+
+farr = [1.5 2.5 3.5]
+fkeep = 9.25
+fkeep = fkeep + farr[9]
+"FloatOOBKeepsPrev: -fkeep"
+
+sarr = ["x" "y"]
+skeep = "keep".
+skeep = skeep ⊕ sarr[9]
+"StringOOBKeepsPrev: -skeep"

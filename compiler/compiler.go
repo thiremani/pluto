@@ -90,6 +90,8 @@ type Compiler struct {
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
 	condLHS         map[ExprKey][]*Symbol // Statement-local: pre-extracted LHS values during cond-expr lowering
+	stmtBoundsGuard llvm.Value            // Active per-assignment bounds guard (i1*)
+	stmtBoundsUsed  bool                  // Whether current assignment recorded any bounds check
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -459,6 +461,11 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	// finishes, Ptrs already contain NEW values. We must capture old values first.
 	oldValues := c.captureOldValues(writeIdents)
 
+	// Collect bounds checks emitted while compiling RHS expressions. If any
+	// check fails, skip this assignment and keep prior destination values.
+	guardPtr, popGuard := c.pushBoundsGuard("stmt_bounds_guard")
+	defer popGuard()
+
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	// Track result counts per expression to identify call destinations
@@ -481,9 +488,110 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		i += len(res)
 	}
 
-	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
-	c.writeTo(writeIdents, syms, needsCopy)
-	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
+	commit := func() {
+		needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
+		c.writeTo(writeIdents, syms, needsCopy)
+		c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
+	}
+
+	if !c.stmtBoundsUsed {
+		commit()
+		return
+	}
+
+	// Guarded assignments must converge through pointer-backed destinations so
+	// runtime write/skip paths both feed subsequent reads correctly.
+	c.promoteExistingDestinations(writeIdents)
+
+	guardOK := c.createLoad(guardPtr, Int{Width: 1}, "stmt_bounds_ok")
+	fn := c.builder.GetInsertBlock().Parent()
+	writeBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_write")
+	skipBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_skip")
+	contBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_cont")
+	c.builder.CreateCondBr(guardOK, writeBlock, skipBlock)
+
+	c.builder.SetInsertPointAtEnd(writeBlock)
+	commit()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(skipBlock)
+	c.freeAssignmentTemps(exprs, syms, resCounts)
+	c.restoreOldValues(writeIdents, oldValues)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {
+	for _, ident := range idents {
+		sym, exists := Get(c.Scopes, ident.Value)
+		if !exists || sym.Type.Kind() == PtrKind {
+			continue
+		}
+		c.promoteToMemory(ident.Value)
+	}
+}
+
+// pushBoundsGuard sets up a new bounds check guard and returns the allocated pointer
+// along with a function to defer for popping the guard.
+func (c *Compiler) pushBoundsGuard(name string) (llvm.Value, func()) {
+	savedGuard := c.stmtBoundsGuard
+	savedGuardUsed := c.stmtBoundsUsed
+
+	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
+	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
+
+	c.stmtBoundsGuard = guardPtr
+	c.stmtBoundsUsed = false
+
+	return guardPtr, func() {
+		c.stmtBoundsGuard = savedGuard
+		c.stmtBoundsUsed = savedGuardUsed
+	}
+}
+
+// recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
+// guard. A false guard means the current assignment should become a no-op.
+func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
+	if c.stmtBoundsGuard.IsNil() {
+		return
+	}
+	curr := c.createLoad(c.stmtBoundsGuard, Int{Width: 1}, "stmt_bounds_curr")
+	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
+	c.createStore(next, c.stmtBoundsGuard, Int{Width: 1})
+	c.stmtBoundsUsed = true
+}
+
+// freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
+func (c *Compiler) freeAssignmentTemps(exprs []ast.Expression, syms []*Symbol, resCounts []int) {
+	offset := 0
+	for exprIdx, expr := range exprs {
+		count := resCounts[exprIdx]
+		c.freeTemporary(expr, syms[offset:offset+count])
+		offset += count
+	}
+}
+
+// restoreOldValues writes captured destination values back after a skipped
+// assignment path where RHS evaluation may have updated pointer-backed slots.
+func (c *Compiler) restoreOldValues(writeIdents []*ast.Identifier, oldValues []*Symbol) {
+	for i, ident := range writeIdents {
+		oldVal := oldValues[i]
+		if oldVal == nil {
+			continue
+		}
+		sym, exists := Get(c.Scopes, ident.Value)
+		if !exists {
+			continue
+		}
+		if ptrType, ok := sym.Type.(Ptr); ok {
+			c.createStore(oldVal.Val, sym.Val, ptrType.Elem)
+			continue
+		}
+		// Fallback for non-pointer symbols (defensive; guarded assignment paths
+		// normally promote existing destinations before branching).
+		Put(c.Scopes, ident.Value, oldVal)
+	}
 }
 
 // freeOldValues frees old values after stores complete.

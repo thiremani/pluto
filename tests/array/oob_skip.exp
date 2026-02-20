@@ -1,0 +1,8 @@
+ScalarOOBKeepsPrev: 7
+NegativeOOBKeepsPrev: 3
+ExprOOBKeepsPrev: 1
+InBoundsWrites: 20
+CondOOBSkips: 5
+MultiOOBSkips: 100
+FloatOOBKeepsPrev: 9.25
+StringOOBKeepsPrev: keep

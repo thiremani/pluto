@@ -467,6 +467,46 @@ func TestConditionExpression(t *testing.T) {
 	}
 }
 
+func TestConditionThenArrayValue(t *testing.T) {
+	const input = "x = a > b [1 2 3]"
+	l := lexer.New("TestConditionThenArrayValue", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected one condition")
+	require.Truef(t, testInfixExpression(t, stmt.Condition[0], "a", ">", "b"), "condition mismatch")
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	arr, ok := stmt.Value[0].(*ast.ArrayLiteral)
+	require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Value[0])
+	require.Len(t, arr.Rows, 1, "expected one row")
+	require.Len(t, arr.Rows[0], 3, "expected three elements")
+	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][0], 1), "first element mismatch")
+	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][1], 2), "second element mismatch")
+	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][2], 3), "third element mismatch")
+}
+
+func TestConditionThenCallValue(t *testing.T) {
+	const input = "x = a > b foo(1)"
+	l := lexer.New("TestConditionThenCallValue", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected one condition")
+	require.Truef(t, testInfixExpression(t, stmt.Condition[0], "a", ">", "b"), "condition mismatch")
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	callExpr, ok := stmt.Value[0].(*ast.CallExpression)
+	require.Truef(t, ok, "expected *ast.CallExpression, got %T", stmt.Value[0])
+	require.Equal(t, "foo", callExpr.Function.Value)
+	require.Len(t, callExpr.Arguments, 1, "expected one call argument")
+	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
+}
+
 // Multi-return condition
 func TestMultiReturnCondition(t *testing.T) {
 	const input = "x, y = a > 5 10, 20"

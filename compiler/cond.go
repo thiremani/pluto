@@ -20,6 +20,9 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 		return
 	}
 
+	guardPtr, popGuard := c.pushBoundsGuard("cond_bounds_guard")
+	defer popGuard()
+
 	hasConditions = true
 	for i, expr := range stmt.Condition {
 		condSyms := c.compileExpression(expr, nil)
@@ -30,6 +33,11 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 			}
 			cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
 		}
+	}
+
+	if c.stmtBoundsUsed {
+		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
+		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
 	}
 	return
 }

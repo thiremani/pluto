@@ -734,6 +734,12 @@ func (p *StmtParser) tryPostfix(left ast.Expression) (ast.Expression, bool) {
 	if postfix == nil {
 		return left, false
 	}
+	// Postfix call/index operations must be connected to their target:
+	// f(x), a[1], a[1:3]. If there is whitespace before the postfix token,
+	// treat it as the next expression instead.
+	if (key == token.SYM_LBRACK || key == token.SYM_LPAREN) && p.peekToken.HadSpace {
+		return left, false
+	}
 	if key == token.SYM_LPAREN && !p.allowCallPostfix(left) {
 		return left, false
 	}
