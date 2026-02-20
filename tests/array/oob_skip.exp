@@ -1,8 +1,15 @@
 ScalarOOBKeepsPrev: 7
 NegativeOOBKeepsPrev: 3
 ExprOOBKeepsPrev: 1
+NewVarOOBDefaultsZero: 0
 InBoundsWrites: 20
 CondOOBSkips: 5
 MultiOOBSkips: 100
 FloatOOBKeepsPrev: 9.25
 StringOOBKeepsPrev: keep
+NestedSeedIn: 99
+NestedBothInBounds: 30
+NestedSeedOuterOOB: 99
+NestedOuterOOBSkips: 99
+NestedSeedInnerOOB: 99
+NestedInnerOOBSkips: 99

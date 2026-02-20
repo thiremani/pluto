@@ -12,6 +12,9 @@ expr = 1
 expr = expr + arr[4]
 "ExprOOBKeepsPrev: -expr"
 
+newVarOOB = arr[9]
+"NewVarOOBDefaultsZero: -newVarOOB"
+
 inBounds = arr[1]
 "InBoundsWrites: -inBounds"
 
@@ -32,3 +35,25 @@ sarr = ["x" "y"]
 skeep = "keep".
 skeep = skeep ⊕ sarr[9]
 "StringOOBKeepsPrev: -skeep"
+
+arr1 = [10 20 30]
+arr2 = [0 2 5]
+
+nestedIn = 99
+"NestedSeedIn: -nestedIn"
+iIn = 1
+nestedIn = arr1[arr2[iIn]]
+"NestedBothInBounds: -nestedIn"
+
+nestedOuterOOB = 99
+"NestedSeedOuterOOB: -nestedOuterOOB"
+iOuterOOB = 2
+nestedOuterOOB = arr1[arr2[iOuterOOB]]
+"NestedOuterOOBSkips: -nestedOuterOOB"
+
+arr2short = [1]
+nestedInnerOOB = 99
+"NestedSeedInnerOOB: -nestedInnerOOB"
+iInnerOOB = 3
+nestedInnerOOB = arr1[arr2short[iInnerOOB]]
+"NestedInnerOOBSkips: -nestedInnerOOB"
