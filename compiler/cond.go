@@ -35,7 +35,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 		}
 	}
 
-	if c.stmtBoundsUsed {
+	if c.stmtBoundsUsed() {
 		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
 		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
 	}
@@ -277,9 +277,10 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 }
 
 // extractCondExprs walks the expression tree, evaluates each CondScalar
-// comparison, ANDs results into cond, and stores LHS values in c.condLHS
-// for substitution during later value compilation. LHS temporaries are
-// appended to temps so the caller can free them on the false path.
+// comparison, ANDs results into cond, and stores LHS values in the
+// statement-local condLHS map for substitution during later value compilation.
+// LHS temporaries are appended to temps so the caller can free them on the
+// false path.
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
@@ -298,7 +299,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 		var lhsSyms []*Symbol
 		lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
 
-		c.condLHS[key(c.FuncNameMangled, expr)] = lhsSyms
+		c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)] = lhsSyms
 		temps = append(temps, condTemp{infix.Left, left})
 		// Free right-side temporaries (only used for comparison).
 		// Left-side values are retained in condLHS for later substitution.
@@ -319,7 +320,7 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 	for _, tmp := range temps {
 		c.freeTemporary(tmp.expr, tmp.syms)
 	}
-	for exprKey, lhsSyms := range c.condLHS {
+	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
 		exprInfo := c.ExprCache[exprKey]
 		for i, mode := range exprInfo.CompareModes {
 			if mode == CondArray {
@@ -333,9 +334,16 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // combined condition (AND with baseCond when provided), and compiles onTrue on
 // the true path only. False path performs standard cond-expr cleanup.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
-	savedCondLHS := c.condLHS
-	c.condLHS = make(map[ExprKey][]*Symbol)
-	defer func() { c.condLHS = savedCondLHS }()
+	// Conditional value lowering can run outside let-statement compilation
+	// (for example inside call/literal loop paths). In that case we create a
+	// temporary statement context only to scope condLHS extraction.
+	if c.currStmt == nil {
+		c.currStmt = &stmtCtx{}
+		defer func() { c.currStmt = nil }()
+	}
+
+	c.pushCondLHSFrame()
+	defer c.popCondLHSFrame()
 
 	var temps []condTemp
 	cond := baseCond

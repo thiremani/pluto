@@ -89,9 +89,13 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
-	condLHS         map[ExprKey][]*Symbol // Statement-local: pre-extracted LHS values during cond-expr lowering
-	stmtBoundsGuard llvm.Value            // Active per-assignment bounds guard (i1*)
-	stmtBoundsUsed  bool                  // Whether current assignment recorded any bounds check
+	currStmt        *stmtCtx
+}
+
+type stmtCtx struct {
+	condStack   []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
+	boundsGuard llvm.Value              // Active per-assignment bounds guard (i1*)
+	boundsUsed  bool                    // Whether current assignment recorded any bounds check
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -488,7 +492,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		i += len(res)
 	}
 
-	if !c.stmtBoundsUsed {
+	if !c.stmtBoundsUsed() {
 		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 		return
 	}
@@ -540,34 +544,69 @@ func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {
 	}
 }
 
+func (c *Compiler) stmtBoundsUsed() bool {
+	return c.currStmt != nil && c.currStmt.boundsUsed
+}
+
+func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
+	if c.currStmt == nil || len(c.currStmt.condStack) == 0 {
+		return nil
+	}
+	return c.currStmt.condStack[len(c.currStmt.condStack)-1]
+}
+
+func (c *Compiler) requireCondLHSFrame() map[ExprKey][]*Symbol {
+	frame := c.currentCondLHSFrame()
+	if frame == nil {
+		panic("internal: missing condLHS frame (pushCondLHSFrame must be called before extraction)")
+	}
+	return frame
+}
+
+func (c *Compiler) pushCondLHSFrame() {
+	c.currStmt.condStack = append(c.currStmt.condStack, make(map[ExprKey][]*Symbol))
+}
+
+func (c *Compiler) popCondLHSFrame() {
+	c.currStmt.condStack = c.currStmt.condStack[:len(c.currStmt.condStack)-1]
+}
+
 // pushBoundsGuard sets up a new bounds check guard and returns the allocated pointer
 // along with a function to defer for popping the guard.
 func (c *Compiler) pushBoundsGuard(name string) (llvm.Value, func()) {
-	savedGuard := c.stmtBoundsGuard
-	savedGuardUsed := c.stmtBoundsUsed
+	if c.currStmt == nil {
+		return llvm.Value{}, func() {}
+	}
+
+	savedGuard := c.currStmt.boundsGuard
+	savedGuardUsed := c.currStmt.boundsUsed
 
 	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
 	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
 
-	c.stmtBoundsGuard = guardPtr
-	c.stmtBoundsUsed = false
+	c.currStmt.boundsGuard = guardPtr
+	c.currStmt.boundsUsed = false
 
 	return guardPtr, func() {
-		c.stmtBoundsGuard = savedGuard
-		c.stmtBoundsUsed = savedGuardUsed
+		c.currStmt.boundsGuard = savedGuard
+		c.currStmt.boundsUsed = savedGuardUsed
 	}
 }
 
 // recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
 // guard. A false guard means the current assignment should become a no-op.
 func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
-	if c.stmtBoundsGuard.IsNil() {
+	if c.currStmt == nil {
 		return
 	}
-	curr := c.createLoad(c.stmtBoundsGuard, Int{Width: 1}, "stmt_bounds_curr")
+	guard := c.currStmt.boundsGuard
+	if guard.IsNil() {
+		return
+	}
+	curr := c.createLoad(guard, Int{Width: 1}, "stmt_bounds_curr")
 	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
-	c.createStore(next, c.stmtBoundsGuard, Int{Width: 1})
-	c.stmtBoundsUsed = true
+	c.createStore(next, guard, Int{Width: 1})
+	c.currStmt.boundsUsed = true
 }
 
 // freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
@@ -667,6 +706,10 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
+	savedStmt := c.currStmt
+	c.currStmt = &stmtCtx{}
+	defer func() { c.currStmt = savedStmt }()
+
 	cond, hasConditions := c.compileConditions(stmt)
 
 	// Embedded conditional expressions (comparisons in value position)
@@ -917,8 +960,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Return pre-extracted LHS values for conditional expressions
-	if c.condLHS != nil {
-		if lhs, ok := c.condLHS[key(c.FuncNameMangled, expr)]; ok {
+	if condLHS := c.currentCondLHSFrame(); condLHS != nil {
+		if lhs, ok := condLHS[key(c.FuncNameMangled, expr)]; ok {
 			return lhs
 		}
 	}

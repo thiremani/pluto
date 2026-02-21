@@ -416,7 +416,7 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	elemType Type,
 	guardPtr llvm.Value,
 ) {
-	if !c.stmtBoundsUsed {
+	if !c.stmtBoundsUsed() {
 		c.pushAccumCell(acc, vals, cell, elemType)
 		return
 	}
