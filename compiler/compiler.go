@@ -553,6 +553,8 @@ func (c *Compiler) currentStmtCtx() *stmtCtx {
 	if len(c.stmtCtxStack) == 0 {
 		return nil
 	}
+	// This returns a pointer into stmtCtxStack storage. Callers must not keep
+	// it across operations that can append to stmtCtxStack.
 	return &c.stmtCtxStack[len(c.stmtCtxStack)-1]
 }
 
@@ -609,6 +611,8 @@ func (c *Compiler) popCondLHSFrame() {
 func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 	ctx := c.currentStmtCtx()
 	if ctx == nil {
+		// Bounds checks can be compiled in expression-only paths with no
+		// statement frame. In that case we skip statement-level guard tracking.
 		return llvm.Value{}
 	}
 
@@ -621,6 +625,7 @@ func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 func (c *Compiler) popBoundsGuard() {
 	ctx := c.currentStmtCtx()
 	if ctx == nil || len(ctx.boundsStack) == 0 {
+		// No active statement/bounds frame: nothing to pop by design.
 		return
 	}
 	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
@@ -631,9 +636,12 @@ func (c *Compiler) popBoundsGuard() {
 func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
 	ctx := c.currentStmtCtx()
 	if ctx == nil || len(ctx.boundsStack) == 0 {
+		// No active statement/bounds frame: skip statement-level guard updates.
 		return
 	}
 
+	// Pointer into boundsStack is safe here because this function does not append
+	// to boundsStack while frame is live.
 	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
 	if frame.guard.IsNil() {
 		return
