@@ -89,13 +89,17 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
-	currStmt        *stmtCtx
+	stmtCtxStack    []stmtCtx
+}
+
+type boundsGuardFrame struct {
+	guard llvm.Value
+	used  bool
 }
 
 type stmtCtx struct {
 	condStack   []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
-	boundsGuard llvm.Value              // Active per-assignment bounds guard (i1*)
-	boundsUsed  bool                    // Whether current assignment recorded any bounds check
+	boundsStack []boundsGuardFrame      // Nested bounds guards active within this statement
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -115,6 +119,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
+		stmtCtxStack:    []stmtCtx{},
 	}
 }
 
@@ -467,8 +472,8 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 
 	// Collect bounds checks emitted while compiling RHS expressions. If any
 	// check fails, skip this assignment and keep prior destination values.
-	guardPtr, popGuard := c.pushBoundsGuard("stmt_bounds_guard")
-	defer popGuard()
+	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
+	defer c.popBoundsGuard()
 
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
@@ -544,15 +549,35 @@ func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {
 	}
 }
 
+func (c *Compiler) currentStmtCtx() *stmtCtx {
+	if len(c.stmtCtxStack) == 0 {
+		return nil
+	}
+	return &c.stmtCtxStack[len(c.stmtCtxStack)-1]
+}
+
+func (c *Compiler) pushStmtCtx() {
+	c.stmtCtxStack = append(c.stmtCtxStack, stmtCtx{})
+}
+
+func (c *Compiler) popStmtCtx() {
+	c.stmtCtxStack = c.stmtCtxStack[:len(c.stmtCtxStack)-1]
+}
+
 func (c *Compiler) stmtBoundsUsed() bool {
-	return c.currStmt != nil && c.currStmt.boundsUsed
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		return false
+	}
+	return ctx.boundsStack[len(ctx.boundsStack)-1].used
 }
 
 func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
-	if c.currStmt == nil || len(c.currStmt.condStack) == 0 {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.condStack) == 0 {
 		return nil
 	}
-	return c.currStmt.condStack[len(c.currStmt.condStack)-1]
+	return ctx.condStack[len(ctx.condStack)-1]
 }
 
 func (c *Compiler) requireCondLHSFrame() map[ExprKey][]*Symbol {
@@ -564,49 +589,59 @@ func (c *Compiler) requireCondLHSFrame() map[ExprKey][]*Symbol {
 }
 
 func (c *Compiler) pushCondLHSFrame() {
-	c.currStmt.condStack = append(c.currStmt.condStack, make(map[ExprKey][]*Symbol))
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		panic("internal: missing statement context for pushCondLHSFrame")
+	}
+	ctx.condStack = append(ctx.condStack, make(map[ExprKey][]*Symbol))
 }
 
 func (c *Compiler) popCondLHSFrame() {
-	c.currStmt.condStack = c.currStmt.condStack[:len(c.currStmt.condStack)-1]
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.condStack) == 0 {
+		panic("internal: missing condLHS frame for popCondLHSFrame")
+	}
+	ctx.condStack = ctx.condStack[:len(ctx.condStack)-1]
 }
 
-// pushBoundsGuard sets up a new bounds check guard and returns the allocated pointer
-// along with a function to defer for popping the guard.
-func (c *Compiler) pushBoundsGuard(name string) (llvm.Value, func()) {
-	if c.currStmt == nil {
-		return llvm.Value{}, func() {}
+// pushBoundsGuard sets up a new bounds-check guard and returns its pointer.
+// Callers must pop the guard with popBoundsGuard after the guarded region.
+func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		return llvm.Value{}
 	}
-
-	savedGuard := c.currStmt.boundsGuard
-	savedGuardUsed := c.currStmt.boundsUsed
 
 	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
 	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
+	ctx.boundsStack = append(ctx.boundsStack, boundsGuardFrame{guard: guardPtr, used: false})
+	return guardPtr
+}
 
-	c.currStmt.boundsGuard = guardPtr
-	c.currStmt.boundsUsed = false
-
-	return guardPtr, func() {
-		c.currStmt.boundsGuard = savedGuard
-		c.currStmt.boundsUsed = savedGuardUsed
+func (c *Compiler) popBoundsGuard() {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		return
 	}
+	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
 }
 
 // recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
 // guard. A false guard means the current assignment should become a no-op.
 func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
-	if c.currStmt == nil {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
 		return
 	}
-	guard := c.currStmt.boundsGuard
-	if guard.IsNil() {
+
+	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
+	if frame.guard.IsNil() {
 		return
 	}
-	curr := c.createLoad(guard, Int{Width: 1}, "stmt_bounds_curr")
+	curr := c.createLoad(frame.guard, Int{Width: 1}, "stmt_bounds_curr")
 	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
-	c.createStore(next, guard, Int{Width: 1})
-	c.currStmt.boundsUsed = true
+	c.createStore(next, frame.guard, Int{Width: 1})
+	frame.used = true
 }
 
 // freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
@@ -706,9 +741,8 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
-	savedStmt := c.currStmt
-	c.currStmt = &stmtCtx{}
-	defer func() { c.currStmt = savedStmt }()
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
 
 	cond, hasConditions := c.compileConditions(stmt)
 

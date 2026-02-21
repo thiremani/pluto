@@ -394,12 +394,12 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
-			guardPtr, popGuard := c.pushBoundsGuard("acc_bounds_guard")
+			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
 			c.compileCondExprValue(cell, llvm.Value{}, func() {
 				vals := c.compileExpression(cell, nil)
 				c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
 			})
-			popGuard()
+			c.popBoundsGuard()
 		}
 	})
 

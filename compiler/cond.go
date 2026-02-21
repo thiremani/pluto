@@ -20,8 +20,8 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 		return
 	}
 
-	guardPtr, popGuard := c.pushBoundsGuard("cond_bounds_guard")
-	defer popGuard()
+	guardPtr := c.pushBoundsGuard("cond_bounds_guard")
+	defer c.popBoundsGuard()
 
 	hasConditions = true
 	for i, expr := range stmt.Condition {
@@ -337,9 +337,9 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	// Conditional value lowering can run outside let-statement compilation
 	// (for example inside call/literal loop paths). In that case we create a
 	// temporary statement context only to scope condLHS extraction.
-	if c.currStmt == nil {
-		c.currStmt = &stmtCtx{}
-		defer func() { c.currStmt = nil }()
+	if c.currentStmtCtx() == nil {
+		c.pushStmtCtx()
+		defer c.popStmtCtx()
 	}
 
 	c.pushCondLHSFrame()
