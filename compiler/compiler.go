@@ -1995,6 +1995,9 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
+
 	ce := ps.Expression
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 

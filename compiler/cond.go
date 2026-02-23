@@ -324,14 +324,6 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // combined condition (AND with baseCond when provided), and compiles onTrue on
 // the true path only. False path performs standard cond-expr cleanup.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
-	// Conditional value lowering can run outside let-statement compilation
-	// (for example inside call/literal loop paths). In that case we create a
-	// temporary statement context only to scope condLHS extraction.
-	if c.currentStmtCtx() == nil {
-		c.pushStmtCtx()
-		defer c.popStmtCtx()
-	}
-
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
