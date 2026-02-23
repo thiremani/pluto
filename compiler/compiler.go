@@ -504,7 +504,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 
 	// Guarded assignments must converge through pointer-backed destinations so
 	// runtime write/skip paths both feed subsequent reads correctly.
-	c.promoteExistingDestinations(writeIdents)
+	c.promoteIdentifiersIfNeeded(writeIdents)
 
 	guardOK := c.createLoad(guardPtr, Int{Width: 1}, "stmt_bounds_ok")
 	writeBlock, skipBlock, contBlock := c.createIfElseCont(guardOK, "stmt_bounds_write", "stmt_bounds_skip", "stmt_bounds_cont")
@@ -533,10 +533,6 @@ func (c *Compiler) commitAssignments(
 	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
 	c.writeTo(writeIdents, syms, needsCopy)
 	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
-}
-
-func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {
-	c.promoteIdentifiersIfNeeded(idents)
 }
 
 func (c *Compiler) promoteExistingSym(name string) {
