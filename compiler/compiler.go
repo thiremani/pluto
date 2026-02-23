@@ -548,12 +548,12 @@ func (c *Compiler) promoteIdentifiersIfNeeded(idents []*ast.Identifier) {
 	}
 }
 
+// This returns a pointer into stmtCtxStack storage. Callers must not keep
+// it across operations that can append to stmtCtxStack.
 func (c *Compiler) currentStmtCtx() *stmtCtx {
 	if len(c.stmtCtxStack) == 0 {
 		return nil
 	}
-	// This returns a pointer into stmtCtxStack storage. Callers must not keep
-	// it across operations that can append to stmtCtxStack.
 	return &c.stmtCtxStack[len(c.stmtCtxStack)-1]
 }
 
