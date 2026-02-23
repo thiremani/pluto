@@ -536,12 +536,19 @@ func (c *Compiler) commitAssignments(
 }
 
 func (c *Compiler) promoteExistingDestinations(idents []*ast.Identifier) {
+	c.promoteIdentifiersIfNeeded(idents)
+}
+
+func (c *Compiler) promoteExistingSym(name string) {
+	if _, exists := Get(c.Scopes, name); !exists {
+		return
+	}
+	c.promoteToMemory(name)
+}
+
+func (c *Compiler) promoteIdentifiersIfNeeded(idents []*ast.Identifier) {
 	for _, ident := range idents {
-		sym, exists := Get(c.Scopes, ident.Value)
-		if !exists || sym.Type.Kind() == PtrKind {
-			continue
-		}
-		c.promoteToMemory(ident.Value)
+		c.promoteExistingSym(ident.Value)
 	}
 }
 

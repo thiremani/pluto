@@ -68,14 +68,7 @@ func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
 	}
 
 	for name := range argNames {
-		sym, ok := Get(c.Scopes, name)
-		if !ok {
-			continue
-		}
-		if sym.Type.Kind() == PtrKind {
-			continue
-		}
-		c.promoteToMemory(name)
+		c.promoteExistingSym(name)
 	}
 }
 
