@@ -89,7 +89,17 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
-	condLHS         map[ExprKey][]*Symbol // Statement-local: pre-extracted LHS values during cond-expr lowering
+	stmtCtxStack    []stmtCtx
+}
+
+type boundsGuardFrame struct {
+	guard llvm.Value
+	used  bool
+}
+
+type stmtCtx struct {
+	condStack   []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
+	boundsStack []boundsGuardFrame      // Nested bounds guards active within this statement
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -109,6 +119,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
+		stmtCtxStack:    []stmtCtx{},
 	}
 }
 
@@ -459,6 +470,11 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	// finishes, Ptrs already contain NEW values. We must capture old values first.
 	oldValues := c.captureOldValues(writeIdents)
 
+	// Collect bounds checks emitted while compiling RHS expressions. If any
+	// check fails, skip this assignment and keep prior destination values.
+	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
+	defer c.popBoundsGuard()
+
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
 	// Track result counts per expression to identify call destinations
@@ -481,9 +497,190 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		i += len(res)
 	}
 
+	if !c.stmtBoundsUsed() {
+		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+		return
+	}
+
+	// Guarded assignments must converge through pointer-backed destinations so
+	// runtime write/skip paths both feed subsequent reads correctly.
+	c.promoteIdentifiersIfNeeded(writeIdents)
+
+	guardOK := c.createLoad(guardPtr, Int{Width: 1}, "stmt_bounds_ok")
+	writeBlock, skipBlock, contBlock := c.createIfElseCont(guardOK, "stmt_bounds_write", "stmt_bounds_skip", "stmt_bounds_cont")
+
+	c.builder.SetInsertPointAtEnd(writeBlock)
+	c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(skipBlock)
+	c.freeAssignmentTemps(exprs, syms, resCounts)
+	c.restoreOldValues(writeIdents, oldValues)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) commitAssignments(
+	writeIdents []*ast.Identifier,
+	ownershipIdents []*ast.Identifier,
+	syms []*Symbol,
+	rhsNames []string,
+	oldValues []*Symbol,
+	exprs []ast.Expression,
+	resCounts []int,
+) {
 	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
 	c.writeTo(writeIdents, syms, needsCopy)
 	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
+}
+
+func (c *Compiler) promoteExistingSym(name string) {
+	if _, exists := Get(c.Scopes, name); !exists {
+		return
+	}
+	c.promoteToMemory(name)
+}
+
+func (c *Compiler) promoteIdentifiersIfNeeded(idents []*ast.Identifier) {
+	for _, ident := range idents {
+		c.promoteExistingSym(ident.Value)
+	}
+}
+
+// This returns a pointer into stmtCtxStack storage. Callers must not keep
+// it across operations that can append to stmtCtxStack.
+func (c *Compiler) currentStmtCtx() *stmtCtx {
+	if len(c.stmtCtxStack) == 0 {
+		return nil
+	}
+	return &c.stmtCtxStack[len(c.stmtCtxStack)-1]
+}
+
+func (c *Compiler) pushStmtCtx() {
+	c.stmtCtxStack = append(c.stmtCtxStack, stmtCtx{})
+}
+
+func (c *Compiler) popStmtCtx() {
+	c.stmtCtxStack = c.stmtCtxStack[:len(c.stmtCtxStack)-1]
+}
+
+func (c *Compiler) stmtBoundsUsed() bool {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		return false
+	}
+	return ctx.boundsStack[len(ctx.boundsStack)-1].used
+}
+
+func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.condStack) == 0 {
+		return nil
+	}
+	return ctx.condStack[len(ctx.condStack)-1]
+}
+
+func (c *Compiler) requireCondLHSFrame() map[ExprKey][]*Symbol {
+	frame := c.currentCondLHSFrame()
+	if frame == nil {
+		panic("internal: missing condLHS frame (pushCondLHSFrame must be called before extraction)")
+	}
+	return frame
+}
+
+func (c *Compiler) pushCondLHSFrame() {
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		panic("internal: missing statement context for pushCondLHSFrame")
+	}
+	ctx.condStack = append(ctx.condStack, make(map[ExprKey][]*Symbol))
+}
+
+func (c *Compiler) popCondLHSFrame() {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.condStack) == 0 {
+		panic("internal: missing condLHS frame for popCondLHSFrame")
+	}
+	ctx.condStack = ctx.condStack[:len(ctx.condStack)-1]
+}
+
+// pushBoundsGuard sets up a new bounds-check guard and returns its pointer.
+// Callers must pop the guard with popBoundsGuard after the guarded region.
+func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		// Bounds checks can be compiled in expression-only paths with no
+		// statement frame. In that case we skip statement-level guard tracking.
+		return llvm.Value{}
+	}
+
+	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
+	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
+	ctx.boundsStack = append(ctx.boundsStack, boundsGuardFrame{guard: guardPtr, used: false})
+	return guardPtr
+}
+
+func (c *Compiler) popBoundsGuard() {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		// No active statement/bounds frame: nothing to pop by design.
+		return
+	}
+	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
+}
+
+// recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
+// guard. A false guard means the current assignment should become a no-op.
+func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		// No active statement/bounds frame: skip statement-level guard updates.
+		return
+	}
+
+	// Pointer into boundsStack is safe here because this function does not append
+	// to boundsStack while frame is live.
+	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
+	if frame.guard.IsNil() {
+		return
+	}
+	curr := c.createLoad(frame.guard, Int{Width: 1}, "stmt_bounds_curr")
+	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
+	c.createStore(next, frame.guard, Int{Width: 1})
+	frame.used = true
+}
+
+// freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
+func (c *Compiler) freeAssignmentTemps(exprs []ast.Expression, syms []*Symbol, resCounts []int) {
+	offset := 0
+	for exprIdx, expr := range exprs {
+		count := resCounts[exprIdx]
+		c.freeTemporary(expr, syms[offset:offset+count])
+		offset += count
+	}
+}
+
+// restoreOldValues writes captured destination values back after a skipped
+// assignment path where RHS evaluation may have updated pointer-backed slots.
+func (c *Compiler) restoreOldValues(writeIdents []*ast.Identifier, oldValues []*Symbol) {
+	for i, ident := range writeIdents {
+		oldVal := oldValues[i]
+		if oldVal == nil {
+			continue
+		}
+		sym, exists := Get(c.Scopes, ident.Value)
+		if !exists {
+			continue
+		}
+		if ptrType, ok := sym.Type.(Ptr); ok {
+			c.createStore(oldVal.Val, sym.Val, ptrType.Elem)
+			continue
+		}
+		// Fallback for non-pointer symbols (defensive; guarded assignment paths
+		// normally promote existing destinations before branching).
+		Put(c.Scopes, ident.Value, oldVal)
+	}
 }
 
 // freeOldValues frees old values after stores complete.
@@ -551,6 +748,9 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 }
 
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
+
 	cond, hasConditions := c.compileConditions(stmt)
 
 	// Embedded conditional expressions (comparisons in value position)
@@ -801,8 +1001,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Return pre-extracted LHS values for conditional expressions
-	if c.condLHS != nil {
-		if lhs, ok := c.condLHS[key(c.FuncNameMangled, expr)]; ok {
+	if condLHS := c.currentCondLHSFrame(); condLHS != nil {
+		if lhs, ok := condLHS[key(c.FuncNameMangled, expr)]; ok {
 			return lhs
 		}
 	}
@@ -888,12 +1088,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 	// Heap-owning or composite types use explicit branching to avoid eager
 	// false-arm materialization (select evaluates both operands).
 	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(lSym.Type), "cond_lhs.mem")
-	fn := c.builder.GetInsertBlock().Parent()
-	trueBlock := c.Context.AddBasicBlock(fn, "cond_lhs_true")
-	falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
-
-	c.builder.CreateCondBr(cmpVal, trueBlock, falseBlock)
+	trueBlock, falseBlock, contBlock := c.createIfElseCont(cmpVal, "cond_lhs_true", "cond_lhs_false", "cond_lhs_cont")
 
 	c.builder.SetInsertPointAtEnd(trueBlock)
 	c.createStore(lSym.Val, outPtr, lSym.Type)
@@ -1077,11 +1272,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 	// Range CondScalar is "keep previous output" on false, not "write zero".
 	lSym, cmpVal := c.compareScalars(op, leftSym, rightSym)
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
-	elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_next")
-	c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cmpVal, "cond_store", "cond_drop_lhs", "cond_next")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.freeSymbolValue(output, "old_output")
@@ -1488,6 +1679,27 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	return alloca
 }
 
+// createIfElseCont emits a conditional branch and creates if/else/cont blocks
+// in the current function.
+func (c *Compiler) createIfElseCont(cond llvm.Value, ifName, elseName, contName string) (llvm.BasicBlock, llvm.BasicBlock, llvm.BasicBlock) {
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, ifName)
+	elseBlock := c.Context.AddBasicBlock(fn, elseName)
+	contBlock := c.Context.AddBasicBlock(fn, contName)
+	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+	return ifBlock, elseBlock, contBlock
+}
+
+// createIfCont emits a conditional branch and creates if/cont blocks
+// in the current function.
+func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.BasicBlock, llvm.BasicBlock) {
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, ifName)
+	contBlock := c.Context.AddBasicBlock(fn, contName)
+	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+	return ifBlock, contBlock
+}
+
 func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 	funcName := ce.Function.Value
 	var args []*Symbol
@@ -1783,6 +1995,9 @@ func (c *Compiler) printf(args []llvm.Value) {
 }
 
 func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
+
 	ce := ps.Expression
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 

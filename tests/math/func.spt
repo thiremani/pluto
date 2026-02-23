@@ -16,6 +16,8 @@ arrFilterVal = Square(arr > 3)
 arrRangeFilterVal = Square(arr[1:3] > 3)
 arrRangeFilterKeepPrev = 99
 arrRangeFilterKeepPrev = Square(arr[1:3] > 3)
+callOOBKeepPrev = 11
+callOOBKeepPrev = 2 > 1 Square(arr[10])
 rangeFilterTailFalseVal = Square((0:5) < 3)
 
 "SquareRange: -rangeVal"
@@ -23,6 +25,7 @@ rangeFilterTailFalseVal = Square((0:5) < 3)
 "SquareArrFilter: -arrFilterVal"
 "SquareArrRangeFilter: -arrRangeFilterVal"
 "SquareArrRangeFilterKeepPrev: -arrRangeFilterKeepPrev"
+"SquareCallOOBKeepPrev: -callOOBKeepPrev"
 
 arrRangeFilterKeepPrev = Square(arr[1:3] > 2)
 "SquareArrRangeFilterKeepPrev changed: -arrRangeFilterKeepPrev"
@@ -38,7 +41,8 @@ rangeFilterAccVal = [Square((0:5) > 3)]
 arrInput = [1 2 3]
 arrAssignNoMatch = [Square(arrInput[1:4] > 20)]
 arrSelf = [1 2 3]
-arrSelf = [Square(arrSelf[1:4] > 20)]
+arrSelf = 1 > 2 [Square(arrSelf[1:4])]
+
 arrSelfMixed = [1 2 3]
 arrSelfMixed = [Square(arrSelfMixed[1:4] > 1)]
 
@@ -48,6 +52,9 @@ arrSelfMixed = [Square(arrSelfMixed[1:4] > 1)]
 "SquareArrRangeFilterAccMixed: -arrRangeFilterAccMixedVal"
 "SquareRangeFilterAcc: -rangeFilterAccVal"
 "SquareArrAssignNoMatch: -arrAssignNoMatch"
+"SquareArrSelfCondFail: -arrSelf"
+
+arrSelf = [Square(arrSelf[1:4] > 20)]
 "SquareArrSelfNoMatch: -arrSelf"
 "SquareArrSelfMixed: -arrSelfMixed\n"
 

@@ -208,6 +208,35 @@ func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
+// arrayIndexInBounds checks idx against [0, len(arr)).
+func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+	length := c.ArrayLen(arr, elem)
+	// Unsigned compare rejects negative indices as well (two's-complement wrap
+	// makes them larger than any valid length).
+	return c.builder.CreateICmp(llvm.IntULT, idx, length, "idx_in_bounds")
+}
+
+// checkedArrayGet loads arr[idx] when idx is in bounds; otherwise returns zero
+// value for resultType. Assignment-level guards decide whether writes commit.
+func (c *Compiler) checkedArrayGet(arr *Symbol, arrElem Type, resultType Type, idx llvm.Value, inBounds llvm.Value) llvm.Value {
+	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(resultType), "arr_get_checked_mem")
+
+	getBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_get_in_bounds", "arr_get_oob", "arr_get_cont")
+
+	c.builder.SetInsertPointAtEnd(getBlock)
+	value := c.ArrayGet(arr, arrElem, idx)
+	c.createStore(value, outPtr, resultType)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(missBlock)
+	zero := c.makeZeroValue(resultType)
+	c.createStore(zero.Val, outPtr, zero.Type)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	return c.createLoad(outPtr, resultType, "arr_get_checked")
+}
+
 // ArrayGetBorrowed returns a borrowed reference to an array element.
 // For string arrays, this avoids the strdup that ArrayGet performs.
 // For int/float arrays, this is identical to ArrayGet (value types have no ownership).
@@ -361,15 +390,50 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 	c.withLoopNest(info.Ranges, func() {
 		for _, cell := range row {
+			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
 			c.compileCondExprValue(cell, llvm.Value{}, func() {
 				vals := c.compileExpression(cell, nil)
-				_, isIdent := cell.(*ast.Identifier)
-				c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
+				c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
 			})
+			c.popBoundsGuard()
 		}
 	})
 
 	return []*Symbol{c.ArrayAccResult(acc)}
+}
+
+// pushAccumCellWhenInBounds pushes one accumulated cell only when its local
+// bounds guard remains true. OOB indexes skip this cell iteration (and free
+// temporary values) without poisoning the outer assignment.
+func (c *Compiler) pushAccumCellWhenInBounds(
+	acc *ArrayAccumulator,
+	vals []*Symbol,
+	cell ast.Expression,
+	elemType Type,
+	guardPtr llvm.Value,
+) {
+	if !c.stmtBoundsUsed() {
+		c.pushAccumCell(acc, vals, cell, elemType)
+		return
+	}
+
+	boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "acc_bounds_ok")
+	pushBlock, skipBlock, contBlock := c.createIfElseCont(boundsOK, "acc_push", "acc_skip", "acc_cont")
+
+	c.builder.SetInsertPointAtEnd(pushBlock)
+	c.pushAccumCell(acc, vals, cell, elemType)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(skipBlock)
+	c.freeTemporary(cell, vals)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) pushAccumCell(acc *ArrayAccumulator, vals []*Symbol, cell ast.Expression, elemType Type) {
+	_, isIdent := cell.(*ast.Identifier)
+	c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
 }
 
 // pushAccumCellValue appends one accumulated cell value, handling element casts
@@ -567,10 +631,7 @@ func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, ex
 // filterPush conditionally appends sym to acc based on cond.
 // Emits a branch: if cond is true, push sym; otherwise skip.
 func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Value) {
-	fn := c.builder.GetInsertBlock().Parent()
-	copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
-	nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
-	c.builder.CreateCondBr(cond, copyBlock, nextBlock)
+	copyBlock, nextBlock := c.createIfCont(cond, "filter_copy", "filter_next")
 
 	c.builder.SetInsertPointAtEnd(copyBlock)
 	c.PushVal(acc, sym)
@@ -718,23 +779,27 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 	}
 
 	// Scalar index - element access
-	elemType := arrType.ColTypes[0]
+	arrElemType := arrType.ColTypes[0]
+	resultType := arrElemType
 	idxVal := idxSym.Val
 	if intType, ok := idxSym.Type.(Int); ok && intType.Width != 64 {
 		idxVal = c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 	}
 
-	elemVal := c.ArrayGet(arraySym, elemType, idxVal)
+	// Bounds are checked in IR before get. OOB reads materialize a zero value
+	// for expression evaluation; assignment/condition guards decide whether the
+	// enclosing statement commits.
+	if arrElemType.Kind() == StrKind {
+		// String array get returns owned heap strings.
+		resultType = StrH{}
+	}
+	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+	c.recordStmtBoundsCheck(inBounds)
+	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
 
 	// Scalar element access does not retain the source array pointer.
 	// Release temporary array sources immediately.
 	c.freeTemporary(expr.Array, []*Symbol{arraySym})
 
-	// For string arrays, arr_str_get returns an owned copy that must be freed.
-	// String copies are heap-allocated regardless of original type.
-	if elemType.Kind() == StrKind {
-		elemType = StrH{}
-	}
-
-	return []*Symbol{{Type: elemType, Val: elemVal}}
+	return []*Symbol{{Type: resultType, Val: elemVal}}
 }

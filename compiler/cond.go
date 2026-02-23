@@ -20,6 +20,9 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 		return
 	}
 
+	guardPtr := c.pushBoundsGuard("cond_bounds_guard")
+	defer c.popBoundsGuard()
+
 	hasConditions = true
 	for i, expr := range stmt.Condition {
 		condSyms := c.compileExpression(expr, nil)
@@ -30,6 +33,11 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 			}
 			cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
 		}
+	}
+
+	if c.stmtBoundsUsed() {
+		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
+		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
 	}
 	return
 }
@@ -60,14 +68,7 @@ func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
 	}
 
 	for name := range argNames {
-		sym, ok := Get(c.Scopes, name)
-		if !ok {
-			continue
-		}
-		if sym.Type.Kind() == PtrKind {
-			continue
-		}
-		c.promoteToMemory(name)
+		c.promoteExistingSym(name)
 	}
 }
 
@@ -214,10 +215,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 
 	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "if")
-	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+	ifBlock, contBlock := c.createIfCont(cond, "if", "continue")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
@@ -269,9 +267,10 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 }
 
 // extractCondExprs walks the expression tree, evaluates each CondScalar
-// comparison, ANDs results into cond, and stores LHS values in c.condLHS
-// for substitution during later value compilation. LHS temporaries are
-// appended to temps so the caller can free them on the false path.
+// comparison, ANDs results into cond, and stores LHS values in the
+// statement-local condLHS map for substitution during later value compilation.
+// LHS temporaries are appended to temps so the caller can free them on the
+// false path.
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
@@ -290,7 +289,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 		var lhsSyms []*Symbol
 		lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
 
-		c.condLHS[key(c.FuncNameMangled, expr)] = lhsSyms
+		c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)] = lhsSyms
 		temps = append(temps, condTemp{infix.Left, left})
 		// Free right-side temporaries (only used for comparison).
 		// Left-side values are retained in condLHS for later substitution.
@@ -311,7 +310,7 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 	for _, tmp := range temps {
 		c.freeTemporary(tmp.expr, tmp.syms)
 	}
-	for exprKey, lhsSyms := range c.condLHS {
+	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
 		exprInfo := c.ExprCache[exprKey]
 		for i, mode := range exprInfo.CompareModes {
 			if mode == CondArray {
@@ -325,9 +324,8 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // combined condition (AND with baseCond when provided), and compiles onTrue on
 // the true path only. False path performs standard cond-expr cleanup.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
-	savedCondLHS := c.condLHS
-	c.condLHS = make(map[ExprKey][]*Symbol)
-	defer func() { c.condLHS = savedCondLHS }()
+	c.pushCondLHSFrame()
+	defer c.popCondLHSFrame()
 
 	var temps []condTemp
 	cond := baseCond
@@ -338,11 +336,7 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 		return
 	}
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "cond_if")
-	elseBlock := c.Context.AddBasicBlock(fn, "cond_else")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_cont")
-	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, "cond_if", "cond_else", "cond_cont")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	onTrue()

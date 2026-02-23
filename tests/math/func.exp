@@ -7,6 +7,7 @@ SquareArrRange: 9
 SquareArrFilter: [25]
 SquareArrRangeFilter: 0
 SquareArrRangeFilterKeepPrev: 99
+SquareCallOOBKeepPrev: 11
 SquareArrRangeFilterKeepPrev changed: 9
 SquareRangeFilterTailFalse: 4
 
@@ -16,6 +17,7 @@ SquareArrRangeFilterAccFalse: []
 SquareArrRangeFilterAccMixed: [9 25]
 SquareRangeFilterAcc: [16]
 SquareArrAssignNoMatch: []
+SquareArrSelfCondFail: [1 2 3]
 SquareArrSelfNoMatch: []
 SquareArrSelfMixed: [4 9]
 
