@@ -507,11 +507,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	c.promoteExistingDestinations(writeIdents)
 
 	guardOK := c.createLoad(guardPtr, Int{Width: 1}, "stmt_bounds_ok")
-	fn := c.builder.GetInsertBlock().Parent()
-	writeBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_write")
-	skipBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_skip")
-	contBlock := c.Context.AddBasicBlock(fn, "stmt_bounds_cont")
-	c.builder.CreateCondBr(guardOK, writeBlock, skipBlock)
+	writeBlock, skipBlock, contBlock := c.createIfElseCont(guardOK, "stmt_bounds_write", "stmt_bounds_skip", "stmt_bounds_cont")
 
 	c.builder.SetInsertPointAtEnd(writeBlock)
 	c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
@@ -1089,12 +1085,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 	// Heap-owning or composite types use explicit branching to avoid eager
 	// false-arm materialization (select evaluates both operands).
 	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(lSym.Type), "cond_lhs.mem")
-	fn := c.builder.GetInsertBlock().Parent()
-	trueBlock := c.Context.AddBasicBlock(fn, "cond_lhs_true")
-	falseBlock := c.Context.AddBasicBlock(fn, "cond_lhs_false")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_lhs_cont")
-
-	c.builder.CreateCondBr(cmpVal, trueBlock, falseBlock)
+	trueBlock, falseBlock, contBlock := c.createIfElseCont(cmpVal, "cond_lhs_true", "cond_lhs_false", "cond_lhs_cont")
 
 	c.builder.SetInsertPointAtEnd(trueBlock)
 	c.createStore(lSym.Val, outPtr, lSym.Type)
@@ -1278,11 +1269,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 	// Range CondScalar is "keep previous output" on false, not "write zero".
 	lSym, cmpVal := c.compareScalars(op, leftSym, rightSym)
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "cond_store")
-	elseBlock := c.Context.AddBasicBlock(fn, "cond_drop_lhs")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_next")
-	c.builder.CreateCondBr(cmpVal, ifBlock, elseBlock)
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cmpVal, "cond_store", "cond_drop_lhs", "cond_next")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.freeSymbolValue(output, "old_output")
@@ -1687,6 +1674,27 @@ func (c *Compiler) createEntryBlockAlloca(ty llvm.Type, name string) llvm.Value 
 	alloca := c.builder.CreateAlloca(ty, name)
 	c.builder.SetInsertPointAtEnd(current)
 	return alloca
+}
+
+// createIfElseCont emits a conditional branch and creates if/else/cont blocks
+// in the current function.
+func (c *Compiler) createIfElseCont(cond llvm.Value, ifName, elseName, contName string) (llvm.BasicBlock, llvm.BasicBlock, llvm.BasicBlock) {
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, ifName)
+	elseBlock := c.Context.AddBasicBlock(fn, elseName)
+	contBlock := c.Context.AddBasicBlock(fn, contName)
+	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+	return ifBlock, elseBlock, contBlock
+}
+
+// createIfCont emits a conditional branch and creates if/cont blocks
+// in the current function.
+func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.BasicBlock, llvm.BasicBlock) {
+	fn := c.builder.GetInsertBlock().Parent()
+	ifBlock := c.Context.AddBasicBlock(fn, ifName)
+	contBlock := c.Context.AddBasicBlock(fn, contName)
+	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+	return ifBlock, contBlock
 }
 
 func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {

@@ -221,11 +221,7 @@ func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) ll
 func (c *Compiler) checkedArrayGet(arr *Symbol, arrElem Type, resultType Type, idx llvm.Value, inBounds llvm.Value) llvm.Value {
 	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(resultType), "arr_get_checked_mem")
 
-	fn := c.builder.GetInsertBlock().Parent()
-	getBlock := c.Context.AddBasicBlock(fn, "arr_get_in_bounds")
-	missBlock := c.Context.AddBasicBlock(fn, "arr_get_oob")
-	contBlock := c.Context.AddBasicBlock(fn, "arr_get_cont")
-	c.builder.CreateCondBr(inBounds, getBlock, missBlock)
+	getBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_get_in_bounds", "arr_get_oob", "arr_get_cont")
 
 	c.builder.SetInsertPointAtEnd(getBlock)
 	value := c.ArrayGet(arr, arrElem, idx)
@@ -422,11 +418,7 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	}
 
 	boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "acc_bounds_ok")
-	fn := c.builder.GetInsertBlock().Parent()
-	pushBlock := c.Context.AddBasicBlock(fn, "acc_push")
-	skipBlock := c.Context.AddBasicBlock(fn, "acc_skip")
-	contBlock := c.Context.AddBasicBlock(fn, "acc_cont")
-	c.builder.CreateCondBr(boundsOK, pushBlock, skipBlock)
+	pushBlock, skipBlock, contBlock := c.createIfElseCont(boundsOK, "acc_push", "acc_skip", "acc_cont")
 
 	c.builder.SetInsertPointAtEnd(pushBlock)
 	c.pushAccumCell(acc, vals, cell, elemType)
@@ -639,10 +631,7 @@ func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, ex
 // filterPush conditionally appends sym to acc based on cond.
 // Emits a branch: if cond is true, push sym; otherwise skip.
 func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Value) {
-	fn := c.builder.GetInsertBlock().Parent()
-	copyBlock := c.Context.AddBasicBlock(fn, "filter_copy")
-	nextBlock := c.Context.AddBasicBlock(fn, "filter_next")
-	c.builder.CreateCondBr(cond, copyBlock, nextBlock)
+	copyBlock, nextBlock := c.createIfCont(cond, "filter_copy", "filter_next")
 
 	c.builder.SetInsertPointAtEnd(copyBlock)
 	c.PushVal(acc, sym)

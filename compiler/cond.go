@@ -222,10 +222,7 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 
 	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "if")
-	contBlock := c.Context.AddBasicBlock(fn, "continue")
-	c.builder.CreateCondBr(cond, ifBlock, contBlock)
+	ifBlock, contBlock := c.createIfCont(cond, "if", "continue")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
@@ -354,11 +351,7 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 		return
 	}
 
-	fn := c.builder.GetInsertBlock().Parent()
-	ifBlock := c.Context.AddBasicBlock(fn, "cond_if")
-	elseBlock := c.Context.AddBasicBlock(fn, "cond_else")
-	contBlock := c.Context.AddBasicBlock(fn, "cond_cont")
-	c.builder.CreateCondBr(cond, ifBlock, elseBlock)
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, "cond_if", "cond_else", "cond_cont")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	onTrue()
