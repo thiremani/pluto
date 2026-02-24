@@ -77,7 +77,7 @@ func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
-	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
+	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
 
 // PushValOwn pushes a value to an array accumulator, transferring ownership for strings.
@@ -90,13 +90,13 @@ func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
 	// must be copied so future string kinds remain auto-supported via PushVal.
 	if acc.ElemType.Kind() == StrKind && IsStrH(valSym.Type) {
 		pushOwnTy, pushOwnFn := c.GetCFunc(ARR_STR_PUSH_OWN)
-		c.callStatusChecked(pushOwnTy, pushOwnFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own", "range_arr_push_own")
+		c.callStatusChecked(pushOwnTy, pushOwnFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own")
 		return
 	}
 
 	// Fallback to copy semantics for non-heap strings and value types.
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
-	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
+	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
 }
 
 func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
@@ -156,12 +156,12 @@ func (c *Compiler) CreateArrayForType(elem Type, length llvm.Value) llvm.Value {
 	switch elem.Kind() {
 	case IntKind:
 		zero := c.ConstI64(0)
-		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize", "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
 	case FloatKind:
 		zero := c.ConstF64(0)
-		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize", "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
 	case StrKind:
-		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize", "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize")
 	}
 
 	return vec
@@ -188,9 +188,9 @@ func (c *Compiler) trapOnRuntimeError(status llvm.Value, name string) {
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) callStatusChecked(fnTy llvm.Type, fn llvm.Value, args []llvm.Value, callName string, statusName string) {
-	status := c.builder.CreateCall(fnTy, fn, args, callName)
-	c.trapOnRuntimeError(status, statusName)
+func (c *Compiler) callStatusChecked(fnTy llvm.Type, fn llvm.Value, args []llvm.Value, name string) {
+	status := c.builder.CreateCall(fnTy, fn, args, name)
+	c.trapOnRuntimeError(status, name)
 }
 
 func (c *Compiler) ArraySetForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
@@ -198,7 +198,7 @@ func (c *Compiler) ArraySetForType(elem Type, vec llvm.Value, idx llvm.Value, va
 
 	if elem.Kind() == StrKind {
 		fnTy, fn := c.GetCFunc(info.SetName)
-		c.callStatusChecked(fnTy, fn, []llvm.Value{vec, idx, value}, "arr_str_set_status", "arr_str_set")
+		c.callStatusChecked(fnTy, fn, []llvm.Value{vec, idx, value}, "arr_str_set")
 		return
 	}
 
