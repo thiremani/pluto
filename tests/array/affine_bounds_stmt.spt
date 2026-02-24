@@ -1,0 +1,22 @@
+arr = [10 20 30 40 50]
+
+i = 0:4
+stmtPos = arr[i + 1]
+"StmtAffinePos: -stmtPos"
+
+j = 4:0:-1
+stmtNeg = arr[j - 1]
+"StmtAffineNeg: -stmtNeg"
+
+k = 0:2
+stmtMul = arr[2k + 1]
+"StmtAffineMulPos: -stmtMul"
+
+l = 3:0:-1
+stmtMulNeg = arr[2l - 2]
+"StmtAffineMulNeg: -stmtMulNeg"
+
+m = 0:3
+stmtOOB = 99
+stmtOOB = arr[2m + 1]
+"StmtAffineOOBKeepsPrev: -stmtOOB"

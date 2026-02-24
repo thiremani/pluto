@@ -12,6 +12,31 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string) (scriptIR string, codeIR string) {
+	t.Helper()
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	var codeAST *ast.Code
+	if strings.TrimSpace(codeSrc) == "" {
+		codeAST = ast.NewCode()
+	} else {
+		codeAST = mustParseCode(t, codeSrc)
+	}
+
+	cc := NewCodeCompiler(ctx, moduleName, "", codeAST)
+	program := mustParseScript(t, scriptSrc)
+
+	funcCache := make(map[string]*Func)
+	exprCache := cc.Compiler.ExprCache
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	errs := sc.Compile()
+	require.Empty(t, errs)
+
+	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
+}
+
 func TestStringCompile(t *testing.T) {
 	input := `"hello"`
 	l := lexer.New("TestStringCompile", input)
@@ -188,4 +213,102 @@ func TestCanUseCondSelectWhitelist(t *testing.T) {
 
 	require.False(t, canUseCondSelect(StrH{}))
 	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
+}
+
+func TestAffineArrayIndexExprUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:4
+x = arr[i + 1] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_expr_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in script IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block in script IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block in script IR")
+	require.NotContains(t, scriptIR, "arr_get_affine_fast", "versioned loop fast path should not branch per iteration")
+}
+
+func TestAffineArrayIndexExprNegativeStepUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+j = 4:0:-1
+x = arr[j - 1] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_expr_emit_neg", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in script IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block in script IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block in script IR")
+	require.NotContains(t, scriptIR, "arr_get_affine_fast", "versioned loop fast path should not branch per iteration")
+}
+
+func TestAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
+	code := `out = pick(arr, i)
+    out = arr[i + 1]
+`
+	script := `arr = [10 20 30 40 50]
+i = 0:4
+out = pick(arr, i)
+out`
+
+	scriptIR, codeIR := compileScriptAndCodeIR(t, "affine_stmt_emit", code, script)
+	combinedIR := scriptIR + "\n" + codeIR
+	require.NotContains(t, combinedIR, "arr_get_affine_fast", "function-body indexing should use normal checked path")
+	require.Contains(t, combinedIR, "idx_in_bounds", "function-body indexing should emit checked bounds predicate")
+	require.Contains(t, combinedIR, "arr_get_oob", "function-body indexing should emit checked OOB block")
+}
+
+func TestNonAffineArrayIndexExprUsesCheckedPath(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:2
+x = arr[i * i - 2i + 3] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "non_affine_expr_emit", "", script)
+	require.NotContains(t, scriptIR, "idx_affine_all_safe", "non-affine index must not emit affine predicate")
+	require.NotContains(t, scriptIR, "arr_get_affine_fast", "non-affine index must not emit affine fast block")
+	require.Contains(t, scriptIR, "idx_in_bounds", "non-affine index should use checked bounds predicate")
+	require.Contains(t, scriptIR, "arr_get_oob", "non-affine index should use checked OOB block")
+}
+
+func TestNonAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
+	code := `out = pick_poly(arr, i)
+    out = arr[i * i - 2i + 3]
+`
+	script := `arr = [10 20 30 40 50]
+i = 0:2
+out = pick_poly(arr, i)
+out`
+
+	scriptIR, codeIR := compileScriptAndCodeIR(t, "non_affine_stmt_emit", code, script)
+	combinedIR := scriptIR + "\n" + codeIR
+	require.NotContains(t, combinedIR, "idx_affine_all_safe", "non-affine index must not emit affine predicate")
+	require.NotContains(t, combinedIR, "arr_get_affine_fast", "non-affine index must not emit affine fast block")
+	require.Contains(t, combinedIR, "idx_in_bounds", "non-affine index should use checked bounds predicate")
+	require.Contains(t, combinedIR, "arr_get_oob", "non-affine index should use checked OOB block")
+}
+
+func TestNonAffineModuloArrayIndexExprUsesCheckedPath(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:5
+x = arr[i % 3] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "non_affine_mod_expr_emit", "", script)
+	require.NotContains(t, scriptIR, "idx_affine_all_safe", "modulo index must not emit affine predicate")
+	require.NotContains(t, scriptIR, "loop_affine_fast", "modulo index must not emit affine fast loop")
+	require.Contains(t, scriptIR, "idx_in_bounds", "modulo index should use checked bounds predicate")
+	require.Contains(t, scriptIR, "arr_get_oob", "modulo index should use checked OOB block")
+}
+
+func TestNonAffineQuotientArrayIndexExprUsesCheckedPath(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:6
+x = arr[i ÷ 2 + 1] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "non_affine_quo_expr_emit", "", script)
+	require.NotContains(t, scriptIR, "idx_affine_all_safe", "quotient index must not emit affine predicate")
+	require.NotContains(t, scriptIR, "loop_affine_fast", "quotient index must not emit affine fast loop")
+	require.Contains(t, scriptIR, "idx_in_bounds", "quotient index should use checked bounds predicate")
+	require.Contains(t, scriptIR, "arr_get_oob", "quotient index should use checked OOB block")
 }

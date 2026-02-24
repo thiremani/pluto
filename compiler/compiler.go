@@ -90,11 +90,7 @@ type Compiler struct {
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
 	stmtCtxStack    []stmtCtx
-}
-
-type boundsGuardFrame struct {
-	guard llvm.Value
-	used  bool
+	loopBoundsStack []loopBoundsFrame
 }
 
 type stmtCtx struct {
@@ -565,14 +561,6 @@ func (c *Compiler) popStmtCtx() {
 	c.stmtCtxStack = c.stmtCtxStack[:len(c.stmtCtxStack)-1]
 }
 
-func (c *Compiler) stmtBoundsUsed() bool {
-	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
-		return false
-	}
-	return ctx.boundsStack[len(ctx.boundsStack)-1].used
-}
-
 func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
 	ctx := c.currentStmtCtx()
 	if ctx == nil || len(ctx.condStack) == 0 {
@@ -603,52 +591,6 @@ func (c *Compiler) popCondLHSFrame() {
 		panic("internal: missing condLHS frame for popCondLHSFrame")
 	}
 	ctx.condStack = ctx.condStack[:len(ctx.condStack)-1]
-}
-
-// pushBoundsGuard sets up a new bounds-check guard and returns its pointer.
-// Callers must pop the guard with popBoundsGuard after the guarded region.
-func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
-	ctx := c.currentStmtCtx()
-	if ctx == nil {
-		// Bounds checks can be compiled in expression-only paths with no
-		// statement frame. In that case we skip statement-level guard tracking.
-		return llvm.Value{}
-	}
-
-	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
-	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
-	ctx.boundsStack = append(ctx.boundsStack, boundsGuardFrame{guard: guardPtr, used: false})
-	return guardPtr
-}
-
-func (c *Compiler) popBoundsGuard() {
-	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
-		// No active statement/bounds frame: nothing to pop by design.
-		return
-	}
-	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
-}
-
-// recordStmtBoundsCheck ANDs one in-bounds predicate into the active assignment
-// guard. A false guard means the current assignment should become a no-op.
-func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
-	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
-		// No active statement/bounds frame: skip statement-level guard updates.
-		return
-	}
-
-	// Pointer into boundsStack is safe here because this function does not append
-	// to boundsStack while frame is live.
-	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
-	if frame.guard.IsNil() {
-		return
-	}
-	curr := c.createLoad(frame.guard, Int{Width: 1}, "stmt_bounds_curr")
-	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
-	c.createStore(next, frame.guard, Int{Width: 1})
-	frame.used = true
 }
 
 // freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
@@ -1211,7 +1153,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
-	c.withLoopNest(info.Ranges, func() {
+	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.InfixExpression), func() {
 		left := c.compileExpression(leftRew, nil)
 		right := c.compileExpression(rightRew, nil)
 
@@ -1428,7 +1370,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
 
 	// Drive the loops and store into outputs each trip.
-	c.withLoopNest(info.Ranges, func() {
+	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.PrefixExpression), func() {
 		ops := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(ops); i++ {
@@ -1601,8 +1543,10 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 	elemType := arrRangeType.Array.ColTypes[0]
 	c.createLoop(rangeVal, func(iter llvm.Value) {
-		// Use borrowed get - iterator values are read-only during iteration
-		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
+		// Use checked borrowed get for iterator semantics:
+		// in-bounds reads borrow array storage; OOB reads yield borrowed zero values.
+		inBounds := c.arrayIndexInBounds(arraySym, elemType, iter)
+		elemVal := c.checkedArrayGetBorrowed(arraySym, elemType, iter, inBounds)
 		body(elemVal, elemType)
 	})
 }
@@ -1735,7 +1679,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
 		rewCall := info.Rewrite.(*ast.CallExpression)
-		c.withLoopNest(info.Ranges, func() {
+		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
 			// Inside loop, ranges are shadowed as scalars. If call arguments contain
 			// conditional expressions, execute the call only when they hold.
 			c.compileCondExprValue(rewCall, llvm.Value{}, func() {
@@ -2004,7 +1948,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
 		rewCall := info.Rewrite.(*ast.CallExpression)
-		c.withLoopNest(info.Ranges, func() {
+		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
 			c.printAllExpressions(rewCall.Arguments)
 		})
 		return

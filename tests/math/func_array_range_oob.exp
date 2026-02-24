@@ -1,0 +1,2 @@
+Square(arr[0:4]) OOB tail: 0
+Square(arr[-1:1]) OOB head: 100

@@ -887,6 +887,14 @@ func AllowedArrayElem(t Type) bool {
 	}
 }
 
+func (ts *TypeSolver) boundDependsOnRange(expr ast.Expression) bool {
+	if expr == nil {
+		return false
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && info.HasRanges
+}
+
 func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
 	// infer start and stop - these are nested expressions
 	startT := ts.TypeExpression(r.Start, false)
@@ -895,6 +903,20 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 		ce := &token.CompileError{
 			Token: r.Tok(),
 			Msg:   fmt.Sprintf("start and stop in range should be of length 1. start length: %d, stop length: %d", len(startT), len(stopT)),
+		}
+		ts.Errors = append(ts.Errors, ce)
+	}
+	if ts.boundDependsOnRange(r.Start) {
+		ce := &token.CompileError{
+			Token: r.Tok(),
+			Msg:   "range start cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
+		}
+		ts.Errors = append(ts.Errors, ce)
+	}
+	if ts.boundDependsOnRange(r.Stop) {
+		ce := &token.CompileError{
+			Token: r.Tok(),
+			Msg:   "range stop cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
 		}
 		ts.Errors = append(ts.Errors, ce)
 	}
@@ -921,6 +943,13 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			ce := &token.CompileError{
 				Token: r.Tok(),
 				Msg:   fmt.Sprintf("range step got from expression should have length 1. step length: %d", len(stepT)),
+			}
+			ts.Errors = append(ts.Errors, ce)
+		}
+		if ts.boundDependsOnRange(r.Step) {
+			ce := &token.CompileError{
+				Token: r.Tok(),
+				Msg:   "range step cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
 			}
 			ts.Errors = append(ts.Errors, ce)
 		}

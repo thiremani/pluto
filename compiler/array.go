@@ -77,7 +77,7 @@ func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 func (c *Compiler) PushVal(acc *ArrayAccumulator, value *Symbol) {
 	valSym := c.derefIfPointer(value, "")
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
-	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
+	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
 }
 
 // PushValOwn pushes a value to an array accumulator, transferring ownership for strings.
@@ -89,14 +89,27 @@ func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
 	// Use push_own only for heap strings. Other string flavors (e.g. StrG/StrS)
 	// must be copied so future string kinds remain auto-supported via PushVal.
 	if acc.ElemType.Kind() == StrKind && IsStrH(valSym.Type) {
-		pushTy, pushFn := c.GetCFunc(ARR_STR_PUSH_OWN)
-		c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own")
+		null := llvm.ConstPointerNull(valSym.Val.Type())
+		isNull := c.builder.CreateICmp(llvm.IntEQ, valSym.Val, null, "range_arr_push_own_is_null")
+		copyBlock, ownBlock, contBlock := c.createIfElseCont(isNull, "range_arr_push_copy", "range_arr_push_own", "range_arr_push_cont")
+
+		c.builder.SetInsertPointAtEnd(copyBlock)
+		pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
+		c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(ownBlock)
+		pushOwnTy, pushOwnFn := c.GetCFunc(ARR_STR_PUSH_OWN)
+		c.callStatusChecked(pushOwnTy, pushOwnFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own", "range_arr_push_own")
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
 		return
 	}
 
 	// Fallback to copy semantics for non-heap strings and value types.
 	pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
-	c.builder.CreateCall(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push")
+	c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
 }
 
 func (c *Compiler) ArrayAccResult(acc *ArrayAccumulator) *Symbol {
@@ -156,22 +169,54 @@ func (c *Compiler) CreateArrayForType(elem Type, length llvm.Value) llvm.Value {
 	switch elem.Kind() {
 	case IntKind:
 		zero := c.ConstI64(0)
-		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize", "arr_resize")
 	case FloatKind:
 		zero := c.ConstF64(0)
-		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length, zero}, "arr_resize", "arr_resize")
 	case StrKind:
-		c.builder.CreateCall(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize")
+		c.callStatusChecked(c.GetFnType(info.ResizeName), rezFn, []llvm.Value{vec, length}, "arr_resize", "arr_resize")
 	}
 
 	return vec
 }
 
+func (c *Compiler) trapOnRuntimeError(status llvm.Value, name string) {
+	zero := llvm.ConstInt(status.Type(), 0, false)
+	ok := c.builder.CreateICmp(llvm.IntEQ, status, zero, name+"_ok")
+
+	fn := c.builder.GetInsertBlock().Parent()
+	failBlock := c.Context.AddBasicBlock(fn, name+"_fail")
+	contBlock := c.Context.AddBasicBlock(fn, name+"_cont")
+	c.builder.CreateCondBr(ok, contBlock, failBlock)
+
+	c.builder.SetInsertPointAtEnd(failBlock)
+	trapTy := llvm.FunctionType(c.Context.VoidType(), nil, false)
+	trapFn := c.Module.NamedFunction("llvm.trap")
+	if trapFn.IsNil() {
+		trapFn = llvm.AddFunction(c.Module, "llvm.trap", trapTy)
+	}
+	c.builder.CreateCall(trapTy, trapFn, nil, "")
+	c.builder.CreateUnreachable()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) callStatusChecked(fnTy llvm.Type, fn llvm.Value, args []llvm.Value, callName string, statusName string) {
+	status := c.builder.CreateCall(fnTy, fn, args, callName)
+	c.trapOnRuntimeError(status, statusName)
+}
+
 func (c *Compiler) ArraySetForType(elem Type, vec llvm.Value, idx llvm.Value, value llvm.Value) {
 	info := ArrayInfos[elem.Kind()]
 
+	if elem.Kind() == StrKind {
+		fnTy, fn := c.GetCFunc(info.SetName)
+		c.callStatusChecked(fnTy, fn, []llvm.Value{vec, idx, value}, "arr_str_set_status", "arr_str_set")
+		return
+	}
+
 	fnTy, fn := c.GetCFunc(info.SetName)
-	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, info.SetName)
+	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, "")
 }
 
 // ArraySetOwnForType sets an array element, taking ownership of the value for strings.
@@ -182,14 +227,27 @@ func (c *Compiler) ArraySetOwnForType(elem Type, vec llvm.Value, idx llvm.Value,
 
 	// For strings, use set_own to transfer ownership without duplicating
 	if elem.Kind() == StrKind {
-		fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
-		c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, ARR_STR_SET_OWN)
+		null := llvm.ConstPointerNull(value.Type())
+		isNull := c.builder.CreateICmp(llvm.IntEQ, value, null, "arr_str_set_own_is_null")
+		copyBlock, ownBlock, contBlock := c.createIfElseCont(isNull, "arr_str_set_copy", "arr_str_set_own", "arr_str_set_cont")
+
+		c.builder.SetInsertPointAtEnd(copyBlock)
+		setTy, setFn := c.GetCFunc(info.SetName)
+		c.callStatusChecked(setTy, setFn, []llvm.Value{vec, idx, value}, "arr_str_set_status", "arr_str_set")
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(ownBlock)
+		setOwnTy, setOwnFn := c.GetCFunc(ARR_STR_SET_OWN)
+		c.builder.CreateCall(setOwnTy, setOwnFn, []llvm.Value{vec, idx, value}, "")
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
 		return
 	}
 
 	// For value types, regular set is fine
 	fnTy, fn := c.GetCFunc(info.SetName)
-	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, info.SetName)
+	c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, value}, "")
 }
 
 func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
@@ -206,35 +264,6 @@ func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	cast := c.ArrayBitCast(arr.Val, info, "arrp")
 	fnTy, fn := c.GetCFunc(info.GetName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
-}
-
-// arrayIndexInBounds checks idx against [0, len(arr)).
-func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
-	length := c.ArrayLen(arr, elem)
-	// Unsigned compare rejects negative indices as well (two's-complement wrap
-	// makes them larger than any valid length).
-	return c.builder.CreateICmp(llvm.IntULT, idx, length, "idx_in_bounds")
-}
-
-// checkedArrayGet loads arr[idx] when idx is in bounds; otherwise returns zero
-// value for resultType. Assignment-level guards decide whether writes commit.
-func (c *Compiler) checkedArrayGet(arr *Symbol, arrElem Type, resultType Type, idx llvm.Value, inBounds llvm.Value) llvm.Value {
-	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(resultType), "arr_get_checked_mem")
-
-	getBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_get_in_bounds", "arr_get_oob", "arr_get_cont")
-
-	c.builder.SetInsertPointAtEnd(getBlock)
-	value := c.ArrayGet(arr, arrElem, idx)
-	c.createStore(value, outPtr, resultType)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(missBlock)
-	zero := c.makeZeroValue(resultType)
-	c.createStore(zero.Val, outPtr, zero.Type)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
-	return c.createLoad(outPtr, resultType, "arr_get_checked")
 }
 
 // ArrayGetBorrowed returns a borrowed reference to an array element.
@@ -270,8 +299,6 @@ func isStrHTemporary(sym *Symbol, expr ast.Expression) bool {
 // for heap-allocated temporaries (non-identifier expressions) to avoid double-allocation.
 // Identifiers and static strings are copied to preserve the original value.
 func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Expression, elemType Type) {
-	info := ArrayInfos[elemType.Kind()]
-
 	for i, cs := range cells {
 		idx := c.ConstI64(uint64(i))
 		val := cs.Val
@@ -283,13 +310,11 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Ex
 
 		// For StrH temporaries, transfer ownership; all other values get copied
 		if isStrHTemporary(cs, exprs[i]) {
-			fnTy, fn := c.GetCFunc(ARR_STR_SET_OWN)
-			c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set_own")
+			c.ArraySetOwnForType(elemType, vec, idx, val)
 			continue
 		}
 
-		fnTy, fn := c.GetCFunc(info.SetName)
-		c.builder.CreateCall(fnTy, fn, []llvm.Value{vec, idx, val}, "arr_set")
+		c.ArraySetForType(elemType, vec, idx, val)
 	}
 }
 
@@ -388,7 +413,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	acc := c.NewArrayAccumulator(arr)
 	row := lit.Rows[0]
 
-	c.withLoopNest(info.Ranges, func() {
+	c.withLoopNestVersioned(info.Ranges, lit, func() {
 		for _, cell := range row {
 			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
 			c.compileCondExprValue(cell, llvm.Value{}, func() {
@@ -793,9 +818,15 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression) [
 		// String array get returns owned heap strings.
 		resultType = StrH{}
 	}
-	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-	c.recordStmtBoundsCheck(inBounds)
-	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
+
+	var elemVal llvm.Value
+	if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(expr) {
+		elemVal = c.ArrayGet(arraySym, arrElemType, idxVal)
+	} else {
+		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+		c.recordStmtBoundsCheck(inBounds)
+		elemVal = c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
+	}
 
 	// Scalar element access does not retain the source array pointer.
 	// Release temporary array sources immediately.

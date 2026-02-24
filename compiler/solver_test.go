@@ -268,6 +268,65 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	}
 }
 
+func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "rangeBoundsDepend", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	cases := []struct {
+		name        string
+		script      string
+		expectError string
+	}{
+		{
+			name: "stop depends on range",
+			script: `i = 0:3
+j = 0:i`,
+			expectError: "range stop cannot depend on range values in this scope",
+		},
+		{
+			name: "start depends on range",
+			script: `i = 0:3
+j = i:5`,
+			expectError: "range start cannot depend on range values in this scope",
+		},
+		{
+			name: "step depends on range",
+			script: `i = 0:3
+j = 0:5:i`,
+			expectError: "range step cannot depend on range values in this scope",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+
+			sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			if len(ts.Errors) == 0 {
+				t.Fatalf("expected type error for %s, but got none", tc.name)
+			}
+
+			found := false
+			for _, err := range ts.Errors {
+				if strings.Contains(err.Msg, tc.expectError) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected error containing %q, got: %v", tc.expectError, ts.Errors)
+			}
+		})
+	}
+}
+
 func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())

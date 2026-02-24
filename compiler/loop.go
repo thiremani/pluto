@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 
+	"github.com/thiremani/pluto/ast"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -87,6 +88,69 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 		filtered = append(filtered, ri)
 	}
 	return filtered
+}
+
+func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRangeExpression]struct{}) {
+	c.loopBoundsStack = append(c.loopBoundsStack, loopBoundsFrame{
+		mode:       mode,
+		fastAccess: fast,
+	})
+}
+
+func (c *Compiler) popLoopBoundsMode() {
+	if len(c.loopBoundsStack) == 0 {
+		return
+	}
+	c.loopBoundsStack = c.loopBoundsStack[:len(c.loopBoundsStack)-1]
+}
+
+func (c *Compiler) currentLoopBoundsMode() loopBoundsMode {
+	if len(c.loopBoundsStack) == 0 {
+		return loopBoundsModeDefault
+	}
+	return c.loopBoundsStack[len(c.loopBoundsStack)-1].mode
+}
+
+func (c *Compiler) isFastAffineAccess(expr *ast.ArrayRangeExpression) bool {
+	if len(c.loopBoundsStack) == 0 {
+		return false
+	}
+	frame := c.loopBoundsStack[len(c.loopBoundsStack)-1]
+	if frame.mode != loopBoundsModeAffineFast || len(frame.fastAccess) == 0 {
+		return false
+	}
+	_, ok := frame.fastAccess[expr]
+	return ok
+}
+
+func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probe ast.Expression, body func()) {
+	pending := c.pendingLoopRanges(ranges)
+	if len(pending) == 0 {
+		body()
+		return
+	}
+
+	guard, fastAccess, ok := c.affineVersioningGuard(probe, pending)
+	if !ok {
+		c.withLoopNest(ranges, body)
+		return
+	}
+
+	fastBlock, checkedBlock, contBlock := c.createIfElseCont(guard, "loop_affine_fast", "loop_affine_checked", "loop_affine_cont")
+
+	c.builder.SetInsertPointAtEnd(fastBlock)
+	c.pushLoopBoundsMode(loopBoundsModeAffineFast, fastAccess)
+	c.withLoopNest(ranges, body)
+	c.popLoopBoundsMode()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(checkedBlock)
+	c.pushLoopBoundsMode(loopBoundsModeChecked, nil)
+	c.withLoopNest(ranges, body)
+	c.popLoopBoundsMode()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
 func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {

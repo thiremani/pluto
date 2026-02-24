@@ -85,8 +85,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	// Array I64 functions
 	case ARR_I64_NEW:
 		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayI64"), nil, false)
-	case ARR_I64_RESIZE, ARR_I64_SET:
+	case ARR_I64_RESIZE:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64, i64}, false)
+	case ARR_I64_SET:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64, i64}, false)
 	case ARR_I64_GET:
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64}, false)
 	case ARR_I64_LEN:
@@ -105,8 +107,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 	// Array F64 functions
 	case ARR_F64_NEW:
 		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayF64"), nil, false)
-	case ARR_F64_RESIZE, ARR_F64_SET:
+	case ARR_F64_RESIZE:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64, f64}, false)
+	case ARR_F64_SET:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64, f64}, false)
 	case ARR_F64_GET:
 		return llvm.FunctionType(f64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64}, false)
 	case ARR_F64_LEN:
@@ -127,8 +131,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(c.NamedOpaquePtr("PtArrayStr"), nil, false)
 	case ARR_STR_RESIZE:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
-	case ARR_STR_SET, ARR_STR_SET_OWN:
+	case ARR_STR_SET:
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
+	case ARR_STR_SET_OWN:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64, charPtr}, false)
 	case ARR_STR_GET, ARR_STR_BORROW:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_LEN:
