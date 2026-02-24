@@ -89,21 +89,8 @@ func (c *Compiler) PushValOwn(acc *ArrayAccumulator, value *Symbol) {
 	// Use push_own only for heap strings. Other string flavors (e.g. StrG/StrS)
 	// must be copied so future string kinds remain auto-supported via PushVal.
 	if acc.ElemType.Kind() == StrKind && IsStrH(valSym.Type) {
-		null := llvm.ConstPointerNull(valSym.Val.Type())
-		isNull := c.builder.CreateICmp(llvm.IntEQ, valSym.Val, null, "range_arr_push_own_is_null")
-		copyBlock, ownBlock, contBlock := c.createIfElseCont(isNull, "range_arr_push_copy", "range_arr_push_own", "range_arr_push_cont")
-
-		c.builder.SetInsertPointAtEnd(copyBlock)
-		pushTy, pushFn := c.GetCFunc(acc.Info.PushName)
-		c.callStatusChecked(pushTy, pushFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push", "range_arr_push")
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(ownBlock)
 		pushOwnTy, pushOwnFn := c.GetCFunc(ARR_STR_PUSH_OWN)
 		c.callStatusChecked(pushOwnTy, pushOwnFn, []llvm.Value{acc.Vec, valSym.Val}, "range_arr_push_own", "range_arr_push_own")
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
 		return
 	}
 
@@ -227,21 +214,8 @@ func (c *Compiler) ArraySetOwnForType(elem Type, vec llvm.Value, idx llvm.Value,
 
 	// For strings, use set_own to transfer ownership without duplicating
 	if elem.Kind() == StrKind {
-		null := llvm.ConstPointerNull(value.Type())
-		isNull := c.builder.CreateICmp(llvm.IntEQ, value, null, "arr_str_set_own_is_null")
-		copyBlock, ownBlock, contBlock := c.createIfElseCont(isNull, "arr_str_set_copy", "arr_str_set_own", "arr_str_set_cont")
-
-		c.builder.SetInsertPointAtEnd(copyBlock)
-		setTy, setFn := c.GetCFunc(info.SetName)
-		c.callStatusChecked(setTy, setFn, []llvm.Value{vec, idx, value}, "arr_str_set_status", "arr_str_set")
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(ownBlock)
 		setOwnTy, setOwnFn := c.GetCFunc(ARR_STR_SET_OWN)
 		c.builder.CreateCall(setOwnTy, setOwnFn, []llvm.Value{vec, idx, value}, "")
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
 		return
 	}
 
