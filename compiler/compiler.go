@@ -90,12 +90,12 @@ type Compiler struct {
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
 	stmtCtxStack    []stmtCtx
-	loopBoundsStack []loopBoundsFrame
 }
 
 type stmtCtx struct {
-	condStack   []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
-	boundsStack []boundsGuardFrame      // Nested bounds guards active within this statement
+	condStack       []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
+	boundsStack     []boundsGuardFrame      // Nested bounds guards active within this statement
+	loopBoundsStack []loopBoundsFrame       // Loop bounds mode stack active within this statement
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {

@@ -91,31 +91,38 @@ func (c *Compiler) pendingLoopRanges(ranges []*RangeInfo) []*RangeInfo {
 }
 
 func (c *Compiler) pushLoopBoundsMode(mode loopBoundsMode, fast map[*ast.ArrayRangeExpression]struct{}) {
-	c.loopBoundsStack = append(c.loopBoundsStack, loopBoundsFrame{
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		return
+	}
+	ctx.loopBoundsStack = append(ctx.loopBoundsStack, loopBoundsFrame{
 		mode:       mode,
 		fastAccess: fast,
 	})
 }
 
 func (c *Compiler) popLoopBoundsMode() {
-	if len(c.loopBoundsStack) == 0 {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.loopBoundsStack) == 0 {
 		return
 	}
-	c.loopBoundsStack = c.loopBoundsStack[:len(c.loopBoundsStack)-1]
+	ctx.loopBoundsStack = ctx.loopBoundsStack[:len(ctx.loopBoundsStack)-1]
 }
 
 func (c *Compiler) currentLoopBoundsMode() loopBoundsMode {
-	if len(c.loopBoundsStack) == 0 {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.loopBoundsStack) == 0 {
 		return loopBoundsModeDefault
 	}
-	return c.loopBoundsStack[len(c.loopBoundsStack)-1].mode
+	return ctx.loopBoundsStack[len(ctx.loopBoundsStack)-1].mode
 }
 
 func (c *Compiler) isFastAffineAccess(expr *ast.ArrayRangeExpression) bool {
-	if len(c.loopBoundsStack) == 0 {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.loopBoundsStack) == 0 {
 		return false
 	}
-	frame := c.loopBoundsStack[len(c.loopBoundsStack)-1]
+	frame := ctx.loopBoundsStack[len(ctx.loopBoundsStack)-1]
 	if frame.mode != loopBoundsModeAffineFast || len(frame.fastAccess) == 0 {
 		return false
 	}
