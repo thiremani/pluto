@@ -1,6 +1,0 @@
-arr = [10 20 30 40 50]
-
-i = 0:4
-rootLowered = 111
-rootLowered = arr[2i + 1]
-"RootRangedIndexPerIterSkip: -rootLowered"

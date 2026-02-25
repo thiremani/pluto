@@ -416,18 +416,19 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 		return
 	}
 
-	boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "acc_bounds_ok")
-	pushBlock, skipBlock, contBlock := c.createIfElseCont(boundsOK, "acc_push", "acc_skip", "acc_cont")
-
-	c.builder.SetInsertPointAtEnd(pushBlock)
-	c.pushAccumCell(acc, vals, cell, elemType)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(skipBlock)
-	c.freeTemporary(cell, vals)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
+	c.withLoadedGuard(
+		guardPtr,
+		"acc_bounds_ok",
+		"acc_push",
+		"acc_skip",
+		"acc_cont",
+		func() {
+			c.pushAccumCell(acc, vals, cell, elemType)
+		},
+		func() {
+			c.freeTemporary(cell, vals)
+		},
+	)
 }
 
 func (c *Compiler) pushAccumCell(acc *ArrayAccumulator, vals []*Symbol, cell ast.Expression, elemType Type) {

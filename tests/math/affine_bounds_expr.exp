@@ -2,4 +2,4 @@ ExprAffinePos: 2500
 ExprAffineNeg: 100
 ExprAffineMulPos: 1600
 ExprAffineMulNeg: 100
-ExprAffineOOBKeepsPrev: 77
+ExprAffineOOBKeepsPrev: 1600

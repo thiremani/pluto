@@ -504,20 +504,20 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	// Guarded assignments must converge through pointer-backed destinations so
 	// runtime write/skip paths both feed subsequent reads correctly.
 	c.promoteIdentifiersIfNeeded(writeIdents)
-
-	guardOK := c.createLoad(guardPtr, Int{Width: 1}, "stmt_bounds_ok")
-	writeBlock, skipBlock, contBlock := c.createIfElseCont(guardOK, "stmt_bounds_write", "stmt_bounds_skip", "stmt_bounds_cont")
-
-	c.builder.SetInsertPointAtEnd(writeBlock)
-	c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(skipBlock)
-	c.freeAssignmentTemps(exprs, syms, resCounts)
-	c.restoreOldValues(writeIdents, oldValues)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
+	c.withLoadedGuard(
+		guardPtr,
+		"stmt_bounds_ok",
+		"stmt_bounds_write",
+		"stmt_bounds_skip",
+		"stmt_bounds_cont",
+		func() {
+			c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+		},
+		func() {
+			c.freeAssignmentTemps(exprs, syms, resCounts)
+			c.restoreOldValues(writeIdents, oldValues)
+		},
+	)
 }
 
 func (c *Compiler) commitAssignments(
@@ -1157,6 +1157,9 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	// Build nested loops, storing final value
 	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.InfixExpression), func() {
+		c.pushBoundsGuard("infix_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
 		left := c.compileExpression(leftRew, nil)
 		right := c.compileExpression(rightRew, nil)
 
@@ -1197,17 +1200,37 @@ func (c *Compiler) compileRangeInfixSlot(
 	output *Symbol,
 	leftTempsHandledInline bool,
 ) {
-	if mode == CondScalar {
-		c.storeRangeCondScalar(op, leftSym, rightSym, output, leftTempsHandledInline)
-		return
+	onSkip := func() {}
+	if leftTempsHandledInline {
+		onSkip = func() {
+			c.freeTemporarySymbol(leftSym, "cond_lhs_drop")
+		}
 	}
 
-	computed := c.compileInfix(op, leftSym, rightSym, expected)
-	// Free previous iteration's result before overwriting.
-	c.freeSymbolValue(output, "old_output")
-	c.createStore(computed.Val, output.Val, computed.Type)
-	if leftTempsHandledInline {
-		c.freeTemporarySymbol(leftSym, "temp_left")
+	run := func() {
+		if mode == CondScalar {
+			c.storeRangeCondScalar(op, leftSym, rightSym, output, leftTempsHandledInline)
+			return
+		}
+
+		computed := c.compileInfix(op, leftSym, rightSym, expected)
+		// Free previous iteration's result before overwriting.
+		c.freeSymbolValue(output, "old_output")
+		c.createStore(computed.Val, output.Val, computed.Type)
+		if leftTempsHandledInline {
+			c.freeTemporarySymbol(leftSym, "temp_left")
+		}
+	}
+
+	if !c.withStmtBoundsGuard(
+		"infix_bounds_ok",
+		"infix_bounds_run",
+		"infix_bounds_skip",
+		"infix_bounds_cont",
+		run,
+		onSkip,
+	) {
+		run()
 	}
 }
 
@@ -1374,14 +1397,13 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Drive the loops and store into outputs each trip.
 	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.PrefixExpression), func() {
+		c.pushBoundsGuard("prefix_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
 		ops := c.compileExpression(rightRew, nil)
 
 		for i := 0; i < len(ops); i++ {
-			computed := c.compilePrefix(expr.Operator, ops[i], info.OutTypes[i])
-
-			// Free previous iteration's result before overwriting
-			c.freeSymbolValue(outputs[i], "old_output")
-			c.createStore(computed.Val, outputs[i].Val, computed.Type)
+			c.compileRangePrefixSlot(expr.Operator, ops[i], info.OutTypes[i], outputs[i])
 		}
 
 		// Range-loop operand is temporary per iteration (except identifiers).
@@ -1399,6 +1421,27 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	}
 
 	return out
+}
+
+func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected Type, output *Symbol) {
+	run := func() {
+		computed := c.compilePrefix(op, operand, expected)
+
+		// Free previous iteration's result before overwriting
+		c.freeSymbolValue(output, "old_output")
+		c.createStore(computed.Val, output.Val, computed.Type)
+	}
+
+	if !c.withStmtBoundsGuard(
+		"prefix_bounds_ok",
+		"prefix_bounds_run",
+		"prefix_bounds_skip",
+		"prefix_bounds_cont",
+		run,
+		nil,
+	) {
+		run()
+	}
 }
 
 func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type {
@@ -1546,11 +1589,18 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 	elemType := arrRangeType.Array.ColTypes[0]
 	c.createLoop(rangeVal, func(iter llvm.Value) {
-		// Use checked borrowed get for iterator semantics:
-		// in-bounds reads borrow array storage; OOB reads yield borrowed zero values.
 		inBounds := c.arrayIndexInBounds(arraySym, elemType, iter)
-		elemVal := c.checkedArrayGetBorrowed(arraySym, elemType, iter, inBounds)
+		iterBlock, skipBlock, contBlock := c.createIfElseCont(inBounds, "arr_iter_in_bounds", "arr_iter_oob", "arr_iter_cont")
+
+		c.builder.SetInsertPointAtEnd(iterBlock)
+		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
 		body(elemVal, elemType)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(skipBlock)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
 	})
 }
 
@@ -1683,11 +1733,16 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !info.LoopInside && len(info.Ranges) > 0 {
 		rewCall := info.Rewrite.(*ast.CallExpression)
 		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+			// Scope bounds checks to this loop iteration: arguments can contain
+			// multiple array reads, and the call should execute only when all are
+			// in-bounds for this iteration.
+			c.pushBoundsGuard("call_iter_bounds_guard")
 			// Inside loop, ranges are shadowed as scalars. If call arguments contain
 			// conditional expressions, execute the call only when they hold.
 			c.compileCondExprValue(rewCall, llvm.Value{}, func() {
 				c.compileCallInner(ce.Function.Value, rewCall, outputs)
 			})
+			c.popBoundsGuard()
 		})
 
 		// Loop path materializes final values from output slots after iteration.
@@ -1779,7 +1834,18 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 		c.builder.SetInsertPointAtEnd(savedBlock)
 	}
 
-	c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+	if !c.withStmtBoundsGuard(
+		"call_bounds_ok",
+		"call_bounds_run",
+		"call_bounds_skip",
+		"call_bounds_cont",
+		func() {
+			c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+		},
+		nil,
+	) {
+		c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+	}
 
 	// Free temporary arguments after the call. Function copies input values to outputs
 	// (see computeCopyRequirements - no Borrowed skip), so temps can be safely freed.

@@ -1,0 +1,4 @@
+LeakCallStrOOB: abb
+LeakInfixStrOOB: abb
+LeakArrayAccOOB: [a bb]
+LeakPrefixNumOOB: -2

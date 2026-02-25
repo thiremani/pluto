@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/thiremani/pluto/ast"
@@ -81,6 +80,56 @@ func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
 	frame.used = true
 }
 
+// withGuardedBranch emits an if/else/cont branch structure and executes the
+// provided callbacks in each branch.
+func (c *Compiler) withGuardedBranch(
+	guard llvm.Value,
+	ifName, elseName, contName string,
+	onIf func(),
+	onElse func(),
+) {
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(guard, ifName, elseName, contName)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	if onIf != nil {
+		onIf()
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	if onElse != nil {
+		onElse()
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) withLoadedGuard(
+	guardPtr llvm.Value,
+	loadName, ifName, elseName, contName string,
+	onIf func(),
+	onElse func(),
+) {
+	guard := c.createLoad(guardPtr, Int{Width: 1}, loadName)
+	c.withGuardedBranch(guard, ifName, elseName, contName, onIf, onElse)
+}
+
+func (c *Compiler) withStmtBoundsGuard(
+	loadName, ifName, elseName, contName string,
+	onIf func(),
+	onElse func(),
+) bool {
+	if !c.stmtBoundsUsed() {
+		return false
+	}
+
+	ctx := c.currentStmtCtx()
+	frame := ctx.boundsStack[len(ctx.boundsStack)-1]
+	c.withLoadedGuard(frame.guard, loadName, ifName, elseName, contName, onIf, onElse)
+	return true
+}
+
 // arrayIndexInBounds checks idx against [0, len(arr)).
 func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	length := c.ArrayLen(arr, elem)
@@ -108,43 +157,6 @@ func (c *Compiler) checkedArrayGet(arr *Symbol, arrElem Type, resultType Type, i
 
 	c.builder.SetInsertPointAtEnd(contBlock)
 	return c.createLoad(outPtr, resultType, "arr_get_checked")
-}
-
-// borrowedArrayElemZero returns a non-owning zero value for array element reads.
-// String OOB fallbacks use a static empty string so borrowed iterator paths avoid
-// heap allocations and remain safe for string operators.
-func (c *Compiler) borrowedArrayElemZero(elem Type) llvm.Value {
-	switch elem.Kind() {
-	case IntKind:
-		return c.ConstI64(0)
-	case FloatKind:
-		return c.ConstF64(0)
-	case StrKind:
-		return c.constCString("")
-	default:
-		panic(fmt.Sprintf("unsupported array element kind for borrowed zero: %s", elem.String()))
-	}
-}
-
-// checkedArrayGetBorrowed loads arr[idx] when idx is in bounds; otherwise returns
-// a borrowed zero value for arrElem.
-func (c *Compiler) checkedArrayGetBorrowed(arr *Symbol, arrElem Type, idx llvm.Value, inBounds llvm.Value) llvm.Value {
-	outPtr := c.createEntryBlockAlloca(c.mapToLLVMType(arrElem), "arr_get_borrowed_checked_mem")
-
-	getBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_borrow_in_bounds", "arr_borrow_oob", "arr_borrow_cont")
-
-	c.builder.SetInsertPointAtEnd(getBlock)
-	value := c.ArrayGetBorrowed(arr, arrElem, idx)
-	c.createStore(value, outPtr, arrElem)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(missBlock)
-	zero := c.borrowedArrayElemZero(arrElem)
-	c.createStore(zero, outPtr, arrElem)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
-	return c.createLoad(outPtr, arrElem, "arr_get_borrowed_checked")
 }
 
 type affineIndexForm struct {

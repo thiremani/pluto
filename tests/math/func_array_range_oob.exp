@@ -1,2 +1,6 @@
-Square(arr[0:4]) OOB tail: 0
+Square(arr[0:4]) OOB tail: 400
 Square(arr[-1:1]) OOB head: 100
+arr[0:4] * arr[0:4] OOB: 400
+sumProd + arr[0:4] * arr[0:4]: 900
+Prefix arr[0:4] OOB tail: -20
+sum with shared i arr[i]*arr[i]: 500
