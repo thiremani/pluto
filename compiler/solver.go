@@ -888,11 +888,18 @@ func AllowedArrayElem(t Type) bool {
 }
 
 func (ts *TypeSolver) boundDependsOnRange(expr ast.Expression) bool {
-	if expr == nil {
-		return false
-	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && info.HasRanges
+	return info.HasRanges
+}
+
+func (ts *TypeSolver) rejectRangeDependentBound(boundName string, expr ast.Expression, tok token.Token) {
+	if !ts.boundDependsOnRange(expr) {
+		return
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("range %s cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)", boundName),
+	})
 }
 
 func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
@@ -906,20 +913,8 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 		}
 		ts.Errors = append(ts.Errors, ce)
 	}
-	if ts.boundDependsOnRange(r.Start) {
-		ce := &token.CompileError{
-			Token: r.Tok(),
-			Msg:   "range start cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
-		}
-		ts.Errors = append(ts.Errors, ce)
-	}
-	if ts.boundDependsOnRange(r.Stop) {
-		ce := &token.CompileError{
-			Token: r.Tok(),
-			Msg:   "range stop cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
-		}
-		ts.Errors = append(ts.Errors, ce)
-	}
+	ts.rejectRangeDependentBound("start", r.Start, r.Tok())
+	ts.rejectRangeDependentBound("stop", r.Stop, r.Tok())
 	// must be integers
 	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
 		ce := &token.CompileError{
@@ -946,13 +941,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			}
 			ts.Errors = append(ts.Errors, ce)
 		}
-		if ts.boundDependsOnRange(r.Step) {
-			ce := &token.CompileError{
-				Token: r.Tok(),
-				Msg:   "range step cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)",
-			}
-			ts.Errors = append(ts.Errors, ce)
-		}
+		ts.rejectRangeDependentBound("step", r.Step, r.Tok())
 		if stepT[0].Kind() != IntKind {
 			ce := &token.CompileError{
 				Token: r.Tok(),
