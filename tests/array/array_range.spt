@@ -5,6 +5,12 @@ value = arr[2]
 current = arr[1:4]
 "RangeAssign: -current"
 
+wrapped = [arr[1:3]]
+"RangeWrappedMaterialized: -wrapped"
+
+viewPrint = arr[1:3]
+"RangeViewPrint: -viewPrint"
+
 sum = 0
 sum = sum + arr[0:5]
 "RangeReduce: -sum"

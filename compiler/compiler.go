@@ -427,7 +427,7 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //     normal assignment cleanup when writing to those output params, so caller
 //     freeOldValues must skip.
 //
-//   - InfixExpression/PrefixExpression with pending ranges:
+//   - InfixExpression/PrefixExpression/ArrayRangeExpression with pending ranges:
 //     Range-lowered paths free previous output values per iteration inside the
 //     loop body before storing the next value.
 //
@@ -443,6 +443,9 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
 		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
 	case *ast.PrefixExpression:
+		info := c.ExprCache[key(c.FuncNameMangled, e)]
+		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+	case *ast.ArrayRangeExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
 		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
 	default:
@@ -733,7 +736,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.ArrayLiteral:
 		return c.compileArrayExpression(e, dest)
 	case *ast.ArrayRangeExpression:
-		return c.compileArrayRangeExpression(e)
+		return c.compileArrayRangeExpression(e, dest)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:

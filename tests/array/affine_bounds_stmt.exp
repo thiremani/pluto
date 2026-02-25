@@ -2,4 +2,4 @@ StmtAffinePos: 50
 StmtAffineNeg: 10
 StmtAffineMulPos: 40
 StmtAffineMulNeg: 10
-StmtAffineOOBKeepsPrev: 99
+StmtAffineOOBKeepsPrev: 40
