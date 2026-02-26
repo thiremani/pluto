@@ -845,18 +845,15 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	defer c.popScope()
 
 	outputs := c.makeOutputs(dest, info.OutTypes, true)
-	if len(outputs) != 1 {
-		panic(fmt.Sprintf("internal: array range expression expected 1 output, got %d", len(outputs)))
-	}
-
-	rew, ok := info.Rewrite.(*ast.ArrayRangeExpression)
-	if !ok {
-		panic("internal: missing rewritten array range expression for range lowering")
-	}
+	rew := info.Rewrite.(*ast.ArrayRangeExpression)
 	output := outputs[0]
 
 	c.withLoopNestVersioned(info.Ranges, rew, func() {
 		arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
+		// Source operands are temporary for each loop iteration in this path.
+		defer c.freeTemporary(rew.Array, []*Symbol{arraySym})
+		defer c.freeTemporary(rew.Range, []*Symbol{idxSym})
+
 		if idxSym.Type.Kind() == RangeKind {
 			panic("internal: range-lowered array access requires scalar index")
 		}
@@ -869,25 +866,22 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
 			c.freeSymbolValue(output, "old_output")
 			c.createStore(elemVal, output.Val, resultType)
-		} else {
-			inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-			storeBlock, skipBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_skip", "arr_range_cont")
-
-			c.builder.SetInsertPointAtEnd(storeBlock)
-			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-			c.freeSymbolValue(output, "old_output")
-			c.createStore(elemVal, output.Val, resultType)
-			c.builder.CreateBr(contBlock)
-
-			c.builder.SetInsertPointAtEnd(skipBlock)
-			c.builder.CreateBr(contBlock)
-
-			c.builder.SetInsertPointAtEnd(contBlock)
+			return
 		}
 
-		// Scalar element access does not retain source operands.
-		c.freeTemporary(rew.Array, []*Symbol{arraySym})
-		c.freeTemporary(rew.Range, []*Symbol{idxSym})
+		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+		storeBlock, skipBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_skip", "arr_range_cont")
+
+		c.builder.SetInsertPointAtEnd(storeBlock)
+		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+		c.freeSymbolValue(output, "old_output")
+		c.createStore(elemVal, output.Val, resultType)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(skipBlock)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
 	})
 
 	elemType := output.Type.(Ptr).Elem
