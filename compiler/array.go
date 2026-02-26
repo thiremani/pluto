@@ -869,15 +869,12 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 		}
 
 		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-		storeBlock, skipBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_skip", "arr_range_cont")
+		storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
 
 		c.builder.SetInsertPointAtEnd(storeBlock)
 		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
 		c.freeSymbolValue(output, "old_output")
 		c.createStore(elemVal, output.Val, resultType)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(skipBlock)
 		c.builder.CreateBr(contBlock)
 
 		c.builder.SetInsertPointAtEnd(contBlock)
