@@ -38,11 +38,6 @@ func (c *Compiler) stmtBoundsUsed() bool {
 // Callers must pop the guard with popBoundsGuard after the guarded region.
 func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 	ctx := c.currentStmtCtx()
-	if ctx == nil {
-		// Bounds checks can be compiled in expression-only paths with no
-		// statement frame. In that case we skip statement-level guard tracking.
-		return llvm.Value{}
-	}
 
 	guardPtr := c.createEntryBlockAlloca(c.Context.Int1Type(), name)
 	c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), guardPtr, Int{Width: 1})
@@ -52,9 +47,8 @@ func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 
 func (c *Compiler) popBoundsGuard() {
 	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
-		// No active statement/bounds frame: nothing to pop by design.
-		return
+	if len(ctx.boundsStack) == 0 {
+		panic("internal: missing bounds guard frame for popBoundsGuard")
 	}
 	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
 }
@@ -63,9 +57,8 @@ func (c *Compiler) popBoundsGuard() {
 // guard. A false guard means the current assignment should become a no-op.
 func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
 	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
-		// No active statement/bounds frame: skip statement-level guard updates.
-		return
+	if len(ctx.boundsStack) == 0 {
+		panic("internal: missing bounds guard frame for recordStmtBoundsCheck")
 	}
 
 	// Pointer into boundsStack is safe here because this function does not append
