@@ -815,6 +815,9 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 			Borrowed: borrowed,
 		}}
 	}
+	// Scalar element access does not retain the source array pointer.
+	// Release temporary array sources on all scalar return paths.
+	defer c.freeTemporary(expr.Array, []*Symbol{arraySym})
 
 	// Scalar index - element access
 	arrElemType := arrType.ColTypes[0]
@@ -824,18 +827,14 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	// Bounds are checked in IR before get. OOB reads materialize a zero value
 	// for expression evaluation; assignment/condition guards decide whether the
 	// enclosing statement commits.
-	var elemVal llvm.Value
 	if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(expr) {
-		elemVal = c.ArrayGet(arraySym, arrElemType, idxVal)
-	} else {
-		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-		c.recordStmtBoundsCheck(inBounds)
-		elemVal = c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
+		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+		return []*Symbol{{Type: resultType, Val: elemVal}}
 	}
 
-	// Scalar element access does not retain the source array pointer.
-	// Release temporary array sources immediately.
-	c.freeTemporary(expr.Array, []*Symbol{arraySym})
+	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+	c.recordStmtBoundsCheck(inBounds)
+	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
 
 	return []*Symbol{{Type: resultType, Val: elemVal}}
 }
