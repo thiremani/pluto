@@ -21,11 +21,10 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	var codeAST *ast.Code
-	if strings.TrimSpace(codeSrc) == "" {
-		codeAST = ast.NewCode()
-	} else {
+	codeAST := ast.NewCode()
+	if strings.TrimSpace(codeSrc) != "" {
 		codeAST = mustParseCode(t, codeSrc)
+
 	}
 
 	cc := NewCodeCompiler(ctx, moduleName, "", codeAST)

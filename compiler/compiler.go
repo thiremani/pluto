@@ -1200,7 +1200,7 @@ func (c *Compiler) compileRangeInfixSlot(
 	output *Symbol,
 	leftTempsHandledInline bool,
 ) {
-	onSkip := func() {}
+	var onSkip func()
 	if leftTempsHandledInline {
 		onSkip = func() {
 			c.freeTemporarySymbol(leftSym, "cond_lhs_drop")
@@ -1590,14 +1590,11 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	elemType := arrRangeType.Array.ColTypes[0]
 	c.createLoop(rangeVal, func(iter llvm.Value) {
 		inBounds := c.arrayIndexInBounds(arraySym, elemType, iter)
-		iterBlock, skipBlock, contBlock := c.createIfElseCont(inBounds, "arr_iter_in_bounds", "arr_iter_oob", "arr_iter_cont")
+		iterBlock, contBlock := c.createIfCont(inBounds, "arr_iter_in_bounds", "arr_iter_cont")
 
 		c.builder.SetInsertPointAtEnd(iterBlock)
 		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
 		body(elemVal, elemType)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(skipBlock)
 		c.builder.CreateBr(contBlock)
 
 		c.builder.SetInsertPointAtEnd(contBlock)

@@ -73,6 +73,18 @@ func (c *Compiler) withGuardedBranch(
 	onElse func(),
 ) {
 	guard := c.createLoad(guardPtr, Int{Width: 1}, loadName)
+
+	if onElse == nil {
+		ifBlock, contBlock := c.createIfCont(guard, ifName, contName)
+		c.builder.SetInsertPointAtEnd(ifBlock)
+		if onIf != nil {
+			onIf()
+		}
+		c.builder.CreateBr(contBlock)
+		c.builder.SetInsertPointAtEnd(contBlock)
+		return
+	}
+
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(guard, ifName, elseName, contName)
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
