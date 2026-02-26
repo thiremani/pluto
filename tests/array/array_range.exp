@@ -1,5 +1,7 @@
 Index: 30
 RangeAssign: [10 20 30 40 50][1:4]
+RangeWrappedMaterialized: [20 30]
+RangeViewPrint: [10 20 30 40 50][1:3]
 RangeReduce: 150
 RangeInfix: 51
 RangeRoot: [10 20 30 40 50][0:5]

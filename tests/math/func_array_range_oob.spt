@@ -1,0 +1,22 @@
+arr = [10 20]
+
+oobTail = Square(arr[0:4])
+"Square(arr[0:4]) OOB tail: -oobTail"
+
+oobHead = Square(arr[-1:1])
+"Square(arr[-1:1]) OOB head: -oobHead"
+
+pairProd = arr[0:4] * arr[0:4]
+"arr[0:4] * arr[0:4] OOB: -pairProd"
+
+sumProd = 0
+sumProd = sumProd + arr[0:4] * arr[0:4]
+"sumProd + arr[0:4] * arr[0:4]: -sumProd"
+
+prefixTail = -arr[0:4]
+"Prefix arr[0:4] OOB tail: -prefixTail"
+
+i = 0:4
+sharedIterSum = 0
+sharedIterSum = sharedIterSum + arr[i] * arr[i]
+"sum with shared i arr[i]*arr[i]: -sharedIterSum"

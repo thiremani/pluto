@@ -1,0 +1,3 @@
+res = UpperTriRowTail(a, n, i)
+    j = (i + 1):n
+    res = a[i * n + j]

@@ -1,0 +1,22 @@
+arr = [10 20 30 40 50]
+
+i = 0:4
+exprPos = Square(arr[i + 1])
+"ExprAffinePos: -exprPos"
+
+j = 4:0:-1
+exprNeg = Square(arr[j - 1])
+"ExprAffineNeg: -exprNeg"
+
+k = 0:2
+exprMul = Square(arr[2k + 1])
+"ExprAffineMulPos: -exprMul"
+
+l = 3:0:-1
+exprMulNeg = Square(arr[2l - 2])
+"ExprAffineMulNeg: -exprMulNeg"
+
+m = 0:3
+exprOOB = 77
+exprOOB = Square(arr[2m + 1])
+"ExprAffineOOBKeepsPrev: -exprOOB"

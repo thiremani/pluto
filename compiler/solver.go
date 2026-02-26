@@ -887,6 +887,21 @@ func AllowedArrayElem(t Type) bool {
 	}
 }
 
+func (ts *TypeSolver) boundDependsOnRange(expr ast.Expression) bool {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info.HasRanges
+}
+
+func (ts *TypeSolver) rejectRangeDependentBound(boundName string, expr ast.Expression, tok token.Token) {
+	if !ts.boundDependsOnRange(expr) {
+		return
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("range %s cannot depend on range values in this scope; use a scalar iterator context (for example, inside a function/body loop)", boundName),
+	})
+}
+
 func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Type {
 	// infer start and stop - these are nested expressions
 	startT := ts.TypeExpression(r.Start, false)
@@ -898,6 +913,8 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 		}
 		ts.Errors = append(ts.Errors, ce)
 	}
+	ts.rejectRangeDependentBound("start", r.Start, r.Tok())
+	ts.rejectRangeDependentBound("stop", r.Stop, r.Tok())
 	// must be integers
 	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
 		ce := &token.CompileError{
@@ -924,6 +941,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			}
 			ts.Errors = append(ts.Errors, ce)
 		}
+		ts.rejectRangeDependentBound("step", r.Step, r.Tok())
 		if stepT[0].Kind() != IntKind {
 			ce := &token.CompileError{
 				Token: r.Tok(),
@@ -989,6 +1007,28 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 			Msg:   fmt.Sprintf("array index expects an integer or range, got %s", idxType),
 		})
 		return info.OutTypes
+	}
+	if idxType.Kind() == IntKind {
+		idxInt := idxType.(Int)
+		// I1 behaves like a predicate; using it as an array index hides bugs.
+		// Wider integer kinds are normalized to runtime index width during codegen.
+		if idxInt.Width == 1 {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: ax.Tok(),
+				Msg:   "array index cannot be I1; use an integer index",
+			})
+			return info.OutTypes
+		}
+	}
+	if idxType.Kind() == RangeKind {
+		iterType := idxType.(Range).Iter
+		if !TypeEqual(iterType, I64) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: ax.Tok(),
+				Msg:   fmt.Sprintf("array range index expects I64 iterator, got %s", iterType),
+			})
+			return info.OutTypes
+		}
 	}
 
 	if !isRoot {

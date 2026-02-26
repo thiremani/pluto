@@ -103,15 +103,8 @@ int arr_##SUF##_pop(NAME* a, T* out){                                    \
     if (out) *out = v;                                                   \
     return 0;                                                            \
 }                                                                        \
-T arr_##SUF##_get(const NAME* a, size_t i){ \
-    if (!a || i >= (size_t)a->v.n) return (T)0; \
-    return a->v.a[i]; \
-}          \
-int arr_##SUF##_set(NAME* a, size_t i, T v){                             \
-    if (!a || i >= (size_t)a->v.n) return -1;                            \
-    a->v.a[i] = v;                                                       \
-    return 0;                                                            \
-}                                                                        \
+T arr_##SUF##_get(const NAME* a, size_t i){ return a->v.a[i]; }          \
+void arr_##SUF##_set(NAME* a, size_t i, T v){ a->v.a[i] = v; }                                                                        \
 void arr_##SUF##_swap(NAME* a, size_t i, size_t j){                      \
     if (!a) return;                                                      \
     T t = a->v.a[i]; a->v.a[i] = a->v.a[j]; a->v.a[j] = t;               \
@@ -222,7 +215,7 @@ int arr_str_push(PtArrayStr* a, const char* s){
 }
 
 int arr_str_push_own(PtArrayStr* a, char* s){
-    if (!a) return -1;
+    if (!a || !s) return -1;
     if (str_ensure_cap(&a->v, 1) != 0) return -1;
     a->v.a[a->v.n++] = s;  // takes ownership; caller must not free s
     return 0;
@@ -246,7 +239,6 @@ const char* arr_str_borrow(const PtArrayStr* a, size_t i){
 }
 
 int arr_str_set(PtArrayStr* a, size_t i, const char* s){
-    if (!a || i >= (size_t)a->v.n) return -1;
     char* dup = dup_cstr(s);
     if (!dup) return -1;
     free(a->v.a[i]);
@@ -254,12 +246,10 @@ int arr_str_set(PtArrayStr* a, size_t i, const char* s){
     return 0;
 }
 
-int arr_str_set_own(PtArrayStr* a, size_t i, char* s){
-    if (!a || i >= (size_t)a->v.n) return -1;
-    if (a->v.a[i] == s) return 0;  // no-op for self-assignment
+void arr_str_set_own(PtArrayStr* a, size_t i, char* s){
+    if (a->v.a[i] == s) return;  // no-op for self-assignment
     free(a->v.a[i]);
     a->v.a[i] = s;  // takes ownership; caller must not free s
-    return 0;
 }
 
 void arr_str_swap(PtArrayStr* a, size_t i, size_t j){

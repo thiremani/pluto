@@ -21,7 +21,7 @@ extern "C" {
     int     arr_##SUF##_push(NAME* a, T v);             \
     int     arr_##SUF##_pop(NAME* a, T* out);           \
     T       arr_##SUF##_get(const NAME* a, size_t i);   \
-    int     arr_##SUF##_set(NAME* a, size_t i, T v);    \
+    void    arr_##SUF##_set(NAME* a, size_t i, T v);    \
     void    arr_##SUF##_swap(NAME* a, size_t i, size_t j); \
     T*      arr_##SUF##_data(NAME* a);
 
@@ -54,8 +54,8 @@ int                  arr_str_pop(PtArrayStr* a, char** out);
 
 char*                arr_str_get(const PtArrayStr* a, size_t i);  /* caller owns the copy */
 const char*          arr_str_borrow(const PtArrayStr* a, size_t i); /* borrowed; do NOT free */
-int                  arr_str_set(PtArrayStr* a, size_t i, const char* s);
-int                  arr_str_set_own(PtArrayStr* a, size_t i, char* s); /* takes ownership; do NOT free s */
+int                  arr_str_set(PtArrayStr* a, size_t i, const char* s); /* 0 on success, -1 on allocation failure */
+void                 arr_str_set_own(PtArrayStr* a, size_t i, char* s); /* takes ownership */
 
 void                 arr_str_swap(PtArrayStr* a, size_t i, size_t j);
 const char* const*   arr_str_data(const PtArrayStr* a);  /* contiguous, read-only view */

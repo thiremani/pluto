@@ -1,0 +1,2 @@
+out = condCallHeap(s)
+    out = s ⊕ "_cond"

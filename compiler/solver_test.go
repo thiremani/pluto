@@ -268,6 +268,65 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	}
 }
 
+func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "rangeBoundsDepend", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	cases := []struct {
+		name        string
+		script      string
+		expectError string
+	}{
+		{
+			name: "stop depends on range",
+			script: `i = 0:3
+j = 0:i`,
+			expectError: "range stop cannot depend on range values in this scope",
+		},
+		{
+			name: "start depends on range",
+			script: `i = 0:3
+j = i:5`,
+			expectError: "range start cannot depend on range values in this scope",
+		},
+		{
+			name: "step depends on range",
+			script: `i = 0:3
+j = 0:5:i`,
+			expectError: "range step cannot depend on range values in this scope",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+
+			sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			if len(ts.Errors) == 0 {
+				t.Fatalf("expected type error for %s, but got none", tc.name)
+			}
+
+			found := false
+			for _, err := range ts.Errors {
+				if strings.Contains(err.Msg, tc.expectError) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected error containing %q, got: %v", tc.expectError, ts.Errors)
+			}
+		})
+	}
+}
+
 func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
@@ -392,6 +451,83 @@ func TestArrayRangeTyping(t *testing.T) {
 	sumInt, ok := sumType.(Int)
 	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
 	require.EqualValues(t, 64, sumInt.Width)
+}
+
+func TestArrayIndexRejectsI1(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayIndexI1", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "arr = [1 2 3]\nvalue = arr[idx]"
+	sl := lexer.New("ArrayIndexRejectsI1.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "idx", Type(Int{Width: 1}))
+	ts.Solve()
+
+	require.NotEmpty(t, ts.Errors, "expected type error for I1 array index")
+
+	found := false
+	for _, err := range ts.Errors {
+		if strings.Contains(err.Msg, "array index cannot be I1") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected I1 array index error, got: %v", ts.Errors)
+}
+
+func TestArrayIndexAllowsWiderIntKinds(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayIndexI32", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "arr = [1 2 3]\nvalue = arr[idx]"
+	sl := lexer.New("ArrayIndexAllowsWiderIntKinds.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "idx", Type(Int{Width: 32}))
+	ts.Solve()
+	require.Empty(t, ts.Errors, "unexpected solver errors for wider integer index: %v", ts.Errors)
+}
+
+func TestArrayRangeIndexRequiresI64Iter(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayRangeIndexI64", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "arr = [1 2 3]\nvalue = arr[idx]"
+	sl := lexer.New("ArrayRangeIndexRequiresI64Iter.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "idx", Type(Range{Iter: Int{Width: 1}}))
+	ts.Solve()
+
+	require.NotEmpty(t, ts.Errors, "expected type error for non-I64 array range index iterator")
+
+	found := false
+	for _, err := range ts.Errors {
+		if strings.Contains(err.Msg, "array range index expects I64 iterator") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected I64 array range iterator error, got: %v", ts.Errors)
 }
 
 func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
