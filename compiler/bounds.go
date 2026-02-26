@@ -252,6 +252,34 @@ func combineAffineForms(left, right affineIndexForm, rightSign int64) (affineInd
 	}, true
 }
 
+func affineIndexFromInfix(op string, left, right affineIndexForm) (affineIndexForm, bool) {
+	switch op {
+	case token.SYM_ADD:
+		return combineAffineForms(left, right, 1)
+	case token.SYM_SUB:
+		return combineAffineForms(left, right, -1)
+	case token.SYM_MUL, token.SYM_IMPL_MUL:
+		leftConst := !left.hasVar
+		rightConst := !right.hasVar
+		switch {
+		case leftConst && rightConst:
+			bias, ok := mulInt64(left.bias, right.bias)
+			if !ok {
+				return affineIndexForm{}, false
+			}
+			return affineIndexForm{bias: bias}, true
+		case leftConst:
+			return scaleAffineForm(right, left.bias)
+		case rightConst:
+			return scaleAffineForm(left, right.bias)
+		default:
+			return affineIndexForm{}, false
+		}
+	default:
+		return affineIndexForm{}, false
+	}
+}
+
 func affineIndexFromExpr(expr ast.Expression) (affineIndexForm, bool) {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -280,32 +308,7 @@ func affineIndexFromExpr(expr ast.Expression) (affineIndexForm, bool) {
 		if !ok {
 			return affineIndexForm{}, false
 		}
-
-		switch e.Operator {
-		case token.SYM_ADD:
-			return combineAffineForms(left, right, 1)
-		case token.SYM_SUB:
-			return combineAffineForms(left, right, -1)
-		case token.SYM_MUL, token.SYM_IMPL_MUL:
-			leftConst := !left.hasVar
-			rightConst := !right.hasVar
-			switch {
-			case leftConst && rightConst:
-				bias, ok := mulInt64(left.bias, right.bias)
-				if !ok {
-					return affineIndexForm{}, false
-				}
-				return affineIndexForm{bias: bias}, true
-			case leftConst:
-				return scaleAffineForm(right, left.bias)
-			case rightConst:
-				return scaleAffineForm(left, right.bias)
-			default:
-				return affineIndexForm{}, false
-			}
-		default:
-			return affineIndexForm{}, false
-		}
+		return affineIndexFromInfix(e.Operator, left, right)
 	default:
 		return affineIndexForm{}, false
 	}
