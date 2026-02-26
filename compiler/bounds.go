@@ -386,12 +386,6 @@ func (c *Compiler) affineLoopBoundsForComponents(
 	)
 }
 
-type loopRangeBounds struct {
-	start llvm.Value
-	stop  llvm.Value
-	step  llvm.Value
-}
-
 func collectArrayIndexAccesses(expr ast.Expression, out *[]*ast.ArrayRangeExpression) {
 	if expr == nil {
 		return
@@ -404,19 +398,10 @@ func collectArrayIndexAccesses(expr ast.Expression, out *[]*ast.ArrayRangeExpres
 	}
 }
 
-func (c *Compiler) loopRangeBoundsByName(ranges []*RangeInfo) map[string]loopRangeBounds {
-	bounds := make(map[string]loopRangeBounds, len(ranges))
+func (c *Compiler) loopRangeValuesByName(ranges []*RangeInfo) map[string]llvm.Value {
+	bounds := make(map[string]llvm.Value, len(ranges))
 	for _, ri := range ranges {
-		rangeVal := c.rangeAggregateForRI(ri)
-		start, stop, step := c.rangeComponents(rangeVal)
-		if start.Type() != c.Context.Int64Type() || stop.Type() != c.Context.Int64Type() || step.Type() != c.Context.Int64Type() {
-			continue
-		}
-		bounds[ri.Name] = loopRangeBounds{
-			start: start,
-			stop:  stop,
-			step:  step,
-		}
+		bounds[ri.Name] = c.rangeAggregateForRI(ri)
 	}
 	return bounds
 }
@@ -449,7 +434,7 @@ func (c *Compiler) affineVersioningGuard(expr ast.Expression, ranges []*RangeInf
 		return llvm.Value{}, nil, false
 	}
 
-	boundsByName := c.loopRangeBoundsByName(ranges)
+	boundsByName := c.loopRangeValuesByName(ranges)
 	fastAccess := make(map[*ast.ArrayRangeExpression]struct{})
 	guard := llvm.Value{}
 	hasGuard := false
@@ -460,17 +445,18 @@ func (c *Compiler) affineVersioningGuard(expr ast.Expression, ranges []*RangeInf
 			continue
 		}
 
-		bounds, ok := boundsByName[form.varName]
+		rangeVal, ok := boundsByName[form.varName]
 		if !ok {
 			continue
 		}
+		start, stop, step := c.rangeComponents(rangeVal)
 
 		arraySym, arrElem, ok := c.arraySymbolForAffineGuard(access.Array)
 		if !ok {
 			continue
 		}
 
-		safe := c.affineLoopBoundsForComponents(form, arraySym, arrElem, bounds.start, bounds.stop, bounds.step)
+		safe := c.affineLoopBoundsForComponents(form, arraySym, arrElem, start, stop, step)
 		if !hasGuard {
 			guard = safe
 			hasGuard = true
