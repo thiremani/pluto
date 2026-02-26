@@ -833,7 +833,10 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	}
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-	c.recordStmtBoundsCheck(inBounds)
+	ctx := c.currentStmtCtx()
+	if len(ctx.boundsStack) > 0 {
+		c.recordStmtBoundsCheck(inBounds)
+	}
 	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
 
 	return []*Symbol{{Type: resultType, Val: elemVal}}
