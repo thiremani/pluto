@@ -766,6 +766,18 @@ func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*S
 	return arraySym, idxSym, arrType
 }
 
+func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
+	idxVal := idxSym.Val
+	intType, ok := idxSym.Type.(Int)
+	if !ok || intType.Width == 64 {
+		return idxVal
+	}
+	if intType.Width == 1 {
+		panic("internal: I1 array index should be rejected by type solver")
+	}
+	return c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
+}
+
 // compileArrayRangeExpression compiles an array indexing expression.
 // If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
 // If the index is a scalar (e.g., arr[4]), returns the element.
@@ -807,7 +819,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	// Scalar index - element access
 	arrElemType := arrType.ColTypes[0]
 	resultType := arrayAccessResultType(arrElemType)
-	idxVal := idxSym.Val
+	idxVal := c.normalizeArrayIndex(idxSym)
 
 	// Bounds are checked in IR before get. OOB reads materialize a zero value
 	// for expression evaluation; assignment/condition guards decide whether the
@@ -851,7 +863,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 
 		arrElemType := arrType.ColTypes[0]
 		resultType := arrayAccessResultType(arrElemType)
-		idxVal := idxSym.Val
+		idxVal := c.normalizeArrayIndex(idxSym)
 
 		if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
 			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)

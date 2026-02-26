@@ -1008,12 +1008,17 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		})
 		return info.OutTypes
 	}
-	if idxType.Kind() == IntKind && !TypeEqual(idxType, I64) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   fmt.Sprintf("array index expects I64, got %s", idxType),
-		})
-		return info.OutTypes
+	if idxType.Kind() == IntKind {
+		idxInt := idxType.(Int)
+		// I1 behaves like a predicate; using it as an array index hides bugs.
+		// Wider integer kinds are normalized to runtime index width during codegen.
+		if idxInt.Width == 1 {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: ax.Tok(),
+				Msg:   "array index cannot be I1; use an integer index",
+			})
+			return info.OutTypes
+		}
 	}
 	if idxType.Kind() == RangeKind {
 		iterType := idxType.(Range).Iter
