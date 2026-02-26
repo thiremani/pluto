@@ -28,7 +28,7 @@ type loopBoundsFrame struct {
 
 func (c *Compiler) stmtBoundsUsed() bool {
 	ctx := c.currentStmtCtx()
-	if ctx == nil || len(ctx.boundsStack) == 0 {
+	if len(ctx.boundsStack) == 0 {
 		return false
 	}
 	return ctx.boundsStack[len(ctx.boundsStack)-1].used
@@ -95,12 +95,16 @@ func (c *Compiler) withStmtBoundsGuard(
 	onIf func(),
 	onElse func(),
 ) bool {
-	if !c.stmtBoundsUsed() {
+	ctx := c.currentStmtCtx()
+	if len(ctx.boundsStack) == 0 {
 		return false
 	}
 
-	ctx := c.currentStmtCtx()
 	frame := ctx.boundsStack[len(ctx.boundsStack)-1]
+	if !frame.used {
+		return false
+	}
+
 	c.withGuardedBranch(frame.guard, loadName, ifName, elseName, contName, onIf, onElse)
 	return true
 }
