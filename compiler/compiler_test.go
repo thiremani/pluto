@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -311,4 +314,92 @@ x`
 	require.NotContains(t, scriptIR, "loop_affine_fast", "quotient index must not emit affine fast loop")
 	require.Contains(t, scriptIR, "idx_in_bounds", "quotient index should use checked bounds predicate")
 	require.Contains(t, scriptIR, "arr_get_oob", "quotient index should use checked OOB block")
+}
+
+func TestCallStatusCheckedEmitsTrap(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "status_checked_trap", "", ast.NewCode())
+	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+
+	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
+	fn := llvm.AddFunction(c.Module, "status_checked_fn", fnType)
+	entry := ctx.AddBasicBlock(fn, "entry")
+	c.builder.SetInsertPointAtEnd(entry)
+
+	failTy := llvm.FunctionType(ctx.Int32Type(), nil, false)
+	failFn := llvm.AddFunction(c.Module, "always_fail_status", failTy)
+	c.callStatusChecked(failTy, failFn, nil, "status_checked")
+	c.builder.CreateRetVoid()
+
+	ir := c.Module.String()
+	require.Contains(t, ir, "call i32 @always_fail_status()", "expected status-returning call")
+	require.Contains(t, ir, "status_checked_fail", "expected fail block for non-zero status")
+	require.Contains(t, ir, "call void @llvm.trap()", "expected trap on runtime failure")
+	require.Contains(t, ir, "unreachable", "expected fail block terminator")
+}
+
+func TestPushValOwnNullStrHEmitsTrapPath(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "status_checked_push_null", "", ast.NewCode())
+	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+
+	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
+	fn := llvm.AddFunction(c.Module, "status_checked_push_fn", fnType)
+	entry := ctx.AddBasicBlock(fn, "entry")
+	c.builder.SetInsertPointAtEnd(entry)
+
+	acc := c.NewArrayAccumulator(Array{ColTypes: []Type{StrH{}}})
+	nullStr := llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+	c.PushValOwn(acc, &Symbol{Val: nullStr, Type: StrH{}})
+	c.builder.CreateRetVoid()
+
+	ir := c.Module.String()
+	require.Contains(t, ir, "call i32 @arr_str_push_own", "expected owned-string push call")
+	require.Contains(t, ir, "ptr null", "expected injected null pointer argument")
+	require.Contains(t, ir, "range_arr_push_own_fail", "expected status fail block for push_own")
+	require.Contains(t, ir, "call void @llvm.trap()", "expected trap on push_own failure")
+}
+
+func TestCallStatusCheckedTrapExecutesNonZero(t *testing.T) {
+	lliPath, err := exec.LookPath("lli")
+	if err != nil {
+		t.Skip("lli not found on PATH")
+	}
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "status_checked_exec_trap", "", ast.NewCode())
+	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+
+	failTy := llvm.FunctionType(ctx.Int32Type(), nil, false)
+	failFn := llvm.AddFunction(c.Module, "always_fail_status_exec", failTy)
+	failEntry := ctx.AddBasicBlock(failFn, "entry")
+	c.builder.SetInsertPointAtEnd(failEntry)
+	c.builder.CreateRet(llvm.ConstInt(ctx.Int32Type(), 1, false))
+
+	mainTy := llvm.FunctionType(ctx.Int32Type(), nil, false)
+	mainFn := llvm.AddFunction(c.Module, "main", mainTy)
+	mainEntry := ctx.AddBasicBlock(mainFn, "entry")
+	c.builder.SetInsertPointAtEnd(mainEntry)
+	c.callStatusChecked(failTy, failFn, nil, "status_checked_exec")
+	c.builder.CreateRet(llvm.ConstInt(ctx.Int32Type(), 0, false))
+
+	tempDir := t.TempDir()
+	irPath := filepath.Join(tempDir, "trap_exec.ll")
+	require.NoError(t, os.WriteFile(irPath, []byte(c.Module.String()), 0o644))
+
+	cmd := exec.Command(lliPath, irPath)
+	out, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("expected non-zero exit from trap path, got success. output:\n%s", string(out))
+	}
+
+	exitErr, ok := runErr.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError for non-zero process exit")
+	require.NotEqual(t, 0, exitErr.ExitCode(), "trap path should not exit with status 0")
 }

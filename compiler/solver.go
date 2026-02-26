@@ -1008,6 +1008,23 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		})
 		return info.OutTypes
 	}
+	if idxType.Kind() == IntKind && !TypeEqual(idxType, I64) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   fmt.Sprintf("array index expects I64, got %s", idxType),
+		})
+		return info.OutTypes
+	}
+	if idxType.Kind() == RangeKind {
+		iterType := idxType.(Range).Iter
+		if !TypeEqual(iterType, I64) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: ax.Tok(),
+				Msg:   fmt.Sprintf("array range index expects I64 iterator, got %s", iterType),
+			})
+			return info.OutTypes
+		}
+	}
 
 	if !isRoot {
 		// nested: return element type (iterating)

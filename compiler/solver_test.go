@@ -453,6 +453,64 @@ func TestArrayRangeTyping(t *testing.T) {
 	require.EqualValues(t, 64, sumInt.Width)
 }
 
+func TestArrayIndexRequiresI64(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayIndexI64", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "arr = [1 2 3]\nvalue = arr[idx]"
+	sl := lexer.New("ArrayIndexRequiresI64.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "idx", Type(Int{Width: 1}))
+	ts.Solve()
+
+	require.NotEmpty(t, ts.Errors, "expected type error for non-I64 array index")
+
+	found := false
+	for _, err := range ts.Errors {
+		if strings.Contains(err.Msg, "array index expects I64") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected I64 array index error, got: %v", ts.Errors)
+}
+
+func TestArrayRangeIndexRequiresI64Iter(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "arrayRangeIndexI64", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "arr = [1 2 3]\nvalue = arr[idx]"
+	sl := lexer.New("ArrayRangeIndexRequiresI64Iter.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "idx", Type(Range{Iter: Int{Width: 1}}))
+	ts.Solve()
+
+	require.NotEmpty(t, ts.Errors, "expected type error for non-I64 array range index iterator")
+
+	found := false
+	for _, err := range ts.Errors {
+		if strings.Contains(err.Msg, "array range index expects I64 iterator") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected I64 array range iterator error, got: %v", ts.Errors)
+}
+
 func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "prefixRewriteCopy", "", ast.NewCode())
