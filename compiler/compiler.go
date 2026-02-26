@@ -504,7 +504,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	// Guarded assignments must converge through pointer-backed destinations so
 	// runtime write/skip paths both feed subsequent reads correctly.
 	c.promoteIdentifiersIfNeeded(writeIdents)
-	c.withLoadedGuard(
+	c.withGuardedBranch(
 		guardPtr,
 		"stmt_bounds_ok",
 		"stmt_bounds_write",

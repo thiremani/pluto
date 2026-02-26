@@ -416,7 +416,7 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 		return
 	}
 
-	c.withLoadedGuard(
+	c.withGuardedBranch(
 		guardPtr,
 		"acc_bounds_ok",
 		"acc_push",

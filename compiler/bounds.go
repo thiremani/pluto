@@ -47,9 +47,6 @@ func (c *Compiler) pushBoundsGuard(name string) llvm.Value {
 
 func (c *Compiler) popBoundsGuard() {
 	ctx := c.currentStmtCtx()
-	if len(ctx.boundsStack) == 0 {
-		panic("internal: missing bounds guard frame for popBoundsGuard")
-	}
 	ctx.boundsStack = ctx.boundsStack[:len(ctx.boundsStack)-1]
 }
 
@@ -57,16 +54,10 @@ func (c *Compiler) popBoundsGuard() {
 // guard. A false guard means the current assignment should become a no-op.
 func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
 	ctx := c.currentStmtCtx()
-	if len(ctx.boundsStack) == 0 {
-		panic("internal: missing bounds guard frame for recordStmtBoundsCheck")
-	}
 
 	// Pointer into boundsStack is safe here because this function does not append
 	// to boundsStack while frame is live.
 	frame := &ctx.boundsStack[len(ctx.boundsStack)-1]
-	if frame.guard.IsNil() {
-		return
-	}
 	curr := c.createLoad(frame.guard, Int{Width: 1}, "stmt_bounds_curr")
 	next := c.builder.CreateAnd(curr, inBounds, "stmt_bounds_and")
 	c.createStore(next, frame.guard, Int{Width: 1})
@@ -76,11 +67,12 @@ func (c *Compiler) recordStmtBoundsCheck(inBounds llvm.Value) {
 // withGuardedBranch emits an if/else/cont branch structure and executes the
 // provided callbacks in each branch.
 func (c *Compiler) withGuardedBranch(
-	guard llvm.Value,
-	ifName, elseName, contName string,
+	guardPtr llvm.Value,
+	loadName, ifName, elseName, contName string,
 	onIf func(),
 	onElse func(),
 ) {
+	guard := c.createLoad(guardPtr, Int{Width: 1}, loadName)
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(guard, ifName, elseName, contName)
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
@@ -98,16 +90,6 @@ func (c *Compiler) withGuardedBranch(
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) withLoadedGuard(
-	guardPtr llvm.Value,
-	loadName, ifName, elseName, contName string,
-	onIf func(),
-	onElse func(),
-) {
-	guard := c.createLoad(guardPtr, Int{Width: 1}, loadName)
-	c.withGuardedBranch(guard, ifName, elseName, contName, onIf, onElse)
-}
-
 func (c *Compiler) withStmtBoundsGuard(
 	loadName, ifName, elseName, contName string,
 	onIf func(),
@@ -119,7 +101,7 @@ func (c *Compiler) withStmtBoundsGuard(
 
 	ctx := c.currentStmtCtx()
 	frame := ctx.boundsStack[len(ctx.boundsStack)-1]
-	c.withLoadedGuard(frame.guard, loadName, ifName, elseName, contName, onIf, onElse)
+	c.withGuardedBranch(frame.guard, loadName, ifName, elseName, contName, onIf, onElse)
 	return true
 }
 
