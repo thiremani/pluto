@@ -268,6 +268,24 @@ met = 1.
 	checkInput(t, input, tests)
 }
 
+func TestPeriodAndLeadingDotFloat(t *testing.T) {
+	input := `p.name
+x = .5
+`
+	tests := []Test{
+		{token.IDENT, "p", "", 1, 1},
+		{token.PERIOD, ".", "", 1, 2},
+		{token.IDENT, "name", "", 1, 3},
+		{token.NEWLINE, "\n", "", 1, 7},
+		{token.IDENT, "x", "", 2, 1},
+		{token.ASSIGN, "=", "", 2, 3},
+		{token.FLOAT, ".5", "", 2, 5},
+		{token.NEWLINE, "\n", "", 2, 7},
+		{token.EOF, "", "", 3, 1},
+	}
+	checkInput(t, input, tests)
+}
+
 func TestString(t *testing.T) {
 	input := `"hello\nworld"`
 	tests := []Test{

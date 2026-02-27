@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
@@ -20,8 +21,31 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
+func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
+	seen := make(map[string]token.Token)
+	errs := []*token.CompileError{}
+
+	for _, def := range cc.Code.Struct.Definitions {
+		typeName := def.Token.Literal
+		if _, exists := seen[typeName]; exists {
+			errs = append(errs, &token.CompileError{
+				Token: def.Token,
+				Msg:   fmt.Sprintf("struct type %s has been previously defined", typeName),
+			})
+			continue
+		}
+		seen[typeName] = def.Token
+	}
+	return errs
+}
+
 // compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
+	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.validateStructDefs()...)
+	if len(cc.Compiler.Errors) > 0 {
+		return cc.Compiler.Errors
+	}
+
 	// Compile constants
 	for _, stmt := range cc.Code.Const.Statements {
 		cc.Compiler.compileConstStatement(stmt)

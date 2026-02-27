@@ -135,6 +135,35 @@ greeting = "hello"`
 	}
 }
 
+func TestCodeCompilerRejectsDuplicateStructDefsAcrossMergedCode(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :name age
+    "Ada" 28`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "dupStructDefs", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected duplicate struct definition error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "struct type Person has been previously defined") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected duplicate struct definition error, got: %v", errs)
+}
+
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

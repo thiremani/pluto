@@ -150,6 +150,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.postfixParseFns = make(map[string]postfixParseFn)
 	p.registerPostfix(token.SYM_LPAREN, p.parseCallPostfix)
 	p.registerPostfix(token.SYM_LBRACK, p.parseArrayRangePostfix)
+	p.registerPostfix(token.SYM_PERIOD, p.parseDotPostfix)
 
 	// Read two tokens, so curToken and peekToken are both set
 	p.nextToken()
@@ -451,6 +452,7 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
 	}
+	assignTok := p.curToken
 
 	if p.peekToken.IsConstant() {
 		s := p.parseConstStatement(idents)
@@ -472,8 +474,15 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 			}
 			return nil
 		}
+		if p.peekTokenIs(token.NEWLINE) {
+			s := p.parseStructLiteralStatement(assignTok, idents, p.curToken)
+			if s != nil {
+				return s
+			}
+			return nil
+		}
 	}
-	// TODO operator, struct definitions
+	// TODO operator definitions
 	return nil
 }
 
@@ -538,6 +547,181 @@ func (p *StmtParser) parseConstant() ast.Expression {
 		return p.parseHeapStringLiteral()
 	}
 	return nil
+}
+
+func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
+	headerToks := []token.Token{}
+	seen := make(map[string]struct{})
+
+	for !p.curTokenIs(token.NEWLINE) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
+		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
+			p.nextToken()
+			p.nextToken()
+			continue
+		}
+
+		if !p.curTokenIs(token.IDENT) {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: p.curToken,
+				Msg:   fmt.Sprintf("expected identifier for struct field header, got %s", p.curToken.Type),
+			})
+			return nil, false
+		}
+
+		p.validateIdentifier(p.curToken)
+		if _, ok := seen[p.curToken.Literal]; ok {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: p.curToken,
+				Msg:   fmt.Sprintf("duplicate struct field header: %s", p.curToken.Literal),
+			})
+			return nil, false
+		}
+
+		seen[p.curToken.Literal] = struct{}{}
+		headerToks = append(headerToks, p.curToken)
+		p.nextToken()
+	}
+	p.errorOnBlanks()
+
+	if len(headerToks) == 0 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct definition must include at least one field header",
+		})
+		return nil, false
+	}
+
+	return headerToks, true
+}
+
+func (p *StmtParser) parseStructRowConstants() ([]ast.Expression, bool) {
+	row := []ast.Expression{}
+	expectValue := true
+
+	for !p.curTokenIs(token.NEWLINE) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
+		if p.curTokenIs(token.COMMA) {
+			if expectValue {
+				p.errors = append(p.errors, &token.CompileError{
+					Token: p.curToken,
+					Msg:   "unexpected comma in struct value row",
+				})
+				return nil, false
+			}
+			expectValue = true
+			p.nextToken()
+			continue
+		}
+
+		if !p.curToken.IsConstant() {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: p.curToken,
+				Msg:   fmt.Sprintf("struct value row must contain constants only, got %s", p.curToken.TokenTypeWithOp()),
+			})
+			return nil, false
+		}
+
+		row = append(row, p.parseConstant())
+		expectValue = false
+		p.nextToken()
+	}
+
+	if expectValue && len(row) > 0 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct value row cannot end with a comma",
+		})
+		return nil, false
+	}
+
+	if len(row) == 0 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct definition requires one data row",
+		})
+		return nil, false
+	}
+
+	return row, true
+}
+
+func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents []*ast.Identifier, typeTok token.Token) *ast.ConstStatement {
+	if len(idents) != 1 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: assignTok,
+			Msg:   "struct definition must bind exactly one constant name",
+		})
+		return nil
+	}
+
+	stmt := &ast.ConstStatement{
+		Token: assignTok,
+		Name:  idents,
+		Value: []ast.Expression{},
+	}
+
+	if !p.expectPeek(token.NEWLINE) {
+		return nil
+	}
+	if !p.expectPeek(token.INDENT) {
+		return nil
+	}
+
+	p.nextToken()
+	if !p.curTokenIs(token.COLON) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct definition must start with ':' field header row",
+		})
+		return nil
+	}
+
+	p.nextToken()
+	headers, ok := p.parseStructHeaders()
+	if !ok {
+		return nil
+	}
+
+	if !p.curTokenIs(token.NEWLINE) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "expected NEWLINE after struct field headers",
+		})
+		return nil
+	}
+
+	p.nextToken()
+	row, ok := p.parseStructRowConstants()
+	if !ok {
+		return nil
+	}
+
+	if len(row) != len(headers) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: typeTok,
+			Msg:   fmt.Sprintf("struct value row has %d values, expected %d", len(row), len(headers)),
+		})
+		return nil
+	}
+
+	if p.curTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+
+	if !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct definition supports exactly one value row",
+		})
+		return nil
+	}
+
+	lit := &ast.StructLiteral{
+		Token:   typeTok,
+		Headers: headers,
+		Rows:    row,
+	}
+	stmt.Value = append(stmt.Value, lit)
+	return stmt
 }
 
 func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
@@ -737,7 +921,7 @@ func (p *StmtParser) tryPostfix(left ast.Expression) (ast.Expression, bool) {
 	// Postfix call/index operations must be connected to their target:
 	// f(x), a[1], a[1:3]. If there is whitespace before the postfix token,
 	// treat it as the next expression instead.
-	if (key == token.SYM_LBRACK || key == token.SYM_LPAREN) && p.peekToken.HadSpace {
+	if (key == token.SYM_LBRACK || key == token.SYM_LPAREN || key == token.SYM_PERIOD) && p.peekToken.HadSpace {
 		return left, false
 	}
 	if key == token.SYM_LPAREN && !p.allowCallPostfix(left) {
@@ -1147,6 +1331,20 @@ func (p *StmtParser) parseCallPostfix(base ast.Expression) ast.Expression {
 
 func (p *StmtParser) parseArrayRangePostfix(array ast.Expression) ast.Expression {
 	return p.parseArrayRangeExpression(array)
+}
+
+func (p *StmtParser) parseDotPostfix(base ast.Expression) ast.Expression {
+	dotTok := p.curToken
+	if !p.expectPeek(token.IDENT) {
+		return base
+	}
+	p.validateIdentifier(p.curToken)
+	p.errorOnBlanks()
+	return &ast.DotExpression{
+		Token: dotTok,
+		Left:  base,
+		Field: p.curToken.Literal,
+	}
 }
 
 func (p *StmtParser) parseCallArguments() []ast.Expression {

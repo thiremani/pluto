@@ -32,7 +32,11 @@ func (cp *CodeParser) Parse() *ast.Code {
 
 		switch s := stmt.(type) {
 		case *ast.ConstStatement:
-			cp.addConstStatement(code, s)
+			if lit, ok := cp.structLiteralOf(s); ok {
+				cp.addStructStatement(code, s, lit)
+			} else {
+				cp.addConstStatement(code, s)
+			}
 		case *ast.FuncStatement:
 			cp.addFuncStatement(code, s)
 		}
@@ -45,7 +49,15 @@ func (cp *CodeParser) Parse() *ast.Code {
 	return code
 }
 
-func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
+func (cp *CodeParser) structLiteralOf(s *ast.ConstStatement) (*ast.StructLiteral, bool) {
+	if len(s.Value) != 1 {
+		return nil, false
+	}
+	lit, ok := s.Value[0].(*ast.StructLiteral)
+	return lit, ok
+}
+
+func (cp *CodeParser) validateConstBindings(code *ast.Code, s *ast.ConstStatement) int {
 	prevLen := len(cp.p.errors)
 	cp.p.checkNoDuplicates(s.Name)
 
@@ -60,17 +72,52 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 			cp.p.errors = append(cp.p.errors, ce)
 		}
 	}
+	return prevLen
+}
 
-	if len(cp.p.errors) > prevLen {
-		// If there are errors, we don't add the statement to the code.
-		return
-	}
-
-	// add the statement to the code if no errors were found
+func (cp *CodeParser) addConstBinding(code *ast.Code, s *ast.ConstStatement) {
 	code.Const.Statements = append(code.Const.Statements, s)
 	for _, id := range s.Name {
 		code.Const.Map[id.Value] = s
 	}
+}
+
+func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
+	prevLen := cp.validateConstBindings(code, s)
+
+	if len(cp.p.errors) > prevLen {
+		return
+	}
+
+	cp.addConstBinding(code, s)
+}
+
+func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.ConstStatement, lit *ast.StructLiteral) {
+	prevLen := cp.validateConstBindings(code, s)
+	typeName := lit.Token.Literal
+
+	if _, exists := code.Struct.Map[typeName]; exists {
+		cp.p.errors = append(cp.p.errors, &token.CompileError{
+			Token: lit.Token,
+			Msg:   fmt.Sprintf("struct type %s has been previously defined", typeName),
+		})
+	}
+
+	if len(cp.p.errors) > prevLen {
+		return
+	}
+
+	structDef := &ast.StructDef{
+		Token:       lit.Token,
+		Fields:      make([]string, len(lit.Headers)),
+		FieldTokens: append([]token.Token(nil), lit.Headers...),
+	}
+	for i, h := range lit.Headers {
+		structDef.Fields[i] = h.Literal
+	}
+	code.Struct.Map[typeName] = structDef
+	code.Struct.Definitions = append(code.Struct.Definitions, structDef)
+	cp.addConstBinding(code, s)
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {

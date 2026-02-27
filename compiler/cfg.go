@@ -249,6 +249,15 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 			}
 		}
 		return false
+	case *ast.StructLiteral:
+		for _, cell := range t.Rows {
+			if cfg.hasRangeExpr(cell) {
+				return true
+			}
+		}
+		return false
+	case *ast.DotExpression:
+		return cfg.hasRangeExpr(t.Left)
 	default:
 		// Identifiers, literals, etc. are not conditional at root level
 		return false

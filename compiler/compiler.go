@@ -173,9 +173,30 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		// Arrays are backed by runtime dynamic vectors (opaque C structs).
 		// Model them as opaque pointers here to interop cleanly with the C runtime.
 		return llvm.PointerType(c.Context.Int8Type(), 0)
+	case StructKind:
+		return c.getOrCreateStructLLVMType(t.(Struct))
 	default:
 		panic("unknown type in mapToLLVMType: " + t.String())
 	}
+}
+
+func (c *Compiler) structTypeName(typeName string) string {
+	return c.MangledPath + SEP + "Struct" + SEP + MangleIdent(typeName)
+}
+
+func (c *Compiler) getOrCreateStructLLVMType(structType Struct) llvm.Type {
+	name := c.structTypeName(structType.Name)
+	if st := c.Module.GetTypeByName(name); !st.IsNil() {
+		return st
+	}
+
+	st := c.Context.StructCreateNamed(name)
+	fieldTypes := make([]llvm.Type, len(structType.Fields))
+	for i, field := range structType.Fields {
+		fieldTypes[i] = c.mapToLLVMType(field.Type)
+	}
+	st.StructSetBody(fieldTypes, false)
+	return st
 }
 
 // createGlobalString creates a global string constant in the LLVM module.
@@ -256,6 +277,57 @@ func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 			})
 			return
 
+		case *ast.StructLiteral:
+			if len(v.Rows) != len(v.Headers) {
+				c.Errors = append(c.Errors, &token.CompileError{
+					Token: v.Token,
+					Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Rows), len(v.Headers)),
+				})
+				return
+			}
+
+			fields := make([]StructField, len(v.Headers))
+			constVals := make([]llvm.Value, len(v.Headers))
+
+			for idx, headerTok := range v.Headers {
+				cell := v.Rows[idx]
+				header := headerTok.Literal
+				switch cv := cell.(type) {
+				case *ast.IntegerLiteral:
+					fields[idx] = StructField{Name: header, Type: I64}
+					constVals[idx] = c.ConstI64(uint64(cv.Value))
+				case *ast.FloatLiteral:
+					fields[idx] = StructField{Name: header, Type: F64}
+					constVals[idx] = c.ConstF64(cv.Value)
+				case *ast.StringLiteral:
+					fields[idx] = StructField{Name: header, Type: StrG{}}
+					fieldGlobalName := mangledName + SEP + MangleIdent(header) + SEP + "str"
+					fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
+					constVals[idx] = llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0))
+				case *ast.HeapStringLiteral:
+					c.Errors = append(c.Errors, &token.CompileError{
+						Token: cv.Token,
+						Msg:   "heap string literals cannot be used in struct constants",
+					})
+					return
+				default:
+					c.Errors = append(c.Errors, &token.CompileError{
+						Token: cell.Tok(),
+						Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
+					})
+					return
+				}
+			}
+
+			structType := Struct{
+				Name:   v.Token.Literal,
+				Fields: fields,
+			}
+			structLLVM := c.mapToLLVMType(structType)
+			val = llvm.ConstNamedStruct(structLLVM, constVals)
+			sym.Type = Ptr{Elem: structType}
+			sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
+
 		default:
 			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
@@ -315,6 +387,8 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		// Create zero value for the range part
 		rangeSym := c.makeZeroValue(arrRangeType.Range)
 		s.Val = c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRangeType)
+	case StructKind:
+		s.Val = llvm.ConstNull(c.mapToLLVMType(symType))
 	default:
 		panic(fmt.Sprintf("unsupported type for zero value: %s", symType.String()))
 	}
@@ -737,6 +811,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		return c.compileArrayExpression(e, dest)
 	case *ast.ArrayRangeExpression:
 		return c.compileArrayRangeExpression(e, dest)
+	case *ast.DotExpression:
+		return c.compileDotExpression(e)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -777,6 +853,9 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		inst.SetAlignment(8)
 	case ArrayRange:
 		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
+		inst.SetAlignment(8)
+	case Struct:
+		// Struct alignment follows max-field ABI alignment; Phase 1 fields are scalar/ptr.
 		inst.SetAlignment(8)
 	default:
 		panic("Unsupported type for alignment" + typ.String())
@@ -929,6 +1008,43 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	// no need to check ok as that is done in the typesolver
 	s, _ = Get(cc.Scopes, ident.Value)
 	return c.derefIfPointer(s, ident.Value+"_load")
+}
+
+func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
+	leftSym := c.compileExpression(expr.Left, nil)[0]
+
+	structType, ok := leftSym.Type.(Struct)
+	if !ok {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("field access expects a struct value, got %s", leftSym.Type.String()),
+		})
+		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
+	}
+
+	fieldIndex := -1
+	var fieldType Type = Unresolved{}
+	for i, field := range structType.Fields {
+		if field.Name == expr.Field {
+			fieldIndex = i
+			fieldType = field.Type
+			break
+		}
+	}
+
+	if fieldIndex < 0 {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("unknown struct field %q on %s", expr.Field, structType.Name),
+		})
+		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
+	}
+
+	fieldVal := c.builder.CreateExtractValue(leftSym.Val, fieldIndex, expr.Field)
+	return []*Symbol{{
+		Type: fieldType,
+		Val:  fieldVal,
+	}}
 }
 
 // getRawSymbol looks up a symbol by name without dereferencing pointers.

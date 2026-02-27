@@ -791,6 +791,81 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	*/
 }
 
+func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
+	types := []Type{Unresolved{}}
+	info := &ExprInfo{OutTypes: types, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, sl)] = info
+
+	row := sl.Rows
+	if len(row) != len(sl.Headers) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: sl.Tok(),
+			Msg:   fmt.Sprintf("struct literal row has %d values, expected %d", len(row), len(sl.Headers)),
+		})
+		return types
+	}
+
+	fields := make([]StructField, len(sl.Headers))
+	for i, nameTok := range sl.Headers {
+		cellType, ok := ts.typeCell(row[i], sl.Tok())
+		if !ok {
+			return types
+		}
+		fields[i] = StructField{
+			Name: nameTok.Literal,
+			Type: cellType,
+		}
+	}
+
+	structType := Struct{
+		Name:   sl.Token.Literal,
+		Fields: fields,
+	}
+	info.OutTypes = []Type{structType}
+	return info.OutTypes
+}
+
+func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
+	types := []Type{Unresolved{}}
+	info := &ExprInfo{OutTypes: types, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = info
+
+	leftTypes := ts.TypeExpression(expr.Left, false)
+	if len(leftTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   fmt.Sprintf("field access expects a single struct value, got %d", len(leftTypes)),
+		})
+		return types
+	}
+
+	structType, ok := leftTypes[0].(Struct)
+	if !ok {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   fmt.Sprintf("field access expects a struct value, got %s", leftTypes[0].String()),
+		})
+		return types
+	}
+
+	for _, field := range structType.Fields {
+		if field.Name == expr.Field {
+			info.OutTypes = []Type{field.Type}
+			leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+			if leftInfo != nil {
+				info.HasRanges = leftInfo.HasRanges
+			}
+			return info.OutTypes
+		}
+	}
+
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: expr.Tok(),
+		Msg:   fmt.Sprintf("unknown field %q on struct %s", expr.Field, structType.Name),
+	})
+	return types
+}
+
 // arrayNumCols returns column count based on headers or max row width.
 func (ts *TypeSolver) arrayNumCols(al *ast.ArrayLiteral) int {
 	if len(al.Headers) > 0 {
@@ -1076,8 +1151,12 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)
+	case *ast.StructLiteral:
+		types = append(types, ts.TypeStructLiteral(e)...)
 	case *ast.ArrayRangeExpression:
 		types = append(types, ts.TypeArrayRangeExpression(e, isRoot)...)
+	case *ast.DotExpression:
+		types = append(types, ts.TypeDotExpression(e)...)
 	case *ast.RangeLiteral:
 		types = append(types, ts.TypeRangeExpression(e, isRoot)...)
 	case *ast.Identifier:

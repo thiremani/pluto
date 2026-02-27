@@ -540,6 +540,7 @@ func TestMangleDemangleRoundTrip(t *testing.T) {
 		{"math", "", "add", []Type{I64, I64}, "math.add(I64, I64)"},
 		{"github.com/user/pkg", "", "Run", []Type{}, "github.com/user/pkg.Run()"},
 		{"github.com/user/pkg", "sub", "Run", []Type{F64}, "github.com/user/pkg/sub.Run(F64)"},
+		{"math", "", "move", []Type{Struct{Name: "Person"}, I64}, "math.move(Person, I64)"},
 		{"github.com/user/math/v1.2.34abc", "", "Calc", []Type{I64}, "github.com/user/math/v1.2.34abc.Calc(I64)"},
 		{"github.com/user/stat/v2.45-abhijk", "", "Mean", []Type{F64}, "github.com/user/stat/v2.45-abhijk.Mean(F64)"},
 		// Consecutive separators

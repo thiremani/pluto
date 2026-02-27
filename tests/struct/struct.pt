@@ -1,0 +1,3 @@
+p = Person
+    :name age height
+    "Tejas" 35 184.5

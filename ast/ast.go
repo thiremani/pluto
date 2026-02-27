@@ -32,14 +32,25 @@ type Program struct {
 }
 
 type Code struct {
-	Const Const
-	Func  Func
-	// Struct Struct
+	Const  Const
+	Func   Func
+	Struct Struct
 }
 
 type FuncKey struct {
 	FuncName string
 	Arity    int
+}
+
+type StructDef struct {
+	Token       token.Token
+	Fields      []string
+	FieldTokens []token.Token
+}
+
+type Struct struct {
+	Definitions []*StructDef
+	Map         map[string]*StructDef
 }
 
 func NewCode() *Code {
@@ -51,10 +62,15 @@ func NewCode() *Code {
 		Statements: []*FuncStatement{},
 		Map:        make(map[FuncKey]*FuncStatement),
 	}
+	Struct := Struct{
+		Definitions: []*StructDef{},
+		Map:         make(map[string]*StructDef),
+	}
 
 	return &Code{
-		Const: Const,
-		Func:  Func,
+		Const:  Const,
+		Func:   Func,
+		Struct: Struct,
 	}
 }
 
@@ -65,10 +81,9 @@ func (c *Code) Merge(other *Code) {
 		maps.Copy(c.Const.Map, other.Const.Map)
 		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
 		maps.Copy(c.Func.Map, other.Func.Map)
+		c.Struct.Definitions = append(c.Struct.Definitions, other.Struct.Definitions...)
+		maps.Copy(c.Struct.Map, other.Struct.Map)
 	}
-
-	// Add similar merging logic for struct when implemented
-	// c.Struct.Merge(other.Struct)
 }
 
 type Const struct {
@@ -319,6 +334,39 @@ func (al *ArrayLiteral) String() string {
 	return out.String()
 }
 
+// StructLiteral represents a struct value declared in .pt code mode.
+// Example:
+// p = Person
+//
+//	:name age
+//	"Tejas" 35
+type StructLiteral struct {
+	Token   token.Token // the type name token (e.g. "Person")
+	Headers []token.Token
+	Rows    []Expression // Single value row for this struct definition/usage
+}
+
+func (sl *StructLiteral) expressionNode()  {}
+func (sl *StructLiteral) Tok() token.Token { return sl.Token }
+func (sl *StructLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString(sl.Token.Literal)
+	out.WriteString(" ")
+	if len(sl.Headers) > 0 {
+		headers := make([]string, len(sl.Headers))
+		for i, h := range sl.Headers {
+			headers[i] = h.Literal
+		}
+		out.WriteString(":")
+		out.WriteString(strings.Join(headers, " "))
+	}
+	if len(sl.Rows) > 0 {
+		out.WriteString(" ")
+		out.WriteString(printVec(sl.Rows))
+	}
+	return out.String()
+}
+
 // ArrayRangeExpression represents arr[expr] accesses, where expr can be either
 // a single index or a range literal (e.g., arr[0:5]).
 type ArrayRangeExpression struct {
@@ -331,6 +379,19 @@ func (ar *ArrayRangeExpression) expressionNode()  {}
 func (ar *ArrayRangeExpression) Tok() token.Token { return ar.Token }
 func (ar *ArrayRangeExpression) String() string {
 	return fmt.Sprintf("%s[%s]", ar.Array.String(), ar.Range.String())
+}
+
+// DotExpression represents field access: base.field
+type DotExpression struct {
+	Token token.Token // the '.' token
+	Left  Expression
+	Field string
+}
+
+func (de *DotExpression) expressionNode()  {}
+func (de *DotExpression) Tok() token.Token { return de.Token }
+func (de *DotExpression) String() string {
+	return fmt.Sprintf("%s.%s", de.Left.String(), de.Field)
 }
 
 type PrefixExpression struct {
@@ -452,8 +513,12 @@ func ExprChildren(expr Expression) []Expression {
 			children = append(children, row...)
 		}
 		return children
+	case *StructLiteral:
+		return append([]Expression(nil), e.Rows...)
 	case *ArrayRangeExpression:
 		return []Expression{e.Array, e.Range}
+	case *DotExpression:
+		return []Expression{e.Left}
 	case *RangeLiteral:
 		children := []Expression{e.Start, e.Stop}
 		if e.Step != nil {

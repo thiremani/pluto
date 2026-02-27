@@ -89,6 +89,18 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		tok = l.createToken(token.LBRACK, token.SYM_LBRACK, hadSpace)
 	case ']':
 		tok = l.createToken(token.RBRACK, token.SYM_RBRACK, hadSpace)
+	case '.':
+		// Float literals can start with '.' (e.g. .5)
+		if IsDecimal(l.peekRune()) {
+			tok = l.createToken(token.INT, "", hadSpace)
+			var isFloat bool
+			tok.Literal, isFloat = l.readNumber()
+			if isFloat {
+				tok.Type = token.FLOAT
+			}
+			return tok, nil
+		}
+		tok = l.createToken(token.PERIOD, token.SYM_PERIOD, hadSpace)
 	case 0:
 		fallthrough
 	case eof:
