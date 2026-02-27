@@ -5,6 +5,7 @@ import (
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
+	ptypes "github.com/thiremani/pluto/types"
 )
 
 type CodeParser struct {
@@ -96,6 +97,13 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.ConstStatement, 
 	prevLen := cp.validateConstBindings(code, s)
 	typeName := lit.Token.Literal
 
+	if ptypes.IsReservedTypeName(typeName) {
+		cp.p.errors = append(cp.p.errors, &token.CompileError{
+			Token: lit.Token,
+			Msg:   fmt.Sprintf("struct type name %q is reserved", typeName),
+		})
+	}
+
 	if _, exists := code.Struct.Map[typeName]; exists {
 		cp.p.errors = append(cp.p.errors, &token.CompileError{
 			Token: lit.Token,
@@ -122,6 +130,14 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.ConstStatement, 
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 	prevLen := len(cp.p.errors)
+
+	if ptypes.IsReservedTypeName(s.Token.Literal) {
+		ce := &token.CompileError{
+			Token: s.Token,
+			Msg:   fmt.Sprintf("function name %q is reserved", s.Token.Literal),
+		}
+		cp.p.errors = append(cp.p.errors, ce)
+	}
 
 	fKey := ast.FuncKey{
 		FuncName: s.Token.Literal,

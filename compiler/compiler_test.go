@@ -164,6 +164,32 @@ func TestCodeCompilerRejectsDuplicateStructDefsAcrossMergedCode(t *testing.T) {
 	require.True(t, found, "expected duplicate struct definition error, got: %v", errs)
 }
 
+func TestCodeCompilerRejectsReservedFunctionNames(t *testing.T) {
+	code := ast.NewCode()
+	code.Func.Statements = append(code.Func.Statements, &ast.FuncStatement{
+		Token: token.Token{
+			Type:    token.IDENT,
+			Literal: "Int",
+		},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "reservedFuncName", "", code)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected reserved function name error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), `function name "Int" is reserved`) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected reserved function name error, got: %v", errs)
+}
+
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

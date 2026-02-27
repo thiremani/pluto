@@ -652,7 +652,6 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		})
 		return nil
 	}
-
 	stmt := &ast.ConstStatement{
 		Token: assignTok,
 		Name:  idents,
