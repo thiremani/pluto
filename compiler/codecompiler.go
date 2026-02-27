@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
-	ptypes "github.com/thiremani/pluto/types"
+	"github.com/thiremani/pluto/types"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -28,7 +28,7 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 
 	for _, def := range cc.Code.Struct.Definitions {
 		typeName := def.Token.Literal
-		if ptypes.IsReservedTypeName(typeName) {
+		if types.IsReservedTypeName(typeName) {
 			errs = append(errs, &token.CompileError{
 				Token: def.Token,
 				Msg:   fmt.Sprintf("struct type name %q is reserved", typeName),
@@ -51,7 +51,7 @@ func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {
 	errs := []*token.CompileError{}
 
 	for _, fn := range cc.Code.Func.Statements {
-		if !ptypes.IsReservedTypeName(fn.Token.Literal) {
+		if !types.IsReservedTypeName(fn.Token.Literal) {
 			continue
 		}
 		errs = append(errs, &token.CompileError{
