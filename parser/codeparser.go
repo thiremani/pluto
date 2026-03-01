@@ -33,13 +33,11 @@ func (cp *CodeParser) Parse() *ast.Code {
 
 		switch s := stmt.(type) {
 		case *ast.ConstStatement:
-			if lit, ok := cp.structLiteralOf(s); ok {
-				cp.addStructStatement(code, s, lit)
-			} else {
-				cp.addConstStatement(code, s)
-			}
+			cp.addConstStatement(code, s)
 		case *ast.FuncStatement:
 			cp.addFuncStatement(code, s)
+		case *ast.StructStatement:
+			cp.addStructStatement(code, s)
 		}
 		cp.p.nextToken()
 	}
@@ -50,21 +48,13 @@ func (cp *CodeParser) Parse() *ast.Code {
 	return code
 }
 
-func (cp *CodeParser) structLiteralOf(s *ast.ConstStatement) (*ast.StructLiteral, bool) {
-	if len(s.Value) != 1 {
-		return nil, false
-	}
-	lit, ok := s.Value[0].(*ast.StructLiteral)
-	return lit, ok
-}
-
-func (cp *CodeParser) validateConstBindings(code *ast.Code, s *ast.ConstStatement) int {
+func (cp *CodeParser) validateConstBindings(code *ast.Code, names []*ast.Identifier) int {
 	prevLen := len(cp.p.errors)
-	cp.p.checkNoDuplicates(s.Name)
+	cp.p.checkNoDuplicates(names)
 
-	// Check for global redeclarations against the code map.
-	for _, id := range s.Name {
-		if _, ok := code.Const.Map[id.Value]; ok {
+	// Check for global redeclarations against all constant bindings.
+	for _, id := range names {
+		if _, ok := code.ConstNames[id.Value]; ok {
 			msg := fmt.Sprintf("global redeclaration of constant %s", id.Value)
 			ce := &token.CompileError{
 				Token: id.Token,
@@ -80,11 +70,18 @@ func (cp *CodeParser) addConstBinding(code *ast.Code, s *ast.ConstStatement) {
 	code.Const.Statements = append(code.Const.Statements, s)
 	for _, id := range s.Name {
 		code.Const.Map[id.Value] = s
+		code.ConstNames[id.Value] = id.Token
 	}
 }
 
+func (cp *CodeParser) addStructConstBinding(code *ast.Code, s *ast.StructStatement) {
+	// Keep struct-bound names in global const names so shared global-const checks
+	// (writes/reads in CFG) stay consistent with regular constants.
+	code.ConstNames[s.Name.Value] = s.Name.Token
+}
+
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
-	prevLen := cp.validateConstBindings(code, s)
+	prevLen := cp.validateConstBindings(code, s.Name)
 
 	if len(cp.p.errors) > prevLen {
 		return
@@ -93,21 +90,21 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 	cp.addConstBinding(code, s)
 }
 
-func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.ConstStatement, lit *ast.StructLiteral) {
-	prevLen := cp.validateConstBindings(code, s)
-	typeName := lit.Token.Literal
+func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement) {
+	prevLen := cp.validateConstBindings(code, []*ast.Identifier{s.Name})
+	typeName := s.Value.Token.Literal
 
 	if types.IsReservedTypeName(typeName) {
 		cp.p.errors = append(cp.p.errors, &token.CompileError{
-			Token: lit.Token,
+			Token: s.Value.Token,
 			Msg:   fmt.Sprintf("struct type name %q is reserved", typeName),
 		})
 	}
 
-	if _, exists := code.Struct.Map[typeName]; exists {
+	if existing, exists := code.Struct.Map[typeName]; exists && !sameStructHeaders(existing.Value.Headers, s.Value.Headers) {
 		cp.p.errors = append(cp.p.errors, &token.CompileError{
-			Token: lit.Token,
-			Msg:   fmt.Sprintf("struct type %s has been previously defined", typeName),
+			Token: s.Value.Token,
+			Msg:   fmt.Sprintf("struct type %s has conflicting field headers", typeName),
 		})
 	}
 
@@ -115,17 +112,23 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.ConstStatement, 
 		return
 	}
 
-	structDef := &ast.StructDef{
-		Token:       lit.Token,
-		Fields:      make([]string, len(lit.Headers)),
-		FieldTokens: append([]token.Token(nil), lit.Headers...),
+	code.Struct.Statements = append(code.Struct.Statements, s)
+	if _, exists := code.Struct.Map[typeName]; !exists {
+		code.Struct.Map[typeName] = s
 	}
-	for i, h := range lit.Headers {
-		structDef.Fields[i] = h.Literal
+	cp.addStructConstBinding(code, s)
+}
+
+func sameStructHeaders(a, b []token.Token) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	code.Struct.Map[typeName] = structDef
-	code.Struct.Definitions = append(code.Struct.Definitions, structDef)
-	cp.addConstBinding(code, s)
+	for i := range a {
+		if a[i].Literal != b[i].Literal {
+			return false
+		}
+	}
+	return true
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {

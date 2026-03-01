@@ -23,28 +23,42 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 }
 
 func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
-	seen := make(map[string]token.Token)
+	seenHeaders := make(map[string][]token.Token)
 	errs := []*token.CompileError{}
 
-	for _, def := range cc.Code.Struct.Definitions {
-		typeName := def.Token.Literal
+	for _, stmt := range cc.Code.Struct.Statements {
+		typeName := stmt.Value.Token.Literal
 		if types.IsReservedTypeName(typeName) {
 			errs = append(errs, &token.CompileError{
-				Token: def.Token,
+				Token: stmt.Value.Token,
 				Msg:   fmt.Sprintf("struct type name %q is reserved", typeName),
 			})
 			continue
 		}
-		if _, exists := seen[typeName]; exists {
-			errs = append(errs, &token.CompileError{
-				Token: def.Token,
-				Msg:   fmt.Sprintf("struct type %s has been previously defined", typeName),
-			})
+		if headers, exists := seenHeaders[typeName]; exists {
+			if !sameStructHeaders(headers, stmt.Value.Headers) {
+				errs = append(errs, &token.CompileError{
+					Token: stmt.Value.Token,
+					Msg:   fmt.Sprintf("struct type %s has conflicting field headers", typeName),
+				})
+			}
 			continue
 		}
-		seen[typeName] = def.Token
+		seenHeaders[typeName] = append([]token.Token(nil), stmt.Value.Headers...)
 	}
 	return errs
+}
+
+func sameStructHeaders(a, b []token.Token) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Literal != b[i].Literal {
+			return false
+		}
+	}
+	return true
 }
 
 func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {
@@ -74,6 +88,9 @@ func (cc *CodeCompiler) Compile() []*token.CompileError {
 	// Compile constants
 	for _, stmt := range cc.Code.Const.Statements {
 		cc.Compiler.compileConstStatement(stmt)
+	}
+	for _, stmt := range cc.Code.Struct.Statements {
+		cc.Compiler.compileStructStatement(stmt)
 	}
 
 	cfg := NewCFG(nil, cc)

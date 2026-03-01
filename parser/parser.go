@@ -644,7 +644,7 @@ func (p *StmtParser) parseStructRowConstants() ([]ast.Expression, bool) {
 	return row, true
 }
 
-func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents []*ast.Identifier, typeTok token.Token) *ast.ConstStatement {
+func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents []*ast.Identifier, typeTok token.Token) *ast.StructStatement {
 	if len(idents) != 1 {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: assignTok,
@@ -652,10 +652,9 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		})
 		return nil
 	}
-	stmt := &ast.ConstStatement{
+	stmt := &ast.StructStatement{
 		Token: assignTok,
-		Name:  idents,
-		Value: []ast.Expression{},
+		Name:  idents[0],
 	}
 
 	if !p.expectPeek(token.NEWLINE) {
@@ -719,7 +718,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		Headers: headers,
 		Rows:    row,
 	}
-	stmt.Value = append(stmt.Value, lit)
+	stmt.Value = lit
 	return stmt
 }
 

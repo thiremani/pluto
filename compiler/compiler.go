@@ -244,95 +244,101 @@ func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Val
 	return global
 }
 
-func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
-	for i := 0; i < len(stmt.Name); i++ {
-		name := stmt.Name[i].Value
-		valueExpr := stmt.Value[i]
-		linkage := llvm.ExternalLinkage
-		sym := &Symbol{}
-		var val llvm.Value
+func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
+	linkage := llvm.ExternalLinkage
+	sym := &Symbol{}
+	var val llvm.Value
 
-		// Mangle constant name for C ABI compliance
-		mangledName := MangleConst(c.MangledPath, name)
+	// Mangle constant name for C ABI compliance
+	mangledName := MangleConst(c.MangledPath, name)
 
-		switch v := valueExpr.(type) {
-		case *ast.IntegerLiteral:
-			val = c.ConstI64(uint64(v.Value))
-			sym.Type = Ptr{Elem: Int{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), mangledName, val, linkage)
+	switch v := valueExpr.(type) {
+	case *ast.IntegerLiteral:
+		val = c.ConstI64(uint64(v.Value))
+		sym.Type = Ptr{Elem: Int{Width: 64}}
+		sym.Val = c.makeGlobalConst(c.Context.Int64Type(), mangledName, val, linkage)
 
-		case *ast.FloatLiteral:
-			val = c.ConstF64(v.Value)
-			sym.Type = Ptr{Elem: Float{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
+	case *ast.FloatLiteral:
+		val = c.ConstF64(v.Value)
+		sym.Type = Ptr{Elem: Float{Width: 64}}
+		sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
 
-		case *ast.StringLiteral:
-			sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
-			sym.Type = StrG{} // Global constants are static strings
+	case *ast.StringLiteral:
+		sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
+		sym.Type = StrG{} // Global constants are static strings
 
-		case *ast.HeapStringLiteral:
+	case *ast.HeapStringLiteral:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: v.Token,
+			Msg:   "heap string literals cannot be used as global constants",
+		})
+		return
+
+	case *ast.StructLiteral:
+		if len(v.Rows) != len(v.Headers) {
 			c.Errors = append(c.Errors, &token.CompileError{
 				Token: v.Token,
-				Msg:   "heap string literals cannot be used as global constants",
+				Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Rows), len(v.Headers)),
 			})
 			return
+		}
 
-		case *ast.StructLiteral:
-			if len(v.Rows) != len(v.Headers) {
+		fields := make([]StructField, len(v.Headers))
+		constVals := make([]llvm.Value, len(v.Headers))
+
+		for idx, headerTok := range v.Headers {
+			cell := v.Rows[idx]
+			header := headerTok.Literal
+			switch cv := cell.(type) {
+			case *ast.IntegerLiteral:
+				fields[idx] = StructField{Name: header, Type: I64}
+				constVals[idx] = c.ConstI64(uint64(cv.Value))
+			case *ast.FloatLiteral:
+				fields[idx] = StructField{Name: header, Type: F64}
+				constVals[idx] = c.ConstF64(cv.Value)
+			case *ast.StringLiteral:
+				fields[idx] = StructField{Name: header, Type: StrG{}}
+				fieldGlobalName := mangledName + SEP + MangleIdent(header) + SEP + "str"
+				fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
+				constVals[idx] = llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0))
+			case *ast.HeapStringLiteral:
 				c.Errors = append(c.Errors, &token.CompileError{
-					Token: v.Token,
-					Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Rows), len(v.Headers)),
+					Token: cv.Token,
+					Msg:   "heap string literals cannot be used in struct constants",
+				})
+				return
+			default:
+				c.Errors = append(c.Errors, &token.CompileError{
+					Token: cell.Tok(),
+					Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
 				})
 				return
 			}
-
-			fields := make([]StructField, len(v.Headers))
-			constVals := make([]llvm.Value, len(v.Headers))
-
-			for idx, headerTok := range v.Headers {
-				cell := v.Rows[idx]
-				header := headerTok.Literal
-				switch cv := cell.(type) {
-				case *ast.IntegerLiteral:
-					fields[idx] = StructField{Name: header, Type: I64}
-					constVals[idx] = c.ConstI64(uint64(cv.Value))
-				case *ast.FloatLiteral:
-					fields[idx] = StructField{Name: header, Type: F64}
-					constVals[idx] = c.ConstF64(cv.Value)
-				case *ast.StringLiteral:
-					fields[idx] = StructField{Name: header, Type: StrG{}}
-					fieldGlobalName := mangledName + SEP + MangleIdent(header) + SEP + "str"
-					fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
-					constVals[idx] = llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0))
-				case *ast.HeapStringLiteral:
-					c.Errors = append(c.Errors, &token.CompileError{
-						Token: cv.Token,
-						Msg:   "heap string literals cannot be used in struct constants",
-					})
-					return
-				default:
-					c.Errors = append(c.Errors, &token.CompileError{
-						Token: cell.Tok(),
-						Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
-					})
-					return
-				}
-			}
-
-			structType := Struct{
-				Name:   v.Token.Literal,
-				Fields: fields,
-			}
-			structLLVM := c.mapToLLVMType(structType)
-			val = llvm.ConstNamedStruct(structLLVM, constVals)
-			sym.Type = Ptr{Elem: structType}
-			sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
-
-		default:
-			panic(fmt.Sprintf("unsupported constant type: %T", v))
 		}
-		Put(c.Scopes, name, sym)
+
+		structType := Struct{
+			Name:   v.Token.Literal,
+			Fields: fields,
+		}
+		structLLVM := c.mapToLLVMType(structType)
+		val = llvm.ConstNamedStruct(structLLVM, constVals)
+		sym.Type = Ptr{Elem: structType}
+		sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
+
+	default:
+		panic(fmt.Sprintf("unsupported constant type: %T", v))
 	}
+	Put(c.Scopes, name, sym)
+}
+
+func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
+	for i := 0; i < len(stmt.Name); i++ {
+		c.compileConstBinding(stmt.Name[i].Value, stmt.Value[i])
+	}
+}
+
+func (c *Compiler) compileStructStatement(stmt *ast.StructStatement) {
+	c.compileConstBinding(stmt.Name.Value, stmt.Value)
 }
 
 func (c *Compiler) addMain() {

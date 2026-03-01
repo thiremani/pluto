@@ -383,14 +383,11 @@ func TestParseStructDefinition(t *testing.T) {
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	require.Len(t, code.Const.Statements, 1)
-	stmt := code.Const.Statements[0]
-	require.Len(t, stmt.Name, 1)
-	require.Equal(t, "p", stmt.Name[0].Value)
-	require.Len(t, stmt.Value, 1)
+	require.Len(t, code.Struct.Statements, 1)
+	stmt := code.Struct.Statements[0]
+	require.Equal(t, "p", stmt.Name.Value)
 
-	lit, ok := stmt.Value[0].(*ast.StructLiteral)
-	require.True(t, ok, "expected struct literal, got %T", stmt.Value[0])
+	lit := stmt.Value
 	require.Equal(t, "Person", lit.Token.Literal)
 	require.Len(t, lit.Headers, 3)
 	expectedHeaders := []string{"name", "age", "height"}
@@ -399,13 +396,17 @@ func TestParseStructDefinition(t *testing.T) {
 	}
 	require.Len(t, lit.Rows, 3)
 
-	def, ok := code.Struct.Map["Person"]
+	defStmt, ok := code.Struct.Map["Person"]
 	require.True(t, ok, "expected struct definition in code map")
-	require.Equal(t, expectedHeaders, def.Fields)
-	require.Len(t, def.FieldTokens, 3)
-	for i, tok := range def.FieldTokens {
-		require.Equal(t, def.Fields[i], tok.Literal)
+	require.Equal(t, stmt, defStmt)
+	require.Len(t, defStmt.Value.Headers, 3)
+	for i, tok := range defStmt.Value.Headers {
+		require.Equal(t, expectedHeaders[i], tok.Literal)
 	}
+
+	// Struct bindings should still be treated as constants globally.
+	_, constExists := code.ConstNames["p"]
+	require.True(t, constExists)
 }
 
 func TestStructDefinitionErrors(t *testing.T) {
@@ -422,14 +423,14 @@ func TestStructDefinitionErrors(t *testing.T) {
 			errMsg: "duplicate struct field header: age",
 		},
 		{
-			name: "duplicate struct type definition",
+			name: "conflicting struct type definition",
 			input: `p = Person
     :name age
     "Tejas" 35
 q = Person
-    :name age
-    "A" 20`,
-			errMsg: "struct type Person has been previously defined",
+    :name height
+    "A" 180`,
+			errMsg: "struct type Person has conflicting field headers",
 		},
 		{
 			name: "multiple lhs bindings not allowed",
@@ -462,4 +463,18 @@ q = Person
 			require.True(t, found, "expected error %q, got %v", tt.errMsg, cp.Errors())
 		})
 	}
+}
+
+func TestStructDefinitionAllowsRepeatedTypeWithSameHeaders(t *testing.T) {
+	input := `p = Person
+    :name age
+    "Tejas" 35
+q = Person
+    :name age
+    "Ada" 28`
+
+	cp := NewCodeParser(lexer.New("TestStructDefinitionAllowsRepeatedTypeWithSameHeaders", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
 }

@@ -32,9 +32,10 @@ type Program struct {
 }
 
 type Code struct {
-	Const  Const
-	Func   Func
-	Struct Struct
+	Const      Const
+	ConstNames map[string]token.Token
+	Func       Func
+	Struct     Struct
 }
 
 type FuncKey struct {
@@ -42,15 +43,9 @@ type FuncKey struct {
 	Arity    int
 }
 
-type StructDef struct {
-	Token       token.Token
-	Fields      []string
-	FieldTokens []token.Token
-}
-
 type Struct struct {
-	Definitions []*StructDef
-	Map         map[string]*StructDef
+	Statements []*StructStatement
+	Map        map[string]*StructStatement
 }
 
 func NewCode() *Code {
@@ -63,14 +58,15 @@ func NewCode() *Code {
 		Map:        make(map[FuncKey]*FuncStatement),
 	}
 	Struct := Struct{
-		Definitions: []*StructDef{},
-		Map:         make(map[string]*StructDef),
+		Statements: []*StructStatement{},
+		Map:        make(map[string]*StructStatement),
 	}
 
 	return &Code{
-		Const:  Const,
-		Func:   Func,
-		Struct: Struct,
+		Const:      Const,
+		ConstNames: make(map[string]token.Token),
+		Func:       Func,
+		Struct:     Struct,
 	}
 }
 
@@ -79,9 +75,10 @@ func (c *Code) Merge(other *Code) {
 	if other != nil {
 		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
 		maps.Copy(c.Const.Map, other.Const.Map)
+		maps.Copy(c.ConstNames, other.ConstNames)
 		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
 		maps.Copy(c.Func.Map, other.Func.Map)
-		c.Struct.Definitions = append(c.Struct.Definitions, other.Struct.Definitions...)
+		c.Struct.Statements = append(c.Struct.Statements, other.Struct.Statements...)
 		maps.Copy(c.Struct.Map, other.Struct.Map)
 	}
 }
@@ -94,6 +91,32 @@ type Const struct {
 type Func struct {
 	Statements []*FuncStatement
 	Map        map[FuncKey]*FuncStatement
+}
+
+// StructStatement represents a struct constant definition in a .pt file.
+// For example:
+//
+//	p = Person
+//	    :name age
+//	    "Tejas" 35
+type StructStatement struct {
+	Token token.Token // The token.ASSIGN token
+	Name  *Identifier
+	Value *StructLiteral
+}
+
+func (ss *StructStatement) statementNode() {}
+
+func (ss *StructStatement) Tok() token.Token {
+	return ss.Token
+}
+
+func (ss *StructStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(ss.Name.String())
+	out.WriteString(" = ")
+	out.WriteString(ss.Value.String())
+	return out.String()
 }
 
 func (p *Program) Tok() token.Token {

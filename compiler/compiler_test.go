@@ -135,7 +135,7 @@ greeting = "hello"`
 	}
 }
 
-func TestCodeCompilerRejectsDuplicateStructDefsAcrossMergedCode(t *testing.T) {
+func TestCodeCompilerAllowsRepeatedStructDefsAcrossMergedCode(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
@@ -152,16 +152,36 @@ func TestCodeCompilerRejectsDuplicateStructDefsAcrossMergedCode(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "dupStructDefs", "", merged)
 	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected duplicate struct definition error")
+	require.Empty(t, errs, "expected repeated struct definition with same headers to compile")
+}
+
+func TestCodeCompilerRejectsConflictingStructDefsAcrossMergedCode(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :name height
+    "Ada" 170`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "conflictStructDefs", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected conflicting struct definition error")
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), "struct type Person has been previously defined") {
+		if strings.Contains(err.Error(), "struct type Person has conflicting field headers") {
 			found = true
 			break
 		}
 	}
-	require.True(t, found, "expected duplicate struct definition error, got: %v", errs)
+	require.True(t, found, "expected conflicting struct definition error, got: %v", errs)
 }
 
 func TestCodeCompilerRejectsReservedFunctionNames(t *testing.T) {
