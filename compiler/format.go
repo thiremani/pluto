@@ -54,6 +54,8 @@ func defaultSpecifier(t Type) (string, error) {
 		return "%s", nil
 	case ArrayRangeKind:
 		return "%s", nil
+	case StructKind:
+		return "", fmt.Errorf("struct values cannot be printed directly; use field access (e.g. p.name)")
 	default:
 		err := fmt.Errorf("unsupported type in print statement %s", t.String())
 		return "", err

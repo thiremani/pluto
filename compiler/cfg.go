@@ -249,6 +249,15 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 			}
 		}
 		return false
+	case *ast.StructLiteral:
+		for _, cell := range t.Row {
+			if cfg.hasRangeExpr(cell) {
+				return true
+			}
+		}
+		return false
+	case *ast.DotExpression:
+		return cfg.hasRangeExpr(t.Left)
 	default:
 		// Identifiers, literals, etc. are not conditional at root level
 		return false
@@ -428,7 +437,7 @@ func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
 	}
 	// check we are not writing to a constant
 	cc := cfg.CodeCompiler
-	if _, ok := cc.Code.Const.Map[e.Name]; ok {
+	if _, ok := cc.Code.ConstNames[e.Name]; ok {
 		cfg.addError(e.Token, fmt.Sprintf("cannot write to constant %q", e.Name))
 	}
 	// update the last write type.
@@ -479,12 +488,7 @@ func (cfg *CFG) isDefined(name string) bool {
 	if _, ok := Get(cfg.Scopes, name); ok {
 		return true
 	}
-	return cfg.isGlobalConst(name)
-}
-
-// isGlobalConst is a simple helper.
-func (cfg *CFG) isGlobalConst(name string) bool {
 	cc := cfg.CodeCompiler
-	_, ok := cc.Code.Const.Map[name]
+	_, ok := cc.Code.ConstNames[name]
 	return ok
 }

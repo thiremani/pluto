@@ -135,6 +135,81 @@ greeting = "hello"`
 	}
 }
 
+func TestCodeCompilerAllowsRepeatedStructDefsAcrossMergedCode(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :name age
+    "Ada" 28`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "dupStructDefs", "", merged)
+	errs := cc.Compile()
+	require.Empty(t, errs, "expected repeated struct definition with same headers to compile")
+}
+
+func TestCodeCompilerRejectsConflictingStructDefsAcrossMergedCode(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :name height
+    "Ada" 170`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "conflictStructDefs", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected conflicting struct definition error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "struct type Person has conflicting field headers") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected conflicting struct definition error, got: %v", errs)
+}
+
+func TestCodeCompilerRejectsReservedFunctionNames(t *testing.T) {
+	code := ast.NewCode()
+	code.Func.Statements = append(code.Func.Statements, &ast.FuncStatement{
+		Token: token.Token{
+			Type:    token.IDENT,
+			Literal: "Int",
+		},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "reservedFuncName", "", code)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected reserved function name error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), `function name "Int" is reserved`) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected reserved function name error, got: %v", errs)
+}
+
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

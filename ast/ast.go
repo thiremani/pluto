@@ -32,14 +32,20 @@ type Program struct {
 }
 
 type Code struct {
-	Const Const
-	Func  Func
-	// Struct Struct
+	Const      Const
+	ConstNames map[string]token.Token
+	Func       Func
+	Struct     Struct
 }
 
 type FuncKey struct {
 	FuncName string
 	Arity    int
+}
+
+type Struct struct {
+	Statements []*StructStatement
+	Map        map[string]*StructStatement
 }
 
 func NewCode() *Code {
@@ -51,10 +57,16 @@ func NewCode() *Code {
 		Statements: []*FuncStatement{},
 		Map:        make(map[FuncKey]*FuncStatement),
 	}
+	Struct := Struct{
+		Statements: []*StructStatement{},
+		Map:        make(map[string]*StructStatement),
+	}
 
 	return &Code{
-		Const: Const,
-		Func:  Func,
+		Const:      Const,
+		ConstNames: make(map[string]token.Token),
+		Func:       Func,
+		Struct:     Struct,
 	}
 }
 
@@ -63,12 +75,12 @@ func (c *Code) Merge(other *Code) {
 	if other != nil {
 		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
 		maps.Copy(c.Const.Map, other.Const.Map)
+		maps.Copy(c.ConstNames, other.ConstNames)
 		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
 		maps.Copy(c.Func.Map, other.Func.Map)
+		c.Struct.Statements = append(c.Struct.Statements, other.Struct.Statements...)
+		maps.Copy(c.Struct.Map, other.Struct.Map)
 	}
-
-	// Add similar merging logic for struct when implemented
-	// c.Struct.Merge(other.Struct)
 }
 
 type Const struct {
@@ -79,6 +91,32 @@ type Const struct {
 type Func struct {
 	Statements []*FuncStatement
 	Map        map[FuncKey]*FuncStatement
+}
+
+// StructStatement represents a struct constant definition in a .pt file.
+// For example:
+//
+//	p = Person
+//	    :name age
+//	    "Tejas" 35
+type StructStatement struct {
+	Token token.Token // The token.ASSIGN token
+	Name  *Identifier
+	Value *StructLiteral
+}
+
+func (ss *StructStatement) statementNode() {}
+
+func (ss *StructStatement) Tok() token.Token {
+	return ss.Token
+}
+
+func (ss *StructStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(ss.Name.String())
+	out.WriteString(" = ")
+	out.WriteString(ss.Value.String())
+	return out.String()
 }
 
 func (p *Program) Tok() token.Token {
@@ -319,6 +357,46 @@ func (al *ArrayLiteral) String() string {
 	return out.String()
 }
 
+// StructLiteral represents a struct value declared in .pt code mode.
+// Example:
+// p = Person
+//
+//	:name age
+//	"Tejas" 35
+type StructLiteral struct {
+	Token   token.Token // the type name token (e.g. "Person")
+	Headers []token.Token
+	Row     []Expression // Single value row for this struct definition/usage
+}
+
+func (sl *StructLiteral) expressionNode()  {}
+func (sl *StructLiteral) Tok() token.Token { return sl.Token }
+func (sl *StructLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString(sl.Token.Literal)
+
+	if len(sl.Headers) > 0 {
+		out.WriteString("\n    :")
+		for i, header := range sl.Headers {
+			if i > 0 {
+				out.WriteString(" ")
+			}
+			out.WriteString(header.Literal)
+		}
+	}
+
+	if len(sl.Row) > 0 {
+		out.WriteString("\n    ")
+		for i, expr := range sl.Row {
+			if i > 0 {
+				out.WriteString(" ")
+			}
+			out.WriteString(expr.String())
+		}
+	}
+	return out.String()
+}
+
 // ArrayRangeExpression represents arr[expr] accesses, where expr can be either
 // a single index or a range literal (e.g., arr[0:5]).
 type ArrayRangeExpression struct {
@@ -331,6 +409,19 @@ func (ar *ArrayRangeExpression) expressionNode()  {}
 func (ar *ArrayRangeExpression) Tok() token.Token { return ar.Token }
 func (ar *ArrayRangeExpression) String() string {
 	return fmt.Sprintf("%s[%s]", ar.Array.String(), ar.Range.String())
+}
+
+// DotExpression represents field access: base.field
+type DotExpression struct {
+	Token token.Token // the '.' token
+	Left  Expression
+	Field string
+}
+
+func (de *DotExpression) expressionNode()  {}
+func (de *DotExpression) Tok() token.Token { return de.Token }
+func (de *DotExpression) String() string {
+	return fmt.Sprintf("%s.%s", de.Left.String(), de.Field)
 }
 
 type PrefixExpression struct {
@@ -452,8 +543,12 @@ func ExprChildren(expr Expression) []Expression {
 			children = append(children, row...)
 		}
 		return children
+	case *StructLiteral:
+		return append([]Expression(nil), e.Row...)
 	case *ArrayRangeExpression:
 		return []Expression{e.Array, e.Range}
+	case *DotExpression:
+		return []Expression{e.Left}
 	case *RangeLiteral:
 		children := []Expression{e.Start, e.Stop}
 		if e.Step != nil {

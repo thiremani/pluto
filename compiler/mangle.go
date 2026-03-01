@@ -624,11 +624,23 @@ func demangleType(s string) (string, string) {
 			return p, s[len(p):]
 		}
 	}
+	// Check nominal user-defined types (e.g., 6Person)
+	if typeName, rest, ok := demangleNominalType(s); ok {
+		return typeName, rest
+	}
 	// Check compound types
 	if typeName, rest, ok := demangleCompoundType(s); ok {
 		return typeName, rest
 	}
 	return "", s
+}
+
+func demangleNominalType(s string) (string, string, bool) {
+	name, rest := demangleIdent(s)
+	if name == "" {
+		return "", s, false
+	}
+	return name, rest, true
 }
 
 // demangleCompoundType handles types with _tN_[types...] structure.

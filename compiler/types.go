@@ -20,6 +20,7 @@ const (
 	FuncKind
 	ArrayKind
 	ArrayRangeKind
+	StructKind
 )
 
 // Type is the interface for all types in our language.
@@ -261,6 +262,13 @@ func IsFullyResolvedType(t Type) bool {
 		return true
 	case ArrayRange:
 		return IsFullyResolvedType(tt.Array) && IsFullyResolvedType(tt.Range)
+	case Struct:
+		for _, field := range tt.Fields {
+			if !IsFullyResolvedType(field.Type) {
+				return false
+			}
+		}
+		return true
 	case Func:
 		return tt.AllTypesInferred()
 	default:
@@ -331,6 +339,46 @@ func (ar ArrayRange) Key() Type {
 	return ArrayRange{
 		Array: ar.Array.Key().(Array),
 		Range: ar.Range.Key().(Range),
+	}
+}
+
+type StructField struct {
+	Name string
+	Type Type
+}
+
+type Struct struct {
+	Name   string
+	Fields []StructField
+}
+
+func (s Struct) String() string {
+	if len(s.Fields) == 0 {
+		return s.Name + "{}"
+	}
+	parts := make([]string, len(s.Fields))
+	for i, field := range s.Fields {
+		parts[i] = fmt.Sprintf("%s: %s", field.Name, field.Type.String())
+	}
+	return fmt.Sprintf("%s{%s}", s.Name, strings.Join(parts, ", "))
+}
+
+func (s Struct) Kind() Kind { return StructKind }
+
+// Structs are nominal in Phase 1 and mangle as nominal type names.
+func (s Struct) Mangle() string { return MangleIdent(s.Name) }
+
+func (s Struct) Key() Type {
+	keyFields := make([]StructField, len(s.Fields))
+	for i, field := range s.Fields {
+		keyFields[i] = StructField{
+			Name: field.Name,
+			Type: field.Type.Key(),
+		}
+	}
+	return Struct{
+		Name:   s.Name,
+		Fields: keyFields,
 	}
 }
 
@@ -405,6 +453,9 @@ func CanRefineType(oldType, newType Type) bool {
 	case Func:
 		newFunc, ok := newType.(Func)
 		return ok && canRefineFunc(old, newFunc)
+	case Struct:
+		newStruct, ok := newType.(Struct)
+		return ok && canRefineStruct(old, newStruct)
 	default:
 		// For other types, must be equal
 		return TypeEqual(oldType, newType)
@@ -435,6 +486,26 @@ func canRefineFunc(oldFunc, newFunc Func) bool {
 	return canRefineTypes(oldFunc.Params, newFunc.Params) && canRefineTypes(oldFunc.OutTypes, newFunc.OutTypes)
 }
 
+func canRefineStruct(oldStruct, newStruct Struct) bool {
+	if oldStruct.Name != newStruct.Name {
+		return false
+	}
+	if len(oldStruct.Fields) != len(newStruct.Fields) {
+		return false
+	}
+	for i := range oldStruct.Fields {
+		oldField := oldStruct.Fields[i]
+		newField := newStruct.Fields[i]
+		if oldField.Name != newField.Name {
+			return false
+		}
+		if !CanRefineType(oldField.Type, newField.Type) {
+			return false
+		}
+	}
+	return true
+}
+
 func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
@@ -455,6 +526,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqArray
 	case ArrayRangeKind:
 		return eqArrayRange
+	case StructKind:
+		return eqStruct
 	default:
 		return func(a, b Type) bool { panic(fmt.Sprintf("TypeEqual: unhandled kind %v", k)) }
 	}
@@ -516,4 +589,26 @@ func eqArrayRange(a, b Type) bool {
 	aar := a.(ArrayRange)
 	bar := b.(ArrayRange)
 	return eqArray(aar.Array, bar.Array) && eqRange(aar.Range, bar.Range)
+}
+
+func eqStruct(a, b Type) bool {
+	as := a.(Struct)
+	bs := b.(Struct)
+	if as.Name != bs.Name {
+		return false
+	}
+	if len(as.Fields) != len(bs.Fields) {
+		return false
+	}
+	for i := range as.Fields {
+		af := as.Fields[i]
+		bf := bs.Fields[i]
+		if af.Name != bf.Name {
+			return false
+		}
+		if !TypeEqual(af.Type, bf.Type) {
+			return false
+		}
+	}
+	return true
 }
