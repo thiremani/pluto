@@ -374,18 +374,29 @@ func (sl *StructLiteral) Tok() token.Token { return sl.Token }
 func (sl *StructLiteral) String() string {
 	var out bytes.Buffer
 	out.WriteString(sl.Token.Literal)
-	out.WriteString(" ")
+
 	if len(sl.Headers) > 0 {
-		headers := make([]string, len(sl.Headers))
-		for i, h := range sl.Headers {
-			headers[i] = h.Literal
+		out.WriteString("\n    :")
+		for i, header := range sl.Headers {
+			if i > 0 {
+				out.WriteString(" ")
+			}
+			out.WriteString(header.Literal)
 		}
-		out.WriteString(":")
-		out.WriteString(strings.Join(headers, " "))
 	}
+
 	if len(sl.Rows) > 0 {
-		out.WriteString(" ")
-		out.WriteString(printVec(sl.Rows))
+		out.WriteString("\n    ")
+		for i, expr := range sl.Rows {
+			if i > 0 {
+				out.WriteString(" ")
+			}
+			if expr != nil {
+				out.WriteString(expr.String())
+			} else {
+				out.WriteString("<nil>")
+			}
+		}
 	}
 	return out.String()
 }

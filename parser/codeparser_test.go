@@ -407,6 +407,10 @@ func TestParseStructDefinition(t *testing.T) {
 	// Struct bindings should still be treated as constants globally.
 	_, constExists := code.ConstNames["p"]
 	require.True(t, constExists)
+
+	require.Equal(t, `p = Person
+    :name age height
+    Tejas 35 184.5`, stmt.String())
 }
 
 func TestStructDefinitionErrors(t *testing.T) {
