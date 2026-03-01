@@ -716,7 +716,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	lit := &ast.StructLiteral{
 		Token:   typeTok,
 		Headers: headers,
-		Rows:    row,
+		Row:     row,
 	}
 	stmt.Value = lit
 	return stmt

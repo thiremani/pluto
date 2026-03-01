@@ -796,7 +796,7 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 	info := &ExprInfo{OutTypes: types, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, sl)] = info
 
-	row := sl.Rows
+	row := sl.Row
 	if len(row) != len(sl.Headers) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: sl.Tok(),

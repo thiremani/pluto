@@ -366,7 +366,7 @@ func (al *ArrayLiteral) String() string {
 type StructLiteral struct {
 	Token   token.Token // the type name token (e.g. "Person")
 	Headers []token.Token
-	Rows    []Expression // Single value row for this struct definition/usage
+	Row     []Expression // Single value row for this struct definition/usage
 }
 
 func (sl *StructLiteral) expressionNode()  {}
@@ -385,9 +385,9 @@ func (sl *StructLiteral) String() string {
 		}
 	}
 
-	if len(sl.Rows) > 0 {
+	if len(sl.Row) > 0 {
 		out.WriteString("\n    ")
-		for i, expr := range sl.Rows {
+		for i, expr := range sl.Row {
 			if i > 0 {
 				out.WriteString(" ")
 			}
@@ -544,7 +544,7 @@ func ExprChildren(expr Expression) []Expression {
 		}
 		return children
 	case *StructLiteral:
-		return append([]Expression(nil), e.Rows...)
+		return append([]Expression(nil), e.Row...)
 	case *ArrayRangeExpression:
 		return []Expression{e.Array, e.Range}
 	case *DotExpression:

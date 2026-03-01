@@ -250,7 +250,7 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		}
 		return false
 	case *ast.StructLiteral:
-		for _, cell := range t.Rows {
+		for _, cell := range t.Row {
 			if cfg.hasRangeExpr(cell) {
 				return true
 			}

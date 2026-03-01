@@ -275,10 +275,10 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		return
 
 	case *ast.StructLiteral:
-		if len(v.Rows) != len(v.Headers) {
+		if len(v.Row) != len(v.Headers) {
 			c.Errors = append(c.Errors, &token.CompileError{
 				Token: v.Token,
-				Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Rows), len(v.Headers)),
+				Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Row), len(v.Headers)),
 			})
 			return
 		}
@@ -287,7 +287,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		constVals := make([]llvm.Value, len(v.Headers))
 
 		for idx, headerTok := range v.Headers {
-			cell := v.Rows[idx]
+			cell := v.Row[idx]
 			header := headerTok.Literal
 			switch cv := cell.(type) {
 			case *ast.IntegerLiteral:

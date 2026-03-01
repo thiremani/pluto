@@ -394,7 +394,7 @@ func TestParseStructDefinition(t *testing.T) {
 	for i, tok := range lit.Headers {
 		require.Equal(t, expectedHeaders[i], tok.Literal)
 	}
-	require.Len(t, lit.Rows, 3)
+	require.Len(t, lit.Row, 3)
 
 	defStmt, ok := code.Struct.Map["Person"]
 	require.True(t, ok, "expected struct definition in code map")
