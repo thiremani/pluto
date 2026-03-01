@@ -391,11 +391,7 @@ func (sl *StructLiteral) String() string {
 			if i > 0 {
 				out.WriteString(" ")
 			}
-			if expr != nil {
-				out.WriteString(expr.String())
-			} else {
-				out.WriteString("<nil>")
-			}
+			out.WriteString(expr.String())
 		}
 	}
 	return out.String()
