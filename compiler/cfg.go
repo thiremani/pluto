@@ -488,11 +488,6 @@ func (cfg *CFG) isDefined(name string) bool {
 	if _, ok := Get(cfg.Scopes, name); ok {
 		return true
 	}
-	return cfg.isGlobalConst(name)
-}
-
-// isGlobalConst is a simple helper.
-func (cfg *CFG) isGlobalConst(name string) bool {
 	cc := cfg.CodeCompiler
 	_, ok := cc.Code.ConstNames[name]
 	return ok
