@@ -135,7 +135,7 @@ greeting = "hello"`
 	}
 }
 
-func TestCodeCompilerAllowsRepeatedStructDefsAcrossMergedCode(t *testing.T) {
+func TestCodeCompilerAllowsRepeatedStructDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
@@ -155,7 +155,7 @@ func TestCodeCompilerAllowsRepeatedStructDefsAcrossMergedCode(t *testing.T) {
 	require.Empty(t, errs, "expected repeated struct definition with same headers to compile")
 }
 
-func TestCodeCompilerRejectsConflictingStructDefsAcrossMergedCode(t *testing.T) {
+func TestCodeCompilerRejectsUnknownStructHeaders(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
@@ -176,12 +176,66 @@ func TestCodeCompilerRejectsConflictingStructDefsAcrossMergedCode(t *testing.T) 
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), "struct type Person has conflicting field headers") {
+		if strings.Contains(err.Error(), `struct type Person has unknown field header "height"`) {
 			found = true
 			break
 		}
 	}
 	require.True(t, found, "expected conflicting struct definition error, got: %v", errs)
+}
+
+func TestCodeCompilerAllowsSubsetStructDefs(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age height
+    "Tejas" 35 184.5`)
+	codeB := mustParseCode(t, `q = Person
+    :age name
+    28 "Ada"`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "subsetStructDefs", "", merged)
+	errs := cc.Compile()
+	require.Empty(t, errs, "expected subset/reordered struct definition to compile")
+}
+
+func TestCodeCompilerAllowsEmptyStructInit(t *testing.T) {
+	code := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35
+q = Person`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "emptyStructInit", "", code)
+	errs := cc.Compile()
+	require.Empty(t, errs, "expected empty struct initializer to compile after definition")
+}
+
+func TestCodeCompilerRejectsStructUseBeforeDef(t *testing.T) {
+	code := mustParseCode(t, `q = Person`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "structUseBeforeDef", "", code)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected use-before-definition error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "struct type Person used before definition") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected use-before-definition error, got: %v", errs)
 }
 
 func TestCodeCompilerRejectsReservedFunctionNames(t *testing.T) {

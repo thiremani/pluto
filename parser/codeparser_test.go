@@ -427,14 +427,14 @@ func TestStructDefinitionErrors(t *testing.T) {
 			errMsg: "duplicate struct field header: age",
 		},
 		{
-			name: "conflicting struct type definition",
+			name: "unknown header in repeated struct type definition",
 			input: `p = Person
     :name age
     "Tejas" 35
 q = Person
     :name height
     "A" 180`,
-			errMsg: "struct type Person has conflicting field headers",
+			errMsg: `struct type Person has unknown field header "height"`,
 		},
 		{
 			name: "multiple lhs bindings not allowed",
@@ -469,7 +469,7 @@ q = Person
 	}
 }
 
-func TestStructDefinitionAllowsRepeatedTypeWithSameHeaders(t *testing.T) {
+func TestStructDefAllowsRepeat(t *testing.T) {
 	input := `p = Person
     :name age
     "Tejas" 35
@@ -477,8 +477,37 @@ q = Person
     :name age
     "Ada" 28`
 
-	cp := NewCodeParser(lexer.New("TestStructDefinitionAllowsRepeatedTypeWithSameHeaders", input))
+	cp := NewCodeParser(lexer.New("TestStructDefAllowsRepeat", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 	require.Len(t, code.Struct.Statements, 2)
+}
+
+func TestStructDefAllowsSubset(t *testing.T) {
+	input := `p = Person
+    :name age height
+    "Tejas" 35 184.5
+q = Person
+    :age name
+    28 "Ada"`
+
+	cp := NewCodeParser(lexer.New("TestStructDefAllowsSubset", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+}
+
+func TestStructDefAllowsEmptyInit(t *testing.T) {
+	input := `p = Person
+    :name age
+    "Tejas" 35
+q = Person`
+
+	cp := NewCodeParser(lexer.New("TestStructDefAllowsEmptyInit", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+	require.Equal(t, "q", code.Struct.Statements[1].Name.Value)
+	require.Len(t, code.Struct.Statements[1].Value.Headers, 0)
+	require.Len(t, code.Struct.Statements[1].Value.Row, 0)
 }

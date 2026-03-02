@@ -1,1 +1,3 @@
 p.name, p.age, p.height
+q.name, q.age, q.height
+r.age, r.height

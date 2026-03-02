@@ -35,30 +35,39 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 			})
 			continue
 		}
-		if headers, exists := seenHeaders[typeName]; exists {
-			if !sameStructHeaders(headers, stmt.Value.Headers) {
+		headers := stmt.Value.Headers
+		if schemaHeaders, exists := seenHeaders[typeName]; exists {
+			if unknown, ok := findUnknownStructHeader(headers, schemaHeaders); ok {
 				errs = append(errs, &token.CompileError{
-					Token: stmt.Value.Token,
-					Msg:   fmt.Sprintf("struct type %s has conflicting field headers", typeName),
+					Token: unknown,
+					Msg:   fmt.Sprintf("struct type %s has unknown field header %q", typeName, unknown.Literal),
 				})
 			}
 			continue
 		}
-		seenHeaders[typeName] = append([]token.Token(nil), stmt.Value.Headers...)
+		if len(headers) == 0 {
+			errs = append(errs, &token.CompileError{
+				Token: stmt.Value.Token,
+				Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
+			})
+			continue
+		}
+		seenHeaders[typeName] = append([]token.Token(nil), headers...)
 	}
 	return errs
 }
 
-func sameStructHeaders(a, b []token.Token) bool {
-	if len(a) != len(b) {
-		return false
+func findUnknownStructHeader(headers, schema []token.Token) (token.Token, bool) {
+	allowed := make(map[string]struct{}, len(schema))
+	for _, tok := range schema {
+		allowed[tok.Literal] = struct{}{}
 	}
-	for i := range a {
-		if a[i].Literal != b[i].Literal {
-			return false
+	for _, tok := range headers {
+		if _, ok := allowed[tok.Literal]; !ok {
+			return tok, true
 		}
 	}
-	return true
+	return token.Token{}, false
 }
 
 func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {

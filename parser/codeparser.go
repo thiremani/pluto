@@ -101,11 +101,14 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 		})
 	}
 
-	if existing, exists := code.Struct.Map[typeName]; exists && !sameStructHeaders(existing.Value.Headers, s.Value.Headers) {
-		cp.p.errors = append(cp.p.errors, &token.CompileError{
-			Token: s.Value.Token,
-			Msg:   fmt.Sprintf("struct type %s has conflicting field headers", typeName),
-		})
+	existing, exists := code.Struct.Map[typeName]
+	if exists && len(s.Value.Headers) > 0 {
+		if unknown, ok := findUnknownStructHeader(s.Value.Headers, existing.Value.Headers); ok {
+			cp.p.errors = append(cp.p.errors, &token.CompileError{
+				Token: unknown,
+				Msg:   fmt.Sprintf("struct type %s has unknown field header %q", typeName, unknown.Literal),
+			})
+		}
 	}
 
 	if len(cp.p.errors) > prevLen {
@@ -119,16 +122,17 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 	cp.addStructConstBinding(code, s)
 }
 
-func sameStructHeaders(a, b []token.Token) bool {
-	if len(a) != len(b) {
-		return false
+func findUnknownStructHeader(headers, schema []token.Token) (token.Token, bool) {
+	allowed := make(map[string]struct{}, len(schema))
+	for _, tok := range schema {
+		allowed[tok.Literal] = struct{}{}
 	}
-	for i := range a {
-		if a[i].Literal != b[i].Literal {
-			return false
+	for _, tok := range headers {
+		if _, ok := allowed[tok.Literal]; !ok {
+			return tok, true
 		}
 	}
-	return true
+	return token.Token{}, false
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {

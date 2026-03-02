@@ -474,7 +474,7 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 			}
 			return nil
 		}
-		if p.peekTokenIs(token.NEWLINE) {
+		if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
 			s := p.parseStructLiteralStatement(assignTok, idents, p.curToken)
 			if s != nil {
 				return s
@@ -657,13 +657,24 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		Name:  idents[0],
 	}
 
+	lit := &ast.StructLiteral{
+		Token: typeTok,
+	}
+	stmt.Value = lit
+
+	if p.peekTokenIs(token.EOF) {
+		return stmt
+	}
+
 	if !p.expectPeek(token.NEWLINE) {
 		return nil
+	}
+	if !p.peekTokenIs(token.INDENT) {
+		return stmt
 	}
 	if !p.expectPeek(token.INDENT) {
 		return nil
 	}
-
 	p.nextToken()
 	if !p.curTokenIs(token.COLON) {
 		p.errors = append(p.errors, &token.CompileError{
@@ -713,12 +724,8 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		return nil
 	}
 
-	lit := &ast.StructLiteral{
-		Token:   typeTok,
-		Headers: headers,
-		Row:     row,
-	}
-	stmt.Value = lit
+	stmt.Value.Headers = headers
+	stmt.Value.Row = row
 	return stmt
 }
 

@@ -85,6 +85,7 @@ type Compiler struct {
 	tmpCounter      int           // Temporary variable names counter
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
+	StructSchemas   map[string]Struct
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
@@ -111,6 +112,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		tmpCounter:      0,
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
+		StructSchemas:   make(map[string]Struct),
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
@@ -244,6 +246,125 @@ func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Val
 	return global
 }
 
+func structFieldTypeFromConstant(cell ast.Expression) (Type, bool) {
+	switch cell.(type) {
+	case *ast.IntegerLiteral:
+		return I64, true
+	case *ast.FloatLiteral:
+		return F64, true
+	case *ast.StringLiteral:
+		return StrG{}, true
+	default:
+		return Unresolved{}, false
+	}
+}
+
+func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (Struct, bool) {
+	typeName := lit.Token.Literal
+	if schema, ok := c.StructSchemas[typeName]; ok {
+		return schema, true
+	}
+
+	if len(lit.Headers) == 0 {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: lit.Token,
+			Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
+		})
+		return Struct{}, false
+	}
+
+	fields := make([]StructField, len(lit.Headers))
+	for idx, headerTok := range lit.Headers {
+		cell := lit.Row[idx]
+		if _, ok := cell.(*ast.HeapStringLiteral); ok {
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: cell.Tok(),
+				Msg:   "heap string literals cannot be used in struct constants",
+			})
+			return Struct{}, false
+		}
+		fieldType, ok := structFieldTypeFromConstant(cell)
+		if !ok {
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: cell.Tok(),
+				Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
+			})
+			return Struct{}, false
+		}
+		fields[idx] = StructField{Name: headerTok.Literal, Type: fieldType}
+	}
+
+	schema := Struct{
+		Name:   typeName,
+		Fields: fields,
+	}
+	c.StructSchemas[typeName] = schema
+	return schema, true
+}
+
+func (c *Compiler) structFieldConstValue(mangledName, fieldName string, fieldType Type, cell ast.Expression) (llvm.Value, bool) {
+	switch cv := cell.(type) {
+	case *ast.IntegerLiteral:
+		switch fieldType.Kind() {
+		case IntKind:
+			return c.ConstI64(uint64(cv.Value)), true
+		case FloatKind:
+			return c.ConstF64(float64(cv.Value)), true
+		}
+	case *ast.FloatLiteral:
+		if fieldType.Kind() == FloatKind {
+			return c.ConstF64(cv.Value), true
+		}
+	case *ast.StringLiteral:
+		if fieldType.Kind() == StrKind {
+			fieldGlobalName := mangledName + SEP + MangleIdent(fieldName) + SEP + "str"
+			fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
+			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
+		}
+	case *ast.HeapStringLiteral:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: cell.Tok(),
+			Msg:   "heap string literals cannot be used in struct constants",
+		})
+		return llvm.Value{}, false
+	}
+
+	var expected string
+	switch fieldType.Kind() {
+	case IntKind:
+		expected = "I64"
+	case FloatKind:
+		expected = "F64"
+	case StrKind:
+		expected = "Str"
+	default:
+		expected = fieldType.String()
+	}
+	c.Errors = append(c.Errors, &token.CompileError{
+		Token: cell.Tok(),
+		Msg:   fmt.Sprintf("struct field %q expects %s value", fieldName, expected),
+	})
+	return llvm.Value{}, false
+}
+
+func (c *Compiler) structFieldZeroValue(mangledName, fieldName string, fieldType Type) (llvm.Value, bool) {
+	switch fieldType.Kind() {
+	case IntKind:
+		return c.ConstI64(0), true
+	case FloatKind:
+		return c.ConstF64(0), true
+	case StrKind:
+		fieldGlobalName := mangledName + SEP + MangleIdent(fieldName) + SEP + "str_default"
+		fieldGlobal := c.createGlobalString(fieldGlobalName, "", llvm.PrivateLinkage)
+		return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
+	default:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Msg: fmt.Sprintf("unsupported zero value for struct field type %s (%q)", fieldType.String(), fieldName),
+		})
+		return llvm.Value{}, false
+	}
+}
+
 func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 	linkage := llvm.ExternalLinkage
 	sym := &Symbol{}
@@ -283,46 +404,60 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 			return
 		}
 
-		fields := make([]StructField, len(v.Headers))
-		constVals := make([]llvm.Value, len(v.Headers))
+		schema, ok := c.getOrInitStructSchema(v)
+		if !ok {
+			return
+		}
 
+		cellsByHeader := make(map[string]ast.Expression, len(v.Headers))
 		for idx, headerTok := range v.Headers {
-			cell := v.Row[idx]
 			header := headerTok.Literal
-			switch cv := cell.(type) {
-			case *ast.IntegerLiteral:
-				fields[idx] = StructField{Name: header, Type: I64}
-				constVals[idx] = c.ConstI64(uint64(cv.Value))
-			case *ast.FloatLiteral:
-				fields[idx] = StructField{Name: header, Type: F64}
-				constVals[idx] = c.ConstF64(cv.Value)
-			case *ast.StringLiteral:
-				fields[idx] = StructField{Name: header, Type: StrG{}}
-				fieldGlobalName := mangledName + SEP + MangleIdent(header) + SEP + "str"
-				fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
-				constVals[idx] = llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0))
-			case *ast.HeapStringLiteral:
+			if _, exists := cellsByHeader[header]; exists {
 				c.Errors = append(c.Errors, &token.CompileError{
-					Token: cv.Token,
-					Msg:   "heap string literals cannot be used in struct constants",
-				})
-				return
-			default:
-				c.Errors = append(c.Errors, &token.CompileError{
-					Token: cell.Tok(),
-					Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
+					Token: headerTok,
+					Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
 				})
 				return
 			}
+			cellsByHeader[header] = v.Row[idx]
 		}
 
-		structType := Struct{
-			Name:   v.Token.Literal,
-			Fields: fields,
+		schemaFields := make(map[string]struct{}, len(schema.Fields))
+		for _, field := range schema.Fields {
+			schemaFields[field.Name] = struct{}{}
 		}
-		structLLVM := c.mapToLLVMType(structType)
+		for _, headerTok := range v.Headers {
+			if _, ok := schemaFields[headerTok.Literal]; ok {
+				continue
+			}
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: headerTok,
+				Msg:   fmt.Sprintf("struct type %s has unknown field header %q", schema.Name, headerTok.Literal),
+			})
+			return
+		}
+
+		constVals := make([]llvm.Value, len(schema.Fields))
+		for idx, field := range schema.Fields {
+			cell, provided := cellsByHeader[field.Name]
+			if provided {
+				cv, ok := c.structFieldConstValue(mangledName, field.Name, field.Type, cell)
+				if !ok {
+					return
+				}
+				constVals[idx] = cv
+				continue
+			}
+			zv, ok := c.structFieldZeroValue(mangledName, field.Name, field.Type)
+			if !ok {
+				return
+			}
+			constVals[idx] = zv
+		}
+
+		structLLVM := c.mapToLLVMType(schema)
 		val = llvm.ConstNamedStruct(structLLVM, constVals)
-		sym.Type = Ptr{Elem: structType}
+		sym.Type = Ptr{Elem: schema}
 		sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
 
 	default:
