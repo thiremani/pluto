@@ -85,7 +85,7 @@ type Compiler struct {
 	tmpCounter      int           // Temporary variable names counter
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
-	StructSchemas   map[string]Struct
+	StructCache     map[string]*Struct
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
@@ -112,7 +112,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		tmpCounter:      0,
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
-		StructSchemas:   make(map[string]Struct),
+		StructCache:     make(map[string]*Struct),
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
@@ -259,9 +259,9 @@ func structFieldTypeFromConstant(cell ast.Expression) (Type, bool) {
 	}
 }
 
-func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (Struct, bool) {
+func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (*Struct, bool) {
 	typeName := lit.Token.Literal
-	if schema, ok := c.StructSchemas[typeName]; ok {
+	if schema, ok := c.StructCache[typeName]; ok {
 		return schema, true
 	}
 
@@ -270,7 +270,7 @@ func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (Struct, bool) 
 			Token: lit.Token,
 			Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
 		})
-		return Struct{}, false
+		return nil, false
 	}
 
 	fields := make([]StructField, len(lit.Headers))
@@ -281,7 +281,7 @@ func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (Struct, bool) 
 				Token: cell.Tok(),
 				Msg:   "heap string literals cannot be used in struct constants",
 			})
-			return Struct{}, false
+			return nil, false
 		}
 		fieldType, ok := structFieldTypeFromConstant(cell)
 		if !ok {
@@ -289,16 +289,16 @@ func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (Struct, bool) 
 				Token: cell.Tok(),
 				Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
 			})
-			return Struct{}, false
+			return nil, false
 		}
 		fields[idx] = StructField{Name: headerTok.Literal, Type: fieldType}
 	}
 
-	schema := Struct{
+	schema := &Struct{
 		Name:   typeName,
 		Fields: fields,
 	}
-	c.StructSchemas[typeName] = schema
+	c.StructCache[typeName] = schema
 	return schema, true
 }
 
@@ -455,9 +455,9 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 			constVals[idx] = zv
 		}
 
-		structLLVM := c.mapToLLVMType(schema)
+		structLLVM := c.mapToLLVMType(*schema)
 		val = llvm.ConstNamedStruct(structLLVM, constVals)
-		sym.Type = Ptr{Elem: schema}
+		sym.Type = Ptr{Elem: *schema}
 		sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
 
 	default:
