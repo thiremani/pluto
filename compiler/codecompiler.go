@@ -22,6 +22,40 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
+func validateAndTrackStructHeaders(stmt *ast.StructStatement, seenHeaders map[string][]token.Token, headerMap map[string]map[string]token.Token) *token.CompileError {
+	typeName := stmt.Value.Token.Literal
+	headers := stmt.Value.Headers
+
+	schema, exists := headerMap[typeName]
+	if !exists {
+		if len(headers) == 0 {
+			return &token.CompileError{
+				Token: stmt.Value.Token,
+				Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
+			}
+		}
+
+		seenHeaders[typeName] = append([]token.Token(nil), headers...)
+		schema = make(map[string]token.Token, len(headers))
+		for _, header := range headers {
+			schema[header.Literal] = header
+		}
+		headerMap[typeName] = schema
+		return nil
+	}
+
+	for _, header := range headers {
+		if _, ok := schema[header.Literal]; ok {
+			continue
+		}
+		return &token.CompileError{
+			Token: header,
+			Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
+		}
+	}
+	return nil
+}
+
 func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 	seenHeaders := make(map[string][]token.Token)
 	headerMap := make(map[string]map[string]token.Token)
@@ -37,35 +71,8 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 			continue
 		}
 
-		headers := stmt.Value.Headers
-		schema, exists := headerMap[typeName]
-		if !exists {
-			if len(headers) == 0 {
-				errs = append(errs, &token.CompileError{
-					Token: stmt.Value.Token,
-					Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
-				})
-				continue
-			}
-
-			seenHeaders[typeName] = append([]token.Token(nil), headers...)
-			schema = make(map[string]token.Token, len(headers))
-			for _, header := range headers {
-				schema[header.Literal] = header
-			}
-			headerMap[typeName] = schema
-			continue
-		}
-
-		for _, header := range headers {
-			if _, ok := schema[header.Literal]; ok {
-				continue
-			}
-			errs = append(errs, &token.CompileError{
-				Token: header,
-				Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
-			})
-			break
+		if err := validateAndTrackStructHeaders(stmt, seenHeaders, headerMap); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errs
