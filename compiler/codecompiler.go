@@ -24,6 +24,7 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 
 func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 	seenHeaders := make(map[string][]token.Token)
+	headerMap := make(map[string]map[string]token.Token)
 	errs := []*token.CompileError{}
 
 	for _, stmt := range cc.Code.Struct.Statements {
@@ -35,39 +36,39 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 			})
 			continue
 		}
+
 		headers := stmt.Value.Headers
-		if schemaHeaders, exists := seenHeaders[typeName]; exists {
-			if unknown, ok := findUnknownStructHeader(headers, schemaHeaders); ok {
+		schema, exists := headerMap[typeName]
+		if !exists {
+			if len(headers) == 0 {
 				errs = append(errs, &token.CompileError{
-					Token: unknown,
-					Msg:   fmt.Sprintf("unknown field %q in struct type %s", unknown.Literal, typeName),
+					Token: stmt.Value.Token,
+					Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
 				})
+				continue
 			}
+
+			seenHeaders[typeName] = append([]token.Token(nil), headers...)
+			schema = make(map[string]token.Token, len(headers))
+			for _, header := range headers {
+				schema[header.Literal] = header
+			}
+			headerMap[typeName] = schema
 			continue
 		}
-		if len(headers) == 0 {
+
+		for _, header := range headers {
+			if _, ok := schema[header.Literal]; ok {
+				continue
+			}
 			errs = append(errs, &token.CompileError{
-				Token: stmt.Value.Token,
-				Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
+				Token: header,
+				Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
 			})
-			continue
+			break
 		}
-		seenHeaders[typeName] = append([]token.Token(nil), headers...)
 	}
 	return errs
-}
-
-func findUnknownStructHeader(headers, schema []token.Token) (token.Token, bool) {
-	allowed := make(map[string]struct{}, len(schema))
-	for _, tok := range schema {
-		allowed[tok.Literal] = struct{}{}
-	}
-	for _, tok := range headers {
-		if _, ok := allowed[tok.Literal]; !ok {
-			return tok, true
-		}
-	}
-	return token.Token{}, false
 }
 
 func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {

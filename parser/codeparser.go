@@ -103,11 +103,19 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 
 	existing, exists := code.Struct.Map[typeName]
 	if exists && len(s.Value.Headers) > 0 {
-		if unknown, ok := findUnknownStructHeader(s.Value.Headers, existing.Value.Headers); ok {
+		schema := make(map[string]token.Token, len(existing.Value.Headers))
+		for _, header := range existing.Value.Headers {
+			schema[header.Literal] = header
+		}
+		for _, header := range s.Value.Headers {
+			if _, ok := schema[header.Literal]; ok {
+				continue
+			}
 			cp.p.errors = append(cp.p.errors, &token.CompileError{
-				Token: unknown,
-				Msg:   fmt.Sprintf("unknown field %q in struct type %s", unknown.Literal, typeName),
+				Token: header,
+				Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
 			})
+			break
 		}
 	}
 
@@ -120,19 +128,6 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 		code.Struct.Map[typeName] = s
 	}
 	cp.addStructConstBinding(code, s)
-}
-
-func findUnknownStructHeader(headers, schema []token.Token) (token.Token, bool) {
-	allowed := make(map[string]struct{}, len(schema))
-	for _, tok := range schema {
-		allowed[tok.Literal] = struct{}{}
-	}
-	for _, tok := range headers {
-		if _, ok := allowed[tok.Literal]; !ok {
-			return tok, true
-		}
-	}
-	return token.Token{}, false
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
