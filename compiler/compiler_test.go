@@ -176,7 +176,7 @@ func TestCodeCompilerRejectsUnknownStructHeaders(t *testing.T) {
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), `struct type Person has unknown field header "height"`) {
+		if strings.Contains(err.Error(), `unknown field "height" in struct type Person`) {
 			found = true
 			break
 		}

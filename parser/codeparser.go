@@ -106,7 +106,7 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 		if unknown, ok := findUnknownStructHeader(s.Value.Headers, existing.Value.Headers); ok {
 			cp.p.errors = append(cp.p.errors, &token.CompileError{
 				Token: unknown,
-				Msg:   fmt.Sprintf("struct type %s has unknown field header %q", typeName, unknown.Literal),
+				Msg:   fmt.Sprintf("unknown field %q in struct type %s", unknown.Literal, typeName),
 			})
 		}
 	}

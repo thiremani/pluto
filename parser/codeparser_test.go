@@ -434,7 +434,7 @@ func TestStructDefinitionErrors(t *testing.T) {
 q = Person
     :name height
     "A" 180`,
-			errMsg: `struct type Person has unknown field header "height"`,
+			errMsg: `unknown field "height" in struct type Person`,
 		},
 		{
 			name: "multiple lhs bindings not allowed",

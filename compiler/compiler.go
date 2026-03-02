@@ -432,7 +432,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 			}
 			c.Errors = append(c.Errors, &token.CompileError{
 				Token: headerTok,
-				Msg:   fmt.Sprintf("struct type %s has unknown field header %q", schema.Name, headerTok.Literal),
+				Msg:   fmt.Sprintf("unknown field %q in struct type %s", headerTok.Literal, schema.Name),
 			})
 			return
 		}
