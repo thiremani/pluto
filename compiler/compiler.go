@@ -183,7 +183,7 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 }
 
 func (c *Compiler) structTypeName(typeName string) string {
-	return c.MangledPath + SEP + "Struct" + SEP + MangleIdent(typeName)
+	return c.MangledPath + SEP + MangleIdent(typeName)
 }
 
 func (c *Compiler) getOrCreateStructLLVMType(structType Struct) llvm.Type {
