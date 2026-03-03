@@ -302,7 +302,7 @@ func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (*Struct, bool)
 	return schema, true
 }
 
-func (c *Compiler) structFieldConstValue(mangledName, fieldName string, fieldType Type, cell ast.Expression) (llvm.Value, bool) {
+func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType Type, cell ast.Expression) (llvm.Value, bool) {
 	switch cv := cell.(type) {
 	case *ast.IntegerLiteral:
 		switch fieldType.Kind() {
@@ -317,7 +317,8 @@ func (c *Compiler) structFieldConstValue(mangledName, fieldName string, fieldTyp
 		}
 	case *ast.StringLiteral:
 		if fieldType.Kind() == StrKind {
-			fieldGlobalName := mangledName + SEP + MangleIdent(fieldName) + SEP + "str"
+			fieldGlobalName := fmt.Sprintf("struct_%s_%s_%d", typeName, fieldName, c.tmpCounter)
+			c.tmpCounter++
 			fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
 			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
 		}
@@ -347,14 +348,15 @@ func (c *Compiler) structFieldConstValue(mangledName, fieldName string, fieldTyp
 	return llvm.Value{}, false
 }
 
-func (c *Compiler) structFieldZeroValue(mangledName, fieldName string, fieldType Type) (llvm.Value, bool) {
+func (c *Compiler) structFieldZeroValue(typeName, fieldName string, fieldType Type) (llvm.Value, bool) {
 	switch fieldType.Kind() {
 	case IntKind:
 		return c.ConstI64(0), true
 	case FloatKind:
 		return c.ConstF64(0), true
 	case StrKind:
-		fieldGlobalName := mangledName + SEP + MangleIdent(fieldName) + SEP + "str_default"
+		fieldGlobalName := fmt.Sprintf("struct_%s_%s_default_%d", typeName, fieldName, c.tmpCounter)
+		c.tmpCounter++
 		fieldGlobal := c.createGlobalString(fieldGlobalName, "", llvm.PrivateLinkage)
 		return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
 	default:
@@ -441,14 +443,14 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		for idx, field := range schema.Fields {
 			cell, provided := cellsByHeader[field.Name]
 			if provided {
-				cv, ok := c.structFieldConstValue(mangledName, field.Name, field.Type, cell)
+				cv, ok := c.structFieldConstValue(schema.Name, field.Name, field.Type, cell)
 				if !ok {
 					return
 				}
 				constVals[idx] = cv
 				continue
 			}
-			zv, ok := c.structFieldZeroValue(mangledName, field.Name, field.Type)
+			zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
 			if !ok {
 				return
 			}
