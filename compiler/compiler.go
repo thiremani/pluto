@@ -531,7 +531,17 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		rangeSym := c.makeZeroValue(arrRangeType.Range)
 		s.Val = c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRangeType)
 	case StructKind:
-		s.Val = llvm.ConstNull(c.mapToLLVMType(symType))
+		structType := symType.(Struct)
+		fieldVals := make([]llvm.Value, len(structType.Fields))
+		for i, field := range structType.Fields {
+			zv, ok := c.structFieldZeroValue(structType.Name, field.Name, field.Type)
+			if !ok {
+				fieldVals[i] = llvm.ConstNull(c.mapToLLVMType(field.Type))
+				continue
+			}
+			fieldVals[i] = zv
+		}
+		s.Val = llvm.ConstNamedStruct(c.mapToLLVMType(structType), fieldVals)
 	default:
 		panic(fmt.Sprintf("unsupported type for zero value: %s", symType.String()))
 	}
