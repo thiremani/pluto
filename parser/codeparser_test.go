@@ -511,3 +511,18 @@ q = Person`
 	require.Len(t, code.Struct.Statements[1].Value.Headers, 0)
 	require.Len(t, code.Struct.Statements[1].Value.Row, 0)
 }
+
+func TestStructDefAllowsDefinitionAfterEmptyInit(t *testing.T) {
+	input := `q = Person
+p = Person
+    :name age
+    "Tejas" 35`
+
+	cp := NewCodeParser(lexer.New("TestStructDefAllowsDefinitionAfterEmptyInit", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+	require.Equal(t, "q", code.Struct.Statements[0].Name.Value)
+	require.Equal(t, "p", code.Struct.Statements[1].Name.Value)
+	require.Len(t, code.Struct.Statements[1].Value.Headers, 2)
+}

@@ -150,7 +150,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 			tok = l.createToken(token.IDENT, "", hadSpace)
 			tok.Literal = l.readIdentifier()
 			return tok, nil
-		} else if IsDecimal(l.curr) || (l.curr == '.' && IsDecimal(l.peekRune())) {
+		} else if IsDecimal(l.curr) {
 			tok = l.createToken(token.INT, "", hadSpace)
 			var isFloat bool
 			tok.Literal, isFloat = l.readNumber()

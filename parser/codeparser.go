@@ -102,7 +102,7 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 	}
 
 	existing, exists := code.Struct.Map[typeName]
-	if exists && len(s.Value.Headers) > 0 {
+	if exists && len(s.Value.Headers) > 0 && len(existing.Value.Headers) > 0 {
 		schema := make(map[string]token.Token, len(existing.Value.Headers))
 		for _, header := range existing.Value.Headers {
 			schema[header.Literal] = header

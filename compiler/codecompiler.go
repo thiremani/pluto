@@ -22,7 +22,7 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func validateAndTrackStructHeaders(stmt *ast.StructStatement, seenHeaders map[string][]token.Token, headerMap map[string]map[string]token.Token) *token.CompileError {
+func validateAndTrackStructHeaders(stmt *ast.StructStatement, headerMap map[string]map[string]token.Token) *token.CompileError {
 	typeName := stmt.Value.Token.Literal
 	headers := stmt.Value.Headers
 
@@ -35,7 +35,6 @@ func validateAndTrackStructHeaders(stmt *ast.StructStatement, seenHeaders map[st
 			}
 		}
 
-		seenHeaders[typeName] = append([]token.Token(nil), headers...)
 		schema = make(map[string]token.Token, len(headers))
 		for _, header := range headers {
 			schema[header.Literal] = header
@@ -57,7 +56,6 @@ func validateAndTrackStructHeaders(stmt *ast.StructStatement, seenHeaders map[st
 }
 
 func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
-	seenHeaders := make(map[string][]token.Token)
 	headerMap := make(map[string]map[string]token.Token)
 	errs := []*token.CompileError{}
 
@@ -71,7 +69,7 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 			continue
 		}
 
-		if err := validateAndTrackStructHeaders(stmt, seenHeaders, headerMap); err != nil {
+		if err := validateAndTrackStructHeaders(stmt, headerMap); err != nil {
 			errs = append(errs, err)
 		}
 	}
