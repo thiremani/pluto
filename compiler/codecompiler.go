@@ -22,7 +22,7 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func validateAndTrackStructHeaders(stmt *ast.StructStatement, headerMap map[string]map[string]token.Token) *token.CompileError {
+func validateStructHeaders(stmt *ast.StructStatement, headerMap map[string]map[string]token.Token) *token.CompileError {
 	typeName := stmt.Value.Token.Literal
 	headers := stmt.Value.Headers
 
@@ -69,7 +69,7 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 			continue
 		}
 
-		if err := validateAndTrackStructHeaders(stmt, headerMap); err != nil {
+		if err := validateStructHeaders(stmt, headerMap); err != nil {
 			errs = append(errs, err)
 		}
 	}
