@@ -94,9 +94,7 @@ func (c *Compiler) withGuardedBranch(
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
-	if onElse != nil {
-		onElse()
-	}
+	onElse()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)

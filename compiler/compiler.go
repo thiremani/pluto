@@ -85,7 +85,7 @@ type Compiler struct {
 	tmpCounter      int           // Temporary variable names counter
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
-	StructCache map[string]*Struct
+	StructCache     map[string]*Struct
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
@@ -112,7 +112,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		tmpCounter:      0,
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
-		StructCache: make(map[string]*Struct),
+		StructCache:     make(map[string]*Struct),
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
@@ -369,59 +369,65 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		return
 
 	case *ast.StructLiteral:
-		if len(v.Row) != len(v.Headers) {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: v.Token,
-				Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Row), len(v.Headers)),
-			})
+		if !c.compileStructConst(v, sym, mangledName, linkage) {
 			return
 		}
-
-		schema, ok := c.getStructSchema(v)
-		if !ok {
-			return
-		}
-
-		cellsByHeader := make(map[string]ast.Expression, len(v.Headers))
-		for idx, headerTok := range v.Headers {
-			header := headerTok.Literal
-			if _, exists := cellsByHeader[header]; exists {
-				c.Errors = append(c.Errors, &token.CompileError{
-					Token: headerTok,
-					Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
-				})
-				return
-			}
-			cellsByHeader[header] = v.Row[idx]
-		}
-
-		constVals := make([]llvm.Value, len(schema.Fields))
-		for idx, field := range schema.Fields {
-			cell, provided := cellsByHeader[field.Name]
-			if provided {
-				cv, ok := c.structFieldConstValue(schema.Name, field.Name, field.Type, cell)
-				if !ok {
-					return
-				}
-				constVals[idx] = cv
-			} else {
-				zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
-				if !ok {
-					return
-				}
-				constVals[idx] = zv
-			}
-		}
-
-		structLLVM := c.mapToLLVMType(*schema)
-		val = llvm.ConstNamedStruct(structLLVM, constVals)
-		sym.Type = Ptr{Elem: *schema}
-		sym.Val = c.makeGlobalConst(structLLVM, mangledName, val, linkage)
 
 	default:
 		panic(fmt.Sprintf("unsupported constant type: %T", v))
 	}
 	Put(c.Scopes, name, sym)
+}
+
+func (c *Compiler) compileStructConst(v *ast.StructLiteral, sym *Symbol, mangledName string, linkage llvm.Linkage) bool {
+	if len(v.Row) != len(v.Headers) {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: v.Token,
+			Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Row), len(v.Headers)),
+		})
+		return false
+	}
+
+	schema, ok := c.getStructSchema(v)
+	if !ok {
+		return false
+	}
+
+	cellsByHeader := make(map[string]ast.Expression, len(v.Headers))
+	for idx, headerTok := range v.Headers {
+		header := headerTok.Literal
+		if _, exists := cellsByHeader[header]; exists {
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: headerTok,
+				Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
+			})
+			return false
+		}
+		cellsByHeader[header] = v.Row[idx]
+	}
+
+	constVals := make([]llvm.Value, len(schema.Fields))
+	for idx, field := range schema.Fields {
+		cell, provided := cellsByHeader[field.Name]
+		if provided {
+			cv, ok := c.structFieldConstValue(schema.Name, field.Name, field.Type, cell)
+			if !ok {
+				return false
+			}
+			constVals[idx] = cv
+			continue
+		}
+		zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
+		if !ok {
+			return false
+		}
+		constVals[idx] = zv
+	}
+
+	structLLVM := c.mapToLLVMType(*schema)
+	sym.Type = Ptr{Elem: *schema}
+	sym.Val = c.makeGlobalConst(structLLVM, mangledName, llvm.ConstNamedStruct(structLLVM, constVals), linkage)
+	return true
 }
 
 func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
