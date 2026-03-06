@@ -85,7 +85,7 @@ type Compiler struct {
 	tmpCounter      int           // Temporary variable names counter
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
-	StructCache     map[string]*Struct
+	StructCache map[string]*Struct
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
@@ -112,7 +112,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		tmpCounter:      0,
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
-		StructCache:     make(map[string]*Struct),
+		StructCache: make(map[string]*Struct),
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
@@ -259,47 +259,18 @@ func structFieldTypeFromConstant(cell ast.Expression) (Type, bool) {
 	}
 }
 
-func (c *Compiler) getOrInitStructSchema(lit *ast.StructLiteral) (*Struct, bool) {
+// getStructSchema looks up a struct type's canonical schema from StructCache.
+// StructCache is populated by validateStructDefs before compilation begins.
+func (c *Compiler) getStructSchema(lit *ast.StructLiteral) (*Struct, bool) {
 	typeName := lit.Token.Literal
 	if schema, ok := c.StructCache[typeName]; ok {
 		return schema, true
 	}
-
-	if len(lit.Headers) == 0 {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: lit.Token,
-			Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
-		})
-		return nil, false
-	}
-
-	fields := make([]StructField, len(lit.Headers))
-	for idx, headerTok := range lit.Headers {
-		cell := lit.Row[idx]
-		if _, ok := cell.(*ast.HeapStringLiteral); ok {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: cell.Tok(),
-				Msg:   "heap string literals cannot be used in struct constants",
-			})
-			return nil, false
-		}
-		fieldType, ok := structFieldTypeFromConstant(cell)
-		if !ok {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: cell.Tok(),
-				Msg:   fmt.Sprintf("unsupported struct constant field expression %T", cell),
-			})
-			return nil, false
-		}
-		fields[idx] = StructField{Name: headerTok.Literal, Type: fieldType}
-	}
-
-	schema := &Struct{
-		Name:   typeName,
-		Fields: fields,
-	}
-	c.StructCache[typeName] = schema
-	return schema, true
+	c.Errors = append(c.Errors, &token.CompileError{
+		Token: lit.Token,
+		Msg:   fmt.Sprintf("struct type %s is not defined", typeName),
+	})
+	return nil, false
 }
 
 func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType Type, cell ast.Expression) (llvm.Value, bool) {
@@ -406,7 +377,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 			return
 		}
 
-		schema, ok := c.getOrInitStructSchema(v)
+		schema, ok := c.getStructSchema(v)
 		if !ok {
 			return
 		}
@@ -424,21 +395,6 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 			cellsByHeader[header] = v.Row[idx]
 		}
 
-		schemaFields := make(map[string]struct{}, len(schema.Fields))
-		for _, field := range schema.Fields {
-			schemaFields[field.Name] = struct{}{}
-		}
-		for _, headerTok := range v.Headers {
-			if _, ok := schemaFields[headerTok.Literal]; ok {
-				continue
-			}
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: headerTok,
-				Msg:   fmt.Sprintf("unknown field %q in struct type %s", headerTok.Literal, schema.Name),
-			})
-			return
-		}
-
 		constVals := make([]llvm.Value, len(schema.Fields))
 		for idx, field := range schema.Fields {
 			cell, provided := cellsByHeader[field.Name]
@@ -448,13 +404,13 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 					return
 				}
 				constVals[idx] = cv
-				continue
+			} else {
+				zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
+				if !ok {
+					return
+				}
+				constVals[idx] = zv
 			}
-			zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
-			if !ok {
-				return
-			}
-			constVals[idx] = zv
 		}
 
 		structLLVM := c.mapToLLVMType(*schema)
@@ -536,8 +492,7 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		for i, field := range structType.Fields {
 			zv, ok := c.structFieldZeroValue(structType.Name, field.Name, field.Type)
 			if !ok {
-				fieldVals[i] = llvm.ConstNull(c.mapToLLVMType(field.Type))
-				continue
+				return s
 			}
 			fieldVals[i] = zv
 		}

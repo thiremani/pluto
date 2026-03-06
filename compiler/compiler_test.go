@@ -150,15 +150,44 @@ func TestCodeCompilerAllowsRepeatedStructDefs(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "dupStructDefs", "", merged)
+	cc := NewCodeCompiler(ctx, "repeatedStructDefs", "", merged)
 	errs := cc.Compile()
-	require.Empty(t, errs, "expected repeated struct definition with same headers to compile")
+	require.Empty(t, errs, "expected same-order repeated struct defs to compile")
 }
 
-func TestCodeCompilerRejectsUnknownStructHeaders(t *testing.T) {
+func TestCodeCompilerRejectsAmbiguousFieldOrder(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :age name
+    28 "Ada"`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "ambiguousFieldOrder", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected ambiguous field order error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "ambiguous struct field order") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected ambiguous field order error, got: %v", errs)
+}
+
+func TestCodeCompilerRejectsUnknownField(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age score
+    "Tejas" 35 100`)
 	codeB := mustParseCode(t, `q = Person
     :name height
     "Ada" 170`)
@@ -170,18 +199,47 @@ func TestCodeCompilerRejectsUnknownStructHeaders(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "conflictStructDefs", "", merged)
+	cc := NewCodeCompiler(ctx, "unknownField", "", merged)
 	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected conflicting struct definition error")
+	require.NotEmpty(t, errs, "expected unknown field error")
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), `unknown field "height" in struct type Person`) {
+		if strings.Contains(err.Error(), `field "height" not in struct type Person`) {
 			found = true
 			break
 		}
 	}
-	require.True(t, found, "expected conflicting struct definition error, got: %v", errs)
+	require.True(t, found, "expected unknown field error, got: %v", errs)
+}
+
+func TestCodeCompilerRejectsFieldTypeMismatch(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age height
+    "Tejas" 35 184.5`)
+	codeB := mustParseCode(t, `q = Person
+    :name age
+    "Ada" 28.5`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "typeMismatch", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected type mismatch error")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "expects I64 value") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected type mismatch error, got: %v", errs)
 }
 
 func TestCodeCompilerAllowsSubsetStructDefs(t *testing.T) {
@@ -204,6 +262,31 @@ func TestCodeCompilerAllowsSubsetStructDefs(t *testing.T) {
 	require.Empty(t, errs, "expected subset/reordered struct definition to compile")
 }
 
+func TestCodeCompilerMaxHeaderDef(t *testing.T) {
+	// Smaller statement first, larger definition second — larger wins.
+	codeA := mustParseCode(t, `q = Person
+    :age name
+    28 "Ada"`)
+	codeB := mustParseCode(t, `p = Person
+    :name age height
+    "Tejas" 35 184.5`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "maxHeaderDef", "", merged)
+	errs := cc.Compile()
+	require.Empty(t, errs, "expected max-header definition to compile")
+
+	schema, ok := cc.Compiler.StructCache["Person"]
+	require.True(t, ok, "expected Person in StructCache")
+	require.Len(t, schema.Fields, 3, "expected 3 fields from max-header definition")
+}
+
 func TestCodeCompilerAllowsEmptyStructInit(t *testing.T) {
 	code := mustParseCode(t, `p = Person
     :name age
@@ -219,49 +302,31 @@ q = Person`)
 }
 
 func TestCodeCompilerRejectsStructUseBeforeDef(t *testing.T) {
-	code := mustParseCode(t, `q = Person`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "structUseBeforeDef", "", code)
-	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected use-before-definition error")
-
-	found := false
-	for _, err := range errs {
-		if strings.Contains(err.Error(), "struct type Person used before definition") {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "expected use-before-definition error, got: %v", errs)
-}
-
-func TestCodeCompilerRejectsReservedFunctionNames(t *testing.T) {
+	// Build AST directly: parser now rejects this, so we test the compiler guard independently.
 	code := ast.NewCode()
-	code.Func.Statements = append(code.Func.Statements, &ast.FuncStatement{
-		Token: token.Token{
-			Type:    token.IDENT,
-			Literal: "Int",
+	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
+		Token: token.Token{Type: token.ASSIGN, Literal: "="},
+		Name:  &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "q"}, Value: "q"},
+		Value: &ast.StructLiteral{
+			Token: token.Token{Type: token.IDENT, Literal: "Person"},
 		},
 	})
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "reservedFuncName", "", code)
+	cc := NewCodeCompiler(ctx, "structUseBeforeDef", "", code)
 	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected reserved function name error")
+	require.NotEmpty(t, errs, "expected undefined struct type error")
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), `function name "Int" is reserved`) {
+		if strings.Contains(err.Error(), "struct type Person has not been defined") {
 			found = true
 			break
 		}
 	}
-	require.True(t, found, "expected reserved function name error, got: %v", errs)
+	require.True(t, found, "expected undefined struct type error, got: %v", errs)
 }
 
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {

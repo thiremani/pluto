@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
-	"github.com/thiremani/pluto/types"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -22,71 +21,131 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func validateStructHeaders(stmt *ast.StructStatement, headerMap map[string]map[string]token.Token) *token.CompileError {
-	typeName := stmt.Value.Token.Literal
-	headers := stmt.Value.Headers
-
-	schema, exists := headerMap[typeName]
-	if !exists {
-		if len(headers) == 0 {
-			return &token.CompileError{
-				Token: stmt.Value.Token,
-				Msg:   fmt.Sprintf("struct type %s used before definition", typeName),
-			}
-		}
-
-		schema = make(map[string]token.Token, len(headers))
-		for _, header := range headers {
-			schema[header.Literal] = header
-		}
-		headerMap[typeName] = schema
-		return nil
-	}
-
+// validateStructUsage checks that all headers in a usage reference fields from the definition.
+func validateStructUsage(def *Struct, headers []token.Token) []*token.CompileError {
+	var errs []*token.CompileError
 	for _, header := range headers {
-		if _, ok := schema[header.Literal]; ok {
-			continue
-		}
-		return &token.CompileError{
-			Token: header,
-			Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
-		}
-	}
-	return nil
-}
-
-func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
-	headerMap := make(map[string]map[string]token.Token)
-	errs := []*token.CompileError{}
-
-	for _, stmt := range cc.Code.Struct.Statements {
-		typeName := stmt.Value.Token.Literal
-		if types.IsReservedTypeName(typeName) {
+		if _, ok := def.FieldSet[header.Literal]; !ok {
 			errs = append(errs, &token.CompileError{
-				Token: stmt.Value.Token,
-				Msg:   fmt.Sprintf("struct type name %q is reserved", typeName),
+				Token: header,
+				Msg:   fmt.Sprintf("field %q not in struct type %s", header.Literal, def.Name),
 			})
-			continue
-		}
-
-		if err := validateStructHeaders(stmt, headerMap); err != nil {
-			errs = append(errs, err)
 		}
 	}
 	return errs
 }
 
-func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {
-	errs := []*token.CompileError{}
+// checkFieldOrder returns an error if an equal-length header list has fields in a different order.
+func checkFieldOrder(def *Struct, headers []token.Token) *token.CompileError {
+	for i, header := range headers {
+		if header.Literal != def.Fields[i].Name {
+			return &token.CompileError{
+				Token: header,
+				Msg:   fmt.Sprintf("ambiguous struct field order for %s: expected %s at position %d, got %s", def.Name, def.Fields[i].Name, i, header.Literal),
+			}
+		}
+	}
+	return nil
+}
 
-	for _, fn := range cc.Code.Func.Statements {
-		if !types.IsReservedTypeName(fn.Token.Literal) {
+// buildStructDef builds a Struct from a struct statement's headers and row values.
+func buildStructDef(stmt *ast.StructStatement) (*Struct, []*token.CompileError) {
+	def := &Struct{
+		Name:     stmt.Value.Token.Literal,
+		FieldSet: make(map[string]struct{}, len(stmt.Value.Headers)),
+	}
+	var errs []*token.CompileError
+	for i, header := range stmt.Value.Headers {
+		cellType, ok := structFieldTypeFromConstant(stmt.Value.Row[i])
+		if !ok {
+			errs = append(errs, &token.CompileError{
+				Token: stmt.Value.Row[i].Tok(),
+				Msg:   fmt.Sprintf("unsupported struct constant field expression %T", stmt.Value.Row[i]),
+			})
 			continue
 		}
-		errs = append(errs, &token.CompileError{
-			Token: fn.Token,
-			Msg:   fmt.Sprintf("function name %q is reserved", fn.Token.Literal),
-		})
+		def.Fields = append(def.Fields, StructField{Name: header.Literal, Type: cellType})
+		def.FieldSet[header.Literal] = struct{}{}
+	}
+	return def, errs
+}
+
+// validateStructHeaders validates all statements against the canonical definition:
+// equal-length statements must have the same fields in the same order,
+// shorter statements must only reference fields from the definition.
+func validateStructHeaders(defs map[string]*Struct, stmts []*ast.StructStatement) []*token.CompileError {
+	var errs []*token.CompileError
+	for _, stmt := range stmts {
+		if len(stmt.Value.Headers) == 0 {
+			continue
+		}
+		def := defs[stmt.Value.Token.Literal]
+		errs = append(errs, validateStructUsage(def, stmt.Value.Headers)...)
+		if len(stmt.Value.Headers) == len(def.Fields) {
+			if err := checkFieldOrder(def, stmt.Value.Headers); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errs
+}
+
+// collectStructDefs finds the canonical definition (max-header statement) for each struct type
+// and validates all other statements against it.
+func collectStructDefs(stmts []*ast.StructStatement) (map[string]*Struct, []*token.CompileError) {
+	defs := make(map[string]*Struct)
+	var errs []*token.CompileError
+
+	// Find the definition (max headers) for each struct type.
+	for _, stmt := range stmts {
+		typeName := stmt.Value.Token.Literal
+		if len(stmt.Value.Headers) == 0 {
+			continue
+		}
+
+		existing, exists := defs[typeName]
+		if !exists || len(stmt.Value.Headers) > len(existing.Fields) {
+			def, defErrs := buildStructDef(stmt)
+			errs = append(errs, defErrs...)
+			defs[typeName] = def
+		}
+	}
+	if len(errs) > 0 {
+		return defs, errs
+	}
+
+	errs = append(errs, validateStructHeaders(defs, stmts)...)
+	return defs, errs
+}
+
+// validateStructDefs finds the single canonical definition for each struct type,
+// populates StructCache, and reports errors for
+// unknown fields, field order conflicts, and undefined types.
+func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
+	defs, errs := collectStructDefs(cc.Code.Struct.Statements)
+	if len(errs) > 0 {
+		return errs
+	}
+
+	// Validate zero-header usages have a definition somewhere.
+	for _, stmt := range cc.Code.Struct.Statements {
+		typeName := stmt.Value.Token.Literal
+		if len(stmt.Value.Headers) == 0 {
+			if _, exists := defs[typeName]; !exists {
+				errs = append(errs, &token.CompileError{
+					Token: stmt.Value.Token,
+					Msg:   fmt.Sprintf("struct type %s has not been defined", typeName),
+				})
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return errs
+	}
+
+	// Populate StructCache from definitions.
+	for typeName, def := range defs {
+		cc.Compiler.StructCache[typeName] = def
 	}
 
 	return errs
@@ -95,7 +154,6 @@ func (cc *CodeCompiler) validateFuncDefs() []*token.CompileError {
 // compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
 	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.validateStructDefs()...)
-	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.validateFuncDefs()...)
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
 	}

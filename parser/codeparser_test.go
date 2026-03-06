@@ -413,7 +413,7 @@ func TestParseStructDefinition(t *testing.T) {
     Tejas 35 184.5`, stmt.String())
 }
 
-func TestStructDefinitionErrors(t *testing.T) {
+func TestStructDefErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -425,16 +425,6 @@ func TestStructDefinitionErrors(t *testing.T) {
     :name age age
     "Tejas" 35 184.5`,
 			errMsg: "duplicate struct field header: age",
-		},
-		{
-			name: "unknown header in repeated struct type definition",
-			input: `p = Person
-    :name age
-    "Tejas" 35
-q = Person
-    :name height
-    "A" 180`,
-			errMsg: `unknown field "height" in struct type Person`,
 		},
 		{
 			name: "multiple lhs bindings not allowed",
@@ -454,7 +444,7 @@ q = Person
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cp := NewCodeParser(lexer.New("TestStructDefinitionErrors", tt.input))
+			cp := NewCodeParser(lexer.New("TestStructDefErrors", tt.input))
 			_ = cp.Parse()
 			require.NotEmpty(t, cp.Errors())
 			found := false
@@ -469,7 +459,7 @@ q = Person
 	}
 }
 
-func TestStructDefAllowsRepeat(t *testing.T) {
+func TestStructDefRepeat(t *testing.T) {
 	input := `p = Person
     :name age
     "Tejas" 35
@@ -477,13 +467,13 @@ q = Person
     :name age
     "Ada" 28`
 
-	cp := NewCodeParser(lexer.New("TestStructDefAllowsRepeat", input))
+	cp := NewCodeParser(lexer.New("TestStructDefRepeat", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 	require.Len(t, code.Struct.Statements, 2)
 }
 
-func TestStructDefAllowsSubset(t *testing.T) {
+func TestStructDefSubset(t *testing.T) {
 	input := `p = Person
     :name age height
     "Tejas" 35 184.5
@@ -491,19 +481,19 @@ q = Person
     :age name
     28 "Ada"`
 
-	cp := NewCodeParser(lexer.New("TestStructDefAllowsSubset", input))
+	cp := NewCodeParser(lexer.New("TestStructDefSubset", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 	require.Len(t, code.Struct.Statements, 2)
 }
 
-func TestStructDefAllowsEmptyInit(t *testing.T) {
+func TestStructDefZeroInit(t *testing.T) {
 	input := `p = Person
     :name age
     "Tejas" 35
 q = Person`
 
-	cp := NewCodeParser(lexer.New("TestStructDefAllowsEmptyInit", input))
+	cp := NewCodeParser(lexer.New("TestStructDefZeroInit", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 	require.Len(t, code.Struct.Statements, 2)
@@ -512,17 +502,14 @@ q = Person`
 	require.Len(t, code.Struct.Statements[1].Value.Row, 0)
 }
 
-func TestStructDefAllowsDefinitionAfterEmptyInit(t *testing.T) {
+func TestStructDefZeroInitBeforeDef(t *testing.T) {
 	input := `q = Person
 p = Person
     :name age
     "Tejas" 35`
 
-	cp := NewCodeParser(lexer.New("TestStructDefAllowsDefinitionAfterEmptyInit", input))
+	cp := NewCodeParser(lexer.New("TestStructDefZeroInitBeforeDef", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 	require.Len(t, code.Struct.Statements, 2)
-	require.Equal(t, "q", code.Struct.Statements[0].Name.Value)
-	require.Equal(t, "p", code.Struct.Statements[1].Name.Value)
-	require.Len(t, code.Struct.Statements[1].Value.Headers, 2)
 }

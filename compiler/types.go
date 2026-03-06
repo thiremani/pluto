@@ -348,8 +348,9 @@ type StructField struct {
 }
 
 type Struct struct {
-	Name   string
-	Fields []StructField
+	Name     string
+	Fields   []StructField
+	FieldSet map[string]struct{}
 }
 
 func (s Struct) String() string {

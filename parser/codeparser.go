@@ -101,24 +101,6 @@ func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement)
 		})
 	}
 
-	existing, exists := code.Struct.Map[typeName]
-	if exists && len(s.Value.Headers) > 0 && len(existing.Value.Headers) > 0 {
-		schema := make(map[string]token.Token, len(existing.Value.Headers))
-		for _, header := range existing.Value.Headers {
-			schema[header.Literal] = header
-		}
-		for _, header := range s.Value.Headers {
-			if _, ok := schema[header.Literal]; ok {
-				continue
-			}
-			cp.p.errors = append(cp.p.errors, &token.CompileError{
-				Token: header,
-				Msg:   fmt.Sprintf("unknown field %q in struct type %s", header.Literal, typeName),
-			})
-			break
-		}
-	}
-
 	if len(cp.p.errors) > prevLen {
 		return
 	}
