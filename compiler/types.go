@@ -632,4 +632,3 @@ var reservedTypeNames = map[string]struct{}{
 	"Ptr": {}, "Range": {}, "Array": {}, "ArrayRange": {},
 	"Func": {}, "Struct": {},
 }
-

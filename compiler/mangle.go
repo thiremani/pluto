@@ -507,52 +507,59 @@ func demangleIdent(s string) (string, string) {
 
 	// Parse segments in a loop: Unicode, n-prefixed numeric, or length-prefixed ASCII
 	for len(rest) > 0 {
-		switch {
-		case rest[0] == 'u' && len(rest) > 1 && rest[1] >= '1' && rest[1] <= '9':
-			// Unicode segment
-			runes, remaining, ok := parseUnicodeSegment(rest)
-			if !ok {
-				return result.String(), rest
-			}
-			for _, r := range runes {
-				result.WriteRune(r)
-			}
-			rest = remaining
-
-		case rest[0] == 'n' && len(rest) > 1 && rest[1] >= '0' && rest[1] <= '9':
-			// n-prefixed numeric (e.g., "123" -> "n123")
-			rest = consumeDigits(&result, rest[1:])
-
-		case rest[0] >= '0' && rest[0] <= '9':
-			// Length-prefixed ASCII
-			ascii, remaining, ok := parseASCIISegment(rest)
-			if !ok {
-				return result.String(), rest
-			}
-			result.WriteString(ascii)
-			rest = remaining
-
-		case rest[0] == '_' && len(rest) > 1 && isIdentContinuation(rest[1:]):
-			// Separator within identifier (after n-prefix, before ASCII/Unicode)
-			rest = rest[1:]
-
-		default:
-			// Unrecognized character - if nothing parsed yet, return failure
-			if result.Len() == 0 {
-				return "", s
-			}
-			return result.String(), rest
+		remaining, ok := demangleIdentSegment(&result, rest)
+		if !ok {
+			break
 		}
+		rest = remaining
 	}
 
+	if result.Len() == 0 {
+		return "", s
+	}
 	return result.String(), rest
+}
+
+// demangleIdentSegment parses a single identifier segment from s into result.
+// Returns the remaining string and whether a segment was consumed.
+func demangleIdentSegment(result *strings.Builder, s string) (string, bool) {
+	switch {
+	case s[0] == 'u' && len(s) > 1 && s[1] >= '1' && s[1] <= '9':
+		// Unicode segment
+		runes, rest, ok := parseUnicodeSegment(s)
+		if !ok {
+			return s, false
+		}
+		for _, r := range runes {
+			result.WriteRune(r)
+		}
+		return rest, true
+
+	case s[0] == 'n' && len(s) > 1 && s[1] >= '0' && s[1] <= '9':
+		// n-prefixed numeric (e.g., "123" -> "n123")
+		rest := consumeDigits(result, s[1:])
+		// n-prefix always emits trailing _ before next segment
+		if strings.HasPrefix(rest, SEP) && len(rest) > 1 && isIdentContinuation(rest[1:]) {
+			rest = rest[1:]
+		}
+		return rest, true
+
+	case s[0] >= '0' && s[0] <= '9':
+		// Length-prefixed ASCII
+		ascii, rest, ok := parseASCIISegment(s)
+		if !ok {
+			return s, false
+		}
+		result.WriteString(ascii)
+		return rest, true
+
+	default:
+		return s, false
+	}
 }
 
 // isIdentContinuation checks if s starts with a valid identifier segment.
 func isIdentContinuation(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
 	// Digit: ASCII segment follows
 	if s[0] >= '0' && s[0] <= '9' {
 		return true

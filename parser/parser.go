@@ -1343,6 +1343,13 @@ func (p *StmtParser) parseDotPostfix(base ast.Expression) ast.Expression {
 	if !p.expectPeek(token.IDENT) {
 		return base
 	}
+	if p.curToken.HadSpace {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "no whitespace allowed after '.' in field access",
+		})
+		return base
+	}
 	p.validateIdentifier(p.curToken)
 	p.errorOnBlanks()
 	return &ast.DotExpression{

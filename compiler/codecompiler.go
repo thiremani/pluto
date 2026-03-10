@@ -36,6 +36,7 @@ func validateStructUsage(def *Struct, headers []token.Token) []*token.CompileErr
 }
 
 // checkFieldTypes returns an error if a statement's value types conflict with the canonical definition.
+// Int→float promotion is allowed to match the codegen widening in structFieldConstValue.
 func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError {
 	for i, header := range stmt.Value.Headers {
 		defIdx := def.FieldIndex(header.Literal)
@@ -46,11 +47,13 @@ func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError
 		if !ok {
 			continue // buildStructDef catches unsupported expressions
 		}
-		if !TypeEqual(cellType, def.Fields[defIdx].Type) {
-			return &token.CompileError{
-				Token: stmt.Value.Row[i].Tok(),
-				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", header.Literal, def.Fields[defIdx].Type.String(), cellType.String()),
-			}
+		defType := def.Fields[defIdx].Type
+		if TypeEqual(cellType, defType) || (cellType.Kind() == IntKind && defType.Kind() == FloatKind) {
+			continue
+		}
+		return &token.CompileError{
+			Token: stmt.Value.Row[i].Tok(),
+			Msg:   fmt.Sprintf("struct field %q expects %s, got %s", header.Literal, defType.String(), cellType.String()),
 		}
 	}
 	return nil
