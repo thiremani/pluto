@@ -65,7 +65,7 @@ func checkFieldOrder(def *Struct, headers []token.Token) *token.CompileError {
 		if header.Literal != def.Fields[i].Name {
 			return &token.CompileError{
 				Token: header,
-				Msg:   fmt.Sprintf("ambiguous struct field order for %s: expected %s at position %d, got %s", def.Name, def.Fields[i].Name, i, header.Literal),
+				Msg:   fmt.Sprintf("struct %s fields reordered: expected %s at position %d, got %s (all fields must match definition order)", def.Name, def.Fields[i].Name, i, header.Literal),
 			}
 		}
 	}
@@ -103,23 +103,32 @@ func validateStructHeaders(defs map[string]*Struct, stmts []*ast.StructStatement
 		if len(stmt.Value.Headers) == 0 {
 			continue
 		}
-		def := defs[stmt.Value.Token.Literal]
-		usageErrs := validateStructUsage(def, stmt.Value.Headers)
-		errs = append(errs, usageErrs...)
-		if len(usageErrs) > 0 {
-			continue // skip order/type checks when fields are unknown
-		}
-		if len(stmt.Value.Headers) == len(def.Fields) {
-			if err := checkFieldOrder(def, stmt.Value.Headers); err != nil {
-				errs = append(errs, err)
-				continue // skip type checks when field order is wrong
-			}
-		}
-		if err := checkFieldTypes(def, stmt); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, validateStructStmt(defs[stmt.Value.Token.Literal], stmt)...)
 	}
 	return errs
+}
+
+// validateStructStmt validates a single struct statement against its canonical definition.
+func validateStructStmt(def *Struct, stmt *ast.StructStatement) []*token.CompileError {
+	usageErrs := validateStructUsage(def, stmt.Value.Headers)
+	if len(usageErrs) > 0 {
+		if len(stmt.Value.Headers) == len(def.Fields) {
+			return []*token.CompileError{{
+				Token: stmt.Value.Token,
+				Msg:   fmt.Sprintf("struct %s redefined with different fields", def.Name),
+			}}
+		}
+		return usageErrs
+	}
+	if len(stmt.Value.Headers) == len(def.Fields) {
+		if err := checkFieldOrder(def, stmt.Value.Headers); err != nil {
+			return []*token.CompileError{err}
+		}
+	}
+	if err := checkFieldTypes(def, stmt); err != nil {
+		return []*token.CompileError{err}
+	}
+	return nil
 }
 
 // collectStructDefs finds the canonical definition (max-header statement) for each struct type

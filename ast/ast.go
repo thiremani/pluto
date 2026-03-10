@@ -79,7 +79,7 @@ func (c *Code) Merge(other *Code) {
 		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
 		maps.Copy(c.Func.Map, other.Func.Map)
 		c.Struct.Statements = append(c.Struct.Statements, other.Struct.Statements...)
-		maps.Copy(c.Struct.Map, other.Struct.Map)
+		maps.Copy(c.Struct.Map, other.Struct.Map) // last-writer-wins; canonical def uses Statements not Map
 	}
 }
 

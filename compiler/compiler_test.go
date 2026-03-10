@@ -172,16 +172,16 @@ func TestStructAmbiguousFieldOrder(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "ambiguousFieldOrder", "", merged)
 	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected ambiguous field order error")
+	require.NotEmpty(t, errs, "expected field order error")
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), "ambiguous struct field order") {
+		if strings.Contains(err.Error(), "fields reordered") {
 			found = true
 			break
 		}
 	}
-	require.True(t, found, "expected ambiguous field order error, got: %v", errs)
+	require.True(t, found, "expected field order error, got: %v", errs)
 }
 
 func TestStructUnknownField(t *testing.T) {
@@ -472,12 +472,17 @@ func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "unknownFieldNoSpurious", "", merged)
 	errs := cc.Compile()
-	require.NotEmpty(t, errs, "expected unknown field error")
+	require.NotEmpty(t, errs, "expected redefined struct error")
 
+	found := false
 	for _, err := range errs {
-		require.NotContains(t, err.Error(), "ambiguous struct field order",
-			"should not emit spurious order error when field is unknown")
+		if strings.Contains(err.Error(), "struct Person redefined with different fields") {
+			found = true
+		}
+		require.NotContains(t, err.Error(), "fields reordered",
+			"should not emit spurious order error for redefined struct")
 	}
+	require.True(t, found, "expected redefined struct error, got: %v", errs)
 }
 
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {

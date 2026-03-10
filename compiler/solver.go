@@ -806,6 +806,7 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 	}
 
 	fields := make([]StructField, len(sl.Headers))
+	fieldSet := make(map[string]struct{}, len(sl.Headers))
 	for i, nameTok := range sl.Headers {
 		cellType, ok := ts.typeCell(row[i], sl.Tok())
 		if !ok {
@@ -815,11 +816,13 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 			Name: nameTok.Literal,
 			Type: cellType,
 		}
+		fieldSet[nameTok.Literal] = struct{}{}
 	}
 
 	structType := Struct{
-		Name:   sl.Token.Literal,
-		Fields: fields,
+		Name:     sl.Token.Literal,
+		Fields:   fields,
+		FieldSet: fieldSet,
 	}
 	info.OutTypes = []Type{structType}
 	return info.OutTypes
