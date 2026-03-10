@@ -366,6 +366,16 @@ func (s Struct) String() string {
 
 func (s Struct) Kind() Kind { return StructKind }
 
+// FieldIndex returns the index of the named field, or -1 if not found.
+func (s Struct) FieldIndex(name string) int {
+	for i, f := range s.Fields {
+		if f.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // Structs are nominal in Phase 1 and mangle as nominal type names.
 func (s Struct) Mangle() string { return MangleIdent(s.Name) }
 
@@ -613,3 +623,13 @@ func eqStruct(a, b Type) bool {
 	}
 	return true
 }
+
+var reservedTypeNames = map[string]struct{}{
+	"Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
+	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
+	"U8": {}, "U16": {}, "U32": {}, "U64": {},
+	"F32": {}, "F64": {},
+	"Ptr": {}, "Range": {}, "Array": {}, "ArrayRange": {},
+	"Func": {}, "Struct": {},
+}
+

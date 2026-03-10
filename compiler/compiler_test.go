@@ -135,7 +135,7 @@ greeting = "hello"`
 	}
 }
 
-func TestCodeCompilerAllowsRepeatedStructDefs(t *testing.T) {
+func TestStructRepeatedDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
@@ -155,7 +155,7 @@ func TestCodeCompilerAllowsRepeatedStructDefs(t *testing.T) {
 	require.Empty(t, errs, "expected same-order repeated struct defs to compile")
 }
 
-func TestCodeCompilerRejectsAmbiguousFieldOrder(t *testing.T) {
+func TestStructAmbiguousFieldOrder(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35`)
@@ -184,7 +184,7 @@ func TestCodeCompilerRejectsAmbiguousFieldOrder(t *testing.T) {
 	require.True(t, found, "expected ambiguous field order error, got: %v", errs)
 }
 
-func TestCodeCompilerRejectsUnknownField(t *testing.T) {
+func TestStructUnknownField(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age score
     "Tejas" 35 100`)
@@ -213,7 +213,7 @@ func TestCodeCompilerRejectsUnknownField(t *testing.T) {
 	require.True(t, found, "expected unknown field error, got: %v", errs)
 }
 
-func TestCodeCompilerRejectsFieldTypeMismatch(t *testing.T) {
+func TestStructFieldTypeMismatch(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age height
     "Tejas" 35 184.5`)
@@ -234,7 +234,7 @@ func TestCodeCompilerRejectsFieldTypeMismatch(t *testing.T) {
 
 	found := false
 	for _, err := range errs {
-		if strings.Contains(err.Error(), "expects I64 value") {
+		if strings.Contains(err.Error(), "expects I64") {
 			found = true
 			break
 		}
@@ -242,7 +242,36 @@ func TestCodeCompilerRejectsFieldTypeMismatch(t *testing.T) {
 	require.True(t, found, "expected type mismatch error, got: %v", errs)
 }
 
-func TestCodeCompilerAllowsSubsetStructDefs(t *testing.T) {
+func TestStructSameArityConflictingTypes(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :name age
+    35 "Ada"`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "sameArityConflict", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected type conflict error for same-arity definitions")
+
+	found := false
+	for _, err := range errs {
+		if strings.Contains(err.Error(), `struct field "name" expects`) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected field type conflict error, got: %v", errs)
+}
+
+func TestStructSubsetDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age height
     "Tejas" 35 184.5`)
@@ -262,7 +291,7 @@ func TestCodeCompilerAllowsSubsetStructDefs(t *testing.T) {
 	require.Empty(t, errs, "expected subset/reordered struct definition to compile")
 }
 
-func TestCodeCompilerMaxHeaderDef(t *testing.T) {
+func TestStructMaxHeaderDef(t *testing.T) {
 	// Smaller statement first, larger definition second — larger wins.
 	codeA := mustParseCode(t, `q = Person
     :age name
@@ -287,7 +316,7 @@ func TestCodeCompilerMaxHeaderDef(t *testing.T) {
 	require.Len(t, schema.Fields, 3, "expected 3 fields from max-header definition")
 }
 
-func TestCodeCompilerAllowsEmptyStructInit(t *testing.T) {
+func TestStructEmptyInit(t *testing.T) {
 	code := mustParseCode(t, `p = Person
     :name age
     "Tejas" 35
@@ -301,7 +330,7 @@ q = Person`)
 	require.Empty(t, errs, "expected empty struct initializer to compile after definition")
 }
 
-func TestCodeCompilerRejectsStructUseBeforeDef(t *testing.T) {
+func TestStructUseBeforeDef(t *testing.T) {
 	// Build AST directly: parser now rejects this, so we test the compiler guard independently.
 	code := ast.NewCode()
 	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
@@ -327,6 +356,128 @@ func TestCodeCompilerRejectsStructUseBeforeDef(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected undefined struct type error, got: %v", errs)
+}
+
+func TestStructReservedTypeName(t *testing.T) {
+	// Build AST directly to bypass parser-side checks.
+	code := ast.NewCode()
+	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
+		Token: token.Token{Type: token.ASSIGN, Literal: "="},
+		Name:  &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
+		Value: &ast.StructLiteral{
+			Token:   token.Token{Type: token.IDENT, Literal: "Int"},
+			Headers: []token.Token{{Type: token.IDENT, Literal: "val"}},
+			Row:     []ast.Expression{&ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "1"}, Value: 1}},
+		},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "reservedTypeName", "", code)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected reserved type name error")
+
+	require.Contains(t, errs[0].Error(), `struct type name "Int" is a reserved name`)
+}
+
+func TestReservedConstantName(t *testing.T) {
+	code := ast.NewCode()
+	code.Const.Statements = append(code.Const.Statements, &ast.ConstStatement{
+		Token: token.Token{Type: token.ASSIGN, Literal: "="},
+		Name:  []*ast.Identifier{{Token: token.Token{Type: token.IDENT, Literal: "Int"}, Value: "Int"}},
+		Value: []ast.Expression{&ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "42"}, Value: 42}},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	errs := NewCodeCompiler(ctx, "reservedConst", "", code).Compile()
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0].Error(), `constant name "Int" is a reserved name`)
+}
+
+func TestReservedFuncName(t *testing.T) {
+	code := ast.NewCode()
+	code.Func.Statements = append(code.Func.Statements, &ast.FuncStatement{
+		Token: token.Token{Type: token.IDENT, Literal: "Float"},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	errs := NewCodeCompiler(ctx, "reservedFunc", "", code).Compile()
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0].Error(), `function name "Float" is a reserved name`)
+}
+
+func TestReservedStructBindingName(t *testing.T) {
+	code := ast.NewCode()
+	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
+		Token: token.Token{Type: token.ASSIGN, Literal: "="},
+		Name:  &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "I64"}, Value: "I64"},
+		Value: &ast.StructLiteral{
+			Token:   token.Token{Type: token.IDENT, Literal: "Person"},
+			Headers: []token.Token{{Type: token.IDENT, Literal: "name"}},
+			Row:     []ast.Expression{&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Tejas"}, Value: "Tejas"}},
+		},
+	})
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	errs := NewCodeCompiler(ctx, "reservedBinding", "", code).Compile()
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0].Error(), `struct constant name "I64" is a reserved name`)
+}
+
+func TestReservedScriptVariableName(t *testing.T) {
+	code := ast.NewCode()
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "reservedVar", "", code)
+	cc.Compile()
+
+	program := &ast.Program{
+		Statements: []ast.Statement{
+			&ast.LetStatement{
+				Token: token.Token{Type: token.ASSIGN, Literal: "="},
+				Name:  []*ast.Identifier{{Token: token.Token{Type: token.IDENT, Literal: "Str"}, Value: "Str"}},
+				Value: []ast.Expression{&ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "42"}, Value: 42}},
+			},
+		},
+	}
+
+	sc := NewScriptCompiler(ctx, program, cc, cc.Compiler.FuncCache, cc.Compiler.ExprCache)
+	errs := sc.Compile()
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0].Error(), `variable name "Str" is a reserved name`)
+}
+
+func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
+	codeA := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+	codeB := mustParseCode(t, `q = Person
+    :height age
+    170 28`)
+
+	merged := ast.NewCode()
+	merged.Merge(codeA)
+	merged.Merge(codeB)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "unknownFieldNoSpurious", "", merged)
+	errs := cc.Compile()
+	require.NotEmpty(t, errs, "expected unknown field error")
+
+	for _, err := range errs {
+		require.NotContains(t, err.Error(), "ambiguous struct field order",
+			"should not emit spurious order error when field is unknown")
+	}
 }
 
 func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {

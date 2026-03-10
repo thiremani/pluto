@@ -35,6 +35,27 @@ func validateStructUsage(def *Struct, headers []token.Token) []*token.CompileErr
 	return errs
 }
 
+// checkFieldTypes returns an error if a statement's value types conflict with the canonical definition.
+func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError {
+	for i, header := range stmt.Value.Headers {
+		defIdx := def.FieldIndex(header.Literal)
+		if defIdx < 0 {
+			continue // validateStructUsage catches unknown fields
+		}
+		cellType, ok := structFieldTypeFromConstant(stmt.Value.Row[i])
+		if !ok {
+			continue // buildStructDef catches unsupported expressions
+		}
+		if !TypeEqual(cellType, def.Fields[defIdx].Type) {
+			return &token.CompileError{
+				Token: stmt.Value.Row[i].Tok(),
+				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", header.Literal, def.Fields[defIdx].Type.String(), cellType.String()),
+			}
+		}
+	}
+	return nil
+}
+
 // checkFieldOrder returns an error if an equal-length header list has fields in a different order.
 func checkFieldOrder(def *Struct, headers []token.Token) *token.CompileError {
 	for i, header := range headers {
@@ -80,11 +101,19 @@ func validateStructHeaders(defs map[string]*Struct, stmts []*ast.StructStatement
 			continue
 		}
 		def := defs[stmt.Value.Token.Literal]
-		errs = append(errs, validateStructUsage(def, stmt.Value.Headers)...)
+		usageErrs := validateStructUsage(def, stmt.Value.Headers)
+		errs = append(errs, usageErrs...)
+		if len(usageErrs) > 0 {
+			continue // skip order/type checks when fields are unknown
+		}
 		if len(stmt.Value.Headers) == len(def.Fields) {
 			if err := checkFieldOrder(def, stmt.Value.Headers); err != nil {
 				errs = append(errs, err)
+				continue // skip type checks when field order is wrong
 			}
+		}
+		if err := checkFieldTypes(def, stmt); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errs
@@ -121,10 +150,15 @@ func collectStructDefs(stmts []*ast.StructStatement) (map[string]*Struct, []*tok
 // validateStructDefs finds the single canonical definition for each struct type,
 // populates StructCache, and reports errors for
 // unknown fields, field order conflicts, and undefined types.
-func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
+// Must be called after validateReservedNames.
+func (cc *CodeCompiler) validateStructDefs() {
+	c := cc.Compiler
+	prior := len(c.Errors)
+
 	defs, errs := collectStructDefs(cc.Code.Struct.Statements)
 	if len(errs) > 0 {
-		return errs
+		c.Errors = append(c.Errors, errs...)
+		return
 	}
 
 	// Validate zero-header usages have a definition somewhere.
@@ -132,28 +166,44 @@ func (cc *CodeCompiler) validateStructDefs() []*token.CompileError {
 		typeName := stmt.Value.Token.Literal
 		if len(stmt.Value.Headers) == 0 {
 			if _, exists := defs[typeName]; !exists {
-				errs = append(errs, &token.CompileError{
+				c.Errors = append(c.Errors, &token.CompileError{
 					Token: stmt.Value.Token,
 					Msg:   fmt.Sprintf("struct type %s has not been defined", typeName),
 				})
 			}
 		}
 	}
-	if len(errs) > 0 {
-		return errs
+	if len(c.Errors) > prior {
+		return
 	}
 
 	// Populate StructCache from definitions.
 	for typeName, def := range defs {
-		cc.Compiler.StructCache[typeName] = def
+		c.StructCache[typeName] = def
 	}
-
-	return errs
 }
 
-// compile compiles the constants in the AST and adds them to the compiler's symbol table.
+// validateReservedNames rejects constant, struct type, struct binding,
+// and function names that collide with built-in type names.
+func (cc *CodeCompiler) validateReservedNames() {
+	for _, stmt := range cc.Code.Const.Statements {
+		for _, id := range stmt.Name {
+			cc.Compiler.rejectReservedName(id.Token, "constant")
+		}
+	}
+	for _, stmt := range cc.Code.Struct.Statements {
+		cc.Compiler.rejectReservedName(stmt.Value.Token, "struct type")
+		cc.Compiler.rejectReservedName(stmt.Name.Token, "struct constant")
+	}
+	for _, stmt := range cc.Code.Func.Statements {
+		cc.Compiler.rejectReservedName(stmt.Token, "function")
+	}
+}
+
+// Compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
-	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.validateStructDefs()...)
+	cc.validateReservedNames()
+	cc.validateStructDefs()
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
 	}

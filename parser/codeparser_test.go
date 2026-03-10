@@ -183,13 +183,6 @@ res = sum(res, x)
 			params: nil,
 			errs:   []string{"identifier cannot end with '_'"},
 		},
-		{
-			name: "reservedName",
-			input: `y = I64(x)
-    y = x`,
-			params: nil,
-			errs:   []string{`function name "I64" is reserved`},
-		},
 	}
 
 	for _, tt := range tests {
@@ -432,13 +425,6 @@ func TestStructDefErrors(t *testing.T) {
     :name age
     "Tejas" 35`,
 			errMsg: "struct definition must bind exactly one constant name",
-		},
-		{
-			name: "reserved struct type name",
-			input: `p = Int
-    :name age
-    "Tejas" 35`,
-			errMsg: `struct type name "Int" is reserved`,
 		},
 	}
 

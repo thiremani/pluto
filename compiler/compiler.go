@@ -121,6 +121,15 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 	}
 }
 
+func (c *Compiler) rejectReservedName(tok token.Token, kind string) {
+	if _, reserved := reservedTypeNames[tok.Literal]; reserved {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("%s name %q is a reserved name", kind, tok.Literal),
+		})
+	}
+}
+
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 	switch t.Kind() {
 	case IntKind:
