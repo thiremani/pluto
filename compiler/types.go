@@ -354,14 +354,11 @@ type Struct struct {
 }
 
 func (s Struct) String() string {
-	if len(s.Fields) == 0 {
-		return s.Name + "{}"
-	}
 	parts := make([]string, len(s.Fields))
 	for i, field := range s.Fields {
-		parts[i] = fmt.Sprintf("%s: %s", field.Name, field.Type.String())
+		parts[i] = field.Name + ":" + field.Type.String()
 	}
-	return fmt.Sprintf("%s{%s}", s.Name, strings.Join(parts, ", "))
+	return s.Name + "{" + strings.Join(parts, " ") + "}"
 }
 
 func (s Struct) Kind() Kind { return StructKind }
