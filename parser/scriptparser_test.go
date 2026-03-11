@@ -875,8 +875,18 @@ func TestDotExpression(t *testing.T) {
 }
 
 func TestDotExpressionDisallowsWhitespace(t *testing.T) {
-	input := `p .name`
-	sp := NewScriptParser(lexer.New("TestDotExpressionDisallowsWhitespace", input))
-	_ = sp.Parse()
-	require.NotEmpty(t, sp.Errors(), "expected parse error for spaced dot access")
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"space before dot", `p .name`},
+		{"space after dot", `p. age`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New(tt.name, tt.input))
+			_ = sp.Parse()
+			require.NotEmpty(t, sp.Errors(), "expected parse error for spaced dot access")
+		})
+	}
 }

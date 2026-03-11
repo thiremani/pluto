@@ -2331,6 +2331,15 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		s = &Symbol{Val: derefed, Type: elemType}
 	}
 
+	// Structs produce multi-line output with a trailing \n separator.
+	if s.Type.Kind() == StructKind {
+		fmtStr, fmtArgs, fmtFree := c.structFormatArgs(s)
+		*formatStr += fmtStr
+		*args = append(*args, fmtArgs...)
+		*toFree = append(*toFree, fmtFree...)
+		return
+	}
+
 	// ArrayRange needs special handling (two string args)
 	if s.Type.Kind() == ArrayRangeKind {
 		arrStr, rngStr := c.arrayRangeStrArgs(s)

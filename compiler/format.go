@@ -55,7 +55,7 @@ func defaultSpecifier(t Type) (string, error) {
 	case ArrayRangeKind:
 		return "%s", nil
 	case StructKind:
-		return "", fmt.Errorf("struct values cannot be printed directly; use field access (e.g. p.name)")
+		return "%s", nil
 	default:
 		err := fmt.Errorf("unsupported type in print statement %s", t.String())
 		return "", err
@@ -242,6 +242,12 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 			valArgs = append(valArgs, strPtr)
 			toFree = append(toFree, strPtr)
 			return
+		case StructKind:
+			fmtStr, fmtArgs, fmtFree := c.structFormatArgs(mainSym)
+			formattedStr = fmtStr
+			valArgs = append(valArgs, fmtArgs...)
+			toFree = append(toFree, fmtFree...)
+			return
 		case ArrayRangeKind:
 			arrStr, rangeStr := c.arrayRangeStrArgs(mainSym)
 			formattedStr = builder.String() + "[%s]"
@@ -394,6 +400,38 @@ func hasSpecifier(runes []rune, i int) bool {
 
 func specIdAhead(runes []rune, i int) bool {
 	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
+}
+
+// structFormatArgs builds a printf format string and args for a struct value.
+// Output format:
+//
+//	Point
+//	    :x y
+//	    1 2
+func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value, toFree []llvm.Value) {
+	st := s.Type.(Struct)
+	var headerParts []string
+	var valueParts []string
+	for i, field := range st.Fields {
+		headerParts = append(headerParts, field.Name)
+		fieldVal := c.builder.CreateExtractValue(s.Val, i, field.Name)
+		spec, _ := defaultSpecifier(field.Type)
+		switch field.Type.Kind() {
+		case FloatKind:
+			strPtr := c.floatStrArg(&Symbol{Type: field.Type, Val: fieldVal})
+			args = append(args, strPtr)
+			toFree = append(toFree, strPtr)
+		case ArrayKind:
+			strPtr := c.arrayStrArg(&Symbol{Type: field.Type, Val: fieldVal})
+			args = append(args, strPtr)
+			toFree = append(toFree, strPtr)
+		default:
+			args = append(args, fieldVal)
+		}
+		valueParts = append(valueParts, spec)
+	}
+	fmtStr = st.Name + "\n    :" + strings.Join(headerParts, " ") + "\n    " + strings.Join(valueParts, " ") + "\n"
+	return
 }
 
 // hasValidMarkers checks if a format string contains any markers (-identifier)
