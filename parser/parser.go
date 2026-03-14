@@ -638,27 +638,22 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	stmt := &ast.StructStatement{
 		Token: assignTok,
 		Name:  idents[0],
+		Value: &ast.StructLiteral{
+			Token: typeTok,
+		},
 	}
-
-	lit := &ast.StructLiteral{
-		Token: typeTok,
-	}
-	stmt.Value = lit
 
 	if p.peekTokenIs(token.EOF) {
 		return stmt
 	}
 
-	if !p.expectPeek(token.NEWLINE) {
-		return nil
-	}
+	// Caller only enters this path when the type name is followed by NEWLINE or EOF.
+	p.nextToken() // consume NEWLINE
 	if !p.peekTokenIs(token.INDENT) {
 		return stmt
 	}
-	if !p.expectPeek(token.INDENT) {
-		return nil
-	}
-	p.nextToken()
+	p.nextToken() // consume INDENT
+	p.nextToken() // move to first token in the struct body
 	if !p.curTokenIs(token.COLON) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
