@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/thiremani/pluto/token"
 )
 
 type Kind int
@@ -348,6 +350,9 @@ type StructField struct {
 }
 
 type Struct struct {
+	// Struct is the canonical schema for a nominal struct type.
+	// Source literals may provide only a subset of fields; omitted fields remain
+	// represented in the AST and are filled during codegen, not in the type.
 	Name     string
 	Fields   []StructField
 	FieldSet map[string]struct{}
@@ -387,6 +392,39 @@ func (s Struct) Key() Type {
 	return Struct{
 		Name:   s.Name,
 		Fields: keyFields,
+	}
+}
+
+func validateStructFieldHeaders(schema *Struct, headers []token.Token) (map[string]int, *token.CompileError) {
+	fieldIdxByHeader := make(map[string]int, len(headers))
+	for _, headerTok := range headers {
+		header := headerTok.Literal
+		if _, exists := fieldIdxByHeader[header]; exists {
+			return nil, &token.CompileError{
+				Token: headerTok,
+				Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
+			}
+		}
+		fieldIdx := schema.FieldIndex(header)
+		if fieldIdx < 0 {
+			return nil, &token.CompileError{
+				Token: headerTok,
+				Msg:   fmt.Sprintf("field %q not in struct type %s", header, schema.Name),
+			}
+		}
+		fieldIdxByHeader[header] = fieldIdx
+	}
+	return fieldIdxByHeader, nil
+}
+
+func structFieldTypeAssignable(cellType, fieldType Type) bool {
+	return TypeEqual(cellType, fieldType) || (cellType.Kind() == IntKind && fieldType.Kind() == FloatKind)
+}
+
+func structFieldTypeMismatchError(fieldName string, fieldType, cellType Type, tok token.Token) *token.CompileError {
+	return &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("struct field %q expects %s, got %s", fieldName, fieldType.String(), cellType.String()),
 	}
 }
 
@@ -495,23 +533,9 @@ func canRefineFunc(oldFunc, newFunc Func) bool {
 }
 
 func canRefineStruct(oldStruct, newStruct Struct) bool {
-	if oldStruct.Name != newStruct.Name {
-		return false
-	}
-	if len(oldStruct.Fields) != len(newStruct.Fields) {
-		return false
-	}
-	for i := range oldStruct.Fields {
-		oldField := oldStruct.Fields[i]
-		newField := newStruct.Fields[i]
-		if oldField.Name != newField.Name {
-			return false
-		}
-		if !CanRefineType(oldField.Type, newField.Type) {
-			return false
-		}
-	}
-	return true
+	// Struct refinement is nominal: solver-side Struct values are canonicalized
+	// through StructCache before they participate in assignment/refinement.
+	return oldStruct.Name == newStruct.Name
 }
 
 func typeComparer(k Kind) func(a, b Type) bool {

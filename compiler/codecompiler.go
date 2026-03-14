@@ -48,13 +48,10 @@ func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError
 			continue // buildStructDef catches unsupported expressions
 		}
 		defType := def.Fields[defIdx].Type
-		if TypeEqual(cellType, defType) || (cellType.Kind() == IntKind && defType.Kind() == FloatKind) {
+		if structFieldTypeAssignable(cellType, defType) {
 			continue
 		}
-		return &token.CompileError{
-			Token: stmt.Value.Row[i].Tok(),
-			Msg:   fmt.Sprintf("struct field %q expects %s, got %s", header.Literal, defType.String(), cellType.String()),
-		}
+		return structFieldTypeMismatchError(header.Literal, defType, cellType, stmt.Value.Row[i].Tok())
 	}
 	return nil
 }

@@ -402,17 +402,14 @@ func (c *Compiler) compileStructConst(v *ast.StructLiteral, sym *Symbol, mangled
 		return false
 	}
 
+	if _, err := validateStructFieldHeaders(schema, v.Headers); err != nil {
+		c.Errors = append(c.Errors, err)
+		return false
+	}
+
 	cellsByHeader := make(map[string]ast.Expression, len(v.Headers))
 	for idx, headerTok := range v.Headers {
-		header := headerTok.Literal
-		if _, exists := cellsByHeader[header]; exists {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: headerTok,
-				Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
-			})
-			return false
-		}
-		cellsByHeader[header] = v.Row[idx]
+		cellsByHeader[headerTok.Literal] = v.Row[idx]
 	}
 
 	constVals := make([]llvm.Value, len(schema.Fields))
