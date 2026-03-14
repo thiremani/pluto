@@ -857,3 +857,36 @@ val = data[i]`,
 	_, isRangeLiteral := idxExpr.Range.(*ast.RangeLiteral)
 	require.True(t, isRangeLiteral)
 }
+
+func TestDotExpression(t *testing.T) {
+	input := `val = p.age`
+	sp := NewScriptParser(lexer.New("TestDotExpression", input))
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1)
+	dot, ok := stmt.Value[0].(*ast.DotExpression)
+	require.Truef(t, ok, "expected *ast.DotExpression, got %T", stmt.Value[0])
+	require.Equal(t, "age", dot.Field)
+	left, ok := dot.Left.(*ast.Identifier)
+	require.True(t, ok, "expected identifier on left side of dot")
+	require.Equal(t, "p", left.Value)
+}
+
+func TestDotExpressionDisallowsWhitespace(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"space before dot", `p .name`},
+		{"space after dot", `p. age`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New(tt.name, tt.input))
+			_ = sp.Parse()
+			require.NotEmpty(t, sp.Errors(), "expected parse error for spaced dot access")
+		})
+	}
+}

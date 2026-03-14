@@ -21,7 +21,25 @@ func NewScriptCompiler(ctx llvm.Context, program *ast.Program, cc *CodeCompiler,
 	}
 }
 
+// validateReservedNames rejects script variable names that collide with built-in type names.
+func (sc *ScriptCompiler) validateReservedNames() {
+	for _, stmt := range sc.Program.Statements {
+		ls, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+		for _, id := range ls.Name {
+			sc.Compiler.rejectReservedName(id.Token, "variable")
+		}
+	}
+}
+
 func (sc *ScriptCompiler) Compile() []*token.CompileError {
+	sc.validateReservedNames()
+	if len(sc.Compiler.Errors) > 0 {
+		return sc.Compiler.Errors
+	}
+
 	// get output types for all functions
 	ts := NewTypeSolver(sc)
 	ts.Solve()

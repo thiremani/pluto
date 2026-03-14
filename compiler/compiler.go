@@ -85,6 +85,7 @@ type Compiler struct {
 	tmpCounter      int           // Temporary variable names counter
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
+	StructCache     map[string]*Struct
 	FuncCache       map[string]*Func
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
@@ -111,11 +112,21 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		tmpCounter:      0,
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
+		StructCache:     make(map[string]*Struct),
 		FuncCache:       make(map[string]*Func),
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
 		stmtCtxStack:    []stmtCtx{},
+	}
+}
+
+func (c *Compiler) rejectReservedName(tok token.Token, kind string) {
+	if _, reserved := reservedTypeNames[tok.Literal]; reserved {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("%s name %q is a reserved name", kind, tok.Literal),
+		})
 	}
 }
 
@@ -173,9 +184,30 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		// Arrays are backed by runtime dynamic vectors (opaque C structs).
 		// Model them as opaque pointers here to interop cleanly with the C runtime.
 		return llvm.PointerType(c.Context.Int8Type(), 0)
+	case StructKind:
+		return c.getOrCreateStructLLVMType(t.(Struct))
 	default:
 		panic("unknown type in mapToLLVMType: " + t.String())
 	}
+}
+
+func (c *Compiler) structTypeName(typeName string) string {
+	return c.MangledPath + SEP + MangleIdent(typeName)
+}
+
+func (c *Compiler) getOrCreateStructLLVMType(structType Struct) llvm.Type {
+	name := c.structTypeName(structType.Name)
+	if st := c.Module.GetTypeByName(name); !st.IsNil() {
+		return st
+	}
+
+	st := c.Context.StructCreateNamed(name)
+	fieldTypes := make([]llvm.Type, len(structType.Fields))
+	for i, field := range structType.Fields {
+		fieldTypes[i] = c.mapToLLVMType(field.Type)
+	}
+	st.StructSetBody(fieldTypes, false)
+	return st
 }
 
 // createGlobalString creates a global string constant in the LLVM module.
@@ -223,44 +255,198 @@ func (c *Compiler) makeGlobalConst(llvmType llvm.Type, name string, val llvm.Val
 	return global
 }
 
+func structFieldTypeFromConstant(cell ast.Expression) (Type, bool) {
+	switch cell.(type) {
+	case *ast.IntegerLiteral:
+		return I64, true
+	case *ast.FloatLiteral:
+		return F64, true
+	case *ast.StringLiteral:
+		return StrG{}, true
+	default:
+		return Unresolved{}, false
+	}
+}
+
+// getStructSchema looks up a struct type's canonical schema from StructCache.
+// StructCache is populated by validateStructDefs before compilation begins.
+func (c *Compiler) getStructSchema(lit *ast.StructLiteral) (*Struct, bool) {
+	typeName := lit.Token.Literal
+	if schema, ok := c.StructCache[typeName]; ok {
+		return schema, true
+	}
+	c.Errors = append(c.Errors, &token.CompileError{
+		Token: lit.Token,
+		Msg:   fmt.Sprintf("struct type %s is not defined", typeName),
+	})
+	return nil, false
+}
+
+func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType Type, cell ast.Expression) (llvm.Value, bool) {
+	switch cv := cell.(type) {
+	case *ast.IntegerLiteral:
+		switch fieldType.Kind() {
+		case IntKind:
+			return c.ConstI64(uint64(cv.Value)), true
+		case FloatKind:
+			return c.ConstF64(float64(cv.Value)), true
+		}
+	case *ast.FloatLiteral:
+		if fieldType.Kind() == FloatKind {
+			return c.ConstF64(cv.Value), true
+		}
+	case *ast.StringLiteral:
+		if fieldType.Kind() == StrKind {
+			fieldGlobalName := fmt.Sprintf("struct_%s_%s_%d", typeName, fieldName, c.tmpCounter)
+			c.tmpCounter++
+			fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
+			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
+		}
+	case *ast.HeapStringLiteral:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: cell.Tok(),
+			Msg:   "heap string literals cannot be used in struct constants",
+		})
+		return llvm.Value{}, false
+	}
+
+	var expected string
+	switch fieldType.Kind() {
+	case IntKind:
+		expected = "I64"
+	case FloatKind:
+		expected = "F64"
+	case StrKind:
+		expected = "Str"
+	default:
+		expected = fieldType.String()
+	}
+	c.Errors = append(c.Errors, &token.CompileError{
+		Token: cell.Tok(),
+		Msg:   fmt.Sprintf("struct field %q expects %s value", fieldName, expected),
+	})
+	return llvm.Value{}, false
+}
+
+func (c *Compiler) structFieldZeroValue(typeName, fieldName string, fieldType Type) (llvm.Value, bool) {
+	switch fieldType.Kind() {
+	case IntKind:
+		return c.ConstI64(0), true
+	case FloatKind:
+		return c.ConstF64(0), true
+	case StrKind:
+		fieldGlobalName := fmt.Sprintf("struct_%s_%s_default_%d", typeName, fieldName, c.tmpCounter)
+		c.tmpCounter++
+		fieldGlobal := c.createGlobalString(fieldGlobalName, "", llvm.PrivateLinkage)
+		return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
+	default:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Msg: fmt.Sprintf("unsupported zero value for struct field type %s (%q)", fieldType.String(), fieldName),
+		})
+		return llvm.Value{}, false
+	}
+}
+
+func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
+	linkage := llvm.ExternalLinkage
+	sym := &Symbol{}
+	var val llvm.Value
+
+	// Mangle constant name for C ABI compliance
+	mangledName := MangleConst(c.MangledPath, name)
+
+	switch v := valueExpr.(type) {
+	case *ast.IntegerLiteral:
+		val = c.ConstI64(uint64(v.Value))
+		sym.Type = Ptr{Elem: Int{Width: 64}}
+		sym.Val = c.makeGlobalConst(c.Context.Int64Type(), mangledName, val, linkage)
+
+	case *ast.FloatLiteral:
+		val = c.ConstF64(v.Value)
+		sym.Type = Ptr{Elem: Float{Width: 64}}
+		sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
+
+	case *ast.StringLiteral:
+		sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
+		sym.Type = StrG{} // Global constants are static strings
+
+	case *ast.HeapStringLiteral:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: v.Token,
+			Msg:   "heap string literals cannot be used as global constants",
+		})
+		return
+
+	case *ast.StructLiteral:
+		if !c.compileStructConst(v, sym, mangledName, linkage) {
+			return
+		}
+
+	default:
+		panic(fmt.Sprintf("unsupported constant type: %T", v))
+	}
+	Put(c.Scopes, name, sym)
+}
+
+func (c *Compiler) compileStructConst(v *ast.StructLiteral, sym *Symbol, mangledName string, linkage llvm.Linkage) bool {
+	if len(v.Row) != len(v.Headers) {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: v.Token,
+			Msg:   fmt.Sprintf("struct row width mismatch: got %d values for %d fields", len(v.Row), len(v.Headers)),
+		})
+		return false
+	}
+
+	schema, ok := c.getStructSchema(v)
+	if !ok {
+		return false
+	}
+
+	cellsByHeader := make(map[string]ast.Expression, len(v.Headers))
+	for idx, headerTok := range v.Headers {
+		header := headerTok.Literal
+		if _, exists := cellsByHeader[header]; exists {
+			c.Errors = append(c.Errors, &token.CompileError{
+				Token: headerTok,
+				Msg:   fmt.Sprintf("duplicate struct field header: %s", header),
+			})
+			return false
+		}
+		cellsByHeader[header] = v.Row[idx]
+	}
+
+	constVals := make([]llvm.Value, len(schema.Fields))
+	for idx, field := range schema.Fields {
+		cell, provided := cellsByHeader[field.Name]
+		if provided {
+			cv, ok := c.structFieldConstValue(schema.Name, field.Name, field.Type, cell)
+			if !ok {
+				return false
+			}
+			constVals[idx] = cv
+			continue
+		}
+		zv, ok := c.structFieldZeroValue(schema.Name, field.Name, field.Type)
+		if !ok {
+			return false
+		}
+		constVals[idx] = zv
+	}
+
+	structLLVM := c.mapToLLVMType(*schema)
+	sym.Type = Ptr{Elem: *schema}
+	sym.Val = c.makeGlobalConst(structLLVM, mangledName, llvm.ConstNamedStruct(structLLVM, constVals), linkage)
+	return true
+}
+
 func (c *Compiler) compileConstStatement(stmt *ast.ConstStatement) {
 	for i := 0; i < len(stmt.Name); i++ {
-		name := stmt.Name[i].Value
-		valueExpr := stmt.Value[i]
-		linkage := llvm.ExternalLinkage
-		sym := &Symbol{}
-		var val llvm.Value
-
-		// Mangle constant name for C ABI compliance
-		mangledName := MangleConst(c.MangledPath, name)
-
-		switch v := valueExpr.(type) {
-		case *ast.IntegerLiteral:
-			val = c.ConstI64(uint64(v.Value))
-			sym.Type = Ptr{Elem: Int{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.Int64Type(), mangledName, val, linkage)
-
-		case *ast.FloatLiteral:
-			val = c.ConstF64(v.Value)
-			sym.Type = Ptr{Elem: Float{Width: 64}}
-			sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
-
-		case *ast.StringLiteral:
-			sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
-			sym.Type = StrG{} // Global constants are static strings
-
-		case *ast.HeapStringLiteral:
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: v.Token,
-				Msg:   "heap string literals cannot be used as global constants",
-			})
-			return
-
-		default:
-			panic(fmt.Sprintf("unsupported constant type: %T", v))
-		}
-		Put(c.Scopes, name, sym)
+		c.compileConstBinding(stmt.Name[i].Value, stmt.Value[i])
 	}
+}
+
+func (c *Compiler) compileStructStatement(stmt *ast.StructStatement) {
+	c.compileConstBinding(stmt.Name.Value, stmt.Value)
 }
 
 func (c *Compiler) addMain() {
@@ -315,6 +501,17 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		// Create zero value for the range part
 		rangeSym := c.makeZeroValue(arrRangeType.Range)
 		s.Val = c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRangeType)
+	case StructKind:
+		structType := symType.(Struct)
+		fieldVals := make([]llvm.Value, len(structType.Fields))
+		for i, field := range structType.Fields {
+			zv, ok := c.structFieldZeroValue(structType.Name, field.Name, field.Type)
+			if !ok {
+				return s
+			}
+			fieldVals[i] = zv
+		}
+		s.Val = llvm.ConstNamedStruct(c.mapToLLVMType(structType), fieldVals)
 	default:
 		panic(fmt.Sprintf("unsupported type for zero value: %s", symType.String()))
 	}
@@ -737,6 +934,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		return c.compileArrayExpression(e, dest)
 	case *ast.ArrayRangeExpression:
 		return c.compileArrayRangeExpression(e, dest)
+	case *ast.DotExpression:
+		return c.compileDotExpression(e)
 	case *ast.Identifier:
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
@@ -777,6 +976,9 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		inst.SetAlignment(8)
 	case ArrayRange:
 		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
+		inst.SetAlignment(8)
+	case Struct:
+		// Struct alignment follows max-field ABI alignment; Phase 1 fields are scalar/ptr.
 		inst.SetAlignment(8)
 	default:
 		panic("Unsupported type for alignment" + typ.String())
@@ -929,6 +1131,43 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	// no need to check ok as that is done in the typesolver
 	s, _ = Get(cc.Scopes, ident.Value)
 	return c.derefIfPointer(s, ident.Value+"_load")
+}
+
+func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
+	leftSym := c.compileExpression(expr.Left, nil)[0]
+
+	structType, ok := leftSym.Type.(Struct)
+	if !ok {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("field access expects a struct value, got %s", leftSym.Type.String()),
+		})
+		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
+	}
+
+	fieldIndex := -1
+	var fieldType Type = Unresolved{}
+	for i, field := range structType.Fields {
+		if field.Name == expr.Field {
+			fieldIndex = i
+			fieldType = field.Type
+			break
+		}
+	}
+
+	if fieldIndex < 0 {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("unknown struct field %q on %s", expr.Field, structType.Name),
+		})
+		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
+	}
+
+	fieldVal := c.builder.CreateExtractValue(leftSym.Val, fieldIndex, expr.Field)
+	return []*Symbol{{
+		Type: fieldType,
+		Val:  fieldVal,
+	}}
 }
 
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
@@ -2090,6 +2329,15 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		elemType := s.Type.(Ptr).Elem
 		derefed := c.createLoad(s.Val, elemType, "print_deref")
 		s = &Symbol{Val: derefed, Type: elemType}
+	}
+
+	// Structs produce multi-line output with a trailing \n separator.
+	if s.Type.Kind() == StructKind {
+		fmtStr, fmtArgs, fmtFree := c.structFormatArgs(s)
+		*formatStr += fmtStr
+		*args = append(*args, fmtArgs...)
+		*toFree = append(*toFree, fmtFree...)
+		return
 	}
 
 	// ArrayRange needs special handling (two string args)

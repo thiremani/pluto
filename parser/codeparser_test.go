@@ -366,3 +366,143 @@ func TestFunctionParameterParsing(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStructDefinition(t *testing.T) {
+	input := `p = Person
+    :name age height
+    "Tejas" 35 184.5`
+
+	cp := NewCodeParser(lexer.New("TestParseStructDefinition", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	require.Len(t, code.Struct.Statements, 1)
+	stmt := code.Struct.Statements[0]
+	require.Equal(t, "p", stmt.Name.Value)
+
+	lit := stmt.Value
+	require.Equal(t, "Person", lit.Token.Literal)
+	require.Len(t, lit.Headers, 3)
+	expectedHeaders := []string{"name", "age", "height"}
+	for i, tok := range lit.Headers {
+		require.Equal(t, expectedHeaders[i], tok.Literal)
+	}
+	require.Len(t, lit.Row, 3)
+
+	defStmt, ok := code.Struct.Map["Person"]
+	require.True(t, ok, "expected struct definition in code map")
+	require.Equal(t, stmt, defStmt)
+	require.Len(t, defStmt.Value.Headers, 3)
+	for i, tok := range defStmt.Value.Headers {
+		require.Equal(t, expectedHeaders[i], tok.Literal)
+	}
+
+	// Struct bindings should still be treated as constants globally.
+	_, constExists := code.ConstNames["p"]
+	require.True(t, constExists)
+
+	require.Equal(t, `p = Person
+    :name age height
+    Tejas 35 184.5`, stmt.String())
+}
+
+func TestStructDefErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		errMsg string
+	}{
+		{
+			name: "duplicate struct field header",
+			input: `p = Person
+    :name age age
+    "Tejas" 35 184.5`,
+			errMsg: "duplicate struct field header: age",
+		},
+		{
+			name: "multiple lhs bindings not allowed",
+			input: `p, q = Person
+    :name age
+    "Tejas" 35`,
+			errMsg: "struct definition must bind exactly one constant name",
+		},
+		{
+			name: "comma-separated struct row not allowed",
+			input: `p = Person
+    :name age
+    "Tejas", 35`,
+			errMsg: "struct value row values must be separated by spaces, not commas",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New("TestStructDefErrors", tt.input))
+			_ = cp.Parse()
+			require.NotEmpty(t, cp.Errors())
+			found := false
+			for _, err := range cp.Errors() {
+				if strings.Contains(err, tt.errMsg) {
+					found = true
+					break
+				}
+			}
+			require.True(t, found, "expected error %q, got %v", tt.errMsg, cp.Errors())
+		})
+	}
+}
+
+func TestStructDefRepeat(t *testing.T) {
+	input := `p = Person
+    :name age
+    "Tejas" 35
+q = Person
+    :name age
+    "Ada" 28`
+
+	cp := NewCodeParser(lexer.New("TestStructDefRepeat", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+}
+
+func TestStructDefSubset(t *testing.T) {
+	input := `p = Person
+    :name age height
+    "Tejas" 35 184.5
+q = Person
+    :age name
+    28 "Ada"`
+
+	cp := NewCodeParser(lexer.New("TestStructDefSubset", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+}
+
+func TestStructDefZeroInit(t *testing.T) {
+	input := `p = Person
+    :name age
+    "Tejas" 35
+q = Person`
+
+	cp := NewCodeParser(lexer.New("TestStructDefZeroInit", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+	require.Equal(t, "q", code.Struct.Statements[1].Name.Value)
+	require.Len(t, code.Struct.Statements[1].Value.Headers, 0)
+	require.Len(t, code.Struct.Statements[1].Value.Row, 0)
+}
+
+func TestStructDefZeroInitBeforeDef(t *testing.T) {
+	input := `q = Person
+p = Person
+    :name age
+    "Tejas" 35`
+
+	cp := NewCodeParser(lexer.New("TestStructDefZeroInitBeforeDef", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 2)
+}

@@ -1,0 +1,19 @@
+Tejas 35 184.5
+Ada 28 0
+0 0
+Person
+    :name age height
+    Tejas 35 184.5
+
+Person
+    :name age height
+    Tejas 35 184.5
+
+Person
+    :name age height
+    Tejas 35 184.5
+99
+x=Person
+    :name age height
+    Tejas 35 184.5
+ y=99

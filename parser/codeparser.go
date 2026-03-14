@@ -35,6 +35,8 @@ func (cp *CodeParser) Parse() *ast.Code {
 			cp.addConstStatement(code, s)
 		case *ast.FuncStatement:
 			cp.addFuncStatement(code, s)
+		case *ast.StructStatement:
+			cp.addStructStatement(code, s)
 		}
 		cp.p.nextToken()
 	}
@@ -45,13 +47,13 @@ func (cp *CodeParser) Parse() *ast.Code {
 	return code
 }
 
-func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
+func (cp *CodeParser) validateConstBindings(code *ast.Code, names []*ast.Identifier) int {
 	prevLen := len(cp.p.errors)
-	cp.p.checkNoDuplicates(s.Name)
+	cp.p.checkNoDuplicates(names)
 
-	// Check for global redeclarations against the code map.
-	for _, id := range s.Name {
-		if _, ok := code.Const.Map[id.Value]; ok {
+	// Check for global redeclarations against all constant bindings.
+	for _, id := range names {
+		if _, ok := code.ConstNames[id.Value]; ok {
 			msg := fmt.Sprintf("global redeclaration of constant %s", id.Value)
 			ce := &token.CompileError{
 				Token: id.Token,
@@ -60,17 +62,46 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 			cp.p.errors = append(cp.p.errors, ce)
 		}
 	}
+	return prevLen
+}
 
-	if len(cp.p.errors) > prevLen {
-		// If there are errors, we don't add the statement to the code.
-		return
-	}
-
-	// add the statement to the code if no errors were found
+func (cp *CodeParser) addConstBinding(code *ast.Code, s *ast.ConstStatement) {
 	code.Const.Statements = append(code.Const.Statements, s)
 	for _, id := range s.Name {
 		code.Const.Map[id.Value] = s
+		code.ConstNames[id.Value] = id.Token
 	}
+}
+
+func (cp *CodeParser) addStructConstBinding(code *ast.Code, s *ast.StructStatement) {
+	// Keep struct-bound names in global const names so shared global-const checks
+	// (writes/reads in CFG) stay consistent with regular constants.
+	code.ConstNames[s.Name.Value] = s.Name.Token
+}
+
+func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
+	prevLen := cp.validateConstBindings(code, s.Name)
+
+	if len(cp.p.errors) > prevLen {
+		return
+	}
+
+	cp.addConstBinding(code, s)
+}
+
+func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement) {
+	prevLen := cp.validateConstBindings(code, []*ast.Identifier{s.Name})
+	typeName := s.Value.Token.Literal
+
+	if len(cp.p.errors) > prevLen {
+		return
+	}
+
+	code.Struct.Statements = append(code.Struct.Statements, s)
+	if _, exists := code.Struct.Map[typeName]; !exists {
+		code.Struct.Map[typeName] = s
+	}
+	cp.addStructConstBinding(code, s)
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
