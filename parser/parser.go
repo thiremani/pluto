@@ -554,9 +554,7 @@ func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
 	seen := make(map[string]struct{})
 
 	for !p.curTokenIs(token.NEWLINE) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
-		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
-			p.nextToken()
-			p.nextToken()
+		if p.skipLineContinuation() {
 			continue
 		}
 
@@ -596,20 +594,14 @@ func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
 
 func (p *StmtParser) parseStructRowConstants() ([]ast.Expression, bool) {
 	row := []ast.Expression{}
-	expectValue := true
 
 	for !p.curTokenIs(token.NEWLINE) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
 		if p.curTokenIs(token.COMMA) {
-			if expectValue {
-				p.errors = append(p.errors, &token.CompileError{
-					Token: p.curToken,
-					Msg:   "unexpected comma in struct value row",
-				})
-				return nil, false
-			}
-			expectValue = true
-			p.nextToken()
-			continue
+			p.errors = append(p.errors, &token.CompileError{
+				Token: p.curToken,
+				Msg:   "struct value row values must be separated by spaces, not commas",
+			})
+			return nil, false
 		}
 
 		if !p.curToken.IsConstant() {
@@ -621,16 +613,7 @@ func (p *StmtParser) parseStructRowConstants() ([]ast.Expression, bool) {
 		}
 
 		row = append(row, p.parseConstant())
-		expectValue = false
 		p.nextToken()
-	}
-
-	if expectValue && len(row) > 0 {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
-			Msg:   "struct value row cannot end with a comma",
-		})
-		return nil, false
 	}
 
 	if len(row) == 0 {
@@ -1085,11 +1068,7 @@ func (p *StmtParser) skipArrayFormatting() {
 // parseHeader parses column headers after ':'
 func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
-		// handle line continuation first
-		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
-			// Line continuation for long headers
-			p.nextToken()
-			p.nextToken()
+		if p.skipLineContinuation() {
 			continue
 		}
 
@@ -1117,12 +1096,8 @@ func (p *StmtParser) parseRow() []ast.Expression {
 
 	// Parse elements in this row until newline or ']'
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
-		// handle line continuation first
-		if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
-			// Line continuation for long rows
-			p.nextToken()
-			p.nextToken()
-			p.skipArrayFormatting() // Skip any indentation on continued line
+		if p.skipLineContinuation() {
+			p.skipArrayFormatting() // skip indentation on continued line
 			continue
 		}
 
@@ -1418,6 +1393,16 @@ func (p *StmtParser) validateIdentifier(tok token.Token) {
 			Msg:   "identifier cannot end with '_'",
 		})
 	}
+}
+
+// skipLineContinuation consumes a backslash-newline pair and returns true if one was found.
+func (p *StmtParser) skipLineContinuation() bool {
+	if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+		p.nextToken()
+		return true
+	}
+	return false
 }
 
 // errorOnBlanks converts tracked blank identifiers to errors and clears the list.

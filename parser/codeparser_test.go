@@ -426,6 +426,13 @@ func TestStructDefErrors(t *testing.T) {
     "Tejas" 35`,
 			errMsg: "struct definition must bind exactly one constant name",
 		},
+		{
+			name: "comma-separated struct row not allowed",
+			input: `p = Person
+    :name age
+    "Tejas", 35`,
+			errMsg: "struct value row values must be separated by spaces, not commas",
+		},
 	}
 
 	for _, tt := range tests {
