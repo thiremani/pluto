@@ -464,25 +464,34 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 	}
 
 	if p.peekTokenIs(token.IDENT) {
-		p.nextToken()
-		if p.peekTokenIs(token.LPAREN) {
-			fTok := p.curToken
-			p.nextToken()
-			f := p.parseFuncStatement(fTok, idents)
-			if f != nil {
-				return f
-			}
-			return nil
-		}
-		if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
-			s := p.parseStructLiteralStatement(assignTok, idents, p.curToken)
-			if s != nil {
-				return s
-			}
-			return nil
+		// In code mode, an identifier after '=' starts either a function signature
+		// (`name(...)`) or a nominal struct literal (`TypeName`).
+		if stmt := p.parseFuncOrStructStatement(assignTok, idents); stmt != nil {
+			return stmt
 		}
 	}
 	// TODO operator definitions
+	return nil
+}
+
+func (p *StmtParser) parseFuncOrStructStatement(assignTok token.Token, idents []*ast.Identifier) ast.Statement {
+	p.nextToken()
+	if p.peekTokenIs(token.LPAREN) {
+		fTok := p.curToken
+		p.nextToken()
+		f := p.parseFuncStatement(fTok, idents)
+		if f != nil {
+			return f
+		}
+		return nil
+	}
+
+	if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
+		s := p.parseStructLiteralStatement(assignTok, idents, p.curToken)
+		if s != nil {
+			return s
+		}
+	}
 	return nil
 }
 
