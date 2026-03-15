@@ -46,6 +46,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	if len(ts.Errors) != 0 {
 		return ts.Errors
 	}
+	sc.Compiler.BindingTypes = ts.BindingTypes
 
 	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)
 	cfg.Analyze(sc.Program.Statements)

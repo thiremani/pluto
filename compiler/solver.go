@@ -77,6 +77,7 @@ type TypeSolver struct {
 	FuncNameMangled string              // current function's mangled name ("" for script level)
 	Converging      bool
 	Errors          []*token.CompileError
+	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr     bool // true when typing Value expressions of a LetStatement
@@ -92,10 +93,25 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		FuncNameMangled: "",
 		Converging:      false,
 		Errors:          []*token.CompileError{},
+		BindingTypes:    make(map[BindingKey]Type),
 		ExprCache:       sc.Compiler.ExprCache,
 		TmpCounter:      0,
 		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
 	}
+}
+
+func (ts *TypeSolver) currentBindingKey(name string) BindingKey {
+	return BindingKey{
+		FuncNameMangled: ts.FuncNameMangled,
+		Name:            name,
+	}
+}
+
+func (ts *TypeSolver) recordBindingType(name string, typ Type) {
+	if typ.Kind() == UnresolvedKind {
+		return
+	}
+	ts.BindingTypes[ts.currentBindingKey(name)] = typ
 }
 
 func cloneArrayHeaders(src []string) []string {
@@ -293,8 +309,10 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 	}
 
 	if typ, ok := Get(ts.Scopes, name); ok {
-		if CanRefineType(typ, t) {
-			SetExisting(ts.Scopes, name, t)
+		if bindingStoreCompatible(typ, t) {
+			slotType := joinBindingStoreType(typ, t)
+			SetExisting(ts.Scopes, name, slotType)
+			ts.recordBindingType(name, slotType)
 		}
 	}
 }
@@ -691,6 +709,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if !exists {
 			trueValues[ident.Value] = newType
+			ts.recordBindingType(ident.Value, newType)
 			continue
 		}
 
@@ -701,7 +720,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			continue
 		}
 
-		if !CanRefineType(typ, newType) {
+		if !bindingStoreCompatible(typ, newType) {
 			ce := &token.CompileError{
 				Token: ident.Token,
 				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
@@ -709,7 +728,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			ts.Errors = append(ts.Errors, ce)
 			return
 		}
-		trueValues[ident.Value] = newType
+		slotType := joinBindingStoreType(typ, newType)
+		trueValues[ident.Value] = slotType
+		ts.recordBindingType(ident.Value, slotType)
 	}
 
 	PutBulk(ts.Scopes, trueValues)
@@ -1148,9 +1169,6 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 			strType = StrH{}
 		}
 		types = append(types, strType)
-		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-	case *ast.HeapStringLiteral:
-		types = append(types, StrH{})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)

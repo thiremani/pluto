@@ -470,6 +470,23 @@ func CanRefineType(oldType, newType Type) bool {
 	}
 }
 
+func bindingStoreCompatible(oldType, newType Type) bool {
+	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
+		return true
+	}
+	return CanRefineType(oldType, newType)
+}
+
+func joinBindingStoreType(oldType, newType Type) Type {
+	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
+		if IsStrH(oldType) || IsStrH(newType) {
+			return StrH{}
+		}
+		return StrG{}
+	}
+	return newType
+}
+
 func canRefineTypes(oldTypes, newTypes []Type) bool {
 	if len(oldTypes) != len(newTypes) {
 		return false

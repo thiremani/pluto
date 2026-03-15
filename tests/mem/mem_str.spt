@@ -22,8 +22,8 @@ a, b = b, a
 a, b
 
 # Swap: x, y = y, x with heap strings (mixed: StrH ⊕ StrG, StrG ⊕ StrH)
-ha = "one". ⊕ "1"
-hb = "two" ⊕ "2".
+ha = ("one" ⊕ "") ⊕ "1"
+hb = "two" ⊕ ("2" ⊕ "")
 ha, hb = hb, ha
 ha, hb
 
@@ -35,8 +35,8 @@ a, b = a, a
 a, b
 
 # Duplicate RHS: x, y = x, x with heap (StrH ⊕ StrH)
-ha = "dup". ⊕ "heap".
-hb = "other".
+ha = ("dup" ⊕ "") ⊕ ("heap" ⊕ "")
+hb = "other" ⊕ ""
 hb  # use before overwrite
 ha, hb = ha, ha
 ha, hb
@@ -69,6 +69,26 @@ rh  # use before overwrite
 rh = getHeap()  # StrH -> StrH (from function)
 rh
 
+# Binding inferred as StrH should accept later static stores via copy-on-store
+slotReset = "left" ⊕ "_owned"
+slotReset
+slotReset = "reset"
+slotReset
+
+# Direct call returning StrG into inferred StrH binding should also copy on store
+callReset = getHeap()
+callReset
+callReset = getStatic()
+callReset
+
+# Array element copy infers StrH for the binding; later static stores should work
+arrSlot = ["slot" "array"]
+elemReset = arrSlot[0]
+elemReset
+elemReset = "plain"
+elemReset
+arrSlot
+
 # ============================================
 # Array string element tests
 # arr[i] returns an owned StrH copy
@@ -81,7 +101,7 @@ ax
 arr  # array should still be valid
 
 # Modify ax, array should be unchanged (independent copy)
-ax = "modified".  # ax is StrH, can only assign StrH
+ax = "modified" ⊕ ""  # ax is StrH, later static stores are copied into owned storage
 ax
 arr  # original array unchanged
 

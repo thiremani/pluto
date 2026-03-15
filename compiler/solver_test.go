@@ -268,6 +268,47 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	}
 }
 
+func TestStringBindingInferencePreservesExprTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "stringBindingInference", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := `a = "abc"
+a = a ⊕ "d"`
+	sl := lexer.New("StringBindingInference.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
+
+	slotType, ok := ts.GetIdentifier("a")
+	require.True(t, ok, "expected identifier a")
+	require.True(t, IsStrH(slotType), "binding a should widen to StrH")
+
+	bindingType, ok := ts.BindingTypes[BindingKey{Name: "a"}]
+	require.True(t, ok, "expected recorded binding type for a")
+	require.True(t, IsStrH(bindingType), "binding map should record StrH for a")
+
+	firstStmt, ok := program.Statements[0].(*ast.LetStatement)
+	require.True(t, ok)
+	firstInfo := ts.ExprCache[key(ts.FuncNameMangled, firstStmt.Value[0])]
+	require.NotNil(t, firstInfo)
+	require.True(t, IsStrG(firstInfo.OutTypes[0]), "plain literal expression should remain StrG")
+
+	secondStmt, ok := program.Statements[1].(*ast.LetStatement)
+	require.True(t, ok)
+	secondExpr, ok := secondStmt.Value[0].(*ast.InfixExpression)
+	require.True(t, ok)
+	secondInfo := ts.ExprCache[key(ts.FuncNameMangled, secondExpr)]
+	require.NotNil(t, secondInfo)
+	require.True(t, IsStrH(secondInfo.OutTypes[0]), "concat expression should remain StrH")
+}
+
 func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "rangeBoundsDepend", "", ast.NewCode())
