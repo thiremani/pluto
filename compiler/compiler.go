@@ -173,6 +173,13 @@ func outputTypesDiffer(a, b []Type) bool {
 	return false
 }
 
+func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) bool {
+	if len(info.Ranges) != 0 || dest == nil {
+		return false
+	}
+	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
+}
+
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 	switch t.Kind() {
 	case IntKind:
@@ -710,13 +717,7 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
 		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
-		// Direct calls with differing destination slot types return temporary RHS
-		// values, so outer assignment cleanup must free the old destination value.
-		if len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes) {
-			return false
-		}
-		return true
+		return !c.callNeedsTempOutputs(info, dest)
 	}
 
 	switch e := expr.(type) {
@@ -2039,13 +2040,12 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
-	resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
 
 	// Direct calls can materialize into temporary outputs first when the
 	// callee's return flavor differs from the destination slot flavor. Those
 	// temporaries are returned as normal RHS values so outer assignment/guard
 	// logic owns the eventual store, restore, and old-value cleanup.
-	if len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes) {
+	if c.callNeedsTempOutputs(info, dest) {
 		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
 		c.compileCallInner(ce.Function.Value, ce, tempOutputs)
 
