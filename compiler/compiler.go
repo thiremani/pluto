@@ -138,21 +138,12 @@ func (c *Compiler) rejectReservedName(tok token.Token, kind string) {
 	}
 }
 
-func (c *Compiler) currentBindingKey(name string) BindingKey {
-	return BindingKey{
+func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
+	typ, ok := c.BindingTypes[BindingKey{
 		FuncNameMangled: c.FuncNameMangled,
 		Name:            name,
-	}
-}
-
-func (c *Compiler) bindingTypeFor(name string) (Type, bool) {
-	typ, ok := c.BindingTypes[c.currentBindingKey(name)]
-	return typ, ok
-}
-
-func (c *Compiler) resolvedBindingType(name string, fallback Type) Type {
-	typ, ok := c.bindingTypeFor(name)
-	if !ok || typ.Kind() != fallback.Kind() {
+	}]
+	if !ok {
 		return fallback
 	}
 	return typ
@@ -165,7 +156,7 @@ func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []
 		if dest == nil || i >= len(dest) {
 			continue
 		}
-		resolved[i] = c.resolvedBindingType(dest[i].Value, outType)
+		resolved[i] = c.bindingSlotType(dest[i].Value, outType)
 	}
 	return resolved
 }
@@ -659,13 +650,13 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 
 	oldSym, exists := Get(c.Scopes, name)
 	if !exists || oldSym.Type.Kind() != PtrKind {
-		targetType := c.resolvedBindingType(name, valueToStore.Type)
+		targetType := c.bindingSlotType(name, valueToStore.Type)
 		valueToStore = c.coerceSymbolForType(valueToStore, targetType, name+"_rhs_load")
 		Put(c.Scopes, name, valueToStore)
 		return
 	}
 
-	targetType := c.resolvedBindingType(name, oldSym.Type.(Ptr).Elem)
+	targetType := c.bindingSlotType(name, oldSym.Type.(Ptr).Elem)
 	stored := c.storeSymbolToPtrAsType(oldSym, valueToStore, targetType, name+"_rhs_load")
 	ptrType := oldSym.Type.(Ptr)
 	if !TypeEqual(ptrType.Elem, stored.Type) {
