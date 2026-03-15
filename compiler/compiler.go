@@ -624,7 +624,7 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 func (c *Compiler) storeSymbolToPtrAsType(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
-		panic("storeSymbolToPtr requires pointer destination")
+		panic("internal: storeSymbolToPtrAsType requires pointer destination")
 	}
 	if target.Kind() != ptrType.Elem.Kind() {
 		target = ptrType.Elem
