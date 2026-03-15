@@ -48,7 +48,7 @@ func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError
 			continue // buildStructDef catches unsupported expressions
 		}
 		defType := def.Fields[defIdx].Type
-		if TypeEqual(cellType, defType) || (cellType.Kind() == IntKind && defType.Kind() == FloatKind) {
+		if structFieldTypeAssignable(cellType, defType) {
 			continue
 		}
 		return &token.CompileError{

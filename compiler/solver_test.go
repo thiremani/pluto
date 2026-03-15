@@ -8,6 +8,7 @@ import (
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -174,6 +175,68 @@ y`
 	if !strings.Contains(ts.Errors[0].Msg, "Function f is not converging. Check for cyclic recursion and that each function has a base case") {
 		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
 	}
+}
+
+func TestTypeStructLiteralCanonicalizesToSchema(t *testing.T) {
+	code := mustParseCode(t, `p = Person
+    :name age height
+    "Tejas" 35 184.5
+q = Person
+    :age
+    28
+r = Person`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "canonicalStruct", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	ts := NewTypeSolver(sc)
+
+	require.Len(t, code.Struct.Statements, 3, "expected canonical/full, subset, and empty struct statements")
+	qType := ts.TypeStructLiteral(code.Struct.Statements[1].Value)
+	rType := ts.TypeStructLiteral(code.Struct.Statements[2].Value)
+
+	require.Empty(t, ts.Errors)
+	require.Len(t, qType, 1)
+	require.Len(t, rType, 1)
+
+	schema, ok := cc.Compiler.StructCache["Person"]
+	require.True(t, ok, "expected canonical Person schema")
+	require.True(t, TypeEqual(*schema, qType[0]))
+	require.True(t, TypeEqual(*schema, rType[0]))
+	require.True(t, CanRefineType(qType[0], rType[0]))
+}
+
+func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
+	code := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "canonicalStructValidation", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	ts := NewTypeSolver(sc)
+
+	lit := &ast.StructLiteral{
+		Token:   token.Token{Type: token.IDENT, Literal: "Person"},
+		Headers: []token.Token{{Type: token.IDENT, Literal: "age"}},
+		Row: []ast.Expression{
+			&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}, Value: "Ada"},
+		},
+	}
+
+	got := ts.TypeStructLiteral(lit)
+	require.Len(t, got, 1)
+	require.Equal(t, UnresolvedKind, got[0].Kind())
+	require.NotEmpty(t, ts.Errors)
+	require.Contains(t, ts.Errors[0].Error(), `struct field "age" expects I64, got Str`)
 }
 
 func TestArrayConcatTypeErrors(t *testing.T) {

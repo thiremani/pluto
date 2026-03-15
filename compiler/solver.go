@@ -796,6 +796,11 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 	info := &ExprInfo{OutTypes: types, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, sl)] = info
 
+	schema, ok := ts.getCanonicalStructSchema(sl.Token)
+	if !ok {
+		return types
+	}
+
 	row := sl.Row
 	if len(row) != len(sl.Headers) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -805,27 +810,46 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 		return types
 	}
 
-	fields := make([]StructField, len(sl.Headers))
-	fieldSet := make(map[string]struct{}, len(sl.Headers))
+	fieldIdxByHeader, err := validateStructFieldHeaders(schema, sl.Headers)
+	if err != nil {
+		ts.Errors = append(ts.Errors, err)
+		return types
+	}
+
 	for i, nameTok := range sl.Headers {
-		cellType, ok := ts.typeCell(row[i], sl.Tok())
+		cellType, ok := ts.typeCell(row[i], row[i].Tok())
 		if !ok {
 			return types
 		}
-		fields[i] = StructField{
-			Name: nameTok.Literal,
-			Type: cellType,
+
+		fieldType := schema.Fields[fieldIdxByHeader[nameTok.Literal]].Type
+		if !structFieldTypeAssignable(cellType, fieldType) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: row[i].Tok(),
+				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", nameTok.Literal, fieldType.String(), cellType.String()),
+			})
+			return types
 		}
-		fieldSet[nameTok.Literal] = struct{}{}
 	}
 
-	structType := Struct{
-		Name:     sl.Token.Literal,
-		Fields:   fields,
-		FieldSet: fieldSet,
-	}
+	structType := *schema
 	info.OutTypes = []Type{structType}
 	return info.OutTypes
+}
+
+func (ts *TypeSolver) getCanonicalStructSchema(typeTok token.Token) (*Struct, bool) {
+	if sc := ts.ScriptCompiler; sc != nil {
+		if compiler := sc.Compiler; compiler != nil && compiler.CodeCompiler != nil {
+			if schema, ok := compiler.CodeCompiler.Compiler.StructCache[typeTok.Literal]; ok {
+				return schema, true
+			}
+		}
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: typeTok,
+		Msg:   fmt.Sprintf("struct type %s is not defined", typeTok.Literal),
+	})
+	return nil, false
 }
 
 func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
