@@ -107,11 +107,23 @@ func (ts *TypeSolver) currentBindingKey(name string) BindingKey {
 	}
 }
 
-func (ts *TypeSolver) recordBindingType(name string, typ Type) {
+func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
 	}
 	ts.BindingTypes[ts.currentBindingKey(name)] = typ
+}
+
+// resolveBindingSlotType computes the binding slot type for a resolved RHS and
+// persists the result for later code generation.
+// currentType must either be Unresolved or bindingSlotCompatible with newType.
+func (ts *TypeSolver) resolveBindingSlotType(name string, currentType, newType Type) Type {
+	slotType := newType
+	if currentType.Kind() != UnresolvedKind {
+		slotType = mergeBindingSlotType(currentType, newType)
+	}
+	ts.recordBindingSlotType(name, slotType)
+	return slotType
 }
 
 func cloneArrayHeaders(src []string) []string {
@@ -309,10 +321,8 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 	}
 
 	if typ, ok := Get(ts.Scopes, name); ok {
-		if bindingStoreCompatible(typ, t) {
-			slotType := joinBindingStoreType(typ, t)
-			SetExisting(ts.Scopes, name, slotType)
-			ts.recordBindingType(name, slotType)
+		if bindingSlotCompatible(typ, t) {
+			SetExisting(ts.Scopes, name, ts.resolveBindingSlotType(name, typ, t))
 		}
 	}
 }
@@ -708,8 +718,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if !exists {
-			trueValues[ident.Value] = newType
-			ts.recordBindingType(ident.Value, newType)
+			trueValues[ident.Value] = ts.resolveBindingSlotType(ident.Value, Unresolved{}, newType)
 			continue
 		}
 
@@ -720,7 +729,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			continue
 		}
 
-		if !bindingStoreCompatible(typ, newType) {
+		if !bindingSlotCompatible(typ, newType) {
 			ce := &token.CompileError{
 				Token: ident.Token,
 				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
@@ -728,9 +737,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			ts.Errors = append(ts.Errors, ce)
 			return
 		}
-		slotType := joinBindingStoreType(typ, newType)
-		trueValues[ident.Value] = slotType
-		ts.recordBindingType(ident.Value, slotType)
+		trueValues[ident.Value] = ts.resolveBindingSlotType(ident.Value, typ, newType)
 	}
 
 	PutBulk(ts.Scopes, trueValues)

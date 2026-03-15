@@ -470,17 +470,17 @@ func CanRefineType(oldType, newType Type) bool {
 	}
 }
 
-func bindingStoreCompatible(oldType, newType Type) bool {
+func bindingSlotCompatible(oldType, newType Type) bool {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return true
 	}
 	return CanRefineType(oldType, newType)
 }
 
-// joinBindingStoreType assumes bindingStoreCompatible(oldType, newType) is true.
+// mergeBindingSlotType assumes bindingSlotCompatible(oldType, newType) is true.
 // For strings it widens to the owning flavor; for all other types callers have
 // already established that newType is a valid refinement of the existing slot.
-func joinBindingStoreType(oldType, newType Type) Type {
+func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		if IsStrH(oldType) || IsStrH(newType) {
 			return StrH{}

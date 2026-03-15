@@ -728,7 +728,12 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Ident
 			return true
 		}
 		resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
-		return !(len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes))
+		// Direct calls with differing destination slot types return temporary RHS
+		// values, so outer assignment cleanup must free the old destination value.
+		if len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes) {
+			return false
+		}
+		return true
 	}
 
 	switch e := expr.(type) {
