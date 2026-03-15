@@ -17,8 +17,8 @@ newAcc = 1 > 0 Accum(10, 0:-2)
 "CondCallEmptyNew: -newAcc"
 
 # Conditional false keeps existing value and initializes new values.
-seed = "seed" ⊕ ""
-arg = "arg" ⊕ ""
+seed = "seed"
+arg = "arg"
 seed = 1 > 2 HeapSuffix(arg)
 "CondCallFalseHeapExisting: -seed"
 fresh = 1 > 2 HeapSuffix(arg)

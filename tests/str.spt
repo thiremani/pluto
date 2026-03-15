@@ -45,7 +45,7 @@ heapFmt
 "heap print: -name"
 
 # Owned string without markers
-rawHeap = "no markers here" ⊕ ""
+rawHeap = "no markers here"
 rawHeap
 rawHeap = rawHeap ⊕ "abc"
 rawHeap

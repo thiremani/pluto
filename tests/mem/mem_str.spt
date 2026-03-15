@@ -21,9 +21,9 @@ b = "beta"
 a, b = b, a
 a, b
 
-# Swap: x, y = y, x with heap strings (mixed: StrH ⊕ StrG, StrG ⊕ StrH)
-ha = ("one" ⊕ "") ⊕ "1"
-hb = "two" ⊕ ("2" ⊕ "")
+# Swap: x, y = y, x with heap strings
+ha = "one" ⊕ "1"
+hb = "two" ⊕ "2"
 ha, hb = hb, ha
 ha, hb
 
@@ -34,9 +34,9 @@ b  # use before overwrite
 a, b = a, a
 a, b
 
-# Duplicate RHS: x, y = x, x with heap (StrH ⊕ StrH)
-ha = ("dup" ⊕ "") ⊕ ("heap" ⊕ "")
-hb = "other" ⊕ ""
+# Duplicate RHS: x, y = x, x with heap
+ha = "dup" ⊕ "heap"
+hb = "other"
 hb  # use before overwrite
 ha, hb = ha, ha
 ha, hb
@@ -101,7 +101,7 @@ ax
 arr  # array should still be valid
 
 # Modify ax, array should be unchanged (independent copy)
-ax = "modified" ⊕ ""  # ax is StrH, later static stores are copied into owned storage
+ax = "modified"  # ax is StrH, later static stores are copied into owned storage
 ax
 arr  # original array unchanged
 

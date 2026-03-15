@@ -100,18 +100,14 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	}
 }
 
-func (ts *TypeSolver) currentBindingKey(name string) BindingKey {
-	return BindingKey{
-		FuncNameMangled: ts.FuncNameMangled,
-		Name:            name,
-	}
-}
-
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
 	}
-	ts.BindingTypes[ts.currentBindingKey(name)] = typ
+	ts.BindingTypes[BindingKey{
+		FuncNameMangled: ts.FuncNameMangled,
+		Name:            name,
+	}] = typ
 }
 
 // resolveBindingSlotType computes the binding slot type for a resolved RHS and

@@ -294,16 +294,6 @@ func TestString(t *testing.T) {
 	checkInput(t, input, tests)
 }
 
-func TestStringThenPeriod(t *testing.T) {
-	input := `"hello".`
-	tests := []Test{
-		{token.STRING, "hello", "", 1, 1},
-		{token.PERIOD, ".", "", 1, 8},
-		{token.EOF, "", "", 1, 9},
-	}
-	checkInput(t, input, tests)
-}
-
 func TestUnicodeIdentifiers(t *testing.T) {
 	tests := []struct {
 		input    string

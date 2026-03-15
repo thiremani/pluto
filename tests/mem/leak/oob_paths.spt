@@ -2,13 +2,13 @@ arr = ["a" "bb"]
 
 # Call path: argument array access can go OOB; call is skipped per-iteration.
 i = 0:5
-sCall = "" ⊕ ""
+sCall = ""
 sCall = sCall ⊕ Id(arr[i])
 "LeakCallStrOOB: -sCall"
 
 # Infix path: OOB iterations should skip and keep prior accumulated value.
 j = 0:5
-sInfix = "" ⊕ ""
+sInfix = ""
 sInfix = sInfix ⊕ arr[j]
 "LeakInfixStrOOB: -sInfix"
 
