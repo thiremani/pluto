@@ -108,7 +108,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 			Borrowed: true,
 		}
 		seed := c.resolveConditionalSeed(ident, outTypes[i])
-		c.storeSymbolToPtr(tempSym, seed, tempName+"_seed")
+		c.storeSymbolToPtrAsType(tempSym, seed, outTypes[i], tempName+"_seed")
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
@@ -136,7 +136,7 @@ func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []
 		}
 
 		if _, ok := oldSym.Type.(Ptr); ok {
-			c.storeSymbolToPtr(oldSym, finalSym, ident.Value+"_cond_commit")
+			c.storeSymbolToPtrAsType(oldSym, finalSym, oldSym.Type.(Ptr).Elem, ident.Value+"_cond_commit")
 
 			// Keep pointer element type in sync (important for string ownership flags).
 			updated := GetCopy(oldSym)

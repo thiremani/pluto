@@ -634,11 +634,6 @@ func (c *Compiler) storeSymbolToPtrAsType(dst *Symbol, src *Symbol, target Type,
 	return coerced
 }
 
-func (c *Compiler) storeSymbolToPtr(dst *Symbol, src *Symbol, loadName string) *Symbol {
-	ptrType := dst.Type.(Ptr)
-	return c.storeSymbolToPtrAsType(dst, src, ptrType.Elem, loadName)
-}
-
 // storeValue writes one RHS value into a named destination.
 // If destination already has pointer storage, update that slot in place.
 // Otherwise, bind/replace the scope symbol directly.
@@ -1540,7 +1535,7 @@ func (c *Compiler) compileRangeInfixSlot(
 		computed := c.compileInfix(op, leftSym, rightSym, expected)
 		// Free previous iteration's result before overwriting.
 		c.freeSymbolValue(output, "old_output")
-		c.storeSymbolToPtr(output, computed, "range_infix_store")
+		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_infix_store")
 		if leftTempsHandledInline {
 			c.freeTemporarySymbol(leftSym, "temp_left")
 		}
@@ -1568,7 +1563,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.freeSymbolValue(output, "old_output")
-	c.storeSymbolToPtr(output, lSym, "range_cond_store")
+	c.storeSymbolToPtrAsType(output, lSym, output.Type.(Ptr).Elem, "range_cond_store")
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
@@ -1753,7 +1748,7 @@ func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected T
 
 		// Free previous iteration's result before overwriting
 		c.freeSymbolValue(output, "old_output")
-		c.storeSymbolToPtr(output, computed, "range_prefix_store")
+		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_prefix_store")
 	}
 
 	if !c.withStmtBoundsGuard(
