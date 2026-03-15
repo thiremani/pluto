@@ -32,7 +32,7 @@ fkeep = fkeep + farr[9]
 "FloatOOBKeepsPrev: -fkeep"
 
 sarr = ["x" "y"]
-skeep = "keep".
+skeep = "keep"
 skeep = skeep ⊕ sarr[9]
 "StringOOBKeepsPrev: -skeep"
 

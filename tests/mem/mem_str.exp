@@ -20,6 +20,13 @@ static from func
 heap from func
 heap from func
 heap from func
+left_owned
+reset
+heap from func
+static from func
+slot
+plain
+[slot array]
 first
 [first second third]
 modified

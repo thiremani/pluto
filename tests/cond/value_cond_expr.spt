@@ -178,9 +178,18 @@ sgfh = "bee" < ("a" ⊕ "z")
 "StrGStrHFalseExisting: -sgfh"
 
 # Statement condition with existing heap string should keep old value on false
-stmtKeep = "keep_stmt".
-stmtKeep = 1 > 2 "drop".
+stmtKeep = "keep_stmt" ⊕ ""
+stmtKeep = 1 > 2 ("drop" ⊕ "")
 "StmtFalseExistingStrH: -stmtKeep"
+
+# Binding inferred as StrH should preserve slot flavor across cond-expr merges
+autoKeep = "auto" ⊕ "_keep"
+autoKeep = 1 > 2 "drop_auto"
+"StmtFalseExistingAutoStrH: -autoKeep"
+
+autoTake = "auto" ⊕ "_take"
+autoTake = 2 > 1 "picked"
+"StmtTrueExistingAutoStrH: -autoTake"
 
 # String concat cond-expr: (a ⊕ b) > "threshold"
 # Concat allocates a heap string; on false path it must be freed.

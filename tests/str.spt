@@ -33,23 +33,23 @@ msg, eager
 
 # Heap string literals with markers
 name = "world"
-heapMsg = "hello -name".
+heapMsg = "hello -name"
 heapMsg
 
 # Heap string with format specifiers
 num = 42
-heapFmt = "number is -num%05d".
+heapFmt = "number is -num%05d"
 heapFmt
 
 # Print heap string with markers directly
-"heap print: -name".
+"heap print: -name"
 
-# Heap string without markers (raw copy)
-rawHeap = "no markers here".
+# Owned string without markers
+rawHeap = "no markers here"
 rawHeap
 rawHeap = rawHeap ⊕ "abc"
 rawHeap
 
 # Reassign heap string with markers
-heapMsg = "goodbye -name".
+heapMsg = "goodbye -name"
 heapMsg

@@ -2,15 +2,23 @@ arr = ["a" "bb"]
 
 # Call path: argument array access can go OOB; call is skipped per-iteration.
 i = 0:5
-sCall = "".
+sCall = ""
 sCall = sCall ⊕ Id(arr[i])
 "LeakCallStrOOB: -sCall"
 
 # Infix path: OOB iterations should skip and keep prior accumulated value.
 j = 0:5
-sInfix = "".
+sInfix = ""
 sInfix = sInfix ⊕ arr[j]
 "LeakInfixStrOOB: -sInfix"
+
+# Direct call path: a StrG return flowing into an inferred-StrH slot must not
+# free the old destination when a later RHS value trips the statement bounds guard.
+guardKeep = "keep" ⊕ ""
+guardOther = "seed" ⊕ ""
+guardKeep, guardOther
+guardKeep, guardOther = Static(), arr[9]
+"LeakGuardedCallKeepsOld: -guardKeep -guardOther"
 
 # Array accumulator path: skipped OOB cells must free temporary values.
 k = 0:5

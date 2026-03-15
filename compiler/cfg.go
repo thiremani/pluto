@@ -78,8 +78,6 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 		return nil
 	case *ast.StringLiteral:
 		return cfg.collectStringReads(e.Value, e.Token)
-	case *ast.HeapStringLiteral:
-		return cfg.collectStringReads(e.Value, e.Token)
 	case *ast.Identifier:
 		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
 	}

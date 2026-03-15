@@ -77,6 +77,7 @@ type TypeSolver struct {
 	FuncNameMangled string              // current function's mangled name ("" for script level)
 	Converging      bool
 	Errors          []*token.CompileError
+	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr     bool // true when typing Value expressions of a LetStatement
@@ -92,10 +93,33 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		FuncNameMangled: "",
 		Converging:      false,
 		Errors:          []*token.CompileError{},
+		BindingTypes:    make(map[BindingKey]Type),
 		ExprCache:       sc.Compiler.ExprCache,
 		TmpCounter:      0,
 		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
 	}
+}
+
+func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
+	if typ.Kind() == UnresolvedKind {
+		return
+	}
+	ts.BindingTypes[BindingKey{
+		FuncNameMangled: ts.FuncNameMangled,
+		Name:            name,
+	}] = typ
+}
+
+// resolveBindingSlotType computes the binding slot type for a resolved RHS and
+// persists the result for later code generation.
+// currentType must either be Unresolved or bindingSlotCompatible with newType.
+func (ts *TypeSolver) resolveBindingSlotType(name string, currentType, newType Type) Type {
+	slotType := newType
+	if currentType.Kind() != UnresolvedKind {
+		slotType = mergeBindingSlotType(currentType, newType)
+	}
+	ts.recordBindingSlotType(name, slotType)
+	return slotType
 }
 
 func cloneArrayHeaders(src []string) []string {
@@ -293,8 +317,8 @@ func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
 	}
 
 	if typ, ok := Get(ts.Scopes, name); ok {
-		if CanRefineType(typ, t) {
-			SetExisting(ts.Scopes, name, t)
+		if bindingSlotCompatible(typ, t) {
+			SetExisting(ts.Scopes, name, ts.resolveBindingSlotType(name, typ, t))
 		}
 	}
 }
@@ -690,7 +714,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if !exists {
-			trueValues[ident.Value] = newType
+			trueValues[ident.Value] = ts.resolveBindingSlotType(ident.Value, Unresolved{}, newType)
 			continue
 		}
 
@@ -701,7 +725,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			continue
 		}
 
-		if !CanRefineType(typ, newType) {
+		if !bindingSlotCompatible(typ, newType) {
 			ce := &token.CompileError{
 				Token: ident.Token,
 				Msg:   fmt.Sprintf("cannot reassign type to identifier. Old Type: %s. New Type: %s. Identifier %q", typ, newType, ident.Token.Literal),
@@ -709,7 +733,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			ts.Errors = append(ts.Errors, ce)
 			return
 		}
-		trueValues[ident.Value] = newType
+		trueValues[ident.Value] = ts.resolveBindingSlotType(ident.Value, typ, newType)
 	}
 
 	PutBulk(ts.Scopes, trueValues)
@@ -1172,9 +1196,6 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 			strType = StrH{}
 		}
 		types = append(types, strType)
-		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-	case *ast.HeapStringLiteral:
-		types = append(types, StrH{})
 		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)

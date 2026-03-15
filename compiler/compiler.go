@@ -66,6 +66,13 @@ type FuncArgs struct {
 	Iters       map[string]*Symbol // Current iterator values during loop
 }
 
+// BindingKey identifies a variable binding within a specific function variant.
+// Script-level bindings use an empty FuncNameMangled.
+type BindingKey struct {
+	FuncNameMangled string
+	Name            string
+}
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -87,6 +94,7 @@ type Compiler struct {
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
 	StructCache     map[string]*Struct
 	FuncCache       map[string]*Func
+	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
@@ -128,6 +136,48 @@ func (c *Compiler) rejectReservedName(tok token.Token, kind string) {
 			Msg:   fmt.Sprintf("%s name %q is a reserved name", kind, tok.Literal),
 		})
 	}
+}
+
+func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
+	typ, ok := c.BindingTypes[BindingKey{
+		FuncNameMangled: c.FuncNameMangled,
+		Name:            name,
+	}]
+	if !ok {
+		return fallback
+	}
+	return typ
+}
+
+func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
+	resolved := make([]Type, len(outTypes))
+	for i, outType := range outTypes {
+		resolved[i] = outType
+		if dest == nil || i >= len(dest) {
+			continue
+		}
+		resolved[i] = c.bindingSlotType(dest[i].Value, outType)
+	}
+	return resolved
+}
+
+func outputTypesDiffer(a, b []Type) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for i := range a {
+		if !TypeEqual(a[i], b[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) bool {
+	if len(info.Ranges) != 0 || dest == nil {
+		return false
+	}
+	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -302,12 +352,6 @@ func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType T
 			fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
 			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
 		}
-	case *ast.HeapStringLiteral:
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: cell.Tok(),
-			Msg:   "heap string literals cannot be used in struct constants",
-		})
-		return llvm.Value{}, false
 	}
 
 	var expected string
@@ -369,13 +413,6 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 	case *ast.StringLiteral:
 		sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
 		sym.Type = StrG{} // Global constants are static strings
-
-	case *ast.HeapStringLiteral:
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: v.Token,
-			Msg:   "heap string literals cannot be used as global constants",
-		})
-		return
 
 	case *ast.StructLiteral:
 		if !c.compileStructConst(v, sym, mangledName, linkage) {
@@ -564,6 +601,43 @@ func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Sym
 	return needsCopy, movedSources
 }
 
+func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string) *Symbol {
+	derefed := c.derefIfPointer(sym, loadName)
+
+	if target.Kind() == StrKind && derefed.Type.Kind() == StrKind {
+		if IsStrH(target) && IsStrG(derefed.Type) {
+			return &Symbol{
+				Val:  c.copyString(derefed.Val),
+				Type: StrH{},
+			}
+		}
+		return &Symbol{
+			Val: derefed.Val,
+			// Keep the actual string flavor unless we explicitly widened StrG -> StrH.
+			// This avoids silently dropping ownership metadata if a stale slot type slips through.
+			Type:     derefed.Type,
+			FuncArg:  derefed.FuncArg,
+			Borrowed: derefed.Borrowed,
+			ReadOnly: derefed.ReadOnly,
+		}
+	}
+
+	return derefed
+}
+
+func (c *Compiler) storeSymbolToPtrAsType(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
+	ptrType, ok := dst.Type.(Ptr)
+	if !ok {
+		panic("internal: storeSymbolToPtrAsType requires pointer destination")
+	}
+	if target.Kind() != ptrType.Elem.Kind() {
+		target = ptrType.Elem
+	}
+	coerced := c.coerceSymbolForType(src, target, loadName)
+	c.createStore(coerced.Val, dst.Val, coerced.Type)
+	return coerced
+}
+
 // storeValue writes one RHS value into a named destination.
 // If destination already has pointer storage, update that slot in place.
 // Otherwise, bind/replace the scope symbol directly.
@@ -575,12 +649,22 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 
 	oldSym, exists := Get(c.Scopes, name)
 	if !exists || oldSym.Type.Kind() != PtrKind {
+		targetType := c.bindingSlotType(name, valueToStore.Type)
+		valueToStore = c.coerceSymbolForType(valueToStore, targetType, name+"_rhs_load")
 		Put(c.Scopes, name, valueToStore)
 		return
 	}
 
-	derefed := c.derefIfPointer(valueToStore, name+"_rhs_load")
-	c.createStore(derefed.Val, oldSym.Val, derefed.Type)
+	targetType := c.bindingSlotType(name, oldSym.Type.(Ptr).Elem)
+	stored := c.storeSymbolToPtrAsType(oldSym, valueToStore, targetType, name+"_rhs_load")
+	ptrType := oldSym.Type.(Ptr)
+	if !TypeEqual(ptrType.Elem, stored.Type) {
+		updated := GetCopy(oldSym)
+		updated.Type = Ptr{Elem: stored.Type}
+		if !SetExisting(c.Scopes, name, updated) {
+			Put(c.Scopes, name, updated)
+		}
+	}
 }
 
 // freeValue frees heap-allocated memory for the given value based on its type.
@@ -616,7 +700,7 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //
 // Cases:
 //
-//   - CallExpression:
+//   - CallExpression writing directly through destination pointers:
 //     The caller passes output pointers to the callee. The callee then applies
 //     normal assignment cleanup when writing to those output params, so caller
 //     freeOldValues must skip.
@@ -627,9 +711,10 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //
 // All other expressions return false so freeOldValues handles cleanup with full
 // assignment context (moved sources and borrowed/non-owning guards).
-func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
-	if _, isCall := expr.(*ast.CallExpression); isCall {
-		return true
+func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
+	if ce, isCall := expr.(*ast.CallExpression); isCall {
+		info := c.ExprCache[key(c.FuncNameMangled, ce)]
+		return !c.callNeedsTempOutputs(info, dest)
 	}
 
 	switch e := expr.(type) {
@@ -832,7 +917,8 @@ func (c *Compiler) freeOldValues(ownershipIdents []*ast.Identifier, oldValues []
 	i := 0
 	for exprIdx, expr := range exprs {
 		// Skip expressions that handle destination old-value ownership themselves.
-		if c.shouldSkipOldValueFree(expr) {
+		dest := ownershipIdents[i : i+resCounts[exprIdx]]
+		if c.shouldSkipOldValueFree(expr, dest) {
 			i += resCounts[exprIdx]
 			continue
 		}
@@ -921,9 +1007,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, false)}
-	case *ast.HeapStringLiteral:
-		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value, true)}
+		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value)}
 	case *ast.RangeLiteral:
 		res = c.compileRangeExpression(e)
 		return
@@ -1090,10 +1174,9 @@ func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
 	return res
 }
 
-// compileStringLiteral compiles a string literal (regular or heap).
-// If forceHeap is true, the string is always heap-allocated (for HeapStringLiteral).
-// If forceHeap is false, only strings with format markers are heap-allocated.
-func (c *Compiler) compileStringLiteral(tok token.Token, value string, forceHeap bool) *Symbol {
+// compileStringLiteral compiles a string literal.
+// Strings with format markers are heap-allocated; other literals stay static.
+func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 	formatted, args, toFree := c.formatString(tok, value)
 
 	// No markers
@@ -1101,11 +1184,6 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string, forceHeap
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
 		globalPtr := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
-		if forceHeap {
-			// Heap string literal: strdup the static string
-			return &Symbol{Type: StrH{}, Val: c.copyString(globalPtr)}
-		}
-		// Regular string literal: static storage
 		return &Symbol{Type: StrG{}, Val: globalPtr}
 	}
 
@@ -1382,7 +1460,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 
 	// Setup outputs to store values across iterations.
 	// Mark as borrowed so cleanupScope skips them - values are returned via out.
-	outputs := c.makeOutputs(dest, info.OutTypes, true)
+	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
 	leftRew := info.Rewrite.(*ast.InfixExpression).Left
 	rightRew := info.Rewrite.(*ast.InfixExpression).Right
@@ -1452,7 +1530,7 @@ func (c *Compiler) compileRangeInfixSlot(
 		computed := c.compileInfix(op, leftSym, rightSym, expected)
 		// Free previous iteration's result before overwriting.
 		c.freeSymbolValue(output, "old_output")
-		c.createStore(computed.Val, output.Val, computed.Type)
+		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_infix_store")
 		if leftTempsHandledInline {
 			c.freeTemporarySymbol(leftSym, "temp_left")
 		}
@@ -1480,7 +1558,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.freeSymbolValue(output, "old_output")
-	c.createStore(lSym.Val, output.Val, lSym.Type)
+	c.storeSymbolToPtrAsType(output, lSym, output.Type.(Ptr).Elem, "range_cond_store")
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
@@ -1626,7 +1704,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
-	outputs := c.makeOutputs(dest, info.OutTypes, true)
+	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
 	// Rewritten operand under tmp iters.
 	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
@@ -1665,7 +1743,7 @@ func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected T
 
 		// Free previous iteration's result before overwriting
 		c.freeSymbolValue(output, "old_output")
-		c.createStore(computed.Val, output.Val, computed.Type)
+		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_prefix_store")
 	}
 
 	if !c.withStmtBoundsGuard(
@@ -1959,6 +2037,24 @@ func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+
+	// Direct calls can materialize into temporary outputs first when the
+	// callee's return flavor differs from the destination slot flavor. Those
+	// temporaries are returned as normal RHS values so outer assignment/guard
+	// logic owns the eventual store, restore, and old-value cleanup.
+	if c.callNeedsTempOutputs(info, dest) {
+		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
+		c.compileCallInner(ce.Function.Value, ce, tempOutputs)
+
+		out := make([]*Symbol, len(tempOutputs))
+		for i := range tempOutputs {
+			out[i] = &Symbol{
+				Val:  c.createLoad(tempOutputs[i].Val, info.OutTypes[i], fmt.Sprintf("call_tmp_%d", i)),
+				Type: info.OutTypes[i],
+			}
+		}
+		return out
+	}
 
 	outputs := c.makeOutputs(dest, info.OutTypes, false)
 
@@ -2276,12 +2372,10 @@ func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 	c.free(toFree)
 }
 
-// asStringLiteral extracts token and value from string literal expressions (regular or heap).
+// asStringLiteral extracts token and value from string literal expressions.
 func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok bool) {
 	switch e := expr.(type) {
 	case *ast.StringLiteral:
-		return e.Token, e.Value, true
-	case *ast.HeapStringLiteral:
 		return e.Token, e.Value, true
 	}
 	return token.Token{}, "", false
@@ -2289,7 +2383,7 @@ func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok boo
 
 // appendPrintExpression handles one print expression (string literal or compiled expression)
 func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
-	// String literals (regular or heap) with markers are processed specially
+	// String literals with markers are processed specially.
 	if tok, value, ok := asStringLiteral(expr); ok {
 		processed, newArgs, toFreeArgs := c.formatString(tok, value)
 		*formatStr += processed + " "

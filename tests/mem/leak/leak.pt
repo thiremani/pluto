@@ -1,2 +1,5 @@
 out = Id(x)
     out = x
+
+out = Static()
+    out = "static"

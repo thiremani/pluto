@@ -93,7 +93,7 @@ func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *
 }
 
 func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
-	outTypes := c.collectOutTypes(stmt)
+	outTypes := c.resolvedDestTypes(stmt.Name, c.collectOutTypes(stmt))
 
 	tempNames := make([]*ast.Identifier, len(stmt.Name))
 	for i, ident := range stmt.Name {
@@ -102,16 +102,17 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		tempIdent := &ast.Identifier{Value: tempName}
 
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
-		seed := c.resolveConditionalSeed(ident, outTypes[i])
-		c.createStore(seed.Val, ptr, outTypes[i])
-
-		// Temporary conditional outputs are borrowed so scope cleanup does not free
-		// values that are transferred to real destinations in the merge block.
-		Put(c.Scopes, tempName, &Symbol{
+		tempSym := &Symbol{
 			Val:      ptr,
 			Type:     Ptr{Elem: outTypes[i]},
 			Borrowed: true,
-		})
+		}
+		seed := c.resolveConditionalSeed(ident, outTypes[i])
+		c.storeSymbolToPtrAsType(tempSym, seed, outTypes[i], tempName+"_seed")
+
+		// Temporary conditional outputs are borrowed so scope cleanup does not free
+		// values that are transferred to real destinations in the merge block.
+		Put(c.Scopes, tempName, tempSym)
 		tempNames[i] = tempIdent
 	}
 	return tempNames, outTypes
@@ -135,7 +136,7 @@ func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []
 		}
 
 		if _, ok := oldSym.Type.(Ptr); ok {
-			c.createStore(finalVal, oldSym.Val, finalType)
+			c.storeSymbolToPtrAsType(oldSym, finalSym, oldSym.Type.(Ptr).Elem, ident.Value+"_cond_commit")
 
 			// Keep pointer element type in sync (important for string ownership flags).
 			updated := GetCopy(oldSym)

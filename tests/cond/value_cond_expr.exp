@@ -44,6 +44,8 @@ StrGStrHTrue: ant
 StrGStrHSeed: keep
 StrGStrHFalseExisting: keep
 StmtFalseExistingStrH: keep_stmt
+StmtFalseExistingAutoStrH: auto_keep
+StmtTrueExistingAutoStrH: picked
 ConcatTrue: hello world
 re:ConcatFalse:\s*
 StrEqTrue: abc
