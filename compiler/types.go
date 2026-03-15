@@ -418,7 +418,24 @@ func validateStructFieldHeaders(schema *Struct, headers []token.Token) (map[stri
 }
 
 func structFieldTypeAssignable(cellType, fieldType Type) bool {
+	if cellType.Kind() == StrKind && fieldType.Kind() == StrKind {
+		return true
+	}
 	return TypeEqual(cellType, fieldType) || (cellType.Kind() == IntKind && fieldType.Kind() == FloatKind)
+}
+
+func mergeStringFlavor(leftType, rightType Type) Type {
+	if IsStrH(leftType) || IsStrH(rightType) {
+		return StrH{}
+	}
+	return StrG{}
+}
+
+func mergeStructFieldType(fieldType, cellType Type) Type {
+	if cellType.Kind() == StrKind && fieldType.Kind() == StrKind {
+		return mergeStringFlavor(fieldType, cellType)
+	}
+	return fieldType
 }
 
 func typesStr(types []Type) string {
@@ -513,10 +530,7 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 // already established that newType is a valid refinement of the existing slot.
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
-		if IsStrH(oldType) || IsStrH(newType) {
-			return StrH{}
-		}
-		return StrG{}
+		return mergeStringFlavor(oldType, newType)
 	}
 	return newType
 }
