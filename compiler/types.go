@@ -421,13 +421,6 @@ func structFieldTypeAssignable(cellType, fieldType Type) bool {
 	return TypeEqual(cellType, fieldType) || (cellType.Kind() == IntKind && fieldType.Kind() == FloatKind)
 }
 
-func structFieldTypeMismatchError(fieldName string, fieldType, cellType Type, tok token.Token) *token.CompileError {
-	return &token.CompileError{
-		Token: tok,
-		Msg:   fmt.Sprintf("struct field %q expects %s, got %s", fieldName, fieldType.String(), cellType.String()),
-	}
-}
-
 func typesStr(types []Type) string {
 	if len(types) == 0 {
 		return ""

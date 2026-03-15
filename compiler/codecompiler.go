@@ -51,7 +51,10 @@ func checkFieldTypes(def *Struct, stmt *ast.StructStatement) *token.CompileError
 		if structFieldTypeAssignable(cellType, defType) {
 			continue
 		}
-		return structFieldTypeMismatchError(header.Literal, defType, cellType, stmt.Value.Row[i].Tok())
+		return &token.CompileError{
+			Token: stmt.Value.Row[i].Tok(),
+			Msg:   fmt.Sprintf("struct field %q expects %s, got %s", header.Literal, defType.String(), cellType.String()),
+		}
 	}
 	return nil
 }

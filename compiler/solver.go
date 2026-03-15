@@ -824,7 +824,10 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 
 		fieldType := schema.Fields[fieldIdxByHeader[nameTok.Literal]].Type
 		if !structFieldTypeAssignable(cellType, fieldType) {
-			ts.Errors = append(ts.Errors, structFieldTypeMismatchError(nameTok.Literal, fieldType, cellType, row[i].Tok()))
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: row[i].Tok(),
+				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", nameTok.Literal, fieldType.String(), cellType.String()),
+			})
 			return types
 		}
 	}
