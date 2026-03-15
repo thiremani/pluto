@@ -710,9 +710,6 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
 		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		if info == nil {
-			return true
-		}
 		resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
 		// Direct calls with differing destination slot types return temporary RHS
 		// values, so outer assignment cleanup must free the old destination value.
