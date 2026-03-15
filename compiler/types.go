@@ -477,6 +477,9 @@ func bindingStoreCompatible(oldType, newType Type) bool {
 	return CanRefineType(oldType, newType)
 }
 
+// joinBindingStoreType assumes bindingStoreCompatible(oldType, newType) is true.
+// For strings it widens to the owning flavor; for all other types callers have
+// already established that newType is a valid refinement of the existing slot.
 func joinBindingStoreType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		if IsStrH(oldType) || IsStrH(newType) {

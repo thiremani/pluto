@@ -617,8 +617,10 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 			}
 		}
 		return &Symbol{
-			Val:      derefed.Val,
-			Type:     target,
+			Val: derefed.Val,
+			// Keep the actual string flavor unless we explicitly widened StrG -> StrH.
+			// This avoids silently dropping ownership metadata if a stale slot type slips through.
+			Type:     derefed.Type,
 			FuncArg:  derefed.FuncArg,
 			Borrowed: derefed.Borrowed,
 			ReadOnly: derefed.ReadOnly,
@@ -628,14 +630,22 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	return derefed
 }
 
-func (c *Compiler) storeSymbolToPtr(dst *Symbol, src *Symbol, loadName string) *Symbol {
+func (c *Compiler) storeSymbolToPtrAsType(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
 		panic("storeSymbolToPtr requires pointer destination")
 	}
-	coerced := c.coerceSymbolForType(src, ptrType.Elem, loadName)
+	if target.Kind() != ptrType.Elem.Kind() {
+		target = ptrType.Elem
+	}
+	coerced := c.coerceSymbolForType(src, target, loadName)
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
 	return coerced
+}
+
+func (c *Compiler) storeSymbolToPtr(dst *Symbol, src *Symbol, loadName string) *Symbol {
+	ptrType := dst.Type.(Ptr)
+	return c.storeSymbolToPtrAsType(dst, src, ptrType.Elem, loadName)
 }
 
 // storeValue writes one RHS value into a named destination.
@@ -647,16 +657,16 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 		valueToStore = c.deepCopyIfNeeded(rhsSym)
 	}
 
-	targetType := c.resolvedBindingType(name, valueToStore.Type)
-	valueToStore = c.coerceSymbolForType(valueToStore, targetType, name+"_rhs_load")
-
 	oldSym, exists := Get(c.Scopes, name)
 	if !exists || oldSym.Type.Kind() != PtrKind {
+		targetType := c.resolvedBindingType(name, valueToStore.Type)
+		valueToStore = c.coerceSymbolForType(valueToStore, targetType, name+"_rhs_load")
 		Put(c.Scopes, name, valueToStore)
 		return
 	}
 
-	stored := c.storeSymbolToPtr(oldSym, valueToStore, name+"_rhs_load")
+	targetType := c.resolvedBindingType(name, oldSym.Type.(Ptr).Elem)
+	stored := c.storeSymbolToPtrAsType(oldSym, valueToStore, targetType, name+"_rhs_load")
 	ptrType := oldSym.Type.(Ptr)
 	if !TypeEqual(ptrType.Elem, stored.Type) {
 		updated := GetCopy(oldSym)
@@ -700,7 +710,7 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //
 // Cases:
 //
-//   - CallExpression:
+//   - CallExpression writing directly through destination pointers:
 //     The caller passes output pointers to the callee. The callee then applies
 //     normal assignment cleanup when writing to those output params, so caller
 //     freeOldValues must skip.
@@ -711,9 +721,14 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //
 // All other expressions return false so freeOldValues handles cleanup with full
 // assignment context (moved sources and borrowed/non-owning guards).
-func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression) bool {
-	if _, isCall := expr.(*ast.CallExpression); isCall {
-		return true
+func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
+	if ce, isCall := expr.(*ast.CallExpression); isCall {
+		info := c.ExprCache[key(c.FuncNameMangled, ce)]
+		if info == nil {
+			return true
+		}
+		resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
+		return !(len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes))
 	}
 
 	switch e := expr.(type) {
@@ -916,7 +931,8 @@ func (c *Compiler) freeOldValues(ownershipIdents []*ast.Identifier, oldValues []
 	i := 0
 	for exprIdx, expr := range exprs {
 		// Skip expressions that handle destination old-value ownership themselves.
-		if c.shouldSkipOldValueFree(expr) {
+		dest := ownershipIdents[i : i+resCounts[exprIdx]]
+		if c.shouldSkipOldValueFree(expr, dest) {
 			i += resCounts[exprIdx]
 			continue
 		}
@@ -2038,27 +2054,19 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	resolvedOutTypes := c.resolvedDestTypes(dest, info.OutTypes)
 
 	// Direct calls can materialize into temporary outputs first when the
-	// callee's return flavor differs from the destination slot flavor.
+	// callee's return flavor differs from the destination slot flavor. Those
+	// temporaries are returned as normal RHS values so outer assignment/guard
+	// logic owns the eventual store, restore, and old-value cleanup.
 	if len(info.Ranges) == 0 && dest != nil && outputTypesDiffer(info.OutTypes, resolvedOutTypes) {
 		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
 		c.compileCallInner(ce.Function.Value, ce, tempOutputs)
 
-		oldValues := c.captureOldValues(dest)
-		for i, ident := range dest {
-			val := c.createLoad(tempOutputs[i].Val, info.OutTypes[i], ident.Value+"_call_tmp")
-			c.storeValue(ident.Value, &Symbol{Val: val, Type: info.OutTypes[i]}, false)
-		}
-		for _, oldVal := range oldValues {
-			if oldVal == nil || c.skipBorrowedOldValueFree(oldVal) {
-				continue
+		out := make([]*Symbol, len(tempOutputs))
+		for i := range tempOutputs {
+			out[i] = &Symbol{
+				Val:  c.createLoad(tempOutputs[i].Val, info.OutTypes[i], fmt.Sprintf("call_tmp_%d", i)),
+				Type: info.OutTypes[i],
 			}
-			c.freeSymbolValue(oldVal, "old_call_assign")
-		}
-
-		out := make([]*Symbol, len(dest))
-		for i, ident := range dest {
-			sym, _ := Get(c.Scopes, ident.Value)
-			out[i] = sym
 		}
 		return out
 	}

@@ -1,4 +1,6 @@
 LeakCallStrOOB: abb
 LeakInfixStrOOB: abb
+keep seed
+LeakGuardedCallKeepsOld: keep seed
 LeakArrayAccOOB: [a bb]
 LeakPrefixNumOOB: -2
