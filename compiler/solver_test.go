@@ -239,6 +239,54 @@ func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Error(), `struct field "age" expects I64, got Str`)
 }
 
+func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
+	code := mustParseCode(t, `p = Person
+    :name age
+    "Tejas" 35`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "structStringFieldWiden", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	ts := NewTypeSolver(sc)
+
+	lit := &ast.StructLiteral{
+		Token:   token.Token{Type: token.IDENT, Literal: "Person"},
+		Headers: []token.Token{{Type: token.IDENT, Literal: "name"}},
+		Row: []ast.Expression{
+			&ast.InfixExpression{
+				Token:    token.Token{Type: token.OPERATOR, Literal: token.SYM_CONCAT},
+				Left:     &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}, Value: "Ada"},
+				Operator: token.SYM_CONCAT,
+				Right:    &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "!"}, Value: "!"},
+			},
+		},
+	}
+
+	got := ts.TypeStructLiteral(lit)
+	require.Len(t, got, 1)
+	require.Empty(t, ts.Errors)
+
+	structType, ok := got[0].(Struct)
+	require.True(t, ok)
+
+	nameIdx := structType.FieldIndex("name")
+	require.GreaterOrEqual(t, nameIdx, 0)
+	require.True(t, IsStrH(structType.Fields[nameIdx].Type), "provided heap string field should widen field type to StrH")
+
+	dot := &ast.DotExpression{
+		Token: token.Token{Type: token.PERIOD, Literal: "."},
+		Left:  lit,
+		Field: "name",
+	}
+	dotTypes := ts.TypeDotExpression(dot)
+	require.Len(t, dotTypes, 1)
+	require.True(t, IsStrH(dotTypes[0]), "dot access should reflect widened field flavor")
+}
+
 func TestArrayConcatTypeErrors(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayConcatErrors", "", ast.NewCode())

@@ -840,23 +840,28 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 		return types
 	}
 
+	structType := *schema
+	structType.Fields = append([]StructField(nil), schema.Fields...)
+
 	for i, nameTok := range sl.Headers {
 		cellType, ok := ts.typeCell(row[i], row[i].Tok())
 		if !ok {
 			return types
 		}
 
-		fieldType := schema.Fields[fieldIdxByHeader[nameTok.Literal]].Type
-		if !structFieldTypeAssignable(cellType, fieldType) {
+		fieldIdx := fieldIdxByHeader[nameTok.Literal]
+		fieldType := schema.Fields[fieldIdx].Type
+		resolvedFieldType, ok := resolvedStructFieldType(fieldType, cellType)
+		if !ok {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: row[i].Tok(),
 				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", nameTok.Literal, fieldType.String(), cellType.String()),
 			})
 			return types
 		}
+		structType.Fields[fieldIdx].Type = resolvedFieldType
 	}
 
-	structType := *schema
 	info.OutTypes = []Type{structType}
 	return info.OutTypes
 }
