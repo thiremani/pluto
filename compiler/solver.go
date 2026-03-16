@@ -851,14 +851,15 @@ func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 
 		fieldIdx := fieldIdxByHeader[nameTok.Literal]
 		fieldType := schema.Fields[fieldIdx].Type
-		if !structFieldTypeAssignable(cellType, fieldType) {
+		resolvedFieldType, ok := resolvedStructFieldType(fieldType, cellType)
+		if !ok {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: row[i].Tok(),
 				Msg:   fmt.Sprintf("struct field %q expects %s, got %s", nameTok.Literal, fieldType.String(), cellType.String()),
 			})
 			return types
 		}
-		structType.Fields[fieldIdx].Type = mergeStructFieldType(fieldType, cellType)
+		structType.Fields[fieldIdx].Type = resolvedFieldType
 	}
 
 	info.OutTypes = []Type{structType}

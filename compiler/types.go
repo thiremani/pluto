@@ -417,13 +417,6 @@ func validateStructFieldHeaders(schema *Struct, headers []token.Token) (map[stri
 	return fieldIdxByHeader, nil
 }
 
-func structFieldTypeAssignable(cellType, fieldType Type) bool {
-	if cellType.Kind() == StrKind && fieldType.Kind() == StrKind {
-		return true
-	}
-	return TypeEqual(cellType, fieldType) || (cellType.Kind() == IntKind && fieldType.Kind() == FloatKind)
-}
-
 func mergeStringFlavor(leftType, rightType Type) Type {
 	if IsStrH(leftType) || IsStrH(rightType) {
 		return StrH{}
@@ -431,11 +424,17 @@ func mergeStringFlavor(leftType, rightType Type) Type {
 	return StrG{}
 }
 
-func mergeStructFieldType(fieldType, cellType Type) Type {
+func resolvedStructFieldType(fieldType, cellType Type) (Type, bool) {
 	if cellType.Kind() == StrKind && fieldType.Kind() == StrKind {
-		return mergeStringFlavor(fieldType, cellType)
+		return mergeStringFlavor(fieldType, cellType), true
 	}
-	return fieldType
+	if cellType.Kind() == IntKind && fieldType.Kind() == FloatKind {
+		return fieldType, true
+	}
+	if TypeEqual(cellType, fieldType) {
+		return fieldType, true
+	}
+	return Unresolved{}, false
 }
 
 func typesStr(types []Type) string {
