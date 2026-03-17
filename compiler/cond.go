@@ -16,8 +16,12 @@ type condTemp struct {
 
 // evalConditions compiles a list of condition expressions, ANDs all resulting
 // i1 values together, and incorporates bounds guard checks. The caller must
-// call pushBoundsGuard before and popBoundsGuard after.
+// call pushBoundsGuard before and popBoundsGuard after. Panics if exprs is
+// empty or no expression produces a boolean symbol.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
+	if len(exprs) == 0 {
+		panic("evalConditions: exprs must be non-empty")
+	}
 	var cond llvm.Value
 	for _, expr := range exprs {
 		condSyms := c.compileExpression(expr, nil)
@@ -382,13 +386,6 @@ func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast
 		}
 	}
 
-	// No cond-expr in value tree (avoid conflict with compileCondExprStatement).
-	for _, expr := range stmt.Value {
-		if c.hasCondExprInTree(expr) {
-			return nil, nil
-		}
-	}
-
 	// Collect merged ranges and per-condition compile expressions.
 	var ranges []*RangeInfo
 	seen := make(map[string]struct{})
@@ -453,8 +450,10 @@ func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, condRanges 
 		pushBlock, contBlock := c.createIfCont(combinedCond, "accum_push", "accum_cont")
 
 		c.builder.SetInsertPointAtEnd(pushBlock)
-		for i, expr := range stmt.Value {
-			c.appendArrayLiteralToAccum(accs[i], expr.(*ast.ArrayLiteral))
+		if len(stmt.Value) == 1 {
+			c.appendArrayLiteralToAccum(accs[0], stmt.Value[0].(*ast.ArrayLiteral))
+		} else {
+			c.appendTupleLiteralsToAccums(accs, stmt.Value)
 		}
 		c.builder.CreateBr(contBlock)
 

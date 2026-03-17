@@ -26,6 +26,29 @@ i = 0:4
 bounded = i < 4 [data[i]]
 bounded
 
+# Cond-expr in value cell (P1-1: must not bail to scalar path)
+i = 0:3
+x = i < 2 [i > 0]
+x
+
+# Multi-output accumulation
+i = 0:5
+a, b = i < 3 [i], [i * 10]
+a
+b
+
+# Multi-output with OOB sync (P1-2: both outputs skip together)
+data = [10 20]
+i = 0:4
+a, b = i < 4 [data[i]], [i]
+a
+b
+
+# Multi-condition AND
+j = 0:10
+filtered = j > 2, j < 7 [j]
+filtered
+
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
 p = 0:3
