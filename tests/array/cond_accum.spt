@@ -1,0 +1,33 @@
+# Fill with constant
+n = 5
+i = 0:n
+fill = i > -1 [0]
+fill
+
+# Conditional accumulation
+j = 0:5
+arr = j < 3 [j]
+arr
+
+# Empty result when condition always false
+old = [10 20 30]
+k = 0:3
+old = k < 0 [99]
+old
+
+# Range cell in value literal
+i = 0:3
+ranged = i < 2 [0:2]
+ranged
+
+# Bounds-checked cell with OOB iterations skipped
+data = [10 20]
+i = 0:4
+bounded = i < 4 [data[i]]
+bounded
+
+# Existing array replaced on successful accumulation (leak check)
+seed = [1 2 3]
+p = 0:3
+seed = p < 2 [9]
+seed

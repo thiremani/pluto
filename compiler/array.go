@@ -383,12 +383,24 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
 	arr := info.OutTypes[0].(Array)
-	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
-	row := lit.Rows[0]
 
 	c.withLoopNestVersioned(info.Ranges, lit, func() {
-		for _, cell := range row {
+		c.appendArrayLiteralToAccum(acc, lit)
+	})
+
+	return []*Symbol{c.ArrayAccResult(acc)}
+}
+
+// appendArrayLiteralToAccum resolves any solver rewrite on the literal,
+// loops over value-level ranges (if any), and pushes each cell into the
+// accumulator with per-cell bounds guards. Used by both the standalone
+// array-with-loops path and conditional accumulation.
+func (c *Compiler) appendArrayLiteralToAccum(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
+	resolved, valueInfo := c.resolveArrayLiteralRewrite(lit)
+	elemType := acc.ElemType
+	pushCells := func() {
+		for _, cell := range resolved.Rows[0] {
 			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
 			c.compileCondExprValue(cell, llvm.Value{}, func() {
 				vals := c.compileExpression(cell, nil)
@@ -396,9 +408,12 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 			})
 			c.popBoundsGuard()
 		}
-	})
-
-	return []*Symbol{c.ArrayAccResult(acc)}
+	}
+	if len(valueInfo.Ranges) > 0 {
+		c.withLoopNest(valueInfo.Ranges, pushCells)
+	} else {
+		pushCells()
+	}
 }
 
 // pushAccumCellWhenInBounds pushes one accumulated cell only when its local

@@ -976,6 +976,14 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
 
+	// Conditional accumulation: ranged condition(s) + array literal value(s).
+	// Must be checked before compileConditions so ranges are not prematurely
+	// lowered into a single final boolean.
+	if condRanges, condExprs := c.condAccumPattern(stmt); condRanges != nil {
+		c.compileCondAccumStatement(stmt, condRanges, condExprs)
+		return
+	}
+
 	cond, hasConditions := c.compileConditions(stmt)
 
 	// Embedded conditional expressions (comparisons in value position)
