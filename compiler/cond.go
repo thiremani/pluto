@@ -16,12 +16,8 @@ type condTemp struct {
 
 // evalConditions compiles a list of condition expressions, ANDs all resulting
 // i1 values together, and incorporates bounds guard checks. The caller must
-// call pushBoundsGuard before and popBoundsGuard after. Panics if exprs is
-// empty or no expression produces a boolean symbol.
+// call pushBoundsGuard before and popBoundsGuard after.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
-	if len(exprs) == 0 {
-		panic("evalConditions: exprs must be non-empty")
-	}
 	var cond llvm.Value
 	for _, expr := range exprs {
 		condSyms := c.compileExpression(expr, nil)
