@@ -383,10 +383,13 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo) []*Symbol {
 	arr := info.OutTypes[0].(Array)
+	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
 
 	c.withLoopNestVersioned(info.Ranges, lit, func() {
-		c.appendArrayLiteralToAccum(acc, lit)
+		for _, cell := range lit.Rows[0] {
+			c.compileAccumCell(acc, cell, elemType)
+		}
 	})
 
 	return []*Symbol{c.ArrayAccResult(acc)}
@@ -394,14 +397,25 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // withValueRanges resolves the solver rewrite on a literal, then either
 // wraps body in a loop nest (when the literal has value-level ranges) or
-// calls it directly. Returns the resolved literal for the caller to use.
+// calls it directly. The resolved literal is passed to body.
 func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
 	resolved, valueInfo := c.resolveArrayLiteralRewrite(lit)
-	if len(valueInfo.Ranges) > 0 {
-		c.withLoopNest(valueInfo.Ranges, func() { body(resolved) })
-	} else {
+	if len(valueInfo.Ranges) == 0 {
 		body(resolved)
+		return
 	}
+	c.withLoopNest(valueInfo.Ranges, func() { body(resolved) })
+}
+
+// compileAccumCell compiles one cell under a fresh bounds guard and pushes
+// the result into the accumulator. Handles cond-exprs and OOB skipping.
+func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
+	guardPtr := c.pushBoundsGuard("acc_bounds_guard")
+	c.compileCondExprValue(cell, llvm.Value{}, func() {
+		vals := c.compileExpression(cell, nil)
+		c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
+	})
+	c.popBoundsGuard()
 }
 
 // appendArrayLiteralToAccum pushes each cell of a single literal into an
@@ -410,12 +424,7 @@ func (c *Compiler) appendArrayLiteralToAccum(acc *ArrayAccumulator, lit *ast.Arr
 	elemType := acc.ElemType
 	c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
 		for _, cell := range resolved.Rows[0] {
-			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
-			c.compileCondExprValue(cell, llvm.Value{}, func() {
-				vals := c.compileExpression(cell, nil)
-				c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
-			})
-			c.popBoundsGuard()
+			c.compileAccumCell(acc, cell, elemType)
 		}
 	})
 }
