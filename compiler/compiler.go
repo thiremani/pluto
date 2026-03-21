@@ -1682,6 +1682,11 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 	pending := c.pendingLoopRanges(info.Ranges)
 	// If the result is an array, let the operand handle any collection itself.
 	if len(pending) == 0 {
+		// Use rewritten expression if ranges were consumed by an outer loop.
+		if info.Rewrite != nil {
+			expr = info.Rewrite.(*ast.PrefixExpression)
+			info = c.ExprCache[key(c.FuncNameMangled, expr)]
+		}
 		return c.compilePrefixBasic(expr, info)
 	}
 	return c.compilePrefixRanges(expr, info, dest)
