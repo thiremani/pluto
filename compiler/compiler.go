@@ -1280,8 +1280,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	if len(pending) == 0 {
 		// Use rewritten expression if ranges were consumed by an outer loop.
 		if info.Rewrite != nil {
-			rewriteInfo := c.ExprCache[key(c.FuncNameMangled, info.Rewrite)]
-			return c.compileInfixBasic(info.Rewrite.(*ast.InfixExpression), rewriteInfo)
+			expr = info.Rewrite.(*ast.InfixExpression)
+			info = c.ExprCache[key(c.FuncNameMangled, expr)]
 		}
 		return c.compileInfixBasic(expr, info)
 	}
