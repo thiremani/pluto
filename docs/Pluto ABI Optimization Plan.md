@@ -77,7 +77,7 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 
 This is the highest-value optimization — it benefits all scalar-heavy code, not just specific patterns. Expected: better register allocation, less stack traffic, simpler IR.
 
-**Benchmark target:** `fib_tail`, general scalar arithmetic benchmarks.
+**Benchmark target:** `fib`, `fib_tail`, and other call-heavy scalar code. Note: `sum` is not a useful target here — its optimized IR is already a call-free scalar loop; the current gap vs clang is loop optimization quality, not call ABI.
 
 ### Phase 2: Restricted self tail recursion
 
@@ -109,7 +109,7 @@ Once internal ABI is stable, decide whether exported symbols keep the current C 
 
 Each phase should:
 
-1. **Feature-flag the new ABI** — compile both old and new paths, compare IR output
+1. **Feature-flag the new ABI** — compile both old and new paths, compare program behavior and test results (not raw IR, which will differ by design)
 2. **Run the full test suite** (`python3 test.py --leak-check`) against both paths
 3. **Benchmark before/after** using `bench/` suite to validate the expected gains
 4. **Merge internal ABI first** — external wrappers come later (Phase 5)
