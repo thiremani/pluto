@@ -429,11 +429,23 @@ func (c *Compiler) appendArrayLiteralToAccum(acc *ArrayAccumulator, lit *ast.Arr
 	})
 }
 
-// appendTupleLiteralsToAccums compiles cells from multiple output literals
-// under a single shared bounds guard, ensuring all outputs push or skip
-// together per iteration. Unlike appendArrayLiteralToAccum (per-cell guards),
-// per-cell granularity is intentionally collapsed so that an OOB in any cell
-// of any output skips the entire iteration across all outputs.
+// appendValuesToAccums dispatches to the appropriate accumulation strategy
+// based on count (single vs tuple). All values must be array literals
+// (enforced by condAccumPattern). For single values, per-cell bounds guards
+// are used. For tuples, a shared bounds guard ensures all outputs push or
+// skip together.
+func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
+	if len(values) == 1 {
+		c.appendArrayLiteralToAccum(accs[0], values[0].(*ast.ArrayLiteral))
+		return
+	}
+	c.appendTupleLiteralsToAccums(accs, values)
+}
+
+// appendTupleLiteralsToAccums compiles cells from multiple output array
+// literals under a single shared bounds guard, ensuring all outputs push
+// or skip together per iteration. An OOB in any output skips the entire
+// iteration across all outputs.
 func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
 	guardPtr := c.pushBoundsGuard("tuple_bounds_guard")
 

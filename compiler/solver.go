@@ -673,6 +673,68 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 	}
 }
 
+// collectConditionRanges gathers all ranges from condition expressions.
+// When conditions iterate over ranges (e.g. i < 3 where i = 0:5), those
+// ranges must be merged into value ExprInfos so the compiler iterates
+// and accumulates per iteration.
+func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*RangeInfo {
+	var ranges []*RangeInfo
+	for _, expr := range conditions {
+		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+		if info != nil && len(info.Ranges) > 0 {
+			ranges = mergeUses(ranges, info.Ranges)
+		}
+	}
+	return ranges
+}
+
+// mergeCondRangesIntoValue merges condition ranges into a value expression's
+// ExprInfo so the compiler can iterate over them. For bare range identifiers,
+// the identifier's own range is also included so it becomes an Int loop
+// variable. No type promotion is performed — only [...] values accumulate;
+// scalar values use conditional assignment (last value wins).
+func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []Type, condRanges []*RangeInfo) {
+	if len(condRanges) == 0 {
+		return
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	if info == nil {
+		return
+	}
+
+	merged := condRanges
+	// For bare range identifiers, include their own range so the
+	// compiler iterates over them (they become Int loop variables).
+	// Also update the output type from Range to its iterator type.
+	if ident, ok := expr.(*ast.Identifier); ok {
+		if len(exprTypes) == 1 && exprTypes[0].Kind() == RangeKind {
+			ri := &RangeInfo{Name: ident.Value}
+			merged = mergeUses(condRanges, []*RangeInfo{ri})
+			iterType := exprTypes[0].(Range).Iter
+			exprTypes[0] = iterType
+			info.OutTypes[0] = iterType
+		}
+	}
+
+	// For ArrayRange expressions where the index range is being iterated,
+	// downgrade to scalar element access (the index becomes Int in the loop).
+	if ax, ok := expr.(*ast.ArrayRangeExpression); ok {
+		if ident, ok := ax.Range.(*ast.Identifier); ok {
+			for _, ri := range merged {
+				if ri.Name == ident.Value && len(exprTypes) == 1 && exprTypes[0].Kind() == ArrayRangeKind {
+					elemType := exprTypes[0].(ArrayRange).Array.ColTypes[0]
+					exprTypes[0] = elemType
+					info.OutTypes[0] = elemType
+					break
+				}
+			}
+		}
+	}
+
+	info.Ranges = mergeUses(merged, info.Ranges)
+	info.HasRanges = true
+}
+
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	savedInValueExpr := ts.InValueExpr
 	defer func() { ts.InValueExpr = savedInValueExpr }()
@@ -684,6 +746,8 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		RejectKind(&ts.Errors, condTypes, ArrayKind, stmt.Token, "statement condition must produce a scalar value, not an array")
 	}
 
+	condRanges := ts.collectConditionRanges(stmt.Condition)
+
 	// type values in value-expression context (comparisons become conditional extractors)
 	ts.InValueExpr = true
 	types := []Type{}
@@ -691,6 +755,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
+		ts.mergeCondRangesIntoValue(expr, exprTypes, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)

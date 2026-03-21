@@ -236,6 +236,17 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }
 
+// valuesHaveCondExpr returns true if any value expression contains an
+// embedded cond-expr (scalar comparison in value position).
+func (c *Compiler) valuesHaveCondExpr(values []ast.Expression) bool {
+	for _, expr := range values {
+		if c.hasCondExprInTree(expr) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasCondExprInTree returns true if any node in the expression tree has
 // CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
@@ -359,42 +370,16 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-// condAccumPattern detects conditional accumulation statements: one or more
-// ranged conditions with 1D array literal values. Returns the merged condition
-// ranges and per-condition compile expressions, or nil, nil when the pattern
-// does not match.
-func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast.Expression) {
-	if len(stmt.Condition) == 0 || len(stmt.Value) == 0 {
-		return nil, nil
-	}
-	if len(stmt.Name) != len(stmt.Value) {
-		return nil, nil
-	}
-
-	// Every value must be a 1D array literal.
-	for _, v := range stmt.Value {
-		lit, ok := v.(*ast.ArrayLiteral)
-		if !ok {
-			return nil, nil
-		}
-		if len(lit.Headers) != 0 || len(lit.Rows) != 1 {
-			return nil, nil
-		}
-	}
-
-	// Collect merged ranges and per-condition compile expressions.
+// extractCondRanges collects merged ranges and per-condition compile
+// expressions from statement conditions. Returns nil, nil if no condition
+// has ranges.
+func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
 	var ranges []*RangeInfo
-	seen := make(map[string]struct{})
-	condExprs := make([]ast.Expression, len(stmt.Condition))
-	for i, expr := range stmt.Condition {
+	condExprs := make([]ast.Expression, len(conditions))
+	for i, expr := range conditions {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if len(info.Ranges) > 0 {
-			for _, ri := range info.Ranges {
-				if _, ok := seen[ri.Name]; !ok {
-					seen[ri.Name] = struct{}{}
-					ranges = append(ranges, ri)
-				}
-			}
+			ranges = mergeUses(ranges, info.Ranges)
 			if info.Rewrite != nil {
 				condExprs[i] = info.Rewrite
 			} else {
@@ -404,60 +389,80 @@ func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast
 			condExprs[i] = expr
 		}
 	}
-
-	// At least one condition must have ranges.
 	if len(ranges) == 0 {
 		return nil, nil
 	}
 	return ranges, condExprs
 }
 
-// compileCondAccumStatement lowers:
-//
-//	name, ... = cond [values...], ...
-//
-// where cond has range iterators, to:
-//
-// 1. Capture old destination values for later freeing
-// 2. Create one ArrayAccumulator per value expression
-// 3. Loop over merged condition ranges
-// 4. Inside loop: evaluate all conditions, AND them, push cells on true
-// 5. After loop: store accumulated results (possibly empty []) and free old values
+// condAccumPattern detects conditional accumulation: ranged conditions with
+// 1D array literal values ([...]). Returns merged condition ranges and
+// per-condition compile expressions, or nil, nil when the pattern does not match.
+func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast.Expression) {
+	if len(stmt.Condition) == 0 || len(stmt.Value) == 0 {
+		return nil, nil
+	}
+	for _, v := range stmt.Value {
+		lit, ok := v.(*ast.ArrayLiteral)
+		if !ok || len(lit.Headers) != 0 || len(lit.Rows) != 1 {
+			return nil, nil
+		}
+	}
+	return c.extractCondRanges(stmt.Condition)
+}
+
+// mergeValueRanges merges value-level ranges from all value expressions
+// into a base set of ranges. Returns the combined set.
+func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) []*RangeInfo {
+	all := base
+	for _, expr := range values {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if info != nil && len(info.Ranges) > 0 {
+			all = mergeUses(all, info.Ranges)
+		}
+	}
+	return all
+}
+
+// withCondRangeLoop sets up the shared loop+guard+branch scaffold used by
+// both accumulation and iteration paths: loop over all ranges, evaluate
+// conditions, branch on the combined result, and call body on the true path.
+func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, guardName, ifName, contName string, body func()) {
+	c.withLoopNest(allRanges, func() {
+		guardPtr := c.pushBoundsGuard(guardName)
+		combinedCond := c.evalConditions(condExprs, guardPtr)
+		c.popBoundsGuard()
+
+		ifBlock, contBlock := c.createIfCont(combinedCond, ifName, contName)
+
+		c.builder.SetInsertPointAtEnd(ifBlock)
+		body()
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
+	})
+}
+
+// compileCondAccumStatement lowers ranged conditions with array literal
+// values ([...]) into per-iteration accumulation. Result is [] if the
+// condition was never true (list-comprehension semantics).
 func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	oldValues := c.captureOldValues(stmt.Name)
 
-	// Create one accumulator per value expression.
 	accs := make([]*ArrayAccumulator, len(stmt.Value))
 	for i, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		arrType := info.OutTypes[0].(Array)
-		accs[i] = c.NewArrayAccumulator(arrType)
+		accs[i] = c.NewArrayAccumulator(info.OutTypes[0].(Array))
 	}
 
-	// Loop over merged condition ranges.
-	c.withLoopNest(condRanges, func() {
-		guardPtr := c.pushBoundsGuard("accum_cond_bounds_guard")
-		combinedCond := c.evalConditions(condExprs, guardPtr)
-		c.popBoundsGuard()
+	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
 
-		// Branch on combined condition.
-		pushBlock, contBlock := c.createIfCont(combinedCond, "accum_push", "accum_cont")
-
-		c.builder.SetInsertPointAtEnd(pushBlock)
-		if len(stmt.Value) == 1 {
-			c.appendArrayLiteralToAccum(accs[0], stmt.Value[0].(*ast.ArrayLiteral))
-		} else {
-			c.appendTupleLiteralsToAccums(accs, stmt.Value)
-		}
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
+	c.withCondRangeLoop(allRanges, condExprs, "accum_cond_guard", "accum_push", "accum_cont", func() {
+		c.appendValuesToAccums(accs, stmt.Value)
 	})
 
-	// After loop: store accumulated results and free old destination values.
-	// Result is [] if the condition was never true (list-comprehension semantics).
 	for i := range accs {
 		result := c.ArrayAccResult(accs[i])
 		c.storeValue(stmt.Name[i].Value, result, false)
@@ -468,6 +473,24 @@ func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, condRanges 
 		}
 		c.freeSymbolValue(old, "old_accum")
 	}
+}
+
+// compileCondIterStatement lowers ranged conditions with non-accumulating
+// values. Iterates over all ranges (condition + value), evaluates conditions
+// per iteration, and assigns values when true (last value wins).
+func (c *Compiler) compileCondIterStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
+	c.prePromoteConditionalCallArgs(stmt.Value)
+
+	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
+
+	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
+
+	c.withCondRangeLoop(allRanges, condExprs, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
+		c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+	})
+
+	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
+	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }
 
 // compileCondExprStatement handles let statements that have conditional

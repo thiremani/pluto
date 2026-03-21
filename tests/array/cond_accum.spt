@@ -49,6 +49,62 @@ j = 0:10
 filtered = j > 2, j < 7 [j]
 filtered
 
+# Array identifier with ranged condition (not a literal, no accumulation)
+arr3 = [10 20 30]
+w = 0:3
+noaccum = w < 2 arr3
+noaccum
+
+# Multi-cell array literal
+i = 0:3
+mc = i < 2 [i i + 10]
+mc
+
+# Single iteration true (narrow AND window)
+i = 0:5
+one = i > 3, i < 5 [i]
+one
+
+# Scalar conditional iteration: arithmetic (last value wins)
+i = 0:5
+s = i < 3 i + 1
+s
+
+# Scalar conditional iteration: bare range filtered by own condition
+m = 0:5
+filt = m > 2 m
+filt
+
+# Scalar conditional iteration: array indexing
+arr4 = [10 20 30]
+q = 0:3
+elem = q < 2 arr4[q]
+elem
+
+# Scalar conditional iteration: cross-range
+r = 0:3
+i = 0:5
+cross = r < 4 i
+cross
+
+# Tuple accumulation with mixed value-level ranges
+i = 0:3
+tc, td = i < 2 [0:2], [i]
+tc
+td
+
+# Mixed tuple: array literal + scalar (iter path, last value wins)
+i = 0:4
+ma, mb = i < 3 [i], i + 10
+ma
+mb
+
+# Cond-expr in value preserves old value when false (no clobber)
+cv = 7
+i = 0:2
+cv = i < 2 i > 5
+cv
+
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
 p = 0:3

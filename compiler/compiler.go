@@ -976,23 +976,29 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
 
-	// Conditional accumulation: ranged condition(s) + array literal value(s).
-	// Must be checked before compileConditions so ranges are not prematurely
-	// lowered into a single final boolean.
+	// Ranged conditions must be checked before compileConditions so ranges
+	// are not prematurely lowered into a single final boolean.
 	if condRanges, condExprs := c.condAccumPattern(stmt); condRanges != nil {
+		// Array literal values ([...]) → accumulate per iteration.
 		c.compileCondAccumStatement(stmt, condRanges, condExprs)
 		return
+	}
+	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
+		// Values with embedded cond-exprs need compileCondExprStatement
+		// semantics to preserve old values when the cond-expr is false.
+		if !c.valuesHaveCondExpr(stmt.Value) {
+			c.compileCondIterStatement(stmt, condRanges, condExprs)
+			return
+		}
 	}
 
 	cond, hasConditions := c.compileConditions(stmt)
 
 	// Embedded conditional expressions (comparisons in value position)
 	// take the most specialized path — they subsume statement conditions.
-	for _, expr := range stmt.Value {
-		if c.hasCondExprInTree(expr) {
-			c.compileCondExprStatement(stmt, cond)
-			return
-		}
+	if c.valuesHaveCondExpr(stmt.Value) {
+		c.compileCondExprStatement(stmt, cond)
+		return
 	}
 
 	if hasConditions {
