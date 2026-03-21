@@ -1,11 +1,11 @@
 # Pluto ABI Optimization Plan
 
-**Status:** Proposed  
-**Scope:** Internal Pluto call lowering, external C ABI stability, scalar fast paths, tail recursion
+**Status:** Proposed
+**Scope:** Internal call lowering, scalar fast paths, tail recursion, external ABI stability
 
-## 1. Problem Statement
+## 1. Problem
 
-Pluto currently uses a single conservative lowering strategy for all functions:
+Pluto uses a single conservative lowering for all functions:
 
 - all functions return `void`
 - arg 0 is an `sret` pointer
@@ -13,147 +13,75 @@ Pluto currently uses a single conservative lowering strategy for all functions:
 
 This is documented in [Pluto C ABI Spec.md](./Pluto%20C%20ABI%20Spec.md).
 
-That design is simple and uniform, but it leaves significant performance on the table for scalar-heavy code. In particular:
+Simple and uniform, but costly for scalar-heavy code:
 
-- `I64` / `F64` arguments are passed indirectly even when aliasing is unobservable
+- `I64`/`F64` arguments are passed indirectly even when aliasing is unobservable
 - single-scalar outputs use `sret` instead of register return
 - self tail recursion lowers to recursive calls plus stack traffic instead of loops
 
-The `fib_tail` benchmark in `bench` exposes this clearly.
+The `fib_tail` benchmark exposes this clearly. LLVM `opt -O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification and tail-recursion lowering must be done in Pluto.
 
-## 2. Design Goal
+## 2. Key Principle: Separate Semantics from ABI
 
-Keep Pluto's source-level semantics unchanged:
+Pluto's source-level semantics stay unchanged:
 
 - assignments copy
 - inputs are logically read-only
 - outputs are logically writable results flowing back to the caller
 
-But stop forcing every function through the same pointer-based ABI.
+These are **language semantics**. How values physically move across a call boundary is the **lowered calling convention** — a separate concern. A read-only `I64` input can be passed by value without changing Pluto semantics. A single `I64` output can be returned in a register while still behaving like a Pluto output.
 
-The long-term goal is:
+## 3. Architecture
 
-- semantic model stays stable
-- internal lowering becomes target-aware and performance-oriented
-- external C ABI can remain stable via wrappers if needed
+### 3.1 ABI classifier
 
-## 3. Key Principle: Separate Semantics from ABI
+Introduce an explicit ABI classification phase in the compilation pipeline. Each parameter/output is classified as:
 
-Pluto currently mixes two different concepts:
+| Classification            | When to use                                                  |
+| ------------------------- | ------------------------------------------------------------ |
+| **direct scalar**         | `I64`, `F64`, `Bool`, other plain numeric types              |
+| **direct aggregate**      | small POD bundles (`{I64, I64}`) when target ABI allows      |
+| **indirect/by-reference** | strings, arrays, ownership-sensitive values, aliased storage |
+| **indirect/sret**         | complex aggregates, target-dependent indirect return         |
 
-1. **Language semantics**
-   - what the programmer can observe
-   - e.g. assignments copy, outputs behave like caller-visible destinations
+The classifier should be target-aware — don't hardcode "`<= 16 bytes` = direct".
 
-2. **Lowered calling convention**
-   - how values actually move across a call boundary
+### 3.2 Pipeline integration
 
-These must be treated separately.
+The ABI classifier runs **after type solving and before LLVM IR emission**:
 
-For example, a read-only `I64` input can be passed by value without changing Pluto semantics, even if the language describes the function as receiving an input "by reference" conceptually.
+```text
+parse → TypeSolver → [ABI classifier] → Compiler (IR emission)
+```
 
-Likewise, a single `I64` output can be returned in a register while still behaving semantically like a Pluto output.
+Concretely, it hooks between `TypeLetStatement` / `TypeExpression` (which resolve types and populate `ExprCache`) and `compileLetStatement` / `compileExpression` (which emit IR). The classifier annotates each function signature with its ABI decisions, and the IR emitter reads those annotations instead of unconditionally using pointer ABI.
 
-## 4. Recommended Long-Term Architecture
+### 3.3 Internal vs external ABI
 
-Introduce an explicit ABI classification phase after type solving and before LLVM IR emission.
+|                | Internal (Pluto-to-Pluto)             | External (C callers)     |
+| -------------- | ------------------------------------- | ------------------------ |
+| **Convention** | Classified ABI (direct scalars, etc.) | Current all-pointer ABI  |
+| **Stability**  | Can change between compiler versions  | Stable, documented       |
+| **Migration**  | Transparent to Pluto code             | Wrapper thunks if needed |
 
-Each parameter/output should be classified into one of:
+Name mangling encodes semantic types, not physical ABI. Changing `I64` from pointer-passed to value-passed does not require a mangling change. But the binary calling convention does change, so external callers need ABI wrappers or versioning.
 
-- direct scalar
-- direct small POD aggregate
-- indirect/by-reference
-- indirect/sret
+## 4. Implementation Phases
 
-This classifier should be target-aware.
+### Phase 1: Scalar fast path (highest priority)
 
-### 4.1 Direct candidates
+Direct lowering for scalar numeric inputs and single scalar outputs.
 
-Use direct passing/return by default for:
+- pass `I64`/`F64` by value instead of by pointer
+- return single scalar in register instead of via `sret`
 
-- `I64`
-- `F64`
-- `Bool` / integer-width booleans
-- possibly other plain scalar numeric types
+This is the highest-value optimization — it benefits all scalar-heavy code, not just specific patterns. Expected: better register allocation, less stack traffic, simpler IR.
 
-### 4.2 Aggregate candidates
-
-Use direct aggregate return only when:
-
-- the result is plain data
-- no ownership/cleanup metadata is needed
-- the target ABI naturally returns it directly
-
-This should not be implemented as a hardcoded front-end-only "`<= 16 bytes` optimization".
-
-Instead:
-
-- model the result as an LLVM aggregate return
-- let target ABI classification determine whether it stays direct or becomes indirect
-
-### 4.3 Indirect-only cases
-
-Keep indirect lowering for:
-
-- strings
-- arrays and array views
-- values with ownership-sensitive cleanup
-- complex aggregates with target-dependent indirect return
-- any case where aliasing or caller-visible storage identity matters
-
-## 5. External ABI vs Internal ABI
-
-This plan assumes Pluto should distinguish between:
-
-- **internal Pluto ABI**: optimized calling convention for Pluto-to-Pluto calls
-- **external C ABI**: stable exported interface documented for foreign callers
-
-### Recommendation
-
-- Pluto-to-Pluto internal calls should move to the classified ABI
-- exported symbols may continue using the current all-pointer C ABI through wrapper thunks
-
-This avoids forcing internal performance decisions to be constrained by long-term external compatibility.
-
-## 6. Mangling Impact
-
-Name mangling should continue to encode semantic types, not the physical lowered ABI.
-
-That means:
-
-- changing `I64` input from pointer-passed to value-passed internally does **not** require a mangling change by itself
-- changing single-scalar return from `sret` to direct return does **not** require a mangling change by itself
-
-However, the **binary calling convention** does change.
-
-So:
-
-- if external callers are expected to link directly against Pluto symbols, ABI versioning or wrapper exports are required
-- if the optimized ABI is internal-only, mangling can remain unchanged
-
-## 7. Priority Order
-
-The recommended implementation order is:
-
-### Phase 1: Scalar fast path
-
-Add direct lowering for:
-
-- scalar numeric inputs by value
-- single scalar outputs by value
-
-This is the highest-value general optimization.
-
-Expected benefits:
-
-- better register allocation
-- less stack traffic
-- simpler IR
-- improved performance across many benchmarks, not just `fib_tail`
+**Benchmark target:** `fib_tail`, general scalar arithmetic benchmarks.
 
 ### Phase 2: Restricted self tail recursion
 
-Add a narrow self-tail-recursion optimization for functions that satisfy all of:
+Transform self-recursive calls into loops when all of:
 
 - direct scalar params only
 - single direct scalar return
@@ -161,119 +89,33 @@ Add a narrow self-tail-recursion optimization for functions that satisfy all of:
 - no ownership-sensitive temporaries live across the tail call
 - no cleanup work required before return
 
-Transform these into loops in IR generation.
+Intentionally narrow — ignore multi-output, strings, arrays, mutual recursion. This is medium difficulty because the restricted form avoids all the hard ownership/cleanup interactions.
 
-This should be intentionally narrow at first.
-
-Expected benefits:
-
-- major improvement on `fib_tail`
-- better codegen for accumulator-style numeric templates
+**Benchmark target:** `fib_tail` (eliminates stack growth entirely).
 
 ### Phase 3: Small POD aggregate returns
 
-Support direct multi-output returns for plain-data aggregates when target ABI allows.
-
-Examples:
-
-- `{I64, I64}`
-- `{I64, F64}`
-- similar small plain-data bundles
-
-This phase should be target-aware and should not assume all small aggregates are register-returned on all platforms.
+Support direct multi-output returns for plain-data aggregates (`{I64, I64}`, `{I64, F64}`) when the target ABI allows. Model as LLVM aggregate return and let target classification decide direct vs indirect.
 
 ### Phase 4: Generalized ABI classification
 
-Broaden support to:
+Broaden to more scalar types, small direct aggregates in both params and results, methods/operators, mixed direct/indirect signatures.
 
-- more scalar types
-- small direct aggregates in both params and results
-- methods and operators
-- mixed direct/indirect signatures
+### Phase 5: External ABI wrappers
 
-### Phase 5: External ABI wrappers and versioning
+Once internal ABI is stable, decide whether exported symbols keep the current C ABI (add wrappers) or version the ABI docs explicitly.
 
-Once internal ABI classification is stable:
+## 5. Rollout Strategy
 
-- decide whether exported Pluto symbols keep the current documented C ABI
-- if yes, add ABI wrappers
-- if no, version the ABI docs explicitly
+Each phase should:
 
-## 8. Tail Recursion Assessment
+1. **Feature-flag the new ABI** — compile both old and new paths, compare IR output
+2. **Run the full test suite** (`python3 test.py --leak-check`) against both paths
+3. **Benchmark before/after** using `bench/` suite to validate the expected gains
+4. **Merge internal ABI first** — external wrappers come later (Phase 5)
 
-### 8.1 Restricted self tail recursion
+## 6. Practical Recommendation
 
-This is considered **medium difficulty** and worth doing.
+If only one optimization can be prioritized: **Phase 1** (scalar fast path). It gives compiler-wide performance gain with low implementation risk.
 
-It is much easier than full general tail-call elimination because the first version can ignore:
-
-- multi-output indirect returns
-- strings
-- arrays
-- ownership-sensitive cleanup
-- mutual recursion
-
-### 8.2 Full tail-call elimination
-
-This is significantly harder.
-
-It would need to interact correctly with:
-
-- cleanup scopes
-- ownership transfer
-- indirect outputs
-- non-scalar params
-- cross-function calling convention compatibility
-
-That should not be the first step.
-
-## 9. What LLVM Can and Cannot Do for Pluto
-
-LLVM `opt -O3` already performs strong scalar promotion and cleanup, but it cannot fully recover from ABI choices that are already baked into the function signature.
-
-LLVM can help with:
-
-- local allocas
-- scalar promotion
-- CFG simplification
-- loop optimizations
-
-LLVM cannot reliably fix:
-
-- pointer-based param ABI when a value ABI would be better
-- `sret`-only return ABI when direct return is possible
-- recursive call structure that should have been lowered to a loop earlier
-
-So ABI classification and restricted tail-recursion lowering must be done in Pluto, not deferred to LLVM.
-
-## 10. Recommended Documentation Split
-
-To avoid future confusion, Pluto docs should clearly distinguish:
-
-- **semantic docs**
-  - how Pluto behaves at the source level
-- **lowered ABI docs**
-  - how generated symbols are currently called
-- **optimization plan docs**
-  - what the compiler intends to improve internally over time
-
-This file is the optimization-plan layer.
-
-## 11. Practical Recommendation
-
-If only one optimization can be prioritized soon, do:
-
-1. direct scalar inputs and outputs
-
-If two optimizations can be prioritized, do:
-
-1. direct scalar inputs and outputs
-2. restricted self tail recursion
-
-This gives the best balance of:
-
-- compiler-wide performance gain
-- implementation risk
-- long-term architectural cleanliness
-- improved benchmark credibility
-
+If two: **Phase 1 + Phase 2** (scalar fast path + restricted tail recursion). This covers the broadest performance wins with the best risk/reward ratio.
