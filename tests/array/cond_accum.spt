@@ -120,7 +120,7 @@ rl
 # Ranged condition + range literal in prefix value (rewrite used)
 pl = 0
 i = 0:3
-pl = i < 2 -0:3
+pl = i < 2 -(0:3)
 pl
 
 # Existing array replaced on successful accumulation (leak check)
