@@ -105,6 +105,18 @@ i = 0:2
 cv = i < 2 i > 5
 cv
 
+# Ranged condition + cond-expr: last true iteration wins
+ce = 0
+i = 0:5
+ce = i < 3 i > 1
+ce
+
+# Ranged condition + range literal in value (rewrite used)
+rl = 0
+i = 0:3
+rl = i < 2 0:3 + 10
+rl
+
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
 p = 0:3

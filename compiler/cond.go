@@ -478,6 +478,8 @@ func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, condRanges 
 // compileCondIterStatement lowers ranged conditions with non-accumulating
 // values. Iterates over all ranges (condition + value), evaluates conditions
 // per iteration, and assigns values when true (last value wins).
+// When values contain embedded cond-exprs, each is wrapped in
+// compileCondExprValue to preserve old values when the cond-expr is false.
 func (c *Compiler) compileCondIterStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
@@ -486,7 +488,22 @@ func (c *Compiler) compileCondIterStatement(stmt *ast.LetStatement, condRanges [
 	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
 
 	c.withCondRangeLoop(allRanges, condExprs, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
-		c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+		if c.valuesHaveCondExpr(stmt.Value) {
+			targetIdx := 0
+			for _, expr := range stmt.Value {
+				info := c.ExprCache[key(c.FuncNameMangled, expr)]
+				numOutputs := len(info.OutTypes)
+				exprTempNames := tempNames[targetIdx : targetIdx+numOutputs]
+				exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
+				exprValues := []ast.Expression{expr}
+				c.compileCondExprValue(expr, llvm.Value{}, func() {
+					c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
+				})
+				targetIdx += numOutputs
+			}
+		} else {
+			c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+		}
 	})
 
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)

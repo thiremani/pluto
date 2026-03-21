@@ -984,12 +984,8 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 		return
 	}
 	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
-		// Values with embedded cond-exprs need compileCondExprStatement
-		// semantics to preserve old values when the cond-expr is false.
-		if !c.valuesHaveCondExpr(stmt.Value) {
-			c.compileCondIterStatement(stmt, condRanges, condExprs)
-			return
-		}
+		c.compileCondIterStatement(stmt, condRanges, condExprs)
+		return
 	}
 
 	cond, hasConditions := c.compileConditions(stmt)
@@ -1282,6 +1278,11 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
+		// Use rewritten expression if ranges were consumed by an outer loop.
+		if info.Rewrite != nil {
+			rewriteInfo := c.ExprCache[key(c.FuncNameMangled, info.Rewrite)]
+			return c.compileInfixBasic(info.Rewrite.(*ast.InfixExpression), rewriteInfo)
+		}
 		return c.compileInfixBasic(expr, info)
 	}
 	return c.compileInfixRanges(expr, info, dest)
