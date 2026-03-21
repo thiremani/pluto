@@ -105,6 +105,26 @@ Broaden to more scalar types, small direct aggregates in both params and results
 
 Once internal ABI is stable, decide whether exported symbols keep the current C ABI (add wrappers) or version the ABI docs explicitly.
 
+### Parallel track: non-ABI loop/codegen quick wins
+
+`sum` suggests there is also a separate non-ABI optimization gap. Pluto's optimized IR
+for that benchmark is already a call-free scalar loop, but clang still produces a much
+more optimized kernel. That means `sum` should be treated as a loop/codegen quality
+benchmark, not as a primary validation target for the ABI phases above.
+
+The first things to investigate here are:
+
+- emit module `target triple`
+- emit module `datalayout`
+- attach `target-cpu` / `target-features` where appropriate
+
+These are adjacent quick wins because they improve LLVM's target knowledge and may
+unlock better loop unrolling, cost modeling, and strength reduction. They can be done
+independently and before Phase 1 since they only add metadata to the LLVM module — no
+ABI classifier needed.
+
+**Benchmark target:** `sum`, other call-free integer kernels.
+
 ## 5. Rollout Strategy
 
 Each phase should:
