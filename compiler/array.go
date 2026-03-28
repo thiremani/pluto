@@ -463,17 +463,8 @@ func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values 
 		})
 	}
 
-	pushAll := func() {
-		for i, acc := range accs {
-			for j, sym := range accSyms[i] {
-				_, isIdent := accCells[i][j].(*ast.Identifier)
-				c.pushAccumCellValue(acc, sym, !isIdent, acc.ElemType)
-			}
-		}
-	}
-
 	if !c.stmtBoundsUsed() {
-		pushAll()
+		c.pushTupleCells(accs, accSyms, accCells)
 		c.popBoundsGuard()
 		return
 	}
@@ -481,16 +472,29 @@ func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values 
 	c.withGuardedBranch(
 		guardPtr,
 		"tuple_ok", "tuple_push", "tuple_skip", "tuple_cont",
-		pushAll,
-		func() {
-			for i := range accs {
-				for j := range accSyms[i] {
-					c.freeTemporary(accCells[i][j], []*Symbol{accSyms[i][j]})
-				}
-			}
-		},
+		func() { c.pushTupleCells(accs, accSyms, accCells) },
+		func() { c.freeTupleCells(accSyms, accCells) },
 	)
 	c.popBoundsGuard()
+}
+
+// pushTupleCells pushes all compiled tuple cells into their accumulators.
+func (c *Compiler) pushTupleCells(accs []*ArrayAccumulator, accSyms [][]*Symbol, accCells [][]ast.Expression) {
+	for i, acc := range accs {
+		for j, sym := range accSyms[i] {
+			_, isIdent := accCells[i][j].(*ast.Identifier)
+			c.pushAccumCellValue(acc, sym, !isIdent, acc.ElemType)
+		}
+	}
+}
+
+// freeTupleCells frees all compiled tuple cell temporaries.
+func (c *Compiler) freeTupleCells(accSyms [][]*Symbol, accCells [][]ast.Expression) {
+	for i := range accSyms {
+		for j := range accSyms[i] {
+			c.freeTemporary(accCells[i][j], []*Symbol{accSyms[i][j]})
+		}
+	}
 }
 
 // pushAccumCellWhenInBounds pushes one accumulated cell only when its local
