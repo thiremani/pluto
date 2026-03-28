@@ -425,14 +425,12 @@ func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, 
 // poisoning the enclosing statement guard.
 func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
 	ctx := c.currentStmtCtx()
-	if ctx == nil {
-		return c.compileExpression(cell, nil)
+	if ctx != nil {
+		ctx.arrayCellDepth++
+		defer func() {
+			ctx.arrayCellDepth--
+		}()
 	}
-
-	ctx.arrayCellDepth++
-	defer func() {
-		ctx.arrayCellDepth--
-	}()
 
 	return c.compileExpression(cell, nil)
 }
