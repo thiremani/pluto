@@ -754,16 +754,19 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
 	defer c.popBoundsGuard()
 
+	syms, rhsNames, resCounts := c.compileAssignmentValues(writeIdents, exprs)
+	c.finishAssignmentsWithGuard(writeIdents, ownershipIdents, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
+}
+
+func (c *Compiler) compileAssignmentValues(writeIdents []*ast.Identifier, exprs []ast.Expression) ([]*Symbol, []string, []int) {
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
-	// Track result counts per expression to identify call destinations
-	resCounts := []int{}
+	resCounts := []int{}   // Track result counts per expression to identify call destinations
 	i := 0
 	for _, expr := range exprs {
 		res := c.compileExpression(expr, writeIdents[i:])
 		resCounts = append(resCounts, len(res))
 
-		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
 		if ident, ok := expr.(*ast.Identifier); ok {
 			rhsName = ident.Value
@@ -775,7 +778,19 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		syms = append(syms, res...)
 		i += len(res)
 	}
+	return syms, rhsNames, resCounts
+}
 
+func (c *Compiler) finishAssignmentsWithGuard(
+	writeIdents []*ast.Identifier,
+	ownershipIdents []*ast.Identifier,
+	exprs []ast.Expression,
+	oldValues []*Symbol,
+	syms []*Symbol,
+	rhsNames []string,
+	resCounts []int,
+	guardPtr llvm.Value,
+) {
 	if !c.stmtBoundsUsed() {
 		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 		return
@@ -984,13 +999,8 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 
 	// Ranged conditions must be checked before compileConditions so ranges
 	// are not prematurely lowered into a single final boolean.
-	if condRanges, condExprs, values := c.condAccumPattern(stmt); condRanges != nil {
-		// Array literal values ([...]) → accumulate per iteration.
-		c.compileCondAccumStatement(stmt, values, condRanges, condExprs)
-		return
-	}
 	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
-		c.compileCondIterStatement(stmt, condRanges, condExprs)
+		c.compileCondRangedStatement(stmt, condRanges, condExprs)
 		return
 	}
 

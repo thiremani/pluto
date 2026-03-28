@@ -50,7 +50,7 @@ a, b = i < 4 [data[i]], [i]
 a
 b
 
-# Mixed tuple: scalar + array literal keeps literal shape on OOB
+# Mixed tuple: scalar iterates while array literal accumulates with OOB zero-fill
 data = [10 20]
 i = 0:3
 za, zb = i < 3 3, [1 2 data[i] 5]
@@ -113,11 +113,28 @@ tc, td = i < 2 [0:2], [i]
 tc
 td
 
-# Mixed tuple: array literal + scalar (iter path, last value wins)
+# Mixed tuple: array literal accumulates while scalar keeps last true value
 i = 0:4
 ma, mb = i < 3 [i], i + 10
 ma
 mb
+
+# Mixed tuple: scalar outputs iterate, array literals accumulate
+data = [10 20]
+i = 0:4
+mx, my, mz, mw = i < 4 i, 5, [i data[i]], [1 2 3 i + 1]
+mx
+my
+mz
+mw
+
+# Mixed tuple: non-contiguous array literals still accumulate in position order
+data = [10 20 30 40]
+i = 0:4
+nx, ny, nz = i < 4 [data[i] 1 data[i + 1]], i, [1 2 i]
+nx
+ny
+nz
 
 # Cond-expr in value preserves old value when false (no clobber)
 cv = 7
