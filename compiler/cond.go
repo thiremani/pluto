@@ -529,7 +529,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			} else {
 				assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
 				if hasAccums {
-					c.appendAccumLiterals(accumAccs, accumLits)
+					c.appendArrayLiterals(accumAccs, accumLits)
 				}
 				c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
 				c.popBoundsGuard()
@@ -538,7 +538,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		}
 
 		if hasAccums {
-			c.appendAccumLiterals(accumAccs, accumLits)
+			c.appendArrayLiterals(accumAccs, accumLits)
 		}
 
 		if hasAssigns {

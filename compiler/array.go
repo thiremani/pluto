@@ -435,9 +435,9 @@ func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
 	return c.compileExpression(cell, nil)
 }
 
-// appendAccumLiteral pushes each cell of a single literal into an
+// appendArrayLiteral pushes each cell of a single literal into an
 // accumulator with per-cell bounds guards.
-func (c *Compiler) appendAccumLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
+func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
 	elemType := acc.ElemType
 	c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
 		for _, cell := range resolved.Rows[0] {
@@ -446,23 +446,23 @@ func (c *Compiler) appendAccumLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 	})
 }
 
-// appendAccumLiterals dispatches to the appropriate accumulation strategy for
+// appendArrayLiterals dispatches to the appropriate accumulation strategy for
 // top-level 1D array-literal outputs from ranged conditional lowering. Single
 // values use the direct per-cell path; tuples share one bounds guard so
 // remaining guarded write/skip decisions stay synchronized across outputs.
-func (c *Compiler) appendAccumLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
+func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	if len(values) == 1 {
-		c.appendAccumLiteral(accs[0], values[0])
+		c.appendArrayLiteral(accs[0], values[0])
 		return
 	}
-	c.appendTupleAccumLiterals(accs, values)
+	c.appendTupleArrayLiterals(accs, values)
 }
 
-// appendTupleAccumLiterals compiles cells from multiple accumulating
+// appendTupleArrayLiterals compiles cells from multiple accumulating
 // array-literal outputs under a single shared bounds guard. Array accesses
 // inside literal cells zero-fill, while any remaining guarded failures still
 // keep the tuple outputs synchronized per iteration.
-func (c *Compiler) appendTupleAccumLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
+func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	c.pushBoundsGuard("tuple_bounds_guard")
 
 	accSyms := make([][]*Symbol, len(accs))
