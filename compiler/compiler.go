@@ -849,20 +849,6 @@ func (c *Compiler) inArrayLiteralCellMode() bool {
 	return ctx != nil && ctx.arrayCellDepth > 0
 }
 
-func (c *Compiler) withArrayLiteralCellMode(body func()) {
-	ctx := c.currentStmtCtx()
-	if ctx == nil {
-		body()
-		return
-	}
-
-	ctx.arrayCellDepth++
-	defer func() {
-		ctx.arrayCellDepth--
-	}()
-	body()
-}
-
 func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
 	ctx := c.currentStmtCtx()
 	if ctx == nil || len(ctx.condStack) == 0 {

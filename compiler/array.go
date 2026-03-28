@@ -424,11 +424,17 @@ func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, 
 // mode so OOB array accesses preserve the literal's shape instead of
 // poisoning the enclosing statement guard.
 func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
-	var vals []*Symbol
-	c.withArrayLiteralCellMode(func() {
-		vals = c.compileExpression(cell, nil)
-	})
-	return vals
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		return c.compileExpression(cell, nil)
+	}
+
+	ctx.arrayCellDepth++
+	defer func() {
+		ctx.arrayCellDepth--
+	}()
+
+	return c.compileExpression(cell, nil)
 }
 
 // appendArrayLiteralToAccum pushes each cell of a single literal into an
