@@ -445,11 +445,11 @@ func (c *Compiler) appendArrayLiteralToAccum(acc *ArrayAccumulator, lit *ast.Arr
 // appendValuesToAccums dispatches to the appropriate accumulation strategy
 // based on count (single vs tuple). All values must be array literals
 // (enforced by condAccumPattern). Single values use the direct per-cell path;
-// tuples share one bounds guard so non-literal write/skip decisions stay
+// tuples share one bounds guard so remaining guarded write/skip decisions stay
 // synchronized across outputs.
-func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
+func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	if len(values) == 1 {
-		c.appendArrayLiteralToAccum(accs[0], values[0].(*ast.ArrayLiteral))
+		c.appendArrayLiteralToAccum(accs[0], values[0])
 		return
 	}
 	c.appendTupleLiteralsToAccums(accs, values)
@@ -459,13 +459,13 @@ func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []ast.E
 // literals under a single shared bounds guard. Array accesses inside literal
 // cells zero-fill, while any remaining guarded failures still keep the tuple
 // outputs synchronized per iteration.
-func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
+func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	guardPtr := c.pushBoundsGuard("tuple_bounds_guard")
 
 	accSyms := make([][]*Symbol, len(accs))
 	accCells := make([][]ast.Expression, len(accs))
-	for i, expr := range values {
-		c.withValueRanges(expr.(*ast.ArrayLiteral), func(resolved *ast.ArrayLiteral) {
+	for i, lit := range values {
+		c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
 			for _, cell := range resolved.Rows[0] {
 				c.compileCondExprValue(cell, llvm.Value{}, func() {
 					vals := c.compileArrayLiteralCellExpr(cell)

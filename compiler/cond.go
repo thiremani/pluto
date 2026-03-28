@@ -397,18 +397,22 @@ func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo,
 
 // condAccumPattern detects conditional accumulation: ranged conditions with
 // 1D array literal values ([...]). Returns merged condition ranges and
-// per-condition compile expressions, or nil, nil when the pattern does not match.
-func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast.Expression) {
+// per-condition compile expressions, plus typed array literal values.
+// Returns nils when the pattern does not match.
+func (c *Compiler) condAccumPattern(stmt *ast.LetStatement) ([]*RangeInfo, []ast.Expression, []*ast.ArrayLiteral) {
 	if len(stmt.Condition) == 0 || len(stmt.Value) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	for _, v := range stmt.Value {
+	values := make([]*ast.ArrayLiteral, len(stmt.Value))
+	for i, v := range stmt.Value {
 		lit, ok := v.(*ast.ArrayLiteral)
 		if !ok || len(lit.Headers) != 0 || len(lit.Rows) != 1 {
-			return nil, nil
+			return nil, nil, nil
 		}
+		values[i] = lit
 	}
-	return c.extractCondRanges(stmt.Condition)
+	ranges, condExprs := c.extractCondRanges(stmt.Condition)
+	return ranges, condExprs, values
 }
 
 // mergeValueRanges merges value-level ranges from all value expressions
@@ -446,21 +450,23 @@ func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Exp
 // compileCondAccumStatement lowers ranged conditions with array literal
 // values ([...]) into per-iteration accumulation. Result is [] if the
 // condition was never true (list-comprehension semantics).
-func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
+func (c *Compiler) compileCondAccumStatement(stmt *ast.LetStatement, values []*ast.ArrayLiteral, condRanges []*RangeInfo, condExprs []ast.Expression) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	oldValues := c.captureOldValues(stmt.Name)
 
-	accs := make([]*ArrayAccumulator, len(stmt.Value))
-	for i, expr := range stmt.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	valueExprs := make([]ast.Expression, len(values))
+	accs := make([]*ArrayAccumulator, len(values))
+	for i, lit := range values {
+		valueExprs[i] = lit
+		info := c.ExprCache[key(c.FuncNameMangled, lit)]
 		accs[i] = c.NewArrayAccumulator(info.OutTypes[0].(Array))
 	}
 
-	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
+	allRanges := c.mergeValueRanges(condRanges, valueExprs)
 
 	c.withCondRangeLoop(allRanges, condExprs, "accum_cond_guard", "accum_push", "accum_cont", func() {
-		c.appendValuesToAccums(accs, stmt.Value)
+		c.appendValuesToAccums(accs, values)
 	})
 
 	for i := range accs {

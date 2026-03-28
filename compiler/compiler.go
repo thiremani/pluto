@@ -998,9 +998,9 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 
 	// Ranged conditions must be checked before compileConditions so ranges
 	// are not prematurely lowered into a single final boolean.
-	if condRanges, condExprs := c.condAccumPattern(stmt); condRanges != nil {
+	if condRanges, condExprs, values := c.condAccumPattern(stmt); condRanges != nil {
 		// Array literal values ([...]) → accumulate per iteration.
-		c.compileCondAccumStatement(stmt, condRanges, condExprs)
+		c.compileCondAccumStatement(stmt, values, condRanges, condExprs)
 		return
 	}
 	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
