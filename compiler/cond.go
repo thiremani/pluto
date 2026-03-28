@@ -415,7 +415,7 @@ func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo,
 	return ranges, condExprs
 }
 
-func topLevelAccumArrayLiteral(expr ast.Expression) *ast.ArrayLiteral {
+func topLevelAccumLiteral(expr ast.Expression) *ast.ArrayLiteral {
 	lit, ok := expr.(*ast.ArrayLiteral)
 	if !ok || len(lit.Headers) != 0 || len(lit.Rows) != 1 {
 		return nil
@@ -476,7 +476,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
 
-		if lit := topLevelAccumArrayLiteral(expr); lit != nil {
+		if lit := topLevelAccumLiteral(expr); lit != nil {
 			accumDest := stmt.Name[targetIdx]
 			accumLits = append(accumLits, lit)
 			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
@@ -529,7 +529,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			} else {
 				assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
 				if hasAccums {
-					c.appendAccumArrayLiteralsToAccums(accumAccs, accumLits)
+					c.appendAccumLiterals(accumAccs, accumLits)
 				}
 				c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
 				c.popBoundsGuard()
@@ -538,7 +538,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		}
 
 		if hasAccums {
-			c.appendAccumArrayLiteralsToAccums(accumAccs, accumLits)
+			c.appendAccumLiterals(accumAccs, accumLits)
 		}
 
 		if hasAssigns {
