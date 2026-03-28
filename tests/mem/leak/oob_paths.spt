@@ -20,7 +20,7 @@ guardKeep, guardOther
 guardKeep, guardOther = Static(), arr[9]
 "LeakGuardedCallKeepsOld: -guardKeep -guardOther"
 
-# Array accumulator path: skipped OOB cells must free temporary values.
+# Array accumulator path: OOB cells zero-fill and must still free temporaries.
 k = 0:5
 acc = [arr[k]]
 "LeakArrayAccOOB: -acc"

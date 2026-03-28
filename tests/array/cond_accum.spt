@@ -20,11 +20,17 @@ i = 0:3
 ranged = i < 2 [0:2]
 ranged
 
-# Bounds-checked cell with OOB iterations skipped
+# Bounds-checked cell with OOB iterations zero-filled
 data = [10 20]
 i = 0:4
 bounded = i < 4 [data[i]]
 bounded
+
+# Float cells also zero-fill on OOB to preserve literal shape
+fdata = [1.5 2.5]
+i = 0:4
+fbounded = i < 4 [fdata[i]]
+fbounded
 
 # Cond-expr in value cell (P1-1: must not bail to scalar path)
 i = 0:3
@@ -37,12 +43,26 @@ a, b = i < 3 [i], [i * 10]
 a
 b
 
-# Multi-output with OOB sync (P1-2: both outputs skip together)
+# Multi-output with OOB literal cells zero-filled in sync
 data = [10 20]
 i = 0:4
 a, b = i < 4 [data[i]], [i]
 a
 b
+
+# Mixed tuple: scalar + array literal keeps literal shape on OOB
+data = [10 20]
+i = 0:3
+za, zb = i < 3 3, [1 2 data[i] 5]
+za
+zb
+
+# Tuple accumulation keeps literal shape on OOB
+data = [10 20]
+i = 0:3
+ta, tb = i < 3 [3], [1 2 data[i] 5]
+ta
+tb
 
 # Multi-condition AND
 j = 0:10

@@ -105,6 +105,7 @@ type stmtCtx struct {
 	condStack       []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
 	boundsStack     []boundsGuardFrame      // Nested bounds guards active within this statement
 	loopBoundsStack []loopBoundsFrame       // Loop bounds mode stack active within this statement
+	arrayCellDepth  int                     // Nested array-literal cell compilation frames active within this statement
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -841,6 +842,25 @@ func (c *Compiler) pushStmtCtx() {
 
 func (c *Compiler) popStmtCtx() {
 	c.stmtCtxStack = c.stmtCtxStack[:len(c.stmtCtxStack)-1]
+}
+
+func (c *Compiler) inArrayLiteralCellMode() bool {
+	ctx := c.currentStmtCtx()
+	return ctx != nil && ctx.arrayCellDepth > 0
+}
+
+func (c *Compiler) withArrayLiteralCellMode(body func()) {
+	ctx := c.currentStmtCtx()
+	if ctx == nil {
+		body()
+		return
+	}
+
+	ctx.arrayCellDepth++
+	defer func() {
+		ctx.arrayCellDepth--
+	}()
+	body()
 }
 
 func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {

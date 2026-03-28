@@ -18,6 +18,10 @@ newVarOOB = arr[9]
 inBounds = arr[1]
 "InBoundsWrites: -inBounds"
 
+tupleScalar, tupleArr = 3, [1 2 arr[9] 5]
+"TupleLiteralScalarWrites: -tupleScalar"
+tupleArr
+
 cond = 5
 cond = arr[5] > 0 99
 "CondOOBSkips: -cond"

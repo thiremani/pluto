@@ -3,6 +3,8 @@ NegativeOOBKeepsPrev: 3
 ExprOOBKeepsPrev: 1
 NewVarOOBDefaultsZero: 0
 InBoundsWrites: 20
+TupleLiteralScalarWrites: 3
+[1 2 0 5]
 CondOOBSkips: 5
 MultiOOBSkips: 100
 FloatOOBKeepsPrev: 9.25

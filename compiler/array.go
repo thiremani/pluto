@@ -361,8 +361,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	row := lit.Rows[0]
 	cells := make([]*Symbol, len(row))
 	for i, cell := range row {
-		// Compile cells
-		vals := c.compileExpression(cell, nil)
+		// Compile cells with zero-fill semantics for OOB array accesses.
+		vals := c.compileArrayLiteralCellExpr(cell)
 		cells[i] = c.derefIfPointer(vals[0], "")
 	}
 
@@ -408,14 +408,27 @@ func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLi
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes
-// the result into the accumulator. Handles cond-exprs and OOB skipping.
+// the result into the accumulator. Cond-exprs can skip the push entirely;
+// array accesses inside the cell zero-fill instead of poisoning the outer
+// statement guard.
 func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
 	guardPtr := c.pushBoundsGuard("acc_bounds_guard")
 	c.compileCondExprValue(cell, llvm.Value{}, func() {
-		vals := c.compileExpression(cell, nil)
+		vals := c.compileArrayLiteralCellExpr(cell)
 		c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
 	})
 	c.popBoundsGuard()
+}
+
+// compileArrayLiteralCellExpr evaluates one array-literal cell in zero-fill
+// mode so OOB array accesses preserve the literal's shape instead of
+// poisoning the enclosing statement guard.
+func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
+	var vals []*Symbol
+	c.withArrayLiteralCellMode(func() {
+		vals = c.compileExpression(cell, nil)
+	})
+	return vals
 }
 
 // appendArrayLiteralToAccum pushes each cell of a single literal into an
@@ -431,9 +444,9 @@ func (c *Compiler) appendArrayLiteralToAccum(acc *ArrayAccumulator, lit *ast.Arr
 
 // appendValuesToAccums dispatches to the appropriate accumulation strategy
 // based on count (single vs tuple). All values must be array literals
-// (enforced by condAccumPattern). For single values, per-cell bounds guards
-// are used. For tuples, a shared bounds guard ensures all outputs push or
-// skip together.
+// (enforced by condAccumPattern). Single values use the direct per-cell path;
+// tuples share one bounds guard so non-literal write/skip decisions stay
+// synchronized across outputs.
 func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
 	if len(values) == 1 {
 		c.appendArrayLiteralToAccum(accs[0], values[0].(*ast.ArrayLiteral))
@@ -443,9 +456,9 @@ func (c *Compiler) appendValuesToAccums(accs []*ArrayAccumulator, values []ast.E
 }
 
 // appendTupleLiteralsToAccums compiles cells from multiple output array
-// literals under a single shared bounds guard, ensuring all outputs push
-// or skip together per iteration. An OOB in any output skips the entire
-// iteration across all outputs.
+// literals under a single shared bounds guard. Array accesses inside literal
+// cells zero-fill, while any remaining guarded failures still keep the tuple
+// outputs synchronized per iteration.
 func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values []ast.Expression) {
 	guardPtr := c.pushBoundsGuard("tuple_bounds_guard")
 
@@ -455,7 +468,7 @@ func (c *Compiler) appendTupleLiteralsToAccums(accs []*ArrayAccumulator, values 
 		c.withValueRanges(expr.(*ast.ArrayLiteral), func(resolved *ast.ArrayLiteral) {
 			for _, cell := range resolved.Rows[0] {
 				c.compileCondExprValue(cell, llvm.Value{}, func() {
-					vals := c.compileExpression(cell, nil)
+					vals := c.compileArrayLiteralCellExpr(cell)
 					accSyms[i] = append(accSyms[i], c.derefIfPointer(vals[0], ""))
 					accCells[i] = append(accCells[i], cell)
 				})
@@ -874,6 +887,51 @@ func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
 	return c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 }
 
+func (c *Compiler) storeArrayRangeOutput(output *Symbol, value llvm.Value, valueType Type) {
+	c.freeSymbolValue(output, "old_output")
+	c.createStore(value, output.Val, valueType)
+}
+
+// storeArrayRangeElement writes arr[idx] into output when inBounds.
+// When zeroOnMiss is true, OOB stores the type zero value instead of leaving
+// the previous output untouched. Array literal cells use this to preserve
+// literal arity without tripping the enclosing statement guard.
+func (c *Compiler) storeArrayRangeElement(
+	output *Symbol,
+	arraySym *Symbol,
+	arrElemType Type,
+	resultType Type,
+	idxVal llvm.Value,
+	inBounds llvm.Value,
+	zeroOnMiss bool,
+) {
+	if zeroOnMiss {
+		storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
+
+		c.builder.SetInsertPointAtEnd(storeBlock)
+		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+		c.storeArrayRangeOutput(output, elemVal, resultType)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(missBlock)
+		zeroVal := c.makeZeroValue(resultType)
+		c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
+		return
+	}
+
+	storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
+
+	c.builder.SetInsertPointAtEnd(storeBlock)
+	elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+	c.storeArrayRangeOutput(output, elemVal, resultType)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
 // compileArrayRangeExpression compiles an array indexing expression.
 // If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
 // If the index is a scalar (e.g., arr[4]), returns the element.
@@ -930,7 +988,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
 	ctx := c.currentStmtCtx()
-	if len(ctx.boundsStack) > 0 {
+	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
 		c.recordStmtBoundsCheck(inBounds)
 	}
 	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
@@ -962,21 +1020,12 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 
 		if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
 			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-			c.freeSymbolValue(output, "old_output")
-			c.createStore(elemVal, output.Val, resultType)
+			c.storeArrayRangeOutput(output, elemVal, resultType)
 			return
 		}
 
 		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-		storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
-
-		c.builder.SetInsertPointAtEnd(storeBlock)
-		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-		c.freeSymbolValue(output, "old_output")
-		c.createStore(elemVal, output.Val, resultType)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
+		c.storeArrayRangeElement(output, arraySym, arrElemType, resultType, idxVal, inBounds, c.inArrayLiteralCellMode())
 	})
 
 	elemType := output.Type.(Ptr).Elem
