@@ -888,46 +888,6 @@ func (c *Compiler) storeArrayRangeOutput(output *Symbol, value llvm.Value, value
 	c.createStore(value, output.Val, valueType)
 }
 
-// storeArrayRangeElement writes arr[idx] into output when inBounds.
-// When zeroOnMiss is true, OOB stores the type zero value instead of leaving
-// the previous output untouched. Array literal cells use this to preserve
-// literal arity without tripping the enclosing statement guard.
-func (c *Compiler) storeArrayRangeElement(
-	output *Symbol,
-	arraySym *Symbol,
-	arrElemType Type,
-	resultType Type,
-	idxVal llvm.Value,
-	inBounds llvm.Value,
-	zeroOnMiss bool,
-) {
-	if zeroOnMiss {
-		storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
-
-		c.builder.SetInsertPointAtEnd(storeBlock)
-		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-		c.storeArrayRangeOutput(output, elemVal, resultType)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(missBlock)
-		zeroVal := c.makeZeroValue(resultType)
-		c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
-		return
-	}
-
-	storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
-
-	c.builder.SetInsertPointAtEnd(storeBlock)
-	elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-	c.storeArrayRangeOutput(output, elemVal, resultType)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
-}
-
 // compileArrayRangeExpression compiles an array indexing expression.
 // If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
 // If the index is a scalar (e.g., arr[4]), returns the element.
@@ -1021,7 +981,31 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 		}
 
 		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-		c.storeArrayRangeElement(output, arraySym, arrElemType, resultType, idxVal, inBounds, c.inArrayLiteralCellMode())
+		if c.inArrayLiteralCellMode() {
+			storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
+
+			c.builder.SetInsertPointAtEnd(storeBlock)
+			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+			c.storeArrayRangeOutput(output, elemVal, resultType)
+			c.builder.CreateBr(contBlock)
+
+			c.builder.SetInsertPointAtEnd(missBlock)
+			zeroVal := c.makeZeroValue(resultType)
+			c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
+			c.builder.CreateBr(contBlock)
+
+			c.builder.SetInsertPointAtEnd(contBlock)
+			return
+		}
+
+		storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
+
+		c.builder.SetInsertPointAtEnd(storeBlock)
+		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+		c.storeArrayRangeOutput(output, elemVal, resultType)
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
 	})
 
 	elemType := output.Type.(Ptr).Elem
