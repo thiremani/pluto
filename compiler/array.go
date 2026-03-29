@@ -426,9 +426,9 @@ func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, 
 func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
 	ctx := c.currentStmtCtx()
 	if ctx != nil {
-		ctx.arrayCellDepth++
+		ctx.arrayLitCellDepth++
 		defer func() {
-			ctx.arrayCellDepth--
+			ctx.arrayLitCellDepth--
 		}()
 	}
 
