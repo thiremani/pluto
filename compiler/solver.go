@@ -697,6 +697,7 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 	if len(condRanges) == 0 {
 		return
 	}
+
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	if info == nil {
 		return
@@ -706,27 +707,27 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 	// For bare range identifiers, include their own range so the
 	// compiler iterates over them (they become Int loop variables).
 	// Also update the output type from Range to its iterator type.
-	if ident, ok := expr.(*ast.Identifier); ok {
-		if len(exprTypes) == 1 && exprTypes[0].Kind() == RangeKind {
-			ri := &RangeInfo{Name: ident.Value}
-			merged = mergeUses(condRanges, []*RangeInfo{ri})
-			iterType := exprTypes[0].(Range).Iter
-			exprTypes[0] = iterType
-			info.OutTypes[0] = iterType
-		}
+	if ident, ok := expr.(*ast.Identifier); ok && len(exprTypes) == 1 && exprTypes[0].Kind() == RangeKind {
+		ri := &RangeInfo{Name: ident.Value}
+		merged = mergeUses(condRanges, []*RangeInfo{ri})
+		iterType := exprTypes[0].(Range).Iter
+		exprTypes[0] = iterType
+		info.OutTypes[0] = iterType
 	}
 
 	// For ArrayRange expressions where the index range is being iterated,
 	// downgrade to scalar element access (the index becomes Int in the loop).
-	if ax, ok := expr.(*ast.ArrayRangeExpression); ok {
+	if ax, ok := expr.(*ast.ArrayRangeExpression); ok && len(exprTypes) == 1 && exprTypes[0].Kind() == ArrayRangeKind {
 		if ident, ok := ax.Range.(*ast.Identifier); ok {
 			for _, ri := range merged {
-				if ri.Name == ident.Value && len(exprTypes) == 1 && exprTypes[0].Kind() == ArrayRangeKind {
-					elemType := exprTypes[0].(ArrayRange).Array.ColTypes[0]
-					exprTypes[0] = elemType
-					info.OutTypes[0] = elemType
-					break
+				if ri.Name != ident.Value {
+					continue
 				}
+
+				elemType := exprTypes[0].(ArrayRange).Array.ColTypes[0]
+				exprTypes[0] = elemType
+				info.OutTypes[0] = elemType
+				break
 			}
 		}
 	}
