@@ -397,16 +397,16 @@ func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo,
 	var ranges []*RangeInfo
 	condExprs := make([]ast.Expression, len(conditions))
 	for i, expr := range conditions {
+		condExprs[i] = expr
+
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if len(info.Ranges) > 0 {
-			ranges = mergeUses(ranges, info.Ranges)
-			if info.Rewrite != nil {
-				condExprs[i] = info.Rewrite
-			} else {
-				condExprs[i] = expr
-			}
-		} else {
-			condExprs[i] = expr
+		if len(info.Ranges) == 0 {
+			continue
+		}
+
+		ranges = mergeUses(ranges, info.Ranges)
+		if info.Rewrite != nil {
+			condExprs[i] = info.Rewrite
 		}
 	}
 	if len(ranges) == 0 {
