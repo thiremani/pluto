@@ -415,14 +415,6 @@ func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo,
 	return ranges, condExprs
 }
 
-func topLevelAccumLiteral(expr ast.Expression) *ast.ArrayLiteral {
-	lit, ok := expr.(*ast.ArrayLiteral)
-	if !ok || len(lit.Headers) != 0 || len(lit.Rows) != 1 {
-		return nil
-	}
-	return lit
-}
-
 // mergeValueRanges merges value-level ranges from all value expressions
 // into a base set of ranges. Returns the combined set.
 func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) []*RangeInfo {
@@ -476,7 +468,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
 
-		if lit := topLevelAccumLiteral(expr); lit != nil {
+		if lit, ok := expr.(*ast.ArrayLiteral); ok && len(lit.Headers) == 0 && len(lit.Rows) == 1 {
 			accumDest := stmt.Name[targetIdx]
 			accumLits = append(accumLits, lit)
 			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
