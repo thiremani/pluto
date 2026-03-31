@@ -530,46 +530,47 @@ func (c *Compiler) compileCondRangedIteration(
 	accumAccs []*ArrayAccumulator,
 	accumLits []*ast.ArrayLiteral,
 ) {
-	hasAssigns := len(assignDests) > 0
-	hasAccums := len(accumLits) > 0
-
-	var guardPtr llvm.Value
-	if hasAssigns {
-		guardPtr = c.pushBoundsGuard("cond_value_guard")
+	// Accum-only: no assigns, just push cells.
+	if len(assignDests) == 0 {
+		c.appendArrayLiterals(accumAccs, accumLits)
+		return
 	}
 
-	if hasAssigns {
-		if assignHasCondExpr {
-			assignTargetIdx := 0
-			for _, expr := range assignExprs {
-				info := c.ExprCache[key(c.FuncNameMangled, expr)]
-				numOutputs := len(info.OutTypes)
-				exprTempNames := assignTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
-				exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
-				exprValues := []ast.Expression{expr}
-				c.compileCondExprValue(expr, llvm.Value{}, func() {
-					c.compileCondAssignmentsWithGuard(exprTempNames, exprDestNames, exprValues, guardPtr)
-				})
-				assignTargetIdx += numOutputs
-			}
-		} else {
-			assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
-			if hasAccums {
-				c.appendArrayLiterals(accumAccs, accumLits)
-			}
-			c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
-			c.popBoundsGuard()
-			return
+	guardPtr := c.pushBoundsGuard("cond_value_guard")
+
+	// Assigns without cond-exprs: compile values, optionally append accums,
+	// then finish with guard. Values and accums share the same bounds guard
+	// so OOB in either skips the whole iteration.
+	if !assignHasCondExpr {
+		assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
+		if len(accumLits) > 0 {
+			c.appendArrayLiterals(accumAccs, accumLits)
 		}
+		c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
+		c.popBoundsGuard()
+		return
 	}
 
-	if hasAccums {
+	// Assigns with cond-exprs: each expression is wrapped individually
+	// so false cond-exprs preserve the old value.
+	assignTargetIdx := 0
+	for _, expr := range assignExprs {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+		exprTempNames := assignTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprValues := []ast.Expression{expr}
+		c.compileCondExprValue(expr, llvm.Value{}, func() {
+			c.compileCondAssignmentsWithGuard(exprTempNames, exprDestNames, exprValues, guardPtr)
+		})
+		assignTargetIdx += numOutputs
+	}
+
+	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
 
-	if hasAssigns {
-		c.popBoundsGuard()
-	}
+	c.popBoundsGuard()
 }
 
 // compileCondExprStatement handles let statements that have conditional
