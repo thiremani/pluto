@@ -358,6 +358,11 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*
 	}
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
+
+	if info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]; info != nil {
+		info.Ranges = append([]*RangeInfo(nil), ranges...)
+		info.Rewrite = rew
+	}
 	return
 }
 
@@ -704,31 +709,27 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 	}
 
 	merged := condRanges
-	// For bare range identifiers, include their own range so the
-	// compiler iterates over them (they become Int loop variables).
-	// Also update the output type from Range to its iterator type.
-	if ident, ok := expr.(*ast.Identifier); ok && len(exprTypes) == 1 && exprTypes[0].Kind() == RangeKind {
-		ri := &RangeInfo{Name: ident.Value}
-		merged = mergeUses(condRanges, []*RangeInfo{ri})
-		iterType := exprTypes[0].(Range).Iter
-		exprTypes[0] = iterType
-		info.OutTypes[0] = iterType
-	}
+	// Bare range values become per-iteration scalars only when the statement
+	// condition already introduced outer iteration. Outside that context they
+	// remain Range / ArrayRange values.
+	if len(exprTypes) == 1 && ts.isBareRangeExpr(expr) {
+		selfRanges := info.Ranges
+		if ident, ok := expr.(*ast.Identifier); ok && exprTypes[0].Kind() == RangeKind {
+			selfRanges = []*RangeInfo{{Name: ident.Value}}
+		}
+		if len(selfRanges) > 0 {
+			merged = mergeUses(condRanges, selfRanges)
+		}
 
-	// For ArrayRange expressions where the index range is being iterated,
-	// downgrade to scalar element access (the index becomes Int in the loop).
-	if ax, ok := expr.(*ast.ArrayRangeExpression); ok && len(exprTypes) == 1 && exprTypes[0].Kind() == ArrayRangeKind {
-		if ident, ok := ax.Range.(*ast.Identifier); ok {
-			for _, ri := range merged {
-				if ri.Name != ident.Value {
-					continue
-				}
-
-				elemType := exprTypes[0].(ArrayRange).Array.ColTypes[0]
-				exprTypes[0] = elemType
-				info.OutTypes[0] = elemType
-				break
-			}
+		switch exprTypes[0].Kind() {
+		case RangeKind:
+			iterType := exprTypes[0].(Range).Iter
+			exprTypes[0] = iterType
+			info.OutTypes[0] = iterType
+		case ArrayRangeKind:
+			elemType := arrayAccessResultType(exprTypes[0].(ArrayRange).Array.ColTypes[0])
+			exprTypes[0] = elemType
+			info.OutTypes[0] = elemType
 		}
 	}
 

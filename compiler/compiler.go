@@ -1035,6 +1035,12 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.StringLiteral:
 		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value)}
 	case *ast.RangeLiteral:
+		info := c.ExprCache[key(c.FuncNameMangled, e)]
+		if info != nil && len(c.pendingLoopRanges(info.Ranges)) == 0 && info.Rewrite != nil {
+			if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok {
+				return []*Symbol{c.compileIdentifier(rewIdent)}
+			}
+		}
 		res = c.compileRangeExpression(e)
 		return
 	case *ast.ArrayLiteral:

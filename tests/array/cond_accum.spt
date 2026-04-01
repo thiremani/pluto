@@ -69,6 +69,11 @@ j = 0:10
 filtered = j > 2, j < 7 [j]
 filtered
 
+# Multi-condition AND with scalar iteration
+j = 0:10
+scalarFiltered = j > 2, j < 7 j
+scalarFiltered
+
 # Array identifier with ranged condition (not a literal, no accumulation)
 arr3 = [10 20 30]
 w = 0:3
@@ -107,6 +112,42 @@ i = 0:5
 cross = r < 4 i
 cross
 
+# Scalar conditional iteration: direct bare range literal
+r = 0:3
+litcross = r < 2 0:5
+litcross
+
+# Scalar conditional iteration: direct bare array-range view
+arr5 = [10 20 30 40]
+r = 0:3
+viewcross = r < 2 arr5[0:3]
+viewcross
+
+# Scalar conditional iteration: direct bare range literal false path keeps old value
+seedlit = 88
+r = 0:3
+seedlit = r < 0 0:5
+seedlit
+
+# Scalar conditional iteration: direct bare array-range view false path keeps old value
+seedview = 77
+arr6 = [10 20 30 40]
+r = 0:3
+seedview = r < 0 arr6[0:3]
+seedview
+
+# Scalar conditional iteration: direct bare string array-range view
+sarr = ["a" "b" "c" "d"]
+r = 0:3
+strview = r < 2 sarr[0:3]
+strview
+
+# String accumulation
+sarr2 = ["a" "b"]
+i = 0:3
+stracc = i < 2 [sarr2[i]]
+stracc
+
 # Tuple accumulation with mixed value-level ranges
 i = 0:3
 tc, td = i < 2 [0:2], [i]
@@ -118,6 +159,12 @@ i = 0:4
 ma, mb = i < 3 [i], i + 10
 ma
 mb
+
+# Mixed tuple: array literal accumulates while scalar cond-expr keeps last true value
+i = 0:5
+mca, mcb = i < 3 [i], i > 1
+mca
+mcb
 
 # Mixed tuple: scalar outputs iterate, array literals accumulate
 data = [10 20]
