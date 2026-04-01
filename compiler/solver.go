@@ -381,11 +381,6 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*RangeInfo, rew ast.Expression) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
-	// If no ExprCache entry exists (e.g., empty array with unresolved type), nothing to handle
-	if info == nil {
-		return nil, al
-	}
-
 	// Only 1D array literals are currently supported by the compiler.
 	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
 		info.Ranges = nil
@@ -705,9 +700,6 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 	}
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info == nil {
-		return
-	}
 
 	merged := condRanges
 	// Bare range values become per-iteration scalars only when the statement
@@ -976,9 +968,7 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		if field.Name == expr.Field {
 			info.OutTypes = []Type{field.Type}
 			leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
-			if leftInfo != nil {
-				info.HasRanges = leftInfo.HasRanges
-			}
+			info.HasRanges = leftInfo.HasRanges
 			return info.OutTypes
 		}
 	}
@@ -1698,7 +1688,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	for i, e := range exprs {
 		outerTypes[i] = ts.TypeExpression(e, isRoot)
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if info == nil || !info.HasRanges {
+		if !info.HasRanges {
 			continue
 		}
 		hasRanges = true
@@ -1721,7 +1711,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 			continue
 		}
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if info == nil || !info.LoopInside {
+		if !info.LoopInside {
 			continue
 		}
 		ts.ensureScalarCallVariant(call)
