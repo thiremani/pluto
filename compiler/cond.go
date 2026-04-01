@@ -421,7 +421,7 @@ func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) 
 	all := base
 	for _, expr := range values {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info != nil && len(info.Ranges) > 0 {
+		if len(info.Ranges) > 0 {
 			all = mergeUses(all, info.Ranges)
 		}
 	}

@@ -359,10 +359,9 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
 
-	if info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]; info != nil {
-		info.Ranges = append([]*RangeInfo(nil), ranges...)
-		info.Rewrite = rew
-	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]
+	info.Ranges = append([]*RangeInfo(nil), ranges...)
+	info.Rewrite = rew
 	return
 }
 
@@ -686,7 +685,7 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
 		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		if info != nil && len(info.Ranges) > 0 {
+		if len(info.Ranges) > 0 {
 			ranges = mergeUses(ranges, info.Ranges)
 		}
 	}

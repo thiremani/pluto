@@ -721,13 +721,13 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Ident
 	switch e := expr.(type) {
 	case *ast.InfixExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	case *ast.PrefixExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	case *ast.ArrayRangeExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	default:
 		return false
 	}
@@ -1039,7 +1039,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		// Root bare range literals can be scalarized by an outer ranged context.
 		// When all of this literal's ranges are already bound, compile the rewrite
 		// iterator identifier instead of materializing a Range aggregate again.
-		if info != nil && len(c.pendingLoopRanges(info.Ranges)) == 0 && info.Rewrite != nil {
+		if len(c.pendingLoopRanges(info.Ranges)) == 0 && info.Rewrite != nil {
 			if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok {
 				return []*Symbol{c.compileIdentifier(rewIdent)}
 			}
