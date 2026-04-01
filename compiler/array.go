@@ -315,10 +315,8 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	info := c.ExprCache[key(c.FuncNameMangled, e)]
 
 	// Check if the expression was rewritten by the type solver
-	if info.Rewrite != nil {
-		if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
-			lit = rew
-		}
+	if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
+		lit = rew
 	}
 
 	// Use the rewritten literal's cache entry if available

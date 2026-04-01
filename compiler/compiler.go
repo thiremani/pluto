@@ -1039,10 +1039,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		// Root bare range literals can be scalarized by an outer ranged context.
 		// When all of this literal's ranges are already bound, compile the rewrite
 		// iterator identifier instead of materializing a Range aggregate again.
-		if len(c.pendingLoopRanges(info.Ranges)) == 0 && info.Rewrite != nil {
-			if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok {
-				return []*Symbol{c.compileIdentifier(rewIdent)}
-			}
+		if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+			return []*Symbol{c.compileIdentifier(rewIdent)}
 		}
 		res = c.compileRangeExpression(e)
 		return
@@ -1304,8 +1302,8 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
 		// Use rewritten expression if ranges were consumed by an outer loop.
-		if info.Rewrite != nil {
-			expr = info.Rewrite.(*ast.InfixExpression)
+		if rew, ok := info.Rewrite.(*ast.InfixExpression); ok {
+			expr = rew
 			info = c.ExprCache[key(c.FuncNameMangled, expr)]
 		}
 		return c.compileInfixBasic(expr, info)
@@ -1708,8 +1706,8 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 	// If the result is an array, let the operand handle any collection itself.
 	if len(pending) == 0 {
 		// Use rewritten expression if ranges were consumed by an outer loop.
-		if info.Rewrite != nil {
-			expr = info.Rewrite.(*ast.PrefixExpression)
+		if rew, ok := info.Rewrite.(*ast.PrefixExpression); ok {
+			expr = rew
 			info = c.ExprCache[key(c.FuncNameMangled, expr)]
 		}
 		return c.compilePrefixBasic(expr, info)
