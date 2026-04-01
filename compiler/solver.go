@@ -694,10 +694,12 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 }
 
 // mergeCondRangesIntoValue merges condition ranges into a value expression's
-// ExprInfo so the compiler can iterate over them. For bare range identifiers,
-// the identifier's own range is also included so it becomes an Int loop
-// variable. No type promotion is performed — only [...] values accumulate;
-// scalar values use conditional assignment (last value wins).
+// ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
+// Bare range-like values (identifiers, direct range literals, and bare
+// array-range views) also merge their own ranges here so they scalarize to the
+// iterator / element type only inside that outer ranged context. Outside it
+// they remain Range / ArrayRange values. Array literals still control
+// accumulation; non-literal values remain last-value-wins.
 func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []Type, condRanges []*RangeInfo) {
 	if len(condRanges) == 0 {
 		return

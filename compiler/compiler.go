@@ -1036,6 +1036,9 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value)}
 	case *ast.RangeLiteral:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
+		// Root bare range literals can be scalarized by an outer ranged context.
+		// When all of this literal's ranges are already bound, compile the rewrite
+		// iterator identifier instead of materializing a Range aggregate again.
 		if info != nil && len(c.pendingLoopRanges(info.Ranges)) == 0 && info.Rewrite != nil {
 			if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok {
 				return []*Symbol{c.compileIdentifier(rewIdent)}

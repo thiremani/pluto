@@ -537,6 +537,7 @@ func (c *Compiler) compileCondRangedIteration(
 	}
 
 	guardPtr := c.pushBoundsGuard("cond_value_guard")
+	defer c.popBoundsGuard()
 
 	// Assigns without cond-exprs: compile values, optionally append accums,
 	// then finish with guard. Values and accums share the same bounds guard
@@ -547,7 +548,6 @@ func (c *Compiler) compileCondRangedIteration(
 			c.appendArrayLiterals(accumAccs, accumLits)
 		}
 		c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
-		c.popBoundsGuard()
 		return
 	}
 
@@ -569,8 +569,6 @@ func (c *Compiler) compileCondRangedIteration(
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
-
-	c.popBoundsGuard()
 }
 
 // compileCondExprStatement handles let statements that have conditional

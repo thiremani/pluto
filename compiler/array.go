@@ -413,11 +413,11 @@ func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLi
 // statement guard.
 func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
 	c.pushBoundsGuard("acc_bounds_guard")
+	defer c.popBoundsGuard()
 	c.compileCondExprValue(cell, llvm.Value{}, func() {
 		vals := c.compileArrayLiteralCellExpr(cell)
 		c.pushAccumCellWhenInBounds(acc, vals, cell, elemType)
 	})
-	c.popBoundsGuard()
 }
 
 // compileArrayLiteralCellExpr evaluates one array-literal cell in zero-fill
