@@ -87,7 +87,7 @@ filtered
 
 # Multi-condition AND with scalar iteration
 j = 0:10
-scalarFiltered = j > 2, j < 7 j
+scalarFiltered = j >= 2, j < 7 j
 "ScalarFiltered: -scalarFiltered"
 
 # Array identifier with ranged condition (not a literal, no accumulation)
@@ -103,7 +103,7 @@ mc = i < 2 [i i + 10]
 
 # Single iteration true (narrow AND window)
 i = 0:10
-one = i > 3, i < 6 [i]
+one = i > 3, i <= 6 [i]
 one
 
 # Scalar conditional iteration: arithmetic (last value wins)
