@@ -176,8 +176,12 @@ ma, mb = i < 3 [i], i + 10
 
 # Mixed tuple: array literal accumulates while scalar cond-expr keeps last true value
 i = 0:5
-mca, mcb = i < 3 [i], i > 1
+mca, mcb = i < 3 [i], i < 2
 "MixedCondExprA: -mca. MixedCondExprB: -mcb"
+
+# Mixed tuple: scalar cond-expr never becomes true, so fresh scalar stays default
+nca, ncb = i < 3 [i], i < 0
+"NeverCondExprA: -nca. NeverCondExprB: -ncb"
 
 # Mixed tuple: scalar outputs iterate, array literals accumulate
 data = [10 20]
