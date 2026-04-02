@@ -34,12 +34,12 @@ fbounded
 
 # Cond-expr in value cell zero-fills false iterations instead of shrinking
 i = 1:6
-x = i < 6 [i > 2]
+x = i < 5 [i > 2]
 x
 
 # Tuple accumulation with cond-expr cell also zero-fills false iterations
 i = 1:6
-cx, cy = i < 6 [i > 2], [i]
+cx, cy = i < 5 [i > 2], [i]
 cx
 cy
 
@@ -47,6 +47,11 @@ cy
 i = 1:6
 imm = [i > 2]
 imm
+
+# Chained cond-exprs in a cell zero-fill both leading and trailing misses
+i = 1:6
+band = [i > 2 < 5]
+band
 
 # Multi-output accumulation
 i = 0:5
