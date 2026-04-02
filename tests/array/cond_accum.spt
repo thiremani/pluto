@@ -102,8 +102,8 @@ mc = i < 2 [i i + 10]
 "MultiCell: -mc"
 
 # Single iteration true (narrow AND window)
-i = 0:5
-one = i > 3, i < 5 [i]
+i = 0:10
+one = i > 3, i < 6 [i]
 one
 
 # Scalar conditional iteration: arithmetic (last value wins)

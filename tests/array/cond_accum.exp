@@ -17,7 +17,7 @@ TupleShapeA: [3 3 3]. TupleShapeB: [1 2 10 5 1 2 20 5 1 2 0 5]
 ScalarFiltered: 6
 [10 20 30]
 MultiCell: [0 10 1 11]
-[4]
+[4 5]
 ScalarArith: 3
 4
 ScalarElem: 20
