@@ -1,0 +1,226 @@
+# Fill with constant
+n = 5
+i = 0:n
+fill = i > -1 [0]
+"Fill: -fill"
+
+# Conditional accumulation
+j = 0:5
+arr = j < 3 [j]
+arr
+
+# Empty result when condition always false
+old = [10 20 30]
+k = 0:3
+old = k < 0 [99]
+"FalseCondEmpty: -old"
+
+# Empty result when the driving range itself is empty
+i = 0:0
+empty = i < 5 [i]
+empty
+
+# Range cell in value literal
+i = 0:3
+ranged = i < 2 [0:2]
+"RangeCell: -ranged"
+
+# Bounds-checked cell with OOB iterations zero-filled
+data = [10 20]
+i = 0:4
+bounded = i < 3 [data[i]]
+bounded
+
+# Float cells also zero-fill on OOB to preserve literal shape
+fdata = [1.5 2.5]
+i = 0:4
+fbounded = i < 5 [fdata[i]]
+"FloatBounded: -fbounded"
+
+# Cond-expr in value cell zero-fills false iterations instead of shrinking
+i = 1:6
+x = i < 5 [i > 2]
+x
+
+# Tuple accumulation with cond-expr cell also zero-fills false iterations
+i = 1:6
+cx, cy = i < 5 [i > 2], [i]
+"TupleCellCondX: -cx. TupleCellCondY: -cy"
+
+# Immediate ranged array literal cond-expr also preserves shape via zero-fill
+i = 1:6
+imm = [i > 2]
+imm
+
+# Chained cond-exprs in a cell zero-fill both leading and trailing misses
+i = 1:6
+band = [i > 2 < 5]
+"BandCond: -band"
+
+# Multi-output accumulation
+i = 0:5
+a, b, c = i < 3 [i], [i * 10], [5.2i]
+a, b, c
+
+# Multi-output with OOB literal cells zero-filled in sync
+data = [10 20]
+i = 0:4
+a, b = i < 3 [data[i]], [i]
+"TupleOOBA: -a. TupleOOBB: -b"
+
+# Mixed tuple: scalar iterates while array literal accumulates with OOB zero-fill
+data = [10 20]
+i = 0:3
+za, zb = i < 3 3, [1 2 data[i] 5]
+"MixedScalarAccumA: -za. MixedScalarAccumB: -zb"
+
+# Tuple accumulation keeps literal shape on OOB
+data = [10 20]
+i = 0:3
+ta, tb = i < 3 [3], [1 2 data[i] 5]
+"TupleShapeA: -ta. TupleShapeB: -tb"
+
+# Multi-condition AND
+j = 0:10
+filtered = j > 2, j < 7 [j]
+filtered
+
+# Multi-condition AND with scalar iteration
+j = 0:10
+scalarFiltered = j >= 2, j < 7 j
+"ScalarFiltered: -scalarFiltered"
+
+# Array identifier with ranged condition (not a literal, no accumulation)
+arr3 = [10 20 30]
+w = 0:3
+noaccum = w < 2 arr3
+noaccum
+
+# Multi-cell array literal
+i = 0:3
+mc = i < 2 [i i + 10]
+"MultiCell: -mc"
+
+# Single iteration true (narrow AND window)
+i = 0:10
+one = i > 3, i <= 6 [i]
+one
+
+# Scalar conditional iteration: arithmetic (last value wins)
+i = 0:5
+s = i < 3 i + 1
+"ScalarArith: -s"
+
+# Scalar conditional iteration: bare range filtered by own condition
+m = 0:5
+filt = m > 2 m
+filt
+
+# Scalar conditional iteration: array indexing
+arr4 = [10 20 30]
+q = 0:3
+elem = q < 2 arr4[q]
+"ScalarElem: -elem"
+
+# Scalar conditional iteration: cross-range
+r = 0:3
+i = 0:5
+cross = r < 4 i
+cross
+
+# Scalar conditional iteration: direct bare range literal
+r = 0:3
+litcross = r < 2 0:5
+"LitCross: -litcross"
+
+# Scalar conditional iteration: direct bare array-range view
+arr5 = [10 20 30 40]
+r = 0:3
+viewcross = r < 2 arr5[0:3]
+viewcross
+
+# Scalar conditional iteration: direct bare range literal false path keeps old value
+seedlit = 88
+r = 0:3
+seedlit = r < 0 0:5
+"SeedLit: -seedlit"
+
+# Scalar conditional iteration: direct bare array-range view false path keeps old value
+seedview = 77
+arr6 = [10 20 30 40]
+r = 0:3
+seedview = r < 0 arr6[0:3]
+seedview
+
+# Scalar conditional iteration: direct bare string array-range view
+sarr = ["a" "b" "c" "d"]
+r = 0:3
+strview = r < 2 sarr[0:3]
+"StrView: -strview"
+
+# String accumulation
+sarr2 = ["a" "b"]
+i = 0:3
+stracc = i < 2 [sarr2[i]]
+stracc
+
+# Tuple accumulation with mixed value-level ranges
+i = 0:3
+tc, td = i < 2 [0:2], [i]
+"TupleValueRangesA: -tc. TupleValueRangesB: -td"
+
+# Mixed tuple: array literal accumulates while scalar keeps last true value
+i = 0:4
+ma, mb = i < 3 [i], i + 10
+"MixedLastWinsA: -ma. MixedLastWinsB: -mb"
+
+# Mixed tuple: array literal accumulates while scalar cond-expr keeps last true value
+i = 0:5
+mca, mcb = i < 3 [i], i < 2
+"MixedCondExprA: -mca. MixedCondExprB: -mcb"
+
+# Mixed tuple: scalar cond-expr never becomes true, so fresh scalar stays default
+nca, ncb = i < 3 [i], i < 0
+"NeverCondExprA: -nca. NeverCondExprB: -ncb"
+
+# Mixed tuple: scalar outputs iterate, array literals accumulate
+data = [10 20]
+i = 0:4
+mx, my, mz, mw = i < 4 i, 5, [i data[i]], [1 2 3 i + 1]
+"MixedScalarAccumX: -mx. MixedScalarAccumY: -my. MixedScalarAccumZ: -mz. MixedScalarAccumW: -mw"
+
+# Mixed tuple: non-contiguous array literals still accumulate in position order
+data = [10 20 30 40]
+i = 0:4
+nx, ny, nz = i < 4 [data[i] 1 data[i + 1]], i, [1 2 i]
+"InterleavedAccumX: -nx. InterleavedAccumY: -ny. InterleavedAccumZ: -nz"
+
+# Cond-expr in value preserves old value when false (no clobber)
+cv = 7
+i = 0:2
+cv = i < 2 i > 5
+cv
+
+# Ranged condition + cond-expr: last true iteration wins
+ce = 0
+i = 0:5
+ce = i < 3 i > 1
+"CondLastWins: -ce"
+
+# Ranged condition + range literal in infix value (rewrite used)
+rl = 0
+i = 0:3
+rl = i < 2 0:3 + 10
+rl
+
+# Ranged condition + range literal in prefix value (rewrite used)
+pl = 0
+i = 0:3
+pl = i < 2 -(0:3)
+"RangePrefixRewrite: -pl"
+
+# Existing array replaced on successful accumulation (leak check)
+seed = [1 2 3]
+p = 0:3
+seed = p < 2 [9]
+seed

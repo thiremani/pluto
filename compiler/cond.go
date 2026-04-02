@@ -14,6 +14,29 @@ type condTemp struct {
 	syms []*Symbol
 }
 
+// evalConditions compiles a list of condition expressions, ANDs all resulting
+// i1 values together, and incorporates bounds guard checks. The caller must
+// call pushBoundsGuard before and popBoundsGuard after.
+func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
+	var cond llvm.Value
+	for _, expr := range exprs {
+		condSyms := c.compileExpression(expr, nil)
+		for _, condSym := range condSyms {
+			if cond.IsNil() {
+				cond = condSym.Val
+			} else {
+				cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
+			}
+		}
+	}
+
+	if c.stmtBoundsUsed() {
+		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
+		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
+	}
+	return cond
+}
+
 func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, hasConditions bool) {
 	if len(stmt.Condition) == 0 {
 		hasConditions = false
@@ -24,21 +47,7 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 	defer c.popBoundsGuard()
 
 	hasConditions = true
-	for i, expr := range stmt.Condition {
-		condSyms := c.compileExpression(expr, nil)
-		for idx, condSym := range condSyms {
-			if i == 0 && idx == 0 {
-				cond = condSym.Val
-				continue
-			}
-			cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
-		}
-	}
-
-	if c.stmtBoundsUsed() {
-		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
-		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
-	}
+	cond = c.evalConditions(stmt.Condition, guardPtr)
 	return
 }
 
@@ -94,9 +103,12 @@ func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *
 
 func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
 	outTypes := c.resolvedDestTypes(stmt.Name, c.collectOutTypes(stmt))
+	return c.createConditionalTempOutputsFor(stmt.Name, outTypes), outTypes
+}
 
-	tempNames := make([]*ast.Identifier, len(stmt.Name))
-	for i, ident := range stmt.Name {
+func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTypes []Type) []*ast.Identifier {
+	tempNames := make([]*ast.Identifier, len(dest))
+	for i, ident := range dest {
 		tempName := fmt.Sprintf("condtmp_%s_%d", ident.Value, c.tmpCounter)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
@@ -115,7 +127,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.
 		Put(c.Scopes, tempName, tempSym)
 		tempNames[i] = tempIdent
 	}
-	return tempNames, outTypes
+	return tempNames
 }
 
 func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []*ast.Identifier, outTypes []Type) {
@@ -197,6 +209,23 @@ func (c *Compiler) compileCondAssignments(tempNames []*ast.Identifier, dest []*a
 	c.restoreCondDests(aliases)
 }
 
+func (c *Compiler) compileCondAssignmentValues(
+	tempNames []*ast.Identifier,
+	dest []*ast.Identifier,
+	exprs []ast.Expression,
+) ([]*Symbol, []*Symbol, []string, []int) {
+	aliases := c.aliasCondDests(dest, tempNames)
+	oldValues := c.captureOldValues(tempNames)
+	syms, rhsNames, resCounts := c.compileAssignmentValues(tempNames, exprs)
+	c.restoreCondDests(aliases)
+	return oldValues, syms, rhsNames, resCounts
+}
+
+func (c *Compiler) compileCondAssignmentsWithGuard(tempNames []*ast.Identifier, dest []*ast.Identifier, exprs []ast.Expression, guardPtr llvm.Value) {
+	oldValues, syms, rhsNames, resCounts := c.compileCondAssignmentValues(tempNames, dest, exprs)
+	c.finishAssignmentsWithGuard(tempNames, dest, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
+}
+
 // compileCondStatement lowers:
 //
 //	name = cond value
@@ -225,6 +254,17 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	c.builder.SetInsertPointAtEnd(contBlock)
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+}
+
+// valuesHaveCondExpr returns true if any value expression contains an
+// embedded cond-expr (scalar comparison in value position).
+func (c *Compiler) valuesHaveCondExpr(values []ast.Expression) bool {
+	for _, expr := range values {
+		if c.hasCondExprInTree(expr) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasCondExprInTree returns true if any node in the expression tree has
@@ -348,6 +388,187 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// extractCondRanges collects merged ranges and per-condition compile
+// expressions from statement conditions. Returns nil, nil if no condition
+// has ranges.
+func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
+	var ranges []*RangeInfo
+	condExprs := make([]ast.Expression, len(conditions))
+	for i, expr := range conditions {
+		condExprs[i] = expr
+
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if len(info.Ranges) == 0 {
+			continue
+		}
+
+		ranges = mergeUses(ranges, info.Ranges)
+		if info.Rewrite != nil {
+			condExprs[i] = info.Rewrite
+		}
+	}
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+	return ranges, condExprs
+}
+
+// mergeValueRanges merges value-level ranges from all value expressions
+// into a base set of ranges. Returns the combined set.
+func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) []*RangeInfo {
+	all := base
+	for _, expr := range values {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if len(info.Ranges) > 0 {
+			all = mergeUses(all, info.Ranges)
+		}
+	}
+	return all
+}
+
+// withCondRangeLoop sets up the shared loop+guard+branch scaffold used by
+// both accumulation and iteration paths: loop over all ranges, evaluate
+// conditions, branch on the combined result, and call body on the true path.
+func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, guardName, ifName, contName string, body func()) {
+	c.withLoopNest(allRanges, func() {
+		guardPtr := c.pushBoundsGuard(guardName)
+		combinedCond := c.evalConditions(condExprs, guardPtr)
+		c.popBoundsGuard()
+
+		ifBlock, contBlock := c.createIfCont(combinedCond, ifName, contName)
+
+		c.builder.SetInsertPointAtEnd(ifBlock)
+		body()
+		c.builder.CreateBr(contBlock)
+
+		c.builder.SetInsertPointAtEnd(contBlock)
+	})
+}
+
+// compileCondRangedStatement lowers ranged conditions with per-output behavior.
+// This intentionally gives mixed ranged tuples split semantics: top-level 1D
+// array literals accumulate across true iterations, while all other outputs use
+// normal conditional iteration (last value wins).
+func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
+	c.prePromoteConditionalCallArgs(stmt.Value)
+
+	assignExprs := []ast.Expression{}
+	assignDests := []*ast.Identifier{}
+	assignOutTypes := []Type{}
+
+	accumLits := []*ast.ArrayLiteral{}
+	accumAccs := []*ArrayAccumulator{}
+	accumDests := []*ast.Identifier{}
+	accumOldValues := []*Symbol{}
+
+	targetIdx := 0
+	for _, expr := range stmt.Value {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+
+		if lit, ok := expr.(*ast.ArrayLiteral); ok && len(lit.Headers) == 0 && len(lit.Rows) == 1 {
+			accumDest := stmt.Name[targetIdx]
+			accumLits = append(accumLits, lit)
+			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
+			accumDests = append(accumDests, accumDest)
+			accumOldValues = append(accumOldValues, c.captureOldValues([]*ast.Identifier{accumDest})[0])
+			targetIdx += numOutputs
+			continue
+		}
+
+		assignExprs = append(assignExprs, expr)
+		for i := 0; i < numOutputs; i++ {
+			dest := stmt.Name[targetIdx+i]
+			assignDests = append(assignDests, dest)
+			assignOutTypes = append(assignOutTypes, c.bindingSlotType(dest.Value, info.OutTypes[i]))
+		}
+		targetIdx += numOutputs
+	}
+
+	hasAssigns := len(assignDests) > 0
+	assignHasCondExpr := c.valuesHaveCondExpr(assignExprs)
+
+	var assignTempNames []*ast.Identifier
+	if hasAssigns {
+		assignTempNames = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
+	}
+
+	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
+
+	c.withCondRangeLoop(allRanges, condExprs, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
+		c.compileCondRangedIteration(
+			assignExprs, assignDests, assignTempNames, assignHasCondExpr,
+			accumAccs, accumLits,
+		)
+	})
+
+	if hasAssigns {
+		c.commitConditionalOutputs(assignDests, assignTempNames, assignOutTypes)
+		DeleteBulk(c.Scopes, tempNamesToStrings(assignTempNames))
+	}
+
+	for i, acc := range accumAccs {
+		result := c.ArrayAccResult(acc)
+		c.storeValue(accumDests[i].Value, result, false)
+		if accumOldValues[i] == nil || c.skipBorrowedOldValueFree(accumOldValues[i]) {
+			continue
+		}
+		c.freeSymbolValue(accumOldValues[i], "old_accum")
+	}
+}
+
+// compileCondRangedIteration runs inside the per-iteration body of
+// compileCondRangedStatement. It compiles scalar assignments under a
+// bounds guard and appends array literal cells to accumulators.
+func (c *Compiler) compileCondRangedIteration(
+	assignExprs []ast.Expression,
+	assignDests []*ast.Identifier,
+	assignTempNames []*ast.Identifier,
+	assignHasCondExpr bool,
+	accumAccs []*ArrayAccumulator,
+	accumLits []*ast.ArrayLiteral,
+) {
+	// Accum-only: no assigns, just push cells.
+	if len(assignDests) == 0 {
+		c.appendArrayLiterals(accumAccs, accumLits)
+		return
+	}
+
+	guardPtr := c.pushBoundsGuard("cond_value_guard")
+	defer c.popBoundsGuard()
+
+	// Assigns without cond-exprs: compile values, optionally append accums,
+	// then finish with guard. Values and accums share the same bounds guard
+	// so OOB in either skips the whole iteration.
+	if !assignHasCondExpr {
+		assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
+		if len(accumLits) > 0 {
+			c.appendArrayLiterals(accumAccs, accumLits)
+		}
+		c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
+		return
+	}
+
+	// Assigns with cond-exprs: each expression is wrapped individually
+	// so false cond-exprs preserve the old value.
+	assignTargetIdx := 0
+	for _, expr := range assignExprs {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+		exprTempNames := assignTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprValues := []ast.Expression{expr}
+		c.compileCondExprValue(expr, llvm.Value{}, func() {
+			c.compileCondAssignmentsWithGuard(exprTempNames, exprDestNames, exprValues, guardPtr)
+		})
+		assignTargetIdx += numOutputs
+	}
+
+	if len(accumLits) > 0 {
+		c.appendArrayLiterals(accumAccs, accumLits)
+	}
 }
 
 // compileCondExprStatement handles let statements that have conditional

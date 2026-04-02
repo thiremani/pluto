@@ -315,10 +315,8 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	info := c.ExprCache[key(c.FuncNameMangled, e)]
 
 	// Check if the expression was rewritten by the type solver
-	if info.Rewrite != nil {
-		if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
-			lit = rew
-		}
+	if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
+		lit = rew
 	}
 
 	// Use the rewritten literal's cache entry if available
@@ -361,8 +359,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	row := lit.Rows[0]
 	cells := make([]*Symbol, len(row))
 	for i, cell := range row {
-		// Compile cells
-		vals := c.compileExpression(cell, nil)
+		// Compile cells with zero-fill semantics for OOB array accesses.
+		vals := c.compileArrayLiteralCellExpr(cell)
 		cells[i] = c.derefIfPointer(vals[0], "")
 	}
 
@@ -385,20 +383,126 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
-	row := lit.Rows[0]
 
 	c.withLoopNestVersioned(info.Ranges, lit, func() {
-		for _, cell := range row {
-			guardPtr := c.pushBoundsGuard("acc_bounds_guard")
-			c.compileCondExprValue(cell, llvm.Value{}, func() {
-				vals := c.compileExpression(cell, nil)
-				c.pushAccumCellWhenInBounds(acc, vals, cell, elemType, guardPtr)
-			})
-			c.popBoundsGuard()
+		for _, cell := range lit.Rows[0] {
+			c.compileAccumCell(acc, cell, elemType)
 		}
 	})
 
 	return []*Symbol{c.ArrayAccResult(acc)}
+}
+
+// withValueRanges resolves the solver rewrite on a literal, then either
+// wraps body in a loop nest (when the literal has value-level ranges) or
+// calls it directly. The resolved literal is passed to body.
+func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
+	resolved, valueInfo := c.resolveArrayLiteralRewrite(lit)
+	if len(valueInfo.Ranges) == 0 {
+		body(resolved)
+		return
+	}
+	c.withLoopNest(valueInfo.Ranges, func() { body(resolved) })
+}
+
+// compileAccumCell compiles one cell under a fresh bounds guard and pushes
+// the result into the accumulator. False cond-exprs and OOB array accesses
+// zero-fill the cell instead of shrinking the accumulated literal or
+// poisoning the outer statement guard.
+func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
+	c.pushBoundsGuard("acc_bounds_guard")
+	defer c.popBoundsGuard()
+	vals := c.compileArrayLiteralCellExpr(cell)
+	c.pushAccumCellWhenInBounds(acc, vals, cell, elemType)
+}
+
+// compileArrayLiteralCellExpr evaluates one array-literal cell in zero-fill
+// mode so OOB array accesses preserve the literal's shape instead of
+// poisoning the enclosing statement guard.
+func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
+	ctx := c.currentStmtCtx()
+	if ctx != nil {
+		ctx.arrayLitCellDepth++
+		defer func() {
+			ctx.arrayLitCellDepth--
+		}()
+	}
+
+	return c.compileExpression(cell, nil)
+}
+
+// appendArrayLiteral pushes each cell of a single literal into an
+// accumulator with per-cell bounds guards.
+func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
+	elemType := acc.ElemType
+	c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
+		for _, cell := range resolved.Rows[0] {
+			c.compileAccumCell(acc, cell, elemType)
+		}
+	})
+}
+
+// appendArrayLiterals dispatches to the appropriate accumulation strategy for
+// top-level 1D array-literal outputs from ranged conditional lowering. Single
+// values use the direct per-cell path; tuples share one bounds guard so
+// remaining guarded write/skip decisions stay synchronized across outputs.
+func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
+	if len(values) == 1 {
+		c.appendArrayLiteral(accs[0], values[0])
+		return
+	}
+	c.appendTupleArrayLiterals(accs, values)
+}
+
+// appendTupleArrayLiterals compiles cells from multiple accumulating
+// array-literal outputs under a single shared bounds guard. Literal cells
+// preserve shape via zero-fill, while any remaining guarded failures still
+// keep the tuple outputs synchronized per iteration.
+func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
+	c.pushBoundsGuard("tuple_bounds_guard")
+
+	accSyms := make([][]*Symbol, len(accs))
+	accCells := make([][]ast.Expression, len(accs))
+	for i, lit := range values {
+		c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
+			for _, cell := range resolved.Rows[0] {
+				vals := c.compileArrayLiteralCellExpr(cell)
+				accSyms[i] = append(accSyms[i], c.derefIfPointer(vals[0], ""))
+				accCells[i] = append(accCells[i], cell)
+			}
+		})
+	}
+
+	if !c.withActiveBoundsGuard(
+		"tuple_ok",
+		"tuple_push",
+		"tuple_skip",
+		"tuple_cont",
+		func() { c.pushTupleCells(accs, accSyms, accCells) },
+		func() { c.freeTupleCells(accSyms, accCells) },
+	) {
+		c.pushTupleCells(accs, accSyms, accCells)
+	}
+	c.popBoundsGuard()
+}
+
+// pushTupleCells pushes all compiled tuple cells into their accumulators.
+func (c *Compiler) pushTupleCells(accs []*ArrayAccumulator, accSyms [][]*Symbol, accCells [][]ast.Expression) {
+	for i, acc := range accs {
+		for j, sym := range accSyms[i] {
+			_, isIdent := accCells[i][j].(*ast.Identifier)
+			c.pushAccumCellValue(acc, sym, !isIdent, acc.ElemType)
+		}
+	}
+}
+
+// freeTupleCells frees all compiled tuple cell temporaries.
+func (c *Compiler) freeTupleCells(accSyms [][]*Symbol, accCells [][]ast.Expression) {
+	for i := range accSyms {
+		for j := range accSyms[i] {
+			c.freeTemporary(accCells[i][j], []*Symbol{accSyms[i][j]})
+		}
+	}
 }
 
 // pushAccumCellWhenInBounds pushes one accumulated cell only when its local
@@ -409,15 +513,8 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 	vals []*Symbol,
 	cell ast.Expression,
 	elemType Type,
-	guardPtr llvm.Value,
 ) {
-	if !c.stmtBoundsUsed() {
-		c.pushAccumCell(acc, vals, cell, elemType)
-		return
-	}
-
-	c.withGuardedBranch(
-		guardPtr,
+	if !c.withActiveBoundsGuard(
 		"acc_bounds_ok",
 		"acc_push",
 		"acc_skip",
@@ -428,7 +525,9 @@ func (c *Compiler) pushAccumCellWhenInBounds(
 		func() {
 			c.freeTemporary(cell, vals)
 		},
-	)
+	) {
+		c.pushAccumCell(acc, vals, cell, elemType)
+	}
 }
 
 func (c *Compiler) pushAccumCell(acc *ArrayAccumulator, vals []*Symbol, cell ast.Expression, elemType Type) {
@@ -778,6 +877,11 @@ func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
 	return c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 }
 
+func (c *Compiler) storeArrayRangeOutput(output *Symbol, value llvm.Value, valueType Type) {
+	c.freeSymbolValue(output, "old_output")
+	c.createStore(value, output.Val, valueType)
+}
+
 // compileArrayRangeExpression compiles an array indexing expression.
 // If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
 // If the index is a scalar (e.g., arr[4]), returns the element.
@@ -834,7 +938,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 
 	inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
 	ctx := c.currentStmtCtx()
-	if len(ctx.boundsStack) > 0 {
+	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
 		c.recordStmtBoundsCheck(inBounds)
 	}
 	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
@@ -866,18 +970,33 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 
 		if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
 			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-			c.freeSymbolValue(output, "old_output")
-			c.createStore(elemVal, output.Val, resultType)
+			c.storeArrayRangeOutput(output, elemVal, resultType)
 			return
 		}
 
 		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+		if c.inArrayLiteralCellMode() {
+			storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
+
+			c.builder.SetInsertPointAtEnd(storeBlock)
+			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+			c.storeArrayRangeOutput(output, elemVal, resultType)
+			c.builder.CreateBr(contBlock)
+
+			c.builder.SetInsertPointAtEnd(missBlock)
+			zeroVal := c.makeZeroValue(resultType)
+			c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
+			c.builder.CreateBr(contBlock)
+
+			c.builder.SetInsertPointAtEnd(contBlock)
+			return
+		}
+
 		storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
 
 		c.builder.SetInsertPointAtEnd(storeBlock)
 		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-		c.freeSymbolValue(output, "old_output")
-		c.createStore(elemVal, output.Val, resultType)
+		c.storeArrayRangeOutput(output, elemVal, resultType)
 		c.builder.CreateBr(contBlock)
 
 		c.builder.SetInsertPointAtEnd(contBlock)

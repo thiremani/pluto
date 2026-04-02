@@ -1,0 +1,141 @@
+# Pluto ABI Optimization Plan
+
+**Status:** Proposed
+**Scope:** Internal call lowering, scalar fast paths, tail recursion, external ABI stability
+
+## 1. Problem
+
+Pluto uses a single conservative lowering for all functions:
+
+- all functions return `void`
+- arg 0 is an `sret` pointer
+- all arguments are passed by pointer
+
+This is documented in [Pluto C ABI Spec.md](./Pluto%20C%20ABI%20Spec.md).
+
+Simple and uniform, but costly for scalar-heavy code:
+
+- `I64`/`F64` arguments are passed indirectly even when aliasing is unobservable
+- single-scalar outputs use `sret` instead of register return
+- self tail recursion lowers to recursive calls plus stack traffic instead of loops
+
+The `fib_tail` benchmark exposes this clearly. LLVM `opt -O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification and tail-recursion lowering must be done in Pluto.
+
+## 2. Key Principle: Separate Semantics from ABI
+
+Pluto's source-level semantics stay unchanged:
+
+- assignments copy
+- inputs are logically read-only
+- outputs are logically writable results flowing back to the caller
+
+These are **language semantics**. How values physically move across a call boundary is the **lowered calling convention** — a separate concern. A read-only `I64` input can be passed by value without changing Pluto semantics. A single `I64` output can be returned in a register while still behaving like a Pluto output.
+
+## 3. Architecture
+
+### 3.1 ABI classifier
+
+Introduce an explicit ABI classification phase in the compilation pipeline. Each parameter/output is classified as:
+
+| Classification            | When to use                                                  |
+| ------------------------- | ------------------------------------------------------------ |
+| **direct scalar**         | `I64`, `F64`, `Bool`, other plain numeric types              |
+| **direct aggregate**      | small POD bundles (`{I64, I64}`) when target ABI allows      |
+| **indirect/by-reference** | strings, arrays, ownership-sensitive values, aliased storage |
+| **indirect/sret**         | complex aggregates, target-dependent indirect return         |
+
+The classifier should be target-aware — don't hardcode "`<= 16 bytes` = direct".
+
+### 3.2 Pipeline integration
+
+The ABI classifier runs **after type solving and before LLVM IR emission**:
+
+```text
+parse → TypeSolver → [ABI classifier] → Compiler (IR emission)
+```
+
+Concretely, it hooks between `TypeLetStatement` / `TypeExpression` (which resolve types and populate `ExprCache`) and `compileLetStatement` / `compileExpression` (which emit IR). The classifier annotates each function signature with its ABI decisions, and the IR emitter reads those annotations instead of unconditionally using pointer ABI.
+
+### 3.3 Internal vs external ABI
+
+|                | Internal (Pluto-to-Pluto)             | External (C callers)     |
+| -------------- | ------------------------------------- | ------------------------ |
+| **Convention** | Classified ABI (direct scalars, etc.) | Current all-pointer ABI  |
+| **Stability**  | Can change between compiler versions  | Stable, documented       |
+| **Migration**  | Transparent to Pluto code             | Wrapper thunks if needed |
+
+Name mangling encodes semantic types, not physical ABI. Changing `I64` from pointer-passed to value-passed does not require a mangling change. But the binary calling convention does change, so external callers need ABI wrappers or versioning.
+
+## 4. Implementation Phases
+
+### Phase 1: Scalar fast path (highest priority)
+
+Direct lowering for scalar numeric inputs and single scalar outputs.
+
+- pass `I64`/`F64` by value instead of by pointer
+- return single scalar in register instead of via `sret`
+
+This is the highest-value optimization — it benefits all scalar-heavy code, not just specific patterns. Expected: better register allocation, less stack traffic, simpler IR.
+
+**Benchmark target:** `fib`, `fib_tail`, and other call-heavy scalar code. Note: `sum` is not a useful target here — its optimized IR is already a call-free scalar loop; the current gap vs clang is loop optimization quality, not call ABI.
+
+### Phase 2: Restricted self tail recursion
+
+Transform self-recursive calls into loops when all of:
+
+- direct scalar params only
+- single direct scalar return
+- self call in tail position
+- no ownership-sensitive temporaries live across the tail call
+- no cleanup work required before return
+
+Intentionally narrow — ignore multi-output, strings, arrays, mutual recursion. This is medium difficulty because the restricted form avoids all the hard ownership/cleanup interactions.
+
+**Benchmark target:** `fib_tail` (eliminates stack growth entirely).
+
+### Phase 3: Small POD aggregate returns
+
+Support direct multi-output returns for plain-data aggregates (`{I64, I64}`, `{I64, F64}`) when the target ABI allows. Model as LLVM aggregate return and let target classification decide direct vs indirect.
+
+### Phase 4: Generalized ABI classification
+
+Broaden to more scalar types, small direct aggregates in both params and results, methods/operators, mixed direct/indirect signatures.
+
+### Phase 5: External ABI wrappers
+
+Once internal ABI is stable, decide whether exported symbols keep the current C ABI (add wrappers) or version the ABI docs explicitly.
+
+### Parallel track: non-ABI loop/codegen quick wins
+
+`sum` suggests there is also a separate non-ABI optimization gap. Pluto's optimized IR
+for that benchmark is already a call-free scalar loop, but clang still produces a much
+more optimized kernel. That means `sum` should be treated as a loop/codegen quality
+benchmark, not as a primary validation target for the ABI phases above.
+
+The first things to investigate here are:
+
+- emit module `target triple`
+- emit module `datalayout`
+- attach `target-cpu` / `target-features` where appropriate
+
+These are adjacent quick wins because they improve LLVM's target knowledge and may
+unlock better loop unrolling, cost modeling, and strength reduction. They can be done
+independently and before Phase 1 since they only add metadata to the LLVM module — no
+ABI classifier needed.
+
+**Benchmark target:** `sum`, other call-free integer kernels.
+
+## 5. Rollout Strategy
+
+Each phase should:
+
+1. **Feature-flag the new ABI** — compile both old and new paths, compare program behavior and test results (not raw IR, which will differ by design)
+2. **Run the full test suite** (`python3 test.py --leak-check`) against both paths
+3. **Benchmark before/after** using `bench/` suite to validate the expected gains
+4. **Merge internal ABI first** — external wrappers come later (Phase 5)
+
+## 6. Practical Recommendation
+
+If only one optimization can be prioritized: **Phase 1** (scalar fast path). It gives compiler-wide performance gain with low implementation risk.
+
+If two: **Phase 1 + Phase 2** (scalar fast path + restricted tail recursion). This covers the broadest performance wins with the best risk/reward ratio.

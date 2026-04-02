@@ -102,9 +102,10 @@ type Compiler struct {
 }
 
 type stmtCtx struct {
-	condStack       []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
-	boundsStack     []boundsGuardFrame      // Nested bounds guards active within this statement
-	loopBoundsStack []loopBoundsFrame       // Loop bounds mode stack active within this statement
+	condStack         []map[ExprKey][]*Symbol // Cond-expr frames (one map per compileCondExprValue invocation)
+	boundsStack       []boundsGuardFrame      // Nested bounds guards active within this statement
+	loopBoundsStack   []loopBoundsFrame       // Loop bounds mode stack active within this statement
+	arrayLitCellDepth int                     // Nested array-literal cell compilation frames active within this statement
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -720,13 +721,13 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Ident
 	switch e := expr.(type) {
 	case *ast.InfixExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	case *ast.PrefixExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	case *ast.ArrayRangeExpression:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0
+		return len(c.pendingLoopRanges(info.Ranges)) > 0
 	default:
 		return false
 	}
@@ -753,16 +754,19 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
 	defer c.popBoundsGuard()
 
+	syms, rhsNames, resCounts := c.compileAssignmentValues(writeIdents, exprs)
+	c.finishAssignmentsWithGuard(writeIdents, ownershipIdents, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
+}
+
+func (c *Compiler) compileAssignmentValues(writeIdents []*ast.Identifier, exprs []ast.Expression) ([]*Symbol, []string, []int) {
 	syms := []*Symbol{}
 	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
-	// Track result counts per expression to identify call destinations
-	resCounts := []int{}
+	resCounts := []int{}   // Track result counts per expression to identify call destinations
 	i := 0
 	for _, expr := range exprs {
 		res := c.compileExpression(expr, writeIdents[i:])
 		resCounts = append(resCounts, len(res))
 
-		// For each result symbol, record the source variable name if it's an identifier
 		var rhsName string
 		if ident, ok := expr.(*ast.Identifier); ok {
 			rhsName = ident.Value
@@ -774,7 +778,19 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		syms = append(syms, res...)
 		i += len(res)
 	}
+	return syms, rhsNames, resCounts
+}
 
+func (c *Compiler) finishAssignmentsWithGuard(
+	writeIdents []*ast.Identifier,
+	ownershipIdents []*ast.Identifier,
+	exprs []ast.Expression,
+	oldValues []*Symbol,
+	syms []*Symbol,
+	rhsNames []string,
+	resCounts []int,
+	guardPtr llvm.Value,
+) {
 	if !c.stmtBoundsUsed() {
 		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 		return
@@ -841,6 +857,11 @@ func (c *Compiler) pushStmtCtx() {
 
 func (c *Compiler) popStmtCtx() {
 	c.stmtCtxStack = c.stmtCtxStack[:len(c.stmtCtxStack)-1]
+}
+
+func (c *Compiler) inArrayLiteralCellMode() bool {
+	ctx := c.currentStmtCtx()
+	return ctx != nil && ctx.arrayLitCellDepth > 0
 }
 
 func (c *Compiler) currentCondLHSFrame() map[ExprKey][]*Symbol {
@@ -976,15 +997,20 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
 
+	// Ranged conditions must be checked before compileConditions so ranges
+	// are not prematurely lowered into a single final boolean.
+	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
+		c.compileCondRangedStatement(stmt, condRanges, condExprs)
+		return
+	}
+
 	cond, hasConditions := c.compileConditions(stmt)
 
 	// Embedded conditional expressions (comparisons in value position)
 	// take the most specialized path — they subsume statement conditions.
-	for _, expr := range stmt.Value {
-		if c.hasCondExprInTree(expr) {
-			c.compileCondExprStatement(stmt, cond)
-			return
-		}
+	if c.valuesHaveCondExpr(stmt.Value) {
+		c.compileCondExprStatement(stmt, cond)
+		return
 	}
 
 	if hasConditions {
@@ -1009,6 +1035,13 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.StringLiteral:
 		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value)}
 	case *ast.RangeLiteral:
+		info := c.ExprCache[key(c.FuncNameMangled, e)]
+		// Root bare range literals can be scalarized by an outer ranged context.
+		// When all of this literal's ranges are already bound, compile the rewrite
+		// iterator identifier instead of materializing a Range aggregate again.
+		if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+			return []*Symbol{c.compileIdentifier(rewIdent)}
+		}
 		res = c.compileRangeExpression(e)
 		return
 	case *ast.ArrayLiteral:
@@ -1268,6 +1301,11 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	if len(pending) == 0 {
+		// Use rewritten expression if ranges were consumed by an outer loop.
+		if rew, ok := info.Rewrite.(*ast.InfixExpression); ok {
+			expr = rew
+			info = c.ExprCache[key(c.FuncNameMangled, expr)]
+		}
 		return c.compileInfixBasic(expr, info)
 	}
 	return c.compileInfixRanges(expr, info, dest)
@@ -1667,6 +1705,11 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 	pending := c.pendingLoopRanges(info.Ranges)
 	// If the result is an array, let the operand handle any collection itself.
 	if len(pending) == 0 {
+		// Use rewritten expression if ranges were consumed by an outer loop.
+		if rew, ok := info.Rewrite.(*ast.PrefixExpression); ok {
+			expr = rew
+			info = c.ExprCache[key(c.FuncNameMangled, expr)]
+		}
 		return c.compilePrefixBasic(expr, info)
 	}
 	return c.compilePrefixRanges(expr, info, dest)

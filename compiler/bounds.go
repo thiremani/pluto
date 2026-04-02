@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/thiremani/pluto/ast"
@@ -32,6 +33,29 @@ func (c *Compiler) stmtBoundsUsed() bool {
 		return false
 	}
 	return ctx.boundsStack[len(ctx.boundsStack)-1].used
+}
+
+func (c *Compiler) activeBoundsGuardValue(loadName string) (llvm.Value, bool) {
+	ctx := c.currentStmtCtx()
+	if ctx == nil || len(ctx.boundsStack) == 0 {
+		return llvm.Value{}, false
+	}
+
+	var guard llvm.Value
+	used := false
+	for i, frame := range ctx.boundsStack {
+		if !frame.used {
+			continue
+		}
+		curr := c.createLoad(frame.guard, Int{Width: 1}, fmt.Sprintf("%s_%d", loadName, i))
+		if !used {
+			guard = curr
+			used = true
+			continue
+		}
+		guard = c.builder.CreateAnd(guard, curr, fmt.Sprintf("%s_and_%d", loadName, i))
+	}
+	return guard, used
 }
 
 // pushBoundsGuard sets up a new bounds-check guard and returns its pointer.
@@ -116,6 +140,46 @@ func (c *Compiler) withStmtBoundsGuard(
 	}
 
 	c.withGuardedBranch(frame.guard, loadName, ifName, elseName, contName, onIf, onElse)
+	return true
+}
+
+func (c *Compiler) withActiveBoundsGuard(
+	loadName, ifName, elseName, contName string,
+	onIf func(),
+	onElse func(),
+) bool {
+	// Active guards compose across nested contexts. This is intentional for mixed
+	// ranged lowering: an inner tuple/cell guard may only proceed when every
+	// outer statement/iteration guard is still true.
+	guard, ok := c.activeBoundsGuardValue(loadName)
+	if !ok {
+		return false
+	}
+
+	if onElse == nil {
+		ifBlock, contBlock := c.createIfCont(guard, ifName, contName)
+		c.builder.SetInsertPointAtEnd(ifBlock)
+		if onIf != nil {
+			onIf()
+		}
+		c.builder.CreateBr(contBlock)
+		c.builder.SetInsertPointAtEnd(contBlock)
+		return true
+	}
+
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(guard, ifName, elseName, contName)
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	if onIf != nil {
+		onIf()
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	onElse()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
 	return true
 }
 

@@ -358,6 +358,10 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*
 	}
 	ranges = []*RangeInfo{ri}
 	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]
+	info.Ranges = append([]*RangeInfo(nil), ranges...)
+	info.Rewrite = rew
 	return
 }
 
@@ -376,11 +380,6 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 
 func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*RangeInfo, rew ast.Expression) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
-
-	// If no ExprCache entry exists (e.g., empty array with unresolved type), nothing to handle
-	if info == nil {
-		return nil, al
-	}
 
 	// Only 1D array literals are currently supported by the compiler.
 	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
@@ -673,6 +672,62 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 	}
 }
 
+// collectConditionRanges gathers all ranges from condition expressions.
+// When conditions iterate over ranges (e.g. i < 3 where i = 0:5), those
+// ranges must be merged into value ExprInfos so the compiler iterates
+// and accumulates per iteration.
+func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*RangeInfo {
+	var ranges []*RangeInfo
+	for _, expr := range conditions {
+		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+		if len(info.Ranges) > 0 {
+			ranges = mergeUses(ranges, info.Ranges)
+		}
+	}
+	return ranges
+}
+
+// mergeCondRangesIntoValue merges condition ranges into a value expression's
+// ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
+// Bare range-like values (identifiers, direct range literals, and bare
+// array-range views) also merge their own ranges here so they scalarize to the
+// iterator / element type only inside that outer ranged context. Outside it
+// they remain Range / ArrayRange values. Array literals still control
+// accumulation; non-literal values remain last-value-wins.
+func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []Type, condRanges []*RangeInfo) {
+	if len(condRanges) == 0 {
+		return
+	}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+
+	merged := condRanges
+	// Bare range values become per-iteration scalars only when the statement
+	// condition already introduced outer iteration. Outside that context they
+	// remain Range / ArrayRange values.
+	if len(exprTypes) == 1 && ts.isBareRangeExpr(expr) {
+		selfRanges := info.Ranges
+		if ident, ok := expr.(*ast.Identifier); ok && exprTypes[0].Kind() == RangeKind {
+			selfRanges = []*RangeInfo{{Name: ident.Value}}
+		}
+		merged = mergeUses(condRanges, selfRanges)
+
+		switch exprTypes[0].Kind() {
+		case RangeKind:
+			iterType := exprTypes[0].(Range).Iter
+			exprTypes[0] = iterType
+			info.OutTypes[0] = iterType
+		case ArrayRangeKind:
+			elemType := arrayAccessResultType(exprTypes[0].(ArrayRange).Array.ColTypes[0])
+			exprTypes[0] = elemType
+			info.OutTypes[0] = elemType
+		}
+	}
+
+	info.Ranges = mergeUses(merged, info.Ranges)
+	info.HasRanges = true
+}
+
 func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	savedInValueExpr := ts.InValueExpr
 	defer func() { ts.InValueExpr = savedInValueExpr }()
@@ -684,6 +739,8 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		RejectKind(&ts.Errors, condTypes, ArrayKind, stmt.Token, "statement condition must produce a scalar value, not an array")
 	}
 
+	condRanges := ts.collectConditionRanges(stmt.Condition)
+
 	// type values in value-expression context (comparisons become conditional extractors)
 	ts.InValueExpr = true
 	types := []Type{}
@@ -691,6 +748,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
+		ts.mergeCondRangesIntoValue(expr, exprTypes, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)
@@ -908,9 +966,7 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		if field.Name == expr.Field {
 			info.OutTypes = []Type{field.Type}
 			leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
-			if leftInfo != nil {
-				info.HasRanges = leftInfo.HasRanges
-			}
+			info.HasRanges = leftInfo.HasRanges
 			return info.OutTypes
 		}
 	}
@@ -1630,7 +1686,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	for i, e := range exprs {
 		outerTypes[i] = ts.TypeExpression(e, isRoot)
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if info == nil || !info.HasRanges {
+		if !info.HasRanges {
 			continue
 		}
 		hasRanges = true
@@ -1653,7 +1709,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 			continue
 		}
 		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
-		if info == nil || !info.LoopInside {
+		if !info.LoopInside {
 			continue
 		}
 		ts.ensureScalarCallVariant(call)
