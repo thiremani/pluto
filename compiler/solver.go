@@ -710,9 +710,7 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 		if ident, ok := expr.(*ast.Identifier); ok && exprTypes[0].Kind() == RangeKind {
 			selfRanges = []*RangeInfo{{Name: ident.Value}}
 		}
-		if len(selfRanges) > 0 {
-			merged = mergeUses(condRanges, selfRanges)
-		}
+		merged = mergeUses(condRanges, selfRanges)
 
 		switch exprTypes[0].Kind() {
 		case RangeKind:
