@@ -406,16 +406,14 @@ func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLi
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes
-// the result into the accumulator. Cond-exprs can skip the push entirely;
-// array accesses inside the cell zero-fill instead of poisoning the outer
-// statement guard.
+// the result into the accumulator. False cond-exprs and OOB array accesses
+// zero-fill the cell instead of shrinking the accumulated literal or
+// poisoning the outer statement guard.
 func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
 	c.pushBoundsGuard("acc_bounds_guard")
 	defer c.popBoundsGuard()
-	c.compileCondExprValue(cell, llvm.Value{}, func() {
-		vals := c.compileArrayLiteralCellExpr(cell)
-		c.pushAccumCellWhenInBounds(acc, vals, cell, elemType)
-	})
+	vals := c.compileArrayLiteralCellExpr(cell)
+	c.pushAccumCellWhenInBounds(acc, vals, cell, elemType)
 }
 
 // compileArrayLiteralCellExpr evaluates one array-literal cell in zero-fill
@@ -457,8 +455,8 @@ func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.A
 }
 
 // appendTupleArrayLiterals compiles cells from multiple accumulating
-// array-literal outputs under a single shared bounds guard. Array accesses
-// inside literal cells zero-fill, while any remaining guarded failures still
+// array-literal outputs under a single shared bounds guard. Literal cells
+// preserve shape via zero-fill, while any remaining guarded failures still
 // keep the tuple outputs synchronized per iteration.
 func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	c.pushBoundsGuard("tuple_bounds_guard")
@@ -468,11 +466,9 @@ func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*
 	for i, lit := range values {
 		c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
 			for _, cell := range resolved.Rows[0] {
-				c.compileCondExprValue(cell, llvm.Value{}, func() {
-					vals := c.compileArrayLiteralCellExpr(cell)
-					accSyms[i] = append(accSyms[i], c.derefIfPointer(vals[0], ""))
-					accCells[i] = append(accCells[i], cell)
-				})
+				vals := c.compileArrayLiteralCellExpr(cell)
+				accSyms[i] = append(accSyms[i], c.derefIfPointer(vals[0], ""))
+				accCells[i] = append(accCells[i], cell)
 			}
 		})
 	}

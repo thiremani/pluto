@@ -32,10 +32,21 @@ i = 0:4
 fbounded = i < 4 [fdata[i]]
 fbounded
 
-# Cond-expr in value cell (P1-1: must not bail to scalar path)
-i = 0:3
-x = i < 2 [i > 0]
+# Cond-expr in value cell zero-fills false iterations instead of shrinking
+i = 1:6
+x = i < 6 [i > 2]
 x
+
+# Tuple accumulation with cond-expr cell also zero-fills false iterations
+i = 1:6
+cx, cy = i < 6 [i > 2], [i]
+cx
+cy
+
+# Immediate ranged array literal cond-expr also preserves shape via zero-fill
+i = 1:6
+imm = [i > 2]
+imm
 
 # Multi-output accumulation
 i = 0:5
