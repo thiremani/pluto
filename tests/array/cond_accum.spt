@@ -28,13 +28,13 @@ ranged = i < 2 [0:2]
 # Bounds-checked cell with OOB iterations zero-filled
 data = [10 20]
 i = 0:4
-bounded = i < 4 [data[i]]
+bounded = i < 3 [data[i]]
 bounded
 
 # Float cells also zero-fill on OOB to preserve literal shape
 fdata = [1.5 2.5]
 i = 0:4
-fbounded = i < 4 [fdata[i]]
+fbounded = i < 5 [fdata[i]]
 "FloatBounded: -fbounded"
 
 # Cond-expr in value cell zero-fills false iterations instead of shrinking
