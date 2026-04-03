@@ -142,9 +142,7 @@ func TestCompilerModuleTargetMetadata(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "target_metadata", "", ast.NewCode())
 
 	triple, dataLayout := defaultModuleTargetMetadata()
-	if triple == "" {
-		t.Fatal("expected default target triple to be available")
-	}
+	require.NotEmpty(t, triple, "expected default target triple to be available")
 	require.Equal(t, triple, cc.Compiler.Module.Target())
 	require.NotEmpty(t, cc.Compiler.Module.DataLayout())
 	if dataLayout != "" {

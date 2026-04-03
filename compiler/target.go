@@ -7,6 +7,8 @@ import (
 )
 
 var (
+	// Cache process-global host target metadata so each new LLVM module can reuse
+	// it without repeating LLVM target initialization and target-machine setup.
 	targetMetadataOnce sync.Once
 	targetTriple       string
 	targetDataLayout   string
@@ -14,12 +16,12 @@ var (
 
 func defaultModuleTargetMetadata() (triple, dataLayout string) {
 	targetMetadataOnce.Do(func() {
-		llvm.InitializeAllTargetInfos()
-		llvm.InitializeAllTargets()
-		llvm.InitializeAllTargetMCs()
-
 		targetTriple = llvm.DefaultTargetTriple()
 		if targetTriple == "" {
+			return
+		}
+
+		if err := llvm.InitializeNativeTarget(); err != nil {
 			return
 		}
 

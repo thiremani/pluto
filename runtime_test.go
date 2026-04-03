@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func containsPrefix(values []string, prefix string) bool {
@@ -75,8 +77,8 @@ func TestCLICommand(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := cliCommand(tt.arg); got != tt.want {
-			t.Fatalf("cliCommand(%q) = %q, want %q", tt.arg, got, tt.want)
-		}
+		t.Run(tt.arg, func(t *testing.T) {
+			require.Equal(t, tt.want, cliCommand(tt.arg))
+		})
 	}
 }
