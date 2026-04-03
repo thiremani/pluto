@@ -16,6 +16,7 @@ var (
 
 func defaultModuleTargetMetadata() (triple, dataLayout string) {
 	targetMetadataOnce.Do(func() {
+		// DefaultTargetTriple is provided by LLVM without requiring target init.
 		targetTriple = llvm.DefaultTargetTriple()
 		if targetTriple == "" {
 			return
