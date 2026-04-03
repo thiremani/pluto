@@ -19,8 +19,9 @@ type Symbol struct {
 
 // Borrowed-value ownership model:
 //
-// Function parameters are passed by reference (Ptr) to caller-owned storage.
-// The caller retains ownership; the callee gets read/write access to slots.
+// Function lowering is ABI-classified. Indirect params/results use caller-owned
+// storage as before; direct scalar params are spilled into local allocas in the
+// callee prologue, and direct scalar returns cross the call boundary as SSA values.
 //
 //   - Input params (ReadOnly=true): read-only reference to caller's value
 //   - Output params (ReadOnly=false): write reference to caller's storage
@@ -64,6 +65,25 @@ type FuncArgs struct {
 	Outputs     []*Symbol          // retPtrs (pointers to sret slots)
 	IterIndices []int              // Indices of iterator params
 	Iters       map[string]*Symbol // Current iterator values during loop
+}
+
+type callArg struct {
+	Expr   ast.Expression
+	Name   string
+	Symbol *Symbol
+}
+
+type callSignature struct {
+	FuncName   string
+	Mangled    string
+	ParamTypes []Type
+	FnInfo     *Func
+	ABI        FuncABI
+}
+
+type loweredCallArgs struct {
+	Args         []*Symbol
+	AliasIndices []int
 }
 
 // BindingKey identifies a variable binding within a specific function variant.
@@ -185,6 +205,137 @@ func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) 
 		return false
 	}
 	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
+}
+
+func callArgType(sym *Symbol) Type {
+	if ptr, ok := sym.Type.(Ptr); ok {
+		return ptr.Elem
+	}
+	return sym.Type
+}
+
+func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *ExprInfo) []Type {
+	paramTypes := []Type{}
+	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
+	for _, arg := range ce.Arguments {
+		if useBoundScalars {
+			if ident, ok := arg.(*ast.Identifier); ok {
+				if sym, exists := c.getRawSymbol(ident.Value); exists {
+					paramTypes = append(paramTypes, callArgType(sym))
+					continue
+				}
+			}
+		}
+
+		argInfo := c.ExprCache[key(c.FuncNameMangled, arg)]
+		if argInfo == nil {
+			if ident, ok := arg.(*ast.Identifier); ok {
+				sym, exists := c.getRawSymbol(ident.Value)
+				if !exists {
+					panic("internal: missing call arg type info for " + ident.Value)
+				}
+				paramTypes = append(paramTypes, callArgType(sym))
+				continue
+			}
+			panic(fmt.Sprintf("internal: missing call arg type info for %T", arg))
+		}
+		for _, argType := range argInfo.OutTypes {
+			if info.LoopInside {
+				paramTypes = append(paramTypes, argType)
+				continue
+			}
+
+			switch argType.Kind() {
+			case RangeKind:
+				paramTypes = append(paramTypes, argType.(Range).Iter)
+			case ArrayRangeKind:
+				paramTypes = append(paramTypes, argType.(ArrayRange).Array.ColTypes[0])
+			default:
+				paramTypes = append(paramTypes, argType)
+			}
+		}
+	}
+	return paramTypes
+}
+
+func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
+	paramTypes := c.callParamTypesFromExprInfo(ce, info)
+	mangled := Mangle(c.MangledPath, funcName, paramTypes)
+	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
+		})
+		return nil, false
+	}
+
+	return &callSignature{
+		FuncName:   funcName,
+		Mangled:    mangled,
+		ParamTypes: paramTypes,
+		FnInfo:     fnInfo,
+		ABI:        classifyFuncABI(paramTypes, fnInfo.OutTypes),
+	}, true
+}
+
+func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg, dest []*ast.Identifier) []int {
+	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
+	if dest == nil {
+		return aliasIndices
+	}
+
+	for i, arg := range args {
+		aliasSlot := sig.ABI.Params[i].AliasSlot
+		if aliasSlot < 0 || arg.Name == "" {
+			continue
+		}
+
+		for j, outType := range sig.FnInfo.OutTypes {
+			if j >= len(dest) {
+				break
+			}
+			if dest[j].Value != arg.Name {
+				continue
+			}
+			if !TypeEqual(sig.ParamTypes[i], outType) {
+				continue
+			}
+			aliasIndices[aliasSlot] = j + 1
+			break
+		}
+	}
+
+	return aliasIndices
+}
+
+func (c *Compiler) directReturnSeedForCall(outType Type, dest []*ast.Identifier, output *Symbol) *Symbol {
+	if output != nil {
+		return c.derefIfPointer(output, "call_seed")
+	}
+	if dest != nil && len(dest) > 0 {
+		return c.resolveConditionalSeed(dest[0], outType)
+	}
+	return c.makeZeroValue(outType)
+}
+
+func (c *Compiler) selectAliasedParamPtr(name string, elemType Type, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
+	slotPtr := spill
+	for i, output := range outputs {
+		ptrType, ok := output.Type.(Ptr)
+		if !ok || !TypeEqual(ptrType.Elem, elemType) {
+			continue
+		}
+
+		match := c.builder.CreateICmp(
+			llvm.IntEQ,
+			aliasIndex,
+			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
+			fmt.Sprintf("%s_alias_%d", name, i),
+		)
+		slotPtr = c.builder.CreateSelect(match, output.Val, slotPtr, fmt.Sprintf("%s_slot_%d", name, i))
+	}
+	return slotPtr
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -721,6 +872,10 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
 		info := c.ExprCache[key(c.FuncNameMangled, ce)]
+		sig, ok := c.resolveCallSignature(ce.Function.Value, ce, info)
+		if !ok || sig.ABI.Return.Mode == ABIReturnDirect {
+			return false
+		}
 		return !c.callNeedsTempOutputs(info, dest)
 	}
 
@@ -1824,19 +1979,38 @@ func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type
 	return st
 }
 
-func (c *Compiler) getFuncType(retStruct llvm.Type, inputs []llvm.Type) llvm.Type {
-	ptrToRet := llvm.PointerType(retStruct, 0)
-	llvmParams := append([]llvm.Type{ptrToRet}, inputs...)
+func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Type) {
+	llvmParams := make([]llvm.Type, 0, len(abi.Params)+1)
+	retType := c.Context.VoidType()
+	retStruct := llvm.Type{}
 
-	funcType := llvm.FunctionType(c.Context.VoidType(), llvmParams, false)
-	return funcType
+	if abi.UsesIndirectReturn() {
+		retStruct = c.getReturnStruct(mangled, abi.Return.OutTypes)
+		llvmParams = append(llvmParams, llvm.PointerType(retStruct, 0))
+	} else {
+		retType = c.mapToLLVMType(abi.Return.DirectType)
+	}
+
+	for _, param := range abi.Params {
+		llvmParams = append(llvmParams, c.mapToLLVMType(param.Lowered))
+	}
+	for i := 0; i < abi.NumAliasSlots(); i++ {
+		llvmParams = append(llvmParams, c.Context.Int32Type())
+	}
+	if abi.Return.HasSeedParam {
+		llvmParams = append(llvmParams, c.mapToLLVMType(abi.Return.DirectType))
+	}
+
+	return llvm.FunctionType(retType, llvmParams, false), retStruct
 }
 
-func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnInfo *Func, paramTypes []Type, retStruct llvm.Type, funcType llvm.Type) llvm.Value {
-	function := llvm.AddFunction(c.Module, mangled, funcType)
+func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, funcType llvm.Type, retStruct llvm.Type) llvm.Value {
+	function := llvm.AddFunction(c.Module, sig.Mangled, funcType)
 
-	sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
-	function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
+	if sig.ABI.UsesIndirectReturn() {
+		sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
+		function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
+	}
 
 	// Create entry block
 	entry := c.Context.AddBasicBlock(function, "entry")
@@ -1845,11 +2019,15 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnIn
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := c.FuncNameMangled
-	c.FuncNameMangled = mangled
-	c.compileFuncBlock(template, fnInfo, paramTypes, retStruct, function)
+	c.FuncNameMangled = sig.Mangled
+	retVal, hasDirectRet := c.compileFuncBlock(template, sig, retStruct, function)
 	c.FuncNameMangled = savedFuncNameMangled
 
-	c.builder.CreateRetVoid()
+	if hasDirectRet {
+		c.builder.CreateRet(retVal)
+	} else {
+		c.builder.CreateRetVoid()
+	}
 
 	// Restore the builder to where it was before compiling this function
 	if !savedBlock.IsNil() {
@@ -1859,7 +2037,7 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, mangled string, fnIn
 	return function
 }
 
-func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
+func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sretPtr llvm.Value, finalOutTypes []Type) []*Symbol {
 	retPtrs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		// GEP to get pointer to sret field (which holds a destination pointer)
@@ -1877,28 +2055,77 @@ func (c *Compiler) processOutputs(fn *ast.FuncStatement, retStruct llvm.Type, sr
 			Borrowed: true,
 			ReadOnly: false,
 		}
-		// Bind output name to destination pointer so body writes to correct location
-		Put(c.Scopes, outIdent.Value, retPtrs[i])
 	}
 	return retPtrs
 }
 
-func (c *Compiler) processParams(template *ast.FuncStatement, fnInfo *Func, paramTypes []Type, function llvm.Value) ([]*Symbol, []int) {
-	inputs := make([]*Symbol, len(paramTypes))
+func (c *Compiler) processDirectOutputs(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
+	retPtrs := make([]*Symbol, len(fn.Outputs))
+	for i, outIdent := range fn.Outputs {
+		outType := sig.FnInfo.OutTypes[i]
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), outIdent.Value)
+		retPtrs[i] = &Symbol{
+			Val:     ptr,
+			Type:    Ptr{Elem: outType},
+			FuncArg: true,
+		}
+
+		seed := c.makeZeroValue(outType)
+		if i == 0 {
+			seedParamIndex := sig.ABI.DirectReturnSeedParamIndex()
+			if seedParamIndex >= 0 {
+				seed = &Symbol{
+					Val:      function.Param(seedParamIndex),
+					Type:     sig.ABI.Return.DirectType,
+					FuncArg:  true,
+					Borrowed: true,
+					ReadOnly: true,
+				}
+			}
+		}
+		c.storeSymbolToPtrAsType(retPtrs[i], seed, outType, outIdent.Value+"_seed")
+	}
+	return retPtrs
+}
+
+func (c *Compiler) bindFuncOutputs(fn *ast.FuncStatement, retPtrs []*Symbol) {
+	for i, outIdent := range fn.Outputs {
+		Put(c.Scopes, outIdent.Value, retPtrs[i])
+	}
+}
+
+func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature, function llvm.Value, retPtrs []*Symbol) ([]*Symbol, []int) {
+	inputs := make([]*Symbol, len(sig.ParamTypes))
 	iterIndices := []int{}
 
 	for i, param := range template.Parameters {
 		name := param.Value
-		// paramTypes has outer types (includes Range), fnInfo.Params has inner types (Range unwrapped)
-		elemType := paramTypes[i]
-		paramVal := function.Param(i + 1) // +1 because param 0 is sret
+		elemType := sig.ParamTypes[i]
+		paramVal := function.Param(sig.ABI.SourceFunctionParamIndex(i))
 
-		inputs[i] = &Symbol{
-			Val:      paramVal,
-			Type:     Ptr{Elem: elemType},
-			FuncArg:  true,
-			Borrowed: true,
-			ReadOnly: true,
+		if sig.ABI.Params[i].Mode == ABIParamDirect {
+			paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(elemType), name)
+			c.createStore(paramVal, paramPtr, elemType)
+
+			slotPtr := paramPtr
+			aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i)
+			if aliasParamIndex >= 0 {
+				slotPtr = c.selectAliasedParamPtr(name, elemType, paramPtr, function.Param(aliasParamIndex), retPtrs)
+			}
+			inputs[i] = &Symbol{
+				Val:      slotPtr,
+				Type:     Ptr{Elem: elemType},
+				FuncArg:  true,
+				ReadOnly: true,
+			}
+		} else {
+			inputs[i] = &Symbol{
+				Val:      paramVal,
+				Type:     Ptr{Elem: elemType},
+				FuncArg:  true,
+				Borrowed: true,
+				ReadOnly: true,
+			}
 		}
 
 		kind := elemType.Kind()
@@ -1922,20 +2149,32 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	c.funcLoopNest(template, fa, function, 0)
 }
 
-func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, fnInfo *Func, paramTypes []Type, retStruct llvm.Type, function llvm.Value) {
+func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignature, retStruct llvm.Type, function llvm.Value) (llvm.Value, bool) {
 	PushScope(&c.Scopes, FuncScope)
 	defer c.popScope()
 
-	sretPtr := function.Param(0)
-	inputs, iterIndices := c.processParams(template, fnInfo, paramTypes, function)
-	retPtrs := c.processOutputs(template, retStruct, sretPtr, fnInfo.OutTypes)
+	var retPtrs []*Symbol
+	if sig.ABI.UsesIndirectReturn() {
+		sretPtr := function.Param(0)
+		retPtrs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.OutTypes)
+	} else {
+		retPtrs = c.processDirectOutputs(template, sig, function)
+	}
+	inputs, iterIndices := c.processParams(template, sig, function, retPtrs)
+	c.bindFuncOutputs(template, retPtrs)
 
 	if len(iterIndices) == 0 {
 		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
-		return
+	} else {
+		c.compileFuncIter(template, inputs, iterIndices, retPtrs, function)
 	}
 
-	c.compileFuncIter(template, inputs, iterIndices, retPtrs, function)
+	if sig.ABI.Return.Mode == ABIReturnDirect {
+		retVal := c.createLoad(retPtrs[0].Val, sig.ABI.Return.DirectType, template.Outputs[0].Value+"_ret")
+		return retVal, true
+	}
+
+	return llvm.Value{}, false
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
@@ -2057,35 +2296,130 @@ func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.
 	return ifBlock, contBlock
 }
 
-func (c *Compiler) compileArgs(ce *ast.CallExpression) []*Symbol {
-	funcName := ce.Function.Value
-	var args []*Symbol
-	for idx, callArg := range ce.Arguments {
-		if ident, ok := callArg.(*ast.Identifier); ok {
-			// Identifier: get raw symbol without dereferencing
+func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	outputs := make([]*Symbol, len(outTypes))
+	for i, outType := range outTypes {
+		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
+		c.tmpCounter++
+
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name+".mem")
+		output := &Symbol{
+			Val:      ptr,
+			Type:     Ptr{Elem: outType},
+			Borrowed: true,
+		}
+
+		var seed *Symbol
+		if dest != nil && i < len(dest) {
+			seed = c.resolveConditionalSeed(dest[i], outType)
+		} else {
+			seed = c.makeZeroValue(outType)
+		}
+		c.storeSymbolToPtrAsType(output, seed, outType, name+"_seed")
+		outputs[i] = output
+	}
+	return outputs
+}
+
+func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
+	args := []callArg{}
+	for _, callArgExpr := range ce.Arguments {
+		if ident, ok := callArgExpr.(*ast.Identifier); ok {
 			sym, _ := c.getRawSymbol(ident.Value)
-			// If not already a pointer, promote to memory
-			if sym.Type.Kind() != PtrKind {
-				sym = c.promoteToMemory(ident.Value)
-			}
-			args = append(args, sym)
+			args = append(args, callArg{
+				Expr:   callArgExpr,
+				Name:   ident.Value,
+				Symbol: sym,
+			})
 			continue
 		}
-		// Expression: evaluate, then wrap in pointer if needed
-		res := c.compileExpression(callArg, nil)
+
+		res := c.compileExpression(callArgExpr, nil)
 		for _, r := range res {
-			if r.Type.Kind() != PtrKind {
-				name := fmt.Sprintf("%s_arg_%d", funcName, idx)
-				r, _ = c.makePtr(name, r)
-			}
-			args = append(args, r)
+			args = append(args, callArg{
+				Expr:   callArgExpr,
+				Symbol: r,
+			})
 		}
 	}
 	return args
 }
 
+func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature, dest []*ast.Identifier) loweredCallArgs {
+	lowered := loweredCallArgs{
+		Args:         make([]*Symbol, len(args)),
+		AliasIndices: c.buildCallParamAliasIndices(sig, args, dest),
+	}
+	for i, arg := range args {
+		sym := arg.Symbol
+		if sig.ABI.Params[i].Mode == ABIParamIndirect {
+			if arg.Name != "" {
+				sym, _ = c.getRawSymbol(arg.Name)
+				if sym.Type.Kind() != PtrKind {
+					sym = c.promoteToMemory(arg.Name)
+				}
+			} else if sym.Type.Kind() != PtrKind {
+				name := fmt.Sprintf("%s_arg_%d", funcName, i)
+				sym, _ = c.makePtr(name, sym)
+			}
+			lowered.Args[i] = sym
+			continue
+		}
+
+		lowered.Args[i] = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+	}
+	return lowered
+}
+
+func (c *Compiler) freeCallArgTemps(callArgs []callArg, loweredArgs []*Symbol) {
+	offset := 0
+	for offset < len(callArgs) {
+		expr := callArgs[offset].Expr
+		end := offset + 1
+		for end < len(callArgs) && callArgs[end].Expr == expr {
+			end++
+		}
+		c.freeTemporary(expr, loweredArgs[offset:end])
+		offset = end
+	}
+}
+
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	if rew, ok := info.Rewrite.(*ast.CallExpression); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		ce = rew
+		if rewInfo := c.ExprCache[key(c.FuncNameMangled, ce)]; rewInfo != nil {
+			info = rewInfo
+		}
+	}
+	sig, ok := c.resolveCallSignature(ce.Function.Value, ce, info)
+	if !ok {
+		return nil
+	}
+
+	if sig.ABI.Return.Mode == ABIReturnDirect {
+		// LoopInside=false still needs a temp slot so empty ranges preserve the
+		// existing destination value instead of forcing zero.
+		if !info.LoopInside && len(info.Ranges) > 0 {
+			outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+			rewCall := info.Rewrite.(*ast.CallExpression)
+
+			c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+				c.pushBoundsGuard("call_iter_bounds_guard")
+				c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+					c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
+				})
+				c.popBoundsGuard()
+			})
+
+			return []*Symbol{{
+				Val:  c.createLoad(outputs[0].Val, info.OutTypes[0], "final"),
+				Type: info.OutTypes[0],
+			}}
+		}
+
+		return c.compileCallInner(sig, ce, dest, nil)
+	}
 
 	// Direct calls can materialize into temporary outputs first when the
 	// callee's return flavor differs from the destination slot flavor. Those
@@ -2093,7 +2427,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// logic owns the eventual store, restore, and old-value cleanup.
 	if c.callNeedsTempOutputs(info, dest) {
 		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
-		c.compileCallInner(ce.Function.Value, ce, tempOutputs)
+		c.compileCallInner(sig, ce, dest, tempOutputs)
 
 		out := make([]*Symbol, len(tempOutputs))
 		for i := range tempOutputs {
@@ -2118,7 +2452,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			// Inside loop, ranges are shadowed as scalars. If call arguments contain
 			// conditional expressions, execute the call only when they hold.
 			c.compileCondExprValue(rewCall, llvm.Value{}, func() {
-				c.compileCallInner(ce.Function.Value, rewCall, outputs)
+				c.compileCallInner(sig, rewCall, dest, outputs)
 			})
 			c.popBoundsGuard()
 		})
@@ -2140,7 +2474,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	}
 
 	// LoopInside=true or no ranges: direct call
-	c.compileCallInner(ce.Function.Value, ce, outputs)
+	c.compileCallInner(sig, ce, dest, outputs)
 
 	// Update output types (e.g., Static flag for strings) when there are no ranges.
 	// Old value freeing is handled by writeTo using captured old values.
@@ -2163,53 +2497,37 @@ func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []
 	}
 }
 
-// compileCallInner compiles the actual function call
-func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, outputs []*Symbol) {
-	args := c.compileArgs(ce)
-
-	// Extract element types from pointer args for mangling.
-	// Functions are mangled separately for StrG/StrH, so no normalization needed.
-	paramTypes := make([]Type, len(args))
-	for i, arg := range args {
-		paramTypes[i] = arg.Type.(Ptr).Elem
+func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llvm.Type, llvm.Type) {
+	funcType, retStruct := c.getFuncType(sig.Mangled, sig.ABI)
+	fn := c.Module.NamedFunction(sig.Mangled)
+	if !fn.IsNil() {
+		return fn, funcType, retStruct
 	}
 
-	mangled := Mangle(c.MangledPath, funcName, paramTypes)
-	fnInfo := c.FuncCache[mangled]
-	if fnInfo == nil {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: ce.Tok(),
-			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
-		})
-		return
+	fk := ast.FuncKey{
+		FuncName: sig.FuncName,
+		Arity:    len(sig.ParamTypes),
 	}
+	template := c.CodeCompiler.Code.Func.Map[fk]
+	savedBlock := c.builder.GetInsertBlock()
 
-	retStruct := c.getReturnStruct(mangled, fnInfo.OutTypes)
-	sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
+	fn = c.compileFunc(template, sig, funcType, retStruct)
+	c.builder.SetInsertPointAtEnd(savedBlock)
+	return fn, funcType, retStruct
+}
 
-	// Populate sret with output destination pointers
-	for i, out := range outputs {
-		fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
-		c.builder.CreateStore(out.Val, fieldPtr)
-	}
+func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
+	callArgs := c.compileCallArgs(ce)
+	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
+	seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
+	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 
-	// LLVM inputs are pointer types since we pass by reference
-	llvmInputs := make([]llvm.Type, len(args))
-	for i, arg := range args {
-		llvmInputs[i] = c.mapToLLVMType(arg.Type)
-	}
-	funcType := c.getFuncType(retStruct, llvmInputs)
-	fn := c.Module.NamedFunction(mangled)
-	if fn.IsNil() {
-		fk := ast.FuncKey{
-			FuncName: funcName,
-			Arity:    len(paramTypes),
+	run := func() {
+		results := c.callFunction(fn, funcType, sig, lowered, retStruct, nil, seed)
+		if len(results) != 1 {
+			panic("internal: direct-return call expected a single result")
 		}
-		template := c.CodeCompiler.Code.Func.Map[fk]
-		savedBlock := c.builder.GetInsertBlock()
-
-		fn = c.compileFunc(template, mangled, fnInfo, paramTypes, retStruct, funcType)
-		c.builder.SetInsertPointAtEnd(savedBlock)
+		c.storeSymbolToPtrAsType(output, results[0], output.Type.(Ptr).Elem, "call_direct_store")
 	}
 
 	if !c.withStmtBoundsGuard(
@@ -2217,29 +2535,109 @@ func (c *Compiler) compileCallInner(funcName string, ce *ast.CallExpression, out
 		"call_bounds_run",
 		"call_bounds_skip",
 		"call_bounds_cont",
-		func() {
-			c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
-		},
+		run,
 		nil,
 	) {
-		c.callFunctionDirect(fn, funcType, args, sretPtr, outputs)
+		run()
+	}
+
+	c.freeCallArgTemps(callArgs, lowered.Args)
+}
+
+// compileCallInner compiles the actual function call
+func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
+	callArgs := c.compileCallArgs(ce)
+	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
+	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
+
+	var results []*Symbol
+	if sig.ABI.Return.Mode == ABIReturnDirect {
+		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest, nil)
+		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
+		c.createStore(seed.Val, resultPtr, seed.Type)
+
+		run := func() {
+			callResults := c.callFunction(fn, funcType, sig, lowered, retStruct, nil, seed)
+			if len(callResults) != 1 {
+				panic("internal: direct-return call expected a single result")
+			}
+			c.createStore(callResults[0].Val, resultPtr, callResults[0].Type)
+		}
+
+		if !c.withStmtBoundsGuard(
+			"call_bounds_ok",
+			"call_bounds_run",
+			"call_bounds_skip",
+			"call_bounds_cont",
+			run,
+			nil,
+		) {
+			run()
+		}
+
+		results = []*Symbol{{
+			Val:  c.createLoad(resultPtr, sig.ABI.Return.DirectType, sig.FuncName+"_call_ret"),
+			Type: sig.ABI.Return.DirectType,
+		}}
+	} else {
+		if !c.withStmtBoundsGuard(
+			"call_bounds_ok",
+			"call_bounds_run",
+			"call_bounds_skip",
+			"call_bounds_cont",
+			func() {
+				results = c.callFunction(fn, funcType, sig, lowered, retStruct, outputs, nil)
+			},
+			nil,
+		) {
+			results = c.callFunction(fn, funcType, sig, lowered, retStruct, outputs, nil)
+		}
 	}
 
 	// Free temporary arguments after the call. Function copies input values to outputs
 	// (see computeCopyRequirements - no Borrowed skip), so temps can be safely freed.
 	// Identifiers are skipped by freeTemporary since they're owned by caller's scope.
-	for i, arg := range ce.Arguments {
-		c.freeTemporary(arg, []*Symbol{args[i]})
-	}
+	c.freeCallArgTemps(callArgs, lowered.Args)
+
+	return results
 }
 
-func (c *Compiler) callFunctionDirect(fn llvm.Value, funcType llvm.Type, args []*Symbol, sretPtr llvm.Value, outputs []*Symbol) []*Symbol {
-	llvmArgs := []llvm.Value{sretPtr}
-	for _, arg := range args {
+func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []*Symbol {
+	llvmArgs := []llvm.Value{}
+	if sig.ABI.UsesIndirectReturn() {
+		sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
+		for i, out := range outputs {
+			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
+			c.builder.CreateStore(out.Val, fieldPtr)
+		}
+		llvmArgs = append(llvmArgs, sretPtr)
+	}
+	for _, arg := range lowered.Args {
 		llvmArgs = append(llvmArgs, arg.Val)
 	}
+	for _, aliasIndex := range lowered.AliasIndices {
+		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
+	}
+	if sig.ABI.Return.HasSeedParam {
+		if directSeed == nil {
+			panic("internal: direct-return call missing seed value")
+		}
+		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
+		llvmArgs = append(llvmArgs, seed.Val)
+	}
 
-	c.builder.CreateCall(funcType, fn, llvmArgs, "")
+	callName := ""
+	if sig.ABI.Return.Mode == ABIReturnDirect {
+		callName = sig.FuncName + "_ret"
+	}
+	callVal := c.builder.CreateCall(funcType, fn, llvmArgs, callName)
+
+	if sig.ABI.Return.Mode == ABIReturnDirect {
+		return []*Symbol{{
+			Val:  callVal,
+			Type: sig.ABI.Return.DirectType,
+		}}
+	}
 
 	// Function writes directly through destination pointers in sret
 	// Results are already in outputs, just return them
