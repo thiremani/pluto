@@ -672,7 +672,7 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 	}
 }
 
-func (ts *TypeSolver) isBareRangeDriverCondition(expr ast.Expression, condTypes []Type) bool {
+func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
 	if len(condTypes) != 1 || !ts.isBareRangeExpr(expr) {
 		return false
 	}
@@ -680,7 +680,7 @@ func (ts *TypeSolver) isBareRangeDriverCondition(expr ast.Expression, condTypes 
 	return isRangeDriverType(condTypes[0])
 }
 
-func (ts *TypeSolver) rangeDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
+func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	if len(info.Ranges) > 0 {
 		return info.Ranges
@@ -688,7 +688,7 @@ func (ts *TypeSolver) rangeDriverRanges(expr ast.Expression, condTypes []Type) [
 
 	// Non-driver conditions (for example, comparisons with no ranged operands)
 	// fall through here harmlessly: they contribute no loop driver ranges.
-	if !ts.isBareRangeDriverCondition(expr, condTypes) {
+	if !ts.isRangeDriverCond(expr, condTypes) {
 		return nil
 	}
 
@@ -719,7 +719,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	if ts.isBareRangeDriverCondition(expr, condTypes) {
+	if ts.isRangeDriverCond(expr, condTypes) {
 		return
 	}
 
@@ -741,7 +741,7 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
 		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, ts.rangeDriverRanges(expr, info.OutTypes))
+		ranges = mergeUses(ranges, ts.collectDriverRanges(expr, info.OutTypes))
 	}
 	return ranges
 }

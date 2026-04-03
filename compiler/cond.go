@@ -390,7 +390,7 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) isBareRangeDriverCondition(expr ast.Expression) bool {
+func (c *Compiler) isRangeDriverCond(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if len(info.OutTypes) != 1 {
 		return false
@@ -399,7 +399,7 @@ func (c *Compiler) isBareRangeDriverCondition(expr ast.Expression) bool {
 	return isRangeDriverType(info.OutTypes[0])
 }
 
-func (c *Compiler) rangeDriverRanges(expr ast.Expression) []*RangeInfo {
+func (c *Compiler) collectDriverRanges(expr ast.Expression) []*RangeInfo {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if len(info.Ranges) > 0 {
 		return info.Ranges
@@ -421,8 +421,8 @@ func (c *Compiler) splitRangedConditions(conditions []ast.Expression) ([]*RangeI
 	var condExprs []ast.Expression
 	for _, expr := range conditions {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if c.isBareRangeDriverCondition(expr) {
-			ranges = mergeUses(ranges, c.rangeDriverRanges(expr))
+		if c.isRangeDriverCond(expr) {
+			ranges = mergeUses(ranges, c.collectDriverRanges(expr))
 			continue
 		}
 
