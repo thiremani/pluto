@@ -51,4 +51,7 @@ jobs:
       - name: Run full test suite with leak detection
         run: |
           python3 --version
-          python3 test.py --leak-check
+          # Valgrind can SIGILL on host-tuned codegen from -mcpu/-march=native.
+          # Keep native tuning as the default elsewhere, but force portable code
+          # for the leak-check job so the memory checker can execute the binaries.
+          PLUTO_TARGET_CPU=portable python3 test.py --leak-check
