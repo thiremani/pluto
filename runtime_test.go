@@ -85,10 +85,35 @@ func TestTargetCPUFlagOverride(t *testing.T) {
 	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
 }
 
+func TestClangTargetFlagDefaultAMD64(t *testing.T) {
+	t.Setenv(targetCPUEnv, "")
+
+	require.Equal(t, "-march=native", clangTargetFlag("amd64"))
+}
+
+func TestClangTargetFlagDefaultARM64(t *testing.T) {
+	t.Setenv(targetCPUEnv, "")
+
+	require.Equal(t, "-mcpu=native", clangTargetFlag("arm64"))
+}
+
+func TestClangTargetFlagExplicitMarchPassthrough(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+
+	require.Equal(t, "-march=x86-64-v3", clangTargetFlag("amd64"))
+}
+
+func TestClangTargetFlagExplicitMCPUPassthrough(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-mcpu=apple-m1")
+
+	require.Equal(t, "-mcpu=apple-m1", clangTargetFlag("arm64"))
+}
+
 func TestTargetCPUFlagDisable(t *testing.T) {
 	t.Setenv(targetCPUEnv, "portable")
 
 	require.Empty(t, targetCPUFlag())
+	require.Empty(t, clangTargetFlag("amd64"))
 }
 
 func TestOptCommandArgsIncludeCPU(t *testing.T) {

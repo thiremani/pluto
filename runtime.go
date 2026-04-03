@@ -47,7 +47,7 @@ func runtimeTargetFlag() string {
 	if march := runtimeMarchFlag(); march != "" {
 		return march
 	}
-	return targetCPUFlag()
+	return clangTargetFlag(runtime.GOARCH)
 }
 
 // runtimeCompileFlags returns the compiler flags used for runtime compilation.

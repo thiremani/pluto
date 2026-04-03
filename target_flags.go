@@ -7,12 +7,16 @@ import (
 
 const targetCPUEnv = "PLUTO_TARGET_CPU"
 
-func targetCPUFlag() string {
+func targetCPUValue() string {
 	value := strings.TrimSpace(os.Getenv(targetCPUEnv))
 	if value == "" {
-		value = "native"
+		return "native"
 	}
+	return value
+}
 
+func targetCPUFlag() string {
+	value := targetCPUValue()
 	switch strings.ToLower(value) {
 	case "default", "off", "none", "portable":
 		return ""
@@ -22,6 +26,25 @@ func targetCPUFlag() string {
 		return value
 	}
 	return "-mcpu=" + value
+}
+
+func clangTargetFlag(goarch string) string {
+	value := targetCPUValue()
+	switch strings.ToLower(value) {
+	case "default", "off", "none", "portable":
+		return ""
+	}
+
+	if strings.HasPrefix(value, "-mcpu=") || strings.HasPrefix(value, "-march=") {
+		return value
+	}
+
+	switch goarch {
+	case "386", "amd64":
+		return "-march=" + value
+	default:
+		return "-mcpu=" + value
+	}
 }
 
 func llvmCodegenFlags() []string {
