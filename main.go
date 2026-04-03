@@ -443,14 +443,25 @@ func New(cwd string) *Pluto {
 	return p
 }
 
+func cliCommand(arg string) string {
+	switch arg {
+	case "-v", "-version":
+		return "version"
+	case "-c", "-clean":
+		return "clean"
+	default:
+		return ""
+	}
+}
+
 func main() {
 	// Handle flags
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "-v", "--version":
+		switch cliCommand(os.Args[1]) {
+		case "version":
 			printVersion()
 			return
-		case "-c", "--clean":
+		case "clean":
 			runClean()
 			return
 		}

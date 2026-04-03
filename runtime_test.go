@@ -61,3 +61,22 @@ func TestRuntimeCompileFlagsMarchFlagPassthrough(t *testing.T) {
 		t.Fatalf("expected explicit -march flag passthrough, got %v", flags)
 	}
 }
+
+func TestCLICommand(t *testing.T) {
+	tests := []struct {
+		arg  string
+		want string
+	}{
+		{arg: "-v", want: "version"},
+		{arg: "-version", want: "version"},
+		{arg: "-c", want: "clean"},
+		{arg: "-clean", want: "clean"},
+		{arg: "tests", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := cliCommand(tt.arg); got != tt.want {
+			t.Fatalf("cliCommand(%q) = %q, want %q", tt.arg, got, tt.want)
+		}
+	}
+}
