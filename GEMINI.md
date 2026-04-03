@@ -66,8 +66,8 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 *   **Run the compiler:**
     ```bash
     ./pluto [directory]    # Compiles .pt and .spt files in directory
-    ./pluto --version      # Show version information (or -v)
-    ./pluto --clean        # Clear cache for current version (or -c)
+    ./pluto -version       # Show version information (or -v)
+    ./pluto -clean         # Clear cache for current version (or -c)
     ```
     This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
@@ -103,11 +103,11 @@ The compiler uses a cache to store intermediate build artifacts (LLVM IR and obj
     *   Linux: `$HOME/.cache/pluto`
     *   Windows: `%LocalAppData%\pluto`
 
-To clear the cache for the current version, run `./pluto --clean`. To clear the entire cache manually, delete the appropriate directory.
+To clear the cache for the current version, run `./pluto -clean`. To clear the entire cache manually, delete the appropriate directory.
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
-- Use `pluto --clean` to clear cache for current version.
+- Use `pluto -clean` to clear cache for current version.
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
