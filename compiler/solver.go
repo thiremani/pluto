@@ -673,11 +673,9 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 }
 
 func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
-	if len(condTypes) != 1 || !ts.isBareRangeExpr(expr) {
-		return false
-	}
-
-	return isRangeDriverType(condTypes[0])
+	return len(condTypes) == 1 &&
+		ts.isBareRangeExpr(expr) &&
+		isRangeDriverType(condTypes[0])
 }
 
 func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
