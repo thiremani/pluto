@@ -999,7 +999,7 @@ func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 
 	// Ranged conditions must be checked before compileConditions so ranges
 	// are not prematurely lowered into a single final boolean.
-	if condRanges, condExprs := c.extractCondRanges(stmt.Condition); condRanges != nil {
+	if condRanges, condExprs := c.splitRangedConditions(stmt.Condition); condRanges != nil {
 		c.compileCondRangedStatement(stmt, condRanges, condExprs)
 		return
 	}

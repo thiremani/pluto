@@ -410,8 +410,8 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 		expErrLen int
 		expErr    string
 	}{
-		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. The main operation should be a comparison"},
-		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. The main operation should be a comparison TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
+		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. Statement conditions must be comparisons or bare range/array-range drivers"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-range drivers TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
 	}
 
 	for _, tt := range tests {
@@ -505,6 +505,62 @@ func TestConditionThenCallValue(t *testing.T) {
 	require.Equal(t, "foo", callExpr.Function.Value)
 	require.Len(t, callExpr.Arguments, 1, "expected one call argument")
 	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
+}
+
+func TestBareRangeDriverCondition(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		condCheck func(*testing.T, ast.Expression)
+	}{
+		{
+			name:  "identifier driver",
+			input: "xs = i [1]",
+			condCheck: func(t *testing.T, expr ast.Expression) {
+				ident, ok := expr.(*ast.Identifier)
+				require.Truef(t, ok, "expected *ast.Identifier, got %T", expr)
+				require.Equal(t, "i", ident.Value)
+			},
+		},
+		{
+			name:  "range literal driver",
+			input: "xs = 0:3 [1]",
+			condCheck: func(t *testing.T, expr ast.Expression) {
+				rl, ok := expr.(*ast.RangeLiteral)
+				require.Truef(t, ok, "expected *ast.RangeLiteral, got %T", expr)
+				require.Truef(t, testIntegerLiteral(t, rl.Start, 0), "range start mismatch")
+				require.Truef(t, testIntegerLiteral(t, rl.Stop, 3), "range stop mismatch")
+			},
+		},
+		{
+			name:  "array range driver",
+			input: "xs = arr[0:3] [1]",
+			condCheck: func(t *testing.T, expr ast.Expression) {
+				ar, ok := expr.(*ast.ArrayRangeExpression)
+				require.Truef(t, ok, "expected *ast.ArrayRangeExpression, got %T", expr)
+				ident, ok := ar.Array.(*ast.Identifier)
+				require.Truef(t, ok, "expected array identifier, got %T", ar.Array)
+				require.Equal(t, "arr", ident.Value)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestBareRangeDriverCondition", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyLetStmt(t, program)
+			require.Len(t, stmt.Condition, 1, "expected one condition")
+			tt.condCheck(t, stmt.Condition[0])
+
+			require.Len(t, stmt.Value, 1, "expected one value")
+			_, ok := stmt.Value[0].(*ast.ArrayLiteral)
+			require.Truef(t, ok, "expected array literal value, got %T", stmt.Value[0])
+		})
+	}
 }
 
 // Multi-return condition

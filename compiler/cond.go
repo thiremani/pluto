@@ -390,24 +390,52 @@ func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-// extractCondRanges collects merged ranges and per-condition compile
-// expressions from statement conditions. Returns nil, nil if no condition
-// has ranges.
-func (c *Compiler) extractCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
-	var ranges []*RangeInfo
-	condExprs := make([]ast.Expression, len(conditions))
-	for i, expr := range conditions {
-		condExprs[i] = expr
+func (c *Compiler) isBareRangeDriverCondition(expr ast.Expression) bool {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(info.OutTypes) != 1 {
+		return false
+	}
 
+	return isRangeDriverType(info.OutTypes[0])
+}
+
+func (c *Compiler) rangeDriverRanges(expr ast.Expression) []*RangeInfo {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(info.Ranges) > 0 {
+		return info.Ranges
+	}
+
+	ident, ok := expr.(*ast.Identifier)
+	if !ok {
+		panic(fmt.Sprintf("internal: bare range driver %T missing cached ranges", expr))
+	}
+	return []*RangeInfo{{Name: ident.Value}}
+}
+
+// splitRangedConditions collects merged ranges and boolean guard expressions
+// from statement conditions. Bare range/array-range drivers contribute only
+// ranges; comparisons contribute both ranges and a per-iteration guard.
+// Returns nil, nil if no condition introduces ranges.
+func (c *Compiler) splitRangedConditions(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
+	var ranges []*RangeInfo
+	var condExprs []ast.Expression
+	for _, expr := range conditions {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if c.isBareRangeDriverCondition(expr) {
+			ranges = mergeUses(ranges, c.rangeDriverRanges(expr))
+			continue
+		}
+
 		if len(info.Ranges) == 0 {
 			continue
 		}
 
 		ranges = mergeUses(ranges, info.Ranges)
 		if info.Rewrite != nil {
-			condExprs[i] = info.Rewrite
+			condExprs = append(condExprs, info.Rewrite)
+			continue
 		}
+		condExprs = append(condExprs, expr)
 	}
 	if len(ranges) == 0 {
 		return nil, nil
@@ -433,6 +461,11 @@ func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) 
 // conditions, branch on the combined result, and call body on the true path.
 func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, guardName, ifName, contName string, body func()) {
 	c.withLoopNest(allRanges, func() {
+		if len(condExprs) == 0 {
+			body()
+			return
+		}
+
 		guardPtr := c.pushBoundsGuard(guardName)
 		combinedCond := c.evalConditions(condExprs, guardPtr)
 		c.popBoundsGuard()

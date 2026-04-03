@@ -1,4 +1,10 @@
 Fill: [0 0 0 0 0]
+LiteralDriver: [1 1 1 1 1]
+IdentifierDriver: [2 2 2 2]
+MixedDriverGuard: [0 1 2]
+ArrayRangeDriver: [7 7 7]
+NamedArrayRangeDriver: [8 8 8]
+DriverScalar: 5
 [0 1 2]
 FalseCondEmpty: []
 []

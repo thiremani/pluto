@@ -672,6 +672,67 @@ func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok toke
 	}
 }
 
+func (ts *TypeSolver) isBareRangeDriverCondition(expr ast.Expression, condTypes []Type) bool {
+	if len(condTypes) != 1 || !ts.isBareRangeExpr(expr) {
+		return false
+	}
+
+	return isRangeDriverType(condTypes[0])
+}
+
+func (ts *TypeSolver) rangeDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	if len(info.Ranges) > 0 {
+		return info.Ranges
+	}
+
+	// Non-driver conditions (for example, comparisons with no ranged operands)
+	// fall through here harmlessly: they contribute no loop driver ranges.
+	if !ts.isBareRangeDriverCondition(expr, condTypes) {
+		return nil
+	}
+
+	ident, ok := expr.(*ast.Identifier)
+	if !ok {
+		panic(fmt.Sprintf("internal: bare range driver %T missing cached ranges", expr))
+	}
+	return []*RangeInfo{{Name: ident.Value}}
+}
+
+func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
+	RejectKind(&ts.Errors, condTypes, ArrayKind, expr.Tok(), "statement condition must produce a scalar value, not an array")
+
+	if len(condTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   fmt.Sprintf("statement condition must produce a single value, got %d", len(condTypes)),
+		})
+		return
+	}
+
+	condType := condTypes[0]
+	if condType.Kind() == UnresolvedKind {
+		return
+	}
+
+	if condType.Kind() == ArrayKind {
+		return
+	}
+
+	if ts.isBareRangeDriverCondition(expr, condTypes) {
+		return
+	}
+
+	if intType, ok := condType.(Int); ok && intType.Width == 1 {
+		return
+	}
+
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: expr.Tok(),
+		Msg:   fmt.Sprintf("statement condition must be a comparison or bare range/array-range driver, got %s", condType),
+	})
+}
+
 // collectConditionRanges gathers all ranges from condition expressions.
 // When conditions iterate over ranges (e.g. i < 3 where i = 0:5), those
 // ranges must be merged into value ExprInfos so the compiler iterates
@@ -680,9 +741,7 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
 		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		if len(info.Ranges) > 0 {
-			ranges = mergeUses(ranges, info.Ranges)
-		}
+		ranges = mergeUses(ranges, ts.rangeDriverRanges(expr, info.OutTypes))
 	}
 	return ranges
 }
@@ -736,7 +795,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	ts.InValueExpr = false
 	for _, expr := range stmt.Condition {
 		condTypes := ts.TypeExpression(expr, true)
-		RejectKind(&ts.Errors, condTypes, ArrayKind, stmt.Token, "statement condition must produce a scalar value, not an array")
+		ts.validateStatementCondition(expr, condTypes)
 	}
 
 	condRanges := ts.collectConditionRanges(stmt.Condition)

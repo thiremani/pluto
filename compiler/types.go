@@ -344,6 +344,19 @@ func (ar ArrayRange) Key() Type {
 	}
 }
 
+func isRangeDriverType(t Type) bool {
+	if t == nil {
+		return false
+	}
+
+	switch t.Kind() {
+	case RangeKind, ArrayRangeKind:
+		return true
+	default:
+		return false
+	}
+}
+
 type StructField struct {
 	Name string
 	Type Type
