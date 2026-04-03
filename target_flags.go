@@ -1,56 +1,71 @@
 package main
 
 import (
-	"net/url"
 	"os"
 	"strings"
 )
 
 const targetCPUEnv = "PLUTO_TARGET_CPU"
 
-func targetCPUValue() string {
-	value := strings.TrimSpace(os.Getenv(targetCPUEnv))
-	if value == "" {
-		return "native"
-	}
-	return value
+type targetCPUSetting struct {
+	bare         string
+	explicitKind string
+	disabled     bool
+	defaulted    bool
 }
 
-func normalizedTargetCPUValue() string {
-	value := targetCPUValue()
-	switch strings.ToLower(value) {
-	case "default", "off", "none", "portable":
-		return ""
+func currentTargetCPUSetting() targetCPUSetting {
+	value := strings.TrimSpace(os.Getenv(targetCPUEnv))
+	defaulted := value == ""
+	if defaulted {
+		value = "native"
 	}
 
 	lower := strings.ToLower(value)
+	switch lower {
+	case "default", "off", "none", "portable":
+		return targetCPUSetting{disabled: true, defaulted: defaulted}
+	}
+
+	setting := targetCPUSetting{
+		bare:      value,
+		defaulted: defaulted,
+	}
 	if strings.HasPrefix(lower, "-mcpu=") || strings.HasPrefix(lower, "-march=") {
 		if idx := strings.IndexByte(value, '='); idx >= 0 {
-			return value[idx+1:]
+			setting.bare = value[idx+1:]
+		}
+		if strings.HasPrefix(lower, "-march=") {
+			setting.explicitKind = "march"
+		} else {
+			setting.explicitKind = "mcpu"
 		}
 	}
-	return value
+	return setting
 }
 
 func targetCPUFlag() string {
-	value := normalizedTargetCPUValue()
-	if value == "" {
+	setting := currentTargetCPUSetting()
+	if setting.disabled {
 		return ""
 	}
-	return "-mcpu=" + value
+	return "-mcpu=" + setting.bare
 }
 
 func clangTargetFlag(goarch string) string {
-	value := normalizedTargetCPUValue()
-	if value == "" {
+	setting := currentTargetCPUSetting()
+	if setting.disabled {
 		return ""
+	}
+	if setting.explicitKind != "" {
+		return "-" + setting.explicitKind + "=" + setting.bare
 	}
 
 	switch goarch {
 	case "386", "amd64":
-		return "-march=" + value
+		return "-march=" + setting.bare
 	default:
-		return "-mcpu=" + value
+		return "-mcpu=" + setting.bare
 	}
 }
 
@@ -61,10 +76,22 @@ func llvmCodegenFlags() []string {
 	return nil
 }
 
-func targetCPUCacheSegment() string {
-	value := normalizedTargetCPUValue()
-	if value == "" {
-		value = "portable"
+func targetCPUCacheSegment() (string, error) {
+	setting := currentTargetCPUSetting()
+	if !setting.disabled && strings.EqualFold(setting.bare, "native") {
+		return "", nil
 	}
-	return "cpu-" + url.PathEscape(value)
+
+	key := "portable"
+	if !setting.disabled {
+		key = setting.bare
+		if setting.explicitKind != "" {
+			key = setting.explicitKind + "-" + key
+		}
+	}
+	safeKey, err := sanitizeCacheComponent(key)
+	if err != nil {
+		return "", err
+	}
+	return "target_cpu-" + safeKey, nil
 }

@@ -448,7 +448,15 @@ func New(cwd string) *Pluto {
 	}
 
 	// Use module path (slashes) as unique cache key
-	p.CacheDir = filepath.Join(p.PtCache, targetCPUCacheSegment(), filepath.FromSlash(p.ModPath))
+	targetSegment, err := targetCPUCacheSegment()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	p.CacheDir = filepath.Join(p.PtCache, filepath.FromSlash(p.ModPath))
+	if targetSegment != "" {
+		p.CacheDir = filepath.Join(p.PtCache, targetSegment, filepath.FromSlash(p.ModPath))
+	}
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
 	fmt.Println()
 

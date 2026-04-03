@@ -143,7 +143,8 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `p
   - Windows: `%LocalAppData%\pluto`
 - Cache layout (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
-  - `<PTCACHE>/<version>/<target-cpu>/<module-path>/{code,script}` for IR/objects
+  - Default host CPU builds: `<PTCACHE>/<version>/<module-path>/{code,script}`
+  - Non-default `PLUTO_TARGET_CPU` builds: `<PTCACHE>/<version>/target_cpu-<setting>/<module-path>/{code,script}`
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`
 - Use `pluto -clean` to clear cache for current version
