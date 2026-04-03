@@ -30,31 +30,11 @@ func isHashDir(name string) bool {
 //go:embed runtime
 var runtimeFS embed.FS
 
-const runtimeMarchEnv = "PLUTO_RUNTIME_MARCH"
-
-func runtimeMarchFlag() string {
-	value := strings.TrimSpace(os.Getenv(runtimeMarchEnv))
-	if value == "" {
-		return ""
-	}
-	if strings.HasPrefix(value, "-march=") {
-		return value
-	}
-	return "-march=" + value
-}
-
-func runtimeTargetFlag() string {
-	if march := runtimeMarchFlag(); march != "" {
-		return march
-	}
-	return clangTargetFlag(runtime.GOARCH)
-}
-
 // runtimeCompileFlags returns the compiler flags used for runtime compilation.
 // Used by both compileRuntime and metadataHash to keep them in sync.
 func runtimeCompileFlags() []string {
 	flags := []string{OPT_LEVEL, C_STD}
-	if target := runtimeTargetFlag(); target != "" {
+	if target := clangTargetFlag(runtime.GOARCH); target != "" {
 		flags = append(flags, target)
 	}
 	if runtime.GOOS != OS_WINDOWS {

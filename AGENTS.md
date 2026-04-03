@@ -28,7 +28,7 @@ Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
 - Cache layout (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
-  - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
+  - `<PTCACHE>/<version>/<target-cpu>/<module-path>/{code,script}` for IR/objects
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.

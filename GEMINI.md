@@ -92,7 +92,7 @@ The compilation process consists of two main phases:
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
 - Cache layout (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
-  - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
+  - `<PTCACHE>/<version>/<target-cpu>/<module-path>/{code,script}` for IR/objects
 
 ## Debugging & Configuration Tips
 

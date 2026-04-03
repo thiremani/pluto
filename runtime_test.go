@@ -19,7 +19,6 @@ func containsPrefix(values []string, prefix string) bool {
 }
 
 func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
-	t.Setenv(runtimeMarchEnv, "")
 	t.Setenv(targetCPUEnv, "")
 
 	flags := runtimeCompileFlags()
@@ -30,11 +29,16 @@ func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
 	if !slices.Contains(flags, C_STD) {
 		t.Fatalf("missing C standard flag %q in %v", C_STD, flags)
 	}
-	if !slices.Contains(flags, "-mcpu=native") {
-		t.Fatalf("expected host CPU default with -mcpu=native, got %v", flags)
+	wantTargetFlag := clangTargetFlag(runtime.GOARCH)
+	if wantTargetFlag != "" && !slices.Contains(flags, wantTargetFlag) {
+		t.Fatalf("expected host CPU default with %q, got %v", wantTargetFlag, flags)
 	}
-	if containsPrefix(flags, "-march=") {
-		t.Fatalf("did not expect legacy -march flag by default, got %v", flags)
+	otherPrefix := "-march="
+	if strings.HasPrefix(wantTargetFlag, "-march=") {
+		otherPrefix = "-mcpu="
+	}
+	if containsPrefix(flags, otherPrefix) {
+		t.Fatalf("did not expect mismatched target flag family, got %v", flags)
 	}
 
 	if runtime.GOOS == OS_WINDOWS {
@@ -48,31 +52,6 @@ func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompileFlagsMarchOverride(t *testing.T) {
-	t.Setenv(targetCPUEnv, "")
-	t.Setenv(runtimeMarchEnv, "x86-64")
-
-	flags := runtimeCompileFlags()
-
-	if !slices.Contains(flags, "-march=x86-64") {
-		t.Fatalf("expected -march override in flags, got %v", flags)
-	}
-	if containsPrefix(flags, "-mcpu=") {
-		t.Fatalf("did not expect -mcpu when legacy -march override is set, got %v", flags)
-	}
-}
-
-func TestRuntimeCompileFlagsMarchFlagPassthrough(t *testing.T) {
-	t.Setenv(targetCPUEnv, "")
-	t.Setenv(runtimeMarchEnv, "-march=native")
-
-	flags := runtimeCompileFlags()
-
-	if !slices.Contains(flags, "-march=native") {
-		t.Fatalf("expected explicit -march flag passthrough, got %v", flags)
-	}
-}
-
 func TestTargetCPUFlagDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
 
@@ -83,6 +62,18 @@ func TestTargetCPUFlagOverride(t *testing.T) {
 	t.Setenv(targetCPUEnv, "apple-m1")
 
 	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
+}
+
+func TestTargetCPUFlagPassthroughMCPU(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-mcpu=apple-m1")
+
+	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
+}
+
+func TestTargetCPUFlagNormalizesMarchPrefix(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+
+	require.Equal(t, "-mcpu=x86-64-v3", targetCPUFlag())
 }
 
 func TestClangTargetFlagDefaultAMD64(t *testing.T) {
@@ -114,6 +105,24 @@ func TestTargetCPUFlagDisable(t *testing.T) {
 
 	require.Empty(t, targetCPUFlag())
 	require.Empty(t, clangTargetFlag("amd64"))
+}
+
+func TestTargetCPUCacheSegmentDefault(t *testing.T) {
+	t.Setenv(targetCPUEnv, "")
+
+	require.Equal(t, "cpu-native", targetCPUCacheSegment())
+}
+
+func TestTargetCPUCacheSegmentDisable(t *testing.T) {
+	t.Setenv(targetCPUEnv, "portable")
+
+	require.Equal(t, "cpu-portable", targetCPUCacheSegment())
+}
+
+func TestTargetCPUCacheSegmentEscapes(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-march=x86-64/v3")
+
+	require.Equal(t, "cpu-x86-64%2Fv3", targetCPUCacheSegment())
 }
 
 func TestOptCommandArgsIncludeCPU(t *testing.T) {

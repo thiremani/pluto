@@ -427,7 +427,7 @@ Pluto is under active development.
 - **Module resolution:** walks up from CWD to find `pt.mod` and derives module path.
 - **Cache layout** (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
-  - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
+  - `<PTCACHE>/<version>/<target-cpu>/<module-path>/{code,script}` for IR/objects
 
 ---
 

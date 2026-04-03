@@ -69,15 +69,15 @@ type Pluto struct {
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
 
-// sanitizeVersion returns a filesystem-safe version string.
-// Returns error for path traversal attempts or empty versions.
-func sanitizeVersion(v string) (string, error) {
+// sanitizeCacheComponent returns a filesystem-safe cache path component.
+// Returns error for path traversal attempts or empty values.
+func sanitizeCacheComponent(v string) (string, error) {
 	if v == "" {
-		return "", fmt.Errorf("invalid version: empty string")
+		return "", fmt.Errorf("invalid cache component: empty string")
 	}
 	escaped := url.PathEscape(v)
 	if escaped == "." || escaped == ".." {
-		return "", fmt.Errorf("invalid version: %q", v)
+		return "", fmt.Errorf("invalid cache component: %q", v)
 	}
 	return escaped, nil
 }
@@ -424,7 +424,7 @@ func New(cwd string) *Pluto {
 
 	ptcache := defaultPTCache()
 	// Include version in cache path to isolate different compiler versions
-	safeVersion, err := sanitizeVersion(Version)
+	safeVersion, err := sanitizeCacheComponent(Version)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -448,7 +448,7 @@ func New(cwd string) *Pluto {
 	}
 
 	// Use module path (slashes) as unique cache key
-	p.CacheDir = filepath.Join(p.PtCache, filepath.FromSlash(p.ModPath))
+	p.CacheDir = filepath.Join(p.PtCache, targetCPUCacheSegment(), filepath.FromSlash(p.ModPath))
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
 	fmt.Println()
 
@@ -486,7 +486,7 @@ func main() {
 // runClean removes the cache directory for the current version.
 func runClean() {
 	ptcache := defaultPTCache()
-	safeVersion, err := sanitizeVersion(Version)
+	safeVersion, err := sanitizeCacheComponent(Version)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
