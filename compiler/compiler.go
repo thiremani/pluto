@@ -110,6 +110,12 @@ type stmtCtx struct {
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
 	module := ctx.NewModule(mangledPath)
+	if triple, dataLayout := defaultModuleTargetMetadata(); triple != "" {
+		module.SetTarget(triple)
+		if dataLayout != "" {
+			module.SetDataLayout(dataLayout)
+		}
+	}
 	builder := ctx.NewBuilder()
 
 	return &Compiler{

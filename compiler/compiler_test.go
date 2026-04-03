@@ -135,6 +135,25 @@ greeting = "hello"`
 	}
 }
 
+func TestCompilerModuleTargetMetadata(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "target_metadata", "", ast.NewCode())
+
+	triple, dataLayout := defaultModuleTargetMetadata()
+	require.NotEmpty(t, triple, "expected default target triple to be available")
+	require.Equal(t, triple, cc.Compiler.Module.Target())
+	require.NotEmpty(t, cc.Compiler.Module.DataLayout())
+	if dataLayout != "" {
+		require.Equal(t, dataLayout, cc.Compiler.Module.DataLayout())
+	}
+
+	ir := cc.Compiler.GenerateIR()
+	require.Contains(t, ir, `target triple = "`)
+	require.Contains(t, ir, `target datalayout = "`)
+}
+
 func TestStructRepeatedDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
     :name age

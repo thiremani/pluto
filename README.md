@@ -278,8 +278,8 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 
 **Other commands:**
 
-- `./pluto --version` (or `-v`) — show version
-- `./pluto --clean` (or `-c`) — clear cache for current version
+- `./pluto -version` (or `-v`) — show version
+- `./pluto -clean` (or `-c`) — clear cache for current version
 
 ---
 
@@ -442,7 +442,7 @@ Pluto is under active development.
 - Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH
 
 **Stale cache behavior:**
-- Clear current version: `./pluto --clean`
+- Clear current version: `./pluto -clean`
 - Clear all versions:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`

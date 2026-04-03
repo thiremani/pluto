@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func containsPrefix(values []string, prefix string) bool {
@@ -59,5 +61,24 @@ func TestRuntimeCompileFlagsMarchFlagPassthrough(t *testing.T) {
 
 	if !slices.Contains(flags, "-march=native") {
 		t.Fatalf("expected explicit -march flag passthrough, got %v", flags)
+	}
+}
+
+func TestCLICommand(t *testing.T) {
+	tests := []struct {
+		arg  string
+		want string
+	}{
+		{arg: "-v", want: "version"},
+		{arg: "-version", want: "version"},
+		{arg: "-c", want: "clean"},
+		{arg: "-clean", want: "clean"},
+		{arg: "tests", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.arg, func(t *testing.T) {
+			require.Equal(t, tt.want, cliCommand(tt.arg))
+		})
 	}
 }
