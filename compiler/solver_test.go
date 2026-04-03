@@ -528,6 +528,26 @@ func TestArrayConditionEmitsSingleDiagnostic(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "statement condition must produce a scalar value, not an array")
 }
 
+func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "scalarConditionDiagnostic", "", ast.NewCode())
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+
+	script := "cond = 5\nx = cond [1]"
+	sl := lexer.New("scalarConditionDiagnostic.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1, "scalar-valued statement condition should emit one diagnostic")
+	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-range driver, got I64")
+}
+
 func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())

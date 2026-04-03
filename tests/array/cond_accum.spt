@@ -28,6 +28,28 @@ view = driverSrc[1:4]
 eights = view [8]
 "NamedArrayRangeDriver: -eights"
 
+# Bare range driver with mixed tuple outputs accumulates arrays and keeps scalar last-value-wins
+i = 0:4
+mixRangeA, mixRangeB = i [i], i + 10
+"RangeMixedTupleA: -mixRangeA. RangeMixedTupleB: -mixRangeB"
+
+# Bare array-range driver does the same with the per-iteration element value
+viewMix = driverSrc[1:4]
+mixViewA, mixViewB = viewMix [8], viewMix
+"ArrayRangeMixedTupleA: -mixViewA. ArrayRangeMixedTupleB: -mixViewB"
+
+# Bare range drivers compose as nested loops
+i = 0:2
+j = 0:3
+grid = i, j [i * 10 + j]
+"NestedDrivers: -grid"
+
+# Range and array-range drivers compose as nested loops
+i = 0:2
+view2 = driverSrc[1:4]
+gridView = i, view2 [9]
+"MixedDrivers: -gridView"
+
 # Bare range driver with scalar RHS keeps last iteration value
 i = 0:5
 driverScalar = i i + 1
