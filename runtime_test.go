@@ -20,8 +20,9 @@ func containsPrefix(values []string, prefix string) bool {
 
 func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	flags := runtimeCompileFlags()
+	flags := cfg.runtimeCompileFlags()
 
 	if !slices.Contains(flags, OPT_LEVEL) {
 		t.Fatalf("missing optimize flag %q in %v", OPT_LEVEL, flags)
@@ -29,7 +30,7 @@ func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
 	if !slices.Contains(flags, C_STD) {
 		t.Fatalf("missing C standard flag %q in %v", C_STD, flags)
 	}
-	wantTargetFlag := clangTargetFlag(runtime.GOARCH)
+	wantTargetFlag := cfg.clangTargetFlag(runtime.GOARCH)
 	if wantTargetFlag != "" && !slices.Contains(flags, wantTargetFlag) {
 		t.Fatalf("expected host CPU default with %q, got %v", wantTargetFlag, flags)
 	}
@@ -54,113 +55,130 @@ func TestRuntimeCompileFlagsDefaultHostCPU(t *testing.T) {
 
 func TestTargetCPUFlagDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=native", targetCPUFlag())
+	require.Equal(t, "-mcpu=native", cfg.targetCPUFlag())
 }
 
 func TestTargetCPUFlagOverride(t *testing.T) {
 	t.Setenv(targetCPUEnv, "apple-m1")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
+	require.Equal(t, "-mcpu=apple-m1", cfg.targetCPUFlag())
 }
 
 func TestTargetCPUFlagPassthroughMCPU(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-mcpu=apple-m1")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
+	require.Equal(t, "-mcpu=apple-m1", cfg.targetCPUFlag())
 }
 
 func TestTargetCPUFlagNormalizesMarchPrefix(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=x86-64-v3", targetCPUFlag())
+	require.Equal(t, "-mcpu=x86-64-v3", cfg.targetCPUFlag())
 }
 
 func TestTargetCPUFlagCaseInsensitivePrefix(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-MCPU=apple-m1")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=apple-m1", targetCPUFlag())
+	require.Equal(t, "-mcpu=apple-m1", cfg.targetCPUFlag())
 }
 
 func TestClangTargetFlagDefaultAMD64(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-march=native", clangTargetFlag("amd64"))
+	require.Equal(t, "-march=native", cfg.clangTargetFlag("amd64"))
 }
 
 func TestClangTargetFlagDefaultARM64(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=native", clangTargetFlag("arm64"))
+	require.Equal(t, "-mcpu=native", cfg.clangTargetFlag("arm64"))
 }
 
 func TestClangTargetFlagExplicitMarchPassthrough(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-march=x86-64-v3", clangTargetFlag("amd64"))
+	require.Equal(t, "-march=x86-64-v3", cfg.clangTargetFlag("amd64"))
 }
 
 func TestClangTargetFlagExplicitMCPUPassthrough(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-mcpu=apple-m1")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-mcpu=apple-m1", clangTargetFlag("arm64"))
+	require.Equal(t, "-mcpu=apple-m1", cfg.clangTargetFlag("arm64"))
 }
 
 func TestClangTargetFlagExplicitMarchPreservedOnARM64(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-march=armv8.5-a")
+	cfg := currentBuildConfig()
 
-	require.Equal(t, "-march=armv8.5-a", clangTargetFlag("arm64"))
+	require.Equal(t, "-march=armv8.5-a", cfg.clangTargetFlag("arm64"))
 }
 
 func TestTargetCPUFlagDisable(t *testing.T) {
 	t.Setenv(targetCPUEnv, "portable")
+	cfg := currentBuildConfig()
 
-	require.Empty(t, targetCPUFlag())
-	require.Empty(t, clangTargetFlag("amd64"))
+	require.Empty(t, cfg.targetCPUFlag())
+	require.Empty(t, cfg.clangTargetFlag("amd64"))
 }
 
 func TestTargetCPUCacheSegmentDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	segment, err := targetCPUCacheSegment()
+	segment, err := cfg.targetCPUCacheSegment()
 	require.NoError(t, err)
 	require.Empty(t, segment)
 }
 
 func TestTargetCPUCacheSegmentDisable(t *testing.T) {
 	t.Setenv(targetCPUEnv, "portable")
+	cfg := currentBuildConfig()
 
-	segment, err := targetCPUCacheSegment()
+	segment, err := cfg.targetCPUCacheSegment()
 	require.NoError(t, err)
 	require.Equal(t, "target_cpu-portable", segment)
 }
 
 func TestTargetCPUCacheSegmentEscapes(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-march=x86-64/v3")
+	cfg := currentBuildConfig()
 
-	segment, err := targetCPUCacheSegment()
+	segment, err := cfg.targetCPUCacheSegment()
 	require.NoError(t, err)
 	require.Equal(t, "target_cpu-march-x86-64%2Fv3", segment)
 }
 
 func TestTargetCPUCacheSegmentExplicitMCPU(t *testing.T) {
 	t.Setenv(targetCPUEnv, "-mcpu=apple-m1")
+	cfg := currentBuildConfig()
 
-	segment, err := targetCPUCacheSegment()
+	segment, err := cfg.targetCPUCacheSegment()
 	require.NoError(t, err)
 	require.Equal(t, "target_cpu-mcpu-apple-m1", segment)
 }
 
 func TestOptCommandArgsIncludeCPU(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	require.Contains(t, optCommandArgs("in.ll", "out.ll"), "-mcpu=native")
+	require.Contains(t, optCommandArgs(cfg, "in.ll", "out.ll"), "-mcpu=native")
 }
 
 func TestLLCCommandArgsIncludeCPU(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
 
-	args := llcCommandArgs("in.ll", "out.o")
+	args := llcCommandArgs(cfg, "in.ll", "out.o")
 	require.Contains(t, args, "-mcpu=native")
 	require.Contains(t, args, FILETYPE_OBJ)
 	if runtime.GOOS == OS_WINDOWS {

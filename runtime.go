@@ -32,9 +32,9 @@ var runtimeFS embed.FS
 
 // runtimeCompileFlags returns the compiler flags used for runtime compilation.
 // Used by both compileRuntime and metadataHash to keep them in sync.
-func runtimeCompileFlags() []string {
+func (cfg buildConfig) runtimeCompileFlags() []string {
 	flags := []string{OPT_LEVEL, C_STD}
-	if target := clangTargetFlag(runtime.GOARCH); target != "" {
+	if target := cfg.clangTargetFlag(runtime.GOARCH); target != "" {
 		flags = append(flags, target)
 	}
 	if runtime.GOOS != OS_WINDOWS {
@@ -44,9 +44,9 @@ func runtimeCompileFlags() []string {
 }
 
 // metadataHash hashes compiler settings and platform that affect runtime compilation.
-func metadataHash(h hash.Hash) {
+func metadataHash(h hash.Hash, cfg buildConfig) {
 	h.Write([]byte(CC))
-	for _, flag := range runtimeCompileFlags() {
+	for _, flag := range cfg.runtimeCompileFlags() {
 		h.Write([]byte(flag))
 	}
 	h.Write([]byte(runtime.GOOS))
@@ -57,9 +57,9 @@ func metadataHash(h hash.Hash) {
 // Hash includes all files (headers in subdirs matter) but only counts
 // top-level .c files since compileRuntime only compiles those.
 // Returns short hash (8 chars for directory name) and full hash (for collision check).
-func runtimeInfo() (shortHash, fullHash string, srcCount int, err error) {
+func runtimeInfo(cfg buildConfig) (shortHash, fullHash string, srcCount int, err error) {
 	h := sha256.New()
-	metadataHash(h)
+	metadataHash(h, cfg)
 	err = fs.WalkDir(runtimeFS, RUNTIME_DIR, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -110,7 +110,7 @@ func extractRuntime(rtDir string) error {
 }
 
 // compileRuntime compiles .c files in rtDir and returns paths to .o files.
-func compileRuntime(rtDir string) ([]string, error) {
+func compileRuntime(rtDir string, cfg buildConfig) ([]string, error) {
 	rtSrcs, err := filepath.Glob(filepath.Join(rtDir, "*.c"))
 	if err != nil {
 		return nil, fmt.Errorf("glob runtime sources: %w", err)
@@ -122,7 +122,7 @@ func compileRuntime(rtDir string) ([]string, error) {
 	var rtObjs []string
 	for _, src := range rtSrcs {
 		outObj := filepath.Join(rtDir, filepath.Base(src)+OBJ_SUFFIX)
-		args := append(runtimeCompileFlags(), "-I", rtDir, "-c", src, "-o", outObj)
+		args := append(cfg.runtimeCompileFlags(), "-I", rtDir, "-c", src, "-o", outObj)
 		if out, err := exec.Command(CC, args...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("compile %s: %v\n%s", src, err, out)
 		}
@@ -178,7 +178,7 @@ func cleanupOldRuntimes(runtimeDir string, keep int, minAge int64) {
 // prepareRuntime extracts embedded runtime files and compiles them to object files.
 // Uses a hash-based directory to cache compiled objects across runs.
 // A file lock ensures concurrent processes see either fully compiled runtime or build it.
-func prepareRuntime(cacheDir string) ([]string, error) {
+func prepareRuntime(cacheDir string, cfg buildConfig) ([]string, error) {
 	runtimeDir := filepath.Join(cacheDir, RUNTIME_DIR)
 	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
 		return nil, fmt.Errorf("create runtime dir: %w", err)
@@ -191,7 +191,7 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	}
 	defer lock.Unlock()
 
-	shortHash, fullHash, srcCount, err := runtimeInfo()
+	shortHash, fullHash, srcCount, err := runtimeInfo(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func prepareRuntime(cacheDir string) ([]string, error) {
 	if err := extractRuntime(rtDir); err != nil {
 		return nil, err
 	}
-	rtObjs, err := compileRuntime(rtDir)
+	rtObjs, err := compileRuntime(rtDir, cfg)
 	if err != nil {
 		return nil, err
 	}

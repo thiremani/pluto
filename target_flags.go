@@ -14,6 +14,10 @@ type targetCPUSetting struct {
 	defaulted    bool
 }
 
+type buildConfig struct {
+	targetCPU targetCPUSetting
+}
+
 func currentTargetCPUSetting() targetCPUSetting {
 	value := strings.TrimSpace(os.Getenv(targetCPUEnv))
 	defaulted := value == ""
@@ -44,49 +48,50 @@ func currentTargetCPUSetting() targetCPUSetting {
 	return setting
 }
 
-func targetCPUFlag() string {
-	setting := currentTargetCPUSetting()
-	if setting.disabled {
-		return ""
-	}
-	return "-mcpu=" + setting.bare
+func currentBuildConfig() buildConfig {
+	return buildConfig{targetCPU: currentTargetCPUSetting()}
 }
 
-func clangTargetFlag(goarch string) string {
-	setting := currentTargetCPUSetting()
-	if setting.disabled {
+func (cfg buildConfig) targetCPUFlag() string {
+	if cfg.targetCPU.disabled {
 		return ""
 	}
-	if setting.explicitKind != "" {
-		return "-" + setting.explicitKind + "=" + setting.bare
+	return "-mcpu=" + cfg.targetCPU.bare
+}
+
+func (cfg buildConfig) clangTargetFlag(goarch string) string {
+	if cfg.targetCPU.disabled {
+		return ""
+	}
+	if cfg.targetCPU.explicitKind != "" {
+		return "-" + cfg.targetCPU.explicitKind + "=" + cfg.targetCPU.bare
 	}
 
 	switch goarch {
 	case "386", "amd64":
-		return "-march=" + setting.bare
+		return "-march=" + cfg.targetCPU.bare
 	default:
-		return "-mcpu=" + setting.bare
+		return "-mcpu=" + cfg.targetCPU.bare
 	}
 }
 
-func llvmCodegenFlags() []string {
-	if cpu := targetCPUFlag(); cpu != "" {
+func (cfg buildConfig) llvmCodegenFlags() []string {
+	if cpu := cfg.targetCPUFlag(); cpu != "" {
 		return []string{cpu}
 	}
 	return nil
 }
 
-func targetCPUCacheSegment() (string, error) {
-	setting := currentTargetCPUSetting()
-	if !setting.disabled && strings.EqualFold(setting.bare, "native") {
+func (cfg buildConfig) targetCPUCacheSegment() (string, error) {
+	if !cfg.targetCPU.disabled && strings.EqualFold(cfg.targetCPU.bare, "native") {
 		return "", nil
 	}
 
 	key := "portable"
-	if !setting.disabled {
-		key = setting.bare
-		if setting.explicitKind != "" {
-			key = setting.explicitKind + "-" + key
+	if !cfg.targetCPU.disabled {
+		key = cfg.targetCPU.bare
+		if cfg.targetCPU.explicitKind != "" {
+			key = cfg.targetCPU.explicitKind + "-" + key
 		}
 	}
 	safeKey, err := sanitizeCacheComponent(key)
