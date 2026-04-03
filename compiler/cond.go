@@ -412,11 +412,11 @@ func (c *Compiler) collectDriverRanges(expr ast.Expression) []*RangeInfo {
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
-// splitRangedConditions collects merged ranges and boolean guard expressions
+// splitCondRanges collects merged ranges and boolean guard expressions
 // from statement conditions. Bare range/array-range drivers contribute only
 // ranges; comparisons contribute both ranges and a per-iteration guard.
 // Returns nil, nil if no condition introduces ranges.
-func (c *Compiler) splitRangedConditions(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
+func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
 	var ranges []*RangeInfo
 	var condExprs []ast.Expression
 	for _, expr := range conditions {
