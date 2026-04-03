@@ -718,7 +718,7 @@ func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
 		if p.isCondition(exp) {
 			continue
 		}
-		msg := fmt.Sprintf("Expression %q is not a condition. The main operation should be a comparison", exp.String())
+		msg := fmt.Sprintf("Expression %q is not a condition. Statement conditions must be comparisons or bare range/array-range drivers", exp.String())
 		ce := &token.CompileError{
 			Token: exp.Tok(),
 			Msg:   msg,
@@ -780,7 +780,16 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 }
 
 func (p *StmtParser) isCondition(exp ast.Expression) bool {
-	return exp.Tok().IsComparison()
+	if exp.Tok().IsComparison() {
+		return true
+	}
+
+	switch exp.(type) {
+	case *ast.Identifier, *ast.RangeLiteral, *ast.ArrayRangeExpression:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *token.CompileError) {
