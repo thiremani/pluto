@@ -29,9 +29,9 @@ type ABIReturn struct {
 }
 
 type FuncABI struct {
-	Params        []ABIParam
-	Return        ABIReturn
-	HasIterParams bool
+	Params         []ABIParam
+	Return         ABIReturn
+	HasRangeParams bool
 }
 
 func isDirectScalarABIType(t Type) bool {
@@ -56,7 +56,7 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 
 	for _, paramType := range paramTypes {
 		if paramType.Kind() == RangeKind || paramType.Kind() == ArrayRangeKind {
-			abi.HasIterParams = true
+			abi.HasRangeParams = true
 			break
 		}
 	}
@@ -72,7 +72,7 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		if isDirectScalarABIType(paramType) {
 			paramABI.Mode = ABIParamDirect
 			paramABI.Lowered = paramType
-			if abi.HasIterParams {
+			if abi.HasRangeParams {
 				paramABI.AliasSlot = aliasSlot
 				aliasSlot++
 			}
@@ -83,7 +83,7 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	if len(outTypes) == 1 && isDirectScalarABIType(outTypes[0]) {
 		abi.Return.Mode = ABIReturnDirect
 		abi.Return.DirectType = outTypes[0]
-		abi.Return.HasSeedParam = abi.HasIterParams
+		abi.Return.HasSeedParam = abi.HasRangeParams
 	}
 
 	return abi
