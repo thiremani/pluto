@@ -663,15 +663,6 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	}
 }
 
-// RejectKind appends a compile error for every type in types whose Kind matches kind.
-func RejectKind(errors *[]*token.CompileError, types []Type, kind Kind, tok token.Token, msg string) {
-	for _, t := range types {
-		if t.Kind() == kind {
-			*errors = append(*errors, &token.CompileError{Token: tok, Msg: msg})
-		}
-	}
-}
-
 func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
 	return len(condTypes) == 1 &&
 		ts.isBareRangeExpr(expr) &&
@@ -698,8 +689,6 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
-	RejectKind(&ts.Errors, condTypes, ArrayKind, expr.Tok(), "statement condition must produce a scalar value, not an array")
-
 	if len(condTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
@@ -714,6 +703,10 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	}
 
 	if condType.Kind() == ArrayKind {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   "statement condition must produce a scalar value, not an array",
+		})
 		return
 	}
 
