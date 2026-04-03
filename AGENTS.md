@@ -16,8 +16,8 @@
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)
-- Show version: `./pluto -version` (or `-v`)
-- Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
+- Show version: `./pluto --version` (or `-v`)
+- Clear cache: `./pluto --clean` (or `-c`, clears cache for current version)
 
 Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 
@@ -74,7 +74,7 @@ When reviewing PRs or preparing code for review, check:
 
 ## Debugging & Configuration Tips
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- Clear cache for current version: `./pluto -clean`
+- Clear cache for current version: `./pluto --clean`
 - Clear entire cache manually:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`

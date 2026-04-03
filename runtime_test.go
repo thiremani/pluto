@@ -70,9 +70,9 @@ func TestCLICommand(t *testing.T) {
 		want string
 	}{
 		{arg: "-v", want: "version"},
-		{arg: "-version", want: "version"},
+		{arg: "--version", want: "version"},
 		{arg: "-c", want: "clean"},
-		{arg: "-clean", want: "clean"},
+		{arg: "--clean", want: "clean"},
 		{arg: "tests", want: ""},
 	}
 

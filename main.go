@@ -445,9 +445,9 @@ func New(cwd string) *Pluto {
 
 func cliCommand(arg string) string {
 	switch arg {
-	case "-v", "-version":
+	case "-v", "--version":
 		return "version"
-	case "-c", "-clean":
+	case "-c", "--clean":
 		return "clean"
 	default:
 		return ""
