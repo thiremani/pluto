@@ -65,19 +65,20 @@ type Pluto struct {
 
 	PtCache  string // Root cache directory (PTCACHE)
 	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
+	Config   buildConfig
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
 
-// sanitizeVersion returns a filesystem-safe version string.
-// Returns error for path traversal attempts or empty versions.
-func sanitizeVersion(v string) (string, error) {
+// sanitizeCacheComponent returns a filesystem-safe cache path component.
+// Returns error for path traversal attempts or empty values.
+func sanitizeCacheComponent(v string) (string, error) {
 	if v == "" {
-		return "", fmt.Errorf("invalid version: empty string")
+		return "", fmt.Errorf("invalid cache component: empty string")
 	}
 	escaped := url.PathEscape(v)
 	if escaped == "." || escaped == ".." {
-		return "", fmt.Errorf("invalid version: %q", v)
+		return "", fmt.Errorf("invalid cache component: %q", v)
 	}
 	return escaped, nil
 }
@@ -330,19 +331,13 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	}
 
 	// 1) Optimize IR
-	if out, err := exec.Command(OPT_BIN, OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(OPT_BIN, optCommandArgs(p.Config, scriptLL, optFile)...).CombinedOutput(); err != nil {
 		fmt.Printf("optimization failed: %v\n%s\n", err, out)
 		return err
 	}
 
 	// 2) Lower to object
-	llcArgs := []string{FILETYPE_OBJ}
-	// PIC is ELF/Mach-O specific; avoid on Windows COFF
-	if runtime.GOOS != OS_WINDOWS {
-		llcArgs = append(llcArgs, RELOC_PIC)
-	}
-	llcArgs = append(llcArgs, optFile, "-o", objFile)
-	if out, err := exec.Command(LLC_BIN, llcArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(LLC_BIN, llcCommandArgs(p.Config, optFile, objFile)...).CombinedOutput(); err != nil {
 		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -375,6 +370,24 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	}
 
 	return nil
+}
+
+func optCommandArgs(cfg buildConfig, scriptLL, optFile string) []string {
+	args := []string{OPT_LEVEL}
+	args = append(args, cfg.llvmCodegenFlags()...)
+	args = append(args, "-S", scriptLL, "-o", optFile)
+	return args
+}
+
+func llcCommandArgs(cfg buildConfig, optFile, objFile string) []string {
+	args := []string{FILETYPE_OBJ}
+	args = append(args, cfg.llvmCodegenFlags()...)
+	// PIC is ELF/Mach-O specific; avoid on Windows COFF
+	if runtime.GOOS != OS_WINDOWS {
+		args = append(args, RELOC_PIC)
+	}
+	args = append(args, optFile, "-o", objFile)
+	return args
 }
 
 func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
@@ -411,8 +424,9 @@ func New(cwd string) *Pluto {
 	fmt.Println("Current working directory is", cwd)
 
 	ptcache := defaultPTCache()
+	cfg := currentBuildConfig()
 	// Include version in cache path to isolate different compiler versions
-	safeVersion, err := sanitizeVersion(Version)
+	safeVersion, err := sanitizeCacheComponent(Version)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -427,6 +441,7 @@ func New(cwd string) *Pluto {
 	p := &Pluto{
 		Cwd:     cwd,
 		PtCache: versionedCache,
+		Config:  cfg,
 		Ctx:     llvm.NewContext(),
 	}
 
@@ -436,7 +451,15 @@ func New(cwd string) *Pluto {
 	}
 
 	// Use module path (slashes) as unique cache key
+	targetSegment, err := p.Config.targetCPUCacheSegment()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
 	p.CacheDir = filepath.Join(p.PtCache, filepath.FromSlash(p.ModPath))
+	if targetSegment != "" {
+		p.CacheDir = filepath.Join(p.PtCache, targetSegment, filepath.FromSlash(p.ModPath))
+	}
 	fmt.Printf("Cache dir is %s\n", p.CacheDir)
 	fmt.Println()
 
@@ -474,7 +497,7 @@ func main() {
 // runClean removes the cache directory for the current version.
 func runClean() {
 	ptcache := defaultPTCache()
-	safeVersion, err := sanitizeVersion(Version)
+	safeVersion, err := sanitizeCacheComponent(Version)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -524,7 +547,7 @@ func runCompile() {
 	p := New(cwd)
 
 	// Prepare runtime once (in PtCache root, shared across all projects)
-	rtObjs, err := prepareRuntime(p.PtCache)
+	rtObjs, err := prepareRuntime(p.PtCache, p.Config)
 	if err != nil {
 		fmt.Printf("Error preparing runtime: %v\n", err)
 		os.Exit(1)
