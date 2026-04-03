@@ -28,6 +28,10 @@ type ABIReturn struct {
 	HasSeedParam bool
 }
 
+// FuncABI captures the lowered function boundary for one mangled variant.
+// Range-bearing variants may need hidden alias/seed state so direct scalar
+// params and returns still preserve loop-carried accumulation and empty-range
+// no-op semantics inside the callee.
 type FuncABI struct {
 	Params         []ABIParam
 	Return         ABIReturn
@@ -43,6 +47,16 @@ func isDirectScalarABIType(t Type) bool {
 	default:
 		return false
 	}
+}
+
+func directScalarABIReturnType(outTypes []Type) (Type, bool) {
+	if len(outTypes) != 1 {
+		return nil, false
+	}
+	if !isDirectScalarABIType(outTypes[0]) {
+		return nil, false
+	}
+	return outTypes[0], true
 }
 
 func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
@@ -80,9 +94,9 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		abi.Params[i] = paramABI
 	}
 
-	if len(outTypes) == 1 && isDirectScalarABIType(outTypes[0]) {
+	if directType, ok := directScalarABIReturnType(outTypes); ok {
 		abi.Return.Mode = ABIReturnDirect
-		abi.Return.DirectType = outTypes[0]
+		abi.Return.DirectType = directType
 		abi.Return.HasSeedParam = abi.HasRangeParams
 	}
 

@@ -99,6 +99,27 @@ res`
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 
+func TestCallParamTypesFromExprInfoReportsMissingArgType(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	c := NewCompiler(ctx, "call_param_type_error", nil)
+	ce := &ast.CallExpression{
+		Token:    token.Token{FileName: "test", Line: 1, Column: 1, Literal: "Add"},
+		Function: &ast.Identifier{Token: token.Token{FileName: "test", Line: 1, Column: 1, Literal: "Add"}, Value: "Add"},
+		Arguments: []ast.Expression{
+			&ast.IntegerLiteral{Token: token.Token{FileName: "test", Line: 1, Column: 5, Literal: "1"}, Value: 1},
+		},
+	}
+
+	paramTypes, ok := c.callParamTypesFromExprInfo(ce, &ExprInfo{})
+
+	require.False(t, ok)
+	require.Nil(t, paramTypes)
+	require.Len(t, c.Errors, 1)
+	require.Contains(t, c.Errors[0].Msg, "could not resolve type information for call argument")
+}
+
 func TestStringCompile(t *testing.T) {
 	input := `"hello"`
 	l := lexer.New("TestStringCompile", input)

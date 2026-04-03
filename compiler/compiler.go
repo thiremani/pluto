@@ -86,6 +86,14 @@ type loweredCallArgs struct {
 	AliasIndices []int
 }
 
+type preparedCall struct {
+	Args      []callArg
+	Lowered   loweredCallArgs
+	Function  llvm.Value
+	FuncType  llvm.Type
+	RetStruct llvm.Type
+}
+
 // BindingKey identifies a variable binding within a specific function variant.
 // Script-level bindings use an empty FuncNameMangled.
 type BindingKey struct {
@@ -214,7 +222,24 @@ func callArgType(sym *Symbol) Type {
 	return sym.Type
 }
 
-func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *ExprInfo) []Type {
+func (c *Compiler) reportMissingCallTypeInfo(tok token.Token, msg string) bool {
+	c.Errors = append(c.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   msg,
+	})
+	return false
+}
+
+// callParamTypesFromExprInfo reconstructs the callee variant from solved call
+// arguments. When outer loop lowering has already consumed all pending ranges,
+// current-scope identifier bindings take precedence so rewritten iter variables
+// use their bound scalar types. Otherwise we fall back to cached expression
+// result types, with a final raw-symbol fallback for bare identifiers.
+func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
+	if info == nil {
+		return nil, c.reportMissingCallTypeInfo(ce.Tok(), "could not resolve type information for function call")
+	}
+
 	paramTypes := []Type{}
 	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
 	for _, arg := range ce.Arguments {
@@ -232,12 +257,12 @@ func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *Expr
 			if ident, ok := arg.(*ast.Identifier); ok {
 				sym, exists := c.getRawSymbol(ident.Value)
 				if !exists {
-					panic("internal: missing call arg type info for " + ident.Value)
+					return nil, c.reportMissingCallTypeInfo(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
 				}
 				paramTypes = append(paramTypes, callArgType(sym))
 				continue
 			}
-			panic(fmt.Sprintf("internal: missing call arg type info for %T", arg))
+			return nil, c.reportMissingCallTypeInfo(arg.Tok(), "could not resolve type information for call argument")
 		}
 		for _, argType := range argInfo.OutTypes {
 			if info.LoopInside {
@@ -255,11 +280,14 @@ func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *Expr
 			}
 		}
 	}
-	return paramTypes
+	return paramTypes, true
 }
 
 func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
-	paramTypes := c.callParamTypesFromExprInfo(ce, info)
+	paramTypes, ok := c.callParamTypesFromExprInfo(ce, info)
+	if !ok {
+		return nil, false
+	}
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 	if fnInfo == nil {
@@ -279,6 +307,10 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
+// buildCallParamAliasIndices records which direct scalar params alias caller
+// destinations for range-bearing variants. The callee uses these indices to
+// redirect a by-value param spill to the matching output slot so loop-carried
+// accumulation keeps the same semantics as the legacy indirect ABI.
 func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg, dest []*ast.Identifier) []int {
 	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
 	if dest == nil {
@@ -309,6 +341,10 @@ func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg
 	return aliasIndices
 }
 
+// directReturnSeedForCall captures the caller's current destination value for a
+// direct scalar return. Range-bearing variants thread this through a hidden ABI
+// param so the callee can preserve empty-range and loop-carried accumulation
+// semantics even though the LLVM return itself is by value.
 func (c *Compiler) directReturnSeedForCall(outType Type, dest []*ast.Identifier, output *Symbol) *Symbol {
 	if output != nil {
 		return c.derefIfPointer(output, "call_seed")
@@ -872,8 +908,10 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
 		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		sig, ok := c.resolveCallSignature(ce.Function.Value, ce, info)
-		if !ok || sig.ABI.Return.Mode == ABIReturnDirect {
+		if info == nil {
+			return false
+		}
+		if _, ok := directScalarABIReturnType(info.OutTypes); ok {
 			return false
 		}
 		return !c.callNeedsTempOutputs(info, dest)
@@ -1842,17 +1880,41 @@ func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type, borrowed
 
 		// New variable or intermediate value - create temp alloca without adding to scope.
 		// The permanent variable will be created by writeTo in FuncScope.
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
-		// Initialize with zero value (important for empty ranges where loop body never runs).
-		// Use zero value's type for Ptr.Elem to preserve Static flag for strings.
-		zeroVal := c.makeZeroValue(outType)
-		c.createStore(zeroVal.Val, ptr, zeroVal.Type)
-		out := &Symbol{
-			Val:      ptr,
-			Type:     Ptr{Elem: zeroVal.Type},
-			Borrowed: borrowed,
+		outputs[i] = c.makeTempOutput(name, outType, borrowed, nil)
+	}
+	return outputs
+}
+
+func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed *Symbol) *Symbol {
+	ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name)
+	ptrElem := outType
+	if seed == nil {
+		// Zero initialization preserves empty-range no-op behavior for fresh slots.
+		// Use the zero value's type to keep string Static flags accurate.
+		seed = c.makeZeroValue(outType)
+		ptrElem = seed.Type
+	}
+
+	output := &Symbol{
+		Val:      ptr,
+		Type:     Ptr{Elem: ptrElem},
+		Borrowed: borrowed,
+	}
+	c.storeSymbolToPtrAsType(output, seed, outType, name+"_seed")
+	return output
+}
+
+func (c *Compiler) makeTempOutputs(outTypes []Type, borrowed bool, seedFor func(int, Type) *Symbol) []*Symbol {
+	outputs := make([]*Symbol, len(outTypes))
+	for i, outType := range outTypes {
+		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
+		c.tmpCounter++
+
+		var seed *Symbol
+		if seedFor != nil {
+			seed = seedFor(i, outType)
 		}
-		outputs[i] = out
+		outputs[i] = c.makeTempOutput(name, outType, borrowed, seed)
 	}
 	return outputs
 }
@@ -2296,31 +2358,6 @@ func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.
 	return ifBlock, contBlock
 }
 
-func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
-	outputs := make([]*Symbol, len(outTypes))
-	for i, outType := range outTypes {
-		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
-		c.tmpCounter++
-
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), name+".mem")
-		output := &Symbol{
-			Val:      ptr,
-			Type:     Ptr{Elem: outType},
-			Borrowed: true,
-		}
-
-		var seed *Symbol
-		if dest != nil && i < len(dest) {
-			seed = c.resolveConditionalSeed(dest[i], outType)
-		} else {
-			seed = c.makeZeroValue(outType)
-		}
-		c.storeSymbolToPtrAsType(output, seed, outType, name+"_seed")
-		outputs[i] = output
-	}
-	return outputs
-}
-
 func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
 	args := []callArg{}
 	for _, callArgExpr := range ce.Arguments {
@@ -2384,8 +2421,101 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg, loweredArgs []*Symbol) {
 	}
 }
 
+func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
+	callArgs := c.compileCallArgs(ce)
+	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
+	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
+	return preparedCall{
+		Args:      callArgs,
+		Lowered:   lowered,
+		Function:  fn,
+		FuncType:  funcType,
+		RetStruct: retStruct,
+	}
+}
+
+func (c *Compiler) withPreparedCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, body func(preparedCall)) {
+	call := c.prepareCall(sig, ce, dest)
+	defer c.freeCallArgTemps(call.Args, call.Lowered.Args)
+	body(call)
+}
+
+func (c *Compiler) runCallWithBounds(run func()) {
+	if !c.withStmtBoundsGuard(
+		"call_bounds_ok",
+		"call_bounds_run",
+		"call_bounds_skip",
+		"call_bounds_cont",
+		run,
+		nil,
+	) {
+		run()
+	}
+}
+
+func (c *Compiler) loadOutputValues(outputs []*Symbol, outTypes []Type, name string) []*Symbol {
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outTypes[i]
+		loadName := name
+		if len(outputs) > 1 {
+			loadName = fmt.Sprintf("%s_%d", name, i)
+		}
+		out[i] = &Symbol{
+			Val:  c.createLoad(outputs[i].Val, elemType, loadName),
+			Type: elemType,
+		}
+	}
+	return out
+}
+
+func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+	outputs := c.makeTempOutputs(info.OutTypes, true, func(i int, outType Type) *Symbol {
+		if dest != nil && i < len(dest) {
+			return c.resolveConditionalSeed(dest[i], outType)
+		}
+		return c.makeZeroValue(outType)
+	})
+	rewCall := info.Rewrite.(*ast.CallExpression)
+
+	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+		c.pushBoundsGuard("call_iter_bounds_guard")
+		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+			c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
+		})
+		c.popBoundsGuard()
+	})
+
+	return c.loadOutputValues(outputs, info.OutTypes, "final")
+}
+
+func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
+	rewCall := info.Rewrite.(*ast.CallExpression)
+	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+		// Scope bounds checks to this loop iteration: arguments can contain
+		// multiple array reads, and the call should execute only when all are
+		// in-bounds for this iteration.
+		c.pushBoundsGuard("call_iter_bounds_guard")
+		// Inside loop, ranges are shadowed as scalars. If call arguments contain
+		// conditional expressions, execute the call only when they hold.
+		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+			c.compileCallInner(sig, rewCall, dest, outputs)
+		})
+		c.popBoundsGuard()
+	})
+
+	// Loop path materializes final values from output slots after iteration.
+	// Slots are seeded by makeOutputs (existing value or zero for new vars), so
+	// empty ranges naturally preserve no-op semantics for existing destinations.
+	return c.loadOutputValues(outputs, info.OutTypes, "final")
+}
+
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	if info == nil {
+		c.reportMissingCallTypeInfo(ce.Tok(), "could not resolve type information for function call")
+		return nil
+	}
 	if rew, ok := info.Rewrite.(*ast.CallExpression); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		ce = rew
 		if rewInfo := c.ExprCache[key(c.FuncNameMangled, ce)]; rewInfo != nil {
@@ -2398,24 +2528,10 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		// LoopInside=false still needs a temp slot so empty ranges preserve the
-		// existing destination value instead of forcing zero.
 		if !info.LoopInside && len(info.Ranges) > 0 {
-			outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
-			rewCall := info.Rewrite.(*ast.CallExpression)
-
-			c.withLoopNestVersioned(info.Ranges, rewCall, func() {
-				c.pushBoundsGuard("call_iter_bounds_guard")
-				c.compileCondExprValue(rewCall, llvm.Value{}, func() {
-					c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
-				})
-				c.popBoundsGuard()
-			})
-
-			return []*Symbol{{
-				Val:  c.createLoad(outputs[0].Val, info.OutTypes[0], "final"),
-				Type: info.OutTypes[0],
-			}}
+			// LoopInside=false still needs a temp slot so empty ranges preserve the
+			// existing destination value instead of forcing zero.
+			return c.compileDirectCallWithRanges(sig, info, dest)
 		}
 
 		return c.compileCallInner(sig, ce, dest, nil)
@@ -2428,49 +2544,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if c.callNeedsTempOutputs(info, dest) {
 		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
 		c.compileCallInner(sig, ce, dest, tempOutputs)
-
-		out := make([]*Symbol, len(tempOutputs))
-		for i := range tempOutputs {
-			out[i] = &Symbol{
-				Val:  c.createLoad(tempOutputs[i].Val, info.OutTypes[i], fmt.Sprintf("call_tmp_%d", i)),
-				Type: info.OutTypes[i],
-			}
-		}
-		return out
+		return c.loadOutputValues(tempOutputs, info.OutTypes, "call_tmp")
 	}
 
 	outputs := c.makeOutputs(dest, info.OutTypes, false)
 
-	// If LoopInside=false, wrap call in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
-		rewCall := info.Rewrite.(*ast.CallExpression)
-		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
-			// Scope bounds checks to this loop iteration: arguments can contain
-			// multiple array reads, and the call should execute only when all are
-			// in-bounds for this iteration.
-			c.pushBoundsGuard("call_iter_bounds_guard")
-			// Inside loop, ranges are shadowed as scalars. If call arguments contain
-			// conditional expressions, execute the call only when they hold.
-			c.compileCondExprValue(rewCall, llvm.Value{}, func() {
-				c.compileCallInner(sig, rewCall, dest, outputs)
-			})
-			c.popBoundsGuard()
-		})
-
-		// Loop path materializes final values from output slots after iteration.
-		// Slots are seeded by makeOutputs (existing value or zero for new vars), so
-		// empty ranges naturally preserve no-op semantics for existing destinations.
-		out := make([]*Symbol, len(outputs))
-		for i := range outputs {
-			// Use info.OutTypes[i] for correct Static flag on strings, not outputs[i].Type
-			// which may retain stale flags from existing variables.
-			elemType := info.OutTypes[i]
-			out[i] = &Symbol{
-				Val:  c.createLoad(outputs[i].Val, elemType, "final"),
-				Type: elemType,
-			}
-		}
-		return out
+		return c.compileIndirectCallWithRanges(sig, info, dest, outputs)
 	}
 
 	// LoopInside=true or no ranges: direct call
@@ -2517,87 +2597,46 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 }
 
 func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
-	callArgs := c.compileCallArgs(ce)
-	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
-	seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
-	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
-
-	run := func() {
-		results := c.callFunction(fn, funcType, sig, lowered, retStruct, nil, seed)
-		if len(results) != 1 {
-			panic("internal: direct-return call expected a single result")
-		}
-		c.storeSymbolToPtrAsType(output, results[0], output.Type.(Ptr).Elem, "call_direct_store")
-	}
-
-	if !c.withStmtBoundsGuard(
-		"call_bounds_ok",
-		"call_bounds_run",
-		"call_bounds_skip",
-		"call_bounds_cont",
-		run,
-		nil,
-	) {
-		run()
-	}
-
-	c.freeCallArgTemps(callArgs, lowered.Args)
+	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
+		c.runCallWithBounds(func() {
+			results := c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, nil, seed)
+			if len(results) != 1 {
+				panic("internal: direct-return call expected a single result")
+			}
+			c.storeSymbolToPtrAsType(output, results[0], output.Type.(Ptr).Elem, "call_direct_store")
+		})
+	})
 }
 
 // compileCallInner compiles the actual function call
 func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
-	callArgs := c.compileCallArgs(ce)
-	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
-	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
-
 	var results []*Symbol
-	if sig.ABI.Return.Mode == ABIReturnDirect {
-		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest, nil)
-		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
-		c.createStore(seed.Val, resultPtr, seed.Type)
+	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		if sig.ABI.Return.Mode == ABIReturnDirect {
+			seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest, nil)
+			resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
+			c.createStore(seed.Val, resultPtr, seed.Type)
 
-		run := func() {
-			callResults := c.callFunction(fn, funcType, sig, lowered, retStruct, nil, seed)
-			if len(callResults) != 1 {
-				panic("internal: direct-return call expected a single result")
-			}
-			c.createStore(callResults[0].Val, resultPtr, callResults[0].Type)
+			c.runCallWithBounds(func() {
+				callResults := c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, nil, seed)
+				if len(callResults) != 1 {
+					panic("internal: direct-return call expected a single result")
+				}
+				c.createStore(callResults[0].Val, resultPtr, callResults[0].Type)
+			})
+
+			results = []*Symbol{{
+				Val:  c.createLoad(resultPtr, sig.ABI.Return.DirectType, sig.FuncName+"_call_ret"),
+				Type: sig.ABI.Return.DirectType,
+			}}
+			return
 		}
 
-		if !c.withStmtBoundsGuard(
-			"call_bounds_ok",
-			"call_bounds_run",
-			"call_bounds_skip",
-			"call_bounds_cont",
-			run,
-			nil,
-		) {
-			run()
-		}
-
-		results = []*Symbol{{
-			Val:  c.createLoad(resultPtr, sig.ABI.Return.DirectType, sig.FuncName+"_call_ret"),
-			Type: sig.ABI.Return.DirectType,
-		}}
-	} else {
-		if !c.withStmtBoundsGuard(
-			"call_bounds_ok",
-			"call_bounds_run",
-			"call_bounds_skip",
-			"call_bounds_cont",
-			func() {
-				results = c.callFunction(fn, funcType, sig, lowered, retStruct, outputs, nil)
-			},
-			nil,
-		) {
-			results = c.callFunction(fn, funcType, sig, lowered, retStruct, outputs, nil)
-		}
-	}
-
-	// Free temporary arguments after the call. Function copies input values to outputs
-	// (see computeCopyRequirements - no Borrowed skip), so temps can be safely freed.
-	// Identifiers are skipped by freeTemporary since they're owned by caller's scope.
-	c.freeCallArgTemps(callArgs, lowered.Args)
+		c.runCallWithBounds(func() {
+			results = c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, outputs, nil)
+		})
+	})
 
 	return results
 }
