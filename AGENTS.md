@@ -20,6 +20,7 @@
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
 Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+`PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
@@ -80,6 +81,7 @@ When reviewing PRs or preparing code for review, check:
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
+- `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 
 ## Instructions for AI Assistants
 - Keep changes minimal and focused; avoid reflowing or reindenting unrelated lines.

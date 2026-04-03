@@ -48,6 +48,8 @@ go test -race ./lexer ./parser ./compiler
 ./pluto [directory]    # Compiles .pt and .spt files in directory
 ./pluto -version       # Show version information (or -v)
 ./pluto -clean         # Clear cache for current version (or -c)
+# Override host CPU tuning (defaults to native)
+PLUTO_TARGET_CPU=portable ./pluto .
 ```
 This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
@@ -143,6 +145,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `p
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - `<PTCACHE>/<version>/<module-path>/{code,script}` for IR/objects
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
+- `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`
 - Use `pluto -clean` to clear cache for current version
 
 ## Coding Style & Naming Conventions

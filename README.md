@@ -280,6 +280,7 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 
 - `./pluto -version` (or `-v`) — show version
 - `./pluto -clean` (or `-c`) — clear cache for current version
+- `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning
 
 ---
 
@@ -448,6 +449,7 @@ Pluto is under active development.
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
 - Override cache location with `PTCACHE` environment variable
+- Override host CPU tuning with `PLUTO_TARGET_CPU` (`portable` disables the default `-mcpu=native` path)
 
 **Encoding issues on Windows:**
 - Run from the MSYS2 UCRT64 shell; the runner decodes output as UTF-8

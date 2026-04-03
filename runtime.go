@@ -43,12 +43,19 @@ func runtimeMarchFlag() string {
 	return "-march=" + value
 }
 
+func runtimeTargetFlag() string {
+	if march := runtimeMarchFlag(); march != "" {
+		return march
+	}
+	return targetCPUFlag()
+}
+
 // runtimeCompileFlags returns the compiler flags used for runtime compilation.
 // Used by both compileRuntime and metadataHash to keep them in sync.
 func runtimeCompileFlags() []string {
 	flags := []string{OPT_LEVEL, C_STD}
-	if march := runtimeMarchFlag(); march != "" {
-		flags = append(flags, march)
+	if target := runtimeTargetFlag(); target != "" {
+		flags = append(flags, target)
 	}
 	if runtime.GOOS != OS_WINDOWS {
 		flags = append(flags, FPIC)

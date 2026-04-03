@@ -68,6 +68,7 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
     ./pluto [directory]    # Compiles .pt and .spt files in directory
     ./pluto -version       # Show version information (or -v)
     ./pluto -clean         # Clear cache for current version (or -c)
+    PLUTO_TARGET_CPU=portable ./pluto .  # Override host CPU tuning (defaults to native)
     ```
     This will compile all `.pt` and `.spt` files in the specified directory and generate executables in the same directory.
 
@@ -107,6 +108,7 @@ To clear the cache for the current version, run `./pluto -clean`. To clear the e
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
 - `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
+- `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 - Use `pluto -clean` to clear cache for current version.
 
 ## Coding Style & Naming Conventions

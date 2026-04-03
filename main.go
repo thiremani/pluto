@@ -330,19 +330,13 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	}
 
 	// 1) Optimize IR
-	if out, err := exec.Command(OPT_BIN, OPT_LEVEL, "-S", scriptLL, "-o", optFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(OPT_BIN, optCommandArgs(scriptLL, optFile)...).CombinedOutput(); err != nil {
 		fmt.Printf("optimization failed: %v\n%s\n", err, out)
 		return err
 	}
 
 	// 2) Lower to object
-	llcArgs := []string{FILETYPE_OBJ}
-	// PIC is ELF/Mach-O specific; avoid on Windows COFF
-	if runtime.GOOS != OS_WINDOWS {
-		llcArgs = append(llcArgs, RELOC_PIC)
-	}
-	llcArgs = append(llcArgs, optFile, "-o", objFile)
-	if out, err := exec.Command(LLC_BIN, llcArgs...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(LLC_BIN, llcCommandArgs(optFile, objFile)...).CombinedOutput(); err != nil {
 		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
 		return err
 	}
@@ -375,6 +369,24 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	}
 
 	return nil
+}
+
+func optCommandArgs(scriptLL, optFile string) []string {
+	args := []string{OPT_LEVEL}
+	args = append(args, llvmCodegenFlags()...)
+	args = append(args, "-S", scriptLL, "-o", optFile)
+	return args
+}
+
+func llcCommandArgs(optFile, objFile string) []string {
+	args := []string{FILETYPE_OBJ}
+	args = append(args, llvmCodegenFlags()...)
+	// PIC is ELF/Mach-O specific; avoid on Windows COFF
+	if runtime.GOOS != OS_WINDOWS {
+		args = append(args, RELOC_PIC)
+	}
+	args = append(args, optFile, "-o", objFile)
+	return args
 }
 
 func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
