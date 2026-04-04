@@ -68,9 +68,10 @@ type FuncArgs struct {
 }
 
 type callArg struct {
-	Expr   ast.Expression
-	Name   string
-	Symbol *Symbol
+	Expr    ast.Expression
+	Name    string
+	Symbol  *Symbol
+	Lowered *Symbol
 }
 
 type callSignature struct {
@@ -81,17 +82,12 @@ type callSignature struct {
 	ABI        FuncABI
 }
 
-type loweredCallArgs struct {
-	Args         []*Symbol
-	AliasIndices []int
-}
-
 type preparedCall struct {
-	Args      []callArg
-	Lowered   loweredCallArgs
-	Function  llvm.Value
-	FuncType  llvm.Type
-	RetStruct llvm.Type
+	Args         []callArg
+	AliasIndices []int
+	Function     llvm.Value
+	FuncType     llvm.Type
+	RetStruct    llvm.Type
 }
 
 // BindingKey identifies a variable binding within a specific function variant.
@@ -2421,11 +2417,8 @@ func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
 	return args
 }
 
-func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature, dest []*ast.Identifier) loweredCallArgs {
-	lowered := loweredCallArgs{
-		Args:         make([]*Symbol, len(args)),
-		AliasIndices: c.buildCallParamAliasIndices(sig, args, dest),
-	}
+func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature, dest []*ast.Identifier) []int {
+	aliasIndices := c.buildCallParamAliasIndices(sig, args, dest)
 	for i, arg := range args {
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode == ABIParamIndirect {
@@ -2438,16 +2431,16 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 				name := fmt.Sprintf("%s_arg_%d", funcName, i)
 				sym, _ = c.makePtr(name, sym)
 			}
-			lowered.Args[i] = sym
+			args[i].Lowered = sym
 			continue
 		}
 
-		lowered.Args[i] = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+		args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
 	}
-	return lowered
+	return aliasIndices
 }
 
-func (c *Compiler) freeCallArgTemps(callArgs []callArg, loweredArgs []*Symbol) {
+func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 	offset := 0
 	for offset < len(callArgs) {
 		expr := callArgs[offset].Expr
@@ -2455,27 +2448,32 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg, loweredArgs []*Symbol) {
 		for end < len(callArgs) && callArgs[end].Expr == expr {
 			end++
 		}
-		c.freeTemporary(expr, loweredArgs[offset:end])
+
+		lowered := make([]*Symbol, 0, end-offset)
+		for i := offset; i < end; i++ {
+			lowered = append(lowered, callArgs[i].Lowered)
+		}
+		c.freeTemporary(expr, lowered)
 		offset = end
 	}
 }
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
 	callArgs := c.compileCallArgs(ce)
-	lowered := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
+	aliasIndices := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
-		Args:      callArgs,
-		Lowered:   lowered,
-		Function:  fn,
-		FuncType:  funcType,
-		RetStruct: retStruct,
+		Args:         callArgs,
+		AliasIndices: aliasIndices,
+		Function:     fn,
+		FuncType:     funcType,
+		RetStruct:    retStruct,
 	}
 }
 
 func (c *Compiler) withPreparedCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, body func(preparedCall)) {
 	call := c.prepareCall(sig, ce, dest)
-	defer c.freeCallArgTemps(call.Args, call.Lowered.Args)
+	defer c.freeCallArgTemps(call.Args)
 	body(call)
 }
 
@@ -2639,7 +2637,7 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
 		c.runCallWithBounds(func() {
-			result := c.callDirect(call.Function, call.FuncType, sig, call.Lowered, seed)
+			result := c.callDirect(call.Function, call.FuncType, sig, call, seed)
 			c.storeSymbolToPtrAsType(output, result, output.Type.(Ptr).Elem, "call_direct_store")
 		})
 	})
@@ -2655,7 +2653,7 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 			c.createStore(seed.Val, resultPtr, seed.Type)
 
 			c.runCallWithBounds(func() {
-				callResult := c.callDirect(call.Function, call.FuncType, sig, call.Lowered, seed)
+				callResult := c.callDirect(call.Function, call.FuncType, sig, call, seed)
 				c.createStore(callResult.Val, resultPtr, callResult.Type)
 			})
 
@@ -2667,14 +2665,14 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 		}
 
 		c.runCallWithBounds(func() {
-			results = c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, outputs)
+			results = c.callFunction(call.Function, call.FuncType, sig, call, call.RetStruct, outputs)
 		})
 	})
 
 	return results
 }
 
-func (c *Compiler) callArgs(sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []llvm.Value {
+func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []llvm.Value {
 	llvmArgs := []llvm.Value{}
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -2684,10 +2682,10 @@ func (c *Compiler) callArgs(sig *callSignature, lowered loweredCallArgs, retStru
 		}
 		llvmArgs = append(llvmArgs, sretPtr)
 	}
-	for _, arg := range lowered.Args {
-		llvmArgs = append(llvmArgs, arg.Val)
+	for _, arg := range call.Args {
+		llvmArgs = append(llvmArgs, arg.Lowered.Val)
 	}
-	for _, aliasIndex := range lowered.AliasIndices {
+	for _, aliasIndex := range call.AliasIndices {
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
 	if sig.ABI.Return.HasSeedParam {
@@ -2700,16 +2698,16 @@ func (c *Compiler) callArgs(sig *callSignature, lowered loweredCallArgs, retStru
 	return llvmArgs
 }
 
-func (c *Compiler) callDirect(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, directSeed *Symbol) *Symbol {
-	callVal := c.builder.CreateCall(funcType, fn, c.callArgs(sig, lowered, llvm.Type{}, nil, directSeed), sig.FuncName+"_ret")
+func (c *Compiler) callDirect(fn llvm.Value, funcType llvm.Type, sig *callSignature, call preparedCall, directSeed *Symbol) *Symbol {
+	callVal := c.builder.CreateCall(funcType, fn, c.callArgs(sig, call, llvm.Type{}, nil, directSeed), sig.FuncName+"_ret")
 	return &Symbol{
 		Val:  callVal,
 		Type: sig.ABI.Return.DirectType,
 	}
 }
 
-func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol) []*Symbol {
-	c.builder.CreateCall(funcType, fn, c.callArgs(sig, lowered, retStruct, outputs, nil), "")
+func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, call preparedCall, retStruct llvm.Type, outputs []*Symbol) []*Symbol {
+	c.builder.CreateCall(funcType, fn, c.callArgs(sig, call, retStruct, outputs, nil), "")
 	return outputs
 }
 
