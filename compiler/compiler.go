@@ -2600,11 +2600,8 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
 		c.runCallWithBounds(func() {
-			results := c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, nil, seed)
-			if len(results) != 1 {
-				panic("internal: direct-return call expected a single result")
-			}
-			c.storeSymbolToPtrAsType(output, results[0], output.Type.(Ptr).Elem, "call_direct_store")
+			result := c.callDirect(call.Function, call.FuncType, sig, call.Lowered, seed)
+			c.storeSymbolToPtrAsType(output, result, output.Type.(Ptr).Elem, "call_direct_store")
 		})
 	})
 }
@@ -2619,11 +2616,8 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 			c.createStore(seed.Val, resultPtr, seed.Type)
 
 			c.runCallWithBounds(func() {
-				callResults := c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, nil, seed)
-				if len(callResults) != 1 {
-					panic("internal: direct-return call expected a single result")
-				}
-				c.createStore(callResults[0].Val, resultPtr, callResults[0].Type)
+				callResult := c.callDirect(call.Function, call.FuncType, sig, call.Lowered, seed)
+				c.createStore(callResult.Val, resultPtr, callResult.Type)
 			})
 
 			results = []*Symbol{{
@@ -2634,14 +2628,14 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 		}
 
 		c.runCallWithBounds(func() {
-			results = c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, outputs, nil)
+			results = c.callFunction(call.Function, call.FuncType, sig, call.Lowered, call.RetStruct, outputs)
 		})
 	})
 
 	return results
 }
 
-func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []*Symbol {
+func (c *Compiler) callArgs(sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []llvm.Value {
 	llvmArgs := []llvm.Value{}
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -2664,22 +2658,19 @@ func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSign
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}
+	return llvmArgs
+}
 
-	callName := ""
-	if sig.ABI.Return.Mode == ABIReturnDirect {
-		callName = sig.FuncName + "_ret"
+func (c *Compiler) callDirect(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, directSeed *Symbol) *Symbol {
+	callVal := c.builder.CreateCall(funcType, fn, c.callArgs(sig, lowered, llvm.Type{}, nil, directSeed), sig.FuncName+"_ret")
+	return &Symbol{
+		Val:  callVal,
+		Type: sig.ABI.Return.DirectType,
 	}
-	callVal := c.builder.CreateCall(funcType, fn, llvmArgs, callName)
+}
 
-	if sig.ABI.Return.Mode == ABIReturnDirect {
-		return []*Symbol{{
-			Val:  callVal,
-			Type: sig.ABI.Return.DirectType,
-		}}
-	}
-
-	// Function writes directly through destination pointers in sret
-	// Results are already in outputs, just return them
+func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, lowered loweredCallArgs, retStruct llvm.Type, outputs []*Symbol) []*Symbol {
+	c.builder.CreateCall(funcType, fn, c.callArgs(sig, lowered, retStruct, outputs, nil), "")
 	return outputs
 }
 
