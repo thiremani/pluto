@@ -2066,12 +2066,51 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	return llvm.FunctionType(retType, llvmParams, false), retStruct
 }
 
+func (c *Compiler) addEnumAttribute(function llvm.Value, index int, name string) {
+	attr := c.Context.CreateEnumAttribute(llvm.AttributeKindID(name), 0)
+	function.AddAttributeAtIndex(index, attr)
+}
+
+func (c *Compiler) addStringAttribute(function llvm.Value, index int, name string, value string) {
+	attr := c.Context.CreateStringAttribute(name, value)
+	function.AddAttributeAtIndex(index, attr)
+}
+
+func (c *Compiler) addNoundefAttribute(function llvm.Value, index int) {
+	c.addEnumAttribute(function, index, "noundef")
+}
+
+func (c *Compiler) addPointerParamAttributes(function llvm.Value, index int) {
+	c.addNoundefAttribute(function, index)
+	c.addEnumAttribute(function, index, "nonnull")
+	c.addStringAttribute(function, index, "captures", "none")
+}
+
 func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, funcType llvm.Type, retStruct llvm.Type) llvm.Value {
 	function := llvm.AddFunction(c.Module, sig.Mangled, funcType)
 
 	if sig.ABI.UsesIndirectReturn() {
 		sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
 		function.AddAttributeAtIndex(1, sretAttr) // Index 1 is the first parameter
+		c.addPointerParamAttributes(function, 1)
+	} else {
+		c.addNoundefAttribute(function, 0)
+	}
+
+	for i, paramABI := range sig.ABI.Params {
+		paramIndex := sig.ABI.SourceFunctionParamIndex(i) + 1
+		if paramABI.Mode == ABIParamDirect {
+			c.addNoundefAttribute(function, paramIndex)
+			continue
+		}
+		c.addPointerParamAttributes(function, paramIndex)
+	}
+
+	for i := 0; i < sig.ABI.NumAliasSlots(); i++ {
+		c.addNoundefAttribute(function, sig.ABI.AliasParamBaseIndex()+i+1)
+	}
+	if seedParamIndex := sig.ABI.DirectReturnSeedParamIndex(); seedParamIndex >= 0 {
+		c.addNoundefAttribute(function, seedParamIndex+1)
 	}
 
 	// Create entry block
