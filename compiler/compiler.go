@@ -211,7 +211,7 @@ func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) 
 	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
 }
 
-func callArgType(sym *Symbol) Type {
+func valType(sym *Symbol) Type {
 	if ptr, ok := sym.Type.(Ptr); ok {
 		return ptr.Elem
 	}
@@ -242,7 +242,7 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 		if useBoundScalars {
 			if ident, ok := arg.(*ast.Identifier); ok {
 				if sym, exists := c.getRawSymbol(ident.Value); exists {
-					paramTypes = append(paramTypes, callArgType(sym))
+					paramTypes = append(paramTypes, valType(sym))
 					continue
 				}
 			}
@@ -255,7 +255,7 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 				if !exists {
 					return nil, c.reportMissingCallTypeInfo(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
 				}
-				paramTypes = append(paramTypes, callArgType(sym))
+				paramTypes = append(paramTypes, valType(sym))
 				continue
 			}
 			return nil, c.reportMissingCallTypeInfo(arg.Tok(), "could not resolve type information for call argument")
