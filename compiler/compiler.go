@@ -239,26 +239,26 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 	paramTypes := []Type{}
 	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
 	for _, arg := range ce.Arguments {
-		if useBoundScalars {
-			if ident, ok := arg.(*ast.Identifier); ok {
-				if sym, exists := c.getRawSymbol(ident.Value); exists {
-					paramTypes = append(paramTypes, valType(sym))
-					continue
-				}
+		ident, isIdent := arg.(*ast.Identifier)
+		if useBoundScalars && isIdent {
+			if sym, exists := c.getRawSymbol(ident.Value); exists {
+				paramTypes = append(paramTypes, valType(sym))
+				continue
 			}
 		}
 
 		argInfo := c.ExprCache[key(c.FuncNameMangled, arg)]
 		if argInfo == nil {
-			if ident, ok := arg.(*ast.Identifier); ok {
-				sym, exists := c.getRawSymbol(ident.Value)
-				if !exists {
-					return nil, c.addCallTypeError(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
-				}
-				paramTypes = append(paramTypes, valType(sym))
-				continue
+			if !isIdent {
+				return nil, c.addCallTypeError(arg.Tok(), "could not resolve type information for call argument")
 			}
-			return nil, c.addCallTypeError(arg.Tok(), "could not resolve type information for call argument")
+
+			sym, exists := c.getRawSymbol(ident.Value)
+			if !exists {
+				return nil, c.addCallTypeError(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
+			}
+			paramTypes = append(paramTypes, valType(sym))
+			continue
 		}
 		for _, argType := range argInfo.OutTypes {
 			if info.LoopInside {
@@ -2421,13 +2421,13 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 	aliasIndices := c.buildCallParamAliasIndices(sig, args, dest)
 	for i, arg := range args {
 		sym := arg.Symbol
-		if sig.ABI.Params[i].Mode == ABIParamIndirect {
-			if arg.Name != "" {
-				sym, _ = c.getRawSymbol(arg.Name)
-				if sym.Type.Kind() != PtrKind {
-					sym = c.promoteToMemory(arg.Name)
-				}
-			} else if sym.Type.Kind() != PtrKind {
+		if sig.ABI.Params[i].Mode != ABIParamIndirect {
+			args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+			continue
+		}
+
+		if arg.Name == "" {
+			if sym.Type.Kind() != PtrKind {
 				name := fmt.Sprintf("%s_arg_%d", funcName, i)
 				sym, _ = c.makePtr(name, sym)
 			}
@@ -2435,7 +2435,11 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 			continue
 		}
 
-		args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+		sym, _ = c.getRawSymbol(arg.Name)
+		if sym.Type.Kind() != PtrKind {
+			sym = c.promoteToMemory(arg.Name)
+		}
+		args[i].Lowered = sym
 	}
 	return aliasIndices
 }
