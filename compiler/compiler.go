@@ -218,7 +218,7 @@ func valType(sym *Symbol) Type {
 	return sym.Type
 }
 
-func (c *Compiler) reportMissingCallTypeInfo(tok token.Token, msg string) bool {
+func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 	c.Errors = append(c.Errors, &token.CompileError{
 		Token: tok,
 		Msg:   msg,
@@ -233,7 +233,7 @@ func (c *Compiler) reportMissingCallTypeInfo(tok token.Token, msg string) bool {
 // result types, with a final raw-symbol fallback for bare identifiers.
 func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
 	if info == nil {
-		return nil, c.reportMissingCallTypeInfo(ce.Tok(), "could not resolve type information for function call")
+		return nil, c.addCallTypeError(ce.Tok(), "could not resolve type information for function call")
 	}
 
 	paramTypes := []Type{}
@@ -253,12 +253,12 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 			if ident, ok := arg.(*ast.Identifier); ok {
 				sym, exists := c.getRawSymbol(ident.Value)
 				if !exists {
-					return nil, c.reportMissingCallTypeInfo(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
+					return nil, c.addCallTypeError(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
 				}
 				paramTypes = append(paramTypes, valType(sym))
 				continue
 			}
-			return nil, c.reportMissingCallTypeInfo(arg.Tok(), "could not resolve type information for call argument")
+			return nil, c.addCallTypeError(arg.Tok(), "could not resolve type information for call argument")
 		}
 		for _, argType := range argInfo.OutTypes {
 			if info.LoopInside {
@@ -2550,7 +2550,7 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
 	if info == nil {
-		c.reportMissingCallTypeInfo(ce.Tok(), "could not resolve type information for function call")
+		c.addCallTypeError(ce.Tok(), "could not resolve type information for function call")
 		return nil
 	}
 	if rew, ok := info.Rewrite.(*ast.CallExpression); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
