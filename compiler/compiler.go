@@ -226,12 +226,12 @@ func (c *Compiler) reportMissingCallTypeInfo(tok token.Token, msg string) bool {
 	return false
 }
 
-// callParamTypesFromExprInfo reconstructs the callee variant from solved call
+// inferCallParamTypes reconstructs the callee variant from solved call
 // arguments. When outer loop lowering has already consumed all pending ranges,
 // current-scope identifier bindings take precedence so rewritten iter variables
 // use their bound scalar types. Otherwise we fall back to cached expression
 // result types, with a final raw-symbol fallback for bare identifiers.
-func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
+func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
 	if info == nil {
 		return nil, c.reportMissingCallTypeInfo(ce.Tok(), "could not resolve type information for function call")
 	}
@@ -280,7 +280,7 @@ func (c *Compiler) callParamTypesFromExprInfo(ce *ast.CallExpression, info *Expr
 }
 
 func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
-	paramTypes, ok := c.callParamTypesFromExprInfo(ce, info)
+	paramTypes, ok := c.inferCallParamTypes(ce, info)
 	if !ok {
 		return nil, false
 	}

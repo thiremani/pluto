@@ -102,7 +102,7 @@ res`
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 
-func TestCallParamTypesFromExprInfoReportsMissingArgType(t *testing.T) {
+func TestInferCallParamTypesReportsMissingArgType(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -115,7 +115,7 @@ func TestCallParamTypesFromExprInfoReportsMissingArgType(t *testing.T) {
 		},
 	}
 
-	paramTypes, ok := c.callParamTypesFromExprInfo(ce, &ExprInfo{})
+	paramTypes, ok := c.inferCallParamTypes(ce, &ExprInfo{})
 
 	require.False(t, ok)
 	require.Nil(t, paramTypes)
