@@ -102,22 +102,42 @@ res`
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 
-func TestInferCallParamTypesPanicsOnMissingArgType(t *testing.T) {
+func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	c := NewCompiler(ctx, "call_param_type_error", nil)
-	ce := &ast.CallExpression{
-		Token:    token.Token{FileName: "test", Line: 1, Column: 1, Literal: "Add"},
-		Function: &ast.Identifier{Token: token.Token{FileName: "test", Line: 1, Column: 1, Literal: "Add"}, Value: "Add"},
-		Arguments: []ast.Expression{
-			&ast.IntegerLiteral{Token: token.Token{FileName: "test", Line: 1, Column: 5, Literal: "1"}, Value: 1},
-		},
+	c := NewCompiler(ctx, "call_param_type_select", nil)
+	info := &ExprInfo{
+		Ranges:               []*RangeInfo{{Name: "i"}},
+		CallParamTypes:       []Type{I64, Range{Iter: I64}},
+		ScalarCallParamTypes: []Type{I64, I64},
 	}
+	Put(c.Scopes, "i", &Symbol{Type: I64})
 
-	require.Panics(t, func() {
-		c.inferCallParamTypes(ce, &ExprInfo{})
-	})
+	paramTypes := c.inferCallParamTypes(info)
+
+	require.Len(t, paramTypes, 2)
+	require.True(t, TypeEqual(paramTypes[0], I64))
+	require.True(t, TypeEqual(paramTypes[1], I64))
+}
+
+func TestInferCallParamTypesUsesOriginalVariantWhenRangesPending(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	c := NewCompiler(ctx, "call_param_type_select", nil)
+	info := &ExprInfo{
+		Ranges:               []*RangeInfo{{Name: "i"}},
+		CallParamTypes:       []Type{I64, Range{Iter: I64}},
+		ScalarCallParamTypes: []Type{I64, I64},
+	}
+	Put(c.Scopes, "i", &Symbol{Type: Range{Iter: I64}})
+
+	paramTypes := c.inferCallParamTypes(info)
+
+	require.Len(t, paramTypes, 2)
+	require.True(t, TypeEqual(paramTypes[0], I64))
+	require.True(t, TypeEqual(paramTypes[1], Range{Iter: I64}))
 }
 
 func TestStringCompile(t *testing.T) {

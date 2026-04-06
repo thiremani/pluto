@@ -211,13 +211,6 @@ func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) 
 	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
 }
 
-func valType(sym *Symbol) Type {
-	if ptr, ok := sym.Type.(Ptr); ok {
-		return ptr.Elem
-	}
-	return sym.Type
-}
-
 func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 	c.Errors = append(c.Errors, &token.CompileError{
 		Token: tok,
@@ -226,45 +219,18 @@ func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 	return false
 }
 
-// inferCallParamTypes reconstructs the callee variant from solved call
-// arguments. When outer loop lowering has already consumed all pending ranges,
-// current-scope identifier bindings take precedence so rewritten iter variables
-// use their bound scalar types. Otherwise we fall back to cached expression
-// result types, with a final raw-symbol fallback for bare identifiers.
-func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) []Type {
-	paramTypes := []Type{}
-	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
-	for _, arg := range ce.Arguments {
-		ident, isIdent := arg.(*ast.Identifier)
-		if useBoundScalars && isIdent {
-			if sym, exists := c.getRawSymbol(ident.Value); exists {
-				paramTypes = append(paramTypes, valType(sym))
-				continue
-			}
-		}
-
-		argInfo := c.ExprCache[key(c.FuncNameMangled, arg)]
-		for _, argType := range argInfo.OutTypes {
-			if info.LoopInside {
-				paramTypes = append(paramTypes, argType)
-				continue
-			}
-
-			switch argType.Kind() {
-			case RangeKind:
-				paramTypes = append(paramTypes, argType.(Range).Iter)
-			case ArrayRangeKind:
-				paramTypes = append(paramTypes, argType.(ArrayRange).Array.ColTypes[0])
-			default:
-				paramTypes = append(paramTypes, argType)
-			}
-		}
+// inferCallParamTypes selects the solver-cached call variant to use at the
+// current lowering site. Once outer loops have consumed all pending ranges, the
+// scalarized param types become the right callee variant for code generation.
+func (c *Compiler) inferCallParamTypes(info *ExprInfo) []Type {
+	if len(c.pendingLoopRanges(info.Ranges)) == 0 && len(info.ScalarCallParamTypes) > 0 {
+		return info.ScalarCallParamTypes
 	}
-	return paramTypes
+	return info.CallParamTypes
 }
 
 func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
-	paramTypes := c.inferCallParamTypes(ce, info)
+	paramTypes := c.inferCallParamTypes(info)
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 	if fnInfo == nil {

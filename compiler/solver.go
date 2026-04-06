@@ -25,13 +25,15 @@ const (
 )
 
 type ExprInfo struct {
-	Ranges       []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	Rewrite      ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
-	ExprLen      int
-	OutTypes     []Type
-	HasRanges    bool       // True if expression involves ranges (propagated upward during typing)
-	LoopInside   bool       // For CallExpression: true if function handles iteration, false if call site handles it
-	CompareModes []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+	Ranges               []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	Rewrite              ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	ExprLen              int
+	OutTypes             []Type
+	HasRanges            bool       // True if expression involves ranges (propagated upward during typing)
+	LoopInside           bool       // For CallExpression: true if function handles iteration, false if call site handles it
+	CallParamTypes       []Type     // Solver-selected call params for the original expression shape
+	ScalarCallParamTypes []Type     // Param types to use once outer loops consume ranges into scalars
+	CompareModes         []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -541,9 +543,12 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	rew = &cp
 	// Cache the rewritten expression with no ranges (ranges have been extracted)
 	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
-		OutTypes: info.OutTypes,
-		ExprLen:  info.ExprLen,
-		Ranges:   nil,
+		OutTypes:             info.OutTypes,
+		ExprLen:              info.ExprLen,
+		Ranges:               nil,
+		LoopInside:           info.LoopInside,
+		CallParamTypes:       append([]Type(nil), info.ScalarCallParamTypes...),
+		ScalarCallParamTypes: append([]Type(nil), info.ScalarCallParamTypes...),
 	}
 	info.Ranges = ranges
 	info.Rewrite = rew
@@ -1694,6 +1699,8 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
+	info.CallParamTypes = append([]Type(nil), args...)
+	info.ScalarCallParamTypes = append([]Type(nil), innerArgs...)
 
 	// Compute hasRanges from all arguments
 	hasRanges := false
