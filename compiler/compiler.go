@@ -232,10 +232,6 @@ func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 // use their bound scalar types. Otherwise we fall back to cached expression
 // result types, with a final raw-symbol fallback for bare identifiers.
 func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
-	if info == nil {
-		return nil, c.addCallTypeError(ce.Tok(), "could not resolve type information for function call")
-	}
-
 	paramTypes := []Type{}
 	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
 	for _, arg := range ce.Arguments {
@@ -248,18 +244,6 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 		}
 
 		argInfo := c.ExprCache[key(c.FuncNameMangled, arg)]
-		if argInfo == nil {
-			if !isIdent {
-				return nil, c.addCallTypeError(arg.Tok(), "could not resolve type information for call argument")
-			}
-
-			sym, exists := c.getRawSymbol(ident.Value)
-			if !exists {
-				return nil, c.addCallTypeError(arg.Tok(), fmt.Sprintf("could not resolve type information for call argument %q", ident.Value))
-			}
-			paramTypes = append(paramTypes, valType(sym))
-			continue
-		}
 		for _, argType := range argInfo.OutTypes {
 			if info.LoopInside {
 				paramTypes = append(paramTypes, argType)

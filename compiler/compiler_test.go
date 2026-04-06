@@ -102,7 +102,7 @@ res`
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 
-func TestInferCallParamTypesReportsMissingArgType(t *testing.T) {
+func TestInferCallParamTypesPanicsOnMissingArgType(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -115,12 +115,9 @@ func TestInferCallParamTypesReportsMissingArgType(t *testing.T) {
 		},
 	}
 
-	paramTypes, ok := c.inferCallParamTypes(ce, &ExprInfo{})
-
-	require.False(t, ok)
-	require.Nil(t, paramTypes)
-	require.Len(t, c.Errors, 1)
-	require.Contains(t, c.Errors[0].Msg, "could not resolve type information for call argument")
+	require.Panics(t, func() {
+		c.inferCallParamTypes(ce, &ExprInfo{})
+	})
 }
 
 func TestStringCompile(t *testing.T) {
