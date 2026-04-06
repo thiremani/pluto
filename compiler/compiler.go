@@ -848,9 +848,6 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
 		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		if info == nil {
-			return false
-		}
 		if _, ok := directScalarABIReturnType(info.OutTypes); ok {
 			return false
 		}
