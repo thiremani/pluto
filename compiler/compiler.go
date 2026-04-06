@@ -319,14 +319,11 @@ func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg
 			continue
 		}
 
-		for j, outType := range sig.FnInfo.OutTypes {
+		for j := range sig.FnInfo.OutTypes {
 			if j >= len(dest) {
 				break
 			}
 			if dest[j].Value != arg.Name {
-				continue
-			}
-			if !TypeEqual(sig.ParamTypes[i], outType) {
 				continue
 			}
 			aliasIndices[aliasSlot] = j + 1
