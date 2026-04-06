@@ -285,12 +285,12 @@ func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg
 // direct scalar return. Range-bearing variants thread this through a hidden ABI
 // param so the callee can preserve empty-range and loop-carried accumulation
 // semantics even though the LLVM return itself is by value.
-func (c *Compiler) directReturnSeedForCall(outType Type, dest []*ast.Identifier, output *Symbol) *Symbol {
+func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, output *Symbol) *Symbol {
 	if output != nil {
 		return c.derefIfPointer(output, "call_seed")
 	}
-	if dest != nil && len(dest) > 0 {
-		return c.resolveConditionalSeed(dest[0], outType)
+	if dest != nil {
+		return c.resolveConditionalSeed(dest, outType)
 	}
 	return c.makeZeroValue(outType)
 }
@@ -2580,7 +2580,10 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 
 func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, output *Symbol) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
+		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
+		if output != nil {
+			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, nil, output)
+		}
 		c.runCallWithBounds(func() {
 			result := c.callDirect(call.Function, call.FuncType, sig, call, seed)
 			c.storeSymbolToPtrAsType(output, result, output.Type.(Ptr).Elem, "call_direct_store")
@@ -2593,7 +2596,10 @@ func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, 
 	var results []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		if sig.ABI.Return.Mode == ABIReturnDirect {
-			seed := c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest, nil)
+			seed := c.makeZeroValue(sig.ABI.Return.DirectType)
+			if len(dest) > 0 {
+				seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
+			}
 			resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
 			c.createStore(seed.Val, resultPtr, seed.Type)
 
