@@ -231,7 +231,7 @@ func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 // current-scope identifier bindings take precedence so rewritten iter variables
 // use their bound scalar types. Otherwise we fall back to cached expression
 // result types, with a final raw-symbol fallback for bare identifiers.
-func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) ([]Type, bool) {
+func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) []Type {
 	paramTypes := []Type{}
 	useBoundScalars := len(c.pendingLoopRanges(info.Ranges)) == 0
 	for _, arg := range ce.Arguments {
@@ -260,14 +260,11 @@ func (c *Compiler) inferCallParamTypes(ce *ast.CallExpression, info *ExprInfo) (
 			}
 		}
 	}
-	return paramTypes, true
+	return paramTypes
 }
 
 func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
-	paramTypes, ok := c.inferCallParamTypes(ce, info)
-	if !ok {
-		return nil, false
-	}
+	paramTypes := c.inferCallParamTypes(ce, info)
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
 	fnInfo := c.FuncCache[mangled]
 	if fnInfo == nil {
