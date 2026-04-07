@@ -223,7 +223,7 @@ func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
 // current lowering site. Once outer loops have consumed all pending ranges, the
 // scalarized param types become the right callee variant for code generation.
 func (c *Compiler) inferCallParamTypes(info *ExprInfo) []Type {
-	if len(c.pendingLoopRanges(info.Ranges)) == 0 && len(info.ScalarCallParamTypes) > 0 {
+	if len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		return info.ScalarCallParamTypes
 	}
 	return info.CallParamTypes
