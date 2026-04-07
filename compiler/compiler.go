@@ -290,7 +290,7 @@ func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, o
 		return c.derefIfPointer(output, "call_seed")
 	}
 	if dest != nil {
-		return c.resolveConditionalSeed(dest, outType)
+		return c.resolveDestSeed(dest, outType)
 	}
 	return c.makeZeroValue(outType)
 }
@@ -2454,7 +2454,7 @@ func (c *Compiler) loadOutputValues(outputs []*Symbol, outTypes []Type, name str
 func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
 	outputs := c.makeTempOutputs(info.OutTypes, true, func(i int, outType Type) *Symbol {
 		if dest != nil && i < len(dest) {
-			return c.resolveConditionalSeed(dest[i], outType)
+			return c.resolveDestSeed(dest[i], outType)
 		}
 		return c.makeZeroValue(outType)
 	})

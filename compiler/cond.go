@@ -90,10 +90,9 @@ func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 	return outTypes
 }
 
-// resolveConditionalSeed returns the initial value for conditional temp outputs.
-// Existing destinations keep their current value on false branches; new
-// destinations start from the type zero value.
-func (c *Compiler) resolveConditionalSeed(ident *ast.Identifier, outType Type) *Symbol {
+// resolveDestSeed returns the current destination value when it already exists
+// in scope, or the type zero value for a fresh destination.
+func (c *Compiler) resolveDestSeed(ident *ast.Identifier, outType Type) *Symbol {
 	existing, ok := Get(c.Scopes, ident.Value)
 	if !ok {
 		return c.makeZeroValue(outType)
@@ -119,7 +118,7 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 			Type:     Ptr{Elem: outTypes[i]},
 			Borrowed: true,
 		}
-		seed := c.resolveConditionalSeed(ident, outTypes[i])
+		seed := c.resolveDestSeed(ident, outTypes[i])
 		c.storeSymbolToPtrAsType(tempSym, seed, outTypes[i], tempName+"_seed")
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
