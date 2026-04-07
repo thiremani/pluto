@@ -754,10 +754,10 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	return derefed
 }
 
-func (c *Compiler) storeSymbolToPtrAsType(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
+func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
-		panic("internal: storeSymbolToPtrAsType requires pointer destination")
+		panic("internal: storeSymbolToSlot requires pointer destination")
 	}
 	if target.Kind() != ptrType.Elem.Kind() {
 		target = ptrType.Elem
@@ -785,7 +785,7 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	}
 
 	targetType := c.bindingSlotType(name, oldSym.Type.(Ptr).Elem)
-	stored := c.storeSymbolToPtrAsType(oldSym, valueToStore, targetType, name+"_rhs_load")
+	stored := c.storeSymbolToSlot(oldSym, valueToStore, targetType, name+"_rhs_load")
 	ptrType := oldSym.Type.(Ptr)
 	if !TypeEqual(ptrType.Elem, stored.Type) {
 		updated := GetCopy(oldSym)
@@ -1699,7 +1699,7 @@ func (c *Compiler) compileRangeInfixSlot(
 		computed := c.compileInfix(op, leftSym, rightSym, expected)
 		// Free previous iteration's result before overwriting.
 		c.freeSymbolValue(output, "old_output")
-		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_infix_store")
+		c.storeSymbolToSlot(output, computed, output.Type.(Ptr).Elem, "range_infix_store")
 		if leftTempsHandledInline {
 			c.freeTemporarySymbol(leftSym, "temp_left")
 		}
@@ -1727,7 +1727,7 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	c.freeSymbolValue(output, "old_output")
-	c.storeSymbolToPtrAsType(output, lSym, output.Type.(Ptr).Elem, "range_cond_store")
+	c.storeSymbolToSlot(output, lSym, output.Type.(Ptr).Elem, "range_cond_store")
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
@@ -1832,7 +1832,7 @@ func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed
 		Type:     Ptr{Elem: ptrElem},
 		Borrowed: borrowed,
 	}
-	c.storeSymbolToPtrAsType(output, seed, outType, name+"_seed")
+	c.storeSymbolToSlot(output, seed, outType, name+"_seed")
 	return output
 }
 
@@ -1941,7 +1941,7 @@ func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected T
 
 		// Free previous iteration's result before overwriting
 		c.freeSymbolValue(output, "old_output")
-		c.storeSymbolToPtrAsType(output, computed, output.Type.(Ptr).Elem, "range_prefix_store")
+		c.storeSymbolToSlot(output, computed, output.Type.(Ptr).Elem, "range_prefix_store")
 	}
 
 	if !c.withStmtBoundsGuard(
@@ -2116,7 +2116,7 @@ func (c *Compiler) processDirectOutputs(fn *ast.FuncStatement, sig *callSignatur
 				}
 			}
 		}
-		c.storeSymbolToPtrAsType(retPtrs[i], seed, outType, outIdent.Value+"_seed")
+		c.storeSymbolToSlot(retPtrs[i], seed, outType, outIdent.Value+"_seed")
 	}
 	return retPtrs
 }
@@ -2581,7 +2581,7 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 		}
 		c.runCallWithBounds(func() {
 			result := c.callDirect(call.Function, call.FuncType, sig, call, seed)
-			c.storeSymbolToPtrAsType(output, result, output.Type.(Ptr).Elem, "call_direct_store")
+			c.storeSymbolToSlot(output, result, output.Type.(Ptr).Elem, "call_direct_store")
 		})
 	})
 }
