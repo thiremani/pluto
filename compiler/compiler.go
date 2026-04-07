@@ -295,14 +295,9 @@ func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, o
 	return c.makeZeroValue(outType)
 }
 
-func (c *Compiler) selectAliasedParamPtr(name string, elemType Type, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
+func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
 	slotPtr := spill
 	for i, output := range outputs {
-		ptrType, ok := output.Type.(Ptr)
-		if !ok || !TypeEqual(ptrType.Elem, elemType) {
-			continue
-		}
-
 		match := c.builder.CreateICmp(
 			llvm.IntEQ,
 			aliasIndex,
@@ -2148,7 +2143,7 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 			slotPtr := paramPtr
 			aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i)
 			if aliasParamIndex >= 0 {
-				slotPtr = c.selectAliasedParamPtr(name, elemType, paramPtr, function.Param(aliasParamIndex), retPtrs)
+				slotPtr = c.selectAliasedParamPtr(name, paramPtr, function.Param(aliasParamIndex), retPtrs)
 			}
 			inputs[i] = &Symbol{
 				Val:      slotPtr,
