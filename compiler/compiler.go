@@ -228,6 +228,14 @@ func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Valu
 	}
 }
 
+func (c *Compiler) clearParamAlias(name string) {
+	state := c.currentFuncState()
+	if state == nil {
+		return
+	}
+	delete(state.ParamAliases, name)
+}
+
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
 	if sym == nil {
 		return nil, false
@@ -408,6 +416,8 @@ func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool
 	if c.CodeCompiler == nil {
 		return nil, false
 	}
+	// CodeCompiler bindings are global code-scope values/slots, not active
+	// function params, so they never participate in param-alias resolution.
 	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
 	if !ok {
 		return nil, false
@@ -1382,6 +1392,7 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 			ReadOnly: sym.ReadOnly,
 		}
 		Put(c.Scopes, name, ptr)
+		c.clearParamAlias(name)
 		return ptr
 	}
 
@@ -2474,7 +2485,12 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
 			if arg.Name != "" {
-				sym, _ = c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+				lowered, ok := c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+				if !ok {
+					panic("internal: direct call arg missing from scope: " + arg.Name)
+				}
+				args[i].Lowered = lowered
+				continue
 			}
 			args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
 			continue
