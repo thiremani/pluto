@@ -1,3 +1,7 @@
 res = 10
 res = Acc(res, 1:6)
 res
+
+res = 10
+res = Acc(res, 0:-2)
+res
