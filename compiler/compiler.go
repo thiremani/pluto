@@ -2363,10 +2363,7 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 		}
 
 		if arg.Name == "" {
-			if sym.Type.Kind() != PtrKind {
-				name := fmt.Sprintf("%s_arg_%d", funcName, i)
-				sym, _ = c.makePtr(name, sym)
-			}
+			sym, _ = c.makePtr(fmt.Sprintf("%s_arg_%d", funcName, i), sym)
 			args[i].Lowered = sym
 			continue
 		}
