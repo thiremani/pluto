@@ -5,3 +5,11 @@ res
 res = 10
 res = Acc(res, 0:-2)
 res
+
+res = 10
+res = AccViaId(res, 1:6)
+res
+
+res = 10
+res = AccViaId(res, 0:-2)
+res

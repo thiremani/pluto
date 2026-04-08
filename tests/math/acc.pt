@@ -1,2 +1,9 @@
+res = Id(x)
+    res = x
+
+res = AccViaId(a, x)
+    tmp = Id(a)
+    res = tmp + x
+
 res = Acc(a, x)
     res = a + x

@@ -20,8 +20,9 @@ type Symbol struct {
 // Borrowed-value ownership model:
 //
 // Function lowering is ABI-classified. Indirect params/results use caller-owned
-// storage as before; direct scalar params are spilled into local allocas in the
-// callee prologue, and direct scalar returns cross the call boundary as SSA values.
+// storage as before; direct scalar params stay as SSA values in function scope
+// until addressable storage is semantically required, and direct scalar returns
+// cross the call boundary as SSA values.
 //
 //   - Input params (ReadOnly=true): read-only reference to caller's value
 //   - Output params (ReadOnly=false): write reference to caller's storage
@@ -61,7 +62,7 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs      []*Symbol          // function.Param pointers for all params
+	Inputs      []*Symbol          // lowered function inputs (range iterators remain pointer-backed)
 	Outputs     []*Symbol          // retPtrs (pointers to sret slots)
 	IterIndices []int              // Indices of iterator params
 	Iters       map[string]*Symbol // Current iterator values during loop
@@ -97,6 +98,19 @@ type BindingKey struct {
 	Name            string
 }
 
+// paramAlias tracks an aliased direct scalar param binding for the active
+// function body. The Base check prevents alias behavior from leaking onto a
+// same-name binding introduced later in the scope tree.
+type paramAlias struct {
+	Base       *Symbol
+	AliasIndex llvm.Value
+	Outputs    []*Symbol
+}
+
+type funcLoweringState struct {
+	ParamAliases map[string]*paramAlias
+}
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -122,6 +136,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
+	funcStateStack  []funcLoweringState
 	stmtCtxStack    []stmtCtx
 }
 
@@ -156,6 +171,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
+		funcStateStack:  []funcLoweringState{},
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -178,6 +194,53 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 		return fallback
 	}
 	return typ
+}
+
+func (c *Compiler) currentFuncState() *funcLoweringState {
+	if len(c.funcStateStack) == 0 {
+		return nil
+	}
+	return &c.funcStateStack[len(c.funcStateStack)-1]
+}
+
+func (c *Compiler) pushFuncState() {
+	c.funcStateStack = append(c.funcStateStack, funcLoweringState{
+		ParamAliases: make(map[string]*paramAlias),
+	})
+}
+
+func (c *Compiler) popFuncState() {
+	if len(c.funcStateStack) == 0 {
+		panic("internal: missing function lowering state")
+	}
+	c.funcStateStack = c.funcStateStack[:len(c.funcStateStack)-1]
+}
+
+func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputs []*Symbol) {
+	state := c.currentFuncState()
+	if state == nil {
+		panic("internal: missing function lowering state for aliased param")
+	}
+	state.ParamAliases[name] = &paramAlias{
+		Base:       sym,
+		AliasIndex: aliasIndex,
+		Outputs:    outputs,
+	}
+}
+
+func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
+	if sym == nil {
+		return nil, false
+	}
+	state := c.currentFuncState()
+	if state == nil {
+		return nil, false
+	}
+	alias, ok := state.ParamAliases[name]
+	if !ok || alias.Base != sym {
+		return nil, false
+	}
+	return alias, true
 }
 
 func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
@@ -307,6 +370,49 @@ func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasInd
 		slotPtr = c.builder.CreateSelect(match, output.Val, slotPtr, fmt.Sprintf("%s_slot_%d", name, i))
 	}
 	return slotPtr
+}
+
+func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
+	if alias == nil || alias.AliasIndex.IsNil() || len(alias.Outputs) == 0 {
+		return sym
+	}
+
+	value := sym.Val
+	for i, output := range alias.Outputs {
+		match := c.builder.CreateICmp(
+			llvm.IntEQ,
+			alias.AliasIndex,
+			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
+			fmt.Sprintf("%s_alias_match_%d", name, i),
+		)
+		aliasVal := c.createLoad(output.Val, sym.Type, fmt.Sprintf("%s_alias_load_%d", name, i))
+		value = c.builder.CreateSelect(match, aliasVal, value, fmt.Sprintf("%s_alias_value_%d", name, i))
+	}
+
+	resolved := GetCopy(sym)
+	resolved.Val = value
+	return resolved
+}
+
+func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbol {
+	if alias, ok := c.paramAliasFor(name, sym); ok {
+		return c.directParamValue(name, sym, alias)
+	}
+	return c.derefIfPointer(sym, loadName)
+}
+
+func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
+	if s, ok := Get(c.Scopes, name); ok {
+		return c.valueSymbol(name, s, loadName), true
+	}
+	if c.CodeCompiler == nil {
+		return nil, false
+	}
+	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
+	if !ok {
+		return nil, false
+	}
+	return c.derefIfPointer(s, loadName), true
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -1117,9 +1223,7 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 		if !exists {
 			continue
 		}
-		// For Ptrs, load the actual value so we can free it later.
-		// For non-Ptrs, use the symbol directly.
-		result[i] = c.derefIfPointer(sym, ident.Value+"_old_load")
+		result[i] = c.valueSymbol(ident.Value, sym, ident.Value+"_old_load")
 	}
 	return result
 }
@@ -1261,6 +1365,26 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
 
+	if alias, ok := c.paramAliasFor(name, sym); ok {
+		paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
+		c.createStore(sym.Val, paramPtr, sym.Type)
+
+		slotPtr := paramPtr
+		if !alias.AliasIndex.IsNil() {
+			slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, alias.Outputs)
+		}
+
+		ptr := &Symbol{
+			Val:      slotPtr,
+			Type:     Ptr{Elem: sym.Type},
+			FuncArg:  sym.FuncArg,
+			Borrowed: sym.Borrowed,
+			ReadOnly: sym.ReadOnly,
+		}
+		Put(c.Scopes, name, ptr)
+		return ptr
+	}
+
 	ptr, alreadyPtr := c.makePtr(name, sym)
 	if alreadyPtr {
 		return ptr
@@ -1361,15 +1485,11 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
-	s, ok := Get(c.Scopes, ident.Value)
+	s, ok := c.namedValueSymbol(ident.Value, ident.Value+"_load")
 	if ok {
-		return c.derefIfPointer(s, ident.Value+"_load")
+		return s
 	}
-
-	cc := c.CodeCompiler.Compiler
-	// no need to check ok as that is done in the typesolver
-	s, _ = Get(cc.Scopes, ident.Value)
-	return c.derefIfPointer(s, ident.Value+"_load")
+	panic("internal: identifier missing from scope: " + ident.Value)
 }
 
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
@@ -2053,7 +2173,9 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := c.FuncNameMangled
 	c.FuncNameMangled = sig.Mangled
+	c.pushFuncState()
 	retVal, hasDirectRet := c.compileFuncBlock(template, sig, retStruct, function)
+	c.popFuncState()
 	c.FuncNameMangled = savedFuncNameMangled
 
 	if hasDirectRet {
@@ -2137,19 +2259,14 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 		paramVal := function.Param(sig.ABI.SourceFunctionParamIndex(i))
 
 		if sig.ABI.Params[i].Mode == ABIParamDirect {
-			paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(elemType), name)
-			c.createStore(paramVal, paramPtr, elemType)
-
-			slotPtr := paramPtr
-			aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i)
-			if aliasParamIndex >= 0 {
-				slotPtr = c.selectAliasedParamPtr(name, paramPtr, function.Param(aliasParamIndex), retPtrs)
-			}
 			inputs[i] = &Symbol{
-				Val:      slotPtr,
-				Type:     Ptr{Elem: elemType},
+				Val:      paramVal,
+				Type:     elemType,
 				FuncArg:  true,
 				ReadOnly: true,
+			}
+			if aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i); aliasParamIndex >= 0 {
+				c.bindParamAlias(name, inputs[i], function.Param(aliasParamIndex), retPtrs)
 			}
 		} else {
 			inputs[i] = &Symbol{
@@ -2333,11 +2450,9 @@ func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
 	args := []callArg{}
 	for _, callArgExpr := range ce.Arguments {
 		if ident, ok := callArgExpr.(*ast.Identifier); ok {
-			sym, _ := c.getRawSymbol(ident.Value)
 			args = append(args, callArg{
-				Expr:   callArgExpr,
-				Name:   ident.Value,
-				Symbol: sym,
+				Expr: callArgExpr,
+				Name: ident.Value,
 			})
 			continue
 		}
@@ -2358,6 +2473,9 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 	for i, arg := range args {
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
+			if arg.Name != "" {
+				sym, _ = c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+			}
 			args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
 			continue
 		}
