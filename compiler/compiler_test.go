@@ -39,6 +39,107 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
 }
 
+func TestPhase1ScalarABIDirectI64(t *testing.T) {
+	code := `res = Add(x, y)
+    res = x + y`
+	script := `res = Add(2, 3)
+res`
+
+	moduleName := "phase1_scalar_abi_i64"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{I64, I64})
+
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1)", "expected direct scalar signature with noundef attrs")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3)", "expected direct scalar call")
+	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar return should not use sret struct")
+}
+
+func TestPhase1ScalarABIDirectF64(t *testing.T) {
+	code := `res = AddF(x, y)
+    res = x + y`
+	script := `res = AddF(2.5, 3.5)
+res`
+
+	moduleName := "phase1_scalar_abi_f64"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "AddF", []Type{F64, F64})
+
+	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1)", "expected direct float signature with noundef attrs")
+	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00)", "expected direct float call")
+	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar float return should not use sret struct")
+}
+
+func TestPhase1ScalarABIMultiReturnKeepsIndirectReturn(t *testing.T) {
+	code := `a, b = Pair(x, y)
+    a, b = x, y`
+	script := `a, b = Pair(2, 3)
+a, b`
+
+	moduleName := "phase1_scalar_abi_pair"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Pair", []Type{I64, I64})
+
+	require.Contains(t, scriptIR, "define void @"+mangled+"(", "expected indirect multi-return definition")
+	require.Contains(t, scriptIR, "ptr noundef nonnull sret(%"+mangled+"_ret) \"captures\"=\"none\" %0", "expected sret pointer attrs on the indirect return slot")
+	require.Contains(t, scriptIR, "i64 noundef %1, i64 noundef %2", "expected noundef attrs on direct scalar params")
+	require.Contains(t, scriptIR, "call void @"+mangled+"(", "expected indirect multi-return call")
+}
+
+func TestPhase1ScalarABIRangeVariantUsesDirectScalarBoundary(t *testing.T) {
+	code := `res = Acc(a, x)
+    res = a + x`
+	script := `res = 10
+res = Acc(res, 1:6)
+res`
+
+	moduleName := "phase1_scalar_abi_acc"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Acc", []Type{I64, Range{Iter: I64}})
+
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(", "range-bearing variant should keep the direct scalar return")
+	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i32 noundef %2, i64 noundef %3", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(", "expected direct scalar call/return for ranged accumulator case")
+	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
+}
+
+func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	c := NewCompiler(ctx, "call_param_type_select", nil)
+	info := &ExprInfo{
+		Ranges:               []*RangeInfo{{Name: "i"}},
+		CallParamTypes:       []Type{I64, Range{Iter: I64}},
+		ScalarCallParamTypes: []Type{I64, I64},
+	}
+	Put(c.Scopes, "i", &Symbol{Type: I64})
+
+	paramTypes := c.inferCallParamTypes(info)
+
+	require.Len(t, paramTypes, 2)
+	require.True(t, TypeEqual(paramTypes[0], I64))
+	require.True(t, TypeEqual(paramTypes[1], I64))
+}
+
+func TestInferCallParamTypesUsesOriginalVariantWhenRangesPending(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	c := NewCompiler(ctx, "call_param_type_select", nil)
+	info := &ExprInfo{
+		Ranges:               []*RangeInfo{{Name: "i"}},
+		CallParamTypes:       []Type{I64, Range{Iter: I64}},
+		ScalarCallParamTypes: []Type{I64, I64},
+	}
+	Put(c.Scopes, "i", &Symbol{Type: Range{Iter: I64}})
+
+	paramTypes := c.inferCallParamTypes(info)
+
+	require.Len(t, paramTypes, 2)
+	require.True(t, TypeEqual(paramTypes[0], I64))
+	require.True(t, TypeEqual(paramTypes[1], Range{Iter: I64}))
+}
+
 func TestStringCompile(t *testing.T) {
 	input := `"hello"`
 	l := lexer.New("TestStringCompile", input)

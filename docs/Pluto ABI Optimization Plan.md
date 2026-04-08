@@ -1,6 +1,6 @@
 # Pluto ABI Optimization Plan
 
-**Status:** Proposed
+**Status:** Phase 1 scalar ABI shipped internally; remaining phases proposed
 **Scope:** Internal call lowering, scalar fast paths, tail recursion, external ABI stability
 
 ## 1. Problem
@@ -68,18 +68,20 @@ Name mangling encodes semantic types, not physical ABI. Changing `I64` from poin
 
 ## 4. Implementation Phases
 
-### Phase 1: Scalar fast path (highest priority)
+### Phase 1: Scalar fast path (implemented)
 
 Direct lowering for scalar numeric inputs and single scalar outputs.
 
 - pass `I64`/`F64` by value instead of by pointer
 - return single scalar in register instead of via `sret`
+- keep function-body semantics stable by spilling direct scalar params into local addressable slots in the callee
+- preserve range-bearing accumulator / empty-range behavior with hidden alias/seed state where needed
 
-This is the highest-value optimization — it benefits all scalar-heavy code, not just specific patterns. Expected: better register allocation, less stack traffic, simpler IR.
+This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 
 **Benchmark target:** `fib`, `fib_tail`, and other call-heavy scalar code. Note: `sum` is not a useful target here — its optimized IR is already a call-free scalar loop; the current gap vs clang is loop optimization quality, not call ABI.
 
-### Phase 2: Restricted self tail recursion
+### Phase 2: Restricted self tail recursion (next highest priority)
 
 Transform self-recursive calls into loops when all of:
 
@@ -91,11 +93,13 @@ Transform self-recursive calls into loops when all of:
 
 Intentionally narrow — ignore multi-output, strings, arrays, mutual recursion. This is medium difficulty because the restricted form avoids all the hard ownership/cleanup interactions.
 
-**Benchmark target:** `fib_tail` (eliminates stack growth entirely).
+**Benchmark target:** `fib_tail` (eliminates stack growth entirely and removes the remaining recursive-call overhead after Phase 1).
 
 ### Phase 3: Small POD aggregate returns
 
 Support direct multi-output returns for plain-data aggregates (`{I64, I64}`, `{I64, F64}`) when the target ABI allows. Model as LLVM aggregate return and let target classification decide direct vs indirect.
+
+This is the natural next ABI expansion after Phase 2 because the classifier/lowering split from Phase 1 is already in place. The remaining work is target-aware aggregate classification, not another structural refactor.
 
 ### Phase 4: Generalized ABI classification
 
@@ -105,25 +109,26 @@ Broaden to more scalar types, small direct aggregates in both params and results
 
 Once internal ABI is stable, decide whether exported symbols keep the current C ABI (add wrappers) or version the ABI docs explicitly.
 
-### Parallel track: non-ABI loop/codegen quick wins
+### Parallel track: non-ABI loop/codegen work
 
 `sum` suggests there is also a separate non-ABI optimization gap. Pluto's optimized IR
 for that benchmark is already a call-free scalar loop, but clang still produces a much
 more optimized kernel. That means `sum` should be treated as a loop/codegen quality
 benchmark, not as a primary validation target for the ABI phases above.
 
-The first things to investigate here are:
+The target-metadata quick wins have already landed far enough to make this a
+different problem now. The next things to investigate here are:
 
-- emit module `target triple`
-- emit module `datalayout`
-- attach `target-cpu` / `target-features` where appropriate
+- emit a more canonical counted-loop fast path for common `I64` ranges, especially `step == 1`
+- preserve affine-friendly loop structure so LLVM can unroll and strength-reduce more aggressively
+- keep range-heavy scalar accumulators in SSA where aliasing is provably absent, and spill only at the boundary
+- continue improving bounds/versioning so fast paths stay simple in the common in-bounds case
 
-These are adjacent quick wins because they improve LLVM's target knowledge and may
-unlock better loop unrolling, cost modeling, and strength reduction. They can be done
-independently and before Phase 1 since they only add metadata to the LLVM module — no
-ABI classifier needed.
+These are worth treating as a separate optimization track because they improve
+call-free kernels like `sum` and still benefit range-heavy scalar code such as
+`harmonic`, without depending on more ABI surface area.
 
-**Benchmark target:** `sum`, other call-free integer kernels.
+**Benchmark target:** `sum`, `harmonic`, and other call-free or loop-dominated integer kernels.
 
 ## 5. Rollout Strategy
 
@@ -136,6 +141,8 @@ Each phase should:
 
 ## 6. Practical Recommendation
 
-If only one optimization can be prioritized: **Phase 1** (scalar fast path). It gives compiler-wide performance gain with low implementation risk.
+If only one remaining optimization can be prioritized: **Phase 2** (restricted self tail recursion). Phase 1 is already shipped, and tail recursion is now the clearest remaining win on the benchmark set.
 
-If two: **Phase 1 + Phase 2** (scalar fast path + restricted tail recursion). This covers the broadest performance wins with the best risk/reward ratio.
+If two: **Phase 2 + Phase 3** (restricted tail recursion + small POD aggregate returns). That extends the current ABI work with the best continuity and risk/reward ratio.
+
+If a parallel non-ABI effort is desired at the same time, prioritize the counted-loop fast path from the loop/codegen track rather than additional cache or tooling work.
