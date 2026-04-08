@@ -2486,10 +2486,6 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
 	info := c.ExprCache[key(c.FuncNameMangled, ce)]
-	if info == nil {
-		c.addCallTypeError(ce.Tok(), "could not resolve type information for function call")
-		return nil
-	}
 	if rew, ok := info.Rewrite.(*ast.CallExpression); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		ce = rew
 		if rewInfo := c.ExprCache[key(c.FuncNameMangled, ce)]; rewInfo != nil {
