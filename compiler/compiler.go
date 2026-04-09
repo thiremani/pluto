@@ -204,9 +204,6 @@ func (c *Compiler) pushParamAliases() {
 }
 
 func (c *Compiler) popParamAliases() {
-	if len(c.paramAliasStack) == 0 {
-		panic("internal: missing param alias state")
-	}
 	c.paramAliasStack = c.paramAliasStack[:len(c.paramAliasStack)-1]
 }
 
@@ -223,11 +220,7 @@ func identNames(idents []*ast.Identifier) []string {
 // This allows direct outputs to remain values, be replaced in scope, or be
 // promoted to slots without invalidating the alias metadata.
 func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputNames []string) {
-	aliases := c.currentParamAliases()
-	if aliases == nil {
-		panic("internal: missing param alias state for aliased param")
-	}
-	aliases[name] = &paramAlias{
+	c.currentParamAliases()[name] = &paramAlias{
 		Base:        sym,
 		AliasIndex:  aliasIndex,
 		OutputNames: append([]string(nil), outputNames...),
@@ -239,9 +232,6 @@ func (c *Compiler) clearParamAlias(name string) {
 }
 
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
-	if sym == nil {
-		return nil, false
-	}
 	alias, ok := c.currentParamAliases()[name]
 	if !ok || alias.Base != sym {
 		return nil, false
