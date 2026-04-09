@@ -107,10 +107,6 @@ type paramAlias struct {
 	Outputs    []*Symbol
 }
 
-type funcLoweringState struct {
-	ParamAliases map[string]*paramAlias
-}
-
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -136,7 +132,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
-	funcStateStack  []funcLoweringState
+	paramAliasStack []map[string]*paramAlias
 	stmtCtxStack    []stmtCtx
 }
 
@@ -171,7 +167,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
-		funcStateStack:  []funcLoweringState{},
+		paramAliasStack: []map[string]*paramAlias{},
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -196,32 +192,30 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 	return typ
 }
 
-func (c *Compiler) currentFuncState() *funcLoweringState {
-	if len(c.funcStateStack) == 0 {
+func (c *Compiler) currentParamAliases() map[string]*paramAlias {
+	if len(c.paramAliasStack) == 0 {
 		return nil
 	}
-	return &c.funcStateStack[len(c.funcStateStack)-1]
+	return c.paramAliasStack[len(c.paramAliasStack)-1]
 }
 
-func (c *Compiler) pushFuncState() {
-	c.funcStateStack = append(c.funcStateStack, funcLoweringState{
-		ParamAliases: make(map[string]*paramAlias),
-	})
+func (c *Compiler) pushParamAliases() {
+	c.paramAliasStack = append(c.paramAliasStack, make(map[string]*paramAlias))
 }
 
-func (c *Compiler) popFuncState() {
-	if len(c.funcStateStack) == 0 {
-		panic("internal: missing function lowering state")
+func (c *Compiler) popParamAliases() {
+	if len(c.paramAliasStack) == 0 {
+		panic("internal: missing param alias state")
 	}
-	c.funcStateStack = c.funcStateStack[:len(c.funcStateStack)-1]
+	c.paramAliasStack = c.paramAliasStack[:len(c.paramAliasStack)-1]
 }
 
 func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputs []*Symbol) {
-	state := c.currentFuncState()
-	if state == nil {
-		panic("internal: missing function lowering state for aliased param")
+	aliases := c.currentParamAliases()
+	if aliases == nil {
+		panic("internal: missing param alias state for aliased param")
 	}
-	state.ParamAliases[name] = &paramAlias{
+	aliases[name] = &paramAlias{
 		Base:       sym,
 		AliasIndex: aliasIndex,
 		Outputs:    outputs,
@@ -229,22 +223,22 @@ func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Valu
 }
 
 func (c *Compiler) clearParamAlias(name string) {
-	state := c.currentFuncState()
-	if state == nil {
+	aliases := c.currentParamAliases()
+	if aliases == nil {
 		return
 	}
-	delete(state.ParamAliases, name)
+	delete(aliases, name)
 }
 
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
 	if sym == nil {
 		return nil, false
 	}
-	state := c.currentFuncState()
-	if state == nil {
+	aliases := c.currentParamAliases()
+	if aliases == nil {
 		return nil, false
 	}
-	alias, ok := state.ParamAliases[name]
+	alias, ok := aliases[name]
 	if !ok || alias.Base != sym {
 		return nil, false
 	}
@@ -2184,9 +2178,9 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := c.FuncNameMangled
 	c.FuncNameMangled = sig.Mangled
-	c.pushFuncState()
+	c.pushParamAliases()
 	retVal, hasDirectRet := c.compileFuncBlock(template, sig, retStruct, function)
-	c.popFuncState()
+	c.popParamAliases()
 	c.FuncNameMangled = savedFuncNameMangled
 
 	if hasDirectRet {
