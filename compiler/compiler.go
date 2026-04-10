@@ -376,6 +376,17 @@ func (c *Compiler) scopedValueSymbol(name string, loadName string) (*Symbol, boo
 	return c.valueSymbol(name, s, loadName), true
 }
 
+func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, bool, bool) {
+	if s, ok := Get(c.Scopes, name); ok {
+		return s, true, true
+	}
+	if c.CodeCompiler == nil {
+		return nil, false, false
+	}
+	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
+	return s, false, ok
+}
+
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
 	if alias == nil || len(alias.OutputNames) == 0 {
 		return sym
@@ -410,18 +421,15 @@ func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbo
 }
 
 func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
-	if s, ok := c.scopedValueSymbol(name, loadName); ok {
-		return s, true
-	}
-	if c.CodeCompiler == nil {
-		return nil, false
-	}
-	// CodeCompiler bindings are global code-scope values/slots, not active
-	// function params, so they never participate in param-alias resolution.
-	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
+	s, fromScope, ok := c.lookupNamedSymbol(name)
 	if !ok {
 		return nil, false
 	}
+	if fromScope {
+		return c.valueSymbol(name, s, loadName), true
+	}
+	// CodeCompiler bindings are global code-scope values/slots, not active
+	// function params, so they never participate in param-alias resolution.
 	return c.derefIfPointer(s, loadName), true
 }
 
@@ -1572,11 +1580,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
 func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
-	s, ok := Get(c.Scopes, name)
-	if ok {
-		return s, ok
-	}
-	s, ok = Get(c.CodeCompiler.Compiler.Scopes, name)
+	s, _, ok := c.lookupNamedSymbol(name)
 	return s, ok
 }
 
