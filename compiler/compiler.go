@@ -368,7 +368,7 @@ func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasInd
 	return slotPtr
 }
 
-func (c *Compiler) scopedValueSymbol(name string, loadName string) (*Symbol, bool) {
+func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
 	s, ok := Get(c.Scopes, name)
 	if !ok {
 		return nil, false
@@ -400,7 +400,7 @@ func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias)
 			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
 			fmt.Sprintf("%s_alias_match_%d", name, i),
 		)
-		output, ok := c.scopedValueSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
+		output, ok := c.localValSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
 		if !ok {
 			panic("internal: aliased output binding missing from scope: " + outputName)
 		}
@@ -2386,7 +2386,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		retSym, ok := c.scopedValueSymbol(template.Outputs[0].Value, template.Outputs[0].Value+"_ret")
+		retSym, ok := c.localValSymbol(template.Outputs[0].Value, template.Outputs[0].Value+"_ret")
 		if !ok {
 			panic("internal: direct return output missing from scope: " + template.Outputs[0].Value)
 		}
