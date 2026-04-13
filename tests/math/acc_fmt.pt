@@ -1,0 +1,3 @@
+res = AccFmt(a, x)
+    "count-a%n chars"
+    res = a + x

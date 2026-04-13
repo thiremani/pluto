@@ -54,6 +54,32 @@ res`
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar return should not use sret struct")
 }
 
+func TestDirectScalarParamsStayValuesInCallee(t *testing.T) {
+	code := `res = Add(x, y)
+    res = x + y`
+	script := `res = Add(2, 3)
+res`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "direct_param_values", code, script)
+
+	require.NotContains(t, scriptIR, "%x = alloca i64", "direct scalar param x should stay in SSA form by default")
+	require.NotContains(t, scriptIR, "%y = alloca i64", "direct scalar param y should stay in SSA form by default")
+	require.NotContains(t, scriptIR, "store i64 %0, ptr %x", "callee should not eagerly spill direct scalar param x")
+	require.NotContains(t, scriptIR, "store i64 %1, ptr %y", "callee should not eagerly spill direct scalar param y")
+}
+
+func TestDirectScalarOutputsStayValuesInCallee(t *testing.T) {
+	code := `sum = Add(x, y)
+    sum = x + y`
+	script := `res = Add(2, 3)
+res`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "direct_output_values", code, script)
+
+	require.NotContains(t, scriptIR, "%sum = alloca i64", "direct scalar output sum should stay in SSA form by default")
+	require.NotContains(t, scriptIR, "store i64 0, ptr %sum", "callee should not eagerly seed direct scalar output sum via an alloca")
+}
+
 func TestPhase1ScalarABIDirectF64(t *testing.T) {
 	code := `res = AddF(x, y)
     res = x + y`
@@ -100,6 +126,37 @@ res`
 	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i32 noundef %2, i64 noundef %3", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
 	require.Contains(t, scriptIR, "call i64 @"+mangled+"(", "expected direct scalar call/return for ranged accumulator case")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
+}
+
+func TestConditionalDirectCallArgsDoNotPromoteDirectParams(t *testing.T) {
+	code := `res = Id(x)
+    res = x
+
+res = CondId(x, y)
+    res = x
+    res = y > 0 Id(x)`
+	script := `res = CondId(2, 1)
+res`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "conditional_direct_call_args", code, script)
+
+	require.NotContains(t, scriptIR, "%x = alloca i64", "direct call args in conditional lowering should not force param spills")
+	require.NotContains(t, scriptIR, "%y = alloca i64", "condition-only direct params should not be promoted")
+	require.NotContains(t, scriptIR, "store i64 %0, ptr %x", "conditional direct call should keep x in value form")
+	require.NotContains(t, scriptIR, "store i64 %1, ptr %y", "conditional direct call should keep y in value form")
+}
+
+func TestRangeBearingDirectOutputsUseSlotsForLoopCarriedState(t *testing.T) {
+	code := `sum = AccFmt(a, x)
+    "count-a%n chars"
+    sum = a + x`
+	script := `res = 10
+res = AccFmt(res, 1:4)
+res`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "aliased_direct_output_promotion", code, script)
+
+	require.Contains(t, scriptIR, "%sum = alloca i64", "range-bearing direct returns still need an output slot for loop-carried state")
 }
 
 func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {

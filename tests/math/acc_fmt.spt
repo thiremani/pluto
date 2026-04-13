@@ -1,0 +1,3 @@
+res = 10
+res = AccFmt(res, 1:4)
+res

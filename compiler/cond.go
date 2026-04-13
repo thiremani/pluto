@@ -51,29 +51,43 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 	return
 }
 
-// collectCallArgIdentifiers walks an expression and records identifiers that
-// appear inside call argument subexpressions. These identifiers may be promoted
-// to memory by compileArgs, so conditional lowering pre-promotes them before
-// branching.
-func collectCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
+// collectPromotableCallArgIdentifiers walks an expression and records bare
+// identifier call arguments that lower indirectly. Those identifiers may be
+// promoted to memory by lowerCallArgs, so conditional lowering pre-promotes
+// only that subset before branching.
+func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	if ce, ok := expr.(*ast.CallExpression); ok {
-		for _, arg := range ce.Arguments {
-			if ident, ok := arg.(*ast.Identifier); ok {
-				out[ident.Value] = struct{}{}
+		info := c.ExprCache[key(c.FuncNameMangled, ce)]
+		if info != nil {
+			paramTypes := c.inferCallParamTypes(info)
+			mangled := Mangle(c.MangledPath, ce.Function.Value, paramTypes)
+			if fnInfo := c.FuncCache[mangled]; fnInfo != nil {
+				abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
+				for i, arg := range ce.Arguments {
+					if abi.Params[i].Mode != ABIParamIndirect {
+						continue
+					}
+					ident, ok := arg.(*ast.Identifier)
+					if !ok {
+						continue
+					}
+					out[ident.Value] = struct{}{}
+				}
 			}
 		}
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		collectCallArgIdentifiers(child, out)
+		c.collectPromotableCallArgIdentifiers(child, out)
 	}
 }
 
-// prePromoteConditionalCallArgs promotes local identifiers that are used as call
-// arguments so branch codegen does not introduce path-dependent promotions.
+// prePromoteConditionalCallArgs promotes local identifiers that are used as
+// indirect call arguments so branch codegen does not introduce path-dependent
+// promotions.
 func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
 	argNames := make(map[string]struct{})
 	for _, expr := range exprs {
-		collectCallArgIdentifiers(expr, argNames)
+		c.collectPromotableCallArgIdentifiers(expr, argNames)
 	}
 
 	for name := range argNames {
@@ -97,7 +111,7 @@ func (c *Compiler) resolveDestSeed(ident *ast.Identifier, outType Type) *Symbol 
 	if !ok {
 		return c.makeZeroValue(outType)
 	}
-	return c.derefIfPointer(existing, ident.Value+"_cond_seed")
+	return c.valueSymbol(ident.Value, existing, ident.Value+"_cond_seed")
 }
 
 func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {

@@ -20,8 +20,10 @@ type Symbol struct {
 // Borrowed-value ownership model:
 //
 // Function lowering is ABI-classified. Indirect params/results use caller-owned
-// storage as before; direct scalar params are spilled into local allocas in the
-// callee prologue, and direct scalar returns cross the call boundary as SSA values.
+// storage as before; direct scalar params stay as SSA values in function scope
+// until addressable storage is semantically required, and direct scalar outputs
+// stay as seeded values in function scope until storage is semantically required.
+// Direct scalar returns cross the call boundary as SSA values.
 //
 //   - Input params (ReadOnly=true): read-only reference to caller's value
 //   - Output params (ReadOnly=false): write reference to caller's storage
@@ -61,8 +63,7 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs      []*Symbol          // function.Param pointers for all params
-	Outputs     []*Symbol          // retPtrs (pointers to sret slots)
+	Inputs      []*Symbol          // lowered function inputs (range iterators remain pointer-backed)
 	IterIndices []int              // Indices of iterator params
 	Iters       map[string]*Symbol // Current iterator values during loop
 }
@@ -97,6 +98,15 @@ type BindingKey struct {
 	Name            string
 }
 
+// paramAlias tracks an aliased direct scalar param binding for the active
+// function body. The Base check prevents alias behavior from leaking onto a
+// same-name binding introduced later in the scope tree.
+type paramAlias struct {
+	Base        *Symbol
+	AliasIndex  llvm.Value
+	OutputNames []string
+}
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -122,6 +132,7 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current function's mangled name ("" for script level)
 	Errors          []*token.CompileError
+	paramAliasStack []map[string]*paramAlias
 	stmtCtxStack    []stmtCtx
 }
 
@@ -156,6 +167,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
+		paramAliasStack: []map[string]*paramAlias{},
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -178,6 +190,53 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 		return fallback
 	}
 	return typ
+}
+
+func (c *Compiler) currentParamAliases() map[string]*paramAlias {
+	if len(c.paramAliasStack) == 0 {
+		return nil
+	}
+	return c.paramAliasStack[len(c.paramAliasStack)-1]
+}
+
+func (c *Compiler) pushParamAliases() {
+	c.paramAliasStack = append(c.paramAliasStack, make(map[string]*paramAlias))
+}
+
+func (c *Compiler) popParamAliases() {
+	c.paramAliasStack = c.paramAliasStack[:len(c.paramAliasStack)-1]
+}
+
+func identNames(idents []*ast.Identifier) []string {
+	names := make([]string, len(idents))
+	for i, ident := range idents {
+		names[i] = ident.Value
+	}
+	return names
+}
+
+// bindParamAlias records the output names eagerly, but the outputs themselves
+// are resolved lazily from scope when the param is later read or promoted.
+// This allows direct outputs to remain values, be replaced in scope, or be
+// promoted to slots without invalidating the alias metadata.
+func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputNames []string) {
+	c.currentParamAliases()[name] = &paramAlias{
+		Base:        sym,
+		AliasIndex:  aliasIndex,
+		OutputNames: append([]string(nil), outputNames...),
+	}
+}
+
+func (c *Compiler) clearParamAlias(name string) {
+	delete(c.currentParamAliases(), name)
+}
+
+func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
+	alias, ok := c.currentParamAliases()[name]
+	if !ok || alias.Base != sym {
+		return nil, false
+	}
+	return alias, true
 }
 
 func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
@@ -307,6 +366,79 @@ func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasInd
 		slotPtr = c.builder.CreateSelect(match, output.Val, slotPtr, fmt.Sprintf("%s_slot_%d", name, i))
 	}
 	return slotPtr
+}
+
+func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
+	s, ok := Get(c.Scopes, name)
+	if !ok {
+		return nil, false
+	}
+	return c.valueSymbol(name, s, loadName), true
+}
+
+type symbolSource int
+
+const (
+	Missing symbolSource = iota
+	Local
+	Code
+)
+
+func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
+	if s, ok := Get(c.Scopes, name); ok {
+		return s, Local
+	}
+	if c.CodeCompiler == nil {
+		return nil, Missing
+	}
+	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
+	if !ok {
+		return nil, Missing
+	}
+	return s, Code
+}
+
+func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
+	if alias == nil || len(alias.OutputNames) == 0 {
+		return sym
+	}
+
+	value := sym.Val
+	for i, outputName := range alias.OutputNames {
+		match := c.builder.CreateICmp(
+			llvm.IntEQ,
+			alias.AliasIndex,
+			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
+			fmt.Sprintf("%s_alias_match_%d", name, i),
+		)
+		output, _ := c.localValSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
+		aliasVal := c.coerceSymbolForType(output, sym.Type, fmt.Sprintf("%s_alias_value_%d", outputName, i))
+		value = c.builder.CreateSelect(match, aliasVal.Val, value, fmt.Sprintf("%s_alias_value_%d", name, i))
+	}
+
+	resolved := GetCopy(sym)
+	resolved.Val = value
+	return resolved
+}
+
+func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbol {
+	if alias, ok := c.paramAliasFor(name, sym); ok {
+		return c.directParamValue(name, sym, alias)
+	}
+	return c.derefIfPointer(sym, loadName)
+}
+
+func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
+	s, source := c.lookupNamedSymbol(name)
+	if source == Missing {
+		return nil, false
+	}
+	if source == Local {
+		return c.valueSymbol(name, s, loadName), true
+	}
+	// CodeCompiler bindings are global code-scope values/slots, not active
+	// function params, so they never participate in param-alias resolution.
+	return c.derefIfPointer(s, loadName), true
 }
 
 func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
@@ -814,10 +946,26 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 	}
 }
 
+func typeNeedsCleanup(typ Type) bool {
+	switch t := typ.(type) {
+	case Ptr:
+		return typeNeedsCleanup(t.Elem)
+	case StrH:
+		return true
+	case Array:
+		return true
+	case ArrayRange:
+		return true
+	default:
+		// Scalar values, including Range, do not own heap data.
+		return false
+	}
+}
+
 // freeSymbolValue frees a symbol's current value. If the symbol is Ptr-wrapped,
 // loads the pointee first so the owned heap value is released.
 func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
-	if sym == nil {
+	if sym == nil || !typeNeedsCleanup(sym.Type) {
 		return
 	}
 	derefed := c.derefIfPointer(sym, loadName)
@@ -1117,9 +1265,7 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 		if !exists {
 			continue
 		}
-		// For Ptrs, load the actual value so we can free it later.
-		// For non-Ptrs, use the symbol directly.
-		result[i] = c.derefIfPointer(sym, ident.Value+"_old_load")
+		result[i] = c.valueSymbol(ident.Value, sym, ident.Value+"_old_load")
 	}
 	return result
 }
@@ -1261,6 +1407,10 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
 
+	if alias, ok := c.paramAliasFor(name, sym); ok {
+		return c.promoteAlias(name, sym, alias)
+	}
+
 	ptr, alreadyPtr := c.makePtr(name, sym)
 	if alreadyPtr {
 		return ptr
@@ -1269,6 +1419,37 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
 	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
 	Put(c.Scopes, name, ptr)
+	return ptr
+}
+
+func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Symbol {
+	paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
+	c.createStore(sym.Val, paramPtr, sym.Type)
+
+	slotPtr := paramPtr
+	if len(alias.OutputNames) > 0 {
+		outputPtrs := make([]*Symbol, len(alias.OutputNames))
+		for i, outputName := range alias.OutputNames {
+			outputSym, _ := Get(c.Scopes, outputName)
+			if outputSym.Type.Kind() != PtrKind {
+				// Only params carry alias bindings, so promoting an output here
+				// cannot recurse through another param-alias entry.
+				outputSym = c.promoteToMemory(outputName)
+			}
+			outputPtrs[i] = outputSym
+		}
+		slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, outputPtrs)
+	}
+
+	ptr := &Symbol{
+		Val:      slotPtr,
+		Type:     Ptr{Elem: sym.Type},
+		FuncArg:  sym.FuncArg,
+		Borrowed: sym.Borrowed,
+		ReadOnly: sym.ReadOnly,
+	}
+	Put(c.Scopes, name, ptr)
+	c.clearParamAlias(name)
 	return ptr
 }
 
@@ -1361,14 +1542,10 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
-	s, ok := Get(c.Scopes, ident.Value)
-	if ok {
-		return c.derefIfPointer(s, ident.Value+"_load")
+	s, source := c.lookupNamedSymbol(ident.Value)
+	if source == Local {
+		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
-
-	cc := c.CodeCompiler.Compiler
-	// no need to check ok as that is done in the typesolver
-	s, _ = Get(cc.Scopes, ident.Value)
 	return c.derefIfPointer(s, ident.Value+"_load")
 }
 
@@ -1412,12 +1589,8 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
 func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
-	s, ok := Get(c.Scopes, name)
-	if ok {
-		return s, ok
-	}
-	s, ok = Get(c.CodeCompiler.Compiler.Scopes, name)
-	return s, ok
+	s, source := c.lookupNamedSymbol(name)
+	return s, source != Missing
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
@@ -1580,7 +1753,7 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 
 // freeTemporarySymbol frees one temporary symbol if it owns heap data.
 func (c *Compiler) freeTemporarySymbol(sym *Symbol, loadName string) {
-	if sym.Borrowed {
+	if sym.Borrowed || !typeNeedsCleanup(sym.Type) {
 		return
 	}
 	derefed := c.derefIfPointer(sym, loadName)
@@ -2053,7 +2226,9 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := c.FuncNameMangled
 	c.FuncNameMangled = sig.Mangled
+	c.pushParamAliases()
 	retVal, hasDirectRet := c.compileFuncBlock(template, sig, retStruct, function)
+	c.popParamAliases()
 	c.FuncNameMangled = savedFuncNameMangled
 
 	if hasDirectRet {
@@ -2092,42 +2267,55 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 	return retPtrs
 }
 
-func (c *Compiler) processDirectOutputs(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
-	retPtrs := make([]*Symbol, len(fn.Outputs))
+func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature, function llvm.Value) *Symbol {
+	seedParamIndex := sig.ABI.DirectReturnSeedParamIndex()
+	if index != 0 || seedParamIndex < 0 {
+		return c.makeZeroValue(outType)
+	}
+
+	return &Symbol{
+		Val:      function.Param(seedParamIndex),
+		Type:     sig.ABI.Return.DirectType,
+		FuncArg:  true,
+		Borrowed: true,
+		ReadOnly: true,
+	}
+}
+
+func (c *Compiler) processDirectOutputValues(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
+	outputs := make([]*Symbol, len(fn.Outputs))
+	for i := range fn.Outputs {
+		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.OutTypes[i], sig, function))
+		output.FuncArg = true
+		output.Borrowed = false
+		output.ReadOnly = false
+		outputs[i] = output
+	}
+	return outputs
+}
+
+func (c *Compiler) processDirectOutputSlots(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
+	outputs := make([]*Symbol, len(fn.Outputs))
 	for i, outIdent := range fn.Outputs {
 		outType := sig.FnInfo.OutTypes[i]
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), outIdent.Value)
-		retPtrs[i] = &Symbol{
+		outputs[i] = &Symbol{
 			Val:     ptr,
 			Type:    Ptr{Elem: outType},
 			FuncArg: true,
 		}
-
-		seed := c.makeZeroValue(outType)
-		if i == 0 {
-			seedParamIndex := sig.ABI.DirectReturnSeedParamIndex()
-			if seedParamIndex >= 0 {
-				seed = &Symbol{
-					Val:      function.Param(seedParamIndex),
-					Type:     sig.ABI.Return.DirectType,
-					FuncArg:  true,
-					Borrowed: true,
-					ReadOnly: true,
-				}
-			}
-		}
-		c.storeSymbolToSlot(retPtrs[i], seed, outType, outIdent.Value+"_seed")
+		c.storeSymbolToSlot(outputs[i], c.directOutputSeed(i, outType, sig, function), outType, outIdent.Value+"_seed")
 	}
-	return retPtrs
+	return outputs
 }
 
-func (c *Compiler) bindFuncOutputs(fn *ast.FuncStatement, retPtrs []*Symbol) {
+func (c *Compiler) bindFuncOutputs(fn *ast.FuncStatement, outputs []*Symbol) {
 	for i, outIdent := range fn.Outputs {
-		Put(c.Scopes, outIdent.Value, retPtrs[i])
+		Put(c.Scopes, outIdent.Value, outputs[i])
 	}
 }
 
-func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature, function llvm.Value, retPtrs []*Symbol) ([]*Symbol, []int) {
+func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature, function llvm.Value, outputNames []string) ([]*Symbol, []int) {
 	inputs := make([]*Symbol, len(sig.ParamTypes))
 	iterIndices := []int{}
 
@@ -2137,19 +2325,14 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 		paramVal := function.Param(sig.ABI.SourceFunctionParamIndex(i))
 
 		if sig.ABI.Params[i].Mode == ABIParamDirect {
-			paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(elemType), name)
-			c.createStore(paramVal, paramPtr, elemType)
-
-			slotPtr := paramPtr
-			aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i)
-			if aliasParamIndex >= 0 {
-				slotPtr = c.selectAliasedParamPtr(name, paramPtr, function.Param(aliasParamIndex), retPtrs)
-			}
 			inputs[i] = &Symbol{
-				Val:      slotPtr,
-				Type:     Ptr{Elem: elemType},
+				Val:      paramVal,
+				Type:     elemType,
 				FuncArg:  true,
 				ReadOnly: true,
+			}
+			if aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i); aliasParamIndex >= 0 {
+				c.bindParamAlias(name, inputs[i], function.Param(aliasParamIndex), outputNames)
 			}
 		} else {
 			inputs[i] = &Symbol{
@@ -2172,39 +2355,44 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 	return inputs, iterIndices
 }
 
-func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, retPtrs []*Symbol, function llvm.Value) {
+func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int) {
 	fa := &FuncArgs{
 		Inputs:      inputs,
-		Outputs:     retPtrs,
 		IterIndices: iterIndices,
 		Iters:       make(map[string]*Symbol),
 	}
-	c.funcLoopNest(template, fa, function, 0)
+	c.funcLoopNest(template, fa, 0)
 }
 
 func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignature, retStruct llvm.Type, function llvm.Value) (llvm.Value, bool) {
 	PushScope(&c.Scopes, FuncScope)
 	defer c.popScope()
 
-	var retPtrs []*Symbol
+	outputNames := identNames(template.Outputs)
+	inputs, iterIndices := c.processParams(template, sig, function, outputNames)
+
+	var outputs []*Symbol
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		retPtrs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.OutTypes)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.OutTypes)
+	} else if len(iterIndices) == 0 {
+		outputs = c.processDirectOutputValues(template, sig, function)
 	} else {
-		retPtrs = c.processDirectOutputs(template, sig, function)
+		// Loop-carried direct outputs still use slots in the current lowering.
+		// A future PHI-based output convergence refactor can remove this.
+		outputs = c.processDirectOutputSlots(template, sig, function)
 	}
-	inputs, iterIndices := c.processParams(template, sig, function, retPtrs)
-	c.bindFuncOutputs(template, retPtrs)
+	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
 		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
 	} else {
-		c.compileFuncIter(template, inputs, iterIndices, retPtrs, function)
+		c.compileFuncIter(template, inputs, iterIndices)
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		retVal := c.createLoad(retPtrs[0].Val, sig.ABI.Return.DirectType, template.Outputs[0].Value+"_ret")
-		return retVal, true
+		retSym, _ := c.localValSymbol(template.Outputs[0].Value, template.Outputs[0].Value+"_ret")
+		return retSym.Val, true
 	}
 
 	return llvm.Value{}, false
@@ -2236,7 +2424,7 @@ func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value,
 	})
 }
 
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, function llvm.Value, level int) {
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int) {
 	if level == len(fa.IterIndices) {
 		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
 		return
@@ -2254,7 +2442,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, function ll
 			Borrowed: true,
 			ReadOnly: false,
 		}
-		c.funcLoopNest(fn, fa, function, level+1)
+		c.funcLoopNest(fn, fa, level+1)
 	}
 
 	// Inputs are pointers, extract element type and load the value
@@ -2333,11 +2521,9 @@ func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
 	args := []callArg{}
 	for _, callArgExpr := range ce.Arguments {
 		if ident, ok := callArgExpr.(*ast.Identifier); ok {
-			sym, _ := c.getRawSymbol(ident.Value)
 			args = append(args, callArg{
-				Expr:   callArgExpr,
-				Name:   ident.Value,
-				Symbol: sym,
+				Expr: callArgExpr,
+				Name: ident.Value,
 			})
 			continue
 		}
@@ -2358,6 +2544,11 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 	for i, arg := range args {
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
+			if arg.Name != "" {
+				lowered, _ := c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
+				args[i].Lowered = lowered
+				continue
+			}
 			args[i].Lowered = c.derefIfPointer(sym, fmt.Sprintf("%s_arg_%d_load", funcName, i))
 			continue
 		}
@@ -2628,9 +2819,6 @@ func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llv
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
 	if sig.ABI.Return.HasSeedParam {
-		if directSeed == nil {
-			panic("internal: direct-return call missing seed value")
-		}
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}
