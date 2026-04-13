@@ -1,0 +1,9 @@
+res = 10
+res = Acc(res, 5:0:-1)
+res
+
+res = AccViaId(res, 5:0:-1)
+res
+
+fresh = Acc(10, 0:5:-1)
+fresh

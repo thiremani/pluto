@@ -159,6 +159,20 @@ res`
 	require.Contains(t, scriptIR, "phi i64", "loop-carried direct scalar outputs should converge through PHI state")
 }
 
+func TestDescendingRangeDirectOutputsStayValuesAcrossIterations(t *testing.T) {
+	code := `sum = Acc(a, x)
+    sum = a + x`
+	script := `res = 10
+res = Acc(res, 5:0:-1)
+res`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "loop_direct_output_values_desc", code, script)
+
+	require.NotContains(t, scriptIR, "%sum = alloca i64", "descending loop-carried direct scalar outputs should stay in SSA form by default")
+	require.Contains(t, scriptIR, "phi i64", "descending loop-carried direct scalar outputs should converge through PHI state")
+	require.Contains(t, scriptIR, "loop_cond_neg", "descending loop-carried direct scalar outputs should use the negative-step loop path")
+}
+
 func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
