@@ -2287,6 +2287,7 @@ func (c *Compiler) processDirectOutputValues(fn *ast.FuncStatement, sig *callSig
 	for i := range fn.Outputs {
 		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.OutTypes[i], sig, function))
 		output.FuncArg = true
+		output.Borrowed = false
 		output.ReadOnly = false
 		outputs[i] = output
 	}
