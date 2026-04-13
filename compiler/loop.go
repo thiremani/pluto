@@ -32,7 +32,7 @@ func rangeDriverSymbolInScopes(scopes []Scope[*Symbol], name string) (*Symbol, b
 	return nil, false
 }
 
-func (c *Compiler) lookupRangeDriverSymbol(name string) (*Symbol, bool) {
+func (c *Compiler) getRangeDriverSymbol(name string) (*Symbol, bool) {
 	if sym, ok := rangeDriverSymbolInScopes(c.Scopes, name); ok {
 		return sym, true
 	}
@@ -160,7 +160,7 @@ func (c *Compiler) iterOverLocalRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 		return
 	}
 
-	sym, ok := c.lookupRangeDriverSymbol(ri.Name)
+	sym, ok := c.getRangeDriverSymbol(ri.Name)
 	if !ok {
 		panic(fmt.Sprintf("internal: local range driver %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
