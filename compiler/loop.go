@@ -227,7 +227,7 @@ func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probe ast.Expressi
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
+func (c *Compiler) createLoopCore(r llvm.Value, seed llvm.Value, stateType llvm.Type, hasState bool, bodyGen func(iter llvm.Value, current llvm.Value) llvm.Value) llvm.Value {
 	start, stop, step := c.rangeComponents(r)
 	if step.IsUndef() || start.IsUndef() || stop.IsUndef() {
 		panic("range aggregate is undefined; likely received non-range value")
@@ -253,6 +253,11 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 	c.builder.SetInsertPointAtEnd(condPos)
 	iterPos := c.builder.CreatePHI(c.Context.Int64Type(), "iter_pos")
 	iterPos.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{preheader})
+	var statePos llvm.Value
+	if hasState {
+		statePos = c.builder.CreatePHI(stateType, "state_pos")
+		statePos.AddIncoming([]llvm.Value{seed}, []llvm.BasicBlock{preheader})
+	}
 	cmpPos := c.builder.CreateICmp(llvm.IntSLT, iterPos, stop, "loop_cond_pos")
 	c.builder.CreateCondBr(cmpPos, body, exit)
 
@@ -260,6 +265,11 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 	c.builder.SetInsertPointAtEnd(condNeg)
 	iterNeg := c.builder.CreatePHI(c.Context.Int64Type(), "iter_neg")
 	iterNeg.AddIncoming([]llvm.Value{start}, []llvm.BasicBlock{preheader})
+	var stateNeg llvm.Value
+	if hasState {
+		stateNeg = c.builder.CreatePHI(stateType, "state_neg")
+		stateNeg.AddIncoming([]llvm.Value{seed}, []llvm.BasicBlock{preheader})
+	}
 	cmpNeg := c.builder.CreateICmp(llvm.IntSGT, iterNeg, stop, "loop_cond_neg")
 	c.builder.CreateCondBr(cmpNeg, body, exit)
 
@@ -268,8 +278,14 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 	iter := c.builder.CreatePHI(c.Context.Int64Type(), "iter")
 	iter.AddIncoming([]llvm.Value{iterPos}, []llvm.BasicBlock{condPos})
 	iter.AddIncoming([]llvm.Value{iterNeg}, []llvm.BasicBlock{condNeg})
+	var current llvm.Value
+	if hasState {
+		current = c.builder.CreatePHI(stateType, "loop_state")
+		current.AddIncoming([]llvm.Value{statePos}, []llvm.BasicBlock{condPos})
+		current.AddIncoming([]llvm.Value{stateNeg}, []llvm.BasicBlock{condNeg})
+	}
 
-	bodyGen(iter)
+	nextState := bodyGen(iter, current)
 
 	latch := c.builder.GetInsertBlock()
 	iterNext := c.builder.CreateAdd(iter, step, "iter_next")
@@ -277,6 +293,28 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 
 	iterPos.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
 	iterNeg.AddIncoming([]llvm.Value{iterNext}, []llvm.BasicBlock{latch})
+	if hasState {
+		statePos.AddIncoming([]llvm.Value{nextState}, []llvm.BasicBlock{latch})
+		stateNeg.AddIncoming([]llvm.Value{nextState}, []llvm.BasicBlock{latch})
+	}
 
 	c.builder.SetInsertPointAtEnd(exit)
+	if !hasState {
+		return llvm.Value{}
+	}
+	finalState := c.builder.CreatePHI(stateType, "loop_final")
+	finalState.AddIncoming([]llvm.Value{statePos}, []llvm.BasicBlock{condPos})
+	finalState.AddIncoming([]llvm.Value{stateNeg}, []llvm.BasicBlock{condNeg})
+	return finalState
+}
+
+func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
+	c.createLoopCore(r, llvm.Value{}, llvm.Type{}, false, func(iter llvm.Value, _ llvm.Value) llvm.Value {
+		bodyGen(iter)
+		return llvm.Value{}
+	})
+}
+
+func (c *Compiler) createLoopState(r llvm.Value, seed llvm.Value, stateType llvm.Type, bodyGen func(iter llvm.Value, current llvm.Value) llvm.Value) llvm.Value {
+	return c.createLoopCore(r, seed, stateType, true, bodyGen)
 }

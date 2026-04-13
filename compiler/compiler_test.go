@@ -146,17 +146,17 @@ res`
 	require.NotContains(t, scriptIR, "store i64 %1, ptr %y", "conditional direct call should keep y in value form")
 }
 
-func TestRangeBearingDirectOutputsUseSlotsForLoopCarriedState(t *testing.T) {
-	code := `sum = AccFmt(a, x)
-    "count-a%n chars"
+func TestRangeBearingDirectOutputsStayValuesAcrossIterations(t *testing.T) {
+	code := `sum = Acc(a, x)
     sum = a + x`
 	script := `res = 10
-res = AccFmt(res, 1:4)
+res = Acc(res, 1:4)
 res`
 
-	scriptIR, _ := compileScriptAndCodeIR(t, "aliased_direct_output_promotion", code, script)
+	scriptIR, _ := compileScriptAndCodeIR(t, "loop_direct_output_values", code, script)
 
-	require.Contains(t, scriptIR, "%sum = alloca i64", "range-bearing direct returns still need an output slot for loop-carried state")
+	require.NotContains(t, scriptIR, "%sum = alloca i64", "loop-carried direct scalar outputs should stay in SSA form by default")
+	require.Contains(t, scriptIR, "phi i64", "loop-carried direct scalar outputs should converge through PHI state")
 }
 
 func TestInferCallParamTypesUsesScalarizedVariantWhenRangesConsumed(t *testing.T) {
