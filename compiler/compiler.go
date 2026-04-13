@@ -2268,14 +2268,9 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 }
 
 func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature, function llvm.Value) *Symbol {
-	seed := c.makeZeroValue(outType)
-	if index != 0 {
-		return seed
-	}
-
 	seedParamIndex := sig.ABI.DirectReturnSeedParamIndex()
-	if seedParamIndex < 0 {
-		return seed
+	if index != 0 || seedParamIndex < 0 {
+		return c.makeZeroValue(outType)
 	}
 
 	return &Symbol{
