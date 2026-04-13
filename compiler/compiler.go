@@ -376,15 +376,26 @@ func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) 
 	return c.valueSymbol(name, s, loadName), true
 }
 
-func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, bool, bool) {
+type symbolSource int
+
+const (
+	Missing symbolSource = iota
+	Local
+	Code
+)
+
+func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
 	if s, ok := Get(c.Scopes, name); ok {
-		return s, true, true
+		return s, Local
 	}
 	if c.CodeCompiler == nil {
-		return nil, false, false
+		return nil, Missing
 	}
 	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
-	return s, false, ok
+	if !ok {
+		return nil, Missing
+	}
+	return s, Code
 }
 
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
@@ -421,11 +432,11 @@ func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbo
 }
 
 func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
-	s, fromScope, ok := c.lookupNamedSymbol(name)
-	if !ok {
+	s, source := c.lookupNamedSymbol(name)
+	if source == Missing {
 		return nil, false
 	}
-	if fromScope {
+	if source == Local {
 		return c.valueSymbol(name, s, loadName), true
 	}
 	// CodeCompiler bindings are global code-scope values/slots, not active
@@ -1400,37 +1411,7 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 	}
 
 	if alias, ok := c.paramAliasFor(name, sym); ok {
-		paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
-		c.createStore(sym.Val, paramPtr, sym.Type)
-
-		slotPtr := paramPtr
-		if len(alias.OutputNames) > 0 {
-			outputPtrs := make([]*Symbol, len(alias.OutputNames))
-			for i, outputName := range alias.OutputNames {
-				outputSym, ok := Get(c.Scopes, outputName)
-				if !ok {
-					panic("internal: aliased output binding missing from scope: " + outputName)
-				}
-				if outputSym.Type.Kind() != PtrKind {
-					// Only params carry alias bindings, so promoting an output here
-					// cannot recurse through another param-alias entry.
-					outputSym = c.promoteToMemory(outputName)
-				}
-				outputPtrs[i] = outputSym
-			}
-			slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, outputPtrs)
-		}
-
-		ptr := &Symbol{
-			Val:      slotPtr,
-			Type:     Ptr{Elem: sym.Type},
-			FuncArg:  sym.FuncArg,
-			Borrowed: sym.Borrowed,
-			ReadOnly: sym.ReadOnly,
-		}
-		Put(c.Scopes, name, ptr)
-		c.clearParamAlias(name)
-		return ptr
+		return c.promoteAlias(name, sym, alias)
 	}
 
 	ptr, alreadyPtr := c.makePtr(name, sym)
@@ -1441,6 +1422,40 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
 	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
 	Put(c.Scopes, name, ptr)
+	return ptr
+}
+
+func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Symbol {
+	paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
+	c.createStore(sym.Val, paramPtr, sym.Type)
+
+	slotPtr := paramPtr
+	if len(alias.OutputNames) > 0 {
+		outputPtrs := make([]*Symbol, len(alias.OutputNames))
+		for i, outputName := range alias.OutputNames {
+			outputSym, ok := Get(c.Scopes, outputName)
+			if !ok {
+				panic("internal: aliased output binding missing from scope: " + outputName)
+			}
+			if outputSym.Type.Kind() != PtrKind {
+				// Only params carry alias bindings, so promoting an output here
+				// cannot recurse through another param-alias entry.
+				outputSym = c.promoteToMemory(outputName)
+			}
+			outputPtrs[i] = outputSym
+		}
+		slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, outputPtrs)
+	}
+
+	ptr := &Symbol{
+		Val:      slotPtr,
+		Type:     Ptr{Elem: sym.Type},
+		FuncArg:  sym.FuncArg,
+		Borrowed: sym.Borrowed,
+		ReadOnly: sym.ReadOnly,
+	}
+	Put(c.Scopes, name, ptr)
+	c.clearParamAlias(name)
 	return ptr
 }
 
@@ -1580,8 +1595,8 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
 func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
-	s, _, ok := c.lookupNamedSymbol(name)
-	return s, ok
+	s, source := c.lookupNamedSymbol(name)
+	return s, source != Missing
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
