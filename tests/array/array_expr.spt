@@ -36,6 +36,11 @@ arr3 = [1 2 3]
 res7 = arr3 + (10:13)
 "Array + Range: -res7"
 
+# Nested collection materializes before the outer ranged expression is finalized
+i = 0:5
+res7b = i + 1 + [i + 1]
+"Range + Collected Range: -res7b"
+
 # Range + Array
 res8 = (5:8) + arr3
 "Range + Array: -res8"

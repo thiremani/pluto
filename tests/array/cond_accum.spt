@@ -113,7 +113,8 @@ i = 0:5
 a, b, c = i < 3 [i], [i * 10], [5.2i]
 a, b, c
 
-# Multi-output with OOB literal cells zero-filled in sync
+# Tuple collectors are independent: OOB in one collector zero-fills there
+# without suppressing sibling collectors on the same iteration.
 data = [10 20]
 i = 0:4
 a, b = i < 3 [data[i]], [i]
@@ -215,7 +216,7 @@ i = 0:3
 stracc = i < 2 [sarr2[i]]
 stracc
 
-# Tuple accumulation with mixed value-level ranges
+# Tuple accumulation with mixed value-level ranges keeps each [] collector local.
 i = 0:3
 tc, td = i < 2 [0:2], [i]
 "TupleValueRangesA: -tc. TupleValueRangesB: -td"
@@ -269,6 +270,11 @@ pl = 0
 i = 0:3
 pl = i < 2 -(0:3)
 "RangePrefixRewrite: -pl"
+
+# Nested [] under a ranged condition still reopens the full driver range
+i = 0:5
+sameCondNested = i < 2 [i] + 100
+"SameDriverCondNested: -sameCondNested"
 
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]

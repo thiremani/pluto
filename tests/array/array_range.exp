@@ -9,7 +9,7 @@ NestedOp: 103
 DirectLiteral: [5 6 7 8][0:3]
 IdentRange: [10 20 30 40 50][0:5]
 PrefixRange: -40
-LiteralIterChain: [1 1 1 1 1 1]
+LiteralIterChain: [1 1 0 0 0 0]
 CallRangeRoot: 100
 CallRootVec: [20 40 60 80 100]
 CallRangeInfix: 104

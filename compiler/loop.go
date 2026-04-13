@@ -13,6 +13,35 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
+func rangeDriverSymbolInScopes(scopes []Scope[*Symbol], name string) (*Symbol, bool) {
+	for i := len(scopes) - 1; i >= 0; i-- {
+		sym, ok := scopes[i].Elems[name]
+		if ok {
+			driverType := sym.Type
+			if ptrType, ok := driverType.(Ptr); ok {
+				driverType = ptrType.Elem
+			}
+			if isRangeDriverType(driverType) {
+				return sym, true
+			}
+		}
+		if scopes[i].ScopeKind == FuncScope {
+			break
+		}
+	}
+	return nil, false
+}
+
+func (c *Compiler) lookupRangeDriverSymbol(name string) (*Symbol, bool) {
+	if sym, ok := rangeDriverSymbolInScopes(c.Scopes, name); ok {
+		return sym, true
+	}
+	if c.CodeCompiler == nil {
+		return nil, false
+	}
+	return rangeDriverSymbolInScopes(c.CodeCompiler.Compiler.Scopes, name)
+}
+
 // extractRangeSymbol loads a range aggregate from a symbol when needed.
 func (c *Compiler) extractRangeSymbol(sym *Symbol, name string) (*Symbol, bool) {
 	switch t := sym.Type.(type) {
@@ -119,6 +148,50 @@ func (c *Compiler) iterOverRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 	panic(fmt.Sprintf("internal: range driver %q expected Range or ArrayRange kind, got %s (should have been caught by type solver)", ri.Name, sym.Type.String()))
 }
 
+// iterOverLocalRangeInfo re-opens a collector-local range even when an outer
+// loop currently shadows the same name with a scalar iterator.
+func (c *Compiler) iterOverLocalRangeInfo(ri *RangeInfo, body func(*Symbol)) {
+	if ri.RangeLit != nil {
+		rangeType := Range{Iter: Int{Width: 64}}
+		rangeVal := c.ToRange(ri.RangeLit, rangeType)
+		c.iterOverRange(rangeType, rangeVal, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{Val: iter, Type: iterType, Borrowed: true})
+		})
+		return
+	}
+
+	sym, ok := c.lookupRangeDriverSymbol(ri.Name)
+	if !ok {
+		panic(fmt.Sprintf("internal: local range driver %q not found in scope (should have been caught by type solver)", ri.Name))
+	}
+
+	if rangeSym, ok := c.extractRangeSymbol(sym, ri.Name); ok {
+		c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{
+				Val:      iter,
+				Type:     iterType,
+				FuncArg:  rangeSym.FuncArg,
+				Borrowed: true,
+			})
+		})
+		return
+	}
+
+	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, ri.Name); ok {
+		c.iterOverArrayRange(arrRangeSym, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{
+				Val:      iter,
+				Type:     iterType,
+				FuncArg:  arrRangeSym.FuncArg,
+				Borrowed: true,
+			})
+		})
+		return
+	}
+
+	panic(fmt.Sprintf("internal: local range driver %q expected Range or ArrayRange kind, got %s (should have been caught by type solver)", ri.Name, sym.Type.String()))
+}
+
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
 func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 	ranges = c.pendingLoopRanges(ranges)
@@ -133,6 +206,31 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 			return
 		}
 		c.iterOverRangeInfo(ranges[i], func(iterSym *Symbol) {
+			PushScope(&c.Scopes, BlockScope)
+			Put(c.Scopes, ranges[i].Name, iterSym)
+			rec(i + 1)
+			c.popScope()
+		})
+	}
+	rec(0)
+}
+
+// withLocalLoopNest iterates a collector-local domain exactly as written in
+// the expression, even when the same driver names are shadowed by outer scalar
+// iterator bindings in the current scope.
+func (c *Compiler) withLocalLoopNest(ranges []*RangeInfo, body func()) {
+	if len(ranges) == 0 {
+		body()
+		return
+	}
+
+	var rec func(i int)
+	rec = func(i int) {
+		if i == len(ranges) {
+			body()
+			return
+		}
+		c.iterOverLocalRangeInfo(ranges[i], func(iterSym *Symbol) {
 			PushScope(&c.Scopes, BlockScope)
 			Put(c.Scopes, ranges[i].Name, iterSym)
 			rec(i + 1)

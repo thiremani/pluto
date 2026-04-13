@@ -299,9 +299,9 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Ex
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 
-	// If ArrayLiteral has ranges, use with-loops path which creates accumulator
-	// pendingLoopRanges will filter already-bound ranges to prevent double-looping
-	if len(info.Ranges) == 0 {
+	// Array literals materialize their own local range domain instead of
+	// inheriting the parent expression's outer loop shape.
+	if len(info.LocalRanges) == 0 {
 		return c.compileArrayLiteralImmediate(lit, info)
 	}
 
@@ -384,7 +384,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
 
-	c.withLoopNestVersioned(info.Ranges, lit, func() {
+	c.withLocalLoopNest(info.LocalRanges, func() {
 		for _, cell := range lit.Rows[0] {
 			c.compileAccumCell(acc, cell, elemType)
 		}
@@ -393,16 +393,16 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	return []*Symbol{c.ArrayAccResult(acc)}
 }
 
-// withValueRanges resolves the solver rewrite on a literal, then either
-// wraps body in a loop nest (when the literal has value-level ranges) or
-// calls it directly. The resolved literal is passed to body.
-func (c *Compiler) withValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
+// withActiveValueRanges resolves the solver rewrite on a literal, then either
+// wraps body in the currently active loop domain (used by top-level
+// accumulation under statement-driven iteration) or calls it directly.
+func (c *Compiler) withActiveValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
 	resolved, valueInfo := c.resolveArrayLiteralRewrite(lit)
-	if len(valueInfo.Ranges) == 0 {
+	if len(valueInfo.LocalRanges) == 0 {
 		body(resolved)
 		return
 	}
-	c.withLoopNest(valueInfo.Ranges, func() { body(resolved) })
+	c.withLoopNest(valueInfo.LocalRanges, func() { body(resolved) })
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes
@@ -435,7 +435,7 @@ func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
 // accumulator with per-cell bounds guards.
 func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
 	elemType := acc.ElemType
-	c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
+	c.withActiveValueRanges(lit, func(resolved *ast.ArrayLiteral) {
 		for _, cell := range resolved.Rows[0] {
 			c.compileAccumCell(acc, cell, elemType)
 		}
@@ -443,9 +443,9 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 }
 
 // appendArrayLiterals dispatches to the appropriate accumulation strategy for
-// top-level 1D array-literal outputs from ranged conditional lowering. Single
-// values use the direct per-cell path; tuples share one bounds guard so
-// remaining guarded write/skip decisions stay synchronized across outputs.
+// top-level 1D array-literal outputs from ranged conditional lowering.
+// Each collector owns its own local value-range domain and appends
+// independently of sibling array outputs.
 func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	if len(values) == 1 {
 		c.appendArrayLiteral(accs[0], values[0])
@@ -454,54 +454,12 @@ func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.A
 	c.appendTupleArrayLiterals(accs, values)
 }
 
-// appendTupleArrayLiterals compiles cells from multiple accumulating
-// array-literal outputs under a single shared bounds guard. Literal cells
-// preserve shape via zero-fill, while any remaining guarded failures still
-// keep the tuple outputs synchronized per iteration.
+// appendTupleArrayLiterals appends each accumulating array-literal output
+// independently. Local ranges belong to the collector that mentions them and
+// do not leak across sibling array outputs in the same tuple assignment.
 func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
-	c.pushBoundsGuard("tuple_bounds_guard")
-
-	accSyms := make([][]*Symbol, len(accs))
-	accCells := make([][]ast.Expression, len(accs))
 	for i, lit := range values {
-		c.withValueRanges(lit, func(resolved *ast.ArrayLiteral) {
-			for _, cell := range resolved.Rows[0] {
-				vals := c.compileArrayLiteralCellExpr(cell)
-				accSyms[i] = append(accSyms[i], c.derefIfPointer(vals[0], ""))
-				accCells[i] = append(accCells[i], cell)
-			}
-		})
-	}
-
-	if !c.withActiveBoundsGuard(
-		"tuple_ok",
-		"tuple_push",
-		"tuple_skip",
-		"tuple_cont",
-		func() { c.pushTupleCells(accs, accSyms, accCells) },
-		func() { c.freeTupleCells(accSyms, accCells) },
-	) {
-		c.pushTupleCells(accs, accSyms, accCells)
-	}
-	c.popBoundsGuard()
-}
-
-// pushTupleCells pushes all compiled tuple cells into their accumulators.
-func (c *Compiler) pushTupleCells(accs []*ArrayAccumulator, accSyms [][]*Symbol, accCells [][]ast.Expression) {
-	for i, acc := range accs {
-		for j, sym := range accSyms[i] {
-			_, isIdent := accCells[i][j].(*ast.Identifier)
-			c.pushAccumCellValue(acc, sym, !isIdent, acc.ElemType)
-		}
-	}
-}
-
-// freeTupleCells frees all compiled tuple cell temporaries.
-func (c *Compiler) freeTupleCells(accSyms [][]*Symbol, accCells [][]ast.Expression) {
-	for i := range accSyms {
-		for j := range accSyms[i] {
-			c.freeTemporary(accCells[i][j], []*Symbol{accSyms[i][j]})
-		}
+		c.appendArrayLiteral(accs[i], lit)
 	}
 }
 
