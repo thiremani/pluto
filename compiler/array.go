@@ -393,16 +393,17 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	return []*Symbol{c.ArrayAccResult(acc)}
 }
 
-// withActiveValueRanges resolves the solver rewrite on a literal, then either
-// wraps body in the currently active loop domain (used by top-level
-// accumulation under statement-driven iteration) or calls it directly.
-func (c *Compiler) withActiveValueRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
-	resolved, valueInfo := c.resolveArrayLiteralRewrite(lit)
-	if len(valueInfo.LocalRanges) == 0 {
+// withPendingLiteralRanges resolves the solver rewrite on a literal, then
+// iterates only the literal ranges still pending in the current outer context.
+// This is used by top-level ranged accumulation, not by collector-local
+// materialization.
+func (c *Compiler) withPendingLiteralRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
+	resolved, literalInfo := c.resolveArrayLiteralRewrite(lit)
+	if len(literalInfo.LocalRanges) == 0 {
 		body(resolved)
 		return
 	}
-	c.withLoopNest(valueInfo.LocalRanges, func() { body(resolved) })
+	c.withLoopNest(literalInfo.LocalRanges, func() { body(resolved) })
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes
@@ -435,7 +436,7 @@ func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
 // accumulator with per-cell bounds guards.
 func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiteral) {
 	elemType := acc.ElemType
-	c.withActiveValueRanges(lit, func(resolved *ast.ArrayLiteral) {
+	c.withPendingLiteralRanges(lit, func(resolved *ast.ArrayLiteral) {
 		for _, cell := range resolved.Rows[0] {
 			c.compileAccumCell(acc, cell, elemType)
 		}
