@@ -2294,21 +2294,6 @@ func (c *Compiler) processDirectOutputValues(fn *ast.FuncStatement, sig *callSig
 	return outputs
 }
 
-func (c *Compiler) processDirectOutputSlots(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
-	outputs := make([]*Symbol, len(fn.Outputs))
-	for i, outIdent := range fn.Outputs {
-		outType := sig.FnInfo.OutTypes[i]
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), outIdent.Value)
-		outputs[i] = &Symbol{
-			Val:     ptr,
-			Type:    Ptr{Elem: outType},
-			FuncArg: true,
-		}
-		c.storeSymbolToSlot(outputs[i], c.directOutputSeed(i, outType, sig, function), outType, outIdent.Value+"_seed")
-	}
-	return outputs
-}
-
 func (c *Compiler) bindFuncOutputs(fn *ast.FuncStatement, outputs []*Symbol) {
 	for i, outIdent := range fn.Outputs {
 		Put(c.Scopes, outIdent.Value, outputs[i])
@@ -2355,13 +2340,13 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 	return inputs, iterIndices
 }
 
-func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int) {
+func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol, iterIndices []int, currentOutput *Symbol) *Symbol {
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
 		Iters:       make(map[string]*Symbol),
 	}
-	c.funcLoopNest(template, fa, 0)
+	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
 
 func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignature, retStruct llvm.Type, function llvm.Value) (llvm.Value, bool) {
@@ -2375,19 +2360,21 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
 		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.OutTypes)
-	} else if len(iterIndices) == 0 {
-		outputs = c.processDirectOutputValues(template, sig, function)
 	} else {
-		// Loop-carried direct outputs still use slots in the current lowering.
-		// A future PHI-based output convergence refactor can remove this.
-		outputs = c.processDirectOutputSlots(template, sig, function)
+		outputs = c.processDirectOutputValues(template, sig, function)
 	}
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
 		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
+	} else if sig.ABI.Return.Mode == ABIReturnDirect {
+		// ABIReturnDirect is currently a single scalar output, so the seeded
+		// binding above becomes the initial loop-carried SSA state here.
+		finalOutput := c.compileFuncIter(template, inputs, iterIndices, outputs[0])
+		// Rebind the function output name to the final loop-carried SSA value.
+		Put(c.Scopes, template.Outputs[0].Value, finalOutput)
 	} else {
-		c.compileFuncIter(template, inputs, iterIndices)
+		c.compileFuncIter(template, inputs, iterIndices, nil)
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
@@ -2399,42 +2386,115 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 }
 
 func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func(llvm.Value, Type)) {
-	iterType := rangeType.Iter
-	c.createLoop(rangeVal, func(iter llvm.Value) {
+	c.iterOverRangeState(rangeType, rangeVal, nil, func(iter llvm.Value, iterType Type, _ *Symbol) *Symbol {
 		body(iter, iterType)
+		return nil
 	})
 }
 
 func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value, Type)) {
+	c.iterOverArrayRangeState(arrRangeSym, nil, func(iter llvm.Value, iterType Type, _ *Symbol) *Symbol {
+		body(iter, iterType)
+		return nil
+	})
+}
+
+func (c *Compiler) iterOverRangeState(rangeType Range, rangeVal llvm.Value, currentOutput *Symbol, body func(llvm.Value, Type, *Symbol) *Symbol) *Symbol {
+	iterType := rangeType.Iter
+	hasState := currentOutput != nil
+	stateType := llvm.Type{}
+	seed := llvm.Value{}
+	if hasState {
+		stateType = c.mapToLLVMType(currentOutput.Type)
+		seed = currentOutput.Val
+	}
+
+	finalVal := c.createLoopCore(rangeVal, seed, stateType, hasState, func(iter llvm.Value, current llvm.Value) llvm.Value {
+		var state *Symbol
+		if hasState {
+			state = GetCopy(currentOutput)
+			state.Val = current
+		}
+		next := body(iter, iterType, state)
+		if !hasState {
+			return llvm.Value{}
+		}
+		return next.Val
+	})
+
+	if !hasState {
+		return nil
+	}
+	finalOutput := GetCopy(currentOutput)
+	finalOutput.Val = finalVal
+	return finalOutput
+}
+
+func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *Symbol, body func(llvm.Value, Type, *Symbol) *Symbol) *Symbol {
 	arrRangeType := arrRangeSym.Type.(ArrayRange)
 	arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
 	rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
 	elemType := arrRangeType.Array.ColTypes[0]
-	c.createLoop(rangeVal, func(iter llvm.Value) {
+	hasState := currentOutput != nil
+	stateType := llvm.Type{}
+	seed := llvm.Value{}
+	if hasState {
+		stateType = c.mapToLLVMType(currentOutput.Type)
+		seed = currentOutput.Val
+	}
+
+	finalVal := c.createLoopCore(rangeVal, seed, stateType, hasState, func(iter llvm.Value, current llvm.Value) llvm.Value {
 		inBounds := c.arrayIndexInBounds(arraySym, elemType, iter)
+		preCheck := c.builder.GetInsertBlock()
 		iterBlock, contBlock := c.createIfCont(inBounds, "arr_iter_in_bounds", "arr_iter_cont")
 
 		c.builder.SetInsertPointAtEnd(iterBlock)
 		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
-		body(elemVal, elemType)
+		var state *Symbol
+		if hasState {
+			state = GetCopy(currentOutput)
+			state.Val = current
+		}
+		next := body(elemVal, elemType, state)
 		c.builder.CreateBr(contBlock)
 
+		iterEnd := c.builder.GetInsertBlock()
 		c.builder.SetInsertPointAtEnd(contBlock)
+		if !hasState {
+			return llvm.Value{}
+		}
+		// Array-range iteration can skip the body when the element is out of
+		// bounds, so merge the unchanged incoming state with the body-updated
+		// state before handing it back to createLoopCore.
+		merged := c.builder.CreatePHI(stateType, "arr_iter_state")
+		merged.AddIncoming([]llvm.Value{current}, []llvm.BasicBlock{preCheck})
+		merged.AddIncoming([]llvm.Value{next.Val}, []llvm.BasicBlock{iterEnd})
+		return merged
 	})
+
+	if !hasState {
+		return nil
+	}
+	finalOutput := GetCopy(currentOutput)
+	finalOutput.Val = finalVal
+	return finalOutput
 }
 
-func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int) {
+func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, currentOutput *Symbol) *Symbol {
 	if level == len(fa.IterIndices) {
-		c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
-		return
+		if currentOutput == nil {
+			c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
+			return nil
+		}
+		return c.compileDirectOutputIterBody(fn, fa.Iters, currentOutput)
 	}
 
 	paramIdx := fa.IterIndices[level]
 	input := fa.Inputs[paramIdx]
 	name := fn.Parameters[paramIdx].Value
 
-	next := func(iterVal llvm.Value, iterType Type) {
+	next := func(iterVal llvm.Value, iterType Type, current *Symbol) *Symbol {
 		fa.Iters[name] = &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
@@ -2442,18 +2502,19 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int) 
 			Borrowed: true,
 			ReadOnly: false,
 		}
-		c.funcLoopNest(fn, fa, level+1)
+		return c.funcLoopNest(fn, fa, level+1, current)
 	}
 
 	// Inputs are pointers, extract element type and load the value
 	elemType := input.Type.(Ptr).Elem
 	paramPtr := input.Val
+	var result *Symbol
 
 	switch elemType.Kind() {
 	case RangeKind:
 		rangeType := elemType.(Range)
 		rangeVal := c.createLoad(paramPtr, elemType, name+"_range")
-		c.iterOverRange(rangeType, rangeVal, next)
+		result = c.iterOverRangeState(rangeType, rangeVal, currentOutput, next)
 	case ArrayRangeKind:
 		arrRangeVal := c.createLoad(paramPtr, elemType, name+"_arrrange")
 		arrRangeSym := &Symbol{
@@ -2463,11 +2524,29 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int) 
 			Borrowed: true,
 			ReadOnly: true,
 		}
-		c.iterOverArrayRange(arrRangeSym, next)
+		result = c.iterOverArrayRangeState(arrRangeSym, currentOutput, next)
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
 	delete(fa.Iters, name)
+	return result
+}
+
+func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[string]*Symbol, currentOutput *Symbol) *Symbol {
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	PutBulk(c.Scopes, iters)
+	// Direct-return ABI is single-output today, so the loop body only needs the
+	// current scalar output binding for fn.Outputs[0].
+	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
+
+	for _, stmt := range fn.Body.Statements {
+		c.compileStatement(stmt)
+	}
+
+	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
+	return output
 }
 
 func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
