@@ -13,18 +13,17 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
-func rangeDriverSymbolInScopes(scopes []Scope[*Symbol], name string) (*Symbol, bool) {
+func preIterationSymbol(scopes []Scope[*Symbol], name string) (*Symbol, bool) {
 	for i := len(scopes) - 1; i >= 0; i-- {
+		if scopes[i].ScopeKind == IterScope {
+			continue
+		}
+
 		sym, ok := scopes[i].Elems[name]
 		if ok {
-			driverType := sym.Type
-			if ptrType, ok := driverType.(Ptr); ok {
-				driverType = ptrType.Elem
-			}
-			if isRangeDriverType(driverType) {
-				return sym, true
-			}
+			return sym, true
 		}
+
 		if scopes[i].ScopeKind == FuncScope {
 			break
 		}
@@ -32,14 +31,17 @@ func rangeDriverSymbolInScopes(scopes []Scope[*Symbol], name string) (*Symbol, b
 	return nil, false
 }
 
-func (c *Compiler) getRangeDriverSymbol(name string) (*Symbol, bool) {
-	if sym, ok := rangeDriverSymbolInScopes(c.Scopes, name); ok {
+func (c *Compiler) getPreIterationSymbol(name string) (*Symbol, bool) {
+	if sym, ok := preIterationSymbol(c.Scopes, name); ok {
 		return sym, true
 	}
-	if c.CodeCompiler == nil {
-		return nil, false
+
+	if c.CodeCompiler != nil {
+		if sym, ok := preIterationSymbol(c.CodeCompiler.Compiler.Scopes, name); ok {
+			return sym, true
+		}
 	}
-	return rangeDriverSymbolInScopes(c.CodeCompiler.Compiler.Scopes, name)
+	return nil, false
 }
 
 // extractRangeSymbol loads a range aggregate from a symbol when needed.
@@ -160,9 +162,9 @@ func (c *Compiler) iterOverLocalRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 		return
 	}
 
-	sym, ok := c.getRangeDriverSymbol(ri.Name)
+	sym, ok := c.getPreIterationSymbol(ri.Name)
 	if !ok {
-		panic(fmt.Sprintf("internal: local range driver %q not found in scope (should have been caught by type solver)", ri.Name))
+		panic(fmt.Sprintf("internal: pre-iteration binding %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
 
 	if rangeSym, ok := c.extractRangeSymbol(sym, ri.Name); ok {
@@ -206,7 +208,7 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 			return
 		}
 		c.iterOverRangeInfo(ranges[i], func(iterSym *Symbol) {
-			PushScope(&c.Scopes, BlockScope)
+			PushIterScope(&c.Scopes)
 			Put(c.Scopes, ranges[i].Name, iterSym)
 			rec(i + 1)
 			c.popScope()
@@ -231,7 +233,7 @@ func (c *Compiler) withLocalLoopNest(ranges []*RangeInfo, body func()) {
 			return
 		}
 		c.iterOverLocalRangeInfo(ranges[i], func(iterSym *Symbol) {
-			PushScope(&c.Scopes, BlockScope)
+			PushIterScope(&c.Scopes)
 			Put(c.Scopes, ranges[i].Name, iterSym)
 			rec(i + 1)
 			c.popScope()

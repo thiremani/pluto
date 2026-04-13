@@ -2532,11 +2532,23 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	return result
 }
 
+func (c *Compiler) pushIterBindings(iters map[string]*Symbol) bool {
+	if len(iters) == 0 {
+		return false
+	}
+	PushIterScope(&c.Scopes)
+	PutBulk(c.Scopes, iters)
+	return true
+}
+
 func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[string]*Symbol, currentOutput *Symbol) *Symbol {
+	if c.pushIterBindings(iters) {
+		defer c.popScope()
+	}
+
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
-	PutBulk(c.Scopes, iters)
 	// Direct-return ABI is single-output today, so the loop body only needs the
 	// current scalar output binding for fn.Outputs[0].
 	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
@@ -2550,8 +2562,20 @@ func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[
 }
 
 func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
+	hasIterBindings := c.pushIterBindings(iters)
+	if hasIterBindings {
+		defer c.popScope()
+	}
+
+	if hasIterBindings {
+		// When iterators are active, keep ordinary body writes out of the
+		// iterator-shadow scope. Without iterators, reuse the caller's scope so
+		// function outputs and locals continue to update their existing slots.
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
+	}
+
 	PutBulk(c.Scopes, scalars)
-	PutBulk(c.Scopes, iters)
 
 	for _, stmt := range fn.Body.Statements {
 		c.compileStatement(stmt)
