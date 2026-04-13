@@ -411,10 +411,7 @@ func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias)
 			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
 			fmt.Sprintf("%s_alias_match_%d", name, i),
 		)
-		output, ok := c.localValSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
-		if !ok {
-			panic("internal: aliased output binding missing from scope: " + outputName)
-		}
+		output, _ := c.localValSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
 		aliasVal := c.coerceSymbolForType(output, sym.Type, fmt.Sprintf("%s_alias_value_%d", outputName, i))
 		value = c.builder.CreateSelect(match, aliasVal.Val, value, fmt.Sprintf("%s_alias_value_%d", name, i))
 	}
@@ -1433,10 +1430,7 @@ func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Sy
 	if len(alias.OutputNames) > 0 {
 		outputPtrs := make([]*Symbol, len(alias.OutputNames))
 		for i, outputName := range alias.OutputNames {
-			outputSym, ok := Get(c.Scopes, outputName)
-			if !ok {
-				panic("internal: aliased output binding missing from scope: " + outputName)
-			}
+			outputSym, _ := Get(c.Scopes, outputName)
 			if outputSym.Type.Kind() != PtrKind {
 				// Only params carry alias bindings, so promoting an output here
 				// cannot recurse through another param-alias entry.
@@ -1548,11 +1542,11 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 }
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
-	s, ok := c.namedValueSymbol(ident.Value, ident.Value+"_load")
-	if ok {
-		return s
+	s, source := c.lookupNamedSymbol(ident.Value)
+	if source == Local {
+		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
-	panic("internal: identifier missing from scope: " + ident.Value)
+	return c.derefIfPointer(s, ident.Value+"_load")
 }
 
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
@@ -2401,10 +2395,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	}
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		retSym, ok := c.localValSymbol(template.Outputs[0].Value, template.Outputs[0].Value+"_ret")
-		if !ok {
-			panic("internal: direct return output missing from scope: " + template.Outputs[0].Value)
-		}
+		retSym, _ := c.localValSymbol(template.Outputs[0].Value, template.Outputs[0].Value+"_ret")
 		return retSym.Val, true
 	}
 
@@ -2558,10 +2549,7 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
 			if arg.Name != "" {
-				lowered, ok := c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
-				if !ok {
-					panic("internal: direct call arg missing from scope: " + arg.Name)
-				}
+				lowered, _ := c.namedValueSymbol(arg.Name, fmt.Sprintf("%s_arg_%d_load", funcName, i))
 				args[i].Lowered = lowered
 				continue
 			}
@@ -2835,9 +2823,6 @@ func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llv
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
 	if sig.ABI.Return.HasSeedParam {
-		if directSeed == nil {
-			panic("internal: direct-return call missing seed value")
-		}
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}
