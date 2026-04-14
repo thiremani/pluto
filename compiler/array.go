@@ -301,7 +301,7 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 
 	// Array literals materialize their own local range domain instead of
 	// inheriting the parent expression's outer loop shape.
-	if len(info.LocalRanges) == 0 {
+	if len(info.CollectRanges) == 0 {
 		return c.compileArrayLiteralImmediate(lit, info)
 	}
 
@@ -384,7 +384,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
 
-	c.withLocalLoopNest(info.LocalRanges, func() {
+	c.withLocalLoopNest(info.CollectRanges, func() {
 		for _, cell := range lit.Rows[0] {
 			c.compileAccumCell(acc, cell, elemType)
 		}
@@ -399,11 +399,11 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 // materialization.
 func (c *Compiler) withPendingLiteralRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
 	resolved, literalInfo := c.resolveArrayLiteralRewrite(lit)
-	if len(literalInfo.LocalRanges) == 0 {
+	if len(literalInfo.CollectRanges) == 0 {
 		body(resolved)
 		return
 	}
-	c.withLoopNest(literalInfo.LocalRanges, func() { body(resolved) })
+	c.withLoopNest(literalInfo.CollectRanges, func() { body(resolved) })
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes

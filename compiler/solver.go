@@ -26,7 +26,7 @@ const (
 
 type ExprInfo struct {
 	Ranges               []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
-	LocalRanges          []*RangeInfo   // ranges owned and materialized internally by this expression (array literals)
+	CollectRanges        []*RangeInfo   // ranges owned and materialized internally by this expression's collector (array literals)
 	Rewrite              ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
 	ExprLen              int
 	OutTypes             []Type
@@ -387,7 +387,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	// Only 1D array literals are currently supported by the compiler.
 	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
 		info.Ranges = nil
-		info.LocalRanges = nil
+		info.CollectRanges = nil
 		info.Rewrite = al
 		return nil, al
 	}
@@ -415,17 +415,17 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 			Indices: cloneArrayIndices(al.Indices),
 		}
 		infoCopy := &ExprInfo{
-			OutTypes:    info.OutTypes,
-			ExprLen:     info.ExprLen,
-			LocalRanges: append([]*RangeInfo(nil), ranges...),
-			Rewrite:     newLit,
+			OutTypes:      info.OutTypes,
+			ExprLen:       info.ExprLen,
+			CollectRanges: append([]*RangeInfo(nil), ranges...),
+			Rewrite:       newLit,
 		}
 		ts.ExprCache[key(ts.FuncNameMangled, newLit)] = infoCopy
 		rew = newLit
 	}
 
 	info.Ranges = nil
-	info.LocalRanges = ranges
+	info.CollectRanges = ranges
 	info.HasRanges = false
 	info.Rewrite = rew
 
