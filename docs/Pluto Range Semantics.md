@@ -29,6 +29,38 @@ x = i + 1
 This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
 value, so `x = 5`.
 
+## Calls, Infix, And Prefix
+
+Calls, infix operators, and prefix operators all follow the same rule:
+they transform the current per-iteration values of their range drivers.
+They do not choose a special "base function" that owns the loop.
+
+Examples:
+
+```pluto
+i = 0:5
+x = Square(i)
+```
+
+This evaluates `Square` for each yielded `i` value, then the root assignment
+keeps the final result, so `x = 16`.
+
+```pluto
+i = 0:5
+x = i + 1
+```
+
+This yields `1, 2, 3, 4, 5` across the `i` stream and the root assignment keeps
+the final value, so `x = 5`.
+
+```pluto
+i = 0:5
+x = √(i + 1)
+```
+
+The infix expression first yields `1, 2, 3, 4, 5`, the prefix `√` is applied to
+each yielded value, and the root assignment keeps the final result.
+
 ## Comparisons, Skip, And Fallback
 
 Comparisons in value position are filters, not booleans.
@@ -69,6 +101,15 @@ res = i + 1 + [i + 1]
 `[i + 1]` first materializes `[1 2 3 4 5]`.
 The outer expression then iterates `i` and broadcasts over that array, giving
 `[6 7 8 9 10]` as the final value.
+
+Likewise:
+
+```pluto
+i = 0:5
+arr = [Square(i)]
+```
+
+collects the per-iteration results of `Square(i)` into `[0 1 4 9 16]`.
 
 ## Zero-Fill Inside `[]`
 

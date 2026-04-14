@@ -299,7 +299,7 @@ func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Ex
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 
-	// Array literals materialize their own local range domain instead of
+	// Array literals materialize their own collection domain instead of
 	// inheriting the parent expression's outer loop shape.
 	if len(info.CollectRanges) == 0 {
 		return c.compileArrayLiteralImmediate(lit, info)
@@ -384,7 +384,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
 
-	c.withLocalLoopNest(info.CollectRanges, func() {
+	c.withCollectLoopNest(info.CollectRanges, func() {
 		for _, cell := range lit.Rows[0] {
 			c.compileAccumCell(acc, cell, elemType)
 		}
@@ -395,7 +395,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 // withPendingLiteralRanges resolves the solver rewrite on a literal, then
 // iterates only the literal ranges still pending in the current outer context.
-// This is used by top-level ranged accumulation, not by collector-local
+// This is used by top-level ranged accumulation, not by internal collection
 // materialization.
 func (c *Compiler) withPendingLiteralRanges(lit *ast.ArrayLiteral, body func(*ast.ArrayLiteral)) {
 	resolved, literalInfo := c.resolveArrayLiteralRewrite(lit)

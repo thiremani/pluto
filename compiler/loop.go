@@ -156,9 +156,9 @@ func (c *Compiler) iterOverRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 	c.iterOverDriverSymbol(sym, ri.Name, body)
 }
 
-// iterOverLocalRangeInfo re-opens a collector-local range even when an outer
+// iterOverCollectRangeInfo re-opens a range used for collection even when an outer
 // loop currently shadows the same name with a scalar iterator.
-func (c *Compiler) iterOverLocalRangeInfo(ri *RangeInfo, body func(*Symbol)) {
+func (c *Compiler) iterOverCollectRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 	if ri.RangeLit != nil {
 		rangeType := Range{Iter: Int{Width: 64}}
 		rangeVal := c.ToRange(ri.RangeLit, rangeType)
@@ -198,10 +198,10 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 	rec(0)
 }
 
-// withLocalLoopNest iterates a collector-local domain exactly as written in
+// withCollectLoopNest iterates the collection domain exactly as written in
 // the expression, even when the same driver names are shadowed by outer scalar
 // iterator bindings in the current scope.
-func (c *Compiler) withLocalLoopNest(ranges []*RangeInfo, body func()) {
+func (c *Compiler) withCollectLoopNest(ranges []*RangeInfo, body func()) {
 	if len(ranges) == 0 {
 		body()
 		return
@@ -213,7 +213,7 @@ func (c *Compiler) withLocalLoopNest(ranges []*RangeInfo, body func()) {
 			body()
 			return
 		}
-		c.iterOverLocalRangeInfo(ranges[i], func(iterSym *Symbol) {
+		c.iterOverCollectRangeInfo(ranges[i], func(iterSym *Symbol) {
 			PushIterScope(&c.Scopes)
 			Put(c.Scopes, ranges[i].Name, iterSym)
 			rec(i + 1)
