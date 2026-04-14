@@ -63,9 +63,8 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs      []*Symbol          // lowered function inputs (range iterators remain pointer-backed)
-	IterIndices []int              // Indices of iterator params
-	Iters       map[string]*Symbol // Current iterator values during loop
+	Inputs      []*Symbol // lowered function inputs (range iterators remain pointer-backed)
+	IterIndices []int     // Indices of iterator params
 }
 
 type callArg struct {
@@ -2344,7 +2343,6 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
-		Iters:       make(map[string]*Symbol),
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2366,7 +2364,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
-		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
+		c.compileBlockWithArgs(template, nil)
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
@@ -2483,11 +2481,13 @@ func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *S
 
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, currentOutput *Symbol) *Symbol {
 	if level == len(fa.IterIndices) {
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
 		if currentOutput == nil {
-			c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
+			c.compileBlockWithArgs(fn, nil)
 			return nil
 		}
-		return c.compileDirectOutputIterBody(fn, fa.Iters, currentOutput)
+		return c.compileDirectOutputIterBody(fn, currentOutput)
 	}
 
 	paramIdx := fa.IterIndices[level]
@@ -2495,13 +2495,19 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	name := fn.Parameters[paramIdx].Value
 
 	next := func(iterVal llvm.Value, iterType Type, current *Symbol) *Symbol {
-		fa.Iters[name] = &Symbol{
+		iterSym := &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
 			FuncArg:  true,
 			Borrowed: true,
 			ReadOnly: false,
 		}
+		// Function iterator params mirror statement loops: each nested iterator
+		// level gets its own shadow scope, so pre-iteration lookup can peel back
+		// one level at a time structurally.
+		PushIterScope(&c.Scopes)
+		Put(c.Scopes, name, iterSym)
+		defer c.popScope()
 		return c.funcLoopNest(fn, fa, level+1, current)
 	}
 
@@ -2528,53 +2534,21 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
-	delete(fa.Iters, name)
 	return result
 }
 
-func (c *Compiler) pushIterBindings(iters map[string]*Symbol) bool {
-	if len(iters) == 0 {
-		return false
-	}
-	PushIterScope(&c.Scopes)
-	PutBulk(c.Scopes, iters)
-	return true
-}
-
-func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[string]*Symbol, currentOutput *Symbol) *Symbol {
-	if c.pushIterBindings(iters) {
-		defer c.popScope()
-	}
-
-	PushScope(&c.Scopes, BlockScope)
-	defer c.popScope()
-
+func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
 	// Direct-return ABI is single-output today, so the loop body only needs the
 	// current scalar output binding for fn.Outputs[0].
-	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
-
-	for _, stmt := range fn.Body.Statements {
-		c.compileStatement(stmt)
-	}
+	c.compileBlockWithArgs(fn, map[string]*Symbol{fn.Outputs[0].Value: currentOutput})
 
 	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
 	return output
 }
 
-func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
-	hasIterBindings := c.pushIterBindings(iters)
-	if hasIterBindings {
-		defer c.popScope()
-	}
-
-	if hasIterBindings {
-		// When iterators are active, keep ordinary body writes out of the
-		// iterator-shadow scope. Without iterators, reuse the caller's scope so
-		// function outputs and locals continue to update their existing slots.
-		PushScope(&c.Scopes, BlockScope)
-		defer c.popScope()
-	}
-
+// compileBlockWithArgs executes a function body in the writable scope prepared
+// by the caller, seeding any extra scalar bindings needed for that body entry.
+func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol) {
 	PutBulk(c.Scopes, scalars)
 
 	for _, stmt := range fn.Body.Statements {
