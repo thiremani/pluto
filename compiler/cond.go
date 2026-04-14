@@ -239,40 +239,27 @@ func (c *Compiler) compileCondAssignmentsWithGuard(tempNames []*ast.Identifier, 
 	c.finishAssignmentsWithGuard(tempNames, dest, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
 }
 
-func (c *Compiler) stageTempTypes(tempNames []*ast.Identifier) []Type {
-	types := make([]Type, len(tempNames))
-	for i, ident := range tempNames {
-		tempSym, ok := Get(c.Scopes, ident.Value)
-		if !ok {
-			panic(fmt.Sprintf("internal: conditional temp %q not found in scope", ident.Value))
-		}
-		ptrType, ok := tempSym.Type.(Ptr)
-		if !ok {
-			panic(fmt.Sprintf("internal: conditional temp %q is not pointer-backed", ident.Value))
-		}
-		types[i] = ptrType.Elem
-	}
-	return types
-}
-
 func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Identifier {
-	outTypes := c.stageTempTypes(dest)
 	tempNames := make([]*ast.Identifier, len(dest))
 	for i, ident := range dest {
+		commitTempSym, _ := Get(c.Scopes, ident.Value)
+		ptrType := commitTempSym.Type.(Ptr)
+		outType := ptrType.Elem
+
 		tempName := fmt.Sprintf("condstage_%s_%d", ident.Value, c.tmpCounter)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
 
-		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
-		tempSym := &Symbol{
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), tempName+".mem")
+		stageTempSym := &Symbol{
 			Val:      ptr,
-			Type:     Ptr{Elem: outTypes[i]},
+			Type:     Ptr{Elem: outType},
 			Borrowed: true,
 		}
-		seed := c.resolveDestSeed(ident, outTypes[i])
+		seed := c.resolveDestSeed(ident, outType)
 		seed = c.deepCopyIfNeeded(seed)
-		c.storeSymbolToSlot(tempSym, seed, outTypes[i], tempName+"_seed")
-		Put(c.Scopes, tempName, tempSym)
+		c.storeSymbolToSlot(stageTempSym, seed, outType, tempName+"_seed")
+		Put(c.Scopes, tempName, stageTempSym)
 		tempNames[i] = tempIdent
 	}
 	return tempNames
