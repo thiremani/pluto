@@ -38,12 +38,13 @@ j = 5:7
 x = (-i) + (-j)
 x
 
-# Prefix behaves like functions (iterate inside prefix)
+# Prefix still iterates its direct range operand.
 i = 0:5
 root_last = √i
 root_last
 
 i = 0:5
+# Collector-local [] materializes before the prefix sees the value.
 roots = √[i * i]
 roots
 

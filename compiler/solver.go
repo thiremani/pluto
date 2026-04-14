@@ -26,6 +26,7 @@ const (
 
 type ExprInfo struct {
 	Ranges               []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
+	CollectRanges        []*RangeInfo   // ranges owned and materialized internally by this expression's collector (array literals)
 	Rewrite              ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
 	ExprLen              int
 	OutTypes             []Type
@@ -380,17 +381,19 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 	return out
 }
 
-func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*RangeInfo, rew ast.Expression) {
+func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeInfo, ast.Expression) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
 	// Only 1D array literals are currently supported by the compiler.
 	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
 		info.Ranges = nil
+		info.CollectRanges = nil
 		info.Rewrite = al
 		return nil, al
 	}
 
 	row := al.Rows[0]
+	var ranges []*RangeInfo
 	changed := false
 	newRow := make([]ast.Expression, len(row))
 	for i, cell := range row {
@@ -403,7 +406,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*
 		}
 	}
 
-	rew = al
+	rew := ast.Expression(al)
 	if changed {
 		newLit := &ast.ArrayLiteral{
 			Token:   al.Token,
@@ -412,19 +415,21 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) (ranges []*
 			Indices: cloneArrayIndices(al.Indices),
 		}
 		infoCopy := &ExprInfo{
-			OutTypes: info.OutTypes,
-			ExprLen:  info.ExprLen,
-			Ranges:   append([]*RangeInfo(nil), ranges...),
-			Rewrite:  newLit,
+			OutTypes:      info.OutTypes,
+			ExprLen:       info.ExprLen,
+			CollectRanges: append([]*RangeInfo(nil), ranges...),
+			Rewrite:       newLit,
 		}
 		ts.ExprCache[key(ts.FuncNameMangled, newLit)] = infoCopy
 		rew = newLit
 	}
 
-	info.Ranges = ranges
+	info.Ranges = nil
+	info.CollectRanges = ranges
+	info.HasRanges = false
 	info.Rewrite = rew
 
-	return ranges, rew
+	return nil, rew
 }
 
 func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (ranges []*RangeInfo, rew ast.Expression) {
@@ -867,23 +872,19 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	if len(al.Headers) == 0 && len(al.Rows) == 1 {
 		colTypes := []Type{Unresolved{}}
 		row := al.Rows[0]
-		hasRanges := false
 		for col := 0; col < len(row); col++ {
 			cellT, ok := ts.typeCell(row[col], al.Tok())
 			if !ok {
 				continue
 			}
 			colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
-			// Propagate HasRanges from cells
-			if ts.ExprCache[key(ts.FuncNameMangled, row[col])].HasRanges {
-				hasRanges = true
-			}
 		}
 		// Length = number of elements in the row (for vectors)
 		arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
 
-		// Cache this expression's resolved type for the compiler
-		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: hasRanges}
+		// Array literals materialize their own internal ranges instead of
+		// propagating them upward into the parent expression's loop shape.
+		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
 	}
 	// unsupported as of now

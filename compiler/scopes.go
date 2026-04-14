@@ -9,6 +9,7 @@ type ScopeKind int
 const (
 	FuncScope ScopeKind = iota
 	BlockScope
+	IterScope
 )
 
 type Scope[T any] struct {
@@ -25,6 +26,10 @@ func NewScope[T any](sk ScopeKind) Scope[T] {
 
 func PushScope[T any](scopes *[]Scope[T], sk ScopeKind) {
 	*scopes = append(*scopes, NewScope[T](sk))
+}
+
+func PushIterScope[T any](scopes *[]Scope[T]) {
+	*scopes = append(*scopes, NewScope[T](IterScope))
 }
 
 func PopScope[T any](scopes *[]Scope[T]) {

@@ -13,6 +13,37 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
+func preIterationSymbol(scopes []Scope[*Symbol], name string) (*Symbol, bool) {
+	for i := len(scopes) - 1; i >= 0; i-- {
+		if scopes[i].ScopeKind == IterScope {
+			continue
+		}
+
+		sym, ok := scopes[i].Elems[name]
+		if ok {
+			return sym, true
+		}
+
+		if scopes[i].ScopeKind == FuncScope {
+			break
+		}
+	}
+	return nil, false
+}
+
+func (c *Compiler) getPreIterationSymbol(name string) (*Symbol, bool) {
+	if sym, ok := preIterationSymbol(c.Scopes, name); ok {
+		return sym, true
+	}
+
+	if c.CodeCompiler != nil {
+		if sym, ok := preIterationSymbol(c.CodeCompiler.Compiler.Scopes, name); ok {
+			return sym, true
+		}
+	}
+	return nil, false
+}
+
 // extractRangeSymbol loads a range aggregate from a symbol when needed.
 func (c *Compiler) extractRangeSymbol(sym *Symbol, name string) (*Symbol, bool) {
 	switch t := sym.Type.(type) {
@@ -53,6 +84,46 @@ func (c *Compiler) extractArrayRangeSymbol(sym *Symbol, name string) (*Symbol, b
 	return nil, false
 }
 
+func (c *Compiler) rangeAggregateFromSymbol(sym *Symbol, name string) llvm.Value {
+	if rangeSym, ok := c.extractRangeSymbol(sym, name); ok {
+		return rangeSym.Val
+	}
+
+	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
+		return c.builder.CreateExtractValue(arrRangeSym.Val, 1, name+"_range")
+	}
+
+	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+}
+
+func (c *Compiler) iterOverDriverSymbol(sym *Symbol, name string, body func(*Symbol)) {
+	if rangeSym, ok := c.extractRangeSymbol(sym, name); ok {
+		c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{
+				Val:      iter,
+				Type:     iterType,
+				FuncArg:  rangeSym.FuncArg,
+				Borrowed: true,
+			})
+		})
+		return
+	}
+
+	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
+		c.iterOverArrayRange(arrRangeSym, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{
+				Val:      iter,
+				Type:     iterType,
+				FuncArg:  arrRangeSym.FuncArg,
+				Borrowed: true,
+			})
+		})
+		return
+	}
+
+	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+}
+
 // rangeAggregateForRI builds the {start,stop,step} aggregate for a driver.
 // Named ArrayRange drivers contribute their underlying range component.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
@@ -64,16 +135,7 @@ func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	if !ok {
 		panic(fmt.Sprintf("internal: range driver %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
-
-	if rangeSym, ok := c.extractRangeSymbol(sym, ri.Name); ok {
-		return rangeSym.Val
-	}
-
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, ri.Name); ok {
-		return c.builder.CreateExtractValue(arrRangeSym.Val, 1, ri.Name+"_range")
-	}
-
-	panic(fmt.Sprintf("internal: range driver %q expected Range or ArrayRange kind, got %s (should have been caught by type solver)", ri.Name, sym.Type.String()))
+	return c.rangeAggregateFromSymbol(sym, ri.Name)
 }
 
 // iterOverRangeInfo iterates a single driver, binding its per-iteration scalar value.
@@ -91,32 +153,26 @@ func (c *Compiler) iterOverRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 	if !ok {
 		panic(fmt.Sprintf("internal: range driver %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
+	c.iterOverDriverSymbol(sym, ri.Name, body)
+}
 
-	if rangeSym, ok := c.extractRangeSymbol(sym, ri.Name); ok {
-		c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  rangeSym.FuncArg,
-				Borrowed: true,
-			})
+// iterOverCollectRangeInfo re-opens a range used for collection even when an outer
+// loop currently shadows the same name with a scalar iterator.
+func (c *Compiler) iterOverCollectRangeInfo(ri *RangeInfo, body func(*Symbol)) {
+	if ri.RangeLit != nil {
+		rangeType := Range{Iter: Int{Width: 64}}
+		rangeVal := c.ToRange(ri.RangeLit, rangeType)
+		c.iterOverRange(rangeType, rangeVal, func(iter llvm.Value, iterType Type) {
+			body(&Symbol{Val: iter, Type: iterType, Borrowed: true})
 		})
 		return
 	}
 
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, ri.Name); ok {
-		c.iterOverArrayRange(arrRangeSym, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  arrRangeSym.FuncArg,
-				Borrowed: true,
-			})
-		})
-		return
+	sym, ok := c.getPreIterationSymbol(ri.Name)
+	if !ok {
+		panic(fmt.Sprintf("internal: pre-iteration binding %q not found in scope (should have been caught by type solver)", ri.Name))
 	}
-
-	panic(fmt.Sprintf("internal: range driver %q expected Range or ArrayRange kind, got %s (should have been caught by type solver)", ri.Name, sym.Type.String()))
+	c.iterOverDriverSymbol(sym, ri.Name, body)
 }
 
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
@@ -133,7 +189,32 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 			return
 		}
 		c.iterOverRangeInfo(ranges[i], func(iterSym *Symbol) {
-			PushScope(&c.Scopes, BlockScope)
+			PushIterScope(&c.Scopes)
+			Put(c.Scopes, ranges[i].Name, iterSym)
+			rec(i + 1)
+			c.popScope()
+		})
+	}
+	rec(0)
+}
+
+// withCollectLoopNest iterates the collection domain exactly as written in
+// the expression, even when the same driver names are shadowed by outer scalar
+// iterator bindings in the current scope.
+func (c *Compiler) withCollectLoopNest(ranges []*RangeInfo, body func()) {
+	if len(ranges) == 0 {
+		body()
+		return
+	}
+
+	var rec func(i int)
+	rec = func(i int) {
+		if i == len(ranges) {
+			body()
+			return
+		}
+		c.iterOverCollectRangeInfo(ranges[i], func(iterSym *Symbol) {
+			PushIterScope(&c.Scopes)
 			Put(c.Scopes, ranges[i].Name, iterSym)
 			rec(i + 1)
 			c.popScope()

@@ -1,32 +1,28 @@
-# Test nested range: [i][j] iterates both i and j as outer loops
+# Nested collectors materialize their own range domain before outer indexing.
 i = 0:5
 j = 0:3
 
-# Nested loops: for i in 0:5, for j in 0:3
-# [i] is [current_i] (single element), [i][j] accesses index j
-# Only j=0 is valid, j>0 is OOB (returns 0)
-# Last iteration: i=4, j=2 -> [4][2] = 0 (OOB) -> Square(0) = 0
+# [i] materializes to [0 1 2 3 4], then [j] slices/indexes that array-range.
+# Last iteration for j is 2, so Square([0 1 2]) keeps the last value 4.
 nested = Square([i][j])
 "Square([i][j]): -nested"
 
-# Similar with SumSquares - both args are [i][j] style
+# Similar with SumSquares - both collectors materialize first, then the views iterate.
 k = 1:4
-# Last iteration: i=4, j=2, k=3
-# [4][2] = 0 (OOB), [4][3] = 0 (OOB)
-# SumSquares(0, 0) = 0 + 0 = 0
+# Last values are 2 and 3, so SumSquares = 2^2 + 3^2 = 13.
 sumNested = SumSquares([i][j], [i][k])
 "SumSquares([i][j], [i][k]): -sumNested"
 
-# Mix: first arg is bare range arr[m], second is stored array with expr index
+# Mix: first arg is bare range arr[m], second recollects [i] before indexing.
 arr = [10 20 30 40 50]
 m = 0:3
 n = 1:4
 arr2 = [i]
-# arr[m] is ArrayRange (loop inside), [i][n+0] loops outside giving 0
-# SumSquares(30, 3) = 900 + 0 = 900
+# arr[m] is ArrayRange (loop inside), [i][n+0] materializes [0 1 2 3 4] then indexes it.
+# SumSquares(30, 3) = 900 + 9 = 909
 mixedNested = SumSquares(arr[m], [i][n + 0])
 "SumSquares(arr[m], stored[n+0]): -mixedNested"
 
-# Below function should loop inside as both array ranges are direct
+# Stored top-level array materialization stays unchanged here.
 mixedNested2 = SumSquares(arr[m], arr2[n])
 "SumSquares(arr[m], arr2[n]): -mixedNested2"
