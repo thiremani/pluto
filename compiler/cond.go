@@ -664,19 +664,18 @@ func (c *Compiler) compileCondRangedIteration(
 		numOutputs := len(info.OutTypes)
 		exprCommitTempNames := commitTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
 		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
-		exprValues := []ast.Expression{expr}
 		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
 
 		stageAliases := c.aliasCondDests(exprDestNames, stageTempNames)
 		c.withLoopNest(info.Ranges, func() {
-			if c.valuesHaveCondExpr(exprValues) {
+			if c.hasCondExprInTree(expr) {
 				c.compileCondExprValue(expr, llvm.Value{}, func() {
-					c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, exprValues, guardPtr)
+					c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, []ast.Expression{expr}, guardPtr)
 				})
 				return
 			}
 
-			c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, exprValues, guardPtr)
+			c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, []ast.Expression{expr}, guardPtr)
 		})
 		c.restoreCondDests(stageAliases)
 
