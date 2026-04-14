@@ -178,6 +178,56 @@ arr = [i > 2 < 8]
 
 keeps the full array shape and zero-fills failed positions.
 
+## Statement Conditions And Tuples
+
+Statement conditions are shared across the whole assignment.
+They determine the admitted outer iteration domain for every output in the
+statement.
+
+Sibling RHS expressions do not share their local value drivers with each
+other.
+Each RHS adds only the extra drivers mentioned inside that expression.
+
+Examples:
+
+```pluto
+i = 0:3
+j = 0:2
+x, y = i < 2 [1], j
+```
+
+The statement condition `i < 2` is shared.
+`x` collects once for each admitted `i`, producing `[1 1]`.
+`y` uses its own local `j` driver inside that shared gate and ends with the
+final `j` value `1`.
+
+Likewise:
+
+```pluto
+i = 0:10
+j = 0:5
+x, y = i < 8, j > 2 i + 1, (i + j) < 10
+```
+
+The outer gate is `i < 8, j > 2`, so both outputs run only on admitted
+iterations.
+Inside that shared gate:
+
+- `x` uses only `i + 1`, so it ends with `8`
+- `y` applies its own value-position comparison and ends with `9`
+
+If a statement condition and an RHS expression mention the same driver name,
+the statement condition opens that outer loop first.
+Inside the RHS, the same name refers to the current scalar iterator value, not
+to a fresh nested loop.
+
+For non-collector tuple outputs, one admitted statement iteration is still one
+shared scalar update step.
+If one non-collector RHS hits an out-of-bounds failure on that iteration,
+sibling non-collector outputs keep their previous values for that same
+iteration.
+Top-level `[]` collectors still use their own local zero-fill rules for cells.
+
 ## Nested Collectors
 
 Nested collectors materialize before the surrounding expression continues.

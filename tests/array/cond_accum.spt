@@ -221,6 +221,40 @@ i = 0:3
 tc, td = i < 2 [0:2], [i]
 "TupleValueRangesA: -tc. TupleValueRangesB: -td"
 
+# Statement conditions are shared across tuple outputs, but sibling RHS
+# drivers stay local to the expression that mentions them.
+i = 0:3
+j = 0:2
+localLeakA, localLeakB = i < 2 [1], j
+"CondLocalDriversA: -localLeakA. CondLocalDriversB: -localLeakB"
+
+# When a statement condition and an RHS mention the same driver, the condition
+# opens the outer loop and the RHS sees the current scalar iterator value.
+i = 0:4
+j = 0:4
+sharedReuse = i < 3, j > 1 [i]
+"CondSharedReuse: -sharedReuse"
+
+# Statement-level conditions gate the whole tuple; value-position comparisons
+# still apply only to the expression that contains them.
+i = 0:10
+j = 0:5
+sharedTupleX, sharedTupleY = i < 8, j > 2 i + 1, (i + j) < 10
+"SharedTupleCondX: -sharedTupleX. SharedTupleCondY: -sharedTupleY"
+
+# Non-collector tuple outputs still share one admitted statement iteration:
+# an OOB scalar/indexed RHS keeps sibling scalar outputs at their prior value.
+data = [10 20]
+i = 0:4
+sharedBoundsX, sharedBoundsY = i < 4 data[i], i + 100
+"SharedBoundsTupleX: -sharedBoundsX. SharedBoundsTupleY: -sharedBoundsY"
+
+# The same shared-bounds rule must hold regardless of tuple order.
+data = [10 20]
+i = 0:4
+sharedBoundsFlipX, sharedBoundsFlipY = i < 4 i + 100, data[i]
+"SharedBoundsFlipX: -sharedBoundsFlipX. SharedBoundsFlipY: -sharedBoundsFlipY"
+
 # Mixed tuple: array literal accumulates while scalar keeps last true value
 i = 0:4
 ma, mb = i < 3 [i], i + 10
