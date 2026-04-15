@@ -36,6 +36,28 @@ arr3 = [1 2 3]
 res7 = arr3 + (10:13)
 "Array + Range: -res7"
 
+# Nested collection materializes before the outer ranged expression is finalized
+i = 0:5
+res7b = i + 1 + [i + 1]
+"Range + Collected Range: -res7b"
+
+# Nested constant collection uses the active outer stream before the outer
+# expression is finalized.
+i = 0:5
+res7c = i + [0]
+"Range + Collected Const: -res7c"
+
+# Extracting a collector requires reproducing the enclosing driver set.
+i = 0:5
+res7d = i + [0]
+yctx = i [0]
+res7e = i + yctx
+yplain = [0]
+res7f = i + yplain
+"Inline Collected Const: -res7d"
+"Extracted With Context: -res7e"
+"Extracted Without Context: -res7f"
+
 # Range + Array
 res8 = (5:8) + arr3
 "Range + Array: -res8"

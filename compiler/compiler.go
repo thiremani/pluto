@@ -63,9 +63,8 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs      []*Symbol          // lowered function inputs (range iterators remain pointer-backed)
-	IterIndices []int              // Indices of iterator params
-	Iters       map[string]*Symbol // Current iterator values during loop
+	Inputs      []*Symbol // lowered function inputs (range iterators remain pointer-backed)
+	IterIndices []int     // Indices of iterator params
 }
 
 type callArg struct {
@@ -1543,6 +1542,9 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, source := c.lookupNamedSymbol(ident.Value)
+	if source == Missing {
+		panic(fmt.Sprintf("internal: identifier %q not found during lowering", ident.Value))
+	}
 	if source == Local {
 		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
@@ -1804,15 +1806,20 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	// Mark as borrowed so cleanupScope skips them - values are returned via out.
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
-	leftRew := info.Rewrite.(*ast.InfixExpression).Left
-	rightRew := info.Rewrite.(*ast.InfixExpression).Right
+	rew := info.Rewrite.(*ast.InfixExpression)
+	preparedExpr, collectorTemps := c.prepareCollectorExpr(rew, info.Ranges, nil)
+	defer c.cleanupMaterializedCollectors(collectorTemps)
+	prepared := preparedExpr.(*ast.InfixExpression)
+
+	leftRew := prepared.Left
+	rightRew := prepared.Right
 	_, leftIsIdent := leftRew.(*ast.Identifier)
 	// CondScalar makes left-temp ownership branch-dependent (store on true,
 	// drop on false), so handle left temp cleanup inline per slot.
 	leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
-	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.InfixExpression), func() {
+	c.withLoopNestVersioned(info.Ranges, prepared, func() {
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
@@ -2077,11 +2084,15 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
+	preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.PrefixExpression), info.Ranges, nil)
+	defer c.cleanupMaterializedCollectors(collectorTemps)
+	prepared := preparedExpr.(*ast.PrefixExpression)
+
 	// Rewritten operand under tmp iters.
-	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
+	rightRew := prepared.Right
 
 	// Drive the loops and store into outputs each trip.
-	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.PrefixExpression), func() {
+	c.withLoopNestVersioned(info.Ranges, prepared, func() {
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
@@ -2344,7 +2355,6 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
-		Iters:       make(map[string]*Symbol),
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2366,7 +2376,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
-		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
+		c.compileBlockWithArgs(template, nil)
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
@@ -2483,11 +2493,13 @@ func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *S
 
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, currentOutput *Symbol) *Symbol {
 	if level == len(fa.IterIndices) {
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
 		if currentOutput == nil {
-			c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
+			c.compileBlockWithArgs(fn, nil)
 			return nil
 		}
-		return c.compileDirectOutputIterBody(fn, fa.Iters, currentOutput)
+		return c.compileDirectOutputIterBody(fn, currentOutput)
 	}
 
 	paramIdx := fa.IterIndices[level]
@@ -2495,13 +2507,16 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	name := fn.Parameters[paramIdx].Value
 
 	next := func(iterVal llvm.Value, iterType Type, current *Symbol) *Symbol {
-		fa.Iters[name] = &Symbol{
+		iterSym := &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
 			FuncArg:  true,
 			Borrowed: true,
 			ReadOnly: false,
 		}
+		PushScope(&c.Scopes, BlockScope)
+		Put(c.Scopes, name, iterSym)
+		defer c.popScope()
 		return c.funcLoopNest(fn, fa, level+1, current)
 	}
 
@@ -2528,30 +2543,22 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
-	delete(fa.Iters, name)
 	return result
 }
 
-func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[string]*Symbol, currentOutput *Symbol) *Symbol {
-	PushScope(&c.Scopes, BlockScope)
-	defer c.popScope()
-
-	PutBulk(c.Scopes, iters)
+func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
 	// Direct-return ABI is single-output today, so the loop body only needs the
 	// current scalar output binding for fn.Outputs[0].
-	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
-
-	for _, stmt := range fn.Body.Statements {
-		c.compileStatement(stmt)
-	}
+	c.compileBlockWithArgs(fn, map[string]*Symbol{fn.Outputs[0].Value: currentOutput})
 
 	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
 	return output
 }
 
-func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
+// compileBlockWithArgs executes a function body in the writable scope prepared
+// by the caller, seeding any extra scalar bindings needed for that body entry.
+func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol) {
 	PutBulk(c.Scopes, scalars)
-	PutBulk(c.Scopes, iters)
 
 	for _, stmt := range fn.Body.Statements {
 		c.compileStatement(stmt)
@@ -2720,7 +2727,9 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 		}
 		return c.makeZeroValue(outType)
 	})
-	rewCall := info.Rewrite.(*ast.CallExpression)
+	preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.CallExpression), info.Ranges, nil)
+	defer c.cleanupMaterializedCollectors(collectorTemps)
+	rewCall := preparedExpr.(*ast.CallExpression)
 
 	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
 		c.pushBoundsGuard("call_iter_bounds_guard")
@@ -2734,7 +2743,9 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 }
 
 func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
-	rewCall := info.Rewrite.(*ast.CallExpression)
+	preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.CallExpression), info.Ranges, nil)
+	defer c.cleanupMaterializedCollectors(collectorTemps)
+	rewCall := preparedExpr.(*ast.CallExpression)
 	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
 		// Scope bounds checks to this loop iteration: arguments can contain
 		// multiple array reads, and the call should execute only when all are
@@ -3065,7 +3076,12 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
-		rewCall := info.Rewrite.(*ast.CallExpression)
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
+
+		preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.CallExpression), info.Ranges, nil)
+		defer c.cleanupMaterializedCollectors(collectorTemps)
+		rewCall := preparedExpr.(*ast.CallExpression)
 		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
 			c.printAllExpressions(rewCall.Arguments)
 		})

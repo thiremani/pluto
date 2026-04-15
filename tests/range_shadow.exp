@@ -3,4 +3,4 @@ AddMul res is: 1234
 AddMul res with negative step is: 542
 AddMul res2 with array range arr[i] is: 123450
 AddMul res2 with array range negative step arr[j] is: 2030
-PendingRanges: [160 150 130 99 57 4]
+PendingRanges: [160 150 151 152 153 154 129 130 131 132 133 97 98 99 100 101 54 55 56 57 58 0 1 2 3 4]

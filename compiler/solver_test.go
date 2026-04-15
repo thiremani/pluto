@@ -608,7 +608,8 @@ res = [idx]`
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, arrLit)]
 	require.NotNil(t, info)
-	require.Len(t, info.Ranges, 1)
+	require.Empty(t, info.Ranges)
+	require.Len(t, info.CollectRanges, 1)
 	require.NotNil(t, info.Rewrite)
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
