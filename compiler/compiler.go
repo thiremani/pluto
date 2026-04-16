@@ -1819,7 +1819,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
 
 	// Build nested loops, storing final value
-	c.withLoopNestVersioned(info.Ranges, prepared, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{prepared}, func() {
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
@@ -2092,7 +2092,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	rightRew := prepared.Right
 
 	// Drive the loops and store into outputs each trip.
-	c.withLoopNestVersioned(info.Ranges, prepared, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{prepared}, func() {
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
@@ -2731,7 +2731,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 	defer c.cleanupMaterializedCollectors(collectorTemps)
 	rewCall := preparedExpr.(*ast.CallExpression)
 
-	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{rewCall}, func() {
 		c.pushBoundsGuard("call_iter_bounds_guard")
 		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
 			c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
@@ -2746,7 +2746,7 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 	preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.CallExpression), info.Ranges, nil)
 	defer c.cleanupMaterializedCollectors(collectorTemps)
 	rewCall := preparedExpr.(*ast.CallExpression)
-	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{rewCall}, func() {
 		// Scope bounds checks to this loop iteration: arguments can contain
 		// multiple array reads, and the call should execute only when all are
 		// in-bounds for this iteration.
@@ -3082,7 +3082,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.CallExpression), info.Ranges, nil)
 		defer c.cleanupMaterializedCollectors(collectorTemps)
 		rewCall := preparedExpr.(*ast.CallExpression)
-		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+		c.withLoopNestVersioned(info.Ranges, []ast.Expression{rewCall}, func() {
 			c.printAllExpressions(rewCall.Arguments)
 		})
 		return

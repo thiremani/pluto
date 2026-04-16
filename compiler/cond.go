@@ -525,8 +525,10 @@ func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, [
 // withCondRangeLoop sets up the shared loop+guard+branch scaffold used by
 // both accumulation and iteration paths: loop over all ranges, evaluate
 // conditions, branch on the combined result, and call body on the true path.
-func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, guardName, ifName, contName string, body func()) {
-	c.withLoopNest(allRanges, func() {
+// Probes cover every expression that can issue array accesses inside that loop
+// region, letting the affine fast path apply uniformly when it can be proven.
+func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, probes []ast.Expression, guardName, ifName, contName string, body func()) {
+	c.withLoopNestVersioned(allRanges, probes, func() {
 		if len(condExprs) == 0 {
 			body()
 			return
@@ -559,6 +561,10 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 	assignDests := []*ast.Identifier{}
 	assignOutTypes := []Type{}
 	assignCollectorTemps := []materializedCollector{}
+	// loopProbes collect every expression in the shared ranged-condition loop
+	// that can issue array accesses, so affine versioning can prove the whole
+	// region safe up front instead of only individual RHS shapes.
+	loopProbes := append([]ast.Expression{}, condExprs...)
 
 	accumLits := []*ast.ArrayLiteral{}
 	accumAccs := []*ArrayAccumulator{}
@@ -576,6 +582,8 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
 			accumDests = append(accumDests, accumDest)
 			accumOldValues = append(accumOldValues, c.captureOldValues([]*ast.Identifier{accumDest})[0])
+			resolvedLit, _ := c.resolveArrayLiteralRewrite(lit)
+			loopProbes = append(loopProbes, resolvedLit)
 			targetIdx += numOutputs
 			continue
 		}
@@ -589,6 +597,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			preparedExpr = expr
 		}
 		assignExprs = append(assignExprs, preparedExpr)
+		loopProbes = append(loopProbes, preparedExpr)
 		assignCollectorTemps = append(assignCollectorTemps, collectorTemps...)
 		for i := 0; i < numOutputs; i++ {
 			dest := stmt.Name[targetIdx+i]
@@ -606,7 +615,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		assignTempNames = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
 	}
 
-	c.withCondRangeLoop(condRanges, condExprs, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
+	c.withCondRangeLoop(condRanges, condExprs, loopProbes, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
 		c.compileCondRangedIteration(
 			assignExprs, assignDests, assignTempNames,
 			accumAccs, accumLits,

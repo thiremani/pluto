@@ -203,14 +203,14 @@ func (c *Compiler) isFastAffineAccess(expr *ast.ArrayRangeExpression) bool {
 	return ok
 }
 
-func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probe ast.Expression, body func()) {
+func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probes []ast.Expression, body func()) {
 	pending := c.pendingLoopRanges(ranges)
 	if len(pending) == 0 {
 		body()
 		return
 	}
 
-	guard, fastAccess, ok := c.affineVersioningGuard(probe, pending)
+	guard, fastAccess, ok := c.affineVersioningGuard(probes, pending)
 	if !ok {
 		c.withLoopNest(ranges, body)
 		return

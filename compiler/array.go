@@ -372,12 +372,19 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	return []*Symbol{s}
 }
 
+func (c *Compiler) withCollectorLoopNest(ranges []*RangeInfo, probe ast.Expression, condExprs []ast.Expression, body func()) {
+	probes := make([]ast.Expression, 0, len(condExprs)+1)
+	probes = append(probes, probe)
+	probes = append(probes, condExprs...)
+	c.withLoopNestVersioned(ranges, probes, body)
+}
+
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo, ranges []*RangeInfo, condExprs []ast.Expression) *Symbol {
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 	acc := c.NewArrayAccumulator(arr)
 
-	c.withLoopNest(ranges, func() {
+	c.withCollectorLoopNest(ranges, lit, condExprs, func() {
 		if len(condExprs) > 0 {
 			guardPtr := c.pushBoundsGuard("collect_cond_guard")
 			cond := c.evalConditions(condExprs, guardPtr)
@@ -935,7 +942,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	rew := preparedExpr.(*ast.ArrayRangeExpression)
 	output := outputs[0]
 
-	c.withLoopNestVersioned(info.Ranges, rew, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{rew}, func() {
 		arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 		// Source operands are temporary for each loop iteration in this path.
 		defer c.freeTemporary(rew.Array, []*Symbol{arraySym})

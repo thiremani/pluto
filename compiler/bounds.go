@@ -497,13 +497,15 @@ func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol,
 	return arraySym, arrType.ColTypes[0], true
 }
 
-func (c *Compiler) affineVersioningGuard(expr ast.Expression, ranges []*RangeInfo) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {
-	if expr == nil || len(ranges) == 0 {
+func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*RangeInfo) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {
+	if len(exprs) == 0 || len(ranges) == 0 {
 		return llvm.Value{}, nil, false
 	}
 
 	var accesses []*ast.ArrayRangeExpression
-	collectArrayIndexAccesses(expr, &accesses)
+	for _, expr := range exprs {
+		collectArrayIndexAccesses(expr, &accesses)
+	}
 	if len(accesses) == 0 {
 		return llvm.Value{}, nil, false
 	}

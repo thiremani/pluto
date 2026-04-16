@@ -47,6 +47,21 @@ i = 0:5
 res7c = i + [0]
 "Range + Collected Const: -res7c"
 
+# Collector loops still use affine fast-path lowering when the literal body
+# has provably in-bounds affine array accesses.
+arrAffine = [10 20 30 40 50]
+i = 0:4
+res7ca = [arrAffine[i + 1]]
+"Collected Affine Pos: -res7ca"
+
+j = 4:0:-1
+res7cb = [arrAffine[j - 1]]
+"Collected Affine Neg: -res7cb"
+
+k = 0:3
+res7cc = [arrAffine[2k + 1]]
+"Collected Affine OOB: -res7cc"
+
 # Extracting a collector requires reproducing the enclosing driver set.
 i = 0:5
 res7d = i + [0]
