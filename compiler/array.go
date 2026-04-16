@@ -411,11 +411,8 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, activeRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
 	collectRanges := mergeUses(activeRanges, info.CollectRanges)
-	if len(collectRanges) == 0 {
-		if len(condExprs) == 0 {
-			return c.compileArrayLiteralImmediate(lit, info)[0]
-		}
-		return c.compileArrayLiteralWithLoops(lit, info, activeRanges, condExprs)
+	if len(collectRanges) == 0 && len(condExprs) == 0 {
+		return c.compileArrayLiteralImmediate(lit, info)[0]
 	}
 	return c.compileArrayLiteralWithLoops(lit, info, collectRanges, condExprs)
 }
