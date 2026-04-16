@@ -56,4 +56,5 @@ RangePrefixRewrite: -2
 SameDriverCondNested: [100 101]
 SameDriverCondConst: [1 1 1]
 CapturedCollector: [0 0 0]. CapturedCollectorUse: [5 5 5]
+NestedCondCell: [3 4 5]
 [9 9]

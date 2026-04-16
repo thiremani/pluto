@@ -323,6 +323,12 @@ captured = i > 2 [0]
 capturedUse = i + captured
 "CapturedCollector: -captured. CapturedCollectorUse: -capturedUse"
 
+# Recursive collection inside a top-level collector still respects the admitted
+# outer stream when the surrounding cell expression keeps depending on it.
+i = 0:6
+nestedCondCell = i > 2 [([0] + i)[0]]
+"NestedCondCell: -nestedCondCell"
+
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
 p = 0:3

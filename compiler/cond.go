@@ -583,6 +583,9 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		baseExpr := c.compileTreeFor(expr)
 		preparedExpr, collectorTemps := c.prepareCollectorExpr(baseExpr, mergeUses(condRanges, info.Ranges), condExprs)
 		if preparedExpr == baseExpr {
+			// No nested collectors were materialized, so keep the original AST
+			// node as the assignment root and let ordinary compileExpression
+			// rewrite lookup route through the solver-owned cache entry.
 			preparedExpr = expr
 		}
 		assignExprs = append(assignExprs, preparedExpr)

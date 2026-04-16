@@ -58,6 +58,27 @@ res7f = i + yplain
 "Extracted With Context: -res7e"
 "Extracted Without Context: -res7f"
 
+# Recursive collection inside an array cell materializes the inner collector
+# before the outer array cell expression continues.
+i = 0:5
+res7g = [([i] + 100)[0]]
+"Nested Cell Collector Collapse: -res7g"
+
+# If the surrounding cell expression still depends on the outer iterator after
+# inner materialization, the outer array literal collects that remaining stream.
+i = 0:5
+res7h = [([0] + i)[0]]
+"Nested Cell Collector Stream: -res7h"
+
+# Deeper nesting: an inner collector materializes through array arithmetic and
+# indexing before the outer collector continues with its own remaining drivers.
+dataNested = [10 20 30 40 50]
+i = 0:3
+j = 0:2
+k = 1:4
+res7i = i + [j + ([dataNested[i] + k][0])]
+"Deep Nested Cell Collector: -res7i"
+
 # Range + Array
 res8 = (5:8) + arr3
 "Range + Array: -res8"
