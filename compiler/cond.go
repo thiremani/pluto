@@ -57,27 +57,36 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 // only that subset before branching.
 func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	if ce, ok := expr.(*ast.CallExpression); ok {
-		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		if info != nil {
-			paramTypes := c.inferCallParamTypes(info)
-			mangled := Mangle(c.MangledPath, ce.Function.Value, paramTypes)
-			if fnInfo := c.FuncCache[mangled]; fnInfo != nil {
-				abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
-				for i, arg := range ce.Arguments {
-					if abi.Params[i].Mode != ABIParamIndirect {
-						continue
-					}
-					ident, ok := arg.(*ast.Identifier)
-					if !ok {
-						continue
-					}
-					out[ident.Value] = struct{}{}
-				}
-			}
-		}
+		c.addPromotableArgs(ce, out)
 	}
 	for _, child := range ast.ExprChildren(expr) {
 		c.collectPromotableCallArgIdentifiers(child, out)
+	}
+}
+
+func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]struct{}) {
+	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	if info == nil {
+		return
+	}
+
+	paramTypes := c.inferCallParamTypes(info)
+	mangled := Mangle(c.MangledPath, ce.Function.Value, paramTypes)
+	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		return
+	}
+
+	abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
+	for i, arg := range ce.Arguments {
+		if abi.Params[i].Mode != ABIParamIndirect {
+			continue
+		}
+		ident, ok := arg.(*ast.Identifier)
+		if !ok {
+			continue
+		}
+		out[ident.Value] = struct{}{}
 	}
 }
 
