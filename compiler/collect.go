@@ -106,12 +106,9 @@ func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, activeRang
 	body(prepared)
 }
 
-func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, extraProbes []ast.Expression, body func(T)) {
+func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
 	withPreparedCollectorExpr(c, expr, activeRanges, condExprs, func(prepared T) {
-		probes := make([]ast.Expression, 0, len(extraProbes)+1)
-		probes = append(probes, prepared)
-		probes = append(probes, extraProbes...)
-		c.withLoopNestVersioned(activeRanges, probes, func() {
+		c.withLoopNestVersioned(activeRanges, []ast.Expression{prepared}, func() {
 			body(prepared)
 		})
 	})
