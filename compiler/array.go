@@ -934,12 +934,9 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	defer c.popScope()
 
 	outputs := c.makeOutputs(dest, info.OutTypes, true)
-	preparedExpr, collectorTemps := c.prepareCollectorExpr(info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil)
-	defer c.cleanupMaterializedCollectors(collectorTemps)
-	rew := preparedExpr.(*ast.ArrayRangeExpression)
 	output := outputs[0]
 
-	c.withLoopNestVersioned(info.Ranges, []ast.Expression{rew}, func() {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
 		arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 		// Source operands are temporary for each loop iteration in this path.
 		defer c.freeTemporary(rew.Array, []*Symbol{arraySym})
