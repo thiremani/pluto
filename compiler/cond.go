@@ -305,6 +305,90 @@ func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames
 	}
 }
 
+type condStageGroup struct {
+	commitTempNames []*ast.Identifier
+	stageTempNames  []*ast.Identifier
+}
+
+func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifier, stageTempNames []*ast.Identifier, guardPtr llvm.Value) {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	stageAliases := c.aliasCondDests(dest, stageTempNames)
+	defer c.restoreCondDests(stageAliases)
+
+	c.withLoopNest(info.Ranges, func() {
+		if c.hasCondExprInTree(expr) {
+			c.compileCondExprValue(expr, llvm.Value{}, func() {
+				c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+			})
+			return
+		}
+
+		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+	})
+}
+
+func (c *Compiler) stageCondRangedAssignments(
+	assignExprs []ast.Expression,
+	assignDests []*ast.Identifier,
+	commitTempNames []*ast.Identifier,
+	guardPtr llvm.Value,
+) []condStageGroup {
+	assignTargetIdx := 0
+	groups := make([]condStageGroup, 0, len(assignExprs))
+
+	allAliases := c.aliasCondDests(assignDests, commitTempNames)
+	defer c.restoreCondDests(allAliases)
+
+	for _, expr := range assignExprs {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+		exprCommitTempNames := commitTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
+		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
+
+		c.stageCondRangedExpr(expr, exprDestNames, stageTempNames, guardPtr)
+		groups = append(groups, condStageGroup{
+			commitTempNames: exprCommitTempNames,
+			stageTempNames:  stageTempNames,
+		})
+		assignTargetIdx += numOutputs
+	}
+
+	return groups
+}
+
+func (c *Compiler) finalizeCondRangedStages(groups []condStageGroup, guardPtr llvm.Value) {
+	if !c.stmtBoundsUsed() {
+		for _, group := range groups {
+			c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
+			DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
+		}
+		return
+	}
+
+	c.withGuardedBranch(
+		guardPtr,
+		"cond_stage_ok",
+		"cond_stage_write",
+		"cond_stage_skip",
+		"cond_stage_cont",
+		func() {
+			for _, group := range groups {
+				c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
+			}
+		},
+		func() {
+			for _, group := range groups {
+				c.freeStageTempOutputs(group.stageTempNames)
+			}
+		},
+	)
+
+	for _, group := range groups {
+		DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
+	}
+}
+
 // compileCondStatement lowers:
 //
 //	name = cond value
@@ -662,69 +746,13 @@ func (c *Compiler) compileCondRangedIteration(
 	// private stage temp. Only after every RHS (and any top-level collectors)
 	// has run do we branch on the final shared guard and either commit all stage
 	// temps into the real conditional commit temps or discard them all together.
-	assignTargetIdx := 0
-	stagedCommitTempGroups := make([][]*ast.Identifier, 0, len(assignExprs))
-	stagedTempGroups := make([][]*ast.Identifier, 0, len(assignExprs))
-	allAliases := c.aliasCondDests(assignDests, commitTempNames)
-	for _, expr := range assignExprs {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		numOutputs := len(info.OutTypes)
-		exprCommitTempNames := commitTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
-		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
-		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
-
-		stageAliases := c.aliasCondDests(exprDestNames, stageTempNames)
-		c.withLoopNest(info.Ranges, func() {
-			if c.hasCondExprInTree(expr) {
-				c.compileCondExprValue(expr, llvm.Value{}, func() {
-					c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, []ast.Expression{expr}, guardPtr)
-				})
-				return
-			}
-
-			c.compileCondAssignmentsWithGuard(stageTempNames, exprDestNames, []ast.Expression{expr}, guardPtr)
-		})
-		c.restoreCondDests(stageAliases)
-
-		stagedCommitTempGroups = append(stagedCommitTempGroups, exprCommitTempNames)
-		stagedTempGroups = append(stagedTempGroups, stageTempNames)
-		assignTargetIdx += numOutputs
-	}
-	c.restoreCondDests(allAliases)
+	stageGroups := c.stageCondRangedAssignments(assignExprs, assignDests, commitTempNames, guardPtr)
 
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
 
-	if !c.stmtBoundsUsed() {
-		for i, stageTempNames := range stagedTempGroups {
-			c.commitStageTempOutputs(stagedCommitTempGroups[i], stageTempNames)
-			DeleteBulk(c.Scopes, tempNamesToStrings(stageTempNames))
-		}
-		return
-	}
-
-	c.withGuardedBranch(
-		guardPtr,
-		"cond_stage_ok",
-		"cond_stage_write",
-		"cond_stage_skip",
-		"cond_stage_cont",
-		func() {
-			for i, stageTempNames := range stagedTempGroups {
-				c.commitStageTempOutputs(stagedCommitTempGroups[i], stageTempNames)
-			}
-		},
-		func() {
-			for _, stageTempNames := range stagedTempGroups {
-				c.freeStageTempOutputs(stageTempNames)
-			}
-		},
-	)
-
-	for _, stageTempNames := range stagedTempGroups {
-		DeleteBulk(c.Scopes, tempNamesToStrings(stageTempNames))
-	}
+	c.finalizeCondRangedStages(stageGroups, guardPtr)
 }
 
 // compileCondExprStatement handles let statements that have conditional
