@@ -1,4 +1,4 @@
-Square([i][j]): 16
-SumSquares([i][j], [i][k]): 0
-SumSquares(arr[m], stored[n+0]): 0
+Square([i][j]): 4
+SumSquares([i][j], [i][k]): 13
+SumSquares(arr[m], stored[n+0]): 909
 SumSquares(arr[m], arr2[n]): 909

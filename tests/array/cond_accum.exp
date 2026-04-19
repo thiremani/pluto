@@ -38,7 +38,12 @@ SeedLit: 88
 77
 StrView: c
 [a b]
-TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 0 1 1]
+TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 1]
+CondLocalDriversA: [1 1]. CondLocalDriversB: 1
+CondSharedReuse: [0 0 1 1 2 2]
+SharedTupleCondX: 8. SharedTupleCondY: 9
+SharedBoundsTupleX: 20. SharedBoundsTupleY: 101
+SharedBoundsFlipX: 101. SharedBoundsFlipY: 20
 MixedLastWinsA: [0 1 2]. MixedLastWinsB: 12
 MixedCondExprA: [0 1 2]. MixedCondExprB: 1
 NeverCondExprA: [0 1 2]. NeverCondExprB: 0
@@ -48,4 +53,10 @@ InterleavedAccumX: [10 1 20 20 1 30 30 1 40 40 1 0]. InterleavedAccumY: 3. Inter
 CondLastWins: 2
 12
 RangePrefixRewrite: -2
+SameDriverCondNested: [100 101]
+SameDriverCondConst: [1 1 1]
+CondCollectorAffine: [20 30 40 50]
+CondCollectorAffineOOB: [20 40]
+CapturedCollector: [0 0 0]. CapturedCollectorUse: [5 5 5]
+NestedCondCell: [3 4 5]
 [9 9]

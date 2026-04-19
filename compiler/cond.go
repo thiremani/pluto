@@ -57,27 +57,36 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 // only that subset before branching.
 func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	if ce, ok := expr.(*ast.CallExpression); ok {
-		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		if info != nil {
-			paramTypes := c.inferCallParamTypes(info)
-			mangled := Mangle(c.MangledPath, ce.Function.Value, paramTypes)
-			if fnInfo := c.FuncCache[mangled]; fnInfo != nil {
-				abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
-				for i, arg := range ce.Arguments {
-					if abi.Params[i].Mode != ABIParamIndirect {
-						continue
-					}
-					ident, ok := arg.(*ast.Identifier)
-					if !ok {
-						continue
-					}
-					out[ident.Value] = struct{}{}
-				}
-			}
-		}
+		c.addPromotableArgs(ce, out)
 	}
 	for _, child := range ast.ExprChildren(expr) {
 		c.collectPromotableCallArgIdentifiers(child, out)
+	}
+}
+
+func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]struct{}) {
+	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	if info == nil {
+		return
+	}
+
+	paramTypes := c.inferCallParamTypes(info)
+	mangled := Mangle(c.MangledPath, ce.Function.Value, paramTypes)
+	fnInfo := c.FuncCache[mangled]
+	if fnInfo == nil {
+		return
+	}
+
+	abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
+	for i, arg := range ce.Arguments {
+		if abi.Params[i].Mode != ABIParamIndirect {
+			continue
+		}
+		ident, ok := arg.(*ast.Identifier)
+		if !ok {
+			continue
+		}
+		out[ident.Value] = struct{}{}
 	}
 }
 
@@ -239,6 +248,156 @@ func (c *Compiler) compileCondAssignmentsWithGuard(tempNames []*ast.Identifier, 
 	c.finishAssignmentsWithGuard(tempNames, dest, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
 }
 
+func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Identifier {
+	tempNames := make([]*ast.Identifier, len(dest))
+	for i, ident := range dest {
+		commitTempSym, _ := Get(c.Scopes, ident.Value)
+		ptrType := commitTempSym.Type.(Ptr)
+		outType := ptrType.Elem
+
+		tempName := fmt.Sprintf("condstage_%s_%d", ident.Value, c.tmpCounter)
+		c.tmpCounter++
+		tempIdent := &ast.Identifier{Value: tempName}
+
+		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), tempName+".mem")
+		stageTempSym := &Symbol{
+			Val:      ptr,
+			Type:     Ptr{Elem: outType},
+			Borrowed: true,
+		}
+		seed := c.resolveDestSeed(ident, outType)
+		seed = c.deepCopyIfNeeded(seed)
+		c.storeSymbolToSlot(stageTempSym, seed, outType, tempName+"_seed")
+		Put(c.Scopes, tempName, stageTempSym)
+		tempNames[i] = tempIdent
+	}
+	return tempNames
+}
+
+// Stage temps own their seeded copy or compiled temporary outright. Discarding
+// a failed staged write therefore frees only stage-local storage and never
+// touches the destination slot's current value.
+func (c *Compiler) freeStageTempOutputs(tempNames []*ast.Identifier) {
+	for _, ident := range tempNames {
+		tempSym, ok := Get(c.Scopes, ident.Value)
+		if !ok {
+			continue
+		}
+		c.freeSymbolValue(c.valueSymbol(ident.Value, tempSym, ident.Value+"_stage_discard"), ident.Value+"_stage_discard")
+	}
+}
+
+func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
+	for i, ident := range dest {
+		stageSym, ok := Get(c.Scopes, stageTempNames[i].Value)
+		if !ok {
+			panic(fmt.Sprintf("internal: staged conditional temp %q not found in scope", stageTempNames[i].Value))
+		}
+		destSym, ok := Get(c.Scopes, ident.Value)
+		if !ok {
+			panic(fmt.Sprintf("internal: conditional temp %q not found in scope", ident.Value))
+		}
+
+		oldValue := c.valueSymbol(ident.Value, destSym, ident.Value+"_stage_old")
+		ptrType, ok := destSym.Type.(Ptr)
+		if !ok {
+			panic(fmt.Sprintf("internal: conditional temp %q is not pointer-backed", ident.Value))
+		}
+
+		stagedValue := c.valueSymbol(stageTempNames[i].Value, stageSym, stageTempNames[i].Value+"_stage_final")
+		c.storeSymbolToSlot(destSym, stagedValue, ptrType.Elem, ident.Value+"_stage_commit")
+
+		if c.skipBorrowedOldValueFree(oldValue) {
+			continue
+		}
+		c.freeSymbolValue(oldValue, ident.Value+"_stage_old")
+	}
+}
+
+type condStageGroup struct {
+	commitTempNames []*ast.Identifier
+	stageTempNames  []*ast.Identifier
+}
+
+func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifier, stageTempNames []*ast.Identifier, guardPtr llvm.Value) {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	stageAliases := c.aliasCondDests(dest, stageTempNames)
+	defer c.restoreCondDests(stageAliases)
+
+	c.withLoopNest(info.Ranges, func() {
+		if c.hasCondExprInTree(expr) {
+			c.compileCondExprValue(expr, llvm.Value{}, func() {
+				c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+			})
+			return
+		}
+
+		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+	})
+}
+
+func (c *Compiler) stageCondRangedAssignments(
+	assignExprs []ast.Expression,
+	assignDests []*ast.Identifier,
+	commitTempNames []*ast.Identifier,
+	guardPtr llvm.Value,
+) []condStageGroup {
+	assignTargetIdx := 0
+	groups := make([]condStageGroup, 0, len(assignExprs))
+
+	allAliases := c.aliasCondDests(assignDests, commitTempNames)
+	defer c.restoreCondDests(allAliases)
+
+	for _, expr := range assignExprs {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		numOutputs := len(info.OutTypes)
+		exprCommitTempNames := commitTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
+		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
+		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
+
+		c.stageCondRangedExpr(expr, exprDestNames, stageTempNames, guardPtr)
+		groups = append(groups, condStageGroup{
+			commitTempNames: exprCommitTempNames,
+			stageTempNames:  stageTempNames,
+		})
+		assignTargetIdx += numOutputs
+	}
+
+	return groups
+}
+
+func (c *Compiler) finalizeCondRangedStages(groups []condStageGroup, guardPtr llvm.Value) {
+	if !c.stmtBoundsUsed() {
+		for _, group := range groups {
+			c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
+			DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
+		}
+		return
+	}
+
+	c.withGuardedBranch(
+		guardPtr,
+		"cond_stage_ok",
+		"cond_stage_write",
+		"cond_stage_skip",
+		"cond_stage_cont",
+		func() {
+			for _, group := range groups {
+				c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
+			}
+		},
+		func() {
+			for _, group := range groups {
+				c.freeStageTempOutputs(group.stageTempNames)
+			}
+		},
+	)
+
+	for _, group := range groups {
+		DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
+	}
+}
+
 // compileCondStatement lowers:
 //
 //	name = cond value
@@ -284,7 +443,7 @@ func (c *Compiler) valuesHaveCondExpr(values []ast.Expression) bool {
 // CondScalar set (a scalar comparison in value position).
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info.HasCondScalar() {
+	if info != nil && info.HasCondScalar() {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
@@ -456,24 +615,13 @@ func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, [
 	return ranges, condExprs
 }
 
-// mergeValueRanges merges value-level ranges from all value expressions
-// into a base set of ranges. Returns the combined set.
-func (c *Compiler) mergeValueRanges(base []*RangeInfo, values []ast.Expression) []*RangeInfo {
-	all := base
-	for _, expr := range values {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if len(info.Ranges) > 0 {
-			all = mergeUses(all, info.Ranges)
-		}
-	}
-	return all
-}
-
 // withCondRangeLoop sets up the shared loop+guard+branch scaffold used by
 // both accumulation and iteration paths: loop over all ranges, evaluate
 // conditions, branch on the combined result, and call body on the true path.
-func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, guardName, ifName, contName string, body func()) {
-	c.withLoopNest(allRanges, func() {
+// Probes cover every expression that can issue array accesses inside that loop
+// region, letting the affine fast path apply uniformly when it can be proven.
+func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Expression, probes []ast.Expression, guardName, ifName, contName string, body func()) {
+	c.withLoopNestVersioned(allRanges, probes, func() {
 		if len(condExprs) == 0 {
 			body()
 			return
@@ -493,16 +641,23 @@ func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Exp
 	})
 }
 
-// compileCondRangedStatement lowers ranged conditions with per-output behavior.
-// This intentionally gives mixed ranged tuples split semantics: top-level 1D
-// array literals accumulate across true iterations, while all other outputs use
-// normal conditional iteration (last value wins).
+// compileCondRangedStatement lowers ranged statement conditions.
+// Statement conditions are shared across the whole assignment. They determine
+// the outer admitted iteration domain, while each RHS expression keeps any
+// extra local drivers to itself inside that shared gate. Top-level 1D array
+// literals accumulate across admitted iterations; all other outputs use normal
+// conditional iteration (last value wins).
 func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
 	assignExprs := []ast.Expression{}
 	assignDests := []*ast.Identifier{}
 	assignOutTypes := []Type{}
+	assignCollectorTemps := []materializedCollector{}
+	// loopProbes collect every expression in the shared ranged-condition loop
+	// that can issue array accesses, so affine versioning can prove the whole
+	// region safe up front instead of only individual RHS shapes.
+	loopProbes := append([]ast.Expression{}, condExprs...)
 
 	accumLits := []*ast.ArrayLiteral{}
 	accumAccs := []*ArrayAccumulator{}
@@ -520,11 +675,23 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
 			accumDests = append(accumDests, accumDest)
 			accumOldValues = append(accumOldValues, c.captureOldValues([]*ast.Identifier{accumDest})[0])
+			resolvedLit, _ := c.resolveArrayLiteralRewrite(lit)
+			loopProbes = append(loopProbes, resolvedLit)
 			targetIdx += numOutputs
 			continue
 		}
 
-		assignExprs = append(assignExprs, expr)
+		baseExpr := c.compileTreeFor(expr)
+		preparedExpr, collectorTemps := c.prepareCollectorExpr(baseExpr, mergeUses(condRanges, info.Ranges), condExprs)
+		if preparedExpr == baseExpr {
+			// No nested collectors were materialized, so keep the original AST
+			// node as the assignment root and let ordinary compileExpression
+			// rewrite lookup route through the solver-owned cache entry.
+			preparedExpr = expr
+		}
+		assignExprs = append(assignExprs, preparedExpr)
+		loopProbes = append(loopProbes, preparedExpr)
+		assignCollectorTemps = append(assignCollectorTemps, collectorTemps...)
 		for i := 0; i < numOutputs; i++ {
 			dest := stmt.Name[targetIdx+i]
 			assignDests = append(assignDests, dest)
@@ -534,18 +701,16 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 	}
 
 	hasAssigns := len(assignDests) > 0
-	assignHasCondExpr := c.valuesHaveCondExpr(assignExprs)
+	defer c.cleanupMaterializedCollectors(assignCollectorTemps)
 
 	var assignTempNames []*ast.Identifier
 	if hasAssigns {
 		assignTempNames = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
 	}
 
-	allRanges := c.mergeValueRanges(condRanges, stmt.Value)
-
-	c.withCondRangeLoop(allRanges, condExprs, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
+	c.withCondRangeLoop(condRanges, condExprs, loopProbes, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
 		c.compileCondRangedIteration(
-			assignExprs, assignDests, assignTempNames, assignHasCondExpr,
+			assignExprs, assignDests, assignTempNames,
 			accumAccs, accumLits,
 		)
 	})
@@ -567,12 +732,11 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 
 // compileCondRangedIteration runs inside the per-iteration body of
 // compileCondRangedStatement. It compiles scalar assignments under a
-// bounds guard and appends array literal cells to accumulators.
+// shared bounds guard and appends array literal cells to accumulators.
 func (c *Compiler) compileCondRangedIteration(
 	assignExprs []ast.Expression,
 	assignDests []*ast.Identifier,
-	assignTempNames []*ast.Identifier,
-	assignHasCondExpr bool,
+	commitTempNames []*ast.Identifier,
 	accumAccs []*ArrayAccumulator,
 	accumLits []*ast.ArrayLiteral,
 ) {
@@ -585,36 +749,19 @@ func (c *Compiler) compileCondRangedIteration(
 	guardPtr := c.pushBoundsGuard("cond_value_guard")
 	defer c.popBoundsGuard()
 
-	// Assigns without cond-exprs: compile values, optionally append accums,
-	// then finish with guard. Values and accums share the same bounds guard
-	// so OOB in either skips the whole iteration.
-	if !assignHasCondExpr {
-		assignOldValues, assignSyms, assignRhsNames, assignResCounts := c.compileCondAssignmentValues(assignTempNames, assignDests, assignExprs)
-		if len(accumLits) > 0 {
-			c.appendArrayLiterals(accumAccs, accumLits)
-		}
-		c.finishAssignmentsWithGuard(assignTempNames, assignDests, assignExprs, assignOldValues, assignSyms, assignRhsNames, assignResCounts, guardPtr)
-		return
-	}
-
-	// Assigns with cond-exprs: each expression is wrapped individually
-	// so false cond-exprs preserve the old value.
-	assignTargetIdx := 0
-	for _, expr := range assignExprs {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		numOutputs := len(info.OutTypes)
-		exprTempNames := assignTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
-		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
-		exprValues := []ast.Expression{expr}
-		c.compileCondExprValue(expr, llvm.Value{}, func() {
-			c.compileCondAssignmentsWithGuard(exprTempNames, exprDestNames, exprValues, guardPtr)
-		})
-		assignTargetIdx += numOutputs
-	}
+	// The outer statement condition admits one iteration here, but sibling RHS
+	// expressions may still fail bounds checks later in that same admitted step.
+	// To keep tuple order from becoming observable, each RHS first writes into a
+	// private stage temp. Only after every RHS (and any top-level collectors)
+	// has run do we branch on the final shared guard and either commit all stage
+	// temps into the real conditional commit temps or discard them all together.
+	stageGroups := c.stageCondRangedAssignments(assignExprs, assignDests, commitTempNames, guardPtr)
 
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
+
+	c.finalizeCondRangedStages(stageGroups, guardPtr)
 }
 
 // compileCondExprStatement handles let statements that have conditional

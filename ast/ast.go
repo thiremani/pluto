@@ -549,3 +549,124 @@ func ExprChildren(expr Expression) []Expression {
 	}
 	return nil
 }
+
+// RewriteExpr rewrites the immediate child expressions of expr using rewrite.
+// If every child is unchanged, the original expr is returned.
+func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expression {
+	switch e := expr.(type) {
+	case *InfixExpression:
+		left := rewrite(e.Left)
+		right := rewrite(e.Right)
+		if left == e.Left && right == e.Right {
+			return expr
+		}
+		return &InfixExpression{
+			Token:    e.Token,
+			Left:     left,
+			Operator: e.Operator,
+			Right:    right,
+		}
+	case *PrefixExpression:
+		right := rewrite(e.Right)
+		if right == e.Right {
+			return expr
+		}
+		return &PrefixExpression{
+			Token:    e.Token,
+			Operator: e.Operator,
+			Right:    right,
+		}
+	case *CallExpression:
+		args, changed := rewriteExprSlice(e.Arguments, rewrite)
+		if !changed {
+			return expr
+		}
+		return &CallExpression{
+			Token:     e.Token,
+			Function:  e.Function,
+			Arguments: args,
+		}
+	case *ArrayLiteral:
+		rowsChanged := false
+		rows := make([][]Expression, len(e.Rows))
+		for i, row := range e.Rows {
+			rewrittenRow, changed := rewriteExprSlice(row, rewrite)
+			rows[i] = rewrittenRow
+			rowsChanged = rowsChanged || changed
+		}
+		if !rowsChanged {
+			return expr
+		}
+		return &ArrayLiteral{
+			Token:   e.Token,
+			Headers: append([]string(nil), e.Headers...),
+			Rows:    rows,
+			Indices: maps.Clone(e.Indices),
+		}
+	case *StructLiteral:
+		row, changed := rewriteExprSlice(e.Row, rewrite)
+		if !changed {
+			return expr
+		}
+		return &StructLiteral{
+			Token:   e.Token,
+			Headers: append([]token.Token(nil), e.Headers...),
+			Row:     row,
+		}
+	case *ArrayRangeExpression:
+		arrayExpr := rewrite(e.Array)
+		rangeExpr := rewrite(e.Range)
+		if arrayExpr == e.Array && rangeExpr == e.Range {
+			return expr
+		}
+		return &ArrayRangeExpression{
+			Token: e.Token,
+			Array: arrayExpr,
+			Range: rangeExpr,
+		}
+	case *DotExpression:
+		left := rewrite(e.Left)
+		if left == e.Left {
+			return expr
+		}
+		return &DotExpression{
+			Token: e.Token,
+			Left:  left,
+			Field: e.Field,
+		}
+	case *RangeLiteral:
+		start := rewrite(e.Start)
+		stop := rewrite(e.Stop)
+		step := e.Step
+		if e.Step != nil {
+			step = rewrite(e.Step)
+		}
+		if start == e.Start && stop == e.Stop && step == e.Step {
+			return expr
+		}
+		return &RangeLiteral{
+			Token: e.Token,
+			Start: start,
+			Stop:  stop,
+			Step:  step,
+		}
+	default:
+		return expr
+	}
+}
+
+func rewriteExprSlice(src []Expression, rewrite func(Expression) Expression) ([]Expression, bool) {
+	if len(src) == 0 {
+		return nil, false
+	}
+	out := make([]Expression, len(src))
+	changed := false
+	for i, expr := range src {
+		out[i] = rewrite(expr)
+		changed = changed || out[i] != expr
+	}
+	if !changed {
+		return src, false
+	}
+	return out, true
+}
