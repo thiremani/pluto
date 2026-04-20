@@ -427,7 +427,7 @@ func (c *Compiler) withPendingLiteralRanges(lit *ast.ArrayLiteral, body func(*as
 		body(resolved)
 		return
 	}
-	c.withLoopNest(literalInfo.CollectRanges, func() { body(resolved) })
+	c.withLoopNestVersioned(literalInfo.CollectRanges, []ast.Expression{resolved}, func() { body(resolved) })
 }
 
 // compileAccumCell compiles one cell under a fresh bounds guard and pushes
