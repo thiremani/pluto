@@ -472,17 +472,6 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 // Each collector owns its own local value-range domain and appends
 // independently of sibling array outputs.
 func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
-	if len(values) == 1 {
-		c.appendArrayLiteral(accs[0], values[0])
-		return
-	}
-	c.appendTupleArrayLiterals(accs, values)
-}
-
-// appendTupleArrayLiterals appends each accumulating array-literal output
-// independently. Local ranges belong to the collector that mentions them and
-// do not leak across sibling array outputs in the same tuple assignment.
-func (c *Compiler) appendTupleArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
 	for i, lit := range values {
 		c.appendArrayLiteral(accs[i], lit)
 	}
