@@ -15,9 +15,6 @@ type materializedCollector struct {
 }
 
 func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo {
-	if info == nil {
-		return nil
-	}
 	infoCopy := *info
 	infoCopy.Rewrite = rewrite
 	return &infoCopy
