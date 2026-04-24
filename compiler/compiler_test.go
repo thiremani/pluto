@@ -821,6 +821,19 @@ x`
 	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for pending collector IR")
 }
 
+func TestAffineStagedConditionalLocalRangeUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:2
+j = 0:4
+x = i < 2 arr[j + 1] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_cond_stage_local_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in staged conditional local range IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for staged conditional local range IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for staged conditional local range IR")
+}
+
 func TestAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
 	code := `out = pick(arr, i)
     out = arr[i + 1]

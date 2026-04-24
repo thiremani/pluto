@@ -3058,6 +3058,8 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
+		// Collector preparation can bind collecttmp_* before the print loop opens.
+		// Keep those temporaries scoped to this print statement.
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()
 

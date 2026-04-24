@@ -324,7 +324,7 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifi
 	stageAliases := c.aliasCondDests(dest, stageTempNames)
 	defer c.restoreCondDests(stageAliases)
 
-	c.withLoopNest(info.Ranges, func() {
+	c.withLoopNestVersioned(info.Ranges, []ast.Expression{expr}, func() {
 		if c.hasCondExprInTree(expr) {
 			c.compileCondExprValue(expr, llvm.Value{}, func() {
 				c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
@@ -345,6 +345,10 @@ func (c *Compiler) stageCondRangedAssignments(
 	assignTargetIdx := 0
 	groups := make([]condStageGroup, 0, len(assignExprs))
 
+	// Two alias layers are active here. The outer alias makes destination reads
+	// resolve to commit temps while stage temps are seeded. stageCondRangedExpr
+	// then temporarily aliases the same destinations to private stage temps so
+	// self-referential RHS expressions read/write only that staged result.
 	allAliases := c.aliasCondDests(assignDests, commitTempNames)
 	defer c.restoreCondDests(allAliases)
 
@@ -688,6 +692,12 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			// node as the assignment root and let ordinary compileExpression
 			// rewrite lookup route through the solver-owned cache entry.
 			preparedExpr = expr
+		} else {
+			// Collector preparation runs over the solver rewrite, whose cache
+			// entry may have already scalarized local ranges away. The staged
+			// root still needs the original RHS ranges so local drivers open
+			// before lowering any tmpIter identifiers in the prepared tree.
+			c.registerPreparedExpr(expr, preparedExpr)
 		}
 		assignExprs = append(assignExprs, preparedExpr)
 		loopProbes = append(loopProbes, preparedExpr)

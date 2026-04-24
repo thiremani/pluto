@@ -552,6 +552,7 @@ func ExprChildren(expr Expression) []Expression {
 
 // RewriteExpr rewrites the immediate child expressions of expr using rewrite.
 // If every child is unchanged, the original expr is returned.
+// The returned expression keeps the same concrete root type as expr.
 func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expression {
 	switch e := expr.(type) {
 	case *InfixExpression:

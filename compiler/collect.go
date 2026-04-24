@@ -15,6 +15,8 @@ type materializedCollector struct {
 }
 
 func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo {
+	// ExprInfo slice fields are solver-owned and treated as immutable after
+	// solve; prepared/backfilled cache entries share them and only swap Rewrite.
 	infoCopy := *info
 	infoCopy.Rewrite = rewrite
 	return &infoCopy

@@ -311,6 +311,11 @@ i = 0:5
 sameCondNested = i < 2 [i] + 100
 "SameDriverCondNested: -sameCondNested"
 
+# Nested [] plus a local RHS range should preserve the local range rewrite.
+i = 0:2
+condLocalRange = i < 2 [i] + 0:3
+"CondCollectorLocalRange: -condLocalRange"
+
 # Nested constant collectors also use the admitted outer stream.
 i = 0:6
 sameCondConst = i > 2 1 + [0]

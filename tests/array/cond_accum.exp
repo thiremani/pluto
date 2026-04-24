@@ -54,6 +54,7 @@ CondLastWins: 2
 12
 RangePrefixRewrite: -2
 SameDriverCondNested: [100 101]
+CondCollectorLocalRange: [2 2 2 3 3 3]
 SameDriverCondConst: [1 1 1]
 CondCollectorAffine: [20 30 40 50]
 CondCollectorAffineOOB: [20 40]
