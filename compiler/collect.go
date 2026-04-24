@@ -23,7 +23,7 @@ func (c *Compiler) compileTreeFor(expr ast.Expression) ast.Expression {
 	// entry for the rewritten tree on demand so later collector preparation can
 	// register derived nodes against a stable ExprCache entry.
 	if _, ok := c.ExprCache[key(c.FuncNameMangled, info.Rewrite)]; !ok {
-		c.ExprCache[key(c.FuncNameMangled, info.Rewrite)] = cloneExprInfoWithRewrite(info, info.Rewrite)
+		c.registerPreparedExpr(expr, info.Rewrite)
 	}
 	return info.Rewrite
 }
@@ -33,9 +33,6 @@ func (c *Compiler) registerPreparedExpr(orig ast.Expression, prepared ast.Expres
 		return
 	}
 	info := c.ExprCache[key(c.FuncNameMangled, orig)]
-	if info == nil {
-		return
-	}
 	c.ExprCache[key(c.FuncNameMangled, prepared)] = cloneExprInfoWithRewrite(info, prepared)
 }
 
@@ -48,6 +45,20 @@ func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, s
 	scopeSym.ReadOnly = true
 	Put(c.Scopes, name, scopeSym)
 	return ident, name
+}
+
+func (c *Compiler) prepareCollectorTreeFor(expr ast.Expression, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
+	tree := c.compileTreeFor(expr)
+	prepared, temps := c.prepareCollectorExpr(tree, activeRanges, condExprs)
+	if prepared == tree {
+		return expr, temps
+	}
+
+	// The prepared tree may have been derived from a solver rewrite whose local
+	// range metadata is already scalarized. Register the final root against the
+	// source expression so callers keep the source ranges and output metadata.
+	c.registerPreparedExpr(expr, prepared)
+	return prepared, temps
 }
 
 func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
@@ -87,7 +98,7 @@ func (c *Compiler) cleanupMaterializedCollectors(temps []string) {
 }
 
 func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
-	preparedExpr, collectorTemps := c.prepareCollectorExpr(expr, activeRanges, condExprs)
+	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, activeRanges, condExprs)
 	defer c.cleanupMaterializedCollectors(collectorTemps)
 
 	prepared, ok := preparedExpr.(T)

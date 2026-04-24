@@ -685,20 +685,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			continue
 		}
 
-		baseExpr := c.compileTreeFor(expr)
-		preparedExpr, collectorTemps := c.prepareCollectorExpr(baseExpr, mergeUses(condRanges, info.Ranges), condExprs)
-		if preparedExpr == baseExpr {
-			// No nested collectors were materialized, so keep the original AST
-			// node as the assignment root and let ordinary compileExpression
-			// rewrite lookup route through the solver-owned cache entry.
-			preparedExpr = expr
-		} else {
-			// Collector preparation runs over the solver rewrite, whose cache
-			// entry may have already scalarized local ranges away. The staged
-			// root still needs the original RHS ranges so local drivers open
-			// before lowering any tmpIter identifiers in the prepared tree.
-			c.registerPreparedExpr(expr, preparedExpr)
-		}
+		preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, mergeUses(condRanges, info.Ranges), condExprs)
 		assignExprs = append(assignExprs, preparedExpr)
 		loopProbes = append(loopProbes, preparedExpr)
 		assignCollectorTemps = append(assignCollectorTemps, collectorTemps...)
