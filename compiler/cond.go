@@ -657,7 +657,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 	assignExprs := []ast.Expression{}
 	assignDests := []*ast.Identifier{}
 	assignOutTypes := []Type{}
-	assignCollectorTemps := []materializedCollector{}
+	assignCollectorTemps := []string{}
 	// loopProbes collect every expression in the shared ranged-condition loop
 	// that can issue array accesses, so affine versioning can prove the whole
 	// region safe up front instead of only individual RHS shapes.

@@ -6,14 +6,6 @@ import (
 	"github.com/thiremani/pluto/ast"
 )
 
-// Collector preparation layers a second rewrite pass on top of the solver's
-// Rewrite tree: nested [] nodes are materialized early into temporary array
-// values before the surrounding ranged expression opens its outer loops.
-type materializedCollector struct {
-	name  string
-	owner *Symbol
-}
-
 func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo {
 	// ExprInfo slice fields are solver-owned and treated as immutable after
 	// solve; prepared/backfilled cache entries share them and only swap Rewrite.
@@ -47,7 +39,7 @@ func (c *Compiler) registerPreparedExpr(orig ast.Expression, prepared ast.Expres
 	c.ExprCache[key(c.FuncNameMangled, prepared)] = cloneExprInfoWithRewrite(info, prepared)
 }
 
-func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, materializedCollector) {
+func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, string) {
 	name := fmt.Sprintf("collecttmp_%d", c.tmpCounter)
 	c.tmpCounter++
 	ident := &ast.Identifier{Value: name}
@@ -55,22 +47,22 @@ func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, m
 	scopeSym.Borrowed = true
 	scopeSym.ReadOnly = true
 	Put(c.Scopes, name, scopeSym)
-	return ident, materializedCollector{name: name, owner: sym}
+	return ident, name
 }
 
-func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []materializedCollector) {
+func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	resolved, info := c.resolveArrayLiteralRewrite(lit)
 	sym := c.compileArrayLiteralInDomain(resolved, info, activeRanges, condExprs)
 	ident, temp := c.newMaterializedCollectorTemp(sym)
-	return ident, []materializedCollector{temp}
+	return ident, []string{temp}
 }
 
-func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []materializedCollector) {
+func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	if lit, ok := expr.(*ast.ArrayLiteral); ok {
 		return c.materializeCollectorLiteral(lit, activeRanges, condExprs)
 	}
 
-	temps := []materializedCollector{}
+	temps := []string{}
 	prepared := ast.RewriteExpr(expr, func(child ast.Expression) ast.Expression {
 		rewritten, childTemps := c.prepareCollectorExpr(child, activeRanges, condExprs)
 		temps = append(temps, childTemps...)
@@ -82,16 +74,16 @@ func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*Ran
 	return prepared, temps
 }
 
-func (c *Compiler) cleanupMaterializedCollectors(temps []materializedCollector) {
+func (c *Compiler) cleanupMaterializedCollectors(temps []string) {
 	if len(temps) == 0 {
 		return
 	}
-	names := make([]string, 0, len(temps))
-	for _, temp := range temps {
-		c.freeSymbolValue(temp.owner, temp.name+"_cleanup")
-		names = append(names, temp.name)
+	for _, name := range temps {
+		if sym, ok := Get(c.Scopes, name); ok {
+			c.freeSymbolValue(sym, name+"_cleanup")
+		}
 	}
-	DeleteBulk(c.Scopes, names)
+	DeleteBulk(c.Scopes, temps)
 }
 
 func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
