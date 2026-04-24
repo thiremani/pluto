@@ -16,7 +16,7 @@ func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo 
 
 func (c *Compiler) compileTreeFor(expr ast.Expression) ast.Expression {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info == nil || info.Rewrite == nil {
+	if info.Rewrite == nil {
 		return expr
 	}
 	// Solver rewrites are keyed by the original expression node. Backfill an
