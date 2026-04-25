@@ -23,7 +23,7 @@ func (c *Compiler) compileTreeFor(expr ast.Expression) ast.Expression {
 	// entry for the rewritten tree on demand so later collector preparation can
 	// register derived nodes against a stable ExprCache entry.
 	if _, ok := c.ExprCache[key(c.FuncNameMangled, info.Rewrite)]; !ok {
-		c.registerPreparedExpr(expr, info.Rewrite)
+		c.ExprCache[key(c.FuncNameMangled, info.Rewrite)] = cloneExprInfoWithRewrite(info, info.Rewrite)
 	}
 	return info.Rewrite
 }
