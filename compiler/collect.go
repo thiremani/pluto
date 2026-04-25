@@ -84,9 +84,6 @@ func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*Ran
 }
 
 func (c *Compiler) cleanupMaterializedCollectors(temps []string) {
-	if len(temps) == 0 {
-		return
-	}
 	for _, name := range temps {
 		if sym, ok := Get(c.Scopes, name); ok {
 			c.freeSymbolValue(sym, name+"_cleanup")
