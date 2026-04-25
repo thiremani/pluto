@@ -79,9 +79,7 @@ func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*Ran
 		temps = append(temps, childTemps...)
 		return rewritten
 	})
-	if prepared != expr {
-		c.registerPreparedExpr(expr, prepared)
-	}
+	c.registerPreparedExpr(expr, prepared)
 	return prepared, temps
 }
 
