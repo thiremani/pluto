@@ -83,25 +83,24 @@ This yields `i` when the comparison succeeds, otherwise `0`.
 
 `[]` always materializes an array at the point where it appears.
 
-The collector materializes over the active iteration domain at that point in
-the expression:
+The collector materializes over:
 
-- Outer statement or expression drivers are reused as the current scalar
-  iterator values.
-- New drivers introduced inside the literal add inner loops.
-- The collector does not leak its ranges upward into the parent expression.
+- statement gate ranges that admit the current RHS, and
+- ranges mentioned inside the literal itself.
+
+Sibling ranges from the surrounding expression do not expand the collector.
+The collector also does not leak its own ranges upward into the parent
+expression.
 
 Once the literal has materialized, the result is just an ordinary array value.
-Assigning it to a name freezes that collected value; later statements reuse the
-array and do not recollect it against a new outer domain.
+Binding always produces an array value. Later statements treat it as an
+ordinary array, the same as any other named binding.
 
 ### Collectors And Binding
 
-Binding a collector to a variable freezes it against the active drivers at the
-binding site.
-
-To extract a collector from a larger expression without changing the result,
-carry the enclosing drivers into the binding.
+Binding a collector to a variable freezes the array produced at that binding
+site. Later statements treat it as an ordinary array, the same as any other
+named binding.
 
 For example:
 
@@ -113,10 +112,14 @@ res = i + [0]
 produces:
 
 ```pluto
-[4 4 4 4 4]
+[4]
 ```
 
-This is equivalent to:
+Here `[0]` has no internal ranges and no statement gate, so it materializes as
+the singleton `[0]`. The sibling `i` range belongs to the surrounding infix
+expression and finalizes to `4`.
+
+To collect one `0` for each `i`, make `i` the statement gate:
 
 ```pluto
 i = 0:5
@@ -124,9 +127,15 @@ y = i [0]
 res = i + y
 ```
 
-because the binding site reproduces the active `i` domain.
+This produces:
 
-But it is not equivalent to:
+```pluto
+[4 4 4 4 4]
+```
+
+because `y` is collected as `[0 0 0 0 0]` under the admitted `i` domain.
+
+By contrast:
 
 ```pluto
 i = 0:5
@@ -134,8 +143,7 @@ y = [0]
 res = i + y
 ```
 
-Here `y` is bound with no active outer drivers, so it materializes as `[0]`.
-The later expression reuses that singleton array value and produces `[4]`.
+also produces `[4]`.
 
 Example:
 
@@ -144,9 +152,9 @@ i = 0:5
 res = i + 1 + [i + 1]
 ```
 
-`[i + 1]` first materializes `[1 2 3 4 5]` over the active `i` stream.
-The outer expression then continues with that frozen array value, giving
-`[6 7 8 9 10]` as the final value.
+`[i + 1]` first materializes `[1 2 3 4 5]` because `i` is mentioned inside
+the literal. The outer expression then continues with that frozen array value,
+giving `[6 7 8 9 10]` as the final value.
 
 Likewise:
 
@@ -215,6 +223,19 @@ produces:
 ```
 
 The conditions select which outer iterations execute the collector at all.
+
+The same admitted domain applies to nested collectors in a non-collector RHS:
+
+```pluto
+i = 0:5
+arr = i < 3 1 + [0]
+```
+
+produces:
+
+```pluto
+[1 1 1]
+```
 
 By contrast:
 
@@ -289,6 +310,17 @@ The statement condition admits `i = 3 4 5`.
 `[i]` first materializes `[3 4 5]` over that admitted stream.
 The outer expression then continues with the frozen array value, so the final
 result is `[8 9 10]`.
+
+Sibling expression ranges still do not cross into nested collectors:
+
+```pluto
+i = 0:5
+res = i + [([0] + 1)[0]]
+```
+
+`[0]` is a singleton because it has no internal range and no statement gate.
+`[([0] + 1)[0]]` is also a singleton, and the outer `i` finalizes to `4`, so
+the result is `[5]`.
 
 This is a semantic materialization boundary.
 The compiler may later hoist or fuse loops as an optimization, but that does
