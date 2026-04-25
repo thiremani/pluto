@@ -315,15 +315,17 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifi
 	stageAliases := c.aliasCondDests(dest, stageTempNames)
 	defer c.restoreCondDests(stageAliases)
 
+	compileStageAssign := func() {
+		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+	}
+
 	c.withLoopNestVersioned(info.Ranges, []ast.Expression{expr}, func() {
 		if c.hasCondExprInTree(expr) {
-			c.compileCondExprValue(expr, llvm.Value{}, func() {
-				c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
-			})
+			c.compileCondExprValue(expr, llvm.Value{}, compileStageAssign)
 			return
 		}
 
-		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+		compileStageAssign()
 	})
 }
 
