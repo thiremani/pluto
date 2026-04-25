@@ -99,11 +99,7 @@ func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, activeRang
 	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, activeRanges, condExprs)
 	defer c.cleanupMaterializedCollectors(collectorTemps)
 
-	prepared, ok := preparedExpr.(T)
-	if !ok {
-		panic(fmt.Sprintf("internal: prepared collector expr has unexpected type %T", preparedExpr))
-	}
-	body(prepared)
+	body(preparedExpr.(T))
 }
 
 func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {

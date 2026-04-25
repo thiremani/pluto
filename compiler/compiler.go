@@ -1542,9 +1542,6 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, source := c.lookupNamedSymbol(ident.Value)
-	if source == Missing {
-		panic(fmt.Sprintf("internal: identifier %q not found during lowering", ident.Value))
-	}
 	if source == Local {
 		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
