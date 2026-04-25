@@ -1804,7 +1804,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
 	rew := info.Rewrite.(*ast.InfixExpression)
-	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, func(prepared *ast.InfixExpression) {
+	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, nil, func(prepared *ast.InfixExpression) {
 		leftRew := prepared.Left
 		rightRew := prepared.Right
 		_, leftIsIdent := leftRew.(*ast.Identifier)
@@ -2076,7 +2076,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
-	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.PrefixExpression), info.Ranges, nil, func(prepared *ast.PrefixExpression) {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.PrefixExpression), info.Ranges, nil, nil, func(prepared *ast.PrefixExpression) {
 		rightRew := prepared.Right
 
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
@@ -2713,7 +2713,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 		}
 		return c.makeZeroValue(outType)
 	})
-	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, func(rewCall *ast.CallExpression) {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		c.pushBoundsGuard("call_iter_bounds_guard")
 		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
 			c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
@@ -2725,7 +2725,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 }
 
 func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
-	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, func(rewCall *ast.CallExpression) {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		// Scope bounds checks to this loop iteration: arguments can contain
 		// multiple array reads, and the call should execute only when all are
 		// in-bounds for this iteration.
@@ -3060,7 +3060,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()
 
-		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, func(rewCall *ast.CallExpression) {
+		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 			c.printAllExpressions(rewCall.Arguments)
 		})
 		return

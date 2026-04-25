@@ -41,8 +41,8 @@ i = 0:5
 res7b = i + 1 + [i + 1]
 "Range + Collected Range: -res7b"
 
-# Nested constant collection uses the active outer stream before the outer
-# expression is finalized.
+# Nested constant collection does not inherit sibling range drivers from the
+# surrounding expression.
 i = 0:5
 res7c = i + [0]
 "Range + Collected Const: -res7c"
@@ -62,7 +62,8 @@ k = 0:3
 res7cc = [arrAffine[2k + 1]]
 "Collected Affine OOB: -res7cc"
 
-# Extracting a collector requires reproducing the enclosing driver set.
+# A statement gate can explicitly provide the collection domain; otherwise a
+# constant collector stays singleton.
 i = 0:5
 res7d = i + [0]
 yctx = i [0]
@@ -70,8 +71,21 @@ res7e = i + yctx
 yplain = [0]
 res7f = i + yplain
 "Inline Collected Const: -res7d"
-"Extracted With Context: -res7e"
-"Extracted Without Context: -res7f"
+"Gated Collected Const: -res7e"
+"Plain Collected Const: -res7f"
+
+# A value-position condition is a sibling expression, not a statement gate, so
+# it does not provide a collection domain for [0].
+i = 0:5
+localCondConst = (i < 3) + [0]
+"LocalCondConst: -localCondConst"
+
+# A name bound from a ranged expression is already finalized; later collectors
+# that mention it see the binding, not the original range driver.
+i = 0:5
+ybound = i + 1
+indirectBoundCollector = ybound + [ybound]
+"IndirectBoundCollector: -indirectBoundCollector"
 
 # Recursive collection inside an array cell materializes the inner collector
 # before the outer array cell expression continues.
@@ -85,8 +99,8 @@ i = 0:5
 res7h = [([0] + i)[0]]
 "Nested Cell Collector Stream: -res7h"
 
-# Deeper nesting: an inner collector materializes through array arithmetic and
-# indexing before the outer collector continues with its own remaining drivers.
+# Deeper nesting: each collector uses its own cell ranges. Sibling expression
+# drivers outside that collector do not expand it.
 dataNested = [10 20 30 40 50]
 i = 0:3
 j = 0:2

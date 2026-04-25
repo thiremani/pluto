@@ -409,8 +409,8 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	return c.ArrayAccResult(acc)
 }
 
-func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, activeRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
-	collectRanges := mergeUses(activeRanges, info.CollectRanges)
+func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, gateRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
+	collectRanges := mergeUses(gateRanges, info.CollectRanges)
 	if len(collectRanges) == 0 && len(condExprs) == 0 {
 		return c.compileArrayLiteralImmediate(lit, info)[0]
 	}
@@ -925,7 +925,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	outputs := c.makeOutputs(dest, info.OutTypes, true)
 	output := outputs[0]
 
-	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, func(rew *ast.ArrayRangeExpression) {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
 		arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 		// Source operands are temporary for each loop iteration in this path.
 		defer c.freeTemporary(rew.Array, []*Symbol{arraySym})

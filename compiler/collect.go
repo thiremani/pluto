@@ -47,9 +47,9 @@ func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, s
 	return ident, name
 }
 
-func (c *Compiler) prepareCollectorTreeFor(expr ast.Expression, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
+func (c *Compiler) prepareCollectorTreeFor(expr ast.Expression, gateRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	tree := c.compileTreeFor(expr)
-	prepared, temps := c.prepareCollectorExpr(tree, activeRanges, condExprs)
+	prepared, temps := c.prepareCollectorExpr(tree, gateRanges, condExprs)
 	if prepared == tree {
 		return expr, temps
 	}
@@ -61,21 +61,21 @@ func (c *Compiler) prepareCollectorTreeFor(expr ast.Expression, activeRanges []*
 	return prepared, temps
 }
 
-func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
+func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, gateRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	resolved, info := c.resolveArrayLiteralRewrite(lit)
-	sym := c.compileArrayLiteralInDomain(resolved, info, activeRanges, condExprs)
+	sym := c.compileArrayLiteralInDomain(resolved, info, gateRanges, condExprs)
 	ident, temp := c.newMaterializedCollectorTemp(sym)
 	return ident, []string{temp}
 }
 
-func (c *Compiler) prepareCollectorExpr(expr ast.Expression, activeRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
+func (c *Compiler) prepareCollectorExpr(expr ast.Expression, gateRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	if lit, ok := expr.(*ast.ArrayLiteral); ok {
-		return c.materializeCollectorLiteral(lit, activeRanges, condExprs)
+		return c.materializeCollectorLiteral(lit, gateRanges, condExprs)
 	}
 
 	temps := []string{}
 	prepared := ast.RewriteExpr(expr, func(child ast.Expression) ast.Expression {
-		rewritten, childTemps := c.prepareCollectorExpr(child, activeRanges, condExprs)
+		rewritten, childTemps := c.prepareCollectorExpr(child, gateRanges, condExprs)
 		temps = append(temps, childTemps...)
 		return rewritten
 	})
@@ -92,16 +92,20 @@ func (c *Compiler) cleanupMaterializedCollectors(temps []string) {
 	DeleteBulk(c.Scopes, temps)
 }
 
-func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
-	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, activeRanges, condExprs)
+func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, gateRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
+	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, gateRanges, condExprs)
 	defer c.cleanupMaterializedCollectors(collectorTemps)
 
 	body(preparedExpr.(T))
 }
 
-func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, activeRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
-	withPreparedCollectorExpr(c, expr, activeRanges, condExprs, func(prepared T) {
-		c.withLoopNestVersioned(activeRanges, []ast.Expression{prepared}, func() {
+// loopRanges drive the surrounding ranged expression. gateRanges are the
+// statement-condition ranges allowed to cross into nested collectors.
+// Pass nil when no statement gate is active; collectors then materialize only
+// over ranges mentioned inside the collector itself.
+func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, loopRanges []*RangeInfo, gateRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
+	withPreparedCollectorExpr(c, expr, gateRanges, condExprs, func(prepared T) {
+		c.withLoopNestVersioned(loopRanges, []ast.Expression{prepared}, func() {
 			body(prepared)
 		})
 	})

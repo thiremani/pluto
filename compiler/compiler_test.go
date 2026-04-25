@@ -758,6 +758,29 @@ func TestCanUseCondSelectWhitelist(t *testing.T) {
 	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
 }
 
+func TestCollectorArrayBindingCannotBeNestedAsCell(t *testing.T) {
+	script := `i = 0:5
+y = [i + 1]
+arr = y + [y]
+arr`
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "collector_array_binding_nested", "", ast.NewCode())
+	program := mustParseScript(t, script)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+
+	errs := sc.Compile()
+	require.NotEmpty(t, errs, "expected nested array cell compilation to fail")
+
+	messages := make([]string, len(errs))
+	for i, err := range errs {
+		messages[i] = err.Error()
+	}
+	require.Contains(t, strings.Join(messages, "\n"), "unsupported array element type [I64] in column 0")
+}
+
 func TestAffineArrayIndexExprUsesVersionedLoop(t *testing.T) {
 	script := `arr = [10 20 30 40 50]
 i = 0:4

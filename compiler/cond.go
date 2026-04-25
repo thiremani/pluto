@@ -678,7 +678,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 			continue
 		}
 
-		preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, mergeUses(condRanges, info.Ranges), condExprs)
+		preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, condRanges, condExprs)
 		assignExprs = append(assignExprs, preparedExpr)
 		loopProbes = append(loopProbes, preparedExpr)
 		assignCollectorTemps = append(assignCollectorTemps, collectorTemps...)
