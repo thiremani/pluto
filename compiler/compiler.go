@@ -106,6 +106,14 @@ type paramAlias struct {
 	OutputNames []string
 }
 
+type symbolSource int
+
+const (
+	symbolMissing symbolSource = iota
+	symbolLocal
+	symbolCode
+)
+
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
 	newSym.Val = s.Val
@@ -375,26 +383,18 @@ func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) 
 	return c.valueSymbol(name, s, loadName), true
 }
 
-type symbolSource int
-
-const (
-	Missing symbolSource = iota
-	Local
-	Code
-)
-
 func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
 	if s, ok := Get(c.Scopes, name); ok {
-		return s, Local
+		return s, symbolLocal
 	}
 	if c.CodeCompiler == nil {
-		return nil, Missing
+		return nil, symbolMissing
 	}
 	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
 	if !ok {
-		return nil, Missing
+		return nil, symbolMissing
 	}
-	return s, Code
+	return s, symbolCode
 }
 
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
@@ -429,10 +429,10 @@ func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbo
 
 func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
 	s, source := c.lookupNamedSymbol(name)
-	if source == Missing {
+	if source == symbolMissing {
 		return nil, false
 	}
-	if source == Local {
+	if source == symbolLocal {
 		return c.valueSymbol(name, s, loadName), true
 	}
 	// CodeCompiler bindings are global code-scope values/slots, not active
@@ -1542,7 +1542,7 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, source := c.lookupNamedSymbol(ident.Value)
-	if source == Local {
+	if source == symbolLocal {
 		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
 	return c.derefIfPointer(s, ident.Value+"_load")
@@ -1589,7 +1589,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
 func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 	s, source := c.lookupNamedSymbol(name)
-	return s, source != Missing
+	return s, source != symbolMissing
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
