@@ -71,10 +71,10 @@ i > 2
 
 This yields `i` when true and yields nothing when false.
 
-`or` is a fallback on skip:
+`||` is a fallback on skip:
 
 ```pluto
-i > 2 or 0
+i > 2 || 0
 ```
 
 This yields `i` when the comparison succeeds, otherwise `0`.
@@ -184,7 +184,7 @@ produces:
 and
 
 ```pluto
-[i > 2 < 8 or 2]
+[i > 2 < 8 || 2]
 ```
 
 produces:
@@ -193,7 +193,7 @@ produces:
 [2 2 2 3 4 5 6 7 2 2 2]
 ```
 
-`or` is resolved before the collector sees the final cell result, so explicit
+`||` is resolved before the collector sees the final cell result, so explicit
 fallback values win over zero-fill.
 
 ## Gated Collection
