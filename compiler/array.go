@@ -512,7 +512,7 @@ func (c *Compiler) setArrayCellSlot(vec llvm.Value, idx llvm.Value, cellSlot *Sy
 		}
 	}
 
-	if elemType.Kind() == StrKind && IsStrH(cellValue.Type) {
+	if elemType.Kind() == StrKind {
 		c.ArraySetOwnForType(elemType, vec, idx, cellValue.Val)
 		return true
 	}
@@ -523,9 +523,12 @@ func (c *Compiler) setArrayCellSlot(vec llvm.Value, idx llvm.Value, cellSlot *Sy
 
 func (c *Compiler) pushArrayCellSlot(acc *ArrayAccumulator, cellSlot *Symbol, elemType Type) bool {
 	cellValue := c.derefIfPointer(cellSlot, "array_cell_value")
-	takeOwnership := elemType.Kind() == StrKind && IsStrH(cellValue.Type)
-	c.pushAccumCellValue(acc, cellValue, takeOwnership, elemType)
-	return takeOwnership
+	if elemType.Kind() == StrKind {
+		c.pushAccumCellValue(acc, cellValue, true, elemType)
+		return true
+	}
+	c.pushAccumCellValue(acc, cellValue, false, elemType)
+	return false
 }
 
 // pushAccumCellValue appends one accumulated cell value, handling element casts
