@@ -534,35 +534,29 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // combined condition (AND with baseCond when provided), and compiles onTrue on
 // the true path only. False path performs standard cond-expr cleanup.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
-	c.compileCondExprValueWith(baseCond, onTrue, func(cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
-		return c.extractCondExprs(expr, cond, temps)
-	})
+	c.pushCondLHSFrame()
+	defer c.popCondLHSFrame()
+
+	cond, temps := c.extractCondExprs(expr, baseCond, nil)
+	c.compileCondExprBranch(cond, temps, onTrue)
 }
 
 // compileOperandCondExprValue extracts conditional expressions from expr's
 // operands while leaving expr itself to the caller. Use this when the caller is
 // compiling the root operation into an already-seeded output slot.
 func (c *Compiler) compileOperandCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
-	c.compileCondExprValueWith(baseCond, onTrue, func(cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
-		for _, child := range ast.ExprChildren(expr) {
-			cond, temps = c.extractCondExprs(child, cond, temps)
-		}
-		return cond, temps
-	})
-}
-
-func (c *Compiler) compileCondExprValueWith(
-	baseCond llvm.Value,
-	onTrue func(),
-	extract func(llvm.Value, []condTemp) (llvm.Value, []condTemp),
-) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	var temps []condTemp
 	cond := baseCond
-	cond, temps = extract(cond, temps)
+	var temps []condTemp
+	for _, child := range ast.ExprChildren(expr) {
+		cond, temps = c.extractCondExprs(child, cond, temps)
+	}
+	c.compileCondExprBranch(cond, temps, onTrue)
+}
 
+func (c *Compiler) compileCondExprBranch(cond llvm.Value, temps []condTemp, onTrue func()) {
 	if cond.IsNil() {
 		onTrue()
 		return
