@@ -52,7 +52,8 @@ InterleavedAccumX: [10 1 20 20 1 30 30 1 40 40 1 0]. InterleavedAccumY: 3. Inter
 7
 CondLastWins: 2
 12
-RangePrefixRewrite: -1
+RangePrefixRewrite: -2
+RangeInfixRewrite: -1
 SameDriverCondNested: [100 101]
 CondCollectorLocalRange: [2 3]
 SameDriverCondConst: [1 1 1]

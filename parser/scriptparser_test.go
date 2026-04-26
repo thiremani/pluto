@@ -507,6 +507,72 @@ func TestConditionThenCallValue(t *testing.T) {
 	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
 }
 
+func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		condCount int
+		value     string
+	}{
+		{
+			name:      "attached minus starts value",
+			input:     "res = i < 2 -x",
+			condCount: 1,
+			value:     "(-x)",
+		},
+		{
+			name:      "attached prefix range starts value",
+			input:     "res = i < 2 -(0:3)",
+			condCount: 1,
+			value:     "(-0:3)",
+		},
+		{
+			name:      "attached plus starts value",
+			input:     "res = i != 3 +10",
+			condCount: 1,
+			value:     "(+10)",
+		},
+		{
+			name:      "spaced minus remains infix",
+			input:     "res = i < 2 - x",
+			condCount: 0,
+			value:     "((i < 2) - x)",
+		},
+		{
+			name:      "grouped comparison remains value expression",
+			input:     "res = (i < 2) -x",
+			condCount: 0,
+			value:     "((i < 2) - x)",
+		},
+		{
+			name:      "grouped comparison with attached plus remains value expression",
+			input:     "res = (i < 2) +10",
+			condCount: 0,
+			value:     "((i < 2) + 10)",
+		},
+		{
+			name:      "bare identifier is not split as condition boundary",
+			input:     "res = a -b",
+			condCount: 0,
+			value:     "(a - b)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestConditionValueBoundaryAttachedPrefix", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyLetStmt(t, program)
+			require.Len(t, stmt.Condition, tt.condCount, "input %q: condition count mismatch", tt.input)
+			require.Len(t, stmt.Value, 1, "input %q: expected one value", tt.input)
+			require.Equal(t, tt.value, stmt.Value[0].String(), "input %q: value mismatch", tt.input)
+		})
+	}
+}
+
 func TestBareRangeDriverCondition(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -812,6 +878,21 @@ func TestArrayLiterals(t *testing.T) {
 
 				// Check d is just an identifier
 				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
+			},
+		},
+		{
+			name:  "attached unary plus",
+			input: `[a +b]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers")
+				require.Len(t, arr.Rows, 1, "expected one row")
+				require.Len(t, arr.Rows[0], 2, "expected two elements: a, +b")
+				require.True(t, testIdentifier(t, arr.Rows[0][0], "a"))
+
+				prefixB, ok := arr.Rows[0][1].(*ast.PrefixExpression)
+				require.Truef(t, ok, "expected *ast.PrefixExpression for +b, got %T", arr.Rows[0][1])
+				require.Equal(t, "+", prefixB.Operator)
+				require.True(t, testIdentifier(t, prefixB.Right, "b"))
 			},
 		},
 	}

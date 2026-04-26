@@ -1,0 +1,5 @@
+BoundaryMinus: -1
+BoundaryPrefixRange: -2
+BoundaryPlus: 10
+SpacedMinusInfix: 0
+GroupedAttachedPlus: 12

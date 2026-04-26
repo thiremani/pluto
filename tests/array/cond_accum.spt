@@ -299,11 +299,17 @@ i = 0:3
 rl = i < 2 0:3 + 10
 rl
 
-# Value-position range condition + range literal in infix value (rewrite used)
+# Attached prefix after a statement condition starts the value expression.
 pl = 0
 i = 0:3
 pl = i < 2 -(0:3)
 "RangePrefixRewrite: -pl"
+
+# Spaces around '-' keep the comparison in value position inside the infix.
+plInfix = 0
+i = 0:3
+plInfix = i < 2 - (0:3)
+"RangeInfixRewrite: -plInfix"
 
 # Nested [] under a ranged condition collects over the admitted outer stream
 # before the surrounding expression continues.

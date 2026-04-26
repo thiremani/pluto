@@ -1,0 +1,26 @@
+# Attached prefix operators after a top-level comparison start the statement value.
+i = 0:5
+minusAttached = 99
+minusAttached = i < 2 -i
+"BoundaryMinus: -minusAttached"
+
+i = 0:5
+rangePrefix = 0
+rangePrefix = i < 2 -(0:3)
+"BoundaryPrefixRange: -rangePrefix"
+
+i = 0:5
+plusAttached = 0
+plusAttached = i != 3 +10
+"BoundaryPlus: -plusAttached"
+
+# Spaces around the operator keep it as value-position infix arithmetic.
+i = 0:5
+minusSpaced = 99
+minusSpaced = i < 2 - i
+"SpacedMinusInfix: -minusSpaced"
+
+# Parentheses force comparison-as-value even when the next operator is attached.
+ri = 0:5
+grouped = (ri < 3) +10
+"GroupedAttachedPlus: -grouped"

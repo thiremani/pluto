@@ -34,6 +34,16 @@ type opFunc func(c *Compiler, left, right *Symbol, compile bool) *Symbol
 // It takes one *Symbol and returns a new *Symbol
 type unaryOpFunc func(c *Compiler, operand *Symbol, compile bool) *Symbol
 
+var unaryPlusOp = func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
+	s = &Symbol{}
+	s.Type = operand.Type
+	if !compile {
+		return
+	}
+	s.Val = operand.Val
+	return
+}
+
 // --- Multiplication helper functions (shared by * and ⋅) ---
 
 var mulI64I64 = func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
@@ -748,6 +758,10 @@ var defaultOps = map[opKey]opFunc{
 }
 
 var defaultUnaryOps = map[unaryOpKey]unaryOpFunc{
+	// Unary Plus (+)
+	{Operator: token.SYM_ADD, OperandType: I64}: unaryPlusOp,
+	{Operator: token.SYM_ADD, OperandType: F64}: unaryPlusOp,
+
 	// Unary Minus (-)
 	{Operator: token.SYM_SUB, OperandType: I64}: func(c *Compiler, operand *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}

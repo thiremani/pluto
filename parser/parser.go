@@ -97,13 +97,15 @@ type StmtParser struct {
 	infixParseFns   map[string]infixParseFn
 	postfixParseFns map[string]postfixParseFn
 
-	blankIdents []token.Token // tracks blank identifiers during parsing
+	blankIdents  []token.Token // tracks blank identifiers during parsing
+	groupedExprs map[ast.Expression]struct{}
 }
 
 func New(l *lexer.Lexer) *StmtParser {
 	p := &StmtParser{
-		l:      l,
-		errors: []*token.CompileError{},
+		l:            l,
+		errors:       []*token.CompileError{},
+		groupedExprs: make(map[ast.Expression]struct{}),
 	}
 
 	p.prefixParseFns = make(map[string]prefixParseFn)
@@ -113,6 +115,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.STR_STRING, p.parseStringLiteral)
 
 	p.registerPrefix(token.SYM_BANG, p.parsePrefixExpression)
+	p.registerPrefix(token.SYM_ADD, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SUB, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_TILDE, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_SQRT, p.parsePrefixExpression)
@@ -271,6 +274,7 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			FileName: tok.FileName,
 			Line:     tok.Line,
 			Column:   tok.Column,
+			HadSpace: tok.HadSpace,
 		},
 	}
 
@@ -740,7 +744,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	// Allow line breaks/indentation between '=' and the first RHS expression
 	// so multi-line constructs (arrays, grouped expressions) work naturally.
 	p.skipArrayFormatting()
-	expList := p.parseExpList()
+	expList := p.parseConditionBoundaryExpList()
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
 	// to avoid panics downstream; errors are already recorded.
@@ -811,16 +815,33 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 }
 
 func (p *StmtParser) parseExpList() []ast.Expression {
-	expList := []ast.Expression{p.parseExpression(LOWEST, false)}
+	return p.parseExpListWith(nil)
+}
+
+func (p *StmtParser) parseConditionBoundaryExpList() []ast.Expression {
+	return p.parseExpListWith(p.shouldSplitConditionValueBoundary)
+}
+
+func (p *StmtParser) parseExpListWith(splitPrefix attachedPrefixSplitFunc) []ast.Expression {
+	expList := []ast.Expression{p.parseExpressionWithPrefixSplit(LOWEST, splitPrefix)}
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		expList = append(expList, p.parseExpression(LOWEST, false))
+		expList = append(expList, p.parseExpressionWithPrefixSplit(LOWEST, splitPrefix))
 	}
 	return expList
 }
 
+type attachedPrefixSplitFunc func(ast.Expression) bool
+
 func (p *StmtParser) parseExpression(precedence float64, spacesMatter bool) ast.Expression {
+	if spacesMatter {
+		return p.parseExpressionWithPrefixSplit(precedence, func(ast.Expression) bool { return true })
+	}
+	return p.parseExpressionWithPrefixSplit(precedence, nil)
+}
+
+func (p *StmtParser) parseExpressionWithPrefixSplit(precedence float64, splitPrefix attachedPrefixSplitFunc) ast.Expression {
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -842,26 +863,25 @@ func (p *StmtParser) parseExpression(precedence float64, spacesMatter bool) ast.
 		return nil
 	}
 
-	return p.parseExpressionTail(precedence, spacesMatter, leftExp)
+	return p.parseExpressionTail(precedence, splitPrefix, leftExp)
 }
 
 // parseExpressionTail continues parsing an expression using precedence climbing.
-// It handles infix/postfix operators and, when spacesMatter is true, uses spacing
-// to disambiguate operators that can be both prefix and infix (e.g., `-` for subtraction vs negation).
+// It handles infix/postfix operators and can stop before an attached prefix
+// operator when the caller's splitPrefix predicate says the current left side is
+// complete. Array rows use this to split `[a -b]`; let statements use the same
+// spacing check to split `cond -value` at the condition/value boundary.
 //
 // Parameters:
 //   - precedence: minimum binding power - stops when next operator has lower precedence
-//   - spacesMatter: if true, uses spacing to decide when to start new array elements
+//   - splitPrefix: when non-nil, controls whether an attached prefix starts the next expression
 //   - left: the left-hand expression already parsed
 //
-// Spacing rules (when spacesMatter is true):
+// Spacing rules used by peekStartsAttachedPrefix:
 //   - `a - b` (space before and after `-`) → subtraction (infix)
-//   - `a -b` (space before, not after `-`) → two elements: a and -b (prefix)
+//   - `a -b` (space before, not after `-`) → split before `-b` when allowed
 //   - `a-b` (no space before `-`) → subtraction (infix, normal precedence)
-//
-// This allows natural array syntax like `[1 -2 3]` for `[1, -2, 3]` while
-// still supporting `[1 - 2 3]` for `[-1, 3]`.
-func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, left ast.Expression) ast.Expression {
+func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix attachedPrefixSplitFunc, left ast.Expression) ast.Expression {
 	for {
 		var consumed bool
 		left, consumed = p.tryPostfix(left)
@@ -883,15 +903,8 @@ func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, 
 			return left
 		}
 
-		// When spaces matter, check if operator should start a new element
-		// If operator has space before it but not after (e.g., `a -b`),
-		// it starts a new element as a prefix operator
-		if spacesMatter && p.peekToken.HadSpace {
-			peekNextTok := p.peekNextToken()
-			if !peekNextTok.HadSpace {
-				// Operator is directly attached to next token → prefix (new element)
-				break
-			}
+		if splitPrefix != nil && splitPrefix(left) && p.peekStartsAttachedPrefix() {
+			break
 		}
 
 		// Process as infix operator
@@ -899,6 +912,26 @@ func (p *StmtParser) parseExpressionTail(precedence float64, spacesMatter bool, 
 		left = infix(left)
 	}
 	return left
+}
+
+func (p *StmtParser) peekStartsAttachedPrefix() bool {
+	if !p.peekToken.HadSpace {
+		return false
+	}
+	if p.prefixParseFns[p.peekToken.TokenTypeWithOp()] == nil {
+		return false
+	}
+	return !p.peekNextToken().HadSpace
+}
+
+func (p *StmtParser) shouldSplitConditionValueBoundary(left ast.Expression) bool {
+	if _, grouped := p.groupedExprs[left]; grouped {
+		return false
+	}
+	// Restrict attached-prefix splitting to explicit comparisons. Bare identifier
+	// drivers are type-level conditions, so splitting `x = a -b` here would
+	// hijack ordinary scalar subtraction before the type solver can decide.
+	return left.Tok().IsComparison()
 }
 
 func (p *StmtParser) allowCallPostfix(left ast.Expression) bool {
@@ -1196,6 +1229,9 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 		return nil
 	}
 
+	if exp != nil {
+		p.groupedExprs[exp] = struct{}{}
+	}
 	return exp
 }
 
