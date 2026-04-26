@@ -92,21 +92,16 @@ func (c *Compiler) cleanupMaterializedCollectors(temps []string) {
 	DeleteBulk(c.Scopes, temps)
 }
 
-func withPreparedCollectorExpr[T ast.Expression](c *Compiler, expr T, gateRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
-	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, gateRanges, condExprs)
-	defer c.cleanupMaterializedCollectors(collectorTemps)
-
-	body(preparedExpr.(T))
-}
-
 // loopRanges drive the surrounding ranged expression. gateRanges are the
 // statement-condition ranges allowed to cross into nested collectors.
 // Pass nil when no statement gate is active; collectors then materialize only
 // over ranges mentioned inside the collector itself.
 func withCollectorPreparedLoopNest[T ast.Expression](c *Compiler, expr T, loopRanges []*RangeInfo, gateRanges []*RangeInfo, condExprs []ast.Expression, body func(T)) {
-	withPreparedCollectorExpr(c, expr, gateRanges, condExprs, func(prepared T) {
-		c.withLoopNestVersioned(loopRanges, []ast.Expression{prepared}, func() {
-			body(prepared)
-		})
+	preparedExpr, collectorTemps := c.prepareCollectorTreeFor(expr, gateRanges, condExprs)
+	defer c.cleanupMaterializedCollectors(collectorTemps)
+
+	prepared := preparedExpr.(T)
+	c.withLoopNestVersioned(loopRanges, []ast.Expression{prepared}, func() {
+		body(prepared)
 	})
 }
