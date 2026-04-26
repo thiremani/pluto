@@ -299,7 +299,7 @@ i = 0:3
 rl = i < 2 0:3 + 10
 rl
 
-# Ranged condition + range literal in prefix value (rewrite used)
+# Value-position range condition + range literal in infix value (rewrite used)
 pl = 0
 i = 0:3
 pl = i < 2 -(0:3)

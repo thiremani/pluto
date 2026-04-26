@@ -80,6 +80,15 @@ i = 0:5
 localCondConst = (i < 3) + [0]
 "LocalCondConst: -localCondConst"
 
+# Collector cells use a fresh zero-seeded slot for each iteration. A failed
+# value-position condition leaves that cell seed in place instead of feeding
+# zero into the parent expression.
+i = 0:5
+cellCondValue = [i < 2]
+cellCondExpr = [(i < 2) + 5]
+"CellCondValue: -cellCondValue"
+"CellCondExpr: -cellCondExpr"
+
 # A name bound from a ranged expression is already finalized; later collectors
 # that mention it see the binding, not the original range driver.
 i = 0:5

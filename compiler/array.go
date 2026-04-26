@@ -259,39 +259,6 @@ func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
 
-// isStrHTemporary returns true if the expression is a heap string temporary
-// whose ownership can be transferred (not an identifier that needs to retain ownership).
-func isStrHTemporary(sym *Symbol, expr ast.Expression) bool {
-	if !IsStrH(sym.Type) {
-		return false
-	}
-	_, isIdent := expr.(*ast.Identifier)
-	return !isIdent
-}
-
-// ArraySetCells populates an array with cell values, using ownership transfer
-// for heap-allocated temporaries (non-identifier expressions) to avoid double-allocation.
-// Identifiers and static strings are copied to preserve the original value.
-func (c *Compiler) ArraySetCells(vec llvm.Value, cells []*Symbol, exprs []ast.Expression, elemType Type) {
-	for i, cs := range cells {
-		idx := c.ConstI64(uint64(i))
-		val := cs.Val
-
-		// Handle type conversions
-		if elemType.Kind() == FloatKind && cs.Type.Kind() == IntKind {
-			val = c.builder.CreateSIToFP(cs.Val, c.Context.DoubleType(), "i64_to_f64")
-		}
-
-		// For StrH temporaries, transfer ownership; all other values get copied
-		if isStrHTemporary(cs, exprs[i]) {
-			c.ArraySetOwnForType(elemType, vec, idx, val)
-			continue
-		}
-
-		c.ArraySetForType(elemType, vec, idx, val)
-	}
-}
-
 // Array compilation functions
 
 // compileArrayExpression materializes simple array literals into runtime vectors.
@@ -349,26 +316,22 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 		return []*Symbol{s}
 	}
 
-	row := lit.Rows[0]
-	cells := make([]*Symbol, len(row))
-	for i, cell := range row {
-		// Compile cells with zero-fill semantics for OOB array accesses.
-		vals := c.compileArrayLiteralCellExpr(cell)
-		cells[i] = c.derefIfPointer(vals[0], "")
-	}
-
 	arr := info.OutTypes[0].(Array)
 	elemType := arr.ColTypes[0]
 
+	row := lit.Rows[0]
 	nConst := c.ConstI64(uint64(len(row)))
-
 	arrVal := c.CreateArrayForType(elemType, nConst)
-	// Use expression-aware set to transfer ownership for temporaries only
-	c.ArraySetCells(arrVal, cells, row, elemType)
+
+	for i, cell := range row {
+		idx := c.ConstI64(uint64(i))
+		c.compileArrayLiteralCell(cell, elemType, func(cellSlot *Symbol) bool {
+			return c.setArrayCellSlot(arrVal, idx, cellSlot, elemType)
+		})
+	}
 
 	s.Type = arr
 	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
-
 	return []*Symbol{s}
 }
 
@@ -394,7 +357,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 
 			c.builder.SetInsertPointAtEnd(ifBlock)
 			for _, cell := range lit.Rows[0] {
-				c.compileAccumCell(acc, cell, elemType)
+				c.appendArrayLiteralCell(acc, cell, elemType)
 			}
 			c.builder.CreateBr(contBlock)
 			c.builder.SetInsertPointAtEnd(contBlock)
@@ -402,7 +365,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 		}
 
 		for _, cell := range lit.Rows[0] {
-			c.compileAccumCell(acc, cell, elemType)
+			c.appendArrayLiteralCell(acc, cell, elemType)
 		}
 	})
 
@@ -430,30 +393,59 @@ func (c *Compiler) withPendingLiteralRanges(lit *ast.ArrayLiteral, body func(*as
 	c.withLoopNestVersioned(literalInfo.CollectRanges, []ast.Expression{resolved}, func() { body(resolved) })
 }
 
-// compileAccumCell compiles one cell under a fresh bounds guard and pushes
-// the result into the accumulator. False cond-exprs and OOB array accesses
-// zero-fill the cell instead of shrinking the accumulated literal or
-// poisoning the outer statement guard.
-func (c *Compiler) compileAccumCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
-	c.pushBoundsGuard("acc_bounds_guard")
+// compileArrayLiteralCell evaluates one array-literal cell through a seeded
+// slot. Conditional skips and OOB paths simply leave the seed in place, so each
+// sink receives exactly one value for this cell occurrence. The sink returns
+// true when it consumed the slot's owned value.
+func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, consumeCellSlot func(*Symbol) bool) {
+	cellSlot := c.newArrayCellSlot(elemType)
+
+	c.pushBoundsGuard("array_cell_bounds_guard")
 	defer c.popBoundsGuard()
-	vals := c.compileArrayLiteralCellExpr(cell)
-	c.pushAccumCellWhenInBounds(acc, vals, cell, elemType)
+
+	c.withArrayLiteralCellMode(func() {
+		c.compileCondExprValue(cell, llvm.Value{}, func() {
+			vals := c.compileExpression(cell, nil)
+			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell)
+		})
+	})
+
+	if !consumeCellSlot(cellSlot) {
+		c.freeSymbolValue(cellSlot, "array_cell_cleanup")
+	}
 }
 
-// compileArrayLiteralCellExpr evaluates one array-literal cell in zero-fill
-// mode so OOB array accesses preserve the literal's shape instead of
-// poisoning the enclosing statement guard.
-func (c *Compiler) compileArrayLiteralCellExpr(cell ast.Expression) []*Symbol {
+func (c *Compiler) withArrayLiteralCellMode(body func()) {
 	ctx := c.currentStmtCtx()
-	if ctx != nil {
-		ctx.arrayLitCellDepth++
-		defer func() {
-			ctx.arrayLitCellDepth--
-		}()
+	if ctx == nil {
+		body()
+		return
 	}
 
-	return c.compileExpression(cell, nil)
+	ctx.arrayLitCellDepth++
+	defer func() {
+		ctx.arrayLitCellDepth--
+	}()
+	body()
+}
+
+func (c *Compiler) newArrayCellSlot(elemType Type) *Symbol {
+	name := fmt.Sprintf("celltmp_%d", c.tmpCounter)
+	c.tmpCounter++
+	return c.makeTempOutput(name, arrayCellSlotType(elemType), false, nil)
+}
+
+func arrayCellSlotType(elemType Type) Type {
+	if elemType.Kind() == StrKind {
+		return StrH{}
+	}
+	return elemType
+}
+
+func (c *Compiler) appendArrayLiteralCell(acc *ArrayAccumulator, cell ast.Expression, elemType Type) {
+	c.compileArrayLiteralCell(cell, elemType, func(cellSlot *Symbol) bool {
+		return c.pushArrayCellSlot(acc, cellSlot, elemType)
+	})
 }
 
 // appendArrayLiteral pushes each cell of a single literal into an
@@ -462,7 +454,7 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 	elemType := acc.ElemType
 	c.withPendingLiteralRanges(lit, func(resolved *ast.ArrayLiteral) {
 		for _, cell := range resolved.Rows[0] {
-			c.compileAccumCell(acc, cell, elemType)
+			c.appendArrayLiteralCell(acc, cell, elemType)
 		}
 	})
 }
@@ -477,34 +469,63 @@ func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.A
 	}
 }
 
-// pushAccumCellWhenInBounds pushes one accumulated cell only when its local
-// bounds guard remains true. OOB indexes skip this cell iteration (and free
-// temporary values) without poisoning the outer assignment.
-func (c *Compiler) pushAccumCellWhenInBounds(
-	acc *ArrayAccumulator,
+func (c *Compiler) storeArrayCellSlotWhenInBounds(
+	cellSlot *Symbol,
 	vals []*Symbol,
 	cell ast.Expression,
-	elemType Type,
 ) {
+	slotElemType := cellSlot.Type.(Ptr).Elem
+	store := func() {
+		cellValue := c.derefIfPointer(vals[0], "")
+		if cellValue.Type.Kind() != slotElemType.Kind() {
+			cellValue = &Symbol{
+				Val:  c.CastArrayElem(cellValue.Val, cellValue.Type, slotElemType),
+				Type: slotElemType,
+			}
+		}
+		valueToStore := c.deepCopyIfNeeded(cellValue)
+		c.freeSymbolValue(cellSlot, "array_cell_old")
+		c.storeSymbolToSlot(cellSlot, valueToStore, slotElemType, "array_cell_store")
+		c.freeTemporary(cell, vals)
+	}
+
 	if !c.withActiveBoundsGuard(
-		"acc_bounds_ok",
-		"acc_push",
-		"acc_skip",
-		"acc_cont",
-		func() {
-			c.pushAccumCell(acc, vals, cell, elemType)
-		},
+		"array_cell_bounds_ok",
+		"array_cell_store",
+		"array_cell_skip",
+		"array_cell_cont",
+		store,
 		func() {
 			c.freeTemporary(cell, vals)
 		},
 	) {
-		c.pushAccumCell(acc, vals, cell, elemType)
+		store()
 	}
 }
 
-func (c *Compiler) pushAccumCell(acc *ArrayAccumulator, vals []*Symbol, cell ast.Expression, elemType Type) {
-	_, isIdent := cell.(*ast.Identifier)
-	c.pushAccumCellValue(acc, c.derefIfPointer(vals[0], ""), !isIdent, elemType)
+func (c *Compiler) setArrayCellSlot(vec llvm.Value, idx llvm.Value, cellSlot *Symbol, elemType Type) bool {
+	cellValue := c.derefIfPointer(cellSlot, "array_cell_value")
+	if cellValue.Type.Kind() != elemType.Kind() {
+		cellValue = &Symbol{
+			Val:  c.CastArrayElem(cellValue.Val, cellValue.Type, elemType),
+			Type: elemType,
+		}
+	}
+
+	if elemType.Kind() == StrKind && IsStrH(cellValue.Type) {
+		c.ArraySetOwnForType(elemType, vec, idx, cellValue.Val)
+		return true
+	}
+
+	c.ArraySetForType(elemType, vec, idx, cellValue.Val)
+	return false
+}
+
+func (c *Compiler) pushArrayCellSlot(acc *ArrayAccumulator, cellSlot *Symbol, elemType Type) bool {
+	cellValue := c.derefIfPointer(cellSlot, "array_cell_value")
+	takeOwnership := elemType.Kind() == StrKind && IsStrH(cellValue.Type)
+	c.pushAccumCellValue(acc, cellValue, takeOwnership, elemType)
+	return takeOwnership
 }
 
 // pushAccumCellValue appends one accumulated cell value, handling element casts
@@ -926,51 +947,53 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
-		arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
-		// Source operands are temporary for each loop iteration in this path.
-		defer c.freeTemporary(rew.Array, []*Symbol{arraySym})
-		defer c.freeTemporary(rew.Range, []*Symbol{idxSym})
+		c.compileOperandCondExprValue(rew, llvm.Value{}, func() {
+			arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
+			// Source operands are temporary for each loop iteration in this path.
+			defer c.freeTemporary(rew.Array, []*Symbol{arraySym})
+			defer c.freeTemporary(rew.Range, []*Symbol{idxSym})
 
-		if idxSym.Type.Kind() == RangeKind {
-			panic("internal: range-lowered array access requires scalar index")
-		}
+			if idxSym.Type.Kind() == RangeKind {
+				panic("internal: range-lowered array access requires scalar index")
+			}
 
-		arrElemType := arrType.ColTypes[0]
-		resultType := arrayAccessResultType(arrElemType)
-		idxVal := c.normalizeArrayIndex(idxSym)
+			arrElemType := arrType.ColTypes[0]
+			resultType := arrayAccessResultType(arrElemType)
+			idxVal := c.normalizeArrayIndex(idxSym)
 
-		if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
-			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-			c.storeArrayRangeOutput(output, elemVal, resultType)
-			return
-		}
+			if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
+				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+				c.storeArrayRangeOutput(output, elemVal, resultType)
+				return
+			}
 
-		inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
-		if c.inArrayLiteralCellMode() {
-			storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
+			inBounds := c.arrayIndexInBounds(arraySym, arrElemType, idxVal)
+			if c.inArrayLiteralCellMode() {
+				storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
+
+				c.builder.SetInsertPointAtEnd(storeBlock)
+				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+				c.storeArrayRangeOutput(output, elemVal, resultType)
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(missBlock)
+				zeroVal := c.makeZeroValue(resultType)
+				c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
+				c.builder.CreateBr(contBlock)
+
+				c.builder.SetInsertPointAtEnd(contBlock)
+				return
+			}
+
+			storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
 
 			c.builder.SetInsertPointAtEnd(storeBlock)
 			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
 			c.storeArrayRangeOutput(output, elemVal, resultType)
 			c.builder.CreateBr(contBlock)
 
-			c.builder.SetInsertPointAtEnd(missBlock)
-			zeroVal := c.makeZeroValue(resultType)
-			c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
-			c.builder.CreateBr(contBlock)
-
 			c.builder.SetInsertPointAtEnd(contBlock)
-			return
-		}
-
-		storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
-
-		c.builder.SetInsertPointAtEnd(storeBlock)
-		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-		c.storeArrayRangeOutput(output, elemVal, resultType)
-		c.builder.CreateBr(contBlock)
-
-		c.builder.SetInsertPointAtEnd(contBlock)
+		})
 	})
 
 	elemType := output.Type.(Ptr).Elem

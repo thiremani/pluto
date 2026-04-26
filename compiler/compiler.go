@@ -1815,22 +1815,24 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		left := c.compileExpression(leftRew, nil)
-		right := c.compileExpression(rightRew, nil)
+		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+			left := c.compileExpression(leftRew, nil)
+			right := c.compileExpression(rightRew, nil)
 
-		for i := 0; i < len(left); i++ {
-			c.compileRangeInfixSlot(
-				expr.Operator,
-				info.CompareModes[i],
-				info.OutTypes[i],
-				left[i],
-				right[i],
-				outputs[i],
-				leftTempsHandledInline,
-			)
-		}
+			for i := 0; i < len(left); i++ {
+				c.compileRangeInfixSlot(
+					expr.Operator,
+					info.CompareModes[i],
+					info.OutTypes[i],
+					left[i],
+					right[i],
+					outputs[i],
+					leftTempsHandledInline,
+				)
+			}
 
-		c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempsHandledInline)
+			c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempsHandledInline)
+		})
 	})
 
 	// Load final values from outputs
@@ -2082,14 +2084,16 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		ops := c.compileExpression(rightRew, nil)
+		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+			ops := c.compileExpression(rightRew, nil)
 
-		for i := 0; i < len(ops); i++ {
-			c.compileRangePrefixSlot(expr.Operator, ops[i], info.OutTypes[i], outputs[i])
-		}
+			for i := 0; i < len(ops); i++ {
+				c.compileRangePrefixSlot(expr.Operator, ops[i], info.OutTypes[i], outputs[i])
+			}
 
-		// Range-loop operand is temporary per iteration (except identifiers).
-		c.freeTemporary(rightRew, ops)
+			// Range-loop operand is temporary per iteration (except identifiers).
+			c.freeTemporary(rightRew, ops)
+		})
 	})
 
 	// Materialize final values

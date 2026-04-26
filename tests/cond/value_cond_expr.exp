@@ -23,6 +23,11 @@ FloatTrue: 3.14
 FloatFalse: 0
 CallTrue: 10
 CallFalse: 0
+NestedRangeCondInfix: 12
+NestedRangeCondPrefix: -2
+NestedRangeCondIndex: 30
+RangeCondExistingFalse: 99
+TupleLocalCond: 12 4
 CallLhsTrue: 10
 CallLhsFalse: 0
 NestedCondTrue: 10 5
