@@ -38,6 +38,16 @@ squareVec = [Square(0:5)]
 squareInline = Square([0:5])
 "SquareInline: -squareInline"
 
+# Same driver name outside and inside [] should still recollect the full range
+i = 0:5
+squareSameDriver = i + Square([i])
+"SquareSameDriver: -squareSameDriver"
+
+# Calls inside nested collectors use the collector's scalar iterator.
+i = 0:5
+nestedCallCollector = i + 1 + [Square(i)]
+"NestedCallCollector: -nestedCallCollector"
+
 # Ensure function-internal array assignment builds a fresh array (no accumulation on param)
 rebuilt = [1 2 3]
 rebuilt = Rebuild(rebuilt, 10:13)

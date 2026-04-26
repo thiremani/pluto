@@ -63,9 +63,8 @@ type Symbol struct {
 //   - Borrowed tracks lifetime/ownership (cleanup must skip when true).
 
 type FuncArgs struct {
-	Inputs      []*Symbol          // lowered function inputs (range iterators remain pointer-backed)
-	IterIndices []int              // Indices of iterator params
-	Iters       map[string]*Symbol // Current iterator values during loop
+	Inputs      []*Symbol // lowered function inputs (range iterators remain pointer-backed)
+	IterIndices []int     // Indices of iterator params
 }
 
 type callArg struct {
@@ -106,6 +105,14 @@ type paramAlias struct {
 	AliasIndex  llvm.Value
 	OutputNames []string
 }
+
+type symbolSource int
+
+const (
+	symbolMissing symbolSource = iota
+	symbolLocal
+	symbolCode
+)
 
 func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym = &Symbol{}
@@ -376,26 +383,18 @@ func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) 
 	return c.valueSymbol(name, s, loadName), true
 }
 
-type symbolSource int
-
-const (
-	Missing symbolSource = iota
-	Local
-	Code
-)
-
 func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
 	if s, ok := Get(c.Scopes, name); ok {
-		return s, Local
+		return s, symbolLocal
 	}
 	if c.CodeCompiler == nil {
-		return nil, Missing
+		return nil, symbolMissing
 	}
 	s, ok := Get(c.CodeCompiler.Compiler.Scopes, name)
 	if !ok {
-		return nil, Missing
+		return nil, symbolMissing
 	}
-	return s, Code
+	return s, symbolCode
 }
 
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
@@ -430,10 +429,10 @@ func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbo
 
 func (c *Compiler) namedValueSymbol(name string, loadName string) (*Symbol, bool) {
 	s, source := c.lookupNamedSymbol(name)
-	if source == Missing {
+	if source == symbolMissing {
 		return nil, false
 	}
-	if source == Local {
+	if source == symbolLocal {
 		return c.valueSymbol(name, s, loadName), true
 	}
 	// CodeCompiler bindings are global code-scope values/slots, not active
@@ -1543,7 +1542,7 @@ func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
 
 func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 	s, source := c.lookupNamedSymbol(ident.Value)
-	if source == Local {
+	if source == symbolLocal {
 		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
 	return c.derefIfPointer(s, ident.Value+"_load")
@@ -1590,7 +1589,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 // If it is a PtrKind, returns alloca and Type will be PtrKind.
 func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 	s, source := c.lookupNamedSymbol(name)
-	return s, source != Missing
+	return s, source != symbolMissing
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
@@ -1804,34 +1803,36 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 	// Mark as borrowed so cleanupScope skips them - values are returned via out.
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
-	leftRew := info.Rewrite.(*ast.InfixExpression).Left
-	rightRew := info.Rewrite.(*ast.InfixExpression).Right
-	_, leftIsIdent := leftRew.(*ast.Identifier)
-	// CondScalar makes left-temp ownership branch-dependent (store on true,
-	// drop on false), so handle left temp cleanup inline per slot.
-	leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
+	rew := info.Rewrite.(*ast.InfixExpression)
+	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, nil, func(prepared *ast.InfixExpression) {
+		leftRew := prepared.Left
+		rightRew := prepared.Right
+		_, leftIsIdent := leftRew.(*ast.Identifier)
+		// CondScalar makes left-temp ownership branch-dependent (store on true,
+		// drop on false), so handle left temp cleanup inline per slot.
+		leftTempsHandledInline := info.HasCondScalar() && !leftIsIdent
 
-	// Build nested loops, storing final value
-	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.InfixExpression), func() {
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		left := c.compileExpression(leftRew, nil)
-		right := c.compileExpression(rightRew, nil)
+		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+			left := c.compileExpression(leftRew, nil)
+			right := c.compileExpression(rightRew, nil)
 
-		for i := 0; i < len(left); i++ {
-			c.compileRangeInfixSlot(
-				expr.Operator,
-				info.CompareModes[i],
-				info.OutTypes[i],
-				left[i],
-				right[i],
-				outputs[i],
-				leftTempsHandledInline,
-			)
-		}
+			for i := 0; i < len(left); i++ {
+				c.compileRangeInfixSlot(
+					expr.Operator,
+					info.CompareModes[i],
+					info.OutTypes[i],
+					left[i],
+					right[i],
+					outputs[i],
+					leftTempsHandledInline,
+				)
+			}
 
-		c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempsHandledInline)
+			c.cleanupRangeInfixTemps(leftRew, rightRew, left, right, leftTempsHandledInline)
+		})
 	})
 
 	// Load final values from outputs
@@ -2077,22 +2078,22 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
 	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
 
-	// Rewritten operand under tmp iters.
-	rightRew := info.Rewrite.(*ast.PrefixExpression).Right
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.PrefixExpression), info.Ranges, nil, nil, func(prepared *ast.PrefixExpression) {
+		rightRew := prepared.Right
 
-	// Drive the loops and store into outputs each trip.
-	c.withLoopNestVersioned(info.Ranges, info.Rewrite.(*ast.PrefixExpression), func() {
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		ops := c.compileExpression(rightRew, nil)
+		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+			ops := c.compileExpression(rightRew, nil)
 
-		for i := 0; i < len(ops); i++ {
-			c.compileRangePrefixSlot(expr.Operator, ops[i], info.OutTypes[i], outputs[i])
-		}
+			for i := 0; i < len(ops); i++ {
+				c.compileRangePrefixSlot(expr.Operator, ops[i], info.OutTypes[i], outputs[i])
+			}
 
-		// Range-loop operand is temporary per iteration (except identifiers).
-		c.freeTemporary(rightRew, ops)
+			// Range-loop operand is temporary per iteration (except identifiers).
+			c.freeTemporary(rightRew, ops)
+		})
 	})
 
 	// Materialize final values
@@ -2344,7 +2345,6 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
-		Iters:       make(map[string]*Symbol),
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2366,7 +2366,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
-		c.compileBlockWithArgs(template, map[string]*Symbol{}, map[string]*Symbol{})
+		c.compileBlockWithArgs(template, nil)
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
@@ -2483,11 +2483,13 @@ func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *S
 
 func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, currentOutput *Symbol) *Symbol {
 	if level == len(fa.IterIndices) {
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
 		if currentOutput == nil {
-			c.compileBlockWithArgs(fn, map[string]*Symbol{}, fa.Iters)
+			c.compileBlockWithArgs(fn, nil)
 			return nil
 		}
-		return c.compileDirectOutputIterBody(fn, fa.Iters, currentOutput)
+		return c.compileDirectOutputIterBody(fn, currentOutput)
 	}
 
 	paramIdx := fa.IterIndices[level]
@@ -2495,13 +2497,16 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	name := fn.Parameters[paramIdx].Value
 
 	next := func(iterVal llvm.Value, iterType Type, current *Symbol) *Symbol {
-		fa.Iters[name] = &Symbol{
+		iterSym := &Symbol{
 			Val:      iterVal,
 			Type:     iterType,
 			FuncArg:  true,
 			Borrowed: true,
 			ReadOnly: false,
 		}
+		PushScope(&c.Scopes, BlockScope)
+		Put(c.Scopes, name, iterSym)
+		defer c.popScope()
 		return c.funcLoopNest(fn, fa, level+1, current)
 	}
 
@@ -2528,30 +2533,22 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	default:
 		panic("unsupported iterator kind in funcLoopNest")
 	}
-	delete(fa.Iters, name)
 	return result
 }
 
-func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, iters map[string]*Symbol, currentOutput *Symbol) *Symbol {
-	PushScope(&c.Scopes, BlockScope)
-	defer c.popScope()
-
-	PutBulk(c.Scopes, iters)
+func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
 	// Direct-return ABI is single-output today, so the loop body only needs the
 	// current scalar output binding for fn.Outputs[0].
-	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
-
-	for _, stmt := range fn.Body.Statements {
-		c.compileStatement(stmt)
-	}
+	c.compileBlockWithArgs(fn, map[string]*Symbol{fn.Outputs[0].Value: currentOutput})
 
 	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
 	return output
 }
 
-func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol, iters map[string]*Symbol) {
+// compileBlockWithArgs executes a function body in the writable scope prepared
+// by the caller, seeding any extra scalar bindings needed for that body entry.
+func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol) {
 	PutBulk(c.Scopes, scalars)
-	PutBulk(c.Scopes, iters)
 
 	for _, stmt := range fn.Body.Statements {
 		c.compileStatement(stmt)
@@ -2720,9 +2717,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 		}
 		return c.makeZeroValue(outType)
 	})
-	rewCall := info.Rewrite.(*ast.CallExpression)
-
-	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		c.pushBoundsGuard("call_iter_bounds_guard")
 		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
 			c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
@@ -2734,8 +2729,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 }
 
 func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
-	rewCall := info.Rewrite.(*ast.CallExpression)
-	c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		// Scope bounds checks to this loop iteration: arguments can contain
 		// multiple array reads, and the call should execute only when all are
 		// in-bounds for this iteration.
@@ -3065,8 +3059,12 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
-		rewCall := info.Rewrite.(*ast.CallExpression)
-		c.withLoopNestVersioned(info.Ranges, rewCall, func() {
+		// Collector preparation can bind collecttmp_* before the print loop opens.
+		// Keep those temporaries scoped to this print statement.
+		PushScope(&c.Scopes, BlockScope)
+		defer c.popScope()
+
+		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 			c.printAllExpressions(rewCall.Arguments)
 		})
 		return

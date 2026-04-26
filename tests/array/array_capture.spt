@@ -22,6 +22,17 @@ j = 1:6:3
 arr6 = [3j]
 "ScaledWithoutSpace: -arr6"
 
+j = 6:0:-1
+arrDesc = [j]
+"DescendingCapture: -arrDesc"
+
+arrDescConcat = []
+arrDescConcat = arrDescConcat ⊕ [2j]
+"DescendingConcat: -arrDescConcat"
+
+multiRangeCapture = i + [i] - [3j]
+"MultiRangeCapture: -multiRangeCapture"
+
 arrBase = [1 2 3 4 5]
 arrRangeCapture = [arrBase[1:4]]
 "ArrayRangeCapture: -arrRangeCapture"

@@ -1,381 +1,364 @@
 # Pluto Range Semantics
 
-## Core Principle: Base Function Model
+## Core Model
 
-In Pluto, **every operation is a function**. Each expression has a **base function** that determines where range iteration occurs. Ranges are expanded as loops **inside** the base function's body.
+Expressions that mention ranges produce ordered per-iteration values.
+Those values are not arrays by default.
 
-### Finding the Base Function
+There are two explicit closing steps:
 
-Every expression is a function call. The base function is found by:
+1. `[]` closes a value stream into an array.
+2. The root expression of a scalar assignment closes any remaining outer
+   iteration by taking the final yielded value in iteration order.
 
-```
-findBase(f):
-    if f has exactly one argument AND that argument is a function call g:
-        return findBase(g)  # descend into single-arg function
-    else:
-        return f  # f is base
-```
+This keeps array materialization and scalar finalization separate.
 
-**Rules:**
-1. Start at the root function of the expression
-2. If it has exactly **one argument** that is itself a **function call**, descend into it
-3. Continue until you hit a function with multiple args, or whose single arg is a value (range, variable, literal)
-4. The base function's body contains all range iteration loops
+## Ranges And Drivers
 
-### Examples
+A range or array-range used in an expression contributes an iteration driver.
+Multiple distinct drivers form a nested iteration domain in source order.
+Repeated use of the same driver name refers to the same loop, not a nested copy.
 
-| Expression | Tree | Base | Reason |
-|------------|------|------|--------|
-| `f(0:5)` | `f(range)` | `f` | single arg is value |
-| `f(g(0:5))` | `f(g(range))` | `g` | descend through single-arg `f` |
-| `f(g(h(0:5)))` | `f(g(h(range)))` | `h` | keep descending |
-| `f(a, b)` | `f(a, b)` | `f` | multiple args |
-| `a + b` | `Add(a, b)` | `Add` | multiple args |
-| `-x` | `Negate(x)` | `Negate` | single arg is value |
-| `-(0:5)` | `Negate(range)` | `Negate` | single arg is value |
-| `√(x + y)` | `Sqrt(Add(x, y))` | `Add` | descend through single-arg `Sqrt` |
-| `√(x + 0:5)` | `Sqrt(Add(x, range))` | `Add` | descend to `Add` |
-| `arr[0:5] + 1` | `Add(Index(arr, range), 1)` | `Add` | multiple args |
+Example:
 
----
-
-## Range Basics
-
-A range `start:stop` or `start:stop:step` defines iteration bounds:
-
-```python
-i = 0:5          # Iterates: 0, 1, 2, 3, 4
-j = 0:10:2       # Iterates: 0, 2, 4, 6, 8
-k = 5:0:-1       # Iterates: 5, 4, 3, 2, 1
-```
-
-Ranges are values that describe iteration - they expand when used in expressions.
-
----
-
-## Loop Generation Inside Base Function
-
-Once the base function is determined, all ranges in its arguments become nested loops around its body:
-
-### Example: Simple Function Call
-
-```python
-i = 0:5
-x = Square(i)
-```
-
-- Base function: `Square` (single arg is range value)
-- Range `i` in args → loop inside Square's body
-
-**Generated structure:**
-```
-Square:
-    for i_val in 0:5:
-        x = i_val * i_val
-```
-
-### Example: Nested Single-Arg Functions
-
-```python
-x = √(Square(0:5))
-```
-
-- Tree: `Sqrt(Square(range))`
-- `Sqrt` has single arg `Square(...)` which is a function → descend
-- `Square` has single arg `0:5` (value, not function) → **base is `Square`**
-
-**Generated structure:**
-```
-Square:
-    for i_val in 0:5:
-        tmp = i_val * i_val
-Sqrt(tmp)  # Applied to final result
-```
-
-### Example: Multiple Arguments
-
-```python
-x = f(0:3, 10:13)
-```
-
-- `f` has 2 args → **base is `f`**
-- Both ranges become nested loops
-
-**Generated structure:**
-```
-f:
-    for tmp1 in 0:3:
-        for tmp2 in 10:13:
-            <body of f>
-```
-
-### Example: Infix with Range
-
-```python
-x = a + 0:5
-```
-
-- Tree: `Add(a, range)`
-- `Add` has 2 args → **base is `Add`**
-
-**Generated structure:**
-```
-Add:
-    for i_val in 0:5:
-        x = a + i_val
-```
-
-### Example: Prefix Applied to Infix
-
-```python
-x = √(a + 0:5)
-```
-
-- Tree: `Sqrt(Add(a, range))`
-- `Sqrt` has single arg `Add(...)` which is a function → descend
-- `Add` has 2 args → **base is `Add`**
-
-**Generated structure:**
-```
-Add:
-    for i_val in 0:5:
-        tmp = a + i_val
-Sqrt(tmp)  # Applied to final result
-```
-
----
-
-## Loop Generation Modes
-
-When ranges expand, the behavior depends on the assignment operator:
-
-### Mode 1: Assignment (Last Value)
-
-Simple assignment keeps the last iteration value:
-
-```python
+```pluto
 i = 0:5
 x = i + 1
 ```
 
-**Generated code:**
-```c
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    x = i_val + 1;
-}
-// x = 5 (last value)
-```
+This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
+value, so `x = 5`.
 
-### Mode 2: Compound Assignment (Accumulate)
+## Calls, Infix, And Prefix
 
-Compound operators accumulate across iterations:
+Calls, infix operators, and prefix operators all follow the same rule:
+they transform the current per-iteration values of their range drivers.
+They do not choose a special "base function" that owns the loop.
 
-```python
-x = 0
-x += i
-```
+Examples:
 
-**Generated code:**
-```c
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    x = x + i_val;
-}
-// x = 0+1+2+3+4 = 10
-```
-
-### Mode 3: Array Literal (Collect)
-
-Wrapping in `[...]` collects values into an array:
-
-```python
-arr = [i * 2]
-```
-
-**Generated code:**
-```c
-arr = allocate_array(5);
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    arr[i_val] = i_val * 2;
-}
-// arr = [0, 2, 4, 6, 8]
-```
-
----
-
-## Multiple Ranges: Nested Loops
-
-When multiple ranges appear in the base function's arguments, they become **nested loops**:
-
-```python
-i = 0:2
-j = 0:3
-result = f(i, j)
-```
-
-**Generated structure:**
-```
-f:
-    for i_val in 0:2:
-        for j_val in 0:3:
-            <body of f>
-```
-
-This produces `2 × 3 = 6` iterations (Cartesian product).
-
-### Same Range Variable = Single Loop (Zip)
-
-If the same range variable appears multiple times, it's a single loop:
-
-```python
+```pluto
 i = 0:5
-result = i + i * 2
+x = Square(i)
 ```
 
-**Generated code:**
-```c
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    result = i_val + i_val * 2;
-}
-```
+This evaluates `Square` for each yielded `i` value, then the root assignment
+keeps the final result, so `x = 16`.
 
----
-
-## Conditional Assignment
-
-You can add a conditional guard to selectively update values:
-
-```python
-res = condition expression
-```
-
-**Desugars to:**
-```c
-for each iteration:
-    if (condition):
-        res = expression
-```
-
-### Example: Maximum Value
-
-```python
-arr = [3 1 4 1 5]
+```pluto
 i = 0:5
-res = arr[i] > res arr[i]
+x = i + 1
 ```
 
-**Generated code:**
-```c
-res = 0;
-for (int64_t i_val = 0; i_val < 5; i_val++) {
-    if (arr[i_val] > res) {
-        res = arr[i_val];
-    }
-}
-// res = 5 (maximum)
+This yields `1, 2, 3, 4, 5` across the `i` stream and the root assignment keeps
+the final value, so `x = 5`.
+
+```pluto
+i = 0:5
+x = √(i + 1)
 ```
 
----
+The infix expression first yields `1, 2, 3, 4, 5`, the prefix `√` is applied to
+each yielded value, and the root assignment keeps the final result.
 
-## Array Indexing with Ranges
+## Comparisons, Skip, And Fallback
 
-Using a range to index an array creates a view or loop:
+Comparisons in value position are filters, not booleans.
 
-```python
-arr = [10 20 30 40 50]
+```pluto
+i > 2
+```
+
+This yields `i` when true and yields nothing when false.
+
+`||` is a fallback on skip:
+
+```pluto
+i > 2 || 0
+```
+
+This yields `i` when the comparison succeeds, otherwise `0`.
+
+## Array Literals
+
+`[]` always materializes an array at the point where it appears.
+
+The collector materializes over:
+
+- statement gate ranges that admit the current RHS, and
+- ranges mentioned inside the literal itself.
+
+Sibling ranges from the surrounding expression do not expand the collector.
+The collector also does not leak its own ranges upward into the parent
+expression.
+
+Once the literal has materialized, the result is just an ordinary array value.
+Binding always produces an array value. Later statements treat it as an
+ordinary array, the same as any other named binding.
+
+### Collectors And Binding
+
+Binding a collector to a variable freezes the array produced at that binding
+site. Later statements treat it as an ordinary array, the same as any other
+named binding.
+
+For example:
+
+```pluto
+i = 0:5
+res = i + [0]
+```
+
+produces:
+
+```pluto
+[4]
+```
+
+Here `[0]` has no internal ranges and no statement gate, so it materializes as
+the singleton `[0]`. The sibling `i` range belongs to the surrounding infix
+expression and finalizes to `4`.
+
+To collect one `0` for each `i`, make `i` the statement gate:
+
+```pluto
+i = 0:5
+y = i [0]
+res = i + y
+```
+
+This produces:
+
+```pluto
+[4 4 4 4 4]
+```
+
+because `y` is collected as `[0 0 0 0 0]` under the admitted `i` domain.
+
+By contrast:
+
+```pluto
+i = 0:5
+y = [0]
+res = i + y
+```
+
+also produces `[4]`.
+
+Example:
+
+```pluto
+i = 0:5
+res = i + 1 + [i + 1]
+```
+
+`[i + 1]` first materializes `[1 2 3 4 5]` because `i` is mentioned inside
+the literal. The outer expression then continues with that frozen array value,
+giving `[6 7 8 9 10]` as the final value.
+
+Likewise:
+
+```pluto
+i = 0:5
+arr = [Square(i)]
+```
+
+collects the per-iteration results of `Square(i)` into `[0 1 4 9 16]`.
+
+## Zero-Fill Inside `[]`
+
+Array literals preserve shape.
+If a cell yields nothing, the collector inserts the zero value of the element
+type at that position.
+
+That applies to:
+
+- failed comparison cells
+- out-of-bounds array access inside a cell
+
+Examples:
+
+```pluto
+i = 0:10
+[i > 2 < 8]
+```
+
+produces:
+
+```pluto
+[0 0 0 3 4 5 6 7 0 0 0]
+```
+
+and
+
+```pluto
+[i > 2 < 8 || 2]
+```
+
+produces:
+
+```pluto
+[2 2 2 3 4 5 6 7 2 2 2]
+```
+
+`||` is resolved before the collector sees the final cell result, so explicit
+fallback values win over zero-fill.
+
+## Gated Collection
+
+Statement conditions outside `[]` gate the active iteration domain.
+They do not preserve shape.
+
+Example:
+
+```pluto
+i = 0:10
+arr = i > 2, i < 8 [i]
+```
+
+produces:
+
+```pluto
+[3 4 5 6 7]
+```
+
+The conditions select which outer iterations execute the collector at all.
+
+The same admitted domain applies to nested collectors in a non-collector RHS:
+
+```pluto
+i = 0:5
+arr = i < 3 1 + [0]
+```
+
+produces:
+
+```pluto
+[1 1 1]
+```
+
+By contrast:
+
+```pluto
+arr = [i > 2 < 8]
+```
+
+keeps the full array shape and zero-fills failed positions.
+
+## Statement Conditions And Tuples
+
+Statement conditions are shared across the whole assignment.
+They determine the admitted outer iteration domain for every output in the
+statement.
+
+Sibling RHS expressions do not share their local value drivers with each
+other.
+Each RHS adds only the extra drivers mentioned inside that expression.
+
+Examples:
+
+```pluto
 i = 0:3
-slice = arr[i]         # View (ArrayRange type)
-values = [arr[i]]      # Collect to new array [10, 20, 30]
-res += arr[i]          # Sum: res = 10+20+30 = 60
+j = 0:2
+x, y = i < 2 [1], j
 ```
 
----
+The statement condition `i < 2` is shared.
+`x` collects once for each admitted `i`, producing `[1 1]`.
+`y` uses its own local `j` driver inside that shared gate and ends with the
+final `j` value `1`.
 
-## Pass-by-Reference Semantics
+Likewise:
 
-Function arguments are passed by reference. When the same variable is used for input and output, they alias:
-
-```python
-rebuilt = [1 2 3]
-rebuilt = Rebuild(rebuilt, 10:13)  # Input and output alias!
+```pluto
+i = 0:10
+j = 0:5
+x, y = i < 8, j > 2 i + 1, (i + j) < 10
 ```
 
-**Aliased behavior:** Changes to output affect subsequent reads of input within the same iteration.
+The outer gate is `i < 8, j > 2`, so both outputs run only on admitted
+iterations.
+Inside that shared gate:
 
-**No aliasing (literal array):**
-```python
-result = Rebuild([1 2 3], 10:13)  # Fresh array, no aliasing
+- `x` uses only `i + 1`, so it ends with `8`
+- `y` applies its own value-position comparison and ends with `9`
+
+If a statement condition and an RHS expression mention the same driver name,
+the statement condition opens that outer loop first.
+Inside the RHS, the same name refers to the current scalar iterator value, not
+to a fresh nested loop.
+
+For non-collector tuple outputs, one admitted statement iteration is still one
+shared scalar update step.
+If one non-collector RHS hits an out-of-bounds failure on that iteration,
+sibling non-collector outputs keep their previous values for that same
+iteration.
+Top-level `[]` collectors still use their own local zero-fill rules for cells.
+
+## Nested Collectors
+
+Nested collectors materialize before the surrounding expression continues.
+
+Example:
+
+```pluto
+i = 0:6
+res = i > 2 i + [i]
 ```
 
----
+The statement condition admits `i = 3 4 5`.
+`[i]` first materializes `[3 4 5]` over that admitted stream.
+The outer expression then continues with the frozen array value, so the final
+result is `[8 9 10]`.
 
-## Functions with Range Parameters
+Sibling expression ranges still do not cross into nested collectors:
 
-When a function receives a range parameter, iteration happens **inside** the function body:
-
-```python
-res = AddMul(x, 0:5)
-    i = 10
-    res = i * x + y  # y iterates over 0:5
-```
-
-**Generated structure:**
-```
-AddMul:
-    for y_val in 0:5:
-        i = 10
-        res = i * x + y_val
-```
-
-The function receives the range, and its body contains the loop.
-
----
-
-## Prefix Operators
-
-Prefix operators (`-`, `√`, etc.) are single-argument functions. The base function rule applies:
-
-```python
-x = -(0:5)      # Tree: Negate(range) → base is Negate
-x = √(a + 0:5)  # Tree: Sqrt(Add(a, range)) → descend to Add
-```
-
----
-
-## Intermediate Values Become Scalars
-
-When you assign a range expression to a variable, the loop executes immediately:
-
-```python
+```pluto
 i = 0:5
-x = i + 1        # Loop executes NOW: x = 5 (scalar)
-y = i + 2        # Loop executes NOW: y = 7 (scalar)
-res = x / y      # No loop! Just: res = 5 / 7
+res = i + [([0] + 1)[0]]
 ```
 
-**For iteration over both:**
-```python
+`[0]` is a singleton because it has no internal range and no statement gate.
+`[([0] + 1)[0]]` is also a singleton, and the outer `i` finalizes to `4`, so
+the result is `[5]`.
+
+This is a semantic materialization boundary.
+The compiler may later hoist or fuse loops as an optimization, but that does
+not change the language meaning.
+
+## Scalar Contexts
+
+Outside `[]`, ranged expressions remain per-iteration values until the root
+assignment or statement consumes them.
+
+Examples:
+
+```pluto
 i = 0:5
-res = (i + 1) / (i + 2)  # Single loop, both computed per iteration
+x = i + 1
 ```
 
----
+`x` becomes `5`.
 
-## Summary
+```pluto
+arr = [i + 1]
+```
 
-| Concept | Rule |
-|---------|------|
-| **Base function** | Descend through single-arg function calls until multiple args or value arg |
-| **Range expansion** | Nested loops inside base function's body |
-| **Multiple ranges** | Nested loops (Cartesian product) |
-| **Same variable** | Single loop (zip behavior) |
-| **Assignment** | Last value kept |
-| **Compound assignment** | Accumulate across iterations |
-| **Array literal** | Collect all values |
-| **Pass-by-reference** | Input/output can alias |
+`arr` becomes `[1 2 3 4 5]`.
 
-**Core Design:**
-- Every operation is a function
-- Deterministic base function selection
-- Ranges expand as loops inside base function
-- No side effects in functions
-- Simple, predictable semantics
+## Singleton Arrays
+
+If no range drivers are open inside `[]`, the literal evaluates once and
+produces a singleton array.
+
+Example:
+
+```pluto
+x = 7
+[x]
+```
+
+produces `[7]`.
+
+This is not a special array-literal mode.
+It is the same collector rule applied to an expression with no active drivers.

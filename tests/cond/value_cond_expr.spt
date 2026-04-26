@@ -93,6 +93,30 @@ j = 15
 res2 = Double(j < 10)
 "CallFalse: -res2"
 
+# Nested conditional expression inside a ranged infix should skip false
+# iterations of the enclosing expression, not feed zero into the parent op.
+ri = 0:5
+nestedRangeCond = (ri < 3) + 10
+"NestedRangeCondInfix: -nestedRangeCond"
+
+ri = 0:5
+nestedRangeCondPrefix = -(ri < 3)
+"NestedRangeCondPrefix: -nestedRangeCondPrefix"
+
+idxData = [10 20 30 40 50]
+ri = 0:5
+nestedRangeCondIndex = idxData[ri < 3]
+"NestedRangeCondIndex: -nestedRangeCondIndex"
+
+ri = 0:5
+rangeCondExisting = 99
+rangeCondExisting = ri < 0
+"RangeCondExistingFalse: -rangeCondExisting"
+
+ri = 0:5
+tupleLocalCondA, tupleLocalCondB = (ri < 3) + 10, ri + 0
+"TupleLocalCond: -tupleLocalCondA -tupleLocalCondB"
+
 # Call result as LHS of conditional (exercises false-path temp cleanup)
 cr = Double(5) > 8
 "CallLhsTrue: -cr"

@@ -113,7 +113,8 @@ i = 0:5
 a, b, c = i < 3 [i], [i * 10], [5.2i]
 a, b, c
 
-# Multi-output with OOB literal cells zero-filled in sync
+# Tuple collectors are independent: OOB in one collector zero-fills there
+# without suppressing sibling collectors on the same iteration.
 data = [10 20]
 i = 0:4
 a, b = i < 3 [data[i]], [i]
@@ -215,10 +216,44 @@ i = 0:3
 stracc = i < 2 [sarr2[i]]
 stracc
 
-# Tuple accumulation with mixed value-level ranges
+# Tuple accumulation with mixed value-level ranges keeps each [] collector local.
 i = 0:3
 tc, td = i < 2 [0:2], [i]
 "TupleValueRangesA: -tc. TupleValueRangesB: -td"
+
+# Statement conditions are shared across tuple outputs, but sibling RHS
+# drivers stay local to the expression that mentions them.
+i = 0:3
+j = 0:2
+localLeakA, localLeakB = i < 2 [1], j
+"CondLocalDriversA: -localLeakA. CondLocalDriversB: -localLeakB"
+
+# When a statement condition and an RHS mention the same driver, the condition
+# opens the outer loop and the RHS sees the current scalar iterator value.
+i = 0:4
+j = 0:4
+sharedReuse = i < 3, j > 1 [i]
+"CondSharedReuse: -sharedReuse"
+
+# Statement-level conditions gate the whole tuple; value-position comparisons
+# still apply only to the expression that contains them.
+i = 0:10
+j = 0:5
+sharedTupleX, sharedTupleY = i < 8, j > 2 i + 1, (i + j) < 10
+"SharedTupleCondX: -sharedTupleX. SharedTupleCondY: -sharedTupleY"
+
+# Non-collector tuple outputs share the statement iteration, but RHS-local
+# bounds skips do not suppress sibling scalar outputs.
+data = [10 20]
+i = 0:4
+sharedBoundsX, sharedBoundsY = i < 4 data[i], i + 100
+"TupleLocalBoundsX: -sharedBoundsX. TupleLocalBoundsY: -sharedBoundsY"
+
+# The same local-bounds rule must hold regardless of tuple order.
+data = [10 20]
+i = 0:4
+sharedBoundsFlipX, sharedBoundsFlipY = i < 4 i + 100, data[i]
+"TupleLocalBoundsFlipX: -sharedBoundsFlipX. TupleLocalBoundsFlipY: -sharedBoundsFlipY"
 
 # Mixed tuple: array literal accumulates while scalar keeps last true value
 i = 0:4
@@ -264,11 +299,52 @@ i = 0:3
 rl = i < 2 0:3 + 10
 rl
 
-# Ranged condition + range literal in prefix value (rewrite used)
+# Value-position range condition + range literal in infix value (rewrite used)
 pl = 0
 i = 0:3
 pl = i < 2 -(0:3)
 "RangePrefixRewrite: -pl"
+
+# Nested [] under a ranged condition collects over the admitted outer stream
+# before the surrounding expression continues.
+i = 0:5
+sameCondNested = i < 2 [i] + 100
+"SameDriverCondNested: -sameCondNested"
+
+# Nested [] plus a local RHS range should not let that sibling range expand the
+# nested collector.
+i = 0:2
+condLocalRange = i < 2 [i] + 0:3
+"CondCollectorLocalRange: -condLocalRange"
+
+# Nested constant collectors also use the admitted outer stream.
+i = 0:6
+sameCondConst = i > 2 1 + [0]
+"SameDriverCondConst: -sameCondConst"
+
+# Collector loops can use the same affine fast path even when the statement
+# condition itself contains affine array accesses.
+condAffineArr = [10 20 30 40 50]
+i = 0:4
+condAffine = condAffineArr[i + 1] > 0 [condAffineArr[i + 1]]
+"CondCollectorAffine: -condAffine"
+
+k = 0:3
+condAffineOOB = condAffineArr[2k + 1] > 0 [condAffineArr[2k + 1]]
+"CondCollectorAffineOOB: -condAffineOOB"
+
+# A collected value is frozen once assigned; later statements reuse that array
+# rather than recollecting it against a new outer context.
+i = 0:6
+captured = i > 2 [0]
+capturedUse = i + captured
+"CapturedCollector: -captured. CapturedCollectorUse: -capturedUse"
+
+# Recursive collection inside a top-level collector still respects the admitted
+# outer stream when the surrounding cell expression keeps depending on it.
+i = 0:6
+nestedCondCell = i > 2 [([0] + i)[0]]
+"NestedCondCell: -nestedCondCell"
 
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]

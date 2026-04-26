@@ -758,6 +758,29 @@ func TestCanUseCondSelectWhitelist(t *testing.T) {
 	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
 }
 
+func TestCollectorArrayBindingCannotBeNestedAsCell(t *testing.T) {
+	script := `i = 0:5
+y = [i + 1]
+arr = y + [y]
+arr`
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "collector_array_binding_nested", "", ast.NewCode())
+	program := mustParseScript(t, script)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+
+	errs := sc.Compile()
+	require.NotEmpty(t, errs, "expected nested array cell compilation to fail")
+
+	messages := make([]string, len(errs))
+	for i, err := range errs {
+		messages[i] = err.Error()
+	}
+	require.Contains(t, strings.Join(messages, "\n"), "unsupported array element type [I64] in column 0")
+}
+
 func TestAffineArrayIndexExprUsesVersionedLoop(t *testing.T) {
 	script := `arr = [10 20 30 40 50]
 i = 0:4
@@ -782,6 +805,56 @@ x`
 	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block in script IR")
 	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block in script IR")
 	require.NotContains(t, scriptIR, "arr_get_affine_fast", "versioned loop fast path should not branch per iteration")
+}
+
+func TestAffineCollectorUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:4
+x = [arr[i + 1]]
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_collector_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in collector IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for collector IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for collector IR")
+}
+
+func TestAffineConditionalCollectorUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:4
+x = arr[i + 1] > 0 [arr[i + 1]]
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_cond_collector_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in conditional collector IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for conditional collector IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for conditional collector IR")
+}
+
+func TestAffinePendingCollectorUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:2
+j = 0:4
+x = i < 2 [arr[j + 1]]
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_pending_collector_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in pending collector IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for pending collector IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for pending collector IR")
+}
+
+func TestAffineStagedConditionalLocalRangeUsesVersionedLoop(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:2
+j = 0:4
+x = i < 2 arr[j + 1] + 1
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "affine_cond_stage_local_emit", "", script)
+	require.Contains(t, scriptIR, "idx_affine_all_safe", "expected affine safety predicate in staged conditional local range IR")
+	require.Contains(t, scriptIR, "loop_affine_fast", "expected affine fast loop block for staged conditional local range IR")
+	require.Contains(t, scriptIR, "loop_affine_checked", "expected affine checked loop block for staged conditional local range IR")
 }
 
 func TestAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
@@ -811,6 +884,19 @@ x`
 	require.NotContains(t, scriptIR, "arr_get_affine_fast", "non-affine index must not emit affine fast block")
 	require.Contains(t, scriptIR, "idx_in_bounds", "non-affine index should use checked bounds predicate")
 	require.Contains(t, scriptIR, "arr_get_oob", "non-affine index should use checked OOB block")
+}
+
+func TestNonAffineCollectorUsesCheckedPath(t *testing.T) {
+	script := `arr = [10 20 30 40 50]
+i = 0:5
+x = [arr[i % 3]]
+x`
+
+	scriptIR, _ := compileScriptAndCodeIR(t, "non_affine_collector_emit", "", script)
+	require.NotContains(t, scriptIR, "idx_affine_all_safe", "non-affine collector index must not emit affine predicate")
+	require.NotContains(t, scriptIR, "loop_affine_fast", "non-affine collector index must not emit affine fast loop")
+	require.Contains(t, scriptIR, "idx_in_bounds", "non-affine collector index should use checked bounds predicate")
+	require.Contains(t, scriptIR, "arr_get_oob", "non-affine collector index should use checked OOB block")
 }
 
 func TestNonAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {

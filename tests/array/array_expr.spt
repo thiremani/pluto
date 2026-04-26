@@ -36,6 +36,87 @@ arr3 = [1 2 3]
 res7 = arr3 + (10:13)
 "Array + Range: -res7"
 
+# Nested collection materializes before the outer ranged expression is finalized
+i = 0:5
+res7b = i + 1 + [i + 1]
+"Range + Collected Range: -res7b"
+
+# Nested constant collection does not inherit sibling range drivers from the
+# surrounding expression.
+i = 0:5
+res7c = i + [0]
+"Range + Collected Const: -res7c"
+
+# Collector loops still use affine fast-path lowering when the literal body
+# has provably in-bounds affine array accesses.
+arrAffine = [10 20 30 40 50]
+i = 0:4
+res7ca = [arrAffine[i + 1]]
+"Collected Affine Pos: -res7ca"
+
+j = 4:0:-1
+res7cb = [arrAffine[j - 1]]
+"Collected Affine Neg: -res7cb"
+
+k = 0:3
+res7cc = [arrAffine[2k + 1]]
+"Collected Affine OOB: -res7cc"
+
+# A statement gate can explicitly provide the collection domain; otherwise a
+# constant collector stays singleton.
+i = 0:5
+res7d = i + [0]
+yctx = i [0]
+res7e = i + yctx
+yplain = [0]
+res7f = i + yplain
+"Inline Collected Const: -res7d"
+"Gated Collected Const: -res7e"
+"Plain Collected Const: -res7f"
+
+# A value-position condition is a sibling expression, not a statement gate, so
+# it does not provide a collection domain for [0].
+i = 0:5
+localCondConst = (i < 3) + [0]
+"LocalCondConst: -localCondConst"
+
+# Collector cells use a fresh zero-seeded slot for each iteration. A failed
+# value-position condition leaves that cell seed in place instead of feeding
+# zero into the parent expression.
+i = 0:5
+cellCondValue = [i < 2]
+cellCondExpr = [(i < 2) + 5]
+"CellCondValue: -cellCondValue"
+"CellCondExpr: -cellCondExpr"
+
+# A name bound from a ranged expression is already finalized; later collectors
+# that mention it see the binding, not the original range driver.
+i = 0:5
+ybound = i + 1
+indirectBoundCollector = ybound + [ybound]
+"IndirectBoundCollector: -indirectBoundCollector"
+
+# Recursive collection inside an array cell materializes the inner collector
+# before the outer array cell expression continues.
+i = 0:5
+res7g = [([i] + 100)[0]]
+"Nested Cell Collector Collapse: -res7g"
+
+# If the surrounding cell expression still depends on the outer iterator after
+# inner materialization, the outer array literal collects that remaining stream.
+i = 0:5
+res7h = [([0] + i)[0]]
+"Nested Cell Collector Stream: -res7h"
+
+# Deeper nesting: each collector uses its own cell ranges. Sibling expression
+# drivers outside that collector do not expand it.
+dataNested = [10 20 30 40 50]
+i = 0:3
+j = 0:2
+k = 1:4
+res7i = i + [j + ([dataNested[i] + k][0])]
+"Deep Nested Cell Collector: -res7i"
+
 # Range + Array
 res8 = (5:8) + arr3
 "Range + Array: -res8"
