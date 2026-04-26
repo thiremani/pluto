@@ -289,11 +289,20 @@ func (c *Compiler) freeStageTempOutputs(tempNames []*ast.Identifier) {
 
 func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
 	for i, ident := range dest {
-		stageSym, _ := Get(c.Scopes, stageTempNames[i].Value)
-		destSym, _ := Get(c.Scopes, ident.Value)
+		stageSym, ok := Get(c.Scopes, stageTempNames[i].Value)
+		if !ok {
+			panic(fmt.Sprintf("internal: staged conditional temp %q not found in scope", stageTempNames[i].Value))
+		}
+		destSym, ok := Get(c.Scopes, ident.Value)
+		if !ok {
+			panic(fmt.Sprintf("internal: conditional temp %q not found in scope", ident.Value))
+		}
 
 		oldValue := c.valueSymbol(ident.Value, destSym, ident.Value+"_stage_old")
-		ptrType := destSym.Type.(Ptr)
+		ptrType, ok := destSym.Type.(Ptr)
+		if !ok {
+			panic(fmt.Sprintf("internal: conditional temp %q is not pointer-backed", ident.Value))
+		}
 
 		stagedValue := c.valueSymbol(stageTempNames[i].Value, stageSym, stageTempNames[i].Value+"_stage_final")
 		c.storeSymbolToSlot(destSym, stagedValue, ptrType.Elem, ident.Value+"_stage_commit")
