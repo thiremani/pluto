@@ -242,18 +242,18 @@ j = 0:5
 sharedTupleX, sharedTupleY = i < 8, j > 2 i + 1, (i + j) < 10
 "SharedTupleCondX: -sharedTupleX. SharedTupleCondY: -sharedTupleY"
 
-# Non-collector tuple outputs still share one admitted statement iteration:
-# an OOB scalar/indexed RHS keeps sibling scalar outputs at their prior value.
+# Non-collector tuple outputs share the statement iteration, but RHS-local
+# bounds skips do not suppress sibling scalar outputs.
 data = [10 20]
 i = 0:4
 sharedBoundsX, sharedBoundsY = i < 4 data[i], i + 100
-"SharedBoundsTupleX: -sharedBoundsX. SharedBoundsTupleY: -sharedBoundsY"
+"TupleLocalBoundsX: -sharedBoundsX. TupleLocalBoundsY: -sharedBoundsY"
 
-# The same shared-bounds rule must hold regardless of tuple order.
+# The same local-bounds rule must hold regardless of tuple order.
 data = [10 20]
 i = 0:4
 sharedBoundsFlipX, sharedBoundsFlipY = i < 4 i + 100, data[i]
-"SharedBoundsFlipX: -sharedBoundsFlipX. SharedBoundsFlipY: -sharedBoundsFlipY"
+"TupleLocalBoundsFlipX: -sharedBoundsFlipX. TupleLocalBoundsFlipY: -sharedBoundsFlipY"
 
 # Mixed tuple: array literal accumulates while scalar keeps last true value
 i = 0:4

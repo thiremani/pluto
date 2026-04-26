@@ -274,19 +274,6 @@ func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Iden
 	return tempNames
 }
 
-// Stage temps own their seeded copy or compiled temporary outright. Discarding
-// a failed staged write therefore frees only stage-local storage and never
-// touches the destination slot's current value.
-func (c *Compiler) freeStageTempOutputs(tempNames []*ast.Identifier) {
-	for _, ident := range tempNames {
-		tempSym, ok := Get(c.Scopes, ident.Value)
-		if !ok {
-			continue
-		}
-		c.freeSymbolValue(c.valueSymbol(ident.Value, tempSym, ident.Value+"_stage_discard"), ident.Value+"_stage_discard")
-	}
-}
-
 func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
 	for i, ident := range dest {
 		stageSym, _ := Get(c.Scopes, stageTempNames[i].Value)
@@ -310,12 +297,15 @@ type condStageGroup struct {
 	stageTempNames  []*ast.Identifier
 }
 
-func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifier, stageTempNames []*ast.Identifier, guardPtr llvm.Value) {
+func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	stageAliases := c.aliasCondDests(dest, stageTempNames)
 	defer c.restoreCondDests(stageAliases)
 
 	compileStageAssign := func() {
+		guardPtr := c.pushBoundsGuard("cond_value_guard")
+		defer c.popBoundsGuard()
+
 		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
 	}
 
@@ -333,7 +323,6 @@ func (c *Compiler) stageCondRangedAssignments(
 	assignExprs []ast.Expression,
 	assignDests []*ast.Identifier,
 	commitTempNames []*ast.Identifier,
-	guardPtr llvm.Value,
 ) []condStageGroup {
 	assignTargetIdx := 0
 	groups := make([]condStageGroup, 0, len(assignExprs))
@@ -352,7 +341,7 @@ func (c *Compiler) stageCondRangedAssignments(
 		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
 		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
 
-		c.stageCondRangedExpr(expr, exprDestNames, stageTempNames, guardPtr)
+		c.stageCondRangedExpr(expr, exprDestNames, stageTempNames)
 		groups = append(groups, condStageGroup{
 			commitTempNames: exprCommitTempNames,
 			stageTempNames:  stageTempNames,
@@ -363,34 +352,9 @@ func (c *Compiler) stageCondRangedAssignments(
 	return groups
 }
 
-func (c *Compiler) finalizeCondRangedStages(groups []condStageGroup, guardPtr llvm.Value) {
-	if !c.stmtBoundsUsed() {
-		for _, group := range groups {
-			c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
-			DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
-		}
-		return
-	}
-
-	c.withGuardedBranch(
-		guardPtr,
-		"cond_stage_ok",
-		"cond_stage_write",
-		"cond_stage_skip",
-		"cond_stage_cont",
-		func() {
-			for _, group := range groups {
-				c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
-			}
-		},
-		func() {
-			for _, group := range groups {
-				c.freeStageTempOutputs(group.stageTempNames)
-			}
-		},
-	)
-
+func (c *Compiler) commitCondRangedStages(groups []condStageGroup) {
 	for _, group := range groups {
+		c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
 		DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
 	}
 }
@@ -737,8 +701,8 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 }
 
 // compileCondRangedIteration runs inside the per-iteration body of
-// compileCondRangedStatement. It compiles scalar assignments under a
-// shared bounds guard and appends array literal cells to accumulators.
+// compileCondRangedStatement. It stages scalar assignments independently
+// and appends array literal cells to accumulators.
 func (c *Compiler) compileCondRangedIteration(
 	assignExprs []ast.Expression,
 	assignDests []*ast.Identifier,
@@ -752,22 +716,18 @@ func (c *Compiler) compileCondRangedIteration(
 		return
 	}
 
-	guardPtr := c.pushBoundsGuard("cond_value_guard")
-	defer c.popBoundsGuard()
-
 	// The outer statement condition admits one iteration here, but sibling RHS
-	// expressions may still fail bounds checks later in that same admitted step.
-	// To keep tuple order from becoming observable, each RHS first writes into a
-	// private stage temp. Only after every RHS (and any top-level collectors)
-	// has run do we branch on the final shared guard and either commit all stage
-	// temps into the real conditional commit temps or discard them all together.
-	stageGroups := c.stageCondRangedAssignments(assignExprs, assignDests, commitTempNames, guardPtr)
+	// expressions may still skip later in that same admitted step. Each RHS first
+	// writes into a private stage temp under its own bounds guard, so a local skip
+	// leaves that stage temp seeded with the prior value without suppressing
+	// sibling RHS writes.
+	stageGroups := c.stageCondRangedAssignments(assignExprs, assignDests, commitTempNames)
 
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
 
-	c.finalizeCondRangedStages(stageGroups, guardPtr)
+	c.commitCondRangedStages(stageGroups)
 }
 
 // compileCondExprStatement handles let statements that have conditional

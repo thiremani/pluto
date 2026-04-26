@@ -42,8 +42,8 @@ TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 1]
 CondLocalDriversA: [1 1]. CondLocalDriversB: 1
 CondSharedReuse: [0 0 1 1 2 2]
 SharedTupleCondX: 8. SharedTupleCondY: 9
-SharedBoundsTupleX: 20. SharedBoundsTupleY: 101
-SharedBoundsFlipX: 101. SharedBoundsFlipY: 20
+TupleLocalBoundsX: 20. TupleLocalBoundsY: 103
+TupleLocalBoundsFlipX: 103. TupleLocalBoundsFlipY: 20
 MixedLastWinsA: [0 1 2]. MixedLastWinsB: 12
 MixedCondExprA: [0 1 2]. MixedCondExprB: 1
 NeverCondExprA: [0 1 2]. NeverCondExprB: 0
