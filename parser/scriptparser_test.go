@@ -595,6 +595,12 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			value:     "(-0:3)",
 		},
 		{
+			name:      "attached prefix hex literal starts value",
+			input:     "res = i < 2 -0xff",
+			condCount: 1,
+			value:     "(-0xff)",
+		},
+		{
 			name:      "attached plus starts value",
 			input:     "res = i != 3 +10",
 			condCount: 1,

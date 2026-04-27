@@ -14,6 +14,12 @@ plusAttached = 0
 plusAttached = i != 3 +10
 "BoundaryPlus: -plusAttached"
 
+# Attached prefix on a based numeric literal still splits at the boundary.
+i = 0:5
+hexAttached = 0
+hexAttached = i < 2 -0xff
+"BoundaryHex: -hexAttached"
+
 # Spaces around the operator keep it as value-position infix arithmetic.
 i = 0:5
 minusSpaced = 99
