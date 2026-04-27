@@ -373,17 +373,17 @@ func (l *Lexer) readNumber() (string, bool) {
 		case 'b':
 			l.readRune()
 			l.readRune()
-			l.readBinaryLiteralTail()
+			l.readBaseLiteralTail(isBinaryDigit)
 			return string(l.input[position:l.position]), false
 		case 'o':
 			l.readRune()
 			l.readRune()
-			l.readOctalLiteralTail()
+			l.readBaseLiteralTail(isOctalDigit)
 			return string(l.input[position:l.position]), false
 		case 'x':
 			l.readRune()
 			l.readRune()
-			l.readHexLiteralTail()
+			l.readBaseLiteralTail(isASCIIHexDigit)
 			return string(l.input[position:l.position]), false
 		case 'B', 'O', 'X':
 			l.readRune()
@@ -402,18 +402,6 @@ func (l *Lexer) readNumber() (string, bool) {
 	}
 
 	return string(l.input[position:l.position]), false
-}
-
-func (l *Lexer) readBinaryLiteralTail() {
-	l.readBaseLiteralTail(isBinaryDigit)
-}
-
-func (l *Lexer) readOctalLiteralTail() {
-	l.readBaseLiteralTail(isOctalDigit)
-}
-
-func (l *Lexer) readHexLiteralTail() {
-	l.readBaseLiteralTail(isASCIIHexDigit)
 }
 
 func (l *Lexer) readBaseLiteralTail(validDigit func(rune) bool) {
