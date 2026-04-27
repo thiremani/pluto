@@ -388,7 +388,7 @@ func (l *Lexer) readNumber() (string, bool) {
 		case 'B', 'O', 'X':
 			l.readRune()
 			l.readRune()
-			l.readInvalidBaseLiteralTail()
+			l.readMalformedBaseLiteralTail()
 			return string(l.input[position:l.position]), false
 		}
 	}
@@ -417,10 +417,24 @@ func (l *Lexer) readBaseLiteralTail(base numberBase) {
 	l.readDigitsAndSeparators(base)
 	// Keep malformed based literals as one token: `0b01556` should fail as a
 	// single bad integer literal, not lex as `0b01` followed by `556`.
-	l.readInvalidBaseLiteralTail()
+	l.readInvalidBaseDigitTail(base)
 }
 
-func (l *Lexer) readInvalidBaseLiteralTail() {
+func (l *Lexer) readInvalidBaseDigitTail(base numberBase) {
+	for {
+		if isInvalidDigitForBase(l.curr, base) {
+			l.readRune()
+			continue
+		}
+		if l.curr == '\'' && isInvalidDigitForBase(l.peekRune(), base) {
+			l.readRune()
+			continue
+		}
+		return
+	}
+}
+
+func (l *Lexer) readMalformedBaseLiteralTail() {
 	for {
 		if isBaseLiteralTailChar(l.curr) {
 			l.readRune()
@@ -436,6 +450,10 @@ func (l *Lexer) readInvalidBaseLiteralTail() {
 
 func isBaseLiteralTailChar(ch rune) bool {
 	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
+}
+
+func isInvalidDigitForBase(ch rune, base numberBase) bool {
+	return IsDecimal(ch) && !isDigitForBase(ch, base)
 }
 
 func (l *Lexer) readDigitsAndSeparators(base numberBase) {

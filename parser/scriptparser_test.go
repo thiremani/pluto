@@ -168,7 +168,6 @@ func TestInvalidNumericLiteralValues(t *testing.T) {
 		"0Xffab",
 		"0b01556",
 		"0o89",
-		"0xfg",
 	}
 
 	for _, input := range tests {
@@ -455,6 +454,7 @@ func TestImplicitMultParsing(t *testing.T) {
 	}{
 		{"simple", "x = 5a", "x = (5 ⋅ a)"},
 		{"add after mult", "y = 5x + 2", "y = ((5 ⋅ x) + 2)"},
+		{"based hex", "y = 0x0abcx2", "y = (0x0abc ⋅ x2)"},
 		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 ⋅ x)) + 1)"},
 		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 ⋅ x)) + (3.11 ⋅ (x ^ 2))) + (2.03 ⋅ (x3 ^ 3))) + (7 ⋅ (x3ab ^ 4)))"},
 	}
