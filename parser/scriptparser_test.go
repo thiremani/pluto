@@ -178,6 +178,23 @@ func TestInvalidNumericLiteralValues(t *testing.T) {
 	}
 }
 
+func TestInvalidNumericLiteralSpacing(t *testing.T) {
+	tests := []string{
+		"0b 1011",
+		"0b1011' 0011",
+		"1' 000",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			l := lexer.New("TestInvalidNumericLiteralSpacing", input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			require.NotEmpty(t, sp.Errors(), "expected parse error for %q", input)
+		})
+	}
+}
+
 func ptrInt64(v int64) *int64 {
 	return &v
 }
