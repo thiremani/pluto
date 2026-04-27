@@ -387,6 +387,42 @@ func TestNumberLiterals(t *testing.T) {
 	}
 }
 
+func TestNumberSeparatorBoundaries(t *testing.T) {
+	tests := []struct {
+		input         string
+		firstLiteral  string
+		secondType    token.TokenType
+		secondLiteral string
+	}{
+		{"1''2", "1", token.ILLEGAL, "'"},
+		{"0b10''01", "0b10", token.ILLEGAL, "'"},
+		{"0b'1011", "0b'1011", token.EOF, ""},
+		{"0b''1011", "0b", token.ILLEGAL, "'"},
+	}
+
+	for _, tt := range tests {
+		l := New("TestNumberSeparatorBoundaries", tt.input)
+		first, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("input %q: unexpected first-token lexer error %v", tt.input, err)
+		}
+		if first.Type != token.INT {
+			t.Fatalf("input %q: first token type wrong. expected=%q, got=%q", tt.input, token.INT, first.Type)
+		}
+		if first.Literal != tt.firstLiteral {
+			t.Fatalf("input %q: first literal wrong. expected=%q, got=%q", tt.input, tt.firstLiteral, first.Literal)
+		}
+
+		second, _ := l.NextToken()
+		if second.Type != tt.secondType {
+			t.Fatalf("input %q: second token type wrong. expected=%q, got=%q", tt.input, tt.secondType, second.Type)
+		}
+		if second.Literal != tt.secondLiteral {
+			t.Fatalf("input %q: second literal wrong. expected=%q, got=%q", tt.input, tt.secondLiteral, second.Literal)
+		}
+	}
+}
+
 func TestReadOperator(t *testing.T) {
 	tests := []struct {
 		input    string
