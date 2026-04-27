@@ -397,7 +397,7 @@ func TestNumberSeparatorBoundaries(t *testing.T) {
 		{"1''2", "1", token.ILLEGAL, "'"},
 		{"0b10''01", "0b10", token.ILLEGAL, "'"},
 		{"1'2'", "1'2", token.ILLEGAL, "'"},
-		{"0b'1011", "0b", token.ILLEGAL, "'"},
+		{"0b'1011", "0b'1011", token.EOF, ""},
 		{"0b''1011", "0b", token.ILLEGAL, "'"},
 	}
 
