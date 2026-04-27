@@ -367,7 +367,7 @@ func TestNumberLiterals(t *testing.T) {
 		{"0b01556", token.INT, "0b01556"},
 		{"0xfg", token.INT, "0xf"},
 		{"0x0abcx2", token.INT, "0x0abc"},
-		{"0XFFAB", token.INT, "0XFFAB"},
+		{"0XFFAB", token.INT, "0"},
 		{"1'234.5'6", token.FLOAT, "1'234.5'6"},
 		{".5'0", token.FLOAT, ".5'0"},
 	}

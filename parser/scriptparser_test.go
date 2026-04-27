@@ -163,9 +163,6 @@ func TestNumericLiteralValues(t *testing.T) {
 func TestInvalidNumericLiteralValues(t *testing.T) {
 	tests := []string{
 		"0755",
-		"0B1011",
-		"0O755",
-		"0Xffab",
 		"0b01556",
 		"0o89",
 	}
@@ -455,6 +452,9 @@ func TestImplicitMultParsing(t *testing.T) {
 		{"simple", "x = 5a", "x = (5 ⋅ a)"},
 		{"add after mult", "y = 5x + 2", "y = ((5 ⋅ x) + 2)"},
 		{"based hex", "y = 0x0abcx2", "y = (0x0abc ⋅ x2)"},
+		{"uppercase hex prefix is implicit mult", "y = 0Xff", "y = (0 ⋅ Xff)"},
+		{"uppercase binary prefix is implicit mult", "y = 0B10", "y = (0 ⋅ B10)"},
+		{"uppercase octal prefix is implicit mult", "y = 0O7", "y = (0 ⋅ O7)"},
 		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 ⋅ x)) + 1)"},
 		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 ⋅ x)) + (3.11 ⋅ (x ^ 2))) + (2.03 ⋅ (x3 ^ 3))) + (7 ⋅ (x3ab ^ 4)))"},
 	}

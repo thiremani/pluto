@@ -385,11 +385,6 @@ func (l *Lexer) readNumber() (string, bool) {
 			l.readRune()
 			l.readBaseLiteralTail(numberBaseHex)
 			return string(l.input[position:l.position]), false
-		case 'B', 'O', 'X':
-			l.readRune()
-			l.readRune()
-			l.readMalformedBaseLiteralTail()
-			return string(l.input[position:l.position]), false
 		}
 	}
 
@@ -432,24 +427,6 @@ func (l *Lexer) readInvalidBaseDigitTail(base numberBase) {
 		}
 		return
 	}
-}
-
-func (l *Lexer) readMalformedBaseLiteralTail() {
-	for {
-		if isBaseLiteralTailChar(l.curr) {
-			l.readRune()
-			continue
-		}
-		if l.curr == '\'' && isBaseLiteralTailChar(l.peekRune()) {
-			l.readRune()
-			continue
-		}
-		return
-	}
-}
-
-func isBaseLiteralTailChar(ch rune) bool {
-	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
 }
 
 func isInvalidDigitForBase(ch rune, base numberBase) bool {

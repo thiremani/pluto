@@ -1032,8 +1032,6 @@ func parseIntegerLiteralValue(lit string) (int64, error) {
 		return strconv.ParseInt(lit[2:], 8, 64)
 	case 'x':
 		return strconv.ParseInt(lit[2:], 16, 64)
-	case 'B', 'O', 'X':
-		return 0, fmt.Errorf("uppercase integer literal prefix")
 	default:
 		if lexer.IsDecimal(rune(lit[1])) {
 			return 0, fmt.Errorf("leading-zero integer literal")
