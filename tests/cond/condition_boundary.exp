@@ -3,4 +3,4 @@ BoundaryPrefixRange: -2
 BoundaryPlus: 10
 BoundaryHex: -255
 SpacedMinusInfix: 0
-GroupedAttachedPlus: 12
+GroupedAttachedPlus: 10

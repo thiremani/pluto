@@ -625,16 +625,22 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			value:     "((i < 2) - x)",
 		},
 		{
-			name:      "grouped comparison remains value expression",
+			name:      "grouped comparison still splits on attached prefix",
 			input:     "res = (i < 2) -x",
-			condCount: 0,
-			value:     "((i < 2) - x)",
+			condCount: 1,
+			value:     "(-x)",
 		},
 		{
-			name:      "grouped comparison with attached plus remains value expression",
+			name:      "grouped comparison still splits on attached plus",
 			input:     "res = (i < 2) +10",
+			condCount: 1,
+			value:     "(+10)",
+		},
+		{
+			name:      "grouped comparison stays a value with spaced operator",
+			input:     "res = (i < 2) - x",
 			condCount: 0,
-			value:     "((i < 2) + 10)",
+			value:     "((i < 2) - x)",
 		},
 		{
 			name:      "bare identifier is not split as condition boundary",

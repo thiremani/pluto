@@ -97,15 +97,13 @@ type StmtParser struct {
 	infixParseFns   map[string]infixParseFn
 	postfixParseFns map[string]postfixParseFn
 
-	blankIdents  []token.Token // tracks blank identifiers during parsing
-	groupedExprs map[ast.Expression]struct{}
+	blankIdents []token.Token // tracks blank identifiers during parsing
 }
 
 func New(l *lexer.Lexer) *StmtParser {
 	p := &StmtParser{
-		l:            l,
-		errors:       []*token.CompileError{},
-		groupedExprs: make(map[ast.Expression]struct{}),
+		l:      l,
+		errors: []*token.CompileError{},
 	}
 
 	p.prefixParseFns = make(map[string]prefixParseFn)
@@ -409,7 +407,6 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
-	p.groupedExprs = make(map[ast.Expression]struct{})
 	expList := p.parseExpList(nil)
 
 	if p.stmtEnded() {
@@ -917,12 +914,12 @@ func (p *StmtParser) peekStartsAttachedPrefix() bool {
 }
 
 func (p *StmtParser) shouldSplitConditionValueBoundary(left ast.Expression) bool {
-	if _, grouped := p.groupedExprs[left]; grouped {
-		return false
-	}
 	// Restrict attached-prefix splitting to explicit comparisons. Bare identifier
 	// drivers are type-level conditions, so splitting `x = a -b` here would
 	// hijack ordinary scalar subtraction before the type solver can decide.
+	// Parens around the comparison don't suppress the split: use a spaced
+	// operator (`(i < 2) - x`) when you want the comparison to stay in value
+	// position with arithmetic, mirroring how array rows treat attached prefix.
 	return left.Tok().IsComparison()
 }
 
@@ -1245,9 +1242,6 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 		return nil
 	}
 
-	if exp != nil {
-		p.groupedExprs[exp] = struct{}{}
-	}
 	return exp
 }
 

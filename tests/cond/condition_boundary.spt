@@ -26,7 +26,10 @@ minusSpaced = 99
 minusSpaced = i < 2 - i
 "SpacedMinusInfix: -minusSpaced"
 
-# Parentheses force comparison-as-value even when the next operator is attached.
+# Parentheses don't suppress the attached-prefix split: `(ri < 3) +10` still
+# parses as cond=(ri<3), value=+10. Use a spaced operator (see
+# value_cond_expr.spt) to keep the comparison in value-position arithmetic.
 ri = 0:5
-grouped = (ri < 3) +10
-"GroupedAttachedPlus: -grouped"
+groupedAttached = 0
+groupedAttached = (ri < 3) +10
+"GroupedAttachedPlus: -groupedAttached"
