@@ -373,17 +373,17 @@ func (l *Lexer) readNumber() (string, bool) {
 		case 'b':
 			l.readRune()
 			l.readRune()
-			l.readBaseLiteralTail(isBinaryDigit)
+			l.readBaseLiteralTail(numberBaseBinary)
 			return string(l.input[position:l.position]), false
 		case 'o':
 			l.readRune()
 			l.readRune()
-			l.readBaseLiteralTail(isOctalDigit)
+			l.readBaseLiteralTail(numberBaseOctal)
 			return string(l.input[position:l.position]), false
 		case 'x':
 			l.readRune()
 			l.readRune()
-			l.readBaseLiteralTail(isASCIIHexDigit)
+			l.readBaseLiteralTail(numberBaseHex)
 			return string(l.input[position:l.position]), false
 		case 'B', 'O', 'X':
 			l.readRune()
@@ -393,19 +393,28 @@ func (l *Lexer) readNumber() (string, bool) {
 		}
 	}
 
-	l.readDigitsAndSeparators(IsDecimal)
+	l.readDigitsAndSeparators(numberBaseDecimal)
 
 	if l.curr == '.' {
 		l.readRune()
-		l.readDigitsAndSeparators(IsDecimal)
+		l.readDigitsAndSeparators(numberBaseDecimal)
 		return string(l.input[position:l.position]), true
 	}
 
 	return string(l.input[position:l.position]), false
 }
 
-func (l *Lexer) readBaseLiteralTail(validDigit func(rune) bool) {
-	l.readDigitsAndSeparators(validDigit)
+type numberBase int
+
+const (
+	numberBaseBinary numberBase = iota
+	numberBaseOctal
+	numberBaseDecimal
+	numberBaseHex
+)
+
+func (l *Lexer) readBaseLiteralTail(base numberBase) {
+	l.readDigitsAndSeparators(base)
 	// Keep malformed based literals as one token: `0b01556` should fail as a
 	// single bad integer literal, not lex as `0b01` followed by `556`.
 	l.readInvalidBaseLiteralTail()
@@ -429,29 +438,32 @@ func isBaseLiteralTailChar(ch rune) bool {
 	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
 }
 
-func isBinaryDigit(ch rune) bool {
-	return ch == '0' || ch == '1'
-}
-
-func isOctalDigit(ch rune) bool {
-	return '0' <= ch && ch <= '7'
-}
-
-func isASCIIHexDigit(ch rune) bool {
-	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'f'
-}
-
-func (l *Lexer) readDigitsAndSeparators(validDigit func(rune) bool) {
+func (l *Lexer) readDigitsAndSeparators(base numberBase) {
 	for {
-		if validDigit(l.curr) {
+		if isDigitForBase(l.curr, base) {
 			l.readRune()
 			continue
 		}
-		if l.curr == '\'' && validDigit(l.peekRune()) {
+		if l.curr == '\'' && isDigitForBase(l.peekRune(), base) {
 			l.readRune()
 			continue
 		}
 		return
+	}
+}
+
+func isDigitForBase(ch rune, base numberBase) bool {
+	switch base {
+	case numberBaseBinary:
+		return ch == '0' || ch == '1'
+	case numberBaseOctal:
+		return '0' <= ch && ch <= '7'
+	case numberBaseDecimal:
+		return IsDecimal(ch)
+	case numberBaseHex:
+		return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'f'
+	default:
+		return false
 	}
 }
 
