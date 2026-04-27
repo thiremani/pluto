@@ -410,7 +410,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
 	p.groupedExprs = make(map[ast.Expression]struct{})
-	expList := p.parseExpList()
+	expList := p.parseExpList(nil)
 
 	if p.stmtEnded() {
 		p.nextToken()
@@ -747,7 +747,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	// Allow line breaks/indentation between '=' and the first RHS expression
 	// so multi-line constructs (arrays, grouped expressions) work naturally.
 	p.skipArrayFormatting()
-	expList := p.parseConditionBoundaryExpList()
+	expList := p.parseExpList(p.shouldSplitConditionValueBoundary)
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
 	// to avoid panics downstream; errors are already recorded.
@@ -769,7 +769,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	stmt.Condition = expList
 
 	p.nextToken()
-	stmt.Value = p.parseExpList()
+	stmt.Value = p.parseExpList(nil)
 	p.errorOnBlanks()
 
 	if p.stmtEnded() {
@@ -817,15 +817,7 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 	return identifiers, ce
 }
 
-func (p *StmtParser) parseExpList() []ast.Expression {
-	return p.parseExpListWith(nil)
-}
-
-func (p *StmtParser) parseConditionBoundaryExpList() []ast.Expression {
-	return p.parseExpListWith(p.shouldSplitConditionValueBoundary)
-}
-
-func (p *StmtParser) parseExpListWith(splitPrefix attachedPrefixSplitFunc) []ast.Expression {
+func (p *StmtParser) parseExpList(splitPrefix attachedPrefixSplitFunc) []ast.Expression {
 	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
