@@ -274,6 +274,8 @@ func (p *StmtParser) splitOperator(tok token.Token, opType OpType) []token.Token
 			FileName: tok.FileName,
 			Line:     tok.Line,
 			Column:   tok.Column,
+			// Preserve source spacing so attached-prefix boundary checks still
+			// work after an operator run is split into parseable pieces.
 			HadSpace: tok.HadSpace,
 		},
 	}
@@ -407,6 +409,7 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
+	p.groupedExprs = make(map[ast.Expression]struct{})
 	expList := p.parseExpList()
 
 	if p.stmtEnded() {
@@ -823,25 +826,22 @@ func (p *StmtParser) parseConditionBoundaryExpList() []ast.Expression {
 }
 
 func (p *StmtParser) parseExpListWith(splitPrefix attachedPrefixSplitFunc) []ast.Expression {
-	expList := []ast.Expression{p.parseExpressionWithPrefixSplit(LOWEST, splitPrefix)}
+	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		expList = append(expList, p.parseExpressionWithPrefixSplit(LOWEST, splitPrefix))
+		expList = append(expList, p.parseExpression(LOWEST, splitPrefix))
 	}
 	return expList
 }
 
 type attachedPrefixSplitFunc func(ast.Expression) bool
 
-func (p *StmtParser) parseExpression(precedence float64, spacesMatter bool) ast.Expression {
-	if spacesMatter {
-		return p.parseExpressionWithPrefixSplit(precedence, func(ast.Expression) bool { return true })
-	}
-	return p.parseExpressionWithPrefixSplit(precedence, nil)
+func splitAfterAnyExpr(ast.Expression) bool {
+	return true
 }
 
-func (p *StmtParser) parseExpressionWithPrefixSplit(precedence float64, splitPrefix attachedPrefixSplitFunc) ast.Expression {
+func (p *StmtParser) parseExpression(precedence float64, splitPrefix attachedPrefixSplitFunc) ast.Expression {
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -967,7 +967,7 @@ func (p *StmtParser) parseArrayRangeExpression(array ast.Expression) ast.Express
 
 	// Parse the expression inside the brackets.
 	p.nextToken()
-	idx := p.parseExpression(LOWEST, false)
+	idx := p.parseExpression(LOWEST, nil)
 	if idx == nil {
 		return nil
 	}
@@ -1004,7 +1004,7 @@ func (p *StmtParser) parseIdentifier() ast.Expression {
 func (p *StmtParser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+	value, err := strconv.ParseInt(cleanNumberLiteral(p.curToken.Literal), 0, 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		ce := &token.CompileError{
@@ -1022,7 +1022,7 @@ func (p *StmtParser) parseIntegerLiteral() ast.Expression {
 
 func (p *StmtParser) parseFloatLiteral() ast.Expression {
 	lit := &ast.FloatLiteral{Token: p.curToken}
-	value, err := strconv.ParseFloat(p.curToken.Literal, 64)
+	value, err := strconv.ParseFloat(cleanNumberLiteral(p.curToken.Literal), 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as float", p.curToken.Literal)
 		ce := &token.CompileError{Token: p.curToken, Msg: msg}
@@ -1032,6 +1032,10 @@ func (p *StmtParser) parseFloatLiteral() ast.Expression {
 
 	lit.Value = value
 	return lit
+}
+
+func cleanNumberLiteral(lit string) string {
+	return strings.ReplaceAll(lit, "'", "")
 }
 
 func (p *StmtParser) parseStringLiteral() ast.Expression {
@@ -1137,7 +1141,7 @@ func (p *StmtParser) parseRow() []ast.Expression {
 			continue
 		}
 
-		expr := p.parseExpression(LOWEST, true)
+		expr := p.parseExpression(LOWEST, splitAfterAnyExpr)
 		if expr != nil {
 			row = append(row, expr)
 		}
@@ -1163,7 +1167,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	precedence := p.curPrecedence()
 	p.nextToken() // Consume the ':'
 
-	rl.Stop = p.parseExpression(precedence, false)
+	rl.Stop = p.parseExpression(precedence, nil)
 	if rl.Stop == nil {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
@@ -1175,7 +1179,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	if p.peekTokenIs(token.COLON) {
 		p.nextToken()
 		p.nextToken()
-		rl.Step = p.parseExpression(precedence, false)
+		rl.Step = p.parseExpression(precedence, nil)
 		if rl.Step == nil {
 			p.errors = append(p.errors, &token.CompileError{
 				Token: p.curToken,
@@ -1196,7 +1200,7 @@ func (p *StmtParser) parsePrefixExpression() ast.Expression {
 
 	p.nextToken()
 
-	expression.Right = p.parseExpression(PREFIX, false)
+	expression.Right = p.parseExpression(PREFIX, nil)
 
 	return expression
 }
@@ -1215,7 +1219,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 	}
 
 	p.nextToken()
-	expression.Right = p.parseExpression(rbp, false)
+	expression.Right = p.parseExpression(rbp, nil)
 
 	return expression
 }
@@ -1223,7 +1227,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	p.nextToken()
 
-	exp := p.parseExpression(LOWEST, false)
+	exp := p.parseExpression(LOWEST, nil)
 
 	if !p.expectPeek(token.RPAREN) {
 		return nil
@@ -1382,12 +1386,12 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 	}
 
 	p.nextToken()
-	args = append(args, p.parseExpression(LOWEST, false))
+	args = append(args, p.parseExpression(LOWEST, nil))
 
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		args = append(args, p.parseExpression(LOWEST, false))
+		args = append(args, p.parseExpression(LOWEST, nil))
 	}
 
 	if !p.expectPeek(token.RPAREN) {

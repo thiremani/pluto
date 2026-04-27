@@ -354,6 +354,36 @@ func TestASCIINumbers(t *testing.T) {
 	}
 }
 
+func TestNumberLiterals(t *testing.T) {
+	tests := []struct {
+		input   string
+		tokType token.TokenType
+		literal string
+	}{
+		{"1'000", token.INT, "1'000"},
+		{"0xffab", token.INT, "0xffab"},
+		{"0XFFAB", token.INT, "0XFFAB"},
+		{"0b1011'0001", token.INT, "0b1011'0001"},
+		{"0o7'55", token.INT, "0o7'55"},
+		{"1'234.5'6", token.FLOAT, "1'234.5'6"},
+		{".5'0", token.FLOAT, ".5'0"},
+	}
+
+	for _, tt := range tests {
+		l := New("TestNumberLiterals", tt.input)
+		tok, err := l.NextToken()
+		if err != nil {
+			t.Fatalf("input %q: unexpected lexer error %v", tt.input, err)
+		}
+		if tok.Type != tt.tokType {
+			t.Fatalf("input %q: token type wrong. expected=%q, got=%q", tt.input, tt.tokType, tok.Type)
+		}
+		if tok.Literal != tt.literal {
+			t.Fatalf("input %q: literal wrong. expected=%q, got=%q", tt.input, tt.literal, tok.Literal)
+		}
+	}
+}
+
 func TestReadOperator(t *testing.T) {
 	tests := []struct {
 		input    string

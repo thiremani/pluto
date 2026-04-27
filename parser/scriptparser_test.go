@@ -122,6 +122,52 @@ func TestIntegerLiteralExpression(t *testing.T) {
 	require.Equal(t, "5", lit.Tok().Literal)
 }
 
+func TestNumericLiteralValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantInt *int64
+		wantF64 *float64
+	}{
+		{name: "decimal separator", input: "1'000", wantInt: ptrInt64(1000)},
+		{name: "hex", input: "0xffab", wantInt: ptrInt64(65451)},
+		{name: "binary", input: "0b1011", wantInt: ptrInt64(11)},
+		{name: "octal", input: "0o755", wantInt: ptrInt64(493)},
+		{name: "float separator", input: "1'234.5'6", wantF64: ptrFloat64(1234.56)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestNumericLiteralValues", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			printStmt := requireOnlyPrintStmt(t, program)
+			if tt.wantInt != nil {
+				lit, ok := printStmt.Expression.Arguments[0].(*ast.IntegerLiteral)
+				require.Truef(t, ok, "expected *ast.IntegerLiteral, got %T", printStmt.Expression.Arguments[0])
+				require.Equal(t, *tt.wantInt, lit.Value)
+				require.Equal(t, tt.input, lit.Tok().Literal)
+				return
+			}
+
+			lit, ok := printStmt.Expression.Arguments[0].(*ast.FloatLiteral)
+			require.Truef(t, ok, "expected *ast.FloatLiteral, got %T", printStmt.Expression.Arguments[0])
+			require.Equal(t, *tt.wantF64, lit.Value)
+			require.Equal(t, tt.input, lit.Tok().Literal)
+		})
+	}
+}
+
+func ptrInt64(v int64) *int64 {
+	return &v
+}
+
+func ptrFloat64(v float64) *float64 {
+	return &v
+}
+
 func TestStringLiteral(t *testing.T) {
 	const input = `"hello"`
 	l := lexer.New("TestStringLiteral", input)
@@ -531,6 +577,18 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			input:     "res = i != 3 +10",
 			condCount: 1,
 			value:     "(+10)",
+		},
+		{
+			name:      "comma condition attached prefix starts value",
+			input:     "res = i < 2, j > 1 -x",
+			condCount: 2,
+			value:     "(-x)",
+		},
+		{
+			name:      "chained comparison attached prefix starts value",
+			input:     "res = a < b < c -d",
+			condCount: 1,
+			value:     "(-d)",
 		},
 		{
 			name:      "spaced minus remains infix",

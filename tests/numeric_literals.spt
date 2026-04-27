@@ -1,0 +1,8 @@
+dec = 1'000 + 2
+hex = 0xffab
+bin = 0b1011
+oct = 0o755
+oldOct = 0755
+flt = 1'234.5'6
+arr = [0x1 0b10 0o7 1'0]
+"NumericLiterals: -dec -hex -bin -oct -oldOct -flt -arr"

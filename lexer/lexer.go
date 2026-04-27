@@ -366,23 +366,53 @@ func (l *Lexer) readIdentifier() string {
 }
 
 func (l *Lexer) readNumber() (string, bool) {
-	isFloat := false
 	position := l.position
-	for IsDecimal(l.curr) {
+
+	if l.curr == '0' && isNumberBasePrefix(l.peekRune()) {
 		l.readRune()
+		l.readRune()
+		l.readBaseLiteralTail()
+		return string(l.input[position:l.position]), false
 	}
 
-	// Check for decimal point
+	l.readDigitsAndSeparators(IsDecimal)
+
 	if l.curr == '.' {
-		isFloat = true
 		l.readRune()
-		// Read fractional part
-		for IsDecimal(l.curr) {
-			l.readRune()
-		}
+		l.readDigitsAndSeparators(IsDecimal)
+		return string(l.input[position:l.position]), true
 	}
 
-	return string(l.input[position:l.position]), isFloat
+	return string(l.input[position:l.position]), false
+}
+
+func (l *Lexer) readDigitsAndSeparators(validDigit func(rune) bool) {
+	for {
+		if validDigit(l.curr) {
+			l.readRune()
+			continue
+		}
+		if l.curr == '\'' && validDigit(l.peekRune()) {
+			l.readRune()
+			continue
+		}
+		return
+	}
+}
+
+func (l *Lexer) readBaseLiteralTail() {
+	for isASCIIAlphaNum(l.curr) || l.curr == '\'' {
+		l.readRune()
+	}
+}
+
+func isNumberBasePrefix(ch rune) bool {
+	switch lower(ch) {
+	case 'b', 'o', 'x':
+		return true
+	default:
+		return false
+	}
 }
 
 // readOperator consumes a maximal sequence of operator characters and returns the combined string.
@@ -441,5 +471,9 @@ func IsOperator(ch rune) bool {
 }
 
 func IsDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
+
+func isASCIIAlphaNum(ch rune) bool {
+	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
+}
 
 func lower(ch rune) rune { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter
