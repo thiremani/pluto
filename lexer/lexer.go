@@ -368,11 +368,29 @@ func (l *Lexer) readIdentifier() string {
 func (l *Lexer) readNumber() (string, bool) {
 	position := l.position
 
-	if l.curr == '0' && isNumberBasePrefix(l.peekRune()) {
-		l.readRune()
-		l.readRune()
-		l.readBaseLiteralTail()
-		return string(l.input[position:l.position]), false
+	if l.curr == '0' {
+		switch l.peekRune() {
+		case 'b':
+			l.readRune()
+			l.readRune()
+			l.readBinaryLiteralTail()
+			return string(l.input[position:l.position]), false
+		case 'o':
+			l.readRune()
+			l.readRune()
+			l.readOctalLiteralTail()
+			return string(l.input[position:l.position]), false
+		case 'x':
+			l.readRune()
+			l.readRune()
+			l.readHexLiteralTail()
+			return string(l.input[position:l.position]), false
+		case 'B', 'O', 'X':
+			l.readRune()
+			l.readRune()
+			l.readInvalidBaseLiteralTail()
+			return string(l.input[position:l.position]), false
+		}
 	}
 
 	l.readDigitsAndSeparators(IsDecimal)
@@ -386,6 +404,55 @@ func (l *Lexer) readNumber() (string, bool) {
 	return string(l.input[position:l.position]), false
 }
 
+func (l *Lexer) readBinaryLiteralTail() {
+	l.readBaseLiteralTail(isBinaryDigit)
+}
+
+func (l *Lexer) readOctalLiteralTail() {
+	l.readBaseLiteralTail(isOctalDigit)
+}
+
+func (l *Lexer) readHexLiteralTail() {
+	l.readBaseLiteralTail(isASCIIHexDigit)
+}
+
+func (l *Lexer) readBaseLiteralTail(validDigit func(rune) bool) {
+	l.readDigitsAndSeparators(validDigit)
+	// Keep malformed based literals as one token: `0b01556` should fail as a
+	// single bad integer literal, not lex as `0b01` followed by `556`.
+	l.readInvalidBaseLiteralTail()
+}
+
+func (l *Lexer) readInvalidBaseLiteralTail() {
+	for {
+		if isBaseLiteralTailChar(l.curr) {
+			l.readRune()
+			continue
+		}
+		if l.curr == '\'' && isBaseLiteralTailChar(l.peekRune()) {
+			l.readRune()
+			continue
+		}
+		return
+	}
+}
+
+func isBaseLiteralTailChar(ch rune) bool {
+	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
+}
+
+func isBinaryDigit(ch rune) bool {
+	return ch == '0' || ch == '1'
+}
+
+func isOctalDigit(ch rune) bool {
+	return '0' <= ch && ch <= '7'
+}
+
+func isASCIIHexDigit(ch rune) bool {
+	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'f'
+}
+
 func (l *Lexer) readDigitsAndSeparators(validDigit func(rune) bool) {
 	for {
 		if validDigit(l.curr) {
@@ -397,21 +464,6 @@ func (l *Lexer) readDigitsAndSeparators(validDigit func(rune) bool) {
 			continue
 		}
 		return
-	}
-}
-
-func (l *Lexer) readBaseLiteralTail() {
-	for isASCIIAlphaNum(l.curr) || l.curr == '\'' {
-		l.readRune()
-	}
-}
-
-func isNumberBasePrefix(ch rune) bool {
-	switch lower(ch) {
-	case 'b', 'o', 'x':
-		return true
-	default:
-		return false
 	}
 }
 
@@ -471,9 +523,5 @@ func IsOperator(ch rune) bool {
 }
 
 func IsDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
-
-func isASCIIAlphaNum(ch rune) bool {
-	return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'z'
-}
 
 func lower(ch rune) rune { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter

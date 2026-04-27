@@ -1004,7 +1004,7 @@ func (p *StmtParser) parseIdentifier() ast.Expression {
 func (p *StmtParser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseInt(cleanNumberLiteral(p.curToken.Literal), 0, 64)
+	value, err := parseIntegerLiteralValue(cleanNumberLiteral(p.curToken.Literal))
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		ce := &token.CompileError{
@@ -1018,6 +1018,28 @@ func (p *StmtParser) parseIntegerLiteral() ast.Expression {
 	lit.Value = value
 
 	return lit
+}
+
+func parseIntegerLiteralValue(lit string) (int64, error) {
+	if len(lit) <= 1 || lit[0] != '0' {
+		return strconv.ParseInt(lit, 10, 64)
+	}
+
+	switch lit[1] {
+	case 'b':
+		return strconv.ParseInt(lit[2:], 2, 64)
+	case 'o':
+		return strconv.ParseInt(lit[2:], 8, 64)
+	case 'x':
+		return strconv.ParseInt(lit[2:], 16, 64)
+	case 'B', 'O', 'X':
+		return 0, fmt.Errorf("uppercase integer literal prefix")
+	default:
+		if lexer.IsDecimal(rune(lit[1])) {
+			return 0, fmt.Errorf("leading-zero integer literal")
+		}
+		return strconv.ParseInt(lit, 10, 64)
+	}
 }
 
 func (p *StmtParser) parseFloatLiteral() ast.Expression {

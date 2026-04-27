@@ -160,6 +160,28 @@ func TestNumericLiteralValues(t *testing.T) {
 	}
 }
 
+func TestInvalidNumericLiteralValues(t *testing.T) {
+	tests := []string{
+		"0755",
+		"0B1011",
+		"0O755",
+		"0Xffab",
+		"0b01556",
+		"0o89",
+		"0xfg",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			l := lexer.New("TestInvalidNumericLiteralValues", input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			require.NotEmpty(t, sp.Errors(), "expected parse error for %q", input)
+			require.Contains(t, sp.Errors()[0], "could not parse")
+		})
+	}
+}
+
 func ptrInt64(v int64) *int64 {
 	return &v
 }
