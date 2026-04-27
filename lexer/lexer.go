@@ -402,13 +402,16 @@ func (l *Lexer) readNumber() (string, bool) {
 type numberBase int
 
 const (
-	numberBaseBinary numberBase = iota
+	numberBaseDecimal numberBase = iota
+	numberBaseBinary
 	numberBaseOctal
-	numberBaseDecimal
 	numberBaseHex
 )
 
 func (l *Lexer) readBaseLiteralTail(base numberBase) {
+	if !isDigitForBase(l.curr, base) {
+		return
+	}
 	l.readDigitsAndSeparators(base)
 	// Keep malformed based literals as one token: `0b01556` should fail as a
 	// single bad integer literal, not lex as `0b01` followed by `556`.
