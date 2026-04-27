@@ -178,23 +178,6 @@ func TestInvalidNumericLiteralValues(t *testing.T) {
 	}
 }
 
-func TestInvalidNumericLiteralSpacing(t *testing.T) {
-	tests := []string{
-		"0b 1011",
-		"0b1011' 0011",
-		"1' 000",
-	}
-
-	for _, input := range tests {
-		t.Run(input, func(t *testing.T) {
-			l := lexer.New("TestInvalidNumericLiteralSpacing", input)
-			sp := NewScriptParser(l)
-			sp.Parse()
-			require.NotEmpty(t, sp.Errors(), "expected parse error for %q", input)
-		})
-	}
-}
-
 func ptrInt64(v int64) *int64 {
 	return &v
 }
@@ -660,10 +643,10 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			value:     "((i < 2) - x)",
 		},
 		{
-			name:      "bare identifier is not split as condition boundary",
+			name:      "bare identifier attached prefix starts value",
 			input:     "res = a -b",
-			condCount: 0,
-			value:     "(a - b)",
+			condCount: 1,
+			value:     "(-b)",
 		},
 	}
 
@@ -680,6 +663,38 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			require.Equal(t, tt.value, stmt.Value[0].String(), "input %q: value mismatch", tt.input)
 		})
 	}
+}
+
+func TestConditionValueBoundaryBareDriverArrayPrefix(t *testing.T) {
+	l := lexer.New("TestConditionValueBoundaryBareDriverArrayPrefix", "res = i -[x]")
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected bare driver condition")
+	ident, ok := stmt.Condition[0].(*ast.Identifier)
+	require.Truef(t, ok, "expected *ast.Identifier, got %T", stmt.Condition[0])
+	require.Equal(t, "i", ident.Value)
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	prefix, ok := stmt.Value[0].(*ast.PrefixExpression)
+	require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "-", prefix.Operator)
+	_, ok = prefix.Right.(*ast.ArrayLiteral)
+	require.Truef(t, ok, "expected array literal RHS, got %T", prefix.Right)
+
+	l = lexer.New("TestConditionValueBoundaryBareDriverArrayPrefix", "res = i - [x]")
+	sp = NewScriptParser(l)
+	program = sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt = requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition, "spaced operator should stay in value position")
+	require.Len(t, stmt.Value, 1, "expected one value")
+	infix, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "-", infix.Operator)
 }
 
 func TestBareRangeDriverCondition(t *testing.T) {

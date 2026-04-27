@@ -914,13 +914,11 @@ func (p *StmtParser) peekStartsAttachedPrefix() bool {
 }
 
 func (p *StmtParser) shouldSplitConditionValueBoundary(left ast.Expression) bool {
-	// Restrict attached-prefix splitting to explicit comparisons. Bare identifier
-	// drivers are type-level conditions, so splitting `x = a -b` here would
-	// hijack ordinary scalar subtraction before the type solver can decide.
-	// Parens around the comparison don't suppress the split: use a spaced
-	// operator (`(i < 2) - x`) when you want the comparison to stay in value
-	// position with arithmetic, mirroring how array rows treat attached prefix.
-	return left.Tok().IsComparison()
+	// Split after anything that can be a statement condition. The type solver
+	// later rejects bare identifiers that are not range drivers or bool values.
+	// Use a spaced operator (`i - x`) to keep the left side in value-position
+	// arithmetic, mirroring how array rows treat attached prefix.
+	return p.isCondition(left)
 }
 
 func (p *StmtParser) allowCallPostfix(left ast.Expression) bool {
