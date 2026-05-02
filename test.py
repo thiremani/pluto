@@ -59,11 +59,7 @@ def ensure_dependencies():
 # Ensure dependencies before importing
 ensure_dependencies()
 from colorama import Fore, Style
-MSYS2 = os.environ.get("MSYSTEM") is not None
-try:
-    from scripts.msys2_build import build_pluto  # type: ignore
-except Exception:
-    build_pluto = None
+from scripts.llvm_env import build_env
 
 TEST_DIR = Path("tests")
 BUILD_DIR = Path("build")
@@ -78,87 +74,11 @@ class TestRunner:
         self.passed = 0
         self.failed = 0
         self.project_root = Path(__file__).parent.resolve()
-        # Keep simple: prefer MSYS2-provided LLVM_BIN if present; otherwise fall back.
-        if os.name == 'nt':
-            self.llvm_bin = self.detect_llvm_path_windows()
-        else:
-            self.llvm_bin = self.detect_llvm_path_unix()
         self.test_dir = test_dir
-
-    def detect_llvm_path_windows(self) -> Path:
-        # Prefer MSYS2 UCRT64/MINGW64 paths if present, then LLVM_HOME, then Program Files
-        env_bin = os.environ.get("LLVM_BIN", "").strip()
-        if env_bin:
-            p = Path(env_bin)
-            if p.exists():
-                return p
-        paths = [
-            Path("C:/msys64/ucrt64/bin"),
-            Path("C:/msys64/mingw64/bin"),
-            Path(os.environ.get("LLVM_HOME", "")) / "bin",
-            Path("C:/Program Files/LLVM/bin"),
-        ]
-        for p in paths:
-            if p.exists():
-                return p
-        raise RuntimeError(
-            "LLVM 22 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
-        )
-
-    def detect_llvm_path_unix(self) -> Path:
-        # Try common LLVM 22 paths
-        paths = [
-            Path("/usr/lib/llvm-22/bin"),  # Linux
-            Path("/usr/local/opt/llvm/bin"),  # macOS Intel
-            Path("/opt/homebrew/opt/llvm/bin")  # macOS ARM
-        ]
-        for p in paths:
-            if p.exists():
-                return p
-        raise RuntimeError("LLVM 22 not found. Install with:\n"
-                           "Linux: https://apt.llvm.org/\n"
-                           "macOS: brew install llvm")
-
-    def add_llvm_cgo_env(self, env: dict) -> None:
-        if env.get("LLVM_CONFIG"):
-            llvm_config = Path(shutil.which(env["LLVM_CONFIG"]) or env["LLVM_CONFIG"])
-        else:
-            llvm_config = self.llvm_bin / "llvm-config"
-        if not llvm_config.exists():
-            raise RuntimeError(
-                f"llvm-config not found at {llvm_config}. Set LLVM_CONFIG, LLVM_BIN, or LLVM_HOME to an LLVM 22 installation."
-            )
-
-        def llvm_config_output(*args: str) -> str:
-            return subprocess.check_output([str(llvm_config), *args], text=True).strip()
-
-        goflags = env.get("GOFLAGS", "")
-        if "-tags=byollvm" not in goflags:
-            env["GOFLAGS"] = f"{goflags} -tags=byollvm".strip()
-        env.setdefault(
-            "CGO_CPPFLAGS",
-            f"{llvm_config_output('--cflags')} -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS",
-        )
-        env.setdefault("CGO_CXXFLAGS", f"-std=c++17 {llvm_config_output('--cxxflags')}")
-        env.setdefault("CGO_LDFLAGS", llvm_config_output("--ldflags", "--libs", "all", "--system-libs"))
 
     def run_command(self, cmd: list, cwd: Path = None) -> str:
         """Execute a command and return its output"""
-        # Merge MSYS2 LLVM/CGO env when running inside MSYS2 so go build/test works consistently.
-        env = os.environ.copy()
-        if MSYS2:
-            try:
-                sys.path.insert(0, str((self.project_root / "scripts").resolve()))
-                from msys2_env import compute_env  # type: ignore
-                env.update(compute_env())
-            except Exception:
-                pass
-        else:
-            self.add_llvm_cgo_env(env)
-        # Prepend LLVM bin to PATH, but let existing LLVM_BIN (e.g., from MSYS2) take precedence.
-        prepend = env.get("LLVM_BIN") or str(self.llvm_bin)
-        if prepend:
-            env["PATH"] = f"{prepend}{os.pathsep}{env['PATH']}"
+        env = build_env(os.environ)
 
         str_cmd = [str(c) for c in cmd]
         try:
@@ -182,10 +102,6 @@ class TestRunner:
     def build_compiler(self):
         """Build the Pluto compiler"""
         print(f"{Fore.YELLOW}=== Building Compiler ==={Style.RESET_ALL}")
-        # If MSYS2 build function is available (Windows UCRT64), use it to unify flags.
-        if os.name == 'nt' and build_pluto is not None and os.environ.get('MSYSTEM'):
-            build_pluto(self.project_root)
-            return
         build_command = ["go", "build", "-o", str(PLUTO_EXE)]
         self.run_command(build_command, self.project_root)
 

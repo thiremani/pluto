@@ -239,16 +239,26 @@ This enables strong guarantees around race-free execution. The concurrency model
 
 ## Building and Running
 
-**Build the compiler** after setting the LLVM CGO environment from the requirements below:
+**Build the compiler:**
 
 ```bash
-go build -o pluto
+python3 build.py
 ```
 
 If you prefer the conflict-safe command name locally:
 
 ```bash
-go build -o plt
+python3 build.py -o plt
+```
+
+`build.py` sets the LLVM 22 `byollvm` environment for its own subprocess and does not mutate your shell. If you prefer to call Go directly:
+
+```bash
+export GOFLAGS='-tags=byollvm'
+export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
+export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+go build -o pluto
 ```
 
 **Compile a directory:**
@@ -289,19 +299,12 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 
 - Go 1.26+
 - LLVM 22 development libraries and tools on PATH: `llvm-config`, `clang`
-- Python 3.x (for running tests)
+- Python 3.x (for build/test helpers)
 - Leak check tools (only for `python3 test.py --leak-check`):
   - Linux: `valgrind`
   - macOS: `leaks`
 
-Pluto builds against LLVM through CGO. LLVM 22 builds require the `byollvm` tag and CGO flags from `llvm-config`:
-
-```bash
-export GOFLAGS='-tags=byollvm'
-export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
-export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
-```
+Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` derive the required LLVM 22 `byollvm` flags from `llvm-config` for their subprocesses. Direct `go build` and `go test` are supported when those flags are set manually.
 
 ---
 
@@ -321,7 +324,7 @@ export PATH=/usr/lib/llvm-22/bin:$PATH
 Build and test:
 
 ```bash
-go build -o pluto
+python3 build.py
 python3 test.py
 ```
 
@@ -347,7 +350,7 @@ export PATH=/usr/local/opt/llvm/bin:$PATH
 Build and test:
 
 ```bash
-go build -o pluto
+python3 build.py
 python3 test.py
 ```
 
@@ -367,7 +370,7 @@ pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}
 Quick build:
 
 ```bash
-python scripts/msys2_build.py
+python build.py
 ```
 
 Or manual build with required environment:

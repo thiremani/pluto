@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Go 1.26+
 - LLVM 22 development libraries and tools (`llvm-config`, `clang`)
-- Python 3.x
+- Python 3.x (for build/test helpers)
 - pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-LLVM 22 builds require `GOFLAGS='-tags=byollvm'` plus `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, and `CGO_LDFLAGS` from `llvm-config`.
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` require those flags to be set manually.
 
 ## Development Commands
 
@@ -22,10 +22,10 @@ pip install -r requirements.txt
 ### Building the compiler
 ```bash
 # Development build (version shows as "dev")
-go build -o pluto
+python3 build.py
 
 # Production build with version from git tag (optional, used for releases)
-go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto
+python3 build.py --release
 ```
 
 ### Running tests

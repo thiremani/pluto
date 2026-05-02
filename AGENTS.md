@@ -10,8 +10,8 @@
 
 ## Build, Test, and Development Commands
 
-- Build compiler: `go build -o pluto`
-- Production build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
+- Build compiler: `python3 build.py`
+- Production build with version: `python3 build.py --release`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
@@ -21,7 +21,7 @@
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
 Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-LLVM 22 builds require `GOFLAGS='-tags=byollvm'` plus CGO flags from `llvm-config`; see `README.md`.
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`; direct `go build`/`go test` require those flags to be set manually. See `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
