@@ -122,6 +122,70 @@ func TestIntegerLiteralExpression(t *testing.T) {
 	require.Equal(t, "5", lit.Tok().Literal)
 }
 
+func TestNumericLiteralValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantInt *int64
+		wantF64 *float64
+	}{
+		{name: "decimal separator", input: "1'000", wantInt: ptrInt64(1000)},
+		{name: "hex", input: "0xffab", wantInt: ptrInt64(65451)},
+		{name: "binary", input: "0b1011", wantInt: ptrInt64(11)},
+		{name: "octal", input: "0o755", wantInt: ptrInt64(493)},
+		{name: "float separator", input: "1'234.5'6", wantF64: ptrFloat64(1234.56)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestNumericLiteralValues", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			printStmt := requireOnlyPrintStmt(t, program)
+			if tt.wantInt != nil {
+				lit, ok := printStmt.Expression.Arguments[0].(*ast.IntegerLiteral)
+				require.Truef(t, ok, "expected *ast.IntegerLiteral, got %T", printStmt.Expression.Arguments[0])
+				require.Equal(t, *tt.wantInt, lit.Value)
+				require.Equal(t, tt.input, lit.Tok().Literal)
+				return
+			}
+
+			lit, ok := printStmt.Expression.Arguments[0].(*ast.FloatLiteral)
+			require.Truef(t, ok, "expected *ast.FloatLiteral, got %T", printStmt.Expression.Arguments[0])
+			require.Equal(t, *tt.wantF64, lit.Value)
+			require.Equal(t, tt.input, lit.Tok().Literal)
+		})
+	}
+}
+
+func TestInvalidNumericLiteralValues(t *testing.T) {
+	tests := []string{
+		"0755",
+		"0b01556",
+		"0o89",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			l := lexer.New("TestInvalidNumericLiteralValues", input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			require.NotEmpty(t, sp.Errors(), "expected parse error for %q", input)
+			require.Contains(t, sp.Errors()[0], "could not parse")
+		})
+	}
+}
+
+func ptrInt64(v int64) *int64 {
+	return &v
+}
+
+func ptrFloat64(v float64) *float64 {
+	return &v
+}
+
 func TestStringLiteral(t *testing.T) {
 	const input = `"hello"`
 	l := lexer.New("TestStringLiteral", input)
@@ -387,6 +451,10 @@ func TestImplicitMultParsing(t *testing.T) {
 	}{
 		{"simple", "x = 5a", "x = (5 ⋅ a)"},
 		{"add after mult", "y = 5x + 2", "y = ((5 ⋅ x) + 2)"},
+		{"based hex", "y = 0x0abcx2", "y = (0x0abc ⋅ x2)"},
+		{"uppercase hex prefix is implicit mult", "y = 0Xff", "y = (0 ⋅ Xff)"},
+		{"uppercase binary prefix is implicit mult", "y = 0B10", "y = (0 ⋅ B10)"},
+		{"uppercase octal prefix is implicit mult", "y = 0O7", "y = (0 ⋅ O7)"},
 		{"polynomial", "y = x^2 + 3.14x + 1", "y = (((x ^ 2) + (3.14 ⋅ x)) + 1)"},
 		{"asc polynomial", "y = 1 + 2x + 3.11x^2 + 2.03x3^3 + 7x3ab^4", "y = ((((1 + (2 ⋅ x)) + (3.11 ⋅ (x ^ 2))) + (2.03 ⋅ (x3 ^ 3))) + (7 ⋅ (x3ab ^ 4)))"},
 	}
@@ -505,6 +573,128 @@ func TestConditionThenCallValue(t *testing.T) {
 	require.Equal(t, "foo", callExpr.Function.Value)
 	require.Len(t, callExpr.Arguments, 1, "expected one call argument")
 	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
+}
+
+func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		condCount int
+		value     string
+	}{
+		{
+			name:      "attached minus starts value",
+			input:     "res = i < 2 -x",
+			condCount: 1,
+			value:     "(-x)",
+		},
+		{
+			name:      "attached prefix range starts value",
+			input:     "res = i < 2 -(0:3)",
+			condCount: 1,
+			value:     "(-0:3)",
+		},
+		{
+			name:      "attached prefix hex literal starts value",
+			input:     "res = i < 2 -0xff",
+			condCount: 1,
+			value:     "(-0xff)",
+		},
+		{
+			name:      "attached plus starts value",
+			input:     "res = i != 3 +10",
+			condCount: 1,
+			value:     "(+10)",
+		},
+		{
+			name:      "comma condition attached prefix starts value",
+			input:     "res = i < 2, j > 1 -x",
+			condCount: 2,
+			value:     "(-x)",
+		},
+		{
+			name:      "chained comparison attached prefix starts value",
+			input:     "res = a < b < c -d",
+			condCount: 1,
+			value:     "(-d)",
+		},
+		{
+			name:      "spaced minus remains infix",
+			input:     "res = i < 2 - x",
+			condCount: 0,
+			value:     "((i < 2) - x)",
+		},
+		{
+			name:      "grouped comparison still splits on attached prefix",
+			input:     "res = (i < 2) -x",
+			condCount: 1,
+			value:     "(-x)",
+		},
+		{
+			name:      "grouped comparison still splits on attached plus",
+			input:     "res = (i < 2) +10",
+			condCount: 1,
+			value:     "(+10)",
+		},
+		{
+			name:      "grouped comparison stays a value with spaced operator",
+			input:     "res = (i < 2) - x",
+			condCount: 0,
+			value:     "((i < 2) - x)",
+		},
+		{
+			name:      "bare identifier attached prefix starts value",
+			input:     "res = a -b",
+			condCount: 1,
+			value:     "(-b)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestConditionValueBoundaryAttachedPrefix", tt.input)
+			sp := NewScriptParser(l)
+			program := sp.Parse()
+			require.Emptyf(t, sp.Errors(), "input %q: unexpected errors %v", tt.input, sp.Errors())
+
+			stmt := requireOnlyLetStmt(t, program)
+			require.Len(t, stmt.Condition, tt.condCount, "input %q: condition count mismatch", tt.input)
+			require.Len(t, stmt.Value, 1, "input %q: expected one value", tt.input)
+			require.Equal(t, tt.value, stmt.Value[0].String(), "input %q: value mismatch", tt.input)
+		})
+	}
+}
+
+func TestConditionValueBoundaryBareDriverArrayPrefix(t *testing.T) {
+	l := lexer.New("TestConditionValueBoundaryBareDriverArrayPrefix", "res = i -[x]")
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected bare driver condition")
+	ident, ok := stmt.Condition[0].(*ast.Identifier)
+	require.Truef(t, ok, "expected *ast.Identifier, got %T", stmt.Condition[0])
+	require.Equal(t, "i", ident.Value)
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	prefix, ok := stmt.Value[0].(*ast.PrefixExpression)
+	require.Truef(t, ok, "expected *ast.PrefixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "-", prefix.Operator)
+	_, ok = prefix.Right.(*ast.ArrayLiteral)
+	require.Truef(t, ok, "expected array literal RHS, got %T", prefix.Right)
+
+	l = lexer.New("TestConditionValueBoundaryBareDriverArrayPrefix", "res = i - [x]")
+	sp = NewScriptParser(l)
+	program = sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt = requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition, "spaced operator should stay in value position")
+	require.Len(t, stmt.Value, 1, "expected one value")
+	infix, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "-", infix.Operator)
 }
 
 func TestBareRangeDriverCondition(t *testing.T) {
@@ -812,6 +1002,21 @@ func TestArrayLiterals(t *testing.T) {
 
 				// Check d is just an identifier
 				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
+			},
+		},
+		{
+			name:  "attached unary plus",
+			input: `[a +b]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Empty(t, arr.Headers, "expected no headers")
+				require.Len(t, arr.Rows, 1, "expected one row")
+				require.Len(t, arr.Rows[0], 2, "expected two elements: a, +b")
+				require.True(t, testIdentifier(t, arr.Rows[0][0], "a"))
+
+				prefixB, ok := arr.Rows[0][1].(*ast.PrefixExpression)
+				require.Truef(t, ok, "expected *ast.PrefixExpression for +b, got %T", arr.Rows[0][1])
+				require.Equal(t, "+", prefixB.Operator)
+				require.True(t, testIdentifier(t, prefixB.Right, "b"))
 			},
 		},
 	}

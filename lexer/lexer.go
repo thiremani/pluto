@@ -366,23 +366,100 @@ func (l *Lexer) readIdentifier() string {
 }
 
 func (l *Lexer) readNumber() (string, bool) {
-	isFloat := false
 	position := l.position
-	for IsDecimal(l.curr) {
-		l.readRune()
-	}
 
-	// Check for decimal point
-	if l.curr == '.' {
-		isFloat = true
-		l.readRune()
-		// Read fractional part
-		for IsDecimal(l.curr) {
+	if l.curr == '0' {
+		switch l.peekRune() {
+		case 'b':
 			l.readRune()
+			l.readRune()
+			l.readBaseLiteralTail(numberBaseBinary)
+			return string(l.input[position:l.position]), false
+		case 'o':
+			l.readRune()
+			l.readRune()
+			l.readBaseLiteralTail(numberBaseOctal)
+			return string(l.input[position:l.position]), false
+		case 'x':
+			l.readRune()
+			l.readRune()
+			l.readBaseLiteralTail(numberBaseHex)
+			return string(l.input[position:l.position]), false
 		}
 	}
 
-	return string(l.input[position:l.position]), isFloat
+	l.readDigitsAndSeparators(numberBaseDecimal)
+
+	if l.curr == '.' {
+		l.readRune()
+		l.readDigitsAndSeparators(numberBaseDecimal)
+		return string(l.input[position:l.position]), true
+	}
+
+	return string(l.input[position:l.position]), false
+}
+
+type numberBase int
+
+const (
+	numberBaseDecimal numberBase = iota
+	numberBaseBinary
+	numberBaseOctal
+	numberBaseHex
+)
+
+func (l *Lexer) readBaseLiteralTail(base numberBase) {
+	l.readDigitsAndSeparators(base)
+	// Keep malformed based literals as one token: `0b01556` should fail as a
+	// single bad integer literal, not lex as `0b01` followed by `556`.
+	l.readInvalidBaseDigitTail(base)
+}
+
+func (l *Lexer) readInvalidBaseDigitTail(base numberBase) {
+	for {
+		if isInvalidDigitForBase(l.curr, base) {
+			l.readRune()
+			continue
+		}
+		if l.curr == '\'' && isInvalidDigitForBase(l.peekRune(), base) {
+			l.readRune()
+			continue
+		}
+		return
+	}
+}
+
+func isInvalidDigitForBase(ch rune, base numberBase) bool {
+	return IsDecimal(ch) && !isDigitForBase(ch, base)
+}
+
+func (l *Lexer) readDigitsAndSeparators(base numberBase) {
+	for {
+		if isDigitForBase(l.curr, base) {
+			l.readRune()
+			continue
+		}
+		if l.curr == '\'' && isDigitForBase(l.peekRune(), base) {
+			l.readRune()
+			continue
+		}
+		return
+	}
+}
+
+func isDigitForBase(ch rune, base numberBase) bool {
+	switch base {
+	case numberBaseBinary:
+		return ch == '0' || ch == '1'
+	case numberBaseOctal:
+		return '0' <= ch && ch <= '7'
+	case numberBaseDecimal:
+		return IsDecimal(ch)
+	case numberBaseHex:
+		return IsDecimal(ch) || 'a' <= lower(ch) && lower(ch) <= 'f'
+	default:
+		return false
+	}
 }
 
 // readOperator consumes a maximal sequence of operator characters and returns the combined string.

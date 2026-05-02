@@ -1,0 +1,35 @@
+# Attached prefix operators after a top-level comparison start the statement value.
+i = 0:5
+minusAttached = 99
+minusAttached = i < 2 -i
+"BoundaryMinus: -minusAttached"
+
+i = 0:5
+rangePrefix = 0
+rangePrefix = i < 2 -(0:3)
+"BoundaryPrefixRange: -rangePrefix"
+
+i = 0:5
+plusAttached = 0
+plusAttached = i != 3 +10
+"BoundaryPlus: -plusAttached"
+
+# Attached prefix on a based numeric literal still splits at the boundary.
+i = 0:5
+hexAttached = 0
+hexAttached = i < 2 -0xff
+"BoundaryHex: -hexAttached"
+
+# Spaces around the operator keep it as value-position infix arithmetic.
+i = 0:5
+minusSpaced = 99
+minusSpaced = i < 2 - i
+"SpacedMinusInfix: -minusSpaced"
+
+# Parentheses don't suppress the attached-prefix split: `(ri < 3) +10` still
+# parses as cond=(ri<3), value=+10. Use a spaced operator (see
+# value_cond_expr.spt) to keep the comparison in value-position arithmetic.
+ri = 0:5
+groupedAttached = 0
+groupedAttached = (ri < 3) +10
+"GroupedAttachedPlus: -groupedAttached"
