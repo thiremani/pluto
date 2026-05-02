@@ -21,7 +21,7 @@
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
 Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`; direct `go build`/`go test` require those flags to be set manually. See `README.md`.
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`; direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`. See `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview

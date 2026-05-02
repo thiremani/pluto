@@ -254,10 +254,7 @@ python3 build.py -o plt
 `build.py` sets the LLVM 22 `byollvm` environment for its own subprocess and does not mutate your shell. If you prefer to call Go directly:
 
 ```bash
-export GOFLAGS='-tags=byollvm'
-export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
-export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+eval "$(python3 scripts/llvm_env.py --shell)"
 go build -o pluto
 ```
 
@@ -304,7 +301,7 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
   - Linux: `valgrind`
   - macOS: `leaks`
 
-Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` derive the required LLVM 22 `byollvm` flags from `llvm-config` for their subprocesses. Direct `go build` and `go test` are supported when those flags are set manually.
+Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` derive the required LLVM 22 `byollvm` flags from `llvm-config` for their subprocesses. Direct `go build` and `go test` are supported after `eval "$(python3 scripts/llvm_env.py --shell)"`.
 
 ---
 
@@ -373,21 +370,11 @@ Quick build:
 python build.py
 ```
 
-Or manual build with required environment:
+Manual build/test:
 
 ```bash
-export CGO_ENABLED=1
-export CC=clang CXX=clang++
-export GOFLAGS='-tags=byollvm'
-export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
-export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+eval "$(python scripts/llvm_env.py --shell)"
 go build -o pluto.exe
-```
-
-Run tests:
-
-```bash
 python test.py
 ```
 
@@ -450,8 +437,8 @@ Pluto is under active development.
 <details>
 <summary><strong>Common issues</strong></summary>
 
-**`undefined: run_build_sh` during build (Windows):**
-- Ensure `GOFLAGS='-tags=byollvm'` and CGO flags are set (see Windows installation above)
+**`undefined: llvmHostCPUName` or `undefined: llvmHostCPUFeatures` during build:**
+- Use `python3 build.py` / `python build.py`, or run `eval "$(python3 scripts/llvm_env.py --shell)"` before direct `go build` / `go test`
 
 **Missing LLVM tools:**
 - Verify `llvm-config` and `clang` from LLVM 22 are on PATH

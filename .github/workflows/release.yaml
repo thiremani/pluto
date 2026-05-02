@@ -37,13 +37,11 @@ jobs:
           sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config
-          echo "GOFLAGS=-tags=byollvm" >> "$GITHUB_ENV"
-          echo "CGO_CPPFLAGS=$($LLVM_CONFIG --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" >> "$GITHUB_ENV"
-          echo "CGO_CXXFLAGS=-std=c++17 $($LLVM_CONFIG --cxxflags)" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=$($LLVM_CONFIG --ldflags --libs all --system-libs)" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Smoke test
         run: |
@@ -87,12 +85,9 @@ jobs:
           brew update
           brew install llvm lld
           LLVM_PREFIX="$(brew --prefix llvm)"
-          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
-          LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
-          echo "GOFLAGS=-tags=byollvm" >> "$GITHUB_ENV"
-          echo "CGO_CPPFLAGS=$($LLVM_CONFIG --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" >> "$GITHUB_ENV"
-          echo "CGO_CXXFLAGS=-std=c++17 $($LLVM_CONFIG --cxxflags)" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=$($LLVM_CONFIG --ldflags --libs all --system-libs)" >> "$GITHUB_ENV"
+          LLVM_BIN="$LLVM_PREFIX/bin" \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -121,12 +116,9 @@ jobs:
           brew update
           brew install llvm lld
           LLVM_PREFIX="$(brew --prefix llvm)"
-          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
-          LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
-          echo "GOFLAGS=-tags=byollvm" >> "$GITHUB_ENV"
-          echo "CGO_CPPFLAGS=$($LLVM_CONFIG --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" >> "$GITHUB_ENV"
-          echo "CGO_CXXFLAGS=-std=c++17 $($LLVM_CONFIG --cxxflags)" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=$($LLVM_CONFIG --ldflags --libs all --system-libs)" >> "$GITHUB_ENV"
+          LLVM_BIN="$LLVM_PREFIX/bin" \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -162,8 +154,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          eval "$(python scripts/msys2_env.py | sed 's/^/export /')"
-          export PATH="$LLVM_BIN:$PATH"
+          eval "$(python scripts/llvm_env.py --shell)"
           go version
           go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
 
@@ -192,13 +183,11 @@ jobs:
           sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config
-          echo "GOFLAGS=-tags=byollvm" >> "$GITHUB_ENV"
-          echo "CGO_CPPFLAGS=$($LLVM_CONFIG --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" >> "$GITHUB_ENV"
-          echo "CGO_CXXFLAGS=-std=c++17 $($LLVM_CONFIG --cxxflags)" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=$($LLVM_CONFIG --ldflags --libs all --system-libs)" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -231,13 +220,11 @@ jobs:
           sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config
-          echo "GOFLAGS=-tags=byollvm" >> "$GITHUB_ENV"
-          echo "CGO_CPPFLAGS=$($LLVM_CONFIG --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" >> "$GITHUB_ENV"
-          echo "CGO_CXXFLAGS=-std=c++17 $($LLVM_CONFIG --cxxflags)" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=$($LLVM_CONFIG --ldflags --libs all --system-libs)" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:

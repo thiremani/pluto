@@ -26,10 +26,11 @@ jobs:
           sudo apt-get install -y llvm-22-dev lld-22 clang-22 valgrind
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          echo "LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config" >> $GITHUB_ENV
-          echo "/usr/lib/llvm-22/bin" >> $GITHUB_PATH
-          echo "LD_LIBRARY_PATH=/usr/lib/llvm-22/lib" >> $GITHUB_ENV
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Verify LLVM Tools
         run: |

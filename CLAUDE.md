@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` require those flags to be set manually.
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`.
 
 ## Development Commands
 

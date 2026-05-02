@@ -8,14 +8,31 @@ LLVM installation that is already on the machine.
 """
 from __future__ import annotations
 
+import argparse
 import os
+import shlex
 import shutil
 import subprocess
+import sys
+import uuid
 from pathlib import Path
 from typing import Mapping
 
 
 CPP_DEFS = "-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+EXPORT_KEYS = (
+    "LLVM_BIN",
+    "GOFLAGS",
+    "CGO_ENABLED",
+    "CC",
+    "CXX",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "LD_LIBRARY_PATH",
+    "PLUTO_WIN_TOOLCHAIN",
+    "GOROOT",
+)
 
 
 def _is_windows_env(env: Mapping[str, str]) -> bool:
@@ -100,6 +117,20 @@ def _append_env_flags(env: dict[str, str], key: str, value: str) -> None:
         env[key] = value
 
 
+def _prepend_path_env(env: dict[str, str], key: str, value: str) -> None:
+    value = value.strip()
+    if not value:
+        return
+    current = env.get(key, "").strip()
+    parts = [part for part in current.split(os.pathsep) if part]
+    if value in parts:
+        env[key] = current
+    elif current:
+        env[key] = f"{value}{os.pathsep}{current}"
+    else:
+        env[key] = value
+
+
 def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Return a subprocess environment configured for Pluto's LLVM 22 build."""
     env = dict(os.environ if base_env is None else base_env)
@@ -126,9 +157,65 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
         env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
         _append_env_flags(env, "CGO_CPPFLAGS", f"{_llvm_config_output(llvm_config, '--cflags')} {CPP_DEFS}")
         _append_env_flags(env, "CGO_CXXFLAGS", f"-std=c++17 {_llvm_config_output(llvm_config, '--cxxflags')}")
-        _append_env_flags(env, "CGO_LDFLAGS", _llvm_config_output(llvm_config, "--ldflags", "--libs", "all", "--system-libs"))
+        _append_env_flags(
+            env,
+            "CGO_LDFLAGS",
+            _llvm_config_output(llvm_config, "--ldflags", "--libs", "all", "--system-libs"),
+        )
+        _prepend_path_env(env, "LD_LIBRARY_PATH", _llvm_config_output(llvm_config, "--libdir"))
 
     llvm_bin = env.get("LLVM_BIN")
     if llvm_bin:
         env["PATH"] = f"{llvm_bin}{os.pathsep}{env.get('PATH', '')}"
     return env
+
+
+def _export_env(env: Mapping[str, str]) -> dict[str, str]:
+    return {key: env[key] for key in EXPORT_KEYS if env.get(key)}
+
+
+def _print_shell(env: Mapping[str, str]) -> None:
+    for key, value in _export_env(env).items():
+        print(f"export {key}={shlex.quote(value)}")
+    if env.get("LLVM_BIN"):
+        print(f'export PATH={shlex.quote(env["LLVM_BIN"])}:"$PATH"')
+
+
+def _write_github_env_value(path: str, key: str, value: str) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        if "\n" in value:
+            delimiter = f"PLUTO_ENV_{uuid.uuid4().hex}"
+            f.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+        else:
+            f.write(f"{key}={value}\n")
+
+
+def _write_github_actions(env: Mapping[str, str]) -> None:
+    github_env = os.environ.get("GITHUB_ENV")
+    github_path = os.environ.get("GITHUB_PATH")
+    if not github_env or not github_path:
+        raise RuntimeError("GITHUB_ENV and GITHUB_PATH must be set for --github-actions")
+    for key, value in _export_env(env).items():
+        if key != "LLVM_BIN":
+            _write_github_env_value(github_env, key, value)
+    if env.get("LLVM_BIN"):
+        with open(github_path, "a", encoding="utf-8") as f:
+            f.write(f"{env['LLVM_BIN']}\n")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Print or apply Pluto's LLVM 22 byollvm build environment.")
+    parser.add_argument("--shell", action="store_true", help="print POSIX shell export commands")
+    parser.add_argument("--github-actions", action="store_true", help="write env/path entries to GitHub Actions files")
+    args = parser.parse_args()
+
+    env = build_env()
+    if args.github_actions:
+        _write_github_actions(env)
+    else:
+        _print_shell(env)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
