@@ -407,7 +407,7 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
-	expList := p.parseExpList(nil)
+	expList := p.parseExpList(prefixSplitNone)
 
 	if p.stmtEnded() {
 		p.nextToken()
@@ -744,7 +744,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	// Allow line breaks/indentation between '=' and the first RHS expression
 	// so multi-line constructs (arrays, grouped expressions) work naturally.
 	p.skipArrayFormatting()
-	expList := p.parseExpList(p.shouldSplitConditionValueBoundary)
+	expList := p.parseExpList(prefixSplitAfterCondition)
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
 	// to avoid panics downstream; errors are already recorded.
@@ -766,7 +766,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	stmt.Condition = expList
 
 	p.nextToken()
-	stmt.Value = p.parseExpList(nil)
+	stmt.Value = p.parseExpList(prefixSplitNone)
 	p.errorOnBlanks()
 
 	if p.stmtEnded() {
@@ -814,7 +814,7 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 	return identifiers, ce
 }
 
-func (p *StmtParser) parseExpList(splitPrefix attachedPrefixSplitFunc) []ast.Expression {
+func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode) []ast.Expression {
 	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
@@ -824,13 +824,15 @@ func (p *StmtParser) parseExpList(splitPrefix attachedPrefixSplitFunc) []ast.Exp
 	return expList
 }
 
-type attachedPrefixSplitFunc func(ast.Expression) bool
+type prefixSplitMode int
 
-func splitAfterAnyExpr(ast.Expression) bool {
-	return true
-}
+const (
+	prefixSplitNone prefixSplitMode = iota
+	prefixSplitAlways
+	prefixSplitAfterCondition
+)
 
-func (p *StmtParser) parseExpression(precedence float64, splitPrefix attachedPrefixSplitFunc) ast.Expression {
+func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplitMode) ast.Expression {
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -857,20 +859,20 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix attachedPre
 
 // parseExpressionTail continues parsing an expression using precedence climbing.
 // It handles infix/postfix operators and can stop before an attached prefix
-// operator when the caller's splitPrefix predicate says the current left side is
-// complete. Array rows use this to split `[a -b]`; let statements use the same
-// spacing check to split `cond -value` at the condition/value boundary.
+// operator when the current split mode says the left side is complete. Array
+// rows use this to split `[a -b]`; let statements use the same spacing check to
+// split `cond -value` at the condition/value boundary.
 //
 // Parameters:
 //   - precedence: minimum binding power - stops when next operator has lower precedence
-//   - splitPrefix: when non-nil, controls whether an attached prefix starts the next expression
+//   - splitPrefix: controls whether an attached prefix starts the next expression
 //   - left: the left-hand expression already parsed
 //
 // Spacing rules used by peekStartsAttachedPrefix:
 //   - `a - b` (space before and after `-`) → subtraction (infix)
 //   - `a -b` (space before, not after `-`) → split before `-b` when allowed
 //   - `a-b` (no space before `-`) → subtraction (infix, normal precedence)
-func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix attachedPrefixSplitFunc, left ast.Expression) ast.Expression {
+func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixSplitMode, left ast.Expression) ast.Expression {
 	for {
 		var consumed bool
 		left, consumed = p.tryPostfix(left)
@@ -892,7 +894,7 @@ func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix attache
 			return left
 		}
 
-		if splitPrefix != nil && splitPrefix(left) && p.peekStartsAttachedPrefix() {
+		if p.shouldSplitAttachedPrefix(splitPrefix, left) && p.peekStartsAttachedPrefix() {
 			break
 		}
 
@@ -913,12 +915,19 @@ func (p *StmtParser) peekStartsAttachedPrefix() bool {
 	return !p.peekNextToken().HadSpace
 }
 
-func (p *StmtParser) shouldSplitConditionValueBoundary(left ast.Expression) bool {
-	// Split after anything that can be a statement condition. The type solver
-	// later rejects bare identifiers that are not range drivers or bool values.
-	// Use a spaced operator (`i - x`) to keep the left side in value-position
-	// arithmetic, mirroring how array rows treat attached prefix.
-	return p.isCondition(left)
+func (p *StmtParser) shouldSplitAttachedPrefix(mode prefixSplitMode, left ast.Expression) bool {
+	switch mode {
+	case prefixSplitAlways:
+		return true
+	case prefixSplitAfterCondition:
+		// Split after anything that can be a statement condition. The type solver
+		// later rejects bare identifiers that are not range drivers or bool values.
+		// Use a spaced operator (`i - x`) to keep the left side in value-position
+		// arithmetic, mirroring how array rows treat attached prefix.
+		return p.isCondition(left)
+	default:
+		return false
+	}
 }
 
 func (p *StmtParser) allowCallPostfix(left ast.Expression) bool {
@@ -954,7 +963,7 @@ func (p *StmtParser) parseArrayRangeExpression(array ast.Expression) ast.Express
 
 	// Parse the expression inside the brackets.
 	p.nextToken()
-	idx := p.parseExpression(LOWEST, nil)
+	idx := p.parseExpression(LOWEST, prefixSplitNone)
 	if idx == nil {
 		return nil
 	}
@@ -1148,7 +1157,7 @@ func (p *StmtParser) parseRow() []ast.Expression {
 			continue
 		}
 
-		expr := p.parseExpression(LOWEST, splitAfterAnyExpr)
+		expr := p.parseExpression(LOWEST, prefixSplitAlways)
 		if expr != nil {
 			row = append(row, expr)
 		}
@@ -1174,7 +1183,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	precedence := p.curPrecedence()
 	p.nextToken() // Consume the ':'
 
-	rl.Stop = p.parseExpression(precedence, nil)
+	rl.Stop = p.parseExpression(precedence, prefixSplitNone)
 	if rl.Stop == nil {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
@@ -1186,7 +1195,7 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	if p.peekTokenIs(token.COLON) {
 		p.nextToken()
 		p.nextToken()
-		rl.Step = p.parseExpression(precedence, nil)
+		rl.Step = p.parseExpression(precedence, prefixSplitNone)
 		if rl.Step == nil {
 			p.errors = append(p.errors, &token.CompileError{
 				Token: p.curToken,
@@ -1207,7 +1216,7 @@ func (p *StmtParser) parsePrefixExpression() ast.Expression {
 
 	p.nextToken()
 
-	expression.Right = p.parseExpression(PREFIX, nil)
+	expression.Right = p.parseExpression(PREFIX, prefixSplitNone)
 
 	return expression
 }
@@ -1226,7 +1235,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 	}
 
 	p.nextToken()
-	expression.Right = p.parseExpression(rbp, nil)
+	expression.Right = p.parseExpression(rbp, prefixSplitNone)
 
 	return expression
 }
@@ -1234,7 +1243,7 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	p.nextToken()
 
-	exp := p.parseExpression(LOWEST, nil)
+	exp := p.parseExpression(LOWEST, prefixSplitNone)
 
 	if !p.expectPeek(token.RPAREN) {
 		return nil
@@ -1390,12 +1399,12 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 	}
 
 	p.nextToken()
-	args = append(args, p.parseExpression(LOWEST, nil))
+	args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
-		args = append(args, p.parseExpression(LOWEST, nil))
+		args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 
 	if !p.expectPeek(token.RPAREN) {
