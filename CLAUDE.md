@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Requirements
 
 - Go 1.25+
-- LLVM 21 (including `clang`, `opt`, `llc`, and `lld`)
+- LLVM 21 development libraries and tools (`llvm-config`, `clang`)
 - Python 3.x
 - pip (for installing Python dependencies)
 
@@ -110,8 +110,7 @@ The compilation process consists of two main phases:
 2. **Script Compilation**: For each `.spt` file, the compiler performs the following steps:
    - Links the code module (from the `.pt` files) into the script's module
    - Generates LLVM IR for the script
-   - Optimizes the IR using `opt -O3`
-   - Compiles the optimized IR into an object file using `llc`
+   - Optimizes the IR and emits an object file in-process with LLVM
    - Links the object file with the C runtime to create a native executable
 
 **Module resolution**: Walks up to find `pt.mod` file to determine project root and module path; cache key based on module path.

@@ -19,7 +19,7 @@ Simple and uniform, but costly for scalar-heavy code:
 - single-scalar outputs use `sret` instead of register return
 - self tail recursion lowers to recursive calls plus stack traffic instead of loops
 
-The `fib_tail` benchmark exposes this clearly. LLVM `opt -O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification and tail-recursion lowering must be done in Pluto.
+The `fib_tail` benchmark exposes this clearly. LLVM `-O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification and tail-recursion lowering must be done in Pluto.
 
 ## 2. Key Principle: Separate Semantics from ABI
 

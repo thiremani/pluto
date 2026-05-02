@@ -23,7 +23,7 @@ This project is a compiler for the Pluto programming language, written in Go. It
 ### Requirements
 
 *   Go 1.25+
-*   LLVM 21 (including `clang`, `opt`, `llc`, and `lld`)
+*   LLVM 21 development libraries and tools (`llvm-config`, `clang`)
 *   Python 3.x
 *   pip (for installing Python dependencies)
 
@@ -85,9 +85,8 @@ The compilation process consists of two main phases:
 2.  **Script Compilation:** For each `.spt` file, the compiler performs the following steps:
     a.  Links the code module (from the `.pt` files) into the script's module.
     b.  Generates LLVM IR for the script.
-    c.  Optimizes the IR using `opt -O3`.
-    d.  Compiles the optimized IR into an object file using `llc`.
-    e.  Links the object file with the C runtime to create a native executable.
+    c.  Optimizes the IR and emits an object file in-process with LLVM.
+    d.  Links the object file with the C runtime to create a native executable.
 
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
 - Cache layout (versioned to isolate different compiler versions):
@@ -108,7 +107,7 @@ The compiler uses a cache to store intermediate build artifacts (LLVM IR and obj
 To clear the cache for the current version, run `./pluto -clean`. To clear the entire cache manually, delete the appropriate directory.
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 `llvm-config` and `clang`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 - Use `pluto -clean` to clear cache for current version.
 

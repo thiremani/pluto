@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"tinygo.org/x/go-llvm"
 )
 
 func containsPrefix(values []string, prefix string) bool {
@@ -167,25 +168,41 @@ func TestTargetCPUCacheSegmentExplicitMCPU(t *testing.T) {
 	require.Equal(t, "target_cpu-mcpu-apple-m1", segment)
 }
 
-func TestOptCommandArgsIncludeCPU(t *testing.T) {
+func TestLLVMTargetCPUDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
 	cfg := currentBuildConfig()
 
-	require.Contains(t, optCommandArgs(cfg, "in.ll", "out.ll"), "-mcpu=native")
-}
-
-func TestLLCCommandArgsIncludeCPU(t *testing.T) {
-	t.Setenv(targetCPUEnv, "")
-	cfg := currentBuildConfig()
-
-	args := llcCommandArgs(cfg, "in.ll", "out.o")
-	require.Contains(t, args, "-mcpu=native")
-	require.Contains(t, args, FILETYPE_OBJ)
-	if runtime.GOOS == OS_WINDOWS {
-		require.NotContains(t, args, RELOC_PIC)
+	if runtime.GOOS != OS_DARWIN && runtime.GOOS != "linux" {
+		require.Empty(t, cfg.llvmTargetCPU())
 		return
 	}
-	require.Contains(t, args, RELOC_PIC)
+	require.NotEmpty(t, cfg.llvmTargetCPU())
+	require.NotEqual(t, "native", cfg.llvmTargetCPU())
+}
+
+func TestLLVMTargetCPUOverride(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+	cfg := currentBuildConfig()
+
+	require.Equal(t, "x86-64-v3", cfg.llvmTargetCPU())
+}
+
+func TestLLVMTargetCPUDisable(t *testing.T) {
+	t.Setenv(targetCPUEnv, "portable")
+	cfg := currentBuildConfig()
+
+	require.Empty(t, cfg.llvmTargetCPU())
+}
+
+func TestLLVMRelocMode(t *testing.T) {
+	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
+
+	if runtime.GOOS == OS_WINDOWS {
+		require.Equal(t, llvm.RelocDefault, cfg.llvmRelocMode())
+		return
+	}
+	require.Equal(t, llvm.RelocPIC, cfg.llvmRelocMode())
 }
 
 func TestCLICommand(t *testing.T) {

@@ -19,12 +19,12 @@
 - Show version: `./pluto -version` (or `-v`)
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
-Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+Requirements: Go `1.25`, LLVM `21` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
-- Pipeline: generate IR → optimize `-O3` (`opt`) → object (`llc`) → link with runtime via `clang`/`lld`.
+- Pipeline: generate IR → optimize `-O3` and emit objects in-process with LLVM → link with cached runtime objects via `clang`.
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
 - Cache layout (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
@@ -81,7 +81,7 @@ When reviewing PRs or preparing code for review, check:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 `llvm-config` and `clang`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 
 ## Instructions for AI Assistants

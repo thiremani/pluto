@@ -287,7 +287,7 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 ## Requirements
 
 - Go 1.25+
-- LLVM 21 tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
+- LLVM 21 development libraries and tools on PATH: `llvm-config`, `clang`
 - Python 3.x (for running tests)
 - Leak check tools (only for `python3 test.py --leak-check`):
   - Linux: `valgrind`
@@ -423,7 +423,7 @@ Pluto is under active development.
 ## Architecture
 
 - **Two phases:** CodeCompiler parses `.pt` files and saves function templates and constants; ScriptCompiler compiles specialized versions for each usage in `.spt` files (if not already cached).
-- **Automatic pipeline:** generate IR → optimize `-O3` via `opt` → object via `llc` → link with runtime via `clang`/`lld` — all handled transparently.
+- **Automatic pipeline:** generate IR → optimize `-O3` and emit objects in-process with LLVM → link with cached runtime objects via `clang` — all handled transparently.
 - **Module resolution:** walks up from CWD to find `pt.mod` and derives module path.
 - **Cache layout** (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
@@ -441,7 +441,7 @@ Pluto is under active development.
 - Ensure `GOFLAGS='-tags=byollvm'` and CGO flags are set (see Windows installation above)
 
 **Missing LLVM tools:**
-- Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH
+- Verify `llvm-config` and `clang` from LLVM 21 are on PATH
 
 **Stale cache behavior:**
 - Clear current version: `./pluto -clean`
