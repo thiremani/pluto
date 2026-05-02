@@ -13,9 +13,9 @@ if SCRIPT_DIR and SCRIPT_DIR not in sys.path:
 from msys2_env import compute_env  # noqa: E402
 
 
-def run(cmd, env):
+def run(cmd, env, cwd=None):
     print("+", " ".join(cmd))
-    proc = subprocess.run(cmd, env=env)
+    proc = subprocess.run(cmd, env=env, cwd=str(cwd) if cwd else None)
     if proc.returncode != 0:
         sys.exit(proc.returncode)
 
@@ -38,7 +38,7 @@ def build_pluto(project_root: str | Path | None = None, extra_env: dict | None =
     run(["go", "version"], env)
     # GOFLAGS from msys2_env.py will apply -tags byollvm.
     out = root / "pluto.exe"
-    run(["go", "build", "-o", str(out), "main.go"], env | {"PWD": str(root)})
+    run(["go", "build", "-o", str(out), "."], env | {"PWD": str(root)}, root)
     print(f"OK: ./{out.name} built.")
     return out
 

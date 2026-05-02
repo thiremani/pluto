@@ -10,21 +10,23 @@
 
 ## Build, Test, and Development Commands
 
-- Build compiler: `go build -o pluto`
-- Production build with version: `go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto`
+- Build compiler: `python3 build.py`
+- Production build with version: `python3 build.py --release`
 - Unit tests (race): `go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)
+- Run compiler and keep linked pre-optimization script IR: `./pluto -emit-ir [directory]`
 - Show version: `./pluto -version` (or `-v`)
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
-Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`; direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`. See `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
 - Two phases: CodeCompiler for `.pt` (reusable funcs/consts) → IR; ScriptCompiler for `.spt` (programs) links code IR.
-- Pipeline: generate IR → optimize `-O3` (`opt`) → object (`llc`) → link with runtime via `clang`/`lld`.
+- Pipeline: generate IR → optimize `-O3` and emit objects in-process with LLVM → link with cached runtime objects via `clang`.
 - Module resolution: walks up to find `pt.mod`; cache key based on module path.
 - Cache layout (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
@@ -50,7 +52,7 @@ Requirements: Go `1.25`, LLVM `21` on PATH (`clang`, `opt`, `llc`, `ld.lld`). ma
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
@@ -81,7 +83,7 @@ When reviewing PRs or preparing code for review, check:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 `llvm-config` and `clang`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 
 ## Instructions for AI Assistants

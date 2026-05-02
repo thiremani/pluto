@@ -23,7 +23,6 @@ const (
 	PT_SUFFIX  = ".pt"
 	SPT_SUFFIX = ".spt"
 	IR_SUFFIX  = ".ll"
-	OPT_SUFFIX = ".opt"
 	OBJ_SUFFIX = ".o"
 	EXE_SUFFIX = ".exe"
 
@@ -38,16 +37,12 @@ const (
 	OS_WINDOWS = "windows"
 
 	// Compiler binaries
-	CC      = "clang"
-	OPT_BIN = "opt"
-	LLC_BIN = "llc"
+	CC = "clang"
 
 	// Compiler flags
-	C_STD        = "-std=c11"
-	OPT_LEVEL    = "-O3"
-	FPIC         = "-fPIC"
-	FILETYPE_OBJ = "-filetype=obj"
-	RELOC_PIC    = "-relocation-model=pic"
+	C_STD     = "-std=c11"
+	OPT_LEVEL = "-O3"
+	FPIC      = "-fPIC"
 
 	// Linker flags
 	LINK_DEAD_STRIP  = "-Wl,-dead_strip"
@@ -66,8 +61,15 @@ type Pluto struct {
 	PtCache  string // Root cache directory (PTCACHE)
 	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
 	Config   buildConfig
+	EmitIR   bool
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
+}
+
+type cliOptions struct {
+	command string
+	target  string
+	emitIR  bool
 }
 
 // sanitizeCacheComponent returns a filesystem-safe cache path component.
@@ -263,11 +265,12 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 	return cc, codeLL, nil
 }
 
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (string, error) {
+// CompileScript returns an owned LLVM module. The caller must dispose it.
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (llvm.Module, error) {
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
-		return "", err
+		return llvm.Module{}, err
 	}
 	l := lexer.New(p.RelPath+"/"+filepath.Base(scriptFile), string(source))
 	sp := parser.NewScriptParser(l)
@@ -277,26 +280,33 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 			fmt.Println(err)
 		}
 		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
-		return "", fmt.Errorf("parser errors for %s", scriptFile)
+		return llvm.Module{}, fmt.Errorf("parser errors for %s", scriptFile)
 	}
 	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
+	scriptModule := sc.Compiler.Module
+	moduleReturned := false
+	defer func() {
+		if !moduleReturned {
+			scriptModule.Dispose()
+		}
+	}()
 
 	// Only link if code module has content
 	if codeLL != "" {
 		buffer, err := llvm.NewMemoryBufferFromFile(codeLL)
 		if err != nil {
 			fmt.Printf("Error loading to memory buffer: %v\n", err)
-			return "", err
+			return llvm.Module{}, err
 		}
 		clone, err := p.Ctx.ParseIR(buffer)
 		if err != nil {
 			fmt.Printf("Error parsing IR: %v\n", err)
-			return "", err
+			return llvm.Module{}, err
 		}
 		// Link code-mode module into script's module in-memory
 		if err := llvm.LinkModules(sc.Compiler.Module, clone); err != nil {
 			fmt.Printf("Error linking modules: %v\n", err)
-			return "", err
+			return llvm.Module{}, err
 		}
 	}
 
@@ -305,22 +315,29 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		for _, err := range errs {
 			fmt.Println(err)
 		}
-		return "", fmt.Errorf("error compiling scriptFile %s for script %s", scriptFile, script)
+		return llvm.Module{}, fmt.Errorf("error compiling scriptFile %s for script %s", scriptFile, script)
 	}
-	ir := sc.Compiler.GenerateIR()
-
-	llName := script + IR_SUFFIX
-	scriptLL := filepath.Join(p.CacheDir, SCRIPT_DIR, llName)
-	os.MkdirAll(filepath.Dir(scriptLL), 0755)
-	if err := os.WriteFile(scriptLL, []byte(ir), 0644); err != nil {
-		fmt.Printf("Error writing IR to %s: %v\n", scriptLL, err)
-		return "", err
+	if p.EmitIR {
+		if err := p.writeScriptIR(script, scriptModule); err != nil {
+			return llvm.Module{}, err
+		}
 	}
-	return scriptLL, nil
+	moduleReturned = true
+	return scriptModule, nil
 }
 
-func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
-	optFile := filepath.Join(p.CacheDir, SCRIPT_DIR, bin+OPT_SUFFIX+IR_SUFFIX)
+func (p *Pluto) writeScriptIR(script string, module llvm.Module) error {
+	irFile := filepath.Join(p.CacheDir, SCRIPT_DIR, script+IR_SUFFIX)
+	if err := os.MkdirAll(filepath.Dir(irFile), 0755); err != nil {
+		return fmt.Errorf("create script IR cache dir: %w", err)
+	}
+	if err := os.WriteFile(irFile, []byte(module.String()), 0644); err != nil {
+		return fmt.Errorf("write script IR %s: %w", irFile, err)
+	}
+	return nil
+}
+
+func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string) error {
 	// Use the default object suffix (".o") on all platforms, including
 	// Windows when using the MinGW/UCRT toolchain.
 	objExt := OBJ_SUFFIX
@@ -330,19 +347,11 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 		binFile = binFile + EXE_SUFFIX
 	}
 
-	// 1) Optimize IR
-	if out, err := exec.Command(OPT_BIN, optCommandArgs(p.Config, scriptLL, optFile)...).CombinedOutput(); err != nil {
-		fmt.Printf("optimization failed: %v\n%s\n", err, out)
+	if err := p.emitObject(scriptModule, objFile); err != nil {
+		fmt.Printf("object emission failed: %v\n", err)
 		return err
 	}
 
-	// 2) Lower to object
-	if out, err := exec.Command(LLC_BIN, llcCommandArgs(p.Config, optFile, objFile)...).CombinedOutput(); err != nil {
-		fmt.Printf("llc compilation failed: %v\n%s\n", err, out)
-		return err
-	}
-
-	// 3) Link everything
 	linkArgs := []string{}
 
 	switch runtime.GOOS {
@@ -370,24 +379,6 @@ func (p *Pluto) GenBinary(scriptLL, bin string, rtObjs []string) error {
 	}
 
 	return nil
-}
-
-func optCommandArgs(cfg buildConfig, scriptLL, optFile string) []string {
-	args := []string{OPT_LEVEL}
-	args = append(args, cfg.llvmCodegenFlags()...)
-	args = append(args, "-S", scriptLL, "-o", optFile)
-	return args
-}
-
-func llcCommandArgs(cfg buildConfig, optFile, objFile string) []string {
-	args := []string{FILETYPE_OBJ}
-	args = append(args, cfg.llvmCodegenFlags()...)
-	// PIC is ELF/Mach-O specific; avoid on Windows COFF
-	if runtime.GOOS != OS_WINDOWS {
-		args = append(args, RELOC_PIC)
-	}
-	args = append(args, optFile, "-o", objFile)
-	return args
 }
 
 func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
@@ -420,7 +411,7 @@ func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
 	return codeFiles, scriptFiles
 }
 
-func New(cwd string) *Pluto {
+func New(cwd string, opts cliOptions) *Pluto {
 	fmt.Println("Current working directory is", cwd)
 
 	ptcache := defaultPTCache()
@@ -442,6 +433,7 @@ func New(cwd string) *Pluto {
 		Cwd:     cwd,
 		PtCache: versionedCache,
 		Config:  cfg,
+		EmitIR:  opts.emitIR,
 		Ctx:     llvm.NewContext(),
 	}
 
@@ -477,21 +469,55 @@ func cliCommand(arg string) string {
 	}
 }
 
-func main() {
-	// Handle flags
-	if len(os.Args) > 1 {
-		switch cliCommand(os.Args[1]) {
-		case "version":
-			printVersion()
-			return
-		case "clean":
-			runClean()
-			return
+func parseCLIArgs(args []string) (cliOptions, error) {
+	var opts cliOptions
+	var commandArg string
+	for _, arg := range args {
+		if command := cliCommand(arg); command != "" {
+			if opts.command != "" {
+				return cliOptions{}, fmt.Errorf("%s cannot be combined with %s", arg, commandArg)
+			}
+			opts.command = command
+			commandArg = arg
+			continue
 		}
+
+		switch arg {
+		case "-emit-ir":
+			opts.emitIR = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return cliOptions{}, fmt.Errorf("unknown flag: %s", arg)
+			}
+			if opts.target != "" {
+				return cliOptions{}, fmt.Errorf("multiple compile targets provided: %s and %s", opts.target, arg)
+			}
+			opts.target = arg
+		}
+	}
+	if opts.command != "" && (opts.target != "" || opts.emitIR) {
+		return cliOptions{}, fmt.Errorf("%s cannot be combined with other arguments", commandArg)
+	}
+	return opts, nil
+}
+
+func main() {
+	opts, err := parseCLIArgs(os.Args[1:])
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	switch opts.command {
+	case "version":
+		printVersion()
+		return
+	case "clean":
+		runClean()
+		return
 	}
 
 	// Default: compile
-	runCompile()
+	runCompile(opts)
 }
 
 // runClean removes the cache directory for the current version.
@@ -526,15 +552,15 @@ func runClean() {
 }
 
 // runCompile is the main compilation workflow.
-func runCompile() {
+func runCompile(opts cliOptions) {
 	// Determine target path (file or directory)
 	target, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("Error getting current working directory: %v\n", err)
 		os.Exit(1)
 	}
-	if len(os.Args) > 1 {
-		target = os.Args[1]
+	if opts.target != "" {
+		target = opts.target
 	}
 
 	// Resolve target to cwd and optional specific script
@@ -544,7 +570,7 @@ func runCompile() {
 		os.Exit(1)
 	}
 
-	p := New(cwd)
+	p := New(cwd, opts)
 
 	// Prepare runtime once (in PtCache root, shared across all projects)
 	rtObjs, err := prepareRuntime(p.PtCache, p.Config)
@@ -572,7 +598,7 @@ func runCompile() {
 	for _, scriptFile := range scriptFiles {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptLL, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
+		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
@@ -580,7 +606,11 @@ func runCompile() {
 			continue
 		}
 
-		if err := p.GenBinary(scriptLL, script, rtObjs); err != nil {
+		err = func() error {
+			defer scriptModule.Dispose()
+			return p.GenBinary(scriptModule, script, rtObjs)
+		}()
+		if err != nil {
 			fmt.Printf("⚠️ Binary generation failed for %s: %v\n", script, err)
 			binErr++
 		} else {

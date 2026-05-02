@@ -26,21 +26,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install LLVM and dependencies
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          sudo apt-get install -y llvm-21-dev lld-21 clang-21
+          sudo ./llvm.sh 22
+          sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          echo "CGO_CFLAGS=-I/usr/lib/llvm-21/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-L/usr/lib/llvm-21/lib" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Smoke test
         run: |
@@ -77,16 +78,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Install LLVM
         run: |
           brew update
           brew install llvm lld
           LLVM_PREFIX="$(brew --prefix llvm)"
-          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
-          echo "CGO_CFLAGS=-I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          LLVM_BIN="$LLVM_PREFIX/bin" \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -108,16 +109,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Install LLVM
         run: |
           brew update
           brew install llvm lld
           LLVM_PREFIX="$(brew --prefix llvm)"
-          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
-          echo "CGO_CFLAGS=-I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          LLVM_BIN="$LLVM_PREFIX/bin" \
+            LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -153,8 +154,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          eval "$(python scripts/msys2_env.py | sed 's/^/export /')"
-          export PATH="$LLVM_BIN:$PATH"
+          eval "$(python scripts/llvm_env.py --shell)"
           go version
           go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
 
@@ -172,21 +172,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install LLVM and dependencies
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          sudo apt-get install -y llvm-21-dev lld-21 clang-21
+          sudo ./llvm.sh 22
+          sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          echo "CGO_CFLAGS=-I/usr/lib/llvm-21/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-L/usr/lib/llvm-21/lib" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -208,21 +209,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install LLVM and dependencies
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          sudo apt-get install -y llvm-21-dev lld-21 clang-21
+          sudo ./llvm.sh 22
+          sudo apt-get install -y llvm-22-dev lld-22 clang-22
 
       - name: Set LLVM environment
+        env:
+          LLVM_BIN: /usr/lib/llvm-22/bin
+          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
         run: |
-          echo "CGO_CFLAGS=-I/usr/lib/llvm-21/include" >> "$GITHUB_ENV"
-          echo "CGO_LDFLAGS=-L/usr/lib/llvm-21/lib" >> "$GITHUB_ENV"
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:

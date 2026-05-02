@@ -242,13 +242,20 @@ This enables strong guarantees around race-free execution. The concurrency model
 **Build the compiler:**
 
 ```bash
-go build -o pluto
+python3 build.py
 ```
 
 If you prefer the conflict-safe command name locally:
 
 ```bash
-go build -o plt
+python3 build.py -o plt
+```
+
+`build.py` sets the LLVM 22 `byollvm` environment for its own subprocess and does not mutate your shell. If you prefer to call Go directly:
+
+```bash
+eval "$(python3 scripts/llvm_env.py --shell)"
+go build -o pluto
 ```
 
 **Compile a directory:**
@@ -280,18 +287,21 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 
 - `./pluto -version` (or `-v`) — show version
 - `./pluto -clean` (or `-c`) — clear cache for current version
+- `./pluto -emit-ir [directory]` — also write linked pre-optimization script `.ll` files to the cache
 - `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning
 
 ---
 
 ## Requirements
 
-- Go 1.25+
-- LLVM 21 tools on PATH: `clang`, `opt`, `llc`, `ld.lld`
-- Python 3.x (for running tests)
+- Go 1.26+
+- LLVM 22 development libraries and tools on PATH: `llvm-config`, `clang`
+- Python 3.x (for build/test helpers)
 - Leak check tools (only for `python3 test.py --leak-check`):
   - Linux: `valgrind`
   - macOS: `leaks`
+
+Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` derive the required LLVM 22 `byollvm` flags from `llvm-config` for their subprocesses. Direct `go build` and `go test` are supported after `eval "$(python3 scripts/llvm_env.py --shell)"`.
 
 ---
 
@@ -300,18 +310,18 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 <details>
 <summary><strong>Linux</strong></summary>
 
-Install LLVM 21 from apt.llvm.org:
+Install LLVM 22 from apt.llvm.org:
 
 ```bash
-wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 21
-sudo apt install lld-21
-export PATH=/usr/lib/llvm-21/bin:$PATH
+wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 22
+sudo apt install llvm-22-dev clang-22 lld-22
+export PATH=/usr/lib/llvm-22/bin:$PATH
 ```
 
 Build and test:
 
 ```bash
-go build -o pluto
+python3 build.py
 python3 test.py
 ```
 
@@ -321,7 +331,7 @@ python3 test.py
 <summary><strong>macOS (Homebrew)</strong></summary>
 
 ```bash
-brew install llvm
+brew install llvm lld
 ```
 
 Set PATH for your architecture:
@@ -337,7 +347,7 @@ export PATH=/usr/local/opt/llvm/bin:$PATH
 Build and test:
 
 ```bash
-go build -o pluto
+python3 build.py
 python3 test.py
 ```
 
@@ -357,24 +367,14 @@ pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}
 Quick build:
 
 ```bash
-python scripts/msys2_build.py
+python build.py
 ```
 
-Or manual build with required environment:
+Manual build/test:
 
 ```bash
-export CGO_ENABLED=1
-export CC=clang CXX=clang++
-export GOFLAGS='-tags=byollvm'
-export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
-export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+eval "$(python scripts/llvm_env.py --shell)"
 go build -o pluto.exe
-```
-
-Run tests:
-
-```bash
 python test.py
 ```
 
@@ -423,7 +423,7 @@ Pluto is under active development.
 ## Architecture
 
 - **Two phases:** CodeCompiler parses `.pt` files and saves function templates and constants; ScriptCompiler compiles specialized versions for each usage in `.spt` files (if not already cached).
-- **Automatic pipeline:** generate IR → optimize `-O3` via `opt` → object via `llc` → link with runtime via `clang`/`lld` — all handled transparently.
+- **Automatic pipeline:** generate IR → optimize `-O3` and emit objects in-process with LLVM → link with cached runtime objects via `clang` — all handled transparently.
 - **Module resolution:** walks up from CWD to find `pt.mod` and derives module path.
 - **Cache layout** (versioned to isolate different compiler versions):
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
@@ -437,11 +437,11 @@ Pluto is under active development.
 <details>
 <summary><strong>Common issues</strong></summary>
 
-**`undefined: run_build_sh` during build (Windows):**
-- Ensure `GOFLAGS='-tags=byollvm'` and CGO flags are set (see Windows installation above)
+**`undefined: llvmHostCPUName` or `undefined: llvmHostCPUFeatures` during build:**
+- Use `python3 build.py` / `python build.py`, or run `eval "$(python3 scripts/llvm_env.py --shell)"` before direct `go build` / `go test`
 
 **Missing LLVM tools:**
-- Verify `opt`, `llc`, `clang`, `ld.lld` from LLVM 21 are on PATH
+- Verify `llvm-config` and `clang` from LLVM 22 are on PATH
 
 **Stale cache behavior:**
 - Clear current version: `./pluto -clean`

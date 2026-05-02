@@ -75,13 +75,6 @@ func (cfg buildConfig) clangTargetFlag(goarch string) string {
 	}
 }
 
-func (cfg buildConfig) llvmCodegenFlags() []string {
-	if cpu := cfg.targetCPUFlag(); cpu != "" {
-		return []string{cpu}
-	}
-	return nil
-}
-
 func (cfg buildConfig) targetCPUCacheSegment() (string, error) {
 	if !cfg.targetCPU.disabled && strings.EqualFold(cfg.targetCPU.bare, "native") {
 		return "", nil

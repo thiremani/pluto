@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Requirements
 
-- Go 1.25+
-- LLVM 21 (including `clang`, `opt`, `llc`, and `lld`)
-- Python 3.x
+- Go 1.26+
+- LLVM 22 development libraries and tools (`llvm-config`, `clang`)
+- Python 3.x (for build/test helpers)
 - pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`.
 
 ## Development Commands
 
@@ -21,10 +22,10 @@ pip install -r requirements.txt
 ### Building the compiler
 ```bash
 # Development build (version shows as "dev")
-go build -o pluto
+python3 build.py
 
 # Production build with version from git tag (optional, used for releases)
-go build -ldflags "-X main.Version=$(git describe --tags --always --dirty) -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluto
+python3 build.py --release
 ```
 
 ### Running tests
@@ -46,6 +47,7 @@ go test -race ./lexer ./parser ./compiler
 ### Running the compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
+./pluto -emit-ir [directory]  # Also keeps linked pre-optimization script .ll files in the cache
 ./pluto -version       # Show version information (or -v)
 ./pluto -clean         # Clear cache for current version (or -c)
 # Override host CPU tuning (defaults to native)
@@ -110,8 +112,7 @@ The compilation process consists of two main phases:
 2. **Script Compilation**: For each `.spt` file, the compiler performs the following steps:
    - Links the code module (from the `.pt` files) into the script's module
    - Generates LLVM IR for the script
-   - Optimizes the IR using `opt -O3`
-   - Compiles the optimized IR into an object file using `llc`
+   - Optimizes the IR and emits an object file in-process with LLVM
    - Links the object file with the C runtime to create a native executable
 
 **Module resolution**: Walks up to find `pt.mod` file to determine project root and module path; cache key based on module path.
@@ -133,7 +134,7 @@ The compilation process consists of two main phases:
 - Leak check run: `python3 test.py --leak-check [tests/math]`
 - Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
@@ -145,7 +146,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `p
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - Default host CPU builds: `<PTCACHE>/<version>/<module-path>/{code,script}`
   - Non-default `PLUTO_TARGET_CPU` builds: `<PTCACHE>/<version>/target_cpu-<setting>/<module-path>/{code,script}`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 tools
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`
 - Use `pluto -clean` to clear cache for current version
 

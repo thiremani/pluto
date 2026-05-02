@@ -12,6 +12,8 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "amd64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -30,6 +32,8 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "amd64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -48,6 +52,8 @@ builds:
     goarch:
       - arm64
     skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -66,6 +72,8 @@ builds:
     goarch:
       - arm64
     skip: '{{ or (ne .Runtime.Goos "linux") (ne .Runtime.Goarch "arm64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -84,6 +92,8 @@ builds:
     goarch:
       - arm64
     skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "arm64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -102,6 +112,8 @@ builds:
     goarch:
       - arm64
     skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "arm64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -120,6 +132,8 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "amd64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -138,6 +152,8 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "darwin") (ne .Runtime.Goarch "amd64") }}'
+    tags:
+      - byollvm
     env:
       - CGO_ENABLED=1
       - CC=clang
@@ -156,7 +172,6 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
-    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
     tags:
       - byollvm
     env:
@@ -178,7 +193,6 @@ builds:
     goarch:
       - amd64
     skip: '{{ or (ne .Runtime.Goos "windows") (ne .Runtime.Goarch "amd64") }}'
-    # MSYS2/MinGW builds of tinygo.org/x/go-llvm require byollvm.
     tags:
       - byollvm
     env:
@@ -237,13 +251,13 @@ nfpms:
     file_name_template: '{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}'
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
     maintainer: '{{ or .Env.NFPM_MAINTAINER "Pluto Contributors <opensource@pluto-lang.org>" }}'
-    description: Pluto programming language compiler (requires LLVM 21 toolchain on target host).
+    description: Pluto programming language compiler (requires LLVM 22 toolchain on target host).
     license: MIT
     bindir: /usr/bin
     dependencies:
-      - llvm-21
-      - clang-21
-      - lld-21
+      - llvm-22
+      - clang-22
+      - lld-22
     overrides:
       rpm:
         dependencies:

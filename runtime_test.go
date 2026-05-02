@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"tinygo.org/x/go-llvm"
 )
 
 func containsPrefix(values []string, prefix string) bool {
@@ -167,25 +168,41 @@ func TestTargetCPUCacheSegmentExplicitMCPU(t *testing.T) {
 	require.Equal(t, "target_cpu-mcpu-apple-m1", segment)
 }
 
-func TestOptCommandArgsIncludeCPU(t *testing.T) {
+func TestLLVMTargetCPUDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
 	cfg := currentBuildConfig()
 
-	require.Contains(t, optCommandArgs(cfg, "in.ll", "out.ll"), "-mcpu=native")
-}
-
-func TestLLCCommandArgsIncludeCPU(t *testing.T) {
-	t.Setenv(targetCPUEnv, "")
-	cfg := currentBuildConfig()
-
-	args := llcCommandArgs(cfg, "in.ll", "out.o")
-	require.Contains(t, args, "-mcpu=native")
-	require.Contains(t, args, FILETYPE_OBJ)
-	if runtime.GOOS == OS_WINDOWS {
-		require.NotContains(t, args, RELOC_PIC)
+	if runtime.GOOS != OS_DARWIN && runtime.GOOS != "linux" {
+		require.Empty(t, cfg.llvmTargetCPU())
 		return
 	}
-	require.Contains(t, args, RELOC_PIC)
+	require.NotEmpty(t, cfg.llvmTargetCPU())
+	require.NotEqual(t, "native", cfg.llvmTargetCPU())
+}
+
+func TestLLVMTargetCPUOverride(t *testing.T) {
+	t.Setenv(targetCPUEnv, "-march=x86-64-v3")
+	cfg := currentBuildConfig()
+
+	require.Equal(t, "x86-64-v3", cfg.llvmTargetCPU())
+}
+
+func TestLLVMTargetCPUDisable(t *testing.T) {
+	t.Setenv(targetCPUEnv, "portable")
+	cfg := currentBuildConfig()
+
+	require.Empty(t, cfg.llvmTargetCPU())
+}
+
+func TestLLVMRelocMode(t *testing.T) {
+	t.Setenv(targetCPUEnv, "")
+	cfg := currentBuildConfig()
+
+	if runtime.GOOS == OS_WINDOWS {
+		require.Equal(t, llvm.RelocDefault, cfg.llvmRelocMode())
+		return
+	}
+	require.Equal(t, llvm.RelocPIC, cfg.llvmRelocMode())
 }
 
 func TestCLICommand(t *testing.T) {
@@ -203,6 +220,80 @@ func TestCLICommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.arg, func(t *testing.T) {
 			require.Equal(t, tt.want, cliCommand(tt.arg))
+		})
+	}
+}
+
+func TestParseCLIArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want cliOptions
+	}{
+		{
+			name: "default compile",
+			want: cliOptions{},
+		},
+		{
+			name: "compile target",
+			args: []string{"tests"},
+			want: cliOptions{target: "tests"},
+		},
+		{
+			name: "emit ir",
+			args: []string{"-emit-ir", "tests"},
+			want: cliOptions{target: "tests", emitIR: true},
+		},
+		{
+			name: "version",
+			args: []string{"-version"},
+			want: cliOptions{command: "version"},
+		},
+		{
+			name: "short version",
+			args: []string{"-v"},
+			want: cliOptions{command: "version"},
+		},
+		{
+			name: "clean",
+			args: []string{"-clean"},
+			want: cliOptions{command: "clean"},
+		},
+		{
+			name: "short clean",
+			args: []string{"-c"},
+			want: cliOptions{command: "clean"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCLIArgs(tt.args)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseCLIArgsRejectsInvalidCombinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "unknown flag", args: []string{"-unknown"}, wantErr: "unknown flag: -unknown"},
+		{name: "double dash emit ir", args: []string{"--emit-ir"}, wantErr: "unknown flag: --emit-ir"},
+		{name: "version with emit ir", args: []string{"-emit-ir", "-version"}, wantErr: "-version cannot be combined with other arguments"},
+		{name: "short version with target", args: []string{"-v", "tests"}, wantErr: "-v cannot be combined with other arguments"},
+		{name: "clean with target", args: []string{"-clean", "tests"}, wantErr: "-clean cannot be combined with other arguments"},
+		{name: "multiple targets", args: []string{"tests", "other"}, wantErr: "multiple compile targets provided: tests and other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseCLIArgs(tt.args)
+			require.Error(t, err)
+			require.EqualError(t, err, tt.wantErr)
 		})
 	}
 }
