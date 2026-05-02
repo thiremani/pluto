@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Requirements
 
-- Go 1.25+
-- LLVM 21 development libraries and tools (`llvm-config`, `clang`)
+- Go 1.26+
+- LLVM 22 development libraries and tools (`llvm-config`, `clang`)
 - Python 3.x
 - pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+LLVM 22 builds require `GOFLAGS='-tags=byollvm'` plus `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, and `CGO_LDFLAGS` from `llvm-config`.
 
 ## Development Commands
 
@@ -46,6 +47,7 @@ go test -race ./lexer ./parser ./compiler
 ### Running the compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
+./pluto -emit-ir [directory]  # Also keeps linked pre-optimization script .ll files in the cache
 ./pluto -version       # Show version information (or -v)
 ./pluto -clean         # Clear cache for current version (or -c)
 # Override host CPU tuning (defaults to native)
@@ -132,7 +134,7 @@ The compilation process consists of two main phases:
 - Leak check run: `python3 test.py --leak-check [tests/math]`
 - Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
@@ -144,7 +146,7 @@ CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `p
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - Default host CPU builds: `<PTCACHE>/<version>/<module-path>/{code,script}`
   - Non-default `PLUTO_TARGET_CPU` builds: `<PTCACHE>/<version>/target_cpu-<setting>/<module-path>/{code,script}`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 tools
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 tools
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`
 - Use `pluto -clean` to clear cache for current version
 

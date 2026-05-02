@@ -239,7 +239,7 @@ This enables strong guarantees around race-free execution. The concurrency model
 
 ## Building and Running
 
-**Build the compiler:**
+**Build the compiler** after setting the LLVM CGO environment from the requirements below:
 
 ```bash
 go build -o pluto
@@ -280,18 +280,28 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 
 - `./pluto -version` (or `-v`) — show version
 - `./pluto -clean` (or `-c`) — clear cache for current version
+- `./pluto -emit-ir [directory]` — also write linked pre-optimization script `.ll` files to the cache
 - `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning
 
 ---
 
 ## Requirements
 
-- Go 1.25+
-- LLVM 21 development libraries and tools on PATH: `llvm-config`, `clang`
+- Go 1.26+
+- LLVM 22 development libraries and tools on PATH: `llvm-config`, `clang`
 - Python 3.x (for running tests)
 - Leak check tools (only for `python3 test.py --leak-check`):
   - Linux: `valgrind`
   - macOS: `leaks`
+
+Pluto builds against LLVM through CGO. LLVM 22 builds require the `byollvm` tag and CGO flags from `llvm-config`:
+
+```bash
+export GOFLAGS='-tags=byollvm'
+export CGO_CPPFLAGS="$(llvm-config --cflags) -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+export CGO_CXXFLAGS="-std=c++17 $(llvm-config --cxxflags)"
+export CGO_LDFLAGS="$(llvm-config --ldflags --libs all --system-libs)"
+```
 
 ---
 
@@ -300,12 +310,12 @@ Pluto walks up from the working directory to find `pt.mod` and treats that direc
 <details>
 <summary><strong>Linux</strong></summary>
 
-Install LLVM 21 from apt.llvm.org:
+Install LLVM 22 from apt.llvm.org:
 
 ```bash
-wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 21
-sudo apt install lld-21
-export PATH=/usr/lib/llvm-21/bin:$PATH
+wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 22
+sudo apt install llvm-22-dev clang-22 lld-22
+export PATH=/usr/lib/llvm-22/bin:$PATH
 ```
 
 Build and test:
@@ -321,7 +331,7 @@ python3 test.py
 <summary><strong>macOS (Homebrew)</strong></summary>
 
 ```bash
-brew install llvm
+brew install llvm lld
 ```
 
 Set PATH for your architecture:
@@ -441,7 +451,7 @@ Pluto is under active development.
 - Ensure `GOFLAGS='-tags=byollvm'` and CGO flags are set (see Windows installation above)
 
 **Missing LLVM tools:**
-- Verify `llvm-config` and `clang` from LLVM 21 are on PATH
+- Verify `llvm-config` and `clang` from LLVM 22 are on PATH
 
 **Stale cache behavior:**
 - Clear current version: `./pluto -clean`

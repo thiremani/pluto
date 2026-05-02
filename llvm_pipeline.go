@@ -93,6 +93,11 @@ func (p *Pluto) emitObject(module llvm.Module, objFile string) error {
 
 	pbo := llvm.NewPassBuilderOptions()
 	defer pbo.Dispose()
+	// Match the tuning knobs enabled by the old external `opt -O3` pipeline.
+	pbo.SetLoopInterleaving(true)
+	pbo.SetLoopVectorization(true)
+	pbo.SetSLPVectorization(true)
+	pbo.SetLoopUnrolling(true)
 	if err := module.RunPasses(llvmOptPipeline, tm, pbo); err != nil {
 		return fmt.Errorf("optimize LLVM module with %s: %w", llvmOptPipeline, err)
 	}

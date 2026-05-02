@@ -16,10 +16,12 @@
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)
+- Run compiler and keep linked pre-optimization script IR: `./pluto -emit-ir [directory]`
 - Show version: `./pluto -version` (or `-v`)
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
-Requirements: Go `1.25`, LLVM `21` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+LLVM 22 builds require `GOFLAGS='-tags=byollvm'` plus CGO flags from `llvm-config`; see `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
@@ -50,7 +52,7 @@ Requirements: Go `1.25`, LLVM `21` development libraries and tools on PATH (`llv
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
@@ -81,7 +83,7 @@ When reviewing PRs or preparing code for review, check:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 `llvm-config` and `clang`.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 `llvm-config` and `clang`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 
 ## Instructions for AI Assistants

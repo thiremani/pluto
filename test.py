@@ -102,24 +102,46 @@ class TestRunner:
             if p.exists():
                 return p
         raise RuntimeError(
-            "LLVM 21 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
+            "LLVM 22 not found. On Windows, install MSYS2 UCRT64 and 'mingw-w64-ucrt-x86_64-llvm', or set LLVM_BIN/LLVM_HOME."
         )
 
     def detect_llvm_path_unix(self) -> Path:
-        # Try common LLVM 21 paths
+        # Try common LLVM 22 paths
         paths = [
-            Path("/usr/lib/llvm-21/bin"),  # Linux
+            Path("/usr/lib/llvm-22/bin"),  # Linux
             Path("/usr/local/opt/llvm/bin"),  # macOS Intel
             Path("/opt/homebrew/opt/llvm/bin")  # macOS ARM
         ]
         for p in paths:
             if p.exists():
                 return p
-        raise RuntimeError("LLVM 21 not found. Install with:\n"
+        raise RuntimeError("LLVM 22 not found. Install with:\n"
                            "Linux: https://apt.llvm.org/\n"
                            "macOS: brew install llvm")
 
-        
+    def add_llvm_cgo_env(self, env: dict) -> None:
+        if env.get("LLVM_CONFIG"):
+            llvm_config = Path(shutil.which(env["LLVM_CONFIG"]) or env["LLVM_CONFIG"])
+        else:
+            llvm_config = self.llvm_bin / "llvm-config"
+        if not llvm_config.exists():
+            raise RuntimeError(
+                f"llvm-config not found at {llvm_config}. Set LLVM_CONFIG, LLVM_BIN, or LLVM_HOME to an LLVM 22 installation."
+            )
+
+        def llvm_config_output(*args: str) -> str:
+            return subprocess.check_output([str(llvm_config), *args], text=True).strip()
+
+        goflags = env.get("GOFLAGS", "")
+        if "-tags=byollvm" not in goflags:
+            env["GOFLAGS"] = f"{goflags} -tags=byollvm".strip()
+        env.setdefault(
+            "CGO_CPPFLAGS",
+            f"{llvm_config_output('--cflags')} -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS",
+        )
+        env.setdefault("CGO_CXXFLAGS", f"-std=c++17 {llvm_config_output('--cxxflags')}")
+        env.setdefault("CGO_LDFLAGS", llvm_config_output("--ldflags", "--libs", "all", "--system-libs"))
+
     def run_command(self, cmd: list, cwd: Path = None) -> str:
         """Execute a command and return its output"""
         # Merge MSYS2 LLVM/CGO env when running inside MSYS2 so go build/test works consistently.
@@ -131,6 +153,8 @@ class TestRunner:
                 env.update(compute_env())
             except Exception:
                 pass
+        else:
+            self.add_llvm_cgo_env(env)
         # Prepend LLVM bin to PATH, but let existing LLVM_BIN (e.g., from MSYS2) take precedence.
         prepend = env.get("LLVM_BIN") or str(self.llvm_bin)
         if prepend:

@@ -22,12 +22,13 @@ This project is a compiler for the Pluto programming language, written in Go. It
 
 ### Requirements
 
-*   Go 1.25+
-*   LLVM 21 development libraries and tools (`llvm-config`, `clang`)
+*   Go 1.26+
+*   LLVM 22 development libraries and tools (`llvm-config`, `clang`)
 *   Python 3.x
 *   pip (for installing Python dependencies)
 
 On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
+LLVM 22 builds require `GOFLAGS='-tags=byollvm'` plus `CGO_CPPFLAGS`, `CGO_CXXFLAGS`, and `CGO_LDFLAGS` from `llvm-config`.
 
 ### Commands
 
@@ -66,6 +67,7 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 *   **Run the compiler:**
     ```bash
     ./pluto [directory]    # Compiles .pt and .spt files in directory
+    ./pluto -emit-ir [directory]  # Also keeps linked pre-optimization script .ll files in the cache
     ./pluto -version       # Show version information (or -v)
     ./pluto -clean         # Clear cache for current version (or -c)
     PLUTO_TARGET_CPU=portable ./pluto .  # Override host CPU tuning (defaults to native)
@@ -107,7 +109,7 @@ The compiler uses a cache to store intermediate build artifacts (LLVM IR and obj
 To clear the cache for the current version, run `./pluto -clean`. To clear the entire cache manually, delete the appropriate directory.
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 21 `llvm-config` and `clang`.
+- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 `llvm-config` and `clang`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 - Use `pluto -clean` to clear cache for current version.
 
@@ -130,7 +132,7 @@ To clear the cache for the current version, run `./pluto -clean`. To clear the e
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.25, installs LLVM 21 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).

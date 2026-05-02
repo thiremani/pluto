@@ -223,3 +223,77 @@ func TestCLICommand(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCLIArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want cliOptions
+	}{
+		{
+			name: "default compile",
+			want: cliOptions{},
+		},
+		{
+			name: "compile target",
+			args: []string{"tests"},
+			want: cliOptions{target: "tests"},
+		},
+		{
+			name: "emit ir",
+			args: []string{"-emit-ir", "tests"},
+			want: cliOptions{target: "tests", emitIR: true},
+		},
+		{
+			name: "version",
+			args: []string{"-version"},
+			want: cliOptions{command: "version"},
+		},
+		{
+			name: "short version",
+			args: []string{"-v"},
+			want: cliOptions{command: "version"},
+		},
+		{
+			name: "clean",
+			args: []string{"-clean"},
+			want: cliOptions{command: "clean"},
+		},
+		{
+			name: "short clean",
+			args: []string{"-c"},
+			want: cliOptions{command: "clean"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCLIArgs(tt.args)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseCLIArgsRejectsInvalidCombinations(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "unknown flag", args: []string{"-unknown"}, wantErr: "unknown flag: -unknown"},
+		{name: "double dash emit ir", args: []string{"--emit-ir"}, wantErr: "unknown flag: --emit-ir"},
+		{name: "version with emit ir", args: []string{"-emit-ir", "-version"}, wantErr: "-version cannot be combined with other arguments"},
+		{name: "short version with target", args: []string{"-v", "tests"}, wantErr: "-v cannot be combined with other arguments"},
+		{name: "clean with target", args: []string{"-clean", "tests"}, wantErr: "-clean cannot be combined with other arguments"},
+		{name: "multiple targets", args: []string{"tests", "other"}, wantErr: "multiple compile targets provided: tests and other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseCLIArgs(tt.args)
+			require.Error(t, err)
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
