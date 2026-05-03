@@ -650,18 +650,6 @@ var defaultOps = map[opKey]opFunc{
 		return
 	},
 
-	// Logical OR
-	{Operator: token.SYM_LOGICAL_OR, LeftType: I1, RightType: I1}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
-		s = &Symbol{}
-		s.Type = left.Type
-		if !compile {
-			return
-		}
-
-		s.Val = c.builder.CreateOr(left.Val, right.Val, "or_cond")
-		return
-	},
-
 	// Bitwise XOR
 	{Operator: token.SYM_XOR, LeftType: I64, RightType: I64}: func(c *Compiler, left, right *Symbol, compile bool) (s *Symbol) {
 		s = &Symbol{}

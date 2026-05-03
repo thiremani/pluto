@@ -630,14 +630,12 @@ func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm
 func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func()) {
 	frame := c.requireCondLHSFrame()
 	exprKey := key(c.FuncNameMangled, expr)
-	old, hadOld := frame[exprKey]
-	frame[exprKey] = syms
-	body()
-	if hadOld {
-		frame[exprKey] = old
-		return
+	if _, exists := frame[exprKey]; exists {
+		panic("internal: condLHS binding already active for expression")
 	}
-	delete(frame, exprKey)
+	frame[exprKey] = syms
+	defer delete(frame, exprKey)
+	body()
 }
 
 func (c *Compiler) compileLogicalOrCondExprWithFailure(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {

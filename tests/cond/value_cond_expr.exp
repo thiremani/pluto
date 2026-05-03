@@ -76,3 +76,5 @@ LogicalOrConditionGate: [3 4 2 3 4 5]
 LogicalOrBaseFalse: 55
 LogicalOrStmtCond: 99
 LogicalOrStmtCondFalse: 77
+LogicalOrStmtShortCircuit: 99
+LogicalOrStmtShortCircuitFalse: 77

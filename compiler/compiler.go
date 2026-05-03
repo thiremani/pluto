@@ -1618,6 +1618,10 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 // It handles pointer operands, array-scalar broadcasting, and delegates to
 // the default operator table for scalar work.
 func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
+	if op == token.SYM_LOGICAL_OR {
+		panic("internal: logical OR must be lowered through short-circuit branching")
+	}
+
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
 
@@ -1705,6 +1709,10 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
+	if expr.Operator == token.SYM_LOGICAL_OR && !info.HasCondOr() {
+		return c.compileLogicalOrCondition(expr)
+	}
+
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
 	left := c.compileExpression(expr.Left, nil)
@@ -1733,6 +1741,40 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	c.freeTemporary(expr.Right, right)
 
 	return res
+}
+
+func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbol {
+	left := c.compileExpression(expr.Left, nil)
+	if len(left) != 1 {
+		panic(fmt.Sprintf("internal: logical OR left operand produced %d values", len(left)))
+	}
+	leftSym := c.derefIfPointer(left[0], "")
+
+	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
+
+	c.builder.SetInsertPointAtEnd(trueBlock)
+	c.freeTemporary(expr.Left, left)
+	c.builder.CreateBr(contBlock)
+	trueEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(rhsBlock)
+	right := c.compileExpression(expr.Right, nil)
+	if len(right) != 1 {
+		panic(fmt.Sprintf("internal: logical OR right operand produced %d values", len(right)))
+	}
+	rightSym := c.derefIfPointer(right[0], "")
+	c.freeTemporary(expr.Right, right)
+	c.builder.CreateBr(contBlock)
+	rhsEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int1Type(), "or_cond")
+	result.AddIncoming(
+		[]llvm.Value{llvm.ConstInt(c.Context.Int1Type(), 1, false), rightSym.Val},
+		[]llvm.BasicBlock{trueEnd, rhsEnd},
+	)
+
+	return []*Symbol{{Val: result, Type: I1}}
 }
 
 // freeTemporary frees operands that are temporaries (not variables).

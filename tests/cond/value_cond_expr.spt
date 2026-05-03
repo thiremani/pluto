@@ -306,3 +306,12 @@ lorStmt = b > 2 || d < 10, a > 2 99
 lorStmtFalse = 77
 lorStmtFalse = b > 2 || d > 10 99
 "LogicalOrStmtCondFalse: -lorStmtFalse"
+
+lorOobArr = [1]
+lorShortCircuit = 0
+lorShortCircuit = 1 < 2 || lorOobArr[5] > 0 99
+"LogicalOrStmtShortCircuit: -lorShortCircuit"
+
+lorShortCircuitFalse = 77
+lorShortCircuitFalse = 1 > 2 || lorOobArr[5] > 0 99
+"LogicalOrStmtShortCircuitFalse: -lorShortCircuitFalse"

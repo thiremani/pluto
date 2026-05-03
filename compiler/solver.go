@@ -1499,11 +1499,6 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 	}
 }
 
-func isI1(t Type) bool {
-	intType, ok := t.(Int)
-	return ok && intType.Width == 1
-}
-
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
@@ -1542,7 +1537,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 			Msg:   fmt.Sprintf("logical OR condition operands must produce a single value, got %d", len(left)),
 		})
 		types = []Type{Unresolved{}}
-	} else if left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind && (!isI1(left[0]) || !isI1(right[0])) {
+	} else if left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind && (!IsI1(left[0]) || !IsI1(right[0])) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
