@@ -1,7 +1,7 @@
 # Pluto ABI Optimization Plan
 
-**Status:** Phase 1 scalar ABI shipped internally; remaining phases proposed
-**Scope:** Internal call lowering, scalar fast paths, tail recursion, external ABI stability
+**Status:** Phase 1 scalar ABI and post-O3 scalar recurrence unroll are implemented; remaining ABI phases proposed
+**Scope:** Internal call lowering, scalar fast paths, aggregate returns, external ABI stability, targeted post-LLVM loop cleanup
 
 ## 1. Problem
 
@@ -19,7 +19,9 @@ Simple and uniform, but costly for scalar-heavy code:
 - single-scalar outputs use `sret` instead of register return
 - self tail recursion lowers to recursive calls plus stack traffic instead of loops
 
-The `fib_tail` benchmark exposes this clearly. LLVM `-O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification and tail-recursion lowering must be done in Pluto.
+The `fib_tail` benchmark originally exposed this clearly. LLVM `-O3` cannot recover from ABI choices baked into the function signature — it can promote local allocas and simplify CFGs, but it cannot fix pointer-based param ABI or `sret`-only returns. ABI classification must be done in Pluto.
+
+After Phase 1, `fib_tail` is no longer a strong argument for a Pluto-level tail-call optimization pass: with direct scalar params and returns, LLVM can already eliminate the simple self recursion and inline the helper into the benchmark loop. A Pluto TCO pass should be considered only for stack-safety or broader semantic reasons, not as the next performance optimization.
 
 ## 2. Key Principle: Separate Semantics from ABI
 
@@ -81,25 +83,24 @@ This was the highest-value initial optimization because it benefits all scalar-h
 
 **Benchmark target:** `fib`, `fib_tail`, and other call-heavy scalar code. Note: `sum` is not a useful target here — its optimized IR is already a call-free scalar loop; the current gap vs clang is loop optimization quality, not call ABI.
 
-### Phase 2: Restricted self tail recursion (next highest priority)
+### Phase 2: Restricted self tail recursion (deprioritized)
 
 Transform self-recursive calls into loops when all of:
 
 - direct scalar params only
 - single direct scalar return
 - self call in tail position
-- no ownership-sensitive temporaries live across the tail call
-- no cleanup work required before return
+- cleanup for any owned locals can be emitted explicitly on the tail backedge
 
-Intentionally narrow — ignore multi-output, strings, arrays, mutual recursion. This is medium difficulty because the restricted form avoids all the hard ownership/cleanup interactions.
+This is not currently worth pursuing as a performance phase. An experiment against `fib_tail` showed that optimized baseline IR already contains no recursive `FibAux` call after Phase 1, and standalone binary timings were within noise of a custom Pluto loop lowering. The compiler complexity is therefore not justified for this benchmark.
 
-**Benchmark target:** `fib_tail` (eliminates stack growth entirely and removes the remaining recursive-call overhead after Phase 1).
+Keep this as a future stack-safety/language-semantics feature only. If revisited, the implementation should be a real analysis/lowering pass with explicit backedge cleanup, not a benchmark-specific special case.
 
 ### Phase 3: Small POD aggregate returns
 
 Support direct multi-output returns for plain-data aggregates (`{I64, I64}`, `{I64, F64}`) when the target ABI allows. Model as LLVM aggregate return and let target classification decide direct vs indirect.
 
-This is the natural next ABI expansion after Phase 2 because the classifier/lowering split from Phase 1 is already in place. The remaining work is target-aware aggregate classification, not another structural refactor.
+This is the natural next ABI expansion because the classifier/lowering split from Phase 1 is already in place. The remaining work is target-aware aggregate classification, not another structural refactor.
 
 ### Phase 4: Generalized ABI classification
 
@@ -116,8 +117,28 @@ for that benchmark is already a call-free scalar loop, but clang still produces 
 more optimized kernel. That means `sum` should be treated as a loop/codegen quality
 benchmark, not as a primary validation target for the ABI phases above.
 
-The target-metadata quick wins have already landed far enough to make this a
-different problem now. The next things to investigate here are:
+The first targeted loop/codegen step is implemented: after LLVM `default<O3>`,
+Pluto annotates small scalar recurrence loops with `llvm.loop.unroll.count = 4`
+and reruns only LLVM's function loop unroller. This is deliberately post-O3 so
+it can see loops created by LLVM inlining and tail-recursion elimination. It is
+not a global `--unroll-count=4` policy.
+
+This pass targets the post-inline `fib_tail` recurrence and intentionally leaves
+broader loop classes to LLVM's normal cost model:
+
+- `fib_tail` benefits because the helper has become a small scalar recurrence loop
+- `sum` is rejected because the hot loop contains integer remainder (`% 17`)
+- `harmonic` is currently vectorized by LLVM on the benchmarked target, so its
+  post-O3 IR has vector operations and existing loop metadata; a scalar `fdiv`
+  recurrence remains eligible if LLVM does not vectorize it
+
+Regression coverage compiles a real Pluto `fib_tail` fixture, runs the same
+post-O3 pipeline in-process, and checks that metadata reaches the post-inline
+recurrence before LLVM's loop unroller runs. Broader A/B experiments should use
+temporary local compiler builds rather than permanent user-facing optimization
+knobs.
+
+The next things to investigate for loop/codegen quality are:
 
 - emit a more canonical counted-loop fast path for common `I64` ranges, especially `step == 1`
 - preserve affine-friendly loop structure so LLVM can unroll and strength-reduce more aggressively
@@ -128,7 +149,9 @@ These are worth treating as a separate optimization track because they improve
 call-free kernels like `sum` and still benefit range-heavy scalar code such as
 `harmonic`, without depending on more ABI surface area.
 
-**Benchmark target:** `sum`, `harmonic`, and other call-free or loop-dominated integer kernels.
+**Benchmark target:** `fib_tail` for the scalar recurrence unroll pass; `sum`,
+`harmonic`, and other call-free or loop-dominated kernels for future loop
+canonicalization and strength-reduction work.
 
 ## 5. Rollout Strategy
 
@@ -141,8 +164,17 @@ Each phase should:
 
 ## 6. Practical Recommendation
 
-If only one remaining optimization can be prioritized: **Phase 2** (restricted self tail recursion). Phase 1 is already shipped, and tail recursion is now the clearest remaining win on the benchmark set.
+If only one remaining optimization can be prioritized: **make the implemented
+post-O3 scalar recurrence unroll pass boring and well-covered**. It has a clear
+`fib_tail` win, a bounded eligibility filter, and a real post-opt IR regression
+test. Do not expand it toward `sum`/`harmonic` without a separate measured
+hypothesis.
 
-If two: **Phase 2 + Phase 3** (restricted tail recursion + small POD aggregate returns). That extends the current ABI work with the best continuity and risk/reward ratio.
+After that, prioritize **the counted-loop fast path from the non-ABI loop/codegen
+track**. Phase 1 is already shipped, and `fib_tail` no longer demonstrates a
+meaningful Pluto-level TCO win because LLVM already optimizes the simple tail
+recursion once scalar ABI lowering is in place.
 
-If a parallel non-ABI effort is desired at the same time, prioritize the counted-loop fast path from the loop/codegen track rather than additional cache or tooling work.
+If staying on ABI work, prioritize **Phase 3** (small POD aggregate returns) over custom TCO. That extends the current ABI work with clearer risk/reward and avoids adding a pass that current benchmarks do not justify.
+
+If a parallel non-ABI effort is desired at the same time, continue with the counted-loop fast path from the loop/codegen track rather than additional cache or tooling work.
