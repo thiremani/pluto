@@ -99,6 +99,11 @@ func (i Int) Kind() Kind {
 func (i Int) Mangle() string { return i.String() }
 func (i Int) Key() Type      { return i }
 
+func IsI1(t Type) bool {
+	intType, ok := t.(Int)
+	return ok && intType.Width == 1
+}
+
 // Float represents a floating-point type with a given precision.
 type Float struct {
 	Width uint32 // e.g. 32, 64

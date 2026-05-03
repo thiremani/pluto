@@ -17,6 +17,7 @@ const (
 	LOWEST      = 0.0 + iota // iota works with floats when used in a float expression
 	ASSIGN                   // =
 	COMMA                    // ,
+	LOGICAL_OR               // ||
 	BITWISE_OR               // |
 	BITWISE_XOR              // ⊕
 	BITWISE_AND              // &
@@ -33,31 +34,32 @@ const (
 
 // leftBindingPower: how strongly an operator binds to its left operand
 var leftBindingPower = map[string]float64{
-	token.SYM_ASSIGN:   ASSIGN,
-	token.SYM_COMMA:    COMMA,
-	token.SYM_OR:       BITWISE_OR,
-	token.SYM_XOR:      BITWISE_XOR,
-	token.SYM_AND:      BITWISE_AND,
-	token.SYM_SHL:      SHIFT,
-	token.SYM_SHR:      SHIFT,
-	token.SYM_ASR:      SHIFT,
-	token.SYM_ADD:      SUM,
-	token.SYM_SUB:      SUM,
-	token.SYM_CONCAT:   SUM, // ⊕ array concatenation
-	token.SYM_MUL:      PRODUCT,
-	token.SYM_DIV:      PRODUCT,
-	token.SYM_QUO:      PRODUCT,
-	token.SYM_MOD:      PRODUCT,
-	token.SYM_IMPL_MUL: EXP - 0.25, // 8.75: Between RBP(^)=8.5 and EXP=9, allows ⋅ in exponents but not on left of ^
-	token.SYM_EXP:      EXP,
-	token.SYM_COLON:    COLON,
-	token.SYM_EQL:      LESSGREATER,
-	token.SYM_LSS:      LESSGREATER,
-	token.SYM_GTR:      LESSGREATER,
-	token.SYM_NEQ:      LESSGREATER,
-	token.SYM_LEQ:      LESSGREATER,
-	token.SYM_GEQ:      LESSGREATER,
-	token.SYM_LPAREN:   CALL,
+	token.SYM_ASSIGN:     ASSIGN,
+	token.SYM_COMMA:      COMMA,
+	token.SYM_LOGICAL_OR: LOGICAL_OR,
+	token.SYM_OR:         BITWISE_OR,
+	token.SYM_XOR:        BITWISE_XOR,
+	token.SYM_AND:        BITWISE_AND,
+	token.SYM_SHL:        SHIFT,
+	token.SYM_SHR:        SHIFT,
+	token.SYM_ASR:        SHIFT,
+	token.SYM_ADD:        SUM,
+	token.SYM_SUB:        SUM,
+	token.SYM_CONCAT:     SUM, // ⊕ array concatenation
+	token.SYM_MUL:        PRODUCT,
+	token.SYM_DIV:        PRODUCT,
+	token.SYM_QUO:        PRODUCT,
+	token.SYM_MOD:        PRODUCT,
+	token.SYM_IMPL_MUL:   EXP - 0.25, // 8.75: Between RBP(^)=8.5 and EXP=9, allows ⋅ in exponents but not on left of ^
+	token.SYM_EXP:        EXP,
+	token.SYM_COLON:      COLON,
+	token.SYM_EQL:        LESSGREATER,
+	token.SYM_LSS:        LESSGREATER,
+	token.SYM_GTR:        LESSGREATER,
+	token.SYM_NEQ:        LESSGREATER,
+	token.SYM_LEQ:        LESSGREATER,
+	token.SYM_GEQ:        LESSGREATER,
+	token.SYM_LPAREN:     CALL,
 }
 
 // rightBindingPower: how strongly an operator binds to its right operand
@@ -125,6 +127,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.infixParseFns = make(map[string]infixParseFn)
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
 
+	p.registerInfix(token.SYM_LOGICAL_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
@@ -786,6 +789,10 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 func (p *StmtParser) isCondition(exp ast.Expression) bool {
 	if exp.Tok().IsComparison() {
 		return true
+	}
+
+	if infix, ok := exp.(*ast.InfixExpression); ok && infix.Operator == token.SYM_LOGICAL_OR {
+		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
 	}
 
 	switch exp.(type) {

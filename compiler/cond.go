@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -401,14 +402,36 @@ func (c *Compiler) valuesHaveCondExpr(values []ast.Expression) bool {
 }
 
 // hasCondExprInTree returns true if any node in the expression tree has
-// CondScalar set (a scalar comparison in value position).
+// conditional value lowering.
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info != nil && info.HasCondScalar() {
+	if info != nil && info.HasCondExpr() {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
 		if c.hasCondExprInTree(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compiler) logicalOrCondExpr(expr ast.Expression) (*ast.InfixExpression, bool) {
+	infix, ok := expr.(*ast.InfixExpression)
+	if !ok || infix.Operator != token.SYM_LOGICAL_OR {
+		return nil, false
+	}
+
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	return infix, info != nil && info.HasCondOr()
+}
+
+func (c *Compiler) hasLogicalOrCondExprInTree(expr ast.Expression) bool {
+	if _, ok := c.logicalOrCondExpr(expr); ok {
+		return true
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if c.hasLogicalOrCondExprInTree(child) {
 			return true
 		}
 	}
@@ -452,29 +475,30 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	// Comparisons with ranges can be extracted only when all required iterators
 	// are already bound by an outer loop (no pending ranges).
 	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-		// Bottom-up: extract conditions from operands first
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
-
-		// Compile both operands (may return pre-extracted values)
-		left := c.compileExpression(infix.Left, nil)
-		right := c.compileExpression(infix.Right, nil)
-
-		var lhsSyms []*Symbol
-		lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
-
-		c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)] = lhsSyms
-		temps = append(temps, condTemp{infix.Left, left})
-		// Free right-side temporaries (only used for comparison).
-		// Left-side values are retained in condLHS for later substitution.
-		c.freeTemporary(infix.Right, right)
-		return cond, temps
+		return c.extractCondExprSelf(infix, info, cond, temps)
 	}
 
 	// Not a conditional expression — recurse into children
 	for _, child := range ast.ExprChildren(expr) {
 		cond, temps = c.extractCondExprs(child, cond, temps)
 	}
+	return cond, temps
+}
+
+func (c *Compiler) extractCondExprSelf(infix *ast.InfixExpression, info *ExprInfo, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
+	left := c.compileExpression(infix.Left, nil)
+	right := c.compileExpression(infix.Right, nil)
+
+	var lhsSyms []*Symbol
+	lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
+
+	c.requireCondLHSFrame()[key(c.FuncNameMangled, infix)] = lhsSyms
+	temps = append(temps, condTemp{infix.Left, left})
+	// Free right-side temporaries (only used for comparison).
+	// Left-side values are retained in condLHS for later substitution.
+	c.freeTemporary(infix.Right, right)
 	return cond, temps
 }
 
@@ -494,12 +518,22 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 	}
 }
 
-// compileCondExprValue extracts cond-expr predicates for expr, branches on the
-// combined condition (AND with baseCond when provided), and compiles onTrue on
-// the true path only. False path performs standard cond-expr cleanup.
+// compileCondExprValue extracts cond-expr predicates for expr, branches through
+// value-position conditions, and compiles onTrue on admitted paths only. Plain
+// comparisons compose as AND; value-position logical OR tries the left operand
+// first and falls back to the right operand only on the left false path.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
+
+	c.compileCondExprValueInFrame(expr, baseCond, onTrue)
+}
+
+func (c *Compiler) compileCondExprValueInFrame(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+	if c.hasLogicalOrCondExprInTree(expr) {
+		c.compileCondExprWithFailure(expr, baseCond, onTrue, func() {})
+		return
+	}
 
 	cond, temps := c.extractCondExprs(expr, baseCond, nil)
 	c.compileCondExprBranch(cond, temps, onTrue)
@@ -512,6 +546,11 @@ func (c *Compiler) compileOperandCondExprValue(expr ast.Expression, baseCond llv
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
+	if c.hasLogicalOrCondExprInTree(expr) {
+		c.compileCondExprChildrenInFrame(ast.ExprChildren(expr), baseCond, onTrue, func() {})
+		return
+	}
+
 	cond := baseCond
 	var temps []condTemp
 	for _, child := range ast.ExprChildren(expr) {
@@ -521,6 +560,10 @@ func (c *Compiler) compileOperandCondExprValue(expr ast.Expression, baseCond llv
 }
 
 func (c *Compiler) compileCondExprBranch(cond llvm.Value, temps []condTemp, onTrue func()) {
+	c.compileCondExprBranchWithFailure(cond, temps, onTrue, func() {})
+}
+
+func (c *Compiler) compileCondExprBranchWithFailure(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
 	if cond.IsNil() {
 		onTrue()
 		return
@@ -534,9 +577,87 @@ func (c *Compiler) compileCondExprBranch(cond llvm.Value, temps []condTemp, onTr
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
 	c.cleanupCondExprElse(temps)
+	onFalse()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+func (c *Compiler) compileCondExprChildrenInFrame(children []ast.Expression, baseCond llvm.Value, onTrue func(), onFalse func()) {
+	if len(children) == 0 {
+		c.compileCondExprBranchWithFailure(baseCond, nil, onTrue, onFalse)
+		return
+	}
+
+	child := children[0]
+	rest := children[1:]
+	if c.hasCondExprInTree(child) {
+		c.compileCondExprWithFailure(child, baseCond, func() {
+			c.compileCondExprChildrenInFrame(rest, llvm.Value{}, onTrue, onFalse)
+		}, onFalse)
+		return
+	}
+
+	c.compileCondExprChildrenInFrame(rest, baseCond, onTrue, onFalse)
+}
+
+func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm.Value, onTrue func(), onFalse func()) {
+	if logicalOr, ok := c.logicalOrCondExpr(expr); ok {
+		c.compileLogicalOrCondExprWithFailure(logicalOr, baseCond, onTrue, onFalse)
+		return
+	}
+
+	if !c.hasLogicalOrCondExprInTree(expr) {
+		cond, temps := c.extractCondExprs(expr, baseCond, nil)
+		c.compileCondExprBranchWithFailure(cond, temps, onTrue, onFalse)
+		return
+	}
+
+	c.compileCondExprChildrenInFrame(ast.ExprChildren(expr), baseCond, func() {
+		if infix, ok := expr.(*ast.InfixExpression); ok {
+			info := c.ExprCache[key(c.FuncNameMangled, infix)]
+			if info != nil && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+				cond, temps := c.extractCondExprSelf(infix, info, llvm.Value{}, nil)
+				c.compileCondExprBranchWithFailure(cond, temps, onTrue, onFalse)
+				return
+			}
+		}
+
+		onTrue()
+	}, onFalse)
+}
+
+func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func()) {
+	frame := c.requireCondLHSFrame()
+	exprKey := key(c.FuncNameMangled, expr)
+	if _, exists := frame[exprKey]; exists {
+		panic("internal: condLHS binding already active for expression")
+	}
+	frame[exprKey] = syms
+	defer delete(frame, exprKey)
+	body()
+}
+
+func (c *Compiler) compileLogicalOrCondExprWithFailure(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {
+	if !baseCond.IsNil() {
+		c.compileCondExprBranchWithFailure(baseCond, nil, func() {
+			c.compileLogicalOrCondExprWithFailure(expr, llvm.Value{}, onTrue, onFalse)
+		}, onFalse)
+		return
+	}
+
+	leftTrue := func() {
+		left := c.compileExpression(expr.Left, nil)
+		c.withCondLHS(expr, left, onTrue)
+	}
+	rightTrue := func() {
+		right := c.compileExpression(expr.Right, nil)
+		c.withCondLHS(expr, right, onTrue)
+	}
+
+	c.compileCondExprWithFailure(expr.Left, llvm.Value{}, leftTrue, func() {
+		c.compileCondExprWithFailure(expr.Right, llvm.Value{}, rightTrue, onFalse)
+	})
 }
 
 func (c *Compiler) isRangeDriverCond(expr ast.Expression) bool {
