@@ -248,3 +248,52 @@ rg2 = MkStr(1:4) > "z"
 ga = 1
 gb = Id(ga > 0)
 "NonValueCmp: -gb"
+
+# Logical OR in value position picks the first true conditional value.
+lorLeft = a > 2 || d < 10
+"LogicalOrLeft: -lorLeft"
+
+lorRight = b > 2 || d < 10
+"LogicalOrRight: -lorRight"
+
+lorFalse = b > 2 || d > 10
+"LogicalOrFalse: -lorFalse"
+
+lorExisting = 44
+"LogicalOrBeforeExisting: -lorExisting"
+lorExisting = b > 2 || d > 10
+"LogicalOrExistingFalse: -lorExisting"
+
+lorNestedAdd = (b > 2 || d < 10) + 1
+"LogicalOrNestedAdd: -lorNestedAdd"
+
+lorCallArg = Double(b > 2 || d < 10)
+"LogicalOrCallArg: -lorCallArg"
+
+lorDefault = b > 2 || -1
+"LogicalOrDefault: -lorDefault"
+
+lorDefaultArg = Double(b > 2 || -1)
+"LogicalOrDefaultArg: -lorDefaultArg"
+
+lorIdx = 0:10
+lorDefaultArr = [lorIdx > 2 < 8 || -1]
+"LogicalOrArrayDefault: -lorDefaultArr"
+
+gi = 0:3
+gj = 0:4
+lorGate = gi > 1 || gj > 2 [gi + gj]
+"LogicalOrConditionGate: -lorGate"
+
+lorBaseFalse = 55
+lorBaseFalse = 1 > 3 b > 2 || d < 10
+"LogicalOrBaseFalse: -lorBaseFalse"
+
+# Logical OR in statement conditions composes with comma conditions.
+lorStmt = 0
+lorStmt = b > 2 || d < 10, a > 2 99
+"LogicalOrStmtCond: -lorStmt"
+
+lorStmtFalse = 77
+lorStmtFalse = b > 2 || d > 10 99
+"LogicalOrStmtCondFalse: -lorStmtFalse"

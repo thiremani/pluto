@@ -22,6 +22,7 @@ const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
+	CondOr                     // Logical OR in value position: first true operand wins
 )
 
 type ExprInfo struct {
@@ -41,6 +42,24 @@ type ExprInfo struct {
 func (info *ExprInfo) HasCondScalar() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar {
+			return true
+		}
+	}
+	return false
+}
+
+func (info *ExprInfo) HasCondOr() bool {
+	for _, m := range info.CompareModes {
+		if m == CondOr {
+			return true
+		}
+	}
+	return false
+}
+
+func (info *ExprInfo) HasCondExpr() bool {
+	for _, m := range info.CompareModes {
+		if m == CondScalar || m == CondOr {
 			return true
 		}
 	}
@@ -1454,6 +1473,89 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 	return resultType, CondNone
 }
 
+func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Token) Type {
+	if ptr, ok := leftType.(Ptr); ok {
+		leftType = ptr.Elem
+	}
+	if ptr, ok := rightType.(Ptr); ok {
+		rightType = ptr.Elem
+	}
+
+	switch {
+	case leftType.Kind() == UnresolvedKind:
+		return rightType
+	case rightType.Kind() == UnresolvedKind:
+		return leftType
+	case leftType.Kind() == StrKind && rightType.Kind() == StrKind:
+		return mergeStringFlavor(leftType, rightType)
+	case TypeEqual(leftType, rightType):
+		return leftType
+	default:
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("logical OR value operands must have matching output types, got %s and %s", leftType, rightType),
+		})
+		return Unresolved{}
+	}
+}
+
+func isI1(t Type) bool {
+	intType, ok := t.(Int)
+	return ok && intType.Width == 1
+}
+
+func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
+
+	if ts.InValueExpr {
+		if leftInfo == nil || !leftInfo.HasCondExpr() {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: expr.Token,
+				Msg:   "logical OR in value position requires a conditional left operand",
+			})
+		}
+
+		types := make([]Type, len(left))
+		compareModes := make([]CondMode, len(left))
+		for i := range left {
+			types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
+			compareModes[i] = CondOr
+		}
+
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+			OutTypes:     types,
+			ExprLen:      len(types),
+			HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+			CompareModes: compareModes,
+		}
+		return types
+	}
+
+	types := []Type{I1}
+	if len(left) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("logical OR condition operands must produce a single value, got %d", len(left)),
+		})
+		types = []Type{Unresolved{}}
+	} else if left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind && (!isI1(left[0]) || !isI1(right[0])) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
+		})
+		types = []Type{Unresolved{}}
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		CompareModes: make([]CondMode, len(types)),
+	}
+	return types
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
@@ -1469,6 +1571,10 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types = []Type{Unresolved{}}
 		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 		return
+	}
+
+	if expr.Operator == token.SYM_LOGICAL_OR {
+		return ts.typeLogicalOrExpression(expr, left, right)
 	}
 
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
