@@ -270,6 +270,15 @@ lorNestedAdd = (b > 2 || d < 10) + 1
 lorCallArg = Double(b > 2 || d < 10)
 "LogicalOrCallArg: -lorCallArg"
 
+lorHeapFallback = (sl ⊕ sm) > "hello x" || "fallback"
+"LogicalOrHeapFallback: -lorHeapFallback"
+
+lorPairA, lorPairB = Pair(1, 2) > Pair(5, 5) || Pair(7, 8)
+"LogicalOrPairFallback: -lorPairA -lorPairB"
+
+lorNestedSum = (b > 2 || d < 10) + (a > 10 || c > 2)
+"LogicalOrNestedSum: -lorNestedSum"
+
 lorDefault = b > 2 || -1
 "LogicalOrDefault: -lorDefault"
 

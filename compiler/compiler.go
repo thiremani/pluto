@@ -1720,6 +1720,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
+		case CondOr:
+			panic("internal: value-position logical OR must be lowered through conditional expression branching")
 		default:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		}
