@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -417,8 +416,8 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 }
 
 func (c *Compiler) logicalOrCondExpr(expr ast.Expression) (*ast.InfixExpression, bool) {
-	infix, ok := expr.(*ast.InfixExpression)
-	if !ok || infix.Operator != token.SYM_LOGICAL_OR {
+	infix, ok := ast.IsLogicalOr(expr)
+	if !ok {
 		return nil, false
 	}
 

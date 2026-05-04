@@ -1573,7 +1573,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		return
 	}
 
-	if expr.Operator == token.SYM_LOGICAL_OR {
+	if _, isLogicalOr := ast.IsLogicalOr(expr); isLogicalOr {
 		return ts.typeLogicalOrExpression(expr, left, right)
 	}
 

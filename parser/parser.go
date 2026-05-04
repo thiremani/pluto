@@ -791,7 +791,7 @@ func (p *StmtParser) isCondition(exp ast.Expression) bool {
 		return true
 	}
 
-	if infix, ok := exp.(*ast.InfixExpression); ok && infix.Operator == token.SYM_LOGICAL_OR {
+	if infix, ok := ast.IsLogicalOr(exp); ok {
 		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
 	}
 
