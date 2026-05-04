@@ -1741,9 +1741,6 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbol {
 	left := c.compileExpression(expr.Left, nil)
-	if len(left) != 1 {
-		panic(fmt.Sprintf("internal: logical OR left operand produced %d values", len(left)))
-	}
 	leftSym := c.derefIfPointer(left[0], "")
 
 	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
@@ -1755,9 +1752,6 @@ func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbo
 
 	c.builder.SetInsertPointAtEnd(rhsBlock)
 	right := c.compileExpression(expr.Right, nil)
-	if len(right) != 1 {
-		panic(fmt.Sprintf("internal: logical OR right operand produced %d values", len(right)))
-	}
 	rightSym := c.derefIfPointer(right[0], "")
 	c.freeTemporary(expr.Right, right)
 	c.builder.CreateBr(contBlock)
