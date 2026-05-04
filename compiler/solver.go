@@ -22,7 +22,7 @@ const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
-	CondOr                     // Logical OR in value position: first true operand wins
+	CondOr                     // Fallback OR in value position: first true operand wins
 )
 
 type ExprInfo struct {
@@ -48,7 +48,7 @@ func (info *ExprInfo) HasCondScalar() bool {
 	return false
 }
 
-func (info *ExprInfo) HasCondOr() bool {
+func (info *ExprInfo) HasFallbackOr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondOr {
 			return true

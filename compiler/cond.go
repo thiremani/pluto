@@ -423,7 +423,7 @@ func (c *Compiler) logicalOrCondExpr(expr ast.Expression) (*ast.InfixExpression,
 	}
 
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	return infix, info != nil && info.HasCondOr()
+	return infix, info != nil && info.HasFallbackOr()
 }
 
 func (c *Compiler) hasLogicalOrCondExprInTree(expr ast.Expression) bool {
