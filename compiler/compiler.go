@@ -1705,7 +1705,7 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	if _, isLogicalOr := ast.IsLogicalOr(expr); isLogicalOr && !info.HasFallbackOr() {
+	if expr.IsLogicalOr() && !info.HasFallbackOr() {
 		return c.compileLogicalOrCondition(expr)
 	}
 
