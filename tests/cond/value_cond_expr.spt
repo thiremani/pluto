@@ -315,3 +315,20 @@ lorShortCircuit = 1 < 2 || lorOobArr[5] > 0 99
 lorShortCircuitFalse = 77
 lorShortCircuitFalse = 1 > 2 || lorOobArr[5] > 0 99
 "LogicalOrStmtShortCircuitFalse: -lorShortCircuitFalse"
+
+# The first || belongs to the statement condition; the second belongs to the
+# value expression.
+lorBoundaryLeft = 100
+"LogicalOrBoundaryLeftBefore: -lorBoundaryLeft"
+lorBoundaryLeft = 9 > 5 || 0 > 6 33 > 0 || -1
+"LogicalOrBoundaryLeftCond: -lorBoundaryLeft"
+
+lorBoundaryRightFallback = 100
+"LogicalOrBoundaryRightBefore: -lorBoundaryRightFallback"
+lorBoundaryRightFallback = 1 > 5 || 9 > 6 0 > 1 || -1
+"LogicalOrBoundaryRightCondFallback: -lorBoundaryRightFallback"
+
+lorBoundarySkip = 100
+"LogicalOrBoundarySkipBefore: -lorBoundarySkip"
+lorBoundarySkip = 1 > 5 || 2 > 6 33 > 0 || -1
+"LogicalOrBoundarySkipKeepsDefault: -lorBoundarySkip"

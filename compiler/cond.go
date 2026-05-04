@@ -630,9 +630,6 @@ func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm
 func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func()) {
 	frame := c.requireCondLHSFrame()
 	exprKey := key(c.FuncNameMangled, expr)
-	if _, exists := frame[exprKey]; exists {
-		panic("internal: condLHS binding already active for expression")
-	}
 	frame[exprKey] = syms
 	defer delete(frame, exprKey)
 	body()

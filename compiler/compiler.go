@@ -1618,10 +1618,6 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 // It handles pointer operands, array-scalar broadcasting, and delegates to
 // the default operator table for scalar work.
 func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
-	if op == token.SYM_LOGICAL_OR {
-		panic("internal: logical OR must be lowered through short-circuit branching")
-	}
-
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
 

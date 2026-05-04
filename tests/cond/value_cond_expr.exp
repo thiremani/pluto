@@ -78,3 +78,9 @@ LogicalOrStmtCond: 99
 LogicalOrStmtCondFalse: 77
 LogicalOrStmtShortCircuit: 99
 LogicalOrStmtShortCircuitFalse: 77
+LogicalOrBoundaryLeftBefore: 100
+LogicalOrBoundaryLeftCond: 33
+LogicalOrBoundaryRightBefore: 100
+LogicalOrBoundaryRightCondFallback: -1
+LogicalOrBoundarySkipBefore: 100
+LogicalOrBoundarySkipKeepsDefault: 100
