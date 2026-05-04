@@ -1506,7 +1506,9 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	if ts.InValueExpr {
 		// Value-position OR is asymmetric: the left operand must be able to
 		// fail, while the right operand may be another condition or a plain
-		// fallback value.
+		// fallback value. There is no matching value-position && because
+		// chained comparisons already refine a yielded value, and comma
+		// conditions provide statement-position AND.
 		if leftInfo == nil || !leftInfo.HasCondExpr() {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
