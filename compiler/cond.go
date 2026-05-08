@@ -535,7 +535,7 @@ func (c *Compiler) compileCondExprValueInFrame(expr ast.Expression, baseCond llv
 	}
 
 	cond, temps := c.extractCondExprs(expr, baseCond, nil)
-	c.compileCondExprBranch(cond, temps, onTrue)
+	c.compileCondExprBranch(cond, temps, onTrue, func() {})
 }
 
 // compileOperandCondExprValue extracts conditional expressions from expr's
@@ -555,14 +555,10 @@ func (c *Compiler) compileOperandCondExprValue(expr ast.Expression, baseCond llv
 	for _, child := range ast.ExprChildren(expr) {
 		cond, temps = c.extractCondExprs(child, cond, temps)
 	}
-	c.compileCondExprBranch(cond, temps, onTrue)
+	c.compileCondExprBranch(cond, temps, onTrue, func() {})
 }
 
-func (c *Compiler) compileCondExprBranch(cond llvm.Value, temps []condTemp, onTrue func()) {
-	c.compileCondExprBranchWithFailure(cond, temps, onTrue, func() {})
-}
-
-func (c *Compiler) compileCondExprBranchWithFailure(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
+func (c *Compiler) compileCondExprBranch(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
 	if cond.IsNil() {
 		onTrue()
 		return
@@ -584,7 +580,7 @@ func (c *Compiler) compileCondExprBranchWithFailure(cond llvm.Value, temps []con
 
 func (c *Compiler) compileCondExprChildrenInFrame(children []ast.Expression, baseCond llvm.Value, onTrue func(), onFalse func()) {
 	if len(children) == 0 {
-		c.compileCondExprBranchWithFailure(baseCond, nil, onTrue, onFalse)
+		c.compileCondExprBranch(baseCond, nil, onTrue, onFalse)
 		return
 	}
 
@@ -608,7 +604,7 @@ func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm
 
 	if !c.hasLogicalOrCondExprInTree(expr) {
 		cond, temps := c.extractCondExprs(expr, baseCond, nil)
-		c.compileCondExprBranchWithFailure(cond, temps, onTrue, onFalse)
+		c.compileCondExprBranch(cond, temps, onTrue, onFalse)
 		return
 	}
 
@@ -617,7 +613,7 @@ func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm
 			info := c.ExprCache[key(c.FuncNameMangled, infix)]
 			if info != nil && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 				cond, temps := c.extractCondExprSelf(infix, info, llvm.Value{}, nil)
-				c.compileCondExprBranchWithFailure(cond, temps, onTrue, onFalse)
+				c.compileCondExprBranch(cond, temps, onTrue, onFalse)
 				return
 			}
 		}
@@ -636,7 +632,7 @@ func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func())
 
 func (c *Compiler) compileLogicalOrCondExprWithFailure(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {
 	if !baseCond.IsNil() {
-		c.compileCondExprBranchWithFailure(baseCond, nil, func() {
+		c.compileCondExprBranch(baseCond, nil, func() {
 			c.compileLogicalOrCondExprWithFailure(expr, llvm.Value{}, onTrue, onFalse)
 		}, onFalse)
 		return
