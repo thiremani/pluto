@@ -476,7 +476,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
 		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
-		return c.extractCondExprSelf(infix, info, cond, temps)
+		return c.extractInfixCondExpr(infix, info, cond, temps)
 	}
 
 	// Not a conditional expression — recurse into children
@@ -486,7 +486,7 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	return cond, temps
 }
 
-func (c *Compiler) extractCondExprSelf(infix *ast.InfixExpression, info *ExprInfo, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
+func (c *Compiler) extractInfixCondExpr(infix *ast.InfixExpression, info *ExprInfo, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	left := c.compileExpression(infix.Left, nil)
 	right := c.compileExpression(infix.Right, nil)
 
@@ -612,7 +612,7 @@ func (c *Compiler) compileCondExprWithFailure(expr ast.Expression, baseCond llvm
 		if infix, ok := expr.(*ast.InfixExpression); ok {
 			info := c.ExprCache[key(c.FuncNameMangled, infix)]
 			if info != nil && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-				cond, temps := c.extractCondExprSelf(infix, info, llvm.Value{}, nil)
+				cond, temps := c.extractInfixCondExpr(infix, info, llvm.Value{}, nil)
 				c.compileCondExprBranch(cond, temps, onTrue, onFalse)
 				return
 			}
