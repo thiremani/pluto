@@ -1849,7 +1849,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, llvm.Value{}, func() {
 			left := c.compileExpression(leftRew, nil)
 			right := c.compileExpression(rightRew, nil)
 
@@ -2118,7 +2118,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, llvm.Value{}, func() {
 			ops := c.compileExpression(rightRew, nil)
 
 			for i := 0; i < len(ops); i++ {

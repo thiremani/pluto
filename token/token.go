@@ -90,11 +90,11 @@ const (
 	SYM_GEQ = ">="
 
 	// logical and bitwise symbols
-	SYM_LOGICAL_OR = "||"
-	SYM_AND        = "&"
-	SYM_OR         = "|"
-	SYM_XOR        = "⊻"
-	SYM_TILDE      = "~"
+	SYM_COND_OR = "||"
+	SYM_AND     = "&"
+	SYM_OR      = "|"
+	SYM_XOR     = "⊻"
+	SYM_TILDE   = "~"
 
 	// array concatenation
 	SYM_CONCAT = "⊕"
