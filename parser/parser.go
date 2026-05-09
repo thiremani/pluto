@@ -17,6 +17,7 @@ const (
 	LOWEST      = 0.0 + iota // iota works with floats when used in a float expression
 	ASSIGN                   // =
 	COMMA                    // ,
+	COND_OR                  // ||
 	BITWISE_OR               // |
 	BITWISE_XOR              // ⊕
 	BITWISE_AND              // &
@@ -35,6 +36,7 @@ const (
 var leftBindingPower = map[string]float64{
 	token.SYM_ASSIGN:   ASSIGN,
 	token.SYM_COMMA:    COMMA,
+	token.SYM_COND_OR:  COND_OR,
 	token.SYM_OR:       BITWISE_OR,
 	token.SYM_XOR:      BITWISE_XOR,
 	token.SYM_AND:      BITWISE_AND,
@@ -125,6 +127,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.infixParseFns = make(map[string]infixParseFn)
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
 
+	p.registerInfix(token.SYM_COND_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
@@ -786,6 +789,10 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 func (p *StmtParser) isCondition(exp ast.Expression) bool {
 	if exp.Tok().IsComparison() {
 		return true
+	}
+
+	if infix, ok := ast.IsLogicalOr(exp); ok {
+		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
 	}
 
 	switch exp.(type) {
