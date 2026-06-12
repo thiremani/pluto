@@ -89,12 +89,14 @@ const (
 	SYM_LEQ = "<="
 	SYM_GEQ = ">="
 
-	// logical and bitwise symbols
+	// conditional symbols
 	SYM_COND_OR = "||"
-	SYM_AND     = "&"
-	SYM_OR      = "|"
-	SYM_XOR     = "⊻"
-	SYM_TILDE   = "~"
+
+	// bitwise symbols
+	SYM_AND   = "&"
+	SYM_OR    = "|"
+	SYM_XOR   = "⊻"
+	SYM_TILDE = "~"
 
 	// array concatenation
 	SYM_CONCAT = "⊕"
