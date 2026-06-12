@@ -548,6 +548,58 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-range driver, got I64")
 }
 
+func TestLogicalOrDiagnostics(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cases := []struct {
+		name        string
+		script      string
+		expectError string
+	}{
+		{
+			name:        "ValueOrRequiresConditionalLeft",
+			script:      "x = 1 || 2",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
+			name:        "FallbackTypesMustMatch",
+			script:      "a = 1\nx = a > 0 || \"fallback\"",
+			expectError: "logical OR value operands must have matching output types, got I64 and StrG",
+		},
+		{
+			name:        "ConditionOperandsMustBeI1",
+			script:      "a = 1\nb = 2\nx = a > 0 || b 7",
+			expectError: "logical OR requires condition operands, got I1 and I64",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			found := false
+			for _, err := range ts.Errors {
+				if strings.Contains(err.Msg, tc.expectError) {
+					found = true
+					break
+				}
+			}
+			require.Truef(t, found, "expected error containing %q, got: %v", tc.expectError, ts.Errors)
+		})
+	}
+}
+
 func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())

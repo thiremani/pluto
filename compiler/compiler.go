@@ -1746,14 +1746,12 @@ func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbo
 	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
 
 	c.builder.SetInsertPointAtEnd(trueBlock)
-	c.freeTemporary(expr.Left, left)
 	c.builder.CreateBr(contBlock)
 	trueEnd := c.builder.GetInsertBlock()
 
 	c.builder.SetInsertPointAtEnd(rhsBlock)
 	right := c.compileExpression(expr.Right, nil)
 	rightSym := c.derefIfPointer(right[0], "")
-	c.freeTemporary(expr.Right, right)
 	c.builder.CreateBr(contBlock)
 	rhsEnd := c.builder.GetInsertBlock()
 
