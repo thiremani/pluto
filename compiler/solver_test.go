@@ -565,7 +565,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 		{
 			name:        "FallbackTypesMustMatch",
 			script:      "a = 1\nx = a > 0 || \"fallback\"",
-			expectError: "logical OR value operands must have matching output types, got I64 and StrG",
+			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 		{
 			name:        "ConditionOperandsMustBeI1",
