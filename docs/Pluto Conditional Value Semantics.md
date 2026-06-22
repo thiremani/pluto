@@ -78,21 +78,22 @@ a = 0
 a < 2 || 7           # a < 2 is true -> yields a (0), not 7
 ```
 
-## Parentheses and local resolution
+## Parentheses group the condition
 
 At the top of a statement the `=` separates condition from value, so no
 parentheses are needed (`lhs = cond value`). Inside a larger expression,
-parentheses mark where the condition ends and the value begins.
-
-A conditional resolves **locally** — to its value, to zero, or to its `||`
-fallback. It does not reach back out to an enclosing operator. To choose a
-fallback for a larger expression, put the `||` (or the gate) where you want the
-decision:
+parentheses mark where a conditional ends, choosing what the gate and `||`
+attach to:
 
 ```pluto
-(a > 2 10) < 3 || 5    # a <= 2: (a > 2 10) is 0, then 0 < 3 is true -> 0
-a > 2  (10 < 3 || 5)   # gate on a; fallback chosen inside
+x = a > 3  b < 5 || 10     # gate a > 3 (keep-old); || is the fallback for b < 5
+x = (a > 3 b < 5) || 10    # one conditional; || is the fallback for a > 3
 ```
+
+In the first, `a > 3` gates the statement and `|| 10` catches `b < 5`. In the
+second, `(a > 3 b < 5)` is a single conditional, so `|| 10` fires when `a > 3`
+fails, while a failing `b < 5` resolves locally to zero. A conditional resolves
+locally and never reaches back out to an enclosing operator.
 
 ## Arrays
 
@@ -102,6 +103,13 @@ zero, and `||` overrides.
 ```pluto
 [i > 2]          # failed cells are 0   (zero-fill)
 [i > 2 || -1]    # failed cells are -1
+```
+
+Spacing separates cells, so parentheses also control cell count:
+
+```pluto
+[a > 3  b < 5 || 10]     # two cells
+[(a > 3 b < 5) || 10]    # one cell
 ```
 
 A filter is different: `arr > k` drops elements that fail rather than zeroing
