@@ -645,25 +645,37 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 	}
 
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	outType := info.OutTypes[0]
+	outTypes := info.OutTypes
 
 	cond := c.derefIfPointer(c.compileExpression(expr.Cond, nil)[0], "cv_cond").Val
 	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
 
+	// True path evaluates the value (one symbol per output slot for a
+	// multi-return value); false path yields the zero of each slot's type.
 	c.builder.SetInsertPointAtEnd(trueBlock)
-	val := c.derefIfPointer(c.compileExpression(expr.Value, nil)[0], "cv_val")
+	vals := c.compileExpression(expr.Value, nil)
+	for i := range vals {
+		vals[i] = c.derefIfPointer(vals[i], "cv_val")
+	}
 	c.builder.CreateBr(contBlock)
 	trueEnd := c.builder.GetInsertBlock()
 
 	c.builder.SetInsertPointAtEnd(falseBlock)
-	zero := c.makeZeroValue(outType)
+	zeros := make([]*Symbol, len(outTypes))
+	for i, t := range outTypes {
+		zeros[i] = c.makeZeroValue(t)
+	}
 	c.builder.CreateBr(contBlock)
 	falseEnd := c.builder.GetInsertBlock()
 
 	c.builder.SetInsertPointAtEnd(contBlock)
-	phi := c.builder.CreatePHI(c.mapToLLVMType(outType), "cv_phi")
-	phi.AddIncoming([]llvm.Value{val.Val, zero.Val}, []llvm.BasicBlock{trueEnd, falseEnd})
-	return []*Symbol{{Val: phi, Type: outType}}
+	res := make([]*Symbol, len(outTypes))
+	for i, t := range outTypes {
+		phi := c.builder.CreatePHI(c.mapToLLVMType(t), "cv_phi")
+		phi.AddIncoming([]llvm.Value{vals[i].Val, zeros[i].Val}, []llvm.BasicBlock{trueEnd, falseEnd})
+		res[i] = &Symbol{Val: phi, Type: t}
+	}
+	return res
 }
 
 func (c *Compiler) compileFallbackOr(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {

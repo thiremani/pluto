@@ -17,3 +17,5 @@ CvFloat: 2.5
 CvStrTrue: hello world
 re:CvStrFalse:\s*
 CvStrFb: fallback
+CvMultiTrue: 10 20
+CvMultiFalse: 0 0

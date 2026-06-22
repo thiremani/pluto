@@ -77,3 +77,10 @@ cvStrFalse = (b > 2 sl ⊕ sm)
 "CvStrFalse: -cvStrFalse"
 cvStrFb = (b > 2 sl ⊕ sm) || "fallback"
 "CvStrFb: -cvStrFb"
+
+# Multi-return value: condition true yields all values, false yields the zero
+# of each output slot (one branch/phi per returned value).
+cvMultiA, cvMultiB = (a > 2 Pair(10, 20))
+"CvMultiTrue: -cvMultiA -cvMultiB"
+cvMultiC, cvMultiD = (b > 2 Pair(10, 20))
+"CvMultiFalse: -cvMultiC -cvMultiD"
