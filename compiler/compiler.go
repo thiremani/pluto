@@ -1705,6 +1705,10 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
+	if expr.IsLogicalOr() && !info.HasFallbackOr() {
+		return c.compileLogicalOrCondition(expr)
+	}
+
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
 	left := c.compileExpression(expr.Left, nil)
@@ -1720,6 +1724,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
+		case CondOr:
+			panic("internal: value-position logical OR must be lowered through conditional expression branching")
 		default:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		}
@@ -1731,6 +1737,32 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	c.freeTemporary(expr.Right, right)
 
 	return res
+}
+
+func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbol {
+	left := c.compileExpression(expr.Left, nil)
+	leftSym := c.derefIfPointer(left[0], "")
+
+	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
+
+	c.builder.SetInsertPointAtEnd(trueBlock)
+	c.builder.CreateBr(contBlock)
+	trueEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(rhsBlock)
+	right := c.compileExpression(expr.Right, nil)
+	rightSym := c.derefIfPointer(right[0], "")
+	c.builder.CreateBr(contBlock)
+	rhsEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int1Type(), "or_cond")
+	result.AddIncoming(
+		[]llvm.Value{llvm.ConstInt(c.Context.Int1Type(), 1, false), rightSym.Val},
+		[]llvm.BasicBlock{trueEnd, rhsEnd},
+	)
+
+	return []*Symbol{{Val: result, Type: I1}}
 }
 
 // freeTemporary frees operands that are temporaries (not variables).
@@ -1815,7 +1847,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, llvm.Value{}, func() {
 			left := c.compileExpression(leftRew, nil)
 			right := c.compileExpression(rightRew, nil)
 
@@ -2084,7 +2116,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileOperandCondExprValue(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, llvm.Value{}, func() {
 			ops := c.compileExpression(rightRew, nil)
 
 			for i := 0; i < len(ops); i++ {

@@ -445,6 +445,20 @@ type InfixExpression struct {
 	Right    Expression
 }
 
+// IsLogicalOr reports whether ie is a logical OR infix expression.
+func (ie *InfixExpression) IsLogicalOr() bool {
+	return ie.Operator == token.SYM_COND_OR
+}
+
+// IsLogicalOr returns exp as an infix logical OR expression.
+func IsLogicalOr(exp Expression) (*InfixExpression, bool) {
+	infix, ok := exp.(*InfixExpression)
+	if !ok || !infix.IsLogicalOr() {
+		return nil, false
+	}
+	return infix, true
+}
+
 func (ie *InfixExpression) expressionNode()  {}
 func (ie *InfixExpression) Tok() token.Token { return ie.Token }
 func (ie *InfixExpression) String() string {

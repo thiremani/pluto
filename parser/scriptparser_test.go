@@ -810,6 +810,74 @@ func TestNestedGuardCondition(t *testing.T) {
 	})
 }
 
+func TestLogicalOrCondition(t *testing.T) {
+	const input = "res = a > 3 || b < 5 value"
+	l := lexer.New("TestLogicalOrCondition", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected one condition")
+	cond, ok := stmt.Condition[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Condition[0])
+	require.Equal(t, "||", cond.Operator)
+	require.Truef(t, testInfixExpression(t, cond.Left, "a", ">", 3), "left condition mismatch")
+	require.Truef(t, testInfixExpression(t, cond.Right, "b", "<", 5), "right condition mismatch")
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	require.True(t, testIdentifier(t, stmt.Value[0], "value"))
+}
+
+func TestLogicalOrConditionValueBoundary(t *testing.T) {
+	const input = "res = a > 5 || b > 6 c > 0 || d"
+	l := lexer.New("TestLogicalOrConditionValueBoundary", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Condition, 1, "expected one condition")
+	cond, ok := stmt.Condition[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Condition[0])
+	require.Equal(t, "||", cond.Operator)
+	require.Truef(t, testInfixExpression(t, cond.Left, "a", ">", 5), "left condition mismatch")
+	require.Truef(t, testInfixExpression(t, cond.Right, "b", ">", 6), "right condition mismatch")
+
+	require.Len(t, stmt.Value, 1, "expected one value")
+	value, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "||", value.Operator)
+	require.Truef(t, testInfixExpression(t, value.Left, "c", ">", 0), "left value mismatch")
+	require.Truef(t, testIdentifier(t, value.Right, "d"), "right value mismatch")
+}
+
+func TestLogicalOrValueExpression(t *testing.T) {
+	const input = "res = a > 3 || b < 5"
+	l := lexer.New("TestLogicalOrValueExpression", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	require.Equal(t, "((a > 3) || (b < 5))", stmt.Value[0].String())
+}
+
+func TestLogicalOrDoesNotConsumeBitwiseOr(t *testing.T) {
+	const input = "res = 6 | 3"
+	l := lexer.New("TestLogicalOrDoesNotConsumeBitwiseOr", input)
+	sp := NewScriptParser(l)
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	require.Truef(t, testInfixExpression(t, stmt.Value[0], 6, "|", 3), "bitwise OR value mismatch")
+}
+
 // Function call in condition
 func TestFunctionCallInCondition(t *testing.T) {
 	const input = "res = pow(2, 3) > 8 result"

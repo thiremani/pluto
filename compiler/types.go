@@ -99,6 +99,11 @@ func (i Int) Kind() Kind {
 func (i Int) Mangle() string { return i.String() }
 func (i Int) Key() Type      { return i }
 
+func IsI1(t Type) bool {
+	intType, ok := t.(Int)
+	return ok && intType.Width == 1
+}
+
 // Float represents a floating-point type with a given precision.
 type Float struct {
 	Width uint32 // e.g. 32, 64
@@ -131,7 +136,10 @@ func (p Ptr) Kind() Kind {
 // These strings are never freed and cannot be concatenated.
 type StrG struct{}
 
-func (s StrG) String() string { return "StrG" }
+// String is the user-facing name; the global/heap flavor is an internal
+// detail carried only by Mangle (for specialization identity), not shown
+// in diagnostics.
+func (s StrG) String() string { return "Str" }
 func (s StrG) Kind() Kind     { return StrKind }
 func (s StrG) Mangle() string { return "StrG" }
 func (s StrG) Key() Type      { return s }
@@ -140,7 +148,8 @@ func (s StrG) Key() Type      { return s }
 // These strings must be freed and can be concatenated.
 type StrH struct{}
 
-func (s StrH) String() string { return "StrH" }
+// String is the user-facing name; see StrG.String. Mangle keeps the flavor.
+func (s StrH) String() string { return "Str" }
 func (s StrH) Kind() Kind     { return StrKind }
 func (s StrH) Mangle() string { return "StrH" }
 func (s StrH) Key() Type      { return s }
