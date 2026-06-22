@@ -1251,7 +1251,10 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	lparen := p.curToken
 	p.nextToken()
 
-	exp := p.parseExpression(LOWEST, prefixSplitNone)
+	// Parse the leading sub-expression with the same condition-split mode the
+	// statement level uses, so `(cond value)` detection (including attached
+	// prefixes like `a > 2 -b`) is discovered identically in both places.
+	exp := p.parseExpression(LOWEST, prefixSplitAfterCondition)
 	if exp == nil {
 		return nil
 	}

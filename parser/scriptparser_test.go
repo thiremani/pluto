@@ -956,6 +956,33 @@ func TestParenGroupingUnaffected(t *testing.T) {
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], "x", "+", 1), "expected plain grouped expr")
 }
 
+func TestCondValueAttachedPrefixSharedDetection(t *testing.T) {
+	// `(a > 2 -b)` splits on the attached prefix `-b` (cond `a > 2`, value `-b`)
+	// using the same condition-split mode as the statement level, so detection is
+	// consistent. `(a - b)` (spaced) stays ordinary subtraction.
+	const input = "x = (a > 2 -b)"
+	sp := NewScriptParser(lexer.New("TestCondValueAttachedPrefixSharedDetection", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
+	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
+	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	pre, ok := cv.Value.(*ast.PrefixExpression)
+	require.Truef(t, ok, "expected prefix value, got %T", cv.Value)
+	require.Equal(t, "-", pre.Operator)
+	require.Truef(t, testIdentifier(t, pre.Right, "b"), "value operand mismatch")
+
+	// Spaced subtraction is unaffected.
+	sp2 := NewScriptParser(lexer.New("paren-sub", "y = (a - b)"))
+	prog2 := sp2.Parse()
+	require.Empty(t, sp2.Errors())
+	st2 := requireOnlyLetStmt(t, prog2)
+	require.Truef(t, testInfixExpression(t, st2.Value[0], "a", "-", "b"), "spaced subtraction should be plain")
+}
+
 // Function call in condition
 func TestFunctionCallInCondition(t *testing.T) {
 	const input = "res = pow(2, 3) > 8 result"
