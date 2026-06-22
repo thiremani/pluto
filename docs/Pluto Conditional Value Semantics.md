@@ -62,13 +62,18 @@ transparency.)
 
 ## Fallback `||` overrides the zero
 
-`||` supplies a chosen value when the condition fails, instead of zero. It is
-part of the conditional and is left-biased:
+`||` supplies a chosen value when the condition fails, instead of zero. Its left
+operand must be a conditional (able to fail); it is left-biased and chains:
 
 ```pluto
-y > 2 3 || 7         # 3 when y > 2, else 7
+a > 2 || 7           # a when a > 2, else 7
 a > 2 || b > 2 || 9  # a if a>2, else b if b>2, else 9
 ```
+
+To fall back from an explicit value, parenthesize the conditional: `(a > 2 3) || 7`
+yields `3` when `a > 2`, else `7`. Unparenthesized, `x = a > 2 3 || 7` is an error —
+`a > 2` gates the statement, leaving `3 || 7` as a value-position `||` whose left
+operand cannot fail.
 
 `||` keys off the condition, not the resolved value, so a true condition whose
 value happens to be zero is kept:
