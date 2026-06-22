@@ -563,16 +563,6 @@ func TestCondValueDiagnostics(t *testing.T) {
 			expectError: "(cond value) condition must be a comparison or boolean, got I64",
 		},
 		{
-			name:        "RangesNotSupported",
-			script:      "i = 0:5\nr = (i > 2 i)",
-			expectError: "(cond value) does not support ranges yet",
-		},
-		{
-			name:        "RangeInValueNotSupported",
-			script:      "a = 5\ni = 0:5\nr = (a > 2 i)",
-			expectError: "(cond value) does not support ranges yet",
-		},
-		{
 			// A (cond value) is a valid failable left operand of a value-position
 			// ||; the fallback's type must still match the value's.
 			name:        "FallbackTypeMismatch",

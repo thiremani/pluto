@@ -360,6 +360,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandleArrayRangeExpression(t)
 	case *ast.InfixExpression:
 		return ts.HandleInfixRanges(t)
+	case *ast.CondValueExpr:
+		return ts.HandleCondValueRanges(t)
 	case *ast.PrefixExpression:
 		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
@@ -479,6 +481,34 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
+func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*RangeInfo, rew ast.Expression) {
+	condRanges, cond := ts.HandleRanges(cv.Cond)
+	valRanges, val := ts.HandleRanges(cv.Value)
+	ranges = mergeUses(condRanges, valRanges)
+
+	if cond == cv.Cond && val == cv.Value {
+		rew = cv
+	} else {
+		cp := *cv
+		cp.Cond, cp.Value = cond, val
+		rew = &cp
+		// Cache entry for the rewritten node: operands are scalarized iterators.
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, cv)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CondValueExpr))] = &ExprInfo{
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...),
+			Ranges:       nil,
+		}
+	}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, cv)]
+	info.Ranges = ranges
+	info.Rewrite = rew
+	return
+}
+
 func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	lRanges, l := ts.HandleRanges(infix.Left)
 	rRanges, r := ts.HandleRanges(infix.Right)
@@ -1525,21 +1555,13 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 		})
 	}
 
-	valueTypes := ts.TypeExpression(expr.Value, isRoot)
+	// The value is always a nested, per-iteration value (the CondValueExpr or its
+	// enclosing context owns any loop), so type it non-root: a range identifier
+	// resolves to its iterator type, not a Range.
+	valueTypes := ts.TypeExpression(expr.Value, false)
 
 	condInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Cond)]
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
-
-	// Ranges inside a (cond value) are not yet iterated by its scalar branch/phi
-	// lowering, so reject them rather than silently produce a wrong result. A
-	// range-driven conditional collection is available via the comparison form
-	// (e.g. `[i > 2]`), which yields the left operand and zero-fills.
-	if (condInfo != nil && condInfo.HasRanges) || (valInfo != nil && valInfo.HasRanges) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   "(cond value) does not support ranges yet; use the comparison form (e.g. [i > 2]) for range-driven conditional values",
-		})
-	}
 
 	types := make([]Type, len(valueTypes))
 	copy(types, valueTypes)

@@ -143,7 +143,7 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
   differ only for existing variables and nested arithmetic.
 - **Planned change:** migrate bare value-position comparisons from propagation to
   the same local resolution, removing the inconsistency above.
-- **Not yet supported:** ranges inside a `(cond value)` (its scalar branch/phi
-  lowering does not iterate). `(cond value)` with a range in the condition or
-  value is rejected; use the comparison form (e.g. `[i > 2]`) for range-driven
-  conditional collection.
+- **Ranges:** a `(cond value)` may be range-driven. In a collector it iterates and
+  yields the per-iteration value or zero (`[(i > 2 i)]` → `[0 0 0 3 4]`,
+  `[(i > 2 i*10)]` → `[0 0 0 30 40]`); at an assignment root it keeps the final
+  iteration's value (`r = (i > 2 i)` → `4`).

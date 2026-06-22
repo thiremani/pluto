@@ -98,3 +98,16 @@ cvOrTrue = (a > 2 || b > 5 10)
 "CvOrTrue: -cvOrTrue"
 cvOrFalse = (b > 2 || b > 5 10)
 "CvOrFalse: -cvOrFalse"
+
+# Range-driven: in a collector it iterates and zero-fills failed cells; the
+# value may be an arbitrary per-iteration expression (which the comparison form
+# cannot yield). At an assignment root it keeps the final iteration's value.
+gi = 0:5
+cvRangeArr = [(gi > 2 gi)]
+"CvRangeArr: -cvRangeArr"
+cvRangeArrCustom = [(gi > 2 gi * 10)]
+"CvRangeArrCustom: -cvRangeArrCustom"
+cvRangeRoot = (gi > 2 gi)
+"CvRangeRoot: -cvRangeRoot"
+cvRangeRootFalseFinal = (gi < 2 gi)
+"CvRangeRootFalseFinal: -cvRangeRootFalseFinal"

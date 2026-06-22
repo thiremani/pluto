@@ -631,12 +631,12 @@ func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func())
 	body()
 }
 
-// compileCondValueExpr lowers a parenthesized conditional value (cond value) by
-// local resolution: it yields Value when Cond holds, otherwise the zero value of
-// the result type. Only the taken arm is evaluated, so a heap value or fallback
-// is never allocated on the path it isn't used. When a surrounding gate (a
-// value-position ||, via compileYield) has already branched on Cond and bound
-// the chosen value under this node's key, that pre-bound value is returned.
+// compileCondValueExpr lowers a parenthesized conditional value (cond value).
+// When a surrounding gate (a value-position ||, via compileYield) has already
+// branched on Cond and bound the chosen value under this node's key, that
+// pre-bound value is returned. With pending ranges (e.g. the root `r = (i>2 i)`)
+// it drives a loop; otherwise it compiles the scalar branch/phi, using the
+// range-scalarized rewrite when an outer loop already bound the iterators.
 func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 	if frame := c.currentCondLHSFrame(); frame != nil {
 		if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
@@ -644,6 +644,20 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 		}
 	}
 
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return c.compileCondValueExprRanges(expr, info)
+	}
+	if rew, ok := info.Rewrite.(*ast.CondValueExpr); ok && rew != expr {
+		expr = rew
+	}
+	return c.compileCondValueExprBasic(expr)
+}
+
+// compileCondValueExprBasic is the scalar lowering: yield Value when Cond holds,
+// otherwise the zero of each output slot's type. Only the taken arm is
+// evaluated, so a heap value is never allocated on the path it isn't used.
+func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr) []*Symbol {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	outTypes := info.OutTypes
 
@@ -676,6 +690,38 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 		res[i] = &Symbol{Val: phi, Type: t}
 	}
 	return res
+}
+
+// compileCondValueExprRanges lowers a range-bearing (cond value) at the root of
+// an assignment: it loops the iteration domain, writing the per-iteration
+// value-or-zero into a seeded output slot, and the final iteration's value wins
+// (root assignment keeps the last yielded value).
+func (c *Compiler) compileCondValueExprRanges(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeOutputs(nil, info.OutTypes, true)
+	for i, t := range info.OutTypes {
+		c.storeSymbolToSlot(outputs[i], c.makeZeroValue(t), t, "cv_seed")
+	}
+
+	rew := info.Rewrite.(*ast.CondValueExpr)
+	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, nil, func(prepared *ast.CondValueExpr) {
+		c.pushBoundsGuard("condval_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
+		vals := c.compileCondValueExprBasic(prepared)
+		for i := range vals {
+			c.storeSymbolToSlot(outputs[i], vals[i], info.OutTypes[i], "cv_iter_store")
+		}
+	})
+
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Ptr).Elem
+		out[i] = &Symbol{Val: c.createLoad(outputs[i].Val, elemType, "cv_final"), Type: elemType}
+	}
+	return out
 }
 
 func (c *Compiler) compileFallbackOr(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {

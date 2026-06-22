@@ -23,3 +23,7 @@ CvNested: 5
 CvCallArg: 20
 CvOrTrue: 10
 CvOrFalse: 0
+CvRangeArr: [0 0 0 3 4]
+CvRangeArrCustom: [0 0 0 30 40]
+CvRangeRoot: 4
+CvRangeRootFalseFinal: 0
