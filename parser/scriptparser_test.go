@@ -878,6 +878,84 @@ func TestLogicalOrDoesNotConsumeBitwiseOr(t *testing.T) {
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], 6, "|", 3), "bitwise OR value mismatch")
 }
 
+func TestCondValueExpr(t *testing.T) {
+	const input = "x = (a > 2 10)"
+	sp := NewScriptParser(lexer.New("TestCondValueExpr", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
+	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
+	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+}
+
+func TestCondValueExprWithFallback(t *testing.T) {
+	// The trailing `|| 7` binds OUTSIDE the parens as a normal infix.
+	const input = "x = (a > 2 10) || 7"
+	sp := NewScriptParser(lexer.New("TestCondValueExprWithFallback", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	or, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "||", or.Operator)
+	cv, ok := or.Left.(*ast.CondValueExpr)
+	require.Truef(t, ok, "expected CondValueExpr on the left of ||, got %T", or.Left)
+	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+	require.Truef(t, testIntegerLiteral(t, or.Right, 7), "fallback mismatch")
+}
+
+func TestCondValueExprInArray(t *testing.T) {
+	const input = "x = [1 (a > 2 5) 3]"
+	sp := NewScriptParser(lexer.New("TestCondValueExprInArray", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	arr, ok := stmt.Value[0].(*ast.ArrayLiteral)
+	require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Value[0])
+	require.Len(t, arr.Rows, 1)
+	require.Len(t, arr.Rows[0], 3, "expected three cells")
+	cv, ok := arr.Rows[0][1].(*ast.CondValueExpr)
+	require.Truef(t, ok, "expected CondValueExpr cell, got %T", arr.Rows[0][1])
+	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cell cond mismatch")
+	require.Truef(t, testIntegerLiteral(t, cv.Value, 5), "cell value mismatch")
+}
+
+func TestParenComparisonStaysPlain(t *testing.T) {
+	// `(a > 2)` with no value is a plain value-position comparison, not a CondValueExpr.
+	const input = "x = (a > 2)"
+	sp := NewScriptParser(lexer.New("TestParenComparisonStaysPlain", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	_, isCV := stmt.Value[0].(*ast.CondValueExpr)
+	require.Falsef(t, isCV, "bare (a > 2) must not become a CondValueExpr")
+	require.Truef(t, testInfixExpression(t, stmt.Value[0], "a", ">", 2), "expected plain comparison")
+}
+
+func TestParenGroupingUnaffected(t *testing.T) {
+	// `(x + 1)` is not a condition, so it stays ordinary grouping.
+	const input = "y = (x + 1)"
+	sp := NewScriptParser(lexer.New("TestParenGroupingUnaffected", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	require.Truef(t, testInfixExpression(t, stmt.Value[0], "x", "+", 1), "expected plain grouped expr")
+}
+
 // Function call in condition
 func TestFunctionCallInCondition(t *testing.T) {
 	const input = "res = pow(2, 3) > 8 result"

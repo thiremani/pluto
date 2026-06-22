@@ -481,6 +481,27 @@ func (ie *InfixExpression) String() string {
 	return out.String()
 }
 
+// CondValueExpr is a parenthesized conditional value: (cond value).
+// It yields Value when Cond holds, otherwise nothing (which a boundary
+// resolves to the zero value, or a trailing `|| fallback` overrides).
+type CondValueExpr struct {
+	Token token.Token // the '(' token
+	Cond  Expression
+	Value Expression
+}
+
+func (cv *CondValueExpr) expressionNode()  {}
+func (cv *CondValueExpr) Tok() token.Token { return cv.Token }
+func (cv *CondValueExpr) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(cv.Cond.String())
+	out.WriteString(" ")
+	out.WriteString(cv.Value.String())
+	out.WriteString(")")
+	return out.String()
+}
+
 type FuncStatement struct {
 	Token      token.Token // The identifier
 	Parameters []*Identifier
@@ -538,6 +559,8 @@ func ExprChildren(expr Expression) []Expression {
 	switch e := expr.(type) {
 	case *InfixExpression:
 		return []Expression{e.Left, e.Right}
+	case *CondValueExpr:
+		return []Expression{e.Cond, e.Value}
 	case *PrefixExpression:
 		return []Expression{e.Right}
 	case *CallExpression:
@@ -580,6 +603,17 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			Left:     left,
 			Operator: e.Operator,
 			Right:    right,
+		}
+	case *CondValueExpr:
+		cond := rewrite(e.Cond)
+		value := rewrite(e.Value)
+		if cond == e.Cond && value == e.Value {
+			return expr
+		}
+		return &CondValueExpr{
+			Token: e.Token,
+			Cond:  cond,
+			Value: value,
 		}
 	case *PrefixExpression:
 		right := rewrite(e.Right)

@@ -23,6 +23,7 @@ const (
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
 	CondOr                     // Fallback OR in value position: first true operand wins
+	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
 )
 
 type ExprInfo struct {
@@ -59,7 +60,7 @@ func (info *ExprInfo) HasFallbackOr() bool {
 
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
-		if m == CondScalar || m == CondOr {
+		if m == CondScalar || m == CondOr || m == CondValue {
 			return true
 		}
 	}
@@ -1353,6 +1354,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, t)
 	case *ast.InfixExpression:
 		types = ts.TypeInfixExpression(e)
+	case *ast.CondValueExpr:
+		types = ts.typeCondValueExpr(e, isRoot)
 	case *ast.PrefixExpression:
 		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
@@ -1497,6 +1500,50 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 		})
 		return Unresolved{}
 	}
+}
+
+// typeCondValueExpr types a parenthesized conditional value (cond value).
+// The condition is typed in non-value context (a comparison yields i1, not its
+// LHS) and must be a boolean; the result type is the value's type. Slots are
+// marked CondValue so the value gates on lowering and the node can serve as the
+// (failable) left operand of a value-position ||.
+func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
+	savedInValueExpr := ts.InValueExpr
+	ts.InValueExpr = false
+	condTypes := ts.TypeExpression(expr.Cond, true)
+	ts.InValueExpr = savedInValueExpr
+
+	if len(condTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("(cond value) condition must produce a single value, got %d", len(condTypes)),
+		})
+	} else if condTypes[0].Kind() != UnresolvedKind && !IsI1(condTypes[0]) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("(cond value) condition must be a comparison or boolean, got %s", condTypes[0]),
+		})
+	}
+
+	valueTypes := ts.TypeExpression(expr.Value, isRoot)
+
+	condInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Cond)]
+	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
+
+	types := make([]Type, len(valueTypes))
+	copy(types, valueTypes)
+	compareModes := make([]CondMode, len(valueTypes))
+	for i := range compareModes {
+		compareModes[i] = CondValue
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (condInfo != nil && condInfo.HasRanges) || (valInfo != nil && valInfo.HasRanges),
+		CompareModes: compareModes,
+	}
+	return types
 }
 
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {

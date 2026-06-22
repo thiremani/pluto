@@ -589,6 +589,20 @@ func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue
 		return
 	}
 
+	// A (cond value) yields its value only when its condition holds; otherwise it
+	// fails to onFalse (so an enclosing || tries the next alternative).
+	if cv, ok := expr.(*ast.CondValueExpr); ok {
+		cond := c.derefIfPointer(c.compileExpression(cv.Cond, nil)[0], "cv_cond").Val
+		if !baseCond.IsNil() {
+			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
+		}
+		c.branchCond(cond, nil, func() {
+			vals := c.compileExpression(cv.Value, nil)
+			c.withCondLHS(cv, vals, onTrue)
+		}, onFalse)
+		return
+	}
+
 	if !c.hasFallbackOrInTree(expr) {
 		cond, temps := c.extractCondExprs(expr, baseCond, nil)
 		c.branchCond(cond, temps, onTrue, onFalse)
@@ -615,6 +629,41 @@ func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func())
 	frame[exprKey] = syms
 	defer delete(frame, exprKey)
 	body()
+}
+
+// compileCondValueExpr lowers a parenthesized conditional value (cond value) by
+// local resolution: it yields Value when Cond holds, otherwise the zero value of
+// the result type. Only the taken arm is evaluated, so a heap value or fallback
+// is never allocated on the path it isn't used. When a surrounding gate (a
+// value-position ||, via compileYield) has already branched on Cond and bound
+// the chosen value under this node's key, that pre-bound value is returned.
+func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
+	if frame := c.currentCondLHSFrame(); frame != nil {
+		if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
+			return syms
+		}
+	}
+
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	outType := info.OutTypes[0]
+
+	cond := c.derefIfPointer(c.compileExpression(expr.Cond, nil)[0], "cv_cond").Val
+	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
+
+	c.builder.SetInsertPointAtEnd(trueBlock)
+	val := c.derefIfPointer(c.compileExpression(expr.Value, nil)[0], "cv_val")
+	c.builder.CreateBr(contBlock)
+	trueEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(falseBlock)
+	zero := c.makeZeroValue(outType)
+	c.builder.CreateBr(contBlock)
+	falseEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	phi := c.builder.CreatePHI(c.mapToLLVMType(outType), "cv_phi")
+	phi.AddIncoming([]llvm.Value{val.Val, zero.Val}, []llvm.BasicBlock{trueEnd, falseEnd})
+	return []*Symbol{{Val: phi, Type: outType}}
 }
 
 func (c *Compiler) compileFallbackOr(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {

@@ -1,0 +1,19 @@
+CvTrue: 10
+CvFalseNew: 0
+CvExistingBefore: 42
+CvExistingFalse: 0
+CvArithTrue: 11
+CvArithFalse: 1
+CvDeep: 23
+CvExprValue: 105
+CvFbTrue: 10
+CvFbFalse: 7
+CvFbVar: 5
+CvArrTrue: [1 5 3]
+CvArrFalse: [1 0 3]
+CvArrMulti: [9 0 7]
+CvArrFb: [-1 7]
+CvFloat: 2.5
+CvStrTrue: hello world
+re:CvStrFalse:\s*
+CvStrFb: fallback
