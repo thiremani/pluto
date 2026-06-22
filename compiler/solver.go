@@ -1539,12 +1539,18 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 			Msg:   fmt.Sprintf("logical OR condition operands must produce a single value, got %d", len(left)),
 		})
 		types = []Type{Unresolved{}}
-	} else if left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind && (!IsI1(left[0]) || !IsI1(right[0])) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
-		})
-		types = []Type{Unresolved{}}
+	} else {
+		// Validate the i1 requirement only once both operand types are known;
+		// an unresolved operand may still resolve to i1 on a later solver pass.
+		bothResolved := left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind
+		bothConditions := IsI1(left[0]) && IsI1(right[0])
+		if bothResolved && !bothConditions {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: expr.Token,
+				Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
+			})
+			types = []Type{Unresolved{}}
+		}
 	}
 
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
