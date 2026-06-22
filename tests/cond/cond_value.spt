@@ -122,3 +122,11 @@ cvRangeHeap = (gi >= 0 MkStr(gi))
 cvBounds = [10 20]
 cvRangeOob = (gi >= 0 cvBounds[gi])
 "CvRangeOob: -cvRangeOob"
+
+# Bracketed (cond value) cell with an out-of-bounds access: in-bounds cells take
+# the value, out-of-bounds cells zero-fill (the collector's per-cell bounds
+# guard), and the value may be an arbitrary expression.
+cvArrCellOob = [(gi >= 0 cvBounds[gi])]
+"CvArrCellOob: -cvArrCellOob"
+cvArrCellOobExpr = [(gi >= 0 cvBounds[gi] * 2)]
+"CvArrCellOobExpr: -cvArrCellOobExpr"

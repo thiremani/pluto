@@ -29,3 +29,5 @@ CvRangeRoot: 4
 CvRangeRootFalseFinal: 0
 CvRangeHeap: s4
 CvRangeOob: 20
+CvArrCellOob: [10 20 0 0 0]
+CvArrCellOobExpr: [20 40 0 0 0]
