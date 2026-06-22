@@ -133,10 +133,13 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
 
 - **Implemented:** statement gates (keep-old); `||` fallback in value and
   condition position; value-position comparisons (yield the left operand);
-  collector zero-fill; array filters.
-- **Planned change:** nested value-position comparisons currently keep-old by
-  propagating out of the expression; the model above resolves them locally to
-  zero, matching a named temporary.
-- **Not yet implemented:** the parenthesized `(cond value)` form with an explicit
-  value, and per-cell conditionals inside array literals
-  (`[(a > 2 || 5) 7 (b > 7 || c)]`).
+  collector zero-fill; array filters; the parenthesized `(cond value)`
+  expression (local resolution to zero, with `|| fallback` and array-cell
+  zero-fill), including per-cell use inside array literals.
+- **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
+  but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
+  So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`
+  keeps the old value. They agree for new variables and inside array cells; they
+  differ only for existing variables and nested arithmetic.
+- **Planned change:** migrate bare value-position comparisons from propagation to
+  the same local resolution, removing the inconsistency above.
