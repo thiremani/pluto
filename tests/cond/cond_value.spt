@@ -84,3 +84,11 @@ cvMultiA, cvMultiB = (a > 2 Pair(10, 20))
 "CvMultiTrue: -cvMultiA -cvMultiB"
 cvMultiC, cvMultiD = (b > 2 Pair(10, 20))
 "CvMultiFalse: -cvMultiC -cvMultiD"
+
+# Nested: the value is itself a (cond value).
+cvNested = (a > 2 (a > 4 5))
+"CvNested: -cvNested"
+
+# As a call argument.
+cvCallArg = Double((a > 2 10))
+"CvCallArg: -cvCallArg"

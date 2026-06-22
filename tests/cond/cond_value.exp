@@ -19,3 +19,5 @@ re:CvStrFalse:\s*
 CvStrFb: fallback
 CvMultiTrue: 10 20
 CvMultiFalse: 0 0
+CvNested: 5
+CvCallArg: 20

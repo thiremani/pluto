@@ -143,3 +143,7 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
   differ only for existing variables and nested arithmetic.
 - **Planned change:** migrate bare value-position comparisons from propagation to
   the same local resolution, removing the inconsistency above.
+- **Not yet supported:** ranges inside a `(cond value)` (its scalar branch/phi
+  lowering does not iterate). `(cond value)` with a range in the condition or
+  value is rejected; use the comparison form (e.g. `[i > 2]`) for range-driven
+  conditional collection.

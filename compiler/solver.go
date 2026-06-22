@@ -1530,6 +1530,17 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	condInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Cond)]
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
 
+	// Ranges inside a (cond value) are not yet iterated by its scalar branch/phi
+	// lowering, so reject them rather than silently produce a wrong result. A
+	// range-driven conditional collection is available via the comparison form
+	// (e.g. `[i > 2]`), which yields the left operand and zero-fills.
+	if (condInfo != nil && condInfo.HasRanges) || (valInfo != nil && valInfo.HasRanges) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "(cond value) does not support ranges yet; use the comparison form (e.g. [i > 2]) for range-driven conditional values",
+		})
+	}
+
 	types := make([]Type, len(valueTypes))
 	copy(types, valueTypes)
 	compareModes := make([]CondMode, len(valueTypes))
