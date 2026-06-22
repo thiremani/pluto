@@ -100,6 +100,14 @@ second, `(a > 3 b < 5)` is a single conditional, so `|| 10` fires when `a > 3`
 fails, while a failing `b < 5` resolves locally to zero. A conditional resolves
 locally and never reaches back out to an enclosing operator.
 
+Wrapping the whole right-hand side keeps the bracket in value position, so
+`y = (a > 2 10)` is a plain value assignment — it **always** assigns (local
+resolution: `10` when `a > 2`, else `0`, overwriting `y`), and is treated as an
+unconditional write by the dead-store check. The unbracketed `y = a > 2 10` is
+instead a statement gate: it keeps `y`'s old value when `a <= 2`. Same-looking,
+deliberately different — the brackets choose value-position (local) over the
+gate (keep-old).
+
 ## Arrays
 
 A collector cell is a value position, so the same rule applies: a failed cell is
