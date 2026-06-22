@@ -572,6 +572,13 @@ func TestCondValueDiagnostics(t *testing.T) {
 			script:      "a = 5\ni = 0:5\nr = (a > 2 i)",
 			expectError: "(cond value) does not support ranges yet",
 		},
+		{
+			// A (cond value) is a valid failable left operand of a value-position
+			// ||; the fallback's type must still match the value's.
+			name:        "FallbackTypeMismatch",
+			script:      "a = 1\nx = (a > 0 10) || \"s\"",
+			expectError: "logical OR value operands must have matching output types, got I64 and Str",
+		},
 	}
 
 	for _, tc := range cases {

@@ -92,3 +92,9 @@ cvNested = (a > 2 (a > 4 5))
 # As a call argument.
 cvCallArg = Double((a > 2 10))
 "CvCallArg: -cvCallArg"
+
+# Compound boolean-OR condition.
+cvOrTrue = (a > 2 || b > 5 10)
+"CvOrTrue: -cvOrTrue"
+cvOrFalse = (b > 2 || b > 5 10)
+"CvOrFalse: -cvOrFalse"

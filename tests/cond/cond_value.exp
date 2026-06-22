@@ -21,3 +21,5 @@ CvMultiTrue: 10 20
 CvMultiFalse: 0 0
 CvNested: 5
 CvCallArg: 20
+CvOrTrue: 10
+CvOrFalse: 0
