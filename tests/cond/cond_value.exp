@@ -27,3 +27,5 @@ CvRangeArr: [0 0 0 3 4]
 CvRangeArrCustom: [0 0 0 30 40]
 CvRangeRoot: 4
 CvRangeRootFalseFinal: 0
+CvRangeHeap: s4
+CvRangeOob: 20

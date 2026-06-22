@@ -711,8 +711,23 @@ func (c *Compiler) compileCondValueExprRanges(expr *ast.CondValueExpr, info *Exp
 		defer c.popBoundsGuard()
 
 		vals := c.compileCondValueExprBasic(prepared)
-		for i := range vals {
-			c.storeSymbolToSlot(outputs[i], vals[i], info.OutTypes[i], "cv_iter_store")
+
+		// Free the previous iteration's value before overwriting, and route the
+		// store through the active bounds guard so out-of-bounds iterations skip
+		// it (keeping the last in-bounds value) — matching the other range paths.
+		store := func() {
+			for i := range vals {
+				c.freeSymbolValue(outputs[i], "cv_old_output")
+				c.storeSymbolToSlot(outputs[i], vals[i], info.OutTypes[i], "cv_iter_store")
+			}
+		}
+		skip := func() {
+			for i := range vals {
+				c.freeTemporarySymbol(vals[i], "cv_skip_drop")
+			}
+		}
+		if !c.withStmtBoundsGuard("cv_bounds_ok", "cv_bounds_run", "cv_bounds_skip", "cv_bounds_cont", store, skip) {
+			store()
 		}
 	})
 

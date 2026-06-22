@@ -111,3 +111,14 @@ cvRangeRoot = (gi > 2 gi)
 "CvRangeRoot: -cvRangeRoot"
 cvRangeRootFalseFinal = (gi < 2 gi)
 "CvRangeRootFalseFinal: -cvRangeRootFalseFinal"
+
+# Range-root with a heap value frees the previous iteration before overwriting
+# (no leak across iterations); the final iteration's string wins.
+cvRangeHeap = (gi >= 0 MkStr(gi))
+"CvRangeHeap: -cvRangeHeap"
+
+# Range-root array access: out-of-bounds iterations skip the store and keep the
+# last in-bounds value (respects the active bounds guard).
+cvBounds = [10 20]
+cvRangeOob = (gi >= 0 cvBounds[gi])
+"CvRangeOob: -cvRangeOob"
