@@ -93,3 +93,11 @@ HeapCmpFalse: []
 HeapCmpMulti: [s5 s1]
 HeapCondvalOrTrue: [s5]
 HeapCondvalOrFalse: [def]
+HcCondTrue: 7
+HcCondFalse: 0
+HcBothSides: 7
+HcAnded: 7
+HcOrShortCircuit: 7
+HcCondCell: [7]
+HcCondAndValueCell: [s1]
+HcRangedCond: [0 1 2]

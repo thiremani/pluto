@@ -366,3 +366,26 @@ heapCondvalOrTrue = [(a > 2 MkStr(a)) || "def"]
 "HeapCondvalOrTrue: -heapCondvalOrTrue"
 heapCondvalOrFalse = [(b > 2 MkStr(a)) || "def"]
 "HeapCondvalOrFalse: -heapCondvalOrFalse"
+
+# Heap operands in CONDITION position: a comparison used only as a boolean (a
+# gate, a (cond value) condition, an || test) still computes its operands, and a
+# heap operand must be freed even though it is never the result — on the true and
+# false arms, on both sides of the comparison, when ANDed, when short-circuited,
+# and per-iteration in a collector. (All leak-checked by the suite.)
+hcCondTrue = (MkStr(a) > "a" 7)
+"HcCondTrue: -hcCondTrue"
+hcCondFalse = (MkStr(a) > "zzz" 7)
+"HcCondFalse: -hcCondFalse"
+hcBothSides = (MkStr(a) > MkStr(b) 7)
+"HcBothSides: -hcBothSides"
+hcAnded = MkStr(a) > "a", MkStr(b) > "a" 7
+"HcAnded: -hcAnded"
+hcOrShortCircuit = (a > 2 || MkStr(b) > "a" 7)
+"HcOrShortCircuit: -hcOrShortCircuit"
+hcCondCell = [(MkStr(a) > "a" 7)]
+"HcCondCell: -hcCondCell"
+hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]
+"HcCondAndValueCell: -hcCondAndValueCell"
+hcRng = 0:3
+hcRangedCond = [(MkStr(hcRng) > "s0" hcRng)]
+"HcRangedCond: -hcRangedCond"
