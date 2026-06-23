@@ -130,3 +130,17 @@ cvArrCellOob = [(gi >= 0 cvBounds[gi])]
 "CvArrCellOob: -cvArrCellOob"
 cvArrCellOobExpr = [(gi >= 0 cvBounds[gi] * 2)]
 "CvArrCellOobExpr: -cvArrCellOobExpr"
+
+# (cond value) nested in arithmetic inside a collector, with a scalar condition
+# gating a range-driven value: 2 + 2*gi per iteration.
+cvX = 2
+cvA = 4
+cvCellRangeVal = [cvX + (cvA > 3 2gi)]
+"CvCellRangeVal: -cvCellRangeVal"
+
+# Multi-driver: the condition ranges on one driver and the value on another, so
+# the collector nests them (cvAR outer, gi inner). Only cvAR == 4 admits 2*gi;
+# every other cvAR yields 0, leaving 2 + 0.
+cvAR = 0:5
+cvCellMultiDriver = [cvX + (cvAR > 3 2gi)]
+"CvCellMultiDriver: -cvCellMultiDriver"
