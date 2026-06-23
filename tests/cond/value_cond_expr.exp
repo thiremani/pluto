@@ -101,3 +101,9 @@ HcOrShortCircuit: 7
 HcCondCell: [7]
 HcCondAndValueCell: [s1]
 HcRangedCond: [0 1 2]
+ArithGateTrue: 17
+ArithGateKeepBefore: 99
+ArithGateKeep: 99
+ArithGateHeapTrue: foobar
+ArithGateHeapKeepBefore: OLD
+ArithGateHeapKeep: OLD

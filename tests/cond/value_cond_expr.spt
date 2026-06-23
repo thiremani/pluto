@@ -389,3 +389,25 @@ hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]
 hcRng = 0:3
 hcRangedCond = [(MkStr(hcRng) > "s0" hcRng)]
 "HcRangedCond: -hcRangedCond"
+
+# Comparison binds tighter than arithmetic/concat, so `x + y > k` is `x + (y > k)`:
+# compute `x + y` gated by the trailing comparison, otherwise propagate (skip,
+# keeping the old value). The arithmetic operand's heap value computed before a
+# failed gate is dropped without leaking. (To gate on the sum itself, parenthesize:
+# `(x + y) > k`.)
+agX = 10
+agY = 7
+arithGateTrue = agX + agY > 5
+"ArithGateTrue: -arithGateTrue"
+arithGateKeep = 99
+"ArithGateKeepBefore: -arithGateKeep"
+arithGateKeep = agX + agY > 50
+"ArithGateKeep: -arithGateKeep"
+agS1 = "foo"
+agS2 = "bar"
+arithGateHeapTrue = agS1 ⊕ agS2 > "a"
+"ArithGateHeapTrue: -arithGateHeapTrue"
+arithGateHeapKeep = "OLD"
+"ArithGateHeapKeepBefore: -arithGateHeapKeep"
+arithGateHeapKeep = agS1 ⊕ agS2 > "zzz"
+"ArithGateHeapKeep: -arithGateHeapKeep"
