@@ -33,3 +33,5 @@ CvArrCellOob: [10 20 0 0 0]
 CvArrCellOobExpr: [20 40 0 0 0]
 CvCellRangeVal: [2 4 6 8 10]
 CvCellMultiDriver: [2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 4 6 8 10]
+CvRootArith: 19
+CvRootHeap: his4

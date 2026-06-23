@@ -144,3 +144,14 @@ cvCellRangeVal = [cvX + (cvA > 3 2gi)]
 cvAR = 0:5
 cvCellMultiDriver = [cvX + (cvAR > 3 2gi)]
 "CvCellMultiDriver: -cvCellMultiDriver"
+
+# (cond value) as an arithmetic operand at a statement root (no collector): the
+# enclosing operator owns the loop, so it keeps the final iteration's value.
+cvRootArith = cvX + (cvA > 2 3gi + 5)
+"CvRootArith: -cvRootArith"
+
+# Heap value at a root: the per-iteration concat result is freed before the next
+# overwrite (no leak across iterations), and the final iteration's value wins.
+cvSm = "hi"
+cvRootHeap = cvSm ⊕ (cvA > 2 MkStr(gi))
+"CvRootHeap: -cvRootHeap"
