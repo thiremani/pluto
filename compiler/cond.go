@@ -650,15 +650,15 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 	}
 	if rew, ok := info.Rewrite.(*ast.CondValueExpr); ok && rew != expr {
 		expr = rew
+		info = c.ExprCache[key(c.FuncNameMangled, expr)]
 	}
-	return c.compileCondValueExprBasic(expr)
+	return c.compileCondValueExprBasic(expr, info)
 }
 
 // compileCondValueExprBasic is the scalar lowering: yield Value when Cond holds,
 // otherwise the zero of each output slot's type. Only the taken arm is
 // evaluated, so a heap value is never allocated on the path it isn't used.
-func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr) []*Symbol {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
 	outTypes := info.OutTypes
 
 	cond := c.derefIfPointer(c.compileExpression(expr.Cond, nil)[0], "cv_cond").Val
@@ -710,7 +710,7 @@ func (c *Compiler) compileCondValueExprRanges(expr *ast.CondValueExpr, info *Exp
 		c.pushBoundsGuard("condval_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		vals := c.compileCondValueExprBasic(prepared)
+		vals := c.compileCondValueExprBasic(prepared, c.ExprCache[key(c.FuncNameMangled, prepared)])
 
 		// Free the previous iteration's value before overwriting, and route the
 		// store through the active bounds guard so out-of-bounds iterations skip
