@@ -118,6 +118,13 @@ zero, and `||` overrides.
 [i > 2 || -1]    # failed cells are -1
 ```
 
+Each cell resolves locally and independently — a failed cell zero-fills (or takes
+its `||` fallback) without gating the rest of the literal or the enclosing
+assignment. This holds whether the cells are scalar or range-driven: `[a > 99]`
+is `[0]` (not `[]`), and `[a > 2  a > 99]` is `[5 0]` (not empty or kept-old).
+This matches the `(cond value)` cell form exactly; a bare comparison and
+`(cond value)` are interchangeable as cells.
+
 Spacing separates cells, so parentheses also control cell count:
 
 ```pluto

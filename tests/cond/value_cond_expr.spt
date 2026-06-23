@@ -332,3 +332,37 @@ lorBoundarySkip = 100
 "LogicalOrBoundarySkipBefore: -lorBoundarySkip"
 lorBoundarySkip = 1 > 5 || 2 > 6 33 > 0 || -1
 "LogicalOrBoundarySkipKeepsDefault: -lorBoundarySkip"
+
+# A value-position comparison used as a (scalar) collector cell resolves locally
+# per cell — zero-fill on false, the LHS on true — exactly like the ranged form
+# and like (cond value). It is NOT a gate over the whole literal: a single failed
+# cell does not empty the array or keep the old value, and sibling cells are
+# independent. (Regression: scalar cells used to be lifted into a statement gate,
+# so `[a > 99]` collapsed to `[]` and `[a > 2  a > 99]` to `[]`.)
+scalarCmpCellTrue = [a > 2]
+"ScalarCmpCellTrue: -scalarCmpCellTrue"
+scalarCmpCellFalse = [a > 99]
+"ScalarCmpCellFalse: -scalarCmpCellFalse"
+scalarCmpMulti = [a > 2  a > 99]
+"ScalarCmpMulti: -scalarCmpMulti"
+scalarCmpFb = [a > 99 || -1]
+"ScalarCmpFb: -scalarCmpFb"
+
+# Heap LHS in a scalar comparison cell: the cell value is owned by the array and
+# freed with it, with no leak — on the true arm (value taken) and the false arm
+# (the LHS computed for the comparison is dropped). (Regression: the lifted
+# statement gate double-evaluated the cell and leaked its heap LHS; N heap cells
+# leaked N strings.)
+heapCmpCell = [MkStr(a) > "a"]
+"HeapCmpCell: -heapCmpCell"
+heapCmpFalse = [MkStr(b) > "zzz"]
+"HeapCmpFalse: -heapCmpFalse"
+heapCmpMulti = [MkStr(a) > "a"  MkStr(b) > "a"]
+"HeapCmpMulti: -heapCmpMulti"
+
+# (cond value) || fallback with a heap value as a scalar collector cell: also
+# leak-free on both the value and fallback arms.
+heapCondvalOrTrue = [(a > 2 MkStr(a)) || "def"]
+"HeapCondvalOrTrue: -heapCondvalOrTrue"
+heapCondvalOrFalse = [(b > 2 MkStr(a)) || "def"]
+"HeapCondvalOrFalse: -heapCondvalOrFalse"

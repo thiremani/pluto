@@ -429,6 +429,12 @@ func (c *Compiler) hasFallbackOrInTree(expr ast.Expression) bool {
 	if _, ok := c.fallbackOrExpr(expr); ok {
 		return true
 	}
+	// A collector cell's || fallback is resolved at the cell level, not as a
+	// statement-level fallback (see extractCondExprs). Stop at the array
+	// boundary so the whole literal is not routed through compileYield.
+	if _, ok := expr.(*ast.ArrayLiteral); ok {
+		return false
+	}
 	for _, child := range ast.ExprChildren(expr) {
 		if c.hasFallbackOrInTree(child) {
 			return true
@@ -466,6 +472,17 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 // values for substitution during later value compilation.
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+
+	// An array-literal cell is an independent value position: each cell resolves
+	// its own conditional (zero-fill, or a || fallback) at the cell level via
+	// compileArrayLiteralCell. The collector is therefore a boundary for
+	// statement-level extraction — descending into it would lift a cell's
+	// value-position comparison into a gate over the whole assignment, which both
+	// keeps the old value on a single failed cell and double-evaluates that cell,
+	// leaking its heap LHS on the pass-through path.
+	if _, ok := expr.(*ast.ArrayLiteral); ok {
+		return cond, temps
+	}
 
 	// Comparisons with ranges can be extracted only when all required iterators
 	// are already bound by an outer loop (no pending ranges).

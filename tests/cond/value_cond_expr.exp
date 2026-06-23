@@ -84,3 +84,12 @@ LogicalOrBoundaryRightBefore: 100
 LogicalOrBoundaryRightCondFallback: -1
 LogicalOrBoundarySkipBefore: 100
 LogicalOrBoundarySkipKeepsDefault: 100
+ScalarCmpCellTrue: [5]
+ScalarCmpCellFalse: [0]
+ScalarCmpMulti: [5 0]
+ScalarCmpFb: [-1]
+HeapCmpCell: [s5]
+HeapCmpFalse: []
+HeapCmpMulti: [s5 s1]
+HeapCondvalOrTrue: [s5]
+HeapCondvalOrFalse: [def]
