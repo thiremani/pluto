@@ -186,7 +186,7 @@ i = 0:10
 produces:
 
 ```pluto
-[0 0 0 3 4 5 6 7 0 0 0]
+[0 0 0 3 4 5 6 7 0 0]
 ```
 
 and
@@ -198,7 +198,7 @@ and
 produces:
 
 ```pluto
-[2 2 2 3 4 5 6 7 2 2 2]
+[2 2 2 3 4 5 6 7 2 2]
 ```
 
 `||` is resolved before the collector sees the final cell result, so explicit
