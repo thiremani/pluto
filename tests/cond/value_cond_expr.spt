@@ -411,3 +411,26 @@ arithGateHeapKeep = "OLD"
 "ArithGateHeapKeepBefore: -arithGateHeapKeep"
 arithGateHeapKeep = agS1 ⊕ agS2 > "zzz"
 "ArithGateHeapKeep: -arithGateHeapKeep"
+
+# A fallback || may attach to a left operand that WRAPS its condition in
+# arithmetic, not only to a bare conditional: the whole value is gated on the
+# nested condition (matching value-position propagation / zero-fill), and || just
+# swaps its fallback in for the zero. So `(i > 2 < 8) ^ 2 || -1.0` is i^2 when
+# 2 < i < 8 and -1 otherwise (including i >= 8) — the natural one-liner. Multiple
+# nested conditions are ANDed; the fallback fires if any fail. (Heap arms below
+# are leak-checked, including the value computed before a failed gate.)
+owI = 0:10
+orWrapPow = [(owI > 2 < 8) ^ 2 || -1.0]
+"OrWrapPow: -orWrapPow"
+orWrapAddTrue = (a > 2) + 100 || -1
+"OrWrapAddTrue: -orWrapAddTrue"
+orWrapAddFalse = (b > 2) + 100 || -1
+"OrWrapAddFalse: -orWrapAddFalse"
+orWrapMulti = (a > 2) + (b > 3) || -1
+"OrWrapMulti: -orWrapMulti"
+orWrapHeapTrue = (MkStr(a) > "s2") ⊕ "!" || "def"
+"OrWrapHeapTrue: -orWrapHeapTrue"
+orWrapHeapFalse = (MkStr(b) > "s2") ⊕ "!" || "def"
+"OrWrapHeapFalse: -orWrapHeapFalse"
+orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
+"OrWrapHeapCell: -orWrapHeapCell"

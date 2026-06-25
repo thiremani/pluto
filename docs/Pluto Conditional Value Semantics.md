@@ -83,6 +83,20 @@ a = 0
 a < 2 || 7           # a < 2 is true -> yields a (0), not 7
 ```
 
+The left operand need not be a bare conditional — it may **wrap** its condition
+in arithmetic. Because value-position conditions propagate (the whole value gates
+on them, the same conjunction that drives zero-fill), `||` attaches wherever a
+value can fail and swaps its fallback in for the zero:
+
+```pluto
+(i > 2 < 8) ^ 2 || -1.0   # i^2 when 2 < i < 8, else -1.0 (incl. i >= 8)
+(a > 2) + 100 || -1       # a + 100 when a > 2, else -1
+(a > 2) + (b > 3) || -1   # a + b when both hold (conditions AND), else -1
+```
+
+Only a left operand with **no** condition anywhere in its tree is rejected
+(`5 + 3 || -1`, `a || -1`) — there is nothing that can fail for `||` to catch.
+
 ## Parentheses group the condition
 
 At the top of a statement the `=` separates condition from value, so no

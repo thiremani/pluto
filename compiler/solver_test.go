@@ -612,6 +612,14 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
+			// A wrapped propagating condition can fail ((a > 2) + 1 || -1 is valid),
+			// but a wrapped (cond value) resolves locally and always produces a
+			// value, so the || would catch nothing — reject it.
+			name:        "WrappedLocalCondValueCannotFail",
+			script:      "a = 1\nx = (a > 2 5) + 1 || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
 			name:        "FallbackTypesMustMatch",
 			script:      "a = 1\nx = a > 0 || \"fallback\"",
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",

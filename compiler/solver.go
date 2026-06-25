@@ -1579,6 +1579,37 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	return types
 }
 
+// wrapsPropagatingCond reports whether expr wraps a *propagating* value-position
+// condition — a comparison (CondScalar) or a value-position || (CondOr) — anywhere
+// in its tree. Those propagate their failure to the whole value (the same gating
+// that drives zero-fill), so a fallback || can attach to a left operand that wraps
+// one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
+//
+// A (cond value) and an array cell resolve *locally* (they always produce a value
+// and never propagate a failure outward), so a condition nested inside one does
+// not make the wrapping operand fail — the walk stops at those boundaries. A bare
+// (cond value) at the root is handled by the caller's HasCondExpr check, since the
+// || keys off its condition directly.
+func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
+	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil {
+		for _, m := range info.CompareModes {
+			if m == CondScalar || m == CondOr {
+				return true
+			}
+		}
+	}
+	switch expr.(type) {
+	case *ast.CondValueExpr, *ast.ArrayLiteral:
+		return false
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if ts.wrapsPropagatingCond(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
@@ -1588,8 +1619,10 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		// fail, while the right operand may be another condition or a plain
 		// fallback value. There is no matching value-position && because
 		// chained comparisons already refine a yielded value, and comma
-		// conditions provide statement-position AND.
-		if leftInfo == nil || !leftInfo.HasCondExpr() {
+		// conditions provide statement-position AND. The left counts as failable
+		// if its root is conditional, or if it wraps a propagating condition in
+		// arithmetic — (i > 2 < 8) ^ 2 || -1 keys off the nested comparison.
+		if leftInfo == nil || (!leftInfo.HasCondExpr() && !ts.wrapsPropagatingCond(expr.Left)) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
 				Msg:   "logical OR in value position requires a conditional left operand",
