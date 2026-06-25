@@ -442,3 +442,10 @@ orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
 # condition, so `[t * t || -1]` has nothing for the || to attach to.
 orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
 "OrWrapRepeatedCond: -orWrapRepeatedCond"
+
+# A complicated per-element/piecewise function is one chain of (cond value) || ...
+# || default, evaluated in order with the first matching branch winning — one
+# pass, in order, and length-preserving (no splitting the domain and concatenating
+# filtered pieces). Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
+owPiecewise = [(owI < 2 -10) || (owI < 5 0) || (owI < 8 owI * owI) || 999]
+"OwPiecewise: -owPiecewise"
