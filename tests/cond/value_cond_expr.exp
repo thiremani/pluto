@@ -114,3 +114,4 @@ OrWrapMulti: -1
 OrWrapHeapTrue: s5!
 OrWrapHeapFalse: def
 OrWrapHeapCell: [def def def def def def def s7! s8! s9!]
+OrWrapRepeatedCond: [-1 -1 -1 9 16 25 36 49 -1 -1]

@@ -434,3 +434,11 @@ orWrapHeapFalse = (MkStr(b) > "s2") ⊕ "!" || "def"
 "OrWrapHeapFalse: -orWrapHeapFalse"
 orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
 "OrWrapHeapCell: -orWrapHeapCell"
+
+# The condition may appear more than once in the left operand; all occurrences
+# are ANDed (here identical, so equivalent to one). This gives integer i^2 (vs
+# the float ^) with a -1 fallback. The condition must stay inline: factoring it
+# into a variable (`t = owI > 2 < 8`) resolves it to a value with no live
+# condition, so `[t * t || -1]` has nothing for the || to attach to.
+orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
+"OrWrapRepeatedCond: -orWrapRepeatedCond"
