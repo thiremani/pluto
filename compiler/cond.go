@@ -547,8 +547,16 @@ func (c *Compiler) extractCondComparison(infix *ast.InfixExpression, info *ExprI
 	var lhsSyms []*Symbol
 	lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
 
-	c.requireCondLHSFrame()[key(c.FuncNameMangled, infix)] = lhsSyms
-	temps = append(temps, condTemp{infix.Left, left})
+	frame := c.requireCondLHSFrame()
+	frame[key(c.FuncNameMangled, infix)] = lhsSyms
+
+	// Track `left` as a temporary to free in cleanup — but not when it is a chained
+	// inner comparison (a > b < c): its value came from substituting that already-
+	// retained comparison, so it is the SAME symbol already tracked. Re-tracking it
+	// would free it twice (double-free / crash) for a heap LHS.
+	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
+		temps = append(temps, condTemp{infix.Left, left})
+	}
 
 	// Right is comparison-only; left is retained for condLHS substitution.
 	c.freeTemporary(infix.Right, right)

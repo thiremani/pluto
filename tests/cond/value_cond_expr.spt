@@ -476,3 +476,12 @@ chainKeep = chB > 2 < 8  chB * chB
 # comma-AND (`i > 2, i < 8`) for a two-sided bound. This documents the behaviour.
 chainLeftmost = [2 < chI < 8]
 "ChainLeftmost: -chainLeftmost"
+
+# Heap operands in a chained comparison: the chain reuses one heap LHS across its
+# links, which must be freed exactly once. (A naive cleanup tracked it per link and
+# double-freed it — a crash.) Works in a gate and a (cond value), over both the
+# admitted (s3..s7) and failing iterations, with no leak.
+chainGateHeap = MkStr(chI) > "s2" < "s8" [chI]
+"ChainGateHeap: -chainGateHeap"
+chainCondValHeap = [(MkStr(chI) > "s2" < "s8"  chI)]
+"ChainCondValHeap: -chainCondValHeap"
