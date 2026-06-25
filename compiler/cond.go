@@ -14,25 +14,66 @@ type condTemp struct {
 	syms []*Symbol
 }
 
-// evalConditions compiles a list of condition expressions, ANDs all resulting
-// i1 values together, and incorporates bounds guard checks. The caller must
-// call pushBoundsGuard before and popBoundsGuard after.
+// compileGate lowers a value-position condition expression to its i1 gate: the
+// conjunction of the comparisons it contains. A condition is just a value-position
+// expression we ask "did it yield?" of — comparisons yield their LHS and chain, so
+// `i > 2 < 8` gates on `i > 2 AND i < 8`. The retained LHS values drive the gate
+// but are not a result, so they are freed here (a heap LHS computed only to test a
+// gate must not leak). Returns a nil value when expr contributes no comparison
+// (e.g. a bare range driver, whose admitted domain is handled by the loop).
+func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
+	// No || in the tree: the gate is the conjunction of the comparisons, which
+	// extractCondExprs computes directly while freeing the retained LHS temps
+	// (a heap LHS tested only for the gate must not leak).
+	if !c.hasFallbackOrInTree(expr) {
+		c.pushCondLHSFrame()
+		defer c.popCondLHSFrame()
+		cond, temps := c.extractCondExprs(expr, llvm.Value{}, nil)
+		c.cleanupCondExprElse(temps)
+		return cond
+	}
+
+	// A value-position || is a left-biased fallback, so its gate is "did the
+	// expression yield?" — a > 2 || b > 3 gates on a>2 OR b>3, not AND. Reuse the
+	// value lowering: record the gate on the yield path and free the yielded value
+	// (a gate discards it; freeTemporary skips borrowed operands, so variables are
+	// safe and heap temporaries are released).
+	i1 := Int{Width: 1}
+	i1Ty := c.mapToLLVMType(i1)
+	gatePtr := c.createEntryBlockAlloca(i1Ty, "gate.mem")
+	c.createStore(llvm.ConstInt(i1Ty, 0, false), gatePtr, i1)
+	c.compileCondExprValue(expr, llvm.Value{}, func() {
+		vals := c.compileExpression(expr, nil)
+		c.freeTemporary(expr, vals)
+		c.createStore(llvm.ConstInt(i1Ty, 1, false), gatePtr, i1)
+	})
+	return c.createLoad(gatePtr, i1, "gate")
+}
+
+// evalConditions ANDs the i1 gates of a list of condition expressions and folds
+// in the bounds-guard check. The caller must pushBoundsGuard before and
+// popBoundsGuard after.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
 	var cond llvm.Value
 	for _, expr := range exprs {
-		condSyms := c.compileExpression(expr, nil)
-		for _, condSym := range condSyms {
-			if cond.IsNil() {
-				cond = condSym.Val
-			} else {
-				cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
-			}
+		gate := c.compileGate(expr)
+		if gate.IsNil() {
+			continue
+		}
+		if cond.IsNil() {
+			cond = gate
+		} else {
+			cond = c.builder.CreateAnd(cond, gate, "and_cond")
 		}
 	}
 
 	if c.stmtBoundsUsed() {
 		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
-		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
+		if cond.IsNil() {
+			cond = boundsOK
+		} else {
+			cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
+		}
 	}
 	return cond
 }
@@ -429,10 +470,11 @@ func (c *Compiler) hasFallbackOrInTree(expr ast.Expression) bool {
 	if _, ok := c.fallbackOrExpr(expr); ok {
 		return true
 	}
-	// A collector cell's || fallback is resolved at the cell level, not as a
-	// statement-level fallback (see extractCondExprs). Stop at the array
-	// boundary so the whole literal is not routed through compileYield.
-	if _, ok := expr.(*ast.ArrayLiteral); ok {
+	// Array cells and (cond value) nodes resolve any || at their own level (see
+	// extractCondExprs), so they are boundaries for statement-level fallback
+	// detection — don't descend into them.
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.CondValueExpr:
 		return false
 	}
 	for _, child := range ast.ExprChildren(expr) {
@@ -473,14 +515,14 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
-	// An array-literal cell is an independent value position: each cell resolves
-	// its own conditional (zero-fill, or a || fallback) at the cell level via
-	// compileArrayLiteralCell. The collector is therefore a boundary for
-	// statement-level extraction — descending into it would lift a cell's
-	// value-position comparison into a gate over the whole assignment, which both
-	// keeps the old value on a single failed cell and double-evaluates that cell,
-	// leaking its heap LHS on the pass-through path.
-	if _, ok := expr.(*ast.ArrayLiteral); ok {
+	// Array-literal cells and (cond value) nodes are local-resolution boundaries:
+	// each resolves its own condition (zero-fill / fallback, or the cond-value's
+	// branch) at its own level. Statement-level extraction must stop here —
+	// descending in would lift their inner comparison into a gate over the whole
+	// assignment, which keeps the old value on failure (breaking local resolution)
+	// and double-evaluates the node, leaking its heap LHS on the pass-through path.
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.CondValueExpr:
 		return cond, temps
 	}
 
@@ -609,7 +651,7 @@ func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue
 	// A (cond value) yields its value only when its condition holds; otherwise it
 	// fails to onFalse (so an enclosing || tries the next alternative).
 	if cv, ok := expr.(*ast.CondValueExpr); ok {
-		cond := c.derefIfPointer(c.compileExpression(cv.Cond, nil)[0], "cv_cond").Val
+		cond := c.compileGate(cv.Cond)
 		if !baseCond.IsNil() {
 			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
 		}
@@ -678,7 +720,7 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
 	outTypes := info.OutTypes
 
-	cond := c.derefIfPointer(c.compileExpression(expr.Cond, nil)[0], "cv_cond").Val
+	cond := c.compileGate(expr.Cond)
 	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
 
 	// True path evaluates the value (one symbol per output slot for a

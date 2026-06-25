@@ -32,6 +32,30 @@ new = b > 2  x * 3    # b <= 2 -> new = 0
 
 Multiple conditions separated by commas are ANDed; all must hold.
 
+### Conditions are value positions
+
+A condition is itself a value position: a comparison yields its LHS and chains,
+and the gate asks "did that value-position expression yield?" (the conjunction of
+its comparisons). So a chained comparison gates a range directly — the same
+`i > 2 < 8` that filters in value position:
+
+```pluto
+arr = i > 2 < 8  [i * i]      # gate on 2 < i < 8        -> [9 16 25 36 49]
+arr = [(i > 2 < 8  i * i)]    # same gate, per cell      -> [0 0 0 9 16 25 36 49 0 0]
+```
+
+This holds in every condition slot: a statement gate, a `(cond value)` condition,
+and a scalar gate. The same rule applies everywhere, so there is no separate
+"condition comparison" form to learn.
+
+Because the chain binds to the **leftmost** operand (the value-position rule),
+`i > 2 < 8` means `i > 2 AND i < 8`, but the math-natural `2 < i < 8` means just
+`2 < i` — the `< 8` chains onto the constant `2` (`2 < 8`, always true), not onto
+`i`. **Put the variable first** (`i > 2 < 8`), or use comma-AND (`i > 2, i < 8`),
+for a two-sided bound. A `||` in a condition is an OR gate (`a > 2 || b > 2`);
+its operands must have matching types and it must be able to fail (a `|| value`
+fallback that always yields cannot gate).
+
 ## Value position: a temporary, zero on false
 
 A conditional inside the value is a computed temporary. It yields its value when
@@ -162,9 +186,11 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
 
 - **Implemented:** statement gates (keep-old); `||` fallback in value and
   condition position; value-position comparisons (yield the left operand);
-  collector zero-fill; array filters; the parenthesized `(cond value)`
-  expression (local resolution to zero, with `|| fallback` and array-cell
-  zero-fill), including per-cell use inside array literals.
+  conditions are value positions, so chained comparisons gate directly
+  (`i > 2 < 8`, leftmost-binding) in every condition slot; collector zero-fill;
+  array filters; the parenthesized `(cond value)` expression (local resolution to
+  zero, with `|| fallback` and array-cell zero-fill), including per-cell use
+  inside array literals.
 - **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
   but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
   So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`

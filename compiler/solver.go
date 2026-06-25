@@ -748,6 +748,19 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
+// conditionCanFail reports whether a value-position condition can fail (skip) —
+// which a statement gate requires, since an always-yielding condition can never
+// gate. A comparison or chain can fail; a value-position || can only if its final
+// fallback can: `a > 0 || b > 0` fails when both are false, but `a > 0 || b`
+// always yields b.
+func (ts *TypeSolver) conditionCanFail(expr ast.Expression) bool {
+	if infix, ok := ast.IsLogicalOr(expr); ok {
+		return ts.conditionCanFail(infix.Right)
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && info.HasCondExpr()
+}
+
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
 	if len(condTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -774,7 +787,20 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	if intType, ok := condType.(Int); ok && intType.Width == 1 {
+	// In value context a comparison yields its LHS (so the condition's type is the
+	// operand type, not i1); it gates as long as it can fail — the gate is the
+	// conjunction of its comparisons ("did the value-position expression yield?").
+	if ts.conditionCanFail(expr) {
+		return
+	}
+
+	// A condition that carries a comparison but can never fail (an unconditional
+	// || fallback like `a > 0 || b`, which always yields b) does not gate.
+	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasCondExpr() {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   "statement condition can never fail (its || fallback always yields a value)",
+		})
 		return
 	}
 
@@ -842,8 +868,11 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	savedInValueExpr := ts.InValueExpr
 	defer func() { ts.InValueExpr = savedInValueExpr }()
 
-	// type conditions in non-value context (comparisons produce i1 as usual)
-	ts.InValueExpr = false
+	// Type conditions in value context, like the values: a comparison yields its
+	// LHS and chains (so `i > 2 < 8` works), and the gate is the conjunction of
+	// those comparisons ("did the value-position expression yield?"). One
+	// comparison rule everywhere; the gate collapse to i1 happens at lowering.
+	ts.InValueExpr = true
 	for _, expr := range stmt.Condition {
 		condTypes := ts.TypeExpression(expr, true)
 		ts.validateStatementCondition(expr, condTypes)
@@ -1533,13 +1562,14 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 }
 
 // typeCondValueExpr types a parenthesized conditional value (cond value).
-// The condition is typed in non-value context (a comparison yields i1, not its
-// LHS) and must be a boolean; the result type is the value's type. Slots are
-// marked CondValue so the value gates on lowering and the node can serve as the
-// (failable) left operand of a value-position ||.
+// The condition is typed in value context (like a statement gate): a comparison
+// yields its LHS and chains (so `(i > 2 < 8  v)` works), and it gates on whether
+// that value-position expression yields — so it must be able to fail. The result
+// type is the value's type. Slots are marked CondValue so the value gates on
+// lowering and the node can serve as the (failable) left operand of a value-position ||.
 func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
 	savedInValueExpr := ts.InValueExpr
-	ts.InValueExpr = false
+	ts.InValueExpr = true
 	condTypes := ts.TypeExpression(expr.Cond, true)
 	ts.InValueExpr = savedInValueExpr
 
@@ -1548,10 +1578,10 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 			Token: expr.Token,
 			Msg:   fmt.Sprintf("(cond value) condition must produce a single value, got %d", len(condTypes)),
 		})
-	} else if condTypes[0].Kind() != UnresolvedKind && !IsI1(condTypes[0]) {
+	} else if condTypes[0].Kind() != UnresolvedKind && !ts.conditionCanFail(expr.Cond) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("(cond value) condition must be a comparison or boolean, got %s", condTypes[0]),
+			Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
 		})
 	}
 

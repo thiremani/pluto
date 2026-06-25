@@ -116,3 +116,10 @@ OrWrapHeapFalse: def
 OrWrapHeapCell: [def def def def def def def s7! s8! s9!]
 OrWrapRepeatedCond: [-1 -1 -1 9 16 25 36 49 -1 -1]
 OwPiecewise: [-10 -10 0 0 0 25 36 49 999 999]
+ChainGate: [9 16 25 36 49]
+ChainCondVal: [0 0 0 9 16 25 36 49 0 0]
+ChainCondValFb: [-1 -1 -1 9 16 25 36 49 -1 -1]
+ChainScalar: 25
+ChainKeepBefore: 99
+ChainKeepAfter: 99
+ChainLeftmost: [0 0 0 2 2 2 2 2 2 2]

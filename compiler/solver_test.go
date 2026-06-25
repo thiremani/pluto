@@ -558,9 +558,9 @@ func TestCondValueDiagnostics(t *testing.T) {
 		expectError string
 	}{
 		{
-			name:        "ConditionMustBeBoolean",
+			name:        "ConditionMustBeFailableComparison",
 			script:      "n = 5\nx = (n 10)",
-			expectError: "(cond value) condition must be a comparison or boolean, got I64",
+			expectError: "(cond value) condition must be a comparison that can fail, got I64",
 		},
 		{
 			// A (cond value) is a valid failable left operand of a value-position
@@ -625,9 +625,11 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 		{
-			name:        "ConditionOperandsMustBeI1",
+			// Conditions are value-position now, so `a > 0 || b` is a fallback whose
+			// `b` arm always yields — the gate can never fail, which is rejected.
+			name:        "ConditionWithUnconditionalFallbackCannotGate",
 			script:      "a = 1\nb = 2\nx = a > 0 || b 7",
-			expectError: "logical OR requires condition operands, got I1 and I64",
+			expectError: "statement condition can never fail",
 		},
 	}
 

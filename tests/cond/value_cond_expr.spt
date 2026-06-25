@@ -380,7 +380,7 @@ hcBothSides = (MkStr(a) > MkStr(b) 7)
 "HcBothSides: -hcBothSides"
 hcAnded = MkStr(a) > "a", MkStr(b) > "a" 7
 "HcAnded: -hcAnded"
-hcOrShortCircuit = (a > 2 || MkStr(b) > "a" 7)
+hcOrShortCircuit = (MkStr(a) > "a" || MkStr(b) > "zzz" 7)
 "HcOrShortCircuit: -hcOrShortCircuit"
 hcCondCell = [(MkStr(a) > "a" 7)]
 "HcCondCell: -hcCondCell"
@@ -449,3 +449,30 @@ orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
 # filtered pieces). Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
 owPiecewise = [(owI < 2 -10) || (owI < 5 0) || (owI < 8 owI * owI) || 999]
 "OwPiecewise: -owPiecewise"
+
+# Conditions are value-position like the values: a comparison yields its LHS and
+# chains, so a chained comparison gates a range directly — the same `i > 2 < 8`
+# that filters in value position. Works in every condition slot: a statement gate,
+# a (cond value) condition (with or without a || fallback), and a scalar gate.
+chI = 0:10
+chainGate = chI > 2 < 8 [chI * chI]
+"ChainGate: -chainGate"
+chainCondVal = [(chI > 2 < 8  chI * chI)]
+"ChainCondVal: -chainCondVal"
+chainCondValFb = [(chI > 2 < 8  chI * chI) || -1]
+"ChainCondValFb: -chainCondValFb"
+chA = 5
+chainScalar = chA > 2 < 8  chA * chA
+"ChainScalar: -chainScalar"
+chainKeep = 99
+"ChainKeepBefore: -chainKeep"
+chB = 10
+chainKeep = chB > 2 < 8  chB * chB
+"ChainKeepAfter: -chainKeep"
+
+# Chaining binds to the leftmost operand (the value-position rule), so the
+# math-natural `2 < i < 8` means `2 < i` — the `< 8` chains onto the constant `2`
+# (2 < 8, always true), not onto `i`. Write the variable first (`i > 2 < 8`) or use
+# comma-AND (`i > 2, i < 8`) for a two-sided bound. This documents the behaviour.
+chainLeftmost = [2 < chI < 8]
+"ChainLeftmost: -chainLeftmost"
