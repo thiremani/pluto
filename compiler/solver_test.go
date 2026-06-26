@@ -554,6 +554,7 @@ func TestCondValueDiagnostics(t *testing.T) {
 
 	cases := []struct {
 		name        string
+		code        string
 		script      string
 		expectError string
 	}{
@@ -569,11 +570,23 @@ func TestCondValueDiagnostics(t *testing.T) {
 			script:      "a = 1\nx = (a > 0 10) || \"s\"",
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
+		{
+			// A multi-return comparison (Pair > Pair yields two values) cannot be a
+			// (cond value) condition — the gate must be a single value.
+			name:        "ConditionMustProduceSingleValue",
+			code:        "a, b = Pair(x, y)\n    a, b = x, y",
+			script:      "p, q = (Pair(1, 2) > Pair(3, 4)  7)",
+			expectError: "(cond value) condition must produce a single value",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			codeAST := ast.NewCode()
+			if strings.TrimSpace(tc.code) != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
 			require.Empty(t, cc.Compile())
 
 			sl := lexer.New(tc.name+".spt", tc.script)
@@ -629,6 +642,13 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			// `b` arm always yields — the gate can never fail, which is rejected.
 			name:        "ConditionWithUnconditionalFallbackCannotGate",
 			script:      "a = 1\nb = 2\nx = a > 0 || b 7",
+			expectError: "statement condition can never fail",
+		},
+		{
+			// Same, but deeper: only the final arm of the || chain is unconditional,
+			// so the whole chain still always yields and cannot gate.
+			name:        "DeepOrChainUnconditionalFinalArmCannotGate",
+			script:      "a = 1\nb = 2\nc = 3\nx = a > 0 || b > 5 || c 7",
 			expectError: "statement condition can never fail",
 		},
 	}

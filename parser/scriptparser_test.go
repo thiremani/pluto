@@ -535,6 +535,27 @@ func TestConditionExpression(t *testing.T) {
 	}
 }
 
+func TestCondValueParseErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expErr string
+	}{
+		{"missing closing paren", "a = 5\nr = (a > 2 10", "expected next token to be )"},
+		{"extra expression", "a = 5\nr = (a > 2 10 20)", "expected next token to be )"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := lexer.New("TestCondValueParseErrors", tt.input)
+			sp := NewScriptParser(l)
+			sp.Parse()
+			errs := sp.Errors()
+			require.NotEmptyf(t, errs, "input %q: expected a parse error", tt.input)
+			require.Containsf(t, errs[0], tt.expErr, "input %q: unexpected error %v", tt.input, errs)
+		})
+	}
+}
+
 func TestConditionThenArrayValue(t *testing.T) {
 	const input = "x = a > b [1 2 3]"
 	l := lexer.New("TestConditionThenArrayValue", input)
