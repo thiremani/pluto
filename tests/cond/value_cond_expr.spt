@@ -382,6 +382,14 @@ hcAnded = MkStr(a) > "a", MkStr(b) > "a" 7
 "HcAnded: -hcAnded"
 hcOrShortCircuit = (MkStr(a) > "a" || MkStr(b) > "zzz" 7)
 "HcOrShortCircuit: -hcOrShortCircuit"
+# || gate, fall-through: the first heap arm fails (its LHS must be freed) before a
+# later arm wins.
+hcOrFallThrough = (MkStr(a) > "zzz" || MkStr(b) > "a" 7)
+"HcOrFallThrough: -hcOrFallThrough"
+# || gate, all arms fail: every heap LHS computed for the comparisons is freed and
+# the gate is false, so the (cond value) resolves to its zero.
+hcOrAllFail = (MkStr(a) > "zzz" || MkStr(b) > "zzz" 7)
+"HcOrAllFail: -hcOrAllFail"
 hcCondCell = [(MkStr(a) > "a" 7)]
 "HcCondCell: -hcCondCell"
 hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]
