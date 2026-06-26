@@ -401,6 +401,20 @@ scOrShortCircuit = (1 < 2 || scOob[5] < 5  7)
 "ScOrShortCircuit: -scOrShortCircuit"
 scOrSecondArmRuns = (1 > 2 || scOob[5] < 5  7)
 "ScOrSecondArmRuns: -scOrSecondArmRuns"
+
+# Statement-gate || with heap operands — a distinct path from the (cond value) ||
+# slot: compileGate is reached from evalConditions, and per-iteration inside the
+# loop for a ranged gate. The heap LHS computed for each arm must be freed on every
+# evaluation. Scalar (arm1 wins), ranged (some iterations admitted), and ranged
+# where every iteration fails both arms (so it computes and frees both heap LHS per
+# step and admits nothing) — all leak-checked by the suite.
+orGateHeap = MkStr(a) > "a" || MkStr(b) > "zzz"  7
+"OrGateHeap: -orGateHeap"
+orR = 0:5
+orGateRanged = MkStr(orR) > "s2" || MkStr(orR) > "zzz" [orR]
+"OrGateRanged: -orGateRanged"
+orGateRangedAllFail = MkStr(orR) > "zzz" || MkStr(orR) > "yyy" [orR]
+"OrGateRangedAllFail: -orGateRangedAllFail"
 hcCondCell = [(MkStr(a) > "a" 7)]
 "HcCondCell: -hcCondCell"
 hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]

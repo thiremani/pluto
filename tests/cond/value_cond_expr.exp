@@ -102,6 +102,9 @@ HcOrFallThrough: 7
 HcOrAllFail: 0
 ScOrShortCircuit: 7
 ScOrSecondArmRuns: 0
+OrGateHeap: 7
+OrGateRanged: [3 4]
+OrGateRangedAllFail: []
 HcCondCell: [7]
 HcCondAndValueCell: [s1]
 HcRangedCond: [0 1 2]
