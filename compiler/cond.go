@@ -54,15 +54,13 @@ func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
 // in the bounds-guard check. The caller must pushBoundsGuard before and
 // popBoundsGuard after.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
+	// Every condition reaching evalConditions is a comparison: validation rejects
+	// non-comparison gates, and splitCondRanges routes bare range drivers into the
+	// range list rather than here. So compileGate returns a non-nil gate for each,
+	// and since callers pass a non-empty list, cond is non-nil after the loop.
 	var cond llvm.Value
 	for _, expr := range exprs {
-		// compileGate returns nil for a condition that contributes no comparison
-		// (e.g. a bare range driver) — it adds no constraint, so skip it. Unlike the
-		// old per-condition i1, this means the loop can accumulate zero gates.
 		gate := c.compileGate(expr)
-		if gate.IsNil() {
-			continue
-		}
 		if cond.IsNil() {
 			cond = gate
 		} else {
@@ -72,14 +70,7 @@ func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) l
 
 	if c.stmtBoundsUsed() {
 		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
-		// If no condition produced a gate (all skipped above), cond is nil and the
-		// bounds check is the whole gate; otherwise AND it in. (Guards against
-		// CreateAnd on a nil cond — only reachable if compileGate yields nil here.)
-		if cond.IsNil() {
-			cond = boundsOK
-		} else {
-			cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
-		}
+		cond = c.builder.CreateAnd(cond, boundsOK, "and_cond_bounds")
 	}
 	return cond
 }
