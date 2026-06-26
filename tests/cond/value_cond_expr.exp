@@ -100,6 +100,8 @@ HcAnded: 7
 HcOrShortCircuit: 7
 HcOrFallThrough: 7
 HcOrAllFail: 0
+ScOrShortCircuit: 7
+ScOrSecondArmRuns: 0
 HcCondCell: [7]
 HcCondAndValueCell: [s1]
 HcRangedCond: [0 1 2]

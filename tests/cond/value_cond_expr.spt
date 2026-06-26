@@ -390,6 +390,17 @@ hcOrFallThrough = (MkStr(a) > "zzz" || MkStr(b) > "a" 7)
 # the gate is false, so the (cond value) resolves to its zero.
 hcOrAllFail = (MkStr(a) > "zzz" || MkStr(b) > "zzz" 7)
 "HcOrAllFail: -hcOrAllFail"
+# || gate short-circuits: a later arm is not evaluated once an earlier one wins.
+# Nothing traps in Pluto, so the observable is the bounds guard — an out-of-bounds
+# read in an arm trips it and skips the cond-value (resolving to zero). arm1 wins
+# => arm2's OOB is NOT evaluated, no trip, gate yields 7; arm1 fails => arm2 IS
+# evaluated, trips, => 0. The 7-vs-0 difference (only arm1's truth changed) proves
+# arm2 is skipped on a win.
+scOob = [1]
+scOrShortCircuit = (1 < 2 || scOob[5] < 5  7)
+"ScOrShortCircuit: -scOrShortCircuit"
+scOrSecondArmRuns = (1 > 2 || scOob[5] < 5  7)
+"ScOrSecondArmRuns: -scOrSecondArmRuns"
 hcCondCell = [(MkStr(a) > "a" 7)]
 "HcCondCell: -hcCondCell"
 hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]
