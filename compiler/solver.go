@@ -1568,13 +1568,11 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 // type is the value's type. Slots are marked CondValue so the value gates on
 // lowering and the node can serve as the (failable) left operand of a value-position ||.
 func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
-	// The condition and the value are both value positions (comparisons yield their
-	// LHS and chain), so type both with InValueExpr set and restore on return. Every
-	// caller already types within a value/condition context (InValueExpr is true),
-	// so this is explicit-intent rather than strictly required.
-	savedInValueExpr := ts.InValueExpr
-	ts.InValueExpr = true
-	defer func() { ts.InValueExpr = savedInValueExpr }()
+	// The condition and value are both value positions (comparisons yield their LHS
+	// and chain). A (cond value) is only ever typed within a let condition or value,
+	// both already value context (InValueExpr true), so no flip is needed. A non-value
+	// caller would be caught loudly by the conditionCanFail check below — the cond
+	// would type as a plain boolean, not a failable comparison.
 	condTypes := ts.TypeExpression(expr.Cond, true)
 
 	if len(condTypes) != 1 {
