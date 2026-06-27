@@ -1654,7 +1654,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		// left must be able to fail or the fallback is dead. Failable: its root is
 		// conditional, or it wraps a propagating comparison in arithmetic (e.g.
 		// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
-		if leftInfo == nil || (!leftInfo.HasCondExpr() && !ts.wrapsPropagatingCond(expr.Left)) {
+		if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
 				Msg:   "logical OR in value position requires a conditional left operand",
