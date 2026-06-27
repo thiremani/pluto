@@ -518,3 +518,21 @@ chainGateHeap = MkStr(chI) > "s2" < "s8" [chI]
 "ChainGateHeap: -chainGateHeap"
 chainCondValHeap = [(MkStr(chI) > "s2" < "s8"  chI)]
 "ChainCondValHeap: -chainCondValHeap"
+
+# A (cond value) as a bare print/root expression, with no enclosing let. Print
+# statements don't set InValueExpr, so typeCondValueExpr must force the cond into
+# value position itself — otherwise the cond types as a plain boolean and is
+# rejected ("must be a comparison that can fail"). The value prints when the cond
+# holds, 0 when it fails. Regression guard for that flip (scalar + chained).
+rootA = 5
+"RootCondPrintTrue:"
+(rootA > 2  10)
+rootB = 1
+"RootCondPrintFalse:"
+(rootB > 2  10)
+rootC = 5
+"RootChainPrint:"
+(rootC > 2 < 8  rootC * rootC)
+rootD = 1
+"RootChainPrintFalse:"
+(rootD > 2 < 8  rootD * rootD)
