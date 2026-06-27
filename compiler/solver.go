@@ -103,7 +103,7 @@ type TypeSolver struct {
 	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // true in value-position contexts (LetStatement conditions and values, and (cond value)): comparisons yield their LHS and chain, and || is the asymmetric fallback operator, rather than producing booleans. False in boolean contexts like function arguments.
+	InValueExpr     bool // value position (LetStatement conditions/values, (cond value)): comparisons yield their LHS and chain, || is fallback — not booleans as in function args
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -1650,13 +1650,10 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	if ts.InValueExpr {
-		// Value-position OR is asymmetric: the left operand must be able to
-		// fail, while the right operand may be another condition or a plain
-		// fallback value. There is no matching value-position && because
-		// chained comparisons already refine a yielded value, and comma
-		// conditions provide statement-position AND. The left counts as failable
-		// if its root is conditional, or if it wraps a propagating condition in
-		// arithmetic — (i > 2 < 8) ^ 2 || -1 keys off the nested comparison.
+		// Value-position || is left-biased fallback (yield left, else right), so the
+		// left must be able to fail or the fallback is dead. Failable: its root is
+		// conditional, or it wraps a propagating comparison in arithmetic (e.g.
+		// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
 		if leftInfo == nil || (!leftInfo.HasCondExpr() && !ts.wrapsPropagatingCond(expr.Left)) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
