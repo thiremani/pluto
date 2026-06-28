@@ -1310,7 +1310,7 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	if !p.expectPeek(token.RPAREN) {
 		return nil
 	}
-	return &ast.CondValueExpr{Token: lparen, Condition: conditions, Value: value}
+	return &ast.CondValueExpr{Token: lparen, Conds: conditions, Value: value}
 }
 
 // assumes current token is token.NEWLINE

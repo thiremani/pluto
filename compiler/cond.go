@@ -665,7 +665,7 @@ func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue
 	// A (cond value) yields its value only when its condition holds; otherwise it
 	// fails to onFalse (so an enclosing || tries the next alternative).
 	if cv, ok := expr.(*ast.CondValueExpr); ok {
-		cond := c.andGates(cv.Condition)
+		cond := c.andGates(cv.Conds)
 		if !baseCond.IsNil() {
 			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
 		}
@@ -734,7 +734,7 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
 	outTypes := info.OutTypes
 
-	cond := c.andGates(expr.Condition)
+	cond := c.andGates(expr.Conds)
 	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
 
 	// True path evaluates the value (one symbol per output slot for a

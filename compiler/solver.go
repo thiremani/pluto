@@ -483,8 +483,8 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 // and tracking whether each side contains ranges for optimization decisions.
 func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*RangeInfo, rew ast.Expression) {
 	changed := false
-	conds := make([]ast.Expression, len(cv.Condition))
-	for i, c := range cv.Condition {
+	conds := make([]ast.Expression, len(cv.Conds))
+	for i, c := range cv.Conds {
 		var cRanges []*RangeInfo
 		cRanges, conds[i] = ts.HandleRanges(c)
 		ranges = mergeUses(ranges, cRanges)
@@ -499,7 +499,7 @@ func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*Ra
 		rew = cv
 	} else {
 		cp := *cv
-		cp.Condition, cp.Value = conds, val
+		cp.Conds, cp.Value = conds, val
 		rew = &cp
 		// Cache entry for the rewritten node: operands are scalarized iterators.
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, cv)]
@@ -1608,7 +1608,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// deferred until the operand types resolve, so a not-yet-typed operand does
 	// not trip a spurious diagnostic during fixpoint iteration.
 	condHasRanges := false
-	for _, cond := range expr.Condition {
+	for _, cond := range expr.Conds {
 		condTypes := ts.TypeExpression(cond, true)
 		if typesResolved(condTypes) && !ts.conditionCanFail(cond) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
