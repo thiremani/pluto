@@ -977,6 +977,21 @@ func TestParenGroupingUnaffected(t *testing.T) {
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], "x", "+", 1), "expected plain grouped expr")
 }
 
+func TestParenGroupedIdentifierThenInfix(t *testing.T) {
+	// isCondition treats a bare identifier as a condition, so only the peek-RPAREN
+	// guard keeps `(a)` ordinary grouping: `(a) + 1` must be `a + 1`, not a CondValueExpr.
+	const input = "x = (a) + 1"
+	sp := NewScriptParser(lexer.New("TestParenGroupedIdentifierThenInfix", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	_, isCV := stmt.Value[0].(*ast.CondValueExpr)
+	require.Falsef(t, isCV, "(a) + 1 must not become a CondValueExpr")
+	require.Truef(t, testInfixExpression(t, stmt.Value[0], "a", "+", 1), "expected plain grouped expr a + 1")
+}
+
 func TestCondValueAttachedPrefixSharedDetection(t *testing.T) {
 	// `(a > 2 -b)` splits on the attached prefix `-b` (cond `a > 2`, value `-b`)
 	// using the same condition-split mode as the statement level, so detection is
