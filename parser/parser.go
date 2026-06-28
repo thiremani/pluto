@@ -1248,9 +1248,32 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 }
 
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
+	lparen := p.curToken
 	p.nextToken()
 
-	exp := p.parseExpression(LOWEST, prefixSplitNone)
+	// Parse the leading sub-expression with the same condition-split mode the
+	// statement level uses, so `(cond value)` detection (including attached
+	// prefixes like `a > 2 -b`) is discovered identically in both places.
+	exp := p.parseExpression(LOWEST, prefixSplitAfterCondition)
+	if exp == nil {
+		return nil
+	}
+
+	// (cond value): a parenthesized conditional value. Recognized when the first
+	// sub-expression is a condition and a value follows before the ')'. A bare
+	// `(cond)` (no value) stays an ordinary value-position expression, and a
+	// trailing `|| fallback` binds outside the parens as a normal infix.
+	if p.isCondition(exp) && !p.peekTokenIs(token.RPAREN) {
+		p.nextToken()
+		value := p.parseExpression(LOWEST, prefixSplitNone)
+		if value == nil {
+			return nil
+		}
+		if !p.expectPeek(token.RPAREN) {
+			return nil
+		}
+		return &ast.CondValueExpr{Token: lparen, Cond: exp, Value: value}
+	}
 
 	if !p.expectPeek(token.RPAREN) {
 		return nil

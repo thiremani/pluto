@@ -1,0 +1,157 @@
+# Parenthesized conditional value (cond value): yields value when cond holds,
+# otherwise resolves locally to the zero value. A trailing `|| fallback`
+# overrides the zero; inside `[]` a failed cell zero-fills.
+a = 5
+b = 1
+
+# Standalone, condition true.
+cvTrue = (a > 2 10)
+"CvTrue: -cvTrue"
+
+# Standalone, condition false, new variable -> zero.
+cvFalseNew = (b > 2 10)
+"CvFalseNew: -cvFalseNew"
+
+# Existing variable, condition false -> overwritten with zero (local resolution).
+cvExisting = 42
+"CvExistingBefore: -cvExisting"
+cvExisting = (b > 2 10)
+"CvExistingFalse: -cvExisting"
+
+# Nested in arithmetic, condition true -> 10 + 1.
+cvArithTrue = (a > 2 10) + 1
+"CvArithTrue: -cvArithTrue"
+
+# Nested in arithmetic, condition false -> 0 + 1 (local resolution).
+cvArithFalse = (b > 2 10) + 1
+"CvArithFalse: -cvArithFalse"
+
+# Deeper nesting: 2*(a>2 10) + (b>0 3) = 20 + 3.
+cvDeep = 2 * (a > 2 10) + (b > 0 3)
+"CvDeep: -cvDeep"
+
+# Value is an arbitrary expression.
+cvExprValue = (a > 2 a + 100)
+"CvExprValue: -cvExprValue"
+
+# Fallback ||: condition true keeps the value.
+cvFbTrue = (a > 2 10) || 7
+"CvFbTrue: -cvFbTrue"
+
+# Fallback ||: condition false uses the fallback.
+cvFbFalse = (b > 2 10) || 7
+"CvFbFalse: -cvFbFalse"
+
+# Fallback to a variable.
+cvFbVar = (b > 2 10) || a
+"CvFbVar: -cvFbVar"
+
+# Array: conditional cell true.
+cvArrTrue = [1 (a > 2 5) 3]
+"CvArrTrue: -cvArrTrue"
+
+# Array: conditional cell false -> zero-fill.
+cvArrFalse = [1 (b > 2 5) 3]
+"CvArrFalse: -cvArrFalse"
+
+# Array: multiple conditional cells.
+cvArrMulti = [(a > 2 9) (b > 2 9) (a > 0 7)]
+"CvArrMulti: -cvArrMulti"
+
+# Array: conditional cell with a fallback override.
+cvArrFb = [(b > 2 5) || -1 7]
+"CvArrFb: -cvArrFb"
+
+# Float value.
+f = 2.5
+cvFloat = (a > 2 f)
+"CvFloat: -cvFloat"
+
+# Heap string value (concatenation) gated by a condition; exercises ownership
+# of the branch/zero/fallback arms (no leak, no double-free).
+sl = "hello"
+sm = " world"
+cvStrTrue = (a > 2 sl ⊕ sm)
+"CvStrTrue: -cvStrTrue"
+cvStrFalse = (b > 2 sl ⊕ sm)
+"CvStrFalse: -cvStrFalse"
+cvStrFb = (b > 2 sl ⊕ sm) || "fallback"
+"CvStrFb: -cvStrFb"
+
+# Multi-return value: condition true yields all values, false yields the zero
+# of each output slot (one branch/phi per returned value).
+cvMultiA, cvMultiB = (a > 2 Pair(10, 20))
+"CvMultiTrue: -cvMultiA -cvMultiB"
+cvMultiC, cvMultiD = (b > 2 Pair(10, 20))
+"CvMultiFalse: -cvMultiC -cvMultiD"
+
+# Nested: the value is itself a (cond value).
+cvNested = (a > 2 (a > 4 5))
+"CvNested: -cvNested"
+
+# As a call argument.
+cvCallArg = Double((a > 2 10))
+"CvCallArg: -cvCallArg"
+
+# Compound boolean-OR condition.
+cvOrTrue = (a > 2 || b > 5 10)
+"CvOrTrue: -cvOrTrue"
+cvOrFalse = (b > 2 || b > 5 10)
+"CvOrFalse: -cvOrFalse"
+
+# Range-driven: in a collector it iterates and zero-fills failed cells; the
+# value may be an arbitrary per-iteration expression (which the comparison form
+# cannot yield). At an assignment root it keeps the final iteration's value.
+gi = 0:5
+cvRangeArr = [(gi > 2 gi)]
+"CvRangeArr: -cvRangeArr"
+cvRangeArrCustom = [(gi > 2 gi * 10)]
+"CvRangeArrCustom: -cvRangeArrCustom"
+cvRangeRoot = (gi > 2 gi)
+"CvRangeRoot: -cvRangeRoot"
+cvRangeRootFalseFinal = (gi < 2 gi)
+"CvRangeRootFalseFinal: -cvRangeRootFalseFinal"
+
+# Range-root with a heap value frees the previous iteration before overwriting
+# (no leak across iterations); the final iteration's string wins.
+cvRangeHeap = (gi >= 0 MkStr(gi))
+"CvRangeHeap: -cvRangeHeap"
+
+# Range-root array access: out-of-bounds iterations skip the store and keep the
+# last in-bounds value (respects the active bounds guard).
+cvBounds = [10 20]
+cvRangeOob = (gi >= 0 cvBounds[gi])
+"CvRangeOob: -cvRangeOob"
+
+# Bracketed (cond value) cell with an out-of-bounds access: in-bounds cells take
+# the value, out-of-bounds cells zero-fill (the collector's per-cell bounds
+# guard), and the value may be an arbitrary expression.
+cvArrCellOob = [(gi >= 0 cvBounds[gi])]
+"CvArrCellOob: -cvArrCellOob"
+cvArrCellOobExpr = [(gi >= 0 cvBounds[gi] * 2)]
+"CvArrCellOobExpr: -cvArrCellOobExpr"
+
+# (cond value) nested in arithmetic inside a collector, with a scalar condition
+# gating a range-driven value: 2 + 2*gi per iteration.
+cvX = 2
+cvA = 4
+cvCellRangeVal = [cvX + (cvA > 3 2gi)]
+"CvCellRangeVal: -cvCellRangeVal"
+
+# Multi-driver: the condition ranges on one driver and the value on another, so
+# the collector nests them (cvAR outer, gi inner). Only cvAR == 4 admits 2*gi;
+# every other cvAR yields 0, leaving 2 + 0.
+cvAR = 0:5
+cvCellMultiDriver = [cvX + (cvAR > 3 2gi)]
+"CvCellMultiDriver: -cvCellMultiDriver"
+
+# (cond value) as an arithmetic operand at a statement root (no collector): the
+# enclosing operator owns the loop, so it keeps the final iteration's value.
+cvRootArith = cvX + (cvA > 2 3gi + 5)
+"CvRootArith: -cvRootArith"
+
+# Heap value at a root: the per-iteration concat result is freed before the next
+# overwrite (no leak across iterations), and the final iteration's value wins.
+cvSm = "hi"
+cvRootHeap = cvSm ⊕ (cvA > 2 MkStr(gi))
+"CvRootHeap: -cvRootHeap"

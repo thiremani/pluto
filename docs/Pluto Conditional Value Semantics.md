@@ -32,6 +32,30 @@ new = b > 2  x * 3    # b <= 2 -> new = 0
 
 Multiple conditions separated by commas are ANDed; all must hold.
 
+### Conditions are value positions
+
+A condition is itself a value position: a comparison yields its LHS and chains,
+and the gate asks "did that value-position expression yield?" (the conjunction of
+its comparisons). So a chained comparison gates a range directly — the same
+`i > 2 < 8` that filters in value position:
+
+```pluto
+arr = i > 2 < 8  [i * i]      # gate on 2 < i < 8        -> [9 16 25 36 49]
+arr = [(i > 2 < 8  i * i)]    # same gate, per cell      -> [0 0 0 9 16 25 36 49 0 0]
+```
+
+This holds in every condition slot: a statement gate, a `(cond value)` condition,
+and a scalar gate. The same rule applies everywhere, so there is no separate
+"condition comparison" form to learn.
+
+Because the chain binds to the **leftmost** operand (the value-position rule),
+`i > 2 < 8` means `i > 2 AND i < 8`, but the math-natural `2 < i < 8` means just
+`2 < i` — the `< 8` chains onto the constant `2` (`2 < 8`, always true), not onto
+`i`. **Put the variable first** (`i > 2 < 8`), or use comma-AND (`i > 2, i < 8`),
+for a two-sided bound. A `||` in a condition is an OR gate (`a > 2 || b > 2`);
+its operands must have matching types and it must be able to fail (a `|| value`
+fallback that always yields cannot gate).
+
 ## Value position: a temporary, zero on false
 
 A conditional inside the value is a computed temporary. It yields its value when
@@ -83,6 +107,20 @@ a = 0
 a < 2 || 7           # a < 2 is true -> yields a (0), not 7
 ```
 
+The left operand need not be a bare conditional — it may **wrap** its condition
+in arithmetic. Because value-position conditions propagate (the whole value gates
+on them, the same conjunction that drives zero-fill), `||` attaches wherever a
+value can fail and swaps its fallback in for the zero:
+
+```pluto
+(i > 2 < 8) ^ 2 || -1.0   # i^2 when 2 < i < 8, else -1.0 (incl. i >= 8)
+(a > 2) + 100 || -1       # a + 100 when a > 2, else -1
+(a > 2) + (b > 3) || -1   # a + b when both hold (conditions AND), else -1
+```
+
+Only a left operand with **no** condition anywhere in its tree is rejected
+(`5 + 3 || -1`, `a || -1`) — there is nothing that can fail for `||` to catch.
+
 ## Parentheses group the condition
 
 At the top of a statement the `=` separates condition from value, so no
@@ -100,6 +138,14 @@ second, `(a > 3 b < 5)` is a single conditional, so `|| 10` fires when `a > 3`
 fails, while a failing `b < 5` resolves locally to zero. A conditional resolves
 locally and never reaches back out to an enclosing operator.
 
+Wrapping the whole right-hand side keeps the bracket in value position, so
+`y = (a > 2 10)` is a plain value assignment — it **always** assigns (local
+resolution: `10` when `a > 2`, else `0`, overwriting `y`), and is treated as an
+unconditional write by the dead-store check. The unbracketed `y = a > 2 10` is
+instead a statement gate: it keeps `y`'s old value when `a <= 2`. Same-looking,
+deliberately different — the brackets choose value-position (local) over the
+gate (keep-old).
+
 ## Arrays
 
 A collector cell is a value position, so the same rule applies: a failed cell is
@@ -109,6 +155,13 @@ zero, and `||` overrides.
 [i > 2]          # failed cells are 0   (zero-fill)
 [i > 2 || -1]    # failed cells are -1
 ```
+
+Each cell resolves locally and independently — a failed cell zero-fills (or takes
+its `||` fallback) without gating the rest of the literal or the enclosing
+assignment. This holds whether the cells are scalar or range-driven: `[a > 99]`
+is `[0]` (not `[]`), and `[a > 2  a > 99]` is `[5 0]` (not empty or kept-old).
+This matches the `(cond value)` cell form exactly; a bare comparison and
+`(cond value)` are interchangeable as cells.
 
 Spacing separates cells, so parentheses also control cell count:
 
@@ -133,10 +186,19 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
 
 - **Implemented:** statement gates (keep-old); `||` fallback in value and
   condition position; value-position comparisons (yield the left operand);
-  collector zero-fill; array filters.
-- **Planned change:** nested value-position comparisons currently keep-old by
-  propagating out of the expression; the model above resolves them locally to
-  zero, matching a named temporary.
-- **Not yet implemented:** the parenthesized `(cond value)` form with an explicit
-  value, and per-cell conditionals inside array literals
-  (`[(a > 2 || 5) 7 (b > 7 || c)]`).
+  conditions are value positions, so chained comparisons gate directly
+  (`i > 2 < 8`, leftmost-binding) in every condition slot; collector zero-fill;
+  array filters; the parenthesized `(cond value)` expression (local resolution to
+  zero, with `|| fallback` and array-cell zero-fill), including per-cell use
+  inside array literals.
+- **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
+  but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
+  So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`
+  keeps the old value. They agree for new variables and inside array cells; they
+  differ only for existing variables and nested arithmetic.
+- **Planned change:** migrate bare value-position comparisons from propagation to
+  the same local resolution, removing the inconsistency above.
+- **Ranges:** a `(cond value)` may be range-driven. In a collector it iterates and
+  yields the per-iteration value or zero (`[(i > 2 i)]` → `[0 0 0 3 4]`,
+  `[(i > 2 i*10)]` → `[0 0 0 30 40]`); at an assignment root it keeps the final
+  iteration's value (`r = (i > 2 i)` → `4`).

@@ -1330,6 +1330,8 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
+	case *ast.CondValueExpr:
+		res = c.compileCondValueExpr(e)
 	case *ast.PrefixExpression:
 		res = c.compilePrefixExpression(e, dest)
 	case *ast.CallExpression:

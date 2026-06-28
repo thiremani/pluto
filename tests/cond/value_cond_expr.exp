@@ -84,3 +84,59 @@ LogicalOrBoundaryRightBefore: 100
 LogicalOrBoundaryRightCondFallback: -1
 LogicalOrBoundarySkipBefore: 100
 LogicalOrBoundarySkipKeepsDefault: 100
+ScalarCmpCellTrue: [5]
+ScalarCmpCellFalse: [0]
+ScalarCmpMulti: [5 0]
+ScalarCmpFb: [-1]
+HeapCmpCell: [s5]
+HeapCmpFalse: []
+HeapCmpMulti: [s5 s1]
+HeapCondvalOrTrue: [s5]
+HeapCondvalOrFalse: [def]
+HcCondTrue: 7
+HcCondFalse: 0
+HcBothSides: 7
+HcAnded: 7
+HcOrShortCircuit: 7
+HcOrFallThrough: 7
+HcOrAllFail: 0
+ScOrShortCircuit: 7
+ScOrSecondArmRuns: 0
+OrGateHeap: 7
+OrGateRanged: [3 4]
+OrGateRangedAllFail: []
+HcCondCell: [7]
+HcCondAndValueCell: [s1]
+HcRangedCond: [0 1 2]
+ArithGateTrue: 17
+ArithGateKeepBefore: 99
+ArithGateKeep: 99
+ArithGateHeapTrue: foobar
+ArithGateHeapKeepBefore: OLD
+ArithGateHeapKeep: OLD
+OrWrapPow: [-1 -1 -1 9 16 25 36 49 -1 -1]
+OrWrapAddTrue: 105
+OrWrapAddFalse: -1
+OrWrapMulti: -1
+OrWrapHeapTrue: s5!
+OrWrapHeapFalse: def
+OrWrapHeapCell: [def def def def def def def s7! s8! s9!]
+OrWrapRepeatedCond: [-1 -1 -1 9 16 25 36 49 -1 -1]
+OwPiecewise: [-10 -10 0 0 0 25 36 49 999 999]
+ChainGate: [9 16 25 36 49]
+ChainCondVal: [0 0 0 9 16 25 36 49 0 0]
+ChainCondValFb: [-1 -1 -1 9 16 25 36 49 -1 -1]
+ChainScalar: 25
+ChainKeepBefore: 99
+ChainKeepAfter: 99
+ChainLeftmost: [0 0 0 2 2 2 2 2 2 2]
+ChainGateHeap: [3 4 5 6 7]
+ChainCondValHeap: [0 0 0 3 4 5 6 7 0 0]
+RootCondPrintTrue:
+10
+RootCondPrintFalse:
+0
+RootChainPrint:
+25
+RootChainPrintFalse:
+0

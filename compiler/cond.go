@@ -14,19 +14,57 @@ type condTemp struct {
 	syms []*Symbol
 }
 
-// evalConditions compiles a list of condition expressions, ANDs all resulting
-// i1 values together, and incorporates bounds guard checks. The caller must
-// call pushBoundsGuard before and popBoundsGuard after.
+// compileGate lowers a value-position condition expression to its i1 gate: the
+// conjunction of the comparisons it contains. A condition is just a value-position
+// expression we ask "did it yield?" of — comparisons yield their LHS and chain, so
+// `i > 2 < 8` gates on `i > 2 AND i < 8`. The retained LHS values drive the gate
+// but are not a result, so they are freed here (a heap LHS computed only to test a
+// gate must not leak). Returns a nil value when expr contributes no comparison
+// (e.g. a bare range driver, whose admitted domain is handled by the loop).
+func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
+	// No || in the tree: the gate is the conjunction of the comparisons, which
+	// extractCondExprs computes directly while freeing the retained LHS temps
+	// (a heap LHS tested only for the gate must not leak).
+	if !c.hasFallbackOrInTree(expr) {
+		c.pushCondLHSFrame()
+		defer c.popCondLHSFrame()
+		cond, temps := c.extractCondExprs(expr, llvm.Value{}, nil)
+		c.cleanupCondExprElse(temps)
+		return cond
+	}
+
+	// A value-position || is a left-biased fallback, so its gate is "did the
+	// expression yield?" — a > 2 || b > 3 gates on a>2 OR b>3, not AND. Reuse the
+	// value lowering: record the gate on the yield path and free the yielded value
+	// (a gate discards it; freeTemporary skips borrowed operands, so variables are
+	// safe and heap temporaries are released).
+	i1 := Int{Width: 1}
+	i1Ty := c.mapToLLVMType(i1)
+	gatePtr := c.createEntryBlockAlloca(i1Ty, "gate.mem")
+	c.createStore(llvm.ConstInt(i1Ty, 0, false), gatePtr, i1)
+	c.compileCondExprValue(expr, llvm.Value{}, func() {
+		vals := c.compileExpression(expr, nil)
+		c.freeTemporary(expr, vals)
+		c.createStore(llvm.ConstInt(i1Ty, 1, false), gatePtr, i1)
+	})
+	return c.createLoad(gatePtr, i1, "gate")
+}
+
+// evalConditions ANDs the i1 gates of a list of condition expressions and folds
+// in the bounds-guard check. The caller must pushBoundsGuard before and
+// popBoundsGuard after.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
+	// Every condition reaching evalConditions is a comparison: validation rejects
+	// non-comparison gates, and splitCondRanges routes bare range drivers into the
+	// range list rather than here. So compileGate returns a non-nil gate for each,
+	// and since callers pass a non-empty list, cond is non-nil after the loop.
 	var cond llvm.Value
 	for _, expr := range exprs {
-		condSyms := c.compileExpression(expr, nil)
-		for _, condSym := range condSyms {
-			if cond.IsNil() {
-				cond = condSym.Val
-			} else {
-				cond = c.builder.CreateAnd(cond, condSym.Val, "and_cond")
-			}
+		gate := c.compileGate(expr)
+		if cond.IsNil() {
+			cond = gate
+		} else {
+			cond = c.builder.CreateAnd(cond, gate, "and_cond")
 		}
 	}
 
@@ -429,6 +467,13 @@ func (c *Compiler) hasFallbackOrInTree(expr ast.Expression) bool {
 	if _, ok := c.fallbackOrExpr(expr); ok {
 		return true
 	}
+	// Array cells and (cond value) nodes resolve any || at their own level (see
+	// extractCondExprs), so they are boundaries for statement-level fallback
+	// detection — don't descend into them.
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.CondValueExpr:
+		return false
+	}
 	for _, child := range ast.ExprChildren(expr) {
 		if c.hasFallbackOrInTree(child) {
 			return true
@@ -467,6 +512,17 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
+	// Array-literal cells and (cond value) nodes are local-resolution boundaries:
+	// each resolves its own condition (zero-fill / fallback, or the cond-value's
+	// branch) at its own level. Statement-level extraction must stop here —
+	// descending in would lift their inner comparison into a gate over the whole
+	// assignment, which keeps the old value on failure (breaking local resolution)
+	// and double-evaluates the node, leaking its heap LHS on the pass-through path.
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.CondValueExpr:
+		return cond, temps
+	}
+
 	// Comparisons with ranges can be extracted only when all required iterators
 	// are already bound by an outer loop (no pending ranges).
 	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
@@ -488,8 +544,16 @@ func (c *Compiler) extractCondComparison(infix *ast.InfixExpression, info *ExprI
 	var lhsSyms []*Symbol
 	lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
 
-	c.requireCondLHSFrame()[key(c.FuncNameMangled, infix)] = lhsSyms
-	temps = append(temps, condTemp{infix.Left, left})
+	frame := c.requireCondLHSFrame()
+	frame[key(c.FuncNameMangled, infix)] = lhsSyms
+
+	// Track `left` as a temporary to free in cleanup — but not when it is a chained
+	// inner comparison (a > b < c): its value came from substituting that already-
+	// retained comparison, so it is the SAME symbol already tracked. Re-tracking it
+	// would free it twice (double-free / crash) for a heap LHS.
+	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
+		temps = append(temps, condTemp{infix.Left, left})
+	}
 
 	// Right is comparison-only; left is retained for condLHS substitution.
 	c.freeTemporary(infix.Right, right)
@@ -589,6 +653,20 @@ func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue
 		return
 	}
 
+	// A (cond value) yields its value only when its condition holds; otherwise it
+	// fails to onFalse (so an enclosing || tries the next alternative).
+	if cv, ok := expr.(*ast.CondValueExpr); ok {
+		cond := c.compileGate(cv.Cond)
+		if !baseCond.IsNil() {
+			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
+		}
+		c.branchCond(cond, nil, func() {
+			vals := c.compileExpression(cv.Value, nil)
+			c.withCondLHS(cv, vals, onTrue)
+		}, onFalse)
+		return
+	}
+
 	if !c.hasFallbackOrInTree(expr) {
 		cond, temps := c.extractCondExprs(expr, baseCond, nil)
 		c.branchCond(cond, temps, onTrue, onFalse)
@@ -615,6 +693,114 @@ func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func())
 	frame[exprKey] = syms
 	defer delete(frame, exprKey)
 	body()
+}
+
+// compileCondValueExpr lowers a parenthesized conditional value (cond value).
+// When a surrounding gate (a value-position ||, via compileYield) has already
+// branched on Cond and bound the chosen value under this node's key, that
+// pre-bound value is returned. With pending ranges (e.g. the root `r = (i>2 i)`)
+// it drives a loop; otherwise it compiles the scalar branch/phi, using the
+// range-scalarized rewrite when an outer loop already bound the iterators.
+func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
+	if frame := c.currentCondLHSFrame(); frame != nil {
+		if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
+			return syms
+		}
+	}
+
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return c.compileCondValueExprRanges(expr, info)
+	}
+	if rew, ok := info.Rewrite.(*ast.CondValueExpr); ok && rew != expr {
+		expr = rew
+		info = c.ExprCache[key(c.FuncNameMangled, expr)]
+	}
+	return c.compileCondValueExprBasic(expr, info)
+}
+
+// compileCondValueExprBasic is the scalar lowering: yield Value when Cond holds,
+// otherwise the zero of each output slot's type. Only the taken arm is
+// evaluated, so a heap value is never allocated on the path it isn't used.
+func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
+	outTypes := info.OutTypes
+
+	cond := c.compileGate(expr.Cond)
+	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
+
+	// True path evaluates the value (one symbol per output slot for a
+	// multi-return value); false path yields the zero of each slot's type.
+	c.builder.SetInsertPointAtEnd(trueBlock)
+	vals := c.compileExpression(expr.Value, nil)
+	for i := range vals {
+		vals[i] = c.derefIfPointer(vals[i], "cv_val")
+	}
+	c.builder.CreateBr(contBlock)
+	trueEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(falseBlock)
+	zeros := make([]*Symbol, len(outTypes))
+	for i, t := range outTypes {
+		zeros[i] = c.makeZeroValue(t)
+	}
+	c.builder.CreateBr(contBlock)
+	falseEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	res := make([]*Symbol, len(outTypes))
+	for i, t := range outTypes {
+		phi := c.builder.CreatePHI(c.mapToLLVMType(t), "cv_phi")
+		phi.AddIncoming([]llvm.Value{vals[i].Val, zeros[i].Val}, []llvm.BasicBlock{trueEnd, falseEnd})
+		res[i] = &Symbol{Val: phi, Type: t}
+	}
+	return res
+}
+
+// compileCondValueExprRanges lowers a range-bearing (cond value) at the root of
+// an assignment: it loops the iteration domain, writing the per-iteration
+// value-or-zero into a seeded output slot, and the final iteration's value wins
+// (root assignment keeps the last yielded value).
+func (c *Compiler) compileCondValueExprRanges(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeOutputs(nil, info.OutTypes, true)
+	for i, t := range info.OutTypes {
+		c.storeSymbolToSlot(outputs[i], c.makeZeroValue(t), t, "cv_seed")
+	}
+
+	rew := info.Rewrite.(*ast.CondValueExpr)
+	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, nil, func(prepared *ast.CondValueExpr) {
+		c.pushBoundsGuard("condval_iter_bounds_guard")
+		defer c.popBoundsGuard()
+
+		vals := c.compileCondValueExprBasic(prepared, c.ExprCache[key(c.FuncNameMangled, prepared)])
+
+		// Free the previous iteration's value before overwriting, and route the
+		// store through the active bounds guard so out-of-bounds iterations skip
+		// it (keeping the last in-bounds value) — matching the other range paths.
+		store := func() {
+			for i := range vals {
+				c.freeSymbolValue(outputs[i], "cv_old_output")
+				c.storeSymbolToSlot(outputs[i], vals[i], info.OutTypes[i], "cv_iter_store")
+			}
+		}
+		skip := func() {
+			for i := range vals {
+				c.freeTemporarySymbol(vals[i], "cv_skip_drop")
+			}
+		}
+		if !c.withStmtBoundsGuard("cv_bounds_ok", "cv_bounds_run", "cv_bounds_skip", "cv_bounds_cont", store, skip) {
+			store()
+		}
+	})
+
+	out := make([]*Symbol, len(outputs))
+	for i := range outputs {
+		elemType := outputs[i].Type.(Ptr).Elem
+		out[i] = &Symbol{Val: c.createLoad(outputs[i].Val, elemType, "cv_final"), Type: elemType}
+	}
+	return out
 }
 
 func (c *Compiler) compileFallbackOr(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {

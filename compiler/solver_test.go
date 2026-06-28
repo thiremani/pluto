@@ -548,6 +548,68 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-range driver, got I64")
 }
 
+func TestCondValueDiagnostics(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cases := []struct {
+		name        string
+		code        string
+		script      string
+		expectError string
+	}{
+		{
+			name:        "ConditionMustBeFailableComparison",
+			script:      "n = 5\nx = (n 10)",
+			expectError: "(cond value) condition must be a comparison that can fail, got I64",
+		},
+		{
+			// A (cond value) is a valid failable left operand of a value-position
+			// ||; the fallback's type must still match the value's.
+			name:        "FallbackTypeMismatch",
+			script:      "a = 1\nx = (a > 0 10) || \"s\"",
+			expectError: "logical OR value operands must have matching output types, got I64 and Str",
+		},
+		{
+			// A multi-return comparison (Pair > Pair yields two values) cannot be a
+			// (cond value) condition — the gate must be a single value.
+			name:        "ConditionMustProduceSingleValue",
+			code:        "a, b = Pair(x, y)\n    a, b = x, y",
+			script:      "p, q = (Pair(1, 2) > Pair(3, 4)  7)",
+			expectError: "(cond value) condition must produce a single value",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			codeAST := ast.NewCode()
+			if strings.TrimSpace(tc.code) != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
+			require.Empty(t, cc.Compile())
+
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			found := false
+			for _, err := range ts.Errors {
+				if strings.Contains(err.Msg, tc.expectError) {
+					found = true
+					break
+				}
+			}
+			require.Truef(t, found, "expected error containing %q, got: %v", tc.expectError, ts.Errors)
+		})
+	}
+}
+
 func TestLogicalOrDiagnostics(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -563,14 +625,31 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
+			// A wrapped propagating condition can fail ((a > 2) + 1 || -1 is valid),
+			// but a wrapped (cond value) resolves locally and always produces a
+			// value, so the || would catch nothing — reject it.
+			name:        "WrappedLocalCondValueCannotFail",
+			script:      "a = 1\nx = (a > 2 5) + 1 || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
 			name:        "FallbackTypesMustMatch",
 			script:      "a = 1\nx = a > 0 || \"fallback\"",
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 		{
-			name:        "ConditionOperandsMustBeI1",
+			// Conditions are value-position now, so `a > 0 || b` is a fallback whose
+			// `b` arm always yields — the gate can never fail, which is rejected.
+			name:        "ConditionWithUnconditionalFallbackCannotGate",
 			script:      "a = 1\nb = 2\nx = a > 0 || b 7",
-			expectError: "logical OR requires condition operands, got I1 and I64",
+			expectError: "statement condition can never fail",
+		},
+		{
+			// Same, but deeper: only the final arm of the || chain is unconditional,
+			// so the whole chain still always yields and cannot gate.
+			name:        "DeepOrChainUnconditionalFinalArmCannotGate",
+			script:      "a = 1\nb = 2\nc = 3\nx = a > 0 || b > 5 || c 7",
+			expectError: "statement condition can never fail",
 		},
 	}
 

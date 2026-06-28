@@ -23,6 +23,7 @@ const (
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise filter, keep LHS where condition holds
 	CondOr                     // Fallback OR in value position: first true operand wins
+	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
 )
 
 type ExprInfo struct {
@@ -59,7 +60,7 @@ func (info *ExprInfo) HasFallbackOr() bool {
 
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
-		if m == CondScalar || m == CondOr {
+		if m == CondScalar || m == CondOr || m == CondValue {
 			return true
 		}
 	}
@@ -102,7 +103,7 @@ type TypeSolver struct {
 	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // true when typing Value expressions of a LetStatement
+	InValueExpr     bool // value position (LetStatement conditions/values, (cond value); inherited by nested exprs): comparisons yield their LHS and chain, || is fallback — vs plain booleans in non-value contexts like prints
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -359,6 +360,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandleArrayRangeExpression(t)
 	case *ast.InfixExpression:
 		return ts.HandleInfixRanges(t)
+	case *ast.CondValueExpr:
+		return ts.HandleCondValueRanges(t)
 	case *ast.PrefixExpression:
 		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
@@ -478,6 +481,34 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
+func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*RangeInfo, rew ast.Expression) {
+	condRanges, cond := ts.HandleRanges(cv.Cond)
+	valRanges, val := ts.HandleRanges(cv.Value)
+	ranges = mergeUses(condRanges, valRanges)
+
+	if cond == cv.Cond && val == cv.Value {
+		rew = cv
+	} else {
+		cp := *cv
+		cp.Cond, cp.Value = cond, val
+		rew = &cp
+		// Cache entry for the rewritten node: operands are scalarized iterators.
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, cv)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CondValueExpr))] = &ExprInfo{
+			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
+			ExprLen:      originalInfo.ExprLen,
+			HasRanges:    false,
+			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...),
+			Ranges:       nil,
+		}
+	}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, cv)]
+	info.Ranges = ranges
+	info.Rewrite = rew
+	return
+}
+
 func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	lRanges, l := ts.HandleRanges(infix.Left)
 	rRanges, r := ts.HandleRanges(infix.Right)
@@ -717,6 +748,19 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
+// conditionCanFail reports whether a value-position condition can fail (skip) —
+// which a statement gate requires, since an always-yielding condition can never
+// gate. A comparison or chain can fail; a value-position || can only if its final
+// fallback can: `a > 0 || b > 0` fails when both are false, but `a > 0 || b`
+// always yields b.
+func (ts *TypeSolver) conditionCanFail(expr ast.Expression) bool {
+	if infix, ok := ast.IsLogicalOr(expr); ok {
+		return ts.conditionCanFail(infix.Right)
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && info.HasCondExpr()
+}
+
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
 	if len(condTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -743,7 +787,20 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	if intType, ok := condType.(Int); ok && intType.Width == 1 {
+	// In value context a comparison yields its LHS (so the condition's type is the
+	// operand type, not i1); it gates as long as it can fail — the gate is the
+	// conjunction of its comparisons ("did the value-position expression yield?").
+	if ts.conditionCanFail(expr) {
+		return
+	}
+
+	// A condition that carries a comparison but can never fail (an unconditional
+	// || fallback like `a > 0 || b`, which always yields b) does not gate.
+	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasCondExpr() {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   "statement condition can never fail (its || fallback always yields a value)",
+		})
 		return
 	}
 
@@ -811,8 +868,11 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	savedInValueExpr := ts.InValueExpr
 	defer func() { ts.InValueExpr = savedInValueExpr }()
 
-	// type conditions in non-value context (comparisons produce i1 as usual)
-	ts.InValueExpr = false
+	// Type conditions in value context, like the values: a comparison yields its
+	// LHS and chains (so `i > 2 < 8` works), and the gate is the conjunction of
+	// those comparisons ("did the value-position expression yield?"). One
+	// comparison rule everywhere; the gate collapse to i1 happens at lowering.
+	ts.InValueExpr = true
 	for _, expr := range stmt.Condition {
 		condTypes := ts.TypeExpression(expr, true)
 		ts.validateStatementCondition(expr, condTypes)
@@ -1353,6 +1413,8 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, t)
 	case *ast.InfixExpression:
 		types = ts.TypeInfixExpression(e)
+	case *ast.CondValueExpr:
+		types = ts.typeCondValueExpr(e, isRoot)
 	case *ast.PrefixExpression:
 		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
@@ -1499,17 +1561,100 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 	}
 }
 
+// typeCondValueExpr types a parenthesized conditional value (cond value).
+// The condition is typed in value context (like a statement gate): a comparison
+// yields its LHS and chains (so `(i > 2 < 8  v)` works), and it gates on whether
+// that value-position expression yields — so it must be able to fail. The result
+// type is the value's type. Slots are marked CondValue so the value gates on
+// lowering and the node can serve as the (failable) left operand of a value-position ||.
+func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
+	// A (cond value)'s condition and value are intrinsically value positions
+	// (comparisons yield their LHS and chain), independent of the surrounding
+	// statement: the cond IS a gate by construction. A print/root expression
+	// statement does not set InValueExpr, so force it here (and restore on return)
+	// rather than relying on the enclosing context.
+	savedInValueExpr := ts.InValueExpr
+	ts.InValueExpr = true
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+	condTypes := ts.TypeExpression(expr.Cond, true)
+
+	if len(condTypes) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("(cond value) condition must produce a single value, got %d", len(condTypes)),
+		})
+	} else if condTypes[0].Kind() != UnresolvedKind && !ts.conditionCanFail(expr.Cond) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
+		})
+	}
+
+	// The value is always a nested, per-iteration value (the CondValueExpr or its
+	// enclosing context owns any loop), so type it non-root: a range identifier
+	// resolves to its iterator type, not a Range.
+	valueTypes := ts.TypeExpression(expr.Value, false)
+
+	condInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Cond)]
+	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
+
+	types := make([]Type, len(valueTypes))
+	copy(types, valueTypes)
+	compareModes := make([]CondMode, len(valueTypes))
+	for i := range compareModes {
+		compareModes[i] = CondValue
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (condInfo != nil && condInfo.HasRanges) || (valInfo != nil && valInfo.HasRanges),
+		CompareModes: compareModes,
+	}
+	return types
+}
+
+// wrapsPropagatingCond reports whether expr wraps a *propagating* value-position
+// condition — a comparison (CondScalar) or a value-position || (CondOr) — anywhere
+// in its tree. Those propagate their failure to the whole value (the same gating
+// that drives zero-fill), so a fallback || can attach to a left operand that wraps
+// one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
+//
+// A (cond value) and an array cell resolve *locally* (they always produce a value
+// and never propagate a failure outward), so a condition nested inside one does
+// not make the wrapping operand fail — the walk stops at those boundaries. A bare
+// (cond value) at the root is handled by the caller's HasCondExpr check, since the
+// || keys off its condition directly.
+func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
+	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil {
+		for _, m := range info.CompareModes {
+			if m == CondScalar || m == CondOr {
+				return true
+			}
+		}
+	}
+	switch expr.(type) {
+	case *ast.CondValueExpr, *ast.ArrayLiteral:
+		return false
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if ts.wrapsPropagatingCond(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	if ts.InValueExpr {
-		// Value-position OR is asymmetric: the left operand must be able to
-		// fail, while the right operand may be another condition or a plain
-		// fallback value. There is no matching value-position && because
-		// chained comparisons already refine a yielded value, and comma
-		// conditions provide statement-position AND.
-		if leftInfo == nil || !leftInfo.HasCondExpr() {
+		// Value-position || is left-biased fallback (yield left, else right), so the
+		// left must be able to fail or the fallback is dead. Failable: its root is
+		// conditional, or it wraps a propagating comparison in arithmetic (e.g.
+		// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
+		if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
 				Msg:   "logical OR in value position requires a conditional left operand",
