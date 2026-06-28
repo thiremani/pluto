@@ -244,10 +244,22 @@ rgm = MkStr(1:4) > "s2"
 rg2 = MkStr(1:4) > "z"
 "RangeStrFalse: -rg2"
 
-# Comparison in non-value position (function arg) must not be treated as cond-expr
-ga = 1
-gb = Id(ga > 0)
-"NonValueCmp: -gb"
+# A comparison in a function argument is value-position: it yields its gated LHS
+# (not a boolean), and chains. Set the operand so the value reading differs from
+# the boolean one (5, not 1), which the old ga=1 case could not distinguish.
+ga = 5
+argValue = Id(ga > 0)
+"ArgValuePos: -argValue"
+argChained = Id(ga > 2 < 8)
+"ArgChained: -argChained"
+
+# A failing gate in an argument skips the call rather than running it on a
+# zero-filled 0: Inc(x)=x+100, so a skipped call yields 0, not Inc(0)=100.
+argRun = Inc(ga > 0)
+"ArgRun: -argRun"
+gz = 0
+argSkip = Inc(gz > 2)
+"ArgSkip: -argSkip"
 
 # Logical OR in value position picks the first true conditional value.
 lorLeft = a > 2 || d < 10
@@ -536,3 +548,18 @@ rootC = 5
 rootD = 1
 "RootChainPrintFalse:"
 (rootD > 2 < 8  rootD * rootD)
+
+# Statement-level multi-cell comparison condition: the gate is the cell-wise AND
+# of a multi-return comparison (like a single comparison), with keep-old on
+# failure. Mirrors the (cond value) multi-cell form so the rule holds everywhere.
+smcTrue = Pair(1, 2) > Pair(0, 1) 7
+"SmcCondTrue: -smcTrue"
+smcExist = 99
+smcExist = Pair(1, 2) > Pair(0, 2) 7
+"SmcCondKeepOld: -smcExist"
+smcM, smcN = Pair(3, 4) > Pair(1, 1) 8, 9
+"SmcCondMulti: -smcM -smcN"
+# Heap string pair (PairStr returns ⊕-built heap strings) in a multi-cell gate:
+# the returned heap cells are freed after gating (no leak).
+smcStr = PairStr(3, 1) > PairStr(2, 0) 42
+"SmcCondStr: -smcStr"

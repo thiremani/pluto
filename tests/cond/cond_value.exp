@@ -35,3 +35,25 @@ CvCellRangeVal: [2 4 6 8 10]
 CvCellMultiDriver: [2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 4 6 8 10]
 CvRootArith: 19
 CvRootHeap: his4
+CjBothTrue: 10
+CjOneFalse: 0
+CjAllFalse: 0
+CjThree: 7
+CjFbFalse: 7
+CjFbTrue: 10
+CjChain: 42
+CjArr: [9 0 7]
+CjRangeArr: [0 0 2 3 0]
+CjStrTrue: hello world
+CjStrFalse: 
+CjStrFb: fallback
+CjMultiTrue: 10 20
+CjMultiFalse: 0 0
+CjRangeHeap: s4
+CjMcBoth: 7
+CjMcFail: 0
+CjMcMulti: 8 9
+CjMcStr: match
+CjMcStrF: 
+CjMcStrHeapVal: s9?
+CjMcCombo: 7

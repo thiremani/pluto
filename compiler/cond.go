@@ -50,14 +50,11 @@ func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
 	return c.createLoad(gatePtr, i1, "gate")
 }
 
-// evalConditions ANDs the i1 gates of a list of condition expressions and folds
-// in the bounds-guard check. The caller must pushBoundsGuard before and
-// popBoundsGuard after.
-func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
-	// Every condition reaching evalConditions is a comparison: validation rejects
-	// non-comparison gates, and splitCondRanges routes bare range drivers into the
-	// range list rather than here. So compileGate returns a non-nil gate for each,
-	// and since callers pass a non-empty list, cond is non-nil after the loop.
+// andGates ANDs the i1 gates of a list of condition expressions ("did every
+// condition yield?"). Callers pass a non-empty list of comparisons, so each
+// compileGate returns a non-nil gate and the result is non-nil. Bounds-guard
+// folding is the caller's concern (only the statement path needs it).
+func (c *Compiler) andGates(exprs []ast.Expression) llvm.Value {
 	var cond llvm.Value
 	for _, expr := range exprs {
 		gate := c.compileGate(expr)
@@ -67,6 +64,18 @@ func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) l
 			cond = c.builder.CreateAnd(cond, gate, "and_cond")
 		}
 	}
+	return cond
+}
+
+// evalConditions ANDs the i1 gates of a list of condition expressions and folds
+// in the bounds-guard check. The caller must pushBoundsGuard before and
+// popBoundsGuard after.
+func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
+	// Every condition reaching evalConditions is a comparison: validation rejects
+	// non-comparison gates, and splitCondRanges routes bare range drivers into the
+	// range list rather than here. So compileGate returns a non-nil gate for each,
+	// and since callers pass a non-empty list, cond is non-nil after the loop.
+	cond := c.andGates(exprs)
 
 	if c.stmtBoundsUsed() {
 		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "cond_bounds_ok")
@@ -656,7 +665,7 @@ func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue
 	// A (cond value) yields its value only when its condition holds; otherwise it
 	// fails to onFalse (so an enclosing || tries the next alternative).
 	if cv, ok := expr.(*ast.CondValueExpr); ok {
-		cond := c.compileGate(cv.Cond)
+		cond := c.andGates(cv.Condition)
 		if !baseCond.IsNil() {
 			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
 		}
@@ -719,13 +728,13 @@ func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 	return c.compileCondValueExprBasic(expr, info)
 }
 
-// compileCondValueExprBasic is the scalar lowering: yield Value when Cond holds,
-// otherwise the zero of each output slot's type. Only the taken arm is
-// evaluated, so a heap value is never allocated on the path it isn't used.
+// compileCondValueExprBasic is the scalar lowering: yield Value when every
+// condition holds, otherwise the zero of each output slot's type. Only the taken
+// arm is evaluated, so a heap value is never allocated on the path it isn't used.
 func (c *Compiler) compileCondValueExprBasic(expr *ast.CondValueExpr, info *ExprInfo) []*Symbol {
 	outTypes := info.OutTypes
 
-	cond := c.compileGate(expr.Cond)
+	cond := c.andGates(expr.Condition)
 	trueBlock, falseBlock, contBlock := c.createIfElseCont(cond, "cv_true", "cv_false", "cv_cont")
 
 	// True path evaluates the value (one symbol per output slot for a

@@ -481,13 +481,15 @@ func (ie *InfixExpression) String() string {
 	return out.String()
 }
 
-// CondValueExpr is a parenthesized conditional value: (cond value).
-// It yields Value when Cond holds, otherwise nothing (which a boundary
-// resolves to the zero value, or a trailing `|| fallback` overrides).
+// CondValueExpr is a parenthesized conditional value: (cond value). Condition is
+// a list of comparisons ANDed together (mirroring the statement level), so
+// `(a > 2, b > 3  v)` yields Value only when every condition holds, otherwise
+// nothing (which a boundary resolves to the zero value, or a trailing
+// `|| fallback` overrides).
 type CondValueExpr struct {
-	Token token.Token // the '(' token
-	Cond  Expression
-	Value Expression
+	Token     token.Token // the '(' token
+	Condition []Expression
+	Value     Expression
 }
 
 func (cv *CondValueExpr) expressionNode()  {}
@@ -495,7 +497,7 @@ func (cv *CondValueExpr) Tok() token.Token { return cv.Token }
 func (cv *CondValueExpr) String() string {
 	var out bytes.Buffer
 	out.WriteString("(")
-	out.WriteString(cv.Cond.String())
+	out.WriteString(printVec(cv.Condition))
 	out.WriteString(" ")
 	out.WriteString(cv.Value.String())
 	out.WriteString(")")
@@ -560,7 +562,7 @@ func ExprChildren(expr Expression) []Expression {
 	case *InfixExpression:
 		return []Expression{e.Left, e.Right}
 	case *CondValueExpr:
-		return []Expression{e.Cond, e.Value}
+		return append(append([]Expression(nil), e.Condition...), e.Value)
 	case *PrefixExpression:
 		return []Expression{e.Right}
 	case *CallExpression:
@@ -605,15 +607,22 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			Right:    right,
 		}
 	case *CondValueExpr:
-		cond := rewrite(e.Cond)
+		changed := false
+		conds := make([]Expression, len(e.Condition))
+		for i, c := range e.Condition {
+			conds[i] = rewrite(c)
+			if conds[i] != c {
+				changed = true
+			}
+		}
 		value := rewrite(e.Value)
-		if cond == e.Cond && value == e.Value {
+		if !changed && value == e.Value {
 			return expr
 		}
 		return &CondValueExpr{
-			Token: e.Token,
-			Cond:  cond,
-			Value: value,
+			Token:     e.Token,
+			Condition: conds,
+			Value:     value,
 		}
 	case *PrefixExpression:
 		right := rewrite(e.Right)

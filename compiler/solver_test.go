@@ -571,12 +571,18 @@ func TestCondValueDiagnostics(t *testing.T) {
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 		{
-			// A multi-return comparison (Pair > Pair yields two values) cannot be a
-			// (cond value) condition — the gate must be a single value.
-			name:        "ConditionMustProduceSingleValue",
-			code:        "a, b = Pair(x, y)\n    a, b = x, y",
-			script:      "p, q = (Pair(1, 2) > Pair(3, 4)  7)",
-			expectError: "(cond value) condition must produce a single value",
+			// Each conjunct must be able to fail: an always-yielding || fallback
+			// (a > 0 || a always yields) cannot gate, so it is rejected in the list.
+			name:        "ConjunctMustBeFailable",
+			script:      "a = 1\nb = 2\nx = (a > 0 || a, b > 0  7)",
+			expectError: "(cond value) condition must be a comparison that can fail",
+		},
+		{
+			// A bare identifier conjunct is not a comparison, so it cannot gate even
+			// alongside a well-formed comparison.
+			name:        "ConjunctIdentifierNotComparison",
+			script:      "a = 5\nn = 1\nx = (a > 2, n  7)",
+			expectError: "(cond value) condition must be a comparison that can fail",
 		},
 	}
 

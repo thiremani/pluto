@@ -30,7 +30,10 @@ old = b > 2  x * 3    # b <= 2 -> old stays 99
 new = b > 2  x * 3    # b <= 2 -> new = 0
 ```
 
-Multiple conditions separated by commas are ANDed; all must hold.
+Multiple conditions separated by commas are ANDed; all must hold. A multi-cell
+comparison (`Pair > Pair`, including string pairs) likewise gates on the
+conjunction of its cells — every cell must hold. Both forms work in any condition
+slot (statement gate, `(cond value)`, array cell).
 
 ### Conditions are value positions
 
@@ -191,6 +194,10 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
   array filters; the parenthesized `(cond value)` expression (local resolution to
   zero, with `|| fallback` and array-cell zero-fill), including per-cell use
   inside array literals.
+- **Conjunction conditions:** every condition slot accepts a comma-AND list
+  (`a > 2, b > 3`) and a multi-cell comparison (`Pair(1, 2) > Pair(0, 1)`, gating
+  on the cell-wise AND — every cell must hold). Heap operands (e.g. string cells
+  via `⊕`) are freed after gating.
 - **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
   but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
   So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`
