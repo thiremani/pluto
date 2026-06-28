@@ -779,9 +779,11 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
 	// like a single comparison; it is accepted by the conditionCanFail check
-	// below. The scalar/array and range-driver checks inspect the first cell.
+	// below. Every cell must be a scalar: an array cell is a filter, which gate
+	// lowering would silently drop (it ANDs only scalar cells), so reject a
+	// condition with any array cell — not just the first.
 	condType := condTypes[0]
-	if condType.Kind() == ArrayKind {
+	if anyArrayCell(condTypes) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "statement condition must produce a scalar value, not an array",
@@ -1582,6 +1584,22 @@ func typesResolved(types []Type) bool {
 	return true
 }
 
+// anyArrayCell reports whether any cell of a value-position condition is an array.
+// A gate is the cell-wise conjunction of scalar comparisons; an array comparison
+// is a filter (it yields an array, not a boolean), so gate lowering only ANDs the
+// scalar cells and silently drops an array cell. A gate condition must therefore
+// have no array cell — checked across every cell, not just the first, so a mixed
+// scalar/array multi-return comparison (Pair > Pair where one slot is an array)
+// is rejected. Shared by statement gates and (cond value) conditions.
+func anyArrayCell(condTypes []Type) bool {
+	for _, t := range condTypes {
+		if t.Kind() == ArrayKind {
+			return true
+		}
+	}
+	return false
+}
+
 // typeCondValueExpr types a parenthesized conditional value (cond value).
 // The conditions are typed in value context (like a statement gate): a comparison
 // yields its LHS and chains (so `(i > 2 < 8  v)` works), and each gates on whether
@@ -1610,11 +1628,20 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	condHasRanges := false
 	for _, cond := range expr.Conds {
 		condTypes := ts.TypeExpression(cond, true)
-		if typesResolved(condTypes) && !ts.conditionCanFail(cond) {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: cond.Tok(),
-				Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
-			})
+		if typesResolved(condTypes) {
+			if anyArrayCell(condTypes) {
+				// An array cell is a filter, not a scalar boolean; gate lowering
+				// would silently drop it (see anyArrayCell), so reject it here too.
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cond.Tok(),
+					Msg:   "(cond value) condition must produce a scalar value, not an array",
+				})
+			} else if !ts.conditionCanFail(cond) {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cond.Tok(),
+					Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
+				})
+			}
 		}
 		if info := ts.ExprCache[key(ts.FuncNameMangled, cond)]; info != nil && info.HasRanges {
 			condHasRanges = true
