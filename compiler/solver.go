@@ -103,7 +103,7 @@ type TypeSolver struct {
 	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // value position (LetStatement conditions/values, (cond value)): comparisons yield their LHS and chain, || is fallback — not booleans as in function args
+	InValueExpr     bool // value position (LetStatement conditions/values, (cond value); inherited by nested exprs): comparisons yield their LHS and chain, || is fallback — vs plain booleans in non-value contexts like prints
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
