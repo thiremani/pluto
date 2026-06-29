@@ -482,15 +482,24 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
 func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*RangeInfo, rew ast.Expression) {
-	condRanges, cond := ts.HandleRanges(cv.Cond)
+	changed := false
+	conds := make([]ast.Expression, len(cv.Conds))
+	for i, c := range cv.Conds {
+		var cRanges []*RangeInfo
+		cRanges, conds[i] = ts.HandleRanges(c)
+		ranges = mergeUses(ranges, cRanges)
+		if conds[i] != c {
+			changed = true
+		}
+	}
 	valRanges, val := ts.HandleRanges(cv.Value)
-	ranges = mergeUses(condRanges, valRanges)
+	ranges = mergeUses(ranges, valRanges)
 
-	if cond == cv.Cond && val == cv.Value {
+	if !changed && val == cv.Value {
 		rew = cv
 	} else {
 		cp := *cv
-		cp.Cond, cp.Value = cond, val
+		cp.Conds, cp.Value = conds, val
 		rew = &cp
 		// Cache entry for the rewritten node: operands are scalarized iterators.
 		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, cv)]
@@ -762,20 +771,19 @@ func (ts *TypeSolver) conditionCanFail(expr ast.Expression) bool {
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
-	if len(condTypes) != 1 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   fmt.Sprintf("statement condition must produce a single value, got %d", len(condTypes)),
-		})
+	// Defer until the operand types resolve (an unresolved cell may still become a
+	// comparison during fixpoint iteration).
+	if !typesResolved(condTypes) {
 		return
 	}
 
+	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
+	// like a single comparison; it is accepted by the conditionCanFail check
+	// below. Every cell must be a scalar: an array cell is a filter, which gate
+	// lowering would silently drop (it ANDs only scalar cells), so reject a
+	// condition with any array cell — not just the first.
 	condType := condTypes[0]
-	if condType.Kind() == UnresolvedKind {
-		return
-	}
-
-	if condType.Kind() == ArrayKind {
+	if anyArrayCell(condTypes) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "statement condition must produce a scalar value, not an array",
@@ -1561,33 +1569,83 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 	}
 }
 
+// typesResolved reports whether a slice is non-empty and every type in it is
+// resolved. Used to defer condition diagnostics until operand types settle
+// during fixpoint iteration (an unresolved cell may still become a comparison).
+func typesResolved(types []Type) bool {
+	if len(types) == 0 {
+		return false
+	}
+	for _, t := range types {
+		if t.Kind() == UnresolvedKind {
+			return false
+		}
+	}
+	return true
+}
+
+// anyArrayCell reports whether any cell of a value-position condition is an array.
+// A gate is the cell-wise conjunction of scalar comparisons; an array comparison
+// is a filter (it yields an array, not a boolean), so gate lowering only ANDs the
+// scalar cells and silently drops an array cell. A gate condition must therefore
+// have no array cell — checked across every cell, not just the first, so a mixed
+// scalar/array multi-return comparison (Pair > Pair where one slot is an array)
+// is rejected. Shared by statement gates and (cond value) conditions.
+func anyArrayCell(condTypes []Type) bool {
+	for _, t := range condTypes {
+		if t.Kind() == ArrayKind {
+			return true
+		}
+	}
+	return false
+}
+
 // typeCondValueExpr types a parenthesized conditional value (cond value).
-// The condition is typed in value context (like a statement gate): a comparison
-// yields its LHS and chains (so `(i > 2 < 8  v)` works), and it gates on whether
-// that value-position expression yields — so it must be able to fail. The result
-// type is the value's type. Slots are marked CondValue so the value gates on
+// The conditions are typed in value context (like a statement gate): a comparison
+// yields its LHS and chains (so `(i > 2 < 8  v)` works), and each gates on whether
+// that value-position expression yields — so it must be able to fail. Multiple
+// comma-separated conditions are ANDed (the value yields only when all hold). The
+// result type is the value's type. Slots are marked CondValue so the value gates on
 // lowering and the node can serve as the (failable) left operand of a value-position ||.
 func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
-	// A (cond value)'s condition and value are intrinsically value positions
+	// A (cond value)'s conditions and value are intrinsically value positions
 	// (comparisons yield their LHS and chain), independent of the surrounding
-	// statement: the cond IS a gate by construction. A print/root expression
+	// statement: each condition IS a gate by construction. A print/root expression
 	// statement does not set InValueExpr, so force it here (and restore on return)
 	// rather than relying on the enclosing context.
 	savedInValueExpr := ts.InValueExpr
 	ts.InValueExpr = true
 	defer func() { ts.InValueExpr = savedInValueExpr }()
-	condTypes := ts.TypeExpression(expr.Cond, true)
 
-	if len(condTypes) != 1 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   fmt.Sprintf("(cond value) condition must produce a single value, got %d", len(condTypes)),
-		})
-	} else if condTypes[0].Kind() != UnresolvedKind && !ts.conditionCanFail(expr.Cond) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
-		})
+	// Each condition is typed and validated independently; the gate is the
+	// conjunction of them all (the value yields only when every condition holds),
+	// mirroring the statement level. A condition must be a comparison that can
+	// fail — a multi-cell comparison (Pair > Pair, or a string pair) is fine: it
+	// AND-reduces cell-wise at lowering, so the gate holds only when every cell
+	// does. A bare identifier or always-yielding || cannot gate. The check is
+	// deferred until the operand types resolve, so a not-yet-typed operand does
+	// not trip a spurious diagnostic during fixpoint iteration.
+	condHasRanges := false
+	for _, cond := range expr.Conds {
+		condTypes := ts.TypeExpression(cond, true)
+		if typesResolved(condTypes) {
+			if anyArrayCell(condTypes) {
+				// An array cell is a filter, not a scalar boolean; gate lowering
+				// would silently drop it (see anyArrayCell), so reject it here too.
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cond.Tok(),
+					Msg:   "(cond value) condition must produce a scalar value, not an array",
+				})
+			} else if !ts.conditionCanFail(cond) {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cond.Tok(),
+					Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
+				})
+			}
+		}
+		if info := ts.ExprCache[key(ts.FuncNameMangled, cond)]; info != nil && info.HasRanges {
+			condHasRanges = true
+		}
 	}
 
 	// The value is always a nested, per-iteration value (the CondValueExpr or its
@@ -1595,7 +1653,6 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// resolves to its iterator type, not a Range.
 	valueTypes := ts.TypeExpression(expr.Value, false)
 
-	condInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Cond)]
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
 
 	types := make([]Type, len(valueTypes))
@@ -1608,7 +1665,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    (condInfo != nil && condInfo.HasRanges) || (valInfo != nil && valInfo.HasRanges),
+		HasRanges:    condHasRanges || (valInfo != nil && valInfo.HasRanges),
 		CompareModes: compareModes,
 	}
 	return types

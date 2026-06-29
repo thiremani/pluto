@@ -18,3 +18,10 @@ res = Id(x)
 
 s = MkStr(x)
     s = "s-x"
+
+res = Inc(x)
+    res = x + 100
+
+p, q = PairStr(x, y)
+    p = MkStr(x) ⊕ "!"
+    q = MkStr(y) ⊕ "!"

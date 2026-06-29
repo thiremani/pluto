@@ -910,8 +910,38 @@ func TestCondValueExpr(t *testing.T) {
 	require.Len(t, stmt.Value, 1, "expected one value")
 	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
 	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
-	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	require.Len(t, cv.Conds, 1, "expected one condition")
+	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
 	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+}
+
+func TestCondValueExprConjunction(t *testing.T) {
+	// Comma-separated conditions are gathered into the Condition list (ANDed),
+	// mirroring the statement level; the value follows the last condition.
+	const input = "x = (a > 2, b > 3, c < 9 10)"
+	sp := NewScriptParser(lexer.New("TestCondValueExprConjunction", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
+	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
+	require.Len(t, cv.Conds, 3, "expected three conditions")
+	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond[0] mismatch")
+	require.Truef(t, testInfixExpression(t, cv.Conds[1], "b", ">", 3), "cond[1] mismatch")
+	require.Truef(t, testInfixExpression(t, cv.Conds[2], "c", "<", 9), "cond[2] mismatch")
+	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+}
+
+func TestCondValueConjunctionRequiresValue(t *testing.T) {
+	// A comma-separated condition list with no value is incomplete (a single
+	// `(cond)` stays plain grouping, but `(cond, cond)` has nothing to yield).
+	const input = "x = (a > 2, b > 3)"
+	sp := NewScriptParser(lexer.New("TestCondValueConjunctionRequiresValue", input))
+	sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected a parse error for a value-less condition list")
+	require.Contains(t, sp.Errors()[0], "(cond value) requires a value")
 }
 
 func TestCondValueExprWithFallback(t *testing.T) {
@@ -928,7 +958,7 @@ func TestCondValueExprWithFallback(t *testing.T) {
 	require.Equal(t, "||", or.Operator)
 	cv, ok := or.Left.(*ast.CondValueExpr)
 	require.Truef(t, ok, "expected CondValueExpr on the left of ||, got %T", or.Left)
-	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
 	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
 	require.Truef(t, testIntegerLiteral(t, or.Right, 7), "fallback mismatch")
 }
@@ -947,7 +977,7 @@ func TestCondValueExprInArray(t *testing.T) {
 	require.Len(t, arr.Rows[0], 3, "expected three cells")
 	cv, ok := arr.Rows[0][1].(*ast.CondValueExpr)
 	require.Truef(t, ok, "expected CondValueExpr cell, got %T", arr.Rows[0][1])
-	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cell cond mismatch")
+	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cell cond mismatch")
 	require.Truef(t, testIntegerLiteral(t, cv.Value, 5), "cell value mismatch")
 }
 
@@ -1005,7 +1035,7 @@ func TestCondValueAttachedPrefixSharedDetection(t *testing.T) {
 	require.Len(t, stmt.Value, 1, "expected one value")
 	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
 	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
-	require.Truef(t, testInfixExpression(t, cv.Cond, "a", ">", 2), "cond mismatch")
+	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
 	pre, ok := cv.Value.(*ast.PrefixExpression)
 	require.Truef(t, ok, "expected prefix value, got %T", cv.Value)
 	require.Equal(t, "-", pre.Operator)

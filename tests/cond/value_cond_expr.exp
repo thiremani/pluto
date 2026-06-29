@@ -58,7 +58,10 @@ re:StrEqFalse:\s*
 RangeStrMixed: s3
 RangeStrMixedBranches: s3
 re:RangeStrFalse:\s*
-NonValueCmp: 1
+ArgValuePos: 5
+ArgChained: 5
+ArgRun: 105
+ArgSkip: 0
 LogicalOrLeft: 5
 LogicalOrRight: 7
 LogicalOrFalse: 0
@@ -140,3 +143,7 @@ RootChainPrint:
 25
 RootChainPrintFalse:
 0
+SmcCondTrue: 7
+SmcCondKeepOld: 99
+SmcCondMulti: 8 9
+SmcCondStr: 42

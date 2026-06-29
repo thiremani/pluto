@@ -528,6 +528,35 @@ func TestArrayConditionEmitsSingleDiagnostic(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "statement condition must produce a scalar value, not an array")
 }
 
+func TestMixedArrayScalarStatementConditionRejected(t *testing.T) {
+	ctx := llvm.NewContext()
+	// MixSA returns (scalar, array); the array cell is the second slot, so the
+	// gate's array cell is caught only by checking every cell, not just the first.
+	// Such a gate would otherwise silently drop the array comparison at lowering.
+	code := "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]"
+	cc := NewCodeCompiler(ctx, "mixedArrayStmtCond", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "y = MixSA(5) > MixSA(3)  100"
+	sl := lexer.New("mixedArrayStmtCond.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	found := false
+	for _, err := range ts.Errors {
+		if strings.Contains(err.Msg, "statement condition must produce a scalar value, not an array") {
+			found = true
+			break
+		}
+	}
+	require.Truef(t, found, "expected array-cell rejection, got: %v", ts.Errors)
+}
+
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarConditionDiagnostic", "", ast.NewCode())
@@ -571,12 +600,28 @@ func TestCondValueDiagnostics(t *testing.T) {
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 		{
-			// A multi-return comparison (Pair > Pair yields two values) cannot be a
-			// (cond value) condition — the gate must be a single value.
-			name:        "ConditionMustProduceSingleValue",
-			code:        "a, b = Pair(x, y)\n    a, b = x, y",
-			script:      "p, q = (Pair(1, 2) > Pair(3, 4)  7)",
-			expectError: "(cond value) condition must produce a single value",
+			// Each conjunct must be able to fail: an always-yielding || fallback
+			// (a > 0 || a always yields) cannot gate, so it is rejected in the list.
+			name:        "ConjunctMustBeFailable",
+			script:      "a = 1\nb = 2\nx = (a > 0 || a, b > 0  7)",
+			expectError: "(cond value) condition must be a comparison that can fail",
+		},
+		{
+			// A bare identifier conjunct is not a comparison, so it cannot gate even
+			// alongside a well-formed comparison.
+			name:        "ConjunctIdentifierNotComparison",
+			script:      "a = 5\nn = 1\nx = (a > 2, n  7)",
+			expectError: "(cond value) condition must be a comparison that can fail",
+		},
+		{
+			// A mixed scalar/array multi-return comparison cannot gate: the array
+			// cell is a filter, not a boolean, and gate lowering would silently drop
+			// it. MixSA returns (scalar, array) so the array cell is not first —
+			// exercising the all-cells check, not just cell 0.
+			name:        "MixedArrayCellRejected",
+			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
+			script:      "y = (MixSA(5) > MixSA(3)  7)",
+			expectError: "(cond value) condition must produce a scalar value, not an array",
 		},
 	}
 

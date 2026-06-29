@@ -155,3 +155,83 @@ cvRootArith = cvX + (cvA > 2 3gi + 5)
 cvSm = "hi"
 cvRootHeap = cvSm ⊕ (cvA > 2 MkStr(gi))
 "CvRootHeap: -cvRootHeap"
+
+# Conjunction conditions: comma-separated conditions are ANDed (the value yields
+# only when every condition holds), mirroring the statement level. A failed
+# conjunction resolves locally to zero (or a trailing || fallback overrides).
+cjBothTrue = (a > 2, a > 0 10)
+"CjBothTrue: -cjBothTrue"
+cjOneFalse = (a > 2, b > 2 10)
+"CjOneFalse: -cjOneFalse"
+cjAllFalse = (a > 9, b > 9 10)
+"CjAllFalse: -cjAllFalse"
+
+# Three conditions ANDed.
+cjThree = (a > 2, a > 3, a > 4 7)
+"CjThree: -cjThree"
+
+# Conjunction with a fallback ||: the fallback wins when any condition fails.
+cjFbFalse = (a > 2, b > 2 10) || 7
+"CjFbFalse: -cjFbFalse"
+cjFbTrue = (a > 2, a > 0 10) || 7
+"CjFbTrue: -cjFbTrue"
+
+# A chained comparison may be one of the conjuncts (2 < a < 8 AND a > 0).
+cjChain = (a > 2 < 8, a > 0 42)
+"CjChain: -cjChain"
+
+# Conjunction in array cells: true cell keeps the value, false cell zero-fills.
+cjArr = [(a > 2, a > 0 9) (a > 2, b > 2 9) 7]
+"CjArr: -cjArr"
+
+# Range-driven conjunction in a collector: keep gi only where 1 < gi < 4.
+cjRangeArr = [(gi > 1, gi < 4 gi)]
+"CjRangeArr: -cjRangeArr"
+
+# Conjunction gating a heap string value: true yields the concat, false yields
+# the empty string, and a fallback overrides the zero (no leak on any arm).
+cjStrTrue = (a > 2, a > 0 sl ⊕ sm)
+"CjStrTrue: -cjStrTrue"
+cjStrFalse = (a > 2, b > 2 sl ⊕ sm)
+"CjStrFalse: -cjStrFalse"
+cjStrFb = (a > 2, b > 2 sl ⊕ sm) || "fallback"
+"CjStrFb: -cjStrFb"
+
+# Conjunction with a multi-return value: all slots yield, or all zero on failure.
+cjMa, cjMb = (a > 2, a > 0 Pair(10, 20))
+"CjMultiTrue: -cjMa -cjMb"
+cjMc, cjMd = (a > 2, b > 2 Pair(10, 20))
+"CjMultiFalse: -cjMc -cjMd"
+
+# Range-root conjunction with a heap value: the per-iteration string is freed
+# before the next overwrite (no leak across iterations); the final value wins.
+cjRangeHeap = (gi >= 0, gi < 9 MkStr(gi))
+"CjRangeHeap: -cjRangeHeap"
+
+# Multi-cell comparison condition: a comparison of multi-return operands
+# (Pair > Pair) gates on the cell-wise conjunction — every cell must hold,
+# matching the statement level. The value yields only then.
+cjMcBoth = (Pair(1, 2) > Pair(0, 1) 7)
+"CjMcBoth: -cjMcBoth"
+cjMcFail = (Pair(1, 2) > Pair(0, 2) 7)
+"CjMcFail: -cjMcFail"
+
+# Multi-cell comparison gating a multi-return value.
+cjMcA, cjMcB = (Pair(3, 4) > Pair(1, 1) Pair(8, 9))
+"CjMcMulti: -cjMcA -cjMcB"
+
+# Multi-cell comparison over heap strings: PairStr returns a pair of heap
+# strings (built with ⊕ inside the function), so each compared cell is a heap
+# value whose ownership transfers across the call. Every cell is freed after
+# gating (no leak). True yields the value; a failing cell yields empty; the
+# value itself may be heap too.
+cjMcStr = (PairStr(3, 1) > PairStr(2, 0) "match")
+"CjMcStr: -cjMcStr"
+cjMcStrF = (PairStr(3, 1) > PairStr(2, 5) "match")
+"CjMcStrF: -cjMcStrF"
+cjMcStrHeapVal = (PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?")
+"CjMcStrHeapVal: -cjMcStrHeapVal"
+
+# A multi-cell comparison may itself be one conjunct of a comma-AND list.
+cjMcCombo = (Pair(1, 2) > Pair(0, 1), a > 2 7)
+"CjMcCombo: -cjMcCombo"
