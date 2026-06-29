@@ -21,7 +21,7 @@ type CondMode int
 const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
-	CondArray                  // Array: element-wise filter, keep LHS where condition holds
+	CondArray                  // Array: element-wise mask, LHS where condition holds else 0 (length-preserving)
 	CondOr                     // Fallback OR in value position: first true operand wins
 	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
 )
@@ -43,6 +43,16 @@ type ExprInfo struct {
 func (info *ExprInfo) HasCondScalar() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCondArray returns true if any slot is an element-wise array mask.
+func (info *ExprInfo) HasCondArray() bool {
+	for _, m := range info.CompareModes {
+		if m == CondArray {
 			return true
 		}
 	}
@@ -779,9 +789,10 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
 	// like a single comparison; it is accepted by the conditionCanFail check
-	// below. Every cell must be a scalar: an array cell is a filter, which gate
-	// lowering would silently drop (it ANDs only scalar cells), so reject a
-	// condition with any array cell — not just the first.
+	// below. Every cell must be a scalar: an array cell is a mask (an array
+	// value, not a boolean), which gate lowering would silently drop (it ANDs
+	// only scalar cells), so reject a condition with any array cell — not just
+	// the first.
 	condType := condTypes[0]
 	if anyArrayCell(condTypes) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -1489,9 +1500,9 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 	return
 }
 
-// typeInfixArrayFilter validates that element-wise comparison is supported
-// for an array filter (comparison in value position with at least one array operand).
-func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, tok token.Token) {
+// typeInfixArrayMask validates that element-wise comparison is supported
+// for an array mask (comparison in value position with at least one array operand).
+func (ts *TypeSolver) typeInfixArrayMask(leftType, rightType Type, op string, tok token.Token) {
 	cmpLeft := leftType
 	cmpRight := rightType
 	if leftType.Kind() == ArrayKind {
@@ -1517,11 +1528,12 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		return Unresolved{}, CondNone
 	}
 
-	// Array filter: comparison in value position with an array operand.
-	// Keep LHS values where comparison holds. For scalar-array, this means
-	// producing an array of scalar LHS values (one per true element).
+	// Array mask: comparison in value position with an array operand. Each cell
+	// yields its LHS where the comparison holds, else 0 (length-preserving). For
+	// scalar-array, this produces an array of the scalar LHS type that broadcasts
+	// the scalar across the array's length.
 	if isValueCmp && (leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind) {
-		ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
+		ts.typeInfixArrayMask(leftType, rightType, expr.Operator, expr.Token)
 		if leftType.Kind() == ArrayKind {
 			return leftType, CondArray
 		}
@@ -1586,8 +1598,8 @@ func typesResolved(types []Type) bool {
 
 // anyArrayCell reports whether any cell of a value-position condition is an array.
 // A gate is the cell-wise conjunction of scalar comparisons; an array comparison
-// is a filter (it yields an array, not a boolean), so gate lowering only ANDs the
-// scalar cells and silently drops an array cell. A gate condition must therefore
+// is a mask (it yields an array value, not a boolean), so gate lowering only ANDs
+// the scalar cells and silently drops an array cell. A gate condition must therefore
 // have no array cell — checked across every cell, not just the first, so a mixed
 // scalar/array multi-return comparison (Pair > Pair where one slot is an array)
 // is rejected. Shared by statement gates and (cond value) conditions.
@@ -1630,7 +1642,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 		condTypes := ts.TypeExpression(cond, true)
 		if typesResolved(condTypes) {
 			if anyArrayCell(condTypes) {
-				// An array cell is a filter, not a scalar boolean; gate lowering
+				// An array cell is a mask, not a scalar boolean; gate lowering
 				// would silently drop it (see anyArrayCell), so reject it here too.
 				ts.Errors = append(ts.Errors, &token.CompileError{
 					Token: cond.Tok(),

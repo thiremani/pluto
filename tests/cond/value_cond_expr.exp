@@ -33,14 +33,32 @@ CallLhsFalse: 0
 NestedCondTrue: 10 5
 NestedCondFalse: 0 0
 PairTrue: 5 7
-PairOneFalse: 0 0
-PairFirstFalse: 0 0
-MixedFalse: [] 0
+PairOneFalse: 5 0
+PairFirstFalse: 0 7
+MixedFalse: [0 0] 0
 MixedTrue: [2 3] 2
-ArrayArray: [2 6]
-ArrayScalar: [5 6]
-ScalarArrayGt: [2]
-ScalarArrayLt: [2 2 2]
+ArrayArray: [0 2 6]
+ArrayScalar: [0 0 0 5 6]
+ScalarArrayGt: [2 0 0 0 0]
+ScalarArrayLt: [0 0 2 2 2]
+MaskPosition: [1 0 5 0]
+MaskScalar: [4 8 0]
+MaskUnequalLen: [1 0]
+MaskHeapStr: [s3  s5]
+IntTupleKeepOldBefore: 11 22
+IntTupleKeepOld: 5 22
+MixTupleKeepOldBefore: [9 9] 99
+MixTupleKeepOld: [0 0] 99
+HeapTupleKeepOldBefore: oldA oldB
+HeapTupleKeepOld: s3! oldB
+NewHeapTuple:  s5!
+GatedTupleBefore: [7 7] 5
+GatedTupleFalse: [7 7] 5
+GatedTupleTrue: [3 4] 3
+OobTupleBefore: 77 66
+OobTupleKeepsPrev: 77 66
+HeapOobBefore: keepC keepD
+HeapOobKeepsPrev: keepC keepD
 IntAddTrue: 7
 IntAddFalse: 0
 StrCmpTrue: banana

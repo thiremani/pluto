@@ -63,7 +63,10 @@ each yielded value, and the root assignment keeps the final result.
 
 ## Comparisons, Skip, And Fallback
 
-Comparisons in value position are filters, not booleans.
+Comparisons in value position over a range *stream* are filters (yield-or-skip),
+not booleans. (A comparison on a materialized array is instead an element-wise
+*mask* that keeps each element or zeros it — see
+[Pluto Conditional Value Semantics](Pluto%20Conditional%20Value%20Semantics.md).)
 
 ```pluto
 i > 2

@@ -479,7 +479,7 @@ j = 0:5:i`,
 	}
 }
 
-func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
+func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
@@ -505,7 +505,7 @@ func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
-	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as filter")
+	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as element-wise mask (CondArray)")
 }
 
 func TestArrayConditionEmitsSingleDiagnostic(t *testing.T) {
@@ -615,8 +615,8 @@ func TestCondValueDiagnostics(t *testing.T) {
 		},
 		{
 			// A mixed scalar/array multi-return comparison cannot gate: the array
-			// cell is a filter, not a boolean, and gate lowering would silently drop
-			// it. MixSA returns (scalar, array) so the array cell is not first —
+			// cell is a mask (an array value), not a boolean, and gate lowering would
+			// silently drop it. MixSA returns (scalar, array) so the array cell is not first —
 			// exercising the all-cells check, not just cell 0.
 			name:        "MixedArrayCellRejected",
 			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
@@ -724,7 +724,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
-func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
+func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
@@ -750,11 +750,11 @@ func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
-	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as filter")
+	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as element-wise mask (CondArray)")
 
 	outArr, ok := info.OutTypes[0].(Array)
-	require.True(t, ok, "expected scalar-array filter output type to be array")
-	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array filter should keep scalar LHS element type")
+	require.True(t, ok, "expected scalar-array mask output type to be array")
+	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array mask should keep scalar LHS element type")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {

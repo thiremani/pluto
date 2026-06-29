@@ -173,8 +173,45 @@ Spacing separates cells, so parentheses also control cell count:
 [(a > 3 b < 5) || 10]    # one cell
 ```
 
-A filter is different: `arr > k` drops elements that fail rather than zeroing
-them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
+A direct array comparison follows the same rule element-wise: `arr > k` is a
+**mask** — each cell keeps its left value where the comparison holds, else 0, *in
+place* (length- and position-preserving). It is the scalar "yield the left
+operand, else 0" applied per element, so it stays consistent with the collector
+cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips to the
+shorter length, `arr > scalar` spans the array and broadcasts the scalar.
+
+```pluto
+[1 3 5 7] > [0 4 4 8]    # [1 0 5 0]   (failed cells masked to 0, in place)
+[4 8 1] > 3              # [4 8 0]      (array length, scalar broadcasts)
+[1 3 5 7] > [0 4]        # [1 0]        (zip to min length; surplus dropped)
+```
+
+A failed comparison means "this element did not pass" (0 in place); a missing
+element from a length mismatch is dropped, never zero-filled — so no fabricated 0
+ever reaches a value. Strings stay lexicographic. (A range-driven comparison over
+a *stream* still skips rather than masks — see
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md).)
+
+## Multi-return comparisons
+
+A comparison over multi-valued operands (`Pair(...) > Pair(...)`,
+`Mix(...) > Mix(...)`) resolves **per slot** in value position — each slot behaves
+exactly as the single-value comparison would, independent of its siblings, with no
+all-or-nothing. An array slot is an element-wise mask (it overwrites its target). A
+scalar slot yields its left operand where the comparison holds, and otherwise keeps
+the target's prior value — `0` for a fresh target, the existing value for an
+existing one — the same keep-old-on-false a bare comparison gives.
+
+```pluto
+a, b  = Pair(1, 5) > Pair(2, 4)   # 0 5      (fresh: 1 > 2 keeps 0; 5 > 4 -> 5)
+r, n  = Mix(2) > Mix(1)           # [2 3] 2  (array slot masks; scalar slot yields)
+n2 = 99
+r2, n2 = Mix(1) > Mix(2)          # [0 0] 99 (array overwrites; scalar 1 > 2 keeps 99)
+```
+
+The cell-wise **AND** (every cell must hold) applies only where a multi-cell
+comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`) or the test
+behind a value-position `||` fallback — never to the value itself.
 
 ## Why this model
 
@@ -191,15 +228,16 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
   condition position; value-position comparisons (yield the left operand);
   conditions are value positions, so chained comparisons gate directly
   (`i > 2 < 8`, leftmost-binding) in every condition slot; collector zero-fill;
-  array filters; the parenthesized `(cond value)` expression (local resolution to
+  array masks (element-wise, length-preserving); the parenthesized `(cond value)` expression (local resolution to
   zero, with `|| fallback` and array-cell zero-fill), including per-cell use
   inside array literals.
 - **Conjunction conditions:** every condition slot accepts a comma-AND list
   (`a > 2, b > 3`) and a multi-cell comparison (`Pair(1, 2) > Pair(0, 1)`, gating
   on the cell-wise AND — every cell must hold). Heap operands (e.g. string cells
   via `⊕`) are freed after gating.
-- **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
-  but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
+- **Transitional inconsistency:** `(cond value)`, array cells, and array masks
+  resolve **locally** to zero, but a bare value-position comparison (`a > 2`) and a
+  multi-return comparison's scalar slots still **propagate** (keep-old on false).
   So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`
   keeps the old value. They agree for new variables and inside array cells; they
   differ only for existing variables and nested arithmetic.

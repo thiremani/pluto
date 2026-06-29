@@ -134,44 +134,131 @@ v2 = -3
 m2, n2 = CondDouble(v2), v2 > 0
 "NestedCondFalse: -m2 -n2"
 
-# Multi-return conditional expression: all true
+# Multi-return comparison in value position: all slots pass.
 px, py = Pair(5, 7) > Pair(1, 2)
 "PairTrue: -px -py"
 
-# Multi-return conditional expression: one false (all-or-nothing skip)
+# Multi-return comparison resolves each slot independently (per-slot LHS-or-0): a
+# failing slot is 0 and does not drop the passing slot. Here 7 > 8 fails -> 0 while
+# 5 > 1 keeps 5. (The cell-wise AND is reserved for gate/condition position and ||
+# fallback, not the value form.)
 px2, py2 = Pair(5, 7) > Pair(1, 8)
 "PairOneFalse: -px2 -py2"
 
-# Multi-return: first slot false, second would pass (AND covers both)
+# Same, with the first slot failing: 5 > 6 -> 0, 7 > 2 -> 7.
 px3, py3 = Pair(5, 7) > Pair(6, 2)
 "PairFirstFalse: -px3 -py3"
 
-# Mixed array/scalar cond-expr: false case (scalar comparison fails)
+# Mixed array/scalar tuple comparison: the array slot is an independent mask and
+# the scalar slot gates only itself. Here the scalar fails (1 > 2 -> 0) but does
+# NOT drop the array mask, so the array slot still masks element-wise to [0 0].
 r2, n2 = Mix(1) > Mix(2)
 "MixedFalse: -r2 -n2"
 
-# Mixed array/scalar cond-expr: array slot filtered, scalar slot conditional
+# Same form, all cells pass: array slot masks to [2 3], scalar slot yields 2.
 r, n = Mix(2) > Mix(1)
 "MixedTrue: -r -n"
 
-# Array comparison in value position (normal infix, not cond-expr)
+# Array comparison in value position: element-wise mask, zip to min length.
+# Each cell keeps its LHS where the comparison holds, else 0 (position-preserving).
 arr1 = [1 2 6]
 arr2 = [1 1 3 5 7]
 ax = arr1 > arr2
 "ArrayArray: -ax"
 
-# Array-scalar comparison in value position
+# Array-scalar comparison: element-wise mask over the array length (scalar broadcasts).
 arr3 = [1 2 3 5 6]
 ay = arr3 > 3
 "ArrayScalar: -ay"
 
-# Scalar-array comparison in value position keeps scalar LHS values
+# Scalar-array comparison: mask keeps the scalar LHS where it holds, else 0.
 az = 2 > arr3
 "ScalarArrayGt: -az"
 
 # Non-commutative direction is preserved
 az2 = 2 < arr3
 "ScalarArrayLt: -az2"
+
+# Element-wise mask preserves position: a failed compare becomes 0 in place (the
+# element is masked out, not dropped), so a passing element keeps its index.
+maskPos1 = [1 3 5 7]
+maskPos2 = [0 4 4 8]
+maskPos = maskPos1 > maskPos2
+"MaskPosition: -maskPos"
+
+# Array-scalar mask spans the array length; the scalar broadcasts.
+maskScalar = [4 8 1] > 3
+"MaskScalar: -maskScalar"
+
+# Unequal lengths zip to the min; the surplus beyond the overlap is dropped.
+maskShort = [1 3 5 7] > [0 4]
+"MaskUnequalLen: -maskShort"
+
+# Heap-string elements: a passing cell is copied into the result, a failing cell
+# becomes "" — both owned by the result and freed with it (leak-checked).
+maskStrArr = [MkStr(3) MkStr(1) MkStr(5)]
+maskStr = maskStrArr > "s2"
+"MaskHeapStr: -maskStr"
+
+# Existing-variable tuple comparison: each scalar slot keeps its old value on a
+# failed compare (per-slot keep-old, like a single comparison), while a passing slot
+# commits its LHS. Int slots: 5 > 1 commits 5, 7 > 8 keeps 22.
+itkA = 11
+itkB = 22
+"IntTupleKeepOldBefore: -itkA -itkB"
+itkA, itkB = Pair(5, 7) > Pair(1, 8)
+"IntTupleKeepOld: -itkA -itkB"
+
+# Mixed tuple, existing vars: the array slot overwrites (mask, no keep-old), the
+# scalar slot keeps its old value on failure.
+mtkArr = [9 9]
+mtkN = 99
+"MixTupleKeepOldBefore: -mtkArr -mtkN"
+mtkArr, mtkN = Mix(1) > Mix(2)
+"MixTupleKeepOld: -mtkArr -mtkN"
+
+# Heap-string slots exercise per-slot ownership: the committed slot frees its old
+# heap value and owns a copy of the new one; the kept slot retains its old heap
+# value. The dropped PairStr returns are freed. (All leak-checked.)
+htkA = "old" ⊕ "A"
+htkB = "old" ⊕ "B"
+"HeapTupleKeepOldBefore: -htkA -htkB"
+htkA, htkB = PairStr(3, 1) > PairStr(2, 5)
+"HeapTupleKeepOld: -htkA -htkB"
+
+# Fresh heap-string targets: a passing slot frees its "" zero seed and owns a copy
+# of the winning string; a failing slot keeps the "" zero. All PairStr heap returns
+# (kept, copied, and dropped) are freed (leak-checked).
+nhA, nhB = PairStr(1, 5) > PairStr(2, 3)
+"NewHeapTuple: -nhA -nhB"
+
+# A statement condition still gates a tuple-comparison value as a whole: a false
+# gate keeps the old values; a true gate commits the per-slot result.
+gtr = [7 7]
+gtn = 5
+"GatedTupleBefore: -gtr -gtn"
+gtr, gtn = 1 > 2 Mix(3) > Mix(1)
+"GatedTupleFalse: -gtr -gtn"
+gtr, gtn = 2 > 1 Mix(3) > Mix(1)
+"GatedTupleTrue: -gtr -gtn"
+
+# An out-of-bounds operand fails the bounds guard and skips the WHOLE tuple
+# assignment, keeping prior values — like any assignment. oobArr has length 2, so
+# oobArr[10] is OOB; without the guard a passing slot (5 > 1) would still commit.
+oobArr = [10 20]
+oc = 77
+od = 66
+"OobTupleBefore: -oc -od"
+oc, od = Pair(5, oobArr[10]) > Pair(1, 8)
+"OobTupleKeepsPrev: -oc -od"
+
+# Same skip with heap-string operands: the tuple is skipped (keep old) and the
+# heap operands built before the skip are freed (leak-checked).
+hoc = "keep" ⊕ "C"
+hod = "keep" ⊕ "D"
+"HeapOobBefore: -hoc -hod"
+hoc, hod = PairStr(3, oobArr[10]) > PairStr(2, 0)
+"HeapOobKeepsPrev: -hoc -hod"
 
 # Heap-allocating LHS in cond-expr: (a + b) > threshold
 # The addition creates a temporary; on false path it must be freed.

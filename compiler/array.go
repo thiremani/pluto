@@ -701,77 +701,79 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	return resSym
 }
 
-// compileArrayFilter dispatches value-position comparison filtering when at least
-// one operand is an array. It keeps LHS values where the comparison holds.
-// For scalar-op-array, the scalar LHS is repeated for each true element.
-func (c *Compiler) compileArrayFilter(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
+// compileArrayMask dispatches value-position comparison masking when at least one
+// operand is an array. Each position yields the LHS element where the comparison
+// holds, otherwise 0 — preserving length and position (a 0 marks a failed compare,
+// never a dropped element). This is Pluto's scalar "comparison yields LHS-or-0"
+// applied per element. Array-array zips to min length; array-scalar uses the
+// array's length and broadcasts the scalar.
+func (c *Compiler) compileArrayMask(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
-
-	resArr := expected.(Array)
-	acc := c.NewArrayAccumulator(resArr)
+	resElem := expected.(Array).ColTypes[0]
 
 	if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
-		return c.compileArrayArrayFilter(op, l, r, acc)
+		return c.compileArrayArrayMask(op, l, r, resElem)
 	}
 	if l.Type.Kind() == ArrayKind {
-		return c.compileArrayScalarFilter(op, l, r, acc, true)
+		return c.compileArrayScalarMask(op, l, r, resElem, true)
 	}
 	if r.Type.Kind() == ArrayKind {
-		return c.compileArrayScalarFilter(op, r, l, acc, false)
+		return c.compileArrayScalarMask(op, r, l, resElem, false)
 	}
-	panic(fmt.Sprintf("compileArrayFilter expects at least one array operand, got %s and %s", l.Type, r.Type))
+	panic(fmt.Sprintf("compileArrayMask expects at least one array operand, got %s and %s", l.Type, r.Type))
 }
 
-// filterPush conditionally appends sym to acc based on cond.
-// Emits a branch: if cond is true, push sym; otherwise skip.
-func (c *Compiler) filterPush(acc *ArrayAccumulator, sym *Symbol, cond llvm.Value) {
-	copyBlock, nextBlock := c.createIfCont(cond, "filter_copy", "filter_next")
+// maskStore writes lhs into resVec[iter] when cond holds; on failure it leaves the
+// slot at its preallocated zero (0 for numbers, "" for strings), realizing
+// `cond ? lhs : 0` per cell. The set copies the (borrowed) element, so the source
+// array keeps ownership and the result owns an independent copy.
+func (c *Compiler) maskStore(resElem Type, resVec llvm.Value, iter llvm.Value, lhs *Symbol, cond llvm.Value) {
+	setBlock, contBlock := c.createIfCont(cond, "mask_set", "mask_cont")
 
-	c.builder.SetInsertPointAtEnd(copyBlock)
-	c.PushVal(acc, sym)
-	c.builder.CreateBr(nextBlock)
+	c.builder.SetInsertPointAtEnd(setBlock)
+	c.ArraySetForType(resElem, resVec, iter, lhs.Val)
+	c.builder.CreateBr(contBlock)
 
-	c.builder.SetInsertPointAtEnd(nextBlock)
+	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) compileArrayArrayFilter(op string, left *Symbol, right *Symbol, acc *ArrayAccumulator) *Symbol {
-	c.forEachArrayPair(left, right, c.arrayPairMinLen(left, right), func(_ llvm.Value, leftSym *Symbol, rightSym *Symbol) {
-		cmpResult := defaultOps[opKey{
-			Operator:  op,
-			LeftType:  opType(leftSym.Type.Key()),
-			RightType: opType(rightSym.Type.Key()),
-		}](c, leftSym, rightSym, true)
-
-		c.filterPush(acc, leftSym, cmpResult.Val)
+func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
+	loopLen := c.arrayPairMinLen(left, right)
+	resVec := c.CreateArrayForType(resElem, loopLen)
+	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
+		lhs, cond := c.compareScalars(op, leftSym, rightSym)
+		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.ArrayAccResult(acc)
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	return &Symbol{
+		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
+		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
+	}
 }
 
-func (c *Compiler) compileArrayScalarFilter(op string, arr *Symbol, scalar *Symbol, acc *ArrayAccumulator, arrayOnLeft bool) *Symbol {
+func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
 	arrElem := arr.Type.(Array).ColTypes[0]
-	c.forEachArrayPair(arr, scalar, c.ArrayLen(arr, arrElem), func(_ llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
-		leftSym := elemSym
-		rightSym := scalarSym
-		pushSym := elemSym
+	loopLen := c.ArrayLen(arr, arrElem)
+	resVec := c.CreateArrayForType(resElem, loopLen)
+	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+		// Preserve operand order for non-commutative comparisons. The masked value
+		// is always the comparison's LHS (the array element, or the scalar when it
+		// is on the left), which compareScalars returns alongside the result.
+		leftSym, rightSym := elemSym, scalarSym
 		if !arrayOnLeft {
-			// Preserve original operand order for non-commutative comparisons,
-			// and keep scalar LHS values on true comparisons.
-			leftSym = scalarSym
-			rightSym = elemSym
-			pushSym = scalarSym
+			leftSym, rightSym = scalarSym, elemSym
 		}
-		cmpResult := defaultOps[opKey{
-			Operator:  op,
-			LeftType:  opType(leftSym.Type.Key()),
-			RightType: opType(rightSym.Type.Key()),
-		}](c, leftSym, rightSym, true)
-
-		c.filterPush(acc, pushSym, cmpResult.Val)
+		lhs, cond := c.compareScalars(op, leftSym, rightSym)
+		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.ArrayAccResult(acc)
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	return &Symbol{
+		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
+		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
+	}
 }
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {

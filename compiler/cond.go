@@ -493,7 +493,7 @@ func (c *Compiler) hasFallbackOrInTree(expr ast.Expression) bool {
 
 // handleComparisons processes each slot of a multi-return comparison based on
 // its CondMode. CondScalar slots are compared and ANDed into cond. CondArray
-// slots are compiled as array filters (source freed, marked borrowed).
+// slots are compiled as element-wise array masks (source freed, marked borrowed).
 func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *ExprInfo, cond llvm.Value) ([]*Symbol, llvm.Value) {
 	lhsSyms := make([]*Symbol, len(left))
 	for i := range left {
@@ -507,8 +507,8 @@ func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *Exp
 			}
 			lhsSyms[i] = lSym
 		case CondArray:
-			// compileArrayFilter handles deref internally
-			lhsSyms[i] = c.compileArrayFilter(op, left[i], right[i], info.OutTypes[i])
+			// compileArrayMask handles deref internally
+			lhsSyms[i] = c.compileArrayMask(op, left[i], right[i], info.OutTypes[i])
 			c.freeSymbolValue(left[i], "")
 			left[i].Borrowed = true
 		}
@@ -1044,13 +1044,129 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
 		exprValues := []ast.Expression{expr}
 
-		c.compileCondExprValue(expr, stmtCond, func() {
-			c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
-		})
+		// A value-position multi-return comparison (Pair > Pair, Mix > Mix, ...)
+		// commits each slot independently: array slots mask (overwrite), scalar slots
+		// gate on their own condition — commit the LHS when it holds, keep the seeded
+		// prior value otherwise (the same keep-old-on-false a single comparison gives).
+		// A failing slot affects only itself, never the tuple. The cell-wise AND is
+		// reserved for gate/condition position and for || fallback; a single-return
+		// comparison keeps the gated path below.
+		if infix, ok := c.independentTupleComparison(expr, info); ok {
+			c.compileTupleComparisonPerSlot(infix, info, exprTempNames, stmtCond)
+		} else {
+			c.compileCondExprValue(expr, stmtCond, func() {
+				c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
+			})
+		}
 
 		targetIdx += numOutputs
 	}
 
 	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+}
+
+// independentTupleComparison returns the comparison and true when expr is a
+// value-position multi-return comparison whose slots commit independently (array
+// masks plus per-slot-gated scalars) rather than as one all-or-nothing AND-gate.
+// True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither a
+// fallback-|| nor ranged. A single-return comparison is excluded (it keeps the
+// gated path), and the cell-wise AND still applies in gate/condition position and
+// for ||.
+func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInfo) (*ast.InfixExpression, bool) {
+	infix, ok := expr.(*ast.InfixExpression)
+	if !ok {
+		return nil, false
+	}
+	if info.HasFallbackOr() || len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return nil, false
+	}
+	if !info.HasCondArray() && !info.HasCondScalar() {
+		return nil, false
+	}
+	if len(info.OutTypes) <= 1 {
+		return nil, false
+	}
+	return infix, true
+}
+
+// compileTupleComparisonPerSlot commits a value-position multi-return comparison
+// slot by slot into the pre-seeded temps. Array slots mask and overwrite; scalar
+// slots commit their LHS only when the per-slot comparison holds, otherwise leaving
+// the seeded prior value in place (keep-old-on-false). The whole commit is guarded
+// by any statement condition. Operands are evaluated once and freed after.
+func (c *Compiler) compileTupleComparisonPerSlot(infix *ast.InfixExpression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
+	c.assignUnderStmtCond(stmtCond, func() {
+		// Guard operand evaluation so an out-of-bounds access (e.g. arr[oob]) in any
+		// operand fails the whole tuple assignment and keeps the prior values, like a
+		// normal assignment. Bounds checks are recorded while the operands compile.
+		guardPtr := c.pushBoundsGuard("tuple_bounds_guard")
+		defer c.popBoundsGuard()
+
+		left := c.compileExpression(infix.Left, nil)
+		right := c.compileExpression(infix.Right, nil)
+
+		commitSlots := func() {
+			for i := range left {
+				elemType := info.OutTypes[i]
+				if info.CompareModes[i] == CondArray {
+					mask := c.compileArrayMask(infix.Operator, left[i], right[i], elemType)
+					c.commitSlotValue(tempNames[i], mask, elemType, false)
+					continue
+				}
+
+				lhs, cond := c.compareScalars(infix.Operator, left[i], right[i])
+				ifBlock, contBlock := c.createIfCont(cond, "tuple_slot_if", "tuple_slot_cont")
+				c.builder.SetInsertPointAtEnd(ifBlock)
+				c.commitSlotValue(tempNames[i], lhs, elemType, true)
+				c.builder.CreateBr(contBlock)
+				c.builder.SetInsertPointAtEnd(contBlock)
+			}
+		}
+
+		if c.stmtBoundsUsed() {
+			c.withGuardedBranch(guardPtr, "tuple_bounds_ok", "tuple_bounds_commit", "tuple_bounds_skip", "tuple_bounds_cont", commitSlots, nil)
+		} else {
+			commitSlots()
+		}
+
+		c.freeTemporary(infix.Left, left)
+		c.freeTemporary(infix.Right, right)
+	})
+}
+
+// assignUnderStmtCond runs commit unconditionally when there is no statement
+// condition, or guarded by it (keeping the seeded prior values on the false path).
+func (c *Compiler) assignUnderStmtCond(stmtCond llvm.Value, commit func()) {
+	if stmtCond.IsNil() {
+		commit()
+		return
+	}
+
+	ifBlock, contBlock := c.createIfCont(stmtCond, "if", "continue")
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	commit()
+	c.builder.CreateBr(contBlock)
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// commitSlotValue stores value into the pre-seeded temp slot, freeing the slot's
+// previous value unless it is a borrowed view. copyValue deep-copies the value
+// first (for a borrowed scalar LHS that the temp must own); an array mask is
+// already owned and passes through. Mirrors the seed-commit protocol used by
+// commitStageTempOutputs.
+func (c *Compiler) commitSlotValue(tempIdent *ast.Identifier, value *Symbol, elemType Type, copyValue bool) {
+	tempSym, _ := Get(c.Scopes, tempIdent.Value)
+	oldValue := c.valueSymbol(tempIdent.Value, tempSym, tempIdent.Value+"_slot_old")
+
+	toStore := value
+	if copyValue {
+		toStore = c.deepCopyIfNeeded(value)
+	}
+	c.storeSymbolToSlot(tempSym, toStore, elemType, tempIdent.Value+"_slot_store")
+
+	if c.skipBorrowedOldValueFree(oldValue) {
+		return
+	}
+	c.freeSymbolValue(oldValue, tempIdent.Value+"_slot_old")
 }

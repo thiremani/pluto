@@ -1721,7 +1721,7 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 		switch mode {
 		case CondArray:
-			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
+			res = append(res, c.compileArrayMask(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		case CondScalar:
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).

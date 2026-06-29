@@ -58,7 +58,7 @@ arrSelf = [Square(arrSelf[1:4] > 20)]
 "SquareArrSelfNoMatch: -arrSelf"
 "SquareArrSelfMixed: -arrSelfMixed\n"
 
-# Nested filter composition
+# Nested mask composition: (arr > 3) masks to [0 0 0 5], then < 8 masks again.
 nestedFilterVal = (arr > 3) < 8
 nestedSquareFilterVal = Square((arr > 3) < 8)
 
