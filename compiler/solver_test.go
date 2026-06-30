@@ -640,8 +640,8 @@ func TestCondValueDiagnostics(t *testing.T) {
 		{
 			// A mixed scalar/array multi-return comparison cannot gate: the array
 			// cell is a mask (an array value), not a boolean, and gate lowering would
-			// silently drop it. MixSA returns (scalar, array) so the array cell is not first —
-			// exercising the all-cells check, not just cell 0.
+			// silently drop it. MixSA returns (scalar, array) so the array cell is
+			// not first — exercising the all-cells check, not just cell 0.
 			name:        "MixedArrayCellRejected",
 			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
 			script:      "y = (MixSA(5) > MixSA(3)  7)",

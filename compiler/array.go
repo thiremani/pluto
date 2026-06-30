@@ -607,6 +607,16 @@ func (c *Compiler) forEachArrayPair(
 	})
 }
 
+// arrayResultSym wraps a freshly built single-column array vector as a Symbol,
+// bitcast to the opaque i8* array handle used for array values.
+func (c *Compiler) arrayResultSym(resVec llvm.Value, resElem Type) *Symbol {
+	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+	return &Symbol{
+		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
+		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
+	}
+}
+
 func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
 	leftArrType := left.Type.(Array)
 	rightArrType := right.Type.(Array)
@@ -639,10 +649,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	})
 
 	// Return result array
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
-	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
-	return resSym
+	return c.arrayResultSym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
@@ -666,10 +673,7 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
-	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
-	return resSym
+	return c.arrayResultSym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
@@ -695,10 +699,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	resSym := &Symbol{Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0}}
-	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
-	return resSym
+	return c.arrayResultSym(resVec, resElem)
 }
 
 // compileArrayMask dispatches value-position comparison masking when at least one
@@ -746,11 +747,7 @@ func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol,
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	return &Symbol{
-		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
-		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
-	}
+	return c.arrayResultSym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
@@ -769,11 +766,7 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	return &Symbol{
-		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
-		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
-	}
+	return c.arrayResultSym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {

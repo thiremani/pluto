@@ -59,6 +59,12 @@ func (info *ExprInfo) HasCondArray() bool {
 	return false
 }
 
+// HasAnyComparison returns true if any slot is a comparison in value position
+// (a scalar conditional or an array mask).
+func (info *ExprInfo) HasAnyComparison() bool {
+	return info.HasCondScalar() || info.HasCondArray()
+}
+
 func (info *ExprInfo) HasFallbackOr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondOr {
@@ -1842,7 +1848,7 @@ func (ts *TypeSolver) rejectChainedTupleComparison(expr *ast.InfixExpression) {
 // comparison (it carries per-slot comparison lowering modes).
 func (ts *TypeSolver) isValuePositionComparison(expr ast.Expression) bool {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && (info.HasCondScalar() || info.HasCondArray())
+	return info != nil && info.HasAnyComparison()
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {

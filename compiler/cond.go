@@ -1082,7 +1082,7 @@ func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInf
 	if info.HasFallbackOr() || len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return nil, false
 	}
-	if !info.HasCondArray() && !info.HasCondScalar() {
+	if !info.HasAnyComparison() {
 		return nil, false
 	}
 	if len(info.OutTypes) <= 1 {
@@ -1144,7 +1144,7 @@ func (c *Compiler) assignUnderStmtCond(stmtCond llvm.Value, commit func()) {
 		return
 	}
 
-	ifBlock, contBlock := c.createIfCont(stmtCond, "if", "continue")
+	ifBlock, contBlock := c.createIfCont(stmtCond, "stmt_cond_if", "stmt_cond_cont")
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	commit()
 	c.builder.CreateBr(contBlock)
