@@ -1804,6 +1804,10 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
 	}
 
+	if isValueCmp && len(left) > 1 {
+		ts.rejectChainedTupleComparison(expr)
+	}
+
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
@@ -1813,6 +1817,32 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	return
+}
+
+// rejectChainedTupleComparison rejects a value-position multi-return comparison
+// whose own operand is a comparison — a chained tuple comparison such as
+// Pair > Pair < Pair. Per-slot tuple comparisons do not yet support chaining (the
+// leftmost binding needs the AST chain extraction the per-slot lowering can't
+// reach), so this is rejected rather than silently lowered to all-or-nothing
+// gating, which would contradict the documented per-slot value-position semantics.
+// Per-slot tuple chaining is planned for the value-extraction unification. The
+// check naturally defers during fixpoint iteration: an operand is only tagged as a
+// comparison once its types resolve.
+func (ts *TypeSolver) rejectChainedTupleComparison(expr *ast.InfixExpression) {
+	if !ts.isValuePositionComparison(expr.Left) && !ts.isValuePositionComparison(expr.Right) {
+		return
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: expr.Token,
+		Msg:   "chained comparison over multi-return values is not supported yet (e.g. Pair > Pair < Pair); compare single values instead",
+	})
+}
+
+// isValuePositionComparison reports whether expr was typed as a value-position
+// comparison (it carries per-slot comparison lowering modes).
+func (ts *TypeSolver) isValuePositionComparison(expr ast.Expression) bool {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && (info.HasCondScalar() || info.HasCondArray())
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {

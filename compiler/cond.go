@@ -1072,7 +1072,8 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 // True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither a
 // fallback-|| nor ranged. A single-return comparison is excluded (it keeps the
 // gated path), and the cell-wise AND still applies in gate/condition position and
-// for ||.
+// for ||. Chained tuple comparisons (Pair > Pair < Pair) never reach here — the
+// type solver rejects them (rejectChainedTupleComparison).
 func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInfo) (*ast.InfixExpression, bool) {
 	infix, ok := expr.(*ast.InfixExpression)
 	if !ok {

@@ -557,6 +557,30 @@ func TestMixedArrayScalarStatementConditionRejected(t *testing.T) {
 	require.Truef(t, found, "expected array-cell rejection, got: %v", ts.Errors)
 }
 
+func TestChainedTupleComparisonRejected(t *testing.T) {
+	ctx := llvm.NewContext()
+	// Pair returns two values; a chained comparison over them (Pair < Pair > Pair)
+	// has no per-slot chaining yet, so the solver rejects it rather than silently
+	// lowering to all-or-nothing gating (which would contradict the documented
+	// per-slot value-position semantics).
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "chainedTupleCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "a, b = Pair(5, 7) < Pair(4, 9) > Pair(2, 6)"
+	sl := lexer.New("chainedTupleCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "chained tuple comparison should emit one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "chained comparison over multi-return values is not supported")
+}
+
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarConditionDiagnostic", "", ast.NewCode())

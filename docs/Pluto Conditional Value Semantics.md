@@ -213,6 +213,12 @@ The cell-wise **AND** (every cell must hold) applies only where a multi-cell
 comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`) or the test
 behind a value-position `||` fallback — never to the value itself.
 
+*Chaining* a multi-return comparison (`Pair > Pair < Pair`) is **rejected at
+compile time** for now: per-slot chaining needs the leftmost-binding chain
+extraction the per-slot lowering can't yet reach, and silently falling back to
+all-or-nothing would contradict the per-slot rule above. Single-value chained
+comparisons (`a > 2 < 8`) are unaffected. Per-slot tuple chaining is planned.
+
 ## Why this model
 
 - **Referential transparency:** a value-position conditional equals a named
