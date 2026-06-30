@@ -1069,17 +1069,24 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 // independentTupleComparison returns the comparison and true when expr is a
 // value-position multi-return comparison whose slots commit independently (array
 // masks plus per-slot-gated scalars) rather than as one all-or-nothing AND-gate.
-// True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither a
-// fallback-|| nor ranged. A single-return comparison is excluded (it keeps the
-// gated path), and the cell-wise AND still applies in gate/condition position and
-// for ||. Chained tuple comparisons (Pair > Pair < Pair) never reach here — the
-// type solver rejects them (rejectChainedTupleComparison).
+// True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither
+// ranged nor contains a value-position || anywhere in its tree. A single-return
+// comparison is excluded (it keeps the gated path), and the cell-wise AND still
+// applies in gate/condition position and for ||. Chained tuple comparisons
+// (Pair > Pair < Pair) never reach here — the type solver rejects them
+// (rejectChainedTupleComparison).
+//
+// The || check is the recursive hasFallbackOrInTree, not the flat info.HasFallbackOr:
+// a || nested in an operand (e.g. Pair(a > 2 || 7, b) > Pair(1, 1)) leaves the top
+// comparison's CompareModes free of CondOr, but the per-slot path evaluates operands
+// directly — without the yield/branching context a value-position || needs — so such
+// an expression must defer to the gated path.
 func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInfo) (*ast.InfixExpression, bool) {
 	infix, ok := expr.(*ast.InfixExpression)
 	if !ok {
 		return nil, false
 	}
-	if info.HasFallbackOr() || len(c.pendingLoopRanges(info.Ranges)) > 0 {
+	if c.hasFallbackOrInTree(expr) || len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return nil, false
 	}
 	if !info.HasAnyComparison() {

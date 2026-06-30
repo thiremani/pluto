@@ -260,6 +260,18 @@ hod = "keep" ⊕ "D"
 hoc, hod = PairStr(3, oobArr[10]) > PairStr(2, 0)
 "HeapOobKeepsPrev: -hoc -hod"
 
+# A value-position || nested inside a tuple-comparison operand must NOT take the
+# per-slot path (which has no || branching context); it defers to the gated path.
+# (Regression: this used to panic — "value-position logical OR must be lowered
+# through conditional expression branching".)
+noA = 5
+noB = 9
+noPx, noPy = Pair(noA > 2 || 7, noB) > Pair(1, 1)
+"NestedOrOperandTrue: -noPx -noPy"
+noC = 1
+noPx2, noPy2 = Pair(noC > 2 || 7, noB) > Pair(1, 1)
+"NestedOrOperandFallback: -noPx2 -noPy2"
+
 # Heap-allocating LHS in cond-expr: (a + b) > threshold
 # The addition creates a temporary; on false path it must be freed.
 ia = 3
