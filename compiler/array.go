@@ -607,13 +607,13 @@ func (c *Compiler) forEachArrayPair(
 	})
 }
 
-// arrayResultSym wraps a freshly built single-column array vector as a Symbol,
-// bitcast to the opaque i8* array handle used for array values.
-func (c *Compiler) arrayResultSym(resVec llvm.Value, resElem Type) *Symbol {
+// arraySym wraps an array vector and element type as a Symbol, bitcast to the
+// opaque i8* array handle used for array values.
+func (c *Compiler) arraySym(array llvm.Value, elemType Type) *Symbol {
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	return &Symbol{
-		Type: Array{Headers: nil, ColTypes: []Type{resElem}, Length: 0},
-		Val:  c.builder.CreateBitCast(resVec, i8p, "arr_i8p"),
+		Type: Array{Headers: nil, ColTypes: []Type{elemType}, Length: 0},
+		Val:  c.builder.CreateBitCast(array, i8p, "arr_i8p"),
 	}
 }
 
@@ -649,7 +649,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	})
 
 	// Return result array
-	return c.arrayResultSym(resVec, resElem)
+	return c.arraySym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
@@ -673,7 +673,7 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 
 	// Return concatenated array
-	return c.arrayResultSym(resVec, resElem)
+	return c.arraySym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
@@ -699,7 +699,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
-	return c.arrayResultSym(resVec, resElem)
+	return c.arraySym(resVec, resElem)
 }
 
 // compileArrayMask dispatches value-position comparison masking when at least one
@@ -747,7 +747,7 @@ func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol,
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arrayResultSym(resVec, resElem)
+	return c.arraySym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
@@ -766,7 +766,7 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arrayResultSym(resVec, resElem)
+	return c.arraySym(resVec, resElem)
 }
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
@@ -794,10 +794,7 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 		c.ArraySetOwnForType(resElem, resVec, idx, resultVal)
 	})
 
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
-	resSym := &Symbol{Type: result}
-	resSym.Val = c.builder.CreateBitCast(resVec, i8p, "arr_i8p")
-	return resSym
+	return c.arraySym(resVec, resElem)
 }
 
 // Array string conversion function
