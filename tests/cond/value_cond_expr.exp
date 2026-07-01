@@ -59,8 +59,6 @@ OobTupleBefore: 77 66
 OobTupleKeepsPrev: 77 66
 HeapOobBefore: keepC keepD
 HeapOobKeepsPrev: keepC keepD
-NestedOrOperandTrue: 5 9
-NestedOrOperandFallback: 7 9
 IntAddTrue: 7
 IntAddFalse: 0
 StrCmpTrue: banana

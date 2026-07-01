@@ -581,6 +581,30 @@ func TestChainedTupleComparisonRejected(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "chained comparison over multi-return values is not supported")
 }
 
+func TestInnerFallbackOrTupleComparisonRejected(t *testing.T) {
+	ctx := llvm.NewContext()
+	// A value-position || nested in a multi-return comparison operand
+	// (Pair(5 > 2 || 7, 9) > Pair(1, 1)) can't be lowered by the per-slot path — that
+	// path evaluates operands inline without the || branching context — so the solver
+	// rejects it rather than silently lowering to all-or-nothing gating.
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "innerOrTupleCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "px, py = Pair(5 > 2 || 7, 9) > Pair(1, 1)"
+	sl := lexer.New("innerOrTupleCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "inner-|| tuple comparison should emit one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a multi-return comparison operand is not supported")
+}
+
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarConditionDiagnostic", "", ast.NewCode())

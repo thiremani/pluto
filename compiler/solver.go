@@ -1812,6 +1812,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 	if isValueCmp && len(left) > 1 {
 		ts.rejectChainedTupleComparison(expr)
+		ts.rejectInnerFallbackOrTupleComparison(expr)
 	}
 
 	// Create new entry
@@ -1849,6 +1850,48 @@ func (ts *TypeSolver) rejectChainedTupleComparison(expr *ast.InfixExpression) {
 func (ts *TypeSolver) isValuePositionComparison(expr ast.Expression) bool {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	return info != nil && info.HasAnyComparison()
+}
+
+// rejectInnerFallbackOrTupleComparison rejects a value-position multi-return
+// comparison whose operand carries a bare value-position || — one not resolved
+// locally behind an array literal or (cond value) — e.g.
+// Pair(a > 2 || 7, b) > Pair(1, 1). The per-slot lowering evaluates operands inline
+// and can't set up the branching a value-position || needs, and deferring the whole
+// comparison to all-or-nothing gating would silently change the per-slot value
+// semantics (Pair(a > 2 || 7, b) > Pair(10, 1) would give 0 0 instead of 0 9). So it
+// is rejected here (like a chained tuple) rather than mis-lowered; real support is
+// planned for the value-extraction unification. A || nested behind a (cond value) or
+// array literal self-resolves and is left alone. A top-level || (Pair > Pair || ...)
+// never reaches here — it is typed by typeLogicalOrExpression.
+func (ts *TypeSolver) rejectInnerFallbackOrTupleComparison(expr *ast.InfixExpression) {
+	if !ts.operandHasFallbackOr(expr.Left) && !ts.operandHasFallbackOr(expr.Right) {
+		return
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: expr.Token,
+		Msg:   "value-position || inside a multi-return comparison operand is not supported yet (e.g. Pair(a > 2 || 7, b) > Pair(1, 1)); compute the operand first",
+	})
+}
+
+// operandHasFallbackOr reports whether expr's tree contains a value-position ||
+// that is not resolved locally behind an array literal or (cond value). Mirrors the
+// compiler's hasFallbackOrInTree boundaries.
+func (ts *TypeSolver) operandHasFallbackOr(expr ast.Expression) bool {
+	if _, ok := ast.IsLogicalOr(expr); ok {
+		if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasFallbackOr() {
+			return true
+		}
+	}
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.CondValueExpr:
+		return false
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if ts.operandHasFallbackOr(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {

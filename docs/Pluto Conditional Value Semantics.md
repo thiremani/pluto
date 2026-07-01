@@ -213,11 +213,18 @@ The cell-wise **AND** (every cell must hold) applies only where a multi-cell
 comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`) or the test
 behind a value-position `||` fallback — never to the value itself.
 
-*Chaining* a multi-return comparison (`Pair > Pair < Pair`) is **rejected at
-compile time** for now: per-slot chaining needs the leftmost-binding chain
-extraction the per-slot lowering can't yet reach, and silently falling back to
-all-or-nothing would contradict the per-slot rule above. Single-value chained
-comparisons (`a > 2 < 8`) are unaffected. Per-slot tuple chaining is planned.
+Two forms are **rejected at compile time** for now, rather than silently falling
+back to all-or-nothing (which would contradict the per-slot rule above):
+
+- *Chaining* a multi-return comparison (`Pair > Pair < Pair`) — per-slot chaining
+  needs the leftmost-binding chain extraction the per-slot lowering can't yet reach.
+- A **bare value-position `||` inside an operand** (`Pair(a > 2 || 7, b) > Pair(1, 1)`)
+  — the per-slot lowering evaluates operands inline and can't set up the branching a
+  `||` needs. (A `||` behind a `(cond value)` or array literal self-resolves and is
+  fine; a *top-level* `||` fallback — `Pair > Pair || Pair` — is fine too.)
+
+Single-value chained comparisons (`a > 2 < 8`) are unaffected. Per-slot support for
+both is planned for the value-extraction unification.
 
 ## Why this model
 

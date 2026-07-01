@@ -1070,17 +1070,16 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 // value-position multi-return comparison whose slots commit independently (array
 // masks plus per-slot-gated scalars) rather than as one all-or-nothing AND-gate.
 // True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither
-// ranged nor contains a value-position || anywhere in its tree. A single-return
-// comparison is excluded (it keeps the gated path), and the cell-wise AND still
-// applies in gate/condition position and for ||. Chained tuple comparisons
-// (Pair > Pair < Pair) never reach here — the type solver rejects them
-// (rejectChainedTupleComparison).
+// ranged nor a fallback-||. A single-return comparison is excluded (it keeps the
+// gated path), and the cell-wise AND still applies in gate/condition position and
+// for ||. Two related forms never reach here — the type solver rejects them: a
+// chained tuple comparison (Pair > Pair < Pair; rejectChainedTupleComparison) and a
+// tuple comparison with a bare || in an operand (Pair(a > 2 || 7, b) > Pair(1, 1);
+// rejectInnerFallbackOrTupleComparison), which the per-slot path can't lower.
 //
-// The || check is the recursive hasFallbackOrInTree, not the flat info.HasFallbackOr:
-// a || nested in an operand (e.g. Pair(a > 2 || 7, b) > Pair(1, 1)) leaves the top
-// comparison's CompareModes free of CondOr, but the per-slot path evaluates operands
-// directly — without the yield/branching context a value-position || needs — so such
-// an expression must defer to the gated path.
+// hasFallbackOrInTree here therefore fires only for a top-level fallback-|| tuple
+// (Pair > Pair || Pair): that is correctly all-or-nothing (a fallback is a single
+// whole-tuple decision), so it is deferred to the gated path.
 func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInfo) (*ast.InfixExpression, bool) {
 	infix, ok := expr.(*ast.InfixExpression)
 	if !ok {
