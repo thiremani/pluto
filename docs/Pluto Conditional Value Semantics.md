@@ -218,10 +218,11 @@ back to all-or-nothing (which would contradict the per-slot rule above):
 
 - *Chaining* a multi-return comparison (`Pair > Pair < Pair`) — per-slot chaining
   needs the leftmost-binding chain extraction the per-slot lowering can't yet reach.
-- A **bare value-position `||` inside an operand** (`Pair(a > 2 || 7, b) > Pair(1, 1)`)
-  — the per-slot lowering evaluates operands inline and can't set up the branching a
-  `||` needs. (A `||` behind a `(cond value)` or array literal self-resolves and is
-  fine; a *top-level* `||` fallback — `Pair > Pair || Pair` — is fine too.)
+- A **value-position `||` inside an operand** (`Pair(a > 2 || 7, b) > Pair(1, 1)`, or
+  in a `(cond value)`'s value arm, `Pair((c  x || 7), b) > …`) — the per-slot lowering
+  evaluates operands inline and can't set up the branching a `||` needs. (A `||` in an
+  array-literal cell self-resolves and is fine, as is a *top-level* `||` fallback —
+  `Pair > Pair || Pair`.)
 
 Single-value chained comparisons (`a > 2 < 8`) are unaffected. Per-slot support for
 both is planned for the value-extraction unification.

@@ -1873,18 +1873,23 @@ func (ts *TypeSolver) rejectInnerFallbackOrTupleComparison(expr *ast.InfixExpres
 	})
 }
 
-// operandHasFallbackOr reports whether expr's tree contains a value-position ||
-// that is not resolved locally behind an array literal or (cond value). Mirrors the
-// compiler's hasFallbackOrInTree boundaries.
+// operandHasFallbackOr reports whether expr's tree contains a value-position || that
+// the per-slot tuple lowering can't handle. An array literal resolves a || in a cell
+// locally, so it stays a boundary. A (cond value) is NOT a full boundary: a || in its
+// value arm is still lowered inline (it reaches compileInfixBasic and panics), so its
+// value arm is scanned. (A || in the condition arm is a parse error, so only the
+// value arm matters.)
 func (ts *TypeSolver) operandHasFallbackOr(expr ast.Expression) bool {
 	if _, ok := ast.IsLogicalOr(expr); ok {
 		if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasFallbackOr() {
 			return true
 		}
 	}
-	switch expr.(type) {
-	case *ast.ArrayLiteral, *ast.CondValueExpr:
+	switch e := expr.(type) {
+	case *ast.ArrayLiteral:
 		return false
+	case *ast.CondValueExpr:
+		return ts.operandHasFallbackOr(e.Value)
 	}
 	for _, child := range ast.ExprChildren(expr) {
 		if ts.operandHasFallbackOr(child) {

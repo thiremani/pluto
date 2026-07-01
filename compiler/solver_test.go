@@ -605,6 +605,29 @@ func TestInnerFallbackOrTupleComparisonRejected(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a multi-return comparison operand is not supported")
 }
 
+func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
+	ctx := llvm.NewContext()
+	// A (cond value) is not a full boundary: a || in its value arm is still lowered
+	// inline and would panic in the per-slot tuple path, so the operand scan reaches
+	// into CondValueExpr.Value and rejects Pair((1 > 0  0 > 1 || 7), 9) > Pair(1, 1).
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "condValArmOrCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "px, py = Pair((1 > 0 0 > 1 || 7), 9) > Pair(1, 1)"
+	sl := lexer.New("condValArmOrCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "|| in a (cond value) value arm should emit one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a multi-return comparison operand is not supported")
+}
+
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarConditionDiagnostic", "", ast.NewCode())
