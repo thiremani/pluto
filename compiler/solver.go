@@ -134,24 +134,6 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	}
 }
 
-// dedupeErrors collapses identical diagnostics, keeping first occurrences in
-// order. Function bodies are re-typed on every fixpoint pass (and once per
-// call-site specialization), so an error inside one is appended once per pass;
-// deduplicating the final list once avoids per-emission bookkeeping.
-func (ts *TypeSolver) dedupeErrors() {
-	seen := make(map[string]struct{}, len(ts.Errors))
-	kept := ts.Errors[:0]
-	for _, ce := range ts.Errors {
-		k := ce.Error()
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		kept = append(kept, ce)
-	}
-	ts.Errors = kept
-}
-
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
@@ -696,8 +678,6 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 }
 
 func (ts *TypeSolver) Solve() {
-	defer ts.dedupeErrors()
-
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
 	for _, stmt := range program.Statements {
@@ -1688,8 +1668,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 
 	// A || in the value arm is the one position still lowered inline with no
 	// branching context (it would panic in compileInfixBasic), so reject it —
-	// value-position || resolves per slot everywhere else. Fixpoint re-typing
-	// repeats this append; Solve deduplicates the final list.
+	// value-position || resolves per slot everywhere else.
 	if ts.valueArmHasFallbackOr(expr.Value) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
@@ -2333,17 +2312,22 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			return f.OutTypes
 		}
 
-		// No further progress possible. If typing this function reported
-		// errors, they are the cause (TypeBlock aborts on them before outputs
-		// infer) — a "not converging" message on top would misdirect to cyclic
-		// recursion. Errors reported before this function do not suppress it.
+		// A typing error is fatal for this function: TypeBlock aborts on it
+		// before outputs infer, and the error is deterministic, so another
+		// pass would only append the same diagnostic again. Stopping here
+		// keeps the error list append-only with no duplicates, and skips the
+		// "not converging" message — the reported errors are the cause, not
+		// cyclic recursion.
+		if len(ts.Errors) > errsAtEntry {
+			return f.OutTypes
+		}
+
+		// no further progress possible
 		if !ts.Converging {
-			if len(ts.Errors) == errsAtEntry {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: template.Token,
-					Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
-				})
-			}
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: template.Token,
+				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+			})
 			return f.OutTypes
 		}
 	}
