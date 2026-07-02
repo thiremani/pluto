@@ -165,3 +165,43 @@ SmcCondTrue: 7
 SmcCondKeepOld: 99
 SmcCondMulti: 8 9
 SmcCondStr: 42
+ChainTupleBefore: 11 22
+ChainTuple: 5 22
+ChainTupleFresh: 5 7
+ChainTupleGateBefore: 100
+ChainTupleGate: 42
+ChainTupleGateFalseBefore: 100
+ChainTupleGateFalse: 100
+ArithWrapBefore: 11 22
+ArithWrap: 5 22
+ArithWrapChain: 6 0
+MixArith: [0 1] 0
+CallArgBefore: 111
+CallArgMergesSlots: 111
+GatedLeafBefore: 77 88
+GatedLeaf: 77 88
+GatedLeafPass: 8 9
+RangedGateBefore: 11 22
+RangedGate: 5 22
+TupleOrMixed: 5 0
+TupleOrOldBefore: 11 22
+TupleOrOld: 5 -1
+TupleOrBothFailBefore: 11 22
+TupleOrBothFail: 11 22
+InnerOrOperand: 7 9
+HeapChainBefore: oldA oldB
+HeapChain: s3! oldB
+LitTupleA: zzz
+LitTupleB: |
+HeapTupleOr: s3! s9!
+HeapTupleOrBefore: oldC oldD
+HeapTupleOrBothFallback: s7! s7!
+NamedArrMask: [0 2 3] 5 [1 2 3]
+StaticIntoHeapBefore: x1 x2
+StaticIntoHeap: zzz x2
+GatedMaskBefore: [9 9] 99
+GatedMask: [9 9] 99
+GatedMaskOrBefore: [9 9] 99
+GatedMaskOr: [7 7] 17
+ParenRightBefore: seed0
+ParenRight: seed0

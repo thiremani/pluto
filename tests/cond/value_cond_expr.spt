@@ -650,3 +650,146 @@ smcM, smcN = Pair(3, 4) > Pair(1, 1) 8, 9
 # the returned heap cells are freed after gating (no leak).
 smcStr = PairStr(3, 1) > PairStr(2, 0) 42
 "SmcCondStr: -smcStr"
+
+# Chained tuple comparisons resolve per slot: each slot chains like a single
+# comparison (leftmost LHS binds), a failing slot keeps only its own old value.
+ctA = 11
+ctB = 22
+"ChainTupleBefore: -ctA -ctB"
+ctA, ctB = Pair(5, 7) > Pair(1, 8) < Pair(9, 9)
+"ChainTuple: -ctA -ctB"
+ctC, ctD = Pair(5, 7) > Pair(4, 2) < Pair(9, 9)
+"ChainTupleFresh: -ctC -ctD"
+
+# In gate position the same chain is the cell-wise AND, like a single chain.
+ctGate = 100
+"ChainTupleGateBefore: -ctGate"
+ctGate = Pair(5, 7) > Pair(1, 2) < Pair(9, 9) 42
+"ChainTupleGate: -ctGate"
+ctGateF = 100
+"ChainTupleGateFalseBefore: -ctGateF"
+ctGateF = Pair(5, 7) > Pair(1, 2) < Pair(9, 6) 42
+"ChainTupleGateFalse: -ctGateF"
+
+# Arithmetic over a tuple comparison stays per slot: each output slot carries
+# only its own comparisons, and the combine runs only when its slot commits.
+awA = 11
+awB = 22
+"ArithWrapBefore: -awA -awB"
+awA, awB = (Pair(5, 7) > Pair(1, 8)) + Pair(0, 0)
+"ArithWrap: -awA -awB"
+awC, awD = ((Pair(5, 7) > Pair(1, 8)) + Pair(1, 1)) < Pair(9, 9)
+"ArithWrapChain: -awC -awD"
+
+# A mixed tuple through arithmetic: the array slot's mask flows through the
+# combine (and the intermediate mask is freed); the scalar slot keeps old.
+mxA, mxB = (Mix(1) > Mix(2)) + Mix(0)
+"MixArith: -mxA -mxB"
+
+# Call arguments merge slots: a call's outputs are produced together, so every
+# argument condition gates the whole call (keep-old), and a failing argument
+# comparison skips the call entirely.
+caSum = 111
+"CallArgBefore: -caSum"
+caSum = Accum(Pair(5, 7) > Pair(1, 8))
+"CallArgMergesSlots: -caSum"
+
+# A comparison nested in a tuple operand gates the slots that read it: the call
+# does not run when its argument comparison fails, and those slots keep old.
+k5 = 5
+glA = 77
+glB = 88
+"GatedLeafBefore: -glA -glB"
+glA, glB = Pair(Accum(k5 > 9, 3), 9) > Pair(-1, 1)
+"GatedLeaf: -glA -glB"
+glC, glD = Pair(Accum(k5 > 4, 3), 9) > Pair(-1, 1)
+"GatedLeafPass: -glC -glD"
+
+# A ranged statement condition does not change the value's per-slot semantics.
+rgA = 11
+rgB = 22
+"RangedGateBefore: -rgA -rgB"
+rgJ = 1:3
+rgA, rgB = rgJ > 0 Pair(5, 7) > Pair(1, 8)
+"RangedGate: -rgA -rgB"
+
+# || over tuples falls back per slot: slot i takes the right side only when
+# slot i of the left failed; a fallback beats keep-old, and when both sides
+# fail a slot keeps its old value.
+poA, poB = Pair(5, 7) > Pair(1, 8) || Pair(0, 0)
+"TupleOrMixed: -poA -poB"
+poC = 11
+poD = 22
+"TupleOrOldBefore: -poC -poD"
+poC, poD = Pair(5, 7) > Pair(1, 8) || Pair(-1, -1)
+"TupleOrOld: -poC -poD"
+poE = 11
+poF = 22
+"TupleOrBothFailBefore: -poE -poF"
+poE, poF = Pair(5, 7) > Pair(9, 8) || Pair(5, 7) > Pair(8, 9)
+"TupleOrBothFail: -poE -poF"
+
+# A || inside a comparison operand resolves to its value before the compare.
+ioA, ioB = Pair(0 > 2 || 7, 9) > Pair(1, 1)
+"InnerOrOperand: -ioA -ioB"
+
+# Heap-string chained tuple: the winning slot owns a copy, the failing slot
+# keeps its old heap value, and every intermediate is freed (leak-checked).
+hcA = "old" ⊕ "A"
+hcB = "old" ⊕ "B"
+"HeapChainBefore: -hcA -hcB"
+hcA, hcB = PairStr(3, 1) > PairStr(2, 5) < PairStr(9, 9)
+"HeapChain: -hcA -hcB"
+
+# Static-string (literal) slots: a passing slot stores the static string as-is
+# (no heap copy to leak), a failing slot keeps its "" seed.
+lsA, lsB = LitPair() > LitPair2()
+lsB2 = lsB ⊕ "|"
+"LitTupleA: -lsA"
+"LitTupleB: -lsB2"
+
+# Heap-string tuple ||: a slot that takes the heap fallback owns a copy of it
+# (the fallback temporaries are freed exactly once — this path once double-freed).
+hoA, hoB = PairStr(3, 1) > PairStr(1, 5) || PairStr(9, 9)
+"HeapTupleOr: -hoA -hoB"
+hoC = "old" ⊕ "C"
+hoD = "old" ⊕ "D"
+"HeapTupleOrBefore: -hoC -hoD"
+hoC, hoD = PairStr(1, 1) > PairStr(5, 5) || PairStr(7, 7)
+"HeapTupleOrBothFallback: -hoC -hoD"
+
+# A named array operand survives its mask (the mask copies elements; only
+# owned operands — call results, literals, inner masks — are consumed).
+nmArr = [1 2 3]
+nmK = 5
+nmM, nmS = nmArr > 1, nmK > 2
+"NamedArrMask: -nmM -nmS -nmArr"
+
+# Static-string winners committed into existing heap-string destinations: the
+# store's coercion makes the owned copy, and the old heap values are freed.
+ehA = "x" ⊕ "1"
+ehB = "x" ⊕ "2"
+"StaticIntoHeapBefore: -ehA -ehB"
+ehA, ehB = LitPair() > LitPair2()
+"StaticIntoHeap: -ehA -ehB"
+
+# A mask whose slot condition fails at runtime (here: the arg comparison gates
+# the whole MixK call) is freed, not leaked; the slots keep old.
+gmK = 1
+gmA = [9 9]
+gmB = 99
+"GatedMaskBefore: -gmA -gmB"
+gmA, gmB = MixK(gmK > 2) > MixK(0)
+"GatedMask: -gmA -gmB"
+gmC = [9 9]
+gmD = 99
+"GatedMaskOrBefore: -gmC -gmD"
+gmC, gmD = MixK(gmK > 2) > MixK(0) || MixK(7)
+"GatedMaskOr: -gmC -gmD"
+
+# A parenthesized comparison as the right operand substitutes the inner's
+# retained LHS; the false path frees each heap value exactly once.
+prR = "seed" ⊕ "0"
+"ParenRightBefore: -prR"
+prR = MkStr(1) ⊕ "!" > (MkStr(2) ⊕ "!" > MkStr(3) ⊕ "!")
+"ParenRight: -prR"

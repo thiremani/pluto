@@ -7,8 +7,8 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-// condTemp holds a pre-compiled LHS operand and its source expression, used to
-// free heap temporaries on the false branch of conditional expression lowering.
+// condTemp holds a pre-compiled operand and its source expression, used to
+// free heap temporaries that a skipped or false path leaves unconsumed.
 type condTemp struct {
 	expr ast.Expression
 	syms []*Symbol
@@ -22,32 +22,17 @@ type condTemp struct {
 // gate must not leak). Returns a nil value when expr contributes no comparison
 // (e.g. a bare range driver, whose admitted domain is handled by the loop).
 func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
-	// No || in the tree: the gate is the conjunction of the comparisons, which
-	// extractCondExprs computes directly while freeing the retained LHS temps
-	// (a heap LHS tested only for the gate must not leak).
-	if !c.hasFallbackOrInTree(expr) {
-		c.pushCondLHSFrame()
-		defer c.popCondLHSFrame()
-		cond, temps := c.extractCondExprs(expr, llvm.Value{}, nil)
-		c.cleanupCondExprElse(temps)
-		return cond
-	}
-
-	// A value-position || is a left-biased fallback, so its gate is "did the
-	// expression yield?" — a > 2 || b > 3 gates on a>2 OR b>3, not AND. Reuse the
-	// value lowering: record the gate on the yield path and free the yielded value
-	// (a gate discards it; freeTemporary skips borrowed operands, so variables are
-	// safe and heap temporaries are released).
-	i1 := Int{Width: 1}
-	i1Ty := c.mapToLLVMType(i1)
-	gatePtr := c.createEntryBlockAlloca(i1Ty, "gate.mem")
-	c.createStore(llvm.ConstInt(i1Ty, 0, false), gatePtr, i1)
-	c.compileCondExprValue(expr, llvm.Value{}, func() {
-		vals := c.compileExpression(expr, nil)
-		c.freeTemporary(expr, vals)
-		c.createStore(llvm.ConstInt(i1Ty, 1, false), gatePtr, i1)
-	})
-	return c.createLoad(gatePtr, i1, "gate")
+	// The gate is the conjunction of the per-slot conditions extraction
+	// returns: for comparisons "did every cell hold", for a value-position ||
+	// "did every slot yield" — a > 2 || b > 3 gates on a>2 OR b>3, which IS its
+	// yield flag. The retained LHS values drive the gate but are not a result,
+	// so they are freed here (a heap LHS computed only to test a gate must not
+	// leak).
+	c.pushCondLHSFrame()
+	defer c.popCondLHSFrame()
+	conds, temps := c.extractSlotConds(expr, nil)
+	c.cleanupCondExprElse(temps)
+	return c.foldSlotConds(conds)
 }
 
 // andGates ANDs the i1 gates of a list of condition expressions ("did every
@@ -324,18 +309,8 @@ func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Iden
 func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
 	for i, ident := range dest {
 		stageSym, _ := Get(c.Scopes, stageTempNames[i].Value)
-		destSym, _ := Get(c.Scopes, ident.Value)
-
-		oldValue := c.valueSymbol(ident.Value, destSym, ident.Value+"_stage_old")
-		ptrType := destSym.Type.(Ptr)
-
 		stagedValue := c.valueSymbol(stageTempNames[i].Value, stageSym, stageTempNames[i].Value+"_stage_final")
-		c.storeSymbolToSlot(destSym, stagedValue, ptrType.Elem, ident.Value+"_stage_commit")
-
-		if c.skipBorrowedOldValueFree(oldValue) {
-			continue
-		}
-		c.freeSymbolValue(oldValue, ident.Value+"_stage_old")
+		c.commitSlotValue(ident, stagedValue, false)
 	}
 }
 
@@ -357,6 +332,13 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifi
 	}
 
 	c.withLoopNestVersioned(info.Ranges, []ast.Expression{expr}, func() {
+		// Iterators bound by this loop leave no pending ranges, so a per-slot
+		// value expression commits slot-by-slot here too — a ranged statement
+		// condition must not change the value's per-slot semantics.
+		if c.perSlotCommittable(expr, info) {
+			c.compilePerSlotAssign(expr, info, stageTempNames, llvm.Value{})
+			return
+		}
 		if c.hasCondExprInTree(expr) {
 			c.compileCondExprValue(expr, llvm.Value{}, compileStageAssign)
 			return
@@ -462,63 +444,60 @@ func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
 	return false
 }
 
-func (c *Compiler) fallbackOrExpr(expr ast.Expression) (*ast.InfixExpression, bool) {
-	infix, ok := ast.IsLogicalOr(expr)
-	if !ok {
-		return nil, false
+// andConds ANDs two i1 conditions where either may be nil (unconditional).
+func (c *Compiler) andConds(a, b llvm.Value, name string) llvm.Value {
+	if a.IsNil() {
+		return b
 	}
-
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	return infix, info.HasFallbackOr()
+	if b.IsNil() {
+		return a
+	}
+	return c.builder.CreateAnd(a, b, name)
 }
 
-func (c *Compiler) hasFallbackOrInTree(expr ast.Expression) bool {
-	if _, ok := c.fallbackOrExpr(expr); ok {
-		return true
+// foldSlotConds ANDs all per-slot conditions into a single gate. Returns nil
+// when every slot is unconditional.
+func (c *Compiler) foldSlotConds(conds []llvm.Value) llvm.Value {
+	var cond llvm.Value
+	for _, sc := range conds {
+		cond = c.andConds(cond, sc, "and_slots")
 	}
-	// Array cells and (cond value) nodes resolve any || at their own level (see
-	// extractCondExprs), so they are boundaries for statement-level fallback
-	// detection — don't descend into them.
-	switch expr.(type) {
-	case *ast.ArrayLiteral, *ast.CondValueExpr:
-		return false
-	}
-	for _, child := range ast.ExprChildren(expr) {
-		if c.hasFallbackOrInTree(child) {
-			return true
-		}
-	}
-	return false
+	return cond
 }
 
-// handleComparisons processes each slot of a multi-return comparison based on
-// its CondMode. CondScalar slots are compared and ANDed into cond. CondArray
-// slots are compiled as element-wise array masks (source freed, marked borrowed).
-func (c *Compiler) handleComparisons(op string, left, right []*Symbol, info *ExprInfo, cond llvm.Value) ([]*Symbol, llvm.Value) {
-	lhsSyms := make([]*Symbol, len(left))
-	for i := range left {
-		switch info.CompareModes[i] {
-		case CondScalar:
-			lSym, cmpVal := c.compareScalars(op, left[i], right[i])
-			if cond.IsNil() {
-				cond = cmpVal
-			} else {
-				cond = c.builder.CreateAnd(cond, cmpVal, fmt.Sprintf("and_cond_%d", i))
-			}
-			lhsSyms[i] = lSym
-		case CondArray:
-			// compileArrayMask handles deref internally
-			lhsSyms[i] = c.compileArrayMask(op, left[i], right[i], info.OutTypes[i])
-			c.freeSymbolValue(left[i], "")
-			left[i].Borrowed = true
-		}
+func slotCondAt(conds []llvm.Value, i int) llvm.Value {
+	if i >= len(conds) {
+		return llvm.Value{}
 	}
-	return lhsSyms, cond
+	return conds[i]
 }
 
-// extractCondExprs evaluates value-position comparisons and stores their LHS
-// values for substitution during later value compilation.
-func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
+// broadcastConds spreads one condition over n slots (all nil when cond is nil).
+func broadcastConds(cond llvm.Value, n int) []llvm.Value {
+	conds := make([]llvm.Value, n)
+	if cond.IsNil() {
+		return conds
+	}
+	for i := range conds {
+		conds[i] = cond
+	}
+	return conds
+}
+
+// extractSlotConds evaluates the value-position comparisons in expr and
+// returns per-slot conditions aligned to expr's output slots — a nil entry
+// (or an empty slice, for condition-free subtrees whose arity is not cached)
+// means the slot always yields. Comparison LHS values and array masks are
+// stashed in the condLHS frame for substitution during later value
+// compilation; retained operand temporaries are appended to temps.
+//
+// Conditions merge along dataflow. A slot-aligned infix combines its
+// children's conditions slot-wise, so each slot of Pair > Pair < Pair or
+// (Pair > Pair) + Pair(0, 0) carries only its own comparisons. Any other node
+// (call, index, range, ...) produces its slots together from all of its
+// children, so their conditions AND into every output slot — for a
+// single-output expression that is exactly the old single gate.
+func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Array-literal cells and (cond value) nodes are local-resolution boundaries:
@@ -529,29 +508,94 @@ func (c *Compiler) extractCondExprs(expr ast.Expression, cond llvm.Value, temps 
 	// and double-evaluates the node, leaking its heap LHS on the pass-through path.
 	switch expr.(type) {
 	case *ast.ArrayLiteral, *ast.CondValueExpr:
-		return cond, temps
+		return nil, temps
+	}
+
+	// A value-position || resolves per slot: slot i falls back only when slot i
+	// of the left side failed to yield.
+	if or, ok := ast.IsLogicalOr(expr); ok && info != nil && info.HasFallbackOr() {
+		return c.extractFallbackOrSlots(or, info, temps)
 	}
 
 	// Comparisons with ranges can be extracted only when all required iterators
 	// are already bound by an outer loop (no pending ranges).
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-		cond, temps = c.extractCondExprs(infix.Left, cond, temps)
-		cond, temps = c.extractCondExprs(infix.Right, cond, temps)
-		return c.extractCondComparison(infix, info, cond, temps)
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasAnyComparison() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		return c.extractComparisonSlots(infix, info, temps)
 	}
 
-	for _, child := range ast.ExprChildren(expr) {
-		cond, temps = c.extractCondExprs(child, cond, temps)
+	switch e := expr.(type) {
+	case *ast.InfixExpression:
+		var lConds, rConds []llvm.Value
+		lConds, temps = c.extractSlotConds(e.Left, temps)
+		rConds, temps = c.extractSlotConds(e.Right, temps)
+		if len(lConds) == 0 && len(rConds) == 0 {
+			return nil, temps
+		}
+		n := len(info.OutTypes)
+		if (len(lConds) == 0 || len(lConds) == n) && (len(rConds) == 0 || len(rConds) == n) {
+			conds := make([]llvm.Value, n)
+			for i := range conds {
+				conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("slot_and_%d", i))
+			}
+			return conds, temps
+		}
+		merged := c.andConds(c.foldSlotConds(lConds), c.foldSlotConds(rConds), "slot_merge")
+		return broadcastConds(merged, n), temps
+	case *ast.PrefixExpression:
+		return c.extractSlotConds(e.Right, temps)
 	}
-	return cond, temps
+
+	// Non-aligned nodes (calls, indexing, ranges, ...): every child feeds all
+	// output slots, so child conditions AND together and broadcast.
+	var all llvm.Value
+	for _, child := range ast.ExprChildren(expr) {
+		var childConds []llvm.Value
+		childConds, temps = c.extractSlotConds(child, temps)
+		all = c.andConds(all, c.foldSlotConds(childConds), "child_and")
+	}
+	if all.IsNil() {
+		return nil, temps
+	}
+	return broadcastConds(all, len(info.OutTypes)), temps
 }
 
-func (c *Compiler) extractCondComparison(infix *ast.InfixExpression, info *ExprInfo, cond llvm.Value, temps []condTemp) (llvm.Value, []condTemp) {
+// extractComparisonSlots evaluates one value-position comparison. Operands are
+// compiled once (an inner comparison substitutes its retained LHS, so chains
+// share one evaluation); each scalar slot yields its comparison bit ANDed with
+// the operands' own conditions for that slot, and each array slot becomes an
+// element-wise mask, which always yields and so contributes no condition. LHS
+// values are retained in the condLHS frame; the left operand is tracked as a
+// temporary unless it is a chained comparison that is already tracked.
+func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
+	var lConds, rConds []llvm.Value
+	lConds, temps = c.extractSlotConds(infix.Left, temps)
+	rConds, temps = c.extractSlotConds(infix.Right, temps)
+
 	left := c.compileExpression(infix.Left, nil)
 	right := c.compileExpression(infix.Right, nil)
 
-	var lhsSyms []*Symbol
-	lhsSyms, cond = c.handleComparisons(infix.Operator, left, right, info, cond)
+	conds := make([]llvm.Value, len(left))
+	lhsSyms := make([]*Symbol, len(left))
+	for i := range left {
+		operandCond := c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("operand_cond_%d", i))
+		switch info.CompareModes[i] {
+		case CondArray:
+			// compileArrayMask handles deref internally. The mask copies the
+			// elements it keeps, so an owned left operand (call result, literal,
+			// inner mask) is consumed here — but a named variable's loaded value
+			// is the variable's live payload and must survive.
+			lhsSyms[i] = c.compileArrayMask(infix.Operator, left[i], right[i], info.OutTypes[i])
+			if _, isIdent := infix.Left.(*ast.Identifier); !isIdent {
+				c.freeSymbolValue(left[i], "")
+				left[i].Borrowed = true
+			}
+			conds[i] = operandCond
+		default:
+			lSym, cmpVal := c.compareScalars(infix.Operator, left[i], right[i])
+			conds[i] = c.andConds(operandCond, cmpVal, fmt.Sprintf("slot_cond_%d", i))
+			lhsSyms[i] = lSym
+		}
+	}
 
 	frame := c.requireCondLHSFrame()
 	frame[key(c.FuncNameMangled, infix)] = lhsSyms
@@ -561,42 +605,193 @@ func (c *Compiler) extractCondComparison(infix *ast.InfixExpression, info *ExprI
 	// retained comparison, so it is the SAME symbol already tracked. Re-tracking it
 	// would free it twice (double-free / crash) for a heap LHS.
 	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
-		temps = append(temps, condTemp{infix.Left, left})
+		temps = append(temps, condTemp{expr: infix.Left, syms: left})
 	}
 
-	// Right is comparison-only; left is retained for condLHS substitution.
-	c.freeTemporary(infix.Right, right)
-	return cond, temps
+	// Right is comparison-only; left is retained for condLHS substitution. A
+	// parenthesized comparison on the right (a > (b < c)) substituted the inner
+	// comparison's retained LHS — the same symbol already tracked — so freeing
+	// it here would double-free on the cleanup path.
+	if _, chainedRight := frame[key(c.FuncNameMangled, infix.Right)]; !chainedRight {
+		c.freeTemporary(infix.Right, right)
+	}
+	return conds, temps
+}
+
+// extractFallbackOrSlots lowers a value-position || per slot: slot i yields the
+// left side's value when its condition holds and falls back to the right side
+// only when it failed. The right side is evaluated lazily — once, and only when
+// some slot did not yield. Each result slot holds an owned copy (or a freeable
+// zero when neither side yielded, which downstream reads never commit because
+// the returned slot condition is the yield flag). The resolved values are
+// stashed in the condLHS frame under the || node, and the slots are tracked as
+// one temporary, so both commit conventions work: the AND-gate world moves
+// them into destinations on the true path and frees them on the else path,
+// while the per-slot world copies then frees.
+func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
+	i1 := Int{Width: 1}
+	i1Ty := c.mapToLLVMType(i1)
+
+	slots := make([]llvm.Value, len(info.OutTypes))
+	yields := make([]llvm.Value, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("or_slot_%d.mem", i))
+		yields[i] = c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("or_yield_%d.mem", i))
+		c.createStore(llvm.ConstInt(i1Ty, 0, false), yields[i], i1)
+	}
+
+	storeSide := func(side ast.Expression, conds []llvm.Value, needFlags bool) {
+		for i, outType := range info.OutTypes {
+			store := func() {
+				val, owned := c.spineSlotValue(side, i, outType)
+				if owned {
+					// Ownership moves into the result slot; mark the source so
+					// mask cleanup skips it (a fresh combine is simply discarded).
+					val.Borrowed = true
+				} else {
+					// Deref before deciding to copy: a leaf's slot value may be
+					// Ptr-wrapped, and the copy must clone the pointee — the
+					// source is freed while the result slot lives on.
+					val = c.derefIfPointer(val, fmt.Sprintf("or_take_val_%d", i))
+					if !IsStrG(val.Type) {
+						val = c.deepCopyIfNeeded(val)
+					}
+				}
+				coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("or_val_%d", i))
+				c.createStore(coerced.Val, slots[i], coerced.Type)
+				c.createStore(llvm.ConstInt(i1Ty, 1, false), yields[i], i1)
+			}
+
+			cond := slotCondAt(conds, i)
+			if needFlags {
+				need := c.builder.CreateNot(c.createLoad(yields[i], i1, fmt.Sprintf("or_need_%d", i)), fmt.Sprintf("or_miss_%d", i))
+				cond = c.andConds(need, cond, fmt.Sprintf("or_take_%d", i))
+			}
+			if cond.IsNil() {
+				store()
+				continue
+			}
+
+			ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, fmt.Sprintf("or_store_%d", i), fmt.Sprintf("or_skip_%d", i), fmt.Sprintf("or_store_cont_%d", i))
+
+			c.builder.SetInsertPointAtEnd(ifBlock)
+			store()
+			c.builder.CreateBr(contBlock)
+
+			// A directly stored mask skipped at runtime was never moved; free it.
+			c.builder.SetInsertPointAtEnd(elseBlock)
+			c.freeSkippedSlotMask(side, i)
+			c.builder.CreateBr(contBlock)
+
+			c.builder.SetInsertPointAtEnd(contBlock)
+		}
+	}
+
+	beforeLeft := c.frameMaskKeys()
+	lConds, lTemps := c.prepareFallbackOperand(or.Left, nil)
+	storeSide(or.Left, lConds, false)
+	c.freeCondTemps(lTemps)
+	c.freeUnmovedMasksSince(beforeLeft)
+
+	// Lazy right: only when some slot failed to yield. An unconditional left
+	// (every slot always yields) makes the fallback dead.
+	leftAll := c.foldSlotConds(lConds)
+	if !leftAll.IsNil() {
+		someMissed := c.builder.CreateNot(leftAll, "or_some_missed")
+		c.underCond(someMissed, "or_rhs", "or_rhs_cont", func() {
+			beforeRight := c.frameMaskKeys()
+			rConds, rTemps := c.prepareFallbackOperand(or.Right, nil)
+			storeSide(or.Right, rConds, true)
+			c.freeCondTemps(rTemps)
+			c.freeUnmovedMasksSince(beforeRight)
+		})
+	}
+
+	// Slots that never yielded hold zero (freeable: an StrH zero is an owned
+	// heap copy, an array zero is null), so cleanup stays unconditional.
+	conds := make([]llvm.Value, len(info.OutTypes))
+	loaded := make([]*Symbol, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		yield := c.createLoad(yields[i], i1, fmt.Sprintf("or_yield_%d", i))
+		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), fmt.Sprintf("or_seed_cont_%d", i), func() {
+			zero := c.makeZeroValue(outType)
+			c.createStore(zero.Val, slots[i], outType)
+		})
+		conds[i] = yield
+		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("or_slot_%d", i)), Type: outType}
+	}
+
+	frame := c.requireCondLHSFrame()
+	frame[key(c.FuncNameMangled, or)] = loaded
+	temps = append(temps, condTemp{expr: or, syms: loaded})
+	return conds, temps
+}
+
+// prepareFallbackOperand prepares one side of a value-position || for per-slot
+// reads. A (cond value) operand is failable here — it yields only when its
+// condition holds — unlike everywhere else, where it self-resolves; its value
+// arm is compiled behind its own gate. Everything else prepares like a spine.
+func (c *Compiler) prepareFallbackOperand(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
+	cv, ok := expr.(*ast.CondValueExpr)
+	if !ok {
+		return c.prepareSpine(expr, temps)
+	}
+
+	info := c.ExprCache[key(c.FuncNameMangled, cv)]
+	gate := c.andGates(cv.Conds)
+
+	slots := make([]llvm.Value, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("or_cv_%d.mem", i))
+	}
+
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(gate, "or_cv_if", "or_cv_else", "or_cv_cont")
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	syms := c.compileExpression(cv.Value, nil)
+	for i, outType := range info.OutTypes {
+		coerced := c.coerceSymbolForType(syms[i], outType, fmt.Sprintf("or_cv_val_%d", i))
+		c.createStore(coerced.Val, slots[i], coerced.Type)
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	for i, outType := range info.OutTypes {
+		zero := c.makeZeroValue(outType)
+		c.createStore(zero.Val, slots[i], outType)
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	loaded := make([]*Symbol, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("or_cv_%d", i)), Type: outType}
+	}
+	frame := c.requireCondLHSFrame()
+	frame[key(c.FuncNameMangled, cv)] = loaded
+	temps = append(temps, condTemp{expr: cv, syms: loaded})
+	return broadcastConds(gate, len(info.OutTypes)), temps
 }
 
 // cleanupCondExprElse frees temporaries retained during cond-expr extraction
-// that are not consumed when the condition evaluates to false.
+// that are not consumed when the condition evaluates to false, plus the frame
+// masks a nested resolution has not already released.
 func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 	for _, tmp := range temps {
 		c.freeTemporary(tmp.expr, tmp.syms)
 	}
-	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
-		exprInfo := c.ExprCache[exprKey]
-		for i, mode := range exprInfo.CompareModes {
-			if mode == CondArray {
-				c.freeSymbolValue(lhsSyms[i], "")
-			}
-		}
-	}
+	c.freeFrameMasks()
 }
 
-// compileCondExprValue gates value-position cond expressions. Comparisons
-// compose as AND; fallback OR tries the right side only after the left fails.
+// compileCondExprValue gates value-position cond expressions on the ANDed
+// per-slot conditions: comparisons compose as AND, and a value-position ||
+// contributes its yield flags (fallback resolved during extraction).
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	if c.hasFallbackOrInTree(expr) {
-		c.compileYield(expr, baseCond, onTrue, func() {})
-		return
-	}
-
-	cond, temps := c.extractCondExprs(expr, baseCond, nil)
+	conds, temps := c.extractSlotConds(expr, nil)
+	cond := c.andConds(baseCond, c.foldSlotConds(conds), "base_and")
 	c.branchCond(cond, temps, onTrue, func() {})
 }
 
@@ -605,15 +800,12 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value,
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	if c.hasFallbackOrInTree(expr) {
-		c.compileChildYields(ast.ExprChildren(expr), baseCond, onTrue, func() {})
-		return
-	}
-
 	cond := baseCond
 	var temps []condTemp
 	for _, child := range ast.ExprChildren(expr) {
-		cond, temps = c.extractCondExprs(child, cond, temps)
+		var childConds []llvm.Value
+		childConds, temps = c.extractSlotConds(child, temps)
+		cond = c.andConds(cond, c.foldSlotConds(childConds), "child_gate")
 	}
 	c.branchCond(cond, temps, onTrue, func() {})
 }
@@ -638,77 +830,11 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 
-func (c *Compiler) compileChildYields(children []ast.Expression, baseCond llvm.Value, onTrue func(), onFalse func()) {
-	if len(children) == 0 {
-		c.branchCond(baseCond, nil, onTrue, onFalse)
-		return
-	}
-
-	child := children[0]
-	rest := children[1:]
-	if c.hasCondExprInTree(child) {
-		c.compileYield(child, baseCond, func() {
-			c.compileChildYields(rest, llvm.Value{}, onTrue, onFalse)
-		}, onFalse)
-		return
-	}
-
-	c.compileChildYields(rest, baseCond, onTrue, onFalse)
-}
-
-func (c *Compiler) compileYield(expr ast.Expression, baseCond llvm.Value, onTrue func(), onFalse func()) {
-	if logicalOr, ok := c.fallbackOrExpr(expr); ok {
-		c.compileFallbackOr(logicalOr, baseCond, onTrue, onFalse)
-		return
-	}
-
-	// A (cond value) yields its value only when its condition holds; otherwise it
-	// fails to onFalse (so an enclosing || tries the next alternative).
-	if cv, ok := expr.(*ast.CondValueExpr); ok {
-		cond := c.andGates(cv.Conds)
-		if !baseCond.IsNil() {
-			cond = c.builder.CreateAnd(baseCond, cond, "cv_and")
-		}
-		c.branchCond(cond, nil, func() {
-			vals := c.compileExpression(cv.Value, nil)
-			c.withCondLHS(cv, vals, onTrue)
-		}, onFalse)
-		return
-	}
-
-	if !c.hasFallbackOrInTree(expr) {
-		cond, temps := c.extractCondExprs(expr, baseCond, nil)
-		c.branchCond(cond, temps, onTrue, onFalse)
-		return
-	}
-
-	c.compileChildYields(ast.ExprChildren(expr), baseCond, func() {
-		if infix, ok := expr.(*ast.InfixExpression); ok {
-			info := c.ExprCache[key(c.FuncNameMangled, infix)]
-			if info != nil && info.HasCondScalar() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-				cond, temps := c.extractCondComparison(infix, info, llvm.Value{}, nil)
-				c.branchCond(cond, temps, onTrue, onFalse)
-				return
-			}
-		}
-
-		onTrue()
-	}, onFalse)
-}
-
-func (c *Compiler) withCondLHS(expr ast.Expression, syms []*Symbol, body func()) {
-	frame := c.requireCondLHSFrame()
-	exprKey := key(c.FuncNameMangled, expr)
-	frame[exprKey] = syms
-	defer delete(frame, exprKey)
-	body()
-}
-
 // compileCondValueExpr lowers a parenthesized conditional value (cond value).
-// When a surrounding gate (a value-position ||, via compileYield) has already
-// branched on Cond and bound the chosen value under this node's key, that
-// pre-bound value is returned. With pending ranges (e.g. the root `r = (i>2 i)`)
-// it drives a loop; otherwise it compiles the scalar branch/phi, using the
+// When a surrounding || (via prepareFallbackOperand) has already branched on
+// Cond and bound the chosen value under this node's key, that pre-bound value
+// is returned. With pending ranges (e.g. the root `r = (i>2 i)`) it drives a
+// loop; otherwise it compiles the scalar branch/phi, using the
 // range-scalarized rewrite when an outer loop already bound the iterators.
 func (c *Compiler) compileCondValueExpr(expr *ast.CondValueExpr) []*Symbol {
 	if frame := c.currentCondLHSFrame(); frame != nil {
@@ -810,28 +936,6 @@ func (c *Compiler) compileCondValueExprRanges(expr *ast.CondValueExpr, info *Exp
 		out[i] = &Symbol{Val: c.createLoad(outputs[i].Val, elemType, "cv_final"), Type: elemType}
 	}
 	return out
-}
-
-func (c *Compiler) compileFallbackOr(expr *ast.InfixExpression, baseCond llvm.Value, onTrue func(), onFalse func()) {
-	if !baseCond.IsNil() {
-		c.branchCond(baseCond, nil, func() {
-			c.compileFallbackOr(expr, llvm.Value{}, onTrue, onFalse)
-		}, onFalse)
-		return
-	}
-
-	leftTrue := func() {
-		left := c.compileExpression(expr.Left, nil)
-		c.withCondLHS(expr, left, onTrue)
-	}
-	rightTrue := func() {
-		right := c.compileExpression(expr.Right, nil)
-		c.withCondLHS(expr, right, onTrue)
-	}
-
-	c.compileYield(expr.Left, llvm.Value{}, leftTrue, func() {
-		c.compileYield(expr.Right, llvm.Value{}, rightTrue, onFalse)
-	})
 }
 
 func (c *Compiler) isRangeDriverCond(expr ast.Expression) bool {
@@ -1042,20 +1146,20 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		numOutputs := len(info.OutTypes)
 		exprTempNames := tempNames[targetIdx : targetIdx+numOutputs]
 		exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
-		exprValues := []ast.Expression{expr}
 
-		// A value-position multi-return comparison (Pair > Pair, Mix > Mix, ...)
-		// commits each slot independently: array slots mask (overwrite), scalar slots
-		// gate on their own condition — commit the LHS when it holds, keep the seeded
-		// prior value otherwise (the same keep-old-on-false a single comparison gives).
-		// A failing slot affects only itself, never the tuple. The cell-wise AND is
-		// reserved for gate/condition position and for || fallback; a single-return
-		// comparison keeps the gated path below.
-		if infix, ok := c.independentTupleComparison(expr, info); ok {
-			c.compileTupleComparisonPerSlot(infix, info, exprTempNames, stmtCond)
+		// A multi-return value expression whose slots carry independent
+		// conditions (Pair > Pair, (Pair > Pair) + Pair(1, 1), Mix > Mix, ...)
+		// commits each slot under its own condition: array slots mask
+		// (overwrite), scalar slots keep the seeded prior value when their
+		// condition fails — the same keep-old a single comparison gives. A
+		// failing slot affects only itself. The cell-wise AND is reserved for
+		// gate/condition position and || fallback; everything else keeps the
+		// single ANDed gate below.
+		if c.perSlotCommittable(expr, info) {
+			c.compilePerSlotAssign(expr, info, exprTempNames, stmtCond)
 		} else {
 			c.compileCondExprValue(expr, stmtCond, func() {
-				c.compileCondAssignments(exprTempNames, exprDestNames, exprValues)
+				c.compileCondAssignments(exprTempNames, exprDestNames, []ast.Expression{expr})
 			})
 		}
 
@@ -1066,93 +1170,330 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
 }
 
-// independentTupleComparison returns the comparison and true when expr is a
-// value-position multi-return comparison whose slots commit independently (array
-// masks plus per-slot-gated scalars) rather than as one all-or-nothing AND-gate.
-// True for a multi-slot comparison (Pair > Pair, Mix > Mix, ...) that is neither
-// ranged nor a fallback-||. A single-return comparison is excluded (it keeps the
-// gated path), and the cell-wise AND still applies in gate/condition position and
-// for ||. Two related forms never reach here — the type solver rejects them: a
-// chained tuple comparison (Pair > Pair < Pair; rejectChainedTupleComparison) and a
-// tuple comparison with a bare || in an operand (Pair(a > 2 || 7, b) > Pair(1, 1);
-// rejectInnerFallbackOrTupleComparison), which the per-slot path can't lower.
-//
-// hasFallbackOrInTree here therefore fires only for a top-level fallback-|| tuple
-// (Pair > Pair || Pair): that is correctly all-or-nothing (a fallback is a single
-// whole-tuple decision), so it is deferred to the gated path.
-func (c *Compiler) independentTupleComparison(expr ast.Expression, info *ExprInfo) (*ast.InfixExpression, bool) {
-	infix, ok := expr.(*ast.InfixExpression)
-	if !ok {
-		return nil, false
-	}
-	if c.hasFallbackOrInTree(expr) || len(c.pendingLoopRanges(info.Ranges)) > 0 {
-		return nil, false
-	}
-	if !info.HasAnyComparison() {
-		return nil, false
-	}
+// perSlotCommittable reports whether expr commits slot-by-slot in value
+// position: a multi-return expression whose root is a comparison, a
+// value-position ||, or a slot-aligned arithmetic spine over one, so each
+// output slot carries its own condition. Excluded (they keep the single ANDed
+// gate): single-return expressions, ranged expressions, and roots whose slots
+// merge — a call's outputs are produced together, so every argument condition
+// gates them all.
+func (c *Compiler) perSlotCommittable(expr ast.Expression, info *ExprInfo) bool {
 	if len(info.OutTypes) <= 1 {
-		return nil, false
+		return false
 	}
-	return infix, true
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return false
+	}
+	if !c.hasCondExprInTree(expr) {
+		return false
+	}
+	return c.isSlotAlignedSpine(expr)
 }
 
-// compileTupleComparisonPerSlot commits a value-position multi-return comparison
-// slot by slot into the pre-seeded temps. Array slots mask and overwrite; scalar
-// slots commit their LHS only when the per-slot comparison holds, otherwise leaving
-// the seeded prior value in place (keep-old-on-false). The whole commit is guarded
-// by any statement condition. Operands are evaluated once and freed after.
-func (c *Compiler) compileTupleComparisonPerSlot(infix *ast.InfixExpression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
-	c.assignUnderStmtCond(stmtCond, func() {
-		// Guard operand evaluation so an out-of-bounds access (e.g. arr[oob]) in any
-		// operand fails the whole tuple assignment and keeps the prior values, like a
-		// normal assignment. Bounds checks are recorded while the operands compile.
-		guardPtr := c.pushBoundsGuard("tuple_bounds_guard")
+// isSlotAlignedSpine reports whether expr's root is a comparison, a
+// value-position ||, or an arithmetic infix tree over one — the shapes whose
+// output slots stay aligned with their operands' slots, so per-slot conditions
+// are well-defined all the way to the root.
+func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
+	infix, ok := expr.(*ast.InfixExpression)
+	if !ok {
+		return false
+	}
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0 {
+		return false
+	}
+	if info != nil && (info.HasAnyComparison() || info.HasFallbackOr()) {
+		return true
+	}
+	if infix.Token.IsComparison() || infix.IsLogicalOr() {
+		return false
+	}
+	return c.isSlotAlignedSpine(infix.Left) || c.isSlotAlignedSpine(infix.Right)
+}
+
+// compilePerSlotAssign lowers a per-slot-committable value expression into its
+// pre-seeded temp slots. Extraction evaluates the comparisons and spine leaves
+// once; each slot then commits under its own condition — array slots store
+// their mask, scalar slots store their value when the slot condition holds and
+// keep the seeded prior value otherwise. Spine arithmetic for a slot compiles
+// inside that slot's branch, so a combine (e.g. a division) runs only when its
+// slot commits. The whole lowering sits behind any statement condition, and a
+// failed bounds check in an operand skips every commit, keeping prior values
+// like a normal assignment.
+func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
+	c.underCond(stmtCond, "stmt_cond_if", "stmt_cond_cont", func() {
+		c.pushBoundsGuard("slot_bounds_guard")
 		defer c.popBoundsGuard()
 
-		left := c.compileExpression(infix.Left, nil)
-		right := c.compileExpression(infix.Right, nil)
+		c.pushCondLHSFrame()
+		defer c.popCondLHSFrame()
 
-		commitSlots := func() {
-			for i := range left {
-				elemType := info.OutTypes[i]
-				if info.CompareModes[i] == CondArray {
-					mask := c.compileArrayMask(infix.Operator, left[i], right[i], elemType)
-					c.commitSlotValue(tempNames[i], mask, elemType, false)
-					continue
-				}
+		conds, temps := c.prepareSpine(expr, nil)
 
-				lhs, cond := c.compareScalars(infix.Operator, left[i], right[i])
-				ifBlock, contBlock := c.createIfCont(cond, "tuple_slot_if", "tuple_slot_cont")
-				c.builder.SetInsertPointAtEnd(ifBlock)
-				c.commitSlotValue(tempNames[i], lhs, elemType, true)
-				c.builder.CreateBr(contBlock)
-				c.builder.SetInsertPointAtEnd(contBlock)
+		// Masks still unresolved after extraction (a || operand settles its own
+		// while extracting): once commits run, each is either moved into its
+		// slot or freed by that slot's else arm, and the post-commit sweep
+		// releases the ones arithmetic consumed. The bounds-skip path runs no
+		// commits, so it frees them all.
+		spineMasks := c.unresolvedFrameMasks()
+
+		commitAndSweep := func() {
+			for i, outType := range info.OutTypes {
+				c.commitSpineSlot(expr, i, slotCondAt(conds, i), tempNames[i], outType)
+			}
+			c.freeFrameMasks()
+		}
+		skipAll := func() {
+			for _, mask := range spineMasks {
+				c.freeSymbolValue(mask, "bounds_skip_mask")
 			}
 		}
-
-		if c.stmtBoundsUsed() {
-			c.withGuardedBranch(guardPtr, "tuple_bounds_ok", "tuple_bounds_commit", "tuple_bounds_skip", "tuple_bounds_cont", commitSlots, nil)
-		} else {
-			commitSlots()
+		if !c.withStmtBoundsGuard("slot_bounds_ok", "slot_bounds_commit", "slot_bounds_skip", "slot_bounds_cont", commitAndSweep, skipAll) {
+			commitAndSweep()
 		}
 
-		c.freeTemporary(infix.Left, left)
-		c.freeTemporary(infix.Right, right)
+		c.freeCondTemps(temps)
 	})
 }
 
-// assignUnderStmtCond runs commit unconditionally when there is no statement
-// condition, or guarded by it (keeping the seeded prior values on the false path).
-func (c *Compiler) assignUnderStmtCond(stmtCond llvm.Value, commit func()) {
-	if stmtCond.IsNil() {
+// prepareSpine extracts per-slot conditions for a spine and pre-evaluates its
+// leaves. Comparisons are evaluated by extraction (retaining LHS values and
+// masks in the condLHS frame); any other leaf (call, literal, identifier, ...)
+// is evaluated once here and its slot values stashed in the frame, gated on
+// its own condition when it has one — a call whose argument comparison fails
+// must not run, and the slots reading it are gated by that same condition.
+func (c *Compiler) prepareSpine(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if _, ok := ast.IsLogicalOr(expr); ok && info != nil && info.HasFallbackOr() {
+		return c.extractSlotConds(expr, temps)
+	}
+	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasAnyComparison() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		return c.extractComparisonSlots(infix, info, temps)
+	}
+
+	if infix, ok := expr.(*ast.InfixExpression); ok && c.isSlotAlignedSpine(expr) {
+		var lConds, rConds []llvm.Value
+		lConds, temps = c.prepareSpine(infix.Left, temps)
+		rConds, temps = c.prepareSpine(infix.Right, temps)
+		conds := make([]llvm.Value, len(info.OutTypes))
+		for i := range conds {
+			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("spine_and_%d", i))
+		}
+		return conds, temps
+	}
+
+	return c.prepareSpineLeaf(expr, info, temps)
+}
+
+// prepareSpineLeaf evaluates one non-comparison spine operand and stashes its
+// slot values in the condLHS frame. A leaf with nested comparisons (e.g. a
+// call with a conditional argument) is evaluated behind its own gate — the
+// false arm stores zero values instead, so the loaded slots always hold
+// freeable values (an StrH zero is an owned heap copy, an array zero is null)
+// and cleanup stays unconditional. Slots reading a gated leaf carry its
+// condition, so a zero seed is never committed.
+func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
+	var leafConds []llvm.Value
+	leafConds, temps = c.extractSlotConds(expr, temps)
+
+	frame := c.requireCondLHSFrame()
+	// A node that resolved itself during extraction (a value-position ||) has
+	// its slot values stashed and tracked already; reuse them and its per-slot
+	// conditions as-is.
+	if _, ok := frame[key(c.FuncNameMangled, expr)]; ok {
+		return leafConds, temps
+	}
+
+	leafCond := c.foldSlotConds(leafConds)
+	if leafCond.IsNil() {
+		syms := c.compileExpression(expr, nil)
+		frame[key(c.FuncNameMangled, expr)] = syms
+		temps = append(temps, condTemp{expr: expr, syms: syms})
+		return broadcastConds(leafCond, len(info.OutTypes)), temps
+	}
+
+	slots := make([]llvm.Value, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("spine_leaf_%d.mem", i))
+	}
+
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	syms := c.compileExpression(expr, nil)
+	for i, outType := range info.OutTypes {
+		coerced := c.coerceSymbolForType(syms[i], outType, fmt.Sprintf("spine_leaf_val_%d", i))
+		c.createStore(coerced.Val, slots[i], coerced.Type)
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	for i, outType := range info.OutTypes {
+		zero := c.makeZeroValue(outType)
+		c.createStore(zero.Val, slots[i], outType)
+	}
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	loaded := make([]*Symbol, len(info.OutTypes))
+	for i, outType := range info.OutTypes {
+		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("spine_leaf_%d", i)), Type: outType}
+	}
+	frame[key(c.FuncNameMangled, expr)] = loaded
+	temps = append(temps, condTemp{expr: expr, syms: loaded})
+	return broadcastConds(leafCond, len(info.OutTypes)), temps
+}
+
+// commitSpineSlot commits output slot i of a per-slot spine into its temp
+// slot, keeping the seeded prior value when the slot condition fails. When the
+// slot's value is a directly committed mask, the failing branch frees it — the
+// mask was built during extraction, so a runtime-skipped store must release it.
+func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, tempName *ast.Identifier, outType Type) {
+	commit := func() {
+		val, owned := c.spineSlotValue(expr, i, outType)
+		c.commitSlotValue(tempName, val, !owned)
+		if owned {
+			// Ownership moved into the slot; mark the source so mask cleanup
+			// skips it (a fresh combine is simply discarded).
+			val.Borrowed = true
+		}
+	}
+	if cond.IsNil() {
 		commit()
 		return
 	}
 
-	ifBlock, contBlock := c.createIfCont(stmtCond, "stmt_cond_if", "stmt_cond_cont")
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, "slot_if", "slot_else", "slot_cont")
+
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	commit()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	c.freeSkippedSlotMask(expr, i)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// freeSkippedSlotMask frees the frame mask that slot i of expr would have
+// moved, on the runtime path where the slot's store was skipped. The Borrowed
+// mark set while building the store arm is ignored — these are exclusive
+// runtime paths, and on this one the mask was never moved.
+func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if info == nil || i >= len(info.CompareModes) || info.CompareModes[i] != CondArray {
+		return
+	}
+	syms, ok := c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)]
+	if !ok || syms[i] == nil {
+		return
+	}
+	c.freeSymbolValue(syms[i], "skipped_mask")
+}
+
+// spineSlotValue returns slot i's value for a spine node: retained frame
+// values for comparisons and pre-evaluated leaves, freshly combined arithmetic
+// otherwise. owned reports whether the caller receives ownership (fresh
+// combines and array masks) or a borrowed view it must copy on commit.
+func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Symbol, bool) {
+	frame := c.requireCondLHSFrame()
+	if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		if info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray {
+			return syms[i], true
+		}
+		return syms[i], false
+	}
+
+	infix, ok := expr.(*ast.InfixExpression)
+	if !ok {
+		panic("internal: spine node missing pre-evaluated slot values")
+	}
+	l, _ := c.spineSlotValue(infix.Left, i, outType)
+	r, _ := c.spineSlotValue(infix.Right, i, outType)
+	return c.compileInfix(infix.Operator, l, r, outType), true
+}
+
+// freeFrameMasks frees the array masks retained in the current condLHS frame
+// that were not moved into a result slot (moved masks are marked borrowed at
+// store time). Freed masks are marked too, so later cleanups skip them.
+func (c *Compiler) freeFrameMasks() {
+	c.freeUnmovedMasksSince(nil)
+}
+
+// unresolvedFrameMasks snapshots the frame masks whose ownership is still
+// open — not yet moved or freed (marked borrowed) by a nested resolution.
+func (c *Compiler) unresolvedFrameMasks() []*Symbol {
+	var masks []*Symbol
+	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
+		exprInfo := c.ExprCache[exprKey]
+		if exprInfo == nil {
+			continue
+		}
+		for i, mode := range exprInfo.CompareModes {
+			if mode == CondArray && !lhsSyms[i].Borrowed {
+				masks = append(masks, lhsSyms[i])
+			}
+		}
+	}
+	return masks
+}
+
+// frameMaskKeys snapshots the current condLHS frame's keys, so a nested
+// resolution (a || operand) can clean up only the masks it stashed itself.
+func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
+	keys := make(map[ExprKey]struct{})
+	for exprKey := range c.requireCondLHSFrame() {
+		keys[exprKey] = struct{}{}
+	}
+	return keys
+}
+
+// freeUnmovedMasksSince frees array masks stashed in the condLHS frame since
+// the snapshot (nil means all) that were not moved into a result slot, marking
+// them borrowed so outer cleanups skip them.
+func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
+	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
+		if _, ok := before[exprKey]; ok {
+			continue
+		}
+		exprInfo := c.ExprCache[exprKey]
+		if exprInfo == nil {
+			continue
+		}
+		for i, mode := range exprInfo.CompareModes {
+			if mode != CondArray || lhsSyms[i].Borrowed {
+				continue
+			}
+			c.freeSymbolValue(lhsSyms[i], "")
+			lhsSyms[i].Borrowed = true
+		}
+	}
+}
+
+// freeCondTemps releases retained operand temporaries after per-slot commits.
+// Committed values are copies (or transferred masks), so the sources are freed
+// unconditionally; a skipped gated leaf holds freeable zero values.
+func (c *Compiler) freeCondTemps(temps []condTemp) {
+	for _, tmp := range temps {
+		c.freeTemporary(tmp.expr, tmp.syms)
+	}
+}
+
+// underCond runs body unconditionally when cond is nil, or guarded by it.
+// branchCond is not usable here: its false arm runs cleanupCondExprElse, which
+// requires the condLHS frame state these call sites do not maintain.
+func (c *Compiler) underCond(cond llvm.Value, ifName, contName string, body func()) {
+	if cond.IsNil() {
+		body()
+		return
+	}
+
+	ifBlock, contBlock := c.createIfCont(cond, ifName, contName)
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	body()
 	c.builder.CreateBr(contBlock)
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
@@ -1160,17 +1501,19 @@ func (c *Compiler) assignUnderStmtCond(stmtCond llvm.Value, commit func()) {
 // commitSlotValue stores value into the pre-seeded temp slot, freeing the slot's
 // previous value unless it is a borrowed view. copyValue deep-copies the value
 // first (for a borrowed scalar LHS that the temp must own); an array mask is
-// already owned and passes through. Mirrors the seed-commit protocol used by
-// commitStageTempOutputs.
-func (c *Compiler) commitSlotValue(tempIdent *ast.Identifier, value *Symbol, elemType Type, copyValue bool) {
+// already owned and passes through. A static string is not copied here: under a
+// StrG-typed slot it lives forever (a heap copy there would never be freed),
+// and under an StrH-typed slot the store's coercion makes the owned copy.
+func (c *Compiler) commitSlotValue(tempIdent *ast.Identifier, value *Symbol, copyValue bool) {
 	tempSym, _ := Get(c.Scopes, tempIdent.Value)
+	slotElem := tempSym.Type.(Ptr).Elem
 	oldValue := c.valueSymbol(tempIdent.Value, tempSym, tempIdent.Value+"_slot_old")
 
 	toStore := value
-	if copyValue {
+	if copyValue && !IsStrG(value.Type) {
 		toStore = c.deepCopyIfNeeded(value)
 	}
-	c.storeSymbolToSlot(tempSym, toStore, elemType, tempIdent.Value+"_slot_store")
+	c.storeSymbolToSlot(tempSym, toStore, slotElem, tempIdent.Value+"_slot_store")
 
 	if c.skipBorrowedOldValueFree(oldValue) {
 		return

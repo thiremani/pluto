@@ -49,20 +49,15 @@ func (info *ExprInfo) HasCondScalar() bool {
 	return false
 }
 
-// HasCondArray returns true if any slot is an element-wise array mask.
-func (info *ExprInfo) HasCondArray() bool {
+// HasAnyComparison returns true if any slot is a comparison in value position
+// (a scalar conditional or an array mask).
+func (info *ExprInfo) HasAnyComparison() bool {
 	for _, m := range info.CompareModes {
-		if m == CondArray {
+		if m == CondScalar || m == CondArray {
 			return true
 		}
 	}
 	return false
-}
-
-// HasAnyComparison returns true if any slot is a comparison in value position
-// (a scalar conditional or an array mask).
-func (info *ExprInfo) HasAnyComparison() bool {
-	return info.HasCondScalar() || info.HasCondArray()
 }
 
 func (info *ExprInfo) HasFallbackOr() bool {
@@ -121,6 +116,7 @@ type TypeSolver struct {
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr     bool // value position (LetStatement conditions/values, (cond value); inherited by nested exprs): comparisons yield their LHS and chain, || is fallback — vs plain booleans in non-value contexts like prints
 	UnresolvedExprs map[pendingBinding][]pendingExpr
+	Rejected        map[ExprKey]struct{} // expressions already diagnosed, so fixpoint re-typing does not duplicate the error
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -136,7 +132,20 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ExprCache:       sc.Compiler.ExprCache,
 		TmpCounter:      0,
 		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
+		Rejected:        make(map[ExprKey]struct{}),
 	}
+}
+
+// rejectOnce appends a diagnostic for expr unless one was already recorded —
+// function bodies are re-typed on every fixpoint pass, and a repeated error
+// would both duplicate the message and read as a spurious convergence failure.
+func (ts *TypeSolver) rejectOnce(expr ast.Expression, tok token.Token, msg string) {
+	k := key(ts.FuncNameMangled, expr)
+	if _, ok := ts.Rejected[k]; ok {
+		return
+	}
+	ts.Rejected[k] = struct{}{}
+	ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: msg})
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
@@ -1671,6 +1680,13 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// resolves to its iterator type, not a Range.
 	valueTypes := ts.TypeExpression(expr.Value, false)
 
+	// A || in the value arm is the one position still lowered inline with no
+	// branching context (it would panic in compileInfixBasic), so reject it —
+	// value-position || resolves per slot everywhere else.
+	if ts.valueArmHasFallbackOr(expr.Value) {
+		ts.rejectOnce(expr, expr.Tok(), "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first")
+	}
+
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
 
 	types := make([]Type, len(valueTypes))
@@ -1810,11 +1826,6 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
 	}
 
-	if isValueCmp && len(left) > 1 {
-		ts.rejectChainedTupleComparison(expr)
-		ts.rejectInnerFallbackOrTupleComparison(expr)
-	}
-
 	// Create new entry
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
@@ -1826,60 +1837,12 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	return
 }
 
-// rejectChainedTupleComparison rejects a value-position multi-return comparison
-// whose own operand is a comparison — a chained tuple comparison such as
-// Pair > Pair < Pair. Per-slot tuple comparisons do not yet support chaining (the
-// leftmost binding needs the AST chain extraction the per-slot lowering can't
-// reach), so this is rejected rather than silently lowered to all-or-nothing
-// gating, which would contradict the documented per-slot value-position semantics.
-// Per-slot tuple chaining is planned for the value-extraction unification. The
-// check naturally defers during fixpoint iteration: an operand is only tagged as a
-// comparison once its types resolve.
-func (ts *TypeSolver) rejectChainedTupleComparison(expr *ast.InfixExpression) {
-	if !ts.isValuePositionComparison(expr.Left) && !ts.isValuePositionComparison(expr.Right) {
-		return
-	}
-	ts.Errors = append(ts.Errors, &token.CompileError{
-		Token: expr.Token,
-		Msg:   "chained comparison over multi-return values is not supported yet (e.g. Pair > Pair < Pair); compare single values instead",
-	})
-}
-
-// isValuePositionComparison reports whether expr was typed as a value-position
-// comparison (it carries per-slot comparison lowering modes).
-func (ts *TypeSolver) isValuePositionComparison(expr ast.Expression) bool {
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && info.HasAnyComparison()
-}
-
-// rejectInnerFallbackOrTupleComparison rejects a value-position multi-return
-// comparison whose operand carries a bare value-position || — one not resolved
-// locally behind an array literal or (cond value) — e.g.
-// Pair(a > 2 || 7, b) > Pair(1, 1). The per-slot lowering evaluates operands inline
-// and can't set up the branching a value-position || needs, and deferring the whole
-// comparison to all-or-nothing gating would silently change the per-slot value
-// semantics (Pair(a > 2 || 7, b) > Pair(10, 1) would give 0 0 instead of 0 9). So it
-// is rejected here (like a chained tuple) rather than mis-lowered; real support is
-// planned for the value-extraction unification. A || nested behind a (cond value) or
-// array literal self-resolves and is left alone. A top-level || (Pair > Pair || ...)
-// never reaches here — it is typed by typeLogicalOrExpression.
-func (ts *TypeSolver) rejectInnerFallbackOrTupleComparison(expr *ast.InfixExpression) {
-	if !ts.operandHasFallbackOr(expr.Left) && !ts.operandHasFallbackOr(expr.Right) {
-		return
-	}
-	ts.Errors = append(ts.Errors, &token.CompileError{
-		Token: expr.Token,
-		Msg:   "value-position || inside a multi-return comparison operand is not supported yet (e.g. Pair(a > 2 || 7, b) > Pair(1, 1)); compute the operand first",
-	})
-}
-
-// operandHasFallbackOr reports whether expr's tree contains a value-position || that
-// the per-slot tuple lowering can't handle. An array literal resolves a || in a cell
-// locally, so it stays a boundary. A (cond value) is NOT a full boundary: a || in its
-// value arm is still lowered inline (it reaches compileInfixBasic and panics), so its
-// value arm is scanned. (A || in the condition arm is a parse error, so only the
-// value arm matters.)
-func (ts *TypeSolver) operandHasFallbackOr(expr ast.Expression) bool {
+// valueArmHasFallbackOr reports whether expr's tree contains a bare
+// value-position ||. An array literal resolves a || in a cell locally, so it
+// stays a boundary; a nested (cond value) is scanned through its value arm.
+// Used to reject a || in a (cond value) value arm, the one position the
+// compiler still lowers inline with no branching context.
+func (ts *TypeSolver) valueArmHasFallbackOr(expr ast.Expression) bool {
 	if _, ok := ast.IsLogicalOr(expr); ok {
 		if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasFallbackOr() {
 			return true
@@ -1889,10 +1852,10 @@ func (ts *TypeSolver) operandHasFallbackOr(expr ast.Expression) bool {
 	case *ast.ArrayLiteral:
 		return false
 	case *ast.CondValueExpr:
-		return ts.operandHasFallbackOr(e.Value)
+		return ts.valueArmHasFallbackOr(e.Value)
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if ts.operandHasFallbackOr(child) {
+		if ts.valueArmHasFallbackOr(child) {
 			return true
 		}
 	}
@@ -2350,6 +2313,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
 	ts.ScriptFunc = f.Name
 	defer func() { ts.ScriptFunc = "" }()
+	errsAtEntry := len(ts.Errors)
 	// multiple passes may be needed to infer types for script level function
 	for range 100 {
 		ts.Converging = false
@@ -2359,13 +2323,17 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			return f.OutTypes
 		}
 
-		// no further progress possible
+		// No further progress possible. If typing this function reported
+		// errors, they are the cause (TypeBlock aborts on them before outputs
+		// infer) — a "not converging" message on top would misdirect to cyclic
+		// recursion. Errors reported before this function do not suppress it.
 		if !ts.Converging {
-			ce := &token.CompileError{
-				Token: template.Token,
-				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+			if len(ts.Errors) == errsAtEntry {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: template.Token,
+					Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+				})
 			}
-			ts.Errors = append(ts.Errors, ce)
 			return f.OutTypes
 		}
 	}

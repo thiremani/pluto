@@ -9,10 +9,10 @@ arrVal = Square(arr)
 "SquareFloat: -floatVal"
 "SquareArr: -arrVal\n"
 
-# Range and filter (non-accumulated)
+# Range filters and array masks (non-accumulated)
 rangeVal = Square(1:3)
 arrRangeVal = Square(arr[1:3])
-arrFilterVal = Square(arr > 3)
+arrMaskVal = Square(arr > 3)
 arrRangeFilterVal = Square(arr[1:3] > 3)
 arrRangeFilterKeepPrev = 99
 arrRangeFilterKeepPrev = Square(arr[1:3] > 3)
@@ -22,7 +22,7 @@ rangeFilterTailFalseVal = Square((0:5) < 3)
 
 "SquareRange: -rangeVal"
 "SquareArrRange: -arrRangeVal"
-"SquareArrFilter: -arrFilterVal"
+"SquareArrMask: -arrMaskVal"
 "SquareArrRangeFilter: -arrRangeFilterVal"
 "SquareArrRangeFilterKeepPrev: -arrRangeFilterKeepPrev"
 "SquareCallOOBKeepPrev: -callOOBKeepPrev"
@@ -59,11 +59,11 @@ arrSelf = [Square(arrSelf[1:4] > 20)]
 "SquareArrSelfMixed: -arrSelfMixed\n"
 
 # Nested mask composition: (arr > 3) masks to [0 0 0 5], then < 8 masks again.
-nestedFilterVal = (arr > 3) < 8
-nestedSquareFilterVal = Square((arr > 3) < 8)
+nestedMaskVal = (arr > 3) < 8
+nestedSquareMaskVal = Square((arr > 3) < 8)
 
-"NestedFilter: -nestedFilterVal"
-"NestedSquareFilter: -nestedSquareFilterVal\n"
+"NestedMask: -nestedMaskVal"
+"NestedSquareMask: -nestedSquareMaskVal\n"
 
 # Multi-argument conditional gating
 a = 5

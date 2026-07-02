@@ -557,12 +557,11 @@ func TestMixedArrayScalarStatementConditionRejected(t *testing.T) {
 	require.Truef(t, found, "expected array-cell rejection, got: %v", ts.Errors)
 }
 
-func TestChainedTupleComparisonRejected(t *testing.T) {
+func TestChainedTupleComparisonTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	// Pair returns two values; a chained comparison over them (Pair < Pair > Pair)
-	// has no per-slot chaining yet, so the solver rejects it rather than silently
-	// lowering to all-or-nothing gating (which would contradict the documented
-	// per-slot value-position semantics).
+	// resolves per slot — each slot chains like a single-value comparison — so
+	// the solver accepts it and types both outputs.
 	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
 	cc := NewCodeCompiler(ctx, "chainedTupleCmp", "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
@@ -577,16 +576,14 @@ func TestChainedTupleComparisonRejected(t *testing.T) {
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	require.Lenf(t, ts.Errors, 1, "chained tuple comparison should emit one diagnostic, got: %v", ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "chained comparison over multi-return values is not supported")
+	require.Emptyf(t, ts.Errors, "chained tuple comparison should type cleanly, got: %v", ts.Errors)
 }
 
-func TestInnerFallbackOrTupleComparisonRejected(t *testing.T) {
+func TestInnerFallbackOrTupleComparisonTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	// A value-position || nested in a multi-return comparison operand
-	// (Pair(5 > 2 || 7, 9) > Pair(1, 1)) can't be lowered by the per-slot path — that
-	// path evaluates operands inline without the || branching context — so the solver
-	// rejects it rather than silently lowering to all-or-nothing gating.
+	// (Pair(5 > 2 || 7, 9) > Pair(1, 1)) resolves during extraction like any
+	// other per-slot condition, so the solver accepts it.
 	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
 	cc := NewCodeCompiler(ctx, "innerOrTupleCmp", "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
@@ -601,15 +598,14 @@ func TestInnerFallbackOrTupleComparisonRejected(t *testing.T) {
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	require.Lenf(t, ts.Errors, 1, "inner-|| tuple comparison should emit one diagnostic, got: %v", ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a multi-return comparison operand is not supported")
+	require.Emptyf(t, ts.Errors, "inner-|| tuple comparison should type cleanly, got: %v", ts.Errors)
 }
 
 func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
 	ctx := llvm.NewContext()
-	// A (cond value) is not a full boundary: a || in its value arm is still lowered
-	// inline and would panic in the per-slot tuple path, so the operand scan reaches
-	// into CondValueExpr.Value and rejects Pair((1 > 0  0 > 1 || 7), 9) > Pair(1, 1).
+	// A || in a (cond value) value arm is still lowered inline with no branching
+	// context (it would panic in compileInfixBasic), so the solver rejects it —
+	// in any context, and exactly once despite fixpoint re-typing.
 	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
 	cc := NewCodeCompiler(ctx, "condValArmOrCmp", "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
@@ -625,7 +621,30 @@ func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
 	ts.Solve()
 
 	require.Lenf(t, ts.Errors, 1, "|| in a (cond value) value arm should emit one diagnostic, got: %v", ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a multi-return comparison operand is not supported")
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
+}
+
+func TestCondValueArmOrRejectedOnceInFunction(t *testing.T) {
+	ctx := llvm.NewContext()
+	// Function bodies are re-typed on every solver fixpoint pass; a rejection
+	// inside one must be emitted exactly once — not duplicated per pass, and
+	// with no spurious "not converging" cascade.
+	code := "r = BadOr(x)\n    r = (x > 0  x > 2 || 7)"
+	cc := NewCodeCompiler(ctx, "condValArmOrFunc", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "m = BadOr(5)\n\"-m\""
+	sl := lexer.New("condValArmOrFunc.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "function-body rejection should emit exactly one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
 }
 
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {

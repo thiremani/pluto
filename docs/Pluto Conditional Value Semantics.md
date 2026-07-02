@@ -209,23 +209,34 @@ n2 = 99
 r2, n2 = Mix(1) > Mix(2)          # [0 0] 99 (array overwrites; scalar 1 > 2 keeps 99)
 ```
 
+Per-slot resolution follows the value through its expression. A slot's conditions
+merge along dataflow: chaining a multi-return comparison chains each slot
+(`Pair > Pair < Pair` — the leftmost operand binds per slot, its conditions AND
+slot-wise), and arithmetic over one stays per slot (`(Pair(5, 7) > Pair(1, 8)) +
+Pair(0, 0)` → `5 0` fresh — the failing slot keeps old and its combine never
+runs). A `||` falls back **per slot**: slot *i* takes the right side only when
+slot *i* of the left failed to yield, a fallback beats keep-old, and a slot where
+both sides fail keeps its old value (`Pair(5, 7) > Pair(1, 8) || Pair(0, 0)` →
+`5 0`). A `||` inside an operand resolves to its value before the compare
+(`Pair(a > 2 || 7, b) > Pair(1, 1)`). Array slots always yield (a mask is a
+value), so `||` only ever affects scalar slots.
+
+Slots merge where an expression produces its outputs together: a **call's**
+outputs all share every argument's condition (ANDed), so `Sum2(Pair(5, 7) >
+Pair(1, 8))` is gated whole — a failing argument comparison skips the call and
+keeps old, the same hoisting rule a scalar call argument gets
+(`q = Sum2(k > 9, 3)` keeps `q` when `k <= 9`).
+
 The cell-wise **AND** (every cell must hold) applies only where a multi-cell
-comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`) or the test
-behind a value-position `||` fallback — never to the value itself.
+comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`, including
+chained gates `Pair > Pair < Pair  value`) — never to the value itself. A ranged
+statement condition gates iterations without changing the value's per-slot
+semantics.
 
-Two forms are **rejected at compile time** for now, rather than silently falling
-back to all-or-nothing (which would contradict the per-slot rule above):
-
-- *Chaining* a multi-return comparison (`Pair > Pair < Pair`) — per-slot chaining
-  needs the leftmost-binding chain extraction the per-slot lowering can't yet reach.
-- A **value-position `||` inside an operand** (`Pair(a > 2 || 7, b) > Pair(1, 1)`, or
-  in a `(cond value)`'s value arm, `Pair((c  x || 7), b) > …`) — the per-slot lowering
-  evaluates operands inline and can't set up the branching a `||` needs. (A `||` in an
-  array-literal cell self-resolves and is fine, as is a *top-level* `||` fallback —
-  `Pair > Pair || Pair`.)
-
-Single-value chained comparisons (`a > 2 < 8`) are unaffected. Per-slot support for
-both is planned for the value-extraction unification.
+Operands are evaluated eagerly (once); only the yielding combine and the commit
+are gated per slot. One form is **rejected at compile time**: a value-position
+`||` inside a `(cond value)`'s **value arm** (`(c > 0  a > 2 || 7)`) — that arm
+still lowers inline with no branching context. Compute the value first.
 
 ## Why this model
 
@@ -239,9 +250,11 @@ both is planned for the value-extraction unification.
 ## Status
 
 - **Implemented:** statement gates (keep-old); `||` fallback in value and
-  condition position; value-position comparisons (yield the left operand);
-  conditions are value positions, so chained comparisons gate directly
-  (`i > 2 < 8`, leftmost-binding) in every condition slot; collector zero-fill;
+  condition position (per slot over multi-return values); value-position
+  comparisons (yield the left operand), resolved per slot through chains,
+  arithmetic, and `||` by one extraction pass; conditions are value positions,
+  so chained comparisons gate directly (`i > 2 < 8`, leftmost-binding, including
+  chained multi-return gates) in every condition slot; collector zero-fill;
   array masks (element-wise, length-preserving); the parenthesized `(cond value)` expression (local resolution to
   zero, with `|| fallback` and array-cell zero-fill), including per-cell use
   inside array literals.
