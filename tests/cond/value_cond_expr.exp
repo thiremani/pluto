@@ -205,3 +205,16 @@ GatedMaskOrBefore: [9 9] 99
 GatedMaskOr: [7 7] 17
 ParenRightBefore: seed0
 ParenRight: seed0
+TripleChainBefore: 11 22
+TripleChain: 5 22
+MidLinkFail: 0 7
+ChainFallback: 5 -2
+OrChain3: 5 -2
+OrInArith: 15 10
+MixChain: [2 3] 2
+MixChainFailBefore: [9 9] 99
+MixChainFail: [0 0] 99
+ChainInOperand: 5 9
+ChainInOperandFailBefore: 77 88
+ChainInOperandFail: 77 88
+ChainOrInOperand: -1 9

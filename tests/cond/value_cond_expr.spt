@@ -793,3 +793,51 @@ prR = "seed" ⊕ "0"
 "ParenRightBefore: -prR"
 prR = MkStr(1) ⊕ "!" > (MkStr(2) ⊕ "!" > MkStr(3) ⊕ "!")
 "ParenRight: -prR"
+
+# Deeper chains: three links resolve per slot like one; a middle link failing
+# kills only its own slot (leftmost LHS still binds the whole chain).
+tc3A = 11
+tc3B = 22
+"TripleChainBefore: -tc3A -tc3B"
+tc3A, tc3B = Pair(5, 7) > Pair(1, 8) < Pair(9, 9) > Pair(2, 0)
+"TripleChain: -tc3A -tc3B"
+tcmA, tcmB = Pair(5, 7) > Pair(1, 2) < Pair(4, 9)
+"MidLinkFail: -tcmA -tcmB"
+
+# A chained tuple comparison with a || fallback: the failing slot's chain
+# falls back, the passing slot keeps its chained value.
+cfA, cfB = Pair(5, 7) > Pair(1, 8) < Pair(9, 9) || Pair(-1, -2)
+"ChainFallback: -cfA -cfB"
+
+# Three-way || over tuples: each slot takes the first side that yields.
+o3A, o3B = Pair(5, 7) > Pair(9, 8) || Pair(5, 7) > Pair(1, 9) || Pair(-1, -2)
+"OrChain3: -o3A -o3B"
+
+# A || resolved inside an arithmetic spine: per-slot values feed the combine.
+oaA, oaB = (Pair(5, 7) > Pair(1, 8) || Pair(0, 0)) + Pair(10, 10)
+"OrInArith: -oaA -oaB"
+
+# Mixed tuple chains: the array slot chains masks element-wise (intermediate
+# masks are consumed), the scalar slot chains with keep-old.
+mcA, mcB = Mix(2) > Mix(1) < Mix(9)
+"MixChain: -mcA -mcB"
+mfA = [9 9]
+mfB = 99
+"MixChainFailBefore: -mfA -mfB"
+mfA, mfB = Mix(2) > Mix(3) < Mix(9)
+"MixChainFail: -mfA -mfB"
+
+# A chained scalar comparison inside a tuple operand: its condition gates the
+# slots that read it (keep-old when the chain fails), and a || after the chain
+# supplies the operand value instead.
+ck = 5
+cf = 1
+ccA, ccB = Pair(ck > 2 < 8, 9) > Pair(1, 1)
+"ChainInOperand: -ccA -ccB"
+cdA = 77
+cdB = 88
+"ChainInOperandFailBefore: -cdA -cdB"
+cdA, cdB = Pair(cf > 2 < 8, 9) > Pair(-10, 1)
+"ChainInOperandFail: -cdA -cdB"
+coA, coB = Pair(cf > 2 < 8 || -1, 9) > Pair(-10, 1)
+"ChainOrInOperand: -coA -coB"
