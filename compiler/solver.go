@@ -116,7 +116,6 @@ type TypeSolver struct {
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr     bool // value position (LetStatement conditions/values, (cond value); inherited by nested exprs): comparisons yield their LHS and chain, || is fallback — vs plain booleans in non-value contexts like prints
 	UnresolvedExprs map[pendingBinding][]pendingExpr
-	Rejected        map[ExprKey]struct{} // expressions already diagnosed, so fixpoint re-typing does not duplicate the error
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -132,20 +131,25 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ExprCache:       sc.Compiler.ExprCache,
 		TmpCounter:      0,
 		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
-		Rejected:        make(map[ExprKey]struct{}),
 	}
 }
 
-// rejectOnce appends a diagnostic for expr unless one was already recorded —
-// function bodies are re-typed on every fixpoint pass, and a repeated error
-// would both duplicate the message and read as a spurious convergence failure.
-func (ts *TypeSolver) rejectOnce(expr ast.Expression, tok token.Token, msg string) {
-	k := key(ts.FuncNameMangled, expr)
-	if _, ok := ts.Rejected[k]; ok {
-		return
+// dedupeErrors collapses identical diagnostics, keeping first occurrences in
+// order. Function bodies are re-typed on every fixpoint pass (and once per
+// call-site specialization), so an error inside one is appended once per pass;
+// deduplicating the final list once avoids per-emission bookkeeping.
+func (ts *TypeSolver) dedupeErrors() {
+	seen := make(map[string]struct{}, len(ts.Errors))
+	kept := ts.Errors[:0]
+	for _, ce := range ts.Errors {
+		k := ce.Error()
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		kept = append(kept, ce)
 	}
-	ts.Rejected[k] = struct{}{}
-	ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: msg})
+	ts.Errors = kept
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
@@ -692,6 +696,8 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 }
 
 func (ts *TypeSolver) Solve() {
+	defer ts.dedupeErrors()
+
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
 	for _, stmt := range program.Statements {
@@ -1682,9 +1688,13 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 
 	// A || in the value arm is the one position still lowered inline with no
 	// branching context (it would panic in compileInfixBasic), so reject it —
-	// value-position || resolves per slot everywhere else.
+	// value-position || resolves per slot everywhere else. Fixpoint re-typing
+	// repeats this append; Solve deduplicates the final list.
 	if ts.valueArmHasFallbackOr(expr.Value) {
-		ts.rejectOnce(expr, expr.Tok(), "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first")
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first",
+		})
 	}
 
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
