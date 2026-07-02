@@ -841,3 +841,17 @@ cdA, cdB = Pair(cf > 2 < 8, 9) > Pair(-10, 1)
 "ChainInOperandFail: -cdA -cdB"
 coA, coB = Pair(cf > 2 < 8 || -1, 9) > Pair(-10, 1)
 "ChainOrInOperand: -coA -coB"
+
+# A multi-cell gate asks "did it yield?": every cell must hold. A first-cell
+# failure turns the gate off just like a later cell; a fresh target keeps its
+# zero seed; the same rule holds inside a (cond value) condition.
+smcFirstOff = 88
+"SmcFirstCellOffBefore: -smcFirstOff"
+smcFirstOff = Pair(1, 2) > Pair(1, 5) 7
+"SmcFirstCellOff: -smcFirstOff"
+smcFreshOff = Pair(1, 2) > Pair(1, 5) 7
+"SmcFreshOff: -smcFreshOff"
+cvCellsOn = (Pair(1, 2) > Pair(0, 1) 7)
+"CvCellsOn: -cvCellsOn"
+cvCellsOff = (Pair(1, 2) > Pair(1, 5) 7)
+"CvCellsOff: -cvCellsOff"

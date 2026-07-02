@@ -218,3 +218,8 @@ ChainInOperand: 5 9
 ChainInOperandFailBefore: 77 88
 ChainInOperandFail: 77 88
 ChainOrInOperand: -1 9
+SmcFirstCellOffBefore: 88
+SmcFirstCellOff: 88
+SmcFreshOff: 0
+CvCellsOn: 7
+CvCellsOff: 0

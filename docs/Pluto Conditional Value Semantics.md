@@ -35,6 +35,20 @@ comparison (`Pair > Pair`, including string pairs) likewise gates on the
 conjunction of its cells — every cell must hold. Both forms work in any condition
 slot (statement gate, `(cond value)`, array cell).
 
+```pluto
+g = 99
+g = Pair(1, 2) > Pair(0, 1)  7   # 1 > 0 and 2 > 1 -> gate on,  g = 7
+g = Pair(1, 2) > Pair(1, 5)  8   # 1 > 1 fails     -> gate off, g stays 7
+```
+
+The multi-cell AND is not a conjunction operator smuggled into the gate — it is
+the only single-bit reading of a per-slot expression in a position that asks one
+question: *did it yield?* A multi-value expression yields when it produces its
+complete value, i.e. every slot yields. The same reading gives a `||` gate its
+OR semantics (its yield flag — `a > 2 || b > 3` yields when either side does),
+and is why an **array cell is rejected** in a gate: a mask always yields, so a
+gate over one would look meaningful while testing nothing.
+
 ### Conditions are value positions
 
 A condition is itself a value position: a comparison yields its LHS and chains,
