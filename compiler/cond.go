@@ -531,16 +531,18 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 		if len(lConds) == 0 && len(rConds) == 0 {
 			return nil, temps
 		}
+		// The solver enforces operand arity == node arity for non-comparison
+		// infix, so operand conditions are either absent or slot-aligned;
+		// anything else would zip lane i's condition onto lane j (a miscompile).
 		n := len(info.OutTypes)
-		if (len(lConds) == 0 || len(lConds) == n) && (len(rConds) == 0 || len(rConds) == n) {
-			conds := make([]llvm.Value, n)
-			for i := range conds {
-				conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("slot_and_%d", i))
-			}
-			return conds, temps
+		if (len(lConds) != 0 && len(lConds) != n) || (len(rConds) != 0 && len(rConds) != n) {
+			panic(fmt.Sprintf("internal: slot conditions misaligned with infix arity (left %d, right %d, slots %d)", len(lConds), len(rConds), n))
 		}
-		merged := c.andConds(c.foldSlotConds(lConds), c.foldSlotConds(rConds), "slot_merge")
-		return broadcastConds(merged, n), temps
+		conds := make([]llvm.Value, n)
+		for i := range conds {
+			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("slot_and_%d", i))
+		}
+		return conds, temps
 	case *ast.PrefixExpression:
 		return c.extractSlotConds(e.Right, temps)
 	}
