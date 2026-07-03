@@ -642,50 +642,18 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 		c.createStore(llvm.ConstInt(i1Ty, 0, false), yields[i], i1)
 	}
 
+	// Left and right stores differ only in needFlags: the right side must also
+	// check that the slot was not already filled by the left.
 	storeSide := func(side ast.Expression, conds []llvm.Value, needFlags bool) {
 		for i, outType := range info.OutTypes {
-			store := func() {
-				val, owned := c.spineSlotValue(side, i, outType)
-				if owned {
-					// Ownership moves into the result slot; mark the source so
-					// mask cleanup skips it (a fresh combine is simply discarded).
-					val.Borrowed = true
-				} else {
-					// Deref before deciding to copy: a leaf's slot value may be
-					// Ptr-wrapped, and the copy must clone the pointee — the
-					// source is freed while the result slot lives on.
-					val = c.derefIfPointer(val, fmt.Sprintf("or_take_val_%d", i))
-					if !IsStrG(val.Type) {
-						val = c.deepCopyIfNeeded(val)
-					}
-				}
-				coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("or_val_%d", i))
-				c.createStore(coerced.Val, slots[i], coerced.Type)
-				c.createStore(llvm.ConstInt(i1Ty, 1, false), yields[i], i1)
-			}
-
 			cond := slotCondAt(conds, i)
 			if needFlags {
 				need := c.builder.CreateNot(c.createLoad(yields[i], i1, fmt.Sprintf("or_need_%d", i)), fmt.Sprintf("or_miss_%d", i))
 				cond = c.andConds(need, cond, fmt.Sprintf("or_take_%d", i))
 			}
-			if cond.IsNil() {
-				store()
-				continue
-			}
-
-			ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, fmt.Sprintf("or_store_%d", i), fmt.Sprintf("or_skip_%d", i), fmt.Sprintf("or_store_cont_%d", i))
-
-			c.builder.SetInsertPointAtEnd(ifBlock)
-			store()
-			c.builder.CreateBr(contBlock)
-
-			// A directly stored mask skipped at runtime was never moved; free it.
-			c.builder.SetInsertPointAtEnd(elseBlock)
-			c.freeSkippedSlotMask(side, i)
-			c.builder.CreateBr(contBlock)
-
-			c.builder.SetInsertPointAtEnd(contBlock)
+			c.underSlotCond(side, i, cond, fmt.Sprintf("or_store_%d", i), func() {
+				c.storeFallbackValue(side, i, outType, slots[i], yields[i])
+			})
 		}
 	}
 
@@ -1348,11 +1316,9 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 }
 
 // commitSpineSlot commits output slot i of a per-slot spine into its temp
-// slot, keeping the seeded prior value when the slot condition fails. When the
-// slot's value is a directly committed mask, the failing branch frees it — the
-// mask was built during extraction, so a runtime-skipped store must release it.
+// slot, keeping the seeded prior value when the slot condition fails.
 func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, tempName *ast.Identifier, outType Type) {
-	commit := func() {
+	c.underSlotCond(expr, i, cond, "slot", func() {
 		val, owned := c.spineSlotValue(expr, i, outType)
 		c.commitSlotValue(tempName, val, !owned)
 		if owned {
@@ -1360,16 +1326,22 @@ func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, 
 			// skips it (a fresh combine is simply discarded).
 			val.Borrowed = true
 		}
-	}
+	})
+}
+
+// underSlotCond emits store for slot i of expr under cond (unconditionally
+// when nil). The skipped arm frees the mask that slot would have moved: masks
+// are built during extraction, so a runtime-skipped store must release one.
+func (c *Compiler) underSlotCond(expr ast.Expression, i int, cond llvm.Value, name string, store func()) {
 	if cond.IsNil() {
-		commit()
+		store()
 		return
 	}
 
-	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, "slot_if", "slot_else", "slot_cont")
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, name+"_take", name+"_skip", name+"_cont")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
-	commit()
+	store()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
@@ -1377,6 +1349,29 @@ func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, 
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// storeFallbackValue writes slot i of side into a || result slot and marks it
+// yielded. An owned value (mask, fresh combine) moves in — its source is
+// marked so mask cleanup skips it. A borrowed view is dereferenced first (a
+// leaf's slot value may be Ptr-wrapped, and the copy must clone the pointee)
+// and deep-copied, since the source is freed while the result slot lives on;
+// a static string is left to the store's coercion, which copies it only when
+// the slot type is heap-owned.
+func (c *Compiler) storeFallbackValue(side ast.Expression, i int, outType Type, slot, yield llvm.Value) {
+	val, owned := c.spineSlotValue(side, i, outType)
+	if owned {
+		val.Borrowed = true
+	} else {
+		val = c.derefIfPointer(val, fmt.Sprintf("or_take_val_%d", i))
+		if !IsStrG(val.Type) {
+			val = c.deepCopyIfNeeded(val)
+		}
+	}
+	coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("or_val_%d", i))
+	c.createStore(coerced.Val, slot, coerced.Type)
+	i1 := Int{Width: 1}
+	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), yield, i1)
 }
 
 // freeSkippedSlotMask frees the frame mask that slot i of expr would have
