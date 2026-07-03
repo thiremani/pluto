@@ -620,16 +620,33 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	return conds, temps
 }
 
-// extractFallbackOrSlots lowers a value-position || per slot: slot i yields the
-// left side's value when its condition holds and falls back to the right side
-// only when it failed. The right side is evaluated lazily — once, and only when
-// some slot did not yield. Each result slot holds an owned copy (or a freeable
-// zero when neither side yielded, which downstream reads never commit because
-// the returned slot condition is the yield flag). The resolved values are
-// stashed in the condLHS frame under the || node, and the slots are tracked as
-// one temporary, so both commit conventions work: the AND-gate world moves
-// them into destinations on the true path and frees them on the else path,
-// while the per-slot world copies then frees.
+// extractFallbackOrSlots resolves a value-position || into ordinary per-slot
+// data, so downstream code never sees the fallback: the chosen values sit in
+// the condLHS frame under the || node (like a comparison's retained LHS), and
+// the returned slot conditions are the yield flags — "did slot i get a
+// value?". Gates folding to OR, per-slot fallback at commits, and || nested
+// in arithmetic all follow from that with no special cases.
+//
+// Per slot i: the left side's value when its condition held, else the right
+// side's when it yielded, else no yield (the consumer keeps old / seeds
+// zero). The lowering runs in four named steps:
+//
+//  1. newFallbackSlots: a result alloca and an i1 yield flag per slot —
+//     values are produced inside branches but read after them.
+//  2. resolveFallbackSide(left): under each slot's take-condition, store the
+//     value and raise the flag.
+//  3. Lazy right: only when some flag can still be down (an unconditional
+//     left makes the fallback dead code), branch and resolve the right side,
+//     each slot additionally requiring its flag to still be down.
+//  4. loadFallbackResults: zero-seed slots that never yielded, then load
+//     values and flags.
+//
+// Ownership: every slot ends up holding an owned copy, or a freeable zero (an
+// StrH zero is an owned heap copy, an array zero is null), so the slots are
+// tracked as ONE unconditional temporary. That serves both commit
+// conventions: the AND-gate world moves the values into destinations on the
+// true path and frees them on the else path; the per-slot world copies then
+// frees.
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
 	fs := c.newFallbackSlots(info.OutTypes)
 
