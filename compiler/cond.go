@@ -631,37 +631,9 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 // them into destinations on the true path and frees them on the else path,
 // while the per-slot world copies then frees.
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	i1 := Int{Width: 1}
-	i1Ty := c.mapToLLVMType(i1)
+	fs := c.newFallbackSlots(info.OutTypes)
 
-	slots := make([]llvm.Value, len(info.OutTypes))
-	yields := make([]llvm.Value, len(info.OutTypes))
-	for i, outType := range info.OutTypes {
-		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("or_slot_%d.mem", i))
-		yields[i] = c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("or_yield_%d.mem", i))
-		c.createStore(llvm.ConstInt(i1Ty, 0, false), yields[i], i1)
-	}
-
-	// Left and right stores differ only in needFlags: the right side must also
-	// check that the slot was not already filled by the left.
-	storeSide := func(side ast.Expression, conds []llvm.Value, needFlags bool) {
-		for i, outType := range info.OutTypes {
-			cond := slotCondAt(conds, i)
-			if needFlags {
-				need := c.builder.CreateNot(c.createLoad(yields[i], i1, fmt.Sprintf("or_need_%d", i)), fmt.Sprintf("or_miss_%d", i))
-				cond = c.andConds(need, cond, fmt.Sprintf("or_take_%d", i))
-			}
-			c.underSlotCond(side, i, cond, fmt.Sprintf("or_store_%d", i), func() {
-				c.storeFallbackValue(side, i, outType, slots[i], yields[i])
-			})
-		}
-	}
-
-	beforeLeft := c.frameMaskKeys()
-	lConds, lTemps := c.prepareFallbackOperand(or.Left, nil)
-	storeSide(or.Left, lConds, false)
-	c.freeCondTemps(lTemps)
-	c.freeUnmovedMasksSince(beforeLeft)
+	lConds := c.resolveFallbackSide(fs, or.Left, false)
 
 	// Lazy right: only when some slot failed to yield. An unconditional left
 	// (every slot always yields) makes the fallback dead.
@@ -669,32 +641,84 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 	if !leftAll.IsNil() {
 		someMissed := c.builder.CreateNot(leftAll, "or_some_missed")
 		c.underCond(someMissed, "or_rhs", "or_rhs_cont", func() {
-			beforeRight := c.frameMaskKeys()
-			rConds, rTemps := c.prepareFallbackOperand(or.Right, nil)
-			storeSide(or.Right, rConds, true)
-			c.freeCondTemps(rTemps)
-			c.freeUnmovedMasksSince(beforeRight)
+			c.resolveFallbackSide(fs, or.Right, true)
 		})
 	}
 
-	// Slots that never yielded hold zero (freeable: an StrH zero is an owned
-	// heap copy, an array zero is null), so cleanup stays unconditional.
-	conds := make([]llvm.Value, len(info.OutTypes))
-	loaded := make([]*Symbol, len(info.OutTypes))
-	for i, outType := range info.OutTypes {
-		yield := c.createLoad(yields[i], i1, fmt.Sprintf("or_yield_%d", i))
-		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), fmt.Sprintf("or_seed_cont_%d", i), func() {
-			zero := c.makeZeroValue(outType)
-			c.createStore(zero.Val, slots[i], outType)
-		})
-		conds[i] = yield
-		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("or_slot_%d", i)), Type: outType}
-	}
-
+	conds, loaded := c.loadFallbackResults(fs)
 	frame := c.requireCondLHSFrame()
 	frame[key(c.FuncNameMangled, or)] = loaded
 	temps = append(temps, condTemp{expr: or, syms: loaded})
 	return conds, temps
+}
+
+// fallbackSlots is the result state of one value-position || lowering: per
+// output slot, an alloca for the resolved value and an i1 yield flag.
+type fallbackSlots struct {
+	outTypes []Type
+	slots    []llvm.Value
+	yields   []llvm.Value
+}
+
+func (c *Compiler) newFallbackSlots(outTypes []Type) fallbackSlots {
+	i1 := Int{Width: 1}
+	i1Ty := c.mapToLLVMType(i1)
+	fs := fallbackSlots{
+		outTypes: outTypes,
+		slots:    make([]llvm.Value, len(outTypes)),
+		yields:   make([]llvm.Value, len(outTypes)),
+	}
+	for i, outType := range outTypes {
+		fs.slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("or_slot_%d.mem", i))
+		fs.yields[i] = c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("or_yield_%d.mem", i))
+		c.createStore(llvm.ConstInt(i1Ty, 0, false), fs.yields[i], i1)
+	}
+	return fs
+}
+
+// resolveFallbackSide prepares one || operand, stores its slot values under
+// each slot's take-condition, and releases the operand's temporaries and
+// unmoved masks. The sides differ only in needFlags: the right side also
+// checks that the slot was not already filled by the left. Returns the
+// operand's slot conditions.
+func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, needFlags bool) []llvm.Value {
+	i1 := Int{Width: 1}
+	before := c.frameMaskKeys()
+	conds, sideTemps := c.prepareFallbackOperand(side, nil)
+
+	for i, outType := range fs.outTypes {
+		cond := slotCondAt(conds, i)
+		if needFlags {
+			need := c.builder.CreateNot(c.createLoad(fs.yields[i], i1, fmt.Sprintf("or_need_%d", i)), fmt.Sprintf("or_miss_%d", i))
+			cond = c.andConds(need, cond, fmt.Sprintf("or_take_%d", i))
+		}
+		c.underSlotCond(side, i, cond, fmt.Sprintf("or_store_%d", i), func() {
+			c.storeFallbackValue(side, i, outType, fs.slots[i], fs.yields[i])
+		})
+	}
+
+	c.freeCondTemps(sideTemps)
+	c.freeUnmovedMasksSince(before)
+	return conds
+}
+
+// loadFallbackResults seeds the slots that never yielded with zero (freeable:
+// an StrH zero is an owned heap copy, an array zero is null, so cleanup stays
+// unconditional) and returns the yield flags and loaded values per slot.
+func (c *Compiler) loadFallbackResults(fs fallbackSlots) ([]llvm.Value, []*Symbol) {
+	i1 := Int{Width: 1}
+	conds := make([]llvm.Value, len(fs.outTypes))
+	loaded := make([]*Symbol, len(fs.outTypes))
+	for i, outType := range fs.outTypes {
+		yield := c.createLoad(fs.yields[i], i1, fmt.Sprintf("or_yield_%d", i))
+		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), fmt.Sprintf("or_seed_cont_%d", i), func() {
+			zero := c.makeZeroValue(outType)
+			c.createStore(zero.Val, fs.slots[i], outType)
+		})
+		conds[i] = yield
+		loaded[i] = &Symbol{Val: c.createLoad(fs.slots[i], outType, fmt.Sprintf("or_slot_%d", i)), Type: outType}
+	}
+	return conds, loaded
 }
 
 // prepareFallbackOperand prepares one side of a value-position || for per-slot
