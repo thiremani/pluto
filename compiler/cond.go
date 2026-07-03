@@ -620,33 +620,12 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	return conds, temps
 }
 
-// extractFallbackOrSlots resolves a value-position || into ordinary per-slot
-// data, so downstream code never sees the fallback: the chosen values sit in
-// the condLHS frame under the || node (like a comparison's retained LHS), and
-// the returned slot conditions are the yield flags — "did slot i get a
-// value?". Gates folding to OR, per-slot fallback at commits, and || nested
-// in arithmetic all follow from that with no special cases.
-//
-// Per slot i: the left side's value when its condition held, else the right
-// side's when it yielded, else no yield (the consumer keeps old / seeds
-// zero). The lowering runs in four named steps:
-//
-//  1. newFallbackSlots: a result alloca and an i1 yield flag per slot —
-//     values are produced inside branches but read after them.
-//  2. resolveFallbackSide(left): under each slot's take-condition, store the
-//     value and raise the flag.
-//  3. Lazy right: only when some flag can still be down (an unconditional
-//     left makes the fallback dead code), branch and resolve the right side,
-//     each slot additionally requiring its flag to still be down.
-//  4. loadFallbackResults: zero-seed slots that never yielded, then load
-//     values and flags.
-//
-// Ownership: every slot ends up holding an owned copy, or a freeable zero (an
-// StrH zero is an owned heap copy, an array zero is null), so the slots are
-// tracked as ONE unconditional temporary. That serves both commit
-// conventions: the AND-gate world moves the values into destinations on the
-// true path and frees them on the else path; the per-slot world copies then
-// frees.
+// extractFallbackOrSlots resolves a value-position || into the shared
+// extraction form: chosen values stashed in the condLHS frame under the ||
+// node, yield flags returned as the slot conditions. Every result slot ends
+// up owned or a freeable zero (an StrH zero is an owned heap copy, an array
+// zero is null), so the slots travel as one unconditional temporary across
+// both commit conventions (move-on-true vs copy-then-free).
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
 	fs := c.newFallbackSlots(info.OutTypes)
 
@@ -693,11 +672,9 @@ func (c *Compiler) newFallbackSlots(outTypes []Type) fallbackSlots {
 	return fs
 }
 
-// resolveFallbackSide prepares one || operand, stores its slot values under
-// each slot's take-condition, and releases the operand's temporaries and
-// unmoved masks. The sides differ only in needFlags: the right side also
-// checks that the slot was not already filled by the left. Returns the
-// operand's slot conditions.
+// resolveFallbackSide resolves one || operand into the result slots.
+// needFlags (the right side) restricts each store to slots the left did not
+// already fill.
 func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, needFlags bool) []llvm.Value {
 	i1 := Int{Width: 1}
 	before := c.frameMaskKeys()
@@ -719,9 +696,8 @@ func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, ne
 	return conds
 }
 
-// loadFallbackResults seeds the slots that never yielded with zero (freeable:
-// an StrH zero is an owned heap copy, an array zero is null, so cleanup stays
-// unconditional) and returns the yield flags and loaded values per slot.
+// loadFallbackResults zero-seeds the slots that never yielded and returns the
+// yield flags and loaded values per slot.
 func (c *Compiler) loadFallbackResults(fs fallbackSlots) ([]llvm.Value, []*Symbol) {
 	i1 := Int{Width: 1}
 	conds := make([]llvm.Value, len(fs.outTypes))
@@ -1393,12 +1369,11 @@ func (c *Compiler) underSlotCond(expr ast.Expression, i int, cond llvm.Value, na
 }
 
 // storeFallbackValue writes slot i of side into a || result slot and marks it
-// yielded. An owned value (mask, fresh combine) moves in — its source is
-// marked so mask cleanup skips it. A borrowed view is dereferenced first (a
-// leaf's slot value may be Ptr-wrapped, and the copy must clone the pointee)
-// and deep-copied, since the source is freed while the result slot lives on;
-// a static string is left to the store's coercion, which copies it only when
-// the slot type is heap-owned.
+// yielded. A borrowed view must deref before the copy decision — a leaf's
+// slot value may be Ptr-wrapped, and copying the wrapper aliases the pointee
+// into a slot that outlives the freed source (a past double-free). A static
+// string is left to the store's coercion, which copies only into heap-owned
+// slot types.
 func (c *Compiler) storeFallbackValue(side ast.Expression, i int, outType Type, slot, yield llvm.Value) {
 	val, owned := c.spineSlotValue(side, i, outType)
 	if owned {
