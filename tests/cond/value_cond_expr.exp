@@ -223,3 +223,13 @@ SmcFirstCellOff: 88
 SmcFreshOff: 0
 CvCellsOn: 7
 CvCellsOff: 0
+BothAlignedBefore: 11 22
+BothAligned: 6 22
+CallFoldBefore: 99
+CallFold: 9
+CallFoldFailBefore: 99
+CallFoldFail: 99
+PrefixPassBefore: 99
+PrefixPass: -4
+PrefixPassFailBefore: 99
+PrefixPassFail: 99

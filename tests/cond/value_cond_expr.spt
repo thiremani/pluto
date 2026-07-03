@@ -855,3 +855,32 @@ cvCellsOn = (Pair(1, 2) > Pair(0, 1) 7)
 "CvCellsOn: -cvCellsOn"
 cvCellsOff = (Pair(1, 2) > Pair(1, 5) 7)
 "CvCellsOff: -cvCellsOff"
+
+# Slot conditions merge along dataflow lanes. Both operands aligned: lane i
+# ANDs lane i's bits from each side. A call merges lanes: every argument's
+# conditions (however many comparisons each carries) AND into all outputs.
+# A prefix passes its operand's lanes through untouched.
+baA = 11
+baB = 22
+"BothAlignedBefore: -baA -baB"
+baA, baB = (Pair(5, 7) > Pair(1, 8)) + (Pair(1, 1) > Pair(0, 9))
+"BothAligned: -baA -baB"
+cfa = 5
+cfb = 4
+cfc = 2
+cfX = 99
+"CallFoldBefore: -cfX"
+cfX = Accum(cfa > 2, cfb > 3 < 9)
+"CallFold: -cfX"
+cfY = 99
+"CallFoldFailBefore: -cfY"
+cfY = Accum(cfa > 2, cfc > 3 < 9)
+"CallFoldFail: -cfY"
+pfZ = 99
+"PrefixPassBefore: -pfZ"
+pfZ = -(cfa > 2) + 1
+"PrefixPass: -pfZ"
+pfW = 99
+"PrefixPassFailBefore: -pfW"
+pfW = -(cfc > 3) + 1
+"PrefixPassFail: -pfW"
