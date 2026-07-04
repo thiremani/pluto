@@ -573,13 +573,23 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	lConds, temps = c.extractSlotConds(infix.Left, temps)
 	rConds, temps = c.extractSlotConds(infix.Right, temps)
 
+	// An out-of-bounds read while evaluating an operand is a failed condition
+	// on every lane the operand feeds (the read yields nothing, so nothing
+	// computed from it does either).
+	guardPtr := c.pushBoundsGuard("cmp_bounds_guard")
 	left := c.compileExpression(infix.Left, nil)
 	right := c.compileExpression(infix.Right, nil)
+	var boundsOK llvm.Value
+	if c.stmtBoundsUsed() {
+		boundsOK = c.createLoad(guardPtr, Int{Width: 1}, "cmp_bounds_ok")
+	}
+	c.popBoundsGuard()
 
 	conds := make([]llvm.Value, len(left))
 	lhsSyms := make([]*Symbol, len(left))
 	for i := range left {
 		operandCond := c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("operand_cond_%d", i))
+		operandCond = c.andConds(operandCond, boundsOK, fmt.Sprintf("operand_bounds_%d", i))
 		switch info.CompareModes[i] {
 		case CondArray:
 			// compileArrayMask handles deref internally. The mask copies the
@@ -734,6 +744,9 @@ func (c *Compiler) prepareFallbackOperand(expr ast.Expression, temps []condTemp)
 		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("or_cv_%d.mem", i))
 	}
 
+	// The guard alloca lives in the entry block and is seeded in-bounds, so a
+	// skipped value arm reads back as clean.
+	guardPtr := c.pushBoundsGuard("or_cv_bounds_guard")
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(gate, "or_cv_if", "or_cv_else", "or_cv_cont")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
@@ -752,6 +765,12 @@ func (c *Compiler) prepareFallbackOperand(expr ast.Expression, temps []condTemp)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+	if c.stmtBoundsUsed() {
+		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "or_cv_bounds_ok")
+		gate = c.andConds(gate, boundsOK, "or_cv_and_bounds")
+	}
+	c.popBoundsGuard()
+
 	loaded := make([]*Symbol, len(info.OutTypes))
 	for i, outType := range info.OutTypes {
 		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("or_cv_%d", i)), Type: outType}
@@ -1203,45 +1222,25 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 
 // compilePerSlotAssign lowers a per-slot-committable value expression into its
 // pre-seeded temp slots. Extraction evaluates the comparisons and spine leaves
-// once; each slot then commits under its own condition — array slots store
-// their mask, scalar slots store their value when the slot condition holds and
-// keep the seeded prior value otherwise. Spine arithmetic for a slot compiles
+// once (folding any out-of-bounds read into the affected lanes' conditions);
+// each slot then commits under its own condition — array slots store their
+// mask, scalar slots store their value when the slot condition holds and keep
+// the seeded prior value otherwise. Spine arithmetic for a slot compiles
 // inside that slot's branch, so a combine (e.g. a division) runs only when its
-// slot commits. The whole lowering sits behind any statement condition, and a
-// failed bounds check in an operand skips every commit, keeping prior values
-// like a normal assignment.
+// slot commits. The whole lowering sits behind any statement condition.
 func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
 	c.underCond(stmtCond, "stmt_cond_if", "stmt_cond_cont", func() {
-		c.pushBoundsGuard("slot_bounds_guard")
-		defer c.popBoundsGuard()
-
 		c.pushCondLHSFrame()
 		defer c.popCondLHSFrame()
 
 		conds, temps := c.prepareSpine(expr, nil)
-
-		// Masks still unresolved after extraction (a || operand settles its own
-		// while extracting): once commits run, each is either moved into its
-		// slot or freed by that slot's else arm, and the post-commit sweep
-		// releases the ones arithmetic consumed. The bounds-skip path runs no
-		// commits, so it frees them all.
-		spineMasks := c.unresolvedFrameMasks()
-
-		commitAndSweep := func() {
-			for i, outType := range info.OutTypes {
-				c.commitSpineSlot(expr, i, slotCondAt(conds, i), tempNames[i], outType)
-			}
-			c.freeFrameMasks()
-		}
-		skipAll := func() {
-			for _, mask := range spineMasks {
-				c.freeSymbolValue(mask, "bounds_skip_mask")
-			}
-		}
-		if !c.withStmtBoundsGuard("slot_bounds_ok", "slot_bounds_commit", "slot_bounds_skip", "slot_bounds_cont", commitAndSweep, skipAll) {
-			commitAndSweep()
+		for i, outType := range info.OutTypes {
+			c.commitSpineSlot(expr, i, slotCondAt(conds, i), tempNames[i], outType)
 		}
 
+		// Masks not moved into a slot (freed by a slot's else arm, or consumed
+		// by arithmetic) are swept here; moved ones were marked at store.
+		c.freeFrameMasks()
 		c.freeCondTemps(temps)
 	})
 }
@@ -1296,10 +1295,16 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 
 	leafCond := c.foldSlotConds(leafConds)
 	if leafCond.IsNil() {
+		guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 		syms := c.compileExpression(expr, nil)
+		var boundsOK llvm.Value
+		if c.stmtBoundsUsed() {
+			boundsOK = c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
+		}
+		c.popBoundsGuard()
 		frame[key(c.FuncNameMangled, expr)] = syms
 		temps = append(temps, condTemp{expr: expr, syms: syms})
-		return broadcastConds(leafCond, len(info.OutTypes)), temps
+		return broadcastConds(boundsOK, len(info.OutTypes)), temps
 	}
 
 	slots := make([]llvm.Value, len(info.OutTypes))
@@ -1307,6 +1312,9 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 		slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("spine_leaf_%d.mem", i))
 	}
 
+	// The guard alloca lives in the entry block and is seeded in-bounds, so a
+	// skipped leaf reads back as clean.
+	guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
@@ -1325,6 +1333,12 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
+	if c.stmtBoundsUsed() {
+		boundsOK := c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
+		leafCond = c.andConds(leafCond, boundsOK, "leaf_and_bounds")
+	}
+	c.popBoundsGuard()
+
 	loaded := make([]*Symbol, len(info.OutTypes))
 	for i, outType := range info.OutTypes {
 		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("spine_leaf_%d", i)), Type: outType}
@@ -1438,24 +1452,6 @@ func (c *Compiler) freeFrameMasks() {
 	c.freeUnmovedMasksSince(nil)
 }
 
-// unresolvedFrameMasks snapshots the frame masks whose ownership is still
-// open — not yet moved or freed (marked borrowed) by a nested resolution.
-func (c *Compiler) unresolvedFrameMasks() []*Symbol {
-	var masks []*Symbol
-	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
-		exprInfo := c.ExprCache[exprKey]
-		if exprInfo == nil {
-			continue
-		}
-		for i, mode := range exprInfo.CompareModes {
-			if mode == CondArray && !lhsSyms[i].Borrowed {
-				masks = append(masks, lhsSyms[i])
-			}
-		}
-	}
-	return masks
-}
-
 // frameMaskKeys snapshots the current condLHS frame's keys, so a nested
 // resolution (a || operand) can clean up only the masks it stashed itself.
 func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
@@ -1510,6 +1506,27 @@ func (c *Compiler) underCond(cond llvm.Value, ifName, contName string, body func
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	body()
 	c.builder.CreateBr(contBlock)
+	c.builder.SetInsertPointAtEnd(contBlock)
+}
+
+// underCondElse runs onTrue under cond and onFalse otherwise; a nil cond runs
+// onTrue unconditionally.
+func (c *Compiler) underCondElse(cond llvm.Value, name string, onTrue, onFalse func()) {
+	if cond.IsNil() {
+		onTrue()
+		return
+	}
+
+	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, name+"_if", name+"_else", name+"_cont")
+
+	c.builder.SetInsertPointAtEnd(ifBlock)
+	onTrue()
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(elseBlock)
+	onFalse()
+	c.builder.CreateBr(contBlock)
+
 	c.builder.SetInsertPointAtEnd(contBlock)
 }
 

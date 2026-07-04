@@ -1027,13 +1027,122 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	// finishes, Ptrs already contain NEW values. We must capture old values first.
 	oldValues := c.captureOldValues(writeIdents)
 
-	// Collect bounds checks emitted while compiling RHS expressions. If any
-	// check fails, skip this assignment and keep prior destination values.
-	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
-	defer c.popBoundsGuard()
+	// Each expression evaluates under its own bounds guard: a failed check is a
+	// failed condition on that expression's lanes only, so sibling expressions
+	// in the same statement still commit (a, b = oarr[10], 5 keeps a, sets b).
+	syms := []*Symbol{}
+	rhsNames := []string{}
+	resCounts := []int{}
+	bits := []llvm.Value{}
+	guarded := false
+	i := 0
+	for _, expr := range exprs {
+		guardPtr := c.pushBoundsGuard("assign_bounds_guard")
+		res := c.compileExpression(expr, writeIdents[i:])
+		var bit llvm.Value
+		if c.stmtBoundsUsed() {
+			bit = c.createLoad(guardPtr, Int{Width: 1}, "assign_bounds_ok")
+			guarded = true
+		}
+		c.popBoundsGuard()
 
-	syms, rhsNames, resCounts := c.compileAssignmentValues(writeIdents, exprs)
-	c.finishAssignmentsWithGuard(writeIdents, ownershipIdents, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
+		var rhsName string
+		if ident, ok := expr.(*ast.Identifier); ok {
+			rhsName = ident.Value
+		}
+		for range res {
+			rhsNames = append(rhsNames, rhsName)
+		}
+		syms = append(syms, res...)
+		resCounts = append(resCounts, len(res))
+		bits = append(bits, bit)
+		i += len(res)
+	}
+
+	if !guarded {
+		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+		return
+	}
+	c.commitAssignmentsPerExpr(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts, bits)
+}
+
+// commitAssignmentsPerExpr commits each expression's destinations under that
+// expression's bounds bit (nil = unconditional), preserving the statement's
+// simultaneous-assignment order: all writes land before any old value is
+// freed, so a swap (a, b = b, a) never reads a freed payload. A skipped
+// expression frees its temporaries and restores destinations its evaluation
+// may have written through (call outputs), keeping prior values.
+func (c *Compiler) commitAssignmentsPerExpr(
+	writeIdents []*ast.Identifier,
+	ownershipIdents []*ast.Identifier,
+	syms []*Symbol,
+	rhsNames []string,
+	oldValues []*Symbol,
+	exprs []ast.Expression,
+	resCounts []int,
+	bits []llvm.Value,
+) {
+	// Guarded destinations must be pointer-backed so the write and skip paths
+	// converge; a fresh one gets a zero seed to keep.
+	offset := 0
+	for exprIdx := range exprs {
+		if !bits[exprIdx].IsNil() {
+			for j := 0; j < resCounts[exprIdx]; j++ {
+				c.ensureSeededDest(writeIdents[offset+j], syms[offset+j])
+			}
+		}
+		offset += resCounts[exprIdx]
+	}
+
+	moved := make([]map[string]struct{}, len(exprs))
+	offset = 0
+	for exprIdx, expr := range exprs {
+		n := resCounts[exprIdx]
+		wr := writeIdents[offset : offset+n]
+		exprSyms := syms[offset : offset+n]
+		nc, mv := c.computeCopyRequirements(ownershipIdents[offset:offset+n], exprSyms, rhsNames[offset:offset+n])
+		moved[exprIdx] = mv
+		exprOld := oldValues[offset : offset+n]
+
+		c.underCondElse(bits[exprIdx], "assign_write", func() {
+			c.writeTo(wr, exprSyms, nc)
+		}, func() {
+			c.freeTemporary(expr, exprSyms)
+			c.restoreOldValues(wr, exprOld)
+		})
+		offset += n
+	}
+
+	offset = 0
+	for exprIdx, expr := range exprs {
+		n := resCounts[exprIdx]
+		own := ownershipIdents[offset : offset+n]
+		exprOld := oldValues[offset : offset+n]
+		mv := moved[exprIdx]
+		c.underCond(bits[exprIdx], "assign_free", "assign_free_cont", func() {
+			c.freeOldValues(own, exprOld, mv, []ast.Expression{expr}, []int{n})
+		})
+		offset += n
+	}
+}
+
+// ensureSeededDest makes a guarded destination pointer-backed so conditional
+// commit paths converge; a fresh destination gets a zero seed as its keep-old
+// value.
+func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) {
+	if _, exists := Get(c.Scopes, ident.Value); exists {
+		c.promoteExistingSym(ident.Value)
+		return
+	}
+	t := valSym.Type
+	if p, ok := t.(Ptr); ok {
+		t = p.Elem
+	}
+	t = c.bindingSlotType(ident.Value, t)
+	ptr := c.createEntryBlockAlloca(c.mapToLLVMType(t), ident.Value+".mem")
+	zero := c.makeZeroValue(t)
+	c.createStore(zero.Val, ptr, t)
+	Put(c.Scopes, ident.Value, &Symbol{Val: ptr, Type: Ptr{Elem: t}})
 }
 
 func (c *Compiler) compileAssignmentValues(writeIdents []*ast.Identifier, exprs []ast.Expression) ([]*Symbol, []string, []int) {

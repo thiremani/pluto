@@ -236,6 +236,21 @@ PrefixPassFail: 99
 LazyRhsSkippedBefore: 11 22
 LazyRhsSkipped: 5 7
 LazyRhsOobBefore: 11 22
-LazyRhsOob: 11 22
+LazyRhsOob: 5 22
 ScalarLazySkippedBefore: 99
 ScalarLazySkipped: 5
+PlainMultiOobBefore: 11 22
+PlainMultiOob: 11 5
+PlainMultiOobFresh: 0 5
+PlainSingleOobBefore: 99
+PlainSingleOob: 99
+ScalarCmpOobBefore: 99
+ScalarCmpOob: 99
+ScalarOrOobBefore: 99
+ScalarOrOob: 99
+CallMergeOobBefore: 11 22
+CallMergeOob: 11 22
+SwapBefore: aax bby
+Swap: bby aax
+SwapPlusOobBefore: 7 8 99
+SwapPlusOob: 8 7 99

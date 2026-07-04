@@ -252,6 +252,16 @@ are gated per slot. One form is **rejected at compile time**: a value-position
 `||` inside a `(cond value)`'s **value arm** (`(c > 0  a > 2 || 7)`) — that arm
 still lowers inline with no branching context. Compute the value first.
 
+An **out-of-bounds read is a failed condition on the lanes it feeds**, merged
+by the same rules: a plain read no-ops its assignment (`x = arr[oob]` keeps
+old), sibling expressions in one statement commit independently
+(`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
+argument keeps that call's outputs old as a unit), comparisons and `||`
+fallbacks fed by an OOB read keep old rather than judging a fabricated zero,
+and an unevaluated `||` right side cannot fail anything. The one place OOB
+still reads as `0` is a **collector cell over an explicit range** — the
+documented full-control opt-in.
+
 ## Why this model
 
 - **Referential transparency:** a value-position conditional equals a named

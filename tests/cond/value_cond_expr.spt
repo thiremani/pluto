@@ -886,9 +886,9 @@ pfW = -(cfc > 3) + 1
 "PrefixPassFail: -pfW"
 
 # The || right side is evaluated at most once, and only when a slot missed.
-# Observable via bounds checks: an OOB in an unevaluated right side cannot
-# trip the statement guard (all-left-yield commits), while an evaluated right
-# side's OOB skips the whole assignment like any other OOB operand.
+# Observable via bounds checks: an OOB in an unevaluated right side has no
+# effect (all-left-yield commits), while an evaluated right side's OOB fails
+# that side's lanes — slots the left already filled still commit.
 lzArr = [10 20]
 lzA = 11
 lzB = 22
@@ -905,3 +905,45 @@ lzX = 99
 "ScalarLazySkippedBefore: -lzX"
 lzX = lzS > 2 || lzArr[10]
 "ScalarLazySkipped: -lzX"
+
+# An out-of-bounds read is a failed condition on the lanes it feeds. Sibling
+# expressions in one statement commit independently; a call merges its lanes,
+# so an OOB argument keeps that call's outputs old as a unit; a single plain
+# read still no-ops; scalar comparisons and || fallbacks keep old, not zero.
+obArr = [10 20]
+obA = 11
+obB = 22
+"PlainMultiOobBefore: -obA -obB"
+obA, obB = obArr[10], 5
+"PlainMultiOob: -obA -obB"
+obC, obD = obArr[10], 5
+"PlainMultiOobFresh: -obC -obD"
+obE = 99
+"PlainSingleOobBefore: -obE"
+obE = obArr[10]
+"PlainSingleOob: -obE"
+obF = 99
+"ScalarCmpOobBefore: -obF"
+obF = obArr[10] < 1
+"ScalarCmpOob: -obF"
+obG0 = 1
+obG = 99
+"ScalarOrOobBefore: -obG"
+obG = obG0 > 2 || obArr[10]
+"ScalarOrOob: -obG"
+obH = 11
+obI = 22
+"CallMergeOobBefore: -obH -obI"
+obH, obI = Pair(obArr[10], 5) > Pair(1, 1)
+"CallMergeOob: -obH -obI"
+obS1 = "aa" ⊕ "x"
+obS2 = "bb" ⊕ "y"
+"SwapBefore: -obS1 -obS2"
+obS1, obS2 = obS2, obS1
+"Swap: -obS1 -obS2"
+obM1 = 7
+obM2 = 8
+obM3 = 99
+"SwapPlusOobBefore: -obM1 -obM2 -obM3"
+obM1, obM2, obM3 = obM2, obM1, obArr[10]
+"SwapPlusOob: -obM1 -obM2 -obM3"
