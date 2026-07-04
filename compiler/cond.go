@@ -649,7 +649,7 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 		panic("internal: value-position || requires a failable left operand")
 	}
 	someMissed := c.builder.CreateNot(leftAllYielded, "or_some_missed")
-	c.underCond(someMissed, "or_rhs", func() {
+	c.withCondBranch(someMissed, "or_rhs", func() {
 		c.resolveFallbackSide(fs, or.Right, true)
 	}, nil)
 
@@ -698,7 +698,7 @@ func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, ne
 			need := c.builder.CreateNot(c.createLoad(fs.yields[i], i1, fmt.Sprintf("or_need_%d", i)), fmt.Sprintf("or_miss_%d", i))
 			cond = c.andConds(need, cond, fmt.Sprintf("or_take_%d", i))
 		}
-		c.underSlotCond(side, i, cond, fmt.Sprintf("or_store_%d", i), func() {
+		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("or_store_%d", i), func() {
 			c.storeFallbackValue(side, i, outType, fs.slots[i], fs.yields[i])
 		})
 	}
@@ -716,7 +716,7 @@ func (c *Compiler) loadFallbackResults(fs fallbackSlots) ([]llvm.Value, []*Symbo
 	loaded := make([]*Symbol, len(fs.outTypes))
 	for i, outType := range fs.outTypes {
 		yield := c.createLoad(fs.yields[i], i1, fmt.Sprintf("or_yield_%d", i))
-		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), func() {
+		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), func() {
 			zero := c.makeZeroValue(outType)
 			c.createStore(zero.Val, fs.slots[i], outType)
 		}, nil)
@@ -819,7 +819,7 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value,
 }
 
 func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
-	c.underCond(cond, "cond", onTrue, func() {
+	c.withCondBranch(cond, "cond", onTrue, func() {
 		c.cleanupCondExprElse(temps)
 		onFalse()
 	})
@@ -1216,7 +1216,7 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 // inside that slot's branch, so a combine (e.g. a division) runs only when its
 // slot commits. The whole lowering sits behind any statement condition.
 func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
-	c.underCond(stmtCond, "stmt_cond", func() {
+	c.withCondBranch(stmtCond, "stmt_cond", func() {
 		c.pushCondLHSFrame()
 		defer c.popCondLHSFrame()
 
@@ -1338,7 +1338,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 // commitSpineSlot commits output slot i of a per-slot spine into its temp
 // slot, keeping the seeded prior value when the slot condition fails.
 func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, tempName *ast.Identifier, outType Type) {
-	c.underSlotCond(expr, i, cond, "slot", func() {
+	c.withSlotCondBranch(expr, i, cond, "slot", func() {
 		val, owned := c.spineSlotValue(expr, i, outType)
 		c.commitSlotValue(tempName, val, !owned)
 		if owned {
@@ -1349,11 +1349,11 @@ func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, 
 	})
 }
 
-// underSlotCond emits store for slot i of expr under cond (unconditionally
+// withSlotCondBranch emits store for slot i of expr under cond (unconditionally
 // when nil). The skipped arm frees the mask that slot would have moved: masks
 // are built during extraction, so a runtime-skipped store must release one.
-func (c *Compiler) underSlotCond(expr ast.Expression, i int, cond llvm.Value, name string, store func()) {
-	c.underCond(cond, name, store, func() {
+func (c *Compiler) withSlotCondBranch(expr ast.Expression, i int, cond llvm.Value, name string, store func()) {
+	c.withCondBranch(cond, name, store, func() {
 		c.freeSkippedSlotMask(expr, i)
 	})
 }
@@ -1467,10 +1467,10 @@ func (c *Compiler) freeCondTemps(temps []condTemp) {
 	}
 }
 
-// underCond emits onTrue under cond and onFalse (nillable) otherwise. A nil
+// withCondBranch emits onTrue under cond and onFalse (nillable) otherwise. A nil
 // cond means unconditional: onTrue runs inline and onFalse is dead. Blocks are
 // named name_if / name_else / name_cont.
-func (c *Compiler) underCond(cond llvm.Value, name string, onTrue, onFalse func()) {
+func (c *Compiler) withCondBranch(cond llvm.Value, name string, onTrue, onFalse func()) {
 	if cond.IsNil() {
 		onTrue()
 		return

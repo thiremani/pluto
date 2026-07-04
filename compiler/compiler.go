@@ -1120,7 +1120,7 @@ func (c *Compiler) commitAssignmentsPerExpr(
 		exprOld := oldValues[offset : offset+n]
 
 		exprDestBacked := destBacked[offset : offset+n]
-		c.underCond(bits[exprIdx], "assign_write", func() {
+		c.withCondBranch(bits[exprIdx], "assign_write", func() {
 			c.writeTo(wr, exprSyms, nc)
 		}, func() {
 			c.freeSkippedTemps(expr, exprSyms, exprDestBacked)
@@ -1135,7 +1135,7 @@ func (c *Compiler) commitAssignmentsPerExpr(
 		own := ownershipIdents[offset : offset+n]
 		exprOld := oldValues[offset : offset+n]
 		mv := moved[exprIdx]
-		c.underCond(bits[exprIdx], "assign_free", func() {
+		c.withCondBranch(bits[exprIdx], "assign_free", func() {
 			c.freeOldValues(own, exprOld, mv, []ast.Expression{expr}, []int{n})
 		}, nil)
 		offset += n
