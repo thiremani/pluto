@@ -233,3 +233,9 @@ PrefixPassBefore: 99
 PrefixPass: -4
 PrefixPassFailBefore: 99
 PrefixPassFail: 99
+LazyRhsSkippedBefore: 11 22
+LazyRhsSkipped: 5 7
+LazyRhsOobBefore: 11 22
+LazyRhsOob: 11 22
+ScalarLazySkippedBefore: 99
+ScalarLazySkipped: 5

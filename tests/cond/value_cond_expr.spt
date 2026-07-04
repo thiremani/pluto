@@ -884,3 +884,24 @@ pfW = 99
 "PrefixPassFailBefore: -pfW"
 pfW = -(cfc > 3) + 1
 "PrefixPassFail: -pfW"
+
+# The || right side is evaluated at most once, and only when a slot missed.
+# Observable via bounds checks: an OOB in an unevaluated right side cannot
+# trip the statement guard (all-left-yield commits), while an evaluated right
+# side's OOB skips the whole assignment like any other OOB operand.
+lzArr = [10 20]
+lzA = 11
+lzB = 22
+"LazyRhsSkippedBefore: -lzA -lzB"
+lzA, lzB = Pair(5, 7) > Pair(1, 1) || Pair(lzArr[10], 0)
+"LazyRhsSkipped: -lzA -lzB"
+lzC = 11
+lzD = 22
+"LazyRhsOobBefore: -lzC -lzD"
+lzC, lzD = Pair(5, 7) > Pair(1, 8) || Pair(lzArr[10], 0)
+"LazyRhsOob: -lzC -lzD"
+lzS = 5
+lzX = 99
+"ScalarLazySkippedBefore: -lzX"
+lzX = lzS > 2 || lzArr[10]
+"ScalarLazySkipped: -lzX"
