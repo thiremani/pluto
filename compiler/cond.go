@@ -631,15 +631,17 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 
 	lConds := c.resolveFallbackSide(fs, or.Left, false)
 
-	// Lazy right: only when some slot failed to yield. An unconditional left
-	// (every slot always yields) makes the fallback dead.
-	leftAll := c.foldSlotConds(lConds)
-	if !leftAll.IsNil() {
-		someMissed := c.builder.CreateNot(leftAll, "or_some_missed")
-		c.underCond(someMissed, "or_rhs", "or_rhs_cont", func() {
-			c.resolveFallbackSide(fs, or.Right, true)
-		})
+	// The right side evaluates at most once, as a unit, when any slot missed;
+	// its per-slot stores then fill only still-empty slots. The solver rejects
+	// a left that cannot fail, so the fold is never nil.
+	leftAllYielded := c.foldSlotConds(lConds)
+	if leftAllYielded.IsNil() {
+		panic("internal: value-position || requires a failable left operand")
 	}
+	someMissed := c.builder.CreateNot(leftAllYielded, "or_some_missed")
+	c.underCond(someMissed, "or_rhs", "or_rhs_cont", func() {
+		c.resolveFallbackSide(fs, or.Right, true)
+	})
 
 	conds, loaded := c.loadFallbackResults(fs)
 	frame := c.requireCondLHSFrame()
