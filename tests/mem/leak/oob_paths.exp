@@ -4,3 +4,10 @@ keep seed
 LeakGuardedCallKeepsOld: static seed
 LeakArrayAccOOB: [a bb   ]
 LeakPrefixNumOOB: -2
+DirectCallOobBefore: keep
+DirectCallOob: keep
+DirectCallOk: bb
+MixSkippedBefore: oldM
+MixSkipped: oldM |
+MixOkBefore: old2
+MixOk: pa qz

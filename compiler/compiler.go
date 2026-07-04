@@ -1034,6 +1034,7 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 	rhsNames := []string{}
 	resCounts := []int{}
 	bits := []llvm.Value{}
+	destBacked := []bool{}
 	guarded := false
 	i := 0
 	for _, expr := range exprs {
@@ -1050,8 +1051,9 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		if ident, ok := expr.(*ast.Identifier); ok {
 			rhsName = ident.Value
 		}
-		for range res {
+		for j := range res {
 			rhsNames = append(rhsNames, rhsName)
+			destBacked = append(destBacked, c.aliasesDestSlot(writeIdents[i+j], res[j]))
 		}
 		syms = append(syms, res...)
 		resCounts = append(resCounts, len(res))
@@ -1063,7 +1065,19 @@ func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipId
 		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
 		return
 	}
-	c.commitAssignmentsPerExpr(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts, bits)
+	c.commitAssignmentsPerExpr(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts, bits, destBacked)
+}
+
+// aliasesDestSlot reports whether a compiled value is the destination's own
+// storage: an indirect-return call writes through existing destination slots
+// and returns them, so a skipped commit must not free through such a value —
+// the slot still holds the old value the skip is keeping.
+func (c *Compiler) aliasesDestSlot(ident *ast.Identifier, sym *Symbol) bool {
+	if sym == nil || sym.Type.Kind() != PtrKind {
+		return false
+	}
+	destSym, ok := Get(c.Scopes, ident.Value)
+	return ok && destSym.Type.Kind() == PtrKind && destSym.Val == sym.Val
 }
 
 // commitAssignmentsPerExpr commits each expression's destinations under that
@@ -1081,6 +1095,7 @@ func (c *Compiler) commitAssignmentsPerExpr(
 	exprs []ast.Expression,
 	resCounts []int,
 	bits []llvm.Value,
+	destBacked []bool,
 ) {
 	// Guarded destinations must be pointer-backed so the write and skip paths
 	// converge; a fresh one gets a zero seed to keep.
@@ -1104,10 +1119,11 @@ func (c *Compiler) commitAssignmentsPerExpr(
 		moved[exprIdx] = mv
 		exprOld := oldValues[offset : offset+n]
 
+		exprDestBacked := destBacked[offset : offset+n]
 		c.underCondElse(bits[exprIdx], "assign_write", func() {
 			c.writeTo(wr, exprSyms, nc)
 		}, func() {
-			c.freeTemporary(expr, exprSyms)
+			c.freeSkippedTemps(expr, exprSyms, exprDestBacked)
 			c.restoreOldValues(wr, exprOld)
 		})
 		offset += n
@@ -1123,6 +1139,21 @@ func (c *Compiler) commitAssignmentsPerExpr(
 			c.freeOldValues(own, exprOld, mv, []ast.Expression{expr}, []int{n})
 		})
 		offset += n
+	}
+}
+
+// freeSkippedTemps frees a skipped expression's temporaries, except values
+// backed by destination storage: a skipped call never wrote those slots, so
+// they still hold the old value the skip is keeping.
+func (c *Compiler) freeSkippedTemps(expr ast.Expression, syms []*Symbol, destBacked []bool) {
+	if _, isIdent := expr.(*ast.Identifier); isIdent {
+		return
+	}
+	for j, sym := range syms {
+		if destBacked[j] {
+			continue
+		}
+		c.freeTemporarySymbol(sym, "temp_free")
 	}
 }
 
