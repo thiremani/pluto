@@ -649,9 +649,9 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 		panic("internal: value-position || requires a failable left operand")
 	}
 	someMissed := c.builder.CreateNot(leftAllYielded, "or_some_missed")
-	c.underCond(someMissed, "or_rhs", "or_rhs_cont", func() {
+	c.underCond(someMissed, "or_rhs", func() {
 		c.resolveFallbackSide(fs, or.Right, true)
-	})
+	}, nil)
 
 	conds, loaded := c.loadFallbackResults(fs)
 	frame := c.requireCondLHSFrame()
@@ -716,10 +716,10 @@ func (c *Compiler) loadFallbackResults(fs fallbackSlots) ([]llvm.Value, []*Symbo
 	loaded := make([]*Symbol, len(fs.outTypes))
 	for i, outType := range fs.outTypes {
 		yield := c.createLoad(fs.yields[i], i1, fmt.Sprintf("or_yield_%d", i))
-		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), fmt.Sprintf("or_seed_cont_%d", i), func() {
+		c.underCond(c.builder.CreateNot(yield, fmt.Sprintf("or_zero_%d", i)), fmt.Sprintf("or_seed_%d", i), func() {
 			zero := c.makeZeroValue(outType)
 			c.createStore(zero.Val, fs.slots[i], outType)
-		})
+		}, nil)
 		conds[i] = yield
 		loaded[i] = &Symbol{Val: c.createLoad(fs.slots[i], outType, fmt.Sprintf("or_slot_%d", i)), Type: outType}
 	}
@@ -819,23 +819,10 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value,
 }
 
 func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
-	if cond.IsNil() {
-		onTrue()
-		return
-	}
-
-	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, "cond_if", "cond_else", "cond_cont")
-
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	onTrue()
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	c.cleanupCondExprElse(temps)
-	onFalse()
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
+	c.underCond(cond, "cond", onTrue, func() {
+		c.cleanupCondExprElse(temps)
+		onFalse()
+	})
 }
 
 // compileCondValueExpr lowers a parenthesized conditional value (cond value).
@@ -1229,7 +1216,7 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 // inside that slot's branch, so a combine (e.g. a division) runs only when its
 // slot commits. The whole lowering sits behind any statement condition.
 func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
-	c.underCond(stmtCond, "stmt_cond_if", "stmt_cond_cont", func() {
+	c.underCond(stmtCond, "stmt_cond", func() {
 		c.pushCondLHSFrame()
 		defer c.popCondLHSFrame()
 
@@ -1242,7 +1229,7 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tem
 		// by arithmetic) are swept here; moved ones were marked at store.
 		c.freeFrameMasks()
 		c.freeCondTemps(temps)
-	})
+	}, nil)
 }
 
 // prepareSpine extracts per-slot conditions for a spine and pre-evaluates its
@@ -1366,22 +1353,9 @@ func (c *Compiler) commitSpineSlot(expr ast.Expression, i int, cond llvm.Value, 
 // when nil). The skipped arm frees the mask that slot would have moved: masks
 // are built during extraction, so a runtime-skipped store must release one.
 func (c *Compiler) underSlotCond(expr ast.Expression, i int, cond llvm.Value, name string, store func()) {
-	if cond.IsNil() {
-		store()
-		return
-	}
-
-	ifBlock, elseBlock, contBlock := c.createIfElseCont(cond, name+"_take", name+"_skip", name+"_cont")
-
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	store()
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(elseBlock)
-	c.freeSkippedSlotMask(expr, i)
-	c.builder.CreateBr(contBlock)
-
-	c.builder.SetInsertPointAtEnd(contBlock)
+	c.underCond(cond, name, store, func() {
+		c.freeSkippedSlotMask(expr, i)
+	})
 }
 
 // storeFallbackValue writes slot i of side into a || result slot and marks it
@@ -1493,27 +1467,21 @@ func (c *Compiler) freeCondTemps(temps []condTemp) {
 	}
 }
 
-// underCond runs body unconditionally when cond is nil, or guarded by it.
-// branchCond is not usable here: its false arm runs cleanupCondExprElse, which
-// requires the condLHS frame state these call sites do not maintain.
-func (c *Compiler) underCond(cond llvm.Value, ifName, contName string, body func()) {
+// underCond emits onTrue under cond and onFalse (nillable) otherwise. A nil
+// cond means unconditional: onTrue runs inline and onFalse is dead. Blocks are
+// named name_if / name_else / name_cont.
+func (c *Compiler) underCond(cond llvm.Value, name string, onTrue, onFalse func()) {
 	if cond.IsNil() {
-		body()
+		onTrue()
 		return
 	}
 
-	ifBlock, contBlock := c.createIfCont(cond, ifName, contName)
-	c.builder.SetInsertPointAtEnd(ifBlock)
-	body()
-	c.builder.CreateBr(contBlock)
-	c.builder.SetInsertPointAtEnd(contBlock)
-}
-
-// underCondElse runs onTrue under cond and onFalse otherwise; a nil cond runs
-// onTrue unconditionally.
-func (c *Compiler) underCondElse(cond llvm.Value, name string, onTrue, onFalse func()) {
-	if cond.IsNil() {
+	if onFalse == nil {
+		ifBlock, contBlock := c.createIfCont(cond, name+"_if", name+"_cont")
+		c.builder.SetInsertPointAtEnd(ifBlock)
 		onTrue()
+		c.builder.CreateBr(contBlock)
+		c.builder.SetInsertPointAtEnd(contBlock)
 		return
 	}
 
