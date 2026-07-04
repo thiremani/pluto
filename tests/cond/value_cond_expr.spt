@@ -242,9 +242,10 @@ gtr, gtn = 1 > 2 Mix(3) > Mix(1)
 gtr, gtn = 2 > 1 Mix(3) > Mix(1)
 "GatedTupleTrue: -gtr -gtn"
 
-# An out-of-bounds operand fails the bounds guard and skips the WHOLE tuple
-# assignment, keeping prior values — like any assignment. oobArr has length 2, so
-# oobArr[10] is OOB; without the guard a passing slot (5 > 1) would still commit.
+# An out-of-bounds read is a failed condition on the lanes it feeds. Here it
+# feeds a Pair call, and a call merges its argument conditions into ALL of its
+# outputs — so both slots keep their prior values, the passing comparison
+# (5 > 1) included. oobArr has length 2, so oobArr[10] is OOB.
 oobArr = [10 20]
 oc = 77
 od = 66
@@ -252,8 +253,8 @@ od = 66
 oc, od = Pair(5, oobArr[10]) > Pair(1, 8)
 "OobTupleKeepsPrev: -oc -od"
 
-# Same skip with heap-string operands: the tuple is skipped (keep old) and the
-# heap operands built before the skip are freed (leak-checked).
+# The same call-merge keep-old with heap-string operands: the heap values
+# built for the failed lanes are freed (leak-checked).
 hoc = "keep" ⊕ "C"
 hod = "keep" ⊕ "D"
 "HeapOobBefore: -hoc -hod"
