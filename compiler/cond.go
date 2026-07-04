@@ -263,21 +263,31 @@ func (c *Compiler) compileCondAssignments(tempNames []*ast.Identifier, dest []*a
 	c.restoreCondDests(aliases)
 }
 
-func (c *Compiler) compileCondAssignmentValues(
+// compileCondExprAssigns compiles staged RHS expressions with destinations
+// aliased to their temp slots. Bounds bits stay nil: the caller's guard
+// (cond_value_guard) owns skip/commit for the whole staged group.
+func (c *Compiler) compileCondExprAssigns(
 	tempNames []*ast.Identifier,
 	dest []*ast.Identifier,
 	exprs []ast.Expression,
-) ([]*Symbol, []*Symbol, []string, []int) {
+) []exprAssign {
 	aliases := c.aliasCondDests(dest, tempNames)
+	defer c.restoreCondDests(aliases)
+
 	oldValues := c.captureOldValues(tempNames)
-	syms, rhsNames, resCounts := c.compileAssignmentValues(tempNames, exprs)
-	c.restoreCondDests(aliases)
-	return oldValues, syms, rhsNames, resCounts
+	assigns := make([]exprAssign, 0, len(exprs))
+	i := 0
+	for _, expr := range exprs {
+		res := c.compileExpression(expr, tempNames[i:])
+		assigns = append(assigns, c.newExprAssign(expr, llvm.Value{}, res, tempNames[i:], dest[i:], oldValues[i:]))
+		i += len(res)
+	}
+	return assigns
 }
 
 func (c *Compiler) compileCondAssignmentsWithGuard(tempNames []*ast.Identifier, dest []*ast.Identifier, exprs []ast.Expression, guardPtr llvm.Value) {
-	oldValues, syms, rhsNames, resCounts := c.compileCondAssignmentValues(tempNames, dest, exprs)
-	c.finishAssignmentsWithGuard(tempNames, dest, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
+	assigns := c.compileCondExprAssigns(tempNames, dest, exprs)
+	c.finishAssignmentsWithGuard(assigns, guardPtr)
 }
 
 func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Identifier {
