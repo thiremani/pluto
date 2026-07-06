@@ -1140,8 +1140,7 @@ func (c *Compiler) commitAssignmentsPerExpr(assigns []exprAssign) {
 		c.withCondBranch(e.bit, "assign_write", func() {
 			c.writeTo(e.slots)
 		}, func() {
-			c.freeSkippedTemps(e)
-			c.restoreOldValues(e.slots)
+			c.keepPriorOnSkip(e)
 		})
 	}
 
@@ -1150,6 +1149,15 @@ func (c *Compiler) commitAssignmentsPerExpr(assigns []exprAssign) {
 			c.freeExprOldValues(e, moved[k])
 		}, nil)
 	}
+}
+
+// keepPriorOnSkip is the skip path for one expression's assignment (guard
+// false or bounds failure): free the temporaries its evaluation produced and
+// restore its destinations to their captured prior values, so the skipped
+// assignment leaves everything as it was.
+func (c *Compiler) keepPriorOnSkip(e exprAssign) {
+	c.freeSkippedTemps(e)
+	c.restoreOldValues(e.slots)
 }
 
 // freeSkippedTemps frees a skipped expression's temporaries, except values
@@ -1210,8 +1218,7 @@ func (c *Compiler) finishAssignmentsWithGuard(assigns []exprAssign, guardPtr llv
 		},
 		func() {
 			for _, e := range assigns {
-				c.freeSkippedTemps(e)
-				c.restoreOldValues(e.slots)
+				c.keepPriorOnSkip(e)
 			}
 		},
 	)
