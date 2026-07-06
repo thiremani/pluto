@@ -674,11 +674,16 @@ ctGateF = Pair(5, 7) > Pair(1, 2) < Pair(9, 6) 42
 
 # Arithmetic over a tuple comparison stays per slot: each output slot carries
 # only its own comparisons, and the combine runs only when its slot commits.
+# slot 0 commits 5 + 2 = 7 (the add is exercised); slot 1's comparison fails,
+# so its add never runs and it keeps the prior 22.
 awA = 11
 awB = 22
 "ArithWrapBefore: -awA -awB"
-awA, awB = (Pair(5, 7) > Pair(1, 8)) + Pair(0, 0)
+awA, awB = (Pair(5, 7) > Pair(1, 8)) + Pair(2, 3)
 "ArithWrap: -awA -awB"
+# Chained: slot 0 = (5+1)=6, 6<9 holds -> 6. slot 1's inner 7>8 fails, so the
+# whole lane keeps old (fresh -> 0); the +1 and <9 never run for it. Not 6 1 —
+# that would be zero-fill-then-add, the model propagation replaced.
 awC, awD = ((Pair(5, 7) > Pair(1, 8)) + Pair(1, 1)) < Pair(9, 9)
 "ArithWrapChain: -awC -awD"
 

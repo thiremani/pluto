@@ -173,7 +173,7 @@ ChainTupleGate: 42
 ChainTupleGateFalseBefore: 100
 ChainTupleGateFalse: 100
 ArithWrapBefore: 11 22
-ArithWrap: 5 22
+ArithWrap: 7 22
 ArithWrapChain: 6 0
 MixArith: [0 1] 0
 CallArgBefore: 111
