@@ -696,9 +696,11 @@ awA, awB = (Pair(5, 7) > Pair(1, 8)) + Pair(2, 3)
 awC, awD = ((Pair(5, 7) > Pair(1, 8)) + Pair(1, 1)) < Pair(9, 9)
 "ArithWrapChain: -awC -awD"
 
-# A mixed tuple through arithmetic: the array slot's mask flows through the
-# combine (and the intermediate mask is freed); the scalar slot keeps old.
-mxA, mxB = (Mix(1) > Mix(2)) + Mix(0)
+# A mixed tuple through arithmetic: the array slot's mask [0 0] flows through
+# the combine (+ Mix(3)'s [3 4] -> [3 4], so the add is visibly exercised, not
+# masked by a zero addend), the intermediate mask is freed, and the scalar slot
+# keeps old (1 > 2 fails, so its + 3 never runs -> fresh 0).
+mxA, mxB = (Mix(1) > Mix(2)) + Mix(3)
 "MixArith: -mxA -mxB"
 
 # Call arguments merge slots: a call's outputs are produced together, so every

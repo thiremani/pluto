@@ -177,7 +177,7 @@ ChainTupleGateFalse: 100
 ArithWrapBefore: 11 22
 ArithWrap: 7 22
 ArithWrapChain: 6 0
-MixArith: [0 1] 0
+MixArith: [3 4] 0
 CallArgBefore: 111
 CallArgMergesSlots: 111
 GatedLeafBefore: 77 88
