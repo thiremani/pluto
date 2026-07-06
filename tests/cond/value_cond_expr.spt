@@ -844,9 +844,13 @@ mfB = 99
 mfA, mfB = Mix(2) > Mix(3) < Mix(9)
 "MixChainFail: -mfA -mfB"
 
-# A chained scalar comparison inside a tuple operand: its condition gates the
-# slots that read it (keep-old when the chain fails), and a || after the chain
-# supplies the operand value instead.
+# A chained scalar comparison as a call ARGUMENT gates the WHOLE call, not just
+# the slot that uses it: Pair is opaque (either output could depend on either
+# arg), so a failed cf > 2 < 8 keeps BOTH outputs old — the same call-merge rule
+# an OOB argument gets. Not 77 9: the unconditional 9 is an argument to the same
+# failing call, so it is gated too. A || after the chain resolves the argument
+# locally, letting the call run (see ChainOrInOperand). When ck > 2 < 8 holds,
+# the call runs and both slots yield.
 ck = 5
 cf = 1
 ccA, ccB = Pair(ck > 2 < 8, 9) > Pair(1, 1)
