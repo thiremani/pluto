@@ -347,11 +347,6 @@ func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlo
 	}
 }
 
-type condStageGroup struct {
-	commit []OutputSlot
-	stage  []OutputSlot
-}
-
 func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	stageAliases := c.aliasCondDests(stage)
@@ -381,36 +376,39 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) 
 	})
 }
 
-func (c *Compiler) stageCondRangedAssignments(assignExprs []ast.Expression, commit []OutputSlot) []condStageGroup {
+// stageCondRangedAssignments stages every RHS into a fresh per-iteration stage
+// temp and returns the stage slots flat, aligned 1:1 with commit. The outer
+// alias resolves destination reads to commit temps (this iteration's running
+// values) throughout staging; stageCondRangedExpr adds an inner alias to each
+// expression's own stage temp for self-referential reads/writes. No stage folds
+// into a commit temp until commitCondRangedStages, so sibling RHS expressions
+// read the iteration-start values.
+func (c *Compiler) stageCondRangedAssignments(assignExprs []ast.Expression, commit []OutputSlot) []OutputSlot {
+	stage := make([]OutputSlot, 0, len(commit))
 	assignTargetIdx := 0
-	groups := make([]condStageGroup, 0, len(assignExprs))
 
-	// Two alias layers are active here. The outer alias makes destination reads
-	// resolve to commit temps while stage temps are seeded. stageCondRangedExpr
-	// then temporarily aliases the same destinations to private stage temps so
-	// self-referential RHS expressions read/write only that staged result.
 	allAliases := c.aliasCondDests(commit)
 	defer c.restoreCondDests(allAliases)
 
 	for _, expr := range assignExprs {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
-		exprCommit := commit[assignTargetIdx : assignTargetIdx+numOutputs]
-		stage := c.createStageTempOutputsFor(exprCommit)
+		exprStage := c.createStageTempOutputsFor(commit[assignTargetIdx : assignTargetIdx+numOutputs])
 
-		c.stageCondRangedExpr(expr, stage)
-		groups = append(groups, condStageGroup{commit: exprCommit, stage: stage})
+		c.stageCondRangedExpr(expr, exprStage)
+		stage = append(stage, exprStage...)
 		assignTargetIdx += numOutputs
 	}
 
-	return groups
+	return stage
 }
 
-func (c *Compiler) commitCondRangedStages(groups []condStageGroup) {
-	for _, group := range groups {
-		c.commitStageTempOutputs(group.commit, group.stage)
-		DeleteBulk(c.Scopes, slotTempStrings(group.stage))
-	}
+// commitCondRangedStages folds every staged value back into its commit temp
+// (flat, 1:1 with commit) once all RHS expressions have been staged, then drops
+// the stage temps from scope.
+func (c *Compiler) commitCondRangedStages(commit, stage []OutputSlot) {
+	c.commitStageTempOutputs(commit, stage)
+	DeleteBulk(c.Scopes, slotTempStrings(stage))
 }
 
 // compileCondStatement lowers:
@@ -1136,13 +1134,13 @@ func (c *Compiler) compileCondRangedIteration(
 	// writes into a private stage temp under its own bounds guard, so a local skip
 	// leaves that stage temp seeded with the prior value without suppressing
 	// sibling RHS writes.
-	stageGroups := c.stageCondRangedAssignments(assignExprs, assignSlots)
+	stage := c.stageCondRangedAssignments(assignExprs, assignSlots)
 
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 	}
 
-	c.commitCondRangedStages(stageGroups)
+	c.commitCondRangedStages(assignSlots, stage)
 }
 
 // compileCondExprStatement handles let statements that have conditional
