@@ -155,13 +155,49 @@ func (c *Compiler) resolveDestSeed(ident *ast.Identifier, outType Type) *Symbol 
 	return c.valueSymbol(ident.Value, existing, ident.Value+"_cond_seed")
 }
 
-func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) ([]*ast.Identifier, []Type) {
-	outTypes := c.resolvedDestTypes(stmt.Name, c.collectOutTypes(stmt))
-	return c.createConditionalTempOutputsFor(stmt.Name, outTypes), outTypes
+// OutputSlot bundles a conditional assignment's three parallel facts: the real
+// destination, the borrowed temp slot its value is staged in, and the resolved
+// slot type. Threading one []OutputSlot instead of three lockstep slices keeps
+// dest/temp/outType aligned and turns sub-range slicing into a single
+// expression. The temp name embeds a unique counter, so the dest-to-temp
+// binding is established once at creation and carried, never recomputed.
+type OutputSlot struct {
+	dest    *ast.Identifier
+	temp    *ast.Identifier
+	outType Type
 }
 
-func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTypes []Type) []*ast.Identifier {
-	tempNames := make([]*ast.Identifier, len(dest))
+func slotDests(slots []OutputSlot) []*ast.Identifier {
+	dests := make([]*ast.Identifier, len(slots))
+	for i, s := range slots {
+		dests[i] = s.dest
+	}
+	return dests
+}
+
+func slotTemps(slots []OutputSlot) []*ast.Identifier {
+	temps := make([]*ast.Identifier, len(slots))
+	for i, s := range slots {
+		temps[i] = s.temp
+	}
+	return temps
+}
+
+func slotTempStrings(slots []OutputSlot) []string {
+	names := make([]string, len(slots))
+	for i, s := range slots {
+		names[i] = s.temp.Value
+	}
+	return names
+}
+
+func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) []OutputSlot {
+	outTypes := c.resolvedDestTypes(stmt.Name, c.collectOutTypes(stmt))
+	return c.createConditionalTempOutputsFor(stmt.Name, outTypes)
+}
+
+func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTypes []Type) []OutputSlot {
+	slots := make([]OutputSlot, len(dest))
 	for i, ident := range dest {
 		tempName := fmt.Sprintf("condtmp_%s_%d", ident.Value, c.tmpCounter)
 		c.tmpCounter++
@@ -179,70 +215,62 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
 		Put(c.Scopes, tempName, tempSym)
-		tempNames[i] = tempIdent
+		slots[i] = OutputSlot{dest: ident, temp: tempIdent, outType: outTypes[i]}
 	}
-	return tempNames
+	return slots
 }
 
-func (c *Compiler) commitConditionalOutputs(dest []*ast.Identifier, tempNames []*ast.Identifier, outTypes []Type) {
-	for i, ident := range dest {
-		tempSym, _ := Get(c.Scopes, tempNames[i].Value)
+func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
+	for _, s := range slots {
+		tempSym, _ := Get(c.Scopes, s.temp.Value)
 
-		finalType := outTypes[i]
-		finalVal := c.createLoad(tempSym.Val, finalType, ident.Value+"_cond_final")
+		finalType := s.outType
+		finalVal := c.createLoad(tempSym.Val, finalType, s.dest.Value+"_cond_final")
 		finalSym := &Symbol{
 			Val:  finalVal,
 			Type: finalType,
 		}
 
-		oldSym, exists := Get(c.Scopes, ident.Value)
+		oldSym, exists := Get(c.Scopes, s.dest.Value)
 		if !exists {
-			Put(c.Scopes, ident.Value, finalSym)
+			Put(c.Scopes, s.dest.Value, finalSym)
 			continue
 		}
 
 		if _, ok := oldSym.Type.(Ptr); ok {
-			c.storeSymbolToSlot(oldSym, finalSym, oldSym.Type.(Ptr).Elem, ident.Value+"_cond_commit")
+			c.storeSymbolToSlot(oldSym, finalSym, oldSym.Type.(Ptr).Elem, s.dest.Value+"_cond_commit")
 
 			// Keep pointer element type in sync (important for string ownership flags).
 			updated := GetCopy(oldSym)
 			updated.Type = Ptr{Elem: finalType}
-			if !SetExisting(c.Scopes, ident.Value, updated) {
-				Put(c.Scopes, ident.Value, updated)
+			if !SetExisting(c.Scopes, s.dest.Value, updated) {
+				Put(c.Scopes, s.dest.Value, updated)
 			}
 			continue
 		}
 
 		// Non-pointer symbols are replaced directly. Old value ownership is already
 		// handled in the IF branch assignment into temp slots.
-		Put(c.Scopes, ident.Value, finalSym)
+		Put(c.Scopes, s.dest.Value, finalSym)
 	}
-}
-
-func tempNamesToStrings(tempNames []*ast.Identifier) []string {
-	names := make([]string, len(tempNames))
-	for i, ident := range tempNames {
-		names[i] = ident.Value
-	}
-	return names
 }
 
 // aliasCondDests maps existing destination names to conditional temp slots so
 // RHS reads during IF-branch assignment see the latest temp writes.
-func (c *Compiler) aliasCondDests(dest []*ast.Identifier, tempNames []*ast.Identifier) map[string]*Symbol {
-	aliases := make(map[string]*Symbol, len(dest))
+func (c *Compiler) aliasCondDests(slots []OutputSlot) map[string]*Symbol {
+	aliases := make(map[string]*Symbol, len(slots))
 
-	for i, ident := range dest {
-		oldSym, exists := Get(c.Scopes, ident.Value)
+	for _, s := range slots {
+		oldSym, exists := Get(c.Scopes, s.dest.Value)
 		if !exists {
 			continue
 		}
-		tempSym, ok := Get(c.Scopes, tempNames[i].Value)
+		tempSym, ok := Get(c.Scopes, s.temp.Value)
 		if !ok {
 			continue
 		}
-		aliases[ident.Value] = oldSym
-		SetExisting(c.Scopes, ident.Value, tempSym)
+		aliases[s.dest.Value] = oldSym
+		SetExisting(c.Scopes, s.dest.Value, tempSym)
 	}
 
 	return aliases
@@ -257,47 +285,43 @@ func (c *Compiler) restoreCondDests(aliases map[string]*Symbol) {
 // compileCondAssignments wraps compileAssignments for conditional lowering.
 // Existing destination names are temporarily aliased to temp slots so
 // self-referential RHS expressions read/write the same evolving slot.
-func (c *Compiler) compileCondAssignments(tempNames []*ast.Identifier, dest []*ast.Identifier, exprs []ast.Expression) {
-	aliases := c.aliasCondDests(dest, tempNames)
-	c.compileAssignments(tempNames, dest, exprs)
+func (c *Compiler) compileCondAssignments(slots []OutputSlot, exprs []ast.Expression) {
+	aliases := c.aliasCondDests(slots)
+	c.compileAssignments(slotTemps(slots), slotDests(slots), exprs)
 	c.restoreCondDests(aliases)
 }
 
 // compileCondExprAssigns compiles staged RHS expressions with destinations
 // aliased to their temp slots. Bounds bits stay nil: the caller's guard
 // (cond_value_guard) owns skip/commit for the whole staged group.
-func (c *Compiler) compileCondExprAssigns(
-	tempNames []*ast.Identifier,
-	dest []*ast.Identifier,
-	exprs []ast.Expression,
-) []exprAssign {
-	aliases := c.aliasCondDests(dest, tempNames)
+func (c *Compiler) compileCondExprAssigns(slots []OutputSlot, exprs []ast.Expression) []exprAssign {
+	aliases := c.aliasCondDests(slots)
 	defer c.restoreCondDests(aliases)
 
-	oldValues := c.captureOldValues(tempNames)
+	temps := slotTemps(slots)
+	dests := slotDests(slots)
+	oldValues := c.captureOldValues(temps)
 	assigns := make([]exprAssign, 0, len(exprs))
 	i := 0
 	for _, expr := range exprs {
-		res := c.compileExpression(expr, tempNames[i:])
-		assigns = append(assigns, c.newExprAssign(expr, llvm.Value{}, res, tempNames[i:], dest[i:], oldValues[i:]))
+		res := c.compileExpression(expr, temps[i:])
+		assigns = append(assigns, c.newExprAssign(expr, llvm.Value{}, res, temps[i:], dests[i:], oldValues[i:]))
 		i += len(res)
 	}
 	return assigns
 }
 
-func (c *Compiler) compileCondAssignmentsWithGuard(tempNames []*ast.Identifier, dest []*ast.Identifier, exprs []ast.Expression, guardPtr llvm.Value) {
-	assigns := c.compileCondExprAssigns(tempNames, dest, exprs)
+func (c *Compiler) compileCondAssignmentsWithGuard(slots []OutputSlot, exprs []ast.Expression, guardPtr llvm.Value) {
+	assigns := c.compileCondExprAssigns(slots, exprs)
 	c.finishAssignmentsWithGuard(assigns, guardPtr)
 }
 
-func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Identifier {
-	tempNames := make([]*ast.Identifier, len(dest))
-	for i, ident := range dest {
-		commitTempSym, _ := Get(c.Scopes, ident.Value)
-		ptrType := commitTempSym.Type.(Ptr)
-		outType := ptrType.Elem
+func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
+	stage := make([]OutputSlot, len(commit))
+	for i, cs := range commit {
+		outType := cs.outType
 
-		tempName := fmt.Sprintf("condstage_%s_%d", ident.Value, c.tmpCounter)
+		tempName := fmt.Sprintf("condstage_%s_%d", cs.temp.Value, c.tmpCounter)
 		c.tmpCounter++
 		tempIdent := &ast.Identifier{Value: tempName}
 
@@ -307,38 +331,40 @@ func (c *Compiler) createStageTempOutputsFor(dest []*ast.Identifier) []*ast.Iden
 			Type:     Ptr{Elem: outType},
 			Borrowed: true,
 		}
-		seed := c.resolveDestSeed(ident, outType)
+		// Seed each iteration's private stage slot from the commit temp's current
+		// running value, so a local skip keeps the value carried across iterations.
+		seed := c.resolveDestSeed(cs.temp, outType)
 		seed = c.deepCopyIfNeeded(seed)
 		c.storeSymbolToSlot(stageTempSym, seed, outType, tempName+"_seed")
 		Put(c.Scopes, tempName, stageTempSym)
-		tempNames[i] = tempIdent
+		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
 	}
-	return tempNames
+	return stage
 }
 
-func (c *Compiler) commitStageTempOutputs(dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
-	for i, ident := range dest {
-		stageSym, _ := Get(c.Scopes, stageTempNames[i].Value)
-		stagedValue := c.valueSymbol(stageTempNames[i].Value, stageSym, stageTempNames[i].Value+"_stage_final")
-		c.commitSlotValue(ident, stagedValue, false)
+func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlot) {
+	for i := range stage {
+		stageSym, _ := Get(c.Scopes, stage[i].temp.Value)
+		stagedValue := c.valueSymbol(stage[i].temp.Value, stageSym, stage[i].temp.Value+"_stage_final")
+		c.commitSlotValue(commit[i].temp, stagedValue, false)
 	}
 }
 
 type condStageGroup struct {
-	commitTempNames []*ast.Identifier
-	stageTempNames  []*ast.Identifier
+	commit []OutputSlot
+	stage  []OutputSlot
 }
 
-func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifier, stageTempNames []*ast.Identifier) {
+func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	stageAliases := c.aliasCondDests(dest, stageTempNames)
+	stageAliases := c.aliasCondDests(stage)
 	defer c.restoreCondDests(stageAliases)
 
 	compileStageAssign := func() {
 		guardPtr := c.pushBoundsGuard("cond_value_guard")
 		defer c.popBoundsGuard()
 
-		c.compileCondAssignmentsWithGuard(stageTempNames, dest, []ast.Expression{expr}, guardPtr)
+		c.compileCondAssignmentsWithGuard(stage, []ast.Expression{expr}, guardPtr)
 	}
 
 	c.withLoopNestVersioned(info.Ranges, []ast.Expression{expr}, func() {
@@ -346,7 +372,7 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifi
 		// value expression commits slot-by-slot here too — a ranged statement
 		// condition must not change the value's per-slot semantics.
 		if c.perSlotCommittable(expr, info) {
-			c.compilePerSlotAssign(expr, info, stageTempNames, llvm.Value{})
+			c.compilePerSlotAssign(expr, info, stage, llvm.Value{})
 			return
 		}
 		if c.hasCondExprInTree(expr) {
@@ -358,11 +384,7 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, dest []*ast.Identifi
 	})
 }
 
-func (c *Compiler) stageCondRangedAssignments(
-	assignExprs []ast.Expression,
-	assignDests []*ast.Identifier,
-	commitTempNames []*ast.Identifier,
-) []condStageGroup {
+func (c *Compiler) stageCondRangedAssignments(assignExprs []ast.Expression, commit []OutputSlot) []condStageGroup {
 	assignTargetIdx := 0
 	groups := make([]condStageGroup, 0, len(assignExprs))
 
@@ -370,21 +392,17 @@ func (c *Compiler) stageCondRangedAssignments(
 	// resolve to commit temps while stage temps are seeded. stageCondRangedExpr
 	// then temporarily aliases the same destinations to private stage temps so
 	// self-referential RHS expressions read/write only that staged result.
-	allAliases := c.aliasCondDests(assignDests, commitTempNames)
+	allAliases := c.aliasCondDests(commit)
 	defer c.restoreCondDests(allAliases)
 
 	for _, expr := range assignExprs {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
-		exprCommitTempNames := commitTempNames[assignTargetIdx : assignTargetIdx+numOutputs]
-		exprDestNames := assignDests[assignTargetIdx : assignTargetIdx+numOutputs]
-		stageTempNames := c.createStageTempOutputsFor(exprCommitTempNames)
+		exprCommit := commit[assignTargetIdx : assignTargetIdx+numOutputs]
+		stage := c.createStageTempOutputsFor(exprCommit)
 
-		c.stageCondRangedExpr(expr, exprDestNames, stageTempNames)
-		groups = append(groups, condStageGroup{
-			commitTempNames: exprCommitTempNames,
-			stageTempNames:  stageTempNames,
-		})
+		c.stageCondRangedExpr(expr, stage)
+		groups = append(groups, condStageGroup{commit: exprCommit, stage: stage})
 		assignTargetIdx += numOutputs
 	}
 
@@ -393,8 +411,8 @@ func (c *Compiler) stageCondRangedAssignments(
 
 func (c *Compiler) commitCondRangedStages(groups []condStageGroup) {
 	for _, group := range groups {
-		c.commitStageTempOutputs(group.commitTempNames, group.stageTempNames)
-		DeleteBulk(c.Scopes, tempNamesToStrings(group.stageTempNames))
+		c.commitStageTempOutputs(group.commit, group.stage)
+		DeleteBulk(c.Scopes, slotTempStrings(group.stage))
 	}
 }
 
@@ -415,17 +433,17 @@ func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value)
 	// uninitialized memory. Pre-promote here so storage is initialized on all paths.
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
-	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
+	slots := c.createConditionalTempOutputs(stmt)
 
 	ifBlock, contBlock := c.createIfCont(cond, "if", "continue")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
-	c.compileCondAssignments(tempNames, stmt.Name, stmt.Value)
+	c.compileCondAssignments(slots, stmt.Value)
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
-	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
-	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+	c.commitConditionalOutputs(slots)
+	DeleteBulk(c.Scopes, slotTempStrings(slots))
 }
 
 // valuesHaveCondExpr returns true if any value expression contains an
@@ -1077,21 +1095,18 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 	hasAssigns := len(assignDests) > 0
 	defer c.cleanupMaterializedCollectors(assignCollectorTemps)
 
-	var assignTempNames []*ast.Identifier
+	var assignSlots []OutputSlot
 	if hasAssigns {
-		assignTempNames = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
+		assignSlots = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
 	}
 
 	c.withCondRangeLoop(condRanges, condExprs, loopProbes, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
-		c.compileCondRangedIteration(
-			assignExprs, assignDests, assignTempNames,
-			accumAccs, accumLits,
-		)
+		c.compileCondRangedIteration(assignExprs, assignSlots, accumAccs, accumLits)
 	})
 
 	if hasAssigns {
-		c.commitConditionalOutputs(assignDests, assignTempNames, assignOutTypes)
-		DeleteBulk(c.Scopes, tempNamesToStrings(assignTempNames))
+		c.commitConditionalOutputs(assignSlots)
+		DeleteBulk(c.Scopes, slotTempStrings(assignSlots))
 	}
 
 	for i, acc := range accumAccs {
@@ -1109,13 +1124,12 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 // and appends array literal cells to accumulators.
 func (c *Compiler) compileCondRangedIteration(
 	assignExprs []ast.Expression,
-	assignDests []*ast.Identifier,
-	commitTempNames []*ast.Identifier,
+	assignSlots []OutputSlot,
 	accumAccs []*ArrayAccumulator,
 	accumLits []*ast.ArrayLiteral,
 ) {
 	// Accum-only: no assigns, just push cells.
-	if len(assignDests) == 0 {
+	if len(assignSlots) == 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
 		return
 	}
@@ -1125,7 +1139,7 @@ func (c *Compiler) compileCondRangedIteration(
 	// writes into a private stage temp under its own bounds guard, so a local skip
 	// leaves that stage temp seeded with the prior value without suppressing
 	// sibling RHS writes.
-	stageGroups := c.stageCondRangedAssignments(assignExprs, assignDests, commitTempNames)
+	stageGroups := c.stageCondRangedAssignments(assignExprs, assignSlots)
 
 	if len(accumLits) > 0 {
 		c.appendArrayLiterals(accumAccs, accumLits)
@@ -1143,14 +1157,13 @@ func (c *Compiler) compileCondRangedIteration(
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	c.prePromoteConditionalCallArgs(stmt.Value)
 
-	tempNames, outTypes := c.createConditionalTempOutputs(stmt)
+	slots := c.createConditionalTempOutputs(stmt)
 
 	targetIdx := 0
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
-		exprTempNames := tempNames[targetIdx : targetIdx+numOutputs]
-		exprDestNames := stmt.Name[targetIdx : targetIdx+numOutputs]
+		exprSlots := slots[targetIdx : targetIdx+numOutputs]
 
 		// A multi-return value expression whose slots carry independent
 		// conditions (Pair > Pair, (Pair > Pair) + Pair(1, 1), Mix > Mix, ...)
@@ -1161,18 +1174,18 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		// gate/condition position and || fallback; everything else keeps the
 		// single ANDed gate below.
 		if c.perSlotCommittable(expr, info) {
-			c.compilePerSlotAssign(expr, info, exprTempNames, stmtCond)
+			c.compilePerSlotAssign(expr, info, exprSlots, stmtCond)
 		} else {
 			c.compileCondExprValue(expr, stmtCond, func() {
-				c.compileCondAssignments(exprTempNames, exprDestNames, []ast.Expression{expr})
+				c.compileCondAssignments(exprSlots, []ast.Expression{expr})
 			})
 		}
 
 		targetIdx += numOutputs
 	}
 
-	c.commitConditionalOutputs(stmt.Name, tempNames, outTypes)
-	DeleteBulk(c.Scopes, tempNamesToStrings(tempNames))
+	c.commitConditionalOutputs(slots)
+	DeleteBulk(c.Scopes, slotTempStrings(slots))
 }
 
 // perSlotCommittable reports whether expr commits slot-by-slot in value
@@ -1225,14 +1238,14 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 // the seeded prior value otherwise. Spine arithmetic for a slot compiles
 // inside that slot's branch, so a combine (e.g. a division) runs only when its
 // slot commits. The whole lowering sits behind any statement condition.
-func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, tempNames []*ast.Identifier, stmtCond llvm.Value) {
+func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slots []OutputSlot, stmtCond llvm.Value) {
 	c.withCondBranch(stmtCond, "stmt_cond", func() {
 		c.pushCondLHSFrame()
 		defer c.popCondLHSFrame()
 
 		conds, temps := c.prepareSpine(expr, nil)
 		for i, outType := range info.OutTypes {
-			c.commitSpineSlot(expr, i, slotCondAt(conds, i), tempNames[i], outType)
+			c.commitSpineSlot(expr, i, slotCondAt(conds, i), slots[i].temp, outType)
 		}
 
 		// Masks not moved into a slot (freed by a slot's else arm, or consumed
