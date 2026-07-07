@@ -923,9 +923,10 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	if !TypeEqual(ptrType.Elem, stored.Type) {
 		updated := GetCopy(oldSym)
 		updated.Type = Ptr{Elem: stored.Type}
-		if !SetExisting(c.Scopes, name, updated) {
-			Put(c.Scopes, name, updated)
-		}
+		// oldSym came from Get above and nothing since touched the scope stack, so
+		// SetExisting always finds the binding — and it must update it in its own
+		// scope (which may be an outer block), not shadow it via Put in the current.
+		SetExisting(c.Scopes, name, updated)
 	}
 }
 

@@ -240,9 +240,10 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 			// Keep pointer element type in sync (important for string ownership flags).
 			updated := GetCopy(oldSym)
 			updated.Type = Ptr{Elem: finalType}
-			if !SetExisting(c.Scopes, s.dest.Value, updated) {
-				Put(c.Scopes, s.dest.Value, updated)
-			}
+			// oldSym came from Get above and nothing since touched the scope stack, so
+			// SetExisting always finds the binding — and it must update it in its own
+			// scope (which may be an outer block), not shadow it via Put in the current.
+			SetExisting(c.Scopes, s.dest.Value, updated)
 			continue
 		}
 
