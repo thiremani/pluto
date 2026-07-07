@@ -167,20 +167,17 @@ type OutputSlot struct {
 	outType Type
 }
 
-func slotDests(slots []OutputSlot) []*ast.Identifier {
-	dests := make([]*ast.Identifier, len(slots))
-	for i, s := range slots {
-		dests[i] = s.dest
-	}
-	return dests
-}
-
-func slotTemps(slots []OutputSlot) []*ast.Identifier {
-	temps := make([]*ast.Identifier, len(slots))
+// slotAssignIdents returns the temp slots each value is written into and the
+// real destinations that own move/copy and old-value cleanup — the write and
+// ownership identifiers compileAssignments/newExprAssign consume, in that order.
+func slotAssignIdents(slots []OutputSlot) (temps, dests []*ast.Identifier) {
+	temps = make([]*ast.Identifier, len(slots))
+	dests = make([]*ast.Identifier, len(slots))
 	for i, s := range slots {
 		temps[i] = s.temp
+		dests[i] = s.dest
 	}
-	return temps
+	return temps, dests
 }
 
 func slotTempStrings(slots []OutputSlot) []string {
@@ -287,7 +284,8 @@ func (c *Compiler) restoreCondDests(aliases map[string]*Symbol) {
 // self-referential RHS expressions read/write the same evolving slot.
 func (c *Compiler) compileCondAssignments(slots []OutputSlot, exprs []ast.Expression) {
 	aliases := c.aliasCondDests(slots)
-	c.compileAssignments(slotTemps(slots), slotDests(slots), exprs)
+	temps, dests := slotAssignIdents(slots)
+	c.compileAssignments(temps, dests, exprs)
 	c.restoreCondDests(aliases)
 }
 
@@ -298,8 +296,7 @@ func (c *Compiler) compileCondExprAssigns(slots []OutputSlot, exprs []ast.Expres
 	aliases := c.aliasCondDests(slots)
 	defer c.restoreCondDests(aliases)
 
-	temps := slotTemps(slots)
-	dests := slotDests(slots)
+	temps, dests := slotAssignIdents(slots)
 	oldValues := c.captureOldValues(temps)
 	assigns := make([]exprAssign, 0, len(exprs))
 	i := 0
