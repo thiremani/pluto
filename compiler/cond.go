@@ -1395,7 +1395,7 @@ func (c *Compiler) storeFallbackValue(side ast.Expression, i int, outType Type, 
 // runtime paths, and on this one the mask was never moved.
 func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info == nil || i >= len(info.CompareModes) || info.CompareModes[i] != CondArray {
+	if !info.IsMask(i) {
 		return
 	}
 	syms, ok := c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)]
@@ -1413,7 +1413,7 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 	frame := c.requireCondLHSFrame()
 	if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray {
+		if info.IsMask(i) {
 			return syms[i], true
 		}
 		return syms[i], false
@@ -1450,8 +1450,8 @@ func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
 		if exprInfo == nil {
 			continue
 		}
-		for i, mode := range exprInfo.CompareModes {
-			if mode != CondArray || lhsSyms[i].Borrowed {
+		for i := range exprInfo.CompareModes {
+			if !exprInfo.IsMask(i) || lhsSyms[i].Borrowed {
 				continue
 			}
 			c.freeSymbolValue(lhsSyms[i], "")

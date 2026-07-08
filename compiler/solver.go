@@ -69,6 +69,13 @@ func (info *ExprInfo) HasFallbackOr() bool {
 	return false
 }
 
+// IsMask reports whether output slot i is an array mask — a heap-owned,
+// always-yielding value that must be freed if it is not moved into a result
+// slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
+func (info *ExprInfo) IsMask(i int) bool {
+	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
+}
+
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar || m == CondOr || m == CondValue {
