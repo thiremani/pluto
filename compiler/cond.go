@@ -537,7 +537,7 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 
 	// A value-position || resolves per slot: slot i falls back only when slot i
 	// of the left side failed to yield.
-	if or, ok := ast.IsLogicalOr(expr); ok && info != nil && info.HasFallbackOr() {
+	if or, ok := ast.IsLogicalOr(expr); ok && info.HasFallbackOr() {
 		return c.extractFallbackOrSlots(or, info, temps)
 	}
 
