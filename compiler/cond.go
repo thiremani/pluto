@@ -1214,14 +1214,11 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 		return false
 	}
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info != nil && len(c.pendingLoopRanges(info.Ranges)) > 0 {
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return false
 	}
-	if info != nil && (info.HasAnyComparison() || info.HasFallbackOr()) {
+	if info.HasAnyComparison() || info.HasFallbackOr() {
 		return true
-	}
-	if infix.Token.IsComparison() || infix.IsLogicalOr() {
-		return false
 	}
 	return c.isSlotAlignedSpine(infix.Left) || c.isSlotAlignedSpine(infix.Right)
 }
