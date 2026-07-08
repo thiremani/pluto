@@ -812,7 +812,7 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 	for _, tmp := range temps {
 		c.freeTemporary(tmp.expr, tmp.syms)
 	}
-	c.freeFrameMasks()
+	c.freeUnmovedMasksSince(nil)
 }
 
 // compileCondExprValue gates value-position cond expressions on the ANDed
@@ -1243,7 +1243,7 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 
 		// Masks not moved into a slot (freed by a slot's else arm, or consumed
 		// by arithmetic) are swept here; moved ones were marked at store.
-		c.freeFrameMasks()
+		c.freeUnmovedMasksSince(nil)
 		c.freeCondTemps(temps)
 	}, nil)
 }
@@ -1428,13 +1428,6 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 	l, _ := c.spineSlotValue(infix.Left, i, outType)
 	r, _ := c.spineSlotValue(infix.Right, i, outType)
 	return c.compileInfix(infix.Operator, l, r, outType), true
-}
-
-// freeFrameMasks frees the array masks retained in the current condLHS frame
-// that were not moved into a result slot (moved masks are marked borrowed at
-// store time). Freed masks are marked too, so later cleanups skip them.
-func (c *Compiler) freeFrameMasks() {
-	c.freeUnmovedMasksSince(nil)
 }
 
 // frameMaskKeys snapshots the current condLHS frame's keys, so a nested
