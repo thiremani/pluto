@@ -3121,7 +3121,13 @@ func (c *Compiler) copyArray(arr llvm.Value, elemType Type) llvm.Value {
 func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 	switch sym.Type.Kind() {
 	case StrKind:
-		// Deep copy the string - result is always heap-allocated
+		// A static string is immortal, so it never needs an owned copy — return
+		// it as-is. A store into a heap-string slot makes the StrH copy through
+		// the store's coercion (coerceSymbolForType); a store into a StrG slot
+		// keeps it static. Only heap strings are deep-copied here.
+		if IsStrG(sym.Type) {
+			return sym
+		}
 		copiedStr := c.copyString(sym.Val)
 		return &Symbol{
 			Val:      copiedStr,

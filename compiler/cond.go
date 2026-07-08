@@ -1381,9 +1381,7 @@ func (c *Compiler) storeFallbackValue(side ast.Expression, i int, outType Type, 
 		val.Borrowed = true
 	} else {
 		val = c.derefIfPointer(val, fmt.Sprintf("or_take_val_%d", i))
-		if !IsStrG(val.Type) {
-			val = c.deepCopyIfNeeded(val)
-		}
+		val = c.deepCopyIfNeeded(val)
 	}
 	coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("or_val_%d", i))
 	c.createStore(coerced.Val, slot, coerced.Type)
@@ -1514,7 +1512,7 @@ func (c *Compiler) commitSlotValue(tempIdent *ast.Identifier, value *Symbol, cop
 	oldValue := c.valueSymbol(tempIdent.Value, tempSym, tempIdent.Value+"_slot_old")
 
 	toStore := value
-	if copyValue && !IsStrG(value.Type) {
+	if copyValue {
 		toStore = c.deepCopyIfNeeded(value)
 	}
 	c.storeSymbolToSlot(tempSym, toStore, slotElem, tempIdent.Value+"_slot_store")
