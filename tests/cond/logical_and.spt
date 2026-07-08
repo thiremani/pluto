@@ -265,3 +265,53 @@ cjMcStrHeapVal = PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?"
 # A multi-cell comparison may be one conjunct of a statement comma-AND list.
 cjMcCombo = Pair(1, 2) > Pair(0, 1), a > 2 7
 "CjMcCombo: -cjMcCombo"
+
+# && and || composed in one expression: per-slot if-else across a tuple.
+# Slot 0's condition fails (5 > 8), so its && misses and the || fills it;
+# slot 1's condition holds (7 > 1), so its && yields the gated value.
+aoM, aoN = Pair(5, 7) > Pair(8, 1) && Pair(50, 70) || Pair(-1, -2)
+"AndOrPerSlot: -aoM -aoN"
+
+# The && right side is lazy: with a failing left it never evaluates, so an
+# out-of-bounds read there has no effect and the destination keeps old.
+aoArr = [1 2]
+aoLzA = 99
+"AndLazyBefore: -aoLzA"
+aoLzA = 1 > 2 && aoArr[10]
+"AndLazySkipped: -aoLzA"
+
+# With a holding left the right does evaluate; its OOB read fails the lane,
+# so the destination still keeps old — through the || the fallback wins.
+aoLzB = 88
+"AndOobBefore: -aoLzB"
+aoLzB = 1 < 2 && aoArr[10]
+"AndOobKeepsOld: -aoLzB"
+aoLzC = 1 < 2 && aoArr[10] || -1
+"AndOobFallback: -aoLzC"
+
+# Heap value on the lazy right: never allocated on the miss path (leak-checked).
+aoHs = MkStr("a") > "b" && MkStr("q")
+"AndHeap: -aoHs"
+aoHf = MkStr("a") > "zz" && MkStr("q")
+"AndHeapMiss: -aoHf end"
+
+# Chain mid-fail keeps old through an existing destination.
+aoW = 5
+"AndChainBefore: -aoW"
+aoW = 3 > 2 && 1 > 9 && 11
+"AndChainMidFail: -aoW"
+
+# Ranged && with || fallback: every iteration misses, so the fallback wins
+# each time and the last iteration's fallback is kept.
+aoI = 1:5
+aoR = aoI > 9 && aoI || -1
+"RangedAndOrAllMiss: -aoR"
+aoR2 = aoI > 2 && aoI * 10 || -1
+"RangedAndOrLastWin: -aoR2"
+
+# Statement-gate position: && is the short-circuit boolean AND of two
+# conditions.
+aoG = 3 > 2 && 4 > 3  99
+"GateAnd: -aoG"
+aoG2 = 3 > 2 && 4 > 9  99
+"GateAndFalse: -aoG2 end"

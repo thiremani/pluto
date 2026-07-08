@@ -60,3 +60,17 @@ CjMcStr: match
 CjMcStrF: 
 CjMcStrHeapVal: s9?
 CjMcCombo: 7
+AndOrPerSlot: -1 70
+AndLazyBefore: 99
+AndLazySkipped: 99
+AndOobBefore: 88
+AndOobKeepsOld: 88
+AndOobFallback: -1
+AndHeap: sq
+AndHeapMiss:  end
+AndChainBefore: 5
+AndChainMidFail: 5
+RangedAndOrAllMiss: -1
+RangedAndOrLastWin: 40
+GateAnd: 99
+GateAndFalse: 0 end
