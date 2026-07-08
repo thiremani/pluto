@@ -636,21 +636,28 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	frame := c.requireCondLHSFrame()
 	frame[key(c.FuncNameMangled, infix)] = lhsSyms
 
-	// Track `left` as a temporary to free in cleanup — but not when it is a chained
-	// inner comparison (a > b < c): its value came from substituting that already-
-	// retained comparison, so it is the SAME symbol already tracked. Re-tracking it
-	// would free it twice (double-free / crash) for a heap LHS.
+	// Track the left operand's payloads with the same symbols the frame
+	// retains (the deref'd LHS; the mask's already-released source for array
+	// slots), so a consumer free that marks the frame entry borrowed also
+	// neutralizes this temp. Skip a chained inner comparison (a > b < c): its
+	// value came from substituting that already-retained comparison, so it is
+	// the SAME symbol already tracked — re-tracking would free it twice.
 	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
-		temps = append(temps, condTemp{expr: infix.Left, syms: left})
+		trackSyms := make([]*Symbol, len(left))
+		for i := range left {
+			trackSyms[i] = lhsSyms[i]
+			if info.IsMask(i) {
+				trackSyms[i] = left[i]
+			}
+		}
+		temps = append(temps, condTemp{expr: infix.Left, syms: trackSyms})
 	}
 
 	// Right is comparison-only; left is retained for condLHS substitution. A
-	// parenthesized comparison on the right (a > (b < c)) substituted the inner
-	// comparison's retained LHS — the same symbol already tracked — so freeing
-	// it here would double-free on the cleanup path.
-	if _, chainedRight := frame[key(c.FuncNameMangled, infix.Right)]; !chainedRight {
-		c.freeTemporary(infix.Right, right)
-	}
+	// parenthesized comparison on the right (a > (b < c)) is released here,
+	// once — recording the free marks its frame entry so the cleanups skip
+	// the same payload on every later path.
+	c.freeConsumedTemporary(infix.Right, right)
 	return conds, temps
 }
 
@@ -809,9 +816,7 @@ func (c *Compiler) prepareFallbackOperand(expr ast.Expression, temps []condTemp)
 // that are not consumed when the condition evaluates to false, plus the frame
 // masks a nested resolution has not already released.
 func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
-	for _, tmp := range temps {
-		c.freeTemporary(tmp.expr, tmp.syms)
-	}
+	c.freeCondTemps(temps)
 	c.freeUnmovedMasksSince(nil)
 }
 
@@ -1160,6 +1165,18 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
 		exprSlots := slots[targetIdx : targetIdx+numOutputs]
+
+		// A ranged tree with a value-position || cannot lower inline: a bare
+		// || has no branching context (extraction must pre-resolve it), and
+		// extraction needs bound iterators. Loop first — the per-iteration
+		// body re-enters the standard extraction with no pending ranges.
+		if len(c.pendingLoopRanges(info.Ranges)) > 0 && treeHasFallbackOr(c.ExprCache, c.FuncNameMangled, expr) {
+			c.withCondBranch(stmtCond, "ranged_or", func() {
+				c.stageCondRangedExpr(expr, exprSlots)
+			}, nil)
+			targetIdx += numOutputs
+			continue
+		}
 
 		// A multi-return value expression whose slots carry independent
 		// conditions (Pair > Pair, (Pair > Pair) + Pair(1, 1), Mix > Mix, ...)

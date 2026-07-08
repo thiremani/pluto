@@ -1125,13 +1125,18 @@ func (c *Compiler) aliasesDestSlot(ident *ast.Identifier, sym *Symbol) bool {
 // may have written through (call outputs), keeping prior values.
 func (c *Compiler) commitAssignmentsPerExpr(assigns []exprAssign) {
 	// Guarded destinations must be pointer-backed so the write and skip paths
-	// converge; a fresh one gets a zero seed to keep.
+	// converge; a fresh one gets a zero seed to keep. The seed is what a
+	// commit replaces, so it becomes the slot's oldValue — the commit path
+	// frees an owned heap seed (StrH zero is a live copy) instead of leaking
+	// it, and the skip path keeps it.
 	for _, e := range assigns {
 		if e.bit.IsNil() {
 			continue
 		}
-		for _, slot := range e.slots {
-			c.ensureSeededDest(slot.dest, slot.value)
+		for j := range e.slots {
+			if seed := c.ensureSeededDest(e.slots[j].dest, e.slots[j].value); seed != nil {
+				e.slots[j].oldValue = seed
+			}
 		}
 	}
 
@@ -1178,11 +1183,12 @@ func (c *Compiler) freeSkippedTemps(e exprAssign) {
 
 // ensureSeededDest makes a guarded destination pointer-backed so conditional
 // commit paths converge; a fresh destination gets a zero seed as its keep-old
-// value.
-func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) {
+// value. Returns the seed (nil for an existing destination) so the caller can
+// record it as the value a commit replaces.
+func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) *Symbol {
 	if _, exists := Get(c.Scopes, ident.Value); exists {
 		c.promoteExistingSym(ident.Value)
-		return
+		return nil
 	}
 	t := valSym.Type
 	if p, ok := t.(Ptr); ok {
@@ -1193,6 +1199,7 @@ func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) {
 	zero := c.makeZeroValue(t)
 	c.createStore(zero.Val, ptr, t)
 	Put(c.Scopes, ident.Value, &Symbol{Val: ptr, Type: Ptr{Elem: t}})
+	return zero
 }
 
 func (c *Compiler) finishAssignmentsWithGuard(assigns []exprAssign, guardPtr llvm.Value) {
@@ -1890,6 +1897,41 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 	// Everything else is a temporary - free heap types
 	for _, sym := range syms {
 		c.freeTemporarySymbol(sym, "temp_free")
+	}
+}
+
+// freeConsumedTemporary frees expr's temporaries on the evaluation's straight
+// line and records the free against expr's condLHS frame entry, so the
+// extraction cleanups — the unmoved-mask sweep and the retained-temp
+// releases, which track these same symbols — skip the released payload. Only
+// valid where the free dominates the extraction's branch arms: a free inside
+// one arm of a runtime branch (a collector's cell push, a per-iteration
+// release) must use freeTemporary, or the compile-time mark would poison the
+// other arm.
+func (c *Compiler) freeConsumedTemporary(expr ast.Expression, syms []*Symbol) {
+	c.freeTemporary(expr, syms)
+	c.markFreedFrameValues(expr, syms)
+}
+
+// markFreedFrameValues marks expr's frame-stashed values borrowed after a
+// consumer freed them. Only slots whose value identity matches what was freed
+// are marked: a consumer freeing a value merely derived from a frame slot (a
+// cond_lhs phi, an LHS-or-zero select) did not release the retained payload.
+func (c *Compiler) markFreedFrameValues(expr ast.Expression, syms []*Symbol) {
+	frame := c.currentCondLHSFrame()
+	if frame == nil {
+		return
+	}
+	lhsSyms, ok := frame[key(c.FuncNameMangled, expr)]
+	if !ok {
+		return
+	}
+	for _, freed := range syms {
+		for _, sym := range lhsSyms {
+			if sym.Val == freed.Val {
+				sym.Borrowed = true
+			}
+		}
 	}
 }
 
@@ -2796,11 +2838,14 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 			end++
 		}
 
-		lowered := make([]*Symbol, 0, end-offset)
+		// Free through the compiled symbols, not the ABI-lowered wrappers, so
+		// a frame-substituted argument keeps its value identity and the free
+		// is recorded against the frame entry.
+		compiled := make([]*Symbol, 0, end-offset)
 		for i := offset; i < end; i++ {
-			lowered = append(lowered, callArgs[i].Lowered)
+			compiled = append(compiled, callArgs[i].Symbol)
 		}
-		c.freeTemporary(expr, lowered)
+		c.freeConsumedTemporary(expr, compiled)
 		offset = end
 	}
 }

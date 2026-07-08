@@ -1676,7 +1676,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// A || in the value arm is the one position still lowered inline with no
 	// branching context (it would panic in compileInfixBasic), so reject it —
 	// value-position || resolves per slot everywhere else.
-	if ts.valueArmHasFallbackOr(expr.Value) {
+	if treeHasFallbackOr(ts.ExprCache, ts.FuncNameMangled, expr.Value) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first",
@@ -1833,14 +1833,15 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	return
 }
 
-// valueArmHasFallbackOr reports whether expr's tree contains a bare
-// value-position ||. An array literal resolves a || in a cell locally, so it
-// stays a boundary; a nested (cond value) is scanned through its value arm.
-// Used to reject a || in a (cond value) value arm, the one position the
-// compiler still lowers inline with no branching context.
-func (ts *TypeSolver) valueArmHasFallbackOr(expr ast.Expression) bool {
+// treeHasFallbackOr reports whether expr's tree contains a bare value-position
+// ||. An array literal resolves a || in a cell locally, so it stays a
+// boundary; a nested (cond value) is scanned through its value arm. The solver
+// rejects a || in a (cond value) value arm with it; the compiler routes ranged
+// || trees to per-iteration staging with it (solver and compiler share the
+// same ExprCache map).
+func treeHasFallbackOr(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
 	if _, ok := ast.IsLogicalOr(expr); ok {
-		if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasFallbackOr() {
+		if info := cache[key(funcNameMangled, expr)]; info != nil && info.HasFallbackOr() {
 			return true
 		}
 	}
@@ -1848,10 +1849,10 @@ func (ts *TypeSolver) valueArmHasFallbackOr(expr ast.Expression) bool {
 	case *ast.ArrayLiteral:
 		return false
 	case *ast.CondValueExpr:
-		return ts.valueArmHasFallbackOr(e.Value)
+		return treeHasFallbackOr(cache, funcNameMangled, e.Value)
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if ts.valueArmHasFallbackOr(child) {
+		if treeHasFallbackOr(cache, funcNameMangled, child) {
 			return true
 		}
 	}

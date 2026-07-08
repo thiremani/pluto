@@ -908,8 +908,9 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 		}}
 	}
 	// Scalar element access does not retain the source array pointer.
-	// Release temporary array sources on all scalar return paths.
-	defer c.freeTemporary(expr.Array, []*Symbol{arraySym})
+	// Release temporary array sources on all scalar return paths; a consumed
+	// frame mask ((arr > 1)[i]) is recorded so the sweep skips it.
+	defer c.freeConsumedTemporary(expr.Array, []*Symbol{arraySym})
 
 	// Scalar index - element access
 	arrElemType := arrType.ColTypes[0]
