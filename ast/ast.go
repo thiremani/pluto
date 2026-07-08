@@ -459,6 +459,20 @@ func IsLogicalOr(exp Expression) (*InfixExpression, bool) {
 	return infix, true
 }
 
+// IsLogicalAnd reports whether ie is a logical AND infix expression.
+func (ie *InfixExpression) IsLogicalAnd() bool {
+	return ie.Operator == token.SYM_COND_AND
+}
+
+// IsLogicalAnd returns exp as an infix logical AND expression.
+func IsLogicalAnd(exp Expression) (*InfixExpression, bool) {
+	infix, ok := exp.(*InfixExpression)
+	if !ok || !infix.IsLogicalAnd() {
+		return nil, false
+	}
+	return infix, true
+}
+
 func (ie *InfixExpression) expressionNode()  {}
 func (ie *InfixExpression) Tok() token.Token { return ie.Token }
 func (ie *InfixExpression) String() string {

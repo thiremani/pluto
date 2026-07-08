@@ -1826,6 +1826,9 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	if expr.IsLogicalOr() && !info.HasFallbackOr() {
 		return c.compileLogicalOrCondition(expr)
 	}
+	if expr.IsLogicalAnd() && !info.HasCondAnd() {
+		return c.compileLogicalAndCondition(expr)
+	}
 
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
@@ -1842,8 +1845,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
-		case CondOr:
-			panic("internal: value-position logical OR must be lowered through conditional expression branching")
+		case CondOr, CondAnd:
+			panic("internal: value-position logical OR/AND must be lowered through conditional expression branching")
 		default:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		}
@@ -1878,6 +1881,34 @@ func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbo
 	result.AddIncoming(
 		[]llvm.Value{llvm.ConstInt(c.Context.Int1Type(), 1, false), rightSym.Val},
 		[]llvm.BasicBlock{trueEnd, rhsEnd},
+	)
+
+	return []*Symbol{{Val: result, Type: I1}}
+}
+
+// compileLogicalAndCondition short-circuits a condition-position &&: false
+// when the left is false, otherwise the right (evaluated only then).
+func (c *Compiler) compileLogicalAndCondition(expr *ast.InfixExpression) []*Symbol {
+	left := c.compileExpression(expr.Left, nil)
+	leftSym := c.derefIfPointer(left[0], "")
+
+	rhsBlock, falseBlock, contBlock := c.createIfElseCont(leftSym.Val, "and_rhs", "and_false", "and_cont")
+
+	c.builder.SetInsertPointAtEnd(rhsBlock)
+	right := c.compileExpression(expr.Right, nil)
+	rightSym := c.derefIfPointer(right[0], "")
+	c.builder.CreateBr(contBlock)
+	rhsEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(falseBlock)
+	c.builder.CreateBr(contBlock)
+	falseEnd := c.builder.GetInsertBlock()
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int1Type(), "and_cond")
+	result.AddIncoming(
+		[]llvm.Value{rightSym.Val, llvm.ConstInt(c.Context.Int1Type(), 0, false)},
+		[]llvm.BasicBlock{rhsEnd, falseEnd},
 	)
 
 	return []*Symbol{{Val: result, Type: I1}}

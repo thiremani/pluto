@@ -90,7 +90,8 @@ const (
 	SYM_GEQ = ">="
 
 	// conditional symbols
-	SYM_COND_OR = "||"
+	SYM_COND_OR  = "||"
+	SYM_COND_AND = "&&"
 
 	// bitwise symbols
 	SYM_AND   = "&"

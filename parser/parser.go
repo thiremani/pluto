@@ -18,6 +18,7 @@ const (
 	ASSIGN                   // =
 	COMMA                    // ,
 	COND_OR                  // ||
+	COND_AND                 // && (binds tighter than ||: c && v || w == (c && v) || w)
 	BITWISE_OR               // |
 	BITWISE_XOR              // ⊕
 	BITWISE_AND              // &
@@ -37,6 +38,7 @@ var leftBindingPower = map[string]float64{
 	token.SYM_ASSIGN:   ASSIGN,
 	token.SYM_COMMA:    COMMA,
 	token.SYM_COND_OR:  COND_OR,
+	token.SYM_COND_AND: COND_AND,
 	token.SYM_OR:       BITWISE_OR,
 	token.SYM_XOR:      BITWISE_XOR,
 	token.SYM_AND:      BITWISE_AND,
@@ -128,6 +130,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
 
 	p.registerInfix(token.SYM_COND_OR, p.parseInfixExpression)
+	p.registerInfix(token.SYM_COND_AND, p.parseInfixExpression)
 	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
@@ -792,6 +795,9 @@ func (p *StmtParser) isCondition(exp ast.Expression) bool {
 	}
 
 	if infix, ok := ast.IsLogicalOr(exp); ok {
+		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
+	}
+	if infix, ok := ast.IsLogicalAnd(exp); ok {
 		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
 	}
 

@@ -22,7 +22,8 @@ const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise mask, LHS where condition holds else 0 (length-preserving)
-	CondOr                     // Fallback OR in value position: first true operand wins
+	CondOr                     // Fallback OR in value position: first side to yield wins per slot
+	CondAnd                    // Gating AND in value position: yields the right side only when the left yields
 	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
 )
 
@@ -69,6 +70,16 @@ func (info *ExprInfo) HasFallbackOr() bool {
 	return false
 }
 
+// HasCondAnd returns true if any slot is a value-position gating && result.
+func (info *ExprInfo) HasCondAnd() bool {
+	for _, m := range info.CompareModes {
+		if m == CondAnd {
+			return true
+		}
+	}
+	return false
+}
+
 // IsMask reports whether output slot i is an array mask — a heap-owned,
 // always-yielding value that must be freed if it is not moved into a result
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
@@ -78,7 +89,7 @@ func (info *ExprInfo) IsMask(i int) bool {
 
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
-		if m == CondScalar || m == CondOr || m == CondValue {
+		if m == CondScalar || m == CondOr || m == CondAnd || m == CondValue {
 			return true
 		}
 	}
@@ -1676,7 +1687,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// A || in the value arm is the one position still lowered inline with no
 	// branching context (it would panic in compileInfixBasic), so reject it —
 	// value-position || resolves per slot everywhere else.
-	if treeHasFallbackOr(ts.ExprCache, ts.FuncNameMangled, expr.Value) {
+	if treeHasLogicalCond(ts.ExprCache, ts.FuncNameMangled, expr.Value) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first",
@@ -1702,10 +1713,10 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 }
 
 // wrapsPropagatingCond reports whether expr wraps a *propagating* value-position
-// condition — a comparison (CondScalar) or a value-position || (CondOr) — anywhere
-// in its tree. Those propagate their failure to the whole value (the same gating
-// that drives zero-fill), so a fallback || can attach to a left operand that wraps
-// one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
+// condition — a comparison (CondScalar) or a value-position ||/&& (CondOr,
+// CondAnd) — anywhere in its tree. Those propagate their failure to the whole
+// value (the same gating that drives zero-fill), so a fallback || can attach to
+// a left operand that wraps one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
 //
 // A (cond value) and an array cell resolve *locally* (they always produce a value
 // and never propagate a failure outward), so a condition nested inside one does
@@ -1715,7 +1726,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
 	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil {
 		for _, m := range info.CompareModes {
-			if m == CondScalar || m == CondOr {
+			if m == CondScalar || m == CondOr || m == CondAnd {
 				return true
 			}
 		}
@@ -1733,42 +1744,91 @@ func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
 }
 
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
+	if !ts.InValueExpr {
+		return ts.typeLogicalGateExpression(expr, left, right, "OR")
+	}
+
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
-	if ts.InValueExpr {
-		// Value-position || is left-biased fallback (yield left, else right), so the
-		// left must be able to fail or the fallback is dead. Failable: its root is
-		// conditional, or it wraps a propagating comparison in arithmetic (e.g.
-		// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
-		if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: expr.Token,
-				Msg:   "logical OR in value position requires a conditional left operand",
-			})
-		}
-
-		types := make([]Type, len(left))
-		compareModes := make([]CondMode, len(left))
-		for i := range left {
-			types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
-			compareModes[i] = CondOr
-		}
-
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-			OutTypes:     types,
-			ExprLen:      len(types),
-			HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
-			CompareModes: compareModes,
-		}
-		return types
+	// Value-position || is left-biased fallback (yield left, else right), so the
+	// left must be able to fail or the fallback is dead. Failable: its root is
+	// conditional, or it wraps a propagating comparison in arithmetic (e.g.
+	// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
+	if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "logical OR in value position requires a conditional left operand",
+		})
 	}
+
+	types := make([]Type, len(left))
+	compareModes := make([]CondMode, len(left))
+	for i := range left {
+		types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
+		compareModes[i] = CondOr
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		CompareModes: compareModes,
+	}
+	return types
+}
+
+// typeLogicalAndExpression types a value-position && as a gating AND: slot i
+// yields the right side's slot i only when the left's slot i yields, so the
+// result types are the right side's. The left never materializes into the
+// result, so its slot types need not match the right's — it only has to be
+// able to fail, or the gate is dead.
+func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
+	if !ts.InValueExpr {
+		return ts.typeLogicalGateExpression(expr, left, right, "AND")
+	}
+
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
+
+	if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "logical AND in value position requires a conditional left operand",
+		})
+	}
+
+	types := make([]Type, len(right))
+	compareModes := make([]CondMode, len(right))
+	for i := range right {
+		t := right[i]
+		if ptr, ok := t.(Ptr); ok {
+			t = ptr.Elem
+		}
+		types[i] = t
+		compareModes[i] = CondAnd
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		CompareModes: compareModes,
+	}
+	return types
+}
+
+// typeLogicalGateExpression types a ||/&& in condition position: both operands
+// must be single i1 conditions and the result is one i1.
+func (ts *TypeSolver) typeLogicalGateExpression(expr *ast.InfixExpression, left, right []Type, opName string) []Type {
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	types := []Type{I1}
 	if len(left) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical OR condition operands must produce a single value, got %d", len(left)),
+			Msg:   fmt.Sprintf("logical %s condition operands must produce a single value, got %d", opName, len(left)),
 		})
 		types = []Type{Unresolved{}}
 	} else {
@@ -1779,7 +1839,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		if bothResolved && !bothConditions {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: expr.Token,
-				Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
+				Msg:   fmt.Sprintf("logical %s requires condition operands, got %s and %s", opName, left[0], right[0]),
 			})
 			types = []Type{Unresolved{}}
 		}
@@ -1814,6 +1874,9 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	if expr.IsLogicalOr() {
 		return ts.typeLogicalOrExpression(expr, left, right)
 	}
+	if expr.IsLogicalAnd() {
+		return ts.typeLogicalAndExpression(expr, left, right)
+	}
 
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
 	types = make([]Type, len(left))
@@ -1833,15 +1896,15 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	return
 }
 
-// treeHasFallbackOr reports whether expr's tree contains a bare value-position
-// ||. An array literal resolves a || in a cell locally, so it stays a
+// treeHasLogicalCond reports whether expr's tree contains a bare value-position
+// || or &&. An array literal resolves one in a cell locally, so it stays a
 // boundary; a nested (cond value) is scanned through its value arm. The solver
-// rejects a || in a (cond value) value arm with it; the compiler routes ranged
-// || trees to per-iteration staging with it (solver and compiler share the
-// same ExprCache map).
-func treeHasFallbackOr(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
-	if _, ok := ast.IsLogicalOr(expr); ok {
-		if info := cache[key(funcNameMangled, expr)]; info != nil && info.HasFallbackOr() {
+// rejects a ||/&& in a (cond value) value arm with it; the compiler routes
+// ranged ||/&& trees to per-iteration staging with it (solver and compiler
+// share the same ExprCache map).
+func treeHasLogicalCond(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
+	if infix, ok := expr.(*ast.InfixExpression); ok && (infix.IsLogicalOr() || infix.IsLogicalAnd()) {
+		if info := cache[key(funcNameMangled, expr)]; info != nil && (info.HasFallbackOr() || info.HasCondAnd()) {
 			return true
 		}
 	}
@@ -1849,10 +1912,10 @@ func treeHasFallbackOr(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr
 	case *ast.ArrayLiteral:
 		return false
 	case *ast.CondValueExpr:
-		return treeHasFallbackOr(cache, funcNameMangled, e.Value)
+		return treeHasLogicalCond(cache, funcNameMangled, e.Value)
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if treeHasFallbackOr(cache, funcNameMangled, child) {
+		if treeHasLogicalCond(cache, funcNameMangled, child) {
 			return true
 		}
 	}
