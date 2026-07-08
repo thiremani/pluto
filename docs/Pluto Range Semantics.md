@@ -298,10 +298,10 @@ Likewise:
 ```pluto
 i = 0:10
 j = 0:5
-x, y = i < 8, j > 2 i + 1, (i + j) < 10
+x, y = i < 8 && j > 2 i + 1, (i + j) < 10
 ```
 
-The outer gate is `i < 8, j > 2`, so both outputs run only on admitted
+The outer gate is `i < 8 && j > 2`, so both outputs run only on admitted
 iterations.
 Inside that shared gate:
 

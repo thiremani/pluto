@@ -596,6 +596,16 @@ func TestConditionThenCallValue(t *testing.T) {
 	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
 }
 
+func TestCommaConditionRejected(t *testing.T) {
+	// A statement condition is one expression; comma means positional lists
+	// only. Conjunctions are spelled with &&.
+	const input = "res = i < 2, j > 1  7"
+	sp := NewScriptParser(lexer.New("TestCommaConditionRejected", input))
+	sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected a parse error for a comma condition list")
+	require.Contains(t, sp.Errors()[0], "a statement condition is a single expression; combine conditions with &&")
+}
+
 func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -628,8 +638,11 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			value:     "(+10)",
 		},
 		{
-			name:      "comma condition attached prefix starts value",
-			input:     "res = i < 2, j > 1 -x",
+			// The condition's top-level && flattens into the condition list,
+			// so each conjunct is validated and lowered separately (drivers
+			// nest, comparisons gate) — the old comma-list model.
+			name:      "and condition attached prefix starts value",
+			input:     "res = i < 2 && j > 1 -x",
 			condCount: 2,
 			value:     "(-x)",
 		},

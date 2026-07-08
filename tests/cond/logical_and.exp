@@ -79,3 +79,6 @@ AndBroadcastMiss: 0 0
 AndFoldBoth: 9
 AndFoldBefore: 55
 AndFoldOneFails: 55
+AndCondBefore: 9
+AndCondAttachedPrefix: -1
+GroupedStatementOpen: 63

@@ -31,11 +31,14 @@ old = b > 2  x * 3    # b <= 2 -> old stays 99
 new = b > 2  x * 3    # b <= 2 -> new = 0
 ```
 
-Multiple conditions separated by commas are ANDed; all must hold. In a condition
-slot `&&` is the same short-circuit boolean AND (mirroring the `||` OR gate), so
-`x = a > 2 && b > 3  7` and `x = a > 2, b > 3  7` agree. A multi-cell comparison
-(`Pair > Pair`, including string pairs) likewise gates on the conjunction of its
-cells — every cell must hold.
+A statement condition is one expression — comma means positional lists only,
+everywhere. Conjunctions are spelled with the operator: a condition's
+top-level `&&` chain is the statement's condition list, each conjunct
+validated and lowered separately, so `x = a > 2 && b > 3  7` gates on both,
+and bare range drivers conjoin into iteration domains — `grid = i && j [...]`
+walks the cartesian product, `i < 8 && j > 2  v` a filtered one. A multi-cell
+comparison (`Pair > Pair`, including string pairs) likewise gates on the
+conjunction of its cells — every cell must hold.
 
 ```pluto
 g = 99
@@ -70,7 +73,7 @@ scalar gate. The same rule applies everywhere, so there is no separate
 Because the chain binds to the **leftmost** operand (the value-position rule),
 `i > 2 < 8` means `i > 2 AND i < 8`, but the math-natural `2 < i < 8` means just
 `2 < i` — the `< 8` chains onto the constant `2` (`2 < 8`, always true), not onto
-`i`. **Put the variable first** (`i > 2 < 8`), or use comma-AND (`i > 2, i < 8`),
+`i`. **Put the variable first** (`i > 2 < 8`), or use `&&` (`i > 2 && i < 8`),
 for a two-sided bound. A `||` in a condition is an OR gate (`a > 2 || b > 2`);
 its operands must have matching types and it must be able to fail (a `|| value`
 fallback that always yields cannot gate).
@@ -153,8 +156,8 @@ Only a left operand with **no** condition anywhere in its tree is rejected
 ## Parentheses are pure grouping
 
 Parentheses only group — there is no parenthesized `(cond value)` expression
-(`(a > 2 10)` is a parse error), and comma conjunctions live only at the
-statement gate. In an expression, write the conjunction with `&&`
+(`(a > 2 10)` is a parse error), and there are no comma conjunctions anywhere
+(a statement condition is one expression). Write conjunctions with `&&`
 (`c1 && c2 && v`), and use parentheses to choose what a gate or `||` attaches
 to:
 
@@ -308,13 +311,13 @@ documented full-control opt-in.
   value positions, so chained comparisons gate directly (`i > 2 < 8`,
   leftmost-binding, including chained multi-return gates) in every condition
   slot; collector zero-fill; array masks (element-wise, length-preserving).
-- **Conjunction conditions:** the statement gate accepts a comma-AND list
-  (`a > 2, b > 3`) and the equivalent short-circuit `&&`/`||` over conditions;
-  a multi-cell comparison in a condition slot gates on the cell-wise AND —
+- **Conjunction conditions:** short-circuit `&&`/`||` over conditions; a
+  multi-cell comparison in a condition slot gates on the cell-wise AND —
   every cell must hold. Heap operands (e.g. string cells via `⊕`) are freed
   after gating.
 - **Removed:** the parenthesized `(cond value)` expression and comma
-  conjunctions inside parentheses. Parentheses are pure grouping; write
+  conjunctions everywhere — a statement condition is one expression, comma
+  means positional lists only. Parentheses are pure grouping; write
   `c1 && c2 && v` for the conjunction, and `cond && v || 0` where the old local
   zero-on-failure resolution is wanted. Propagation now applies everywhere —
   `(a > 2 && 10) + 1` keeps the old value when `a <= 2`, exactly like

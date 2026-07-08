@@ -223,12 +223,12 @@ cjStrFalse = a > 2 && b > 2 && sl ⊕ sm
 cjStrFb = a > 2 && b > 2 && sl ⊕ sm || "fallback"
 "CjStrFb: -cjStrFb"
 
-# Comma conjunctions gating a multi-return value stay at the statement level
-# (per-slot && cannot broadcast a scalar gate over two slots): all slots
-# yield, or all keep old (fresh -> zero) on failure.
-cjMa, cjMb = a > 2, a > 0 Pair(10, 20)
+# A conjunction gating a multi-return value: the whole && chain is one
+# statement condition — all slots yield, or all keep old (fresh -> zero) on
+# failure.
+cjMa, cjMb = a > 2 && a > 0 Pair(10, 20)
 "CjMultiTrue: -cjMa -cjMb"
-cjMc, cjMd = a > 2, b > 2 Pair(10, 20)
+cjMc, cjMd = a > 2 && b > 2 Pair(10, 20)
 "CjMultiFalse: -cjMc -cjMd"
 
 # Range-root && chain with a heap value: the per-iteration string is freed
@@ -262,8 +262,9 @@ cjMcStrF = PairStr(3, 1) > PairStr(2, 5) "match"
 cjMcStrHeapVal = PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?"
 "CjMcStrHeapVal: -cjMcStrHeapVal"
 
-# A multi-cell comparison may be one conjunct of a statement comma-AND list.
-cjMcCombo = Pair(1, 2) > Pair(0, 1), a > 2 7
+# A multi-cell comparison may be one && conjunct (its slots fold: every cell
+# must hold).
+cjMcCombo = Pair(1, 2) > Pair(0, 1) && a > 2 7
 "CjMcCombo: -cjMcCombo"
 
 # && and || composed in one expression: per-slot if-else across a tuple.
@@ -329,3 +330,16 @@ abG = 55
 "AndFoldBefore: -abG"
 abG = Pair(5, 7) > Pair(9, 2) && 9
 "AndFoldOneFails: -abG"
+
+# A statement condition is one expression (comma conditions are a parse
+# error); && combines conditions, and the attached-prefix value split fires
+# after the whole conjunction.
+ccI = 1
+ccV = 9
+"AndCondBefore: -ccV"
+ccV = ccI < 2 && ccI > 0 -ccI
+"AndCondAttachedPrefix: -ccV"
+
+# Parens opening a statement's value are pure grouping.
+ccG = (5 + 4) * 7
+"GroupedStatementOpen: -ccG"
