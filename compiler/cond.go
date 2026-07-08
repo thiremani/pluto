@@ -1291,13 +1291,6 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	leafConds, temps = c.extractSlotConds(expr, temps)
 
 	frame := c.requireCondLHSFrame()
-	// A node that resolved itself during extraction (a value-position ||) has
-	// its slot values stashed and tracked already; reuse them and its per-slot
-	// conditions as-is.
-	if _, ok := frame[key(c.FuncNameMangled, expr)]; ok {
-		return leafConds, temps
-	}
-
 	leafCond := c.foldSlotConds(leafConds)
 	if leafCond.IsNil() {
 		guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
