@@ -711,6 +711,13 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 		panic("internal: value-position && requires a failable left operand")
 	}
 
+	// Map the left's conditions onto the result arity: fold when a multi-slot
+	// condition gates one value (every slot must yield), broadcast when one
+	// condition gates a multi-slot value.
+	if len(lConds) != len(info.OutTypes) {
+		lConds = broadcastConds(c.foldSlotConds(lConds), len(info.OutTypes))
+	}
+
 	fs := c.newFallbackSlots(info.OutTypes, "and")
 	c.withCondBranch(c.orSlotConds(lConds, "and_some_yielded"), "and_rhs", func() {
 		c.resolveFallbackSide(fs, and.Right, func(i int) llvm.Value {

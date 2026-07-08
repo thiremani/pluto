@@ -1657,10 +1657,22 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 // yields the right side's slot i only when the left's slot i yields, so the
 // result types are the right side's. The left never materializes into the
 // result, so its slot types need not match the right's — it only has to be
-// able to fail, or the gate is dead.
+// able to fail, or the gate is dead — and its arity folds (N-slot condition
+// gating one value: every slot must yield) or broadcasts (one condition
+// gating an N-slot value) onto the right's; equal arities align per slot.
 func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
 	if !ts.InValueExpr {
 		return ts.typeLogicalGateExpression(expr, left, right, "AND")
+	}
+
+	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", len(left), len(right)),
+		})
+		types := []Type{Unresolved{}}
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		return types
 	}
 
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
@@ -1743,6 +1755,14 @@ func (ts *TypeSolver) typeLogicalGateExpression(expr *ast.InfixExpression, left,
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
+
+	// A && left contributes only conditions (its values are never a result),
+	// so its arity folds or broadcasts onto the right's — dispatch before the
+	// equal-length rule that value-producing operators need.
+	if expr.IsLogicalAnd() {
+		return ts.typeLogicalAndExpression(expr, left, right)
+	}
+
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
@@ -1756,9 +1776,6 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 
 	if expr.IsLogicalOr() {
 		return ts.typeLogicalOrExpression(expr, left, right)
-	}
-	if expr.IsLogicalAnd() {
-		return ts.typeLogicalAndExpression(expr, left, right)
 	}
 
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()

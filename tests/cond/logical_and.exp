@@ -74,3 +74,8 @@ RangedAndOrAllMiss: -1
 RangedAndOrLastWin: 40
 GateAnd: 99
 GateAndFalse: 0 end
+AndBroadcast: 10 20
+AndBroadcastMiss: 0 0
+AndFoldBoth: 9
+AndFoldBefore: 55
+AndFoldOneFails: 55

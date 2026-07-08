@@ -97,6 +97,12 @@ i > 2 || 0
 
 This yields `i` when the comparison succeeds, otherwise `0`.
 
+`&&` gates a per-iteration value: `i > 2 && i * 10` yields `i * 10` on the
+iterations where the comparison yields and skips the rest. At an assignment
+root a skipped iteration keeps the destination, so the last **yielded** value
+wins (`x = i > 2 && i * 2` over `0:5` ends as `8`). `i > 2 && v || w` resolves
+per iteration as an if-else.
+
 ## Array Literals
 
 `[]` always materializes an array at the point where it appears.
@@ -192,6 +198,7 @@ type at that position.
 That applies to:
 
 - failed comparison cells
+- failed `&&` cells (`[i > 2 && i * 10]` → `[0 0 0 30 40]`)
 - out-of-bounds array access inside a cell
 
 Examples:

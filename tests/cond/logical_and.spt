@@ -315,3 +315,17 @@ aoG = 3 > 2 && 4 > 3  99
 "GateAnd: -aoG"
 aoG2 = 3 > 2 && 4 > 9  99
 "GateAndFalse: -aoG2 end"
+
+# Left-arity fold and broadcast: the left of && contributes only conditions,
+# so one condition broadcasts over a multi-value right, and a multi-slot
+# condition folds (every slot must yield) over a single value.
+abA, abB = a > 2 && Pair(10, 20)
+"AndBroadcast: -abA -abB"
+abC, abD = b > 2 && Pair(10, 20)
+"AndBroadcastMiss: -abC -abD"
+abF = Pair(5, 7) > Pair(1, 2) && 9
+"AndFoldBoth: -abF"
+abG = 55
+"AndFoldBefore: -abG"
+abG = Pair(5, 7) > Pair(9, 2) && 9
+"AndFoldOneFails: -abG"
