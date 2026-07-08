@@ -1256,14 +1256,16 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // must not run, and the slots reading it are gated by that same condition.
 func (c *Compiler) prepareSpine(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if _, ok := ast.IsLogicalOr(expr); ok && info != nil && info.HasFallbackOr() {
+	if _, ok := ast.IsLogicalOr(expr); ok && info.HasFallbackOr() {
 		return c.extractSlotConds(expr, temps)
 	}
-	if infix, ok := expr.(*ast.InfixExpression); ok && info.HasAnyComparison() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
+
+	infix, isInfix := expr.(*ast.InfixExpression)
+	if isInfix && info.HasAnyComparison() && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		return c.extractComparisonSlots(infix, info, temps)
 	}
 
-	if infix, ok := expr.(*ast.InfixExpression); ok && c.isSlotAlignedSpine(expr) {
+	if isInfix && c.isSlotAlignedSpine(expr) {
 		var lConds, rConds []llvm.Value
 		lConds, temps = c.prepareSpine(infix.Left, temps)
 		rConds, temps = c.prepareSpine(infix.Right, temps)
