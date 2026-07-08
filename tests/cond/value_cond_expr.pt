@@ -37,3 +37,6 @@ p, q = LitPair2()
 a, b = MixK(x)
     a = [x x]
     b = x + 10
+
+s = Sum3(xs)
+    s = xs[0] + xs[1] + xs[2]

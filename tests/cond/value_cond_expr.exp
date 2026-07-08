@@ -256,3 +256,19 @@ SwapBefore: aax bby
 Swap: bby aax
 SwapPlusOobBefore: 7 8 99
 SwapPlusOob: 8 7 99
+RangedOrScalar: 3
+RangedOrIdent: 3
+RangedOrCallArg: 6
+RangedOrCondValue: 6
+MaskCallGate: 7
+MaskCallValue: 0
+MaskIndex: 5
+MaskCallTuple: 5 2
+MaskSourceIntact: [1 2 3]
+ChainRightHeap: sb sb
+ChainCallTrue: ssa
+ChainCallInnerFalse:  end
+ChainCallOuterFalse:  end
+SeedFreshPair: bb a
+SeedOobPair:  a
+MixedSlotOrGate: 3

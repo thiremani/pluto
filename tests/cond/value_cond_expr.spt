@@ -968,3 +968,60 @@ obM3 = 99
 "SwapPlusOobBefore: -obM1 -obM2 -obM3"
 obM1, obM2, obM3 = obM2, obM1, obArr[10]
 "SwapPlusOob: -obM1 -obM2 -obM3"
+
+# Ranged || in value position loops the iteration domain and resolves the
+# fallback per iteration; the final iteration's value wins.
+rI = 1:4
+rA = rI > 2 || 7
+"RangedOrScalar: -rA"
+rB = rI > 2 || rI
+"RangedOrIdent: -rB"
+rC = Double(rI > 2 || 7)
+"RangedOrCallArg: -rC"
+rD = (rI > 2  rI * 2) || 7
+"RangedOrCondValue: -rD"
+
+# A mask consumed by a call argument or an index is freed by that consumer
+# exactly once; the extraction sweep must not free it again, and the source
+# array survives.
+mkArr = [1 2 3]
+mkA = 0
+mkA = Sum3(mkArr > 1) > 0  7
+"MaskCallGate: -mkA"
+mkB = Sum3(mkArr > 2) < 0
+"MaskCallValue: -mkB"
+mkC = (mkArr > 1)[2] > 0  5
+"MaskIndex: -mkC"
+mkD, mkE = Pair(Sum3(mkArr > 1), 2) > Pair(0, 0)
+"MaskCallTuple: -mkD -mkE"
+"MaskSourceIntact: -mkArr"
+
+# A parenthesized comparison on the right retains its own heap LHS; the yield
+# path must free it too (leak-checked), not just the else path.
+crA = MkStr("b") > (MkStr("a") < "z")
+crB = MkStr("b") > (MkStr("a") < "z")
+"ChainRightHeap: -crA -crB"
+
+# A heap comparison LHS consumed as a call argument is owned by the extraction
+# cleanup: freed once on the yield path and once on the else path, never by
+# the call's own argument cleanup.
+chP = MkStr(MkStr("a") > "b") > "a"
+"ChainCallTrue: -chP"
+chQ = MkStr(MkStr("a") > "zz") > "a"
+"ChainCallInnerFalse: -chQ end"
+chR = MkStr(MkStr("a") > "b") > "zz"
+"ChainCallOuterFalse: -chR end"
+
+# A fresh guarded string destination's zero seed is replaced by the commit
+# (freed, leak-checked) and kept by an OOB skip.
+sdArr = ["a" "bb" "ccc"]
+sdS, sdT = sdArr[1], sdArr[0]
+"SeedFreshPair: -sdS -sdT"
+sdU, sdW = sdArr[9], sdArr[0]
+"SeedOobPair: -sdU -sdW"
+
+# Gate reading of a per-slot ||: every slot yields (each may pick a different
+# side), so the gate turns on even though neither operand yielded as a unit.
+msX = 0
+msX = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3
+"MixedSlotOrGate: -msX"
