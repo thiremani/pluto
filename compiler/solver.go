@@ -1678,6 +1678,16 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
+	// An array lane is a mask — a value, not a boolean — so it cannot gate:
+	// folding or zipping would silently ignore it (the same rule anyArrayCell
+	// enforces for statement gates).
+	if typesResolved(left) && anyArrayCell(left) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "logical AND condition must produce scalar values, not an array",
+		})
+	}
+
 	// A conditional left gates only if it can fail — an always-yielding ||
 	// (fallback that cannot fail) never gates. A non-conditional left
 	// qualifies only by wrapping a propagating comparison in arithmetic,
@@ -1720,10 +1730,12 @@ func (ts *TypeSolver) typeLogicalGateExpression(expr *ast.InfixExpression, left,
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	types := []Type{I1}
-	if len(left) != 1 {
+	if len(left) != 1 || len(right) != 1 {
+		// && dispatches before the infix equal-length check (its value form
+		// folds/broadcasts arity), so the gate form must bound both sides.
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical %s condition operands must produce a single value, got %d", opName, len(left)),
+			Msg:   fmt.Sprintf("logical %s condition operands must produce a single value, got %d and %d", opName, len(left), len(right)),
 		})
 		types = []Type{Unresolved{}}
 	} else {

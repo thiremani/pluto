@@ -672,6 +672,7 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 
 	cases := []struct {
 		name        string
+		code        string
 		script      string
 		expectError string
 	}{
@@ -690,6 +691,24 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
+			// An array lane is a mask (a value, not a boolean), so it cannot
+			// gate: folding or zipping would silently ignore it — the same
+			// rule anyArrayCell enforces for statement gates.
+			name:        "MixedArrayLaneRejected",
+			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
+			script:      "y = MixSA(5) > MixSA(3) && 3",
+			expectError: "logical AND condition must produce scalar values, not an array",
+		},
+		{
+			// Condition-position && bounds BOTH operand arities (its value
+			// form dispatches before the infix equal-length check, so the
+			// gate form cannot rely on it).
+			name:        "GateRightArityRejected",
+			code:        "a, b = Pair(x, y)\n    a = x\n    b = y",
+			script:      "1 > 0 && Pair(1, 2) > Pair(0, 0)",
+			expectError: "logical AND condition operands must produce a single value, got 1 and 2",
+		},
+		{
 			// A && is a valid failable left operand of a value-position ||;
 			// the fallback's type must still match the yielded value's.
 			name:        "AndOrFallbackTypeMismatch",
@@ -700,7 +719,11 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			codeAST := ast.NewCode()
+			if strings.TrimSpace(tc.code) != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
 			require.Empty(t, cc.Compile())
 
 			sl := lexer.New(tc.name+".spt", tc.script)
@@ -730,6 +753,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 
 	cases := []struct {
 		name        string
+		code        string
 		script      string
 		expectError string
 	}{
@@ -761,7 +785,11 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			codeAST := ast.NewCode()
+			if strings.TrimSpace(tc.code) != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
 			require.Empty(t, cc.Compile())
 
 			sl := lexer.New(tc.name+".spt", tc.script)
