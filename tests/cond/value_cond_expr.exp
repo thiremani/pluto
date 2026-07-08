@@ -33,14 +33,32 @@ CallLhsFalse: 0
 NestedCondTrue: 10 5
 NestedCondFalse: 0 0
 PairTrue: 5 7
-PairOneFalse: 0 0
-PairFirstFalse: 0 0
-MixedFalse: [] 0
+PairOneFalse: 5 0
+PairFirstFalse: 0 7
+MixedFalse: [0 0] 0
 MixedTrue: [2 3] 2
-ArrayArray: [2 6]
-ArrayScalar: [5 6]
-ScalarArrayGt: [2]
-ScalarArrayLt: [2 2 2]
+ArrayArray: [0 2 6]
+ArrayScalar: [0 0 0 5 6]
+ScalarArrayGt: [2 0 0 0 0]
+ScalarArrayLt: [0 0 2 2 2]
+MaskPosition: [1 0 5 0]
+MaskScalar: [4 8 0]
+MaskUnequalLen: [1 0]
+MaskHeapStr: [s3  s5]
+IntTupleKeepOldBefore: 11 22
+IntTupleKeepOld: 5 22
+MixTupleKeepOldBefore: [9 9] 99
+MixTupleKeepOld: [0 0] 99
+HeapTupleKeepOldBefore: oldA oldB
+HeapTupleKeepOld: s3! oldB
+NewHeapTuple:  s5!
+GatedTupleBefore: [7 7] 5
+GatedTupleFalse: [7 7] 5
+GatedTupleTrue: [3 4] 3
+OobTupleBefore: 77 66
+OobTupleKeepsPrev: 77 66
+HeapOobBefore: keepC keepD
+HeapOobKeepsPrev: keepC keepD
 IntAddTrue: 7
 IntAddFalse: 0
 StrCmpTrue: banana
@@ -72,6 +90,8 @@ LogicalOrCallArg: 14
 LogicalOrHeapFallback: fallback
 LogicalOrPairFallback: 7 8
 LogicalOrNestedSum: 10
+LogicalOrArithFallbackTaken: 7
+LogicalOrArithFallbackLeft: 25
 LogicalOrDefault: -1
 LogicalOrDefaultArg: -2
 LogicalOrArrayDefault: [-1 -1 -1 3 4 5 6 7 -1 -1]
@@ -147,3 +167,108 @@ SmcCondTrue: 7
 SmcCondKeepOld: 99
 SmcCondMulti: 8 9
 SmcCondStr: 42
+ChainTupleBefore: 11 22
+ChainTuple: 5 22
+ChainTupleFresh: 5 7
+ChainTupleGateBefore: 100
+ChainTupleGate: 42
+ChainTupleGateFalseBefore: 100
+ChainTupleGateFalse: 100
+ArithWrapBefore: 11 22
+ArithWrap: 7 22
+ArithWrapChain: 6 0
+MixArith: [3 4] 0
+CallArgBefore: 111
+CallArgMergesSlots: 111
+GatedLeafBefore: 77 88
+GatedLeaf: 77 88
+GatedLeafPass: 8 9
+RangedGateBefore: 11 22
+RangedGate: 5 22
+TupleOrMixed: 5 0
+TupleOrOldBefore: 11 22
+TupleOrOld: 5 -1
+TupleOrBothFailBefore: 11 22
+TupleOrBothFail: 11 22
+InnerOrOperand: 7 9
+HeapChainBefore: oldA oldB
+HeapChain: s3! oldB
+LitTupleA: zzz
+LitTupleB: |
+HeapTupleOr: s3! s9!
+HeapTupleOrBefore: oldC oldD
+HeapTupleOrBothFallback: s7! s7!
+NamedArrMask: [0 2 3] 5 [1 2 3]
+StaticIntoHeapBefore: x1 x2
+StaticIntoHeap: zzz x2
+GatedMaskBefore: [9 9] 99
+GatedMask: [9 9] 99
+GatedMaskOrBefore: [9 9] 99
+GatedMaskOr: [7 7] 17
+ParenRightBefore: seed0
+ParenRight: seed0
+TripleChainBefore: 11 22
+TripleChain: 5 22
+MidLinkFail: 0 7
+ChainFallback: 5 -2
+OrChain3: 5 -2
+OrInArith: 15 10
+MixChain: [2 3] 2
+MixChainFailBefore: [9 9] 99
+MixChainFail: [0 0] 99
+ChainInOperand: 5 9
+ChainInOperandFailBefore: 77 88
+ChainInOperandFail: 77 88
+ChainOrInOperand: -1 9
+SmcFirstCellOffBefore: 88
+SmcFirstCellOff: 88
+SmcFreshOff: 0
+CvCellsOn: 7
+CvCellsOff: 0
+BothAlignedBefore: 11 22
+BothAligned: 6 22
+CallFoldBefore: 99
+CallFold: 9
+CallFoldFailBefore: 99
+CallFoldFail: 99
+PrefixPassBefore: 99
+PrefixPass: -4
+PrefixPassFailBefore: 99
+PrefixPassFail: 99
+LazyRhsSkippedBefore: 11 22
+LazyRhsSkipped: 5 7
+LazyRhsOobBefore: 11 22
+LazyRhsOob: 5 22
+ScalarLazySkippedBefore: 99
+ScalarLazySkipped: 5
+PlainMultiOobBefore: 11 22
+PlainMultiOob: 11 5
+PlainMultiOobFresh: 0 5
+PlainSingleOobBefore: 99
+PlainSingleOob: 99
+ScalarCmpOobBefore: 99
+ScalarCmpOob: 99
+ScalarOrOobBefore: 99
+ScalarOrOob: 99
+CallMergeOobBefore: 11 22
+CallMergeOob: 11 22
+SwapBefore: aax bby
+Swap: bby aax
+SwapPlusOobBefore: 7 8 99
+SwapPlusOob: 8 7 99
+RangedOrScalar: 3
+RangedOrIdent: 3
+RangedOrCallArg: 6
+RangedOrCondValue: 6
+MaskCallGate: 7
+MaskCallValue: 0
+MaskIndex: 5
+MaskCallTuple: 5 2
+MaskSourceIntact: [1 2 3]
+ChainRightHeap: sb sb
+ChainCallTrue: ssa
+ChainCallInnerFalse:  end
+ChainCallOuterFalse:  end
+SeedFreshPair: bb a
+SeedOobPair:  a
+MixedSlotOrGate: 3

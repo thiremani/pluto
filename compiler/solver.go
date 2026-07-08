@@ -21,7 +21,7 @@ type CondMode int
 const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
-	CondArray                  // Array: element-wise filter, keep LHS where condition holds
+	CondArray                  // Array: element-wise mask, LHS where condition holds else 0 (length-preserving)
 	CondOr                     // Fallback OR in value position: first true operand wins
 	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
 )
@@ -49,6 +49,17 @@ func (info *ExprInfo) HasCondScalar() bool {
 	return false
 }
 
+// HasAnyComparison returns true if any slot is a comparison in value position
+// (a scalar conditional or an array mask).
+func (info *ExprInfo) HasAnyComparison() bool {
+	for _, m := range info.CompareModes {
+		if m == CondScalar || m == CondArray {
+			return true
+		}
+	}
+	return false
+}
+
 func (info *ExprInfo) HasFallbackOr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondOr {
@@ -56,6 +67,13 @@ func (info *ExprInfo) HasFallbackOr() bool {
 		}
 	}
 	return false
+}
+
+// IsMask reports whether output slot i is an array mask — a heap-owned,
+// always-yielding value that must be freed if it is not moved into a result
+// slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
+func (info *ExprInfo) IsMask(i int) bool {
+	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
 func (info *ExprInfo) HasCondExpr() bool {
@@ -779,9 +797,10 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
 	// like a single comparison; it is accepted by the conditionCanFail check
-	// below. Every cell must be a scalar: an array cell is a filter, which gate
-	// lowering would silently drop (it ANDs only scalar cells), so reject a
-	// condition with any array cell — not just the first.
+	// below. Every cell must be a scalar: an array cell is a mask (an array
+	// value, not a boolean), which gate lowering would silently drop (it ANDs
+	// only scalar cells), so reject a condition with any array cell — not just
+	// the first.
 	condType := condTypes[0]
 	if anyArrayCell(condTypes) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -1489,9 +1508,9 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 	return
 }
 
-// typeInfixArrayFilter validates that element-wise comparison is supported
-// for an array filter (comparison in value position with at least one array operand).
-func (ts *TypeSolver) typeInfixArrayFilter(leftType, rightType Type, op string, tok token.Token) {
+// typeInfixArrayMask validates that element-wise comparison is supported
+// for an array mask (comparison in value position with at least one array operand).
+func (ts *TypeSolver) typeInfixArrayMask(leftType, rightType Type, op string, tok token.Token) {
 	cmpLeft := leftType
 	cmpRight := rightType
 	if leftType.Kind() == ArrayKind {
@@ -1517,11 +1536,12 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		return Unresolved{}, CondNone
 	}
 
-	// Array filter: comparison in value position with an array operand.
-	// Keep LHS values where comparison holds. For scalar-array, this means
-	// producing an array of scalar LHS values (one per true element).
+	// Array mask: comparison in value position with an array operand. Each cell
+	// yields its LHS where the comparison holds, else 0 (length-preserving). For
+	// scalar-array, this produces an array of the scalar LHS type that broadcasts
+	// the scalar across the array's length.
 	if isValueCmp && (leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind) {
-		ts.typeInfixArrayFilter(leftType, rightType, expr.Operator, expr.Token)
+		ts.typeInfixArrayMask(leftType, rightType, expr.Operator, expr.Token)
 		if leftType.Kind() == ArrayKind {
 			return leftType, CondArray
 		}
@@ -1586,8 +1606,8 @@ func typesResolved(types []Type) bool {
 
 // anyArrayCell reports whether any cell of a value-position condition is an array.
 // A gate is the cell-wise conjunction of scalar comparisons; an array comparison
-// is a filter (it yields an array, not a boolean), so gate lowering only ANDs the
-// scalar cells and silently drops an array cell. A gate condition must therefore
+// is a mask (it yields an array value, not a boolean), so gate lowering only ANDs
+// the scalar cells and silently drops an array cell. A gate condition must therefore
 // have no array cell — checked across every cell, not just the first, so a mixed
 // scalar/array multi-return comparison (Pair > Pair where one slot is an array)
 // is rejected. Shared by statement gates and (cond value) conditions.
@@ -1630,7 +1650,7 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 		condTypes := ts.TypeExpression(cond, true)
 		if typesResolved(condTypes) {
 			if anyArrayCell(condTypes) {
-				// An array cell is a filter, not a scalar boolean; gate lowering
+				// An array cell is a mask, not a scalar boolean; gate lowering
 				// would silently drop it (see anyArrayCell), so reject it here too.
 				ts.Errors = append(ts.Errors, &token.CompileError{
 					Token: cond.Tok(),
@@ -1652,6 +1672,16 @@ func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []
 	// enclosing context owns any loop), so type it non-root: a range identifier
 	// resolves to its iterator type, not a Range.
 	valueTypes := ts.TypeExpression(expr.Value, false)
+
+	// A || in the value arm is the one position still lowered inline with no
+	// branching context (it would panic in compileInfixBasic), so reject it —
+	// value-position || resolves per slot everywhere else.
+	if treeHasFallbackOr(ts.ExprCache, ts.FuncNameMangled, expr.Value) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first",
+		})
+	}
 
 	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
 
@@ -1801,6 +1831,32 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	return
+}
+
+// treeHasFallbackOr reports whether expr's tree contains a bare value-position
+// ||. An array literal resolves a || in a cell locally, so it stays a
+// boundary; a nested (cond value) is scanned through its value arm. The solver
+// rejects a || in a (cond value) value arm with it; the compiler routes ranged
+// || trees to per-iteration staging with it (solver and compiler share the
+// same ExprCache map).
+func treeHasFallbackOr(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
+	if _, ok := ast.IsLogicalOr(expr); ok {
+		if info := cache[key(funcNameMangled, expr)]; info != nil && info.HasFallbackOr() {
+			return true
+		}
+	}
+	switch e := expr.(type) {
+	case *ast.ArrayLiteral:
+		return false
+	case *ast.CondValueExpr:
+		return treeHasFallbackOr(cache, funcNameMangled, e.Value)
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if treeHasFallbackOr(cache, funcNameMangled, child) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ts *TypeSolver) TypeArrayInfix(left, right Type, op string, tok token.Token) Type {
@@ -2254,6 +2310,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
 	ts.ScriptFunc = f.Name
 	defer func() { ts.ScriptFunc = "" }()
+	errsAtEntry := len(ts.Errors)
 	// multiple passes may be needed to infer types for script level function
 	for range 100 {
 		ts.Converging = false
@@ -2263,13 +2320,22 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			return f.OutTypes
 		}
 
+		// A typing error is fatal for this function: TypeBlock aborts on it
+		// before outputs infer, and the error is deterministic, so another
+		// pass would only append the same diagnostic again. Stopping here
+		// keeps the error list append-only with no duplicates, and skips the
+		// "not converging" message — the reported errors are the cause, not
+		// cyclic recursion.
+		if len(ts.Errors) > errsAtEntry {
+			return f.OutTypes
+		}
+
 		// no further progress possible
 		if !ts.Converging {
-			ce := &token.CompileError{
+			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: template.Token,
 				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
-			}
-			ts.Errors = append(ts.Errors, ce)
+			})
 			return f.OutTypes
 		}
 	}

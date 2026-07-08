@@ -25,3 +25,18 @@ res = Inc(x)
 p, q = PairStr(x, y)
     p = MkStr(x) ⊕ "!"
     q = MkStr(y) ⊕ "!"
+
+p, q = LitPair()
+    p = "zzz"
+    q = "bbb"
+
+p, q = LitPair2()
+    p = "aaa"
+    q = "bbb"
+
+a, b = MixK(x)
+    a = [x x]
+    b = x + 10
+
+s = Sum3(xs)
+    s = xs[0] + xs[1] + xs[2]

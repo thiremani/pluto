@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -39,7 +40,7 @@ type Symbol struct {
 //   For function calls (x = f(y)):
 //     - Function produces a new value and writes it to output slot
 //     - This value is MOVED to the destination (ownership transferred)
-//     - Old value in destination is NOT freed (see freeOldValues)
+//     - Old value in destination is NOT freed (see freeExprOldValues)
 //     - Temps passed as inputs are freed by caller after call returns
 //     - Function cleanup skips borrowed params/slots (caller owns them)
 //
@@ -812,53 +813,54 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 	return s
 }
 
-// writeTo stores compiled RHS symbols into destination identifiers.
+// writeTo stores each slot's compiled value into its destination.
 // It delegates per-destination ownership and in-place pointer-slot updates to storeValue.
-func (c *Compiler) writeTo(idents []*ast.Identifier, syms []*Symbol, needsCopy []bool) {
-	for i, ident := range idents {
-		c.storeValue(ident.Value, syms[i], needsCopy[i])
+func (c *Compiler) writeTo(slots []slotAssign) {
+	for _, slot := range slots {
+		c.storeValue(slot.dest.Value, slot.value, slot.needsCopy)
 	}
 }
 
-// computeCopyRequirements determines whether each RHS value needs copying or can transfer ownership.
-// It also returns movedSources - the set of RHS variable names whose ownership was transferred.
-func (c *Compiler) computeCopyRequirements(idents []*ast.Identifier, syms []*Symbol, rhsNames []string) ([]bool, map[string]struct{}) {
-	needsCopy := make([]bool, len(syms))
+// markCopyRequirements decides whether each slot's store must deep-copy or can
+// transfer ownership, setting slot.needsCopy. Returns movedSources — the RHS
+// variable names whose ownership was transferred.
+func (c *Compiler) markCopyRequirements(slots []slotAssign) map[string]struct{} {
 	movedSources := make(map[string]struct{})
 
-	for i, rhsSym := range syms {
+	for i := range slots {
+		slot := &slots[i]
 		// StrG (static strings): immutable, live forever - no copy needed.
-		if IsStrG(rhsSym.Type) {
+		if IsStrG(slot.value.Type) {
 			continue
 		}
 
 		// Temporaries (array literals, function results, expressions): transfer ownership directly.
 		// No copy needed - the temporary's memory becomes owned by the LHS variable.
-		if rhsNames[i] == "" {
+		if slot.rhsName == "" {
 			continue
 		}
 
 		// Named variable on RHS - default to copying for safety
-		needsCopy[i] = true
+		slot.needsCopy = true
 
 		// Check if RHS variable is being overwritten in LHS (enables ownership transfer).
 		// Only allow transfer if this source hasn't already been moved.
 		// This prevents double-free in cases like: a, b = a, a
 		// where the second use of 'a' must copy, not transfer.
-		if _, moved := movedSources[rhsNames[i]]; moved {
+		if _, moved := movedSources[slot.rhsName]; moved {
 			continue
 		}
 
-		for _, lhsIdent := range idents {
-			if lhsIdent.Value != rhsNames[i] {
+		for _, other := range slots {
+			if other.owner.Value != slot.rhsName {
 				continue
 			}
-			needsCopy[i] = false
-			movedSources[rhsNames[i]] = struct{}{}
+			slot.needsCopy = false
+			movedSources[slot.rhsName] = struct{}{}
 			break
 		}
 	}
-	return needsCopy, movedSources
+	return movedSources
 }
 
 func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string) *Symbol {
@@ -921,9 +923,10 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	if !TypeEqual(ptrType.Elem, stored.Type) {
 		updated := GetCopy(oldSym)
 		updated.Type = Ptr{Elem: stored.Type}
-		if !SetExisting(c.Scopes, name, updated) {
-			Put(c.Scopes, name, updated)
-		}
+		// oldSym came from Get above and nothing since touched the scope stack, so
+		// SetExisting always finds the binding — and it must update it in its own
+		// scope (which may be an outer block), not shadow it via Put in the current.
+		SetExisting(c.Scopes, name, updated)
 	}
 }
 
@@ -979,13 +982,13 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 //   - CallExpression writing directly through destination pointers:
 //     The caller passes output pointers to the callee. The callee then applies
 //     normal assignment cleanup when writing to those output params, so caller
-//     freeOldValues must skip.
+//     freeExprOldValues must skip.
 //
 //   - InfixExpression/PrefixExpression/ArrayRangeExpression with pending ranges:
 //     Range-lowered paths free previous output values per iteration inside the
 //     loop body before storing the next value.
 //
-// All other expressions return false so freeOldValues handles cleanup with full
+// All other expressions return false so freeExprOldValues handles cleanup with full
 // assignment context (moved sources and borrowed/non-owning guards).
 func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
 	if ce, isCall := expr.(*ast.CallExpression); isCall {
@@ -1011,6 +1014,29 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Ident
 	}
 }
 
+// slotAssign is one destination slot of an assignment: where the value is
+// written, which identifier owns move/copy decisions (the real destination,
+// even when writing through a temp), the compiled value and the RHS variable
+// it came from ("" for a temporary), whether the store must deep-copy, the
+// value it replaces, and whether the value is the destination's own storage.
+type slotAssign struct {
+	dest       *ast.Identifier
+	owner      *ast.Identifier
+	value      *Symbol
+	rhsName    string
+	needsCopy  bool
+	oldValue   *Symbol
+	destBacked bool
+}
+
+// exprAssign is one right-hand-side expression's assignment: its compiled
+// destination slots and the bounds bit its evaluation recorded (nil = clean).
+type exprAssign struct {
+	expr  ast.Expression
+	bit   llvm.Value
+	slots []slotAssign
+}
+
 // compileAssignments writes expression results into writeIdents while applying
 // ownership/copy rules based on ownershipIdents.
 //
@@ -1022,61 +1048,173 @@ func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Ident
 // that name must resolve to the corresponding write slot during RHS compilation.
 // Conditional lowering guarantees this via compileCondAssignments.
 func (c *Compiler) compileAssignments(writeIdents []*ast.Identifier, ownershipIdents []*ast.Identifier, exprs []ast.Expression) {
-	// Capture old values BEFORE compiling RHS expressions.
-	// This is critical for function calls with Ptr outputs: by the time RHS compilation
-	// finishes, Ptrs already contain NEW values. We must capture old values first.
+	assigns := c.compileExprAssigns(writeIdents, ownershipIdents, exprs)
+	guarded := slices.ContainsFunc(assigns, func(e exprAssign) bool { return !e.bit.IsNil() })
+	if !guarded {
+		c.commitAssignments(assigns)
+		return
+	}
+	c.commitAssignmentsPerExpr(assigns)
+}
+
+// compileExprAssigns captures old destination values, then evaluates each
+// expression under its own bounds guard: a failed check is a failed condition
+// on that expression's lanes only, so sibling expressions in the same
+// statement still commit (a, b = oarr[10], 5 keeps a, sets b).
+func (c *Compiler) compileExprAssigns(writeIdents []*ast.Identifier, ownershipIdents []*ast.Identifier, exprs []ast.Expression) []exprAssign {
+	// Capture old values BEFORE compiling RHS expressions. This is critical
+	// for function calls with Ptr outputs: by the time RHS compilation
+	// finishes, Ptrs already contain NEW values.
 	oldValues := c.captureOldValues(writeIdents)
 
-	// Collect bounds checks emitted while compiling RHS expressions. If any
-	// check fails, skip this assignment and keep prior destination values.
-	guardPtr := c.pushBoundsGuard("stmt_bounds_guard")
-	defer c.popBoundsGuard()
-
-	syms, rhsNames, resCounts := c.compileAssignmentValues(writeIdents, exprs)
-	c.finishAssignmentsWithGuard(writeIdents, ownershipIdents, exprs, oldValues, syms, rhsNames, resCounts, guardPtr)
-}
-
-func (c *Compiler) compileAssignmentValues(writeIdents []*ast.Identifier, exprs []ast.Expression) ([]*Symbol, []string, []int) {
-	syms := []*Symbol{}
-	rhsNames := []string{} // Track RHS variable names (or "" if not a variable)
-	resCounts := []int{}   // Track result counts per expression to identify call destinations
+	assigns := make([]exprAssign, 0, len(exprs))
 	i := 0
 	for _, expr := range exprs {
+		guardPtr := c.pushBoundsGuard("assign_bounds_guard")
 		res := c.compileExpression(expr, writeIdents[i:])
-		resCounts = append(resCounts, len(res))
-
-		var rhsName string
-		if ident, ok := expr.(*ast.Identifier); ok {
-			rhsName = ident.Value
+		var bit llvm.Value
+		if c.stmtBoundsUsed() {
+			bit = c.createLoad(guardPtr, Int{Width: 1}, "assign_bounds_ok")
 		}
-		for range res {
-			rhsNames = append(rhsNames, rhsName)
-		}
+		c.popBoundsGuard()
 
-		syms = append(syms, res...)
+		assigns = append(assigns, c.newExprAssign(expr, bit, res, writeIdents[i:], ownershipIdents[i:], oldValues[i:]))
 		i += len(res)
 	}
-	return syms, rhsNames, resCounts
+	return assigns
 }
 
-func (c *Compiler) finishAssignmentsWithGuard(
-	writeIdents []*ast.Identifier,
-	ownershipIdents []*ast.Identifier,
-	exprs []ast.Expression,
-	oldValues []*Symbol,
-	syms []*Symbol,
-	rhsNames []string,
-	resCounts []int,
-	guardPtr llvm.Value,
-) {
+// newExprAssign zips one expression's compiled results with its destination
+// slots; the ident and old-value slices start at the expression's first slot.
+func (c *Compiler) newExprAssign(expr ast.Expression, bit llvm.Value, res []*Symbol, dests, owners []*ast.Identifier, olds []*Symbol) exprAssign {
+	var rhsName string
+	if ident, ok := expr.(*ast.Identifier); ok {
+		rhsName = ident.Value
+	}
+	slots := make([]slotAssign, len(res))
+	for j, sym := range res {
+		slots[j] = slotAssign{
+			dest:       dests[j],
+			owner:      owners[j],
+			value:      sym,
+			rhsName:    rhsName,
+			oldValue:   olds[j],
+			destBacked: c.aliasesDestSlot(dests[j], sym),
+		}
+	}
+	return exprAssign{expr: expr, bit: bit, slots: slots}
+}
+
+// aliasesDestSlot reports whether a compiled value is the destination's own
+// storage: an indirect-return call writes through existing destination slots
+// and returns them, so a skipped commit must not free through such a value —
+// the slot still holds the old value the skip is keeping.
+func (c *Compiler) aliasesDestSlot(ident *ast.Identifier, sym *Symbol) bool {
+	if sym == nil || sym.Type.Kind() != PtrKind {
+		return false
+	}
+	destSym, ok := Get(c.Scopes, ident.Value)
+	return ok && destSym.Type.Kind() == PtrKind && destSym.Val == sym.Val
+}
+
+// commitAssignmentsPerExpr commits each expression's destinations under that
+// expression's bounds bit (nil = unconditional), preserving the statement's
+// simultaneous-assignment order: all writes land before any old value is
+// freed, so a swap (a, b = b, a) never reads a freed payload. A skipped
+// expression frees its temporaries and restores destinations its evaluation
+// may have written through (call outputs), keeping prior values.
+func (c *Compiler) commitAssignmentsPerExpr(assigns []exprAssign) {
+	// Guarded destinations must be pointer-backed so the write and skip paths
+	// converge; a fresh one gets a zero seed to keep. The seed is what a
+	// commit replaces, so it becomes the slot's oldValue — the commit path
+	// frees an owned heap seed (StrH zero is a live copy) instead of leaking
+	// it, and the skip path keeps it.
+	for _, e := range assigns {
+		if e.bit.IsNil() {
+			continue
+		}
+		for j := range e.slots {
+			if seed := c.ensureSeededDest(e.slots[j].dest, e.slots[j].value); seed != nil {
+				e.slots[j].oldValue = seed
+			}
+		}
+	}
+
+	moved := make([]map[string]struct{}, len(assigns))
+	for k, e := range assigns {
+		moved[k] = c.markCopyRequirements(e.slots)
+		c.withCondBranch(e.bit, "assign_write", func() {
+			c.writeTo(e.slots)
+		}, func() {
+			c.keepPriorOnSkip(e)
+		})
+	}
+
+	for k, e := range assigns {
+		c.withCondBranch(e.bit, "assign_free", func() {
+			c.freeExprOldValues(e, moved[k])
+		}, nil)
+	}
+}
+
+// keepPriorOnSkip is the skip path for one expression's assignment (guard
+// false or bounds failure): free the temporaries its evaluation produced and
+// restore its destinations to their captured prior values, so the skipped
+// assignment leaves everything as it was.
+func (c *Compiler) keepPriorOnSkip(e exprAssign) {
+	c.freeSkippedTemps(e)
+	c.restoreOldValues(e.slots)
+}
+
+// freeSkippedTemps frees a skipped expression's temporaries, except values
+// backed by destination storage: a skipped call never wrote those slots, so
+// they still hold the old value the skip is keeping.
+func (c *Compiler) freeSkippedTemps(e exprAssign) {
+	if _, isIdent := e.expr.(*ast.Identifier); isIdent {
+		return
+	}
+	for _, slot := range e.slots {
+		if slot.destBacked {
+			continue
+		}
+		c.freeTemporarySymbol(slot.value, "temp_free")
+	}
+}
+
+// ensureSeededDest makes a guarded destination pointer-backed so conditional
+// commit paths converge; a fresh destination gets a zero seed as its keep-old
+// value. Returns the seed (nil for an existing destination) so the caller can
+// record it as the value a commit replaces.
+func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) *Symbol {
+	if _, exists := Get(c.Scopes, ident.Value); exists {
+		c.promoteExistingSym(ident.Value)
+		return nil
+	}
+	t := valSym.Type
+	if p, ok := t.(Ptr); ok {
+		t = p.Elem
+	}
+	t = c.bindingSlotType(ident.Value, t)
+	ptr := c.createEntryBlockAlloca(c.mapToLLVMType(t), ident.Value+".mem")
+	zero := c.makeZeroValue(t)
+	c.createStore(zero.Val, ptr, t)
+	Put(c.Scopes, ident.Value, &Symbol{Val: ptr, Type: Ptr{Elem: t}})
+	return zero
+}
+
+func (c *Compiler) finishAssignmentsWithGuard(assigns []exprAssign, guardPtr llvm.Value) {
 	if !c.stmtBoundsUsed() {
-		c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+		c.commitAssignments(assigns)
 		return
 	}
 
 	// Guarded assignments must converge through pointer-backed destinations so
 	// runtime write/skip paths both feed subsequent reads correctly.
-	c.promoteIdentifiersIfNeeded(writeIdents)
+	for _, e := range assigns {
+		for _, slot := range e.slots {
+			c.promoteExistingSym(slot.dest.Value)
+		}
+	}
 	c.withGuardedBranch(
 		guardPtr,
 		"stmt_bounds_ok",
@@ -1084,27 +1222,54 @@ func (c *Compiler) finishAssignmentsWithGuard(
 		"stmt_bounds_skip",
 		"stmt_bounds_cont",
 		func() {
-			c.commitAssignments(writeIdents, ownershipIdents, syms, rhsNames, oldValues, exprs, resCounts)
+			c.commitAssignments(assigns)
 		},
 		func() {
-			c.freeAssignmentTemps(exprs, syms, resCounts)
-			c.restoreOldValues(writeIdents, oldValues)
+			for _, e := range assigns {
+				c.keepPriorOnSkip(e)
+			}
 		},
 	)
 }
 
-func (c *Compiler) commitAssignments(
-	writeIdents []*ast.Identifier,
-	ownershipIdents []*ast.Identifier,
-	syms []*Symbol,
-	rhsNames []string,
-	oldValues []*Symbol,
-	exprs []ast.Expression,
-	resCounts []int,
-) {
-	needsCopy, movedSources := c.computeCopyRequirements(ownershipIdents, syms, rhsNames)
-	c.writeTo(writeIdents, syms, needsCopy)
-	c.freeOldValues(ownershipIdents, oldValues, movedSources, exprs, resCounts)
+// commitAssignments commits a whole statement unconditionally. Copy/move
+// decisions span the statement — the slots are marked as one group, so
+// a, b = b, a moves both sides — and all writes land before any old value is
+// freed, so a swap never reads a freed payload.
+func (c *Compiler) commitAssignments(assigns []exprAssign) {
+	var slots []slotAssign
+	for _, e := range assigns {
+		slots = append(slots, e.slots...)
+	}
+
+	movedSources := c.markCopyRequirements(slots)
+	c.writeTo(slots)
+	for _, e := range assigns {
+		c.freeExprOldValues(e, movedSources)
+	}
+}
+
+// freeExprOldValues frees the destination values one expression's commit
+// replaced, skipping fresh destinations, moved sources, borrowed storage, and
+// expressions that manage destination cleanup themselves (calls writing
+// through destination pointers; ranged lowerings free per iteration).
+func (c *Compiler) freeExprOldValues(e exprAssign, movedSources map[string]struct{}) {
+	owners := make([]*ast.Identifier, len(e.slots))
+	for j, slot := range e.slots {
+		owners[j] = slot.owner
+	}
+	if c.shouldSkipOldValueFree(e.expr, owners) {
+		return
+	}
+	for _, slot := range e.slots {
+		if slot.oldValue == nil || c.skipBorrowedOldValueFree(slot.oldValue) {
+			continue
+		}
+		if _, isMoved := movedSources[slot.owner.Value]; isMoved {
+			continue
+		}
+		c.freeSymbolValue(slot.oldValue, "old_assign")
+	}
 }
 
 func (c *Compiler) promoteExistingSym(name string) {
@@ -1112,12 +1277,6 @@ func (c *Compiler) promoteExistingSym(name string) {
 		return
 	}
 	c.promoteToMemory(name)
-}
-
-func (c *Compiler) promoteIdentifiersIfNeeded(idents []*ast.Identifier) {
-	for _, ident := range idents {
-		c.promoteExistingSym(ident.Value)
-	}
 }
 
 // This returns a pointer into stmtCtxStack storage. Callers must not keep
@@ -1174,67 +1333,24 @@ func (c *Compiler) popCondLHSFrame() {
 	ctx.condStack = ctx.condStack[:len(ctx.condStack)-1]
 }
 
-// freeAssignmentTemps frees RHS temporaries when assignment writes are skipped.
-func (c *Compiler) freeAssignmentTemps(exprs []ast.Expression, syms []*Symbol, resCounts []int) {
-	offset := 0
-	for exprIdx, expr := range exprs {
-		count := resCounts[exprIdx]
-		c.freeTemporary(expr, syms[offset:offset+count])
-		offset += count
-	}
-}
-
 // restoreOldValues writes captured destination values back after a skipped
 // assignment path where RHS evaluation may have updated pointer-backed slots.
-func (c *Compiler) restoreOldValues(writeIdents []*ast.Identifier, oldValues []*Symbol) {
-	for i, ident := range writeIdents {
-		oldVal := oldValues[i]
-		if oldVal == nil {
+func (c *Compiler) restoreOldValues(slots []slotAssign) {
+	for _, slot := range slots {
+		if slot.oldValue == nil {
 			continue
 		}
-		sym, exists := Get(c.Scopes, ident.Value)
+		sym, exists := Get(c.Scopes, slot.dest.Value)
 		if !exists {
 			continue
 		}
 		if ptrType, ok := sym.Type.(Ptr); ok {
-			c.createStore(oldVal.Val, sym.Val, ptrType.Elem)
+			c.createStore(slot.oldValue.Val, sym.Val, ptrType.Elem)
 			continue
 		}
 		// Fallback for non-pointer symbols (defensive; guarded assignment paths
 		// normally promote existing destinations before branching).
-		Put(c.Scopes, ident.Value, oldVal)
-	}
-}
-
-// freeOldValues frees old values after stores complete.
-// Skips: nil values (new variables), moved values, and expressions that
-// manage old-value cleanup internally.
-//
-// Call results are skipped because function return values are moved (ownership
-// transferred) to destination identifiers.
-func (c *Compiler) freeOldValues(ownershipIdents []*ast.Identifier, oldValues []*Symbol, movedSources map[string]struct{}, exprs []ast.Expression, resCounts []int) {
-	i := 0
-	for exprIdx, expr := range exprs {
-		// Skip expressions that handle destination old-value ownership themselves.
-		dest := ownershipIdents[i : i+resCounts[exprIdx]]
-		if c.shouldSkipOldValueFree(expr, dest) {
-			i += resCounts[exprIdx]
-			continue
-		}
-		for j := 0; j < resCounts[exprIdx]; j++ {
-			idx := i + j
-			if oldValues[idx] == nil {
-				continue
-			}
-			if c.skipBorrowedOldValueFree(oldValues[idx]) {
-				continue
-			}
-			if _, moved := movedSources[ownershipIdents[idx].Value]; moved {
-				continue
-			}
-			c.freeSymbolValue(oldValues[idx], "old_assign")
-		}
-		i += resCounts[exprIdx]
+		Put(c.Scopes, slot.dest.Value, slot.oldValue)
 	}
 }
 
@@ -1721,7 +1837,7 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 		switch mode {
 		case CondArray:
-			res = append(res, c.compileArrayFilter(expr.Operator, left[i], right[i], info.OutTypes[i]))
+			res = append(res, c.compileArrayMask(expr.Operator, left[i], right[i], info.OutTypes[i]))
 		case CondScalar:
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
@@ -1781,6 +1897,41 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 	// Everything else is a temporary - free heap types
 	for _, sym := range syms {
 		c.freeTemporarySymbol(sym, "temp_free")
+	}
+}
+
+// freeConsumedTemporary frees expr's temporaries on the evaluation's straight
+// line and records the free against expr's condLHS frame entry, so the
+// extraction cleanups — the unmoved-mask sweep and the retained-temp
+// releases, which track these same symbols — skip the released payload. Only
+// valid where the free dominates the extraction's branch arms: a free inside
+// one arm of a runtime branch (a collector's cell push, a per-iteration
+// release) must use freeTemporary, or the compile-time mark would poison the
+// other arm.
+func (c *Compiler) freeConsumedTemporary(expr ast.Expression, syms []*Symbol) {
+	c.freeTemporary(expr, syms)
+	c.markFreedFrameValues(expr, syms)
+}
+
+// markFreedFrameValues marks expr's frame-stashed values borrowed after a
+// consumer freed them. Only slots whose value identity matches what was freed
+// are marked: a consumer freeing a value merely derived from a frame slot (a
+// cond_lhs phi, an LHS-or-zero select) did not release the retained payload.
+func (c *Compiler) markFreedFrameValues(expr ast.Expression, syms []*Symbol) {
+	frame := c.currentCondLHSFrame()
+	if frame == nil {
+		return
+	}
+	lhsSyms, ok := frame[key(c.FuncNameMangled, expr)]
+	if !ok {
+		return
+	}
+	for _, freed := range syms {
+		for _, sym := range lhsSyms {
+			if sym.Val == freed.Val {
+				sym.Borrowed = true
+			}
+		}
 	}
 }
 
@@ -2687,11 +2838,14 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 			end++
 		}
 
-		lowered := make([]*Symbol, 0, end-offset)
+		// Free through the compiled symbols, not the ABI-lowered wrappers, so
+		// a frame-substituted argument keeps its value identity and the free
+		// is recorded against the frame entry.
+		compiled := make([]*Symbol, 0, end-offset)
 		for i := offset; i < end; i++ {
-			lowered = append(lowered, callArgs[i].Lowered)
+			compiled = append(compiled, callArgs[i].Symbol)
 		}
-		c.freeTemporary(expr, lowered)
+		c.freeConsumedTemporary(expr, compiled)
 		offset = end
 	}
 }
@@ -3012,7 +3166,13 @@ func (c *Compiler) copyArray(arr llvm.Value, elemType Type) llvm.Value {
 func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 	switch sym.Type.Kind() {
 	case StrKind:
-		// Deep copy the string - result is always heap-allocated
+		// A static string is immortal, so it never needs an owned copy — return
+		// it as-is. A store into a heap-string slot makes the StrH copy through
+		// the store's coercion (coerceSymbolForType); a store into a StrG slot
+		// keeps it static. Only heap strings are deep-copied here.
+		if IsStrG(sym.Type) {
+			return sym
+		}
 		copiedStr := c.copyString(sym.Val)
 		return &Symbol{
 			Val:      copiedStr,

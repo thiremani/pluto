@@ -12,8 +12,9 @@ sInfix = ""
 sInfix = sInfix ⊕ arr[j]
 "LeakInfixStrOOB: -sInfix"
 
-# Direct call path: a StrG return flowing into an inferred-StrH slot must not
-# free the old destination when a later RHS value trips the statement bounds guard.
+# Direct call path: expressions commit independently — the clean StrG-returning
+# call overwrites (freeing the old heap value exactly once) while the OOB
+# sibling keeps its prior value.
 guardKeep = "keep" ⊕ ""
 guardOther = "seed" ⊕ ""
 guardKeep, guardOther
@@ -30,3 +31,22 @@ nums = [1 2]
 p = 123
 p = -nums[0:4]
 "LeakPrefixNumOOB: -p"
+
+# A skipped indirect-return call leaves existing destination slots untouched:
+# cleanup must not free through them (the slot holds the value being kept).
+# Fresh temp outputs of the same skipped call are freed (their zero seeds).
+dcS = "keep" ⊕ ""
+"DirectCallOobBefore: -dcS"
+dcS = Id(arr[9])
+"DirectCallOob: -dcS"
+dcS = Id(arr[1])
+"DirectCallOk: -dcS"
+dcM = "old" ⊕ "M"
+"MixSkippedBefore: -dcM"
+dcM, dcN = PairH(arr[9], "z")
+dcN2 = dcN ⊕ "|"
+"MixSkipped: -dcM -dcN2"
+dcM2 = "old" ⊕ "2"
+"MixOkBefore: -dcM2"
+dcM2, dcN3 = PairH(arr[0], "z")
+"MixOk: -dcM2 -dcN3"

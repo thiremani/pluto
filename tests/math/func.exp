@@ -4,7 +4,7 @@ SquareArr: [1 4 9 25]
 
 SquareRange: 4
 SquareArrRange: 9
-SquareArrFilter: [25]
+SquareArrMask: [0 0 0 25]
 SquareArrRangeFilter: 0
 SquareArrRangeFilterKeepPrev: 99
 SquareCallOOBKeepPrev: 11
@@ -21,8 +21,8 @@ SquareArrSelfCondFail: [1 2 3]
 SquareArrSelfNoMatch: [0 0 0]
 SquareArrSelfMixed: [4 9 0]
 
-NestedFilter: [5]
-NestedSquareFilter: [25]
+NestedMask: [0 0 0 5]
+NestedSquareMask: [0 0 0 25]
 
 SumSquaresBothTrue: 74
 SumSquaresOneFalse: 0

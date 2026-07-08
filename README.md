@@ -143,11 +143,11 @@ b = Square(2.2)          # float specialization
 c = Square(arr)          # squares each array element
 a, b, c
 
-# Range and filter (non-accumulated)
+# Range, mask, and filter (non-accumulated)
 d = Square(1:3)          # range: final iteration result
 e = Square(arr[1:3])     # array-range: final iteration result
-f = Square(arr > 3)      # filtered array
-g = Square(arr[1:3] > 3) # filtered array-range
+f = Square(arr > 3)      # element-wise mask: each element kept where > 3, else 0
+g = Square(arr[1:3] > 3) # array-range filter: final iteration result
 d, e, f, g
 
 # Accumulation forms
@@ -162,11 +162,11 @@ Output:
 
 ```text
 25 4.84 [1 4 9 25]
-4 9 [25] 0
+4 9 [0 0 0 25] 0
 [1 4] [4 9] [0 4] [0 9 25]
 ```
 
-No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a filtered view. `arr > 3` filters the array to elements greater than 3 and passes that subset through.
+No generics syntax, no type parameters. Write the template once — call it with a scalar, an array, or a masked array. `arr > 3` masks the array element-wise — each element kept where it's greater than 3, else 0 (same length) — and passes that through.
 
 Generated code is equivalent to handwritten specialized code. There is no runtime overhead.
 
@@ -195,7 +195,7 @@ x = [1 2 3 4 5]
 y = [1.1 2.2 3.3]
 ```
 
-Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce filtered views that work anywhere an array does.
+Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
 
 ---
 

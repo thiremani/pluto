@@ -29,6 +29,21 @@ x = i + 1
 This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
 value, so `x = 5`.
 
+Distinct drivers nest in source order, so collecting over two ranges walks
+their cartesian product:
+
+```pluto
+a = 0:2
+b = 0:3
+[a + b]
+```
+
+produces:
+
+```pluto
+[0 1 2 1 2 3]
+```
+
 ## Calls, Infix, And Prefix
 
 Calls, infix operators, and prefix operators all follow the same rule:
@@ -63,7 +78,10 @@ each yielded value, and the root assignment keeps the final result.
 
 ## Comparisons, Skip, And Fallback
 
-Comparisons in value position are filters, not booleans.
+Comparisons in value position over a range *stream* are filters (yield-or-skip),
+not booleans. (A comparison on a materialized array is instead an element-wise
+*mask* that keeps each element or zeros it — see
+[Pluto Conditional Value Semantics](Pluto%20Conditional%20Value%20Semantics.md).)
 
 ```pluto
 i > 2
@@ -345,6 +363,46 @@ arr = [i + 1]
 ```
 
 `arr` becomes `[1 2 3 4 5]`.
+
+## Self-Reference: Fold
+
+When the destination also appears on the right-hand side of a ranged
+assignment, each iteration reads the value the previous iteration wrote — the
+statement folds over the iteration domain instead of keeping only the last
+independent value.
+
+```pluto
+i = 1:5
+res = 0
+res = res + i
+```
+
+steps through `1, 3, 6, 10`, so `res` ends as `10`. The same rule accumulates
+arrays through concatenation:
+
+```pluto
+m = 0:3
+acc = []
+acc = acc ⊕ [m]
+```
+
+grows `acc` one element per iteration, ending as `[0 1 2]`. Indexed reads fold
+the same way: `x = x + arr[k]` over `k = 0:5` sums the array into `x`.
+
+## Collection Commutes With Element-Wise Operations
+
+Applying an element-wise operation to a collected array gives the same result
+as collecting the per-iteration values:
+
+```pluto
+n = 0:5
+√[n]    # collect n, then element-wise √ over the array
+[√n]    # √ per iteration, then collect
+```
+
+Both produce `[0 1 1.41421 1.73205 2]`. Streams and materialized arrays agree
+wherever both readings exist; the difference is only *when* the array comes
+into being.
 
 ## Singleton Arrays
 

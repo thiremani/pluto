@@ -35,6 +35,20 @@ comparison (`Pair > Pair`, including string pairs) likewise gates on the
 conjunction of its cells — every cell must hold. Both forms work in any condition
 slot (statement gate, `(cond value)`, array cell).
 
+```pluto
+g = 99
+g = Pair(1, 2) > Pair(0, 1)  7   # 1 > 0 and 2 > 1 -> gate on,  g = 7
+g = Pair(1, 2) > Pair(1, 5)  8   # 1 > 1 fails     -> gate off, g stays 7
+```
+
+The multi-cell AND is not a conjunction operator smuggled into the gate — it is
+the only single-bit reading of a per-slot expression in a position that asks one
+question: *did it yield?* A multi-value expression yields when it produces its
+complete value, i.e. every slot yields. The same reading gives a `||` gate its
+OR semantics (its yield flag — `a > 2 || b > 3` yields when either side does),
+and is why an **array cell is rejected** in a gate: a mask always yields, so a
+gate over one would look meaningful while testing nothing.
+
 ### Conditions are value positions
 
 A condition is itself a value position: a comparison yields its LHS and chains,
@@ -173,8 +187,80 @@ Spacing separates cells, so parentheses also control cell count:
 [(a > 3 b < 5) || 10]    # one cell
 ```
 
-A filter is different: `arr > k` drops elements that fail rather than zeroing
-them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
+A direct array comparison follows the same rule element-wise: `arr > k` is a
+**mask** — each cell keeps its left value where the comparison holds, else 0, *in
+place* (length- and position-preserving). It is the scalar "yield the left
+operand, else 0" applied per element, so it stays consistent with the collector
+cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips to the
+shorter length, `arr > scalar` spans the array and broadcasts the scalar.
+
+```pluto
+[1 3 5 7] > [0 4 4 8]    # [1 0 5 0]   (failed cells masked to 0, in place)
+[4 8 1] > 3              # [4 8 0]      (array length, scalar broadcasts)
+[1 3 5 7] > [0 4]        # [1 0]        (zip to min length; surplus dropped)
+```
+
+A failed comparison means "this element did not pass" (0 in place); a missing
+element from a length mismatch is dropped, never zero-filled — so no fabricated 0
+ever reaches a value. Strings stay lexicographic. (A range-driven comparison over
+a *stream* still skips rather than masks — see
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md).)
+
+## Multi-return comparisons
+
+A comparison over multi-valued operands (`Pair(...) > Pair(...)`,
+`Mix(...) > Mix(...)`) resolves **per slot** in value position — each slot behaves
+exactly as the single-value comparison would, independent of its siblings, with no
+all-or-nothing. An array slot is an element-wise mask (it overwrites its target). A
+scalar slot yields its left operand where the comparison holds, and otherwise keeps
+the target's prior value — `0` for a fresh target, the existing value for an
+existing one — the same keep-old-on-false a bare comparison gives.
+
+```pluto
+a, b  = Pair(1, 5) > Pair(2, 4)   # 0 5      (fresh: 1 > 2 keeps 0; 5 > 4 -> 5)
+r, n  = Mix(2) > Mix(1)           # [2 3] 2  (array slot masks; scalar slot yields)
+n2 = 99
+r2, n2 = Mix(1) > Mix(2)          # [0 0] 99 (array overwrites; scalar 1 > 2 keeps 99)
+```
+
+Per-slot resolution follows the value through its expression. A slot's conditions
+merge along dataflow: chaining a multi-return comparison chains each slot
+(`Pair > Pair < Pair` — the leftmost operand binds per slot, its conditions AND
+slot-wise), and arithmetic over one stays per slot (`(Pair(5, 7) > Pair(1, 8)) +
+Pair(0, 0)` → `5 0` fresh — the failing slot keeps old and its combine never
+runs). A `||` falls back **per slot**: slot *i* takes the right side only when
+slot *i* of the left failed to yield, a fallback beats keep-old, and a slot where
+both sides fail keeps its old value (`Pair(5, 7) > Pair(1, 8) || Pair(0, 0)` →
+`5 0`). A `||` inside an operand resolves to its value before the compare
+(`Pair(a > 2 || 7, b) > Pair(1, 1)`). Array slots always yield (a mask is a
+value), so `||` only ever affects scalar slots.
+
+Slots merge where an expression produces its outputs together: a **call's**
+outputs all share every argument's condition (ANDed), so `Sum2(Pair(5, 7) >
+Pair(1, 8))` is gated whole — a failing argument comparison skips the call and
+keeps old, the same hoisting rule a scalar call argument gets
+(`q = Sum2(k > 9, 3)` keeps `q` when `k <= 9`).
+
+The cell-wise **AND** (every cell must hold) applies only where a multi-cell
+comparison is a **gate/condition** (`Pair(1, 2) > Pair(0, 1)  value`, including
+chained gates `Pair > Pair < Pair  value`) — never to the value itself. A ranged
+statement condition gates iterations without changing the value's per-slot
+semantics.
+
+Operands are evaluated eagerly (once); only the yielding combine and the commit
+are gated per slot. One form is **rejected at compile time**: a value-position
+`||` inside a `(cond value)`'s **value arm** (`(c > 0  a > 2 || 7)`) — that arm
+still lowers inline with no branching context. Compute the value first.
+
+An **out-of-bounds read is a failed condition on the lanes it feeds**, merged
+by the same rules: a plain read no-ops its assignment (`x = arr[oob]` keeps
+old), sibling expressions in one statement commit independently
+(`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
+argument keeps that call's outputs old as a unit), comparisons and `||`
+fallbacks fed by an OOB read keep old rather than judging a fabricated zero,
+and an unevaluated `||` right side cannot fail anything. The one place OOB
+still reads as `0` is a **collector cell over an explicit range** — the
+documented full-control opt-in.
 
 ## Why this model
 
@@ -188,18 +274,21 @@ them. See [Pluto Range Semantics](Pluto%20Range%20Semantics.md).
 ## Status
 
 - **Implemented:** statement gates (keep-old); `||` fallback in value and
-  condition position; value-position comparisons (yield the left operand);
-  conditions are value positions, so chained comparisons gate directly
-  (`i > 2 < 8`, leftmost-binding) in every condition slot; collector zero-fill;
-  array filters; the parenthesized `(cond value)` expression (local resolution to
+  condition position (per slot over multi-return values); value-position
+  comparisons (yield the left operand), resolved per slot through chains,
+  arithmetic, and `||` by one extraction pass; conditions are value positions,
+  so chained comparisons gate directly (`i > 2 < 8`, leftmost-binding, including
+  chained multi-return gates) in every condition slot; collector zero-fill;
+  array masks (element-wise, length-preserving); the parenthesized `(cond value)` expression (local resolution to
   zero, with `|| fallback` and array-cell zero-fill), including per-cell use
   inside array literals.
 - **Conjunction conditions:** every condition slot accepts a comma-AND list
   (`a > 2, b > 3`) and a multi-cell comparison (`Pair(1, 2) > Pair(0, 1)`, gating
   on the cell-wise AND — every cell must hold). Heap operands (e.g. string cells
   via `⊕`) are freed after gating.
-- **Transitional inconsistency:** `(cond value)` resolves **locally** to zero,
-  but a bare value-position comparison (`a > 2`) still **propagates** (keep-old).
+- **Transitional inconsistency:** `(cond value)`, array cells, and array masks
+  resolve **locally** to zero, but a bare value-position comparison (`a > 2`) and a
+  multi-return comparison's scalar slots still **propagate** (keep-old on false).
   So `(a > 2 10) + 1` is `1` when `a <= 2` (local zero), while `(a > 2) + 1`
   keeps the old value. They agree for new variables and inside array cells; they
   differ only for existing variables and nested arithmetic.

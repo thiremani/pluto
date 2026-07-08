@@ -479,7 +479,7 @@ j = 0:5:i`,
 	}
 }
 
-func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
+func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
@@ -505,7 +505,7 @@ func TestArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
-	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as filter")
+	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as element-wise mask (CondArray)")
 }
 
 func TestArrayConditionEmitsSingleDiagnostic(t *testing.T) {
@@ -555,6 +555,96 @@ func TestMixedArrayScalarStatementConditionRejected(t *testing.T) {
 		}
 	}
 	require.Truef(t, found, "expected array-cell rejection, got: %v", ts.Errors)
+}
+
+func TestChainedTupleComparisonTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	// Pair returns two values; a chained comparison over them (Pair < Pair > Pair)
+	// resolves per slot — each slot chains like a single-value comparison — so
+	// the solver accepts it and types both outputs.
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "chainedTupleCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "a, b = Pair(5, 7) < Pair(4, 9) > Pair(2, 6)"
+	sl := lexer.New("chainedTupleCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Emptyf(t, ts.Errors, "chained tuple comparison should type cleanly, got: %v", ts.Errors)
+}
+
+func TestInnerFallbackOrTupleComparisonTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	// A value-position || nested in a multi-return comparison operand
+	// (Pair(5 > 2 || 7, 9) > Pair(1, 1)) resolves during extraction like any
+	// other per-slot condition, so the solver accepts it.
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "innerOrTupleCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "px, py = Pair(5 > 2 || 7, 9) > Pair(1, 1)"
+	sl := lexer.New("innerOrTupleCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Emptyf(t, ts.Errors, "inner-|| tuple comparison should type cleanly, got: %v", ts.Errors)
+}
+
+func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
+	ctx := llvm.NewContext()
+	// A || in a (cond value) value arm is still lowered inline with no branching
+	// context (it would panic in compileInfixBasic), so the solver rejects it —
+	// in any context, and exactly once despite fixpoint re-typing.
+	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
+	cc := NewCodeCompiler(ctx, "condValArmOrCmp", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "px, py = Pair((1 > 0 0 > 1 || 7), 9) > Pair(1, 1)"
+	sl := lexer.New("condValArmOrCmp.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "|| in a (cond value) value arm should emit one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
+}
+
+func TestCondValueArmOrRejectedOnceInFunction(t *testing.T) {
+	ctx := llvm.NewContext()
+	// Function bodies are re-typed on every solver fixpoint pass; a rejection
+	// inside one must be emitted exactly once — not duplicated per pass, and
+	// with no spurious "not converging" cascade.
+	code := "r = BadOr(x)\n    r = (x > 0  x > 2 || 7)"
+	cc := NewCodeCompiler(ctx, "condValArmOrFunc", "", mustParseCode(t, code))
+	require.Empty(t, cc.Compile())
+
+	script := "m = BadOr(5)\n\"-m\""
+	sl := lexer.New("condValArmOrFunc.spt", script)
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Lenf(t, ts.Errors, 1, "function-body rejection should emit exactly one diagnostic, got: %v", ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
 }
 
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
@@ -615,9 +705,9 @@ func TestCondValueDiagnostics(t *testing.T) {
 		},
 		{
 			// A mixed scalar/array multi-return comparison cannot gate: the array
-			// cell is a filter, not a boolean, and gate lowering would silently drop
-			// it. MixSA returns (scalar, array) so the array cell is not first —
-			// exercising the all-cells check, not just cell 0.
+			// cell is a mask (an array value), not a boolean, and gate lowering would
+			// silently drop it. MixSA returns (scalar, array) so the array cell is
+			// not first — exercising the all-cells check, not just cell 0.
 			name:        "MixedArrayCellRejected",
 			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
 			script:      "y = (MixSA(5) > MixSA(3)  7)",
@@ -724,7 +814,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
-func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
+func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())
 	funcCache := make(map[string]*Func)
@@ -750,11 +840,11 @@ func TestScalarArrayComparisonInValuePositionIsFilter(t *testing.T) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
-	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as filter")
+	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as element-wise mask (CondArray)")
 
 	outArr, ok := info.OutTypes[0].(Array)
-	require.True(t, ok, "expected scalar-array filter output type to be array")
-	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array filter should keep scalar LHS element type")
+	require.True(t, ok, "expected scalar-array mask output type to be array")
+	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array mask should keep scalar LHS element type")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {

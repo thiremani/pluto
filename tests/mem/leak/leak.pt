@@ -3,3 +3,7 @@ out = Id(x)
 
 out = Static()
     out = "static"
+
+p, q = PairH(x, y)
+    p = "p" ⊕ x
+    q = "q" ⊕ y
