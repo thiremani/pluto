@@ -155,13 +155,13 @@ ChainKeepAfter: 99
 ChainLeftmost: [0 0 0 2 2 2 2 2 2 2]
 ChainGateHeap: [3 4 5 6 7]
 ChainCondValHeap: [0 0 0 3 4 5 6 7 0 0]
-RootCondPrintTrue:
-10
-RootCondPrintFalse:
+RootPrintCmpTrue:
+1
+RootPrintCmpFalse:
 0
-RootChainPrint:
-25
-RootChainPrintFalse:
+RootPrintAndTrue:
+1
+RootPrintAndFalse:
 0
 SmcCondTrue: 7
 SmcCondKeepOld: 99
@@ -223,8 +223,8 @@ ChainOrInOperand: -1 9
 SmcFirstCellOffBefore: 88
 SmcFirstCellOff: 88
 SmcFreshOff: 0
-CvCellsOn: 7
-CvCellsOff: 0
+CvCellsOn: 7 7
+CvCellsPerSlot: 7 0
 BothAlignedBefore: 11 22
 BothAligned: 6 22
 CallFoldBefore: 99

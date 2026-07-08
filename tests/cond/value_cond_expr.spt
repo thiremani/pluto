@@ -443,8 +443,8 @@ lorBoundarySkip = 1 > 5 || 2 > 6 33 > 0 || -1
 "LogicalOrBoundarySkipKeepsDefault: -lorBoundarySkip"
 
 # A value-position comparison used as a (scalar) collector cell resolves locally
-# per cell — zero-fill on false, the LHS on true — exactly like the ranged form
-# and like (cond value). It is NOT a gate over the whole literal: a single failed
+# per cell — zero-fill on false, the LHS on true — exactly like the ranged form.
+# It is NOT a gate over the whole literal: a single failed
 # cell does not empty the array or keep the old value, and sibling cells are
 # independent. (Regression: scalar cells used to be lifted into a statement gate,
 # so `[a > 99]` collapsed to `[]` and `[a > 2  a > 99]` to `[]`.)
@@ -469,50 +469,50 @@ heapCmpFalse = [MkStr(b) > "zzz"]
 heapCmpMulti = [MkStr(a) > "a"  MkStr(b) > "a"]
 "HeapCmpMulti: -heapCmpMulti"
 
-# (cond value) || fallback with a heap value as a scalar collector cell: also
+# && with a heap value and a || fallback as a scalar collector cell: also
 # leak-free on both the value and fallback arms.
-heapCondvalOrTrue = [(a > 2 MkStr(a)) || "def"]
+heapCondvalOrTrue = [a > 2 && MkStr(a) || "def"]
 "HeapCondvalOrTrue: -heapCondvalOrTrue"
-heapCondvalOrFalse = [(b > 2 MkStr(a)) || "def"]
+heapCondvalOrFalse = [b > 2 && MkStr(a) || "def"]
 "HeapCondvalOrFalse: -heapCondvalOrFalse"
 
 # Heap operands in CONDITION position: a comparison used only as a boolean (a
-# gate, a (cond value) condition, an || test) still computes its operands, and a
-# heap operand must be freed even though it is never the result — on the true and
+# gate, an && condition, an || test) still computes its operands, and a heap
+# operand must be freed even though it is never the result — on the true and
 # false arms, on both sides of the comparison, when ANDed, when short-circuited,
 # and per-iteration in a collector. (All leak-checked by the suite.)
-hcCondTrue = (MkStr(a) > "a" 7)
+hcCondTrue = MkStr(a) > "a" && 7
 "HcCondTrue: -hcCondTrue"
-hcCondFalse = (MkStr(a) > "zzz" 7)
+hcCondFalse = MkStr(a) > "zzz" && 7
 "HcCondFalse: -hcCondFalse"
-hcBothSides = (MkStr(a) > MkStr(b) 7)
+hcBothSides = MkStr(a) > MkStr(b) && 7
 "HcBothSides: -hcBothSides"
 hcAnded = MkStr(a) > "a", MkStr(b) > "a" 7
 "HcAnded: -hcAnded"
-hcOrShortCircuit = (MkStr(a) > "a" || MkStr(b) > "zzz" 7)
+hcOrShortCircuit = (MkStr(a) > "a" || MkStr(b) > "zzz") && 7
 "HcOrShortCircuit: -hcOrShortCircuit"
 # || gate, fall-through: the first heap arm fails (its LHS must be freed) before a
 # later arm wins.
-hcOrFallThrough = (MkStr(a) > "zzz" || MkStr(b) > "a" 7)
+hcOrFallThrough = (MkStr(a) > "zzz" || MkStr(b) > "a") && 7
 "HcOrFallThrough: -hcOrFallThrough"
 # || gate, all arms fail: every heap LHS computed for the comparisons is freed and
-# the gate is false, so the (cond value) resolves to its zero.
-hcOrAllFail = (MkStr(a) > "zzz" || MkStr(b) > "zzz" 7)
+# the && fails, so the fresh destination keeps its zero seed.
+hcOrAllFail = (MkStr(a) > "zzz" || MkStr(b) > "zzz") && 7
 "HcOrAllFail: -hcOrAllFail"
 # || gate short-circuits: a later arm is not evaluated once an earlier one wins.
 # Nothing traps in Pluto, so the observable is the bounds guard — an out-of-bounds
-# read in an arm trips it and skips the cond-value (resolving to zero). arm1 wins
-# => arm2's OOB is NOT evaluated, no trip, gate yields 7; arm1 fails => arm2 IS
-# evaluated, trips, => 0. The 7-vs-0 difference (only arm1's truth changed) proves
-# arm2 is skipped on a win.
+# read in an arm fails the && (the fresh destination keeps its zero seed). arm1
+# wins => arm2's OOB is NOT evaluated, no trip, the && yields 7; arm1 fails =>
+# arm2 IS evaluated, trips, => 0. The 7-vs-0 difference (only arm1's truth
+# changed) proves arm2 is skipped on a win.
 scOob = [1]
-scOrShortCircuit = (1 < 2 || scOob[5] < 5  7)
+scOrShortCircuit = (1 < 2 || scOob[5] < 5) && 7
 "ScOrShortCircuit: -scOrShortCircuit"
-scOrSecondArmRuns = (1 > 2 || scOob[5] < 5  7)
+scOrSecondArmRuns = (1 > 2 || scOob[5] < 5) && 7
 "ScOrSecondArmRuns: -scOrSecondArmRuns"
 
-# Statement-gate || with heap operands — a distinct path from the (cond value) ||
-# slot: compileGate is reached from evalConditions, and per-iteration inside the
+# Statement-gate || with heap operands — a distinct path from the value-position
+# || slot: compileGate is reached from evalConditions, and per-iteration inside the
 # loop for a ranged gate. The heap LHS computed for each arm must be freed on every
 # evaluation. Scalar (arm1 wins), ranged (some iterations admitted), and ranged
 # where every iteration fails both arms (so it computes and frees both heap LHS per
@@ -524,12 +524,12 @@ orGateRanged = MkStr(orR) > "s2" || MkStr(orR) > "zzz" [orR]
 "OrGateRanged: -orGateRanged"
 orGateRangedAllFail = MkStr(orR) > "zzz" || MkStr(orR) > "yyy" [orR]
 "OrGateRangedAllFail: -orGateRangedAllFail"
-hcCondCell = [(MkStr(a) > "a" 7)]
+hcCondCell = [MkStr(a) > "a" && 7]
 "HcCondCell: -hcCondCell"
-hcCondAndValueCell = [(MkStr(a) > "a" MkStr(b))]
+hcCondAndValueCell = [MkStr(a) > "a" && MkStr(b)]
 "HcCondAndValueCell: -hcCondAndValueCell"
 hcRng = 0:3
-hcRangedCond = [(MkStr(hcRng) > "s0" hcRng)]
+hcRangedCond = [MkStr(hcRng) > "s0" && hcRng]
 "HcRangedCond: -hcRangedCond"
 
 # Comparison binds tighter than arithmetic/concat, so `x + y > k` is `x + (y > k)`:
@@ -585,23 +585,24 @@ orWrapHeapCell = [(MkStr(owI) > "s6") ⊕ "!" || "def"]
 orWrapRepeatedCond = [(owI > 2 < 8) * (owI > 2 < 8) || -1]
 "OrWrapRepeatedCond: -orWrapRepeatedCond"
 
-# A complicated per-element/piecewise function is one chain of (cond value) || ...
-# || default, evaluated in order with the first matching branch winning — one
-# pass, in order, and length-preserving (no splitting the domain and concatenating
-# filtered pieces). Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
-owPiecewise = [(owI < 2 -10) || (owI < 5 0) || (owI < 8 owI * owI) || 999]
+# A complicated per-element/piecewise function is one chain of cond && value
+# || ... || default, evaluated in order with the first matching branch winning —
+# one pass, in order, and length-preserving (no splitting the domain and
+# concatenating filtered pieces); && binds tighter than ||, so no parens needed.
+# Here: owI < 2 -> -10, else < 5 -> 0, else < 8 -> owI^2, else 999.
+owPiecewise = [owI < 2 && -10 || owI < 5 && 0 || owI < 8 && owI * owI || 999]
 "OwPiecewise: -owPiecewise"
 
 # Conditions are value-position like the values: a comparison yields its LHS and
 # chains, so a chained comparison gates a range directly — the same `i > 2 < 8`
 # that filters in value position. Works in every condition slot: a statement gate,
-# a (cond value) condition (with or without a || fallback), and a scalar gate.
+# an && condition (with or without a || fallback), and a scalar gate.
 chI = 0:10
 chainGate = chI > 2 < 8 [chI * chI]
 "ChainGate: -chainGate"
-chainCondVal = [(chI > 2 < 8  chI * chI)]
+chainCondVal = [chI > 2 < 8 && chI * chI]
 "ChainCondVal: -chainCondVal"
-chainCondValFb = [(chI > 2 < 8  chI * chI) || -1]
+chainCondValFb = [chI > 2 < 8 && chI * chI || -1]
 "ChainCondValFb: -chainCondValFb"
 chA = 5
 chainScalar = chA > 2 < 8  chA * chA
@@ -621,34 +622,31 @@ chainLeftmost = [2 < chI < 8]
 
 # Heap operands in a chained comparison: the chain reuses one heap LHS across its
 # links, which must be freed exactly once. (A naive cleanup tracked it per link and
-# double-freed it — a crash.) Works in a gate and a (cond value), over both the
+# double-freed it — a crash.) Works in a gate and an && condition, over both the
 # admitted (s3..s7) and failing iterations, with no leak.
 chainGateHeap = MkStr(chI) > "s2" < "s8" [chI]
 "ChainGateHeap: -chainGateHeap"
-chainCondValHeap = [(MkStr(chI) > "s2" < "s8"  chI)]
+chainCondValHeap = [MkStr(chI) > "s2" < "s8" && chI]
 "ChainCondValHeap: -chainCondValHeap"
 
-# A (cond value) as a bare print/root expression, with no enclosing let. Print
-# statements don't set InValueExpr, so typeCondValueExpr must force the cond into
-# value position itself — otherwise the cond types as a plain boolean and is
-# rejected ("must be a comparison that can fail"). The value prints when the cond
-# holds, 0 when it fails. Regression guard for that flip (scalar + chained).
+# In bare print position (no enclosing let) an expression is a condition, not a
+# value: a comparison prints as a boolean (1/0), and && over two comparisons is
+# the short-circuit boolean AND. (Value-position && needs a destination — a
+# non-condition right side is rejected in print position.)
 rootA = 5
-"RootCondPrintTrue:"
-(rootA > 2  10)
+"RootPrintCmpTrue:"
+rootA > 2
 rootB = 1
-"RootCondPrintFalse:"
-(rootB > 2  10)
-rootC = 5
-"RootChainPrint:"
-(rootC > 2 < 8  rootC * rootC)
-rootD = 1
-"RootChainPrintFalse:"
-(rootD > 2 < 8  rootD * rootD)
+"RootPrintCmpFalse:"
+rootB > 2
+"RootPrintAndTrue:"
+rootA > 2 && rootA > 4
+"RootPrintAndFalse:"
+rootB > 2 && rootA > 4
 
 # Statement-level multi-cell comparison condition: the gate is the cell-wise AND
 # of a multi-return comparison (like a single comparison), with keep-old on
-# failure. Mirrors the (cond value) multi-cell form so the rule holds everywhere.
+# failure.
 smcTrue = Pair(1, 2) > Pair(0, 1) 7
 "SmcCondTrue: -smcTrue"
 smcExist = 99
@@ -865,17 +863,18 @@ coA, coB = Pair(cf > 2 < 8 || -1, 9) > Pair(-10, 1)
 
 # A multi-cell gate asks "did it yield?": every cell must hold. A first-cell
 # failure turns the gate off just like a later cell; a fresh target keeps its
-# zero seed; the same rule holds inside a (cond value) condition.
+# zero seed. Value-position && instead gates per slot: each value slot commits
+# on its own condition slot alone, so one failing cell zeroes only its slot.
 smcFirstOff = 88
 "SmcFirstCellOffBefore: -smcFirstOff"
 smcFirstOff = Pair(1, 2) > Pair(1, 5) 7
 "SmcFirstCellOff: -smcFirstOff"
 smcFreshOff = Pair(1, 2) > Pair(1, 5) 7
 "SmcFreshOff: -smcFreshOff"
-cvCellsOn = (Pair(1, 2) > Pair(0, 1) 7)
-"CvCellsOn: -cvCellsOn"
-cvCellsOff = (Pair(1, 2) > Pair(1, 5) 7)
-"CvCellsOff: -cvCellsOff"
+cvCellsA, cvCellsB = Pair(1, 2) > Pair(0, 1) && Pair(7, 7)
+"CvCellsOn: -cvCellsA -cvCellsB"
+cvCellsC, cvCellsD = Pair(1, 2) > Pair(0, 5) && Pair(7, 7)
+"CvCellsPerSlot: -cvCellsC -cvCellsD"
 
 # Slot conditions merge along dataflow lanes. Both operands aligned: lane i
 # ANDs lane i's bits from each side. A call merges lanes: every argument's
@@ -978,7 +977,7 @@ rB = rI > 2 || rI
 "RangedOrIdent: -rB"
 rC = Double(rI > 2 || 7)
 "RangedOrCallArg: -rC"
-rD = (rI > 2  rI * 2) || 7
+rD = rI > 2 && rI * 2 || 7
 "RangedOrCondValue: -rD"
 
 # A mask consumed by a call argument or an index is freed by that consumer

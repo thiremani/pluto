@@ -1,9 +1,12 @@
 CvTrue: 10
 CvFalseNew: 0
 CvExistingBefore: 42
-CvExistingFalse: 0
+CvExistingFalse: 42
+CvExistingZeroBefore: 42
+CvExistingZero: 0
 CvArithTrue: 11
-CvArithFalse: 1
+CvArithFalse: 0
+CvArithZero: 1
 CvDeep: 23
 CvExprValue: 105
 CvFbTrue: 10
@@ -26,13 +29,13 @@ CvOrFalse: 0
 CvRangeArr: [0 0 0 3 4]
 CvRangeArrCustom: [0 0 0 30 40]
 CvRangeRoot: 4
-CvRangeRootFalseFinal: 0
+CvRangeRootFalseFinal: 1
 CvRangeHeap: s4
 CvRangeOob: 20
 CvArrCellOob: [10 20 0 0 0]
 CvArrCellOobExpr: [20 40 0 0 0]
 CvCellRangeVal: [2 4 6 8 10]
-CvCellMultiDriver: [2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 4 6 8 10]
+CvCellMultiDriver: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 4 6 8 10]
 CvRootArith: 19
 CvRootHeap: his4
 CjBothTrue: 10

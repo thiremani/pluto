@@ -1253,70 +1253,21 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 	return expression
 }
 
+// parseGroupedExpression parses parentheses as pure grouping: one
+// sub-expression closed by ')'. Conditional values are spelled with the
+// operators — `cond && value`, `cond && value || fallback` — not a
+// parenthesized (cond value) form.
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
-	lparen := p.curToken
 	p.nextToken()
 
-	// Parse the leading sub-expression with the same condition-split mode the
-	// statement level uses, so `(cond value)` detection (including attached
-	// prefixes like `a > 2 -b`) is discovered identically in both places.
-	exp := p.parseExpression(LOWEST, prefixSplitAfterCondition)
+	exp := p.parseExpression(LOWEST, prefixSplitNone)
 	if exp == nil {
-		return nil
-	}
-
-	// Plain grouping: a single sub-expression closed by ')'. A bare `(cond)`
-	// (no value) stays an ordinary value-position expression, and a trailing
-	// `|| fallback` binds outside the parens as a normal infix.
-	if p.peekTokenIs(token.RPAREN) {
-		p.nextToken()
-		return exp
-	}
-
-	// (cond value): one or more comma-separated conditions followed by a
-	// space-separated value, mirroring the statement level (conditions are
-	// ANDed). The leading sub-expression must be a condition for this to be a
-	// (cond value); otherwise let expectPeek report the unexpected token.
-	if !p.isCondition(exp) {
-		if !p.expectPeek(token.RPAREN) {
-			return nil
-		}
-		return exp
-	}
-
-	conditions := []ast.Expression{exp}
-	for p.peekTokenIs(token.COMMA) {
-		p.nextToken() // consume the previous condition's final token
-		p.nextToken() // move onto the next condition's first token
-		cond := p.parseExpression(LOWEST, prefixSplitAfterCondition)
-		if cond == nil {
-			return nil
-		}
-		conditions = append(conditions, cond)
-	}
-	if !p.conditionsOk(conditions) {
-		return nil
-	}
-
-	// A condition list with no value is incomplete: `(a > 2, b > 3)` has nothing
-	// to yield. (A single `(cond)` is handled above as plain grouping.)
-	if p.peekTokenIs(token.RPAREN) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: lparen,
-			Msg:   "(cond value) requires a value after the condition(s)",
-		})
-		return nil
-	}
-
-	p.nextToken()
-	value := p.parseExpression(LOWEST, prefixSplitNone)
-	if value == nil {
 		return nil
 	}
 	if !p.expectPeek(token.RPAREN) {
 		return nil
 	}
-	return &ast.CondValueExpr{Token: lparen, Conds: conditions, Value: value}
+	return exp
 }
 
 // assumes current token is token.NEWLINE
