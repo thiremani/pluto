@@ -801,13 +801,13 @@ func (c *Compiler) resolveLogicalSide(fs logicalSlots, side ast.Expression, take
 	before := c.frameMaskKeys()
 	conds, sideTemps := c.prepareSpine(side, nil)
 
-	for i, outType := range fs.outTypes {
+	for i := range fs.outTypes {
 		cond := slotCondAt(conds, i)
 		if takeGate != nil {
 			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", fs.prefix, i))
 		}
 		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("%s_store_%d", fs.prefix, i), func() {
-			c.storeLogicalValue(side, i, outType, fs.slots[i], fs.yields[i])
+			c.storeLogicalValue(side, i, fs)
 		})
 	}
 
@@ -1307,18 +1307,19 @@ func (c *Compiler) withSlotCondBranch(expr ast.Expression, i int, cond llvm.Valu
 // into a slot that outlives the freed source (a past double-free). A static
 // string is left to the store's coercion, which copies only into heap-owned
 // slot types.
-func (c *Compiler) storeLogicalValue(side ast.Expression, i int, outType Type, slot, yield llvm.Value) {
+func (c *Compiler) storeLogicalValue(side ast.Expression, i int, fs logicalSlots) {
+	outType := fs.outTypes[i]
 	val, owned := c.spineSlotValue(side, i, outType)
 	if owned {
 		val.Borrowed = true
 	} else {
-		val = c.derefIfPointer(val, fmt.Sprintf("or_take_val_%d", i))
+		val = c.derefIfPointer(val, fmt.Sprintf("%s_take_val_%d", fs.prefix, i))
 		val = c.deepCopyIfNeeded(val)
 	}
-	coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("or_val_%d", i))
-	c.createStore(coerced.Val, slot, coerced.Type)
+	coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("%s_val_%d", fs.prefix, i))
+	c.createStore(coerced.Val, fs.slots[i], coerced.Type)
 	i1 := Int{Width: 1}
-	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), yield, i1)
+	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), fs.yields[i], i1)
 }
 
 // freeSkippedSlotMask frees the frame mask that slot i of expr would have
