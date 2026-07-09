@@ -343,3 +343,57 @@ ccV = ccI < 2 && ccI > 0 -ccI
 # Parens opening a statement's value are pure grouping.
 ccG = (5 + 4) * 7
 "GroupedStatementOpen: -ccG"
+
+# Nested mixed &&/|| — value position. (a = 5, b = 1.)
+# Grouped || gating an &&'s left.
+nstOrGatesAnd = (a > 9 || b > 0) && 7
+"NstOrGatesAnd: -nstOrGatesAnd"
+nstOrGatesAndF = 3
+"NstOrGatesAndFb: -nstOrGatesAndF"
+nstOrGatesAndF = (a > 9 || b > 9) && 7
+"NstOrGatesAndFail: -nstOrGatesAndF"
+# && chain then || fallback.
+nstAndChainOr = a > 2 && b > 0 && 8 || -1
+"NstAndChainOr: -nstAndChainOr"
+nstAndChainOrF = 3
+"NstAndChainOrFb: -nstAndChainOrF"
+nstAndChainOrF = a > 2 && b > 9 && 8 || -1
+"NstAndChainOrFail: -nstAndChainOrF"
+# || of two &&s: (c1 && v) || (c2 && w).
+nstOrOfAnds = a > 9 && 1 || b > 0 && 2
+"NstOrOfAnds: -nstOrOfAnds"
+nstOrOfAndsF = 3
+"NstOrOfAndsFb: -nstOrOfAndsF"
+nstOrOfAndsF = a > 9 && 1 || b > 9 && 2
+"NstOrOfAndsBothFail: -nstOrOfAndsF"
+# && right side is itself an ||.
+nstAndRightOr = a > 2 && (b > 9 || 99)
+"NstAndRightOr: -nstAndRightOr"
+
+# Nested mixed &&/|| — statement condition.
+nstGateAndChain = a > 2 && b > 0 && a < 9  7
+"NstGateAndChain: -nstGateAndChain"
+nstGateOrInAnd = (a > 9 || b > 0) && a < 9  7
+"NstGateOrInAnd: -nstGateOrInAnd"
+
+# Nested mixed &&/|| — call argument, including a lane-merging call whose
+# nested argument condition fails (keep-old, ownership-critical).
+nstArgOrAnd = Double((a > 9 || b > 0) && 5)
+"NstArgOrAnd: -nstArgOrAnd"
+nstArgOrOfAnds = Double(a > 9 && 5 || b > 0 && 6)
+"NstArgOrOfAnds: -nstArgOrOfAnds"
+nstMergeA = 11
+nstMergeB = 22
+"NstMergeBefore: -nstMergeA -nstMergeB"
+nstMergeA, nstMergeB = Pair(a > 9 && 5 || a > 9 && 6, 7) > Pair(1, 1)
+"NstMergeKeepOld: -nstMergeA -nstMergeB"
+# Heap value through a nested &&/|| call argument (leak-checked by the suite).
+nstHeapArg = MkStr(a > 2 && "a" || "z")
+"NstHeapArg: -nstHeapArg"
+nstHeapArgFb = MkStr(a > 9 && "a" || "z")
+"NstHeapArgFallback: -nstHeapArgFb end"
+
+# Nested &&/|| driven by a range: last yielded value wins.
+nstRi = 0:5
+nstRanged = (nstRi > 2 || nstRi < 1) && nstRi * 10
+"NstRanged: -nstRanged"

@@ -82,3 +82,22 @@ AndFoldOneFails: 55
 AndCondBefore: 9
 AndCondAttachedPrefix: -1
 GroupedStatementOpen: 63
+NstOrGatesAnd: 7
+NstOrGatesAndFb: 3
+NstOrGatesAndFail: 3
+NstAndChainOr: 8
+NstAndChainOrFb: 3
+NstAndChainOrFail: -1
+NstOrOfAnds: 2
+NstOrOfAndsFb: 3
+NstOrOfAndsBothFail: 3
+NstAndRightOr: 99
+NstGateAndChain: 7
+NstGateOrInAnd: 7
+NstArgOrAnd: 10
+NstArgOrOfAnds: 12
+NstMergeBefore: 11 22
+NstMergeKeepOld: 11 22
+NstHeapArg: sa
+NstHeapArgFallback: sz end
+NstRanged: 40
