@@ -744,7 +744,7 @@ func (c *Compiler) finishLogicalSlots(fs logicalSlots, node ast.Expression, temp
 func (c *Compiler) slotMissedGate(fs logicalSlots) func(int) llvm.Value {
 	i1 := Int{Width: 1}
 	return func(i int) llvm.Value {
-		yielded := c.createLoad(fs.yields[i], i1, fmt.Sprintf("%s_need_%d", fs.prefix, i))
+		yielded := c.createLoad(fs.slots[i].yield, i1, fmt.Sprintf("%s_need_%d", fs.prefix, i))
 		return c.builder.CreateNot(yielded, fmt.Sprintf("%s_miss_%d", fs.prefix, i))
 	}
 }
@@ -766,29 +766,37 @@ func (c *Compiler) orSlotConds(conds []llvm.Value, name string) llvm.Value {
 	return res
 }
 
-// logicalSlots is the result state of one value-position ||/&& lowering: per
-// output slot, an alloca for the resolved value and an i1 yield flag. The
-// prefix names the emitted IR after the operator that owns the slots.
+// logicalSlot is one output slot of a value-position ||/&& lowering: the
+// slot's type, the alloca holding its resolved value, and the i1 alloca
+// flagging whether it yielded.
+type logicalSlot struct {
+	outType Type
+	value   llvm.Value // alloca for the resolved value
+	yield   llvm.Value // i1 alloca: did this slot yield?
+}
+
+// logicalSlots is the result state of one value-position ||/&& lowering: one
+// logicalSlot per output slot, plus the prefix that names the emitted IR after
+// the operator that owns the slots.
 type logicalSlots struct {
-	outTypes []Type
-	slots    []llvm.Value
-	yields   []llvm.Value
-	prefix   string
+	slots  []logicalSlot
+	prefix string
 }
 
 func (c *Compiler) newLogicalSlots(outTypes []Type, prefix string) logicalSlots {
 	i1 := Int{Width: 1}
 	i1Ty := c.mapToLLVMType(i1)
 	fs := logicalSlots{
-		outTypes: outTypes,
-		slots:    make([]llvm.Value, len(outTypes)),
-		yields:   make([]llvm.Value, len(outTypes)),
-		prefix:   prefix,
+		slots:  make([]logicalSlot, len(outTypes)),
+		prefix: prefix,
 	}
 	for i, outType := range outTypes {
-		fs.slots[i] = c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("%s_slot_%d.mem", prefix, i))
-		fs.yields[i] = c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("%s_yield_%d.mem", prefix, i))
-		c.createStore(llvm.ConstInt(i1Ty, 0, false), fs.yields[i], i1)
+		fs.slots[i] = logicalSlot{
+			outType: outType,
+			value:   c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("%s_slot_%d.mem", prefix, i)),
+			yield:   c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("%s_yield_%d.mem", prefix, i)),
+		}
+		c.createStore(llvm.ConstInt(i1Ty, 0, false), fs.slots[i].yield, i1)
 	}
 	return fs
 }
@@ -801,7 +809,7 @@ func (c *Compiler) resolveLogicalSide(fs logicalSlots, side ast.Expression, take
 	before := c.frameMaskKeys()
 	conds, sideTemps := c.prepareSpine(side, nil)
 
-	for i := range fs.outTypes {
+	for i := range fs.slots {
 		cond := slotCondAt(conds, i)
 		if takeGate != nil {
 			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", fs.prefix, i))
@@ -820,16 +828,16 @@ func (c *Compiler) resolveLogicalSide(fs logicalSlots, side ast.Expression, take
 // yield flags and loaded values per slot.
 func (c *Compiler) loadLogicalResults(fs logicalSlots) ([]llvm.Value, []*Symbol) {
 	i1 := Int{Width: 1}
-	conds := make([]llvm.Value, len(fs.outTypes))
-	loaded := make([]*Symbol, len(fs.outTypes))
-	for i, outType := range fs.outTypes {
-		yield := c.createLoad(fs.yields[i], i1, fmt.Sprintf("%s_yield_%d", fs.prefix, i))
+	conds := make([]llvm.Value, len(fs.slots))
+	loaded := make([]*Symbol, len(fs.slots))
+	for i, sl := range fs.slots {
+		yield := c.createLoad(sl.yield, i1, fmt.Sprintf("%s_yield_%d", fs.prefix, i))
 		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("%s_zero_%d", fs.prefix, i)), fmt.Sprintf("%s_seed_%d", fs.prefix, i), func() {
-			zero := c.makeZeroValue(outType)
-			c.createStore(zero.Val, fs.slots[i], outType)
+			zero := c.makeZeroValue(sl.outType)
+			c.createStore(zero.Val, sl.value, sl.outType)
 		}, nil)
 		conds[i] = yield
-		loaded[i] = &Symbol{Val: c.createLoad(fs.slots[i], outType, fmt.Sprintf("%s_slot_%d", fs.prefix, i)), Type: outType}
+		loaded[i] = &Symbol{Val: c.createLoad(sl.value, sl.outType, fmt.Sprintf("%s_slot_%d", fs.prefix, i)), Type: sl.outType}
 	}
 	return conds, loaded
 }
@@ -1308,18 +1316,18 @@ func (c *Compiler) withSlotCondBranch(expr ast.Expression, i int, cond llvm.Valu
 // string is left to the store's coercion, which copies only into heap-owned
 // slot types.
 func (c *Compiler) storeLogicalValue(side ast.Expression, i int, fs logicalSlots) {
-	outType := fs.outTypes[i]
-	val, owned := c.spineSlotValue(side, i, outType)
+	sl := fs.slots[i]
+	val, owned := c.spineSlotValue(side, i, sl.outType)
 	if owned {
 		val.Borrowed = true
 	} else {
 		val = c.derefIfPointer(val, fmt.Sprintf("%s_take_val_%d", fs.prefix, i))
 		val = c.deepCopyIfNeeded(val)
 	}
-	coerced := c.coerceSymbolForType(val, outType, fmt.Sprintf("%s_val_%d", fs.prefix, i))
-	c.createStore(coerced.Val, fs.slots[i], coerced.Type)
+	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("%s_val_%d", fs.prefix, i))
+	c.createStore(coerced.Val, sl.value, coerced.Type)
 	i1 := Int{Width: 1}
-	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), fs.yields[i], i1)
+	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), sl.yield, i1)
 }
 
 // freeSkippedSlotMask frees the frame mask that slot i of expr would have
