@@ -39,7 +39,7 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
 }
 
-func TestStatementAndPlacesLaterConditionsInLazyBranch(t *testing.T) {
+func TestStatementAndShortCircuits(t *testing.T) {
 	script := `den = 1:3
 out = den < 0 && (10 ÷ den) > 1 7
 out`
