@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -36,19 +35,19 @@ func (c *Compiler) compileGate(expr ast.Expression) llvm.Value {
 	return c.foldSlotConds(conds)
 }
 
-// andGates ANDs the i1 gates of a list of condition expressions ("did every
-// condition yield?"). Callers pass a non-empty list of comparisons, so each
-// compileGate returns a non-nil gate and the result is non-nil. Bounds-guard
-// folding is the caller's concern (only the statement path needs it).
+// andGates short-circuits the i1 gates of a statement's condition list ("did
+// every condition yield?"). Every entry is a validated failable scalar gate,
+// so compileGate returns a non-nil value. Bounds-guard folding is the caller's
+// concern.
 func (c *Compiler) andGates(exprs []ast.Expression) llvm.Value {
-	var cond llvm.Value
-	for _, expr := range exprs {
-		gate := c.compileGate(expr)
-		if cond.IsNil() {
-			cond = gate
-		} else {
-			cond = c.builder.CreateAnd(cond, gate, "and_cond")
-		}
+	if len(exprs) == 0 {
+		return llvm.Value{}
+	}
+	cond := c.compileGate(exprs[0])
+	for _, expr := range exprs[1:] {
+		cond = c.compileShortCircuitAnd(cond, func() llvm.Value {
+			return c.compileGate(expr)
+		}, "stmt_and")
 	}
 	return cond
 }
@@ -57,10 +56,9 @@ func (c *Compiler) andGates(exprs []ast.Expression) llvm.Value {
 // in the bounds-guard check. The caller must pushBoundsGuard before and
 // popBoundsGuard after.
 func (c *Compiler) evalConditions(exprs []ast.Expression, guardPtr llvm.Value) llvm.Value {
-	// Every condition reaching evalConditions is a comparison: validation rejects
-	// non-comparison gates, and splitCondRanges routes bare range drivers into the
-	// range list rather than here. So compileGate returns a non-nil gate for each,
-	// and since callers pass a non-empty list, cond is non-nil after the loop.
+	// Every expression reaching evalConditions is a validated failable scalar
+	// gate; splitCondRanges routes bare range drivers into the range list. Thus
+	// compileGate returns a non-nil gate for each expression.
 	cond := c.andGates(exprs)
 
 	if c.stmtBoundsUsed() {
@@ -674,7 +672,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 // zero is null), so the slots travel as one unconditional temporary across
 // both commit conventions (move-on-true vs copy-then-free).
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	slots := c.newLogicalSlots(info.OutTypes, or.Operator)
+	slots := c.newLogicalSlots(info.OutTypes)
 
 	lConds := c.resolveLogicalSide(slots, or.Left, nil)
 
@@ -719,7 +717,7 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 		lConds = broadcastConds(c.foldSlotConds(lConds), len(info.OutTypes))
 	}
 
-	slots := c.newLogicalSlots(info.OutTypes, and.Operator)
+	slots := c.newLogicalSlots(info.OutTypes)
 	c.withCondBranch(c.orSlotConds(lConds, "and_some_yielded"), "and_rhs", func() {
 		c.resolveLogicalSide(slots, and.Right, func(i int) llvm.Value {
 			return slotCondAt(lConds, i)
@@ -745,8 +743,8 @@ func (c *Compiler) finishLogicalSlots(slots []logicalSlot, node ast.Expression, 
 func (c *Compiler) slotMissedGate(slots []logicalSlot) func(int) llvm.Value {
 	i1 := Int{Width: 1}
 	return func(i int) llvm.Value {
-		yielded := c.createLoad(slots[i].yield, i1, fmt.Sprintf("%s_need_%d", slots[i].name(), i))
-		return c.builder.CreateNot(yielded, fmt.Sprintf("%s_miss_%d", slots[i].name(), i))
+		yielded := c.createLoad(slots[i].yield, i1, fmt.Sprintf("or_need_%d", i))
+		return c.builder.CreateNot(yielded, fmt.Sprintf("or_miss_%d", i))
 	}
 }
 
@@ -768,30 +766,22 @@ func (c *Compiler) orSlotConds(conds []llvm.Value, name string) llvm.Value {
 }
 
 // logicalSlot is one output slot of a value-position ||/&& lowering: the
-// operator that produced it (for naming emitted IR and recording whether this
-// was an || or an &&), the slot's type, and the allocas holding its resolved
-// value and yield flag. All slots of one lowering share the same operator.
+// slot's type and the allocas holding its resolved value and yield flag.
 type logicalSlot struct {
-	op      string // token.SYM_COND_OR or token.SYM_COND_AND
 	outType Type
 	value   llvm.Value // alloca for the resolved value
 	yield   llvm.Value // i1 alloca: did this slot yield?
 }
 
-// name is the operator's identifier-safe prefix for emitted IR ("or"/"and").
-func (s logicalSlot) name() string { return token.OpName(s.op) }
-
-func (c *Compiler) newLogicalSlots(outTypes []Type, op string) []logicalSlot {
+func (c *Compiler) newLogicalSlots(outTypes []Type) []logicalSlot {
 	i1 := Int{Width: 1}
 	i1Ty := c.mapToLLVMType(i1)
-	name := token.OpName(op)
 	slots := make([]logicalSlot, len(outTypes))
 	for i, outType := range outTypes {
 		slots[i] = logicalSlot{
-			op:      op,
 			outType: outType,
-			value:   c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("%s_slot_%d.mem", name, i)),
-			yield:   c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("%s_yield_%d.mem", name, i)),
+			value:   c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("logical_slot_%d.mem", i)),
+			yield:   c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("logical_yield_%d.mem", i)),
 		}
 		c.createStore(llvm.ConstInt(i1Ty, 0, false), slots[i].yield, i1)
 	}
@@ -809,10 +799,10 @@ func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, 
 	for i, sl := range slots {
 		cond := slotCondAt(conds, i)
 		if takeGate != nil {
-			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", sl.name(), i))
+			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("logical_take_%d", i))
 		}
-		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("%s_store_%d", sl.name(), i), func() {
-			c.storeLogicalValue(side, i, slots)
+		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("logical_store_%d", i), func() {
+			c.storeLogicalValue(side, i, sl)
 		})
 	}
 
@@ -828,13 +818,13 @@ func (c *Compiler) loadLogicalResults(slots []logicalSlot) ([]llvm.Value, []*Sym
 	conds := make([]llvm.Value, len(slots))
 	loaded := make([]*Symbol, len(slots))
 	for i, sl := range slots {
-		yield := c.createLoad(sl.yield, i1, fmt.Sprintf("%s_yield_%d", sl.name(), i))
-		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("%s_zero_%d", sl.name(), i)), fmt.Sprintf("%s_seed_%d", sl.name(), i), func() {
+		yield := c.createLoad(sl.yield, i1, fmt.Sprintf("logical_yield_%d", i))
+		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("logical_zero_%d", i)), fmt.Sprintf("logical_seed_%d", i), func() {
 			zero := c.makeZeroValue(sl.outType)
 			c.createStore(zero.Val, sl.value, sl.outType)
 		}, nil)
 		conds[i] = yield
-		loaded[i] = &Symbol{Val: c.createLoad(sl.value, sl.outType, fmt.Sprintf("%s_slot_%d", sl.name(), i)), Type: sl.outType}
+		loaded[i] = &Symbol{Val: c.createLoad(sl.value, sl.outType, fmt.Sprintf("logical_slot_%d", i)), Type: sl.outType}
 	}
 	return conds, loaded
 }
@@ -848,8 +838,8 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 }
 
 // compileCondExprValue gates value-position cond expressions on the ANDed
-// per-slot conditions: comparisons compose as AND, and a value-position ||
-// contributes its yield flags (fallback resolved during extraction).
+// per-slot conditions: comparisons compose as AND, and value-position ||/&&
+// contribute their yield flags after resolving through logical slots.
 func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
@@ -1085,12 +1075,12 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		numOutputs := len(info.OutTypes)
 		exprSlots := slots[targetIdx : targetIdx+numOutputs]
 
-		// A ranged tree with a value-position || cannot lower inline: a bare
-		// || has no branching context (extraction must pre-resolve it), and
-		// extraction needs bound iterators. Loop first — the per-iteration
+		// A ranged tree with a value-position ||/&& cannot lower inline: the
+		// logical node needs extraction to pre-resolve it, and extraction needs
+		// bound iterators. Loop first — the per-iteration
 		// body re-enters the standard extraction with no pending ranges.
 		if len(c.pendingLoopRanges(info.Ranges)) > 0 && treeHasLogicalCond(c.ExprCache, c.FuncNameMangled, expr) {
-			c.withCondBranch(stmtCond, "ranged_or", func() {
+			c.withCondBranch(stmtCond, "ranged_logical", func() {
 				c.stageCondRangedExpr(expr, exprSlots)
 			}, nil)
 			targetIdx += numOutputs
@@ -1312,16 +1302,15 @@ func (c *Compiler) withSlotCondBranch(expr ast.Expression, i int, cond llvm.Valu
 // into a slot that outlives the freed source (a past double-free). A static
 // string is left to the store's coercion, which copies only into heap-owned
 // slot types.
-func (c *Compiler) storeLogicalValue(side ast.Expression, i int, slots []logicalSlot) {
-	sl := slots[i]
+func (c *Compiler) storeLogicalValue(side ast.Expression, i int, sl logicalSlot) {
 	val, owned := c.spineSlotValue(side, i, sl.outType)
 	if owned {
 		val.Borrowed = true
 	} else {
-		val = c.derefIfPointer(val, fmt.Sprintf("%s_take_val_%d", sl.name(), i))
+		val = c.derefIfPointer(val, fmt.Sprintf("logical_take_val_%d", i))
 		val = c.deepCopyIfNeeded(val)
 	}
-	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("%s_val_%d", sl.name(), i))
+	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("logical_val_%d", i))
 	c.createStore(coerced.Val, sl.value, coerced.Type)
 	i1 := Int{Width: 1}
 	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), sl.yield, i1)

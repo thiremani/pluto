@@ -34,7 +34,8 @@ new = b > 2  x * 3    # b <= 2 -> new = 0
 A statement condition is one expression — comma means positional lists only,
 everywhere. Conjunctions are spelled with the operator: a condition's
 top-level `&&` chain is the statement's condition list, each conjunct
-validated and lowered separately, so `x = a > 2 && b > 3  7` gates on both,
+validated separately and short-circuited left to right, so
+`x = a > 2 && b > 3  7` gates on both,
 and bare range drivers conjoin into iteration domains — `grid = i && j [...]`
 walks the cartesian product, `i < 8 && j > 2  v` a filtered one. A multi-cell
 comparison (`Pair > Pair`, including string pairs) likewise gates on the

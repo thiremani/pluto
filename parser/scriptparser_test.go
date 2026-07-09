@@ -639,8 +639,7 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 		},
 		{
 			// The condition's top-level && flattens into the condition list,
-			// so each conjunct is validated and lowered separately (drivers
-			// nest, comparisons gate) — the old comma-list model.
+			// so each conjunct is validated separately and drivers still nest.
 			name:      "and condition attached prefix starts value",
 			input:     "res = i < 2 && j > 1 -x",
 			condCount: 2,
@@ -1002,7 +1001,7 @@ func TestLogicalAndInArrayCell(t *testing.T) {
 }
 
 func TestParenComparisonStaysPlain(t *testing.T) {
-	// `(a > 2)` with no value is a plain value-position comparison, not a CondValueExpr.
+	// Parentheses preserve a plain value-position comparison.
 	const input = "x = (a > 2)"
 	sp := NewScriptParser(lexer.New("TestParenComparisonStaysPlain", input))
 	program := sp.Parse()

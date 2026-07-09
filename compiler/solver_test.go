@@ -691,6 +691,13 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
+			// Wrapping an always-yielding || in arithmetic does not make it
+			// failable.
+			name:        "WrappedUnfailableOrLeftRejected",
+			script:      "a = 1\nx = ((a > 0 || a) + 1) && 7",
+			expectError: "logical AND in value position requires a conditional left operand",
+		},
+		{
 			// An array lane is a mask (a value, not a boolean), so it cannot
 			// gate: folding or zipping would silently ignore it — the same
 			// rule anyArrayCell enforces for statement gates.
@@ -766,6 +773,16 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			name:        "FallbackTypesMustMatch",
 			script:      "a = 1\nx = a > 0 || \"fallback\"",
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
+		},
+		{
+			name:        "UnfailableFallbackLeftRejected",
+			script:      "a = 1\nx = (a > 0 || a) || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
+			name:        "WrappedUnfailableFallbackLeftRejected",
+			script:      "a = 1\nx = ((a > 0 || a) + 1) || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
 			// Conditions are value-position now, so `a > 0 || b` is a fallback whose

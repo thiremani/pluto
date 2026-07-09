@@ -1890,11 +1890,22 @@ func (c *Compiler) compileLogicalAndCondition(expr *ast.InfixExpression) []*Symb
 	left := c.compileExpression(expr.Left, nil)
 	leftSym := c.derefIfPointer(left[0], "")
 
-	rhsBlock, falseBlock, contBlock := c.createIfElseCont(leftSym.Val, "and_rhs", "and_false", "and_cont")
+	result := c.compileShortCircuitAnd(leftSym.Val, func() llvm.Value {
+		right := c.compileExpression(expr.Right, nil)
+		return c.derefIfPointer(right[0], "").Val
+	}, "and_cond")
+
+	return []*Symbol{{Val: result, Type: I1}}
+}
+
+// compileShortCircuitAnd emits a lazy i1 conjunction. compileRight is invoked
+// with the builder in the true branch, so its instructions execute only when
+// left is true.
+func (c *Compiler) compileShortCircuitAnd(left llvm.Value, compileRight func() llvm.Value, name string) llvm.Value {
+	rhsBlock, falseBlock, contBlock := c.createIfElseCont(left, name+"_rhs", name+"_false", name+"_cont")
 
 	c.builder.SetInsertPointAtEnd(rhsBlock)
-	right := c.compileExpression(expr.Right, nil)
-	rightSym := c.derefIfPointer(right[0], "")
+	right := compileRight()
 	c.builder.CreateBr(contBlock)
 	rhsEnd := c.builder.GetInsertBlock()
 
@@ -1903,13 +1914,12 @@ func (c *Compiler) compileLogicalAndCondition(expr *ast.InfixExpression) []*Symb
 	falseEnd := c.builder.GetInsertBlock()
 
 	c.builder.SetInsertPointAtEnd(contBlock)
-	result := c.builder.CreatePHI(c.Context.Int1Type(), "and_cond")
+	result := c.builder.CreatePHI(c.Context.Int1Type(), name)
 	result.AddIncoming(
-		[]llvm.Value{rightSym.Val, llvm.ConstInt(c.Context.Int1Type(), 0, false)},
+		[]llvm.Value{right, llvm.ConstInt(c.Context.Int1Type(), 0, false)},
 		[]llvm.BasicBlock{rhsEnd, falseEnd},
 	)
-
-	return []*Symbol{{Val: result, Type: I1}}
+	return result
 }
 
 // freeTemporary frees operands that are temporaries (not variables).

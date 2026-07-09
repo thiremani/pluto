@@ -617,7 +617,7 @@ chainKeep = chB > 2 < 8  chB * chB
 # Chaining binds to the leftmost operand (the value-position rule), so the
 # math-natural `2 < i < 8` means `2 < i` — the `< 8` chains onto the constant `2`
 # (2 < 8, always true), not onto `i`. Write the variable first (`i > 2 < 8`) or use
-# comma-AND (`i > 2, i < 8`) for a two-sided bound. This documents the behaviour.
+# `&&` (`i > 2 && i < 8`) for a two-sided bound. This documents the behaviour.
 chainLeftmost = [2 < chI < 8]
 "ChainLeftmost: -chainLeftmost"
 

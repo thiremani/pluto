@@ -746,17 +746,27 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
-// conditionCanFail reports whether a value-position condition can fail (skip) —
-// which a statement gate requires, since an always-yielding condition can never
-// gate. A comparison or chain can fail; a value-position || can only if its final
-// fallback can: `a > 0 || b > 0` fails when both are false, but `a > 0 || b`
-// always yields b.
-func (ts *TypeSolver) conditionCanFail(expr ast.Expression) bool {
+// expressionCanFail reports whether a value-position expression can propagate
+// a failed yield to its parent. Array cells resolve failures locally. A || can
+// fail only when its final fallback can; other nodes propagate a root scalar
+// comparison/&& or a failure from any child.
+func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+	if _, ok := expr.(*ast.ArrayLiteral); ok {
+		return false
+	}
 	if infix, ok := ast.IsLogicalOr(expr); ok {
-		return ts.conditionCanFail(infix.Right)
+		return ts.expressionCanFail(infix.Right)
 	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && info.HasCondExpr()
+	if info != nil && (info.HasCondScalar() || info.HasCondAnd()) {
+		return true
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if ts.expressionCanFail(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
@@ -767,7 +777,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	}
 
 	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
-	// like a single comparison; it is accepted by the conditionCanFail check
+	// like a single comparison; it is accepted by the expressionCanFail check
 	// below. Every cell must be a scalar: an array cell is a mask (an array
 	// value, not a boolean), which gate lowering would silently drop (it ANDs
 	// only scalar cells), so reject a condition with any array cell — not just
@@ -788,7 +798,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	// In value context a comparison yields its LHS (so the condition's type is the
 	// operand type, not i1); it gates as long as it can fail — the gate is the
 	// conjunction of its comparisons ("did the value-position expression yield?").
-	if ts.conditionCanFail(expr) {
+	if ts.expressionCanFail(expr) {
 		return
 	}
 
@@ -1589,35 +1599,6 @@ func anyArrayCell(condTypes []Type) bool {
 	return false
 }
 
-// wrapsPropagatingCond reports whether expr wraps a *propagating* value-position
-// condition — a comparison (CondScalar) or a value-position ||/&& (CondOr,
-// CondAnd) — anywhere in its tree. Those propagate their failure to the whole
-// value (the same gating that drives zero-fill), so a fallback || can attach to
-// a left operand that wraps one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
-//
-// An array cell resolves *locally* (it always produces a value and never
-// propagates a failure outward), so a condition nested inside one does not
-// make the wrapping operand fail — the walk stops at that boundary.
-func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
-	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil {
-		for _, m := range info.CompareModes {
-			if m == CondScalar || m == CondOr || m == CondAnd {
-				return true
-			}
-		}
-	}
-	switch expr.(type) {
-	case *ast.ArrayLiteral:
-		return false
-	}
-	for _, child := range ast.ExprChildren(expr) {
-		if ts.wrapsPropagatingCond(child) {
-			return true
-		}
-	}
-	return false
-}
-
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
 	if !ts.InValueExpr {
 		return ts.typeLogicalGateExpression(expr, left, right, "OR")
@@ -1627,10 +1608,9 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	// Value-position || is left-biased fallback (yield left, else right), so the
-	// left must be able to fail or the fallback is dead. Failable: its root is
-	// conditional, or it wraps a propagating comparison in arithmetic (e.g.
-	// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
-	if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
+	// left must be able to fail or the fallback is dead. Failure may come from
+	// its root or a propagating child, e.g. (i > 2 < 8) ^ 2 || -1.
+	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   "logical OR in value position requires a conditional left operand",
@@ -1689,14 +1669,9 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	}
 
 	// A conditional left gates only if it can fail — an always-yielding ||
-	// (fallback that cannot fail) never gates. A non-conditional left
-	// qualifies only by wrapping a propagating comparison in arithmetic,
+	// never gates. Failure may come from a propagating child in arithmetic,
 	// e.g. (i > 2 < 8) ^ 2 && v.
-	leftGates := ts.conditionCanFail(expr.Left)
-	if !leftGates && (leftInfo == nil || !leftInfo.HasCondExpr()) {
-		leftGates = ts.wrapsPropagatingCond(expr.Left)
-	}
-	if !leftGates {
+	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   "logical AND in value position requires a conditional left operand",

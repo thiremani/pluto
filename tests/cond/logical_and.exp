@@ -48,7 +48,7 @@ CjChain: 42
 CjArr: [9 0 7]
 CjRangeArr: [0 0 2 3 0]
 CjStrTrue: hello world
-CjStrFalse: 
+re:CjStrFalse:\s*
 CjStrFb: fallback
 CjMultiTrue: 10 20
 CjMultiFalse: 0 0
@@ -57,7 +57,7 @@ CjMcBoth: 7
 CjMcFail: 0
 CjMcMulti: 8 9
 CjMcStr: match
-CjMcStrF: 
+re:CjMcStrF:\s*
 CjMcStrHeapVal: s9?
 CjMcCombo: 7
 AndOrPerSlot: -1 70

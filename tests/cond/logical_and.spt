@@ -95,10 +95,8 @@ cvStrFalse = b > 2 && sl ⊕ sm
 cvStrFb = b > 2 && sl ⊕ sm || "fallback"
 "CvStrFb: -cvStrFb"
 
-# Multi-return value gated by one scalar condition: value-position && is
-# strictly per slot (a 1-slot condition cannot gate a 2-slot value), so the
-# scalar-gates-a-tuple form is the statement gate. False keeps the old values
-# (fresh -> zero seeds).
+# Multi-return value gated by one scalar condition: the condition broadcasts
+# across the value's slots. False keeps both old values (fresh -> zero seeds).
 cvMultiA, cvMultiB = a > 2 Pair(10, 20)
 "CvMultiTrue: -cvMultiA -cvMultiB"
 cvMultiC, cvMultiD = b > 2 Pair(10, 20)
@@ -310,8 +308,7 @@ aoR = aoI > 9 && aoI || -1
 aoR2 = aoI > 2 && aoI * 10 || -1
 "RangedAndOrLastWin: -aoR2"
 
-# Statement-gate position: && is the short-circuit boolean AND of two
-# conditions.
+# Statement-gate position: && short-circuits conditions left to right.
 aoG = 3 > 2 && 4 > 3  99
 "GateAnd: -aoG"
 aoG2 = 3 > 2 && 4 > 9  99

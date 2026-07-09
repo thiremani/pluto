@@ -730,10 +730,9 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 
 // flattenCondAnd returns a condition's top-level && conjuncts, left to right.
 // The condition slot's && is the statement-level conjunction/domain list: each
-// conjunct is validated and lowered like the former comma-list elements, so
-// bare range drivers nest (i && j walks the cartesian product) and
-// comparisons gate — the gate holds when every conjunct yields, exactly the
-// && reading.
+// conjunct is validated like a former comma-list element, so bare range
+// drivers nest (i && j walks the cartesian product) and comparisons gate. The
+// compiler short-circuits the resulting condition list left to right.
 func flattenCondAnd(exp ast.Expression) []ast.Expression {
 	if infix, ok := ast.IsLogicalAnd(exp); ok {
 		return append(flattenCondAnd(infix.Left), flattenCondAnd(infix.Right)...)

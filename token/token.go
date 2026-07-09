@@ -197,29 +197,6 @@ func (t Token) IsComparison() bool {
 	return comparison_beg < t.Type && comparison_end > t.Type
 }
 
-// opNames maps an operator literal to a short identifier-safe name, for
-// building readable IR value names and labelling which operator a lowering
-// used.
-var opNames = map[string]string{
-	SYM_LSS:      "lt",
-	SYM_GTR:      "gt",
-	SYM_LEQ:      "lte",
-	SYM_GEQ:      "gte",
-	SYM_EQL:      "eq",
-	SYM_NEQ:      "ne",
-	SYM_COND_OR:  "or",
-	SYM_COND_AND: "and",
-}
-
-// OpName returns the short identifier-safe name of an operator literal
-// ("gt" for ">", "and" for "&&"), or the literal itself if unnamed.
-func OpName(op string) string {
-	if name, ok := opNames[op]; ok {
-		return name
-	}
-	return op
-}
-
 func (t Token) IsConstant() bool {
 	return const_beg < t.Type && const_end > t.Type
 }
