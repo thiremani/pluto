@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -673,7 +674,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 // zero is null), so the slots travel as one unconditional temporary across
 // both commit conventions (move-on-true vs copy-then-free).
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	fs := c.newLogicalSlots(info.OutTypes, "or")
+	fs := c.newLogicalSlots(info.OutTypes, or.Operator)
 
 	lConds := c.resolveLogicalSide(fs, or.Left, nil)
 
@@ -718,7 +719,7 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 		lConds = broadcastConds(c.foldSlotConds(lConds), len(info.OutTypes))
 	}
 
-	fs := c.newLogicalSlots(info.OutTypes, "and")
+	fs := c.newLogicalSlots(info.OutTypes, and.Operator)
 	c.withCondBranch(c.orSlotConds(lConds, "and_some_yielded"), "and_rhs", func() {
 		c.resolveLogicalSide(fs, and.Right, func(i int) llvm.Value {
 			return slotCondAt(lConds, i)
@@ -744,8 +745,8 @@ func (c *Compiler) finishLogicalSlots(fs logicalSlots, node ast.Expression, temp
 func (c *Compiler) slotMissedGate(fs logicalSlots) func(int) llvm.Value {
 	i1 := Int{Width: 1}
 	return func(i int) llvm.Value {
-		yielded := c.createLoad(fs.slots[i].yield, i1, fmt.Sprintf("%s_need_%d", fs.prefix, i))
-		return c.builder.CreateNot(yielded, fmt.Sprintf("%s_miss_%d", fs.prefix, i))
+		yielded := c.createLoad(fs.slots[i].yield, i1, fmt.Sprintf("%s_need_%d", fs.name(), i))
+		return c.builder.CreateNot(yielded, fmt.Sprintf("%s_miss_%d", fs.name(), i))
 	}
 }
 
@@ -776,25 +777,29 @@ type logicalSlot struct {
 }
 
 // logicalSlots is the result state of one value-position ||/&& lowering: one
-// logicalSlot per output slot, plus the prefix that names the emitted IR after
-// the operator that owns the slots.
+// logicalSlot per output slot, plus the operator that owns them (which names
+// the emitted IR and records whether this was an || or an &&).
 type logicalSlots struct {
-	slots  []logicalSlot
-	prefix string
+	slots []logicalSlot
+	op    string // token.SYM_COND_OR or token.SYM_COND_AND
 }
 
-func (c *Compiler) newLogicalSlots(outTypes []Type, prefix string) logicalSlots {
+// name is the operator's identifier-safe prefix for emitted IR ("or"/"and").
+func (fs logicalSlots) name() string { return token.OpName(fs.op) }
+
+func (c *Compiler) newLogicalSlots(outTypes []Type, op string) logicalSlots {
 	i1 := Int{Width: 1}
 	i1Ty := c.mapToLLVMType(i1)
 	fs := logicalSlots{
-		slots:  make([]logicalSlot, len(outTypes)),
-		prefix: prefix,
+		slots: make([]logicalSlot, len(outTypes)),
+		op:    op,
 	}
+	name := fs.name()
 	for i, outType := range outTypes {
 		fs.slots[i] = logicalSlot{
 			outType: outType,
-			value:   c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("%s_slot_%d.mem", prefix, i)),
-			yield:   c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("%s_yield_%d.mem", prefix, i)),
+			value:   c.createEntryBlockAlloca(c.mapToLLVMType(outType), fmt.Sprintf("%s_slot_%d.mem", name, i)),
+			yield:   c.createEntryBlockAlloca(i1Ty, fmt.Sprintf("%s_yield_%d.mem", name, i)),
 		}
 		c.createStore(llvm.ConstInt(i1Ty, 0, false), fs.slots[i].yield, i1)
 	}
@@ -812,9 +817,9 @@ func (c *Compiler) resolveLogicalSide(fs logicalSlots, side ast.Expression, take
 	for i := range fs.slots {
 		cond := slotCondAt(conds, i)
 		if takeGate != nil {
-			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", fs.prefix, i))
+			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", fs.name(), i))
 		}
-		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("%s_store_%d", fs.prefix, i), func() {
+		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("%s_store_%d", fs.name(), i), func() {
 			c.storeLogicalValue(side, i, fs)
 		})
 	}
@@ -831,13 +836,13 @@ func (c *Compiler) loadLogicalResults(fs logicalSlots) ([]llvm.Value, []*Symbol)
 	conds := make([]llvm.Value, len(fs.slots))
 	loaded := make([]*Symbol, len(fs.slots))
 	for i, sl := range fs.slots {
-		yield := c.createLoad(sl.yield, i1, fmt.Sprintf("%s_yield_%d", fs.prefix, i))
-		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("%s_zero_%d", fs.prefix, i)), fmt.Sprintf("%s_seed_%d", fs.prefix, i), func() {
+		yield := c.createLoad(sl.yield, i1, fmt.Sprintf("%s_yield_%d", fs.name(), i))
+		c.withCondBranch(c.builder.CreateNot(yield, fmt.Sprintf("%s_zero_%d", fs.name(), i)), fmt.Sprintf("%s_seed_%d", fs.name(), i), func() {
 			zero := c.makeZeroValue(sl.outType)
 			c.createStore(zero.Val, sl.value, sl.outType)
 		}, nil)
 		conds[i] = yield
-		loaded[i] = &Symbol{Val: c.createLoad(sl.value, sl.outType, fmt.Sprintf("%s_slot_%d", fs.prefix, i)), Type: sl.outType}
+		loaded[i] = &Symbol{Val: c.createLoad(sl.value, sl.outType, fmt.Sprintf("%s_slot_%d", fs.name(), i)), Type: sl.outType}
 	}
 	return conds, loaded
 }
@@ -1321,10 +1326,10 @@ func (c *Compiler) storeLogicalValue(side ast.Expression, i int, fs logicalSlots
 	if owned {
 		val.Borrowed = true
 	} else {
-		val = c.derefIfPointer(val, fmt.Sprintf("%s_take_val_%d", fs.prefix, i))
+		val = c.derefIfPointer(val, fmt.Sprintf("%s_take_val_%d", fs.name(), i))
 		val = c.deepCopyIfNeeded(val)
 	}
-	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("%s_val_%d", fs.prefix, i))
+	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("%s_val_%d", fs.name(), i))
 	c.createStore(coerced.Val, sl.value, coerced.Type)
 	i1 := Int{Width: 1}
 	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), sl.yield, i1)
