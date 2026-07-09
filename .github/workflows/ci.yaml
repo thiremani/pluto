@@ -19,11 +19,26 @@ jobs:
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install LLVM and Dependencies
+        # apt.llvm.org is intermittently unreachable (its llvm.sh aborts with a
+        # GPG-key or repo-URL error), so retry the whole install with backoff
+        # rather than failing the job on a transient network blip.
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22  # Install LLVM 22
-          sudo apt-get install -y llvm-22-dev lld-22 clang-22 valgrind
+          install_llvm() {
+            wget -q https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 22  # Install LLVM 22
+            sudo apt-get install -y llvm-22-dev lld-22 clang-22 valgrind
+          }
+          for attempt in 1 2 3 4 5; do
+            if install_llvm; then
+              exit 0
+            fi
+            echo "LLVM install attempt $attempt failed; retrying in $((attempt * 20))s"
+            sudo rm -f llvm.sh
+            sleep $((attempt * 20))
+          done
+          echo "LLVM install failed after 5 attempts"
+          exit 1
 
       - name: Set LLVM environment
         env:
