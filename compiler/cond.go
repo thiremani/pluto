@@ -673,9 +673,9 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 // zero is null), so the slots travel as one unconditional temporary across
 // both commit conventions (move-on-true vs copy-then-free).
 func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
-	fs := c.newFallbackSlots(info.OutTypes, "or")
+	fs := c.newLogicalSlots(info.OutTypes, "or")
 
-	lConds := c.resolveFallbackSide(fs, or.Left, nil)
+	lConds := c.resolveLogicalSide(fs, or.Left, nil)
 
 	// The right side evaluates at most once, as a unit, when any slot missed;
 	// its per-slot stores then fill only still-empty slots. The solver rejects
@@ -686,7 +686,7 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 	}
 	someMissed := c.builder.CreateNot(leftAllYielded, "or_some_missed")
 	c.withCondBranch(someMissed, "or_rhs", func() {
-		c.resolveFallbackSide(fs, or.Right, c.slotMissedGate(fs))
+		c.resolveLogicalSide(fs, or.Right, c.slotMissedGate(fs))
 	}, nil)
 
 	return c.finishLogicalSlots(fs, or, temps)
@@ -718,9 +718,9 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 		lConds = broadcastConds(c.foldSlotConds(lConds), len(info.OutTypes))
 	}
 
-	fs := c.newFallbackSlots(info.OutTypes, "and")
+	fs := c.newLogicalSlots(info.OutTypes, "and")
 	c.withCondBranch(c.orSlotConds(lConds, "and_some_yielded"), "and_rhs", func() {
-		c.resolveFallbackSide(fs, and.Right, func(i int) llvm.Value {
+		c.resolveLogicalSide(fs, and.Right, func(i int) llvm.Value {
 			return slotCondAt(lConds, i)
 		})
 	}, nil)
@@ -731,8 +731,8 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 // finishLogicalSlots loads a ||/&& lowering's resolved slots, stashes them in
 // the condLHS frame under the operator node, and tracks them as one
 // unconditional temporary.
-func (c *Compiler) finishLogicalSlots(fs fallbackSlots, node ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
-	conds, loaded := c.loadFallbackResults(fs)
+func (c *Compiler) finishLogicalSlots(fs logicalSlots, node ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
+	conds, loaded := c.loadLogicalResults(fs)
 	frame := c.requireCondLHSFrame()
 	frame[key(c.FuncNameMangled, node)] = loaded
 	temps = append(temps, condTemp{expr: node, syms: loaded})
@@ -741,7 +741,7 @@ func (c *Compiler) finishLogicalSlots(fs fallbackSlots, node ast.Expression, tem
 
 // slotMissedGate restricts a ||'s right-side stores to slots the left did not
 // already fill.
-func (c *Compiler) slotMissedGate(fs fallbackSlots) func(int) llvm.Value {
+func (c *Compiler) slotMissedGate(fs logicalSlots) func(int) llvm.Value {
 	i1 := Int{Width: 1}
 	return func(i int) llvm.Value {
 		yielded := c.createLoad(fs.yields[i], i1, fmt.Sprintf("%s_need_%d", fs.prefix, i))
@@ -766,20 +766,20 @@ func (c *Compiler) orSlotConds(conds []llvm.Value, name string) llvm.Value {
 	return res
 }
 
-// fallbackSlots is the result state of one value-position ||/&& lowering: per
+// logicalSlots is the result state of one value-position ||/&& lowering: per
 // output slot, an alloca for the resolved value and an i1 yield flag. The
 // prefix names the emitted IR after the operator that owns the slots.
-type fallbackSlots struct {
+type logicalSlots struct {
 	outTypes []Type
 	slots    []llvm.Value
 	yields   []llvm.Value
 	prefix   string
 }
 
-func (c *Compiler) newFallbackSlots(outTypes []Type, prefix string) fallbackSlots {
+func (c *Compiler) newLogicalSlots(outTypes []Type, prefix string) logicalSlots {
 	i1 := Int{Width: 1}
 	i1Ty := c.mapToLLVMType(i1)
-	fs := fallbackSlots{
+	fs := logicalSlots{
 		outTypes: outTypes,
 		slots:    make([]llvm.Value, len(outTypes)),
 		yields:   make([]llvm.Value, len(outTypes)),
@@ -793,11 +793,11 @@ func (c *Compiler) newFallbackSlots(outTypes []Type, prefix string) fallbackSlot
 	return fs
 }
 
-// resolveFallbackSide resolves one ||/&& operand into the result slots.
+// resolveLogicalSide resolves one ||/&& operand into the result slots.
 // takeGate (nil = unrestricted) further gates each slot's store: a ||'s right
 // side fills only slots the left left empty, a &&'s right side fills only
 // slots whose left side yielded.
-func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
+func (c *Compiler) resolveLogicalSide(fs logicalSlots, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
 	before := c.frameMaskKeys()
 	conds, sideTemps := c.prepareSpine(side, nil)
 
@@ -807,7 +807,7 @@ func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, ta
 			cond = c.andConds(takeGate(i), cond, fmt.Sprintf("%s_take_%d", fs.prefix, i))
 		}
 		c.withSlotCondBranch(side, i, cond, fmt.Sprintf("%s_store_%d", fs.prefix, i), func() {
-			c.storeFallbackValue(side, i, outType, fs.slots[i], fs.yields[i])
+			c.storeLogicalValue(side, i, outType, fs.slots[i], fs.yields[i])
 		})
 	}
 
@@ -816,9 +816,9 @@ func (c *Compiler) resolveFallbackSide(fs fallbackSlots, side ast.Expression, ta
 	return conds
 }
 
-// loadFallbackResults zero-seeds the slots that never yielded and returns the
+// loadLogicalResults zero-seeds the slots that never yielded and returns the
 // yield flags and loaded values per slot.
-func (c *Compiler) loadFallbackResults(fs fallbackSlots) ([]llvm.Value, []*Symbol) {
+func (c *Compiler) loadLogicalResults(fs logicalSlots) ([]llvm.Value, []*Symbol) {
 	i1 := Int{Width: 1}
 	conds := make([]llvm.Value, len(fs.outTypes))
 	loaded := make([]*Symbol, len(fs.outTypes))
@@ -1301,13 +1301,13 @@ func (c *Compiler) withSlotCondBranch(expr ast.Expression, i int, cond llvm.Valu
 	})
 }
 
-// storeFallbackValue writes slot i of side into a || result slot and marks it
+// storeLogicalValue writes slot i of side into a ||/&& result slot and marks it
 // yielded. A borrowed view must deref before the copy decision — a leaf's
 // slot value may be Ptr-wrapped, and copying the wrapper aliases the pointee
 // into a slot that outlives the freed source (a past double-free). A static
 // string is left to the store's coercion, which copies only into heap-owned
 // slot types.
-func (c *Compiler) storeFallbackValue(side ast.Expression, i int, outType Type, slot, yield llvm.Value) {
+func (c *Compiler) storeLogicalValue(side ast.Expression, i int, outType Type, slot, yield llvm.Value) {
 	val, owned := c.spineSlotValue(side, i, outType)
 	if owned {
 		val.Borrowed = true
