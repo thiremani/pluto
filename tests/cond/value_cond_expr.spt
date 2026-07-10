@@ -467,6 +467,12 @@ heapCmpCell = [MkStr(a) > "a"]
 "HeapCmpCell: -heapCmpCell"
 heapCmpFalse = [MkStr(b) > "zzz"]
 "HeapCmpFalse: -heapCmpFalse"
+# Unquoted string-array formatting renders both [] and [""] as []. Reading
+# index 0 into a sentinel proves this is one zero-filled cell, not an empty array.
+heapCmpFalseCell = "missing"
+"HeapCmpFalseCellBefore: -heapCmpFalseCell"
+heapCmpFalseCell = heapCmpFalse[0]
+"HeapCmpFalseCell: -heapCmpFalseCell"
 heapCmpMulti = [MkStr(a) > "a"  MkStr(b) > "a"]
 "HeapCmpMulti: -heapCmpMulti"
 
@@ -530,7 +536,7 @@ hcCondCell = [MkStr(a) > "a" && 7]
 hcCondAndValueCell = [MkStr(a) > "a" && MkStr(b)]
 "HcCondAndValueCell: -hcCondAndValueCell"
 hcRng = 0:3
-hcRangedCond = [MkStr(hcRng) > "s0" && hcRng]
+hcRangedCond = [MkStr(hcRng) > "s1" && hcRng]
 "HcRangedCond: -hcRangedCond"
 
 # Comparison binds tighter than arithmetic/concat, so `x + y > k` is `x + (y > k)`:
@@ -630,10 +636,11 @@ chainGateHeap = MkStr(chI) > "s2" < "s8" [chI]
 chainCondValHeap = [MkStr(chI) > "s2" < "s8" && chI]
 "ChainCondValHeap: -chainCondValHeap"
 
-# In bare print position (no enclosing let) an expression is a condition, not a
-# value: a comparison prints as a boolean (1/0), and && over two comparisons is
-# the short-circuit boolean AND. (Value-position && needs a destination — a
-# non-condition right side is rejected in print position.)
+# Print position is value position — the target-less case of propagation: a
+# comparison prints its yielded LHS, a failed condition prints nothing, &&
+# yields its right side, || supplies the fallback, and a ranged comparison
+# filters to the admitted elements. The explicit boolean spelling is
+# `cond && 1 || 0`.
 rootA = 5
 "RootPrintCmpTrue:"
 rootA > 2
@@ -644,6 +651,16 @@ rootB > 2
 rootA > 2 && rootA > 4
 "RootPrintAndFalse:"
 rootB > 2 && rootA > 4
+"RootPrintAndValue:"
+rootA > 2 && 10
+"RootPrintOrFallback:"
+rootB > 2 || 7
+"RootPrintBoolSpelling:"
+rootA > 2 && 1 || 0
+rootB > 2 && 1 || 0
+"RootPrintRangedFilter:"
+rootI = 0:5
+rootI > 2
 
 # Statement-level multi-cell comparison condition: the gate is the cell-wise AND
 # of a multi-return comparison (like a single comparison), with keep-old on

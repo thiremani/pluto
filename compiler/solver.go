@@ -135,7 +135,7 @@ type TypeSolver struct {
 	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // value position (LetStatement conditions/values; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back — vs plain booleans in non-value contexts like prints
+	InValueExpr     bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -686,7 +686,16 @@ func (ts *TypeSolver) Solve() {
 
 }
 
+// TypePrintStatement types a print in value position: a comparison yields its
+// LHS (not a boolean), ||/&& gate and fall back, and the line prints only
+// when every conditional argument yields — print is the target-less case of
+// propagation, so a failed condition prints nothing. The explicit boolean
+// spelling is `cond && 1 || 0`.
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
+	savedInValueExpr := ts.InValueExpr
+	ts.InValueExpr = true
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+
 	ts.TypeExpression(stmt.Expression, true)
 }
 
@@ -1604,10 +1613,6 @@ func anyArrayCell(condTypes []Type) bool {
 }
 
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
-	if !ts.InValueExpr {
-		return ts.typeLogicalGateExpression(expr, left, right, "OR")
-	}
-
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
@@ -1645,10 +1650,6 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 // gating one value: every slot must yield) or broadcasts (one condition
 // gating an N-slot value) onto the right's; equal arities align per slot.
 func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
-	if !ts.InValueExpr {
-		return ts.typeLogicalGateExpression(expr, left, right, "AND")
-	}
-
 	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
@@ -1698,44 +1699,6 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		ExprLen:      len(types),
 		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
 		CompareModes: compareModes,
-	}
-	return types
-}
-
-// typeLogicalGateExpression types a ||/&& in condition position: both operands
-// must be single i1 conditions and the result is one i1.
-func (ts *TypeSolver) typeLogicalGateExpression(expr *ast.InfixExpression, left, right []Type, opName string) []Type {
-	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
-	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
-
-	types := []Type{I1}
-	if len(left) != 1 || len(right) != 1 {
-		// && dispatches before the infix equal-length check (its value form
-		// folds/broadcasts arity), so the gate form must bound both sides.
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical %s condition operands must produce a single value, got %d and %d", opName, len(left), len(right)),
-		})
-		types = []Type{Unresolved{}}
-	} else {
-		// Validate the i1 requirement only once both operand types are known;
-		// an unresolved operand may still resolve to i1 on a later solver pass.
-		bothResolved := left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind
-		bothConditions := IsI1(left[0]) && IsI1(right[0])
-		if bothResolved && !bothConditions {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: expr.Token,
-				Msg:   fmt.Sprintf("logical %s requires condition operands, got %s and %s", opName, left[0], right[0]),
-			})
-			types = []Type{Unresolved{}}
-		}
-	}
-
-	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:     types,
-		ExprLen:      len(types),
-		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
-		CompareModes: make([]CondMode, len(types)),
 	}
 	return types
 }

@@ -392,8 +392,12 @@ nstGateOrInAnd = (a > 9 || b > 0) && a < 9  7
 # nested argument condition fails (keep-old, ownership-critical).
 nstArgOrAnd = Double((a > 9 || b > 0) && 5)
 "NstArgOrAnd: -nstArgOrAnd"
+# First arm misses, so the second gated value supplies the call argument.
 nstArgOrOfAnds = Double(a > 9 && 5 || b > 0 && 6)
 "NstArgOrOfAnds: -nstArgOrOfAnds"
+# Both arms can yield; || is left-biased, so the first value wins.
+nstArgOrOfAndsFirst = Double(a > 2 && 5 || b > 0 && 6)
+"NstArgOrOfAndsFirst: -nstArgOrOfAndsFirst"
 nstMergeA = 11
 nstMergeB = 22
 "NstMergeBefore: -nstMergeA -nstMergeB"

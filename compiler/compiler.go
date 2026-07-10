@@ -1821,13 +1821,6 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	if expr.IsLogicalOr() && !info.HasFallbackOr() {
-		return c.compileLogicalOrCondition(expr)
-	}
-	if expr.IsLogicalAnd() && !info.HasCondAnd() {
-		return c.compileLogicalAndCondition(expr)
-	}
-
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
 	left := c.compileExpression(expr.Left, nil)
@@ -1860,46 +1853,6 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	c.freeTemporary(expr.Right, right)
 
 	return res
-}
-
-func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbol {
-	left := c.compileExpression(expr.Left, nil)
-	leftSym := c.derefIfPointer(left[0], "")
-
-	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
-
-	c.builder.SetInsertPointAtEnd(trueBlock)
-	c.builder.CreateBr(contBlock)
-	trueEnd := c.builder.GetInsertBlock()
-
-	c.builder.SetInsertPointAtEnd(rhsBlock)
-	right := c.compileExpression(expr.Right, nil)
-	rightSym := c.derefIfPointer(right[0], "")
-	c.builder.CreateBr(contBlock)
-	rhsEnd := c.builder.GetInsertBlock()
-
-	c.builder.SetInsertPointAtEnd(contBlock)
-	result := c.builder.CreatePHI(c.Context.Int1Type(), "or_cond")
-	result.AddIncoming(
-		[]llvm.Value{llvm.ConstInt(c.Context.Int1Type(), 1, false), rightSym.Val},
-		[]llvm.BasicBlock{trueEnd, rhsEnd},
-	)
-
-	return []*Symbol{{Val: result, Type: I1}}
-}
-
-// compileLogicalAndCondition short-circuits a condition-position &&: false
-// when the left is false, otherwise the right (evaluated only then).
-func (c *Compiler) compileLogicalAndCondition(expr *ast.InfixExpression) []*Symbol {
-	left := c.compileExpression(expr.Left, nil)
-	leftSym := c.derefIfPointer(left[0], "")
-
-	result := c.compileShortCircuitAnd(leftSym.Val, func() llvm.Value {
-		right := c.compileExpression(expr.Right, nil)
-		return c.derefIfPointer(right[0], "").Val
-	}, "and_cond")
-
-	return []*Symbol{{Val: result, Type: I1}}
 }
 
 // compileShortCircuitAnd emits a lazy i1 conjunction. compileRight is invoked
@@ -3302,13 +3255,21 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		defer c.popScope()
 
 		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
-			c.printAllExpressions(rewCall.Arguments)
+			// Per-iteration gate: a failing conditional skips that
+			// iteration's line, so `i > 2` prints only admitted elements.
+			c.compileCondOperands(rewCall, llvm.Value{}, func() {
+				c.printAllExpressions(rewCall.Arguments)
+			})
 		})
 		return
 	}
 
-	// LoopInside=true or no ranges: direct print
-	c.printAllExpressions(ce.Arguments)
+	// LoopInside=true or no ranges: direct print, gated on every conditional
+	// argument yielding — a failed condition prints nothing (the target-less
+	// case of propagation).
+	c.compileCondOperands(ce, llvm.Value{}, func() {
+		c.printAllExpressions(ce.Arguments)
+	})
 }
 
 // printAllExpressions prints all expressions on a single line

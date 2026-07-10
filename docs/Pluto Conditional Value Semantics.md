@@ -303,7 +303,11 @@ documented full-control opt-in.
 
 ## Status
 
-- **Implemented:** statement gates (keep-old); `||` fallback in value and
+- **Implemented:** statement gates (keep-old); gated prints — print position
+  is value position, the target-less case of propagation: a comparison prints
+  its yielded LHS, a failure prints nothing, a ranged comparison filters to
+  admitted elements, and the explicit boolean spelling is `cond && 1 || 0`;
+  `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
   arithmetic, and `||`/`&&` by one extraction pass; the value-position gating

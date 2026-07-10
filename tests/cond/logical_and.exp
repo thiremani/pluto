@@ -101,6 +101,7 @@ NstGateAndChain: 7
 NstGateOrInAnd: 7
 NstArgOrAnd: 10
 NstArgOrOfAnds: 12
+NstArgOrOfAndsFirst: 10
 NstMergeBefore: 11 22
 NstMergeKeepOld: 11 22
 NstHeapArg: sa

@@ -707,15 +707,6 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 			expectError: "logical AND condition must produce scalar values, not an array",
 		},
 		{
-			// Condition-position && bounds BOTH operand arities (its value
-			// form dispatches before the infix equal-length check, so the
-			// gate form cannot rely on it).
-			name:        "GateRightArityRejected",
-			code:        "a, b = Pair(x, y)\n    a = x\n    b = y",
-			script:      "1 > 0 && Pair(1, 2) > Pair(0, 0)",
-			expectError: "logical AND condition operands must produce a single value, got 1 and 2",
-		},
-		{
 			// A && is a valid failable left operand of a value-position ||;
 			// the fallback's type must still match the yielded value's.
 			name:        "AndOrFallbackTypeMismatch",

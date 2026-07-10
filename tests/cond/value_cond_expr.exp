@@ -113,6 +113,8 @@ ScalarCmpMulti: [5 0]
 ScalarCmpFb: [-1]
 HeapCmpCell: [s5]
 HeapCmpFalse: []
+HeapCmpFalseCellBefore: missing
+re:HeapCmpFalseCell:\s*
 HeapCmpMulti: [s5 s1]
 HeapCondvalOrTrue: [s5]
 HeapCondvalOrFalse: [def]
@@ -130,7 +132,7 @@ OrGateRanged: [3 4]
 OrGateRangedAllFail: []
 HcCondCell: [7]
 HcCondAndValueCell: [s1]
-HcRangedCond: [0 1 2]
+HcRangedCond: [0 0 2]
 ArithGateTrue: 17
 ArithGateKeepBefore: 99
 ArithGateKeep: 99
@@ -156,13 +158,21 @@ ChainLeftmost: [0 0 0 2 2 2 2 2 2 2]
 ChainGateHeap: [3 4 5 6 7]
 ChainCondValHeap: [0 0 0 3 4 5 6 7 0 0]
 RootPrintCmpTrue:
-1
+5
 RootPrintCmpFalse:
-0
 RootPrintAndTrue:
-1
+5
 RootPrintAndFalse:
+RootPrintAndValue:
+10
+RootPrintOrFallback:
+7
+RootPrintBoolSpelling:
+1
 0
+RootPrintRangedFilter:
+3
+4
 SmcCondTrue: 7
 SmcCondKeepOld: 99
 SmcCondMulti: 8 9
