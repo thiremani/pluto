@@ -1353,6 +1353,14 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 	if !ok {
 		panic("internal: spine node missing pre-evaluated slot values")
 	}
+	// A node combined directly must be plain arithmetic: every conditional
+	// node (comparison, mask, ||, &&) was pre-resolved into the frame above,
+	// so a conditional mode here means a new CondMode slipped past the spine
+	// dispatch unclassified.
+	if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil &&
+		slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
+		panic(fmt.Sprintf("internal: conditional spine node %s combined as plain arithmetic", infix.Operator))
+	}
 	l, _ := c.spineSlotValue(infix.Left, i, outType)
 	r, _ := c.spineSlotValue(infix.Right, i, outType)
 	return c.compileInfix(infix.Operator, l, r, outType), true

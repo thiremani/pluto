@@ -1845,8 +1845,12 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
 		case CondOr, CondAnd:
 			panic("internal: value-position logical OR/AND must be lowered through conditional expression branching")
-		default:
+		case CondNone:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		default:
+			// A new CondMode must be classified here deliberately: falling
+			// through would lower a conditional slot as plain arithmetic.
+			panic(fmt.Sprintf("internal: unhandled CondMode %d in infix lowering", mode))
 		}
 	}
 

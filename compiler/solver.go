@@ -86,6 +86,10 @@ func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
+// HasCondExpr returns true if any slot is a failable conditional expression —
+// a scalar comparison, a ||, or a &&. Always-yielding masks (CondArray) are
+// deliberately excluded: callers ask "can this fail to yield?", which a mask
+// never does.
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar || m == CondOr || m == CondAnd {
