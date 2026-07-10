@@ -16,6 +16,11 @@ CvArrTrue: [1 5 3]
 CvArrFalse: [1 0 3]
 CvArrMulti: [9 0 7]
 CvArrFb: [-1 7]
+CvWholeArrTrue: [2 4 6]
+CvWholeArrBefore: [9 9]
+CvWholeArrOld: [9 9]
+CvWholeArrFresh: []
+CvWholeArrFb: [7 8]
 CvFloat: 2.5
 CvStrTrue: hello world
 re:CvStrFalse:\s*

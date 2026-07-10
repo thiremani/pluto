@@ -79,6 +79,21 @@ cvArrMulti = [(a > 2 && 9) (b > 2 && 9) (a > 0 && 7)]
 cvArrFb = [(b > 2 && 5 || -1) 7]
 "CvArrFb: -cvArrFb"
 
+# Whole-array value: an array is one value slot, so a scalar condition gates
+# the array as a unit. The right side is copied only on the yielding path;
+# failure keeps an existing destination, zero-seeds a fresh one, or falls back.
+cvWholeArr = [2 4 6]
+cvWholeArrTrue = a > 2 && cvWholeArr
+"CvWholeArrTrue: -cvWholeArrTrue"
+cvWholeArrOld = [9 9]
+"CvWholeArrBefore: -cvWholeArrOld"
+cvWholeArrOld = b > 2 && cvWholeArr
+"CvWholeArrOld: -cvWholeArrOld"
+cvWholeArrFresh = b > 2 && cvWholeArr
+"CvWholeArrFresh: -cvWholeArrFresh"
+cvWholeArrFb = b > 2 && cvWholeArr || [7 8]
+"CvWholeArrFb: -cvWholeArrFb"
+
 # Float value.
 f = 2.5
 cvFloat = a > 2 && f
