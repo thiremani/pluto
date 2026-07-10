@@ -1,0 +1,109 @@
+CvTrue: 10
+CvFalseNew: 0
+CvExistingBefore: 42
+CvExistingFalse: 42
+CvExistingZeroBefore: 42
+CvExistingZero: 0
+CvArithTrue: 11
+CvArithFalse: 0
+CvArithZero: 1
+CvDeep: 23
+CvExprValue: 105
+CvFbTrue: 10
+CvFbFalse: 7
+CvFbVar: 5
+CvArrTrue: [1 5 3]
+CvArrFalse: [1 0 3]
+CvArrMulti: [9 0 7]
+CvArrFb: [-1 7]
+CvWholeArrTrue: [2 4 6]
+CvWholeArrBefore: [9 9]
+CvWholeArrOld: [9 9]
+CvWholeArrFresh: []
+CvWholeArrFb: [7 8]
+CvFloat: 2.5
+CvStrTrue: hello world
+re:CvStrFalse:\s*
+CvStrFb: fallback
+CvMultiTrue: 10 20
+CvMultiFalse: 0 0
+CvNested: 5
+CvCallArg: 20
+CvOrTrue: 10
+CvOrFalse: 0
+CvRangeArr: [0 0 0 3 4]
+CvRangeArrCustom: [0 0 0 30 40]
+CvRangeRoot: 4
+CvRangeRootFalseFinal: 1
+CvRangeHeap: s4
+CvRangeOob: 20
+CvArrCellOob: [10 20 0 0 0]
+CvArrCellOobExpr: [20 40 0 0 0]
+CvCellRangeVal: [2 4 6 8 10]
+CvCellMultiDriver: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 4 6 8 10]
+CvRootArith: 19
+CvRootHeap: his4
+CjBothTrue: 10
+CjOneFalse: 0
+CjAllFalse: 0
+CjThree: 7
+CjFbFalse: 7
+CjFbTrue: 10
+CjChain: 42
+CjArr: [9 0 7]
+CjRangeArr: [0 0 2 3 0]
+CjStrTrue: hello world
+re:CjStrFalse:\s*
+CjStrFb: fallback
+CjMultiTrue: 10 20
+CjMultiFalse: 0 0
+CjRangeHeap: s4
+CjMcBoth: 7
+CjMcFail: 0
+CjMcMulti: 8 9
+CjMcStr: match
+re:CjMcStrF:\s*
+CjMcStrHeapVal: s9?
+CjMcCombo: 7
+AndOrPerSlot: -1 70
+AndLazyBefore: 99
+AndLazySkipped: 99
+AndOobBefore: 88
+AndOobKeepsOld: 88
+AndOobFallback: -1
+AndHeap: sq
+AndHeapMiss:  end
+AndChainBefore: 5
+AndChainMidFail: 5
+RangedAndOrAllMiss: -1
+RangedAndOrLastWin: 40
+GateAnd: 99
+GateAndFalse: 0 end
+AndBroadcast: 10 20
+AndBroadcastMiss: 0 0
+AndFoldBoth: 9
+AndFoldBefore: 55
+AndFoldOneFails: 55
+AndCondBefore: 9
+AndCondAttachedPrefix: -1
+GroupedStatementOpen: 63
+NstOrGatesAnd: 7
+NstOrGatesAndFb: 3
+NstOrGatesAndFail: 3
+NstAndChainOr: 8
+NstAndChainOrFb: 3
+NstAndChainOrFail: -1
+NstOrOfAnds: 2
+NstOrOfAndsFb: 3
+NstOrOfAndsBothFail: 3
+NstAndRightOr: 99
+NstGateAndChain: 7
+NstGateOrInAnd: 7
+NstArgOrAnd: 10
+NstArgOrOfAnds: 12
+NstArgOrOfAndsFirst: 10
+NstMergeBefore: 11 22
+NstMergeKeepOld: 11 22
+NstHeapArg: sa
+NstHeapArgFallback: sz end
+NstRanged: 40

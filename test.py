@@ -117,6 +117,9 @@ class TestRunner:
 
             print(f"\n{Fore.CYAN}Testing compiler...{Style.RESET_ALL}")
             self.run_command(["go", "test", "-race"], self.project_root/"compiler")
+
+            print(f"\n{Fore.CYAN}Testing cli...{Style.RESET_ALL}")
+            self.run_command(["go", "test", "-race"], self.project_root)
         except subprocess.CalledProcessError:
             print(f"{Fore.RED}❌ Unit tests failed!{Style.RESET_ALL}")
             sys.exit(1)

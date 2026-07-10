@@ -1,5 +1,5 @@
 y = Fac(n)
-    y = n != 1, n != 0 n * Fac(n-1)
+    y = n != 1 && n != 0 n * Fac(n-1)
     y = n == 0 1
     y = n == 1 1
 

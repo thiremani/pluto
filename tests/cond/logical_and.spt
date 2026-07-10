@@ -1,0 +1,415 @@
+# Value-position &&: `cond && value` yields value (per slot) when cond yields.
+# On failure it does NOT resolve locally — it propagates like a failed
+# comparison: an assignment keeps the destination's old value (a fresh
+# destination keeps its zero seed), an array cell zero-fills, and a trailing
+# `|| fallback` resolves it. && binds tighter than ||, and the right side is
+# lazy (evaluated only when the left yielded).
+a = 5
+b = 1
+
+# Standalone, condition true.
+cvTrue = a > 2 && 10
+"CvTrue: -cvTrue"
+
+# Standalone, condition false, new variable -> keeps its zero seed.
+cvFalseNew = b > 2 && 10
+"CvFalseNew: -cvFalseNew"
+
+# Existing variable, condition false -> propagation keeps the old value.
+# (The removed (cond value) form resolved locally and overwrote with zero.)
+cvExisting = 42
+"CvExistingBefore: -cvExisting"
+cvExisting = b > 2 && 10
+"CvExistingFalse: -cvExisting"
+
+# `|| 0` restores the old local zero-on-failure resolution.
+cvExistingZero = 42
+"CvExistingZeroBefore: -cvExistingZero"
+cvExistingZero = b > 2 && 10 || 0
+"CvExistingZero: -cvExistingZero"
+
+# Nested in arithmetic, condition true -> 10 + 1.
+cvArithTrue = (a > 2 && 10) + 1
+"CvArithTrue: -cvArithTrue"
+
+# Nested in arithmetic, condition false: the failure propagates through the
+# `+` to the assignment, so the fresh destination keeps its zero seed — the
+# `+ 1` never lands. (The old form fed a local 0 into the add -> 1.)
+cvArithFalse = (b > 2 && 10) + 1
+"CvArithFalse: -cvArithFalse"
+
+# `|| 0` resolves the failure before the `+`, so the add runs on the zero.
+cvArithZero = (b > 2 && 10 || 0) + 1
+"CvArithZero: -cvArithZero"
+
+# Deeper nesting: 2*(a>2 && 10) + (b>0 && 3) = 20 + 3.
+cvDeep = 2 * (a > 2 && 10) + (b > 0 && 3)
+"CvDeep: -cvDeep"
+
+# Value is an arbitrary expression.
+cvExprValue = a > 2 && a + 100
+"CvExprValue: -cvExprValue"
+
+# Fallback ||: condition true keeps the value (&& binds tighter than ||).
+cvFbTrue = a > 2 && 10 || 7
+"CvFbTrue: -cvFbTrue"
+
+# Fallback ||: condition false uses the fallback.
+cvFbFalse = b > 2 && 10 || 7
+"CvFbFalse: -cvFbFalse"
+
+# Fallback to a variable.
+cvFbVar = b > 2 && 10 || a
+"CvFbVar: -cvFbVar"
+
+# Array: conditional cell true.
+cvArrTrue = [1 (a > 2 && 5) 3]
+"CvArrTrue: -cvArrTrue"
+
+# Array: conditional cell false -> the cell zero-fills (a failed && propagates
+# like a failed comparison, and a failed comparison cell is position-preserving).
+cvArrFalse = [1 (b > 2 && 5) 3]
+"CvArrFalse: -cvArrFalse"
+
+# Array: multiple conditional cells.
+cvArrMulti = [(a > 2 && 9) (b > 2 && 9) (a > 0 && 7)]
+"CvArrMulti: -cvArrMulti"
+
+# Array: conditional cell with a fallback override.
+cvArrFb = [(b > 2 && 5 || -1) 7]
+"CvArrFb: -cvArrFb"
+
+# Whole-array value: an array is one value slot, so a scalar condition gates
+# the array as a unit. The right side is copied only on the yielding path;
+# failure keeps an existing destination, zero-seeds a fresh one, or falls back.
+cvWholeArr = [2 4 6]
+cvWholeArrTrue = a > 2 && cvWholeArr
+"CvWholeArrTrue: -cvWholeArrTrue"
+cvWholeArrOld = [9 9]
+"CvWholeArrBefore: -cvWholeArrOld"
+cvWholeArrOld = b > 2 && cvWholeArr
+"CvWholeArrOld: -cvWholeArrOld"
+cvWholeArrFresh = b > 2 && cvWholeArr
+"CvWholeArrFresh: -cvWholeArrFresh"
+cvWholeArrFb = b > 2 && cvWholeArr || [7 8]
+"CvWholeArrFb: -cvWholeArrFb"
+
+# Float value.
+f = 2.5
+cvFloat = a > 2 && f
+"CvFloat: -cvFloat"
+
+# Heap string value (concatenation) gated by a condition; exercises ownership
+# of the branch/seed/fallback arms (no leak, no double-free).
+sl = "hello"
+sm = " world"
+cvStrTrue = a > 2 && sl ⊕ sm
+"CvStrTrue: -cvStrTrue"
+cvStrFalse = b > 2 && sl ⊕ sm
+"CvStrFalse: -cvStrFalse"
+cvStrFb = b > 2 && sl ⊕ sm || "fallback"
+"CvStrFb: -cvStrFb"
+
+# Multi-return value gated by one scalar condition: the condition broadcasts
+# across the value's slots. False keeps both old values (fresh -> zero seeds).
+cvMultiA, cvMultiB = a > 2 Pair(10, 20)
+"CvMultiTrue: -cvMultiA -cvMultiB"
+cvMultiC, cvMultiD = b > 2 Pair(10, 20)
+"CvMultiFalse: -cvMultiC -cvMultiD"
+
+# Nested: the value is itself a gated &&.
+cvNested = a > 2 && (a > 4 && 5)
+"CvNested: -cvNested"
+
+# As a call argument.
+cvCallArg = Double(a > 2 && 10)
+"CvCallArg: -cvCallArg"
+
+# Compound boolean-OR condition (grouped, so the || gates the && condition).
+cvOrTrue = (a > 2 || b > 5) && 10
+"CvOrTrue: -cvOrTrue"
+cvOrFalse = (b > 2 || b > 5) && 10
+"CvOrFalse: -cvOrFalse"
+
+# Range-driven: in a collector a failed iteration's cell zero-fills; the value
+# may be an arbitrary per-iteration expression (which the comparison form
+# cannot yield). At an assignment root the last yielded value wins.
+gi = 0:5
+cvRangeArr = [gi > 2 && gi]
+"CvRangeArr: -cvRangeArr"
+cvRangeArrCustom = [gi > 2 && gi * 10]
+"CvRangeArrCustom: -cvRangeArrCustom"
+cvRangeRoot = gi > 2 && gi
+"CvRangeRoot: -cvRangeRoot"
+
+# Failing tail iterations propagate (keep the destination), so the last
+# YIELDED value survives — gi=1 here. (The old form zero-filled per iteration,
+# so the failing final iteration left 0.)
+cvRangeRootFalseFinal = gi < 2 && gi
+"CvRangeRootFalseFinal: -cvRangeRootFalseFinal"
+
+# Range-root with a heap value frees the previous iteration before overwriting
+# (no leak across iterations); the final iteration's string wins.
+cvRangeHeap = gi >= 0 && MkStr(gi)
+"CvRangeHeap: -cvRangeHeap"
+
+# Range-root array access: out-of-bounds iterations fail the lane and keep the
+# last in-bounds value (respects the active bounds guard).
+cvBounds = [10 20]
+cvRangeOob = gi >= 0 && cvBounds[gi]
+"CvRangeOob: -cvRangeOob"
+
+# && cell with an out-of-bounds access: in-bounds cells take the value,
+# out-of-bounds cells zero-fill (the collector's per-cell bounds guard), and
+# the value may be an arbitrary expression.
+cvArrCellOob = [gi >= 0 && cvBounds[gi]]
+"CvArrCellOob: -cvArrCellOob"
+cvArrCellOobExpr = [gi >= 0 && cvBounds[gi] * 2]
+"CvArrCellOobExpr: -cvArrCellOobExpr"
+
+# && nested in arithmetic inside a collector, with a scalar condition gating a
+# range-driven value: 2 + 2*gi per iteration.
+cvX = 2
+cvA = 4
+cvCellRangeVal = [cvX + (cvA > 3 && 2gi)]
+"CvCellRangeVal: -cvCellRangeVal"
+
+# Multi-driver: the condition ranges on one driver and the value on another, so
+# the collector nests them (cvAR outer, gi inner). Only cvAR == 4 admits 2*gi;
+# every other cvAR fails the cell, which propagates through the `+` and
+# zero-fills — the `cvX +` never lands on a failed cell. (The old form fed a
+# local 0 into the add, leaving 2s.)
+cvAR = 0:5
+cvCellMultiDriver = [cvX + (cvAR > 3 && 2gi)]
+"CvCellMultiDriver: -cvCellMultiDriver"
+
+# && as an arithmetic operand at a statement root (no collector): the enclosing
+# operator owns the loop, so it keeps the final iteration's value.
+cvRootArith = cvX + (cvA > 2 && 3gi + 5)
+"CvRootArith: -cvRootArith"
+
+# Heap value at a root: the per-iteration concat result is freed before the next
+# overwrite (no leak across iterations), and the final iteration's value wins.
+cvSm = "hi"
+cvRootHeap = cvSm ⊕ (cvA > 2 && MkStr(gi))
+"CvRootHeap: -cvRootHeap"
+
+# Chained conditions: `c1 && c2 && v` yields v only when every link yields
+# (last wins). A failed chain propagates (fresh -> zero seed), or a trailing
+# || fallback overrides.
+cjBothTrue = a > 2 && a > 0 && 10
+"CjBothTrue: -cjBothTrue"
+cjOneFalse = a > 2 && b > 2 && 10
+"CjOneFalse: -cjOneFalse"
+cjAllFalse = a > 9 && b > 9 && 10
+"CjAllFalse: -cjAllFalse"
+
+# Three conditions ANDed.
+cjThree = a > 2 && a > 3 && a > 4 && 7
+"CjThree: -cjThree"
+
+# Chain with a fallback ||: the fallback wins when any condition fails.
+cjFbFalse = a > 2 && b > 2 && 10 || 7
+"CjFbFalse: -cjFbFalse"
+cjFbTrue = a > 2 && a > 0 && 10 || 7
+"CjFbTrue: -cjFbTrue"
+
+# A chained comparison may be one of the links (2 < a < 8 AND a > 0).
+cjChain = a > 2 < 8 && a > 0 && 42
+"CjChain: -cjChain"
+
+# && chains in array cells: a true cell keeps the value, a false cell
+# zero-fills.
+cjArr = [(a > 2 && a > 0 && 9) (a > 2 && b > 2 && 9) 7]
+"CjArr: -cjArr"
+
+# Range-driven && chain in a collector: keep gi only where 1 < gi < 4.
+cjRangeArr = [gi > 1 && gi < 4 && gi]
+"CjRangeArr: -cjRangeArr"
+
+# && chain gating a heap string value: true yields the concat, false keeps the
+# fresh destination's empty seed, and a fallback overrides (no leak on any arm).
+cjStrTrue = a > 2 && a > 0 && sl ⊕ sm
+"CjStrTrue: -cjStrTrue"
+cjStrFalse = a > 2 && b > 2 && sl ⊕ sm
+"CjStrFalse: -cjStrFalse"
+cjStrFb = a > 2 && b > 2 && sl ⊕ sm || "fallback"
+"CjStrFb: -cjStrFb"
+
+# A conjunction gating a multi-return value: the whole && chain is one
+# statement condition — all slots yield, or all keep old (fresh -> zero) on
+# failure.
+cjMa, cjMb = a > 2 && a > 0 Pair(10, 20)
+"CjMultiTrue: -cjMa -cjMb"
+cjMc, cjMd = a > 2 && b > 2 Pair(10, 20)
+"CjMultiFalse: -cjMc -cjMd"
+
+# Range-root && chain with a heap value: the per-iteration string is freed
+# before the next overwrite (no leak across iterations); the final value wins.
+cjRangeHeap = gi >= 0 && gi < 9 && MkStr(gi)
+"CjRangeHeap: -cjRangeHeap"
+
+# Multi-cell comparison condition: a comparison of multi-return operands
+# (Pair > Pair) gating one scalar value is a statement gate — the gate is the
+# cell-wise conjunction ("did it yield?"), and every cell must hold. In
+# value-position && the slot counts would have to match instead.
+cjMcBoth = Pair(1, 2) > Pair(0, 1) 7
+"CjMcBoth: -cjMcBoth"
+cjMcFail = Pair(1, 2) > Pair(0, 2) 7
+"CjMcFail: -cjMcFail"
+
+# Multi-cell comparison gating a multi-return value: value-position && works
+# per slot (2 condition slots gate 2 value slots).
+cjMcA, cjMcB = Pair(3, 4) > Pair(1, 1) && Pair(8, 9)
+"CjMcMulti: -cjMcA -cjMcB"
+
+# Multi-cell comparison over heap strings: PairStr returns a pair of heap
+# strings (built with ⊕ inside the function), so each compared cell is a heap
+# value whose ownership transfers across the call. Every cell is freed after
+# gating (no leak). True yields the value; a failed gate keeps the fresh
+# destination's empty seed; the value itself may be heap too.
+cjMcStr = PairStr(3, 1) > PairStr(2, 0) "match"
+"CjMcStr: -cjMcStr"
+cjMcStrF = PairStr(3, 1) > PairStr(2, 5) "match"
+"CjMcStrF: -cjMcStrF"
+cjMcStrHeapVal = PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?"
+"CjMcStrHeapVal: -cjMcStrHeapVal"
+
+# A multi-cell comparison may be one && conjunct (its slots fold: every cell
+# must hold).
+cjMcCombo = Pair(1, 2) > Pair(0, 1) && a > 2 7
+"CjMcCombo: -cjMcCombo"
+
+# && and || composed in one expression: per-slot if-else across a tuple.
+# Slot 0's condition fails (5 > 8), so its && misses and the || fills it;
+# slot 1's condition holds (7 > 1), so its && yields the gated value.
+aoM, aoN = Pair(5, 7) > Pair(8, 1) && Pair(50, 70) || Pair(-1, -2)
+"AndOrPerSlot: -aoM -aoN"
+
+# The && right side is lazy: with a failing left it never evaluates, so an
+# out-of-bounds read there has no effect and the destination keeps old.
+aoArr = [1 2]
+aoLzA = 99
+"AndLazyBefore: -aoLzA"
+aoLzA = 1 > 2 && aoArr[10]
+"AndLazySkipped: -aoLzA"
+
+# With a holding left the right does evaluate; its OOB read fails the lane,
+# so the destination still keeps old — through the || the fallback wins.
+aoLzB = 88
+"AndOobBefore: -aoLzB"
+aoLzB = 1 < 2 && aoArr[10]
+"AndOobKeepsOld: -aoLzB"
+aoLzC = 1 < 2 && aoArr[10] || -1
+"AndOobFallback: -aoLzC"
+
+# Heap value on the lazy right: never allocated on the miss path (leak-checked).
+aoHs = MkStr("a") > "b" && MkStr("q")
+"AndHeap: -aoHs"
+aoHf = MkStr("a") > "zz" && MkStr("q")
+"AndHeapMiss: -aoHf end"
+
+# Chain mid-fail keeps old through an existing destination.
+aoW = 5
+"AndChainBefore: -aoW"
+aoW = 3 > 2 && 1 > 9 && 11
+"AndChainMidFail: -aoW"
+
+# Ranged && with || fallback: every iteration misses, so the fallback wins
+# each time and the last iteration's fallback is kept.
+aoI = 1:5
+aoR = aoI > 9 && aoI || -1
+"RangedAndOrAllMiss: -aoR"
+aoR2 = aoI > 2 && aoI * 10 || -1
+"RangedAndOrLastWin: -aoR2"
+
+# Statement-gate position: && short-circuits conditions left to right.
+aoG = 3 > 2 && 4 > 3  99
+"GateAnd: -aoG"
+aoG2 = 3 > 2 && 4 > 9  99
+"GateAndFalse: -aoG2 end"
+
+# Left-arity fold and broadcast: the left of && contributes only conditions,
+# so one condition broadcasts over a multi-value right, and a multi-slot
+# condition folds (every slot must yield) over a single value.
+abA, abB = a > 2 && Pair(10, 20)
+"AndBroadcast: -abA -abB"
+abC, abD = b > 2 && Pair(10, 20)
+"AndBroadcastMiss: -abC -abD"
+abF = Pair(5, 7) > Pair(1, 2) && 9
+"AndFoldBoth: -abF"
+abG = 55
+"AndFoldBefore: -abG"
+abG = Pair(5, 7) > Pair(9, 2) && 9
+"AndFoldOneFails: -abG"
+
+# A statement condition is one expression (comma conditions are a parse
+# error); && combines conditions, and the attached-prefix value split fires
+# after the whole conjunction.
+ccI = 1
+ccV = 9
+"AndCondBefore: -ccV"
+ccV = ccI < 2 && ccI > 0 -ccI
+"AndCondAttachedPrefix: -ccV"
+
+# Parens opening a statement's value are pure grouping.
+ccG = (5 + 4) * 7
+"GroupedStatementOpen: -ccG"
+
+# Nested mixed &&/|| — value position. (a = 5, b = 1.)
+# Grouped || gating an &&'s left.
+nstOrGatesAnd = (a > 9 || b > 0) && 7
+"NstOrGatesAnd: -nstOrGatesAnd"
+nstOrGatesAndF = 3
+"NstOrGatesAndFb: -nstOrGatesAndF"
+nstOrGatesAndF = (a > 9 || b > 9) && 7
+"NstOrGatesAndFail: -nstOrGatesAndF"
+# && chain then || fallback.
+nstAndChainOr = a > 2 && b > 0 && 8 || -1
+"NstAndChainOr: -nstAndChainOr"
+nstAndChainOrF = 3
+"NstAndChainOrFb: -nstAndChainOrF"
+nstAndChainOrF = a > 2 && b > 9 && 8 || -1
+"NstAndChainOrFail: -nstAndChainOrF"
+# || of two &&s: (c1 && v) || (c2 && w).
+nstOrOfAnds = a > 9 && 1 || b > 0 && 2
+"NstOrOfAnds: -nstOrOfAnds"
+nstOrOfAndsF = 3
+"NstOrOfAndsFb: -nstOrOfAndsF"
+nstOrOfAndsF = a > 9 && 1 || b > 9 && 2
+"NstOrOfAndsBothFail: -nstOrOfAndsF"
+# && right side is itself an ||.
+nstAndRightOr = a > 2 && (b > 9 || 99)
+"NstAndRightOr: -nstAndRightOr"
+
+# Nested mixed &&/|| — statement condition.
+nstGateAndChain = a > 2 && b > 0 && a < 9  7
+"NstGateAndChain: -nstGateAndChain"
+nstGateOrInAnd = (a > 9 || b > 0) && a < 9  7
+"NstGateOrInAnd: -nstGateOrInAnd"
+
+# Nested mixed &&/|| — call argument, including a lane-merging call whose
+# nested argument condition fails (keep-old, ownership-critical).
+nstArgOrAnd = Double((a > 9 || b > 0) && 5)
+"NstArgOrAnd: -nstArgOrAnd"
+# First arm misses, so the second gated value supplies the call argument.
+nstArgOrOfAnds = Double(a > 9 && 5 || b > 0 && 6)
+"NstArgOrOfAnds: -nstArgOrOfAnds"
+# Both arms can yield; || is left-biased, so the first value wins.
+nstArgOrOfAndsFirst = Double(a > 2 && 5 || b > 0 && 6)
+"NstArgOrOfAndsFirst: -nstArgOrOfAndsFirst"
+nstMergeA = 11
+nstMergeB = 22
+"NstMergeBefore: -nstMergeA -nstMergeB"
+nstMergeA, nstMergeB = Pair(a > 9 && 5 || a > 9 && 6, 7) > Pair(1, 1)
+"NstMergeKeepOld: -nstMergeA -nstMergeB"
+# Heap value through a nested &&/|| call argument (leak-checked by the suite).
+nstHeapArg = MkStr(a > 2 && "a" || "z")
+"NstHeapArg: -nstHeapArg"
+nstHeapArgFb = MkStr(a > 9 && "a" || "z")
+"NstHeapArgFallback: -nstHeapArgFb end"
+
+# Nested &&/|| driven by a range: last yielded value wins.
+nstRi = 0:5
+nstRanged = (nstRi > 2 || nstRi < 1) && nstRi * 10
+"NstRanged: -nstRanged"

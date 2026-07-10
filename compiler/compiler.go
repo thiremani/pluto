@@ -1446,8 +1446,6 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
-	case *ast.CondValueExpr:
-		res = c.compileCondValueExpr(e)
 	case *ast.PrefixExpression:
 		res = c.compilePrefixExpression(e, dest)
 	case *ast.CallExpression:
@@ -1823,10 +1821,6 @@ func (c *Compiler) compileCondScalar(op string, left *Symbol, right *Symbol) *Sy
 }
 
 func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) (res []*Symbol) {
-	if expr.IsLogicalOr() && !info.HasFallbackOr() {
-		return c.compileLogicalOrCondition(expr)
-	}
-
 	// For infix operators, both operands are evaluated in non-root context
 	// since they should not independently create loops
 	left := c.compileExpression(expr.Left, nil)
@@ -1842,10 +1836,14 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
 			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
-		case CondOr:
-			panic("internal: value-position logical OR must be lowered through conditional expression branching")
-		default:
+		case CondOr, CondAnd:
+			panic("internal: value-position logical OR/AND must be lowered through conditional expression branching")
+		case CondNone:
 			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+		default:
+			// A new CondMode must be classified here deliberately: falling
+			// through would lower a conditional slot as plain arithmetic.
+			panic(fmt.Sprintf("internal: unhandled CondMode %d in infix lowering", mode))
 		}
 	}
 
@@ -1857,30 +1855,28 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	return res
 }
 
-func (c *Compiler) compileLogicalOrCondition(expr *ast.InfixExpression) []*Symbol {
-	left := c.compileExpression(expr.Left, nil)
-	leftSym := c.derefIfPointer(left[0], "")
-
-	trueBlock, rhsBlock, contBlock := c.createIfElseCont(leftSym.Val, "or_true", "or_rhs", "or_cont")
-
-	c.builder.SetInsertPointAtEnd(trueBlock)
-	c.builder.CreateBr(contBlock)
-	trueEnd := c.builder.GetInsertBlock()
+// compileShortCircuitAnd emits a lazy i1 conjunction. compileRight is invoked
+// with the builder in the true branch, so its instructions execute only when
+// left is true.
+func (c *Compiler) compileShortCircuitAnd(left llvm.Value, compileRight func() llvm.Value, name string) llvm.Value {
+	rhsBlock, falseBlock, contBlock := c.createIfElseCont(left, name+"_rhs", name+"_false", name+"_cont")
 
 	c.builder.SetInsertPointAtEnd(rhsBlock)
-	right := c.compileExpression(expr.Right, nil)
-	rightSym := c.derefIfPointer(right[0], "")
+	right := compileRight()
 	c.builder.CreateBr(contBlock)
 	rhsEnd := c.builder.GetInsertBlock()
 
-	c.builder.SetInsertPointAtEnd(contBlock)
-	result := c.builder.CreatePHI(c.Context.Int1Type(), "or_cond")
-	result.AddIncoming(
-		[]llvm.Value{llvm.ConstInt(c.Context.Int1Type(), 1, false), rightSym.Val},
-		[]llvm.BasicBlock{trueEnd, rhsEnd},
-	)
+	c.builder.SetInsertPointAtEnd(falseBlock)
+	c.builder.CreateBr(contBlock)
+	falseEnd := c.builder.GetInsertBlock()
 
-	return []*Symbol{{Val: result, Type: I1}}
+	c.builder.SetInsertPointAtEnd(contBlock)
+	result := c.builder.CreatePHI(c.Context.Int1Type(), name)
+	result.AddIncoming(
+		[]llvm.Value{right, llvm.ConstInt(c.Context.Int1Type(), 0, false)},
+		[]llvm.BasicBlock{rhsEnd, falseEnd},
+	)
+	return result
 }
 
 // freeTemporary frees operands that are temporaries (not variables).
@@ -3259,13 +3255,21 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		defer c.popScope()
 
 		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
-			c.printAllExpressions(rewCall.Arguments)
+			// Per-iteration gate: a failing conditional skips that
+			// iteration's line, so `i > 2` prints only admitted elements.
+			c.compileCondOperands(rewCall, llvm.Value{}, func() {
+				c.printAllExpressions(rewCall.Arguments)
+			})
 		})
 		return
 	}
 
-	// LoopInside=true or no ranges: direct print
-	c.printAllExpressions(ce.Arguments)
+	// LoopInside=true or no ranges: direct print, gated on every conditional
+	// argument yielding — a failed condition prints nothing (the target-less
+	// case of propagation).
+	c.compileCondOperands(ce, llvm.Value{}, func() {
+		c.printAllExpressions(ce.Arguments)
+	})
 }
 
 // printAllExpressions prints all expressions on a single line

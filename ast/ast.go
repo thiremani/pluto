@@ -459,6 +459,20 @@ func IsLogicalOr(exp Expression) (*InfixExpression, bool) {
 	return infix, true
 }
 
+// IsLogicalAnd reports whether ie is a logical AND infix expression.
+func (ie *InfixExpression) IsLogicalAnd() bool {
+	return ie.Operator == token.SYM_COND_AND
+}
+
+// IsLogicalAnd returns exp as an infix logical AND expression.
+func IsLogicalAnd(exp Expression) (*InfixExpression, bool) {
+	infix, ok := exp.(*InfixExpression)
+	if !ok || !infix.IsLogicalAnd() {
+		return nil, false
+	}
+	return infix, true
+}
+
 func (ie *InfixExpression) expressionNode()  {}
 func (ie *InfixExpression) Tok() token.Token { return ie.Token }
 func (ie *InfixExpression) String() string {
@@ -478,29 +492,6 @@ func (ie *InfixExpression) String() string {
 	}
 	out.WriteString(")")
 
-	return out.String()
-}
-
-// CondValueExpr is a parenthesized conditional value: (cond value). Conds is
-// a list of comparisons ANDed together (mirroring the statement level), so
-// `(a > 2, b > 3  v)` yields Value only when every condition holds, otherwise
-// nothing (which a boundary resolves to the zero value, or a trailing
-// `|| fallback` overrides).
-type CondValueExpr struct {
-	Token token.Token // the '(' token
-	Conds []Expression
-	Value Expression
-}
-
-func (cv *CondValueExpr) expressionNode()  {}
-func (cv *CondValueExpr) Tok() token.Token { return cv.Token }
-func (cv *CondValueExpr) String() string {
-	var out bytes.Buffer
-	out.WriteString("(")
-	out.WriteString(printVec(cv.Conds))
-	out.WriteString(" ")
-	out.WriteString(cv.Value.String())
-	out.WriteString(")")
 	return out.String()
 }
 
@@ -561,8 +552,6 @@ func ExprChildren(expr Expression) []Expression {
 	switch e := expr.(type) {
 	case *InfixExpression:
 		return []Expression{e.Left, e.Right}
-	case *CondValueExpr:
-		return append(append([]Expression(nil), e.Conds...), e.Value)
 	case *PrefixExpression:
 		return []Expression{e.Right}
 	case *CallExpression:
@@ -605,24 +594,6 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			Left:     left,
 			Operator: e.Operator,
 			Right:    right,
-		}
-	case *CondValueExpr:
-		changed := false
-		conds := make([]Expression, len(e.Conds))
-		for i, c := range e.Conds {
-			conds[i] = rewrite(c)
-			if conds[i] != c {
-				changed = true
-			}
-		}
-		value := rewrite(e.Value)
-		if !changed && value == e.Value {
-			return expr
-		}
-		return &CondValueExpr{
-			Token: e.Token,
-			Conds: conds,
-			Value: value,
 		}
 	case *PrefixExpression:
 		right := rewrite(e.Right)

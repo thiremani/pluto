@@ -22,8 +22,8 @@ const (
 	CondNone   CondMode = iota // Normal expression (not a comparison in value position)
 	CondScalar                 // Scalar: extract LHS value, branch on condition
 	CondArray                  // Array: element-wise mask, LHS where condition holds else 0 (length-preserving)
-	CondOr                     // Fallback OR in value position: first true operand wins
-	CondValue                  // Parenthesized (cond value): yield value when cond holds, else zero
+	CondOr                     // Fallback OR in value position: first side to yield wins per slot
+	CondAnd                    // Gating AND in value position: yields the right side only when the left yields
 )
 
 type ExprInfo struct {
@@ -69,6 +69,16 @@ func (info *ExprInfo) HasFallbackOr() bool {
 	return false
 }
 
+// HasCondAnd returns true if any slot is a value-position gating && result.
+func (info *ExprInfo) HasCondAnd() bool {
+	for _, m := range info.CompareModes {
+		if m == CondAnd {
+			return true
+		}
+	}
+	return false
+}
+
 // IsMask reports whether output slot i is an array mask — a heap-owned,
 // always-yielding value that must be freed if it is not moved into a result
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
@@ -76,9 +86,13 @@ func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
+// HasCondExpr returns true if any slot is a failable conditional expression —
+// a scalar comparison, a ||, or a &&. Always-yielding masks (CondArray) are
+// deliberately excluded: callers ask "can this fail to yield?", which a mask
+// never does.
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
-		if m == CondScalar || m == CondOr || m == CondValue {
+		if m == CondScalar || m == CondOr || m == CondAnd {
 			return true
 		}
 	}
@@ -121,7 +135,7 @@ type TypeSolver struct {
 	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
 	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // value position (LetStatement conditions/values, (cond value); inherited by nested exprs): comparisons yield their LHS and chain, || is fallback — vs plain booleans in non-value contexts like prints
+	InValueExpr     bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	UnresolvedExprs map[pendingBinding][]pendingExpr
 }
 
@@ -378,8 +392,6 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandleArrayRangeExpression(t)
 	case *ast.InfixExpression:
 		return ts.HandleInfixRanges(t)
-	case *ast.CondValueExpr:
-		return ts.HandleCondValueRanges(t)
 	case *ast.PrefixExpression:
 		return ts.HandlePrefixRanges(t)
 	case *ast.CallExpression:
@@ -499,43 +511,6 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 
 // HandleInfixRanges processes infix expressions, recursively handling both operands
 // and tracking whether each side contains ranges for optimization decisions.
-func (ts *TypeSolver) HandleCondValueRanges(cv *ast.CondValueExpr) (ranges []*RangeInfo, rew ast.Expression) {
-	changed := false
-	conds := make([]ast.Expression, len(cv.Conds))
-	for i, c := range cv.Conds {
-		var cRanges []*RangeInfo
-		cRanges, conds[i] = ts.HandleRanges(c)
-		ranges = mergeUses(ranges, cRanges)
-		if conds[i] != c {
-			changed = true
-		}
-	}
-	valRanges, val := ts.HandleRanges(cv.Value)
-	ranges = mergeUses(ranges, valRanges)
-
-	if !changed && val == cv.Value {
-		rew = cv
-	} else {
-		cp := *cv
-		cp.Conds, cp.Value = conds, val
-		rew = &cp
-		// Cache entry for the rewritten node: operands are scalarized iterators.
-		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, cv)]
-		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CondValueExpr))] = &ExprInfo{
-			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
-			ExprLen:      originalInfo.ExprLen,
-			HasRanges:    false,
-			CompareModes: append([]CondMode(nil), originalInfo.CompareModes...),
-			Ranges:       nil,
-		}
-	}
-
-	info := ts.ExprCache[key(ts.FuncNameMangled, cv)]
-	info.Ranges = ranges
-	info.Rewrite = rew
-	return
-}
-
 func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*RangeInfo, rew ast.Expression) {
 	lRanges, l := ts.HandleRanges(infix.Left)
 	rRanges, r := ts.HandleRanges(infix.Right)
@@ -711,7 +686,16 @@ func (ts *TypeSolver) Solve() {
 
 }
 
+// TypePrintStatement types a print in value position: a comparison yields its
+// LHS (not a boolean), ||/&& gate and fall back, and the line prints only
+// when every conditional argument yields — print is the target-less case of
+// propagation, so a failed condition prints nothing. The explicit boolean
+// spelling is `cond && 1 || 0`.
 func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
+	savedInValueExpr := ts.InValueExpr
+	ts.InValueExpr = true
+	defer func() { ts.InValueExpr = savedInValueExpr }()
+
 	ts.TypeExpression(stmt.Expression, true)
 }
 
@@ -775,17 +759,27 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
-// conditionCanFail reports whether a value-position condition can fail (skip) —
-// which a statement gate requires, since an always-yielding condition can never
-// gate. A comparison or chain can fail; a value-position || can only if its final
-// fallback can: `a > 0 || b > 0` fails when both are false, but `a > 0 || b`
-// always yields b.
-func (ts *TypeSolver) conditionCanFail(expr ast.Expression) bool {
+// expressionCanFail reports whether a value-position expression can propagate
+// a failed yield to its parent. Array cells resolve failures locally. A || can
+// fail only when its final fallback can; other nodes propagate a root scalar
+// comparison/&& or a failure from any child.
+func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+	if _, ok := expr.(*ast.ArrayLiteral); ok {
+		return false
+	}
 	if infix, ok := ast.IsLogicalOr(expr); ok {
-		return ts.conditionCanFail(infix.Right)
+		return ts.expressionCanFail(infix.Right)
 	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && info.HasCondExpr()
+	if info != nil && (info.HasCondScalar() || info.HasCondAnd()) {
+		return true
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		if ts.expressionCanFail(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
@@ -796,7 +790,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	}
 
 	// A multi-cell comparison (Pair > Pair) gates on the cell-wise conjunction,
-	// like a single comparison; it is accepted by the conditionCanFail check
+	// like a single comparison; it is accepted by the expressionCanFail check
 	// below. Every cell must be a scalar: an array cell is a mask (an array
 	// value, not a boolean), which gate lowering would silently drop (it ANDs
 	// only scalar cells), so reject a condition with any array cell — not just
@@ -817,7 +811,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	// In value context a comparison yields its LHS (so the condition's type is the
 	// operand type, not i1); it gates as long as it can fail — the gate is the
 	// conjunction of its comparisons ("did the value-position expression yield?").
-	if ts.conditionCanFail(expr) {
+	if ts.expressionCanFail(expr) {
 		return
 	}
 
@@ -1440,8 +1434,6 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 		types = append(types, t)
 	case *ast.InfixExpression:
 		types = ts.TypeInfixExpression(e)
-	case *ast.CondValueExpr:
-		types = ts.typeCondValueExpr(e, isRoot)
 	case *ast.PrefixExpression:
 		types = ts.TypePrefixExpression(e)
 	case *ast.CallExpression:
@@ -1610,122 +1602,10 @@ func typesResolved(types []Type) bool {
 // the scalar cells and silently drops an array cell. A gate condition must therefore
 // have no array cell — checked across every cell, not just the first, so a mixed
 // scalar/array multi-return comparison (Pair > Pair where one slot is an array)
-// is rejected. Shared by statement gates and (cond value) conditions.
+// is rejected.
 func anyArrayCell(condTypes []Type) bool {
 	for _, t := range condTypes {
 		if t.Kind() == ArrayKind {
-			return true
-		}
-	}
-	return false
-}
-
-// typeCondValueExpr types a parenthesized conditional value (cond value).
-// The conditions are typed in value context (like a statement gate): a comparison
-// yields its LHS and chains (so `(i > 2 < 8  v)` works), and each gates on whether
-// that value-position expression yields — so it must be able to fail. Multiple
-// comma-separated conditions are ANDed (the value yields only when all hold). The
-// result type is the value's type. Slots are marked CondValue so the value gates on
-// lowering and the node can serve as the (failable) left operand of a value-position ||.
-func (ts *TypeSolver) typeCondValueExpr(expr *ast.CondValueExpr, isRoot bool) []Type {
-	// A (cond value)'s conditions and value are intrinsically value positions
-	// (comparisons yield their LHS and chain), independent of the surrounding
-	// statement: each condition IS a gate by construction. A print/root expression
-	// statement does not set InValueExpr, so force it here (and restore on return)
-	// rather than relying on the enclosing context.
-	savedInValueExpr := ts.InValueExpr
-	ts.InValueExpr = true
-	defer func() { ts.InValueExpr = savedInValueExpr }()
-
-	// Each condition is typed and validated independently; the gate is the
-	// conjunction of them all (the value yields only when every condition holds),
-	// mirroring the statement level. A condition must be a comparison that can
-	// fail — a multi-cell comparison (Pair > Pair, or a string pair) is fine: it
-	// AND-reduces cell-wise at lowering, so the gate holds only when every cell
-	// does. A bare identifier or always-yielding || cannot gate. The check is
-	// deferred until the operand types resolve, so a not-yet-typed operand does
-	// not trip a spurious diagnostic during fixpoint iteration.
-	condHasRanges := false
-	for _, cond := range expr.Conds {
-		condTypes := ts.TypeExpression(cond, true)
-		if typesResolved(condTypes) {
-			if anyArrayCell(condTypes) {
-				// An array cell is a mask, not a scalar boolean; gate lowering
-				// would silently drop it (see anyArrayCell), so reject it here too.
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: cond.Tok(),
-					Msg:   "(cond value) condition must produce a scalar value, not an array",
-				})
-			} else if !ts.conditionCanFail(cond) {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: cond.Tok(),
-					Msg:   fmt.Sprintf("(cond value) condition must be a comparison that can fail, got %s", condTypes[0]),
-				})
-			}
-		}
-		if info := ts.ExprCache[key(ts.FuncNameMangled, cond)]; info != nil && info.HasRanges {
-			condHasRanges = true
-		}
-	}
-
-	// The value is always a nested, per-iteration value (the CondValueExpr or its
-	// enclosing context owns any loop), so type it non-root: a range identifier
-	// resolves to its iterator type, not a Range.
-	valueTypes := ts.TypeExpression(expr.Value, false)
-
-	// A || in the value arm is the one position still lowered inline with no
-	// branching context (it would panic in compileInfixBasic), so reject it —
-	// value-position || resolves per slot everywhere else.
-	if treeHasFallbackOr(ts.ExprCache, ts.FuncNameMangled, expr.Value) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   "value-position || inside a (cond value) value arm is not supported yet (e.g. (c > 0  a > 2 || 7)); compute the value first",
-		})
-	}
-
-	valInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Value)]
-
-	types := make([]Type, len(valueTypes))
-	copy(types, valueTypes)
-	compareModes := make([]CondMode, len(valueTypes))
-	for i := range compareModes {
-		compareModes[i] = CondValue
-	}
-
-	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-		OutTypes:     types,
-		ExprLen:      len(types),
-		HasRanges:    condHasRanges || (valInfo != nil && valInfo.HasRanges),
-		CompareModes: compareModes,
-	}
-	return types
-}
-
-// wrapsPropagatingCond reports whether expr wraps a *propagating* value-position
-// condition — a comparison (CondScalar) or a value-position || (CondOr) — anywhere
-// in its tree. Those propagate their failure to the whole value (the same gating
-// that drives zero-fill), so a fallback || can attach to a left operand that wraps
-// one in arithmetic, e.g. (i > 2 < 8) ^ 2 || -1.
-//
-// A (cond value) and an array cell resolve *locally* (they always produce a value
-// and never propagate a failure outward), so a condition nested inside one does
-// not make the wrapping operand fail — the walk stops at those boundaries. A bare
-// (cond value) at the root is handled by the caller's HasCondExpr check, since the
-// || keys off its condition directly.
-func (ts *TypeSolver) wrapsPropagatingCond(expr ast.Expression) bool {
-	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil {
-		for _, m := range info.CompareModes {
-			if m == CondScalar || m == CondOr {
-				return true
-			}
-		}
-	}
-	switch expr.(type) {
-	case *ast.CondValueExpr, *ast.ArrayLiteral:
-		return false
-	}
-	for _, child := range ast.ExprChildren(expr) {
-		if ts.wrapsPropagatingCond(child) {
 			return true
 		}
 	}
@@ -1736,60 +1616,89 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
-	if ts.InValueExpr {
-		// Value-position || is left-biased fallback (yield left, else right), so the
-		// left must be able to fail or the fallback is dead. Failable: its root is
-		// conditional, or it wraps a propagating comparison in arithmetic (e.g.
-		// (i > 2 < 8) ^ 2 || -1 keys off the nested comparison).
-		if leftInfo == nil || !(leftInfo.HasCondExpr() || ts.wrapsPropagatingCond(expr.Left)) {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: expr.Token,
-				Msg:   "logical OR in value position requires a conditional left operand",
-			})
-		}
-
-		types := make([]Type, len(left))
-		compareModes := make([]CondMode, len(left))
-		for i := range left {
-			types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
-			compareModes[i] = CondOr
-		}
-
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
-			OutTypes:     types,
-			ExprLen:      len(types),
-			HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
-			CompareModes: compareModes,
-		}
-		return types
-	}
-
-	types := []Type{I1}
-	if len(left) != 1 {
+	// Value-position || is left-biased fallback (yield left, else right), so the
+	// left must be able to fail or the fallback is dead. Failure may come from
+	// its root or a propagating child, e.g. (i > 2 < 8) ^ 2 || -1.
+	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical OR condition operands must produce a single value, got %d", len(left)),
+			Msg:   "logical OR in value position requires a conditional left operand",
 		})
-		types = []Type{Unresolved{}}
-	} else {
-		// Validate the i1 requirement only once both operand types are known;
-		// an unresolved operand may still resolve to i1 on a later solver pass.
-		bothResolved := left[0].Kind() != UnresolvedKind && right[0].Kind() != UnresolvedKind
-		bothConditions := IsI1(left[0]) && IsI1(right[0])
-		if bothResolved && !bothConditions {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: expr.Token,
-				Msg:   fmt.Sprintf("logical OR requires condition operands, got %s and %s", left[0], right[0]),
-			})
-			types = []Type{Unresolved{}}
-		}
+	}
+
+	types := make([]Type, len(left))
+	compareModes := make([]CondMode, len(left))
+	for i := range left {
+		types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
+		compareModes[i] = CondOr
 	}
 
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
 		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
-		CompareModes: make([]CondMode, len(types)),
+		CompareModes: compareModes,
+	}
+	return types
+}
+
+// typeLogicalAndExpression types a value-position && as a gating AND: slot i
+// yields the right side's slot i only when the left's slot i yields, so the
+// result types are the right side's. The left never materializes into the
+// result, so its slot types need not match the right's — it only has to be
+// able to fail, or the gate is dead — and its arity folds (N-slot condition
+// gating one value: every slot must yield) or broadcasts (one condition
+// gating an N-slot value) onto the right's; equal arities align per slot.
+func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
+	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", len(left), len(right)),
+		})
+		types := []Type{Unresolved{}}
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		return types
+	}
+
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
+
+	// An array lane is a mask — a value, not a boolean — so it cannot gate:
+	// folding or zipping would silently ignore it (the same rule anyArrayCell
+	// enforces for statement gates).
+	if typesResolved(left) && anyArrayCell(left) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "logical AND condition must produce scalar values, not an array",
+		})
+	}
+
+	// A conditional left gates only if it can fail — an always-yielding ||
+	// never gates. Failure may come from a propagating child in arithmetic,
+	// e.g. (i > 2 < 8) ^ 2 && v.
+	if !ts.expressionCanFail(expr.Left) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   "logical AND in value position requires a conditional left operand",
+		})
+	}
+
+	types := make([]Type, len(right))
+	compareModes := make([]CondMode, len(right))
+	for i := range right {
+		t := right[i]
+		if ptr, ok := t.(Ptr); ok {
+			t = ptr.Elem
+		}
+		types[i] = t
+		compareModes[i] = CondAnd
+	}
+
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
+		OutTypes:     types,
+		ExprLen:      len(types),
+		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		CompareModes: compareModes,
 	}
 	return types
 }
@@ -1800,6 +1709,14 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
+
+	// A && left contributes only conditions (its values are never a result),
+	// so its arity folds or broadcasts onto the right's — dispatch before the
+	// equal-length rule that value-producing operators need.
+	if expr.IsLogicalAnd() {
+		return ts.typeLogicalAndExpression(expr, left, right)
+	}
+
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
@@ -1833,26 +1750,21 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	return
 }
 
-// treeHasFallbackOr reports whether expr's tree contains a bare value-position
-// ||. An array literal resolves a || in a cell locally, so it stays a
-// boundary; a nested (cond value) is scanned through its value arm. The solver
-// rejects a || in a (cond value) value arm with it; the compiler routes ranged
-// || trees to per-iteration staging with it (solver and compiler share the
-// same ExprCache map).
-func treeHasFallbackOr(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
-	if _, ok := ast.IsLogicalOr(expr); ok {
-		if info := cache[key(funcNameMangled, expr)]; info != nil && info.HasFallbackOr() {
+// treeHasLogicalCond reports whether expr's tree contains a bare value-position
+// || or &&. An array literal resolves one in a cell locally, so it stays a
+// boundary. The compiler routes ranged ||/&& trees to per-iteration staging
+// with it (solver and compiler share the same ExprCache map).
+func treeHasLogicalCond(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
+	if infix, ok := expr.(*ast.InfixExpression); ok && (infix.IsLogicalOr() || infix.IsLogicalAnd()) {
+		if info := cache[key(funcNameMangled, expr)]; info != nil && (info.HasFallbackOr() || info.HasCondAnd()) {
 			return true
 		}
 	}
-	switch e := expr.(type) {
-	case *ast.ArrayLiteral:
+	if _, ok := expr.(*ast.ArrayLiteral); ok {
 		return false
-	case *ast.CondValueExpr:
-		return treeHasFallbackOr(cache, funcNameMangled, e.Value)
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if treeHasFallbackOr(cache, funcNameMangled, child) {
+		if treeHasLogicalCond(cache, funcNameMangled, child) {
 			return true
 		}
 	}

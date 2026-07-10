@@ -601,17 +601,17 @@ func TestInnerFallbackOrTupleComparisonTypes(t *testing.T) {
 	require.Emptyf(t, ts.Errors, "inner-|| tuple comparison should type cleanly, got: %v", ts.Errors)
 }
 
-func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
+func TestInnerAndOrInTupleComparisonTypes(t *testing.T) {
 	ctx := llvm.NewContext()
-	// A || in a (cond value) value arm is still lowered inline with no branching
-	// context (it would panic in compileInfixBasic), so the solver rejects it —
-	// in any context, and exactly once despite fixpoint re-typing.
+	// A &&/|| composition nested in a multi-return comparison operand
+	// (Pair((1 > 0 && 0 > 1) || 7, 9) > Pair(1, 1)) resolves during extraction
+	// like any other per-slot condition, so the solver accepts it.
 	code := "p, q = Pair(x, y)\n    p = x\n    q = y"
-	cc := NewCodeCompiler(ctx, "condValArmOrCmp", "", mustParseCode(t, code))
+	cc := NewCodeCompiler(ctx, "innerAndOrTupleCmp", "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
 
-	script := "px, py = Pair((1 > 0 0 > 1 || 7), 9) > Pair(1, 1)"
-	sl := lexer.New("condValArmOrCmp.spt", script)
+	script := "px, py = Pair(1 > 0 && 0 > 1 || 7, 9) > Pair(1, 1)"
+	sl := lexer.New("innerAndOrTupleCmp.spt", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
@@ -620,21 +620,20 @@ func TestInnerFallbackOrInCondValueArmRejected(t *testing.T) {
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	require.Lenf(t, ts.Errors, 1, "|| in a (cond value) value arm should emit one diagnostic, got: %v", ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
+	require.Emptyf(t, ts.Errors, "inner &&/|| tuple comparison should type cleanly, got: %v", ts.Errors)
 }
 
-func TestCondValueArmOrRejectedOnceInFunction(t *testing.T) {
+func TestFunctionBodyRejectionEmittedOnce(t *testing.T) {
 	ctx := llvm.NewContext()
 	// Function bodies are re-typed on every solver fixpoint pass; a rejection
 	// inside one must be emitted exactly once — not duplicated per pass, and
 	// with no spurious "not converging" cascade.
-	code := "r = BadOr(x)\n    r = (x > 0  x > 2 || 7)"
-	cc := NewCodeCompiler(ctx, "condValArmOrFunc", "", mustParseCode(t, code))
+	code := "r = BadOr(x)\n    r = x || 2"
+	cc := NewCodeCompiler(ctx, "badOrFunc", "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
 
 	script := "m = BadOr(5)\n\"-m\""
-	sl := lexer.New("condValArmOrFunc.spt", script)
+	sl := lexer.New("badOrFunc.spt", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
@@ -644,7 +643,7 @@ func TestCondValueArmOrRejectedOnceInFunction(t *testing.T) {
 	ts.Solve()
 
 	require.Lenf(t, ts.Errors, 1, "function-body rejection should emit exactly one diagnostic, got: %v", ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "value-position || inside a (cond value) value arm is not supported")
+	require.Contains(t, ts.Errors[0].Msg, "logical OR in value position requires a conditional left operand")
 }
 
 func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
@@ -667,7 +666,7 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-range driver, got I64")
 }
 
-func TestCondValueDiagnostics(t *testing.T) {
+func TestLogicalAndDiagnostics(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -678,40 +677,41 @@ func TestCondValueDiagnostics(t *testing.T) {
 		expectError string
 	}{
 		{
-			name:        "ConditionMustBeFailableComparison",
-			script:      "n = 5\nx = (n 10)",
-			expectError: "(cond value) condition must be a comparison that can fail, got I64",
+			// The left of a value-position && must be able to fail, or the
+			// gate is dead.
+			name:        "LeftMustBeFailable",
+			script:      "n = 5\nx = n && 10",
+			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
-			// A (cond value) is a valid failable left operand of a value-position
-			// ||; the fallback's type must still match the value's.
-			name:        "FallbackTypeMismatch",
-			script:      "a = 1\nx = (a > 0 10) || \"s\"",
-			expectError: "logical OR value operands must have matching output types, got I64 and Str",
+			// An always-yielding || (a > 0 || a always yields a value) cannot
+			// gate a &&.
+			name:        "UnfailableOrLeftRejected",
+			script:      "a = 1\nx = (a > 0 || a) && 7",
+			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
-			// Each conjunct must be able to fail: an always-yielding || fallback
-			// (a > 0 || a always yields) cannot gate, so it is rejected in the list.
-			name:        "ConjunctMustBeFailable",
-			script:      "a = 1\nb = 2\nx = (a > 0 || a, b > 0  7)",
-			expectError: "(cond value) condition must be a comparison that can fail",
+			// Wrapping an always-yielding || in arithmetic does not make it
+			// failable.
+			name:        "WrappedUnfailableOrLeftRejected",
+			script:      "a = 1\nx = ((a > 0 || a) + 1) && 7",
+			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
-			// A bare identifier conjunct is not a comparison, so it cannot gate even
-			// alongside a well-formed comparison.
-			name:        "ConjunctIdentifierNotComparison",
-			script:      "a = 5\nn = 1\nx = (a > 2, n  7)",
-			expectError: "(cond value) condition must be a comparison that can fail",
-		},
-		{
-			// A mixed scalar/array multi-return comparison cannot gate: the array
-			// cell is a mask (an array value), not a boolean, and gate lowering would
-			// silently drop it. MixSA returns (scalar, array) so the array cell is
-			// not first — exercising the all-cells check, not just cell 0.
-			name:        "MixedArrayCellRejected",
+			// An array lane is a mask (a value, not a boolean), so it cannot
+			// gate: folding or zipping would silently ignore it — the same
+			// rule anyArrayCell enforces for statement gates.
+			name:        "MixedArrayLaneRejected",
 			code:        "s, arr = MixSA(x)\n    s = x\n    arr = [x x + 1]",
-			script:      "y = (MixSA(5) > MixSA(3)  7)",
-			expectError: "(cond value) condition must produce a scalar value, not an array",
+			script:      "y = MixSA(5) > MixSA(3) && 3",
+			expectError: "logical AND condition must produce scalar values, not an array",
+		},
+		{
+			// A && is a valid failable left operand of a value-position ||;
+			// the fallback's type must still match the yielded value's.
+			name:        "AndOrFallbackTypeMismatch",
+			script:      "a = 1\nx = a > 0 && 10 || \"s\"",
+			expectError: "logical OR value operands must have matching output types, got I64 and Str",
 		},
 	}
 
@@ -751,6 +751,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 
 	cases := []struct {
 		name        string
+		code        string
 		script      string
 		expectError string
 	}{
@@ -760,17 +761,19 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
-			// A wrapped propagating condition can fail ((a > 2) + 1 || -1 is valid),
-			// but a wrapped (cond value) resolves locally and always produces a
-			// value, so the || would catch nothing — reject it.
-			name:        "WrappedLocalCondValueCannotFail",
-			script:      "a = 1\nx = (a > 2 5) + 1 || 7",
-			expectError: "logical OR in value position requires a conditional left operand",
-		},
-		{
 			name:        "FallbackTypesMustMatch",
 			script:      "a = 1\nx = a > 0 || \"fallback\"",
 			expectError: "logical OR value operands must have matching output types, got I64 and Str",
+		},
+		{
+			name:        "UnfailableFallbackLeftRejected",
+			script:      "a = 1\nx = (a > 0 || a) || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
+			name:        "WrappedUnfailableFallbackLeftRejected",
+			script:      "a = 1\nx = ((a > 0 || a) + 1) || 7",
+			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{
 			// Conditions are value-position now, so `a > 0 || b` is a fallback whose
@@ -790,7 +793,11 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			codeAST := ast.NewCode()
+			if strings.TrimSpace(tc.code) != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
 			require.Empty(t, cc.Compile())
 
 			sl := lexer.New(tc.name+".spt", tc.script)

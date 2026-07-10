@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -213,9 +215,56 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 	return nil
 }
 
-func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
+type internalCompilerError struct {
+	unit string
+}
+
+func (e *internalCompilerError) Error() string {
+	return fmt.Sprintf("internal compiler error compiling %s", e.unit)
+}
+
+func isInternalCompilerError(err error) bool {
+	var ice *internalCompilerError
+	return errors.As(err, &ice)
+}
+
+func compileScriptsUntilICE(scriptFiles []string, compile func(string) error) (compileErr int, stopped bool) {
+	for _, scriptFile := range scriptFiles {
+		if err := compile(scriptFile); err != nil {
+			compileErr++
+			if isInternalCompilerError(err) {
+				return compileErr, true
+			}
+		}
+	}
+	return compileErr, false
+}
+
+// recoverICE converts a compiler panic into an internal-compiler-error report.
+// The typed error tells the driver to stop before reusing compiler state that
+// may have been left inconsistent by the panic.
+func recoverICE(unit string, err *error, stderr io.Writer) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "💥 internal compiler error: %v\n", r)
+	fmt.Fprintln(stderr, "This is a bug in the Pluto compiler, not in your program.")
+	fmt.Fprintf(stderr, "Please report it at https://github.com/thiremani/pluto/issues with the source that triggered it and this trace:\n\n%s\n", debug.Stack())
+	*err = &internalCompilerError{unit: unit}
+}
+
+func cleanupUnlessReleased(released *bool, cleanup func()) {
+	if !*released {
+		cleanup()
+	}
+}
+
+func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, codeLL string, err error) {
+	defer recoverICE("code files", &err, os.Stderr)
+
 	pkgCode := ast.NewCode()
-	cc := compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
+	cc = compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
 	if len(codeFiles) == 0 {
 		return cc, "", nil
 	}
@@ -256,7 +305,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 
 	pkg := filepath.Base(p.ModPath)
 	fmt.Println("Pkg name is", pkg)
-	codeLL := filepath.Join(p.CacheDir, CODE_DIR, pkg+IR_SUFFIX)
+	codeLL = filepath.Join(p.CacheDir, CODE_DIR, pkg+IR_SUFFIX)
 	os.MkdirAll(filepath.Dir(codeLL), 0755)
 	if err := os.WriteFile(codeLL, []byte(ir), 0644); err != nil {
 		fmt.Printf("Error writing IR to %s: %v\n", codeLL, err)
@@ -266,7 +315,11 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 }
 
 // CompileScript returns an owned LLVM module. The caller must dispose it.
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (llvm.Module, error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (mod llvm.Module, err error) {
+	// Registered before the module-dispose defer, so unwinding a panic frees
+	// the half-built module first, then the ICE recovery converts the panic.
+	defer recoverICE(scriptFile, &err, os.Stderr)
+
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
@@ -285,11 +338,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
 	scriptModule := sc.Compiler.Module
 	moduleReturned := false
-	defer func() {
-		if !moduleReturned {
-			scriptModule.Dispose()
-		}
-	}()
+	defer cleanupUnlessReleased(&moduleReturned, scriptModule.Dispose)
 
 	// Only link if code module has content
 	if codeLL != "" {
@@ -591,19 +640,17 @@ func runCompile(opts cliOptions) {
 		return
 	}
 
-	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
 	exprCache := make(map[compiler.ExprKey]*compiler.ExprInfo)
-	for _, scriptFile := range scriptFiles {
+	compileErr, stoppedOnICE := compileScriptsUntilICE(scriptFiles, func(scriptFile string) error {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
 		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
-			compileErr++
-			continue
+			return err
 		}
 
 		err = func() error {
@@ -616,6 +663,10 @@ func runCompile(opts cliOptions) {
 		} else {
 			fmt.Printf("✅ Successfully built binary for script: %s\n", script)
 		}
+		return nil
+	})
+	if stoppedOnICE {
+		fmt.Println("Stopping compilation after internal compiler error.")
 	}
 	if compileErr > 0 || binErr > 0 {
 		os.Exit(1)

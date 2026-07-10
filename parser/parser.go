@@ -18,6 +18,7 @@ const (
 	ASSIGN                   // =
 	COMMA                    // ,
 	COND_OR                  // ||
+	COND_AND                 // && (binds tighter than ||: c && v || w == (c && v) || w)
 	BITWISE_OR               // |
 	BITWISE_XOR              // ⊕
 	BITWISE_AND              // &
@@ -37,6 +38,7 @@ var leftBindingPower = map[string]float64{
 	token.SYM_ASSIGN:   ASSIGN,
 	token.SYM_COMMA:    COMMA,
 	token.SYM_COND_OR:  COND_OR,
+	token.SYM_COND_AND: COND_AND,
 	token.SYM_OR:       BITWISE_OR,
 	token.SYM_XOR:      BITWISE_XOR,
 	token.SYM_AND:      BITWISE_AND,
@@ -99,6 +101,11 @@ type StmtParser struct {
 	infixParseFns   map[string]infixParseFn
 	postfixParseFns map[string]postfixParseFn
 
+	// The innermost parseExpression's split mode, threaded to ||/&& right
+	// sides: they combine conditions, so an attached prefix after a complete
+	// right-side condition must start the value there too.
+	splitMode prefixSplitMode
+
 	blankIdents []token.Token // tracks blank identifiers during parsing
 }
 
@@ -128,6 +135,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
 
 	p.registerInfix(token.SYM_COND_OR, p.parseInfixExpression)
+	p.registerInfix(token.SYM_COND_AND, p.parseInfixExpression)
 	p.registerInfix(token.SYM_OR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_XOR, p.parseInfixExpression)
 	p.registerInfix(token.SYM_AND, p.parseInfixExpression)
@@ -720,6 +728,18 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	return stmt
 }
 
+// flattenCondAnd returns a condition's top-level && conjuncts, left to right.
+// The condition slot's && is the statement-level conjunction/domain list: each
+// conjunct is validated like a former comma-list element, so bare range
+// drivers nest (i && j walks the cartesian product) and comparisons gate. The
+// compiler short-circuits the resulting condition list left to right.
+func flattenCondAnd(exp ast.Expression) []ast.Expression {
+	if infix, ok := ast.IsLogicalAnd(exp); ok {
+		return append(flattenCondAnd(infix.Left), flattenCondAnd(infix.Right)...)
+	}
+	return []ast.Expression{exp}
+}
+
 func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
 	for _, exp := range expList {
 		if p.isCondition(exp) {
@@ -762,11 +782,20 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 		return stmt
 	}
 
+	// A statement condition is one expression — comma means positional lists
+	// only. Conjunctions are spelled with the operator: a > 2 && b > 3  value.
+	if len(expList) > 1 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: expList[1].Tok(),
+			Msg:   "a statement condition is a single expression; combine conditions with && (a > 2 && b > 3  value)",
+		})
+		return nil
+	}
 	if !p.conditionsOk(expList) {
 		return nil
 	}
 
-	stmt.Condition = expList
+	stmt.Condition = flattenCondAnd(expList[0])
 
 	p.nextToken()
 	stmt.Value = p.parseExpList(prefixSplitNone)
@@ -792,6 +821,9 @@ func (p *StmtParser) isCondition(exp ast.Expression) bool {
 	}
 
 	if infix, ok := ast.IsLogicalOr(exp); ok {
+		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
+	}
+	if infix, ok := ast.IsLogicalAnd(exp); ok {
 		return p.isCondition(infix.Left) && p.isCondition(infix.Right)
 	}
 
@@ -840,6 +872,10 @@ const (
 )
 
 func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplitMode) ast.Expression {
+	saved := p.splitMode
+	p.splitMode = splitPrefix
+	defer func() { p.splitMode = saved }()
+
 	// ignore illegal tokens
 	for p.curTokenIs(token.ILLEGAL) {
 		p.illegalToken(p.curToken)
@@ -1241,76 +1277,35 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 		rbp = p.curPrecedence() // Default: RBP = LBP (left-associative)
 	}
 
+	// ||/&& combine conditions, so their right side keeps the surrounding
+	// condition-split mode: in `i < 2 && j > 1 -x` the attached prefix
+	// starts the value, exactly as after a single condition.
+	mode := prefixSplitNone
+	if expression.Operator == token.SYM_COND_OR || expression.Operator == token.SYM_COND_AND {
+		mode = p.splitMode
+	}
+
 	p.nextToken()
-	expression.Right = p.parseExpression(rbp, prefixSplitNone)
+	expression.Right = p.parseExpression(rbp, mode)
 
 	return expression
 }
 
+// parseGroupedExpression parses parentheses as pure grouping: one
+// sub-expression closed by ')'. Conditional values are spelled with the
+// operators — `cond && value`, `cond && value || fallback` — not a
+// parenthesized (cond value) form.
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
-	lparen := p.curToken
 	p.nextToken()
 
-	// Parse the leading sub-expression with the same condition-split mode the
-	// statement level uses, so `(cond value)` detection (including attached
-	// prefixes like `a > 2 -b`) is discovered identically in both places.
-	exp := p.parseExpression(LOWEST, prefixSplitAfterCondition)
+	exp := p.parseExpression(LOWEST, prefixSplitNone)
 	if exp == nil {
-		return nil
-	}
-
-	// Plain grouping: a single sub-expression closed by ')'. A bare `(cond)`
-	// (no value) stays an ordinary value-position expression, and a trailing
-	// `|| fallback` binds outside the parens as a normal infix.
-	if p.peekTokenIs(token.RPAREN) {
-		p.nextToken()
-		return exp
-	}
-
-	// (cond value): one or more comma-separated conditions followed by a
-	// space-separated value, mirroring the statement level (conditions are
-	// ANDed). The leading sub-expression must be a condition for this to be a
-	// (cond value); otherwise let expectPeek report the unexpected token.
-	if !p.isCondition(exp) {
-		if !p.expectPeek(token.RPAREN) {
-			return nil
-		}
-		return exp
-	}
-
-	conditions := []ast.Expression{exp}
-	for p.peekTokenIs(token.COMMA) {
-		p.nextToken() // consume the previous condition's final token
-		p.nextToken() // move onto the next condition's first token
-		cond := p.parseExpression(LOWEST, prefixSplitAfterCondition)
-		if cond == nil {
-			return nil
-		}
-		conditions = append(conditions, cond)
-	}
-	if !p.conditionsOk(conditions) {
-		return nil
-	}
-
-	// A condition list with no value is incomplete: `(a > 2, b > 3)` has nothing
-	// to yield. (A single `(cond)` is handled above as plain grouping.)
-	if p.peekTokenIs(token.RPAREN) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: lparen,
-			Msg:   "(cond value) requires a value after the condition(s)",
-		})
-		return nil
-	}
-
-	p.nextToken()
-	value := p.parseExpression(LOWEST, prefixSplitNone)
-	if value == nil {
 		return nil
 	}
 	if !p.expectPeek(token.RPAREN) {
 		return nil
 	}
-	return &ast.CondValueExpr{Token: lparen, Conds: conditions, Value: value}
+	return exp
 }
 
 // assumes current token is token.NEWLINE

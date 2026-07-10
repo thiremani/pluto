@@ -39,6 +39,22 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
 }
 
+func TestStatementAndShortCircuits(t *testing.T) {
+	script := `den = 1:3
+out = den < 0 && (10 ÷ den) > 1 7
+out`
+
+	ir, _ := compileScriptAndCodeIR(t, "stmt_and_short_circuit", "", script)
+	rhsLabel := strings.Index(ir, "stmt_and_rhs:")
+	falseLabel := strings.Index(ir, "stmt_and_false:")
+	division := strings.Index(ir, "sdiv i64")
+	require.NotEqual(t, -1, rhsLabel, "expected a short-circuit RHS block")
+	require.NotEqual(t, -1, falseLabel, "expected a short-circuit false block")
+	require.NotEqual(t, -1, division, "expected the second condition's division")
+	require.Less(t, rhsLabel, division, "the second condition must be emitted inside the lazy RHS block")
+	require.Less(t, division, falseLabel, "the second condition must not escape the lazy RHS block")
+}
+
 func TestPhase1ScalarABIDirectI64(t *testing.T) {
 	code := `res = Add(x, y)
     res = x + y`

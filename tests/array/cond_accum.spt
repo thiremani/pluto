@@ -15,7 +15,7 @@ twos = i [2]
 
 # Driver + boolean guard combines iteration and filtering
 i = 0:5
-mixed = i, i < 3 [i]
+mixed = i && i < 3 [i]
 "MixedDriverGuard: -mixed"
 
 # Bare array-range expression driver uses its view range as the loop driver
@@ -41,13 +41,13 @@ mixViewA, mixViewB = viewMix [8], viewMix
 # Bare range drivers compose as nested loops
 i = 0:2
 j = 0:3
-grid = i, j [i * 10 + j]
+grid = i && j [i * 10 + j]
 "NestedDrivers: -grid"
 
 # Range and array-range drivers compose as nested loops
 i = 0:2
 view2 = driverSrc[1:4]
-gridView = i, view2 [9]
+gridView = i && view2 [9]
 "MixedDrivers: -gridView"
 
 # Bare range driver with scalar RHS keeps last iteration value
@@ -134,12 +134,12 @@ ta, tb = i < 3 [3], [1 2 data[i] 5]
 
 # Multi-condition AND
 j = 0:10
-filtered = j > 2, j < 7 [j]
+filtered = j > 2 && j < 7 [j]
 filtered
 
 # Multi-condition AND with scalar iteration
 j = 0:10
-scalarFiltered = j >= 2, j < 7 j
+scalarFiltered = j >= 2 && j < 7 j
 "ScalarFiltered: -scalarFiltered"
 
 # Array identifier with ranged condition (not a literal, no accumulation)
@@ -155,7 +155,7 @@ mc = i < 2 [i i + 10]
 
 # Single iteration true (narrow AND window)
 i = 0:10
-one = i > 3, i <= 6 [i]
+one = i > 3 && i <= 6 [i]
 one
 
 # Scalar conditional iteration: arithmetic (last value wins)
@@ -232,14 +232,14 @@ localLeakA, localLeakB = i < 2 [1], j
 # opens the outer loop and the RHS sees the current scalar iterator value.
 i = 0:4
 j = 0:4
-sharedReuse = i < 3, j > 1 [i]
+sharedReuse = i < 3 && j > 1 [i]
 "CondSharedReuse: -sharedReuse"
 
 # Statement-level conditions gate the whole tuple; value-position comparisons
 # still apply only to the expression that contains them.
 i = 0:10
 j = 0:5
-sharedTupleX, sharedTupleY = i < 8, j > 2 i + 1, (i + j) < 10
+sharedTupleX, sharedTupleY = i < 8 && j > 2 i + 1, (i + j) < 10
 "SharedTupleCondX: -sharedTupleX. SharedTupleCondY: -sharedTupleY"
 
 # Non-collector tuple outputs share the statement iteration, but RHS-local

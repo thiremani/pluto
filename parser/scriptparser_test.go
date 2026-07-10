@@ -535,7 +535,7 @@ func TestConditionExpression(t *testing.T) {
 	}
 }
 
-func TestCondValueParseErrors(t *testing.T) {
+func TestParenGroupParseErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -546,7 +546,7 @@ func TestCondValueParseErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New("TestCondValueParseErrors", tt.input)
+			l := lexer.New("TestParenGroupParseErrors", tt.input)
 			sp := NewScriptParser(l)
 			sp.Parse()
 			errs := sp.Errors()
@@ -596,6 +596,16 @@ func TestConditionThenCallValue(t *testing.T) {
 	require.Truef(t, testIntegerLiteral(t, callExpr.Arguments[0], 1), "argument mismatch")
 }
 
+func TestCommaConditionRejected(t *testing.T) {
+	// A statement condition is one expression; comma means positional lists
+	// only. Conjunctions are spelled with &&.
+	const input = "res = i < 2, j > 1  7"
+	sp := NewScriptParser(lexer.New("TestCommaConditionRejected", input))
+	sp.Parse()
+	require.NotEmpty(t, sp.Errors(), "expected a parse error for a comma condition list")
+	require.Contains(t, sp.Errors()[0], "a statement condition is a single expression; combine conditions with &&")
+}
+
 func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -628,8 +638,10 @@ func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {
 			value:     "(+10)",
 		},
 		{
-			name:      "comma condition attached prefix starts value",
-			input:     "res = i < 2, j > 1 -x",
+			// The condition's top-level && flattens into the condition list,
+			// so each conjunct is validated separately and drivers still nest.
+			name:      "and condition attached prefix starts value",
+			input:     "res = i < 2 && j > 1 -x",
 			condCount: 2,
 			value:     "(-x)",
 		},
@@ -899,55 +911,47 @@ func TestLogicalOrDoesNotConsumeBitwiseOr(t *testing.T) {
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], 6, "|", 3), "bitwise OR value mismatch")
 }
 
-func TestCondValueExpr(t *testing.T) {
-	const input = "x = (a > 2 10)"
-	sp := NewScriptParser(lexer.New("TestCondValueExpr", input))
+func TestLogicalAndValueExpression(t *testing.T) {
+	const input = "x = a > 2 && 10"
+	sp := NewScriptParser(lexer.New("TestLogicalAndValueExpression", input))
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
 	stmt := requireOnlyLetStmt(t, program)
 	require.Empty(t, stmt.Condition)
 	require.Len(t, stmt.Value, 1, "expected one value")
-	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
-	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
-	require.Len(t, cv.Conds, 1, "expected one condition")
-	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
-	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+	and, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "&&", and.Operator)
+	require.Truef(t, testInfixExpression(t, and.Left, "a", ">", 2), "left mismatch")
+	require.Truef(t, testIntegerLiteral(t, and.Right, 10), "right mismatch")
 }
 
-func TestCondValueExprConjunction(t *testing.T) {
-	// Comma-separated conditions are gathered into the Condition list (ANDed),
-	// mirroring the statement level; the value follows the last condition.
-	const input = "x = (a > 2, b > 3, c < 9 10)"
-	sp := NewScriptParser(lexer.New("TestCondValueExprConjunction", input))
+func TestLogicalAndChainLeftAssociative(t *testing.T) {
+	// a > 2 && b > 3 && 10 parses as ((a > 2 && b > 3) && 10): last one wins
+	// when all hold.
+	const input = "x = a > 2 && b > 3 && 10"
+	sp := NewScriptParser(lexer.New("TestLogicalAndChainLeftAssociative", input))
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
 	stmt := requireOnlyLetStmt(t, program)
 	require.Len(t, stmt.Value, 1, "expected one value")
-	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
-	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
-	require.Len(t, cv.Conds, 3, "expected three conditions")
-	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond[0] mismatch")
-	require.Truef(t, testInfixExpression(t, cv.Conds[1], "b", ">", 3), "cond[1] mismatch")
-	require.Truef(t, testInfixExpression(t, cv.Conds[2], "c", "<", 9), "cond[2] mismatch")
-	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+	outer, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "&&", outer.Operator)
+	require.Truef(t, testIntegerLiteral(t, outer.Right, 10), "outer right mismatch")
+	inner, ok := outer.Left.(*ast.InfixExpression)
+	require.Truef(t, ok, "expected inner infix, got %T", outer.Left)
+	require.Equal(t, "&&", inner.Operator)
+	require.Truef(t, testInfixExpression(t, inner.Left, "a", ">", 2), "inner left mismatch")
+	require.Truef(t, testInfixExpression(t, inner.Right, "b", ">", 3), "inner right mismatch")
 }
 
-func TestCondValueConjunctionRequiresValue(t *testing.T) {
-	// A comma-separated condition list with no value is incomplete (a single
-	// `(cond)` stays plain grouping, but `(cond, cond)` has nothing to yield).
-	const input = "x = (a > 2, b > 3)"
-	sp := NewScriptParser(lexer.New("TestCondValueConjunctionRequiresValue", input))
-	sp.Parse()
-	require.NotEmpty(t, sp.Errors(), "expected a parse error for a value-less condition list")
-	require.Contains(t, sp.Errors()[0], "(cond value) requires a value")
-}
-
-func TestCondValueExprWithFallback(t *testing.T) {
-	// The trailing `|| 7` binds OUTSIDE the parens as a normal infix.
-	const input = "x = (a > 2 10) || 7"
-	sp := NewScriptParser(lexer.New("TestCondValueExprWithFallback", input))
+func TestLogicalAndBindsTighterThanOr(t *testing.T) {
+	// c && v || w parses as (c && v) || w: an if-else, since && binds tighter.
+	const input = "x = a > 2 && 10 || 7"
+	sp := NewScriptParser(lexer.New("TestLogicalAndBindsTighterThanOr", input))
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
@@ -956,16 +960,30 @@ func TestCondValueExprWithFallback(t *testing.T) {
 	or, ok := stmt.Value[0].(*ast.InfixExpression)
 	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
 	require.Equal(t, "||", or.Operator)
-	cv, ok := or.Left.(*ast.CondValueExpr)
-	require.Truef(t, ok, "expected CondValueExpr on the left of ||, got %T", or.Left)
-	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
-	require.Truef(t, testIntegerLiteral(t, cv.Value, 10), "value mismatch")
+	and, ok := or.Left.(*ast.InfixExpression)
+	require.Truef(t, ok, "expected && on the left of ||, got %T", or.Left)
+	require.Equal(t, "&&", and.Operator)
+	require.Truef(t, testInfixExpression(t, and.Left, "a", ">", 2), "cond mismatch")
+	require.Truef(t, testIntegerLiteral(t, and.Right, 10), "value mismatch")
 	require.Truef(t, testIntegerLiteral(t, or.Right, 7), "fallback mismatch")
 }
 
-func TestCondValueExprInArray(t *testing.T) {
-	const input = "x = [1 (a > 2 5) 3]"
-	sp := NewScriptParser(lexer.New("TestCondValueExprInArray", input))
+func TestLogicalAndDoesNotConsumeBitwiseAnd(t *testing.T) {
+	// A single & stays bitwise AND.
+	const input = "x = 6 & 3"
+	sp := NewScriptParser(lexer.New("TestLogicalAndDoesNotConsumeBitwiseAnd", input))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+
+	stmt := requireOnlyLetStmt(t, program)
+	require.Empty(t, stmt.Condition)
+	require.Len(t, stmt.Value, 1, "expected one value")
+	require.Truef(t, testInfixExpression(t, stmt.Value[0], 6, "&", 3), "bitwise AND value mismatch")
+}
+
+func TestLogicalAndInArrayCell(t *testing.T) {
+	const input = "x = [1  a > 2 && 5  3]"
+	sp := NewScriptParser(lexer.New("TestLogicalAndInArrayCell", input))
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
@@ -975,14 +993,15 @@ func TestCondValueExprInArray(t *testing.T) {
 	require.Truef(t, ok, "expected *ast.ArrayLiteral, got %T", stmt.Value[0])
 	require.Len(t, arr.Rows, 1)
 	require.Len(t, arr.Rows[0], 3, "expected three cells")
-	cv, ok := arr.Rows[0][1].(*ast.CondValueExpr)
-	require.Truef(t, ok, "expected CondValueExpr cell, got %T", arr.Rows[0][1])
-	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cell cond mismatch")
-	require.Truef(t, testIntegerLiteral(t, cv.Value, 5), "cell value mismatch")
+	and, ok := arr.Rows[0][1].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected && cell, got %T", arr.Rows[0][1])
+	require.Equal(t, "&&", and.Operator)
+	require.Truef(t, testInfixExpression(t, and.Left, "a", ">", 2), "cell cond mismatch")
+	require.Truef(t, testIntegerLiteral(t, and.Right, 5), "cell value mismatch")
 }
 
 func TestParenComparisonStaysPlain(t *testing.T) {
-	// `(a > 2)` with no value is a plain value-position comparison, not a CondValueExpr.
+	// Parentheses preserve a plain value-position comparison.
 	const input = "x = (a > 2)"
 	sp := NewScriptParser(lexer.New("TestParenComparisonStaysPlain", input))
 	program := sp.Parse()
@@ -990,8 +1009,6 @@ func TestParenComparisonStaysPlain(t *testing.T) {
 
 	stmt := requireOnlyLetStmt(t, program)
 	require.Len(t, stmt.Value, 1, "expected one value")
-	_, isCV := stmt.Value[0].(*ast.CondValueExpr)
-	require.Falsef(t, isCV, "bare (a > 2) must not become a CondValueExpr")
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], "a", ">", 2), "expected plain comparison")
 }
 
@@ -1008,8 +1025,7 @@ func TestParenGroupingUnaffected(t *testing.T) {
 }
 
 func TestParenGroupedIdentifierThenInfix(t *testing.T) {
-	// isCondition treats a bare identifier as a condition, so only the peek-RPAREN
-	// guard keeps `(a)` ordinary grouping: `(a) + 1` must be `a + 1`, not a CondValueExpr.
+	// `(a) + 1` is plain grouping followed by infix: `a + 1`.
 	const input = "x = (a) + 1"
 	sp := NewScriptParser(lexer.New("TestParenGroupedIdentifierThenInfix", input))
 	program := sp.Parse()
@@ -1017,29 +1033,25 @@ func TestParenGroupedIdentifierThenInfix(t *testing.T) {
 
 	stmt := requireOnlyLetStmt(t, program)
 	require.Len(t, stmt.Value, 1, "expected one value")
-	_, isCV := stmt.Value[0].(*ast.CondValueExpr)
-	require.Falsef(t, isCV, "(a) + 1 must not become a CondValueExpr")
 	require.Truef(t, testInfixExpression(t, stmt.Value[0], "a", "+", 1), "expected plain grouped expr a + 1")
 }
 
-func TestCondValueAttachedPrefixSharedDetection(t *testing.T) {
-	// `(a > 2 -b)` splits on the attached prefix `-b` (cond `a > 2`, value `-b`)
-	// using the same condition-split mode as the statement level, so detection is
-	// consistent. `(a - b)` (spaced) stays ordinary subtraction.
+func TestParenAttachedPrefixIsPlainGrouping(t *testing.T) {
+	// Parens are pure grouping: `(a > 2 -b)` parses its single sub-expression
+	// without the statement level's condition split, so `-b` continues as
+	// subtraction. Comparison binds tightest, so the group is `(a > 2) - b`.
 	const input = "x = (a > 2 -b)"
-	sp := NewScriptParser(lexer.New("TestCondValueAttachedPrefixSharedDetection", input))
+	sp := NewScriptParser(lexer.New("TestParenAttachedPrefixIsPlainGrouping", input))
 	program := sp.Parse()
 	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
 
 	stmt := requireOnlyLetStmt(t, program)
 	require.Len(t, stmt.Value, 1, "expected one value")
-	cv, ok := stmt.Value[0].(*ast.CondValueExpr)
-	require.Truef(t, ok, "expected *ast.CondValueExpr, got %T", stmt.Value[0])
-	require.Truef(t, testInfixExpression(t, cv.Conds[0], "a", ">", 2), "cond mismatch")
-	pre, ok := cv.Value.(*ast.PrefixExpression)
-	require.Truef(t, ok, "expected prefix value, got %T", cv.Value)
-	require.Equal(t, "-", pre.Operator)
-	require.Truef(t, testIdentifier(t, pre.Right, "b"), "value operand mismatch")
+	sub, ok := stmt.Value[0].(*ast.InfixExpression)
+	require.Truef(t, ok, "expected *ast.InfixExpression, got %T", stmt.Value[0])
+	require.Equal(t, "-", sub.Operator)
+	require.Truef(t, testInfixExpression(t, sub.Left, "a", ">", 2), "left mismatch")
+	require.Truef(t, testIdentifier(t, sub.Right, "b"), "right mismatch")
 
 	// Spaced subtraction is unaffected.
 	sp2 := NewScriptParser(lexer.New("paren-sub", "y = (a - b)"))
