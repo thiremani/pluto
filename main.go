@@ -228,6 +228,18 @@ func isInternalCompilerError(err error) bool {
 	return errors.As(err, &ice)
 }
 
+func compileScriptsUntilICE(scriptFiles []string, compile func(string) error) (compileErr int, stopped bool) {
+	for _, scriptFile := range scriptFiles {
+		if err := compile(scriptFile); err != nil {
+			compileErr++
+			if isInternalCompilerError(err) {
+				return compileErr, true
+			}
+		}
+	}
+	return compileErr, false
+}
+
 // recoverICE converts a compiler panic into an internal-compiler-error report.
 // The typed error tells the driver to stop before reusing compiler state that
 // may have been left inconsistent by the panic.
@@ -628,23 +640,17 @@ func runCompile(opts cliOptions) {
 		return
 	}
 
-	compileErr := 0
 	binErr := 0
 	funcCache := make(map[string]*compiler.Func)
 	exprCache := make(map[compiler.ExprKey]*compiler.ExprInfo)
-	for _, scriptFile := range scriptFiles {
+	compileErr, stoppedOnICE := compileScriptsUntilICE(scriptFiles, func(scriptFile string) error {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
 		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
-			compileErr++
-			if isInternalCompilerError(err) {
-				fmt.Println("Stopping compilation after internal compiler error.")
-				break
-			}
-			continue
+			return err
 		}
 
 		err = func() error {
@@ -657,6 +663,10 @@ func runCompile(opts cliOptions) {
 		} else {
 			fmt.Printf("✅ Successfully built binary for script: %s\n", script)
 		}
+		return nil
+	})
+	if stoppedOnICE {
+		fmt.Println("Stopping compilation after internal compiler error.")
 	}
 	if compileErr > 0 || binErr > 0 {
 		os.Exit(1)

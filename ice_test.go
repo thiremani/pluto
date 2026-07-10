@@ -90,3 +90,30 @@ func TestCleanupUnlessReleasedPreservesReturnedModule(t *testing.T) {
 		t.Fatal("cleanup ran after module ownership was returned to the caller")
 	}
 }
+
+func TestCompileScriptsStopsAfterICE(t *testing.T) {
+	scripts := []string{"ordinary.spt", "panic.spt", "after.spt"}
+	var visited []string
+
+	compileErr, stopped := compileScriptsUntilICE(scripts, func(script string) error {
+		visited = append(visited, script)
+		switch script {
+		case "ordinary.spt":
+			return errors.New("ordinary compile error")
+		case "panic.spt":
+			return &internalCompilerError{unit: script}
+		default:
+			return nil
+		}
+	})
+
+	if compileErr != 2 {
+		t.Fatalf("compile errors = %d, want 2", compileErr)
+	}
+	if !stopped {
+		t.Fatal("compilation did not stop after an internal compiler error")
+	}
+	if got := strings.Join(visited, ","); got != "ordinary.spt,panic.spt" {
+		t.Fatalf("visited scripts = %q, want ordinary error followed by ICE only", got)
+	}
+}
