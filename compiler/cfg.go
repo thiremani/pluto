@@ -99,7 +99,7 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	var evs []VarEvent
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
-		if maybeMarker(runes, i) {
+		if maybeMarker(tok, runes, i) {
 			evs = append(evs, cfg.collectMarkerReads(value, tok, runes, i)...)
 		}
 	}
@@ -118,7 +118,7 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 
 	evs := []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
 	// now collect any format specifier identifier reads
-	if hasSpecifier(runes, end) {
+	if hasSpecifier(tok, runes, end) {
 		evs = append(evs, cfg.collectSpecifierReads(value, tok, runes, end)...)
 	}
 	return evs
@@ -129,7 +129,7 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
 	var evs []VarEvent
 	for it := start + 1; it < len(runes); it++ {
-		if !specIdAhead(runes, it) {
+		if !specIdAhead(tok, runes, it) {
 			continue
 		}
 

@@ -19,7 +19,7 @@ arrStr =
 arrStr
 "arr is -arrStr"
 
-arrStrQuoted = ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "tab\tstop" "carriage\rreturn" "back\bspace" "form\ffeed" "escape\x1b" "π"]
+arrStrQuoted = ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "tab\tstop" "carriage\rreturn" "back\bspace" "form\ffeed" "escape\x1b" "dash-word" "π"]
 "quoted arr is -arrStrQuoted"
 
 # inline vector (no newline inside)

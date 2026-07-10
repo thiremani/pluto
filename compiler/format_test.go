@@ -61,6 +61,12 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "Format specifier end 'q' is not correct for variable type. Variable identifier: x. Variable type: I64",
 		},
 		{
+			name: "QuotedSpecifierPrecision",
+			input: `s = "hello"
+"Value: -s%.3q"`,
+			expectError: "Precision is not supported for %q because it can truncate the quoted string",
+		},
+		{
 			name: "IntWithFloatSpecifier",
 			input: `x = 5
 "x = -x%f"`,
@@ -182,6 +188,18 @@ y = 3.2
 			name:         "VarNotDefined",
 			input:        `"Value: -x%s"`,
 			expectOutput: "Value: -x%%s",
+		},
+		{
+			name: "EscapedMarker",
+			input: `x = 5
+"Literal: \x2dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "EscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\x25q"`,
+			expectOutput: "Value: %s%%q",
 		},
 	}
 	for _, tc := range tests {

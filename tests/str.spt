@@ -40,6 +40,14 @@ heapMsg
 quoteText = "hello \"world\"\\path\nnext\tcol"
 "quoted static: -quoteText%q"
 
+markerName = 99
+literalMarker = "\-markerName"
+hexLiteralMarker = "\x2dmarkerName"
+"literal markers: -literalMarker -hexLiteralMarker; value: -markerName"
+specifierText = "hello"
+"escaped specifier: -specifierText\x25q"
+"quoted marker: -literalMarker%q"
+
 # Heap string with format specifiers
 num = 42
 heapFmt = "number is -num%05d"

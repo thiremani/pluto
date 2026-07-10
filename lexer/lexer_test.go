@@ -1,8 +1,10 @@
 package lexer
 
 import (
-	"github.com/thiremani/pluto/token"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/thiremani/pluto/token"
 )
 
 type Test struct {
@@ -292,6 +294,43 @@ func TestString(t *testing.T) {
 		{token.STRING, "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f", "", 1, 1},
 	}
 	checkInput(t, input, tests)
+}
+
+func TestStringEscapeProvenance(t *testing.T) {
+	l := New("", `"\x2dname -s\x25d \-other"`)
+	tok, err := l.NextToken()
+	if err != nil {
+		t.Fatalf("unexpected lexer error: %v", err)
+	}
+	if tok.Literal != "-name -s%d -other" {
+		t.Fatalf("literal = %q", tok.Literal)
+	}
+	for _, index := range []int{0, 8, 11} {
+		if !tok.IsEscapedRune(index) {
+			t.Errorf("rune %d should be marked escaped", index)
+		}
+	}
+	if tok.IsEscapedRune(6) {
+		t.Error("unescaped marker rune was marked escaped")
+	}
+}
+
+func TestInvalidHexEscapes(t *testing.T) {
+	for _, input := range []string{`"\x00"`, `"\x80"`, `"\xff"`, `"\xZG"`, `"\x5"`, `"\x"`} {
+		t.Run(input, func(t *testing.T) {
+			l := New("", input)
+			tok, err := l.NextToken()
+			if err == nil {
+				t.Fatal("expected a lexer error")
+			}
+			if err.Msg != `invalid hexadecimal escape: expected \x01 through \x7f` {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !utf8.ValidString(tok.Literal) {
+				t.Fatalf("lexer returned invalid UTF-8: %q", tok.Literal)
+			}
+		})
+	}
 }
 
 func TestZeroKeywordWordsAreIdentifiers(t *testing.T) {

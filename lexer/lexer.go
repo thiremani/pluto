@@ -69,7 +69,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
-		tok.Literal = l.readString()
+		tok.Literal, tok.EscapedRunes, err = l.readString(tok)
 	case ':':
 		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':
@@ -318,48 +318,71 @@ func (l *Lexer) readRune() {
 	l.column++
 }
 
-func (l *Lexer) readString() string {
+func (l *Lexer) readString(tok token.Token) (string, []int, *token.CompileError) {
 	var out strings.Builder
+	var escapedRunes []int
+	var firstErr *token.CompileError
+	runeIndex := 0
+
+	writeRune := func(ch rune, escaped bool) {
+		out.WriteRune(ch)
+		if escaped {
+			escapedRunes = append(escapedRunes, runeIndex)
+		}
+		runeIndex++
+	}
+	invalidHexEscape := func() {
+		if firstErr == nil {
+			firstErr = &token.CompileError{
+				Token: tok,
+				Msg:   `invalid hexadecimal escape: expected \x01 through \x7f`,
+			}
+		}
+		writeRune('x', true)
+	}
+
 	for l.curr != '"' && l.curr != 0 {
 		if l.curr == '\\' {
 			l.readRune()
 			switch l.curr {
 			case 'n':
-				out.WriteByte('\n')
+				writeRune('\n', true)
 			case 't':
-				out.WriteByte('\t')
+				writeRune('\t', true)
 			case 'r':
-				out.WriteByte('\r')
+				writeRune('\r', true)
 			case 'b':
-				out.WriteByte('\b')
+				writeRune('\b', true)
 			case 'f':
-				out.WriteByte('\f')
+				writeRune('\f', true)
 			case '"':
-				out.WriteByte('"')
+				writeRune('"', true)
 			case '\\':
-				out.WriteByte('\\')
+				writeRune('\\', true)
+			case '-', '%':
+				writeRune(l.curr, true)
 			case 'x':
 				if l.readPosition+1 < len(l.input) {
 					hi, hiOK := hexDigitValue(l.input[l.readPosition])
 					lo, loOK := hexDigitValue(l.input[l.readPosition+1])
 					value := hi<<4 | lo
-					if hiOK && loOK && value != 0 {
-						out.WriteByte(value)
+					if hiOK && loOK && value > 0 && value <= 0x7f {
+						writeRune(rune(value), true)
 						l.readRune()
 						l.readRune()
 						break
 					}
 				}
-				out.WriteByte('x')
+				invalidHexEscape()
 			default:
-				out.WriteRune(l.curr) // Handle invalid escapes literally
+				writeRune(l.curr, true) // Preserve the existing unknown-escape behavior.
 			}
 		} else {
-			out.WriteRune(l.curr)
+			writeRune(l.curr, false)
 		}
 		l.readRune()
 	}
-	return out.String()
+	return out.String(), escapedRunes, firstErr
 }
 
 func hexDigitValue(ch rune) (byte, bool) {

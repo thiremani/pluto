@@ -183,12 +183,13 @@ var tokens = [...]string{
 }
 
 type Token struct {
-	FileName string
-	Type     TokenType
-	Literal  string
-	Line     int
-	Column   int
-	HadSpace bool // true if there was any space before this token
+	FileName     string
+	Type         TokenType
+	Literal      string
+	Line         int
+	Column       int
+	HadSpace     bool  // true if there was any space before this token
+	EscapedRunes []int // decoded rune positions originating from string escapes
 }
 
 type CompileErrors []*CompileError
@@ -199,6 +200,18 @@ func (t Token) IsComparison() bool {
 
 func (t Token) IsConstant() bool {
 	return const_beg < t.Type && const_end > t.Type
+}
+
+func (t Token) IsEscapedRune(index int) bool {
+	for _, escaped := range t.EscapedRunes {
+		if escaped == index {
+			return true
+		}
+		if escaped > index {
+			return false
+		}
+	}
+	return false
 }
 
 func (tokenType TokenType) String() string {

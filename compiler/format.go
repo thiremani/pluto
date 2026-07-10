@@ -82,7 +82,7 @@ func (c *Compiler) parseSpecifier(tok token.Token, value string, runes []rune, s
 			return
 		}
 
-		if specIdAhead(runes, it) {
+		if specIdAhead(tok, runes, it) {
 			// cfg already checks that the ')' is after the identifier
 			// and identifier is in the symbol table
 			specId, end := parseIdentifier(runes, it+2)
@@ -96,7 +96,7 @@ func (c *Compiler) parseSpecifier(tok token.Token, value string, runes []rune, s
 		}
 
 		specRunes = append(specRunes, runes[it])
-		if formatSpecifierEnd(runes[it]) {
+		if !tok.IsEscapedRune(it) && formatSpecifierEnd(runes[it]) {
 			endIndex = it + 1
 			spec = string(specRunes)
 			return
@@ -142,7 +142,7 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 		return mainId, []*Symbol{}, "", end, false, nil
 	}
 
-	if hasSpecifier(runes, end) {
+	if hasSpecifier(tok, runes, end) {
 		if end+1 == len(runes) {
 			err = &token.CompileError{
 				Token: tok,
@@ -219,6 +219,14 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 			err = &token.CompileError{
 				Token: tok,
 				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
+			}
+			c.Errors = append(c.Errors, err)
+			return
+		}
+		if strings.Contains(customSpec, ".") {
+			err = &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("Precision is not supported for %%q because it can truncate the quoted string. Variable identifier: %s", mainId),
 			}
 			c.Errors = append(c.Errors, err)
 			return
@@ -313,7 +321,7 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 	runes := []rune(value)
 	i := 0
 	for i < len(runes) {
-		if !(maybeMarker(runes, i)) {
+		if !maybeMarker(tok, runes, i) {
 			builder.WriteRune(runes[i])
 			if runes[i] == '%' {
 				// % is not after -var. so we allow lone %
@@ -390,22 +398,23 @@ func upgradeIntSpec(spec string) string {
 	return spec[:len(spec)-1] + "ll" + string(conv)
 }
 
-func maybeMarker(runes []rune, i int) bool {
-	if i+1 < len(runes) && runes[i] == '-' && lexer.IsLetter(runes[i+1]) {
+func maybeMarker(tok token.Token, runes []rune, i int) bool {
+	if i+1 < len(runes) && runes[i] == '-' && !tok.IsEscapedRune(i) && lexer.IsLetter(runes[i+1]) {
 		return true
 	}
 	return false
 }
 
-func hasSpecifier(runes []rune, i int) bool {
-	if i < len(runes) && runes[i] == '%' {
+func hasSpecifier(tok token.Token, runes []rune, i int) bool {
+	if i < len(runes) && runes[i] == '%' && !tok.IsEscapedRune(i) {
 		return true
 	}
 	return false
 }
 
-func specIdAhead(runes []rune, i int) bool {
-	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
+func specIdAhead(tok token.Token, runes []rune, i int) bool {
+	return i+2 < len(runes) && runes[i] == '(' && !tok.IsEscapedRune(i) &&
+		runes[i+1] == '-' && !tok.IsEscapedRune(i+1) && lexer.IsLetter(runes[i+2])
 }
 
 // structFormatArgs builds a printf format string and args for a struct value.
@@ -445,10 +454,10 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 // This aligns with parseMarker/formatString semantics: a marker is only valid when
 // its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
 // only width is defined) are not considered valid markers.
-func hasValidMarkers(value string, isDefined func(string) bool) bool {
+func hasValidMarkers(tok token.Token, value string, isDefined func(string) bool) bool {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
-		if !maybeMarker(runes, i) {
+		if !maybeMarker(tok, runes, i) {
 			continue
 		}
 		// Parse the identifier after the '-'

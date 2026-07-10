@@ -16,6 +16,9 @@ eager =  123 999
 hello world
 quoted heap: "hello world"
 quoted static: "hello \"world\"\\path\nnext\tcol"
+literal markers: -markerName -markerName; value: 99
+escaped specifier: hello%q
+quoted marker: "\-markerName"
 number is 00042
 heap print: world
 no markers here

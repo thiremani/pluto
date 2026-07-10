@@ -204,7 +204,10 @@ words = ["hello" "hello world" ""]
 words  # ["hello" "hello world" ""]
 ```
 
-Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when a quoted, escaped scalar representation is needed: `"-word%q"`.
+Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when a quoted,
+escaped scalar representation is needed: `"-word%q"`. Quoted output escapes hyphens as `\-` so
+marker-like text remains literal when re-used as Pluto source. Hexadecimal escapes are limited to
+`\x01` through `\x7f`; malformed, NUL, and non-ASCII byte escapes are compile errors.
 
 ---
 
