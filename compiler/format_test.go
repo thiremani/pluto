@@ -201,6 +201,12 @@ y = 3.2
 "Value: -s\x25q"`,
 			expectOutput: "Value: %s%%q",
 		},
+		{
+			name: "QuotedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%10q"`,
+			expectOutput: "Value: %10s",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

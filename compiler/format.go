@@ -33,7 +33,6 @@ var specToKind = map[rune]Kind{
 	'a': FloatKind,
 	'c': IntKind, // maybe character code
 	's': StrKind,
-	'q': StrKind,
 	'p': PtrKind, // pointer kind
 	'n': IntKind, // byte‐count pointer
 }
@@ -166,6 +165,13 @@ func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	return c.namedValueSymbol(id, id+"_load")
 }
 
+func formatSpecifierTypeError(tok token.Token, specRune rune, mainID string, mainType Type) *token.CompileError {
+	return &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainID, mainType),
+	}
+}
+
 // assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
 // if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
 func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
@@ -216,10 +222,7 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 	}
 	if specRune == 'q' {
 		if mainType.Kind() != StrKind {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
-			}
+			err = formatSpecifierTypeError(tok, specRune, mainId, mainType)
 			c.Errors = append(c.Errors, err)
 			return
 		}
@@ -232,6 +235,7 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 			return
 		}
 		quoted := c.quotedStrArg(mainSym)
+		// Only a custom specifier can end in q; libc receives the same specifier ending in s.
 		formattedStr = formattedStr[:len(formattedStr)-1] + "s"
 		valArgs = append(valArgs, quoted)
 		toFree = append(toFree, quoted)
@@ -276,10 +280,7 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 	if specRune == 'p' {
 		// Validate type: %p requires a pointer.
 		if mainType.Kind() != PtrKind {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
-			}
+			err = formatSpecifierTypeError(tok, specRune, mainId, mainType)
 			c.Errors = append(c.Errors, err)
 			return
 		}
@@ -293,10 +294,7 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 	}
 
 	if specToKind[specRune] != mainType.Kind() {
-		err = &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
-		}
+		err = formatSpecifierTypeError(tok, specRune, mainId, mainType)
 		c.Errors = append(c.Errors, err)
 		return
 	}

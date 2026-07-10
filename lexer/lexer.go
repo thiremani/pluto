@@ -362,18 +362,12 @@ func (l *Lexer) readString(tok token.Token) (string, []int, *token.CompileError)
 			case '-', '%':
 				writeRune(l.curr, true)
 			case 'x':
-				if l.readPosition+1 < len(l.input) {
-					hi, hiOK := hexDigitValue(l.input[l.readPosition])
-					lo, loOK := hexDigitValue(l.input[l.readPosition+1])
-					value := hi<<4 | lo
-					if hiOK && loOK && value > 0 && value <= 0x7f {
-						writeRune(rune(value), true)
-						l.readRune()
-						l.readRune()
-						break
-					}
+				value, ok := l.readHexEscape()
+				if !ok {
+					invalidHexEscape()
+					break
 				}
-				invalidHexEscape()
+				writeRune(value, true)
 			default:
 				writeRune(l.curr, true) // Preserve the existing unknown-escape behavior.
 			}
@@ -383,6 +377,29 @@ func (l *Lexer) readString(tok token.Token) (string, []int, *token.CompileError)
 		l.readRune()
 	}
 	return out.String(), escapedRunes, firstErr
+}
+
+// readHexEscape reads the two digits after the current 'x' and leaves curr on
+// the second digit. The caller advances once more at the end of its loop.
+func (l *Lexer) readHexEscape() (rune, bool) {
+	if l.readPosition+1 >= len(l.input) {
+		return 0, false
+	}
+	hi, ok := hexDigitValue(l.input[l.readPosition])
+	if !ok {
+		return 0, false
+	}
+	lo, ok := hexDigitValue(l.input[l.readPosition+1])
+	if !ok {
+		return 0, false
+	}
+	value := hi<<4 | lo
+	if value == 0 || value > 0x7f {
+		return 0, false
+	}
+	l.readRune()
+	l.readRune()
+	return rune(value), true
 }
 
 func hexDigitValue(ch rune) (byte, bool) {
