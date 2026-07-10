@@ -341,10 +341,10 @@ const char* arr_str_str(const PtArrayStr* a) {
     size_t n = arr_str_len(a);
     for (size_t i = 0; i < n; ++i) {
         if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        char* s = arr_str_get(a, i);  // owned copy
-        const char* to_print = s ? s : "";
-        int ok = strbuf_printf(&sb, "%s", to_print);
-        free(s);  // free the copy
+        char* quoted = str_quote(arr_str_borrow(a, i));
+        if (!quoted) { free(sb.data); return NULL; }
+        int ok = strbuf_printf(&sb, "%s", quoted);
+        free(quoted);
         if (ok < 0) { free(sb.data); return NULL; }
     }
     if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }

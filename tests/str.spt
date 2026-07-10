@@ -35,6 +35,10 @@ msg, eager
 name = "world"
 heapMsg = "hello -name"
 heapMsg
+"quoted heap: -heapMsg%q"
+
+quoteText = "hello \"world\"\\path\nnext\tcol"
+"quoted static: -quoteText%q"
 
 # Heap string with format specifiers
 num = 42

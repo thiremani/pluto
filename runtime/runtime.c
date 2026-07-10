@@ -26,6 +26,44 @@ char *str_concat(const char *left, const char *right) {
     return result;
 }
 
+char *str_quote(const char *s) {
+    static const char hex[] = "0123456789abcdef";
+    if (!s) s = "";
+
+    size_t input_len = strlen(s);
+    if (input_len > (SIZE_MAX - 3) / 4) return NULL;
+    char *result = malloc(input_len * 4 + 3);  /* worst case: \\xNN per byte */
+    if (!result) return NULL;
+
+    char *out = result;
+    *out++ = '"';
+    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+        unsigned char ch = *p;
+        switch (ch) {
+        case '"':  *out++ = '\\'; *out++ = '"'; break;
+        case '\\': *out++ = '\\'; *out++ = '\\'; break;
+        case '\b': *out++ = '\\'; *out++ = 'b'; break;
+        case '\f': *out++ = '\\'; *out++ = 'f'; break;
+        case '\n': *out++ = '\\'; *out++ = 'n'; break;
+        case '\r': *out++ = '\\'; *out++ = 'r'; break;
+        case '\t': *out++ = '\\'; *out++ = 't'; break;
+        default:
+            if (ch < 0x20 || ch == 0x7f) {
+                *out++ = '\\';
+                *out++ = 'x';
+                *out++ = hex[ch >> 4];
+                *out++ = hex[ch & 0x0f];
+            } else {
+                *out++ = (char)ch;
+            }
+            break;
+        }
+    }
+    *out++ = '"';
+    *out = '\0';
+    return result;
+}
+
 // Convert a range [s..t) with step p into a NUL-terminated string.
 // Caller is responsible for free()ing the returned buffer.
 char *range_i64_str(int64_t s, int64_t t, int64_t p) {

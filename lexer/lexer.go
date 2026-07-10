@@ -328,10 +328,29 @@ func (l *Lexer) readString() string {
 				out.WriteByte('\n')
 			case 't':
 				out.WriteByte('\t')
+			case 'r':
+				out.WriteByte('\r')
+			case 'b':
+				out.WriteByte('\b')
+			case 'f':
+				out.WriteByte('\f')
 			case '"':
 				out.WriteByte('"')
 			case '\\':
 				out.WriteByte('\\')
+			case 'x':
+				if l.readPosition+1 < len(l.input) {
+					hi, hiOK := hexDigitValue(l.input[l.readPosition])
+					lo, loOK := hexDigitValue(l.input[l.readPosition+1])
+					value := hi<<4 | lo
+					if hiOK && loOK && value != 0 {
+						out.WriteByte(value)
+						l.readRune()
+						l.readRune()
+						break
+					}
+				}
+				out.WriteByte('x')
 			default:
 				out.WriteRune(l.curr) // Handle invalid escapes literally
 			}
@@ -341,6 +360,19 @@ func (l *Lexer) readString() string {
 		l.readRune()
 	}
 	return out.String()
+}
+
+func hexDigitValue(ch rune) (byte, bool) {
+	switch {
+	case '0' <= ch && ch <= '9':
+		return byte(ch - '0'), true
+	case 'a' <= ch && ch <= 'f':
+		return byte(ch-'a') + 10, true
+	case 'A' <= ch && ch <= 'F':
+		return byte(ch-'A') + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func (l *Lexer) peekRune() rune {

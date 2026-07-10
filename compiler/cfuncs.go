@@ -13,8 +13,9 @@ const (
 	RANGE_I64_STR = "range_i64_str"
 
 	// Scalar string functions
-	F64_STR = "f64_str"
-	F32_STR = "f32_str"
+	F64_STR   = "f64_str"
+	F32_STR   = "f32_str"
+	STR_QUOTE = "str_quote"
 
 	// Array I64 functions
 	ARR_I64_NEW    = "arr_i64_new"
@@ -81,6 +82,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{f64}, false)
 	case F32_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.Context.FloatType()}, false)
+	case STR_QUOTE:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, false)
 
 	// Array I64 functions
 	case ARR_I64_NEW:

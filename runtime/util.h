@@ -17,6 +17,9 @@ static inline char* dup_cstr(const char* s) {
 	return p;
 }
 
+/* Returns a newly allocated Pluto string literal representation. */
+char* str_quote(const char* s);
+
 /*
  * f64_special_str: Returns a constant string for NaN/Inf values, or NULL for normal numbers.
  * The returned pointer is to a string literal and should NOT be freed.
@@ -24,4 +27,3 @@ static inline char* dup_cstr(const char* s) {
 const char *f64_special_str(double x);
 
 #endif /* PLUTO_RUNTIME_UTIL_H */
-

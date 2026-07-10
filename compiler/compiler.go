@@ -3127,6 +3127,11 @@ func (c *Compiler) floatStrArg(s *Symbol) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{s.Val}, "f64_str")
 }
 
+func (c *Compiler) quotedStrArg(s *Symbol) llvm.Value {
+	fnType, fn := c.GetCFunc(STR_QUOTE)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{s.Val}, "str_quote")
+}
+
 func (c *Compiler) free(ptrs []llvm.Value) {
 	fnType, fn := c.GetCFunc(FREE)
 	for _, ptr := range ptrs {

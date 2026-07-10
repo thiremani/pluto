@@ -51,8 +51,14 @@ func TestFormatStringErrors(t *testing.T) {
 		{
 			name: "UnsupportedSpecifier",
 			input: `x = 5
+"Value: -x%v"`,
+			expectError: "Invalid format specifier string: Format specifier '%v' is incomplete. Str: Value: -x%v",
+		},
+		{
+			name: "QuotedSpecifierOnNonString",
+			input: `x = 5
 "Value: -x%q"`,
-			expectError: "Invalid format specifier string: Format specifier '%q' is incomplete. Str: Value: -x%q",
+			expectError: "Format specifier end 'q' is not correct for variable type. Variable identifier: x. Variable type: I64",
 		},
 		{
 			name: "IntWithFloatSpecifier",

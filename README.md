@@ -197,6 +197,15 @@ y = [1.1 2.2 3.3]
 
 Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
 
+String-array elements print quoted so boundaries stay unambiguous:
+
+```python
+words = ["hello" "hello world" ""]
+words  # ["hello" "hello world" ""]
+```
+
+Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when a quoted, escaped scalar representation is needed: `"-word%q"`.
+
 ---
 
 ## Function model
@@ -470,7 +479,7 @@ Pluto is under active development.
 
 ## License
 
-Pluto is licensed under the MIT License. See [LICENSE](LICENSE).
+Pluto is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
 
 **Vendored third-party code:**
 - `runtime/third_party/klib/` (klib by Attractive Chaos) — MIT License, see `runtime/third_party/klib/LICENSE.txt`

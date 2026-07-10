@@ -287,11 +287,26 @@ x = .5
 }
 
 func TestString(t *testing.T) {
-	input := `"hello\nworld"`
+	input := `"quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f"`
 	tests := []Test{
-		{token.STRING, "hello\nworld", "", 1, 1},
+		{token.STRING, "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f", "", 1, 1},
 	}
 	checkInput(t, input, tests)
+}
+
+func TestZeroKeywordWordsAreIdentifiers(t *testing.T) {
+	for _, word := range []string{"or", "return"} {
+		t.Run(word, func(t *testing.T) {
+			l := New("", word)
+			tok, err := l.NextToken()
+			if err != nil {
+				t.Fatalf("unexpected lexer error: %v", err)
+			}
+			if tok.Type != token.IDENT || tok.Literal != word {
+				t.Fatalf("token = %s %q, want IDENT %q", tok.Type, tok.Literal, word)
+			}
+		})
+	}
 }
 
 func TestUnicodeIdentifiers(t *testing.T) {

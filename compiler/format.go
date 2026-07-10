@@ -11,7 +11,7 @@ import (
 
 func formatSpecifierEnd(ch rune) bool {
 	switch ch {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'c', 's', 'p', 'n', '%':
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'c', 's', 'q', 'p', 'n', '%':
 		return true
 	}
 	return false
@@ -33,6 +33,7 @@ var specToKind = map[rune]Kind{
 	'a': FloatKind,
 	'c': IntKind, // maybe character code
 	's': StrKind,
+	'q': StrKind,
 	'p': PtrKind, // pointer kind
 	'n': IntKind, // byte‐count pointer
 }
@@ -211,6 +212,21 @@ func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string,
 	if specRune == 'n' {
 		s := c.promoteToMemory(mainId)
 		valArgs = append(valArgs, s.Val)
+		return
+	}
+	if specRune == 'q' {
+		if mainType.Kind() != StrKind {
+			err = &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
+			}
+			c.Errors = append(c.Errors, err)
+			return
+		}
+		quoted := c.quotedStrArg(mainSym)
+		formattedStr = formattedStr[:len(formattedStr)-1] + "s"
+		valArgs = append(valArgs, quoted)
+		toFree = append(toFree, quoted)
 		return
 	}
 

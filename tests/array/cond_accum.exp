@@ -37,7 +37,7 @@ LitCross: 4
 SeedLit: 88
 77
 StrView: c
-[a b]
+["a" "b"]
 TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 1]
 CondLocalDriversA: [1 1]. CondLocalDriversB: 1
 CondSharedReuse: [0 0 1 1 2 2]
