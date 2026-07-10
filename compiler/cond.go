@@ -1143,7 +1143,7 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return false
 	}
-	if info.HasAnyComparison() || info.HasFallbackOr() || info.HasCondAnd() {
+	if info.HasCond() {
 		return true
 	}
 	return c.isSlotAlignedSpine(infix.Left) || c.isSlotAlignedSpine(infix.Right)

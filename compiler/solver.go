@@ -79,6 +79,18 @@ func (info *ExprInfo) HasCondAnd() bool {
 	return false
 }
 
+// HasCond returns true if any slot is lowered by the conditional-value
+// machinery at all — a comparison, an array mask, a ||, or a && — i.e. any
+// mode other than CondNone.
+func (info *ExprInfo) HasCond() bool {
+	for _, m := range info.CompareModes {
+		if m != CondNone {
+			return true
+		}
+	}
+	return false
+}
+
 // IsMask reports whether output slot i is an array mask — a heap-owned,
 // always-yielding value that must be freed if it is not moved into a result
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
