@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"tinygo.org/x/go-llvm"
@@ -1143,7 +1144,9 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return false
 	}
-	if info.HasCond() {
+	// Any conditional slot mode — comparison, mask, ||, && — makes this node
+	// a per-slot root.
+	if slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
 		return true
 	}
 	return c.isSlotAlignedSpine(infix.Left) || c.isSlotAlignedSpine(infix.Right)
