@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -213,9 +214,26 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 	return nil
 }
 
-func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string, error) {
+// recoverICE converts a compiler panic into an internal-compiler-error
+// report: the panic value and stack go to stderr with a request to file a
+// bug, and the current unit fails with err set instead of crashing the
+// process — sibling scripts keep compiling.
+func recoverICE(unit string, err *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "💥 internal compiler error: %v\n", r)
+	fmt.Fprintln(os.Stderr, "This is a bug in the Pluto compiler, not in your program.")
+	fmt.Fprintf(os.Stderr, "Please report it at https://github.com/thiremani/pluto/issues with the source that triggered it and this trace:\n\n%s\n", debug.Stack())
+	*err = fmt.Errorf("internal compiler error compiling %s", unit)
+}
+
+func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, codeLL string, err error) {
+	defer recoverICE("code files", &err)
+
 	pkgCode := ast.NewCode()
-	cc := compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
+	cc = compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
 	if len(codeFiles) == 0 {
 		return cc, "", nil
 	}
@@ -256,7 +274,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 
 	pkg := filepath.Base(p.ModPath)
 	fmt.Println("Pkg name is", pkg)
-	codeLL := filepath.Join(p.CacheDir, CODE_DIR, pkg+IR_SUFFIX)
+	codeLL = filepath.Join(p.CacheDir, CODE_DIR, pkg+IR_SUFFIX)
 	os.MkdirAll(filepath.Dir(codeLL), 0755)
 	if err := os.WriteFile(codeLL, []byte(ir), 0644); err != nil {
 		fmt.Printf("Error writing IR to %s: %v\n", codeLL, err)
@@ -266,7 +284,11 @@ func (p *Pluto) CompileCode(codeFiles []string) (*compiler.CodeCompiler, string,
 }
 
 // CompileScript returns an owned LLVM module. The caller must dispose it.
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (llvm.Module, error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (mod llvm.Module, err error) {
+	// Registered before the module-dispose defer, so unwinding a panic frees
+	// the half-built module first, then the ICE recovery converts the panic.
+	defer recoverICE(scriptFile, &err)
+
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
 		fmt.Printf("Error reading %s: %v\n", scriptFile, err)
