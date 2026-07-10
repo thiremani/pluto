@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -214,23 +215,41 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 	return nil
 }
 
-// recoverICE converts a compiler panic into an internal-compiler-error
-// report: the panic value and stack go to stderr with a request to file a
-// bug, and the current unit fails with err set instead of crashing the
-// process — sibling scripts keep compiling.
-func recoverICE(unit string, err *error) {
+type internalCompilerError struct {
+	unit string
+}
+
+func (e *internalCompilerError) Error() string {
+	return fmt.Sprintf("internal compiler error compiling %s", e.unit)
+}
+
+func isInternalCompilerError(err error) bool {
+	var ice *internalCompilerError
+	return errors.As(err, &ice)
+}
+
+// recoverICE converts a compiler panic into an internal-compiler-error report.
+// The typed error tells the driver to stop before reusing compiler state that
+// may have been left inconsistent by the panic.
+func recoverICE(unit string, err *error, stderr io.Writer) {
 	r := recover()
 	if r == nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "💥 internal compiler error: %v\n", r)
-	fmt.Fprintln(os.Stderr, "This is a bug in the Pluto compiler, not in your program.")
-	fmt.Fprintf(os.Stderr, "Please report it at https://github.com/thiremani/pluto/issues with the source that triggered it and this trace:\n\n%s\n", debug.Stack())
-	*err = fmt.Errorf("internal compiler error compiling %s", unit)
+	fmt.Fprintf(stderr, "💥 internal compiler error: %v\n", r)
+	fmt.Fprintln(stderr, "This is a bug in the Pluto compiler, not in your program.")
+	fmt.Fprintf(stderr, "Please report it at https://github.com/thiremani/pluto/issues with the source that triggered it and this trace:\n\n%s\n", debug.Stack())
+	*err = &internalCompilerError{unit: unit}
+}
+
+func cleanupUnlessReleased(released *bool, cleanup func()) {
+	if !*released {
+		cleanup()
+	}
 }
 
 func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, codeLL string, err error) {
-	defer recoverICE("code files", &err)
+	defer recoverICE("code files", &err, os.Stderr)
 
 	pkgCode := ast.NewCode()
 	cc = compiler.NewCodeCompiler(p.Ctx, p.ModName, p.RelPath, pkgCode)
@@ -287,7 +306,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, code
 func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (mod llvm.Module, err error) {
 	// Registered before the module-dispose defer, so unwinding a panic frees
 	// the half-built module first, then the ICE recovery converts the panic.
-	defer recoverICE(scriptFile, &err)
+	defer recoverICE(scriptFile, &err, os.Stderr)
 
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
@@ -307,11 +326,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
 	scriptModule := sc.Compiler.Module
 	moduleReturned := false
-	defer func() {
-		if !moduleReturned {
-			scriptModule.Dispose()
-		}
-	}()
+	defer cleanupUnlessReleased(&moduleReturned, scriptModule.Dispose)
 
 	// Only link if code module has content
 	if codeLL != "" {
@@ -625,6 +640,10 @@ func runCompile(opts cliOptions) {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)
 			compileErr++
+			if isInternalCompilerError(err) {
+				fmt.Println("Stopping compilation after internal compiler error.")
+				break
+			}
 			continue
 		}
 
