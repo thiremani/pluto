@@ -296,7 +296,7 @@ func TestString(t *testing.T) {
 	checkInput(t, input, tests)
 }
 
-func TestStringEscapeProvenance(t *testing.T) {
+func TestStringKeepsRawSource(t *testing.T) {
 	l := New("", `"\x2dname -s\x25d \-other"`)
 	tok, err := l.NextToken()
 	if err != nil {
@@ -305,13 +305,8 @@ func TestStringEscapeProvenance(t *testing.T) {
 	if tok.Literal != "-name -s%d -other" {
 		t.Fatalf("literal = %q", tok.Literal)
 	}
-	for _, index := range []int{0, 8, 11} {
-		if !tok.IsEscapedRune(index) {
-			t.Errorf("rune %d should be marked escaped", index)
-		}
-	}
-	if tok.IsEscapedRune(6) {
-		t.Error("unescaped marker rune was marked escaped")
+	if tok.RawLiteral != `\x2dname -s\x25d \-other` {
+		t.Fatalf("raw string = %q", tok.RawLiteral)
 	}
 }
 

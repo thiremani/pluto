@@ -44,6 +44,11 @@ markerName = 99
 literalMarker = "\-markerName"
 hexLiteralMarker = "\x2dmarkerName"
 "literal markers: -literalMarker -hexLiteralMarker; value: -markerName"
+markerPrefix = 7
+markerPrefixTail = 88
+escapedMarkerStart = "-\x6darkerName"
+escapedMarkerTail = "-markerPrefix\x54ail"
+"escaped marker parts: -escapedMarkerStart -escapedMarkerTail; full: -markerPrefixTail"
 specifierText = "hello"
 "escaped specifier: -specifierText\x25q"
 "quoted marker: -literalMarker%q"

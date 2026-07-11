@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
 )
 
@@ -97,9 +98,14 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	// Collects all identifiers in the format string.
 	var evs []VarEvent
-	runes := []rune(value)
+	runes := stringSourceRunes(tok, value)
 	for i := 0; i < len(runes); i++ {
-		if maybeMarker(tok, runes, i) {
+		if runes[i] == '\\' {
+			_, next, _ := lexer.DecodeStringEscape(runes, i)
+			i = next - 1
+			continue
+		}
+		if maybeMarker(runes, i) {
 			evs = append(evs, cfg.collectMarkerReads(value, tok, runes, i)...)
 		}
 	}
@@ -118,7 +124,7 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 
 	evs := []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
 	// now collect any format specifier identifier reads
-	if hasSpecifier(tok, runes, end) {
+	if hasSpecifier(runes, end) {
 		evs = append(evs, cfg.collectSpecifierReads(value, tok, runes, end)...)
 	}
 	return evs
@@ -128,21 +134,12 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 // It assumes the runes slice is valid start is at the `%` character
 func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
 	var evs []VarEvent
-	for it := start + 1; it < len(runes); it++ {
-		if !specIdAhead(tok, runes, it) {
-			continue
-		}
-
-		specId, end := parseIdentifier(runes, it+2)
-		if end >= len(runes) || runes[end] != ')' {
-			err := &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, value),
-			}
-			cfg.Errors = append(cfg.Errors, err)
-			return nil
-		}
-
+	specIds, _, _, err := parseSpecifierSyntax(tok, value, runes, start)
+	if err != nil {
+		cfg.Errors = append(cfg.Errors, err)
+		return nil
+	}
+	for _, specId := range specIds {
 		ok := cfg.isDefined(specId)
 		if !ok {
 			err := &token.CompileError{

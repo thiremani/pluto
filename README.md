@@ -207,8 +207,9 @@ words  # ["hello" "hello world" ""]
 Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when a quoted,
 escaped scalar representation is needed: `"-word%q"`. String markers retain their normal scope
 semantics: `-name` interpolates when `name` is defined; use `\-name` when literal marker-like text is
-required. Hexadecimal escapes are limited to `\x01` through `\x7f`; malformed, NUL, and non-ASCII
-byte escapes are compile errors.
+required. Escape-produced characters remain literal during marker parsing, so `\x2dname` is also
+literal. Hexadecimal escapes are limited to `\x01` through `\x7f`; malformed, NUL, and non-ASCII byte
+escapes are compile errors.
 
 ---
 

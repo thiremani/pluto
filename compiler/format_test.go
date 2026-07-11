@@ -67,6 +67,25 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "Precision is not supported for %q because it can truncate the quoted string",
 		},
 		{
+			name: "EscapedSpecifierConversion",
+			input: `s = "hello"
+"Value: -s%\x71"`,
+			expectError: "Escape sequences cannot be used as format syntax",
+		},
+		{
+			name: "EscapedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%\x31q"`,
+			expectError: "Escape sequences cannot be used as format syntax",
+		},
+		{
+			name: "EscapedSpecifierClosingParen",
+			input: `s = "hello"
+width = 10
+"Value: -s%(-width\x29q"`,
+			expectError: "Expected ) after the identifier width",
+		},
+		{
 			name: "IntWithFloatSpecifier",
 			input: `x = 5
 "x = -x%f"`,
@@ -198,6 +217,19 @@ y = 3.2
 			expectOutput: "Literal: -x and value %lld",
 		},
 		{
+			name: "EscapedMarkerIdentifierStart",
+			input: `x = 5
+"Literal: -\x78 and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "EscapedMarkerIdentifierContinuation",
+			input: `x = 5
+xy = 6
+"Value: -x\x79; xy: -xy"`,
+			expectOutput: "Value: %lldy; xy: %lld",
+		},
+		{
 			name: "EscapedSpecifier",
 			input: `s = "hello"
 "Value: -s\x25q"`,
@@ -238,7 +270,9 @@ width = 10
 
 			funcCache := make(map[string]*Func)
 			sc := NewScriptCompiler(ctx, program, cc, funcCache, cc.Compiler.ExprCache)
-			sc.Compile()
+			if errs := sc.Compile(); len(errs) > 0 {
+				t.Fatalf("unexpected compile errors: %v", errs)
+			}
 			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {
 				t.Errorf("IR does not contain string constant.\nIR: %s\n, expected to contain: %s\n", ir, tc.expectOutput)

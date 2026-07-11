@@ -69,7 +69,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
-		tok.Literal, tok.EscapedRunes, err = l.readString(tok)
+		tok.Literal, tok.RawLiteral, err = l.readString(tok)
 	case ':':
 		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':
@@ -318,19 +318,10 @@ func (l *Lexer) readRune() {
 	l.column++
 }
 
-func (l *Lexer) readString(tok token.Token) (string, []int, *token.CompileError) {
+func (l *Lexer) readString(tok token.Token) (string, string, *token.CompileError) {
 	var out strings.Builder
-	var escapedRunes []int
 	var firstErr *token.CompileError
-	runeIndex := 0
-
-	writeRune := func(ch rune, escaped bool) {
-		out.WriteRune(ch)
-		if escaped {
-			escapedRunes = append(escapedRunes, runeIndex)
-		}
-		runeIndex++
-	}
+	start := l.position
 	invalidHexEscape := func() {
 		if firstErr == nil {
 			firstErr = &token.CompileError{
@@ -338,68 +329,71 @@ func (l *Lexer) readString(tok token.Token) (string, []int, *token.CompileError)
 				Msg:   `invalid hexadecimal escape: expected \x01 through \x7f`,
 			}
 		}
-		writeRune('x', true)
+		out.WriteRune('x')
 	}
 
 	for l.curr != '"' && l.curr != 0 {
 		if l.curr == '\\' {
-			l.readRune()
-			switch l.curr {
-			case 'n':
-				writeRune('\n', true)
-			case 't':
-				writeRune('\t', true)
-			case 'r':
-				writeRune('\r', true)
-			case 'b':
-				writeRune('\b', true)
-			case 'f':
-				writeRune('\f', true)
-			case '"':
-				writeRune('"', true)
-			case '\\':
-				writeRune('\\', true)
-			case '-', '%':
-				writeRune(l.curr, true)
-			case 'x':
-				value, ok := l.readHexEscape()
-				if !ok {
-					invalidHexEscape()
-					break
-				}
-				writeRune(value, true)
-			default:
-				writeRune(l.curr, true) // Preserve the existing unknown-escape behavior.
+			value, next, ok := DecodeStringEscape(l.input, l.position)
+			if !ok {
+				invalidHexEscape()
+			} else {
+				out.WriteRune(value)
+			}
+			for l.position+1 < next {
+				l.readRune()
 			}
 		} else {
-			writeRune(l.curr, false)
+			out.WriteRune(l.curr)
 		}
 		l.readRune()
 	}
-	return out.String(), escapedRunes, firstErr
+	return out.String(), string(l.input[start:l.position]), firstErr
 }
 
-// readHexEscape reads the two digits after the current 'x' and leaves curr on
-// the second digit. The caller advances once more at the end of its loop.
-func (l *Lexer) readHexEscape() (rune, bool) {
-	if l.readPosition+1 >= len(l.input) {
-		return 0, false
+// DecodeStringEscape decodes the escape beginning at start and returns the
+// first source index after it. The bool is false only for an invalid \x escape.
+func DecodeStringEscape(raw []rune, start int) (rune, int, bool) {
+	if start+1 >= len(raw) {
+		return '\\', start + 1, true
 	}
-	hi, ok := hexDigitValue(l.input[l.readPosition])
-	if !ok {
-		return 0, false
+
+	escaped := raw[start+1]
+	switch escaped {
+	case 'n':
+		return '\n', start + 2, true
+	case 't':
+		return '\t', start + 2, true
+	case 'r':
+		return '\r', start + 2, true
+	case 'b':
+		return '\b', start + 2, true
+	case 'f':
+		return '\f', start + 2, true
+	case '"':
+		return '"', start + 2, true
+	case '\\':
+		return '\\', start + 2, true
+	case 'x':
+		if start+3 >= len(raw) {
+			return 'x', start + 2, false
+		}
+		hi, ok := hexDigitValue(raw[start+2])
+		if !ok {
+			return 'x', start + 2, false
+		}
+		lo, ok := hexDigitValue(raw[start+3])
+		if !ok {
+			return 'x', start + 2, false
+		}
+		value := hi<<4 | lo
+		if value == 0 || value > 0x7f {
+			return 'x', start + 2, false
+		}
+		return rune(value), start + 4, true
+	default:
+		return escaped, start + 2, true
 	}
-	lo, ok := hexDigitValue(l.input[l.readPosition+1])
-	if !ok {
-		return 0, false
-	}
-	value := hi<<4 | lo
-	if value == 0 || value > 0x7f {
-		return 0, false
-	}
-	l.readRune()
-	l.readRune()
-	return rune(value), true
 }
 
 func hexDigitValue(ch rune) (byte, bool) {

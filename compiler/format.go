@@ -62,51 +62,74 @@ func defaultSpecifier(t Type) (string, error) {
 	}
 }
 
-// parseSpecifier assumes runes[start] == '%'
-// for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
-// these are then returned as specIds. (-identifier) is replaced with *
-// endIndex is one index after specifier ends, or after an invalid rune
-func (c *Compiler) parseSpecifier(tok token.Token, value string, runes []rune, start int) (specSyms []*Symbol, spec string, endIndex int, err *token.CompileError) {
+func stringSourceRunes(tok token.Token, value string) []rune {
+	if tok.RawLiteral != "" {
+		return []rune(tok.RawLiteral)
+	}
+	return []rune(value)
+}
+
+func writeFormatText(builder *strings.Builder, ch rune) {
+	builder.WriteRune(ch)
+	if ch == '%' {
+		builder.WriteRune('%')
+	}
+}
+
+// parseSpecifierSyntax assumes runes[start] == '%'. Dynamic width and
+// precision identifiers use (-identifier), which is returned as '*'.
+func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (specIds []string, spec string, endIndex int, err *token.CompileError) {
 	// Read until we encounter a conversion specifier end char (like d, f, etc.)
-	err = nil
 	specRunes := []rune{runes[start]}
 	for it := start + 1; it < len(runes); it++ {
+		if runes[it] == '\\' {
+			err = &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("Invalid format specifier string: Escape sequences cannot be used as format syntax. Str: %s", value),
+			}
+			endIndex = it
+			return
+		}
+
 		if runes[it] == '*' {
 			err = &token.CompileError{
 				Token: tok,
 				Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", value),
 			}
-			c.Errors = append(c.Errors, err)
-			it += 1
+			endIndex = it + 1
 			return
 		}
 
-		if specIdAhead(tok, runes, it) {
-			// cfg already checks that the ')' is after the identifier
-			// and identifier is in the symbol table
+		if specIdAhead(runes, it) {
 			specId, end := parseIdentifier(runes, it+2)
-			specSym, _ := c.getIdSym(specId)
-			specSyms = append(specSyms, specSym)
+			if end >= len(runes) || runes[end] != ')' {
+				err = &token.CompileError{
+					Token: tok,
+					Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, value),
+				}
+				endIndex = end
+				return
+			}
+			specIds = append(specIds, specId)
 			specRunes = append(specRunes, '*')
-			// it must go past the )
-			// it does so in the loop it++
+			// The loop increment advances past the closing parenthesis.
 			it = end
 			continue
 		}
 
 		specRunes = append(specRunes, runes[it])
-		if !tok.IsEscapedRune(it) && formatSpecifierEnd(runes[it]) {
+		if formatSpecifierEnd(runes[it]) {
 			endIndex = it + 1
 			spec = string(specRunes)
 			return
 		}
 	}
 
-	err = &token.CompileError{
-		Token: tok,
-		Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), value),
+	msg := fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), value)
+	if len(specRunes) == 1 {
+		msg = fmt.Sprintf("Invalid format specifier string: Format specifier is incomplete. Str: %s", value)
 	}
-	c.Errors = append(c.Errors, err)
+	err = &token.CompileError{Token: tok, Msg: msg}
 	endIndex = len(runes)
 	return
 }
@@ -141,7 +164,7 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 		return mainId, []*Symbol{}, "", end, false, nil
 	}
 
-	if hasSpecifier(tok, runes, end) {
+	if hasSpecifier(runes, end) {
 		if end+1 == len(runes) {
 			err = &token.CompileError{
 				Token: tok,
@@ -152,7 +175,26 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 			return
 		}
 		specStart := end
-		specSyms, customSpec, end, err = c.parseSpecifier(tok, value, runes, specStart)
+		var specIds []string
+		specIds, customSpec, end, err = parseSpecifierSyntax(tok, value, runes, specStart)
+		if err != nil {
+			c.Errors = append(c.Errors, err)
+			newIndex = end
+			return
+		}
+		for _, specId := range specIds {
+			specSym, ok := c.getIdSym(specId)
+			if !ok {
+				err = &token.CompileError{
+					Token: tok,
+					Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
+				}
+				c.Errors = append(c.Errors, err)
+				newIndex = end
+				return
+			}
+			specSyms = append(specSyms, specSym)
+		}
 	}
 
 	syms = append(syms, mainSym)
@@ -315,17 +357,19 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
-	runes := []rune(value)
+	// Marker syntax is recognized from raw source. Escapes decode directly to
+	// literal output and are never reconsidered as markers or specifiers.
+	runes := stringSourceRunes(tok, value)
 	i := 0
 	for i < len(runes) {
-		if !maybeMarker(tok, runes, i) {
-			builder.WriteRune(runes[i])
-			if runes[i] == '%' {
-				// % is not after -var. so we allow lone %
-				// for printf we need to write it twice
-				builder.WriteRune(runes[i])
-			}
+		if runes[i] == '\\' {
+			decoded, next, _ := lexer.DecodeStringEscape(runes, i)
+			writeFormatText(&builder, decoded)
+			i = next
+			continue
+		}
+		if !maybeMarker(runes, i) {
+			writeFormatText(&builder, runes[i])
 			i++
 			continue
 		}
@@ -396,23 +440,23 @@ func upgradeIntSpec(spec string) string {
 	return spec[:len(spec)-1] + "ll" + string(conv)
 }
 
-func maybeMarker(tok token.Token, runes []rune, i int) bool {
-	if i+1 < len(runes) && runes[i] == '-' && !tok.IsEscapedRune(i) && lexer.IsLetter(runes[i+1]) {
+func maybeMarker(runes []rune, i int) bool {
+	if i+1 < len(runes) && runes[i] == '-' && lexer.IsLetter(runes[i+1]) {
 		return true
 	}
 	return false
 }
 
-func hasSpecifier(tok token.Token, runes []rune, i int) bool {
-	if i < len(runes) && runes[i] == '%' && !tok.IsEscapedRune(i) {
+func hasSpecifier(runes []rune, i int) bool {
+	if i < len(runes) && runes[i] == '%' {
 		return true
 	}
 	return false
 }
 
-func specIdAhead(tok token.Token, runes []rune, i int) bool {
-	return i+2 < len(runes) && runes[i] == '(' && !tok.IsEscapedRune(i) &&
-		runes[i+1] == '-' && !tok.IsEscapedRune(i+1) && lexer.IsLetter(runes[i+2])
+func specIdAhead(runes []rune, i int) bool {
+	return i+2 < len(runes) && runes[i] == '(' &&
+		runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
 }
 
 // structFormatArgs builds a printf format string and args for a struct value.
@@ -453,9 +497,14 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 // its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
 // only width is defined) are not considered valid markers.
 func hasValidMarkers(tok token.Token, value string, isDefined func(string) bool) bool {
-	runes := []rune(value)
+	runes := stringSourceRunes(tok, value)
 	for i := 0; i < len(runes); i++ {
-		if !maybeMarker(tok, runes, i) {
+		if runes[i] == '\\' {
+			_, next, _ := lexer.DecodeStringEscape(runes, i)
+			i = next - 1
+			continue
+		}
+		if !maybeMarker(runes, i) {
 			continue
 		}
 		// Parse the identifier after the '-'
