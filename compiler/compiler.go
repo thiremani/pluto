@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
@@ -610,7 +611,7 @@ func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType T
 		if fieldType.Kind() == StrKind {
 			fieldGlobalName := fmt.Sprintf("struct_%s_%s_%d", typeName, fieldName, c.tmpCounter)
 			c.tmpCounter++
-			fieldGlobal := c.createGlobalString(fieldGlobalName, decodedStringLiteral(cv.Token.Literal), llvm.PrivateLinkage)
+			fieldGlobal := c.createGlobalString(fieldGlobalName, lexer.DecodeStringLiteral(cv.Token.Literal), llvm.PrivateLinkage)
 			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
 		}
 	}
@@ -672,7 +673,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
 
 	case *ast.StringLiteral:
-		sym.Val = c.createGlobalString(mangledName, decodedStringLiteral(v.Token.Literal), linkage)
+		sym.Val = c.createGlobalString(mangledName, lexer.DecodeStringLiteral(v.Token.Literal), linkage)
 		sym.Type = StrG{} // Global constants are static strings
 
 	case *ast.StructLiteral:
@@ -1643,7 +1644,7 @@ func (c *Compiler) compileStringLiteral(tok token.Token) *Symbol {
 	if len(args) == 0 {
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
-		globalPtr := c.createGlobalString(globalName, decodedStringLiteral(tok.Literal), llvm.PrivateLinkage)
+		globalPtr := c.createGlobalString(globalName, lexer.DecodeStringLiteral(tok.Literal), llvm.PrivateLinkage)
 		return &Symbol{Type: StrG{}, Val: globalPtr}
 	}
 

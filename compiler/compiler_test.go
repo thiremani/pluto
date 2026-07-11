@@ -227,25 +227,9 @@ func TestInferCallParamTypesUsesOriginalVariantWhenRangesPending(t *testing.T) {
 	require.True(t, TypeEqual(paramTypes[1], Range{Iter: I64}))
 }
 
-func TestStringCompile(t *testing.T) {
-	input := `"line\n\x41"`
-	l := lexer.New("TestStringCompile", input)
-	sp := parser.NewScriptParser(l)
-	program := sp.Parse()
-
-	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "testStringCompile", "", ast.NewCode())
-
-	funcCache := make(map[string]*Func)
-	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
-	sc.Compile()
-	ir := sc.Compiler.GenerateIR()
-
-	expectedIR := `@printf_fmt_0 = constant [8 x i8] c"line\0AA\0A\00"`
-	if !strings.Contains(ir, expectedIR) {
-		t.Errorf("IR does not contain string constant:\n%s", ir)
-	}
+func TestStringCompileDecodesEscapes(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "string_escape", "", `"line\n\x21"`)
+	require.Contains(t, ir, `@printf_fmt_0 = constant [8 x i8] c"line\0A!\0A\00"`)
 }
 
 func TestFormatIdentifiers(t *testing.T) {

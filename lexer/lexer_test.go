@@ -295,10 +295,7 @@ func TestString(t *testing.T) {
 	}
 	checkInput(t, input, tests)
 
-	decoded, ok := DecodeStringLiteral(raw)
-	if !ok {
-		t.Fatal("expected valid string escapes")
-	}
+	decoded := DecodeStringLiteral(raw)
 	want := "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f"
 	if decoded != want {
 		t.Fatalf("decoded string = %q, want %q", decoded, want)
@@ -306,7 +303,7 @@ func TestString(t *testing.T) {
 }
 
 func TestStringLiteralIsRaw(t *testing.T) {
-	const raw = `\x2dname -s\x25d \-other`
+	const raw = `\x2dname -s\x25d \-other \%q`
 	l := New("", `"`+raw+`"`)
 	tok, err := l.NextToken()
 	if err != nil {
@@ -315,9 +312,9 @@ func TestStringLiteralIsRaw(t *testing.T) {
 	if tok.Literal != raw {
 		t.Fatalf("literal = %q", tok.Literal)
 	}
-	decoded, ok := DecodeStringLiteral(tok.Literal)
-	if !ok || decoded != "-name -s%d -other" {
-		t.Fatalf("decoded string = %q, ok = %t", decoded, ok)
+	decoded := DecodeStringLiteral(tok.Literal)
+	if decoded != "-name -s%d -other %q" {
+		t.Fatalf("decoded string = %q", decoded)
 	}
 }
 
@@ -325,18 +322,60 @@ func TestInvalidHexEscapes(t *testing.T) {
 	for _, input := range []string{`"\x00"`, `"\x80"`, `"\xff"`, `"\xZG"`, `"\x5"`, `"\x"`} {
 		t.Run(input, func(t *testing.T) {
 			l := New("", input)
-			tok, err := l.NextToken()
+			_, err := l.NextToken()
 			if err == nil {
 				t.Fatal("expected a lexer error")
 			}
 			if err.Msg != `invalid hexadecimal escape: expected \x01 through \x7f` {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if _, ok := DecodeStringLiteral(tok.Literal); ok {
-				t.Fatalf("decoder accepted invalid literal %q", tok.Literal)
+		})
+	}
+}
+
+func TestInvalidStringEscapes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"\0"`, `NUL escape \0 is not supported`},
+		{`"\00"`, `NUL escape \0 is not supported`},
+		{`"\q"`, `unsupported escape sequence \q`},
+		{`"\a"`, `unsupported escape sequence \a`},
+		{`"trailing\`, `incomplete escape sequence`},
+		{`"escaped quote\"`, `unterminated string literal`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			l := New("", tc.input)
+			_, err := l.NextToken()
+			if err == nil || err.Msg != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
 	}
+}
+
+func TestNULCharacterIsRejected(t *testing.T) {
+	t.Run("String", func(t *testing.T) {
+		l := New("", "\"a\x00b\"")
+		_, err := l.NextToken()
+		if err == nil || err.Msg != "NUL character is not allowed in string literals" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("Source", func(t *testing.T) {
+		l := New("", "x \x00 y")
+		if _, err := l.NextToken(); err != nil {
+			t.Fatalf("unexpected identifier error: %v", err)
+		}
+		_, err := l.NextToken()
+		if err == nil || err.Msg != "NUL character is not allowed in source" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestZeroKeywordWordsAreIdentifiers(t *testing.T) {

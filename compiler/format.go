@@ -69,14 +69,6 @@ func writeFormatText(builder *strings.Builder, ch rune) {
 	}
 }
 
-func decodedStringLiteral(raw string) string {
-	decoded, ok := lexer.DecodeStringLiteral(raw)
-	if !ok {
-		panic("invalid string escape reached compiler")
-	}
-	return decoded
-}
-
 // parseSpecifierSyntax assumes runes[start] == '%'. Dynamic width and
 // precision identifiers use (-identifier), which is returned as '*'.
 func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (specIds []string, spec string, endIndex int, err *token.CompileError) {
