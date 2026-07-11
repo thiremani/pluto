@@ -18,7 +18,7 @@ quoted heap: "hello world"
 quoted static: "hello \"world\"\\path\nnext\tcol"
 literal markers: -markerName -markerName; value: 99
 escaped specifier: hello%q
-quoted marker: "\-markerName"
+quoted marker: "-markerName"
 number is 00042
 heap print: world
 no markers here

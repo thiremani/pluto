@@ -42,7 +42,6 @@ char *str_quote(const char *s) {
         switch (ch) {
         case '"':  *out++ = '\\'; *out++ = '"'; break;
         case '\\': *out++ = '\\'; *out++ = '\\'; break;
-        case '-':  *out++ = '\\'; *out++ = '-'; break;
         case '\b': *out++ = '\\'; *out++ = 'b'; break;
         case '\f': *out++ = '\\'; *out++ = 'f'; break;
         case '\n': *out++ = '\\'; *out++ = 'n'; break;

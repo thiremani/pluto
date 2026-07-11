@@ -202,10 +202,11 @@ y = 3.2
 			expectOutput: "Value: %s%%q",
 		},
 		{
-			name: "QuotedSpecifierWidth",
+			name: "QuotedSpecifierDynamicWidth",
 			input: `s = "hello"
-"Value: -s%10q"`,
-			expectOutput: "Value: %10s",
+width = 10
+"Value: -s%(-width)q"`,
+			expectOutput: "Value: %*s",
 		},
 	}
 	for _, tc := range tests {

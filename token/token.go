@@ -189,7 +189,7 @@ type Token struct {
 	Line         int
 	Column       int
 	HadSpace     bool  // true if there was any space before this token
-	EscapedRunes []int // decoded rune positions originating from string escapes
+	EscapedRunes []int // ascending decoded rune positions originating from string escapes
 }
 
 type CompileErrors []*CompileError
