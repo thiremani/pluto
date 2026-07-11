@@ -345,9 +345,9 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			continue
 		}
 		if l.curr == '\\' {
-			_, next, ok := DecodeStringEscape(l.input, l.position)
-			if !ok {
-				setError(stringEscapeError(l.input, l.position))
+			_, next, escapeErr := DecodeStringEscape(l.input, l.position)
+			if escapeErr != nil {
+				setError(escapeErr.Error())
 			}
 			for l.position+1 < next {
 				l.readRune()
@@ -361,68 +361,77 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	return string(l.input[start:l.position]), firstErr
 }
 
-func stringEscapeError(raw []rune, start int) string {
-	if start+1 >= len(raw) {
-		return "incomplete escape sequence"
-	}
-	switch raw[start+1] {
-	case 0:
-		return "NUL character is not allowed in string literals"
-	case '0':
-		return `NUL escape \0 is not supported`
-	case 'x':
-		return `invalid hexadecimal escape: expected \x01 through \x7f`
-	default:
-		return fmt.Sprintf(`unsupported escape sequence \%c`, raw[start+1])
-	}
-}
-
 // DecodeStringEscape decodes the escape beginning at start and returns the
-// first source index after it. The bool is false for unsupported or malformed
-// escapes.
-func DecodeStringEscape(raw []rune, start int) (rune, int, bool) {
+// first source index after it.
+func DecodeStringEscape(raw []rune, start int) (rune, int, error) {
 	if start+1 >= len(raw) {
-		return '\\', start + 1, false
+		return '\\', start + 1, fmt.Errorf("incomplete escape sequence")
 	}
 
 	escaped := raw[start+1]
 	switch escaped {
 	case 'n':
-		return '\n', start + 2, true
+		return '\n', start + 2, nil
 	case 't':
-		return '\t', start + 2, true
+		return '\t', start + 2, nil
 	case 'r':
-		return '\r', start + 2, true
+		return '\r', start + 2, nil
 	case 'b':
-		return '\b', start + 2, true
+		return '\b', start + 2, nil
 	case 'f':
-		return '\f', start + 2, true
+		return '\f', start + 2, nil
 	case '"':
-		return '"', start + 2, true
+		return '"', start + 2, nil
 	case '\\':
-		return '\\', start + 2, true
+		return '\\', start + 2, nil
 	case '-', '%':
-		return escaped, start + 2, true
+		return escaped, start + 2, nil
 	case 'x':
-		if start+3 >= len(raw) {
-			return 'x', start + 2, false
-		}
-		hi, ok := hexDigitValue(raw[start+2])
-		if !ok {
-			return 'x', start + 2, false
-		}
-		lo, ok := hexDigitValue(raw[start+3])
-		if !ok {
-			return 'x', start + 2, false
-		}
-		value := hi<<4 | lo
-		if value == 0 || value > 0x7f {
-			return 'x', start + 2, false
-		}
-		return rune(value), start + 4, true
+		return decodeFixedHexEscape(raw, start, 2)
+	case 'u':
+		return decodeFixedHexEscape(raw, start, 4)
+	case 'U':
+		return decodeFixedHexEscape(raw, start, 8)
+	case 0:
+		return escaped, start + 2, fmt.Errorf("NUL character is not allowed in string literals")
+	case '0':
+		return escaped, start + 2, fmt.Errorf(`NUL escape \0 is not supported`)
 	default:
-		return escaped, start + 2, false
+		return escaped, start + 2, fmt.Errorf(`unsupported escape sequence \%c`, escaped)
 	}
+}
+
+func decodeFixedHexEscape(raw []rune, start, digits int) (rune, int, error) {
+	prefix := raw[start+1]
+	digitStart := start + 2
+	end := digitStart + digits
+	if end > len(raw) {
+		return prefix, len(raw), fmt.Errorf(`invalid \%c escape: expected exactly %d hexadecimal digits`, prefix, digits)
+	}
+
+	var value uint32
+	for i := digitStart; i < end; i++ {
+		digit, ok := hexDigitValue(raw[i])
+		if !ok {
+			if raw[i] == 0 {
+				return prefix, i, fmt.Errorf("NUL character is not allowed in string literals")
+			}
+			return prefix, i, fmt.Errorf(`invalid \%c escape: expected exactly %d hexadecimal digits`, prefix, digits)
+		}
+		value = value<<4 | uint32(digit)
+	}
+
+	escape := string(raw[start:end])
+	if value == 0 {
+		return prefix, end, fmt.Errorf("NUL escape %s is not supported", escape)
+	}
+	if value > 0x10ffff {
+		return prefix, end, fmt.Errorf("invalid Unicode escape %s: code point exceeds U+10FFFF", escape)
+	}
+	if 0xd800 <= value && value <= 0xdfff {
+		return prefix, end, fmt.Errorf("invalid Unicode escape %s: surrogate code points are not supported", escape)
+	}
+	return rune(value), end, nil
 }
 
 // DecodeStringLiteral converts lexer-validated raw string contents to their

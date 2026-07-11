@@ -208,9 +208,11 @@ Scalar strings remain unquoted by default. Use the Pluto `%q` formatting convers
 escaped scalar representation is needed: `"-word%q"`. String markers retain their normal scope
 semantics: `-name` interpolates when `name` is defined; use `\-name` when literal marker-like text is
 required. Escape-produced characters remain literal during marker parsing, so `\x2dname` is also
-literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`, `\f`, and hexadecimal
-`\x01` through `\x7f`. NUL, octal, malformed, unrecognized, and non-ASCII byte escapes are compile
-errors; Pluto strings do not contain NUL characters.
+literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`, `\f`, and the
+fixed-width Unicode forms `\xNN`, `\uNNNN`, and `\UNNNNNNNN`. These forms denote Unicode code points
+and are UTF-8 encoded: `\xff` is `ÿ` (bytes `c3 bf`), while `\xc3\xbf` is `Ã¿`. NUL is rejected in
+every form. Octal, malformed, and unrecognized escapes are compile errors, as are surrogate code
+points and values above U+10FFFF.
 
 ---
 

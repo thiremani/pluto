@@ -318,16 +318,67 @@ func TestStringLiteralIsRaw(t *testing.T) {
 	}
 }
 
-func TestInvalidHexEscapes(t *testing.T) {
-	for _, input := range []string{`"\x00"`, `"\x80"`, `"\xff"`, `"\xZG"`, `"\x5"`, `"\x"`} {
-		t.Run(input, func(t *testing.T) {
-			l := New("", input)
-			_, err := l.NextToken()
-			if err == nil {
-				t.Fatal("expected a lexer error")
+func TestFixedWidthStringEscapes(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{`\x01`, string(rune(0x01))},
+		{`\x7f`, string(rune(0x7f))},
+		{`\x80`, string(rune(0x80))},
+		{`\xff`, "ÿ"},
+		{`\u0001`, string(rune(0x0001))},
+		{`\ud7ff`, string(rune(0xd7ff))},
+		{`\ue000`, string(rune(0xe000))},
+		{`\uffff`, string(rune(0xffff))},
+		{`\U00010000`, string(rune(0x10000))},
+		{`\U0010ffff`, string(rune(0x10ffff))},
+		{`\x414`, "A4"},
+		{`\u23456`, string(rune(0x2345)) + "6"},
+		{`\U0001f680f`, "🚀f"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.raw, func(t *testing.T) {
+			l := New("", `"`+tc.raw+`"`)
+			tok, err := l.NextToken()
+			if err != nil {
+				t.Fatalf("unexpected lexer error: %v", err)
 			}
-			if err.Msg != `invalid hexadecimal escape: expected \x01 through \x7f` {
-				t.Fatalf("unexpected error: %v", err)
+			if got := DecodeStringLiteral(tok.Literal); got != tc.want {
+				t.Fatalf("decoded string = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidFixedWidthStringEscapes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"\x00"`, `NUL escape \x00 is not supported`},
+		{`"\xZG"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\x5"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\x"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\u0000"`, `NUL escape \u0000 is not supported`},
+		{`"\ud800"`, `invalid Unicode escape \ud800: surrogate code points are not supported`},
+		{`"\udfff"`, `invalid Unicode escape \udfff: surrogate code points are not supported`},
+		{`"\u12xz"`, `invalid \u escape: expected exactly 4 hexadecimal digits`},
+		{`"\u123"`, `invalid \u escape: expected exactly 4 hexadecimal digits`},
+		{`"\U00000000"`, `NUL escape \U00000000 is not supported`},
+		{`"\U0000d800"`, `invalid Unicode escape \U0000d800: surrogate code points are not supported`},
+		{`"\U00110000"`, `invalid Unicode escape \U00110000: code point exceeds U+10FFFF`},
+		{`"\U0001f68"`, `invalid \U escape: expected exactly 8 hexadecimal digits`},
+		{`"\U0001f68z"`, `invalid \U escape: expected exactly 8 hexadecimal digits`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			l := New("", tc.input)
+			_, err := l.NextToken()
+			if err == nil || err.Msg != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
 	}

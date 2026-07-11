@@ -220,6 +220,18 @@ y = 3.2
 			expectOutput: "Literal: -x and value %lld",
 		},
 		{
+			name: "UnicodeEscapedMarker",
+			input: `x = 5
+"Literal: \u002dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "WideUnicodeEscapedMarker",
+			input: `x = 5
+"Literal: \U0000002dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
 			name: "EscapedMarkerIdentifierStart",
 			input: `x = 5
 "Literal: -\x78 and value -x"`,
@@ -236,6 +248,18 @@ xy = 6
 			name: "EscapedSpecifier",
 			input: `s = "hello"
 "Value: -s\x25q"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "UnicodeEscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\u0025q"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "WideUnicodeEscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\U00000025q"`,
 			expectOutput: "Value: %s%%q",
 		},
 		{
