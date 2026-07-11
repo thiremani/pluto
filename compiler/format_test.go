@@ -118,6 +118,8 @@ func TestValidFormatString(t *testing.T) {
 		name         string
 		input        string
 		expectOutput string
+		expectIR     string
+		rejectIR     string
 	}{
 		{
 			name: "ValidFormatString",
@@ -202,11 +204,27 @@ y = 3.2
 			expectOutput: "Value: %s%%q",
 		},
 		{
+			name: "QuotedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%10q"`,
+			expectOutput: "Value: %10s",
+			expectIR:     "call ptr @str_quote",
+		},
+		{
 			name: "QuotedSpecifierDynamicWidth",
 			input: `s = "hello"
 width = 10
 "Value: -s%(-width)q"`,
 			expectOutput: "Value: %*s",
+			expectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "StringSpecifierDynamicWidth",
+			input: `s = "hello"
+width = 10
+"Value: -s%(-width)s"`,
+			expectOutput: "Value: %*s",
+			rejectIR:     "call ptr @str_quote",
 		},
 	}
 	for _, tc := range tests {
@@ -224,6 +242,12 @@ width = 10
 			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {
 				t.Errorf("IR does not contain string constant.\nIR: %s\n, expected to contain: %s\n", ir, tc.expectOutput)
+			}
+			if tc.expectIR != "" && !strings.Contains(ir, tc.expectIR) {
+				t.Errorf("IR does not contain %q.\nIR: %s", tc.expectIR, ir)
+			}
+			if tc.rejectIR != "" && strings.Contains(ir, tc.rejectIR) {
+				t.Errorf("IR unexpectedly contains %q.\nIR: %s", tc.rejectIR, ir)
 			}
 		})
 	}
