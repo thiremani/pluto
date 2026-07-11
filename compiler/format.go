@@ -62,18 +62,19 @@ func defaultSpecifier(t Type) (string, error) {
 	}
 }
 
-func stringSourceRunes(tok token.Token, value string) []rune {
-	if tok.RawLiteral != "" {
-		return []rune(tok.RawLiteral)
-	}
-	return []rune(value)
-}
-
 func writeFormatText(builder *strings.Builder, ch rune) {
 	builder.WriteRune(ch)
 	if ch == '%' {
 		builder.WriteRune('%')
 	}
+}
+
+func decodedStringLiteral(raw string) string {
+	decoded, ok := lexer.DecodeStringLiteral(raw)
+	if !ok {
+		panic("invalid string escape reached compiler")
+	}
+	return decoded
 }
 
 // parseSpecifierSyntax assumes runes[start] == '%'. Dynamic width and
@@ -359,7 +360,7 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 
 	// Marker syntax is recognized from raw source. Escapes decode directly to
 	// literal output and are never reconsidered as markers or specifiers.
-	runes := stringSourceRunes(tok, value)
+	runes := []rune(value)
 	i := 0
 	for i < len(runes) {
 		if runes[i] == '\\' {
@@ -496,8 +497,8 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 // This aligns with parseMarker/formatString semantics: a marker is only valid when
 // its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
 // only width is defined) are not considered valid markers.
-func hasValidMarkers(tok token.Token, value string, isDefined func(string) bool) bool {
-	runes := stringSourceRunes(tok, value)
+func hasValidMarkers(value string, isDefined func(string) bool) bool {
+	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
 			_, next, _ := lexer.DecodeStringEscape(runes, i)

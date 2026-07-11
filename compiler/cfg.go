@@ -78,7 +78,7 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	case *ast.IntegerLiteral, *ast.FloatLiteral:
 		return nil
 	case *ast.StringLiteral:
-		return cfg.collectStringReads(e.Value, e.Token)
+		return cfg.collectStringReads(e.Token.Literal, e.Token)
 	case *ast.Identifier:
 		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
 	}
@@ -98,7 +98,7 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	// Collects all identifiers in the format string.
 	var evs []VarEvent
-	runes := stringSourceRunes(tok, value)
+	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
 			_, next, _ := lexer.DecodeStringEscape(runes, i)

@@ -228,7 +228,7 @@ func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
 		Token:   token.Token{Type: token.IDENT, Literal: "Person"},
 		Headers: []token.Token{{Type: token.IDENT, Literal: "age"}},
 		Row: []ast.Expression{
-			&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}, Value: "Ada"},
+			&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}},
 		},
 	}
 
@@ -259,9 +259,9 @@ func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 		Row: []ast.Expression{
 			&ast.InfixExpression{
 				Token:    token.Token{Type: token.OPERATOR, Literal: token.SYM_CONCAT},
-				Left:     &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}, Value: "Ada"},
+				Left:     &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Ada"}},
 				Operator: token.SYM_CONCAT,
-				Right:    &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "!"}, Value: "!"},
+				Right:    &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "!"}},
 			},
 		},
 	}

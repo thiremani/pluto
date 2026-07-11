@@ -1409,7 +1409,7 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 	case *ast.StringLiteral:
 		// Check if string has valid format markers - if so, it's a heap string
 		var strType Type = StrG{}
-		if hasValidMarkers(e.Token, e.Value, ts.isDefined) {
+		if hasValidMarkers(e.Token.Literal, ts.isDefined) {
 			strType = StrH{}
 		}
 		types = append(types, strType)

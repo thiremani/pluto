@@ -125,6 +125,9 @@ width = 10
 			if len(errs) == 0 {
 				t.Fatal("Expected a compile error, but got none.")
 			}
+			if len(errs) != 1 {
+				t.Fatalf("Expected one compile error, but got %d: %v", len(errs), errs)
+			}
 			if !strings.Contains(errs[0].Error(), tc.expectError) {
 				t.Errorf("Expected error message to contain %q, but got %q", tc.expectError, errs[0].Error())
 			}

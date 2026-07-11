@@ -1098,10 +1098,7 @@ func cleanNumberLiteral(lit string) string {
 }
 
 func (p *StmtParser) parseStringLiteral() ast.Expression {
-	return &ast.StringLiteral{
-		Token: p.curToken,
-		Value: p.curToken.Literal,
-	}
+	return &ast.StringLiteral{Token: p.curToken}
 }
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {

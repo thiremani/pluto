@@ -2,7 +2,6 @@ package lexer
 
 import (
 	"testing"
-	"unicode/utf8"
 
 	"github.com/thiremani/pluto/token"
 )
@@ -289,24 +288,36 @@ x = .5
 }
 
 func TestString(t *testing.T) {
-	input := `"quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f"`
+	const raw = `quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f`
+	input := `"` + raw + `"`
 	tests := []Test{
-		{token.STRING, "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f", "", 1, 1},
+		{token.STRING, raw, "", 1, 1},
 	}
 	checkInput(t, input, tests)
+
+	decoded, ok := DecodeStringLiteral(raw)
+	if !ok {
+		t.Fatal("expected valid string escapes")
+	}
+	want := "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f"
+	if decoded != want {
+		t.Fatalf("decoded string = %q, want %q", decoded, want)
+	}
 }
 
-func TestStringKeepsRawSource(t *testing.T) {
-	l := New("", `"\x2dname -s\x25d \-other"`)
+func TestStringLiteralIsRaw(t *testing.T) {
+	const raw = `\x2dname -s\x25d \-other`
+	l := New("", `"`+raw+`"`)
 	tok, err := l.NextToken()
 	if err != nil {
 		t.Fatalf("unexpected lexer error: %v", err)
 	}
-	if tok.Literal != "-name -s%d -other" {
+	if tok.Literal != raw {
 		t.Fatalf("literal = %q", tok.Literal)
 	}
-	if tok.RawLiteral != `\x2dname -s\x25d \-other` {
-		t.Fatalf("raw string = %q", tok.RawLiteral)
+	decoded, ok := DecodeStringLiteral(tok.Literal)
+	if !ok || decoded != "-name -s%d -other" {
+		t.Fatalf("decoded string = %q, ok = %t", decoded, ok)
 	}
 }
 
@@ -321,8 +332,8 @@ func TestInvalidHexEscapes(t *testing.T) {
 			if err.Msg != `invalid hexadecimal escape: expected \x01 through \x7f` {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !utf8.ValidString(tok.Literal) {
-				t.Fatalf("lexer returned invalid UTF-8: %q", tok.Literal)
+			if _, ok := DecodeStringLiteral(tok.Literal); ok {
+				t.Fatalf("decoder accepted invalid literal %q", tok.Literal)
 			}
 		})
 	}

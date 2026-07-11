@@ -610,7 +610,7 @@ func (c *Compiler) structFieldConstValue(typeName, fieldName string, fieldType T
 		if fieldType.Kind() == StrKind {
 			fieldGlobalName := fmt.Sprintf("struct_%s_%s_%d", typeName, fieldName, c.tmpCounter)
 			c.tmpCounter++
-			fieldGlobal := c.createGlobalString(fieldGlobalName, cv.Value, llvm.PrivateLinkage)
+			fieldGlobal := c.createGlobalString(fieldGlobalName, decodedStringLiteral(cv.Token.Literal), llvm.PrivateLinkage)
 			return llvm.ConstBitCast(fieldGlobal, llvm.PointerType(c.Context.Int8Type(), 0)), true
 		}
 	}
@@ -672,7 +672,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 		sym.Val = c.makeGlobalConst(c.Context.DoubleType(), mangledName, val, linkage)
 
 	case *ast.StringLiteral:
-		sym.Val = c.createGlobalString(mangledName, v.Value, linkage)
+		sym.Val = c.createGlobalString(mangledName, decodedStringLiteral(v.Token.Literal), linkage)
 		sym.Type = StrG{} // Global constants are static strings
 
 	case *ast.StructLiteral:
@@ -1425,7 +1425,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		res = []*Symbol{c.compileStringLiteral(e.Token, e.Value)}
+		res = []*Symbol{c.compileStringLiteral(e.Token)}
 	case *ast.RangeLiteral:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
 		// Root bare range literals can be scalarized by an outer ranged context.
@@ -1636,14 +1636,14 @@ func (c *Compiler) compileRangeExpression(e *ast.RangeLiteral) (res []*Symbol) {
 
 // compileStringLiteral compiles a string literal.
 // Strings with format markers are heap-allocated; other literals stay static.
-func (c *Compiler) compileStringLiteral(tok token.Token, value string) *Symbol {
-	formatted, args, toFree := c.formatString(tok, value)
+func (c *Compiler) compileStringLiteral(tok token.Token) *Symbol {
+	formatted, args, toFree := c.formatString(tok, tok.Literal)
 
 	// No markers
 	if len(args) == 0 {
 		globalName := fmt.Sprintf("str_literal_%d", c.formatCounter)
 		c.formatCounter++
-		globalPtr := c.createGlobalString(globalName, value, llvm.PrivateLinkage)
+		globalPtr := c.createGlobalString(globalName, decodedStringLiteral(tok.Literal), llvm.PrivateLinkage)
 		return &Symbol{Type: StrG{}, Val: globalPtr}
 	}
 
@@ -3297,7 +3297,7 @@ func (c *Compiler) printAllExpressions(exprs []ast.Expression) {
 func asStringLiteral(expr ast.Expression) (tok token.Token, value string, ok bool) {
 	switch e := expr.(type) {
 	case *ast.StringLiteral:
-		return e.Token, e.Value, true
+		return e.Token, e.Token.Literal, true
 	}
 	return token.Token{}, "", false
 }

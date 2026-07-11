@@ -69,7 +69,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
-		tok.Literal, tok.RawLiteral, err = l.readString(tok)
+		tok.Literal, err = l.readString(tok)
 	case ':':
 		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':
@@ -318,8 +318,7 @@ func (l *Lexer) readRune() {
 	l.column++
 }
 
-func (l *Lexer) readString(tok token.Token) (string, string, *token.CompileError) {
-	var out strings.Builder
+func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	var firstErr *token.CompileError
 	start := l.position
 	invalidHexEscape := func() {
@@ -329,26 +328,21 @@ func (l *Lexer) readString(tok token.Token) (string, string, *token.CompileError
 				Msg:   `invalid hexadecimal escape: expected \x01 through \x7f`,
 			}
 		}
-		out.WriteRune('x')
 	}
 
 	for l.curr != '"' && l.curr != 0 {
 		if l.curr == '\\' {
-			value, next, ok := DecodeStringEscape(l.input, l.position)
+			_, next, ok := DecodeStringEscape(l.input, l.position)
 			if !ok {
 				invalidHexEscape()
-			} else {
-				out.WriteRune(value)
 			}
 			for l.position+1 < next {
 				l.readRune()
 			}
-		} else {
-			out.WriteRune(l.curr)
 		}
 		l.readRune()
 	}
-	return out.String(), string(l.input[start:l.position]), firstErr
+	return string(l.input[start:l.position]), firstErr
 }
 
 // DecodeStringEscape decodes the escape beginning at start and returns the
@@ -394,6 +388,28 @@ func DecodeStringEscape(raw []rune, start int) (rune, int, bool) {
 	default:
 		return escaped, start + 2, true
 	}
+}
+
+// DecodeStringLiteral converts raw string-literal contents to their runtime
+// value. The bool is false when raw contains an invalid \x escape.
+func DecodeStringLiteral(raw string) (string, bool) {
+	runes := []rune(raw)
+	var out strings.Builder
+	for i := 0; i < len(runes); {
+		if runes[i] != '\\' {
+			out.WriteRune(runes[i])
+			i++
+			continue
+		}
+
+		value, next, ok := DecodeStringEscape(runes, i)
+		if !ok {
+			return "", false
+		}
+		out.WriteRune(value)
+		i = next
+	}
+	return out.String(), true
 }
 
 func hexDigitValue(ch rune) (byte, bool) {

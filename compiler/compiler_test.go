@@ -228,7 +228,7 @@ func TestInferCallParamTypesUsesOriginalVariantWhenRangesPending(t *testing.T) {
 }
 
 func TestStringCompile(t *testing.T) {
-	input := `"hello"`
+	input := `"line\n\x41"`
 	l := lexer.New("TestStringCompile", input)
 	sp := parser.NewScriptParser(l)
 	program := sp.Parse()
@@ -242,7 +242,7 @@ func TestStringCompile(t *testing.T) {
 	sc.Compile()
 	ir := sc.Compiler.GenerateIR()
 
-	expectedIR := `@printf_fmt_0 = constant [7 x i8] c"hello\0A\00"`
+	expectedIR := `@printf_fmt_0 = constant [8 x i8] c"line\0AA\0A\00"`
 	if !strings.Contains(ir, expectedIR) {
 		t.Errorf("IR does not contain string constant:\n%s", ir)
 	}
@@ -273,9 +273,8 @@ x, six`
 			Line:     1,
 			Column:   1,
 		},
-		Value: testStr,
 	}
-	res, vals, _ := sc.Compiler.formatString(sl.Token, sl.Value)
+	res, vals, _ := sc.Compiler.formatString(sl.Token, sl.Token.Literal)
 	expStr := "x = %lld, six = %lld"
 	if res != expStr {
 		t.Errorf("formattedStr does not match expected. got: %s, expected: %s", res, expStr)
@@ -295,7 +294,7 @@ x, six`
 func TestConstCompile(t *testing.T) {
 	input := `pi = 3.1415926535
 answer = 42
-greeting = "hello"`
+greeting = "hello\n\x41"`
 
 	l := lexer.New("TestConstCompile", input)
 	cp := parser.NewCodeParser(l)
@@ -316,11 +315,25 @@ greeting = "hello"`
 		t.Errorf("IR does not contain global constant for answer. Exp: %s, ir: \n%s", expAns, ir)
 	}
 
-	expGreeting := `@Pt_9testConst_p_8greeting = unnamed_addr constant [6 x i8] c"hello\00"`
+	expGreeting := `@Pt_9testConst_p_8greeting = unnamed_addr constant [8 x i8] c"hello\0AA\00"`
 
 	if !strings.Contains(ir, expGreeting) {
 		t.Errorf("IR does not contain global constant for greeting. Exp: %s, ir: \n%s", expGreeting, ir)
 	}
+}
+
+func TestStructStringConstantDecodesEscapes(t *testing.T) {
+	code := mustParseCode(t, `p = Person
+    :name
+    "\x41da\n"`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "structStringEscape", "", code)
+	errs := cc.Compile()
+	require.Empty(t, errs)
+	require.Contains(t, cc.Compiler.GenerateIR(), `c"Ada\0A\00"`)
 }
 
 func TestCompilerModuleTargetMetadata(t *testing.T) {
@@ -626,7 +639,7 @@ func TestReservedStructBindingName(t *testing.T) {
 		Value: &ast.StructLiteral{
 			Token:   token.Token{Type: token.IDENT, Literal: "Person"},
 			Headers: []token.Token{{Type: token.IDENT, Literal: "name"}},
-			Row:     []ast.Expression{&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Tejas"}, Value: "Tejas"}},
+			Row:     []ast.Expression{&ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "Tejas"}}},
 		},
 	})
 
