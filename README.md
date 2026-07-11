@@ -483,4 +483,11 @@ Pluto is under active development.
 
 ## License
 
-Pluto is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+Pluto is licensed under the Apache License 2.0 with LLVM Exceptions
+(`Apache-2.0 WITH LLVM-exception`). See [LICENSE](LICENSE).
+
+The exception allows Pluto-owned runtime code embedded in compiler output to
+be redistributed without the requirements in Apache 2.0 Sections 4(a), 4(b),
+and 4(d). Compiler distributions and Pluto source remain subject to the full
+license. Third-party code always retains its own license; see the
+[runtime dependency policy](runtime/THIRD_PARTY.md).

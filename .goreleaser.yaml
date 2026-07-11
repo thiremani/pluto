@@ -253,7 +253,7 @@ nfpms:
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
     maintainer: '{{ or .Env.NFPM_MAINTAINER "Pluto Contributors <opensource@pluto-lang.org>" }}'
     description: Pluto programming language compiler (requires LLVM 22 toolchain on target host).
-    license: Apache-2.0
+    license: 'Apache-2.0 WITH LLVM-exception'
     bindir: /usr/bin
     contents:
       - src: LICENSE
@@ -288,7 +288,7 @@ homebrew_casks:
       email: 41898282+github-actions[bot]@users.noreply.github.com
     description: Pluto programming language compiler
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
-    license: Apache-2.0
+    license: 'Apache-2.0 WITH LLVM-exception'
     dependencies:
       - formula: llvm
       - formula: lld
@@ -309,7 +309,7 @@ scoops:
       email: 41898282+github-actions[bot]@users.noreply.github.com
     description: Pluto programming language compiler
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
-    license: Apache-2.0
+    license: 'Apache-2.0 WITH LLVM-exception'
     depends:
       - llvm
     skip_upload: '{{ ne (or (index .Env "PUBLISH_SCOOP") "0") "1" }}'
@@ -321,7 +321,7 @@ winget:
     package_identifier: '{{ or .Env.WINGET_PACKAGE_IDENTIFIER "PlutoLang.Pluto" }}'
     publisher: '{{ or .Env.WINGET_PUBLISHER "Pluto Language" }}'
     short_description: Pluto programming language compiler
-    license: Apache-2.0
+    license: 'Apache-2.0 WITH LLVM-exception'
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
     repository:
       owner: '{{ or .Env.WINGET_REPO_OWNER .Env.GITHUB_REPOSITORY_OWNER }}'
