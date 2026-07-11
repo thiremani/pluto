@@ -230,7 +230,6 @@ archives:
       - LICENSE
       - NOTICE
       - README.md
-      - runtime/third_party/klib/LICENSE.txt
 
 checksum:
   name_template: 'checksums_{{ .Runtime.Goos }}_{{ .Runtime.Goarch }}.txt'
@@ -261,8 +260,6 @@ nfpms:
         dst: /usr/share/doc/pluto/LICENSE
       - src: NOTICE
         dst: /usr/share/doc/pluto/NOTICE
-      - src: runtime/third_party/klib/LICENSE.txt
-        dst: /usr/share/doc/pluto/klib-LICENSE.txt
     dependencies:
       - llvm-22
       - clang-22

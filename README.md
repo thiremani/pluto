@@ -484,6 +484,3 @@ Pluto is under active development.
 ## License
 
 Pluto is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
-
-**Vendored third-party code:**
-- `runtime/third_party/klib/` (klib by Attractive Chaos) — MIT License, see `runtime/third_party/klib/LICENSE.txt`
