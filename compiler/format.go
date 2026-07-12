@@ -17,7 +17,9 @@ func formatSpecifierEnd(ch rune) bool {
 	return false
 }
 
-var specToKind = map[rune]Kind{
+// directSpecToKind covers conversions lowered by the generic value path.
+// Conversions requiring pointer, allocation, or vararg adaptation are handled separately.
+var directSpecToKind = map[rune]Kind{
 	'd': IntKind,
 	'i': IntKind,
 	'u': IntKind,
@@ -32,10 +34,7 @@ var specToKind = map[rune]Kind{
 	'G': FloatKind,
 	'a': FloatKind,
 	'A': FloatKind,
-	'c': IntKind, // maybe character code
 	's': StrKind,
-	'p': PtrKind, // pointer kind
-	'n': IntKind, // byte‐count pointer
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
@@ -541,7 +540,7 @@ func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms [
 	if handled {
 		return result, nil
 	}
-	if specToKind[specRune] != mainSym.Type.Kind() {
+	if directSpecToKind[specRune] != mainSym.Type.Kind() {
 		err := formatSpecifierTypeError(tok, specRune, mainID, mainSym.Type)
 		c.Errors = append(c.Errors, err)
 		return formattedMarker{}, err
