@@ -82,6 +82,11 @@ func getValidTestCases() []cfgTestCase {
 "Answer: -x"`, // x defined before marker
 		},
 		{
+			name: "Unresolved Dynamic Specifier Is Literal",
+			input: `x = 42
+"Answer: -x%(-width)d"`,
+		},
+		{
 			name:  "Var Not Defined",
 			input: `"Value: -x%s"`,
 		},
@@ -144,6 +149,13 @@ func getErrorTestCases() []cfgTestCase {
 			name: "Unresolved Marker Specifier Is Literal",
 			input: `width = 5
 "-missing%(-width)d"`,
+			errorContains: `value assigned to "width" is never used`,
+		},
+		{
+			name: "Unresolved Dynamic Specifier Is Atomic",
+			input: `x = 5.
+width = 2
+"Value: -x%(-width).(-precision)f"`,
 			errorContains: `value assigned to "width" is never used`,
 		},
 		{

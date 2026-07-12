@@ -95,9 +95,33 @@ func formatSpecifierLengthStart(ch rune) bool {
 	return strings.ContainsRune("lhLjzt", ch)
 }
 
-func formatSpecifierStart(ch rune) bool {
+func scanDynamicSpecifierID(runes []rune, start int) (id string, next int, complete bool) {
+	if start < 0 || start >= len(runes) {
+		return "", start, false
+	}
+	next = start + 1
+	if start+2 >= len(runes) || runes[start] != '(' || runes[start+1] != '-' || !lexer.IsLetter(runes[start+2]) {
+		return
+	}
+
+	id, next = parseIdentifier(runes, start+2)
+	if next >= len(runes) || runes[next] != ')' {
+		return id, next, false
+	}
+	return id, next + 1, true
+}
+
+func formatSpecifierStart(runes []rune, start int) bool {
+	if start < 0 || start >= len(runes) {
+		return false
+	}
+	if runes[start] == '(' {
+		_, _, complete := scanDynamicSpecifierID(runes, start)
+		return complete
+	}
+	ch := runes[start]
 	return formatSpecifierEnd(ch) || formatSpecifierFlag(ch) ||
-		('1' <= ch && ch <= '9') || ch == '.' || ch == '(' || ch == '*' || formatSpecifierLengthStart(ch)
+		('1' <= ch && ch <= '9') || ch == '.' || ch == '*' || formatSpecifierLengthStart(ch)
 }
 
 func formatSpecifierError(tok token.Token, value, msg string) *token.CompileError {
@@ -108,18 +132,17 @@ func formatSpecifierError(tok token.Token, value, msg string) *token.CompileErro
 }
 
 func parseDynamicSpecifierID(tok token.Token, value string, runes []rune, start int) (id string, next int, err *token.CompileError) {
-	if start+2 >= len(runes) || runes[start+1] != '-' || !lexer.IsLetter(runes[start+2]) {
-		return "", start + 1, formatSpecifierError(tok, value, "Expected an identifier of the form (-name)")
+	id, next, complete := scanDynamicSpecifierID(runes, start)
+	if complete {
+		return id, next, nil
 	}
-
-	id, end := parseIdentifier(runes, start+2)
-	if end >= len(runes) || runes[end] != ')' {
-		return id, end, &token.CompileError{
+	if id != "" {
+		return id, next, &token.CompileError{
 			Token: tok,
 			Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", id, value),
 		}
 	}
-	return id, end + 1, nil
+	return "", next, formatSpecifierError(tok, value, "Expected an identifier of the form (-name)")
 }
 
 func validateSpecifierModifiers(tok token.Token, value, flags, length string, hasWidth, hasPrecision bool, conversion rune) *token.CompileError {
@@ -164,9 +187,9 @@ func validateSpecifierModifiers(tok token.Token, value, flags, length string, ha
 // '%' begins literal text; once a supported prefix is recognized, malformed
 // syntax is reported rather than silently passed to printf. Dynamic width and
 // precision identifiers use (-identifier), which is returned as '*'.
-func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (specIds []string, spec string, endIndex int, matched bool, err *token.CompileError) {
+func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (specIDs []string, spec string, endIndex int, matched bool, err *token.CompileError) {
 	endIndex = start
-	if start+1 >= len(runes) || !formatSpecifierStart(runes[start+1]) {
+	if start+1 >= len(runes) || !formatSpecifierStart(runes, start+1) {
 		return
 	}
 
@@ -206,7 +229,7 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 		var specID string
 		specID, it, err = parseDynamicSpecifierID(tok, value, runes, it)
 		if specID != "" {
-			specIds = append(specIds, specID)
+			specIDs = append(specIDs, specID)
 		}
 		if err != nil {
 			endIndex = it
@@ -232,7 +255,7 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 			var specID string
 			specID, it, err = parseDynamicSpecifierID(tok, value, runes, it)
 			if specID != "" {
-				specIds = append(specIds, specID)
+				specIDs = append(specIDs, specID)
 			}
 			if err != nil {
 				endIndex = it
@@ -286,7 +309,7 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 		endIndex = it + 1
 		return
 	}
-	return specIds, specBuilder.String(), it + 1, true, nil
+	return specIDs, specBuilder.String(), it + 1, true, nil
 }
 
 func unresolvedMarkerEnd(value string, runes []rune, identifierEnd int) int {
@@ -314,64 +337,71 @@ func parseIdentifier(runes []rune, start int) (identifier string, end int) {
 	return
 }
 
-// parseMarker attempts to parse a marker starting at index i in runes.
-// marker should be of type -mainId%(-id1).(-id2).(-id3)d/f/...
-// It returns the parsed symbols from symbol table (using ids), the custom specifier (if any), and the new index.
-// If the main identifier is not in the symbol table, the bool markerSymValid is false
-// If subsequent identifiers within the specifier are not found in symbol table, it gives an error
-func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i int) (mainId string, syms []*Symbol, customSpec string, newIndex int, markerSymValid bool, err *token.CompileError) {
+type parsedMarker struct {
+	mainID        string
+	symbols       []*Symbol
+	customSpec    string
+	literalSuffix []rune
+	end           int
+	mainResolved  bool
+}
+
+// parseMarker resolves a marker and any attached custom specifier. A specifier
+// containing an unresolved dynamic identifier is retained as one literal span.
+func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i int) (parsedMarker, *token.CompileError) {
 	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start (isLetter).
-	markerSymValid = false
-	err = nil
-	specSyms := []*Symbol{}
-	var end int
-	var mainSym *Symbol
-	mainId, end = parseIdentifier(runes, i+1)
-	mainSym, markerSymValid = c.getIdSym(mainId)
-	if !markerSymValid {
-		return mainId, []*Symbol{}, "", unresolvedMarkerEnd(value, runes, end), false, nil
+	mainID, end := parseIdentifier(runes, i+1)
+	mainSym, found := c.getIdSym(mainID)
+	result := parsedMarker{
+		mainID:       mainID,
+		end:          end,
+		mainResolved: found,
 	}
+	if !found {
+		result.end = unresolvedMarkerEnd(value, runes, end)
+		return result, nil
+	}
+	result.symbols = []*Symbol{mainSym}
 
 	if end < len(runes) && runes[end] == '%' {
 		specStart := end
-		var specIds []string
-		var matched bool
-		specIds, customSpec, end, matched, err = parseSpecifierSyntax(tok, value, runes, specStart)
+		specIDs, customSpec, specEnd, matched, err := parseSpecifierSyntax(tok, value, runes, specStart)
 		if !matched {
-			end = specStart
-		} else if err != nil {
-			c.Errors = append(c.Errors, err)
-			newIndex = end
-			return
+			return result, nil
 		}
-		for _, specId := range specIds {
-			specSym, ok := c.getIdSym(specId)
+
+		for _, specID := range specIDs {
+			_, ok := c.getRawSymbol(specID)
 			if !ok {
-				err = &token.CompileError{
-					Token: tok,
-					Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
-				}
-				c.Errors = append(c.Errors, err)
-				newIndex = end
-				return
+				result.literalSuffix = runes[specStart:specEnd]
+				result.end = specEnd
+				return result, nil
 			}
-			if !TypeEqual(specSym.Type, I64) {
-				err = &token.CompileError{
-					Token: tok,
-					Msg:   fmt.Sprintf("Format specifier variable %s must have type I64, got %s", specId, specSym.Type),
-				}
-				c.Errors = append(c.Errors, err)
-				newIndex = end
-				return
-			}
-			specSyms = append(specSyms, specSym)
 		}
+
+		if err != nil {
+			c.Errors = append(c.Errors, err)
+			result.end = specEnd
+			return result, err
+		}
+		for _, specID := range specIDs {
+			specSym, _ := c.getIdSym(specID)
+			if !TypeEqual(specSym.Type, I64) {
+				err := &token.CompileError{
+					Token: tok,
+					Msg:   fmt.Sprintf("Format specifier variable %s must have type I64, got %s", specID, specSym.Type),
+				}
+				c.Errors = append(c.Errors, err)
+				result.end = specEnd
+				return result, err
+			}
+			result.symbols = append(result.symbols, specSym)
+		}
+		result.customSpec = customSpec
+		result.end = specEnd
 	}
 
-	syms = append(syms, mainSym)
-	syms = append(syms, specSyms...)
-	newIndex = end
-	return
+	return result, nil
 }
 
 func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
@@ -572,24 +602,25 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 		}
 		// If we see a '-' and the next rune is a valid identifier start...
 		// Parse the marker.
-		mainId, syms, customSpec, newIndex, markerSymValid, err := c.parseMarker(tok, value, runes, i)
-		if !markerSymValid {
-			writeLiteralFormatText(&builder, runes[i:newIndex])
-			i = newIndex
+		marker, err := c.parseMarker(tok, value, runes, i)
+		if !marker.mainResolved {
+			writeLiteralFormatText(&builder, runes[i:marker.end])
+			i = marker.end
 			continue
 		}
 		if err != nil {
 			return "", args, nil
 		}
-		formattedStr, idArgs, idToFree, err := c.parseFormatting(tok, value, mainId, syms, customSpec)
+		formattedStr, idArgs, idToFree, err := c.parseFormatting(tok, value, marker.mainID, marker.symbols, marker.customSpec)
 		if err != nil {
 			return "", args, nil
 		}
 		builder.WriteString(formattedStr)
+		writeLiteralFormatText(&builder, marker.literalSuffix)
 		args = append(args, idArgs...)
 		toFree = append(toFree, idToFree...)
 		// Advance past the marker.
-		i = newIndex
+		i = marker.end
 	}
 
 	st := builder.String()

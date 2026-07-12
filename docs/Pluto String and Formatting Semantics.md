@@ -63,7 +63,7 @@ The probe commits to format syntax when the next raw character can start:
 
 - a supported conversion;
 - a flag (`-`, `+`, `#`, or `0`);
-- a width (`1` through `9` or `(-name)`);
+- a width (`1` through `9` or a complete raw `(-name)` group);
 - a precision (`.`);
 - a length modifier; or
 - the explicitly rejected direct `*` form.
@@ -75,11 +75,28 @@ default format.
 n = 95
 "Progress: -n%"          # Progress: 95%
 "Progress: -n% complete" # Progress: 95% complete
+"Profit: -n%(higher)"    # Profit: 95%(higher)
 "Value: -n%v"            # Value: 95%v; v cannot start a Pluto specifier
 ```
 
-Once the probe commits, the complete specifier must be valid. Malformed syntax
-is a compile error and is never passed to `printf`.
+An opening parenthesis alone does not commit the probe. It must contain a raw
+`(-identifier)` group, so ordinary percentage text followed by parentheses
+remains literal.
+
+If a candidate specifier contains a dynamic identifier that is undefined, the
+main marker uses its default format and the entire candidate remains literal.
+Identifiers inside that literal span are not reconsidered as markers. This
+mirrors the fallback for an undefined main marker.
+
+```pluto
+n = 95
+"Value: -n%(-width)d" # Value: 95%(-width)d, when width is undefined
+```
+
+Once the probe commits and all dynamic identifiers resolve, the complete
+specifier must be valid. Malformed syntax, incompatible conversions, and
+dynamic identifiers with non-`I64` types are compile errors and are never
+passed to `printf`.
 
 Use `\%` to force a literal percent when the following character could start a
 specifier:
@@ -105,8 +122,9 @@ dynamic    = "(-" identifier ")"
 length     = "l" ["l"]
 ```
 
-Dynamic width and precision identifiers must exist in scope and have type
-`I64`. A direct `*` is rejected; use `(-identifier)` instead.
+Defined dynamic width and precision identifiers must have type `I64`. If one is
+undefined, the candidate specifier remains literal as described above. A direct
+`*` is rejected; use `(-identifier)` instead.
 
 Supported conversions are:
 

@@ -24,16 +24,11 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
 		},
 		{
-			name: "MissingClosingParen",
+			name: "MissingClosingParenAfterPrecision",
 			input: `x = 2
-"Value: -x%(-var"`,
+var = 3
+"Value: -x%.(-var"`,
 			expectError: "Expected ) after the identifier var",
-		},
-		{
-			name: "IdentifierWithinSpecifierNotFound",
-			input: `x = 10
-"Value: -x%(-var)d"`,
-			expectError: "Undefined variable var within specifier. String Literal is Value: -x%(-var)d",
 		},
 		{
 			name: "SpecifierDoesNotEnd",
@@ -42,9 +37,9 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: `Invalid format specifier string: Format specifier "%#-" is incomplete`,
 		},
 		{
-			name: "InvalidDynamicIdentifier",
+			name: "InvalidDynamicPrecisionIdentifier",
 			input: `x = 5
-"Value: -x%(-1)d"`,
+"Value: -x%.(-1)d"`,
 			expectError: "Expected an identifier of the form (-name)",
 		},
 		{
@@ -85,10 +80,10 @@ width = 3.5
 			expectError: "Precision is not supported for %q because it can truncate the quoted string",
 		},
 		{
-			name: "EscapedSpecifierClosingParen",
+			name: "EscapedPrecisionClosingParen",
 			input: `s = "hello"
 width = 10
-"Value: -s%(-width\x29q"`,
+"Value: -s%.(-width\x29q"`,
 			expectError: "Expected ) after the identifier width",
 		},
 		{
@@ -185,6 +180,36 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Progress: %lld%% complete",
 		},
 		{
+			name: "PercentBeforeParentheticalText",
+			input: `n = 95
+"Profit is -n%(Higher than last year"`,
+			expectOutput: "Profit is %lld%%(Higher than last year",
+		},
+		{
+			name: "ParenthesizedNumberIsText",
+			input: `n = 30
+"Value: -n%(5)d."`,
+			expectOutput: "Value: %lld%%(5)d.",
+		},
+		{
+			name: "PercentBeforeSpacedParentheticalText",
+			input: `n = 95
+"Profit is -n% (Higher than last year)"`,
+			expectOutput: "Profit is %lld%% (Higher than last year)",
+		},
+		{
+			name: "MarkerBeforeParentheticalText",
+			input: `x = 5
+"Value of x is -x(it's a new variable)"`,
+			expectOutput: "Value of x is %lld(it's a new variable)",
+		},
+		{
+			name: "MarkerBeforeSpacedParentheticalText",
+			input: `x = 5
+"Value of x is -x (it's a new variable)"`,
+			expectOutput: "Value of x is %lld (it's a new variable)",
+		},
+		{
 			name: "UnsupportedSpecifierIsText",
 			input: `x = 5
 "Value: -x%v"`,
@@ -195,6 +220,44 @@ func TestValidFormatString(t *testing.T) {
 			input: `width = 5
 "Width: -width; literal: -missing%(-width)d"`,
 			expectOutput: "Width: %lld; literal: -missing%%(-width)d",
+		},
+		{
+			name: "UnresolvedDynamicWidthIsText",
+			input: `x = 10
+"Value: -x%(-width)d"`,
+			expectOutput: "Value: %lld%%(-width)d",
+		},
+		{
+			name: "UnresolvedIncompleteDynamicWidthIsText",
+			input: `x = 10
+"Value: -x%(-width)"`,
+			expectOutput: "Value: %lld%%(-width)",
+		},
+		{
+			name: "IncompleteDynamicWidthIsText",
+			input: `x = 10
+"Value: -x%(-width"`,
+			expectOutput: "Value: %lld%%(-width",
+		},
+		{
+			name: "InvalidDynamicWidthIsText",
+			input: `x = 10
+"Value: -x%(-1)d"`,
+			expectOutput: "Value: %lld%%(-1)d",
+		},
+		{
+			name: "UnresolvedSpecifierIsAtomicText",
+			input: `x = 5.
+precision = 2
+"Precision -precision; value -x%(-width).(-precision)f"`,
+			expectOutput: "Precision %lld; value %s%%(-width).(-precision)f",
+		},
+		{
+			name: "UnresolvedSpecifierPrecedesTypeValidation",
+			input: `x = 5.
+width = 3.5
+"Width -width; value -x%(-width).(-precision)f"`,
+			expectOutput: "Width %s; value %s%%(-width).(-precision)f",
 		},
 		{
 			name: "EscapedSpecifierConversionIsText",

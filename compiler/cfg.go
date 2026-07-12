@@ -137,33 +137,21 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
 func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
-	specIds, _, end, matched, err := parseSpecifierSyntax(tok, value, runes, start)
+	specIDs, _, end, matched, err := parseSpecifierSyntax(tok, value, runes, start)
 	if !matched {
 		return nil, start
 	}
-	if err != nil {
-		cfg.Errors = append(cfg.Errors, err)
-		// Keep successfully scanned identifiers live while recovering from the
-		// syntax error, avoiding unrelated dead-store diagnostics.
-		for _, specId := range specIds {
-			if cfg.isDefined(specId) {
-				evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
-			}
-		}
-		return evs, end
-	}
-	for _, specId := range specIds {
-		ok := cfg.isDefined(specId)
-		if !ok {
-			err := &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
-			}
-			cfg.Errors = append(cfg.Errors, err)
+	for _, specID := range specIDs {
+		if !cfg.isDefined(specID) {
 			return nil, end
 		}
-
-		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
+	}
+	if err != nil {
+		cfg.Errors = append(cfg.Errors, err)
+		// Still collect the identifiers to avoid unrelated dead-store diagnostics.
+	}
+	for _, specID := range specIDs {
+		evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
 	return evs, end
 }

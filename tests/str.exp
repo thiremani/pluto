@@ -9,6 +9,12 @@ Floats: 8.73 +9e+00 1.230000E+00
 Width:    42
 Percent: 42%
 Percentage text: 42% complete
+Value: 30%(5)d.
+Profit is 42%(Higher than last year
+Profit is 42% (Higher than last year)
+Unresolved width: 42%(-missingWidth)d
+Unresolved incomplete width: 42%(-missingWidth)
+Atomic unresolved format: 8.73%(-missingWidth).(-two)f
 Multiple percentage: % 8.73% %
 Variable width     42
 Variable precision     8.73   1.23 and   8.73%
