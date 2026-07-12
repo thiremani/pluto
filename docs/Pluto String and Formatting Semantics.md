@@ -51,8 +51,13 @@ name = "Pluto"
 "Literal: \-name"       # Literal: -name
 ```
 
-If the main identifier is undefined, the complete marker-like text remains
-literal. Any trailing pseudo-specifier is treated as text rather than validated.
+If an identifier is undefined, that marker alone remains literal. Scanning then
+continues, so later defined markers are still interpolated:
+
+```pluto
+width = 5
+"-missing%(-width)d" # -missing%(5)d
+```
 
 ## Literal percent and strict formatting
 

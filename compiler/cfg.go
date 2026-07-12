@@ -121,7 +121,7 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 	exists := cfg.isDefined(mainId)
 	if !exists {
 		// nothing to collect if the main identifier is not in the symbol table
-		return nil, unresolvedMarkerEnd(value, runes, end)
+		return nil, end
 	}
 
 	evs = []VarEvent{{Name: mainId, Kind: Read, Token: tok}}

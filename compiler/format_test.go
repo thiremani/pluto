@@ -294,10 +294,10 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Value of x is %lld (it's a new variable)",
 		},
 		{
-			name: "UnresolvedMarkerKeepsSpecifierLiteral",
+			name: "UnresolvedMarkerAllowsFollowingMarker",
 			input: `width = 5
 "Width: -width; literal: -missing%(-width)d"`,
-			expectOutput: "Width: %lld; literal: -missing%%(-width)d",
+			expectOutput: "Width: %lld; literal: -missing%%(%lld)d",
 		},
 		{
 			name: "SpaceAfterVar",
@@ -479,11 +479,11 @@ width = 10
 	}
 }
 
-func TestUnresolvedMarkerSpecifierDoesNotCreateMarker(t *testing.T) {
+func TestUnresolvedMarkerAllowsFollowingMarker(t *testing.T) {
 	value := `-missing%(-width)d`
 	widthOnly := func(name string) bool { return name == "width" }
-	if hasValidMarkers(value, widthOnly) {
-		t.Fatal("dynamic identifier of an unresolved marker must remain literal")
+	if !hasValidMarkers(value, widthOnly) {
+		t.Fatal("a defined marker following an unresolved marker must still be recognized")
 	}
 
 	mainOnly := func(name string) bool { return name == "missing" }

@@ -70,19 +70,6 @@ func writeFormatText(builder *strings.Builder, ch rune) {
 	}
 }
 
-func writeLiteralFormatText(builder *strings.Builder, runes []rune) {
-	for i := 0; i < len(runes); {
-		if runes[i] == '\\' {
-			decoded, next, _ := lexer.DecodeStringEscape(runes, i)
-			writeFormatText(builder, decoded)
-			i = next
-			continue
-		}
-		writeFormatText(builder, runes[i])
-		i++
-	}
-}
-
 func formatSpecifierFlag(ch rune) bool {
 	switch ch {
 	case '-', '+', ' ', '#', '0':
@@ -325,19 +312,6 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 	return p.specIDs, p.spec.String(), p.index, nil
 }
 
-func unresolvedMarkerEnd(value string, runes []rune, identifierEnd int) int {
-	if identifierEnd >= len(runes) || runes[identifierEnd] != '%' {
-		return identifierEnd
-	}
-	// An unresolved main marker is literal, so parse only to keep its attached
-	// pseudo-specifier together; syntax errors from that parse are not reported.
-	_, _, specifierEnd, _ := parseSpecifierSyntax(token.Token{}, value, runes, identifierEnd)
-	if specifierEnd > identifierEnd {
-		return specifierEnd
-	}
-	return identifierEnd
-}
-
 // Assumes runes[start] is a valid start to the identifier (lexer.IsLetter)
 // end is the index after identifier in runes
 func parseIdentifier(runes []rune, start int) (identifier string, end int) {
@@ -394,7 +368,6 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 		mainResolved: found,
 	}
 	if !found {
-		result.end = unresolvedMarkerEnd(value, runes, end)
 		return result, nil
 	}
 	result.symbols = []*Symbol{mainSym}
@@ -609,7 +582,8 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 		// Parse the marker.
 		marker, err := c.parseMarker(tok, value, runes, i)
 		if !marker.mainResolved {
-			writeLiteralFormatText(&builder, runes[i:marker.end])
+			builder.WriteRune('-')
+			builder.WriteString(marker.mainID)
 			i = marker.end
 			continue
 		}
@@ -701,9 +675,8 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 
 // hasValidMarkers checks if a format string contains any markers (-identifier)
 // where the main identifier is defined according to the provided isDefined callback.
-// This aligns with parseMarker/formatString semantics: a marker is only valid when
-// its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
-// only width is defined) are not considered valid markers.
+// This aligns with parseMarker/formatString semantics: each marker is resolved
+// independently, including markers in text following an unresolved marker.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
@@ -716,12 +689,11 @@ func hasValidMarkers(value string, isDefined func(string) bool) bool {
 			continue
 		}
 		// Parse the identifier after the '-'
-		mainId, end := parseIdentifier(runes, i+1)
+		mainId, _ := parseIdentifier(runes, i+1)
 		// Only the main identifier matters - aligns with parseMarker behavior
 		if isDefined(mainId) {
 			return true
 		}
-		i = unresolvedMarkerEnd(value, runes, end) - 1 // -1 because loop will increment
 	}
 	return false
 }

@@ -82,6 +82,11 @@ func getValidTestCases() []cfgTestCase {
 "Answer: -x"`, // x defined before marker
 		},
 		{
+			name: "Marker Following Unresolved Marker",
+			input: `width = 5
+"-missing%(-width)d"`,
+		},
+		{
 			name:  "Var Not Defined",
 			input: `"Value: -x%s"`,
 		},
@@ -139,12 +144,6 @@ func getErrorTestCases() []cfgTestCase {
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
 			errorContains: `variable "x" has not been defined`,
-		},
-		{
-			name: "Unresolved Marker Specifier Is Literal",
-			input: `width = 5
-"-missing%(-width)d"`,
-			errorContains: `value assigned to "width" is never used`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",
