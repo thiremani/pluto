@@ -7,9 +7,53 @@ import (
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/token"
 
 	"tinygo.org/x/go-llvm"
 )
+
+func TestValidateSpecifierModifiers(t *testing.T) {
+	tests := []struct {
+		name         string
+		flags        string
+		length       string
+		hasWidth     bool
+		hasPrecision bool
+		conversion   rune
+		expectError  string
+	}{
+		{name: "SignedIntegerFlags", flags: "-+0", conversion: 'd'},
+		{name: "HexFlags", flags: "-#0", conversion: 'x'},
+		{name: "FloatFlags", flags: "-+#0", conversion: 'A'},
+		{name: "QuotedWidth", flags: "-", hasWidth: true, conversion: 'q'},
+		{name: "CountLength", length: "ll", conversion: 'n'},
+		{name: "RepeatedFlag", flags: "--", conversion: 'd'},
+		{name: "SignedAlternateForm", flags: "#", conversion: 'd', expectError: `Format flag '#' is not supported for %d`},
+		{name: "UnsignedSign", flags: "+", conversion: 'u', expectError: `Format flag '+' is not supported for %u`},
+		{name: "StringLength", length: "l", conversion: 's', expectError: `Length modifier "l" is not supported for %s`},
+		{name: "PointerWidth", hasWidth: true, conversion: 'p', expectError: `Width is not supported for %p`},
+		{name: "CharacterPrecision", hasPrecision: true, conversion: 'c', expectError: `Precision is not supported for %c`},
+		{name: "QuotedPrecision", hasPrecision: true, conversion: 'q', expectError: `Precision is not supported for %q because it can truncate the quoted string`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpecifierModifiers(token.Token{}, "value", tc.flags, tc.length, tc.hasWidth, tc.hasPrecision, tc.conversion)
+			if tc.expectError == "" {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error containing %q", tc.expectError)
+			}
+			if !strings.Contains(err.Msg, tc.expectError) {
+				t.Fatalf("expected error containing %q, got %q", tc.expectError, err.Msg)
+			}
+		})
+	}
+}
 
 func TestFormatStringErrors(t *testing.T) {
 	tests := []struct {

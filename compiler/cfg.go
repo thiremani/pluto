@@ -141,10 +141,8 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	if !matched {
 		return nil, start
 	}
-	for _, specID := range specIDs {
-		if !cfg.isDefined(specID) {
-			return nil, end
-		}
+	if !allIdentifiersDefined(specIDs, cfg.isDefined) {
+		return nil, end
 	}
 	if err != nil {
 		cfg.Errors = append(cfg.Errors, err)
