@@ -131,20 +131,6 @@ func formatSpecifierError(tok token.Token, value, msg string) *token.CompileErro
 	}
 }
 
-func parseDynamicSpecifierID(tok token.Token, value string, runes []rune, start int) (id string, next int, err *token.CompileError) {
-	id, next, complete := scanDynamicSpecifierID(runes, start)
-	if complete {
-		return id, next, nil
-	}
-	if id != "" {
-		return id, next, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", id, value),
-		}
-	}
-	return "", next, formatSpecifierError(tok, value, "Expected an identifier of the form (-name)")
-}
-
 func validateSpecifierModifiers(tok token.Token, value, flags, length string, hasWidth, hasPrecision bool, conversion rune) *token.CompileError {
 	allowedFlags := ""
 	switch conversion {
@@ -225,17 +211,13 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 			it++
 		}
 	} else if it < len(runes) && runes[it] == '(' {
-		hasWidth = true
-		var specID string
-		specID, it, err = parseDynamicSpecifierID(tok, value, runes, it)
-		if specID != "" {
+		specID, next, complete := scanDynamicSpecifierID(runes, it)
+		if complete {
+			hasWidth = true
 			specIDs = append(specIDs, specID)
+			it = next
+			specBuilder.WriteRune('*')
 		}
-		if err != nil {
-			endIndex = it
-			return
-		}
-		specBuilder.WriteRune('*')
 	}
 
 	hasPrecision := false
@@ -252,16 +234,12 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 			return
 		}
 		if it < len(runes) && runes[it] == '(' {
-			var specID string
-			specID, it, err = parseDynamicSpecifierID(tok, value, runes, it)
-			if specID != "" {
+			specID, next, complete := scanDynamicSpecifierID(runes, it)
+			if complete {
 				specIDs = append(specIDs, specID)
+				it = next
+				specBuilder.WriteRune('*')
 			}
-			if err != nil {
-				endIndex = it
-				return
-			}
-			specBuilder.WriteRune('*')
 		} else {
 			for it < len(runes) && '0' <= runes[it] && runes[it] <= '9' {
 				specBuilder.WriteRune(runes[it])

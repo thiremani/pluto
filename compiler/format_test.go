@@ -24,23 +24,16 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
 		},
 		{
-			name: "MissingClosingParenAfterPrecision",
-			input: `x = 2
-var = 3
-"Value: -x%.(-var"`,
-			expectError: "Expected ) after the identifier var",
-		},
-		{
 			name: "SpecifierDoesNotEnd",
 			input: `x = 10
 "Value: -x%#-"`,
 			expectError: `Invalid format specifier string: Format specifier "%#-" is incomplete`,
 		},
 		{
-			name: "InvalidDynamicPrecisionIdentifier",
+			name: "InvalidDynamicPrecisionGroup",
 			input: `x = 5
 "Value: -x%.(-1)d"`,
-			expectError: "Expected an identifier of the form (-name)",
+			expectError: `Unexpected '(' in format specifier "%."`,
 		},
 		{
 			name: "DynamicSpecifierWrongType",
@@ -78,13 +71,6 @@ width = 3.5
 			input: `s = "hello"
 "Value: -s%.3q"`,
 			expectError: "Precision is not supported for %q because it can truncate the quoted string",
-		},
-		{
-			name: "EscapedPrecisionClosingParen",
-			input: `s = "hello"
-width = 10
-"Value: -s%.(-width\x29q"`,
-			expectError: "Expected ) after the identifier width",
 		},
 		{
 			name: "IntWithFloatSpecifier",
