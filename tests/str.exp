@@ -8,6 +8,7 @@ Preceding with zeros 0000000042 and different radices 52 2a 052 0x2a
 Floats: 8.73 +9e+00 1.230000E+00
 Width:    42
 Percent: 42%
+Percentage text: 42% complete
 Multiple percentage: % 8.73% %
 Variable width     42
 Variable precision     8.73   1.23 and   8.73%

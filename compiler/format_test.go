@@ -18,7 +18,7 @@ func TestFormatStringErrors(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "AsteiskNotAllowed",
+			name: "AsteriskNotAllowed",
 			input: `x = 10
 "Value: -x%*d"`,
 			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
@@ -30,13 +30,6 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: "Expected ) after the identifier var",
 		},
 		{
-			name: "InvalidFormatSpecifier",
-			input: `x = 4
-"x = -x%"`,
-			expectError: "Invalid format specifier string: Format specifier is incomplete",
-		},
-
-		{
 			name: "IdentifierWithinSpecifierNotFound",
 			input: `x = 10
 "Value: -x%(-var)d"`,
@@ -46,13 +39,38 @@ func TestFormatStringErrors(t *testing.T) {
 			name: "SpecifierDoesNotEnd",
 			input: `x = 10
 "Value: -x%#-"`,
-			expectError: "Invalid format specifier string: Format specifier '%#-' is incomplete",
+			expectError: `Invalid format specifier string: Format specifier "%#-" is incomplete`,
 		},
 		{
-			name: "UnsupportedSpecifier",
+			name: "InvalidDynamicIdentifier",
 			input: `x = 5
-"Value: -x%v"`,
-			expectError: "Invalid format specifier string: Format specifier '%v' is incomplete. Str: Value: -x%v",
+"Value: -x%(-1)d"`,
+			expectError: "Expected an identifier of the form (-name)",
+		},
+		{
+			name: "DynamicSpecifierWrongType",
+			input: `x = 5
+width = 3.5
+"Value: -x%(-width)d"`,
+			expectError: "Format specifier variable width must have type I64, got F64",
+		},
+		{
+			name: "UnexpectedSpecifierRune",
+			input: `x = 5
+"Value: -x%0vd"`,
+			expectError: `Unexpected 'v' in format specifier "%0"`,
+		},
+		{
+			name: "InvalidLengthForConversion",
+			input: `s = "hello"
+"Value: -s%ls"`,
+			expectError: `Length modifier "l" is not supported for %s`,
+		},
+		{
+			name: "UnsupportedLengthAtStart",
+			input: `x = 5
+"Value: -x%hd"`,
+			expectError: "Length modifier 'h' is not supported",
 		},
 		{
 			name: "QuotedSpecifierOnNonString",
@@ -65,18 +83,6 @@ func TestFormatStringErrors(t *testing.T) {
 			input: `s = "hello"
 "Value: -s%.3q"`,
 			expectError: "Precision is not supported for %q because it can truncate the quoted string",
-		},
-		{
-			name: "EscapedSpecifierConversion",
-			input: `s = "hello"
-"Value: -s%\x71"`,
-			expectError: "Escape sequences cannot be used as format syntax",
-		},
-		{
-			name: "EscapedSpecifierWidth",
-			input: `s = "hello"
-"Value: -s%\x31q"`,
-			expectError: "Escape sequences cannot be used as format syntax",
 		},
 		{
 			name: "EscapedSpecifierClosingParen",
@@ -102,6 +108,12 @@ width = 10
 			input: `x = 42
 "Value: -x%p"`,
 			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
+		{
+			name: "CountOnNonInteger",
+			input: `s = "hello"
+"Value: -s%n"`,
+			expectError: "Format specifier end 'n' is not correct for variable type. Variable identifier: s. Variable type: Str",
 		},
 	}
 
@@ -161,6 +173,42 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Value: %%d",
 		},
 		{
+			name: "TrailingPercent",
+			input: `x = 95
+"Progress: -x%"`,
+			expectOutput: "Progress: %lld%%",
+		},
+		{
+			name: "PercentBeforeText",
+			input: `x = 95
+"Progress: -x% complete"`,
+			expectOutput: "Progress: %lld%% complete",
+		},
+		{
+			name: "UnsupportedSpecifierIsText",
+			input: `x = 5
+"Value: -x%v"`,
+			expectOutput: "Value: %lld%%v",
+		},
+		{
+			name: "UnresolvedMarkerKeepsSpecifierLiteral",
+			input: `width = 5
+"Width: -width; literal: -missing%(-width)d"`,
+			expectOutput: "Width: %lld; literal: -missing%%(-width)d",
+		},
+		{
+			name: "EscapedSpecifierConversionIsText",
+			input: `s = "hello"
+"Value: -s%\x71"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "EscapedSpecifierWidthIsText",
+			input: `s = "hello"
+"Value: -s%\x31q"`,
+			expectOutput: "Value: %s%%1q",
+		},
+		{
 			name: "SpaceAfterVar",
 			input: `x = 5
 "x = -x %d"`,
@@ -173,11 +221,25 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "x = %4.2f%%",
 		},
 		{
+			name: "UpperHexFloat",
+			input: `x = 5.
+"x = -x%A"`,
+			expectOutput: "x = %A",
+		},
+		{
 			name: "SpecifierArg",
 			input: `x = 14
 digits = 4
 "x is -x%(-digits)d"`,
 			expectOutput: "x is %*lld",
+			expectIR:     "i32 4, i64 14",
+		},
+		{
+			name: "CharacterArg",
+			input: `x = 65
+"x is -x%c"`,
+			expectOutput: "x is %c",
+			expectIR:     "i32 65)",
 		},
 		{
 			name: "MixedBackToBack",
@@ -311,5 +373,18 @@ width = 10
 				t.Errorf("IR unexpectedly contains %q.\nIR: %s", tc.rejectIR, ir)
 			}
 		})
+	}
+}
+
+func TestUnresolvedMarkerSpecifierDoesNotCreateMarker(t *testing.T) {
+	value := `-missing%(-width)d`
+	widthOnly := func(name string) bool { return name == "width" }
+	if hasValidMarkers(value, widthOnly) {
+		t.Fatal("dynamic identifier of an unresolved marker must remain literal")
+	}
+
+	mainOnly := func(name string) bool { return name == "missing" }
+	if !hasValidMarkers(value, mainOnly) {
+		t.Fatal("defined main identifier should form a marker")
 	}
 }

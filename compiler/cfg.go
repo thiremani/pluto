@@ -106,7 +106,9 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 			continue
 		}
 		if maybeMarker(runes, i) {
-			evs = append(evs, cfg.collectMarkerReads(value, tok, runes, i)...)
+			markerEvents, end := cfg.collectMarkerReads(value, tok, runes, i)
+			evs = append(evs, markerEvents...)
+			i = end - 1 // The loop increment advances past the marker.
 		}
 	}
 	return evs
@@ -114,30 +116,41 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 
 // collectMarkerReads collects any identifiers used after marker `-` in the format string.
 // it assumes start is at marker
-func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
 	mainId, end := parseIdentifier(runes, start+1)
 	exists := cfg.isDefined(mainId)
 	if !exists {
 		// nothing to collect if the main identifier is not in the symbol table
-		return nil
+		return nil, unresolvedMarkerEnd(value, runes, end)
 	}
 
-	evs := []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
-	// now collect any format specifier identifier reads
-	if hasSpecifier(runes, end) {
-		evs = append(evs, cfg.collectSpecifierReads(value, tok, runes, end)...)
+	evs = []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
+	// Collect dynamic width/precision reads when a real specifier follows.
+	if end < len(runes) && runes[end] == '%' {
+		var specifierEvents []VarEvent
+		specifierEvents, end = cfg.collectSpecifierReads(value, tok, runes, end)
+		evs = append(evs, specifierEvents...)
 	}
-	return evs
+	return evs, end
 }
 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
-func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
-	var evs []VarEvent
-	specIds, _, _, err := parseSpecifierSyntax(tok, value, runes, start)
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
+	specIds, _, end, matched, err := parseSpecifierSyntax(tok, value, runes, start)
+	if !matched {
+		return nil, start
+	}
 	if err != nil {
 		cfg.Errors = append(cfg.Errors, err)
-		return nil
+		// Keep successfully scanned identifiers live while recovering from the
+		// syntax error, avoiding unrelated dead-store diagnostics.
+		for _, specId := range specIds {
+			if cfg.isDefined(specId) {
+				evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
+			}
+		}
+		return evs, end
 	}
 	for _, specId := range specIds {
 		ok := cfg.isDefined(specId)
@@ -147,12 +160,12 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
 			}
 			cfg.Errors = append(cfg.Errors, err)
-			return nil
+			return nil, end
 		}
 
 		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
 	}
-	return evs
+	return evs, end
 }
 
 func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {

@@ -204,15 +204,19 @@ words = ["hello" "hello world" ""]
 words  # ["hello" "hello world" ""]
 ```
 
-Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when a quoted,
-escaped scalar representation is needed: `"-word%q"`. String markers retain their normal scope
+An adjacent `%` is a custom format only when followed by supported specifier syntax. Otherwise it
+remains literal, so `"Progress: -n%"` prints a value followed by `%`; `-n%05d` applies custom
+formatting. Scalar strings remain unquoted by default. Use the Pluto `%q` formatting conversion when
+a quoted, escaped scalar representation is needed: `"-word%q"`. String markers retain their normal scope
 semantics: `-name` interpolates when `name` is defined; use `\-name` when literal marker-like text is
 required. Escape-produced characters remain literal during marker parsing, so `\x2dname` is also
 literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`, `\f`, and the
 fixed-width Unicode forms `\xNN`, `\uNNNN`, and `\UNNNNNNNN`. These forms denote Unicode code points
 and are UTF-8 encoded: `\xff` is `ÿ` (bytes `c3 bf`), while `\xc3\xbf` is `Ã¿`. NUL is rejected in
 every form. Octal, malformed, and unrecognized escapes are compile errors, as are surrogate code
-points and values above U+10FFFF.
+points and values above U+10FFFF. See [Pluto String and Formatting
+Semantics](docs/Pluto%20String%20and%20Formatting%20Semantics.md) for the complete grammar and
+validation rules.
 
 ---
 

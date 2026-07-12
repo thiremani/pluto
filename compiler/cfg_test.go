@@ -141,6 +141,12 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `variable "x" has not been defined`,
 		},
 		{
+			name: "Unresolved Marker Specifier Is Literal",
+			input: `width = 5
+"-missing%(-width)d"`,
+			errorContains: `value assigned to "width" is never used`,
+		},
+		{
 			name: "Write To Constant",
 			code: `a = 4`,
 			input: `
