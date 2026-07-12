@@ -22,9 +22,9 @@ func TestValidateSpecifierModifiers(t *testing.T) {
 		conversion   rune
 		expectError  string
 	}{
-		{name: "SignedIntegerFlags", flags: "-+0", conversion: 'd'},
+		{name: "SignedIntegerFlags", flags: "-+ 0", conversion: 'd'},
 		{name: "HexFlags", flags: "-#0", conversion: 'x'},
-		{name: "FloatFlags", flags: "-+#0", conversion: 'A'},
+		{name: "FloatFlags", flags: "-+ #0", conversion: 'A'},
 		{name: "QuotedWidth", flags: "-", hasWidth: true, conversion: 'q'},
 		{name: "CountLength", length: "ll", conversion: 'n'},
 		{name: "RepeatedFlag", flags: "--", conversion: 'd'},
@@ -74,6 +74,24 @@ func TestFormatStringErrors(t *testing.T) {
 			expectError: `Invalid format specifier string: Format specifier "%#-" is incomplete`,
 		},
 		{
+			name: "TrailingPercent",
+			input: `x = 95
+"Progress: -x%"`,
+			expectError: `Invalid format specifier string: Format specifier "%" is incomplete. Use \% or %% for a literal percent after a value`,
+		},
+		{
+			name: "IdentifierWithinSpecifierNotFound",
+			input: `x = 10
+"Value: -x%(-width)d"`,
+			expectError: "Undefined variable width within specifier. String Literal is Value: -x%(-width)d",
+		},
+		{
+			name: "MissingDynamicWidthClosingParen",
+			input: `x = 10
+"Value: -x%(-width"`,
+			expectError: "Expected ) after the identifier width. Str: Value: -x%(-width",
+		},
+		{
 			name: "InvalidDynamicPrecisionGroup",
 			input: `x = 5
 "Value: -x%.(-1)d"`,
@@ -91,6 +109,30 @@ width = 3.5
 			input: `x = 5
 "Value: -x%0vd"`,
 			expectError: `Unexpected 'v' in format specifier "%0"`,
+		},
+		{
+			name: "UnsupportedSpecifier",
+			input: `x = 5
+"Value: -x%v"`,
+			expectError: `Unexpected 'v' in format specifier "%"`,
+		},
+		{
+			name: "ParenthesizedTextAfterPercent",
+			input: `n = 30
+"Value: -n%(5)d."`,
+			expectError: `Unexpected '(' in format specifier "%"`,
+		},
+		{
+			name: "EscapedSpecifierConversion",
+			input: `s = "hello"
+"Value: -s%\x71"`,
+			expectError: "Escape sequences cannot be used as format syntax",
+		},
+		{
+			name: "EscapedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%\x31q"`,
+			expectError: "Escape sequences cannot be used as format syntax",
 		},
 		{
 			name: "InvalidLengthForConversion",
@@ -198,33 +240,45 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Value: %%d",
 		},
 		{
-			name: "TrailingPercent",
+			name: "LiteralTrailingPercent",
 			input: `x = 95
-"Progress: -x%"`,
+"Progress: -x%%"`,
 			expectOutput: "Progress: %lld%%",
 		},
 		{
 			name: "PercentBeforeText",
 			input: `x = 95
-"Progress: -x% complete"`,
+"Progress: -x%% complete"`,
 			expectOutput: "Progress: %lld%% complete",
+		},
+		{
+			name: "EscapedPercentBeforeText",
+			input: `x = 95
+"Progress: -x\% complete"`,
+			expectOutput: "Progress: %lld%% complete",
+		},
+		{
+			name: "SeparatedPercent",
+			input: `n = 95
+"Profit is -n %"`,
+			expectOutput: "Profit is %lld %%",
 		},
 		{
 			name: "PercentBeforeParentheticalText",
 			input: `n = 95
-"Profit is -n%(Higher than last year"`,
+"Profit is -n%%(Higher than last year"`,
 			expectOutput: "Profit is %lld%%(Higher than last year",
 		},
 		{
 			name: "ParenthesizedNumberIsText",
 			input: `n = 30
-"Value: -n%(5)d."`,
+"Value: -n%%(5)d."`,
 			expectOutput: "Value: %lld%%(5)d.",
 		},
 		{
 			name: "PercentBeforeSpacedParentheticalText",
 			input: `n = 95
-"Profit is -n% (Higher than last year)"`,
+"Profit is -n%% (Higher than last year)"`,
 			expectOutput: "Profit is %lld%% (Higher than last year)",
 		},
 		{
@@ -240,72 +294,28 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Value of x is %lld (it's a new variable)",
 		},
 		{
-			name: "UnsupportedSpecifierIsText",
-			input: `x = 5
-"Value: -x%v"`,
-			expectOutput: "Value: %lld%%v",
-		},
-		{
 			name: "UnresolvedMarkerKeepsSpecifierLiteral",
 			input: `width = 5
 "Width: -width; literal: -missing%(-width)d"`,
 			expectOutput: "Width: %lld; literal: -missing%%(-width)d",
 		},
 		{
-			name: "UnresolvedDynamicWidthIsText",
-			input: `x = 10
-"Value: -x%(-width)d"`,
-			expectOutput: "Value: %lld%%(-width)d",
-		},
-		{
-			name: "UnresolvedIncompleteDynamicWidthIsText",
-			input: `x = 10
-"Value: -x%(-width)"`,
-			expectOutput: "Value: %lld%%(-width)",
-		},
-		{
-			name: "IncompleteDynamicWidthIsText",
-			input: `x = 10
-"Value: -x%(-width"`,
-			expectOutput: "Value: %lld%%(-width",
-		},
-		{
-			name: "InvalidDynamicWidthIsText",
-			input: `x = 10
-"Value: -x%(-1)d"`,
-			expectOutput: "Value: %lld%%(-1)d",
-		},
-		{
-			name: "UnresolvedSpecifierIsAtomicText",
-			input: `x = 5.
-precision = 2
-"Precision -precision; value -x%(-width).(-precision)f"`,
-			expectOutput: "Precision %lld; value %s%%(-width).(-precision)f",
-		},
-		{
-			name: "UnresolvedSpecifierPrecedesTypeValidation",
-			input: `x = 5.
-width = 3.5
-"Width -width; value -x%(-width).(-precision)f"`,
-			expectOutput: "Width %s; value %s%%(-width).(-precision)f",
-		},
-		{
-			name: "EscapedSpecifierConversionIsText",
-			input: `s = "hello"
-"Value: -s%\x71"`,
-			expectOutput: "Value: %s%%q",
-		},
-		{
-			name: "EscapedSpecifierWidthIsText",
-			input: `s = "hello"
-"Value: -s%\x31q"`,
-			expectOutput: "Value: %s%%1q",
-		},
-		{
 			name: "SpaceAfterVar",
 			input: `x = 5
 "x = -x %d"`,
 			expectOutput: "x = %lld %%d",
+		},
+		{
+			name: "SignedIntegerSpaceFlag",
+			input: `x = 5
+"x = -x% d"`,
+			expectOutput: "x = % lld",
+		},
+		{
+			name: "FloatSpaceFlag",
+			input: `x = 5.
+"x = -x% .2f"`,
+			expectOutput: "x = % .2f",
 		},
 		{
 			name: "PercentAfterSpecifier",

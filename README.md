@@ -204,10 +204,11 @@ words = ["hello" "hello world" ""]
 words  # ["hello" "hello world" ""]
 ```
 
-An adjacent `%` is a custom format only when followed by supported specifier syntax. Otherwise it
-remains literal, so `"Progress: -n%"` prints a value followed by `%`; `-n%05d` applies custom
-formatting. A dynamic `(-width)` group only applies when `width` resolves; otherwise the whole
-candidate remains literal. Scalar strings remain unquoted by default. Use the Pluto `%q` formatting
+An unescaped `%` immediately after a resolved marker starts a strict format specifier. Use `%%` or
+`\%` for a literal percent after a value, so `"Progress: -n%%"` prints a value followed by `%`;
+`-n%05d` applies custom formatting and `-n% d` reserves a leading space for a positive number.
+Dynamic width and precision identifiers such as `(-width)` must be defined `I64` values. Scalar
+strings remain unquoted by default. Use the Pluto `%q` formatting
 conversion when a quoted, escaped scalar representation is needed: `"-word%q"`. String markers retain their normal scope
 semantics: `-name` interpolates when `name` is defined; use `\-name` when literal marker-like text is
 required. Escape-produced characters remain literal during marker parsing, so `\x2dname` is also

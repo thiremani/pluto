@@ -52,62 +52,31 @@ name = "Pluto"
 ```
 
 If the main identifier is undefined, the complete marker-like text remains
-literal. Any trailing pseudo-specifier is not parsed.
+literal. Any trailing pseudo-specifier is treated as text rather than validated.
 
-## Literal percent and format probing
+## Literal percent and strict formatting
 
 A `%` outside a resolved marker is ordinary text. A `%` immediately after a
-resolved marker starts a format-specifier probe.
-
-The probe commits to format syntax when the next raw character can start:
-
-- a supported conversion;
-- a flag (`-`, `+`, `#`, or `0`);
-- a width (`1` through `9` or a complete raw `(-name)` group);
-- a precision (`.`);
-- a length modifier; or
-- the explicitly rejected direct `*` form.
-
-If no such character follows, `%` remains literal and the marker uses its
-default format.
+resolved marker always starts a format specifier. The complete specifier must
+match the grammar below; incomplete or malformed specifiers are compile errors.
 
 ```pluto
 n = 95
-"Progress: -n%"          # Progress: 95%
-"Progress: -n% complete" # Progress: 95% complete
-"Profit: -n%(higher)"    # Profit: 95%(higher)
-"Value: -n%v"            # Value: 95%v; v cannot start a Pluto specifier
+"Progress: -n%%"          # Progress: 95%
+"Progress: -n\% complete" # Progress: 95% complete
+"Padded: -n%05d"          # Padded: 00095
+"Signed: -n% d"           # Signed:  95
 ```
 
-An opening parenthesis alone does not commit the probe. It must contain a raw
-`(-identifier)` group, so ordinary percentage text followed by parentheses
-remains literal.
-
-If a candidate specifier contains a dynamic identifier that is undefined, the
-main marker uses its default format and the entire candidate remains literal.
-Identifiers inside that literal span are not reconsidered as markers. This
-mirrors the fallback for an undefined main marker.
-
-```pluto
-n = 95
-"Value: -n%(-width)d" # Value: 95%(-width)d, when width is undefined
-```
-
-Once the probe commits and all dynamic identifiers resolve, the complete
-specifier must be valid. Malformed syntax, incompatible conversions, and
-dynamic identifiers with non-`I64` types are compile errors and are never
-passed to `printf`.
-
-Use `\%` to force a literal percent when the following character could start a
-specifier:
+Use `\%` to make the percent literal data, or `%%` as a printf-familiar
+spelling for the value followed by one literal percent:
 
 ```pluto
 "Literal: -n\%d"         # Literal: 95%d
+"Progress: -n%% complete" # Progress: 95% complete
 ```
 
-`%%` remains supported immediately after a marker as a printf-familiar spelling
-for the value followed by one literal percent. Outside a marker, both percent
-characters are literal.
+Outside a marker, both percent characters in `%%` are literal.
 
 ## Format grammar
 
@@ -115,16 +84,16 @@ The supported grammar is:
 
 ```text
 specifier  = "%" ("%" | flags width? precision? length? conversion)
-flags      = { "-" | "+" | "#" | "0" }
+flags      = { "-" | "+" | " " | "#" | "0" }
 width      = digits | dynamic
 precision  = "." [digits | dynamic]
 dynamic    = "(-" identifier ")"
 length     = "l" ["l"]
 ```
 
-Defined dynamic width and precision identifiers must have type `I64`. If one is
-undefined, the candidate specifier remains literal as described above. A direct
-`*` is rejected; use `(-identifier)` instead.
+Dynamic width and precision identifiers must be defined in the current scope
+and have type `I64`. Undefined identifiers and non-`I64` values are compile
+errors. A direct `*` is rejected; use `(-identifier)` instead.
 
 Supported conversions are:
 
@@ -147,10 +116,10 @@ Flags are conversion-specific:
 
 | Conversion | Flags |
 | --- | --- |
-| `d`, `i` | `-`, `+`, `0` |
+| `d`, `i` | `-`, `+`, space, `0` |
 | `u` | `-`, `0` |
 | `o`, `x`, `X` | `-`, `#`, `0` |
-| floating-point conversions | `-`, `+`, `#`, `0` |
+| floating-point conversions | `-`, `+`, space, `#`, `0` |
 | `c`, `s`, `q` | `-` |
 | `p`, `n`, `%` | none |
 

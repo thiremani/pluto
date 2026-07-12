@@ -125,7 +125,7 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 	}
 
 	evs = []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
-	// Collect dynamic width/precision reads when a real specifier follows.
+	// Collect dynamic width/precision reads when an attached specifier follows.
 	if end < len(runes) && runes[end] == '%' {
 		var specifierEvents []VarEvent
 		specifierEvents, end = cfg.collectSpecifierReads(value, tok, runes, end)
@@ -137,18 +137,22 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
 func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
-	specIDs, _, end, matched, err := parseSpecifierSyntax(tok, value, runes, start)
-	if !matched {
-		return nil, start
-	}
-	if !allIdentifiersDefined(specIDs, cfg.isDefined) {
-		return nil, end
-	}
+	specIDs, _, end, err := parseSpecifierSyntax(tok, value, runes, start)
 	if err != nil {
 		cfg.Errors = append(cfg.Errors, err)
 		// Still collect the identifiers to avoid unrelated dead-store diagnostics.
+		for _, specID := range specIDs {
+			if cfg.isDefined(specID) {
+				evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
+			}
+		}
+		return evs, end
 	}
 	for _, specID := range specIDs {
+		if !cfg.isDefined(specID) {
+			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
+			return evs, end
+		}
 		evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
 	return evs, end
