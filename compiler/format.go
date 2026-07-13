@@ -84,22 +84,6 @@ func formatSpecifierLengthStart(ch rune) bool {
 	return strings.ContainsRune("lhLjzt", ch)
 }
 
-func scanDynamicSpecifierID(runes []rune, start int) (id string, next int, complete bool) {
-	if start < 0 || start >= len(runes) {
-		return "", start, false
-	}
-	next = start + 1
-	if start+2 >= len(runes) || runes[start] != '(' || runes[start+1] != '-' || !lexer.IsLetter(runes[start+2]) {
-		return
-	}
-
-	id, next = parseIdentifier(runes, start+2)
-	if next >= len(runes) || runes[next] != ')' {
-		return id, next, false
-	}
-	return id, next + 1, true
-}
-
 func formatSpecifierError(tok token.Token, value, msg string) *token.CompileError {
 	return &token.CompileError{
 		Token: tok,
@@ -196,20 +180,21 @@ func (p *specifierParser) parseFlags() {
 }
 
 func (p *specifierParser) parseDynamic() (bool, *token.CompileError) {
-	specID, next, complete := scanDynamicSpecifierID(p.runes, p.index)
-	if !complete {
-		if specID != "" {
-			p.index = next
-			return false, &token.CompileError{
-				Token: p.tok,
-				Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specID, p.value),
-			}
-		}
+	if p.index+2 >= len(p.runes) || p.runes[p.index+1] != '-' || !lexer.IsLetter(p.runes[p.index+2]) {
 		return false, nil
+	}
+
+	specID, next := parseIdentifier(p.runes, p.index+2)
+	if next >= len(p.runes) || p.runes[next] != ')' {
+		p.index = next
+		return false, &token.CompileError{
+			Token: p.tok,
+			Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specID, p.value),
+		}
 	}
 	p.specIDs = append(p.specIDs, specID)
 	p.spec.WriteRune('*')
-	p.index = next
+	p.index = next + 1
 	return true, nil
 }
 
