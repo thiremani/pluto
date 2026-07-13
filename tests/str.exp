@@ -23,6 +23,12 @@ eager =  123 999
 hello world
 quoted heap: "hello world"
 quoted static: "hello \"world\"\\path\nnext\tcol"
+quoted precision: "he"
+quoted dynamic precision: "he"
+quoted width precision: |    "he"|
+quoted stored precision: "he"
+quoted escaped precision: "a\""
+quoted unicode byte precision: "π"
 literal markers: -markerName -markerName; value: 99
 unicode literal markers: -markerName -markerName
 escaped marker parts: -markerName 7Tail; full: 88

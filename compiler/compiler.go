@@ -3133,6 +3133,11 @@ func (c *Compiler) quotedStrArg(s *Symbol) llvm.Value {
 	return c.builder.CreateCall(fnType, fn, []llvm.Value{s.Val}, "str_quote")
 }
 
+func (c *Compiler) quotedStrPrefixArg(s *Symbol, byteLimit llvm.Value) llvm.Value {
+	fnType, fn := c.GetCFunc(STR_QUOTE_PREFIX)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{s.Val, byteLimit}, "str_quote_prefix")
+}
+
 func (c *Compiler) free(ptrs []llvm.Value) {
 	fnType, fn := c.GetCFunc(FREE)
 	for _, ptr := range ptrs {

@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/thiremani/pluto/lexer"
@@ -105,7 +106,7 @@ func formatSpecifierError(tok token.Token, value, msg string) *token.CompileErro
 }
 
 func validateSpecifierModifiers(tok token.Token, value, flags, length string, hasWidth, hasPrecision bool, conversion rune) *token.CompileError {
-	// Admit only combinations for which Pluto emits the exact libc varargs ABI.
+	// Keep modifiers within Pluto's documented, portable printf subset.
 	allowedFlags := ""
 	switch conversion {
 	case 'd', 'i':
@@ -116,7 +117,7 @@ func validateSpecifierModifiers(tok token.Token, value, flags, length string, ha
 		allowedFlags = "-#0"
 	case 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A':
 		allowedFlags = "-+ #0"
-	case 'c', 's', 'q':
+	case 'c', 's', 'q', 'p':
 		allowedFlags = "-"
 	}
 
@@ -129,16 +130,36 @@ func validateSpecifierModifiers(tok token.Token, value, flags, length string, ha
 	if length != "" && !strings.ContainsRune("diuoxXn", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Length modifier %q is not supported for %%%c", length, conversion))
 	}
-	if hasWidth && strings.ContainsRune("pn%", conversion) {
+	if hasWidth && strings.ContainsRune("n%", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Width is not supported for %%%c", conversion))
-	}
-	if hasPrecision && conversion == 'q' {
-		return formatSpecifierError(tok, value, "Precision is not supported for %q because it can truncate the quoted string")
 	}
 	if hasPrecision && strings.ContainsRune("cpn%", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Precision is not supported for %%%c", conversion))
 	}
 	return nil
+}
+
+type specifierPrecision struct {
+	present     bool
+	dynamic     bool
+	symbolIndex int
+	literal     string
+	start       int
+	end         int
+}
+
+func (p specifierPrecision) removeFrom(spec string) string {
+	if !p.present {
+		return spec
+	}
+	return spec[:p.start] + spec[p.end:]
+}
+
+type parsedSpecifier struct {
+	ids       []string
+	text      string
+	end       int
+	precision specifierPrecision
 }
 
 type specifierParser struct {
@@ -151,6 +172,7 @@ type specifierParser struct {
 	flags        strings.Builder
 	hasWidth     bool
 	hasPrecision bool
+	precision    specifierPrecision
 }
 
 func newSpecifierParser(tok token.Token, value string, runes []rune, start int) *specifierParser {
@@ -221,19 +243,30 @@ func (p *specifierParser) parsePrecision() *token.CompileError {
 		return nil
 	}
 	p.hasPrecision = true
+	p.precision.present = true
+	p.precision.start = p.spec.Len()
 	p.spec.WriteRune('.')
 	p.index++
 	if err := p.rejectDirectAsterisk(); err != nil {
 		return err
 	}
 	if p.index < len(p.runes) && p.runes[p.index] == '(' {
-		_, err := p.parseDynamic()
+		p.precision.symbolIndex = len(p.specIDs)
+		matched, err := p.parseDynamic()
+		p.precision.dynamic = matched
+		p.precision.end = p.spec.Len()
 		return err
 	}
+	literalStart := p.index
 	for p.index < len(p.runes) && '0' <= p.runes[p.index] && p.runes[p.index] <= '9' {
 		p.spec.WriteRune(p.runes[p.index])
 		p.index++
 	}
+	p.precision.literal = string(p.runes[literalStart:p.index])
+	if p.precision.literal == "" {
+		p.precision.literal = "0"
+	}
+	p.precision.end = p.spec.Len()
 	return nil
 }
 
@@ -283,32 +316,41 @@ func (p *specifierParser) parseConversion(length string) *token.CompileError {
 	return validateSpecifierModifiers(p.tok, p.value, p.flags.String(), length, p.hasWidth, p.hasPrecision, conversion)
 }
 
+func (p *specifierParser) result() parsedSpecifier {
+	return parsedSpecifier{
+		ids:       p.specIDs,
+		text:      p.spec.String(),
+		end:       p.index,
+		precision: p.precision,
+	}
+}
+
 // parseSpecifierSyntax parses a raw '%' attached to a resolved marker. Dynamic
 // width and precision identifiers use (-identifier), which is returned as '*'.
-func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) ([]string, string, int, *token.CompileError) {
+func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (parsedSpecifier, *token.CompileError) {
 	if start+1 < len(runes) && runes[start+1] == '%' {
-		return nil, "%%", start + 2, nil
+		return parsedSpecifier{text: "%%", end: start + 2}, nil
 	}
 
 	p := newSpecifierParser(tok, value, runes, start)
 	p.parseFlags()
 	if err := p.rejectDirectAsterisk(); err != nil {
-		return p.specIDs, "", p.index, err
+		return p.result(), err
 	}
 	if err := p.parseWidth(); err != nil {
-		return p.specIDs, "", p.index, err
+		return p.result(), err
 	}
 	if err := p.parsePrecision(); err != nil {
-		return p.specIDs, "", p.index, err
+		return p.result(), err
 	}
 	length, err := p.parseLength()
 	if err != nil {
-		return p.specIDs, "", p.index, err
+		return p.result(), err
 	}
 	if err := p.parseConversion(length); err != nil {
-		return p.specIDs, "", p.index, err
+		return p.result(), err
 	}
-	return p.specIDs, p.spec.String(), p.index, nil
+	return p.result(), nil
 }
 
 // Assumes runes[start] is a valid start to the identifier (lexer.IsLetter)
@@ -327,6 +369,7 @@ type parsedMarker struct {
 	mainID       string
 	symbols      []*Symbol
 	customSpec   string
+	precision    specifierPrecision
 	end          int
 	mainResolved bool
 }
@@ -376,20 +419,21 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 	}
 
 	specStart := end
-	specIDs, customSpec, specEnd, parseErr := parseSpecifierSyntax(tok, value, runes, specStart)
-	result.end = specEnd
+	spec, parseErr := parseSpecifierSyntax(tok, value, runes, specStart)
+	result.end = spec.end
 	if parseErr != nil {
 		c.Errors = append(c.Errors, parseErr)
 		return result, parseErr
 	}
 
-	specSymbols, resolveErr := c.resolveDynamicSpecifierSymbols(tok, value, specIDs)
+	specSymbols, resolveErr := c.resolveDynamicSpecifierSymbols(tok, value, spec.ids)
 	if resolveErr != nil {
 		c.Errors = append(c.Errors, resolveErr)
 		return result, resolveErr
 	}
 	result.symbols = append(result.symbols, specSymbols...)
-	result.customSpec = customSpec
+	result.customSpec = spec.text
+	result.precision = spec.precision
 
 	return result, nil
 }
@@ -421,6 +465,28 @@ type formattedMarker struct {
 	text   string
 	args   []llvm.Value
 	toFree []llvm.Value
+}
+
+func (c *Compiler) quotePrecisionArg(tok token.Token, value string, precision specifierPrecision, syms []*Symbol) (*llvm.Value, *token.CompileError) {
+	if !precision.present {
+		return nil, nil
+	}
+	if precision.dynamic {
+		symbolIndex := precision.symbolIndex + 1
+		if symbolIndex >= len(syms) {
+			panic("internal: dynamic format precision symbol is missing")
+		}
+		limitI32 := c.formatCIntArg(syms[symbolIndex], "quote_precision_i32")
+		limit := c.builder.CreateSExt(limitI32, c.Context.Int64Type(), "quote_precision_i64")
+		return &limit, nil
+	}
+
+	limit, err := strconv.ParseUint(precision.literal, 10, 63)
+	if err != nil {
+		return nil, formatSpecifierError(tok, value, fmt.Sprintf("Precision %q exceeds the I64 range", precision.literal))
+	}
+	limitValue := llvm.ConstInt(c.Context.Int64Type(), limit, false)
+	return &limitValue, nil
 }
 
 func formatMarkerSpec(mainType Type, customSpec string) (string, rune, error) {
@@ -471,7 +537,7 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 	return true
 }
 
-func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, specRune rune, result *formattedMarker) (bool, *token.CompileError) {
+func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, specRune rune, quoteLimit *llvm.Value, result *formattedMarker) (bool, *token.CompileError) {
 	mainType := mainSym.Type
 	switch specRune {
 	case 'n':
@@ -485,8 +551,13 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 		if mainType.Kind() != StrKind {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
 		}
-		quoted := c.quotedStrArg(mainSym)
-		// Only a custom specifier can end in q; libc receives the same specifier ending in s.
+		var quoted llvm.Value
+		if quoteLimit != nil {
+			quoted = c.quotedStrPrefixArg(mainSym, *quoteLimit)
+		} else {
+			quoted = c.quotedStrArg(mainSym)
+		}
+		// Only a custom specifier can end in q; libc receives its width and alignment as %s.
 		result.text = result.text[:len(result.text)-1] + "s"
 		result.args = append(result.args, quoted)
 		result.toFree = append(result.toFree, quoted)
@@ -494,13 +565,13 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 	case 's':
 		return c.formatAsString(mainSym, result), nil
 	case 'p':
-		// Normalize pointer output across libc implementations as lowercase 0x-prefixed hex.
+		// Normalize pointer output as lowercase alternate-form hex while preserving width.
 		rawSym, _ := c.getRawSymbol(mainID)
 		if rawSym.Type.Kind() != PtrKind {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, rawSym.Type)
 		}
 		ptrAsInt := c.builder.CreatePtrToInt(rawSym.Val, c.Context.Int64Type(), "ptr_as_i64")
-		result.text = "0x%llx"
+		result.text = "%#" + result.text[1:len(result.text)-1] + "llx"
 		result.args = append(result.args, ptrAsInt)
 		return true, nil
 	case 'c':
@@ -516,8 +587,19 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 
 // parseFormatting lowers one resolved marker to compiler-owned printf text and
 // matching arguments. syms contains the main value followed by dynamic sizes.
-func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms []*Symbol, customSpec string) (formattedMarker, *token.CompileError) {
+func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms []*Symbol, customSpec string, precision specifierPrecision) (formattedMarker, *token.CompileError) {
 	mainSym := syms[0]
+	quotedPrecision := precision.present && strings.HasSuffix(customSpec, "q")
+	var quoteLimit *llvm.Value
+	if quotedPrecision {
+		customSpec = precision.removeFrom(customSpec)
+		var precisionErr *token.CompileError
+		quoteLimit, precisionErr = c.quotePrecisionArg(tok, value, precision, syms)
+		if precisionErr != nil {
+			c.Errors = append(c.Errors, precisionErr)
+			return formattedMarker{}, precisionErr
+		}
+	}
 	text, specRune, buildErr := formatMarkerSpec(mainSym.Type, customSpec)
 	if buildErr != nil {
 		err := &token.CompileError{
@@ -529,10 +611,13 @@ func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms [
 	}
 
 	result := formattedMarker{text: text}
-	for _, specSym := range syms[1:] {
+	for i, specSym := range syms[1:] {
+		if quotedPrecision && precision.dynamic && i == precision.symbolIndex {
+			continue
+		}
 		result.args = append(result.args, c.formatCIntArg(specSym, "format_size_i32"))
 	}
-	handled, err := c.formatSpecialValue(tok, mainID, mainSym, specRune, &result)
+	handled, err := c.formatSpecialValue(tok, mainID, mainSym, specRune, quoteLimit, &result)
 	if err != nil {
 		c.Errors = append(c.Errors, err)
 		return formattedMarker{}, err
@@ -589,7 +674,7 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 		if err != nil {
 			return "", args, nil
 		}
-		formatted, err := c.parseFormatting(tok, value, marker.mainID, marker.symbols, marker.customSpec)
+		formatted, err := c.parseFormatting(tok, value, marker.mainID, marker.symbols, marker.customSpec, marker.precision)
 		if err != nil {
 			return "", args, nil
 		}

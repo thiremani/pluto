@@ -1,6 +1,7 @@
 #ifndef PLUTO_RUNTIME_UTIL_H
 #define PLUTO_RUNTIME_UTIL_H
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,8 +18,11 @@ static inline char* dup_cstr(const char* s) {
 	return p;
 }
 
-/* Returns a newly allocated Pluto string literal representation. */
+/* Returns a newly allocated quoted, escaped string representation. */
 char* str_quote(const char* s);
+
+/* Returns a newly allocated quote of at most byte_limit bytes; a negative limit quotes all. */
+char* str_quote_prefix(const char* s, int64_t byte_limit);
 
 /*
  * f64_special_str: Returns a constant string for NaN/Inf values, or NULL for normal numbers.

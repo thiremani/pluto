@@ -5,9 +5,11 @@ specifiers, and quoted output.
 
 ## String values
 
-`Str` contains UTF-8 text and does not contain NUL characters. Scalar strings
-print without quotes by default. String elements inside arrays print quoted so
-element boundaries remain unambiguous.
+`Str` is a sequence of non-NUL bytes stored with a trailing NUL terminator.
+Source string literals are Unicode text encoded as UTF-8, but byte-oriented
+operations such as `printf` precision can produce values that are not valid
+UTF-8. Scalar strings print without quotes by default. String elements inside
+arrays print quoted so element boundaries remain unambiguous.
 
 ```pluto
 word = "hello world"
@@ -125,12 +127,18 @@ Flags are conversion-specific:
 | `u` | `-`, `0` |
 | `o`, `x`, `X` | `-`, `#`, `0` |
 | floating-point conversions | `-`, `+`, space, `#`, `0` |
-| `c`, `s`, `q` | `-` |
-| `p`, `n`, `%` | none |
+| `c`, `s`, `q`, `p` | `-` |
+| `n`, `%` | none |
 
-Width is not supported for `p`, `n`, or `%`. Precision is not supported for
-`c`, `p`, `n`, `%`, or `q`. Precision on `%q` is rejected because truncating
-the quoted representation could remove its closing quote.
+Width is not supported for `n` or `%`. Pointer output uses lowercase
+alternate-form hexadecimal, including an `0x` prefix for nonzero addresses.
+Precision is not supported for `c`, `p`, `n`, or `%`. Following `printf`,
+precision on `%s` and `%q` limits the original string in UTF-8 bytes, not Unicode
+code points, and can split a multi-byte character. For example, `πx` has bytes
+`cf 80 78`, so `%.1s` emits only `cf`, while `%.2s` emits `π`. `%q` applies
+the same byte limit before escaping and quoting the selected prefix. Thus `%.2q`
+applied to `hello` produces `"he"`, with a complete closing quote. Width and
+alignment are then applied to that completed representation.
 
 ## Validation order
 

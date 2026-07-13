@@ -26,18 +26,18 @@ char *str_concat(const char *left, const char *right) {
     return result;
 }
 
-char *str_quote(const char *s) {
+static char *str_quote_bytes(const char *s, size_t input_len) {
     static const char hex[] = "0123456789abcdef";
     if (!s) s = "";
 
-    size_t input_len = strlen(s);
     if (input_len > (SIZE_MAX - 3) / 4) return NULL;
     char *result = malloc(input_len * 4 + 3);  /* worst case: \\xNN per byte */
     if (!result) return NULL;
 
     char *out = result;
     *out++ = '"';
-    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+    const unsigned char *end = (const unsigned char *)s + input_len;
+    for (const unsigned char *p = (const unsigned char *)s; p < end; ++p) {
         unsigned char ch = *p;
         switch (ch) {
         case '"':  *out++ = '\\'; *out++ = '"'; break;
@@ -62,6 +62,18 @@ char *str_quote(const char *s) {
     *out++ = '"';
     *out = '\0';
     return result;
+}
+
+char *str_quote(const char *s) {
+    return str_quote_bytes(s, s ? strlen(s) : 0);
+}
+
+char *str_quote_prefix(const char *s, int64_t byte_limit) {
+    size_t input_len = s ? strlen(s) : 0;
+    if (byte_limit >= 0 && (uint64_t)byte_limit < (uint64_t)input_len) {
+        input_len = (size_t)byte_limit;
+    }
+    return str_quote_bytes(s, input_len);
 }
 
 // Convert a range [s..t) with step p into a NUL-terminated string.

@@ -47,6 +47,16 @@ heapMsg
 
 quoteText = "hello \"world\"\\path\nnext\tcol"
 "quoted static: -quoteText%q"
+quotePrecision = 2
+"quoted precision: -quoteText%.2q"
+"quoted dynamic precision: -quoteText%.(-quotePrecision)q"
+"quoted width precision: |-quoteText%8.2q|"
+quotedStored = "-quoteText%.2q"
+"quoted stored precision: -quotedStored"
+quoteEscaped = "a\"b"
+"quoted escaped precision: -quoteEscaped%.2q"
+quoteUnicode = "πx"
+"quoted unicode byte precision: -quoteUnicode%.2q"
 
 markerName = 99
 literalMarker = "\-markerName"

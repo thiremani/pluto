@@ -137,25 +137,25 @@ func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
 func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
-	specIDs, _, end, err := parseSpecifierSyntax(tok, value, runes, start)
+	spec, err := parseSpecifierSyntax(tok, value, runes, start)
 	if err != nil {
 		cfg.Errors = append(cfg.Errors, err)
 		// Still collect the identifiers to avoid unrelated dead-store diagnostics.
-		for _, specID := range specIDs {
+		for _, specID := range spec.ids {
 			if cfg.isDefined(specID) {
 				evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
 			}
 		}
-		return evs, end
+		return evs, spec.end
 	}
-	for _, specID := range specIDs {
+	for _, specID := range spec.ids {
 		if !cfg.isDefined(specID) {
 			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
-			return evs, end
+			return evs, spec.end
 		}
 		evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
-	return evs, end
+	return evs, spec.end
 }
 
 func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {

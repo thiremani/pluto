@@ -31,9 +31,12 @@ func TestValidateSpecifierModifiers(t *testing.T) {
 		{name: "SignedAlternateForm", flags: "#", conversion: 'd', expectError: `Format flag '#' is not supported for %d`},
 		{name: "UnsignedSign", flags: "+", conversion: 'u', expectError: `Format flag '+' is not supported for %u`},
 		{name: "StringLength", length: "l", conversion: 's', expectError: `Length modifier "l" is not supported for %s`},
-		{name: "PointerWidth", hasWidth: true, conversion: 'p', expectError: `Width is not supported for %p`},
+		{name: "PointerWidth", hasWidth: true, conversion: 'p'},
+		{name: "PointerLeftAlign", flags: "-", hasWidth: true, conversion: 'p'},
+		{name: "PointerZeroPadding", flags: "0", hasWidth: true, conversion: 'p', expectError: `Format flag '0' is not supported for %p`},
+		{name: "PointerPrecision", hasPrecision: true, conversion: 'p', expectError: `Precision is not supported for %p`},
 		{name: "CharacterPrecision", hasPrecision: true, conversion: 'c', expectError: `Precision is not supported for %c`},
-		{name: "QuotedPrecision", hasPrecision: true, conversion: 'q', expectError: `Precision is not supported for %q because it can truncate the quoted string`},
+		{name: "QuotedPrecision", hasPrecision: true, conversion: 'q'},
 	}
 
 	for _, tc := range tests {
@@ -151,12 +154,6 @@ width = 3.5
 			input: `x = 5
 "Value: -x%q"`,
 			expectError: "Format specifier end 'q' is not correct for variable type. Variable identifier: x. Variable type: I64",
-		},
-		{
-			name: "QuotedSpecifierPrecision",
-			input: `s = "hello"
-"Value: -s%.3q"`,
-			expectError: "Precision is not supported for %q because it can truncate the quoted string",
 		},
 		{
 			name: "IntWithFloatSpecifier",
@@ -441,6 +438,38 @@ width = 10
 "Value: -s%(-width)q"`,
 			expectOutput: "Value: %*s",
 			expectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "QuotedSpecifierPrecision",
+			input: `s = "hello"
+"Value: -s%.2q"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_quote_prefix",
+		},
+		{
+			name: "QuotedSpecifierDynamicPrecision",
+			input: `s = "hello"
+precision = 0
+"xx-precision%n"
+"Value: -s%.(-precision)q"`,
+			expectOutput: "Value: %s",
+			expectIR:     "quote_precision_i64 = sext i32",
+		},
+		{
+			name: "QuotedSpecifierWidthAndPrecision",
+			input: `s = "hello"
+width = 8
+precision = 2
+"Value: |-s%(-width).(-precision)q|"`,
+			expectOutput: "Value: |%*s|",
+			expectIR:     "call ptr @str_quote_prefix",
+		},
+		{
+			name: "StringSpecifierBytePrecision",
+			input: `s = "\u03c0x"
+"Value: -s%.1s"`,
+			expectOutput: "Value: %.1s",
+			rejectIR:     "call ptr @str_quote",
 		},
 		{
 			name: "StringSpecifierDynamicWidth",
