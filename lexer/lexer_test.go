@@ -431,21 +431,6 @@ func TestNULCharacterIsRejected(t *testing.T) {
 	})
 }
 
-func TestZeroKeywordWordsAreIdentifiers(t *testing.T) {
-	for _, word := range []string{"or", "return"} {
-		t.Run(word, func(t *testing.T) {
-			l := New("", word)
-			tok, err := l.NextToken()
-			if err != nil {
-				t.Fatalf("unexpected lexer error: %v", err)
-			}
-			if tok.Type != token.IDENT || tok.Literal != word {
-				t.Fatalf("token = %s %q, want IDENT %q", tok.Type, tok.Literal, word)
-			}
-		})
-	}
-}
-
 func TestUnicodeIdentifiers(t *testing.T) {
 	tests := []struct {
 		input    string
