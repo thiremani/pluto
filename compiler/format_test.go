@@ -23,7 +23,9 @@ func TestValidateSpecifierModifiers(t *testing.T) {
 		expectError  string
 	}{
 		{name: "SignedIntegerFlags", flags: "-+ 0", conversion: 'd'},
+		{name: "OctalSpaceFlag", flags: " ", conversion: 'o', expectError: `Format flag ' ' is not supported for %o`},
 		{name: "HexFlags", flags: "-#0", conversion: 'x'},
+		{name: "StringHexSpaceFlagSyntax", flags: "# ", conversion: 'x'},
 		{name: "FloatFlags", flags: "-+ #0", conversion: 'A'},
 		{name: "QuotedWidth", flags: "-", hasWidth: true, conversion: 'q'},
 		{name: "CountLength", length: "ll", conversion: 'n'},
@@ -154,6 +156,24 @@ width = 3.5
 			input: `x = 5
 "Value: -x%q"`,
 			expectError: "Format specifier end 'q' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
+		{
+			name: "StringHexZeroPadding",
+			input: `s = "hello"
+"Value: -s%08x"`,
+			expectError: "Format flag '0' is not supported for Str %x",
+		},
+		{
+			name: "IntegerHexSpaceFlag",
+			input: `x = 42
+"Value: -x% x"`,
+			expectError: "Format flag ' ' is not supported for I64 %x",
+		},
+		{
+			name: "StringHexLength",
+			input: `s = "hello"
+"Value: -s%lx"`,
+			expectError: `Length modifier "l" is not supported for Str %x`,
 		},
 		{
 			name: "IntWithFloatSpecifier",
@@ -478,6 +498,43 @@ width = 10
 "Value: -s%(-width)s"`,
 			expectOutput: "Value: %*s",
 			rejectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "StringLowerHex",
+			input: `s = "\u03c0x"
+"Value: -s%x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringUpperHexAlternateWidth",
+			input: `s = "\u03c0x"
+"Value: |-s%#10X|"`,
+			expectOutput: "Value: |%10s|",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexSpacedAlternate",
+			input: `s = "\u03c0"
+"Value: -s%# x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexBytePrecision",
+			input: `s = "\u03c0x"
+"Value: -s%.1x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexDynamicWidthAndPrecision",
+			input: `s = "\u03c0x"
+width = 8
+precision = 2
+"Value: |-s%(-width).(-precision)x|"`,
+			expectOutput: "Value: |%*s|",
+			expectIR:     "call ptr @str_hex",
 		},
 	}
 	for _, tc := range tests {

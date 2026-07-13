@@ -29,6 +29,13 @@ quoted width precision: |    "he"|
 quoted stored precision: "he"
 quoted escaped precision: "a\""
 quoted unicode byte precision: "π"
+string hex: cf8078 CF8078 0XCF8078
+string hex byte precision: cf cf80
+string hex dynamic precision: CF80
+string hex alternate width: |  0xcf8078|
+string hex spaced: cf 80 78
+string hex spaced alternate: 0xcf 0x80 0x78
+string hex empty width: |     |
 literal markers: -markerName -markerName; value: 99
 unicode literal markers: -markerName -markerName
 escaped marker parts: -markerName 7Tail; full: 88

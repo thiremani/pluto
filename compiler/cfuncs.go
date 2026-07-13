@@ -17,6 +17,7 @@ const (
 	F32_STR          = "f32_str"
 	STR_QUOTE        = "str_quote"
 	STR_QUOTE_PREFIX = "str_quote_prefix"
+	STR_HEX          = "str_hex"
 
 	// Array I64 functions
 	ARR_I64_NEW    = "arr_i64_new"
@@ -87,6 +88,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, false)
 	case STR_QUOTE_PREFIX:
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i64}, false)
+	case STR_HEX:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i64, c.Context.Int32Type(), c.Context.Int32Type(), c.Context.Int32Type()}, false)
 
 	// Array I64 functions
 	case ARR_I64_NEW:

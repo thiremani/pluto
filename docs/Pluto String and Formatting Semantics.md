@@ -106,7 +106,8 @@ Supported conversions are:
 
 | Conversion | Value |
 | --- | --- |
-| `d`, `i`, `u`, `o`, `x`, `X` | `I64` |
+| `d`, `i`, `u`, `o` | `I64` |
+| `x`, `X` | hexadecimal `I64`, or hexadecimal UTF-8 bytes of `Str` |
 | `f`, `F`, `e`, `E`, `g`, `G`, `a`, `A` | `F64` |
 | `c` | `I64` character value |
 | `s` | string-compatible output |
@@ -125,7 +126,8 @@ Flags are conversion-specific:
 | --- | --- |
 | `d`, `i` | `-`, `+`, space, `0` |
 | `u` | `-`, `0` |
-| `o`, `x`, `X` | `-`, `#`, `0` |
+| `o`, and `I64` `x`, `X` | `-`, `#`, `0` |
+| `Str` `x`, `X` | `-`, `#`, space |
 | floating-point conversions | `-`, `+`, space, `#`, `0` |
 | `c`, `s`, `q`, `p` | `-` |
 | `n`, `%` | none |
@@ -133,12 +135,18 @@ Flags are conversion-specific:
 Width is not supported for `n` or `%`. Pointer output uses lowercase
 alternate-form hexadecimal, including an `0x` prefix for nonzero addresses.
 Precision is not supported for `c`, `p`, `n`, or `%`. Following `printf`,
-precision on `%s` and `%q` limits the original string in UTF-8 bytes, not Unicode
-code points, and can split a multi-byte character. For example, `πx` has bytes
-`cf 80 78`, so `%.1s` emits only `cf`, while `%.2s` emits `π`. `%q` applies
-the same byte limit before escaping and quoting the selected prefix. Thus `%.2q`
-applied to `hello` produces `"he"`, with a complete closing quote. Width and
-alignment are then applied to that completed representation.
+precision on `%s`, `%q`, and string `%x`/`%X` limits the original string in UTF-8
+bytes, not Unicode code points, and can split a multi-byte character. For example,
+`πx` has bytes `cf 80 78`, so `%.1s` emits only `cf`, while `%.2s` emits `π`.
+`%q` applies the same byte limit before escaping and quoting the selected prefix;
+`%.2q` applied to `hello` therefore produces `"he"`, with a complete closing
+quote. String `%.1x` and `%.2x` applied to `πx` produce `cf` and `cf80`
+respectively. `%x` uses lowercase digits and `%X` uppercase digits. With strings,
+the space flag separates encoded bytes and combining it with `#` prefixes every
+byte, so `%# x` produces output such as `0xcf 0x80`; without the space flag, `#`
+prefixes the complete encoding once. Zero padding remains specific to numeric
+hexadecimal conversions. Width and alignment are applied to the completed quoted
+or hexadecimal representation.
 
 ## Validation order
 

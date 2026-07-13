@@ -58,6 +58,17 @@ quoteEscaped = "a\"b"
 quoteUnicode = "πx"
 "quoted unicode byte precision: -quoteUnicode%.2q"
 
+hexText = "πx"
+"string hex: -hexText%x -hexText%X -hexText%#X"
+"string hex byte precision: -hexText%.1x -hexText%.2x"
+hexPrecision = 2
+"string hex dynamic precision: -hexText%.(-hexPrecision)X"
+"string hex alternate width: |-hexText%#10x|"
+"string hex spaced: -hexText% x"
+"string hex spaced alternate: -hexText%# x"
+emptyHex = ""
+"string hex empty width: |-emptyHex%#5x|"
+
 markerName = 99
 literalMarker = "\-markerName"
 hexLiteralMarker = "\x2dmarkerName"

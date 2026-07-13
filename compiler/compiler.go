@@ -3138,6 +3138,27 @@ func (c *Compiler) quotedStrPrefixArg(s *Symbol, byteLimit llvm.Value) llvm.Valu
 	return c.builder.CreateCall(fnType, fn, []llvm.Value{s.Val, byteLimit}, "str_quote_prefix")
 }
 
+func (c *Compiler) hexStrArg(s *Symbol, byteLimit *llvm.Value, uppercase, alternate, spaced bool) llvm.Value {
+	limit := llvm.ConstAllOnes(c.Context.Int64Type())
+	if byteLimit != nil {
+		limit = *byteLimit
+	}
+	boolArg := func(value bool) llvm.Value {
+		if value {
+			return llvm.ConstInt(c.Context.Int32Type(), 1, false)
+		}
+		return llvm.ConstInt(c.Context.Int32Type(), 0, false)
+	}
+	fnType, fn := c.GetCFunc(STR_HEX)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{
+		s.Val,
+		limit,
+		boolArg(uppercase),
+		boolArg(alternate),
+		boolArg(spaced),
+	}, "str_hex")
+}
+
 func (c *Compiler) free(ptrs []llvm.Value) {
 	fnType, fn := c.GetCFunc(FREE)
 	for _, ptr := range ptrs {

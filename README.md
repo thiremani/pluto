@@ -209,8 +209,10 @@ An unescaped `%` immediately after a resolved marker starts a strict format spec
 `-n%05d` applies custom formatting and `-n% d` reserves a leading space for a positive number.
 Dynamic width and precision identifiers such as `(-width)` must be defined `I64` values. Scalar
 strings remain unquoted by default. Use the Pluto `%q` formatting
-conversion when a quoted, escaped scalar representation is needed: `"-word%q"`. Precision on `%s`
-and `%q` counts bytes; `%q` selects the byte prefix before escaping and adding quotes. String markers
+conversion when a quoted, escaped scalar representation is needed: `"-word%q"`. On `Str`, `%x` and
+`%X` encode each UTF-8 byte as two hexadecimal digits; `% x` separates bytes and `%#x` adds the
+`0x` prefix. Precision on `%s`, `%q`, and string `%x`/`%X` counts input bytes before quoting or hex
+encoding. String markers
 retain their normal scope semantics: `-name` interpolates when `name` is defined; use `\-name` when
 literal marker-like text is required. Escape-produced characters remain literal during marker parsing,
 so `\x2dname` is also literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`,

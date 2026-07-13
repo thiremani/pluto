@@ -24,6 +24,9 @@ char* str_quote(const char* s);
 /* Returns a newly allocated quote of at most byte_limit bytes; a negative limit quotes all. */
 char* str_quote_prefix(const char* s, int64_t byte_limit);
 
+/* Returns a newly allocated hexadecimal encoding of at most byte_limit bytes. */
+char* str_hex(const char* s, int64_t byte_limit, int32_t uppercase, int32_t alternate, int32_t spaced);
+
 /*
  * f64_special_str: Returns a constant string for NaN/Inf values, or NULL for normal numbers.
  * The returned pointer is to a string literal and should NOT be freed.
