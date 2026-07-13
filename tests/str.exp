@@ -28,6 +28,7 @@ quoted dynamic precision: "he"
 quoted width precision: |    "he"|
 quoted stored precision: "he"
 quoted escaped precision: "a\""
+quoted unicode split byte precision: "\xcf"
 quoted unicode byte precision: "π"
 string hex: cf8078 CF8078 0XCF8078
 string hex byte precision: cf cf80
@@ -42,6 +43,10 @@ escaped marker parts: -markerName 7Tail; full: 88
 escaped specifier: hello%q
 unicode escaped specifier: hello%q hello%q
 quoted marker: "-markerName"
+byte escape: ff "\xff"
+UTF-8 byte sequence: c3bf "ÿ"
+Unicode code point: c3bf "ÿ"
+byte escape array: ["\xff" "ÿ"]
 unicode escapes: ÿ π 🚀
 number is 00042
 heap print: world

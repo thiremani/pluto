@@ -232,9 +232,9 @@ func TestStringCompileDecodesEscapes(t *testing.T) {
 	require.Contains(t, ir, `@printf_fmt_0 = constant [8 x i8] c"line\0A!\0A\00"`)
 }
 
-func TestStringCompileEncodesUnicodeEscapesAsUTF8(t *testing.T) {
-	ir, _ := compileScriptAndCodeIR(t, "unicode_escape", "", `"\xff\u03c0\U0001f680"`)
-	require.Contains(t, ir, `@printf_fmt_0 = constant [10 x i8] c"\C3\BF\CF\80\F0\9F\9A\80\0A\00"`)
+func TestStringCompileDistinguishesByteAndUnicodeEscapes(t *testing.T) {
+	ir, _ := compileScriptAndCodeIR(t, "string_escape_encoding", "", `"\xff\u00ff\u03c0\U0001f680"`)
+	require.Contains(t, ir, `@printf_fmt_0 = constant [11 x i8] c"\FF\C3\BF\CF\80\F0\9F\9A\80\0A\00"`)
 }
 
 func TestFormatIdentifiers(t *testing.T) {

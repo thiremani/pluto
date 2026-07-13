@@ -56,6 +56,7 @@ quotedStored = "-quoteText%.2q"
 quoteEscaped = "a\"b"
 "quoted escaped precision: -quoteEscaped%.2q"
 quoteUnicode = "πx"
+"quoted unicode split byte precision: -quoteUnicode%.1q"
 "quoted unicode byte precision: -quoteUnicode%.2q"
 
 hexText = "πx"
@@ -86,7 +87,15 @@ specifierText = "hello"
 "unicode escaped specifier: -specifierText\u0025q -specifierText\U00000025q"
 "quoted marker: -literalMarker%q"
 
-unicodeEscapes = "\xff \u03c0 \U0001f680"
+rawByte = "\xff"
+utf8ByteSequence = "\xc3\xbf"
+unicodeCodePoint = "\u00ff"
+"byte escape: -rawByte%x -rawByte%q"
+"UTF-8 byte sequence: -utf8ByteSequence%x -utf8ByteSequence%q"
+"Unicode code point: -unicodeCodePoint%x -unicodeCodePoint%q"
+rawByteArray = [rawByte utf8ByteSequence]
+"byte escape array: -rawByteArray"
+unicodeEscapes = "\u00ff \u03c0 \U0001f680"
 "unicode escapes: -unicodeEscapes"
 
 # Heap string with format specifiers

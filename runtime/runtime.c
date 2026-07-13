@@ -26,6 +26,46 @@ char *str_concat(const char *left, const char *right) {
     return result;
 }
 
+static int is_utf8_continuation(unsigned char ch) {
+    return (ch & 0xc0) == 0x80;
+}
+
+// Return the byte width only when p begins a well-formed UTF-8 scalar value.
+static size_t valid_utf8_sequence_length(const unsigned char *p, const unsigned char *end) {
+    size_t remaining = (size_t)(end - p);
+    unsigned char first = p[0];
+    if (first < 0x80) return 1;
+
+    if (0xc2 <= first && first <= 0xdf) {
+        return remaining >= 2 && is_utf8_continuation(p[1]) ? 2 : 0;
+    }
+    if (remaining < 3) return 0;
+    if (first == 0xe0) {
+        return 0xa0 <= p[1] && p[1] <= 0xbf && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+    if ((0xe1 <= first && first <= 0xec) || (0xee <= first && first <= 0xef)) {
+        return is_utf8_continuation(p[1]) && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+    if (first == 0xed) {
+        return 0x80 <= p[1] && p[1] <= 0x9f && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+
+    if (remaining < 4) return 0;
+    if (first == 0xf0) {
+        return 0x90 <= p[1] && p[1] <= 0xbf &&
+               is_utf8_continuation(p[2]) && is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    if (0xf1 <= first && first <= 0xf3) {
+        return is_utf8_continuation(p[1]) && is_utf8_continuation(p[2]) &&
+               is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    if (first == 0xf4) {
+        return 0x80 <= p[1] && p[1] <= 0x8f &&
+               is_utf8_continuation(p[2]) && is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    return 0;
+}
+
 static char *str_quote_bytes(const char *s, size_t input_len) {
     static const char hex[] = "0123456789abcdef";
     if (!s) s = "";
@@ -37,7 +77,8 @@ static char *str_quote_bytes(const char *s, size_t input_len) {
     char *out = result;
     *out++ = '"';
     const unsigned char *end = (const unsigned char *)s + input_len;
-    for (const unsigned char *p = (const unsigned char *)s; p < end; ++p) {
+    const unsigned char *p = (const unsigned char *)s;
+    while (p < end) {
         unsigned char ch = *p;
         switch (ch) {
         case '"':  *out++ = '\\'; *out++ = '"'; break;
@@ -53,11 +94,25 @@ static char *str_quote_bytes(const char *s, size_t input_len) {
                 *out++ = 'x';
                 *out++ = hex[ch >> 4];
                 *out++ = hex[ch & 0x0f];
-            } else {
+            } else if (ch < 0x80) {
                 *out++ = (char)ch;
+            } else {
+                size_t sequence_len = valid_utf8_sequence_length(p, end);
+                if (sequence_len == 0) {
+                    *out++ = '\\';
+                    *out++ = 'x';
+                    *out++ = hex[ch >> 4];
+                    *out++ = hex[ch & 0x0f];
+                } else {
+                    memcpy(out, p, sequence_len);
+                    out += sequence_len;
+                    p += sequence_len;
+                    continue;
+                }
             }
             break;
         }
+        p++;
     }
     *out++ = '"';
     *out = '\0';

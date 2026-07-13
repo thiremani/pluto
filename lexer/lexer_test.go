@@ -325,9 +325,11 @@ func TestFixedWidthStringEscapes(t *testing.T) {
 	}{
 		{`\x01`, string(rune(0x01))},
 		{`\x7f`, string(rune(0x7f))},
-		{`\x80`, string(rune(0x80))},
-		{`\xff`, "ÿ"},
+		{`\x80`, string([]byte{0x80})},
+		{`\xff`, string([]byte{0xff})},
+		{`\xc3\xbf`, "ÿ"},
 		{`\u0001`, string(rune(0x0001))},
+		{`\u00ff`, "ÿ"},
 		{`\ud7ff`, string(rune(0xd7ff))},
 		{`\ue000`, string(rune(0xe000))},
 		{`\uffff`, string(rune(0xffff))},

@@ -433,6 +433,12 @@ xy = 6
 			expectOutput: "Value: %s%%q",
 		},
 		{
+			name: "ByteEscapeInFormatText",
+			input: `x = 5
+"Byte: \xff, value: -x"`,
+			expectOutput: `Byte: \FF, value: %lld`,
+		},
+		{
 			name: "UnicodeEscapedSpecifier",
 			input: `s = "hello"
 "Value: -s\u0025q"`,

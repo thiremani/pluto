@@ -63,10 +63,12 @@ func defaultSpecifier(t Type) (string, error) {
 	}
 }
 
-func writeFormatText(builder *strings.Builder, ch rune) {
-	builder.WriteRune(ch)
-	if ch == '%' {
-		builder.WriteRune('%')
+func writeFormatText(builder *strings.Builder, text string) {
+	for i := 0; i < len(text); i++ {
+		builder.WriteByte(text[i])
+		if text[i] == '%' {
+			builder.WriteByte('%')
+		}
 	}
 }
 
@@ -735,7 +737,7 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 			continue
 		}
 		if !maybeMarker(runes, i) {
-			writeFormatText(&builder, runes[i])
+			writeFormatText(&builder, string(runes[i]))
 			i++
 			continue
 		}

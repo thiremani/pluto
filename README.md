@@ -210,16 +210,17 @@ An unescaped `%` immediately after a resolved marker starts a strict format spec
 Dynamic width and precision identifiers such as `(-width)` must be defined `I64` values. Scalar
 strings remain unquoted by default. Use the Pluto `%q` formatting
 conversion when a quoted, escaped scalar representation is needed: `"-word%q"`. On `Str`, `%x` and
-`%X` encode each UTF-8 byte as two hexadecimal digits; `% x` separates bytes and `%#x` adds the
+`%X` encode each byte as two hexadecimal digits; `% x` separates bytes and `%#x` adds the
 `0x` prefix. Precision on `%s`, `%q`, and string `%x`/`%X` counts input bytes before quoting or hex
 encoding. String markers
 retain their normal scope semantics: `-name` interpolates when `name` is defined; use `\-name` when
 literal marker-like text is required. Escape-produced characters remain literal during marker parsing,
 so `\x2dname` is also literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`,
-`\f`, and the fixed-width Unicode forms `\xNN`, `\uNNNN`, and `\UNNNNNNNN`. These forms denote
-Unicode code points and are UTF-8 encoded: `\xff` is `ÿ` (bytes `c3 bf`), while `\xc3\xbf` is `Ã¿`.
-NUL is rejected in every form. Octal, malformed, and unrecognized escapes are compile errors, as are
-surrogate code points and values above U+10FFFF. See [Pluto String and Formatting
+`\f`, the fixed-width byte escape `\xNN`, and the fixed-width Unicode escapes `\uNNNN` and
+`\UNNNNNNNN`. `\xNN` inserts one raw byte, while `\u` and `\U` encode a Unicode code point as UTF-8:
+`\xff` is the byte `ff`, whereas `\u00ff` and `\xc3\xbf` both produce `ÿ` (bytes `c3 bf`). NUL is
+rejected in every form. Octal, malformed, and unrecognized escapes are compile errors; Unicode escapes
+also reject surrogate code points and values above U+10FFFF. See [Pluto String and Formatting
 Semantics](docs/Pluto%20String%20and%20Formatting%20Semantics.md) for the complete grammar and
 validation rules.
 

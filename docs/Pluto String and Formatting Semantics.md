@@ -6,10 +6,10 @@ specifiers, and quoted output.
 ## String values
 
 `Str` is a sequence of non-NUL bytes stored with a trailing NUL terminator.
-Source string literals are Unicode text encoded as UTF-8, but byte-oriented
-operations such as `printf` precision can produce values that are not valid
-UTF-8. Scalar strings print without quotes by default. String elements inside
-arrays print quoted so element boundaries remain unambiguous.
+Unescaped source text and Unicode escapes are encoded as UTF-8. Byte escapes
+and byte-oriented operations such as `printf` precision can produce values that
+are not valid UTF-8. Scalar strings print without quotes by default. String
+elements inside arrays print quoted so element boundaries remain unambiguous.
 
 ```pluto
 word = "hello world"
@@ -25,18 +25,20 @@ Pluto supports these simple escapes:
 \\  \"  \-  \%  \n  \t  \r  \b  \f
 ```
 
-It also supports fixed-width Unicode code-point escapes:
+It also supports fixed-width byte and Unicode escapes:
 
 ```text
 \xNN  \uNNNN  \UNNNNNNNN
 ```
 
-Each `N` is a hexadecimal digit. These escapes denote Unicode code points,
-not raw bytes, and are encoded as UTF-8. For example, `\xff` is `ÿ` (UTF-8
-bytes `c3 bf`), while `\xc3\xbf` is `Ã¿`.
+Each `N` is a hexadecimal digit. `\xNN` inserts exactly one raw byte. `\uNNNN`
+and `\UNNNNNNNN` denote Unicode code points and encode them as UTF-8. For
+example, `\xff` inserts the byte `ff`, while `\u00ff` and `\xc3\xbf` both
+produce `ÿ` (UTF-8 bytes `c3 bf`).
 
-NUL is rejected in every form. Surrogate code points, values above U+10FFFF,
-octal escapes, malformed escapes, and unrecognized escapes are compile errors.
+NUL is rejected in every form. Unicode escapes also reject surrogate code
+points and values above U+10FFFF. Octal escapes, malformed escapes, and
+unrecognized escapes are compile errors.
 
 Escape-produced characters are always literal data. They never become marker
 or format syntax. Thus `\x2dname` is literal `-name`, even when `name` exists.
@@ -107,7 +109,7 @@ Supported conversions are:
 | Conversion | Value |
 | --- | --- |
 | `d`, `i`, `u`, `o` | `I64` |
-| `x`, `X` | hexadecimal `I64`, or hexadecimal UTF-8 bytes of `Str` |
+| `x`, `X` | hexadecimal `I64`, or hexadecimal bytes of `Str` |
 | `f`, `F`, `e`, `E`, `g`, `G`, `a`, `A` | `F64` |
 | `c` | `I64` character value |
 | `s` | string-compatible output |
@@ -135,18 +137,19 @@ Flags are conversion-specific:
 Width is not supported for `n` or `%`. Pointer output uses lowercase
 alternate-form hexadecimal, including an `0x` prefix for nonzero addresses.
 Precision is not supported for `c`, `p`, `n`, or `%`. Following `printf`,
-precision on `%s`, `%q`, and string `%x`/`%X` limits the original string in UTF-8
+precision on `%s`, `%q`, and string `%x`/`%X` limits the original string in
 bytes, not Unicode code points, and can split a multi-byte character. For example,
 `πx` has bytes `cf 80 78`, so `%.1s` emits only `cf`, while `%.2s` emits `π`.
 `%q` applies the same byte limit before escaping and quoting the selected prefix;
 `%.2q` applied to `hello` therefore produces `"he"`, with a complete closing
-quote. String `%.1x` and `%.2x` applied to `πx` produce `cf` and `cf80`
-respectively. `%x` uses lowercase digits and `%X` uppercase digits. With strings,
-the space flag separates encoded bytes and combining it with `#` prefixes every
-byte, so `%# x` produces output such as `0xcf 0x80`; without the space flag, `#`
-prefixes the complete encoding once. Zero padding remains specific to numeric
-hexadecimal conversions. Width and alignment are applied to the completed quoted
-or hexadecimal representation.
+quote. Quoted output preserves well-formed UTF-8 and writes each invalid byte as
+`\xNN`; `%.1q` applied to `πx` therefore produces `"\xcf"`. String `%.1x` and
+`%.2x` applied to `πx` produce `cf` and `cf80` respectively. `%x` uses lowercase
+digits and `%X` uppercase digits. With strings, the space flag separates encoded
+bytes and combining it with `#` prefixes every byte, so `%# x` produces output
+such as `0xcf 0x80`; without the space flag, `#` prefixes the complete encoding
+once. Zero padding remains specific to numeric hexadecimal conversions. Width
+and alignment are applied to the completed quoted or hexadecimal representation.
 
 ## Validation order
 
