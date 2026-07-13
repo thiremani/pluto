@@ -167,17 +167,16 @@ type parsedSpecifier struct {
 }
 
 type specifierParser struct {
-	tok          token.Token
-	value        string
-	runes        []rune
-	index        int
-	specIDs      []string
-	spec         strings.Builder
-	flags        strings.Builder
-	length       string
-	hasWidth     bool
-	hasPrecision bool
-	precision    specifierPrecision
+	tok       token.Token
+	value     string
+	runes     []rune
+	index     int
+	specIDs   []string
+	spec      strings.Builder
+	flags     strings.Builder
+	length    string
+	hasWidth  bool
+	precision specifierPrecision
 }
 
 func newSpecifierParser(tok token.Token, value string, runes []rune, start int) *specifierParser {
@@ -247,7 +246,6 @@ func (p *specifierParser) parsePrecision() *token.CompileError {
 	if p.index >= len(p.runes) || p.runes[p.index] != '.' {
 		return nil
 	}
-	p.hasPrecision = true
 	p.precision.present = true
 	p.precision.start = p.spec.Len()
 	p.spec.WriteRune('.')
@@ -275,31 +273,30 @@ func (p *specifierParser) parsePrecision() *token.CompileError {
 	return nil
 }
 
-func (p *specifierParser) parseLength() (string, *token.CompileError) {
+func (p *specifierParser) parseLength() *token.CompileError {
 	if p.index >= len(p.runes) {
-		return "", nil
+		return nil
 	}
 	if p.runes[p.index] == 'l' {
-		length := "l"
+		p.length = "l"
 		p.spec.WriteRune('l')
 		p.index++
 		if p.index < len(p.runes) && p.runes[p.index] == 'l' {
-			length = "ll"
+			p.length = "ll"
 			p.spec.WriteRune('l')
 			p.index++
 		}
-		p.length = length
-		return length, nil
+		return nil
 	}
 	if !formatSpecifierLengthStart(p.runes[p.index]) {
-		return "", nil
+		return nil
 	}
 	length := p.runes[p.index]
 	p.index++
-	return "", formatSpecifierError(p.tok, p.value, fmt.Sprintf("Length modifier %q is not supported", length))
+	return formatSpecifierError(p.tok, p.value, fmt.Sprintf("Length modifier %q is not supported", length))
 }
 
-func (p *specifierParser) parseConversion(length string) *token.CompileError {
+func (p *specifierParser) parseConversion() *token.CompileError {
 	if p.index >= len(p.runes) {
 		spec := p.spec.String()
 		msg := fmt.Sprintf("Format specifier %q is incomplete", spec)
@@ -319,7 +316,7 @@ func (p *specifierParser) parseConversion(length string) *token.CompileError {
 
 	p.spec.WriteRune(conversion)
 	p.index++
-	return validateSpecifierModifiers(p.tok, p.value, p.flags.String(), length, p.hasWidth, p.hasPrecision, conversion)
+	return validateSpecifierModifiers(p.tok, p.value, p.flags.String(), p.length, p.hasWidth, p.precision.present, conversion)
 }
 
 func (p *specifierParser) result() parsedSpecifier {
@@ -351,11 +348,10 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 	if err := p.parsePrecision(); err != nil {
 		return p.result(), err
 	}
-	length, err := p.parseLength()
-	if err != nil {
+	if err := p.parseLength(); err != nil {
 		return p.result(), err
 	}
-	if err := p.parseConversion(length); err != nil {
+	if err := p.parseConversion(); err != nil {
 		return p.result(), err
 	}
 	return p.result(), nil
