@@ -456,8 +456,7 @@ func (c *Compiler) transformedStringPrecisionArg(tok token.Token, value string, 
 		if symbolIndex >= len(syms) {
 			panic("internal: dynamic format precision symbol is missing")
 		}
-		limitI32 := c.formatCIntArg(syms[symbolIndex], "quote_precision_i32")
-		limit := c.builder.CreateSExt(limitI32, c.Context.Int64Type(), "quote_precision_i64")
+		limit := syms[symbolIndex].Val
 		return &limit, nil
 	}
 

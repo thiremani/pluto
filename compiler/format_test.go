@@ -479,7 +479,8 @@ precision = 0
 "xx-precision%n"
 "Value: -s%.(-precision)q"`,
 			expectOutput: "Value: %s",
-			expectIR:     "quote_precision_i64 = sext i32",
+			expectIR:     "call ptr @str_quote_prefix",
+			rejectIR:     "quote_precision_i32",
 		},
 		{
 			name: "QuotedSpecifierWidthAndPrecision",
