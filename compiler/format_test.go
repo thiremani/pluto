@@ -67,10 +67,10 @@ func TestFormatStringErrors(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "AsteriskNotAllowed",
+			name: "DirectWidthAsterisk",
 			input: `x = 10
 "Value: -x%*d"`,
-			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
+			expectError: "Invalid format specifier string: Direct * width or precision is not supported; use (-name) with an I64 variable",
 		},
 		{
 			name: "SpecifierDoesNotEnd",

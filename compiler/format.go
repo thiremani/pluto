@@ -195,17 +195,6 @@ func (p *specifierParser) parseFlags() {
 	}
 }
 
-func (p *specifierParser) rejectDirectAsterisk() *token.CompileError {
-	if p.index >= len(p.runes) || p.runes[p.index] != '*' {
-		return nil
-	}
-	p.index++
-	return &token.CompileError{
-		Token: p.tok,
-		Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", p.value),
-	}
-}
-
 func (p *specifierParser) parseDynamic() (bool, *token.CompileError) {
 	specID, next, complete := scanDynamicSpecifierID(p.runes, p.index)
 	if !complete {
@@ -227,6 +216,10 @@ func (p *specifierParser) parseDynamic() (bool, *token.CompileError) {
 func (p *specifierParser) parseWidth() *token.CompileError {
 	if p.index >= len(p.runes) {
 		return nil
+	}
+	if p.runes[p.index] == '*' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "Direct * width or precision is not supported; use (-name) with an I64 variable")
 	}
 	if '0' <= p.runes[p.index] && p.runes[p.index] <= '9' {
 		p.hasWidth = true
@@ -252,8 +245,9 @@ func (p *specifierParser) parsePrecision() *token.CompileError {
 	p.precision.start = p.spec.Len()
 	p.spec.WriteRune('.')
 	p.index++
-	if err := p.rejectDirectAsterisk(); err != nil {
-		return err
+	if p.index < len(p.runes) && p.runes[p.index] == '*' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "Direct * width or precision is not supported; use (-name) with an I64 variable")
 	}
 	if p.index < len(p.runes) && p.runes[p.index] == '(' {
 		p.precision.symbolIndex = len(p.specIDs)
@@ -341,9 +335,6 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 
 	p := newSpecifierParser(tok, value, runes, start)
 	p.parseFlags()
-	if err := p.rejectDirectAsterisk(); err != nil {
-		return p.result(), err
-	}
 	if err := p.parseWidth(); err != nil {
 		return p.result(), err
 	}
