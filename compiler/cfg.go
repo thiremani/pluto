@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
 )
 
@@ -77,7 +78,7 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	case *ast.IntegerLiteral, *ast.FloatLiteral:
 		return nil
 	case *ast.StringLiteral:
-		return cfg.collectStringReads(e.Value, e.Token)
+		return cfg.collectStringReads(e.Token.Literal, e.Token)
 	case *ast.Identifier:
 		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
 	}
@@ -99,8 +100,15 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	var evs []VarEvent
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\\' {
+			_, next, _ := lexer.DecodeStringEscape(runes, i)
+			i = next - 1
+			continue
+		}
 		if maybeMarker(runes, i) {
-			evs = append(evs, cfg.collectMarkerReads(value, tok, runes, i)...)
+			markerEvents, end := cfg.collectMarkerReads(value, tok, runes, i)
+			evs = append(evs, markerEvents...)
+			i = end - 1 // The loop increment advances past the marker.
 		}
 	}
 	return evs
@@ -108,54 +116,46 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 
 // collectMarkerReads collects any identifiers used after marker `-` in the format string.
 // it assumes start is at marker
-func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
 	mainId, end := parseIdentifier(runes, start+1)
 	exists := cfg.isDefined(mainId)
 	if !exists {
 		// nothing to collect if the main identifier is not in the symbol table
-		return nil
+		return nil, end
 	}
 
-	evs := []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
-	// now collect any format specifier identifier reads
-	if hasSpecifier(runes, end) {
-		evs = append(evs, cfg.collectSpecifierReads(value, tok, runes, end)...)
+	evs = []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
+	// Collect dynamic width/precision reads when an attached specifier follows.
+	if end < len(runes) && runes[end] == '%' {
+		var specifierEvents []VarEvent
+		specifierEvents, end = cfg.collectSpecifierReads(value, tok, runes, end)
+		evs = append(evs, specifierEvents...)
 	}
-	return evs
+	return evs, end
 }
 
 // collectSpecifierReads collects all identifiers used in the format specifier
 // It assumes the runes slice is valid start is at the `%` character
-func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) []VarEvent {
-	var evs []VarEvent
-	for it := start + 1; it < len(runes); it++ {
-		if !specIdAhead(runes, it) {
-			continue
-		}
-
-		specId, end := parseIdentifier(runes, it+2)
-		if end >= len(runes) || runes[end] != ')' {
-			err := &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specId, value),
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
+	spec, err := parseSpecifierSyntax(tok, value, runes, start)
+	if err != nil {
+		cfg.Errors = append(cfg.Errors, err)
+		// Still collect the identifiers to avoid unrelated dead-store diagnostics.
+		for _, specID := range spec.ids {
+			if cfg.isDefined(specID) {
+				evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
 			}
-			cfg.Errors = append(cfg.Errors, err)
-			return nil
 		}
-
-		ok := cfg.isDefined(specId)
-		if !ok {
-			err := &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specId, value),
-			}
-			cfg.Errors = append(cfg.Errors, err)
-			return nil
-		}
-
-		evs = append(evs, VarEvent{Name: specId, Kind: Read, Token: tok})
+		return evs, spec.end
 	}
-	return evs
+	for _, specID := range spec.ids {
+		if !cfg.isDefined(specID) {
+			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
+			return evs, spec.end
+		}
+		evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
+	}
+	return evs, spec.end
 }
 
 func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {

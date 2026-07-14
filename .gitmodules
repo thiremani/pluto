@@ -1,3 +1,0 @@
-[submodule "runtime/third_party/klib"]
-	path = runtime/third_party/klib
-	url = https://github.com/attractivechaos/klib.git

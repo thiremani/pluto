@@ -197,6 +197,33 @@ y = [1.1 2.2 3.3]
 
 Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
 
+String-array elements print quoted so boundaries stay unambiguous:
+
+```python
+words = ["hello" "hello world" ""]
+words  # ["hello" "hello world" ""]
+```
+
+An unescaped `%` immediately after a resolved marker starts a strict format specifier. Use `%%` or
+`\%` for a literal percent after a value, so `"Progress: -n%%"` prints a value followed by `%`;
+`-n%05d` applies custom formatting and `-n% d` reserves a leading space for a positive number.
+Dynamic width and precision identifiers such as `(-width)` must be defined `I64` values. Scalar
+strings remain unquoted by default. Use the Pluto `%q` formatting
+conversion when a quoted, escaped scalar representation is needed: `"-word%q"`. On `Str`, `%x` and
+`%X` encode each byte as two hexadecimal digits; `% x` separates bytes and `%#x` adds the
+`0x` prefix. Precision on `%s`, `%q`, and string `%x`/`%X` counts input bytes before quoting or hex
+encoding. String markers
+retain their normal scope semantics: `-name` interpolates when `name` is defined; use `\-name` when
+literal marker-like text is required. Escape-produced characters remain literal during marker parsing,
+so `\x2dname` is also literal. Supported escapes are `\\`, `\"`, `\-`, `\%`, `\n`, `\t`, `\r`, `\b`,
+`\f`, the fixed-width byte escape `\xNN`, and the fixed-width Unicode escapes `\uNNNN` and
+`\UNNNNNNNN`. `\xNN` inserts one raw byte, while `\u` and `\U` encode a Unicode code point as UTF-8:
+`\xff` is the byte `ff`, whereas `\u00ff` and `\xc3\xbf` both produce `ÿ` (bytes `c3 bf`). NUL is
+rejected in every form. Octal, malformed, and unrecognized escapes are compile errors; Unicode escapes
+also reject surrogate code points and values above U+10FFFF. See [Pluto String and Formatting
+Semantics](docs/Pluto%20String%20and%20Formatting%20Semantics.md) for the complete grammar and
+validation rules.
+
 ---
 
 ## Function model
@@ -470,7 +497,11 @@ Pluto is under active development.
 
 ## License
 
-Pluto is licensed under the MIT License. See [LICENSE](LICENSE).
+Pluto is licensed under the Apache License 2.0 with LLVM Exceptions
+(`Apache-2.0 WITH LLVM-exception`). See [LICENSE](LICENSE).
 
-**Vendored third-party code:**
-- `runtime/third_party/klib/` (klib by Attractive Chaos) — MIT License, see `runtime/third_party/klib/LICENSE.txt`
+The exception allows Pluto-owned runtime code embedded in compiler output to
+be redistributed without the requirements in Apache 2.0 Sections 4(a), 4(b),
+and 4(d). Compiler distributions and Pluto source remain subject to the full
+license. Third-party code always retains its own license; see the
+[runtime dependency policy](runtime/THIRD_PARTY.md).

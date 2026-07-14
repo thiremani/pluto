@@ -196,7 +196,6 @@ func TestStringLiteral(t *testing.T) {
 	printStmt := requireOnlyPrintStmt(t, program)
 	lit, ok := printStmt.Expression.Arguments[0].(*ast.StringLiteral)
 	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression.Arguments[0])
-	require.Equal(t, "hello", lit.Value)
 	require.Equal(t, "hello", lit.Token.Literal)
 }
 

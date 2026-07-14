@@ -26,6 +26,153 @@ char *str_concat(const char *left, const char *right) {
     return result;
 }
 
+static int is_utf8_continuation(unsigned char ch) {
+    return (ch & 0xc0) == 0x80;
+}
+
+// Return the byte width only when p begins a well-formed UTF-8 scalar value.
+static size_t valid_utf8_sequence_length(const unsigned char *p, const unsigned char *end) {
+    size_t remaining = (size_t)(end - p);
+    unsigned char first = p[0];
+    if (first < 0x80) return 1;
+
+    if (0xc2 <= first && first <= 0xdf) {
+        return remaining >= 2 && is_utf8_continuation(p[1]) ? 2 : 0;
+    }
+    if (remaining < 3) return 0;
+    if (first == 0xe0) {
+        return 0xa0 <= p[1] && p[1] <= 0xbf && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+    if ((0xe1 <= first && first <= 0xec) || (0xee <= first && first <= 0xef)) {
+        return is_utf8_continuation(p[1]) && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+    if (first == 0xed) {
+        return 0x80 <= p[1] && p[1] <= 0x9f && is_utf8_continuation(p[2]) ? 3 : 0;
+    }
+
+    if (remaining < 4) return 0;
+    if (first == 0xf0) {
+        return 0x90 <= p[1] && p[1] <= 0xbf &&
+               is_utf8_continuation(p[2]) && is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    if (0xf1 <= first && first <= 0xf3) {
+        return is_utf8_continuation(p[1]) && is_utf8_continuation(p[2]) &&
+               is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    if (first == 0xf4) {
+        return 0x80 <= p[1] && p[1] <= 0x8f &&
+               is_utf8_continuation(p[2]) && is_utf8_continuation(p[3]) ? 4 : 0;
+    }
+    return 0;
+}
+
+static char *str_quote_bytes(const char *s, size_t input_len) {
+    static const char hex[] = "0123456789abcdef";
+    if (!s) s = "";
+
+    if (input_len > (SIZE_MAX - 3) / 4) return NULL;
+    char *result = malloc(input_len * 4 + 3);  /* worst case: \\xNN per byte */
+    if (!result) return NULL;
+
+    char *out = result;
+    *out++ = '"';
+    const unsigned char *end = (const unsigned char *)s + input_len;
+    const unsigned char *p = (const unsigned char *)s;
+    while (p < end) {
+        unsigned char ch = *p;
+        switch (ch) {
+        case '"':  *out++ = '\\'; *out++ = '"'; break;
+        case '\\': *out++ = '\\'; *out++ = '\\'; break;
+        case '\b': *out++ = '\\'; *out++ = 'b'; break;
+        case '\f': *out++ = '\\'; *out++ = 'f'; break;
+        case '\n': *out++ = '\\'; *out++ = 'n'; break;
+        case '\r': *out++ = '\\'; *out++ = 'r'; break;
+        case '\t': *out++ = '\\'; *out++ = 't'; break;
+        default:
+            if (ch < 0x20 || ch == 0x7f) {
+                *out++ = '\\';
+                *out++ = 'x';
+                *out++ = hex[ch >> 4];
+                *out++ = hex[ch & 0x0f];
+            } else if (ch < 0x80) {
+                *out++ = (char)ch;
+            } else {
+                size_t sequence_len = valid_utf8_sequence_length(p, end);
+                if (sequence_len == 0) {
+                    *out++ = '\\';
+                    *out++ = 'x';
+                    *out++ = hex[ch >> 4];
+                    *out++ = hex[ch & 0x0f];
+                } else {
+                    memcpy(out, p, sequence_len);
+                    out += sequence_len;
+                    p += sequence_len;
+                    continue;
+                }
+            }
+            break;
+        }
+        p++;
+    }
+    *out++ = '"';
+    *out = '\0';
+    return result;
+}
+
+char *str_quote(const char *s) {
+    return str_quote_bytes(s, s ? strlen(s) : 0);
+}
+
+char *str_quote_prefix(const char *s, int64_t byte_limit) {
+    size_t input_len = s ? strlen(s) : 0;
+    if (byte_limit >= 0 && (uint64_t)byte_limit < (uint64_t)input_len) {
+        input_len = (size_t)byte_limit;
+    }
+    return str_quote_bytes(s, input_len);
+}
+
+char *str_hex(const char *s, int64_t byte_limit, int32_t uppercase, int32_t alternate, int32_t spaced) {
+    static const char lower_hex[] = "0123456789abcdef";
+    static const char upper_hex[] = "0123456789ABCDEF";
+    const char *digits = uppercase ? upper_hex : lower_hex;
+    if (!s) s = "";
+
+    size_t input_len = strlen(s);
+    if (byte_limit >= 0 && (uint64_t)byte_limit < (uint64_t)input_len) {
+        input_len = (size_t)byte_limit;
+    }
+
+    size_t output_len = 0;
+    if (input_len > 0) {
+        if (spaced) {
+            size_t bytes_per_input = alternate ? 5 : 3;
+            if (input_len > SIZE_MAX / bytes_per_input) return NULL;
+            output_len = input_len * bytes_per_input - 1;
+        } else {
+            size_t prefix_len = alternate ? 2 : 0;
+            if (input_len > (SIZE_MAX - prefix_len - 1) / 2) return NULL;
+            output_len = input_len * 2 + prefix_len;
+        }
+    }
+
+    char *result = malloc(output_len + 1);
+    if (!result) return NULL;
+
+    char *out = result;
+    for (size_t i = 0; i < input_len; ++i) {
+        if (spaced && i > 0) *out++ = ' ';
+        if (alternate && (i == 0 || spaced)) {
+            *out++ = '0';
+            *out++ = uppercase ? 'X' : 'x';
+        }
+        unsigned char ch = (unsigned char)s[i];
+        *out++ = digits[ch >> 4];
+        *out++ = digits[ch & 0x0f];
+    }
+    *out = '\0';
+    return result;
+}
+
 // Convert a range [s..t) with step p into a NUL-terminated string.
 // Caller is responsible for free()ing the returned buffer.
 char *range_i64_str(int64_t s, int64_t t, int64_t p) {

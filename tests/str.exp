@@ -8,12 +8,46 @@ Preceding with zeros 0000000042 and different radices 52 2a 052 0x2a
 Floats: 8.73 +9e+00 1.230000E+00
 Width:    42
 Percent: 42%
+Percentage text: 42% complete
+Separated percent: 42 %
+Value: 30%(5)d.
+Profit is 42%(Higher than last year
+Profit is 42% (Higher than last year)
+Space sign: 42| 8.73
 Multiple percentage: % 8.73% %
 Variable width     42
 Variable precision     8.73   1.23 and   8.73%
+Unresolved marker: -missing%(6)d
 Var is 22, x is 42 Now y is       25 and two is 2
 eager =  123 999
 hello world
+quoted heap: "hello world"
+quoted static: "hello \"world\"\\path\nnext\tcol"
+quoted precision: "he"
+quoted dynamic precision: "he"
+quoted width precision: |    "he"|
+quoted stored precision: "he"
+quoted escaped precision: "a\""
+quoted unicode split byte precision: "\xcf"
+quoted unicode byte precision: "π"
+string hex: cf8078 CF8078 0XCF8078
+string hex byte precision: cf cf80
+string hex dynamic precision: CF80
+string hex alternate width: |  0xcf8078|
+string hex spaced: cf 80 78
+string hex spaced alternate: 0xcf 0x80 0x78
+string hex empty width: |     |
+literal markers: -markerName -markerName; value: 99
+unicode literal markers: -markerName -markerName
+escaped marker parts: -markerName 7Tail; full: 88
+escaped specifier: hello%q
+unicode escaped specifier: hello%q hello%q
+quoted marker: "-markerName"
+byte escape: ff "\xff"
+UTF-8 byte sequence: c3bf "ÿ"
+Unicode code point: c3bf "ÿ"
+byte escape array: ["\xff" "ÿ"]
+unicode escapes: ÿ π 🚀
 number is 00042
 heap print: world
 no markers here

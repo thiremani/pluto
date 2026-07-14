@@ -185,7 +185,7 @@ var tokens = [...]string{
 type Token struct {
 	FileName string
 	Type     TokenType
-	Literal  string
+	Literal  string // source spelling; string contents retain escape sequences
 	Line     int
 	Column   int
 	HadSpace bool // true if there was any space before this token

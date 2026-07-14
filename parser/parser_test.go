@@ -167,8 +167,8 @@ func testStringLiteral(t *testing.T, exp ast.Expression, expected string) bool {
 		t.Errorf("expected *ast.StringLiteral, got %T", exp)
 		return false
 	}
-	if str.Value != expected {
-		t.Errorf("expected string %q, got %q", expected, str.Value)
+	if str.Token.Literal != expected {
+		t.Errorf("expected string %q, got %q", expected, str.Token.Literal)
 		return false
 	}
 	return true

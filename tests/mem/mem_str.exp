@@ -26,19 +26,19 @@ heap from func
 static from func
 slot
 plain
-[slot array]
+["slot" "array"]
 first
-[first second third]
+["first" "second" "third"]
 modified
-[first second third]
+["first" "second" "third"]
 world
-[hello world]
+["hello" "world"]
 a b c
 func
-[func test]
+["func" "test"]
 print
 me
-[print me]
+["print" "me"]
 zero
 one
 two

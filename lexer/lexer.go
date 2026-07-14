@@ -1,10 +1,12 @@
 package lexer
 
 import (
-	"github.com/thiremani/pluto/token"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/thiremani/pluto/token"
 )
 
 type Lexer struct {
@@ -69,7 +71,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
-		tok.Literal = l.readString()
+		tok.Literal, err = l.readString(tok)
 	case ':':
 		tok = l.createToken(token.COLON, token.SYM_COLON, hadSpace)
 	case ',':
@@ -91,6 +93,11 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		}
 		tok = l.createToken(token.PERIOD, token.SYM_PERIOD, hadSpace)
 	case 0:
+		if !l.atEOF() {
+			tok = l.createToken(token.ILLEGAL, string(l.curr), hadSpace)
+			err = &token.CompileError{Token: tok, Msg: "NUL character is not allowed in source"}
+			break
+		}
 		fallthrough
 	case eof:
 		tok = l.createToken(token.EOF, "", hadSpace)
@@ -318,29 +325,164 @@ func (l *Lexer) readRune() {
 	l.column++
 }
 
-func (l *Lexer) readString() string {
-	var out strings.Builder
-	for l.curr != '"' && l.curr != 0 {
-		if l.curr == '\\' {
+func (l *Lexer) atEOF() bool {
+	return l.curr == 0 && l.position >= len(l.input)
+}
+
+func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
+	var firstErr *token.CompileError
+	start := l.position
+	setError := func(msg string) {
+		if firstErr == nil {
+			firstErr = &token.CompileError{Token: tok, Msg: msg}
+		}
+	}
+
+	for l.curr != '"' && !l.atEOF() {
+		if l.curr == 0 {
+			setError("NUL character is not allowed in string literals")
 			l.readRune()
-			switch l.curr {
-			case 'n':
-				out.WriteByte('\n')
-			case 't':
-				out.WriteByte('\t')
-			case '"':
-				out.WriteByte('"')
-			case '\\':
-				out.WriteByte('\\')
-			default:
-				out.WriteRune(l.curr) // Handle invalid escapes literally
+			continue
+		}
+		if l.curr == '\\' {
+			_, next, escapeErr := DecodeStringEscape(l.input, l.position)
+			if escapeErr != nil {
+				setError(escapeErr.Error())
 			}
-		} else {
-			out.WriteRune(l.curr)
+			for l.position+1 < next {
+				l.readRune()
+			}
 		}
 		l.readRune()
 	}
+	if l.atEOF() {
+		setError("unterminated string literal")
+	}
+	return string(l.input[start:l.position]), firstErr
+}
+
+// DecodeStringEscape decodes the escape beginning at start and returns its
+// runtime bytes and the first source index after it.
+func DecodeStringEscape(raw []rune, start int) (string, int, error) {
+	if start+1 >= len(raw) {
+		return `\`, start + 1, fmt.Errorf("incomplete escape sequence")
+	}
+
+	escaped := raw[start+1]
+	switch escaped {
+	case 'n':
+		return "\n", start + 2, nil
+	case 't':
+		return "\t", start + 2, nil
+	case 'r':
+		return "\r", start + 2, nil
+	case 'b':
+		return "\b", start + 2, nil
+	case 'f':
+		return "\f", start + 2, nil
+	case '"':
+		return `"`, start + 2, nil
+	case '\\':
+		return `\`, start + 2, nil
+	case '-', '%':
+		return string(escaped), start + 2, nil
+	case 'x':
+		return decodeByteEscape(raw, start)
+	case 'u':
+		return decodeUnicodeEscape(raw, start, 4)
+	case 'U':
+		return decodeUnicodeEscape(raw, start, 8)
+	case 0:
+		return string(escaped), start + 2, fmt.Errorf("NUL character is not allowed in string literals")
+	case '0':
+		return string(escaped), start + 2, fmt.Errorf(`NUL escape \0 is not supported`)
+	default:
+		return string(escaped), start + 2, fmt.Errorf(`unsupported escape sequence \%c`, escaped)
+	}
+}
+
+func decodeFixedHexValue(raw []rune, start, digits int) (uint32, int, error) {
+	prefix := raw[start+1]
+	digitStart := start + 2
+	end := digitStart + digits
+	if end > len(raw) {
+		return 0, len(raw), fmt.Errorf(`invalid \%c escape: expected exactly %d hexadecimal digits`, prefix, digits)
+	}
+
+	var value uint32
+	for i := digitStart; i < end; i++ {
+		digit, ok := hexDigitValue(raw[i])
+		if !ok {
+			if raw[i] == 0 {
+				return 0, i, fmt.Errorf("NUL character is not allowed in string literals")
+			}
+			return 0, i, fmt.Errorf(`invalid \%c escape: expected exactly %d hexadecimal digits`, prefix, digits)
+		}
+		value = value<<4 | uint32(digit)
+	}
+	return value, end, nil
+}
+
+func decodeByteEscape(raw []rune, start int) (string, int, error) {
+	value, end, err := decodeFixedHexValue(raw, start, 2)
+	if err != nil {
+		return "x", end, err
+	}
+	escape := string(raw[start:end])
+	if value == 0 {
+		return "x", end, fmt.Errorf("NUL escape %s is not supported", escape)
+	}
+	return string([]byte{byte(value)}), end, nil
+}
+
+func decodeUnicodeEscape(raw []rune, start, digits int) (string, int, error) {
+	value, end, err := decodeFixedHexValue(raw, start, digits)
+	if err != nil {
+		return string(raw[start+1]), end, err
+	}
+	escape := string(raw[start:end])
+	if value == 0 {
+		return string(raw[start+1]), end, fmt.Errorf("NUL escape %s is not supported", escape)
+	}
+	if value > 0x10ffff {
+		return string(raw[start+1]), end, fmt.Errorf("invalid Unicode escape %s: code point exceeds U+10FFFF", escape)
+	}
+	if 0xd800 <= value && value <= 0xdfff {
+		return string(raw[start+1]), end, fmt.Errorf("invalid Unicode escape %s: surrogate code points are not supported", escape)
+	}
+	return string(rune(value)), end, nil
+}
+
+// DecodeStringLiteral converts lexer-validated raw string contents to their
+// runtime value.
+func DecodeStringLiteral(raw string) string {
+	runes := []rune(raw)
+	var out strings.Builder
+	for i := 0; i < len(runes); {
+		if runes[i] != '\\' {
+			out.WriteRune(runes[i])
+			i++
+			continue
+		}
+
+		value, next, _ := DecodeStringEscape(runes, i)
+		out.WriteString(value)
+		i = next
+	}
 	return out.String()
+}
+
+func hexDigitValue(ch rune) (byte, bool) {
+	switch {
+	case '0' <= ch && ch <= '9':
+		return byte(ch - '0'), true
+	case 'a' <= ch && ch <= 'f':
+		return byte(ch-'a') + 10, true
+	case 'A' <= ch && ch <= 'F':
+		return byte(ch-'A') + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func (l *Lexer) peekRune() rune {

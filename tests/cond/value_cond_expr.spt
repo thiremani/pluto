@@ -467,12 +467,6 @@ heapCmpCell = [MkStr(a) > "a"]
 "HeapCmpCell: -heapCmpCell"
 heapCmpFalse = [MkStr(b) > "zzz"]
 "HeapCmpFalse: -heapCmpFalse"
-# Unquoted string-array formatting renders both [] and [""] as []. Reading
-# index 0 into a sentinel proves this is one zero-filled cell, not an empty array.
-heapCmpFalseCell = "missing"
-"HeapCmpFalseCellBefore: -heapCmpFalseCell"
-heapCmpFalseCell = heapCmpFalse[0]
-"HeapCmpFalseCell: -heapCmpFalseCell"
 heapCmpMulti = [MkStr(a) > "a"  MkStr(b) > "a"]
 "HeapCmpMulti: -heapCmpMulti"
 

@@ -1,8 +1,9 @@
 package lexer
 
 import (
-	"github.com/thiremani/pluto/token"
 	"testing"
+
+	"github.com/thiremani/pluto/token"
 )
 
 type Test struct {
@@ -287,11 +288,147 @@ x = .5
 }
 
 func TestString(t *testing.T) {
-	input := `"hello\nworld"`
+	const raw = `quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f`
+	input := `"` + raw + `"`
 	tests := []Test{
-		{token.STRING, "hello\nworld", "", 1, 1},
+		{token.STRING, raw, "", 1, 1},
 	}
 	checkInput(t, input, tests)
+
+	decoded := DecodeStringLiteral(raw)
+	want := "quote:\" slash:\\ newline:\n tab:\t carriage:\r backspace:\b formfeed:\f escape:\x1b delete:\x7f"
+	if decoded != want {
+		t.Fatalf("decoded string = %q, want %q", decoded, want)
+	}
+}
+
+func TestStringLiteralIsRaw(t *testing.T) {
+	const raw = `\x2dname -s\x25d \-other \%q`
+	l := New("", `"`+raw+`"`)
+	tok, err := l.NextToken()
+	if err != nil {
+		t.Fatalf("unexpected lexer error: %v", err)
+	}
+	if tok.Literal != raw {
+		t.Fatalf("literal = %q", tok.Literal)
+	}
+	decoded := DecodeStringLiteral(tok.Literal)
+	if decoded != "-name -s%d -other %q" {
+		t.Fatalf("decoded string = %q", decoded)
+	}
+}
+
+func TestFixedWidthStringEscapes(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{`\x01`, string(rune(0x01))},
+		{`\x7f`, string(rune(0x7f))},
+		{`\x80`, string([]byte{0x80})},
+		{`\xff`, string([]byte{0xff})},
+		{`\xc3\xbf`, "ÿ"},
+		{`\u0001`, string(rune(0x0001))},
+		{`\u00ff`, "ÿ"},
+		{`\ud7ff`, string(rune(0xd7ff))},
+		{`\ue000`, string(rune(0xe000))},
+		{`\uffff`, string(rune(0xffff))},
+		{`\U00010000`, string(rune(0x10000))},
+		{`\U0010ffff`, string(rune(0x10ffff))},
+		{`\x414`, "A4"},
+		{`\u23456`, string(rune(0x2345)) + "6"},
+		{`\U0001f680f`, "🚀f"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.raw, func(t *testing.T) {
+			l := New("", `"`+tc.raw+`"`)
+			tok, err := l.NextToken()
+			if err != nil {
+				t.Fatalf("unexpected lexer error: %v", err)
+			}
+			if got := DecodeStringLiteral(tok.Literal); got != tc.want {
+				t.Fatalf("decoded string = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidFixedWidthStringEscapes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"\x00"`, `NUL escape \x00 is not supported`},
+		{`"\xZG"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\x5"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\x"`, `invalid \x escape: expected exactly 2 hexadecimal digits`},
+		{`"\u0000"`, `NUL escape \u0000 is not supported`},
+		{`"\ud800"`, `invalid Unicode escape \ud800: surrogate code points are not supported`},
+		{`"\udfff"`, `invalid Unicode escape \udfff: surrogate code points are not supported`},
+		{`"\u12xz"`, `invalid \u escape: expected exactly 4 hexadecimal digits`},
+		{`"\u123"`, `invalid \u escape: expected exactly 4 hexadecimal digits`},
+		{`"\U00000000"`, `NUL escape \U00000000 is not supported`},
+		{`"\U0000d800"`, `invalid Unicode escape \U0000d800: surrogate code points are not supported`},
+		{`"\U00110000"`, `invalid Unicode escape \U00110000: code point exceeds U+10FFFF`},
+		{`"\U0001f68"`, `invalid \U escape: expected exactly 8 hexadecimal digits`},
+		{`"\U0001f68z"`, `invalid \U escape: expected exactly 8 hexadecimal digits`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			l := New("", tc.input)
+			_, err := l.NextToken()
+			if err == nil || err.Msg != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidStringEscapes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`"\0"`, `NUL escape \0 is not supported`},
+		{`"\00"`, `NUL escape \0 is not supported`},
+		{`"\q"`, `unsupported escape sequence \q`},
+		{`"\a"`, `unsupported escape sequence \a`},
+		{`"trailing\`, `incomplete escape sequence`},
+		{`"escaped quote\"`, `unterminated string literal`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			l := New("", tc.input)
+			_, err := l.NextToken()
+			if err == nil || err.Msg != tc.want {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestNULCharacterIsRejected(t *testing.T) {
+	t.Run("String", func(t *testing.T) {
+		l := New("", "\"a\x00b\"")
+		_, err := l.NextToken()
+		if err == nil || err.Msg != "NUL character is not allowed in string literals" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("Source", func(t *testing.T) {
+		l := New("", "x \x00 y")
+		if _, err := l.NextToken(); err != nil {
+			t.Fatalf("unexpected identifier error: %v", err)
+		}
+		_, err := l.NextToken()
+		if err == nil || err.Msg != "NUL character is not allowed in source" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestUnicodeIdentifiers(t *testing.T) {

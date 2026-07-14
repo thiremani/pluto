@@ -19,9 +19,17 @@ two = 2
 "Floats: -z%4.2f -z%+.0e -a%E"
 "Width: -x%5d"
 "Percent: -x%%"
+"Percentage text: -x\% complete"
+"Separated percent: -x %"
+n = 30
+"Value: -n%%(5)d."
+"Profit is -x%%(Higher than last year"
+"Profit is -x%% (Higher than last year)"
+"Space sign:-x% d|-z% .2f"
 "Multiple percentage: % -z%4.2f% %"
 "Variable width -x%(-six)d"
 "Variable precision -z%8.(-two)f -a%(-six).2f and -z%(-six).(-two)f%"
+"Unresolved marker: -missing%(-six)d"
 
 var = 22
 "Var is -var%d, x is", x, "Now y is -y%8d and two is", two
@@ -35,6 +43,60 @@ msg, eager
 name = "world"
 heapMsg = "hello -name"
 heapMsg
+"quoted heap: -heapMsg%q"
+
+quoteText = "hello \"world\"\\path\nnext\tcol"
+"quoted static: -quoteText%q"
+quotePrecision = 2
+"quoted precision: -quoteText%.2q"
+"quoted dynamic precision: -quoteText%.(-quotePrecision)q"
+"quoted width precision: |-quoteText%8.2q|"
+quotedStored = "-quoteText%.2q"
+"quoted stored precision: -quotedStored"
+quoteEscaped = "a\"b"
+"quoted escaped precision: -quoteEscaped%.2q"
+quoteUnicode = "πx"
+"quoted unicode split byte precision: -quoteUnicode%.1q"
+"quoted unicode byte precision: -quoteUnicode%.2q"
+
+hexText = "πx"
+"string hex: -hexText%x -hexText%X -hexText%#X"
+"string hex byte precision: -hexText%.1x -hexText%.2x"
+hexPrecision = 2
+"string hex dynamic precision: -hexText%.(-hexPrecision)X"
+"string hex alternate width: |-hexText%#10x|"
+"string hex spaced: -hexText% x"
+"string hex spaced alternate: -hexText%# x"
+emptyHex = ""
+"string hex empty width: |-emptyHex%#5x|"
+
+markerName = 99
+literalMarker = "\-markerName"
+hexLiteralMarker = "\x2dmarkerName"
+"literal markers: -literalMarker -hexLiteralMarker; value: -markerName"
+unicodeLiteralMarker = "\u002dmarkerName"
+wideUnicodeLiteralMarker = "\U0000002dmarkerName"
+"unicode literal markers: -unicodeLiteralMarker -wideUnicodeLiteralMarker"
+markerPrefix = 7
+markerPrefixTail = 88
+escapedMarkerStart = "-\x6darkerName"
+escapedMarkerTail = "-markerPrefix\x54ail"
+"escaped marker parts: -escapedMarkerStart -escapedMarkerTail; full: -markerPrefixTail"
+specifierText = "hello"
+"escaped specifier: -specifierText\x25q"
+"unicode escaped specifier: -specifierText\u0025q -specifierText\U00000025q"
+"quoted marker: -literalMarker%q"
+
+rawByte = "\xff"
+utf8ByteSequence = "\xc3\xbf"
+unicodeCodePoint = "\u00ff"
+"byte escape: -rawByte%x -rawByte%q"
+"UTF-8 byte sequence: -utf8ByteSequence%x -utf8ByteSequence%q"
+"Unicode code point: -unicodeCodePoint%x -unicodeCodePoint%q"
+rawByteArray = [rawByte utf8ByteSequence]
+"byte escape array: -rawByteArray"
+unicodeEscapes = "\u00ff \u03c0 \U0001f680"
+"unicode escapes: -unicodeEscapes"
 
 # Heap string with format specifiers
 num = 42

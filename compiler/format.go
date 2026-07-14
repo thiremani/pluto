@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/thiremani/pluto/lexer"
@@ -11,13 +12,15 @@ import (
 
 func formatSpecifierEnd(ch rune) bool {
 	switch ch {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'c', 's', 'p', 'n', '%':
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A', 'c', 's', 'q', 'p', 'n', '%':
 		return true
 	}
 	return false
 }
 
-var specToKind = map[rune]Kind{
+// directSpecToKind covers conversions lowered by the generic value path.
+// Conversions requiring pointer, allocation, or vararg adaptation are handled separately.
+var directSpecToKind = map[rune]Kind{
 	'd': IntKind,
 	'i': IntKind,
 	'u': IntKind,
@@ -31,10 +34,8 @@ var specToKind = map[rune]Kind{
 	'g': FloatKind,
 	'G': FloatKind,
 	'a': FloatKind,
-	'c': IntKind, // maybe character code
+	'A': FloatKind,
 	's': StrKind,
-	'p': PtrKind, // pointer kind
-	'n': IntKind, // byte‐count pointer
 }
 
 // defaultSpecifier returns the printf conversion specifier for a given type.
@@ -62,53 +63,276 @@ func defaultSpecifier(t Type) (string, error) {
 	}
 }
 
-// parseSpecifier assumes runes[start] == '%'
-// for the * option the identifers are of the form (-identifier), enclosed wihin parentheses
-// these are then returned as specIds. (-identifier) is replaced with *
-// endIndex is one index after specifier ends, or after an invalid rune
-func (c *Compiler) parseSpecifier(tok token.Token, value string, runes []rune, start int) (specSyms []*Symbol, spec string, endIndex int, err *token.CompileError) {
-	// Read until we encounter a conversion specifier end char (like d, f, etc.)
-	err = nil
-	specRunes := []rune{runes[start]}
-	for it := start + 1; it < len(runes); it++ {
-		if runes[it] == '*' {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Using * not allowed in format specifier (after the %% char). Instead use (-var) where var is an integer variable. Error str: %s", value),
-			}
-			c.Errors = append(c.Errors, err)
-			it += 1
-			return
-		}
-
-		if specIdAhead(runes, it) {
-			// cfg already checks that the ')' is after the identifier
-			// and identifier is in the symbol table
-			specId, end := parseIdentifier(runes, it+2)
-			specSym, _ := c.getIdSym(specId)
-			specSyms = append(specSyms, specSym)
-			specRunes = append(specRunes, '*')
-			// it must go past the )
-			// it does so in the loop it++
-			it = end
-			continue
-		}
-
-		specRunes = append(specRunes, runes[it])
-		if formatSpecifierEnd(runes[it]) {
-			endIndex = it + 1
-			spec = string(specRunes)
-			return
+func writeFormatText(builder *strings.Builder, text string) {
+	for i := 0; i < len(text); i++ {
+		builder.WriteByte(text[i])
+		if text[i] == '%' {
+			builder.WriteByte('%')
 		}
 	}
+}
 
-	err = &token.CompileError{
+func formatSpecifierFlag(ch rune) bool {
+	switch ch {
+	case '-', '+', ' ', '#', '0':
+		return true
+	}
+	return false
+}
+
+func formatSpecifierLengthStart(ch rune) bool {
+	return strings.ContainsRune("lhLjzt", ch)
+}
+
+func formatSpecifierError(tok token.Token, value, msg string) *token.CompileError {
+	return &token.CompileError{
 		Token: tok,
-		Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier '%s' is incomplete. Str: %s", string(specRunes), value),
+		Msg:   fmt.Sprintf("Invalid format specifier string: %s. Str: %s", msg, value),
 	}
-	c.Errors = append(c.Errors, err)
-	endIndex = len(runes)
-	return
+}
+
+func validateSpecifierModifiers(tok token.Token, value, flags, length string, hasWidth, hasPrecision bool, conversion rune) *token.CompileError {
+	// Keep modifiers within Pluto's documented, portable printf subset.
+	allowedFlags := ""
+	switch conversion {
+	case 'd', 'i':
+		allowedFlags = "-+ 0"
+	case 'u':
+		allowedFlags = "-0"
+	case 'o':
+		allowedFlags = "-#0"
+	case 'x', 'X':
+		allowedFlags = "-# 0"
+	case 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A':
+		allowedFlags = "-+ #0"
+	case 'c', 's', 'q', 'p':
+		allowedFlags = "-"
+	}
+
+	for _, flag := range flags {
+		if !strings.ContainsRune(allowedFlags, flag) {
+			return formatSpecifierError(tok, value, fmt.Sprintf("Format flag %q is not supported for %%%c", flag, conversion))
+		}
+	}
+
+	if length != "" && !strings.ContainsRune("diuoxXn", conversion) {
+		return formatSpecifierError(tok, value, fmt.Sprintf("Length modifier %q is not supported for %%%c", length, conversion))
+	}
+	if hasWidth && strings.ContainsRune("n%", conversion) {
+		return formatSpecifierError(tok, value, fmt.Sprintf("Width is not supported for %%%c", conversion))
+	}
+	if hasPrecision && strings.ContainsRune("cpn%", conversion) {
+		return formatSpecifierError(tok, value, fmt.Sprintf("Precision is not supported for %%%c", conversion))
+	}
+	return nil
+}
+
+type specifierPrecision struct {
+	present     bool
+	dynamic     bool
+	symbolIndex int
+	literal     string
+	start       int
+	end         int
+}
+
+func (p specifierPrecision) removeFrom(spec string) string {
+	if !p.present {
+		return spec
+	}
+	return spec[:p.start] + spec[p.end:]
+}
+
+type parsedSpecifier struct {
+	ids       []string
+	text      string
+	end       int
+	flags     string
+	length    string
+	precision specifierPrecision
+}
+
+type specifierParser struct {
+	tok       token.Token
+	value     string
+	runes     []rune
+	index     int
+	specIDs   []string
+	spec      strings.Builder
+	flags     strings.Builder
+	length    string
+	hasWidth  bool
+	precision specifierPrecision
+}
+
+func newSpecifierParser(tok token.Token, value string, runes []rune, start int) *specifierParser {
+	p := &specifierParser{tok: tok, value: value, runes: runes, index: start + 1}
+	p.spec.WriteRune('%')
+	return p
+}
+
+func (p *specifierParser) parseFlags() {
+	for p.index < len(p.runes) && formatSpecifierFlag(p.runes[p.index]) {
+		p.flags.WriteRune(p.runes[p.index])
+		p.spec.WriteRune(p.runes[p.index])
+		p.index++
+	}
+}
+
+func (p *specifierParser) parseDynamic() (bool, *token.CompileError) {
+	if p.index+2 >= len(p.runes) || p.runes[p.index+1] != '-' || !lexer.IsLetter(p.runes[p.index+2]) {
+		return false, nil
+	}
+
+	specID, next := parseIdentifier(p.runes, p.index+2)
+	if next >= len(p.runes) || p.runes[next] != ')' {
+		p.index = next
+		return false, &token.CompileError{
+			Token: p.tok,
+			Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specID, p.value),
+		}
+	}
+	p.specIDs = append(p.specIDs, specID)
+	p.spec.WriteRune('*')
+	p.index = next + 1
+	return true, nil
+}
+
+func (p *specifierParser) parseWidth() *token.CompileError {
+	if p.index >= len(p.runes) {
+		return nil
+	}
+	if p.runes[p.index] == '*' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "Direct * width or precision is not supported; use (-name) with an I64 variable")
+	}
+	if '0' <= p.runes[p.index] && p.runes[p.index] <= '9' {
+		p.hasWidth = true
+		for p.index < len(p.runes) && '0' <= p.runes[p.index] && p.runes[p.index] <= '9' {
+			p.spec.WriteRune(p.runes[p.index])
+			p.index++
+		}
+		return nil
+	}
+	if p.runes[p.index] == '(' {
+		matched, err := p.parseDynamic()
+		p.hasWidth = matched
+		return err
+	}
+	return nil
+}
+
+func (p *specifierParser) parsePrecision() *token.CompileError {
+	if p.index >= len(p.runes) || p.runes[p.index] != '.' {
+		return nil
+	}
+	p.precision.present = true
+	p.precision.start = p.spec.Len()
+	p.spec.WriteRune('.')
+	p.index++
+	if p.index < len(p.runes) && p.runes[p.index] == '*' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "Direct * width or precision is not supported; use (-name) with an I64 variable")
+	}
+	if p.index < len(p.runes) && p.runes[p.index] == '(' {
+		p.precision.symbolIndex = len(p.specIDs)
+		matched, err := p.parseDynamic()
+		p.precision.dynamic = matched
+		p.precision.end = p.spec.Len()
+		return err
+	}
+	literalStart := p.index
+	for p.index < len(p.runes) && '0' <= p.runes[p.index] && p.runes[p.index] <= '9' {
+		p.spec.WriteRune(p.runes[p.index])
+		p.index++
+	}
+	p.precision.literal = string(p.runes[literalStart:p.index])
+	if p.precision.literal == "" {
+		p.precision.literal = "0"
+	}
+	p.precision.end = p.spec.Len()
+	return nil
+}
+
+func (p *specifierParser) parseLength() *token.CompileError {
+	if p.index >= len(p.runes) {
+		return nil
+	}
+	if p.runes[p.index] == 'l' {
+		p.length = "l"
+		p.spec.WriteRune('l')
+		p.index++
+		if p.index < len(p.runes) && p.runes[p.index] == 'l' {
+			p.length = "ll"
+			p.spec.WriteRune('l')
+			p.index++
+		}
+		return nil
+	}
+	if !formatSpecifierLengthStart(p.runes[p.index]) {
+		return nil
+	}
+	length := p.runes[p.index]
+	p.index++
+	return formatSpecifierError(p.tok, p.value, fmt.Sprintf("Length modifier %q is not supported", length))
+}
+
+func (p *specifierParser) parseConversion() *token.CompileError {
+	if p.index >= len(p.runes) {
+		spec := p.spec.String()
+		msg := fmt.Sprintf("Format specifier %q is incomplete", spec)
+		if spec == "%" {
+			msg += `. Use \% or %% for a literal percent after a value`
+		}
+		return formatSpecifierError(p.tok, p.value, msg)
+	}
+	if p.runes[p.index] == '\\' {
+		return formatSpecifierError(p.tok, p.value, "Escape sequences cannot be used as format syntax")
+	}
+	conversion := p.runes[p.index]
+	if !formatSpecifierEnd(conversion) {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, fmt.Sprintf("Unexpected %q in format specifier %q", conversion, p.spec.String()))
+	}
+
+	p.spec.WriteRune(conversion)
+	p.index++
+	return validateSpecifierModifiers(p.tok, p.value, p.flags.String(), p.length, p.hasWidth, p.precision.present, conversion)
+}
+
+func (p *specifierParser) result() parsedSpecifier {
+	return parsedSpecifier{
+		ids:       p.specIDs,
+		text:      p.spec.String(),
+		end:       p.index,
+		flags:     p.flags.String(),
+		length:    p.length,
+		precision: p.precision,
+	}
+}
+
+// parseSpecifierSyntax parses a raw '%' attached to a resolved marker. Dynamic
+// width and precision identifiers use (-identifier), which is returned as '*'.
+func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int) (parsedSpecifier, *token.CompileError) {
+	if start+1 < len(runes) && runes[start+1] == '%' {
+		return parsedSpecifier{text: "%%", end: start + 2}, nil
+	}
+
+	p := newSpecifierParser(tok, value, runes, start)
+	p.parseFlags()
+	if err := p.parseWidth(); err != nil {
+		return p.result(), err
+	}
+	if err := p.parsePrecision(); err != nil {
+		return p.result(), err
+	}
+	if err := p.parseLength(); err != nil {
+		return p.result(), err
+	}
+	if err := p.parseConversion(); err != nil {
+		return p.result(), err
+	}
+	return p.result(), nil
 }
 
 // Assumes runes[start] is a valid start to the identifier (lexer.IsLetter)
@@ -123,162 +347,345 @@ func parseIdentifier(runes []rune, start int) (identifier string, end int) {
 	return
 }
 
-// parseMarker attempts to parse a marker starting at index i in runes.
-// marker should be of type -mainId%(-id1).(-id2).(-id3)d/f/...
-// It returns the parsed symbols from symbol table (using ids), the custom specifier (if any), and the new index.
-// If the main identifier is not in the symbol table, the bool markerSymValid is false
-// If subsequent identifiers within the specifier are not found in symbol table, it gives an error
-func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i int) (mainId string, syms []*Symbol, customSpec string, newIndex int, markerSymValid bool, err *token.CompileError) {
-	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start (isLetter).
-	markerSymValid = false
-	err = nil
-	specSyms := []*Symbol{}
-	var end int
-	var mainSym *Symbol
-	mainId, end = parseIdentifier(runes, i+1)
-	mainSym, markerSymValid = c.getIdSym(mainId)
-	if !markerSymValid {
-		return mainId, []*Symbol{}, "", end, false, nil
-	}
+type parsedMarker struct {
+	mainID       string
+	symbols      []*Symbol
+	specifier    parsedSpecifier
+	end          int
+	mainResolved bool
+}
 
-	if hasSpecifier(runes, end) {
-		if end+1 == len(runes) {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Invalid format specifier string: Format specifier is incomplete. Str: %s", value),
-			}
-			c.Errors = append(c.Errors, err)
-			newIndex = end + 1
-			return
+func undefinedSpecifierVariableError(tok token.Token, value, specID string) *token.CompileError {
+	return &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("Undefined variable %s within specifier. String Literal is %s", specID, value),
+	}
+}
+
+func (c *Compiler) resolveDynamicSpecifierSymbols(tok token.Token, value string, specIDs []string) ([]*Symbol, *token.CompileError) {
+	symbols := make([]*Symbol, 0, len(specIDs))
+	for _, specID := range specIDs {
+		specSym, found := c.getIdSym(specID)
+		if !found {
+			return nil, undefinedSpecifierVariableError(tok, value, specID)
 		}
-		specStart := end
-		specSyms, customSpec, end, err = c.parseSpecifier(tok, value, runes, specStart)
+		if !TypeEqual(specSym.Type, I64) {
+			return nil, &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("Format specifier variable %s must have type I64, got %s", specID, specSym.Type),
+			}
+		}
+		symbols = append(symbols, specSym)
+	}
+	return symbols, nil
+}
+
+// parseMarker resolves a marker and any attached custom specifier.
+func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i int) (parsedMarker, *token.CompileError) {
+	// Assumes runes[i] == '-' and that runes[i+1] is a valid identifier start (isLetter).
+	mainID, end := parseIdentifier(runes, i+1)
+	mainSym, found := c.getIdSym(mainID)
+	result := parsedMarker{
+		mainID:       mainID,
+		end:          end,
+		mainResolved: found,
+	}
+	if !found {
+		return result, nil
+	}
+	result.symbols = []*Symbol{mainSym}
+
+	if end >= len(runes) || runes[end] != '%' {
+		return result, nil
 	}
 
-	syms = append(syms, mainSym)
-	syms = append(syms, specSyms...)
-	newIndex = end
-	return
+	specStart := end
+	spec, parseErr := parseSpecifierSyntax(tok, value, runes, specStart)
+	result.end = spec.end
+	if parseErr != nil {
+		c.Errors = append(c.Errors, parseErr)
+		return result, parseErr
+	}
+
+	specSymbols, resolveErr := c.resolveDynamicSpecifierSymbols(tok, value, spec.ids)
+	if resolveErr != nil {
+		c.Errors = append(c.Errors, resolveErr)
+		return result, resolveErr
+	}
+	result.symbols = append(result.symbols, specSymbols...)
+	result.specifier = spec
+
+	return result, nil
 }
 
 func (c *Compiler) getIdSym(id string) (*Symbol, bool) {
 	return c.namedValueSymbol(id, id+"_load")
 }
 
-// assumes we have at least one identifier in ids. CustomSpec is printf specifier %...
-// if mainSym.Type does not match required type from specifier end, it returns a compileError and adds it to c.Errors
-func (c *Compiler) parseFormatting(tok token.Token, value string, mainId string, syms []*Symbol, customSpec string) (formattedStr string, valArgs []llvm.Value, toFree []llvm.Value, err *token.CompileError) {
-	var builder strings.Builder
-	mainSym := syms[0]
-	valArgs = []llvm.Value{}
-	toFree = []llvm.Value{}
-	// Use the custom specifier if provided; otherwise, use the default.
-	for _, specSym := range syms[1:] {
-		valArgs = append(valArgs, specSym.Val)
+func formatSpecifierTypeError(tok token.Token, specRune rune, mainID string, mainType Type) *token.CompileError {
+	return &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainID, mainType),
+	}
+}
+
+func (c *Compiler) formatCIntArg(sym *Symbol, name string) llvm.Value {
+	intType := sym.Type.(Int)
+	switch {
+	case intType.Width > 32:
+		return c.builder.CreateTrunc(sym.Val, c.Context.Int32Type(), name)
+	case intType.Width < 32:
+		return c.builder.CreateSExt(sym.Val, c.Context.Int32Type(), name)
+	default:
+		return sym.Val
+	}
+}
+
+type formattedMarker struct {
+	text   string
+	args   []llvm.Value
+	toFree []llvm.Value
+}
+
+func (c *Compiler) transformedStringPrecisionArg(tok token.Token, value string, precision specifierPrecision, syms []*Symbol) (*llvm.Value, *token.CompileError) {
+	if !precision.present {
+		return nil, nil
+	}
+	if precision.dynamic {
+		symbolIndex := precision.symbolIndex + 1
+		if symbolIndex >= len(syms) {
+			panic("internal: dynamic format precision symbol is missing")
+		}
+		limit := syms[symbolIndex].Val
+		return &limit, nil
 	}
 
-	// if customSpec is either "" or %% it must be written later anyway. %% must be written as is.
-	var spec string
-	var err1 error
+	limit, err := strconv.ParseUint(precision.literal, 10, 63)
+	if err != nil {
+		return nil, formatSpecifierError(tok, value, fmt.Sprintf("Precision %q exceeds the I64 range", precision.literal))
+	}
+	limitValue := llvm.ConstInt(c.Context.Int64Type(), limit, false)
+	return &limitValue, nil
+}
+
+func formatMarkerSpec(mainType Type, customSpec string) (string, rune, error) {
+	defaultSpec := ""
 	if customSpec == "" || customSpec == "%%" {
-		spec, err1 = defaultSpecifier(mainSym.Type)
-		if err1 != nil {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Error formatting string. String: %s. Err: %s", value, err),
-			}
-			c.Errors = append(c.Errors, err)
-			return
+		var err error
+		defaultSpec, err = defaultSpecifier(mainType)
+		if err != nil {
+			return "", 0, err
 		}
-		builder.WriteString(spec)
 	}
-	// customSpec %% is written here
-	// any other customSpec we replce %d -> %lld etc
-	customSpec = upgradeIntSpec(customSpec)
-	builder.WriteString(customSpec)
 
-	finalSpec := customSpec
-	if spec != "" {
-		finalSpec = spec
+	if mainType.Kind() == IntKind {
+		customSpec = upgradeIntSpec(customSpec)
 	}
-	specRune := rune(finalSpec[len(finalSpec)-1])
-	if specRune == 'p' {
-		mainSym, _ = c.getRawSymbol(mainId)
+	activeSpec := customSpec
+	if defaultSpec != "" {
+		activeSpec = defaultSpec
 	}
+	return defaultSpec + customSpec, rune(activeSpec[len(activeSpec)-1]), nil
+}
+
+func transformedStringSpecifier(t Type, customSpec string) bool {
+	if t.Kind() != StrKind || customSpec == "" {
+		return false
+	}
+	switch customSpec[len(customSpec)-1] {
+	case 'q', 'x', 'X':
+		return true
+	}
+	return false
+}
+
+func validateHexSpecifierType(tok token.Token, value string, mainType Type, conversion rune, spec parsedSpecifier) *token.CompileError {
+	if conversion != 'x' && conversion != 'X' {
+		return nil
+	}
+
+	allowedFlags := ""
+	switch mainType.Kind() {
+	case IntKind:
+		allowedFlags = "-#0"
+	case StrKind:
+		allowedFlags = "-# "
+		if spec.length != "" {
+			return formatSpecifierError(tok, value, fmt.Sprintf("Length modifier %q is not supported for Str %%%c", spec.length, conversion))
+		}
+	default:
+		return nil
+	}
+
+	for _, flag := range spec.flags {
+		if !strings.ContainsRune(allowedFlags, flag) {
+			return formatSpecifierError(tok, value, fmt.Sprintf("Format flag %q is not supported for %s %%%c", flag, mainType, conversion))
+		}
+	}
+	return nil
+}
+
+func rewriteTransformedStringSpecifier(spec, removedFlags string) string {
+	var result strings.Builder
+	result.WriteByte('%')
+	i := 1
+	for i < len(spec)-1 && formatSpecifierFlag(rune(spec[i])) {
+		if !strings.ContainsRune(removedFlags, rune(spec[i])) {
+			result.WriteByte(spec[i])
+		}
+		i++
+	}
+	result.WriteString(spec[i : len(spec)-1])
+	result.WriteByte('s')
+	return result.String()
+}
+
+func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool {
+	switch mainSym.Type.Kind() {
+	case FloatKind:
+		strPtr := c.floatStrArg(mainSym)
+		result.args = append(result.args, strPtr)
+		result.toFree = append(result.toFree, strPtr)
+	case RangeKind:
+		strPtr := c.rangeStrArg(mainSym)
+		result.args = append(result.args, strPtr)
+		result.toFree = append(result.toFree, strPtr)
+	case ArrayKind:
+		strPtr := c.arrayStrArg(mainSym)
+		result.args = append(result.args, strPtr)
+		result.toFree = append(result.toFree, strPtr)
+	case StructKind:
+		fmtStr, fmtArgs, fmtFree := c.structFormatArgs(mainSym)
+		result.text = fmtStr
+		result.args = append(result.args, fmtArgs...)
+		result.toFree = append(result.toFree, fmtFree...)
+	case ArrayRangeKind:
+		arrStr, rangeStr := c.arrayRangeStrArgs(mainSym)
+		result.text += "[%s]"
+		result.args = append(result.args, arrStr, rangeStr)
+		result.toFree = append(result.toFree, arrStr, rangeStr)
+	default:
+		return false
+	}
+	return true
+}
+
+func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, spec parsedSpecifier, specRune rune, byteLimit *llvm.Value, result *formattedMarker) (bool, *token.CompileError) {
 	mainType := mainSym.Type
-
-	formattedStr = builder.String()
-	if specRune == 'n' {
-		s := c.promoteToMemory(mainId)
-		valArgs = append(valArgs, s.Val)
-		return
+	switch specRune {
+	case 'n':
+		if !TypeEqual(mainType, I64) {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
+		}
+		s := c.promoteToMemory(mainID)
+		result.args = append(result.args, s.Val)
+		return true, nil
+	case 'q':
+		if mainType.Kind() != StrKind {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
+		}
+		var quoted llvm.Value
+		if byteLimit != nil {
+			quoted = c.quotedStrPrefixArg(mainSym, *byteLimit)
+		} else {
+			quoted = c.quotedStrArg(mainSym)
+		}
+		// Only a custom specifier can end in q; libc receives its width and alignment as %s.
+		result.text = result.text[:len(result.text)-1] + "s"
+		result.args = append(result.args, quoted)
+		result.toFree = append(result.toFree, quoted)
+		return true, nil
+	case 'x', 'X':
+		if mainType.Kind() != StrKind {
+			return false, nil
+		}
+		hex := c.hexStrArg(
+			mainSym,
+			byteLimit,
+			specRune == 'X',
+			strings.ContainsRune(spec.flags, '#'),
+			strings.ContainsRune(spec.flags, ' '),
+		)
+		// Hex encoding is complete before libc applies string width and alignment.
+		result.text = rewriteTransformedStringSpecifier(result.text, "# ")
+		result.args = append(result.args, hex)
+		result.toFree = append(result.toFree, hex)
+		return true, nil
+	case 's':
+		return c.formatAsString(mainSym, result), nil
+	case 'p':
+		// Normalize pointer output as lowercase alternate-form hex while preserving width.
+		rawSym, _ := c.getRawSymbol(mainID)
+		if rawSym.Type.Kind() != PtrKind {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, rawSym.Type)
+		}
+		ptrAsInt := c.builder.CreatePtrToInt(rawSym.Val, c.Context.Int64Type(), "ptr_as_i64")
+		result.text = "%#" + result.text[1:len(result.text)-1] + "llx"
+		result.args = append(result.args, ptrAsInt)
+		return true, nil
+	case 'c':
+		if mainType.Kind() != IntKind {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
+		}
+		result.args = append(result.args, c.formatCIntArg(mainSym, "format_char_i32"))
+		return true, nil
+	default:
+		return false, nil
 	}
+}
 
-	// If we're using %s, convert non-string types to char* via runtime helpers
-	if specRune == 's' {
-		switch mainType.Kind() {
-		case FloatKind:
-			strPtr := c.floatStrArg(mainSym)
-			valArgs = append(valArgs, strPtr)
-			toFree = append(toFree, strPtr)
-			return
-		case RangeKind:
-			strPtr := c.rangeStrArg(mainSym)
-			valArgs = append(valArgs, strPtr)
-			toFree = append(toFree, strPtr)
-			return
-		case ArrayKind:
-			strPtr := c.arrayStrArg(mainSym)
-			valArgs = append(valArgs, strPtr)
-			toFree = append(toFree, strPtr)
-			return
-		case StructKind:
-			fmtStr, fmtArgs, fmtFree := c.structFormatArgs(mainSym)
-			formattedStr = fmtStr
-			valArgs = append(valArgs, fmtArgs...)
-			toFree = append(toFree, fmtFree...)
-			return
-		case ArrayRangeKind:
-			arrStr, rangeStr := c.arrayRangeStrArgs(mainSym)
-			formattedStr = builder.String() + "[%s]"
-			valArgs = append(valArgs, arrStr, rangeStr)
-			toFree = append(toFree, arrStr, rangeStr)
-			return
+// parseFormatting lowers one resolved marker to compiler-owned printf text and
+// matching arguments. syms contains the main value followed by dynamic sizes.
+func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms []*Symbol, spec parsedSpecifier) (formattedMarker, *token.CompileError) {
+	mainSym := syms[0]
+	customSpec := spec.text
+	transformedPrecision := spec.precision.present && transformedStringSpecifier(mainSym.Type, customSpec)
+	var byteLimit *llvm.Value
+	if transformedPrecision {
+		customSpec = spec.precision.removeFrom(customSpec)
+		var precisionErr *token.CompileError
+		byteLimit, precisionErr = c.transformedStringPrecisionArg(tok, value, spec.precision, syms)
+		if precisionErr != nil {
+			c.Errors = append(c.Errors, precisionErr)
+			return formattedMarker{}, precisionErr
 		}
 	}
-
-	// Make %p consistent across platforms: print as 0x<lowercase-hex>
-	// by converting the pointer to an unsigned 64-bit integer and using %llx.
-	if specRune == 'p' {
-		// Validate type: %p requires a pointer.
-		if mainType.Kind() != PtrKind {
-			err = &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
-			}
-			c.Errors = append(c.Errors, err)
-			return
-		}
-		// Use the raw symbol to ensure we have the pointer, not a dereferenced value.
-		mainSym, _ = c.getRawSymbol(mainId)
-		// Cast pointer to i64 and format with 0x%llx
-		ptrAsInt := c.builder.CreatePtrToInt(mainSym.Val, c.Context.Int64Type(), "ptr_as_i64")
-		formattedStr = "0x%llx"
-		valArgs = append(valArgs, ptrAsInt)
-		return
-	}
-
-	if specToKind[specRune] != mainType.Kind() {
-		err = &token.CompileError{
+	text, specRune, buildErr := formatMarkerSpec(mainSym.Type, customSpec)
+	if buildErr != nil {
+		err := &token.CompileError{
 			Token: tok,
-			Msg:   fmt.Sprintf("Format specifier end %q is not correct for variable type. Variable identifier: %s. Variable type: %s", specRune, mainId, mainType),
+			Msg:   fmt.Sprintf("Error formatting string. String: %s. Err: %s", value, buildErr),
 		}
 		c.Errors = append(c.Errors, err)
-		return
+		return formattedMarker{}, err
+	}
+	if err := validateHexSpecifierType(tok, value, mainSym.Type, specRune, spec); err != nil {
+		c.Errors = append(c.Errors, err)
+		return formattedMarker{}, err
 	}
 
-	valArgs = append(valArgs, mainSym.Val)
-	return
+	result := formattedMarker{text: text}
+	for i, specSym := range syms[1:] {
+		if transformedPrecision && spec.precision.dynamic && i == spec.precision.symbolIndex {
+			continue
+		}
+		result.args = append(result.args, c.formatCIntArg(specSym, "format_size_i32"))
+	}
+	handled, err := c.formatSpecialValue(tok, mainID, mainSym, spec, specRune, byteLimit, &result)
+	if err != nil {
+		c.Errors = append(c.Errors, err)
+		return formattedMarker{}, err
+	}
+	if handled {
+		return result, nil
+	}
+	if directSpecToKind[specRune] != mainSym.Type.Kind() {
+		err := formatSpecifierTypeError(tok, specRune, mainID, mainSym.Type)
+		c.Errors = append(c.Errors, err)
+		return formattedMarker{}, err
+	}
+	result.args = append(result.args, mainSym.Val)
+	return result, nil
 }
 
 // formatString scans the string literal for markers of the form "-identifier".
@@ -293,59 +700,57 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 	var args []llvm.Value
 	var toFree []llvm.Value
 
-	// Convert the input to a slice of runes so we can properly iterate over Unicode characters.
+	// Marker syntax is recognized from raw source. Escapes decode directly to
+	// literal output and are never reconsidered as markers or specifiers.
 	runes := []rune(value)
 	i := 0
 	for i < len(runes) {
-		if !(maybeMarker(runes, i)) {
-			builder.WriteRune(runes[i])
-			if runes[i] == '%' {
-				// % is not after -var. so we allow lone %
-				// for printf we need to write it twice
-				builder.WriteRune(runes[i])
-			}
+		if runes[i] == '\\' {
+			decoded, next, _ := lexer.DecodeStringEscape(runes, i)
+			writeFormatText(&builder, decoded)
+			i = next
+			continue
+		}
+		if !maybeMarker(runes, i) {
+			writeFormatText(&builder, string(runes[i]))
 			i++
 			continue
 		}
 		// If we see a '-' and the next rune is a valid identifier start...
 		// Parse the marker.
-		mainId, syms, customSpec, newIndex, markerSymValid, err := c.parseMarker(tok, value, runes, i)
-		if !markerSymValid {
+		marker, err := c.parseMarker(tok, value, runes, i)
+		if !marker.mainResolved {
 			builder.WriteRune('-')
-			builder.WriteString(mainId)
-			i = newIndex
+			builder.WriteString(marker.mainID)
+			i = marker.end
 			continue
 		}
 		if err != nil {
 			return "", args, nil
 		}
-		formattedStr, idArgs, idToFree, err := c.parseFormatting(tok, value, mainId, syms, customSpec)
+		formatted, err := c.parseFormatting(tok, value, marker.mainID, marker.symbols, marker.specifier)
 		if err != nil {
 			return "", args, nil
 		}
-		builder.WriteString(formattedStr)
-		args = append(args, idArgs...)
-		toFree = append(toFree, idToFree...)
+		builder.WriteString(formatted.text)
+		args = append(args, formatted.args...)
+		toFree = append(toFree, formatted.toFree...)
 		// Advance past the marker.
-		i = newIndex
+		i = marker.end
 	}
 
 	st := builder.String()
 	return st, args, toFree
 }
 
-// upgradeIntSpec rewrites a single printf conversion specifier to include
-// the 64-bit length modifier "ll" for integer-like conversions when no
-// standard length modifier is already present. It preserves flags/width/
-// precision and positional parameters.
+// upgradeIntSpec normalizes integer-like conversions to Pluto's I64 ABI while
+// preserving flags, width, and precision.
 // Examples:
 //
 //	%d   -> %lld
 //	%*d  -> %*lld
 //	%-08d -> %-08lld
 //	%n   -> %lln
-//
-// Leaves existing length modifiers untouched: hh, h, l, ll, j, z, t.
 func upgradeIntSpec(spec string) string {
 	if len(spec) < 2 || spec[0] != '%' {
 		return spec
@@ -358,20 +763,13 @@ func upgradeIntSpec(spec string) string {
 		return spec
 	}
 	body := spec[1 : len(spec)-1]
-	// If already has "ll", leave as-is.
-	if strings.Contains(body, "ll") {
+	if strings.HasSuffix(body, "ll") {
 		return spec
 	}
-	// If other standard length modifiers are present, leave as-is.
-	if strings.Contains(body, "hh") || strings.ContainsAny(body, "hjzt") {
-		return spec
+	if strings.HasSuffix(body, "l") {
+		body = body[:len(body)-1]
 	}
-	// If single 'l' exists, upgrade to 'll' by adding one more 'l'.
-	if strings.Contains(body, "l") {
-		return spec[:len(spec)-1] + "l" + string(conv)
-	}
-	// No length modifier: insert "ll" immediately before the conversion rune.
-	return spec[:len(spec)-1] + "ll" + string(conv)
+	return "%" + body + "ll" + string(conv)
 }
 
 func maybeMarker(runes []rune, i int) bool {
@@ -379,17 +777,6 @@ func maybeMarker(runes []rune, i int) bool {
 		return true
 	}
 	return false
-}
-
-func hasSpecifier(runes []rune, i int) bool {
-	if i < len(runes) && runes[i] == '%' {
-		return true
-	}
-	return false
-}
-
-func specIdAhead(runes []rune, i int) bool {
-	return i+2 < len(runes) && runes[i] == '(' && runes[i+1] == '-' && lexer.IsLetter(runes[i+2])
 }
 
 // structFormatArgs builds a printf format string and args for a struct value.
@@ -426,22 +813,25 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 
 // hasValidMarkers checks if a format string contains any markers (-identifier)
 // where the main identifier is defined according to the provided isDefined callback.
-// This aligns with parseMarker/formatString semantics: a marker is only valid when
-// its main identifier exists. Specifier-only matches (e.g., "-undef%(-width)d" where
-// only width is defined) are not considered valid markers.
+// This aligns with parseMarker/formatString semantics: each marker is resolved
+// independently, including markers in text following an unresolved marker.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\\' {
+			_, next, _ := lexer.DecodeStringEscape(runes, i)
+			i = next - 1
+			continue
+		}
 		if !maybeMarker(runes, i) {
 			continue
 		}
 		// Parse the identifier after the '-'
-		mainId, end := parseIdentifier(runes, i+1)
+		mainId, _ := parseIdentifier(runes, i+1)
 		// Only the main identifier matters - aligns with parseMarker behavior
 		if isDefined(mainId) {
 			return true
 		}
-		i = end - 1 // -1 because loop will increment
 	}
 	return false
 }

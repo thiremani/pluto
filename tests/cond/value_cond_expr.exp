@@ -44,7 +44,7 @@ ScalarArrayLt: [0 0 2 2 2]
 MaskPosition: [1 0 5 0]
 MaskScalar: [4 8 0]
 MaskUnequalLen: [1 0]
-MaskHeapStr: [s3  s5]
+MaskHeapStr: ["s3" "" "s5"]
 IntTupleKeepOldBefore: 11 22
 IntTupleKeepOld: 5 22
 MixTupleKeepOldBefore: [9 9] 99
@@ -111,13 +111,11 @@ ScalarCmpCellTrue: [5]
 ScalarCmpCellFalse: [0]
 ScalarCmpMulti: [5 0]
 ScalarCmpFb: [-1]
-HeapCmpCell: [s5]
-HeapCmpFalse: []
-HeapCmpFalseCellBefore: missing
-re:HeapCmpFalseCell:\s*
-HeapCmpMulti: [s5 s1]
-HeapCondvalOrTrue: [s5]
-HeapCondvalOrFalse: [def]
+HeapCmpCell: ["s5"]
+HeapCmpFalse: [""]
+HeapCmpMulti: ["s5" "s1"]
+HeapCondvalOrTrue: ["s5"]
+HeapCondvalOrFalse: ["def"]
 HcCondTrue: 7
 HcCondFalse: 0
 HcBothSides: 7
@@ -131,7 +129,7 @@ OrGateHeap: 7
 OrGateRanged: [3 4]
 OrGateRangedAllFail: []
 HcCondCell: [7]
-HcCondAndValueCell: [s1]
+HcCondAndValueCell: ["s1"]
 HcRangedCond: [0 0 2]
 ArithGateTrue: 17
 ArithGateKeepBefore: 99
@@ -145,7 +143,7 @@ OrWrapAddFalse: -1
 OrWrapMulti: -1
 OrWrapHeapTrue: s5!
 OrWrapHeapFalse: def
-OrWrapHeapCell: [def def def def def def def s7! s8! s9!]
+OrWrapHeapCell: ["def" "def" "def" "def" "def" "def" "def" "s7!" "s8!" "s9!"]
 OrWrapRepeatedCond: [-1 -1 -1 9 16 25 36 49 -1 -1]
 OwPiecewise: [-10 -10 0 0 0 25 36 49 999 999]
 ChainGate: [9 16 25 36 49]

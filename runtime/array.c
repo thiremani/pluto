@@ -4,24 +4,15 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <limits.h>   /* INT_MAX, SIZE_MAX */
-#include <math.h>     /* isnan, isinf, signbit */
-
-#include "third_party/klib/kvec.h"
+#include <limits.h>   /* SIZE_MAX */
 
 #define PT_MAX(a,b) ((a)>(b)?(a):(b))
 
 /* ---------- helpers ---------- */
 
-/* Overflow-safe ensure-capacity for kvec.
-   Notes:
-   - kvec uses 'int' for n/m; clamp m <= INT_MAX
-   - avoid kv_push so we can report OOM explicitly (return -1)
-   - never overflow size computations (SIZE_MAX guards) */
-#define PT_DEF_ENSURE_CAP(NAME, T)                                       \
-static int NAME##_ensure_cap(void* vv, size_t add) {                     \
-    typedef kvec_t(T) kv_t;                                             \
-    kv_t* v = (kv_t*)vv;                                                \
+/* Overflow-safe capacity growth with explicit OOM reporting. */
+#define PT_DEF_ENSURE_CAP(NAME, T, VEC_T)                                \
+static int NAME##_ensure_cap(VEC_T* v, size_t add) {                     \
     /* add may be 0; we only grow */                                     \
     size_t n = v->n;                                                     \
     if (add > SIZE_MAX - n) return -1;                                   \
@@ -40,20 +31,19 @@ static int NAME##_ensure_cap(void* vv, size_t add) {                     \
     return 0;                                                            \
 }
 
-/* ========== Numeric vector generator (all types from vec_types.def) ========== */
+/* ========== Numeric vector generator (all types from array_types.def) ========== */
 
 #define PT_DEF_VEC_NUMERIC(SUF, T, NAME)                                 \
-struct NAME { kvec_t(T) v; };                                            \
-PT_DEF_ENSURE_CAP(SUF, T)                                                \
+typedef struct { size_t n, m; T* a; } SUF##_vec;                         \
+struct NAME { SUF##_vec v; };                                            \
+PT_DEF_ENSURE_CAP(SUF, T, SUF##_vec)                                     \
 NAME* arr_##SUF##_new(void){                                             \
     NAME* a = (NAME*)calloc(1, sizeof *a);                               \
-    if (!a) return NULL;                                                 \
-    kv_init(a->v);                                                       \
     return a;                                                            \
 }                                                                        \
 void arr_##SUF##_free(NAME* a){                                          \
     if (!a) return;                                                      \
-    kv_destroy(a->v);                                                    \
+    free(a->v.a);                                                        \
     free(a);                                                             \
 }                                                                        \
 NAME* arr_##SUF##_copy(const NAME* a){                                   \
@@ -118,8 +108,9 @@ T* arr_##SUF##_data(NAME* a){ return a ? a->v.a : NULL; }
 
 /* ========== String vector (owning char*) — bespoke ========== */
 
-struct PtArrayStr { kvec_t(char*) v; };
-PT_DEF_ENSURE_CAP(str, char*)
+typedef struct { size_t n, m; char** a; } PtStrVec;
+struct PtArrayStr { PtStrVec v; };
+PT_DEF_ENSURE_CAP(str, char*, PtStrVec)
 
 static void pt_str_free_range(PtArrayStr* a, size_t begin, size_t end){
     /* frees [begin, end) */
@@ -131,15 +122,13 @@ static void pt_str_free_range(PtArrayStr* a, size_t begin, size_t end){
 
 PtArrayStr* arr_str_new(void){
     PtArrayStr* a = (PtArrayStr*)calloc(1, sizeof *a);
-    if (!a) return NULL;
-    kv_init(a->v);
     return a;
 }
 
 void arr_str_free(PtArrayStr* a){
     if (!a) return;
     pt_str_free_range(a, 0, (size_t)a->v.n);
-    kv_destroy(a->v);
+    free(a->v.a);
     free(a);
 }
 
@@ -341,10 +330,10 @@ const char* arr_str_str(const PtArrayStr* a) {
     size_t n = arr_str_len(a);
     for (size_t i = 0; i < n; ++i) {
         if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        char* s = arr_str_get(a, i);  // owned copy
-        const char* to_print = s ? s : "";
-        int ok = strbuf_printf(&sb, "%s", to_print);
-        free(s);  // free the copy
+        char* quoted = str_quote(arr_str_borrow(a, i));
+        if (!quoted) { free(sb.data); return NULL; }
+        int ok = strbuf_printf(&sb, "%s", quoted);
+        free(quoted);
         if (ok < 0) { free(sb.data); return NULL; }
     }
     if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }

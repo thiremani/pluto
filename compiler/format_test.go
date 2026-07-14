@@ -7,9 +7,58 @@ import (
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/token"
 
 	"tinygo.org/x/go-llvm"
 )
+
+func TestValidateSpecifierModifiers(t *testing.T) {
+	tests := []struct {
+		name         string
+		flags        string
+		length       string
+		hasWidth     bool
+		hasPrecision bool
+		conversion   rune
+		expectError  string
+	}{
+		{name: "SignedIntegerFlags", flags: "-+ 0", conversion: 'd'},
+		{name: "OctalSpaceFlag", flags: " ", conversion: 'o', expectError: `Format flag ' ' is not supported for %o`},
+		{name: "HexFlags", flags: "-#0", conversion: 'x'},
+		{name: "StringHexSpaceFlagSyntax", flags: "# ", conversion: 'x'},
+		{name: "FloatFlags", flags: "-+ #0", conversion: 'A'},
+		{name: "QuotedWidth", flags: "-", hasWidth: true, conversion: 'q'},
+		{name: "CountLength", length: "ll", conversion: 'n'},
+		{name: "RepeatedFlag", flags: "--", conversion: 'd'},
+		{name: "SignedAlternateForm", flags: "#", conversion: 'd', expectError: `Format flag '#' is not supported for %d`},
+		{name: "UnsignedSign", flags: "+", conversion: 'u', expectError: `Format flag '+' is not supported for %u`},
+		{name: "StringLength", length: "l", conversion: 's', expectError: `Length modifier "l" is not supported for %s`},
+		{name: "PointerWidth", hasWidth: true, conversion: 'p'},
+		{name: "PointerLeftAlign", flags: "-", hasWidth: true, conversion: 'p'},
+		{name: "PointerZeroPadding", flags: "0", hasWidth: true, conversion: 'p', expectError: `Format flag '0' is not supported for %p`},
+		{name: "PointerPrecision", hasPrecision: true, conversion: 'p', expectError: `Precision is not supported for %p`},
+		{name: "CharacterPrecision", hasPrecision: true, conversion: 'c', expectError: `Precision is not supported for %c`},
+		{name: "QuotedPrecision", hasPrecision: true, conversion: 'q'},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpecifierModifiers(token.Token{}, "value", tc.flags, tc.length, tc.hasWidth, tc.hasPrecision, tc.conversion)
+			if tc.expectError == "" {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error containing %q", tc.expectError)
+			}
+			if !strings.Contains(err.Msg, tc.expectError) {
+				t.Fatalf("expected error containing %q, got %q", tc.expectError, err.Msg)
+			}
+		})
+	}
+}
 
 func TestFormatStringErrors(t *testing.T) {
 	tests := []struct {
@@ -18,41 +67,113 @@ func TestFormatStringErrors(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "AsteiskNotAllowed",
+			name: "DirectWidthAsterisk",
 			input: `x = 10
 "Value: -x%*d"`,
-			expectError: "TestFormatStringErrors:2:1:Using * not allowed in format specifier (after the % char). Instead use (-var) where var is an integer variable. Error str: Value: -x%*d",
-		},
-		{
-			name: "MissingClosingParen",
-			input: `x = 2
-"Value: -x%(-var"`,
-			expectError: "Expected ) after the identifier var",
-		},
-		{
-			name: "InvalidFormatSpecifier",
-			input: `x = 4
-"x = -x%"`,
-			expectError: "Invalid format specifier string: Format specifier is incomplete",
-		},
-
-		{
-			name: "IdentifierWithinSpecifierNotFound",
-			input: `x = 10
-"Value: -x%(-var)d"`,
-			expectError: "Undefined variable var within specifier. String Literal is Value: -x%(-var)d",
+			expectError: "Invalid format specifier string: Direct * width or precision is not supported; use (-name) with an I64 variable",
 		},
 		{
 			name: "SpecifierDoesNotEnd",
 			input: `x = 10
 "Value: -x%#-"`,
-			expectError: "Invalid format specifier string: Format specifier '%#-' is incomplete",
+			expectError: `Invalid format specifier string: Format specifier "%#-" is incomplete`,
+		},
+		{
+			name: "TrailingPercent",
+			input: `x = 95
+"Progress: -x%"`,
+			expectError: `Invalid format specifier string: Format specifier "%" is incomplete. Use \% or %% for a literal percent after a value`,
+		},
+		{
+			name: "IdentifierWithinSpecifierNotFound",
+			input: `x = 10
+"Value: -x%(-width)d"`,
+			expectError: "Undefined variable width within specifier. String Literal is Value: -x%(-width)d",
+		},
+		{
+			name: "MissingDynamicWidthClosingParen",
+			input: `x = 10
+"Value: -x%(-width"`,
+			expectError: "Expected ) after the identifier width. Str: Value: -x%(-width",
+		},
+		{
+			name: "InvalidDynamicPrecisionGroup",
+			input: `x = 5
+"Value: -x%.(-1)d"`,
+			expectError: `Unexpected '(' in format specifier "%."`,
+		},
+		{
+			name: "DynamicSpecifierWrongType",
+			input: `x = 5
+width = 3.5
+"Value: -x%(-width)d"`,
+			expectError: "Format specifier variable width must have type I64, got F64",
+		},
+		{
+			name: "UnexpectedSpecifierRune",
+			input: `x = 5
+"Value: -x%0vd"`,
+			expectError: `Unexpected 'v' in format specifier "%0"`,
 		},
 		{
 			name: "UnsupportedSpecifier",
 			input: `x = 5
+"Value: -x%v"`,
+			expectError: `Unexpected 'v' in format specifier "%"`,
+		},
+		{
+			name: "ParenthesizedTextAfterPercent",
+			input: `n = 30
+"Value: -n%(5)d."`,
+			expectError: `Unexpected '(' in format specifier "%"`,
+		},
+		{
+			name: "EscapedSpecifierConversion",
+			input: `s = "hello"
+"Value: -s%\x71"`,
+			expectError: "Escape sequences cannot be used as format syntax",
+		},
+		{
+			name: "EscapedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%\x31q"`,
+			expectError: "Escape sequences cannot be used as format syntax",
+		},
+		{
+			name: "InvalidLengthForConversion",
+			input: `s = "hello"
+"Value: -s%ls"`,
+			expectError: `Length modifier "l" is not supported for %s`,
+		},
+		{
+			name: "UnsupportedLengthAtStart",
+			input: `x = 5
+"Value: -x%hd"`,
+			expectError: "Length modifier 'h' is not supported",
+		},
+		{
+			name: "QuotedSpecifierOnNonString",
+			input: `x = 5
 "Value: -x%q"`,
-			expectError: "Invalid format specifier string: Format specifier '%q' is incomplete. Str: Value: -x%q",
+			expectError: "Format specifier end 'q' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
+		{
+			name: "StringHexZeroPadding",
+			input: `s = "hello"
+"Value: -s%08x"`,
+			expectError: "Format flag '0' is not supported for Str %x",
+		},
+		{
+			name: "IntegerHexSpaceFlag",
+			input: `x = 42
+"Value: -x% x"`,
+			expectError: "Format flag ' ' is not supported for I64 %x",
+		},
+		{
+			name: "StringHexLength",
+			input: `s = "hello"
+"Value: -s%lx"`,
+			expectError: `Length modifier "l" is not supported for Str %x`,
 		},
 		{
 			name: "IntWithFloatSpecifier",
@@ -71,6 +192,12 @@ func TestFormatStringErrors(t *testing.T) {
 			input: `x = 42
 "Value: -x%p"`,
 			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: x. Variable type: I64",
+		},
+		{
+			name: "CountOnNonInteger",
+			input: `s = "hello"
+"Value: -s%n"`,
+			expectError: "Format specifier end 'n' is not correct for variable type. Variable identifier: s. Variable type: Str",
 		},
 	}
 
@@ -94,6 +221,9 @@ func TestFormatStringErrors(t *testing.T) {
 			if len(errs) == 0 {
 				t.Fatal("Expected a compile error, but got none.")
 			}
+			if len(errs) != 1 {
+				t.Fatalf("Expected one compile error, but got %d: %v", len(errs), errs)
+			}
 			if !strings.Contains(errs[0].Error(), tc.expectError) {
 				t.Errorf("Expected error message to contain %q, but got %q", tc.expectError, errs[0].Error())
 			}
@@ -106,6 +236,8 @@ func TestValidFormatString(t *testing.T) {
 		name         string
 		input        string
 		expectOutput string
+		expectIR     string
+		rejectIR     string
 	}{
 		{
 			name: "ValidFormatString",
@@ -125,10 +257,82 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "Value: %%d",
 		},
 		{
+			name: "LiteralTrailingPercent",
+			input: `x = 95
+"Progress: -x%%"`,
+			expectOutput: "Progress: %lld%%",
+		},
+		{
+			name: "PercentBeforeText",
+			input: `x = 95
+"Progress: -x%% complete"`,
+			expectOutput: "Progress: %lld%% complete",
+		},
+		{
+			name: "EscapedPercentBeforeText",
+			input: `x = 95
+"Progress: -x\% complete"`,
+			expectOutput: "Progress: %lld%% complete",
+		},
+		{
+			name: "SeparatedPercent",
+			input: `n = 95
+"Profit is -n %"`,
+			expectOutput: "Profit is %lld %%",
+		},
+		{
+			name: "PercentBeforeParentheticalText",
+			input: `n = 95
+"Profit is -n%%(Higher than last year"`,
+			expectOutput: "Profit is %lld%%(Higher than last year",
+		},
+		{
+			name: "ParenthesizedNumberIsText",
+			input: `n = 30
+"Value: -n%%(5)d."`,
+			expectOutput: "Value: %lld%%(5)d.",
+		},
+		{
+			name: "PercentBeforeSpacedParentheticalText",
+			input: `n = 95
+"Profit is -n%% (Higher than last year)"`,
+			expectOutput: "Profit is %lld%% (Higher than last year)",
+		},
+		{
+			name: "MarkerBeforeParentheticalText",
+			input: `x = 5
+"Value of x is -x(it's a new variable)"`,
+			expectOutput: "Value of x is %lld(it's a new variable)",
+		},
+		{
+			name: "MarkerBeforeSpacedParentheticalText",
+			input: `x = 5
+"Value of x is -x (it's a new variable)"`,
+			expectOutput: "Value of x is %lld (it's a new variable)",
+		},
+		{
+			name: "UnresolvedMarkerAllowsFollowingMarker",
+			input: `width = 5
+"Width: -width; literal: -missing%(-width)d"`,
+			expectOutput: "Width: %lld; literal: -missing%%(%lld)d",
+		},
+		{
 			name: "SpaceAfterVar",
 			input: `x = 5
 "x = -x %d"`,
 			expectOutput: "x = %lld %%d",
+		},
+		{
+			name: "SignedIntegerSpaceFlag",
+			input: `x = 5
+"x = -x% d"`,
+			expectOutput: "x = % lld",
+		},
+		{
+			name: "FloatSpaceFlag",
+			input: `x = 5.
+"x = -x% .2f"`,
+			expectOutput: "x = % .2f",
 		},
 		{
 			name: "PercentAfterSpecifier",
@@ -137,11 +341,25 @@ func TestValidFormatString(t *testing.T) {
 			expectOutput: "x = %4.2f%%",
 		},
 		{
+			name: "UpperHexFloat",
+			input: `x = 5.
+"x = -x%A"`,
+			expectOutput: "x = %A",
+		},
+		{
 			name: "SpecifierArg",
 			input: `x = 14
 digits = 4
 "x is -x%(-digits)d"`,
 			expectOutput: "x is %*lld",
+			expectIR:     "i32 4, i64 14",
+		},
+		{
+			name: "CharacterArg",
+			input: `x = 65
+"x is -x%c"`,
+			expectOutput: "x is %c",
+			expectIR:     "i32 65)",
 		},
 		{
 			name: "MixedBackToBack",
@@ -177,6 +395,154 @@ y = 3.2
 			input:        `"Value: -x%s"`,
 			expectOutput: "Value: -x%%s",
 		},
+		{
+			name: "EscapedMarker",
+			input: `x = 5
+"Literal: \x2dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "UnicodeEscapedMarker",
+			input: `x = 5
+"Literal: \u002dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "WideUnicodeEscapedMarker",
+			input: `x = 5
+"Literal: \U0000002dx and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "EscapedMarkerIdentifierStart",
+			input: `x = 5
+"Literal: -\x78 and value -x"`,
+			expectOutput: "Literal: -x and value %lld",
+		},
+		{
+			name: "EscapedMarkerIdentifierContinuation",
+			input: `x = 5
+xy = 6
+"Value: -x\x79; xy: -xy"`,
+			expectOutput: "Value: %lldy; xy: %lld",
+		},
+		{
+			name: "EscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\x25q"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "ByteEscapeInFormatText",
+			input: `x = 5
+"Byte: \xff, value: -x"`,
+			expectOutput: `Byte: \FF, value: %lld`,
+		},
+		{
+			name: "UnicodeEscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\u0025q"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "WideUnicodeEscapedSpecifier",
+			input: `s = "hello"
+"Value: -s\U00000025q"`,
+			expectOutput: "Value: %s%%q",
+		},
+		{
+			name: "QuotedSpecifierWidth",
+			input: `s = "hello"
+"Value: -s%10q"`,
+			expectOutput: "Value: %10s",
+			expectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "QuotedSpecifierDynamicWidth",
+			input: `s = "hello"
+width = 10
+"Value: -s%(-width)q"`,
+			expectOutput: "Value: %*s",
+			expectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "QuotedSpecifierPrecision",
+			input: `s = "hello"
+"Value: -s%.2q"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_quote_prefix",
+		},
+		{
+			name: "QuotedSpecifierDynamicPrecision",
+			input: `s = "hello"
+precision = 0
+"xx-precision%n"
+"Value: -s%.(-precision)q"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_quote_prefix",
+			rejectIR:     "quote_precision_i32",
+		},
+		{
+			name: "QuotedSpecifierWidthAndPrecision",
+			input: `s = "hello"
+width = 8
+precision = 2
+"Value: |-s%(-width).(-precision)q|"`,
+			expectOutput: "Value: |%*s|",
+			expectIR:     "call ptr @str_quote_prefix",
+		},
+		{
+			name: "StringSpecifierBytePrecision",
+			input: `s = "\u03c0x"
+"Value: -s%.1s"`,
+			expectOutput: "Value: %.1s",
+			rejectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "StringSpecifierDynamicWidth",
+			input: `s = "hello"
+width = 10
+"Value: -s%(-width)s"`,
+			expectOutput: "Value: %*s",
+			rejectIR:     "call ptr @str_quote",
+		},
+		{
+			name: "StringLowerHex",
+			input: `s = "\u03c0x"
+"Value: -s%x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringUpperHexAlternateWidth",
+			input: `s = "\u03c0x"
+"Value: |-s%#10X|"`,
+			expectOutput: "Value: |%10s|",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexSpacedAlternate",
+			input: `s = "\u03c0"
+"Value: -s%# x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexBytePrecision",
+			input: `s = "\u03c0x"
+"Value: -s%.1x"`,
+			expectOutput: "Value: %s",
+			expectIR:     "call ptr @str_hex",
+		},
+		{
+			name: "StringHexDynamicWidthAndPrecision",
+			input: `s = "\u03c0x"
+width = 8
+precision = 2
+"Value: |-s%(-width).(-precision)x|"`,
+			expectOutput: "Value: |%*s|",
+			expectIR:     "call ptr @str_hex",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,11 +555,32 @@ y = 3.2
 
 			funcCache := make(map[string]*Func)
 			sc := NewScriptCompiler(ctx, program, cc, funcCache, cc.Compiler.ExprCache)
-			sc.Compile()
+			if errs := sc.Compile(); len(errs) > 0 {
+				t.Fatalf("unexpected compile errors: %v", errs)
+			}
 			ir := sc.Compiler.GenerateIR()
 			if !strings.Contains(ir, tc.expectOutput) {
 				t.Errorf("IR does not contain string constant.\nIR: %s\n, expected to contain: %s\n", ir, tc.expectOutput)
 			}
+			if tc.expectIR != "" && !strings.Contains(ir, tc.expectIR) {
+				t.Errorf("IR does not contain %q.\nIR: %s", tc.expectIR, ir)
+			}
+			if tc.rejectIR != "" && strings.Contains(ir, tc.rejectIR) {
+				t.Errorf("IR unexpectedly contains %q.\nIR: %s", tc.rejectIR, ir)
+			}
 		})
+	}
+}
+
+func TestUnresolvedMarkerAllowsFollowingMarker(t *testing.T) {
+	value := `-missing%(-width)d`
+	widthOnly := func(name string) bool { return name == "width" }
+	if !hasValidMarkers(value, widthOnly) {
+		t.Fatal("a defined marker following an unresolved marker must still be recognized")
+	}
+
+	mainOnly := func(name string) bool { return name == "missing" }
+	if !hasValidMarkers(value, mainOnly) {
+		t.Fatal("defined main identifier should form a marker")
 	}
 }

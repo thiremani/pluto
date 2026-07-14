@@ -13,5 +13,10 @@ z = x * y
 x + y, x - y
 "Check the pointer op with vars x, y. The result is -x%p -y%p"
 
+pointerWidth = 24
+"Pointer width: |-x%24p|"
+"Pointer left: |-x%-24p|"
+"Pointer dynamic: |-x%(-pointerWidth)p|"
+
 "x is - x. This checks a space between marker (-) and variable does not print var value"
 "%"
