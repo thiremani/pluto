@@ -820,18 +820,9 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
 
-func (c *Compiler) arrayFormatArg(s *Symbol, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+func (c *Compiler) arrayFormatArg(s *Symbol, info ArrayInfo, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
 	if len(dynamicArgs) > 2 {
 		panic("internal: array element format has more than two dynamic arguments")
-	}
-
-	arr := s.Type.(Array)
-	if len(arr.ColTypes) != 1 {
-		panic("internal: arrayFormatArg supports only single-column vectors")
-	}
-	info, ok := ArrayInfos[arr.ColTypes[0].Kind()]
-	if !ok {
-		panic("internal: unsupported array element kind for formatting")
 	}
 
 	i32 := c.Context.Int32Type()

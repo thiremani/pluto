@@ -469,6 +469,10 @@ func (c *Compiler) formatArrayElements(tok token.Token, value string, mainSym *S
 	if !arrayElementSupportsSpecifier(elementType, conversion) {
 		return formattedMarker{}, false, nil
 	}
+	info, ok := ArrayInfos[elementType.Kind()]
+	if !ok {
+		return formattedMarker{}, false, nil
+	}
 	if err := validateHexSpecifierType(tok, value, elementType, conversion, spec); err != nil {
 		return formattedMarker{}, true, err
 	}
@@ -477,7 +481,7 @@ func (c *Compiler) formatArrayElements(tok token.Token, value string, mainSym *S
 	if elementType.Kind() == IntKind {
 		elementFormat = upgradeIntSpec(elementFormat)
 	}
-	formatted := c.arrayFormatArg(mainSym, elementFormat, syms[1:])
+	formatted := c.arrayFormatArg(mainSym, info, elementFormat, syms[1:])
 	return formattedMarker{
 		text:   "%s",
 		args:   []llvm.Value{formatted},
