@@ -460,10 +460,6 @@ func (c *Compiler) formatArrayElements(tok token.Token, value string, mainSym *S
 		return formattedMarker{}, false, nil
 	}
 	arr := mainSym.Type.(Array)
-	if len(arr.ColTypes) != 1 {
-		return formattedMarker{}, false, nil
-	}
-
 	elementType := arr.ColTypes[0]
 	conversion := rune(spec.text[len(spec.text)-1])
 	if !arrayElementSupportsSpecifier(elementType, conversion) {

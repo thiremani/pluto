@@ -805,10 +805,6 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 
 func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	arr := s.Type.(Array)
-	if len(arr.ColTypes) != 1 {
-		panic("internal: arrayStrArg supports only single-column vectors")
-	}
-
 	elemType := arr.ColTypes[0]
 	info, ok := ArrayInfos[elemType.Kind()]
 	if !ok {
