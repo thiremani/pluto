@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <limits.h>   /* SIZE_MAX */
-#include <math.h>     /* isnan, isinf, signbit */
 
 #define PT_MAX(a,b) ((a)>(b)?(a):(b))
 
@@ -32,7 +31,7 @@ static int NAME##_ensure_cap(VEC_T* v, size_t add) {                     \
     return 0;                                                            \
 }
 
-/* ========== Numeric vector generator (all types from vec_types.def) ========== */
+/* ========== Numeric vector generator (all types from array_types.def) ========== */
 
 #define PT_DEF_VEC_NUMERIC(SUF, T, NAME)                                 \
 typedef struct { size_t n, m; T* a; } SUF##_vec;                         \
