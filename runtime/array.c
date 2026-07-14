@@ -292,6 +292,37 @@ static int strbuf_printf(StrBuf* sb, const char* fmt, ...) {
     return 0;
 }
 
+#define PT_STRBUF_FORMAT_VALUE(SB, FMT, COUNT, FIRST, SECOND, VALUE) \
+    ((COUNT) == 0 ? strbuf_printf((SB), (FMT), (VALUE)) :            \
+     (COUNT) == 1 ? strbuf_printf((SB), (FMT), (FIRST), (VALUE)) :   \
+     (COUNT) == 2 ? strbuf_printf((SB), (FMT), (FIRST), (SECOND), (VALUE)) : -1)
+
+static int strbuf_format_i64(StrBuf* sb, const char* fmt, int dynamic_arg_count,
+                             int first_arg, int second_arg, int64_t value) {
+    if (!fmt || !*fmt) return -1;
+    char conversion = fmt[strlen(fmt) - 1];
+    if (conversion == 'c') {
+        return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg, (int)value);
+    }
+    if (conversion == 'u' || conversion == 'o' || conversion == 'x' || conversion == 'X') {
+        return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                                     (unsigned long long)value);
+    }
+    return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                                 (long long)value);
+}
+
+static int strbuf_format_f64(StrBuf* sb, const char* fmt, int dynamic_arg_count,
+                             int first_arg, int second_arg, double value) {
+    return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg, value);
+}
+
+static int strbuf_format_str(StrBuf* sb, const char* fmt, int dynamic_arg_count,
+                             int first_arg, int second_arg, const char* value) {
+    return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                                 value ? value : "");
+}
+
 const char* arr_i64_str(const PtArrayI64* a) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
@@ -339,3 +370,56 @@ const char* arr_str_str(const PtArrayStr* a) {
     if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
     return sb.data;
 }
+
+const char* arr_i64_format(const PtArrayI64* a, const char* fmt,
+                           int dynamic_arg_count, int first_arg, int second_arg) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    for (size_t i = 0; i < arr_i64_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        if (strbuf_format_i64(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                              arr_i64_get(a, i)) < 0) {
+            free(sb.data);
+            return NULL;
+        }
+    }
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
+}
+
+const char* arr_f64_format(const PtArrayF64* a, const char* fmt,
+                           int dynamic_arg_count, int first_arg, int second_arg) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    for (size_t i = 0; i < arr_f64_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        if (strbuf_format_f64(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                              arr_f64_get(a, i)) < 0) {
+            free(sb.data);
+            return NULL;
+        }
+    }
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
+}
+
+const char* arr_str_format(const PtArrayStr* a, const char* fmt,
+                           int dynamic_arg_count, int first_arg, int second_arg) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
+    for (size_t i = 0; i < arr_str_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
+        if (strbuf_format_str(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                              arr_str_borrow(a, i)) < 0) {
+            free(sb.data);
+            return NULL;
+        }
+    }
+    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+    return sb.data;
+}
+
+#undef PT_STRBUF_FORMAT_VALUE

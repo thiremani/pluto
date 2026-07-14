@@ -447,6 +447,44 @@ type formattedMarker struct {
 	toFree []llvm.Value
 }
 
+func arrayElementSupportsSpecifier(element Type, conversion rune) bool {
+	if conversion == 'c' {
+		return element.Kind() == IntKind
+	}
+	expectedKind, ok := directSpecToKind[conversion]
+	return ok && expectedKind == element.Kind()
+}
+
+func (c *Compiler) formatArrayElements(tok token.Token, value string, mainSym *Symbol, syms []*Symbol, spec parsedSpecifier) (formattedMarker, bool, *token.CompileError) {
+	if spec.text == "" || spec.text == "%%" {
+		return formattedMarker{}, false, nil
+	}
+	arr := mainSym.Type.(Array)
+	if len(arr.ColTypes) != 1 {
+		return formattedMarker{}, false, nil
+	}
+
+	elementType := arr.ColTypes[0]
+	conversion := rune(spec.text[len(spec.text)-1])
+	if !arrayElementSupportsSpecifier(elementType, conversion) {
+		return formattedMarker{}, false, nil
+	}
+	if err := validateHexSpecifierType(tok, value, elementType, conversion, spec); err != nil {
+		return formattedMarker{}, true, err
+	}
+
+	elementFormat := spec.text
+	if elementType.Kind() == IntKind {
+		elementFormat = upgradeIntSpec(elementFormat)
+	}
+	formatted := c.arrayFormatArg(mainSym, elementFormat, syms[1:])
+	return formattedMarker{
+		text:   "%s",
+		args:   []llvm.Value{formatted},
+		toFree: []llvm.Value{formatted},
+	}, true, nil
+}
+
 func (c *Compiler) transformedStringPrecisionArg(tok token.Token, value string, precision specifierPrecision, syms []*Symbol) (*llvm.Value, *token.CompileError) {
 	if !precision.present {
 		return nil, nil
@@ -638,6 +676,16 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 // matching arguments. syms contains the main value followed by dynamic sizes.
 func (c *Compiler) parseFormatting(tok token.Token, value, mainID string, syms []*Symbol, spec parsedSpecifier) (formattedMarker, *token.CompileError) {
 	mainSym := syms[0]
+	if mainSym.Type.Kind() == ArrayKind {
+		result, handled, err := c.formatArrayElements(tok, value, mainSym, syms, spec)
+		if err != nil {
+			c.Errors = append(c.Errors, err)
+			return formattedMarker{}, err
+		}
+		if handled {
+			return result, nil
+		}
+	}
 	customSpec := spec.text
 	transformedPrecision := spec.precision.present && transformedStringSpecifier(mainSym.Type, customSpec)
 	var byteLimit *llvm.Value

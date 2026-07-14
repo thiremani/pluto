@@ -4,6 +4,8 @@ arrInt =
 ]
 arrInt
 "arr is -arrInt"
+"arr int padded: |-arrInt%4d|"
+"arr int hex: -arrInt%#x"
 
 arrFloat =
 [
@@ -11,6 +13,10 @@ arrFloat =
 ]
 arrFloat
 "arr is -arrFloat"
+"arr float fixed: |-arrFloat%7.2f|"
+arrWidth = 7
+arrPrecision = 1
+"arr float dynamic: |-arrFloat%(-arrWidth).(-arrPrecision)f|"
 
 arrStr =
 [
@@ -18,6 +24,7 @@ arrStr =
 ]
 arrStr
 "arr is -arrStr"
+"arr str raw: -arrStr%s"
 
 arrStrQuoted = ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "tab\tstop" "carriage\rreturn" "back\bspace" "form\ffeed" "escape\x1b" "dash-word" "π"]
 "quoted arr is -arrStrQuoted"

@@ -204,6 +204,11 @@ words = ["hello" "hello world" ""]
 words  # ["hello" "hello world" ""]
 ```
 
+Compatible scalar format specifiers lift element-wise over arrays. For example,
+`"-ints%4d"` pads every integer, `"-values%7.2f"` formats every float, and
+`"-ints%#x"` prints every integer in hexadecimal. String arrays stay quoted by
+default; an explicit `"-words%s"` prints their elements without quotes.
+
 An unescaped `%` immediately after a resolved marker starts a strict format specifier. Use `%%` or
 `\%` for a literal percent after a value, so `"Progress: -n%%"` prints a value followed by `%`;
 `-n%05d` applies custom formatting and `-n% d` reserves a leading space for a positive number.
