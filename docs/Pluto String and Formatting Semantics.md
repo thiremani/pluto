@@ -118,6 +118,42 @@ Supported conversions are:
 | `n` | writable `I64` byte-count target |
 | `%` | default-formatted value followed by `%` |
 
+## Array element formatting
+
+A compatible scalar conversion attached to an array marker is applied to every
+element. The brackets and single-space element separators remain part of the
+array representation; width and precision apply independently to each element.
+
+```pluto
+ints = [1 20 255]
+values = [1.5 2.25]
+words = ["hello" "hello world"]
+
+"-ints%4d"       # [   1   20  255]
+"-ints%#x"       # [0x1 0x14 0xff]
+"-values%7.2f"   # [   1.50    2.25]
+"-words%s"       # [hello hello world]
+```
+
+The supported element conversions are:
+
+| Array element type | Conversions |
+| --- | --- |
+| `I64` | `d`, `i`, `u`, `o`, `x`, `X`, `c` |
+| `F64` | `f`, `F`, `e`, `E`, `g`, `G`, `a`, `A` |
+| `Str` | `s` |
+
+Static and dynamic width and precision use the normal grammar. For example,
+`"-values%(-width).(-precision)f"` applies the same runtime width and precision
+to every element. Without a custom conversion, array defaults are unchanged:
+string elements remain quoted and escaped. Explicit `%s` on a string array is
+intentionally unquoted and can therefore be ambiguous when elements contain
+spaces or are empty.
+
+Array `%c` follows C's conversion through `unsigned char`. Because Pluto strings
+cannot contain NUL, a resulting NUL is rendered as the visible text `\x00`;
+field width applies to that rendered representation.
+
 Only `l` and `ll` length modifiers are accepted, and only for integer
 conversions. Pluto normalizes integer formatting to its `I64` calling
 convention. Other C length modifiers are rejected.

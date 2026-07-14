@@ -16,6 +16,7 @@ type ArrayInfo struct {
 	GetName    string
 	LenName    string
 	StrName    string
+	FormatName string
 	PushName   string
 }
 
@@ -35,6 +36,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_I64_GET,
 		LenName:    ARR_I64_LEN,
 		StrName:    ARR_I64_STR,
+		FormatName: ARR_I64_FORMAT,
 		PushName:   ARR_I64_PUSH,
 	},
 	FloatKind: {
@@ -45,6 +47,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_F64_GET,
 		LenName:    ARR_F64_LEN,
 		StrName:    ARR_F64_STR,
+		FormatName: ARR_F64_FORMAT,
 		PushName:   ARR_F64_PUSH,
 	},
 	StrKind: {
@@ -55,6 +58,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		GetName:    ARR_STR_GET,
 		LenName:    ARR_STR_LEN,
 		StrName:    ARR_STR_STR,
+		FormatName: ARR_STR_FORMAT,
 		PushName:   ARR_STR_PUSH,
 	},
 }
@@ -801,10 +805,6 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 
 func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	arr := s.Type.(Array)
-	if len(arr.ColTypes) != 1 {
-		panic("internal: arrayStrArg supports only single-column vectors")
-	}
-
 	elemType := arr.ColTypes[0]
 	info, ok := ArrayInfos[elemType.Kind()]
 	if !ok {
@@ -814,6 +814,24 @@ func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	cast := c.ArrayBitCast(s.Val, info, "arr_cast")
 	fnTy, fn := c.GetCFunc(info.StrName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
+}
+
+func (c *Compiler) arrayFormatArg(s *Symbol, info ArrayInfo, elementFormat string, dynamicArgs []*Symbol) llvm.Value {
+	i32 := c.Context.Int32Type()
+	zero := llvm.ConstInt(i32, 0, false)
+	formatArgs := []llvm.Value{
+		c.ArrayBitCast(s.Val, info, "arr_format_cast"),
+		c.constCString(elementFormat),
+		llvm.ConstInt(i32, uint64(len(dynamicArgs)), false),
+		zero,
+		zero,
+	}
+	for i, dynamicArg := range dynamicArgs {
+		formatArgs[i+3] = c.formatCIntArg(dynamicArg, "array_format_size_i32")
+	}
+
+	fnTy, fn := c.GetCFunc(info.FormatName)
+	return c.builder.CreateCall(fnTy, fn, formatArgs, "arr_format")
 }
 
 func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr llvm.Value) {

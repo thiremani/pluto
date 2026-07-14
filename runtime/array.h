@@ -65,6 +65,15 @@ const char* arr_i64_str(const PtArrayI64* a);
 const char* arr_f64_str(const PtArrayF64* a);
 const char* arr_str_str(const PtArrayStr* a);
 
+/* Element formats are compiler-validated. Dynamic width and precision values
+   appear in format order and dynamic_arg_count is therefore 0, 1, or 2. */
+const char* arr_i64_format(const PtArrayI64* a, const char* fmt,
+                          int dynamic_arg_count, int first_arg, int second_arg);
+const char* arr_f64_format(const PtArrayF64* a, const char* fmt,
+                          int dynamic_arg_count, int first_arg, int second_arg);
+const char* arr_str_format(const PtArrayStr* a, const char* fmt,
+                          int dynamic_arg_count, int first_arg, int second_arg);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

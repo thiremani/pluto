@@ -26,6 +26,7 @@ const (
 	ARR_I64_GET    = "arr_i64_get"
 	ARR_I64_LEN    = "arr_i64_len"
 	ARR_I64_STR    = "arr_i64_str"
+	ARR_I64_FORMAT = "arr_i64_format"
 	ARR_I64_PUSH   = "arr_i64_push"
 	ARR_I64_FREE   = "arr_i64_free"
 	ARR_I64_COPY   = "arr_i64_copy"
@@ -37,6 +38,7 @@ const (
 	ARR_F64_GET    = "arr_f64_get"
 	ARR_F64_LEN    = "arr_f64_len"
 	ARR_F64_STR    = "arr_f64_str"
+	ARR_F64_FORMAT = "arr_f64_format"
 	ARR_F64_PUSH   = "arr_f64_push"
 	ARR_F64_FREE   = "arr_f64_free"
 	ARR_F64_COPY   = "arr_f64_copy"
@@ -50,6 +52,7 @@ const (
 	ARR_STR_BORROW   = "arr_str_borrow"
 	ARR_STR_LEN      = "arr_str_len"
 	ARR_STR_STR      = "arr_str_str"
+	ARR_STR_FORMAT   = "arr_str_format"
 	ARR_STR_PUSH     = "arr_str_push"
 	ARR_STR_PUSH_OWN = "arr_str_push_own"
 	ARR_STR_FREE     = "arr_str_free"
@@ -61,6 +64,7 @@ const (
 func (c *Compiler) GetFnType(name string) llvm.Type {
 	// Short helpers to reduce duplication
 	charPtr := llvm.PointerType(c.Context.Int8Type(), 0)
+	i32 := c.Context.Int32Type()
 	i64 := c.Context.Int64Type()
 	f64 := c.Context.DoubleType()
 
@@ -104,6 +108,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
+	case ARR_I64_FORMAT:
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), charPtr, i32, i32, i32}, false)
 	case ARR_I64_PUSH:
 		pt := c.NamedOpaquePtr("PtArrayI64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, i64}, false)
@@ -126,6 +132,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
+	case ARR_F64_FORMAT:
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), charPtr, i32, i32, i32}, false)
 	case ARR_F64_PUSH:
 		pt := c.NamedOpaquePtr("PtArrayF64")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, f64}, false)
@@ -150,6 +158,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
+	case ARR_STR_FORMAT:
+		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), charPtr, i32, i32, i32}, false)
 	case ARR_STR_PUSH, ARR_STR_PUSH_OWN:
 		pt := c.NamedOpaquePtr("PtArrayStr")
 		return llvm.FunctionType(c.Context.Int32Type(), []llvm.Type{pt, charPtr}, false)

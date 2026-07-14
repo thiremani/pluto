@@ -640,7 +640,7 @@ The statement plan can grow without becoming a machine IR:
 - field, index, column, and cell targets extend `set`
 - member calls remain solved expressions inside `eval` or `map`
 - source `break` and `continue` extend structured range actions
-- `return` can reuse outcome planning with a different final action
+- function-result transfer can reuse outcome planning with a different final action
 - conditional arrays extend domains, alignment, and yield masks
 - gated prints become a statement plan whose final action prints yielded
   outcomes instead of setting targets
