@@ -378,7 +378,6 @@ const char* arr_str_str(const PtArrayStr* a) {
 
 const char* arr_i64_format(const PtArrayI64* a, const char* fmt,
                            int dynamic_arg_count, int first_arg, int second_arg) {
-    if (!fmt || !*fmt) return NULL;
     size_t fmt_len = strlen(fmt);
     char conversion = fmt[fmt_len - 1];
     char* escaped_nul_fmt = NULL;
