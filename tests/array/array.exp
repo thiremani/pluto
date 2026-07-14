@@ -2,6 +2,7 @@
 arr is [1 2 3 4]
 arr int padded: |[   1    2    3    4]|
 arr int hex: [0x1 0x2 0x3 0x4]
+arr chars: |[    A  \x00     B  \x00]|
 [1.5 -2.5 3 4.25]
 arr is [1.5 -2.5 3 4.25]
 arr float fixed: |[   1.50   -2.50    3.00    4.25]|

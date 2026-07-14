@@ -150,6 +150,10 @@ string elements remain quoted and escaped. Explicit `%s` on a string array is
 intentionally unquoted and can therefore be ambiguous when elements contain
 spaces or are empty.
 
+Array `%c` follows C's conversion through `unsigned char`. Because Pluto strings
+cannot contain NUL, a resulting NUL is rendered as the visible text `\x00`;
+field width applies to that rendered representation.
+
 Only `l` and `ll` length modifiers are accepted, and only for integer
 conversions. Pluto normalizes integer formatting to its `I64` calling
 convention. Other C length modifiers are rejected.

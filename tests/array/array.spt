@@ -4,8 +4,11 @@ arrInt =
 ]
 arrInt
 "arr is -arrInt"
-"arr int padded: |-arrInt%4d|"
+arrIntWidth = 4
+"arr int padded: |-arrInt%(-arrIntWidth)d|"
 "arr int hex: -arrInt%#x"
+arrChars = [65 0 66 256]
+"arr chars: |-arrChars%5c|"
 
 arrFloat =
 [

@@ -297,12 +297,17 @@ static int strbuf_printf(StrBuf* sb, const char* fmt, ...) {
      (COUNT) == 1 ? strbuf_printf((SB), (FMT), (FIRST), (VALUE)) :   \
      (COUNT) == 2 ? strbuf_printf((SB), (FMT), (FIRST), (SECOND), (VALUE)) : -1)
 
-static int strbuf_format_i64(StrBuf* sb, const char* fmt, int dynamic_arg_count,
-                             int first_arg, int second_arg, int64_t value) {
-    if (!fmt || !*fmt) return -1;
-    char conversion = fmt[strlen(fmt) - 1];
+static int strbuf_format_i64(StrBuf* sb, const char* fmt, const char* escaped_nul_fmt,
+                             char conversion, int dynamic_arg_count, int first_arg,
+                             int second_arg, int64_t value) {
     if (conversion == 'c') {
-        return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg, (int)value);
+        unsigned char char_value = (unsigned char)value;
+        if (char_value != '\0') {
+            return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg,
+                                         (int)char_value);
+        }
+        return PT_STRBUF_FORMAT_VALUE(sb, escaped_nul_fmt, dynamic_arg_count,
+                                      first_arg, second_arg, "\\x00");
     }
     if (conversion == 'u' || conversion == 'o' || conversion == 'x' || conversion == 'X') {
         return PT_STRBUF_FORMAT_VALUE(sb, fmt, dynamic_arg_count, first_arg, second_arg,
@@ -373,19 +378,32 @@ const char* arr_str_str(const PtArrayStr* a) {
 
 const char* arr_i64_format(const PtArrayI64* a, const char* fmt,
                            int dynamic_arg_count, int first_arg, int second_arg) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_i64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_format_i64(&sb, fmt, dynamic_arg_count, first_arg, second_arg,
-                              arr_i64_get(a, i)) < 0) {
-            free(sb.data);
-            return NULL;
-        }
+    if (!fmt || !*fmt) return NULL;
+    size_t fmt_len = strlen(fmt);
+    char conversion = fmt[fmt_len - 1];
+    char* escaped_nul_fmt = NULL;
+    if (conversion == 'c') {
+        escaped_nul_fmt = dup_cstr(fmt);
+        if (!escaped_nul_fmt) return NULL;
+        escaped_nul_fmt[fmt_len - 1] = 's';
     }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) { free(escaped_nul_fmt); return NULL; }
+    if (strbuf_printf(&sb, "[") < 0) goto fail;
+    for (size_t i = 0; i < arr_i64_len(a); ++i) {
+        if (i > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+        if (strbuf_format_i64(&sb, fmt, escaped_nul_fmt, conversion, dynamic_arg_count,
+                              first_arg, second_arg, arr_i64_get(a, i)) < 0) goto fail;
+    }
+    if (strbuf_printf(&sb, "]") < 0) goto fail;
+    free(escaped_nul_fmt);
     return sb.data;
+
+fail:
+    free(escaped_nul_fmt);
+    free(sb.data);
+    return NULL;
 }
 
 const char* arr_f64_format(const PtArrayF64* a, const char* fmt,
