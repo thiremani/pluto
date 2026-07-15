@@ -105,10 +105,11 @@ per iteration as an if-else.
 
 ## One-Dimensional Array Literals
 
-A headerless bracket literal with at most one data row materializes an array at
-the point where it appears. Rectangular literals with multiple rows are
-classified as matrices or tables; they do not use the collector behavior in
-this section.
+A headerless bracket literal with one scalar row materializes a rank-1 array at
+the point where it appears. Rectangular literals with multiple scalar rows and
+literals containing array-valued cells infer higher-rank arrays; they do not
+use the collector behavior in this section. Heterogeneous rectangular literals
+may infer tables instead.
 
 The collector materializes over:
 

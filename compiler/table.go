@@ -5,42 +5,6 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-// Values must match PtElementKind in runtime/array.h.
-var runtimeElementKinds = map[Kind]uint64{
-	IntKind:   0,
-	FloatKind: 1,
-	StrKind:   2,
-}
-
-func (c *Compiler) compileMatrixLiteral(lit *ast.ArrayLiteral, matrixType Matrix) *Symbol {
-	rows := len(lit.Rows)
-	cols := 0
-	if rows > 0 {
-		cols = len(lit.Rows[0])
-	}
-
-	data := c.CreateArrayForType(matrixType.ElemType, c.ConstI64(uint64(rows*cols)))
-	for rowIndex, row := range lit.Rows {
-		for colIndex, cell := range row {
-			index := c.ConstI64(uint64(rowIndex*cols + colIndex))
-			c.compileArrayLiteralCell(cell, matrixType.ElemType, func(cellSlot *Symbol) bool {
-				return c.setArrayCellSlot(data, index, cellSlot, matrixType.ElemType)
-			})
-		}
-	}
-
-	data = c.builder.CreateBitCast(data, llvm.PointerType(c.Context.Int8Type(), 0), "matrix_data")
-	return &Symbol{
-		Type: matrixType,
-		Val: c.createMatrixValue(
-			data,
-			c.ConstI64(uint64(rows)),
-			c.ConstI64(uint64(cols)),
-			matrixType,
-		),
-	}
-}
-
 func (c *Compiler) compileTableLiteral(lit *ast.ArrayLiteral, tableType Table) *Symbol {
 	if len(lit.Rows) == 0 {
 		return c.makeZeroValue(tableType)
@@ -73,24 +37,6 @@ func (c *Compiler) compileTableLiteral(lit *ast.ArrayLiteral, tableType Table) *
 	}
 }
 
-func (c *Compiler) createMatrixValue(data, rows, cols llvm.Value, matrixType Matrix) llvm.Value {
-	value := llvm.Undef(c.mapToLLVMType(matrixType))
-	value = c.builder.CreateInsertValue(value, data, 0, "matrix_data_value")
-	value = c.builder.CreateInsertValue(value, rows, 1, "matrix_rows")
-	return c.builder.CreateInsertValue(value, cols, 2, "matrix_cols")
-}
-
-func (c *Compiler) matrixArrayValue(matrix llvm.Value) llvm.Value {
-	return c.builder.CreateExtractValue(matrix, 0, "matrix_data")
-}
-
-func (c *Compiler) copyMatrixValue(value llvm.Value, matrixType Matrix) llvm.Value {
-	data := c.copyArray(c.matrixArrayValue(value), matrixType.ElemType)
-	rows := c.builder.CreateExtractValue(value, 1, "matrix_rows")
-	cols := c.builder.CreateExtractValue(value, 2, "matrix_cols")
-	return c.createMatrixValue(data, rows, cols, matrixType)
-}
-
 func (c *Compiler) createTableValue(rowCount llvm.Value, columns []llvm.Value, tableType Table) llvm.Value {
 	value := llvm.Undef(c.mapToLLVMType(tableType))
 	value = c.builder.CreateInsertValue(value, rowCount, 0, "table_rows")
@@ -111,16 +57,6 @@ func (c *Compiler) copyTableValue(value llvm.Value, tableType Table) llvm.Value 
 		columns[i] = c.copyArray(c.tableColumnValue(value, i), column.ElemType)
 	}
 	return c.createTableValue(rows, columns, tableType)
-}
-
-func (c *Compiler) matrixStrArg(s *Symbol) llvm.Value {
-	matrixType := s.Type.(Matrix)
-	data := c.matrixArrayValue(s.Val)
-	rows := c.builder.CreateExtractValue(s.Val, 1, "matrix_rows")
-	cols := c.builder.CreateExtractValue(s.Val, 2, "matrix_cols")
-	kind := llvm.ConstInt(c.Context.Int32Type(), runtimeElementKinds[matrixType.ElemType.Kind()], false)
-	fnType, fn := c.GetCFunc(MATRIX_STR)
-	return c.builder.CreateCall(fnType, fn, []llvm.Value{data, kind, rows, cols}, "matrix_str")
 }
 
 func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {

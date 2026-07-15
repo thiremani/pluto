@@ -307,6 +307,11 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "bracket literal row 1 has 1 cells, expected 2",
 		},
 		{
+			name:        "RaggedArrayRow",
+			script:      "arr = [\n    1 0\n    0\n]",
+			expectError: "bracket literal row 2 has 1 cells, expected 2",
+		},
+		{
 			name:        "IndexEmptyArray",
 			script:      "empty = []\nempty[0]",
 			expectError: "cannot index an empty array without an element type",
@@ -328,6 +333,31 @@ func TestCollectionTypeErrors(t *testing.T) {
     :Name Score
 ])`,
 			expectError: "called with unknown argument type",
+		},
+		{
+			name:        "StackRankMismatch",
+			script:      "m = [[1 2] [[3 4]]]\nm",
+			expectError: "cannot stack rank-1 and rank-2 arrays",
+		},
+		{
+			name:        "StackShapeMismatch",
+			script:      "m = [[1 2] [3 4 5]]\nm",
+			expectError: "cannot stack arrays with shapes [2] and [3]",
+		},
+		{
+			name:        "MixedScalarAndArrayCells",
+			script:      "m = [[1 2] 3]\nm",
+			expectError: "cannot mix scalar and array-valued cells in the same array literal",
+		},
+		{
+			name:        "ConcatRankMismatch",
+			script:      "flat = [1 2]\nnested = [[3 4] [5 6]]\njoined = flat ⊕ nested\njoined",
+			expectError: "cannot concatenate arrays with different ranks: 1 and 2",
+		},
+		{
+			name:        "RangeIndexOnRank2",
+			script:      "m = [\n    1 2\n    3 4\n]\nsub = m[0:2]\nsub",
+			expectError: "range indexing is currently supported only for rank-1 arrays",
 		},
 	}
 

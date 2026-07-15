@@ -80,7 +80,8 @@ typedef enum {
     PT_ELEM_STR
 } PtElementKind;
 
-const char* matrix_str(const void* values, int32_t kind, size_t rows, size_t cols);
+const char* array_nd_str(const void* values, int32_t kind, size_t rank, const size_t* dimensions);
+void array_shape_fail(size_t expected, size_t got);
 const char* table_str(size_t rows, size_t cols, const char* const* names,
                       const int32_t* kinds, const void* const* columns);
 

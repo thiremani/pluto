@@ -1347,7 +1347,7 @@ val = data[i]`,
 			if len(program.Statements) == 1 {
 				stmt = requireOnlyLetStmt(t, program)
 			} else {
-				require.Len(t, program.Statements, 2, "expected two statements for identifier slice case")
+				require.Len(t, program.Statements, 2, "expected two statements for identifier range case")
 				stmt = program.Statements[1].(*ast.LetStatement)
 			}
 			require.Len(t, stmt.Value, 1, "expected single RHS expression")
@@ -1360,7 +1360,7 @@ val = data[i]`,
 		})
 	}
 
-	// Ensure slices inside expressions parse correctly.
+	// Ensure array ranges inside expressions parse correctly.
 	l := lexer.New("TestArrayIndexInfix", "res = data[0:3] + 1")
 	sp := NewScriptParser(l)
 	program := sp.Parse()

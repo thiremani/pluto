@@ -300,7 +300,7 @@ func (rl *RangeLiteral) String() string {
 
 type ArrayLiteral struct {
 	Token   token.Token      // the '[' token
-	Headers []string         // column names; empty for arrays, matrices, and unnamed tables
+	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
 }

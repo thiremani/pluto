@@ -773,30 +773,30 @@ func TestCanUseCondSelectWhitelist(t *testing.T) {
 	require.True(t, canUseCondSelect(StrG{}))
 
 	require.False(t, canUseCondSelect(StrH{}))
-	require.False(t, canUseCondSelect(Array{ElemType: I64}))
+	require.False(t, canUseCondSelect(Array{ElemType: I64, Rank: 1}))
 }
 
-func TestCollectorArrayBindingCannotBeNestedAsCell(t *testing.T) {
-	script := `i = 0:5
-y = [i + 1]
-arr = y + [y]
-arr`
+func TestArrayOperatorRejectsDifferentRanks(t *testing.T) {
+	script := `row = [1 2]
+matrix = [row]
+result = row + matrix
+result`
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "collector_array_binding_nested", "", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "array_rank_mismatch", "", ast.NewCode())
 	program := mustParseScript(t, script)
 	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
 
 	errs := sc.Compile()
-	require.NotEmpty(t, errs, "expected nested array cell compilation to fail")
+	require.NotEmpty(t, errs, "expected different array ranks to fail")
 
 	messages := make([]string, len(errs))
 	for i, err := range errs {
 		messages[i] = err.Error()
 	}
-	require.Contains(t, strings.Join(messages, "\n"), "unsupported bracket literal element type [I64] in column 0")
+	require.Contains(t, strings.Join(messages, "\n"), "operator \"+\" requires arrays with the same rank, got 1 and 2")
 }
 
 func TestAffineArrayIndexExprUsesVersionedLoop(t *testing.T) {
@@ -996,7 +996,7 @@ func TestPushValOwnNullStrHEmitsTrapPath(t *testing.T) {
 	entry := ctx.AddBasicBlock(fn, "entry")
 	c.builder.SetInsertPointAtEnd(entry)
 
-	acc := c.NewArrayAccumulator(Array{ElemType: StrH{}})
+	acc := c.NewArrayAccumulator(Array{ElemType: StrH{}, Rank: 1})
 	nullStr := llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
 	c.PushValOwn(acc, &Symbol{Val: nullStr, Type: StrH{}})
 	c.builder.CreateRetVoid()

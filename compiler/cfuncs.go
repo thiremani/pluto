@@ -18,7 +18,8 @@ const (
 	STR_QUOTE        = "str_quote"
 	STR_QUOTE_PREFIX = "str_quote_prefix"
 	STR_HEX          = "str_hex"
-	MATRIX_STR       = "matrix_str"
+	ARRAY_ND_STR     = "array_nd_str"
+	ARRAY_SHAPE_FAIL = "array_shape_fail"
 	TABLE_STR        = "table_str"
 
 	// Array I64 functions
@@ -96,8 +97,10 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i64}, false)
 	case STR_HEX:
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i64, c.Context.Int32Type(), c.Context.Int32Type(), c.Context.Int32Type()}, false)
-	case MATRIX_STR:
-		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i32, i64, i64}, false)
+	case ARRAY_ND_STR:
+		return llvm.FunctionType(charPtr, []llvm.Type{charPtr, i32, i64, llvm.PointerType(i64, 0)}, false)
+	case ARRAY_SHAPE_FAIL:
+		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{i64, i64}, false)
 	case TABLE_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{i64, i64, charPtr, charPtr, charPtr}, false)
 

@@ -19,6 +19,45 @@ matrix: [
     1 2.5
     3 4
 ]
+nested matrix: [
+    1 2
+    3 4
+]
+matrix row: [3 4]
+matrix cell: 3
+selected rows: [
+    1 2
+    3 4
+]
+reset matrix: [
+    5 6
+]
+rank 3: [
+    [
+        1 2
+        3 4
+    ]
+    [
+        5 6
+        7 8
+    ]
+]
+rank 3 plus: [
+    [
+        2 3
+        4 5
+    ]
+    [
+        6 7
+        8 9
+    ]
+]
+rank 3 cell: 6
+string matrix: [
+    "Ada" ""
+    "Lin" "Mae"
+]
+string matrix row: ["Ada" ""]
 table: [
     :Name Score
     "Ada" 10

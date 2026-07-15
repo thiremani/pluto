@@ -2,7 +2,7 @@
 i = 0:5
 j = 0:3
 
-# [i] materializes to [0 1 2 3 4], then [j] slices/indexes that array-range.
+# [i] materializes to [0 1 2 3 4], then [j] indexes that array-range.
 # Last iteration for j is 2, so Square([0 1 2]) keeps the last value 4.
 nested = Square([i][j])
 "Square([i][j]): -nested"

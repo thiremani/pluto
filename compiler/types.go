@@ -22,7 +22,6 @@ const (
 	RangeKind
 	FuncKind
 	ArrayKind
-	MatrixKind
 	TableKind
 	ArrayRangeKind
 	StructKind
@@ -63,7 +62,6 @@ var PrimitiveTypeNames = []string{
 // Sorted by descending length in init() for correct prefix matching.
 var CompoundTypePrefixes = []string{
 	"ArrayRange",
-	"Matrix",
 	"Table",
 	"Array",
 	"Range",
@@ -277,9 +275,7 @@ func IsFullyResolvedType(t Type) bool {
 	case Range:
 		return IsFullyResolvedType(tt.Iter)
 	case Array:
-		return tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
-	case Matrix:
-		return tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
+		return tt.Rank > 0 && tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
 	case Table:
 		for _, column := range tt.Columns {
 			if column.ElemType == nil || !IsFullyResolvedType(column.ElemType) {
@@ -324,49 +320,48 @@ func isUntypedEmptyCollection(t Type) bool {
 	}
 }
 
-// Array is a homogeneous, one-dimensional sequence.
+// Array is a homogeneous rectangular value. Rank is part of the type while
+// dimension lengths are runtime properties.
 type Array struct {
 	ElemType Type
+	Rank     int
 }
 
 func (a Array) String() string {
-	if a.ElemType == nil {
+	if a.ElemType == nil || a.Rank < 1 {
 		return "[]"
 	}
-	return "[" + a.ElemType.String() + "]"
+	result := a.ElemType.String()
+	for range a.Rank {
+		result = "[" + result + "]"
+	}
+	return result
 }
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	return "Array" + SEP + T + "1" + SEP + a.ElemType.Mangle()
+	result := a.ElemType.Mangle()
+	for range a.Rank {
+		result = "Array" + SEP + T + "1" + SEP + result
+	}
+	return result
 }
 func (a Array) Key() Type {
-	return Array{ElemType: a.ElemType.Key()}
+	return Array{ElemType: a.ElemType.Key(), Rank: a.Rank}
 }
 
 func hasConcreteArrayElemType(elem Type) bool {
 	return elem != nil && elem.Kind() != EmptyKind && elem.Kind() != UnresolvedKind
 }
 
-// Matrix is a homogeneous, two-dimensional value. Its dimensions are runtime
-// properties and therefore do not participate in type identity.
-type Matrix struct {
-	ElemType Type
-}
-
-func (m Matrix) String() string {
-	if m.ElemType == nil {
-		return "Matrix[]"
+func arrayIndexResultType(array Array) Type {
+	if array.Rank > 1 {
+		return Array{ElemType: array.ElemType, Rank: array.Rank - 1}
 	}
-	return "Matrix[" + m.ElemType.String() + "]"
-}
-
-func (m Matrix) Kind() Kind { return MatrixKind }
-func (m Matrix) Mangle() string {
-	return "Matrix" + SEP + T + "1" + SEP + m.ElemType.Mangle()
-}
-func (m Matrix) Key() Type {
-	return Matrix{ElemType: m.ElemType.Key()}
+	if array.ElemType.Kind() == StrKind {
+		return StrH{}
+	}
+	return array.ElemType
 }
 
 // TableColumn pairs an optional source-level name with a homogeneous column
@@ -605,9 +600,6 @@ func CanRefineType(oldType, newType Type) bool {
 	case Array:
 		newArr, ok := newType.(Array)
 		return ok && canRefineArray(old, newArr)
-	case Matrix:
-		newMatrix, ok := newType.(Matrix)
-		return ok && CanRefineType(old.ElemType, newMatrix.ElemType)
 	case Table:
 		newTable, ok := newType.(Table)
 		return ok && canRefineTable(old, newTable)
@@ -638,9 +630,14 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	}
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)
-	if oldIsArray && newIsArray &&
-		(oldArray.ElemType.Kind() == EmptyKind || newArray.ElemType.Kind() == EmptyKind) {
-		return true
+	if oldIsArray && newIsArray {
+		// [] resets an existing array without changing its established type or rank.
+		if newArray.ElemType.Kind() == EmptyKind {
+			return true
+		}
+		if oldArray.ElemType.Kind() == EmptyKind {
+			return oldArray.Rank == newArray.Rank
+		}
 	}
 	return CanRefineType(oldType, newType)
 }
@@ -678,7 +675,7 @@ func canRefineTypes(oldTypes, newTypes []Type) bool {
 }
 
 func canRefineArray(oldArr, newArr Array) bool {
-	return CanRefineType(oldArr.ElemType, newArr.ElemType)
+	return oldArr.Rank == newArr.Rank && CanRefineType(oldArr.ElemType, newArr.ElemType)
 }
 
 func canRefineTable(oldTable, newTable Table) bool {
@@ -728,8 +725,6 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFunc
 	case ArrayKind:
 		return eqArray
-	case MatrixKind:
-		return eqMatrix
 	case TableKind:
 		return eqTable
 	case ArrayRangeKind:
@@ -788,13 +783,7 @@ func eqFunc(a, b Type) bool {
 func eqArray(a, b Type) bool {
 	aa := a.(Array)
 	ba := b.(Array)
-	return TypeEqual(aa.ElemType, ba.ElemType)
-}
-
-func eqMatrix(a, b Type) bool {
-	am := a.(Matrix)
-	bm := b.(Matrix)
-	return TypeEqual(am.ElemType, bm.ElemType)
+	return aa.Rank == ba.Rank && TypeEqual(aa.ElemType, ba.ElemType)
 }
 
 func eqTable(a, b Type) bool {
@@ -845,6 +834,6 @@ var reservedTypeNames = map[string]struct{}{
 	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
 	"U8": {}, "U16": {}, "U32": {}, "U64": {},
 	"F32": {}, "F64": {},
-	"Ptr": {}, "Range": {}, "Array": {}, "Matrix": {}, "Table": {}, "ArrayRange": {},
+	"Ptr": {}, "Range": {}, "Array": {}, "Table": {}, "ArrayRange": {},
 	"Func": {}, "Struct": {},
 }

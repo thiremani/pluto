@@ -349,24 +349,71 @@ static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_
     }
 }
 
-const char* matrix_str(const void* values, int32_t kind, size_t rows, size_t cols) {
+static int strbuf_indent(StrBuf* sb, size_t depth) {
+    if (strbuf_printf(sb, "\n") < 0) return -1;
+    for (size_t i = 0; i < depth; ++i) {
+        if (strbuf_printf(sb, "    ") < 0) return -1;
+    }
+    return 0;
+}
+
+static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t rank,
+                           const size_t* dimensions, size_t depth, size_t* value_index) {
+    if (strbuf_printf(sb, "[") < 0) return -1;
+
+    if (rank == 1) {
+        for (size_t i = 0; i < dimensions[0]; ++i) {
+            if (i > 0 && strbuf_printf(sb, " ") < 0) return -1;
+            if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+        }
+    } else if (rank == 2) {
+        for (size_t row = 0; row < dimensions[0]; ++row) {
+            if (strbuf_indent(sb, depth + 1) < 0) return -1;
+            if (dimensions[1] == 0) {
+                if (strbuf_printf(sb, "[]") < 0) return -1;
+                continue;
+            }
+            for (size_t col = 0; col < dimensions[1]; ++col) {
+                if (col > 0 && strbuf_printf(sb, " ") < 0) return -1;
+                if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+            }
+        }
+        if (dimensions[0] > 0 && strbuf_indent(sb, depth) < 0) return -1;
+    } else {
+        for (size_t i = 0; i < dimensions[0]; ++i) {
+            if (strbuf_indent(sb, depth + 1) < 0) return -1;
+            if (strbuf_array_nd(sb, values, kind, rank - 1, dimensions + 1,
+                                depth + 1, value_index) < 0) return -1;
+        }
+        if (dimensions[0] > 0 && strbuf_indent(sb, depth) < 0) return -1;
+    }
+
+    return strbuf_printf(sb, "]");
+}
+
+const char* array_nd_str(const void* values, int32_t kind, size_t rank,
+                         const size_t* dimensions) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) goto fail;
-    for (size_t row = 0; row < rows; ++row) {
-        if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
-        for (size_t col = 0; col < cols; ++col) {
-            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
-            if (strbuf_array_cell(&sb, values, kind, row * cols + col) < 0) goto fail;
-        }
-    }
-    if (rows > 0 && strbuf_printf(&sb, "\n") < 0) goto fail;
-    if (strbuf_printf(&sb, "]") < 0) goto fail;
+
+    if (rank == 0 || !dimensions) goto fail;
+    size_t value_index = 0;
+    if (strbuf_array_nd(&sb, values, kind, rank, dimensions, 0, &value_index) < 0) goto fail;
     return sb.data;
 
 fail:
     free(sb.data);
     return NULL;
+}
+
+/* Aborts the process; called from generated code when a runtime shape check
+ * fails (stacking, concatenation, or zipping arrays with unequal inner
+ * dimensions). Static shape mismatches are compile errors instead. */
+void array_shape_fail(size_t expected, size_t got) {
+    fprintf(stderr, "pluto: array shape mismatch: expected dimension %zu, got %zu\n",
+            expected, got);
+    fflush(stderr);
+    abort();
 }
 
 const char* table_str(size_t rows, size_t cols, const char* const* names,

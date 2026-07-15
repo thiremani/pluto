@@ -493,13 +493,18 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
 		return llvm.PointerType(elemLLVM, 0)
 	case ArrayKind:
-		// Arrays are backed by runtime dynamic vectors (opaque C structs).
-		// Model them as opaque pointers here to interop cleanly with the C runtime.
-		return llvm.PointerType(c.Context.Int8Type(), 0)
-	case MatrixKind:
+		arrayType := t.(Array)
 		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
+		if arrayType.Rank == 1 {
+			return arrayPtr
+		}
 		i64 := c.Context.Int64Type()
-		return llvm.StructType([]llvm.Type{arrayPtr, i64, i64}, false)
+		fields := make([]llvm.Type, arrayType.Rank+1)
+		fields[0] = arrayPtr
+		for i := 1; i < len(fields); i++ {
+			fields[i] = i64
+		}
+		return llvm.StructType(fields, false)
 	case TableKind:
 		table := t.(Table)
 		fields := make([]llvm.Type, len(table.Columns)+1)
@@ -797,18 +802,12 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 			s.Val = c.copyString(s.Val)
 		}
 	case ArrayKind:
-		// Zero value for arrays is null pointer (similar to static empty string for Str).
-		// Runtime functions handle null gracefully: free(null) is no-op, len(null) returns 0.
-		// This avoids heap allocation for zero values that may be immediately overwritten.
-		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-	case MatrixKind:
-		matrixType := symType.(Matrix)
-		s.Val = c.createMatrixValue(
-			llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0)),
-			c.ConstI64(0),
-			c.ConstI64(0),
-			matrixType,
-		)
+		arrayType := symType.(Array)
+		dimensions := make([]llvm.Value, arrayType.Rank)
+		for i := range dimensions {
+			dimensions[i] = c.ConstI64(0)
+		}
+		s.Val = c.createArrayValue(llvm.Value{}, dimensions, arrayType)
 	case TableKind:
 		tableType := symType.(Table)
 		columns := make([]llvm.Value, len(tableType.Columns))
@@ -916,8 +915,9 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	targetArray, targetIsArray := target.(Array)
 	sourceArray, sourceIsArray := derefed.Type.(Array)
 	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind {
+		zero := c.makeZeroValue(targetArray)
 		return &Symbol{
-			Val:      derefed.Val,
+			Val:      zero.Val,
 			Type:     targetArray,
 			FuncArg:  derefed.FuncArg,
 			Borrowed: derefed.Borrowed,
@@ -936,7 +936,25 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	if target.Kind() != ptrType.Elem.Kind() {
 		target = ptrType.Elem
 	}
-	coerced := c.coerceSymbolForType(src, target, loadName)
+
+	source := c.derefIfPointer(src, loadName)
+	targetArray, targetIsArray := target.(Array)
+	sourceArray, sourceIsArray := source.Type.(Array)
+	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind && targetArray.Rank > 1 {
+		currentValue := c.createLoad(dst.Val, targetArray, "array_reset_shape")
+		current := &Symbol{Val: currentValue, Type: targetArray}
+		dimensions := c.arrayDimensions(current)
+		dimensions[0] = c.ConstI64(0)
+		source = &Symbol{
+			Val:      c.createArrayValue(llvm.Value{}, dimensions, targetArray),
+			Type:     targetArray,
+			FuncArg:  source.FuncArg,
+			Borrowed: source.Borrowed,
+			ReadOnly: source.ReadOnly,
+		}
+	}
+
+	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
 	return coerced
 }
@@ -980,11 +998,7 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 		// Static strings live forever, no free needed
 	case Array:
 		if hasConcreteArrayElemType(t.ElemType) {
-			c.freeArray(val, t.ElemType)
-		}
-	case Matrix:
-		if t.ElemType != nil && t.ElemType.Kind() != UnresolvedKind {
-			c.freeArray(c.matrixArrayValue(val), t.ElemType)
+			c.freeArray(c.arrayDataValue(val, t), t.ElemType)
 		}
 	case Table:
 		for i, column := range t.Columns {
@@ -1007,8 +1021,6 @@ func typeNeedsCleanup(typ Type) bool {
 		return true
 	case Array:
 		return hasConcreteArrayElemType(t.ElemType)
-	case Matrix:
-		return true
 	case Table:
 		return true
 	case ArrayRange:
@@ -1532,10 +1544,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		inst.SetAlignment(8)
 	case Range:
 		setInstAlignment(inst, typ.Iter)
-	case Array:
-		// Arrays are represented as opaque pointers to runtime vectors
-		inst.SetAlignment(8)
-	case Matrix, Table:
+	case Array, Table:
 		inst.SetAlignment(8)
 	case ArrayRange:
 		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
@@ -1745,7 +1754,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 				continue
 			}
 
-			columnType := Array{ElemType: column.ElemType}
+			columnType := Array{ElemType: column.ElemType, Rank: 1}
 			if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil && len(info.OutTypes) > 0 {
 				if resolved, ok := info.OutTypes[0].(Array); ok {
 					columnType = resolved
@@ -2188,11 +2197,6 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 	switch t := sym.Type.(type) {
 	case Array:
 		if !hasConcreteArrayElemType(t.ElemType) {
-			sym.Type = resolved
-			Put(c.Scopes, name, sym)
-		}
-	case Matrix:
-		if t.ElemType.Kind() == UnresolvedKind {
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
@@ -3294,31 +3298,18 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 			ReadOnly: false,
 		}
 	case ArrayKind:
-		// Deep copy the array
 		arrayType := sym.Type.(Array)
 		if arrayType.ElemType != nil {
-			// Empty and unresolved arrays have no runtime allocation to copy.
 			if !hasConcreteArrayElemType(arrayType.ElemType) {
 				return sym
 			}
-			copiedArr := c.copyArray(sym.Val, arrayType.ElemType)
 			return &Symbol{
-				Val:      copiedArr,
-				Type:     sym.Type, // Arrays don't have Static flag
+				Val:      c.copyArrayValue(sym.Val, arrayType),
+				Type:     sym.Type,
 				FuncArg:  false,
 				Borrowed: false,
 				ReadOnly: false,
 			}
-		}
-	case MatrixKind:
-		matrixType := sym.Type.(Matrix)
-		if matrixType.ElemType.Kind() == UnresolvedKind {
-			return sym
-		}
-		return &Symbol{
-			Val:      c.copyMatrixValue(sym.Val, matrixType),
-			Type:     matrixType,
-			Borrowed: false,
 		}
 	case TableKind:
 		tableType := sym.Type.(Table)
@@ -3516,15 +3507,11 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*toFree = append(*toFree, strPtr)
 	case ArrayKind:
 		arrType := s.Type.(Array)
-		if !hasConcreteArrayElemType(arrType.ElemType) {
+		if arrType.Rank == 1 && !hasConcreteArrayElemType(arrType.ElemType) {
 			*args = append(*args, c.constCString("[]"))
 			return
 		}
 		strPtr := c.arrayStrArg(s)
-		*args = append(*args, strPtr)
-		*toFree = append(*toFree, strPtr)
-	case MatrixKind:
-		strPtr := c.matrixStrArg(s)
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)
 	case TableKind:

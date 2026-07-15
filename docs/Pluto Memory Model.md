@@ -110,9 +110,11 @@ a[1:5]                       # Copy by default
 @view a[1:5]                 # View (explicit)
 ```
 
-**Pluto:** Slicing `arr[i]` creates a **View** by default.
+**Pluto:** A range-valued `arr[i]` creates an `ArrayRange` view. Wrapping the
+access as `[arr[i]]` materializes the selected values.
 
-**Difference:** Pluto favors Views for slicing (like Go/Rust), Julia favors Copies unless explicitly requested.
+**Difference:** Pluto separates range views from explicit collection, while
+Julia copies a range selection unless a view is requested explicitly.
 
 ---
 
@@ -125,7 +127,8 @@ a[1:5]                       # Copy by default
 // No hidden allocations.
 ```
 
-**Pluto:** Similar model. `ArrayRange` is essentially a Zig slice.
+**Pluto:** `ArrayRange` similarly borrows an array and carries an iteration
+range, but Pluto does not expose a separate slice type.
 
 **Difference:** Pluto manages memory automatically (scope-based), Zig is manual.
 

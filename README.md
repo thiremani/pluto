@@ -31,7 +31,7 @@ Intended for performance-sensitive scripting, numerical work, simulation, and sy
 
 **Purity:** Functions have read-only inputs and writable outputs; structs are raw data with no hidden pointers.
 
-Range-driven auto-vectorization, safe arrays and slices.
+Range-driven auto-vectorization and safe arrays.
 
 Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by construction.
 
@@ -42,7 +42,7 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - Go front-end, LLVM back-end; emits native binaries
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
-- First-class arrays (safe slicing), inferred row-major matrices, columnar tables, and link semantics
+- First-class rectangular arrays of any rank, columnar tables, and link semantics
 - Scope-based memory: no nulls, no out-of-bounds, no garbage collector
 - printf-style formatting; arrays/ranges printable
 - Cross-platform (Linux/macOS/Windows)
@@ -197,12 +197,23 @@ y = [1.1 2.2 3.3]
 
 Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
 
-The same bracket syntax infers matrices and tables without a type keyword:
+The same bracket syntax infers higher-rank arrays and tables without a type keyword:
 
 ```python
 matrix = [
     1 2
     3 4
+]
+
+cube = [
+    [
+        1 2
+        3 4
+    ]
+    [
+        5 6
+        7 8
+    ]
 ]
 
 scores = [
@@ -212,18 +223,25 @@ scores = [
 ]
 ```
 
-An empty or one-row headerless literal is an array. A rectangular, multi-row
-literal whose cells share one promotable type is a row-major matrix. A header
-row always produces a columnar table; without headers, homogeneous columns
-with different element types infer an unnamed table. A header must contain at
-least one column name, but it may have no data rows. Such a literal is an empty
-table whose columns are untyped empty arrays and print as `[]`. Headerless
-literals start directly with their first data row. The conventional header
-spelling is `:Name Score`. Indentation and spacing inside brackets are not
-semantic; examples use four spaces. Named columns are arrays, so
+An empty or one-row scalar literal is rank 1. A rectangular, multi-row scalar
+literal is rank 2. Array-valued cells of equal rank and shape stack along a new
+outer dimension, so `[[1 2] [3 4]]` is the same rank-2 value as the `matrix`
+literal above and the rule extends to any rank. Storage is flat and row-major;
+there is no pointer per row. Ragged literals are compile errors and missing
+cells are never padded with default values. Indexing removes the outer
+dimension, so `cube[1][0]` is `[5 6]`.
+
+A header row always produces a columnar table; without headers, homogeneous
+columns with different element types infer an unnamed table. A header must
+contain at least one column name, but it may have no data rows. Such a literal
+is an empty table whose columns are untyped empty arrays and print as `[]`.
+Headerless literals start directly with their first data row. The conventional
+header spelling is `:Name Score`. Indentation and spacing inside brackets are
+not semantic; examples use four spaces. Named columns are arrays, so
 `scores.Score` returns `[10 12]`. Header-only tables can be printed and
 projected, but cannot be passed to functions until their column types are
-established.
+established. See [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for
+the complete inference and shape rules.
 
 The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
 functions, and adopts an element type when concatenated with a concrete array.

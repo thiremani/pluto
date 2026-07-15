@@ -51,6 +51,46 @@ matrix =
 ]
 "matrix: -matrix"
 
+firstRow = [1 2]
+nestedMatrix = [firstRow [3 4]]
+"nested matrix: -nestedMatrix"
+matrixRow = nestedMatrix[1]
+matrixCell = matrixRow[0]
+"matrix row: -matrixRow"
+"matrix cell: -matrixCell"
+
+rowRange = 0:2
+selectedRows = [nestedMatrix[rowRange]]
+"selected rows: -selectedRows"
+
+nestedMatrix = []
+nestedMatrix = nestedMatrix ⊕ [[5 6]]
+"reset matrix: -nestedMatrix"
+
+rank3 = [
+    [
+        1 2
+        3 4
+    ]
+    [
+        5 6
+        7 8
+    ]
+]
+"rank 3: -rank3"
+rank3Plus = rank3 + 1
+"rank 3 plus: -rank3Plus"
+rank3Cell = rank3[1][0][1]
+"rank 3 cell: -rank3Cell"
+
+stringMatrix = [
+    "Ada" ""
+    "Lin" "Mae"
+]
+stringMatrixRow = stringMatrix[0]
+"string matrix: -stringMatrix"
+"string matrix row: -stringMatrixRow"
+
 scores =
 [
     :Name Score

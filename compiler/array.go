@@ -63,6 +63,13 @@ var ArrayInfos = map[Kind]ArrayInfo{
 	},
 }
 
+// Values must match PtElementKind in runtime/array.h.
+var runtimeElementKinds = map[Kind]uint64{
+	IntKind:   0,
+	FloatKind: 1,
+	StrKind:   2,
+}
+
 func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
 	info := ArrayInfos[arr.ElemType.Kind()]
 	fnTy, fn := c.GetCFunc(info.NewName)
@@ -174,7 +181,10 @@ func (c *Compiler) CreateArrayForType(elem Type, length llvm.Value) llvm.Value {
 func (c *Compiler) trapOnRuntimeError(status llvm.Value, name string) {
 	zero := llvm.ConstInt(status.Type(), 0, false)
 	ok := c.builder.CreateICmp(llvm.IntEQ, status, zero, name+"_ok")
+	c.trapOnFalse(ok, name)
+}
 
+func (c *Compiler) trapOnFalse(ok llvm.Value, name string) {
 	fn := c.builder.GetInsertBlock().Parent()
 	failBlock := c.Context.AddBasicBlock(fn, name+"_fail")
 	contBlock := c.Context.AddBasicBlock(fn, name+"_cont")
@@ -229,17 +239,20 @@ func (c *Compiler) ArraySetOwnForType(elem Type, vec llvm.Value, idx llvm.Value,
 }
 
 func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
+	if !hasConcreteArrayElemType(elem) {
+		return c.ConstI64(0)
+	}
 	info := ArrayInfos[elem.Kind()]
-
-	cast := c.ArrayBitCast(arr.Val, info, "arrp")
+	arrayType := arr.Type.(Array)
+	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
 	fnTy, fn := c.GetCFunc(info.LenName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
 }
 
 func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	info := ArrayInfos[elem.Kind()]
-
-	cast := c.ArrayBitCast(arr.Val, info, "arrp")
+	arrayType := arr.Type.(Array)
+	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
 	fnTy, fn := c.GetCFunc(info.GetName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast, idx}, "get")
 }
@@ -250,7 +263,8 @@ func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 // Use this for internal operations where the value is immediately passed to set/push.
 func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
 	info := ArrayInfos[elem.Kind()]
-	cast := c.ArrayBitCast(arr.Val, info, "arrp")
+	arrayType := arr.Type.(Array)
+	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
 
 	// For strings, use the borrow function to avoid unnecessary strdup
 	if elem.Kind() == StrKind {
@@ -266,14 +280,21 @@ func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm
 // Array compilation functions
 
 // compileArrayExpression materializes a bracket literal according to its solved
-// Array, Matrix, or Table type.
+// Array or Table type.
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	switch typ := info.OutTypes[0].(type) {
 	case Array:
+		if typ.Rank > 1 {
+			if c.arrayLiteralHasArrayCells(lit) {
+				if len(info.CollectRanges) > 0 {
+					return []*Symbol{c.compileStackedArrayCollector(lit, info, typ)}
+				}
+				return []*Symbol{c.compileStackedArrayLiteral(lit, typ)}
+			}
+			return []*Symbol{c.compileRectangularArrayLiteral(lit, typ)}
+		}
 		return []*Symbol{c.compileArrayLiteralInDomain(lit, info, nil, nil)}
-	case Matrix:
-		return []*Symbol{c.compileMatrixLiteral(lit, typ)}
 	case Table:
 		return []*Symbol{c.compileTableLiteral(lit, typ)}
 	default:
@@ -283,6 +304,18 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 		})
 		return nil
 	}
+}
+
+func (c *Compiler) arrayLiteralHasArrayCells(lit *ast.ArrayLiteral) bool {
+	for _, row := range lit.Rows {
+		for _, cell := range row {
+			info := c.ExprCache[key(c.FuncNameMangled, cell)]
+			if info != nil && len(info.OutTypes) == 1 && info.OutTypes[0].Kind() == ArrayKind {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
@@ -311,7 +344,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	if len(lit.Rows) == 0 {
 		arr := info.OutTypes[0].(Array)
 		s.Type = arr
-		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+		s.Val = c.createArrayValue(llvm.Value{}, []llvm.Value{c.ConstI64(0)}, arr)
 		return []*Symbol{s}
 	}
 
@@ -330,7 +363,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	}
 
 	s.Type = arr
-	s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+	s.Val = c.createArrayValue(arrVal, []llvm.Value{nConst}, arr)
 	return []*Symbol{s}
 }
 
@@ -564,16 +597,39 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isT
 
 // Array operation functions
 
-// arrayPairMinLen returns min(len(left), len(right)) for two arrays.
-func (c *Compiler) arrayPairMinLen(left *Symbol, right *Symbol) llvm.Value {
-	leftElem := left.Type.(Array).ElemType
-	rightElem := right.Type.(Array).ElemType
-	leftLen := c.ArrayLen(left, leftElem)
-	rightLen := c.ArrayLen(right, rightElem)
-	return c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
-		leftLen, rightLen, "min_len",
+// arrayPairShape returns the flat iteration length and dimensions for a zipped
+// pair. Higher-rank arrays zip the outer dimension and require equal inner shape.
+func (c *Compiler) arrayPairShape(left *Symbol, right *Symbol) (llvm.Value, []llvm.Value) {
+	leftType := left.Type.(Array)
+	if leftType.Rank == 1 {
+		leftLen := c.ArrayLen(left, leftType.ElemType)
+		rightLen := c.ArrayLen(right, right.Type.(Array).ElemType)
+		length := c.builder.CreateSelect(
+			c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
+			leftLen, rightLen, "min_len",
+		)
+		return length, []llvm.Value{length}
+	}
+
+	leftDims := c.arrayDimensions(left)
+	rightDims := c.arrayDimensions(right)
+	zero := c.ConstI64(0)
+	bothNonEmpty := c.builder.CreateAnd(
+		c.builder.CreateICmp(llvm.IntNE, leftDims[0], zero, "left_array_nonempty"),
+		c.builder.CreateICmp(llvm.IntNE, rightDims[0], zero, "right_array_nonempty"),
+		"both_arrays_nonempty",
 	)
+	c.requireSameArrayShapeWhen(bothNonEmpty, leftDims[1:], rightDims[1:], "array_inner_shape")
+	outer := c.builder.CreateSelect(
+		c.builder.CreateICmp(llvm.IntULT, leftDims[0], rightDims[0], "cmp_outer_len"),
+		leftDims[0], rightDims[0], "min_outer_len",
+	)
+	dimensions := append([]llvm.Value{outer}, leftDims[1:]...)
+	length := outer
+	for _, dimension := range dimensions[1:] {
+		length = c.builder.CreateMul(length, dimension, "array_zip_len")
+	}
+	return length, dimensions
 }
 
 // forEachArrayPair iterates element-wise over an array LHS and either an array
@@ -606,13 +662,10 @@ func (c *Compiler) forEachArrayPair(
 	})
 }
 
-// arraySym wraps an array vector and element type as a Symbol, bitcast to the
-// opaque i8* array handle used for array values.
-func (c *Compiler) arraySym(array llvm.Value, elemType Type) *Symbol {
-	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
+func (c *Compiler) arrayValueSymbol(data llvm.Value, arrayType Array, dimensions []llvm.Value) *Symbol {
 	return &Symbol{
-		Type: Array{ElemType: elemType},
-		Val:  c.builder.CreateBitCast(array, i8p, "arr_i8p"),
+		Type: arrayType,
+		Val:  c.createArrayValue(data, dimensions, arrayType),
 	}
 }
 
@@ -631,7 +684,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	// Element-wise array operation: arr1 op arr2
 	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
 	// This mirrors vector-style zip semantics and avoids silently inventing data.
-	loopLen := c.arrayPairMinLen(left, right)
+	loopLen, dimensions := c.arrayPairShape(left, right)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		// compileInfix reads values and produces a new result
@@ -648,14 +701,38 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	})
 
 	// Return result array
-	return c.arraySym(resVec, resElem)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: leftArrType.Rank}, dimensions)
 }
 
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
 	// Array concatenation: arr1 ⊕ arr2
 	// Result is [arr1..., arr2...]
+	arrayType := Array{ElemType: resElem, Rank: left.Type.(Array).Rank}
+	var dimensions []llvm.Value
+	if arrayType.Rank > 1 {
+		leftDims := c.arrayDimensions(left)
+		rightDims := c.arrayDimensions(right)
+		zero := c.ConstI64(0)
+		leftNonEmpty := c.builder.CreateICmp(llvm.IntNE, leftDims[0], zero, "concat_left_nonempty")
+		rightNonEmpty := c.builder.CreateICmp(llvm.IntNE, rightDims[0], zero, "concat_right_nonempty")
+		c.requireSameArrayShapeWhen(
+			c.builder.CreateAnd(leftNonEmpty, rightNonEmpty, "concat_both_nonempty"),
+			leftDims[1:],
+			rightDims[1:],
+			"concat_inner_shape",
+		)
+
+		useRightShape := c.builder.CreateAnd(c.builder.CreateNot(leftNonEmpty, "concat_left_empty"), rightNonEmpty, "concat_use_right_shape")
+		dimensions = []llvm.Value{c.builder.CreateAdd(leftDims[0], rightDims[0], "concat_outer_len")}
+		for i := 1; i < len(leftDims); i++ {
+			dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
+		}
+	}
 	if !hasConcreteArrayElemType(resElem) {
-		return c.makeZeroValue(Array{ElemType: resElem})
+		if arrayType.Rank == 1 {
+			return c.makeZeroValue(arrayType)
+		}
+		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
 	}
 
 	// Get lengths of both arrays
@@ -685,12 +762,16 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	}
 
 	// Return concatenated array
-	return c.arraySym(resVec, resElem)
+	if arrayType.Rank == 1 {
+		dimensions = []llvm.Value{totalLen}
+	}
+	return c.arrayValueSymbol(resVec, arrayType, dimensions)
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
 	arrElem := arr.Type.(Array).ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
+	dimensions := c.arrayDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Respect the original operand order for non-commutative operations
@@ -711,7 +792,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
-	return c.arraySym(resVec, resElem)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arr.Type.(Array).Rank}, dimensions)
 }
 
 // compileArrayMask dispatches value-position comparison masking when at least one
@@ -752,19 +833,20 @@ func (c *Compiler) maskStore(resElem Type, resVec llvm.Value, iter llvm.Value, l
 }
 
 func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
-	loopLen := c.arrayPairMinLen(left, right)
+	loopLen, dimensions := c.arrayPairShape(left, right)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		lhs, cond := c.compareScalars(op, leftSym, rightSym)
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arraySym(resVec, resElem)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: left.Type.(Array).Rank}, dimensions)
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
 	arrElem := arr.Type.(Array).ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
+	dimensions := c.arrayDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Preserve operand order for non-commutative comparisons. The masked value
@@ -778,7 +860,7 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arraySym(resVec, resElem)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arr.Type.(Array).Rank}, dimensions)
 }
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
@@ -786,6 +868,7 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 	elem := arrType.ElemType
 	resElem := result.ElemType
 	n := c.ArrayLen(arr, elem)
+	dimensions := c.arrayDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, n)
 
 	r := c.rangeZeroToN(n)
@@ -806,20 +889,23 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 		c.ArraySetOwnForType(resElem, resVec, idx, resultVal)
 	})
 
-	return c.arraySym(resVec, resElem)
+	return c.arrayValueSymbol(resVec, result, dimensions)
 }
 
 // Array string conversion function
 
 func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	arr := s.Type.(Array)
+	if arr.Rank > 1 {
+		return c.arrayNDStrArg(s)
+	}
 	elemType := arr.ElemType
 	info, ok := ArrayInfos[elemType.Kind()]
 	if !ok {
 		panic("internal: unsupported array element kind for printing")
 	}
 
-	cast := c.ArrayBitCast(s.Val, info, "arr_cast")
+	cast := c.ArrayBitCast(c.arrayDataValue(s.Val, arr), info, "arr_cast")
 	fnTy, fn := c.GetCFunc(info.StrName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "arr_str")
 }
@@ -828,7 +914,7 @@ func (c *Compiler) arrayFormatArg(s *Symbol, info ArrayInfo, elementFormat strin
 	i32 := c.Context.Int32Type()
 	zero := llvm.ConstInt(i32, 0, false)
 	formatArgs := []llvm.Value{
-		c.ArrayBitCast(s.Val, info, "arr_format_cast"),
+		c.ArrayBitCast(c.arrayDataValue(s.Val, s.Type.(Array)), info, "arr_format_cast"),
 		c.constCString(elementFormat),
 		llvm.ConstInt(i32, uint64(len(dynamicArgs)), false),
 		zero,
@@ -853,14 +939,6 @@ func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr l
 	rangeSym := &Symbol{Val: rangeVal, Type: arrRange.Range}
 	rangeStr = c.rangeStrArg(rangeSym)
 	return
-}
-
-func arrayAccessResultType(arrElemType Type) Type {
-	if arrElemType.Kind() == StrKind {
-		// String array gets return owned heap strings.
-		return StrH{}
-	}
-	return arrElemType
 }
 
 func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*Symbol, *Symbol, Array) {
@@ -894,6 +972,44 @@ func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
 func (c *Compiler) storeArrayRangeOutput(output *Symbol, value llvm.Value, valueType Type) {
 	c.freeSymbolValue(output, "old_output")
 	c.createStore(value, output.Val, valueType)
+}
+
+func (c *Compiler) compileArraySubarray(array *Symbol, index llvm.Value) *Symbol {
+	arrayType := array.Type.(Array)
+	resultType := arrayIndexResultType(arrayType).(Array)
+	dimensions := c.arrayDimensions(array)[1:]
+	subarrayLen := dimensions[0]
+	for _, dimension := range dimensions[1:] {
+		subarrayLen = c.builder.CreateMul(subarrayLen, dimension, "array_subarray_len")
+	}
+
+	data := c.CreateArrayForType(arrayType.ElemType, subarrayLen)
+	start := c.builder.CreateMul(index, subarrayLen, "array_subarray_start")
+	c.createLoop(c.rangeZeroToN(subarrayLen), func(iter llvm.Value) {
+		sourceIndex := c.builder.CreateAdd(start, iter, "array_subarray_index")
+		value := c.ArrayGetBorrowed(array, arrayType.ElemType, sourceIndex)
+		c.ArraySetForType(arrayType.ElemType, data, iter, value)
+	})
+	return c.arrayValueSymbol(data, resultType, dimensions)
+}
+
+func (c *Compiler) checkedArraySubarray(array *Symbol, index llvm.Value, inBounds llvm.Value) llvm.Value {
+	resultType := arrayIndexResultType(array.Type.(Array)).(Array)
+	resultSlot := c.createEntryBlockAlloca(c.mapToLLVMType(resultType), "array_subarray_checked_mem")
+	getBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "array_subarray_in_bounds", "array_subarray_oob", "array_subarray_cont")
+
+	c.builder.SetInsertPointAtEnd(getBlock)
+	subarray := c.compileArraySubarray(array, index)
+	c.createStore(subarray.Val, resultSlot, resultType)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(missBlock)
+	zero := c.makeZeroValue(resultType)
+	c.createStore(zero.Val, resultSlot, resultType)
+	c.builder.CreateBr(contBlock)
+
+	c.builder.SetInsertPointAtEnd(contBlock)
+	return c.createLoad(resultSlot, resultType, "array_subarray_checked")
 }
 
 // compileArrayRangeExpression compiles an array indexing expression.
@@ -940,13 +1056,16 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 
 	// Scalar index - element access
 	arrElemType := arrType.ElemType
-	resultType := arrayAccessResultType(arrElemType)
+	resultType := arrayIndexResultType(arrType)
 	idxVal := c.normalizeArrayIndex(idxSym)
 
 	// Bounds are checked in IR before get. OOB reads materialize a zero value
 	// for expression evaluation; assignment/condition guards decide whether the
 	// enclosing statement commits.
 	if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(expr) {
+		if arrType.Rank > 1 {
+			return []*Symbol{c.compileArraySubarray(arraySym, idxVal)}
+		}
 		elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
 		return []*Symbol{{Type: resultType, Val: elemVal}}
 	}
@@ -955,6 +1074,9 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	ctx := c.currentStmtCtx()
 	if ctx != nil && len(ctx.boundsStack) > 0 && !c.inArrayLiteralCellMode() {
 		c.recordStmtBoundsCheck(inBounds)
+	}
+	if arrType.Rank > 1 {
+		return []*Symbol{{Type: resultType, Val: c.checkedArraySubarray(arraySym, idxVal, inBounds)}}
 	}
 	elemVal := c.checkedArrayGet(arraySym, arrElemType, resultType, idxVal, inBounds)
 
@@ -980,10 +1102,15 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			}
 
 			arrElemType := arrType.ElemType
-			resultType := arrayAccessResultType(arrElemType)
+			resultType := arrayIndexResultType(arrType)
 			idxVal := c.normalizeArrayIndex(idxSym)
 
 			if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
+				if arrType.Rank > 1 {
+					subarray := c.compileArraySubarray(arraySym, idxVal)
+					c.storeArrayRangeOutput(output, subarray.Val, resultType)
+					return
+				}
 				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
 				c.storeArrayRangeOutput(output, elemVal, resultType)
 				return
@@ -994,8 +1121,13 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 				storeBlock, missBlock, contBlock := c.createIfElseCont(inBounds, "arr_range_store", "arr_range_zero", "arr_range_cont")
 
 				c.builder.SetInsertPointAtEnd(storeBlock)
-				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-				c.storeArrayRangeOutput(output, elemVal, resultType)
+				if arrType.Rank > 1 {
+					subarray := c.compileArraySubarray(arraySym, idxVal)
+					c.storeArrayRangeOutput(output, subarray.Val, resultType)
+				} else {
+					elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+					c.storeArrayRangeOutput(output, elemVal, resultType)
+				}
 				c.builder.CreateBr(contBlock)
 
 				c.builder.SetInsertPointAtEnd(missBlock)
@@ -1010,8 +1142,13 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			storeBlock, contBlock := c.createIfCont(inBounds, "arr_range_store", "arr_range_cont")
 
 			c.builder.SetInsertPointAtEnd(storeBlock)
-			elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-			c.storeArrayRangeOutput(output, elemVal, resultType)
+			if arrType.Rank > 1 {
+				subarray := c.compileArraySubarray(arraySym, idxVal)
+				c.storeArrayRangeOutput(output, subarray.Val, resultType)
+			} else {
+				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
+				c.storeArrayRangeOutput(output, elemVal, resultType)
+			}
 			c.builder.CreateBr(contBlock)
 
 			c.builder.SetInsertPointAtEnd(contBlock)

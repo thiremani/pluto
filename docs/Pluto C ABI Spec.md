@@ -204,7 +204,7 @@ Built-in compound types use the `_tN_` pattern:
 | Pointer | `Ptr_t1_[Elem]` | `Ptr_t1_I64` |
 | Range | `Range_t1_[Iter]` | `Range_t1_I64` |
 | Array | `Array_t1_[Elem]` | `Array_t1_I64` |
-| Matrix | `Matrix_t1_[Elem]` | `Matrix_t1_F64` |
+| Rank-N Array | repeated `Array_t1_` | `Array_t1_Array_t1_F64` |
 | Table | `Table_t2N_[EncodedName Elem]...` | `Table_t4_5nName_StrH_6nScore_I64` |
 | ArrayRange | `ArrayRange_t1_[Elem]` | `ArrayRange_t1_I64` |
 | Function | `Func_tN_[ParamTypes...]` | `Func_t2_I64_F64` |
@@ -214,6 +214,11 @@ Built-in compound types use the `_tN_` pattern:
 Table schemas include column names because named-column access participates in
 type identity. Each column contributes two components. A named column encodes
 `n` plus its source name; an unnamed column encodes `u`.
+
+Rank-1 arrays lower as the existing opaque runtime-vector pointer. Higher-rank
+arrays lower as `{ data, dim0, ..., dim(N-1) }`, where `data` is one flat row-major
+runtime vector. Dimension lengths are runtime values and do not participate in
+type mangling.
 
 ---
 
