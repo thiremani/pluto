@@ -1711,6 +1711,7 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 	leftSym := c.compileExpression(expr.Left, nil)[0]
+	leftSym = c.derefIfPointer(leftSym, "dot_left")
 
 	switch leftType := leftSym.Type.(type) {
 	case Struct:
@@ -1734,6 +1735,8 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 
 			columnValue := c.tableColumnValue(leftSym.Val, i)
 			_, namedTable := expr.Left.(*ast.Identifier)
+			// Named and borrowed tables must survive projection. An owned
+			// temporary can instead transfer its selected column.
 			if leftSym.Borrowed || namedTable {
 				columnValue = c.copyArray(columnValue, column.ElemType)
 			} else {

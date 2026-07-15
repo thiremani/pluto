@@ -36,6 +36,13 @@ tableIdentity = Identity([
 ])
 "TableIdentity: -tableIdentity"
 
+tableCallColumn = Identity([
+    : Name Score
+    "Ada" 10
+    "Lin" 12
+]).Score
+"TableCallColumn: -tableCallColumn"
+
 arr1 = [] ⊕ [0]
 "DirectConcatScalar: -arr1"
 

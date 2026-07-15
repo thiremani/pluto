@@ -18,6 +18,7 @@ TableIdentity: [
     "Ada" 10
     "Lin" 12
 ]
+TableCallColumn: [10 12]
 DirectConcatScalar: [0]
 DirectConcatRange: [0 1 2 3 4]
 SquareVecRange: [0 1 4 9 16]
