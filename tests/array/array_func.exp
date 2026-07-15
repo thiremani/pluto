@@ -19,6 +19,7 @@ TableIdentity: [
     "Lin" 12
 ]
 TableCallColumn: [10 12]
+GatedTableColumn: ["" "Lin"]
 DirectConcatScalar: [0]
 DirectConcatRange: [0 1 2 3 4]
 SquareVecRange: [0 1 4 9 16]

@@ -43,6 +43,13 @@ tableCallColumn = Identity([
 ]).Score
 "TableCallColumn: -tableCallColumn"
 
+gatedTableColumn = (1 > 0 && Identity([
+    : Name Score
+    "Ada" 10
+    "Lin" 12
+])).Name > "K"
+"GatedTableColumn: -gatedTableColumn"
+
 arr1 = [] ⊕ [0]
 "DirectConcatScalar: -arr1"
 

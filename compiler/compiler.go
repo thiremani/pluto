@@ -1733,19 +1733,8 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 				continue
 			}
 
-			columnValue := c.tableColumnValue(leftSym.Val, i)
-			_, namedTable := expr.Left.(*ast.Identifier)
-			// Named and borrowed tables must survive projection. An owned
-			// temporary can instead transfer its selected column.
-			if leftSym.Borrowed || namedTable {
-				columnValue = c.copyArray(columnValue, column.ElemType)
-			} else {
-				for other, otherColumn := range leftType.Columns {
-					if other != i {
-						c.freeArray(c.tableColumnValue(leftSym.Val, other), otherColumn.ElemType)
-					}
-				}
-			}
+			columnValue := c.copyArray(c.tableColumnValue(leftSym.Val, i), column.ElemType)
+			c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})
 
 			return []*Symbol{{
 				Type: Array{ElemType: column.ElemType},
