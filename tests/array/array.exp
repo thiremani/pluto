@@ -20,13 +20,13 @@ matrix: [
     3 4
 ]
 table: [
-    : Name Score
+    :Name Score
     "Ada" 10
     "Lin" 12
 ]
 table scores: [10 12]
 replacement table: [
-    : Name Score
+    :Name Score
     "Mae" 20
 ]
 saved table scores: [10 12]

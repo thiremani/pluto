@@ -386,7 +386,8 @@ const char* table_str(size_t rows, size_t cols, const char* const* names,
     if (has_headers) {
         if (strbuf_printf(&sb, "\n    :") < 0) goto fail;
         for (size_t col = 0; col < cols; ++col) {
-            if (strbuf_printf(&sb, " %s", names[col]) < 0) goto fail;
+            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+            if (strbuf_printf(&sb, "%s", names[col]) < 0) goto fail;
         }
     }
     for (size_t row = 0; row < rows; ++row) {

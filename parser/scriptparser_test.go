@@ -1172,7 +1172,7 @@ func TestArrayLiterals(t *testing.T) {
 		{
 			name: "array with headers",
 			input: `[
-    : Day Product Price
+    :Day Product Price
     "Monday" "Phone" 200
     "Tuesday" "Laptop" 300
 ]`,

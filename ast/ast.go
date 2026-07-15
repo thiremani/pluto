@@ -313,7 +313,7 @@ func (al *ArrayLiteral) String() string {
 
 	// Print headers if present
 	if len(al.Headers) > 0 {
-		out.WriteString("\n    : ")
+		out.WriteString("\n    :")
 		for j, header := range al.Headers {
 			if j > 0 {
 				out.WriteString(" ")

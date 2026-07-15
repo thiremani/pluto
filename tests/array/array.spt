@@ -53,7 +53,7 @@ matrix =
 
 scores =
 [
-    : Name Score
+    :Name Score
     "Ada" 10
     "Lin" 12
 ]
@@ -62,7 +62,7 @@ scoreColumn = scores.Score
 "table scores: -scoreColumn"
 scores =
 [
-    : Name Score
+    :Name Score
     "Mae" 20
 ]
 "replacement table: -scores"

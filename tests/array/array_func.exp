@@ -14,7 +14,7 @@ MatrixIdentity: [
     3 4
 ]
 TableIdentity: [
-    : Name Score
+    :Name Score
     "Ada" 10
     "Lin" 12
 ]
