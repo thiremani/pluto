@@ -1120,8 +1120,15 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 
 	// Parse headers if present
 	if p.curTokenIs(token.COLON) {
-		arr.HasHeaderRow = true
+		headerToken := p.curToken
 		p.nextToken() // consume ':'
+		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: headerToken,
+				Msg:   "expected at least one column header after ':'",
+			})
+			return nil
+		}
 		if !p.parseHeader(arr) {
 			return nil
 		}

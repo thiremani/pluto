@@ -373,9 +373,21 @@ const char* table_str(size_t rows, size_t cols, const char* const* names,
                       const int32_t* kinds, const void* const* columns) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[\n    :") < 0) goto fail;
+
+    int has_headers = 0;
     for (size_t col = 0; col < cols; ++col) {
-        if (names[col][0] != '\0' && strbuf_printf(&sb, " %s", names[col]) < 0) goto fail;
+        if (names[col][0] != '\0') {
+            has_headers = 1;
+            break;
+        }
+    }
+
+    if (strbuf_printf(&sb, "[") < 0) goto fail;
+    if (has_headers) {
+        if (strbuf_printf(&sb, "\n    :") < 0) goto fail;
+        for (size_t col = 0; col < cols; ++col) {
+            if (strbuf_printf(&sb, " %s", names[col]) < 0) goto fail;
+        }
     }
     for (size_t row = 0; row < rows; ++row) {
         if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
@@ -384,7 +396,8 @@ const char* table_str(size_t rows, size_t cols, const char* const* names,
             if (strbuf_array_cell(&sb, columns[col], kinds[col], row) < 0) goto fail;
         }
     }
-    if (strbuf_printf(&sb, "\n]") < 0) goto fail;
+    if ((has_headers || rows > 0) && strbuf_printf(&sb, "\n") < 0) goto fail;
+    if (strbuf_printf(&sb, "]") < 0) goto fail;
     return sb.data;
 
 fail:

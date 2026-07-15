@@ -407,7 +407,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
 	// Only 1D array literals are currently supported by the compiler.
-	if al.HasHeaderRow || len(al.Rows) != 1 {
+	if len(al.Headers) > 0 || len(al.Rows) != 1 {
 		info.Ranges = nil
 		info.CollectRanges = nil
 		info.Rewrite = al
@@ -431,11 +431,10 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	rew := ast.Expression(al)
 	if changed {
 		newLit := &ast.ArrayLiteral{
-			Token:        al.Token,
-			HasHeaderRow: al.HasHeaderRow,
-			Headers:      append([]string(nil), al.Headers...),
-			Rows:         [][]ast.Expression{newRow},
-			Indices:      cloneArrayIndices(al.Indices),
+			Token:   al.Token,
+			Headers: append([]string(nil), al.Headers...),
+			Rows:    [][]ast.Expression{newRow},
+			Indices: cloneArrayIndices(al.Indices),
 		}
 		infoCopy := &ExprInfo{
 			OutTypes:      info.OutTypes,
@@ -931,13 +930,13 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // TypeArrayExpression classifies bracket literals as arrays, matrices, or
 // tables. Element and column types are homogeneous, with I64-to-F64 promotion.
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
-	if !al.HasHeaderRow && len(al.Rows) == 0 {
+	if len(al.Headers) == 0 && len(al.Rows) == 0 {
 		arr := Array{ElemType: Unresolved{}}
 		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
 	}
 
-	if !al.HasHeaderRow && len(al.Rows) == 1 {
+	if len(al.Headers) == 0 && len(al.Rows) == 1 {
 		elemType := Type(Unresolved{})
 		row := al.Rows[0]
 		for col := 0; col < len(row); col++ {
@@ -973,7 +972,7 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 		}
 	}
 
-	if !al.HasHeaderRow {
+	if len(al.Headers) == 0 {
 		if elemType, ok := commonMatrixElemType(colTypes); ok {
 			matrix := Matrix{ElemType: elemType}
 			ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{matrix}, ExprLen: 1}

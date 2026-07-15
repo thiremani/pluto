@@ -30,13 +30,7 @@ replacement table: [
     "Mae" 20
 ]
 saved table scores: [10 12]
-unnamed table: [
-    :
-    1 2
-    3 4
-]
 inferred table: [
-    :
     1 "a"
     2 "b"
 ]

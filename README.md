@@ -201,23 +201,24 @@ The same bracket syntax infers matrices and tables without a type keyword:
 
 ```python
 matrix = [
-  1 2
-  3 4
+    1 2
+    3 4
 ]
 
 scores = [
-  : Name Score
-  "Ada" 10
-  "Lin" 12
+    : Name Score
+    "Ada" 10
+    "Lin" 12
 ]
 ```
 
 An empty or one-row headerless literal is an array. A rectangular, multi-row
 literal whose cells share one promotable type is a row-major matrix. A header
 row always produces a columnar table; without headers, homogeneous columns
-with different element types infer an unnamed table. Use a bare `:` header row
-to force an unnamed table when all columns have the same type. Named columns
-are arrays, so `scores.Score` returns `[10 12]`.
+with different element types infer an unnamed table. A `:` must be followed by
+at least one column name; headerless literals start directly with their first
+data row. Indentation inside brackets is not semantic; examples use four spaces.
+Named columns are arrays, so `scores.Score` returns `[10 12]`.
 
 String-array elements print quoted so boundaries stay unambiguous:
 
