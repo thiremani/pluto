@@ -177,60 +177,30 @@ func (ts *TypeSolver) resolveBindingSlotType(name string, currentType, newType T
 	return slotType
 }
 
-func cloneArrayHeaders(src []string) []string {
-	if len(src) == 0 {
-		return nil
-	}
-	return append([]string(nil), src...)
-}
-
-func concatWithMetadata(leftArr, rightArr Array, elem Type) Array {
-	headers := cloneArrayHeaders(leftArr.Headers)
-	if len(headers) == 0 {
-		headers = cloneArrayHeaders(rightArr.Headers)
-	}
-
-	length := 0
-	switch {
-	case leftArr.Length > 0 && rightArr.Length > 0:
-		length = leftArr.Length + rightArr.Length
-	case leftArr.Length > 0:
-		length = leftArr.Length
-	case rightArr.Length > 0:
-		length = rightArr.Length
-	}
-
-	return Array{
-		Headers:  headers,
-		ColTypes: []Type{elem},
-		Length:   length,
-	}
-}
-
 func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token) Type {
-	leftElemType := leftArr.ColTypes[0]
-	rightElemType := rightArr.ColTypes[0]
+	leftElemType := leftArr.ElemType
+	rightElemType := rightArr.ElemType
 
 	if leftElemType.Kind() == UnresolvedKind {
-		return concatWithMetadata(leftArr, rightArr, rightElemType)
+		return Array{ElemType: rightElemType}
 	}
 
 	if rightElemType.Kind() == UnresolvedKind {
-		return concatWithMetadata(leftArr, rightArr, leftElemType)
+		return Array{ElemType: leftElemType}
 	}
 
 	if leftElemType.Kind() == rightElemType.Kind() {
 		// For string arrays, normalize to StrH if either side is StrH.
 		// This ensures consistent ownership semantics (runtime always heap-copies).
 		if leftElemType.Kind() == StrKind && (IsStrH(leftElemType) || IsStrH(rightElemType)) {
-			return concatWithMetadata(leftArr, rightArr, StrH{})
+			return Array{ElemType: StrH{}}
 		}
-		return concatWithMetadata(leftArr, rightArr, leftElemType)
+		return Array{ElemType: leftElemType}
 	}
 
 	if (leftElemType.Kind() == IntKind && rightElemType.Kind() == FloatKind) ||
 		(leftElemType.Kind() == FloatKind && rightElemType.Kind() == IntKind) {
-		return concatWithMetadata(leftArr, rightArr, Float{Width: 64})
+		return Array{ElemType: Float{Width: 64}}
 	}
 
 	ce := &token.CompileError{
@@ -242,7 +212,7 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 }
 
 func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
-	// Update the ExprCache with refined array metadata (headers, length).
+	// Update the ExprCache with the refined array element type.
 	// Note: handleInfixArrays only calls this when expr is already array-typed,
 	// so we can unconditionally update.
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
@@ -437,7 +407,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
 	// Only 1D array literals are currently supported by the compiler.
-	if !(len(al.Headers) == 0 && len(al.Rows) == 1) {
+	if al.HasHeaderRow || len(al.Rows) != 1 {
 		info.Ranges = nil
 		info.CollectRanges = nil
 		info.Rewrite = al
@@ -461,10 +431,11 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	rew := ast.Expression(al)
 	if changed {
 		newLit := &ast.ArrayLiteral{
-			Token:   al.Token,
-			Headers: append([]string(nil), al.Headers...),
-			Rows:    [][]ast.Expression{newRow},
-			Indices: cloneArrayIndices(al.Indices),
+			Token:        al.Token,
+			HasHeaderRow: al.HasHeaderRow,
+			Headers:      append([]string(nil), al.Headers...),
+			Rows:         [][]ast.Expression{newRow},
+			Indices:      cloneArrayIndices(al.Indices),
 		}
 		infoCopy := &ExprInfo{
 			OutTypes:      info.OutTypes,
@@ -721,7 +692,7 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 			case RangeKind:
 				innerType = t.(Range).Iter
 			case ArrayRangeKind:
-				innerType = t.(ArrayRange).Array.ColTypes[0]
+				innerType = t.(ArrayRange).Array.ElemType
 			}
 			scalarArgs = append(scalarArgs, innerType)
 		}
@@ -875,7 +846,7 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []
 			exprTypes[0] = iterType
 			info.OutTypes[0] = iterType
 		case ArrayRangeKind:
-			elemType := arrayAccessResultType(exprTypes[0].(ArrayRange).Array.ColTypes[0])
+			elemType := arrayAccessResultType(exprTypes[0].(ArrayRange).Array.ElemType)
 			exprTypes[0] = elemType
 			info.OutTypes[0] = elemType
 		}
@@ -957,76 +928,120 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	PutBulk(ts.Scopes, trueValues)
 }
 
-// TypeArrayExpression infers the type of an Array literal. Columns must be
-// homogeneous and of primitive types: I64, F64 (promotion from I64 allowed), or Str.
-// The returned type slice contains a single Array type value.
+// TypeArrayExpression classifies bracket literals as arrays, matrices, or
+// tables. Element and column types are homogeneous, with I64-to-F64 promotion.
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
-	// Empty array literal: [] (no rows)
-	if len(al.Headers) == 0 && len(al.Rows) == 0 {
-		arr := Array{Headers: nil, ColTypes: []Type{Unresolved{}}, Length: 0}
+	if !al.HasHeaderRow && len(al.Rows) == 0 {
+		arr := Array{ElemType: Unresolved{}}
 		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
 	}
 
-	// Vector special-case: single row, no headers → treat as 1-column vector
-	if len(al.Headers) == 0 && len(al.Rows) == 1 {
-		colTypes := []Type{Unresolved{}}
+	if !al.HasHeaderRow && len(al.Rows) == 1 {
+		elemType := Type(Unresolved{})
 		row := al.Rows[0]
 		for col := 0; col < len(row); col++ {
 			cellT, ok := ts.typeCell(row[col], al.Tok())
 			if !ok {
 				continue
 			}
-			colTypes[0] = ts.mergeColType(colTypes[0], cellT, 0, al.Tok())
+			elemType = ts.mergeColType(elemType, cellT, 0, al.Tok())
 		}
-		// Length = number of elements in the row (for vectors)
-		arr := Array{Headers: nil, ColTypes: colTypes, Length: len(row)}
+		arr := Array{ElemType: elemType}
 
 		// Array literals materialize their own internal ranges instead of
 		// propagating them upward into the parent expression's loop shape.
 		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
 	}
-	// unsupported as of now
-	types := []Type{Unresolved{}}
-	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-	return types
-	/*
-	   // 1. Determine number of columns
-	   numCols := ts.arrayNumCols(al)
 
-	   	if numCols == 0 {
-	   		if iterate {
-	   			return []Type{Unresolved{}}
-	   		}
-	   		return []Type{Array{Headers: nil, ColTypes: nil, Length: 0}}
-	   	}
+	numCols := ts.arrayNumCols(al)
+	if !ts.validateBracketLiteralShape(al, numCols) {
+		types := []Type{Unresolved{}}
+		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		return types
+	}
 
-	   // 2. Initialize column types
-	   colTypes := ts.initColTypes(numCols)
+	colTypes := ts.initColTypes(numCols)
+	for _, row := range al.Rows {
+		for col, cell := range row {
+			cellType, ok := ts.typeCell(cell, al.Tok())
+			if !ok {
+				continue
+			}
+			colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
+		}
+	}
 
-	   // 3. Walk rows/cells and merge types per column
+	if !al.HasHeaderRow {
+		if elemType, ok := commonMatrixElemType(colTypes); ok {
+			matrix := Matrix{ElemType: elemType}
+			ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{matrix}, ExprLen: 1}
+			return []Type{matrix}
+		}
+	}
 
-	   	for _, row := range al.Rows {
-	   		for col := 0; col < numCols; col++ {
-	   			if col >= len(row) {
-	   				break // ragged row; remaining cells are missing
-	   			}
-	   			cellT, ok := ts.typeCell(row[col], al.Tok())
-	   			if !ok {
-	   				continue
-	   			}
-	   			colTypes[col] = ts.mergeColType(colTypes[col], cellT, col, al.Tok())
-	   		}
-	   	}
+	columns := make([]TableColumn, numCols)
+	for i, elemType := range colTypes {
+		name := ""
+		if i < len(al.Headers) {
+			name = al.Headers[i]
+		}
+		columns[i] = TableColumn{Name: name, ElemType: elemType}
+	}
+	table := Table{Columns: columns}
+	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{table}, ExprLen: 1}
+	return []Type{table}
+}
 
-	   // 4. Build final Array type (no defaulting of unresolved columns)
-	   arr := Array{Headers: append([]string(nil), al.Headers...), ColTypes: colTypes, Length: len(al.Rows)}
+func (ts *TypeSolver) validateBracketLiteralShape(al *ast.ArrayLiteral, numCols int) bool {
+	valid := true
+	if len(al.Headers) > 0 {
+		seen := make(map[string]struct{}, len(al.Headers))
+		for _, header := range al.Headers {
+			if _, exists := seen[header]; exists {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: al.Tok(),
+					Msg:   fmt.Sprintf("duplicate table column %q", header),
+				})
+				valid = false
+			}
+			seen[header] = struct{}{}
+		}
+	}
 
-	   // Cache this expression's resolved type for the compiler
-	   ts.ExprCache[al] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1}
-	   return []Type{arr}
-	*/
+	for i, row := range al.Rows {
+		if len(row) == numCols {
+			continue
+		}
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: al.Tok(),
+			Msg:   fmt.Sprintf("bracket literal row %d has %d cells, expected %d", i+1, len(row), numCols),
+		})
+		valid = false
+	}
+	return valid
+}
+
+func commonMatrixElemType(colTypes []Type) (Type, bool) {
+	elemType := Type(Unresolved{})
+	for _, colType := range colTypes {
+		switch {
+		case elemType.Kind() == UnresolvedKind:
+			elemType = colType
+		case colType.Kind() == UnresolvedKind:
+			continue
+		case TypeEqual(elemType, colType):
+			continue
+		case elemType.Kind() == IntKind && colType.Kind() == FloatKind:
+			elemType = colType
+		case elemType.Kind() == FloatKind && colType.Kind() == IntKind:
+			continue
+		default:
+			return nil, false
+		}
+	}
+	return elemType, true
 }
 
 func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
@@ -1109,29 +1124,41 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		return types
 	}
 
-	structType, ok := leftTypes[0].(Struct)
-	if !ok {
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	switch leftType := leftTypes[0].(type) {
+	case Struct:
+		for _, field := range leftType.Fields {
+			if field.Name == expr.Field {
+				info.OutTypes = []Type{field.Type}
+				info.HasRanges = leftInfo.HasRanges
+				return info.OutTypes
+			}
+		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
-			Msg:   fmt.Sprintf("field access expects a struct value, got %s", leftTypes[0].String()),
+			Msg:   fmt.Sprintf("unknown field %q on struct %s", expr.Field, leftType.Name),
+		})
+		return types
+	case Table:
+		for _, column := range leftType.Columns {
+			if column.Name == expr.Field {
+				info.OutTypes = []Type{Array{ElemType: column.ElemType}}
+				info.HasRanges = leftInfo.HasRanges
+				return info.OutTypes
+			}
+		}
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   fmt.Sprintf("unknown column %q on %s", expr.Field, leftType.String()),
+		})
+		return types
+	default:
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: expr.Tok(),
+			Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftTypes[0].String()),
 		})
 		return types
 	}
-
-	for _, field := range structType.Fields {
-		if field.Name == expr.Field {
-			info.OutTypes = []Type{field.Type}
-			leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
-			info.HasRanges = leftInfo.HasRanges
-			return info.OutTypes
-		}
-	}
-
-	ts.Errors = append(ts.Errors, &token.CompileError{
-		Token: expr.Tok(),
-		Msg:   fmt.Sprintf("unknown field %q on struct %s", expr.Field, structType.Name),
-	})
-	return types
 }
 
 // arrayNumCols returns column count based on headers or max row width.
@@ -1139,13 +1166,10 @@ func (ts *TypeSolver) arrayNumCols(al *ast.ArrayLiteral) int {
 	if len(al.Headers) > 0 {
 		return len(al.Headers)
 	}
-	maxW := 0
-	for _, row := range al.Rows {
-		if l := len(row); l > maxW {
-			maxW = l
-		}
+	if len(al.Rows) > 0 {
+		return len(al.Rows[0])
 	}
-	return maxW
+	return 0
 }
 
 func (ts *TypeSolver) initColTypes(n int) []Type {
@@ -1162,13 +1186,13 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 	if len(tps) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
-			Msg:   fmt.Sprintf("array cell produced %d types; expected 1", len(tps)),
+			Msg:   fmt.Sprintf("bracket literal cell produced %d types; expected 1", len(tps)),
 		})
 		return Unresolved{}, false
 	}
 	cellType := tps[0]
 	if cellType.Kind() == UnresolvedKind {
-		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "array cell type could not be resolved"})
+		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
 		return Unresolved{}, false
 	}
 	return cellType, true
@@ -1188,8 +1212,8 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 	}
 
 	// Only allow I64, F64, or Str as array elements.
-	if !AllowedArrayElem(newT) {
-		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("unsupported array element type %s in column %d", newT.String(), colIdx)})
+	if !allowedCollectionElement(newT) {
+		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: fmt.Sprintf("unsupported bracket literal element type %s in column %d", newT.String(), colIdx)})
 		return cur
 	}
 
@@ -1216,8 +1240,9 @@ func (ts *TypeSolver) mergeColType(cur Type, newT Type, colIdx int, tok token.To
 	return cur
 }
 
-// AllowedArrayElem returns true only for I64, F64, and Str cells.
-func AllowedArrayElem(t Type) bool {
+// allowedCollectionElement reports whether a value can be stored in the
+// runtime backing arrays used by arrays, matrices, and tables.
+func allowedCollectionElement(t Type) bool {
 	switch v := t.(type) {
 	case Int:
 		return v.Width == 64
@@ -1319,15 +1344,7 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	if !ok {
 		return info.OutTypes
 	}
-	if len(arrType.ColTypes) == 0 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   "array type has no element columns",
-		})
-		return info.OutTypes
-	}
-
-	elemType := arrType.ColTypes[0]
+	elemType := arrType.ElemType
 	// String array element access does strdup at runtime, so result is heap-allocated
 	if elemType.Kind() == StrKind {
 		elemType = StrH{}
@@ -1506,10 +1523,10 @@ func (ts *TypeSolver) typeInfixArrayMask(leftType, rightType Type, op string, to
 	cmpLeft := leftType
 	cmpRight := rightType
 	if leftType.Kind() == ArrayKind {
-		cmpLeft = leftType.(Array).ColTypes[0]
+		cmpLeft = leftType.(Array).ElemType
 	}
 	if rightType.Kind() == ArrayKind {
-		cmpRight = rightType.(Array).ColTypes[0]
+		cmpRight = rightType.(Array).ElemType
 	}
 	ts.TypeInfixOp(cmpLeft, cmpRight, op, tok)
 }
@@ -1537,7 +1554,7 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		if leftType.Kind() == ArrayKind {
 			return leftType, CondArray
 		}
-		return Array{Headers: nil, ColTypes: []Type{leftType}, Length: 0}, CondArray
+		return Array{ElemType: leftType}, CondArray
 	}
 
 	// Handle any expression involving arrays
@@ -1800,17 +1817,13 @@ func (ts *TypeSolver) typeArrayArrayInfix(leftArr, rightArr Array, op string, to
 	}
 
 	// Element-wise operations - resolve element types
-	leftElem := leftArr.ColTypes[0]
-	rightElem := rightArr.ColTypes[0]
+	leftElem := leftArr.ElemType
+	rightElem := rightArr.ElemType
 
 	resultElem := ts.resolveArrayElemTypes(leftElem, rightElem, op, tok)
 
 	// Return array type with dynamic length (determined at runtime)
-	return Array{
-		Headers:  nil,
-		ColTypes: []Type{resultElem},
-		Length:   0,
-	}
+	return Array{ElemType: resultElem}
 }
 
 // resolveArrayElemTypes handles unresolved element types and type inference for array operations
@@ -1853,23 +1866,19 @@ func (ts *TypeSolver) typeArrayScalarInfix(left, right Type, leftIsArr bool, op 
 
 	if leftIsArr {
 		arrType = left.(Array)
-		leftType = arrType.ColTypes[0]
+		leftType = arrType.ElemType
 		rightType = right
 	} else {
 		arrType = right.(Array)
 		leftType = left
-		rightType = arrType.ColTypes[0]
+		rightType = arrType.ElemType
 	}
 
 	// Compute result element type
 	elemType := ts.TypeInfixOp(leftType, rightType, op, tok)
 
 	// Return array with computed element type
-	return Array{
-		Headers:  cloneArrayHeaders(arrType.Headers),
-		ColTypes: []Type{elemType},
-		Length:   arrType.Length,
-	}
+	return Array{ElemType: elemType}
 }
 
 func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) Type {
@@ -1925,7 +1934,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 		if opType.Kind() == ArrayKind {
 			isArrayExpr = true
 			origArrayType = opType.(Array)
-			opType = origArrayType.ColTypes[0]
+			opType = origArrayType.ElemType
 		}
 
 		opKey := unaryOpKey{
@@ -1954,11 +1963,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 		resultType := fn(ts.ScriptCompiler.Compiler, opSym, false).Type
 
 		if isArrayExpr {
-			finalType := Array{
-				Headers:  origArrayType.Headers,
-				ColTypes: []Type{resultType},
-				Length:   origArrayType.Length,
-			}
+			finalType := Array{ElemType: resultType}
 			types = append(types, finalType)
 			continue
 		}
@@ -2071,7 +2076,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 			case RangeKind:
 				innerType = outerType.(Range).Iter
 			case ArrayRangeKind:
-				innerType = outerType.(ArrayRange).Array.ColTypes[0]
+				innerType = outerType.(ArrayRange).Array.ElemType
 			}
 			innerArgs = append(innerArgs, innerType)
 
@@ -2094,7 +2099,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		case RangeKind:
 			return t.(Range).Iter
 		case ArrayRangeKind:
-			return t.(ArrayRange).Array.ColTypes[0]
+			return t.(ArrayRange).Array.ElemType
 		default:
 			return t
 		}

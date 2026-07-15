@@ -299,10 +299,11 @@ func (rl *RangeLiteral) String() string {
 }
 
 type ArrayLiteral struct {
-	Token   token.Token      // the '[' token
-	Headers []string         // column headers (empty for matrices)
-	Rows    [][]Expression   // row data
-	Indices map[string][]int // named row indices like "books": [2,3]
+	Token        token.Token      // the '[' token
+	HasHeaderRow bool             // distinguishes no header row from a bare ':' row
+	Headers      []string         // column names; empty when a bare ':' marks an unnamed table
+	Rows         [][]Expression   // row data
+	Indices      map[string][]int // named row indices like "books": [2,3]
 }
 
 func (al *ArrayLiteral) expressionNode()  {}
@@ -312,7 +313,7 @@ func (al *ArrayLiteral) String() string {
 	out.WriteString("[")
 
 	// Print headers if present
-	if len(al.Headers) > 0 {
+	if al.HasHeaderRow {
 		out.WriteString("\n  :  ") // 2 spaces after :
 		for j, header := range al.Headers {
 			if j > 0 {
@@ -325,7 +326,7 @@ func (al *ArrayLiteral) String() string {
 
 	// Print rows
 	for _, row := range al.Rows {
-		if len(al.Headers) > 0 {
+		if al.HasHeaderRow {
 			out.WriteString("     ") // 5 spaces for header tables
 		} else {
 			out.WriteString("    ") // 4 spaces for matrices
@@ -626,10 +627,11 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			return expr
 		}
 		return &ArrayLiteral{
-			Token:   e.Token,
-			Headers: append([]string(nil), e.Headers...),
-			Rows:    rows,
-			Indices: maps.Clone(e.Indices),
+			Token:        e.Token,
+			HasHeaderRow: e.HasHeaderRow,
+			Headers:      append([]string(nil), e.Headers...),
+			Rows:         rows,
+			Indices:      maps.Clone(e.Indices),
 		}
 	case *StructLiteral:
 		row, changed := rewriteExprSlice(e.Row, rewrite)

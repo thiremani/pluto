@@ -43,3 +43,42 @@ arr3 = [
 ]
 arr3
 "arr3 is -arr3"
+
+matrix =
+[
+  1 2.5
+  3 4
+]
+"matrix: -matrix"
+
+scores =
+[
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+"table: -scores"
+scoreColumn = scores.Score
+"table scores: -scoreColumn"
+scores =
+[
+  : Name Score
+    "Mae" 20
+]
+"replacement table: -scores"
+"saved table scores: -scoreColumn"
+
+unnamedTable =
+[
+  :
+  1 2
+  3 4
+]
+"unnamed table: -unnamedTable"
+
+inferredTable =
+[
+  1 "a"
+  2 "b"
+]
+"inferred table: -inferredTable"

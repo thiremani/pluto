@@ -1120,6 +1120,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 
 	// Parse headers if present
 	if p.curTokenIs(token.COLON) {
+		arr.HasHeaderRow = true
 		p.nextToken() // consume ':'
 		if !p.parseHeader(arr) {
 			return nil

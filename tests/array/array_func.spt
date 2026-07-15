@@ -23,6 +23,19 @@ scalar_sum, scalar_prod = SumAndProduct(2, 3)
 scalar = Square(7)
 "SquareScalar: -scalar"
 
+matrixIdentity = Identity([
+    1 2
+    3 4
+])
+"MatrixIdentity: -matrixIdentity"
+
+tableIdentity = Identity([
+    : Name Score
+    "Ada" 10
+    "Lin" 12
+])
+"TableIdentity: -tableIdentity"
+
 arr1 = [] ⊕ [0]
 "DirectConcatScalar: -arr1"
 

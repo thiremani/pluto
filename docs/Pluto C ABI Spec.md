@@ -203,11 +203,17 @@ Built-in compound types use the `_tN_` pattern:
 |------|---------|---------|
 | Pointer | `Ptr_t1_[Elem]` | `Ptr_t1_I64` |
 | Range | `Range_t1_[Iter]` | `Range_t1_I64` |
-| Array | `Array_tN_[ColTypes...]` | `Array_t2_I64_F64` |
-| ArrayRange | `ArrayRange_tN_[ColTypes...]` | `ArrayRange_t1_I64` |
+| Array | `Array_t1_[Elem]` | `Array_t1_I64` |
+| Matrix | `Matrix_t1_[Elem]` | `Matrix_t1_F64` |
+| Table | `Table_t2N_[EncodedName Elem]...` | `Table_t4_5nName_StrH_6nScore_I64` |
+| ArrayRange | `ArrayRange_t1_[Elem]` | `ArrayRange_t1_I64` |
 | Function | `Func_tN_[ParamTypes...]` | `Func_t2_I64_F64` |
 
 **Note:** Function types only mangle parameter types; return types are NOT included (per §2.4 Arity rules).
+
+Table schemas include column names because named-column access participates in
+type identity. Each column contributes two components. A named column encodes
+`n` plus its source name; an unnamed column encodes `u`.
 
 ---
 

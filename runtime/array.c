@@ -328,6 +328,70 @@ static int strbuf_format_str(StrBuf* sb, const char* fmt, int dynamic_arg_count,
                                  value ? value : "");
 }
 
+static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_t index) {
+    switch (kind) {
+    case PT_ELEM_I64:
+        return strbuf_printf(sb, "%lld", (long long)arr_i64_get((const PtArrayI64*)values, index));
+    case PT_ELEM_F64: {
+        double value = arr_f64_get((const PtArrayF64*)values, index);
+        const char* special = f64_special_str(value);
+        return special ? strbuf_printf(sb, "%s", special) : strbuf_printf(sb, "%g", value);
+    }
+    case PT_ELEM_STR: {
+        char* quoted = str_quote(arr_str_borrow((const PtArrayStr*)values, index));
+        if (!quoted) return -1;
+        int result = strbuf_printf(sb, "%s", quoted);
+        free(quoted);
+        return result;
+    }
+    default:
+        return -1;
+    }
+}
+
+const char* matrix_str(const void* values, int32_t kind, size_t rows, size_t cols) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[") < 0) goto fail;
+    for (size_t row = 0; row < rows; ++row) {
+        if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
+        for (size_t col = 0; col < cols; ++col) {
+            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+            if (strbuf_array_cell(&sb, values, kind, row * cols + col) < 0) goto fail;
+        }
+    }
+    if (rows > 0 && strbuf_printf(&sb, "\n") < 0) goto fail;
+    if (strbuf_printf(&sb, "]") < 0) goto fail;
+    return sb.data;
+
+fail:
+    free(sb.data);
+    return NULL;
+}
+
+const char* table_str(size_t rows, size_t cols, const char* const* names,
+                      const int32_t* kinds, const void* const* columns) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+    if (strbuf_printf(&sb, "[\n    :") < 0) goto fail;
+    for (size_t col = 0; col < cols; ++col) {
+        if (names[col][0] != '\0' && strbuf_printf(&sb, " %s", names[col]) < 0) goto fail;
+    }
+    for (size_t row = 0; row < rows; ++row) {
+        if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
+        for (size_t col = 0; col < cols; ++col) {
+            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+            if (strbuf_array_cell(&sb, columns[col], kinds[col], row) < 0) goto fail;
+        }
+    }
+    if (strbuf_printf(&sb, "\n]") < 0) goto fail;
+    return sb.data;
+
+fail:
+    free(sb.data);
+    return NULL;
+}
+
 const char* arr_i64_str(const PtArrayI64* a) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;

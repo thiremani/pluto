@@ -1142,6 +1142,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:  "empty array",
 			input: "[]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.False(t, arr.HasHeaderRow)
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
 			},
@@ -1153,6 +1154,7 @@ func TestArrayLiterals(t *testing.T) {
     4 5 6
 ]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.False(t, arr.HasHeaderRow)
 				require.Empty(t, arr.Headers, "expected no headers for matrix")
 				require.Len(t, arr.Rows, 2, "expected 2 rows")
 				require.Len(t, arr.Rows[0], 3, "expected 3 elements in first row")
@@ -1177,6 +1179,7 @@ func TestArrayLiterals(t *testing.T) {
      "Tuesday" "Laptop" 300
 ]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.HasHeaderRow)
 				require.Equal(t, []string{"Day", "Product", "Price"}, arr.Headers)
 				require.Len(t, arr.Rows, 2, "expected 2 rows")
 

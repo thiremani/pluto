@@ -42,7 +42,7 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - Go front-end, LLVM back-end; emits native binaries
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
-- First-class arrays (safe slicing) and link semantics
+- First-class arrays (safe slicing), inferred row-major matrices, columnar tables, and link semantics
 - Scope-based memory: no nulls, no out-of-bounds, no garbage collector
 - printf-style formatting; arrays/ranges printable
 - Cross-platform (Linux/macOS/Windows)
@@ -196,6 +196,28 @@ y = [1.1 2.2 3.3]
 ```
 
 Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
+
+The same bracket syntax infers matrices and tables without a type keyword:
+
+```python
+matrix = [
+  1 2
+  3 4
+]
+
+scores = [
+  : Name Score
+  "Ada" 10
+  "Lin" 12
+]
+```
+
+An empty or one-row headerless literal is an array. A rectangular, multi-row
+literal whose cells share one promotable type is a row-major matrix. A header
+row always produces a columnar table; without headers, homogeneous columns
+with different element types infer an unnamed table. Use a bare `:` header row
+to force an unnamed table when all columns have the same type. Named columns
+are arrays, so `scores.Score` returns `[10 12]`.
 
 String-array elements print quoted so boundaries stay unambiguous:
 

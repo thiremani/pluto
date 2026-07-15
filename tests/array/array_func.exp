@@ -9,6 +9,15 @@ ProdReverse: [5 10]
 SumProductScalar: 5
 ProdScalar: 6
 SquareScalar: 49
+MatrixIdentity: [
+    1 2
+    3 4
+]
+TableIdentity: [
+    : Name Score
+    "Ada" 10
+    "Lin" 12
+]
 DirectConcatScalar: [0]
 DirectConcatRange: [0 1 2 3 4]
 SquareVecRange: [0 1 4 9 16]

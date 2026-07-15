@@ -773,7 +773,7 @@ func TestCanUseCondSelectWhitelist(t *testing.T) {
 	require.True(t, canUseCondSelect(StrG{}))
 
 	require.False(t, canUseCondSelect(StrH{}))
-	require.False(t, canUseCondSelect(Array{ColTypes: []Type{I64}}))
+	require.False(t, canUseCondSelect(Array{ElemType: I64}))
 }
 
 func TestCollectorArrayBindingCannotBeNestedAsCell(t *testing.T) {
@@ -796,7 +796,7 @@ arr`
 	for i, err := range errs {
 		messages[i] = err.Error()
 	}
-	require.Contains(t, strings.Join(messages, "\n"), "unsupported array element type [I64] in column 0")
+	require.Contains(t, strings.Join(messages, "\n"), "unsupported bracket literal element type [I64] in column 0")
 }
 
 func TestAffineArrayIndexExprUsesVersionedLoop(t *testing.T) {
@@ -996,7 +996,7 @@ func TestPushValOwnNullStrHEmitsTrapPath(t *testing.T) {
 	entry := ctx.AddBasicBlock(fn, "entry")
 	c.builder.SetInsertPointAtEnd(entry)
 
-	acc := c.NewArrayAccumulator(Array{ColTypes: []Type{StrH{}}})
+	acc := c.NewArrayAccumulator(Array{ElemType: StrH{}})
 	nullStr := llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
 	c.PushValOwn(acc, &Symbol{Val: nullStr, Type: StrH{}})
 	c.builder.CreateRetVoid()

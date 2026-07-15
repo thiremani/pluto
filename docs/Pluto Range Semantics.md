@@ -103,9 +103,12 @@ root a skipped iteration keeps the destination, so the last **yielded** value
 wins (`x = i > 2 && i * 2` over `0:5` ends as `8`). `i > 2 && v || w` resolves
 per iteration as an if-else.
 
-## Array Literals
+## One-Dimensional Array Literals
 
-`[]` always materializes an array at the point where it appears.
+A headerless bracket literal with at most one data row materializes an array at
+the point where it appears. Rectangular literals with multiple rows are
+classified as matrices or tables; they do not use the collector behavior in
+this section.
 
 The collector materializes over:
 

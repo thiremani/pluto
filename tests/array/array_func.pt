@@ -18,3 +18,6 @@ res = PairSum(i, j)
 
 res = Acc(a, x)
     res = a + x
+
+res = Identity(x)
+    res = x

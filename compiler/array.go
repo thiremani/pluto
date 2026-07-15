@@ -64,12 +64,12 @@ var ArrayInfos = map[Kind]ArrayInfo{
 }
 
 func (c *Compiler) NewArrayAccumulator(arr Array) *ArrayAccumulator {
-	info := ArrayInfos[arr.ColTypes[0].Kind()]
+	info := ArrayInfos[arr.ElemType.Kind()]
 	fnTy, fn := c.GetCFunc(info.NewName)
 	vec := c.builder.CreateCall(fnTy, fn, nil, "range_arr_new")
 	return &ArrayAccumulator{
 		Vec:       vec,
-		ElemType:  arr.ColTypes[0],
+		ElemType:  arr.ElemType,
 		ArrayType: arr,
 		Info:      info,
 	}
@@ -265,11 +265,24 @@ func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm
 
 // Array compilation functions
 
-// compileArrayExpression materializes simple array literals into runtime vectors.
-// Currently supports only a single row with no headers, e.g. [1 2 3 4].
+// compileArrayExpression materializes a bracket literal according to its solved
+// Array, Matrix, or Table type.
 func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) (res []*Symbol) {
 	lit, info := c.resolveArrayLiteralRewrite(e)
-	return []*Symbol{c.compileArrayLiteralInDomain(lit, info, nil, nil)}
+	switch typ := info.OutTypes[0].(type) {
+	case Array:
+		return []*Symbol{c.compileArrayLiteralInDomain(lit, info, nil, nil)}
+	case Matrix:
+		return []*Symbol{c.compileMatrixLiteral(lit, typ)}
+	case Table:
+		return []*Symbol{c.compileTableLiteral(lit, typ)}
+	default:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: lit.Tok(),
+			Msg:   fmt.Sprintf("unsupported bracket literal type %s", typ.String()),
+		})
+		return nil
+	}
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
@@ -294,15 +307,10 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
 	s := &Symbol{}
 
-	if !(len(lit.Headers) == 0 && (len(lit.Rows) == 0 || len(lit.Rows) == 1)) {
-		c.Errors = append(c.Errors, &token.CompileError{Token: lit.Tok(), Msg: "2D arrays/tables not implemented yet"})
-		return nil
-	}
-
 	// Handle empty array literal: []
 	if len(lit.Rows) == 0 {
 		arr := info.OutTypes[0].(Array)
-		elemType := arr.ColTypes[0]
+		elemType := arr.ElemType
 
 		// If element type is unresolved, create a null pointer
 		// The actual array will be created when the variable is used with a concrete type
@@ -321,7 +329,7 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	}
 
 	arr := info.OutTypes[0].(Array)
-	elemType := arr.ColTypes[0]
+	elemType := arr.ElemType
 
 	row := lit.Rows[0]
 	nConst := c.ConstI64(uint64(len(row)))
@@ -348,7 +356,7 @@ func (c *Compiler) withCollectorLoopNest(ranges []*RangeInfo, probe ast.Expressi
 
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo, ranges []*RangeInfo, condExprs []ast.Expression) *Symbol {
 	arr := info.OutTypes[0].(Array)
-	elemType := arr.ColTypes[0]
+	elemType := arr.ElemType
 	acc := c.NewArrayAccumulator(arr)
 
 	c.withCollectorLoopNest(ranges, lit, condExprs, func() {
@@ -571,8 +579,8 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isT
 
 // arrayPairMinLen returns min(len(left), len(right)) for two arrays.
 func (c *Compiler) arrayPairMinLen(left *Symbol, right *Symbol) llvm.Value {
-	leftElem := left.Type.(Array).ColTypes[0]
-	rightElem := right.Type.(Array).ColTypes[0]
+	leftElem := left.Type.(Array).ElemType
+	rightElem := right.Type.(Array).ElemType
 	leftLen := c.ArrayLen(left, leftElem)
 	rightLen := c.ArrayLen(right, rightElem)
 	return c.builder.CreateSelect(
@@ -589,11 +597,11 @@ func (c *Compiler) forEachArrayPair(
 	loopLen llvm.Value,
 	body func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol),
 ) {
-	leftElem := left.Type.(Array).ColTypes[0]
+	leftElem := left.Type.(Array).ElemType
 	rightIsArray := right.Type.Kind() == ArrayKind
 	var rightElem Type
 	if rightIsArray {
-		rightElem = right.Type.(Array).ColTypes[0]
+		rightElem = right.Type.(Array).ElemType
 	}
 
 	r := c.rangeZeroToN(loopLen)
@@ -616,7 +624,7 @@ func (c *Compiler) forEachArrayPair(
 func (c *Compiler) arraySym(array llvm.Value, elemType Type) *Symbol {
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	return &Symbol{
-		Type: Array{Headers: nil, ColTypes: []Type{elemType}, Length: 0},
+		Type: Array{ElemType: elemType},
 		Val:  c.builder.CreateBitCast(array, i8p, "arr_i8p"),
 	}
 }
@@ -625,8 +633,8 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	leftArrType := left.Type.(Array)
 	rightArrType := right.Type.(Array)
 
-	leftElem := leftArrType.ColTypes[0]
-	rightElem := rightArrType.ColTypes[0]
+	leftElem := leftArrType.ElemType
+	rightElem := rightArrType.ElemType
 
 	// Array concatenation: arr1 ⊕ arr2
 	if op == token.SYM_CONCAT {
@@ -681,7 +689,7 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	arrElem := arr.Type.(Array).ColTypes[0]
+	arrElem := arr.Type.(Array).ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
@@ -715,7 +723,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 func (c *Compiler) compileArrayMask(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
-	resElem := expected.(Array).ColTypes[0]
+	resElem := expected.(Array).ElemType
 
 	if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
 		return c.compileArrayArrayMask(op, l, r, resElem)
@@ -755,7 +763,7 @@ func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol,
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	arrElem := arr.Type.(Array).ColTypes[0]
+	arrElem := arr.Type.(Array).ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
@@ -775,8 +783,8 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
 	arrType := arr.Type.(Array)
-	elem := arrType.ColTypes[0]
-	resElem := result.ColTypes[0]
+	elem := arrType.ElemType
+	resElem := result.ElemType
 	n := c.ArrayLen(arr, elem)
 	resVec := c.CreateArrayForType(resElem, n)
 
@@ -805,7 +813,7 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 
 func (c *Compiler) arrayStrArg(s *Symbol) llvm.Value {
 	arr := s.Type.(Array)
-	elemType := arr.ColTypes[0]
+	elemType := arr.ElemType
 	info, ok := ArrayInfos[elemType.Kind()]
 	if !ok {
 		panic("internal: unsupported array element kind for printing")
@@ -931,7 +939,7 @@ func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Sym
 	defer c.freeConsumedTemporary(expr.Array, []*Symbol{arraySym})
 
 	// Scalar index - element access
-	arrElemType := arrType.ColTypes[0]
+	arrElemType := arrType.ElemType
 	resultType := arrayAccessResultType(arrElemType)
 	idxVal := c.normalizeArrayIndex(idxSym)
 
@@ -971,7 +979,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 				panic("internal: range-lowered array access requires scalar index")
 			}
 
-			arrElemType := arrType.ColTypes[0]
+			arrElemType := arrType.ElemType
 			resultType := arrayAccessResultType(arrElemType)
 			idxVal := c.normalizeArrayIndex(idxSym)
 

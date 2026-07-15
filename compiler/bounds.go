@@ -491,10 +491,10 @@ func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol,
 	}
 	arraySym := c.derefIfPointer(raw, ident.Value+"_affine_arr")
 	arrType, ok := arraySym.Type.(Array)
-	if !ok || len(arrType.ColTypes) == 0 {
+	if !ok || arrType.ElemType == nil {
 		return nil, nil, false
 	}
-	return arraySym, arrType.ColTypes[0], true
+	return arraySym, arrType.ElemType, true
 }
 
 func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*RangeInfo) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {

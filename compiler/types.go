@@ -21,6 +21,8 @@ const (
 	RangeKind
 	FuncKind
 	ArrayKind
+	MatrixKind
+	TableKind
 	ArrayRangeKind
 	StructKind
 )
@@ -59,6 +61,8 @@ var PrimitiveTypeNames = []string{
 // Sorted by descending length in init() for correct prefix matching.
 var CompoundTypePrefixes = []string{
 	"ArrayRange",
+	"Matrix",
+	"Table",
 	"Array",
 	"Range",
 	"Ptr",
@@ -262,11 +266,12 @@ func IsFullyResolvedType(t Type) bool {
 	case Range:
 		return IsFullyResolvedType(tt.Iter)
 	case Array:
-		if len(tt.ColTypes) == 0 {
-			return false
-		}
-		for _, col := range tt.ColTypes {
-			if !IsFullyResolvedType(col) {
+		return tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
+	case Matrix:
+		return tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
+	case Table:
+		for _, column := range tt.Columns {
+			if column.ElemType == nil || !IsFullyResolvedType(column.ElemType) {
 				return false
 			}
 		}
@@ -287,42 +292,92 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
-// Array represents a tabular array with optional headers and typed columns.
-// Each column has a primitive element type (I64, F64, or Str). Length is the
-// number of rows. Headers may be empty (for matrices without named columns).
+// Array is a homogeneous, one-dimensional sequence.
 type Array struct {
-	Headers  []string // column headers (may be empty)
-	ColTypes []Type   // element type per column (must be Int{64}, Float{64}, or Str)
-	Length   int      // number of rows
+	ElemType Type
 }
 
 func (a Array) String() string {
-	// Type identity ignores headers and length; show schema only.
-	if len(a.ColTypes) == 0 {
+	if a.ElemType == nil {
 		return "[]"
 	}
-	var cols []string
-	for _, ct := range a.ColTypes {
-		cols = append(cols, ct.String())
-	}
-	return "[" + strings.Join(cols, " ") + "]"
+	return "[" + a.ElemType.String() + "]"
 }
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	s := "Array" + SEP + T + strconv.Itoa(len(a.ColTypes))
-	for _, ct := range a.ColTypes {
-		s += SEP + ct.Mangle()
-	}
-	return s
+	return "Array" + SEP + T + "1" + SEP + a.ElemType.Mangle()
 }
 func (a Array) Key() Type {
-	// Array keys ignore headers and length, using only column types
-	keyColTypes := make([]Type, len(a.ColTypes))
-	for i, ct := range a.ColTypes {
-		keyColTypes[i] = ct.Key()
+	return Array{ElemType: a.ElemType.Key()}
+}
+
+// Matrix is a homogeneous, two-dimensional value. Its dimensions are runtime
+// properties and therefore do not participate in type identity.
+type Matrix struct {
+	ElemType Type
+}
+
+func (m Matrix) String() string {
+	if m.ElemType == nil {
+		return "Matrix[]"
 	}
-	return Array{ColTypes: keyColTypes}
+	return "Matrix[" + m.ElemType.String() + "]"
+}
+
+func (m Matrix) Kind() Kind { return MatrixKind }
+func (m Matrix) Mangle() string {
+	return "Matrix" + SEP + T + "1" + SEP + m.ElemType.Mangle()
+}
+func (m Matrix) Key() Type {
+	return Matrix{ElemType: m.ElemType.Key()}
+}
+
+// TableColumn pairs an optional source-level name with a homogeneous column
+// element type. Name is empty for positional, unnamed columns.
+type TableColumn struct {
+	Name     string
+	ElemType Type
+}
+
+// Table is an ordered, columnar schema. Row count is a runtime property.
+type Table struct {
+	Columns []TableColumn
+}
+
+func (t Table) String() string {
+	columns := make([]string, len(t.Columns))
+	for i, column := range t.Columns {
+		columns[i] = column.ElemType.String()
+		if column.Name != "" {
+			columns[i] = column.Name + ":" + columns[i]
+		}
+	}
+	return "Table[" + strings.Join(columns, " ") + "]"
+}
+
+func (t Table) Kind() Kind { return TableKind }
+func (t Table) Mangle() string {
+	parts := make([]string, 0, len(t.Columns)*2)
+	for _, column := range t.Columns {
+		encodedName := "u"
+		if column.Name != "" {
+			encodedName = "n" + column.Name
+		}
+		parts = append(parts, MangleIdent(encodedName), column.ElemType.Mangle())
+	}
+	mangled := "Table" + SEP + T + strconv.Itoa(len(parts))
+	if len(parts) > 0 {
+		mangled += SEP + strings.Join(parts, SEP)
+	}
+	return mangled
+}
+func (t Table) Key() Type {
+	columns := make([]TableColumn, len(t.Columns))
+	for i, column := range t.Columns {
+		columns[i] = TableColumn{Name: column.Name, ElemType: column.ElemType.Key()}
+	}
+	return Table{Columns: columns}
 }
 
 // ArrayRange represents an iteration over a range of an array.
@@ -340,11 +395,7 @@ func (ar ArrayRange) String() string {
 func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
 
 func (ar ArrayRange) Mangle() string {
-	s := "ArrayRange" + SEP + T + strconv.Itoa(len(ar.Array.ColTypes))
-	for _, ct := range ar.Array.ColTypes {
-		s += SEP + ct.Mangle()
-	}
-	return s
+	return "ArrayRange" + SEP + T + "1" + SEP + ar.Array.ElemType.Mangle()
 }
 func (ar ArrayRange) Key() Type {
 	return ArrayRange{
@@ -518,6 +569,12 @@ func CanRefineType(oldType, newType Type) bool {
 	case Array:
 		newArr, ok := newType.(Array)
 		return ok && canRefineArray(old, newArr)
+	case Matrix:
+		newMatrix, ok := newType.(Matrix)
+		return ok && CanRefineType(old.ElemType, newMatrix.ElemType)
+	case Table:
+		newTable, ok := newType.(Table)
+		return ok && canRefineTable(old, newTable)
 	case ArrayRange:
 		newSlice, ok := newType.(ArrayRange)
 		return ok && canRefineArrayRange(old, newSlice)
@@ -569,7 +626,20 @@ func canRefineTypes(oldTypes, newTypes []Type) bool {
 }
 
 func canRefineArray(oldArr, newArr Array) bool {
-	return canRefineTypes(oldArr.ColTypes, newArr.ColTypes)
+	return CanRefineType(oldArr.ElemType, newArr.ElemType)
+}
+
+func canRefineTable(oldTable, newTable Table) bool {
+	if len(oldTable.Columns) != len(newTable.Columns) {
+		return false
+	}
+	for i, oldColumn := range oldTable.Columns {
+		newColumn := newTable.Columns[i]
+		if oldColumn.Name != newColumn.Name || !CanRefineType(oldColumn.ElemType, newColumn.ElemType) {
+			return false
+		}
+	}
+	return true
 }
 
 func canRefineArrayRange(oldSlice, newSlice ArrayRange) bool {
@@ -604,6 +674,10 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFunc
 	case ArrayKind:
 		return eqArray
+	case MatrixKind:
+		return eqMatrix
+	case TableKind:
+		return eqTable
 	case ArrayRangeKind:
 		return eqArrayRange
 	case StructKind:
@@ -659,10 +733,28 @@ func eqFunc(a, b Type) bool {
 func eqArray(a, b Type) bool {
 	aa := a.(Array)
 	ba := b.(Array)
-	if len(aa.ColTypes) != len(ba.ColTypes) {
+	return TypeEqual(aa.ElemType, ba.ElemType)
+}
+
+func eqMatrix(a, b Type) bool {
+	am := a.(Matrix)
+	bm := b.(Matrix)
+	return TypeEqual(am.ElemType, bm.ElemType)
+}
+
+func eqTable(a, b Type) bool {
+	at := a.(Table)
+	bt := b.(Table)
+	if len(at.Columns) != len(bt.Columns) {
 		return false
 	}
-	return EqualTypes(aa.ColTypes, ba.ColTypes)
+	for i, column := range at.Columns {
+		other := bt.Columns[i]
+		if column.Name != other.Name || !TypeEqual(column.ElemType, other.ElemType) {
+			return false
+		}
+	}
+	return true
 }
 
 func eqArrayRange(a, b Type) bool {
@@ -698,6 +790,6 @@ var reservedTypeNames = map[string]struct{}{
 	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
 	"U8": {}, "U16": {}, "U32": {}, "U64": {},
 	"F32": {}, "F64": {},
-	"Ptr": {}, "Range": {}, "Array": {}, "ArrayRange": {},
+	"Ptr": {}, "Range": {}, "Array": {}, "Matrix": {}, "Table": {}, "ArrayRange": {},
 	"Func": {}, "Struct": {},
 }

@@ -347,11 +347,8 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected array type, got %T", resType)
 	}
-	if len(arrType.ColTypes) != 1 {
-		t.Fatalf("expected single-column array type")
-	}
-	if arrType.ColTypes[0].Kind() != FloatKind {
-		t.Fatalf("expected float array result, got %s", arrType.ColTypes[0].String())
+	if arrType.ElemType.Kind() != FloatKind {
+		t.Fatalf("expected float array result, got %s", arrType.ElemType.String())
 	}
 }
 
@@ -851,7 +848,7 @@ func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 
 	outArr, ok := info.OutTypes[0].(Array)
 	require.True(t, ok, "expected scalar-array mask output type to be array")
-	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array mask should keep scalar LHS element type")
+	require.Equal(t, IntKind, outArr.ElemType.Kind(), "scalar-array mask should keep scalar LHS element type")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {
@@ -909,7 +906,7 @@ func TestArrayRangeTyping(t *testing.T) {
 	require.True(t, ok, "expected value identifier")
 	value, ok := valueType.(ArrayRange)
 	require.Truef(t, ok, "expected value to be ArrayRange, got %T", valueType)
-	require.EqualValues(t, value.Array.ColTypes[0], Int{Width: 64})
+	require.EqualValues(t, value.Array.ElemType, Int{Width: 64})
 	require.EqualValues(t, value.Range, Range{Iter: Int{Width: 64}})
 
 	sumType, ok := ts.GetIdentifier("sum")

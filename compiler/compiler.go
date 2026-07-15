@@ -496,6 +496,19 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		// Arrays are backed by runtime dynamic vectors (opaque C structs).
 		// Model them as opaque pointers here to interop cleanly with the C runtime.
 		return llvm.PointerType(c.Context.Int8Type(), 0)
+	case MatrixKind:
+		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
+		i64 := c.Context.Int64Type()
+		return llvm.StructType([]llvm.Type{arrayPtr, i64, i64}, false)
+	case TableKind:
+		table := t.(Table)
+		fields := make([]llvm.Type, len(table.Columns)+1)
+		fields[0] = c.Context.Int64Type()
+		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
+		for i := range table.Columns {
+			fields[i+1] = arrayPtr
+		}
+		return llvm.StructType(fields, false)
 	case StructKind:
 		return c.getOrCreateStructLLVMType(t.(Struct))
 	default:
@@ -788,6 +801,21 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		// Runtime functions handle null gracefully: free(null) is no-op, len(null) returns 0.
 		// This avoids heap allocation for zero values that may be immediately overwritten.
 		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+	case MatrixKind:
+		matrixType := symType.(Matrix)
+		s.Val = c.createMatrixValue(
+			llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0)),
+			c.ConstI64(0),
+			c.ConstI64(0),
+			matrixType,
+		)
+	case TableKind:
+		tableType := symType.(Table)
+		columns := make([]llvm.Value, len(tableType.Columns))
+		for i := range columns {
+			columns[i] = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+		}
+		s.Val = c.createTableValue(c.ConstI64(0), columns, tableType)
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
 	case ArrayRangeKind:
@@ -939,8 +967,18 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 	case StrG:
 		// Static strings live forever, no free needed
 	case Array:
-		if len(t.ColTypes) > 0 && t.ColTypes[0].Kind() != UnresolvedKind {
-			c.freeArray(val, t.ColTypes[0])
+		if t.ElemType != nil && t.ElemType.Kind() != UnresolvedKind {
+			c.freeArray(val, t.ElemType)
+		}
+	case Matrix:
+		if t.ElemType != nil && t.ElemType.Kind() != UnresolvedKind {
+			c.freeArray(c.matrixArrayValue(val), t.ElemType)
+		}
+	case Table:
+		for i, column := range t.Columns {
+			if column.ElemType.Kind() != UnresolvedKind {
+				c.freeArray(c.tableColumnValue(val, i), column.ElemType)
+			}
 		}
 	case ArrayRange:
 		// Release the backing array payload. Borrowed views are skipped by callers.
@@ -956,6 +994,10 @@ func typeNeedsCleanup(typ Type) bool {
 	case StrH:
 		return true
 	case Array:
+		return true
+	case Matrix:
+		return true
+	case Table:
 		return true
 	case ArrayRange:
 		return true
@@ -1481,6 +1523,8 @@ func setInstAlignment(inst llvm.Value, t Type) {
 	case Array:
 		// Arrays are represented as opaque pointers to runtime vectors
 		inst.SetAlignment(8)
+	case Matrix, Table:
+		inst.SetAlignment(8)
 	case ArrayRange:
 		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
 		inst.SetAlignment(8)
@@ -1668,38 +1712,54 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 	leftSym := c.compileExpression(expr.Left, nil)[0]
 
-	structType, ok := leftSym.Type.(Struct)
-	if !ok {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   fmt.Sprintf("field access expects a struct value, got %s", leftSym.Type.String()),
-		})
-		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
-	}
-
-	fieldIndex := -1
-	var fieldType Type = Unresolved{}
-	for i, field := range structType.Fields {
-		if field.Name == expr.Field {
-			fieldIndex = i
-			fieldType = field.Type
-			break
+	switch leftType := leftSym.Type.(type) {
+	case Struct:
+		for i, field := range leftType.Fields {
+			if field.Name == expr.Field {
+				return []*Symbol{{
+					Type: field.Type,
+					Val:  c.builder.CreateExtractValue(leftSym.Val, i, expr.Field),
+				}}
+			}
 		}
-	}
-
-	if fieldIndex < 0 {
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("unknown struct field %q on %s", expr.Field, structType.Name),
+			Msg:   fmt.Sprintf("unknown struct field %q on %s", expr.Field, leftType.Name),
 		})
-		return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
-	}
+	case Table:
+		for i, column := range leftType.Columns {
+			if column.Name != expr.Field {
+				continue
+			}
 
-	fieldVal := c.builder.CreateExtractValue(leftSym.Val, fieldIndex, expr.Field)
-	return []*Symbol{{
-		Type: fieldType,
-		Val:  fieldVal,
-	}}
+			columnValue := c.tableColumnValue(leftSym.Val, i)
+			_, namedTable := expr.Left.(*ast.Identifier)
+			if leftSym.Borrowed || namedTable {
+				columnValue = c.copyArray(columnValue, column.ElemType)
+			} else {
+				for other, otherColumn := range leftType.Columns {
+					if other != i {
+						c.freeArray(c.tableColumnValue(leftSym.Val, other), otherColumn.ElemType)
+					}
+				}
+			}
+
+			return []*Symbol{{
+				Type: Array{ElemType: column.ElemType},
+				Val:  columnValue,
+			}}
+		}
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("unknown table column %q on %s", expr.Field, leftType.String()),
+		})
+	default:
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: expr.Token,
+			Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftSym.Type.String()),
+		})
+	}
+	return []*Symbol{{Type: I64, Val: c.ConstI64(0)}}
 }
 
 // getRawSymbol looks up a symbol by name without dereferencing pointers.
@@ -1743,12 +1803,12 @@ func (c *Compiler) compileInfix(op string, left *Symbol, right *Symbol, expected
 		// Determine element type preference: use expected if it's an array, otherwise
 		// use the available array operand's column type.
 		var elem Type
-		if expArr, ok := expected.(Array); ok && len(expArr.ColTypes) > 0 {
-			elem = expArr.ColTypes[0]
+		if expArr, ok := expected.(Array); ok {
+			elem = expArr.ElemType
 		} else if l.Type.Kind() == ArrayKind {
-			elem = l.Type.(Array).ColTypes[0]
+			elem = l.Type.(Array).ElemType
 		} else {
-			elem = r.Type.(Array).ColTypes[0]
+			elem = r.Type.(Array).ElemType
 		}
 
 		if l.Type.Kind() == ArrayKind && r.Type.Kind() == ArrayKind {
@@ -2113,12 +2173,22 @@ func (c *Compiler) cleanupRangeInfixTemps(
 func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
 	switch t := sym.Type.(type) {
 	case Array:
-		if t.ColTypes[0].Kind() == UnresolvedKind {
+		if t.ElemType.Kind() == UnresolvedKind {
+			sym.Type = resolved
+			Put(c.Scopes, name, sym)
+		}
+	case Matrix:
+		if t.ElemType.Kind() == UnresolvedKind {
+			sym.Type = resolved
+			Put(c.Scopes, name, sym)
+		}
+	case Table:
+		if !IsFullyResolvedType(t) {
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
 	case ArrayRange:
-		if t.Array.ColTypes[0].Kind() == UnresolvedKind {
+		if t.Array.ElemType.Kind() == UnresolvedKind {
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
@@ -2617,7 +2687,7 @@ func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *S
 	arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
 	rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
 	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
-	elemType := arrRangeType.Array.ColTypes[0]
+	elemType := arrRangeType.Array.ElemType
 	hasState := currentOutput != nil
 	stateType := llvm.Type{}
 	seed := llvm.Value{}
@@ -3212,12 +3282,12 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 	case ArrayKind:
 		// Deep copy the array
 		arrayType := sym.Type.(Array)
-		if len(arrayType.ColTypes) > 0 {
+		if arrayType.ElemType != nil {
 			// Skip copying if the element type is unresolved (will be resolved later)
-			if arrayType.ColTypes[0].Kind() == UnresolvedKind {
+			if arrayType.ElemType.Kind() == UnresolvedKind {
 				return sym
 			}
-			copiedArr := c.copyArray(sym.Val, arrayType.ColTypes[0])
+			copiedArr := c.copyArray(sym.Val, arrayType.ElemType)
 			return &Symbol{
 				Val:      copiedArr,
 				Type:     sym.Type, // Arrays don't have Static flag
@@ -3225,6 +3295,26 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 				Borrowed: false,
 				ReadOnly: false,
 			}
+		}
+	case MatrixKind:
+		matrixType := sym.Type.(Matrix)
+		if matrixType.ElemType.Kind() == UnresolvedKind {
+			return sym
+		}
+		return &Symbol{
+			Val:      c.copyMatrixValue(sym.Val, matrixType),
+			Type:     matrixType,
+			Borrowed: false,
+		}
+	case TableKind:
+		tableType := sym.Type.(Table)
+		if !IsFullyResolvedType(tableType) {
+			return sym
+		}
+		return &Symbol{
+			Val:      c.copyTableValue(sym.Val, tableType),
+			Type:     tableType,
+			Borrowed: false,
 		}
 	}
 	// For other types (int, float, range), just return as-is (they're value types)
@@ -3412,11 +3502,19 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*toFree = append(*toFree, strPtr)
 	case ArrayKind:
 		arrType := s.Type.(Array)
-		if len(arrType.ColTypes) == 0 || arrType.ColTypes[0].Kind() == UnresolvedKind {
+		if arrType.ElemType == nil || arrType.ElemType.Kind() == UnresolvedKind {
 			*args = append(*args, c.constCString("[]"))
 			return
 		}
 		strPtr := c.arrayStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
+	case MatrixKind:
+		strPtr := c.matrixStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
+	case TableKind:
+		strPtr := c.tableStrArg(s)
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)
 	case StrKind:
