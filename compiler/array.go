@@ -667,6 +667,9 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
 	// Array concatenation: arr1 ⊕ arr2
 	// Result is [arr1..., arr2...]
+	if resElem.Kind() == UnresolvedKind {
+		return c.makeZeroValue(Array{ElemType: resElem})
+	}
 
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(left, leftElem)

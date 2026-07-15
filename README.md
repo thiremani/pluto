@@ -215,11 +215,15 @@ scores = [
 An empty or one-row headerless literal is an array. A rectangular, multi-row
 literal whose cells share one promotable type is a row-major matrix. A header
 row always produces a columnar table; without headers, homogeneous columns
-with different element types infer an unnamed table. A `:` must be followed by
-at least one column name; headerless literals start directly with their first
-data row. The conventional header spelling is `:Name Score`. Indentation and
-spacing inside brackets are not semantic; examples use four spaces. Named
-columns are arrays, so `scores.Score` returns `[10 12]`.
+with different element types infer an unnamed table. A header must contain at
+least one column name, but it may have no data rows. Such a literal is an empty
+table whose columns are untyped empty arrays and print as `[]`. Headerless
+literals start directly with their first data row. The conventional header
+spelling is `:Name Score`. Indentation and spacing inside brackets are not
+semantic; examples use four spaces. Named columns are arrays, so
+`scores.Score` returns `[10 12]`. Untyped empty arrays can be printed or refined
+by concatenation; operations that require an element type are rejected until
+then.
 
 String-array elements print quoted so boundaries stay unambiguous:
 

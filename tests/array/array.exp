@@ -30,6 +30,13 @@ replacement table: [
     "Mae" 20
 ]
 saved table scores: [10 12]
+empty array: []
+empty concat: []
+empty table: [
+    :Name Score
+]
+empty score column: []
+typed empty scores: [7 8]
 inferred table: [
     1 "a"
     2 "b"

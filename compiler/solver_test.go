@@ -287,6 +287,78 @@ func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 	require.True(t, IsStrH(dotTypes[0]), "dot access should reflect widened field flavor")
 }
 
+func TestCollectionTypeErrors(t *testing.T) {
+	const identity = `out = Identity(x)
+    out = x`
+	cases := []struct {
+		name        string
+		code        string
+		script      string
+		expectError string
+	}{
+		{
+			name:        "DuplicateTableHeader",
+			script:      "table = [\n    :Name Name\n    \"Ada\" \"A\"\n]",
+			expectError: `duplicate table column "Name"`,
+		},
+		{
+			name:        "RaggedTableRow",
+			script:      "table = [\n    :Name Score\n    \"Ada\"\n]",
+			expectError: "bracket literal row 1 has 1 cells, expected 2",
+		},
+		{
+			name:        "IndexUntypedEmptyArray",
+			script:      "empty = []\nempty[0]",
+			expectError: "cannot index an untyped empty array",
+		},
+		{
+			name:        "UntypedEmptyArrayOperator",
+			script:      "result = [] + []",
+			expectError: `operator "+" on untyped empty arrays requires an element type`,
+		},
+		{
+			name:        "UntypedEmptyArrayArgument",
+			code:        identity,
+			script:      "Identity([])",
+			expectError: "called with unknown argument type",
+		},
+		{
+			name: "UntypedEmptyTableArgument",
+			code: identity,
+			script: `Identity([
+    :Name Score
+])`,
+			expectError: "called with unknown argument type",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			code := ast.NewCode()
+			if tc.code != "" {
+				code = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", code)
+			require.Empty(t, cc.Compile())
+
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Contains(t, ts.Errors[0].Msg, tc.expectError)
+		})
+	}
+}
+
 func TestArrayConcatTypeErrors(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayConcatErrors", "", ast.NewCode())

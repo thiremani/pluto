@@ -596,6 +596,11 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)
 	case ArrayKind:
+		arrType := mainSym.Type.(Array)
+		if arrType.ElemType.Kind() == UnresolvedKind {
+			result.args = append(result.args, c.constCString("[]"))
+			break
+		}
 		strPtr := c.arrayStrArg(mainSym)
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)

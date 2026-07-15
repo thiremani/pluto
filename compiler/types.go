@@ -292,6 +292,28 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
+// isUntypedEmptyCollection reports whether t is a runtime-representable empty
+// collection whose element types have not been established yet. Non-empty
+// unresolved collections fail during literal typing and never reach this check.
+func isUntypedEmptyCollection(t Type) bool {
+	switch tt := t.(type) {
+	case Array:
+		return tt.ElemType != nil && tt.ElemType.Kind() == UnresolvedKind
+	case Table:
+		if len(tt.Columns) == 0 {
+			return false
+		}
+		for _, column := range tt.Columns {
+			if column.ElemType == nil || column.ElemType.Kind() != UnresolvedKind {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // Array is a homogeneous, one-dimensional sequence.
 type Array struct {
 	ElemType Type

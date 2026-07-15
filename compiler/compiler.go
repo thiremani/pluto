@@ -1733,11 +1733,21 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 				continue
 			}
 
-			columnValue := c.copyArray(c.tableColumnValue(leftSym.Val, i), column.ElemType)
+			columnType := Array{ElemType: column.ElemType}
+			if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil && len(info.OutTypes) > 0 {
+				if resolved, ok := info.OutTypes[0].(Array); ok {
+					columnType = resolved
+				}
+			}
+
+			columnValue := c.tableColumnValue(leftSym.Val, i)
+			if column.ElemType.Kind() != UnresolvedKind {
+				columnValue = c.copyArray(columnValue, column.ElemType)
+			}
 			c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})
 
 			return []*Symbol{{
-				Type: Array{ElemType: column.ElemType},
+				Type: columnType,
 				Val:  columnValue,
 			}}
 		}

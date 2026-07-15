@@ -5,6 +5,7 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+// Values must match PtElementKind in runtime/array.h.
 var runtimeElementKinds = map[Kind]uint64{
 	IntKind:   0,
 	FloatKind: 1,
@@ -41,6 +42,10 @@ func (c *Compiler) compileMatrixLiteral(lit *ast.ArrayLiteral, matrixType Matrix
 }
 
 func (c *Compiler) compileTableLiteral(lit *ast.ArrayLiteral, tableType Table) *Symbol {
+	if len(lit.Rows) == 0 {
+		return c.makeZeroValue(tableType)
+	}
+
 	rowCount := c.ConstI64(uint64(len(lit.Rows)))
 	columns := make([]llvm.Value, len(tableType.Columns))
 	for i, column := range tableType.Columns {
@@ -145,7 +150,13 @@ func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {
 		kindSlot := c.builder.CreateGEP(kindsType, kinds, indices, "table_kind_slot")
 		columnSlot := c.builder.CreateGEP(columnsType, columns, indices, "table_column_slot")
 		c.builder.CreateStore(c.constCString(column.Name), nameSlot)
-		c.builder.CreateStore(llvm.ConstInt(i32, runtimeElementKinds[column.ElemType.Kind()], false), kindSlot)
+		// An unresolved column is an untyped empty array, so rows is zero and the
+		// runtime never reads this placeholder element kind.
+		runtimeKind := runtimeElementKinds[IntKind]
+		if column.ElemType.Kind() != UnresolvedKind {
+			runtimeKind = runtimeElementKinds[column.ElemType.Kind()]
+		}
+		c.builder.CreateStore(llvm.ConstInt(i32, runtimeKind, false), kindSlot)
 		c.builder.CreateStore(c.tableColumnValue(s.Val, i), columnSlot)
 	}
 

@@ -647,6 +647,10 @@ func (ts *TypeSolver) Solve() {
 			continue
 		}
 		for _, pending := range entries {
+			info := ts.ExprCache[key(binding.FuncNameMangled, pending.expr)]
+			if info != nil && pending.outTypeIdx < len(info.OutTypes) && isUntypedEmptyCollection(info.OutTypes[pending.outTypeIdx]) {
+				continue
+			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: pending.expr.Tok(),
 				Msg:   fmt.Sprintf("type for %q could not be resolved", binding.Name),
@@ -1344,6 +1348,13 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		return info.OutTypes
 	}
 	elemType := arrType.ElemType
+	if elemType.Kind() == UnresolvedKind {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: ax.Tok(),
+			Msg:   "cannot index an untyped empty array",
+		})
+		return info.OutTypes
+	}
 	// String array element access does strdup at runtime, so result is heap-allocated
 	if elemType.Kind() == StrKind {
 		elemType = StrH{}
@@ -1830,8 +1841,13 @@ func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string,
 	leftUnresolved := leftElem.Kind() == UnresolvedKind
 	rightUnresolved := rightElem.Kind() == UnresolvedKind
 
-	// Both unresolved - result is unresolved
+	// Element-wise operations need an element type. Concatenation is handled
+	// before this function and may preserve an untyped empty result.
 	if leftUnresolved && rightUnresolved {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("operator %q on untyped empty arrays requires an element type", op),
+		})
 		return Unresolved{}
 	}
 
@@ -2207,7 +2223,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 
 	// At script level, all arg types must be resolved before typing
 	for i, arg := range args {
-		if arg.Kind() != UnresolvedKind {
+		if IsFullyResolvedType(arg) {
 			continue
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{

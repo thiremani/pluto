@@ -68,6 +68,21 @@ scores =
 "replacement table: -scores"
 "saved table scores: -scoreColumn"
 
+emptyArray = []
+"empty array: -emptyArray"
+emptyConcat = [] ⊕ []
+"empty concat: -emptyConcat"
+
+emptyTable =
+[
+    :Name Score
+]
+"empty table: -emptyTable"
+emptyScoreColumn = emptyTable.Score
+"empty score column: -emptyScoreColumn"
+typedEmptyScores = emptyTable.Score ⊕ [7 8]
+"typed empty scores: -typedEmptyScores"
+
 inferredTable =
 [
     1 "a"
