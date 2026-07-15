@@ -310,21 +310,8 @@ func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *Exp
 	// Handle empty array literal: []
 	if len(lit.Rows) == 0 {
 		arr := info.OutTypes[0].(Array)
-		elemType := arr.ElemType
-
-		// If element type is unresolved, create a null pointer
-		// The actual array will be created when the variable is used with a concrete type
-		if elemType.Kind() == UnresolvedKind {
-			s.Type = arr
-			s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-			return []*Symbol{s}
-		}
-
-		nConst := c.ConstI64(0)
-		arrVal := c.CreateArrayForType(elemType, nConst)
-
 		s.Type = arr
-		s.Val = c.builder.CreateBitCast(arrVal, llvm.PointerType(c.Context.Int8Type(), 0), "arr_i8p")
+		s.Val = llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
 		return []*Symbol{s}
 	}
 
@@ -667,13 +654,19 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
 	// Array concatenation: arr1 ⊕ arr2
 	// Result is [arr1..., arr2...]
-	if resElem.Kind() == UnresolvedKind {
+	if !hasConcreteArrayElemType(resElem) {
 		return c.makeZeroValue(Array{ElemType: resElem})
 	}
 
 	// Get lengths of both arrays
-	leftLen := c.ArrayLen(left, leftElem)
-	rightLen := c.ArrayLen(right, rightElem)
+	leftLen := c.ConstI64(0)
+	if hasConcreteArrayElemType(leftElem) {
+		leftLen = c.ArrayLen(left, leftElem)
+	}
+	rightLen := c.ConstI64(0)
+	if hasConcreteArrayElemType(rightElem) {
+		rightLen = c.ArrayLen(right, rightElem)
+	}
 
 	// Calculate total length
 	totalLen := c.builder.CreateAdd(leftLen, rightLen, "concat_len")
@@ -682,10 +675,14 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	resVec := c.CreateArrayForType(resElem, totalLen)
 
 	// Copy left array elements
-	c.CopyArrayInto(resVec, left, leftElem, resElem, llvm.Value{}, false)
+	if hasConcreteArrayElemType(leftElem) {
+		c.CopyArrayInto(resVec, left, leftElem, resElem, llvm.Value{}, false)
+	}
 
 	// Copy right array elements with offset
-	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
+	if hasConcreteArrayElemType(rightElem) {
+		c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
+	}
 
 	// Return concatenated array
 	return c.arraySym(resVec, resElem)

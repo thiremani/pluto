@@ -221,9 +221,15 @@ table whose columns are untyped empty arrays and print as `[]`. Headerless
 literals start directly with their first data row. The conventional header
 spelling is `:Name Score`. Indentation and spacing inside brackets are not
 semantic; examples use four spaces. Named columns are arrays, so
-`scores.Score` returns `[10 12]`. Untyped empty arrays can be printed or refined
-by concatenation; operations that require an element type are rejected until
-then.
+`scores.Score` returns `[10 12]`. Header-only tables can be printed and
+projected, but cannot be passed to functions until their column types are
+established.
+
+The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
+functions, and adopts an element type when concatenated with a concrete array.
+Once a variable has a concrete array type, assigning `[]` empties its value but
+preserves that element type. Operations such as indexing or arithmetic still
+require a concrete element type.
 
 String-array elements print quoted so boundaries stay unambiguous:
 

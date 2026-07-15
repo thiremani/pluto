@@ -597,7 +597,7 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		result.toFree = append(result.toFree, strPtr)
 	case ArrayKind:
 		arrType := mainSym.Type.(Array)
-		if arrType.ElemType.Kind() == UnresolvedKind {
+		if !hasConcreteArrayElemType(arrType.ElemType) {
 			result.args = append(result.args, c.constCString("[]"))
 			break
 		}

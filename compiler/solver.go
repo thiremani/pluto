@@ -181,6 +181,14 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 	leftElemType := leftArr.ElemType
 	rightElemType := rightArr.ElemType
 
+	if leftElemType.Kind() == EmptyKind {
+		return Array{ElemType: rightElemType}
+	}
+
+	if rightElemType.Kind() == EmptyKind {
+		return Array{ElemType: leftElemType}
+	}
+
 	if leftElemType.Kind() == UnresolvedKind {
 		return Array{ElemType: rightElemType}
 	}
@@ -935,7 +943,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // tables. Element and column types are homogeneous, with I64-to-F64 promotion.
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	if len(al.Headers) == 0 && len(al.Rows) == 0 {
-		arr := Array{ElemType: Unresolved{}}
+		arr := Array{ElemType: Empty{}}
 		ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{arr}, ExprLen: 1, HasRanges: false}
 		return []Type{arr}
 	}
@@ -1348,10 +1356,10 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		return info.OutTypes
 	}
 	elemType := arrType.ElemType
-	if elemType.Kind() == UnresolvedKind {
+	if !hasConcreteArrayElemType(elemType) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
-			Msg:   "cannot index an untyped empty array",
+			Msg:   "cannot index an empty array without an element type",
 		})
 		return info.OutTypes
 	}
@@ -1836,8 +1844,26 @@ func (ts *TypeSolver) typeArrayArrayInfix(leftArr, rightArr Array, op string, to
 	return Array{ElemType: resultElem}
 }
 
-// resolveArrayElemTypes handles unresolved element types and type inference for array operations
+// resolveArrayElemTypes handles empty/unresolved element types and type inference for array operations.
 func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string, tok token.Token) Type {
+	leftEmpty := leftElem.Kind() == EmptyKind
+	rightEmpty := rightElem.Kind() == EmptyKind
+
+	if leftEmpty && rightEmpty {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: tok,
+			Msg:   fmt.Sprintf("operator %q on empty arrays requires an element type", op),
+		})
+		return Unresolved{}
+	}
+
+	if leftEmpty {
+		return rightElem
+	}
+	if rightEmpty {
+		return leftElem
+	}
+
 	leftUnresolved := leftElem.Kind() == UnresolvedKind
 	rightUnresolved := rightElem.Kind() == UnresolvedKind
 
@@ -1846,7 +1872,7 @@ func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string,
 	if leftUnresolved && rightUnresolved {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
-			Msg:   fmt.Sprintf("operator %q on untyped empty arrays requires an element type", op),
+			Msg:   fmt.Sprintf("operator %q on unresolved arrays requires an element type", op),
 		})
 		return Unresolved{}
 	}

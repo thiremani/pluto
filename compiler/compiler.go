@@ -913,6 +913,18 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 		}
 	}
 
+	targetArray, targetIsArray := target.(Array)
+	sourceArray, sourceIsArray := derefed.Type.(Array)
+	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind {
+		return &Symbol{
+			Val:      derefed.Val,
+			Type:     targetArray,
+			FuncArg:  derefed.FuncArg,
+			Borrowed: derefed.Borrowed,
+			ReadOnly: derefed.ReadOnly,
+		}
+	}
+
 	return derefed
 }
 
@@ -967,7 +979,7 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 	case StrG:
 		// Static strings live forever, no free needed
 	case Array:
-		if t.ElemType != nil && t.ElemType.Kind() != UnresolvedKind {
+		if hasConcreteArrayElemType(t.ElemType) {
 			c.freeArray(val, t.ElemType)
 		}
 	case Matrix:
@@ -994,7 +1006,7 @@ func typeNeedsCleanup(typ Type) bool {
 	case StrH:
 		return true
 	case Array:
-		return true
+		return hasConcreteArrayElemType(t.ElemType)
 	case Matrix:
 		return true
 	case Table:
@@ -2175,7 +2187,7 @@ func (c *Compiler) cleanupRangeInfixTemps(
 func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
 	switch t := sym.Type.(type) {
 	case Array:
-		if t.ElemType.Kind() == UnresolvedKind {
+		if !hasConcreteArrayElemType(t.ElemType) {
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
@@ -3285,8 +3297,8 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 		// Deep copy the array
 		arrayType := sym.Type.(Array)
 		if arrayType.ElemType != nil {
-			// Skip copying if the element type is unresolved (will be resolved later)
-			if arrayType.ElemType.Kind() == UnresolvedKind {
+			// Empty and unresolved arrays have no runtime allocation to copy.
+			if !hasConcreteArrayElemType(arrayType.ElemType) {
 				return sym
 			}
 			copiedArr := c.copyArray(sym.Val, arrayType.ElemType)
@@ -3504,7 +3516,7 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*toFree = append(*toFree, strPtr)
 	case ArrayKind:
 		arrType := s.Type.(Array)
-		if arrType.ElemType == nil || arrType.ElemType.Kind() == UnresolvedKind {
+		if !hasConcreteArrayElemType(arrType.ElemType) {
 			*args = append(*args, c.constCString("[]"))
 			return
 		}

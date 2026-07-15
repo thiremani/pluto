@@ -21,3 +21,9 @@ res = Acc(a, x)
 
 res = Identity(x)
     res = x
+
+res = AddElem(a, elem)
+    res = a ⊕ [elem]
+
+res = ConcatArrays(a, b)
+    res = a ⊕ b

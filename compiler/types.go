@@ -13,6 +13,7 @@ type Kind int
 
 const (
 	UnresolvedKind Kind = iota
+	EmptyKind
 	IntKind
 	UintKind
 	FloatKind
@@ -52,6 +53,7 @@ var PrimitiveTypeNames = []string{
 	"U64", "U32", "U16", "U8",
 	"F64", "F32",
 	"StrG", "StrH", // StrG = global/static (.rodata), StrH = heap
+	"Empty",
 	"X", // Unresolved placeholder
 }
 
@@ -87,6 +89,15 @@ func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
 func (u Unresolved) Mangle() string { return "X" } // placeholder for unresolved
 func (u Unresolved) Key() Type      { return u }
+
+// Empty is the element type of an empty array whose concrete element type has
+// not been established. Unlike Unresolved, it is a valid, fully resolved type.
+type Empty struct{}
+
+func (e Empty) Kind() Kind     { return EmptyKind }
+func (e Empty) String() string { return "Empty" }
+func (e Empty) Mangle() string { return "Empty" }
+func (e Empty) Key() Type      { return e }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -259,7 +270,7 @@ func IsFullyResolvedType(t Type) bool {
 	switch tt := t.(type) {
 	case Unresolved:
 		return false
-	case Int, Float, StrG, StrH:
+	case Empty, Int, Float, StrG, StrH:
 		return true
 	case Ptr:
 		return IsFullyResolvedType(tt.Elem)
@@ -292,9 +303,8 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
-// isUntypedEmptyCollection reports whether t is a runtime-representable empty
-// collection whose element types have not been established yet. Non-empty
-// unresolved collections fail during literal typing and never reach this check.
+// isUntypedEmptyCollection reports whether t is a header-only table, or a
+// column projected from one, whose element types have not been established.
 func isUntypedEmptyCollection(t Type) bool {
 	switch tt := t.(type) {
 	case Array:
@@ -332,6 +342,10 @@ func (a Array) Mangle() string {
 }
 func (a Array) Key() Type {
 	return Array{ElemType: a.ElemType.Key()}
+}
+
+func hasConcreteArrayElemType(elem Type) bool {
+	return elem != nil && elem.Kind() != EmptyKind && elem.Kind() != UnresolvedKind
 }
 
 // Matrix is a homogeneous, two-dimensional value. Its dimensions are runtime
@@ -578,7 +592,7 @@ func TypeEqual(a, b Type) bool {
 // Composite/container types are checked recursively.
 func CanRefineType(oldType, newType Type) bool {
 	// Completely unresolved type can be refined to anything
-	if oldType.Kind() == UnresolvedKind {
+	if oldType.Kind() == UnresolvedKind || oldType.Kind() == EmptyKind {
 		return true
 	}
 
@@ -622,6 +636,12 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return true
 	}
+	oldArray, oldIsArray := oldType.(Array)
+	newArray, newIsArray := newType.(Array)
+	if oldIsArray && newIsArray &&
+		(oldArray.ElemType.Kind() == EmptyKind || newArray.ElemType.Kind() == EmptyKind) {
+		return true
+	}
 	return CanRefineType(oldType, newType)
 }
 
@@ -631,6 +651,16 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return mergeStringFlavor(oldType, newType)
+	}
+	oldArray, oldIsArray := oldType.(Array)
+	newArray, newIsArray := newType.(Array)
+	if oldIsArray && newIsArray {
+		if newArray.ElemType.Kind() == EmptyKind {
+			return oldType
+		}
+		if oldArray.ElemType.Kind() == EmptyKind {
+			return newType
+		}
 	}
 	return newType
 }
@@ -682,6 +712,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
 		return eqUnresolved
+	case EmptyKind:
+		return eqEmpty
 	case IntKind:
 		return eqInt
 	case FloatKind:
@@ -710,6 +742,7 @@ func typeComparer(k Kind) func(a, b Type) bool {
 }
 
 func eqUnresolved(a, b Type) bool { return true }
+func eqEmpty(a, b Type) bool      { return true }
 
 func eqInt(a, b Type) bool {
 	ai := a.(Int)
@@ -808,7 +841,7 @@ func eqStruct(a, b Type) bool {
 }
 
 var reservedTypeNames = map[string]struct{}{
-	"Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
+	"Empty": {}, "Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
 	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
 	"U8": {}, "U16": {}, "U32": {}, "U64": {},
 	"F32": {}, "F64": {},

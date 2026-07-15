@@ -307,20 +307,19 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "bracket literal row 1 has 1 cells, expected 2",
 		},
 		{
-			name:        "IndexUntypedEmptyArray",
+			name:        "IndexEmptyArray",
 			script:      "empty = []\nempty[0]",
-			expectError: "cannot index an untyped empty array",
+			expectError: "cannot index an empty array without an element type",
 		},
 		{
-			name:        "UntypedEmptyArrayOperator",
+			name:        "EmptyArrayOperator",
 			script:      "result = [] + []",
-			expectError: `operator "+" on untyped empty arrays requires an element type`,
+			expectError: `operator "+" on empty arrays requires an element type`,
 		},
 		{
-			name:        "UntypedEmptyArrayArgument",
-			code:        identity,
-			script:      "Identity([])",
-			expectError: "called with unknown argument type",
+			name:        "ArrayTypeStaysLockedAfterEmptyReset",
+			script:      "arr = [1]\narr = []\narr = [1.5]",
+			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [F64]. Identifier "arr"`,
 		},
 		{
 			name: "UntypedEmptyTableArgument",
