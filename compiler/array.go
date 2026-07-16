@@ -181,10 +181,6 @@ func (c *Compiler) CreateArrayForType(elem Type, length llvm.Value) llvm.Value {
 func (c *Compiler) trapOnRuntimeError(status llvm.Value, name string) {
 	zero := llvm.ConstInt(status.Type(), 0, false)
 	ok := c.builder.CreateICmp(llvm.IntEQ, status, zero, name+"_ok")
-	c.trapOnFalse(ok, name)
-}
-
-func (c *Compiler) trapOnFalse(ok llvm.Value, name string) {
 	fn := c.builder.GetInsertBlock().Parent()
 	failBlock := c.Context.AddBasicBlock(fn, name+"_fail")
 	contBlock := c.Context.AddBasicBlock(fn, name+"_cont")
