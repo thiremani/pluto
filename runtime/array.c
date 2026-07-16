@@ -454,51 +454,18 @@ fail:
 }
 
 const char* arr_i64_str(const PtArrayI64* a) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_i64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_printf(&sb, "%lld", (long long)arr_i64_get(a, i)) < 0) { free(sb.data); return NULL; }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_i64_len(a);
+    return array_nd_str(a, PT_ELEM_I64, 1, &length);
 }
 
 const char* arr_f64_str(const PtArrayF64* a) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_f64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        double val = (double)arr_f64_get(a, i);
-        // Handle special values using common formatting function
-        const char *special = f64_special_str(val);
-        if (special) {
-            if (strbuf_printf(&sb, "%s", special) < 0) { free(sb.data); return NULL; }
-        } else {
-            if (strbuf_printf(&sb, "%g", val) < 0) { free(sb.data); return NULL; }
-        }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_f64_len(a);
+    return array_nd_str(a, PT_ELEM_F64, 1, &length);
 }
 
 const char* arr_str_str(const PtArrayStr* a) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    size_t n = arr_str_len(a);
-    for (size_t i = 0; i < n; ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        char* quoted = str_quote(arr_str_borrow(a, i));
-        if (!quoted) { free(sb.data); return NULL; }
-        int ok = strbuf_printf(&sb, "%s", quoted);
-        free(quoted);
-        if (ok < 0) { free(sb.data); return NULL; }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_str_len(a);
+    return array_nd_str(a, PT_ELEM_STR, 1, &length);
 }
 
 const char* arr_i64_format(const PtArrayI64* a, const char* fmt,

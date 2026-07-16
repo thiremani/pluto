@@ -310,6 +310,11 @@ func (al *ArrayLiteral) Tok() token.Token { return al.Token }
 func (al *ArrayLiteral) String() string {
 	var out bytes.Buffer
 	out.WriteString("[")
+	if len(al.Headers) == 0 && len(al.Rows) == 1 {
+		writeArrayRow(&out, al.Rows[0])
+		out.WriteString("]")
+		return out.String()
+	}
 
 	// Print headers if present
 	if len(al.Headers) > 0 {
@@ -325,16 +330,7 @@ func (al *ArrayLiteral) String() string {
 	// Print rows
 	for _, row := range al.Rows {
 		out.WriteString("\n    ")
-		for j, expr := range row {
-			if j > 0 {
-				out.WriteString(" ")
-			}
-			if expr != nil {
-				out.WriteString(expr.String())
-			} else {
-				out.WriteString("<nil>")
-			}
-		}
+		writeArrayRow(&out, row)
 	}
 
 	if len(al.Headers) > 0 || len(al.Rows) > 0 {
@@ -342,6 +338,19 @@ func (al *ArrayLiteral) String() string {
 	}
 	out.WriteString("]")
 	return out.String()
+}
+
+func writeArrayRow(out *bytes.Buffer, row []Expression) {
+	for i, expr := range row {
+		if i > 0 {
+			out.WriteString(" ")
+		}
+		if expr == nil {
+			out.WriteString("<nil>")
+			continue
+		}
+		out.WriteString(expr.String())
+	}
 }
 
 // StructLiteral represents a struct value declared in .pt code mode.

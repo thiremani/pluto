@@ -574,6 +574,7 @@ func TestConditionThenArrayValue(t *testing.T) {
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][0], 1), "first element mismatch")
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][1], 2), "second element mismatch")
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][2], 3), "third element mismatch")
+	require.Equal(t, "[1 2 3]", arr.String())
 }
 
 func TestConditionThenCallValue(t *testing.T) {
@@ -1157,6 +1158,7 @@ func TestArrayLiterals(t *testing.T) {
 				require.Len(t, arr.Rows, 2, "expected 2 rows")
 				require.Len(t, arr.Rows[0], 3, "expected 3 elements in first row")
 				require.Len(t, arr.Rows[1], 3, "expected 3 elements in second row")
+				require.Equal(t, "[\n    1 2 3\n    4 5 6\n]", arr.String())
 
 				// Check first row: 1 2 3
 				require.True(t, testIntegerLiteral(t, arr.Rows[0][0], 1))
