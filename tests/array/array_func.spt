@@ -30,21 +30,21 @@ matrixIdentity = Identity([
 "MatrixIdentity: -matrixIdentity"
 
 tableIdentity = Identity([
-    :Name Score
+  : Name Score
     "Ada" 10
     "Lin" 12
 ])
 "TableIdentity: -tableIdentity"
 
 tableCallColumn = Identity([
-    :Name Score
+  : Name Score
     "Ada" 10
     "Lin" 12
 ]).Score
 "TableCallColumn: -tableCallColumn"
 
 gatedTableColumn = (1 > 0 && Identity([
-    :Name Score
+  : Name Score
     "Ada" 10
     "Lin" 12
 ])).Name > "K"

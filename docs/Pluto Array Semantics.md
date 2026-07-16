@@ -18,6 +18,17 @@ dimension lengths beside that buffer; rows are not separately allocated.
 - Multiple scalar rows with homogeneous but different column types infer an
   unnamed table. A header always produces a table.
 
+The preferred table layout outdents the `:` marker so the first header and
+first value begin in the same column. Whitespace remains non-semantic:
+
+```pluto
+scores = [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+```
+
 These two literals therefore have the same rank-2 type and value:
 
 ```pluto

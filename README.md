@@ -217,7 +217,7 @@ cube = [
 ]
 
 scores = [
-    :Name Score
+  : Name Score
     "Ada" 10
     "Lin" 12
 ]
@@ -236,9 +236,10 @@ columns with different element types infer an unnamed table. A header must
 contain at least one column name, but it may have no data rows. Such a literal
 is an empty table whose printed value retains the header; each projected column
 is an untyped empty array and prints as `[]`. Headerless literals start directly
-with their first data row. The conventional header spelling is `:Name Score`.
-Indentation and spacing inside brackets are not semantic; examples use four
-spaces. Named columns are arrays, so `scores.Score` returns `[10 12]`.
+with their first data row. The preferred layout uses `  : Name Score`, with the
+outdented `:` leaving the first header aligned with the first value below it.
+Indentation and spacing inside brackets are not semantic. Named columns are
+arrays, so `scores.Score` returns `[10 12]`.
 Header-only tables can be printed and projected, but cannot be passed to
 functions until their column types are established. See
 [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for the complete
