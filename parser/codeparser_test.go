@@ -401,9 +401,7 @@ func TestParseStructDefinition(t *testing.T) {
 	_, constExists := code.ConstNames["p"]
 	require.True(t, constExists)
 
-	require.Equal(t, `p = Person
-    :name age height
-    Tejas 35 184.5`, stmt.String())
+	require.Equal(t, "p = Person\n    :name age height\n    \"Tejas\" 35 184.5", stmt.String())
 }
 
 func TestStructDefErrors(t *testing.T) {

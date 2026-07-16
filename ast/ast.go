@@ -278,7 +278,7 @@ type StringLiteral struct {
 
 func (sl *StringLiteral) expressionNode()  {}
 func (sl *StringLiteral) Tok() token.Token { return sl.Token }
-func (sl *StringLiteral) String() string   { return sl.Token.Literal }
+func (sl *StringLiteral) String() string   { return `"` + sl.Token.Literal + `"` }
 
 // RangeLiteral represents start:stop[:step]
 type RangeLiteral struct {

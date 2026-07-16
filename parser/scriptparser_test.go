@@ -197,6 +197,7 @@ func TestStringLiteral(t *testing.T) {
 	lit, ok := printStmt.Expression.Arguments[0].(*ast.StringLiteral)
 	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression.Arguments[0])
 	require.Equal(t, "hello", lit.Token.Literal)
+	require.Equal(t, input, lit.String())
 }
 
 func TestParsingPrefixExpressions(t *testing.T) {
