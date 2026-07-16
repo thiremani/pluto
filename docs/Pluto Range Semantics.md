@@ -299,6 +299,19 @@ collector would stack the resulting rows. This is not statement gating. A
 statement gate would instead sit before the statement's RHS and would admit or
 reject the shared iteration point for every RHS expression.
 
+The binder is what distinguishes loop levels:
+
+```pluto
+[F(i, j)]                    # one flat collector over i x j
+[i && [F(i, j)]]             # outer i collector, inner j collector
+[j && [F(i, j)]]             # outer j collector, inner i collector
+[i && [j && [F(i, j, k)]]]   # three explicitly nested domains
+[i && 1]                     # one scalar 1 per i
+```
+
+The bare range is a domain, not a truth value; the right side also runs for an
+iterator value of zero.
+
 The value-position `&&` establishes the local range domain but never collects
 its right side. An explicit collector must surround the scalar yields that
 form one array value:
@@ -312,6 +325,15 @@ j && [-1]       # one singleton-array yield per j
 This same placement rule applies to fallbacks. A row fallback is
 `[j && -1]`, not `j && [-1]`; the former matches the shape of a row collected
 over `j`, while the latter still yields multiple array values.
+
+When a condition such as `i > 0 && [F(i, j)]` fails in value position, the
+enclosing collector retains that `i` position and inserts a zero-filled child
+with the expected `j` shape. `|| [j && -1]` replaces that default with an
+explicit row. PIR must be able to derive the skipped child's shape; otherwise
+the compiler requires an explicit shape-bearing fallback instead of guessing.
+`|| [j && 0]` states the default zero row directly; `|| [j && -1]` selects a
+different fill value. A statement gate remains the only form that rejects the
+complete iteration point for every RHS expression.
 
 This range-left extension is deliberately not part of the current semantics.
 It should be implemented only after PIR can state which collector owns each

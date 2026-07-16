@@ -220,7 +220,10 @@ The planned `[i && [matrix[i][j]]]` construction uses this local value-position
 meaning; support for a bare range on its left is deferred until PIR represents
 the nested range and collector scopes. The operator only binds that domain;
 materialization remains explicit, so `[j && -1]` forms one row while
-`j && [-1]` yields one singleton array per `j`.
+`j && [-1]` yields one singleton array per `j`. The same rule makes
+`[i && 1]` an array containing one `1` per `i`. A failed array-valued cell
+contributes a zero-filled child of its expected shape unless `||` supplies an
+explicit shape-compatible fallback.
 
 ### Conditional Assignment
 

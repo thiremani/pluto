@@ -650,6 +650,10 @@ The statement plan can grow without becoming a machine IR:
   construction such as `[i && [matrix[i][j]]]`; it must remain local to that
   value and must not become a statement gate or implicit collector — only an
   explicit `[]` closes the bound domain into an array
+- a skipped array-valued collector cell closes to a zero-filled child of its
+  expected shape, while `||` may provide a shape-compatible child; the validator
+  rejects a plan whose skipped child shape is neither known nor derivable from
+  its bound domains unless an explicit fallback such as `[j && 0]` supplies it
 - gated prints become a statement plan whose final action prints yielded
   outcomes instead of setting targets
 - test contexts can become explicit statement inputs/effects

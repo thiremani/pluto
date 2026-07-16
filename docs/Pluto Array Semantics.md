@@ -135,6 +135,21 @@ sibling RHS expressions. Bare ranges on the left of value-position `&&` are
 not implemented yet; this construction is deferred until PIR can represent
 the two nested domains and their collector ownership directly.
 
+The binder distinguishes flat cartesian collection from nested dimensions:
+
+```pluto
+flat = [F(i, j)]                     # rank 1 over the i x j domain
+rows = [i && [F(i, j)]]              # rank 2: i rows, j cells
+cols = [j && [F(i, j)]]              # rank 2: j rows, i cells
+cube = [i && [j && [F(i, j, k)]]]    # rank 3: i, then j, then k
+ones = [i && 1]                      # rank 1: one 1 per i
+```
+
+A bare range binder always yields each domain point; its numeric value is not a
+truth test, so `i = 0` still produces a `1` in the last example. Without an
+explicit binder, the nearest collector owns every unbound range mentioned in
+its cells. Ordinary arithmetic does not establish a nested domain.
+
 `&&` binds a domain; it does not collect or flatten the values yielded by that
 domain. Collector placement therefore determines the resulting rank:
 
@@ -163,6 +178,24 @@ each domain point and the inner collector resolves to an array. If a genuinely
 failable row condition made `[-1]` reachable, mixing its singleton shape with
 longer rows would fail the outer collector's rectangular shape check. Pluto
 does not pad, truncate, or flatten mismatched rows.
+
+A failed array-valued cell preserves the outer domain by contributing a
+zero-filled child with the expected inner shape:
+
+```pluto
+zeroRows = [i > 0 && [F(i, j)]]
+minusRows = [i > 0 && [F(i, j)] || [j && -1]]
+```
+
+`zeroRows` contains a zero row for every `i` that fails `i > 0`.
+`minusRows` uses the explicit row fallback instead. The child shape must be
+known statically or derivable from its bound domains, such as `j` here. If PIR
+cannot establish the shape without evaluating the skipped value, the compiler
+rejects the implicit zero-fill and requires an explicit shape-bearing fallback.
+Use `|| [j && 0]` to state the default zero row, or another compatible value
+such as `|| [j && -1]`.
+Only a statement gate removes a rejected iteration from the shared statement
+domain; value-position `&&` never does.
 
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and equal inner dimensions, then zip the outer dimension to
