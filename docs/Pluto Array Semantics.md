@@ -198,10 +198,13 @@ Only a statement gate removes a rejected iteration from the shared statement
 domain; value-position `&&` never does.
 
 Array-scalar operations preserve shape. Array-array element-wise operations
-require equal rank and equal inner dimensions, then zip the outer dimension to
-the shorter input. Concatenation joins the outer dimension and requires every
-inner dimension to match. Literal-construction mismatches are compile errors;
-operation shapes that depend on runtime values are checked before proceeding.
+require equal rank and, when both outer dimensions are nonzero, equal inner
+dimensions; they zip the outer dimension to the shorter input. Concatenation
+joins the outer dimension and applies the same inner-shape check when both
+operands are nonempty. An empty operand contributes no cells and imposes no
+inner-shape constraint; concatenation uses the nonempty operand's inner shape.
+Literal-construction mismatches are compile errors; operation shapes that
+depend on runtime values are checked before proceeding.
 
 Assigning `[]` to a concrete array empties it without changing its established
 leaf type or rank. Untyped empty arrays can specialize functions and refine to

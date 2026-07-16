@@ -39,7 +39,7 @@ func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType A
 
 	childSymbols := make([]*Symbol, 0, len(children))
 	for _, child := range children {
-		compiled := c.compileExpression(child, nil)
+		compiled := c.compileArrayValuedCell(child)
 		if len(compiled) != 1 {
 			c.Errors = append(c.Errors, &token.CompileError{
 				Token: child.Tok(),
@@ -67,16 +67,28 @@ func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType A
 	totalLen := c.builder.CreateMul(c.ConstI64(uint64(len(childSymbols))), childLen, "stacked_array_len")
 	data := c.CreateArrayForType(arrayType.ElemType, totalLen)
 	for i, child := range childSymbols {
+		childElemType := child.Type.(Array).ElemType
+		if !hasConcreteArrayElemType(childElemType) {
+			continue
+		}
 		offset := llvm.Value{}
 		applyOffset := i > 0
 		if applyOffset {
 			offset = c.builder.CreateMul(c.ConstI64(uint64(i)), childLen, "stacked_array_offset")
 		}
-		c.CopyArrayInto(data, child, child.Type.(Array).ElemType, arrayType.ElemType, offset, applyOffset)
+		c.CopyArrayInto(data, child, childElemType, arrayType.ElemType, offset, applyOffset)
 		c.freeConsumedTemporary(children[i], []*Symbol{child})
 	}
 
 	return &Symbol{Type: arrayType, Val: c.createArrayValue(data, dimensions, arrayType)}
+}
+
+func (c *Compiler) compileArrayValuedCell(child ast.Expression) []*Symbol {
+	var compiled []*Symbol
+	c.withArrayLiteralCellMode(func() {
+		compiled = c.compileExpression(child, nil)
+	})
+	return compiled
 }
 
 func (c *Compiler) compileStackedArrayCollector(lit *ast.ArrayLiteral, info *ExprInfo, arrayType Array) *Symbol {
@@ -119,7 +131,7 @@ func (c *Compiler) appendStackedArrayChild(
 	childDimSlots []llvm.Value,
 	child ast.Expression,
 ) {
-	compiled := c.compileExpression(child, nil)
+	compiled := c.compileArrayValuedCell(child)
 	if len(compiled) != 1 {
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: child.Tok(),
@@ -141,11 +153,13 @@ func (c *Compiler) appendStackedArrayChild(
 		c.createStore(c.builder.CreateSelect(firstChild, dimension, stored, "stacked_array_dimension_value"), childDimSlots[i], I64)
 	}
 
-	length := c.ArrayLen(childSymbol, childType.ElemType)
-	c.createLoop(c.rangeZeroToN(length), func(iter llvm.Value) {
-		value := c.ArrayGetBorrowed(childSymbol, childType.ElemType, iter)
-		c.pushAccumCellValue(acc, &Symbol{Val: value, Type: childType.ElemType}, false, acc.ElemType)
-	})
+	if hasConcreteArrayElemType(childType.ElemType) {
+		length := c.ArrayLen(childSymbol, childType.ElemType)
+		c.createLoop(c.rangeZeroToN(length), func(iter llvm.Value) {
+			value := c.ArrayGetBorrowed(childSymbol, childType.ElemType, iter)
+			c.pushAccumCellValue(acc, &Symbol{Val: value, Type: childType.ElemType}, false, acc.ElemType)
+		})
+	}
 
 	c.createStore(c.builder.CreateAdd(outerLen, c.ConstI64(1), "stacked_array_outer_len_next"), outerLenSlot, I64)
 	c.freeTemporary(child, []*Symbol{childSymbol})

@@ -993,6 +993,18 @@ func (c *Compiler) compileArraySubarray(array *Symbol, index llvm.Value) *Symbol
 	return c.arrayValueSymbol(data, resultType, dimensions)
 }
 
+func (c *Compiler) zeroArraySubarray(array *Symbol) *Symbol {
+	arrayType := array.Type.(Array)
+	resultType := arrayIndexResultType(arrayType).(Array)
+	dimensions := c.arrayDimensions(array)[1:]
+	length := dimensions[0]
+	for _, dimension := range dimensions[1:] {
+		length = c.builder.CreateMul(length, dimension, "array_zero_subarray_len")
+	}
+	data := c.CreateArrayForType(arrayType.ElemType, length)
+	return c.arrayValueSymbol(data, resultType, dimensions)
+}
+
 func (c *Compiler) checkedArraySubarray(array *Symbol, index llvm.Value, inBounds llvm.Value) llvm.Value {
 	resultType := arrayIndexResultType(array.Type.(Array)).(Array)
 	resultSlot := c.createEntryBlockAlloca(c.mapToLLVMType(resultType), "array_subarray_checked_mem")
@@ -1004,7 +1016,7 @@ func (c *Compiler) checkedArraySubarray(array *Symbol, index llvm.Value, inBound
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(missBlock)
-	zero := c.makeZeroValue(resultType)
+	zero := c.zeroArraySubarray(array)
 	c.createStore(zero.Val, resultSlot, resultType)
 	c.builder.CreateBr(contBlock)
 
@@ -1132,6 +1144,9 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 
 				c.builder.SetInsertPointAtEnd(missBlock)
 				zeroVal := c.makeZeroValue(resultType)
+				if arrType.Rank > 1 {
+					zeroVal = c.zeroArraySubarray(arraySym)
+				}
 				c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
 				c.builder.CreateBr(contBlock)
 

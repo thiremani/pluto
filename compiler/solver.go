@@ -1133,6 +1133,12 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 		for col, cell := range row {
 			cellType, ok := ts.typeCell(cell, al.Tok())
 			if ok {
+				if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
+					ts.Errors = append(ts.Errors, &token.CompileError{
+						Token: cell.Tok(),
+						Msg:   "table rows require statically sized cells",
+					})
+				}
 				colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
 			}
 		}

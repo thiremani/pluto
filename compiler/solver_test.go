@@ -307,6 +307,11 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "bracket literal row 1 has 1 cells, expected 2",
 		},
 		{
+			name:        "RangedTableCell",
+			script:      "i = 0:3\ntable = [\n    :Value\n    i\n]",
+			expectError: "table rows require statically sized cells",
+		},
+		{
 			name:        "RaggedArrayRow",
 			script:      "arr = [\n    1 0\n    0\n]",
 			expectError: "bracket literal row 2 has 1 cells, expected 2",
@@ -325,6 +330,11 @@ func TestCollectionTypeErrors(t *testing.T) {
 			name:        "ArrayTypeStaysLockedAfterEmptyReset",
 			script:      "arr = [1]\narr = []\narr = [1.5]",
 			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [F64]. Identifier "arr"`,
+		},
+		{
+			name:        "Rank2EmptyIsNotRank1Reset",
+			script:      "arr = [1]\narr = [[]]",
+			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [[Empty]]. Identifier "arr"`,
 		},
 		{
 			name: "UntypedEmptyTableArgument",

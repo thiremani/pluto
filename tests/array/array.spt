@@ -63,6 +63,13 @@ rowRange = 0:2
 selectedRows = [nestedMatrix[rowRange]]
 "selected rows: -selectedRows"
 
+rowRangeOOB = 1:4
+selectedRowsOOB = [nestedMatrix[rowRangeOOB]]
+"selected rows OOB: -selectedRowsOOB"
+
+stackedRowOOB = [nestedMatrix[0] nestedMatrix[3]]
+"stacked row OOB: -stackedRowOOB"
+
 nestedMatrix = []
 nestedMatrix = nestedMatrix ⊕ [[5 6]]
 "reset matrix: -nestedMatrix"
@@ -110,6 +117,10 @@ scores =
 
 emptyArray = []
 "empty array: -emptyArray"
+rank2Refined = [[]]
+"rank 2 empty: -rank2Refined"
+rank2Refined = [[9]]
+"rank 2 refined: -rank2Refined"
 emptyConcat = [] ⊕ []
 "empty concat: -emptyConcat"
 

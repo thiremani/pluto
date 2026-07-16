@@ -29,6 +29,15 @@ selected rows: [
     1 2
     3 4
 ]
+selected rows OOB: [
+    3 4
+    0 0
+    0 0
+]
+stacked row OOB: [
+    1 2
+    0 0
+]
 reset matrix: [
     5 6
 ]
@@ -70,6 +79,12 @@ replacement table: [
 ]
 saved table scores: [10 12]
 empty array: []
+rank 2 empty: [
+    []
+]
+rank 2 refined: [
+    9
+]
 empty concat: []
 empty table: [
     :Name Score

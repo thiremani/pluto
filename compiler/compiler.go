@@ -914,7 +914,16 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 
 	targetArray, targetIsArray := target.(Array)
 	sourceArray, sourceIsArray := derefed.Type.(Array)
-	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind {
+	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind && sourceArray.Rank == targetArray.Rank {
+		return &Symbol{
+			Val:      derefed.Val,
+			Type:     targetArray,
+			FuncArg:  derefed.FuncArg,
+			Borrowed: derefed.Borrowed,
+			ReadOnly: derefed.ReadOnly,
+		}
+	}
+	if targetIsArray && sourceIsArray && sourceArray.Rank == 1 && sourceArray.ElemType.Kind() == EmptyKind {
 		zero := c.makeZeroValue(targetArray)
 		return &Symbol{
 			Val:      zero.Val,
@@ -940,7 +949,7 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	source := c.derefIfPointer(src, loadName)
 	targetArray, targetIsArray := target.(Array)
 	sourceArray, sourceIsArray := source.Type.(Array)
-	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind && targetArray.Rank > 1 {
+	if targetIsArray && sourceIsArray && sourceArray.Rank == 1 && sourceArray.ElemType.Kind() == EmptyKind && targetArray.Rank > 1 {
 		currentValue := c.createLoad(dst.Val, targetArray, "array_reset_shape")
 		current := &Symbol{Val: currentValue, Type: targetArray}
 		dimensions := c.arrayDimensions(current)

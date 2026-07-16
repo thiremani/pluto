@@ -631,9 +631,10 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)
 	if oldIsArray && newIsArray {
-		// [] resets an existing array without changing its established type or rank.
+		// Empty arrays retain an established leaf type. Rank-1 [] is also the
+		// shape-polymorphic reset spelling for an established higher-rank array.
 		if newArray.ElemType.Kind() == EmptyKind {
-			return true
+			return newArray.Rank == 1 || oldArray.Rank == newArray.Rank
 		}
 		if oldArray.ElemType.Kind() == EmptyKind {
 			return oldArray.Rank == newArray.Rank
