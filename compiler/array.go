@@ -310,7 +310,7 @@ func (c *Compiler) arrayLiteralHasArrayCells(lit *ast.ArrayLiteral) bool {
 	for _, row := range lit.Rows {
 		for _, cell := range row {
 			info := c.ExprCache[key(c.FuncNameMangled, cell)]
-			if info != nil && len(info.OutTypes) == 1 && info.OutTypes[0].Kind() == ArrayKind {
+			if info.OutTypes[0].Kind() == ArrayKind {
 				return true
 			}
 		}
