@@ -97,11 +97,13 @@ i > 2 || 0
 
 This yields `i` when the comparison succeeds, otherwise `0`.
 
-`&&` gates a per-iteration value: `i > 2 && i * 10` yields `i * 10` on the
-iterations where the comparison yields and skips the rest. At an assignment
-root a skipped iteration keeps the destination, so the last **yielded** value
-wins (`x = i > 2 && i * 2` over `0:5` ends as `8`). `i > 2 && v || w` resolves
-per iteration as an if-else.
+A value-position `&&` conditionally sequences one per-iteration value into the
+next: `i > 2 && i * 10` yields `i * 10` on the iterations where the comparison
+yields and skips the rest. It is local to the containing value expression; it
+is not a statement gate and does not reject sibling RHS expressions. At an
+assignment root a skipped iteration keeps the destination, so the last
+**yielded** value wins (`x = i > 2 && i * 2` over `0:5` ends as `8`).
+`i > 2 && v || w` resolves per iteration as an if-else.
 
 ## One-Dimensional Array Literals
 
@@ -236,13 +238,16 @@ fallback values win over zero-fill.
 ## Gated Collection
 
 Statement conditions outside `[]` gate the active iteration domain.
-They do not preserve shape.
+They do not preserve shape. The gate is shared by the whole statement: for a
+rejected domain point, none of its RHS expressions, collector appends, carried
+updates, or output commits execute. RHS-local ranges are nested inside each
+admitted point.
 
 Example:
 
 ```pluto
 i = 0:10
-arr = i > 2, i < 8 [i]
+arr = i > 2 && i < 8 [i]
 ```
 
 produces:
@@ -252,6 +257,9 @@ produces:
 ```
 
 The conditions select which outer iterations execute the collector at all.
+
+This is distinct from value-position `&&`, which controls only the value that
+contains it and leaves sibling RHS expressions in the same statement alone.
 
 The same admitted domain applies to nested collectors in a non-collector RHS:
 
@@ -273,6 +281,27 @@ arr = [i > 2 < 8]
 ```
 
 keeps the full array shape and zero-fills failed positions.
+
+## Deferred Nested Range Construction
+
+After PIR owns range and collector scopes, value-position `&&` may also bind a
+bare range for a local nested construction:
+
+```pluto
+i = 0:3
+j = 0:3
+result = [i && [matrix[i][j]]]
+```
+
+The outer collector would iterate `i`; the right side of the value-position
+`&&` would run once per `i`; the inner collector would own `j`; and the outer
+collector would stack the resulting rows. This is not statement gating. A
+statement gate would instead sit before the statement's RHS and would admit or
+reject the shared iteration point for every RHS expression.
+
+This range-left extension is deliberately not part of the current semantics.
+It should be implemented only after PIR can state which collector owns each
+range and validate that ownership before LLVM lowering.
 
 ## Statement Conditions And Tuples
 
@@ -318,11 +347,11 @@ Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
-shared scalar update step.
-If one non-collector RHS hits an out-of-bounds failure on that iteration,
-sibling non-collector outputs keep their previous values for that same
-iteration.
-Top-level `[]` collectors still use their own local zero-fill rules for cells.
+shared scalar update step, but each RHS has its own local yield outcome. If one
+RHS hits an out-of-bounds failure, only that RHS keeps its previous value;
+yielding siblings still update. Only rejection by the shared statement gate
+suppresses every sibling. Top-level `[]` collectors use their own local
+zero-fill rules for cells.
 
 ## Nested Collectors
 

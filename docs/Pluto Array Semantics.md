@@ -73,9 +73,67 @@ i = 0:2
 selected = [matrix[i]]
 ```
 
-Shape-preserving collection across multiple indexed dimensions is not yet
-defined. Chained range drivers in one collector follow the ordinary flattened
-range-domain semantics; adding collector brackets does not select another axis.
+### Planned grouped multi-axis indexing
+
+Shape-preserving selection across multiple indexed dimensions is not yet
+implemented. It is deferred until ranged collectors are represented in PIR.
+The planned syntax is grouped indexing:
+
+```pluto
+i = 0:3
+j = 0:3
+k = 0:3
+
+submatrix = [matrix[i j]]
+plane = [cube[1 j k]]
+column = [cube[i 1 1]]
+```
+
+A grouped access containing at least one range is a lazy selection view. Its
+rank is:
+
+```text
+source rank - number of scalar indices
+```
+
+Unspecified trailing axes are retained. If a grouped access contains a range,
+the leftmost range drives iteration. Each yield has one less rank than the
+selection; the surrounding collector applies its ordinary rule and stacks the
+yields, restoring the selection rank. It does not need a special
+"materialize without adding a dimension" case.
+
+For example, a rank-3 `cube` follows this ladder:
+
+```pluto
+cube[1]          # rank 2
+cube[1 2]        # rank 1
+cube[1 2 0]      # scalar
+[cube[i j k]]    # rank 3
+[cube[1 j k]]    # rank 2
+[cube[1 2 k]]    # rank 1
+```
+
+Grouped indexing preserves axes. Chained range indexing, such as
+`[matrix[i][j]]`, keeps the existing flattened range-domain behavior. Mixed
+grouped and chained indexing should initially be rejected.
+
+### Planned nested range construction
+
+Grouped indexing selects from an existing array. Computed rectangular values
+need a separate construction rule. The first planned case is:
+
+```pluto
+i = 0:3
+j = 0:3
+submatrix = [i && [matrix[i][j]]]
+```
+
+Here `&&` is in value position. It binds the outer `i` yield for the local
+right-hand value; the inner collector owns `j` and produces one row, and the
+outer collector stacks the rows. It is not a statement gate and does not alter
+sibling RHS expressions. Bare ranges on the left of value-position `&&` are
+not implemented yet; this construction is deferred until PIR can represent
+the two nested domains and their collector ownership directly.
 
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and equal inner dimensions, then zip the outer dimension to

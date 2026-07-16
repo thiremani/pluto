@@ -65,7 +65,7 @@ PIR records source-language execution decisions:
 - Pluto types such as `Int`, `String`, and `Array(Int)`
 - LHS targets and simultaneous assignment groups
 - range bindings and nesting order
-- statement conditions and lazy value gates
+- statement gates and lazy value-position `&&`
 - fallback and yield/skip behavior
 - per-value, per-slot, per-element, and per-iteration outcomes
 - checked accesses and the scope affected by OOB
@@ -92,7 +92,7 @@ Every assignment plan has four ordered phases:
 | Phase | Responsibility |
 | --- | --- |
 | `prepare` | Establish carried values, collectors, targets, and range inputs |
-| `execute` | Run versioned ranges, conditions, gates, fallbacks, yields, skips, collections, and carried updates |
+| `execute` | Run versioned ranges, statement gates, value-position `&&`, fallbacks, yields, skips, collections, and carried updates |
 | `finish` | Close collectors and select final carried or collected outcomes |
 | `set` | Apply final outcomes to all LHS targets simultaneously |
 
@@ -111,7 +111,8 @@ PIR should use structured control plus a small Pluto-specific vocabulary:
 | `collector` | Declare a logical collection result before its loops (prepare phase) |
 | `for` | Iterate one resolved range domain |
 | `if` | Apply ordinary structured control |
-| `gate` | Lazily evaluate a value region only when its left outcome yields |
+| `gate` | Admit one shared statement iteration; rejection suppresses every RHS outcome and iteration update |
+| `value-and` | Lazily evaluate a local value region only when its left outcome yields |
 | `fallback` | Lazily evaluate an alternative for missing outcomes |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
@@ -257,7 +258,7 @@ and releases the replaced carry only after the iteration update is safe, and
 
 Releases are **derived, not authored**. The builder does not place cleanup:
 structured region exit implicitly discards any owned outcome no consumer
-took, on every path — a skip arm, the untaken side of a gate or fallback, a
+took, on every path — a skip arm, the untaken side of a `value-and` or fallback, a
 rejected iteration, or region end. The validator derives the release
 obligation for each owned outcome on each path and rejects a plan where one
 is consumed twice or escapes its region unconsumed. Expanded PIR prints the
@@ -299,7 +300,7 @@ The normal per-iteration order is:
 1. Enter the range point.
 2. Evaluate shared statement conditions.
 3. Continue the range if the shared condition rejects the point.
-4. Evaluate each RHS outcome, including gates, fallbacks, and local OOB checks.
+4. Evaluate each RHS outcome, including value-position `&&`, fallbacks, and local OOB checks.
 5. Collect yielded cells and advance yielded carries simultaneously.
 
 This ordering prevents an OOB in `a = arr[i]` from suppressing a sibling update
@@ -397,7 +398,7 @@ statement x
     execute
         fallback
             primary
-                gate
+                value-and
                     condition eval(a > 0)
                     then eval(data[i])
                         on-oob skip
@@ -455,7 +456,7 @@ The PIR validator should reject a plan unless:
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
    and `break` names its range.
-5. Every lazy gate and fallback keeps its RHS in a lazy region.
+5. Every lazy `value-and` and fallback keeps its RHS in a lazy region.
 6. Outcome arity, Pluto types, domain, and yield shape match their consumers.
 7. All sibling RHS expressions read the iteration-start carry snapshot.
 8. All carry advances for one iteration are simultaneous.
@@ -471,7 +472,7 @@ The PIR validator should reject a plan unless:
     decision.
 17. Every owned outcome is consumed at most once, and the validator derives
     exactly one release obligation for every path where it is not consumed —
-    yield, skip, taken and untaken gate/fallback sides, rejected iterations,
+    yield, skip, taken and untaken `value-and`/fallback sides, rejected iterations,
     and region end.
 18. No outcome is used after it is moved or after its derived release point,
     and borrowed outcomes are copied before any consumer that outlives their
@@ -507,7 +508,7 @@ its current lowering without reading LLVM helper code.
 
 ### Phase 2: Conditional values, final set, and ownership (2-3 weeks)
 
-- Add gate, fallback, map, alignment, per-slot skip, and final-set policies.
+- Add value-and, fallback, map, alignment, per-slot skip, and final-set policies.
 - Add owned/borrowed outcome annotations, validator-derived release
   obligations, and generic cleanup lowering for non-ranged statements.
 - Lower selected non-ranged statements from PIR using existing backend helpers.
@@ -642,6 +643,12 @@ The statement plan can grow without becoming a machine IR:
 - source `break` and `continue` extend structured range actions
 - function-result transfer can reuse outcome planning with a different final action
 - conditional arrays extend domains, alignment, and yield masks
+- grouped multi-axis indexing extends borrowed selection domains after PIR migration;
+  scalar indices drop axes, range and omitted indices retain them, and the
+  leftmost range drives the sequence of yielded subarrays
+- range-left value-position `&&` can later bind an outer local domain for nested
+  construction such as `[i && [matrix[i][j]]]`; it must remain local to that
+  value and must not become a statement gate
 - gated prints become a statement plan whose final action prints yielded
   outcomes instead of setting targets
 - test contexts can become explicit statement inputs/effects

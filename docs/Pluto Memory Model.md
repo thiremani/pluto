@@ -6,7 +6,8 @@ This document describes Pluto's semantic model and compares it with other major 
 
 1. **Assignment is Copy:** `a = b` creates a new independent value (Snapshot).
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
-3. **Slices are Views:** `s = arr[i]` (where `i` is a Range) is a reference to `arr`.
+3. **Range Selections are Views:** `s = arr[i]` (where `i` is a Range)
+   borrows `arr`; `[]` materializes the selection.
 4. **Ranges are Loop Syntax:** `x = i + 1` generates a loop, not a lazy type.
 5. **Zero-Value Initialization:** Variables in range expressions auto-initialize to zero.
 6. **IterName Determines Looping:** Same range variable → zip, different → cartesian.
@@ -23,7 +24,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Assignment (`a=b`)** | **Copy** | Reference | Move / Copy | Copy | Reference | Copy |
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
-| **Slicing (`a[:]`)** | **View** | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
+| **Range selection (`a[range]`)** | **Borrowed view** | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
 | **Range Usage** | **Loop Syntax** (Immediate) | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
@@ -88,7 +89,7 @@ s := arr[0:2]
 s[0] = 99                    // Mutates arr via s
 ```
 
-**Pluto:** "Arrays are Values, Slices are Views with Locking."
+**Pluto:** "Arrays are Values, Range Selections are Views with Locking."
 
 ```python
 arr = [1 2 3 4 5]
@@ -115,6 +116,34 @@ access as `[arr[i]]` materializes the selected values.
 
 **Difference:** Pluto separates range views from explicit collection, while
 Julia copies a range selection unless a view is requested explicitly.
+
+### Planned rank-N range selection
+
+The current implementation supports one index per bracket. After ranged
+collectors are represented in PIR, grouped indexing will extend the same view
+model to multiple axes:
+
+```pluto
+i = 0:3
+j = 0:3
+
+view = matrix[i j]
+submatrix = [matrix[i j]]
+rowSums = [Sum(matrix[i j])]
+```
+
+`matrix[i j]` will be a lazy selection view, not an eagerly allocated slice.
+Scalar indices drop their axes; range indices and omitted trailing axes retain
+theirs. The selection rank is therefore the source rank minus the number of
+scalar indices. When at least one range is present, the leftmost range drives
+iteration and each yield has one less rank. An ordinary `[]` collector stacks
+those yields, restoring the selection rank.
+
+Grouped indexing preserves selected axes. Chained range indexing keeps the
+existing flat range-domain behavior. Mixed grouped and chained indexing should
+initially be rejected rather than assigned an implicit shape rule. This work is
+deferred until PIR models range ownership and collector boundaries explicitly;
+see [Pluto Array Semantics](Pluto%20Array%20Semantics.md).
 
 ---
 
@@ -147,7 +176,9 @@ y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-No lazy types - intermediate variables store scalar results.
+Bare ranged expressions execute as loop drivers rather than becoming lazy
+values. An explicit range-indexed array access is the separate borrowed-view
+case described above.
 
 ### IterName Determines Loop Structure
 
@@ -173,6 +204,21 @@ result = x * y   # Nested loops: i × j
 | **Last Value** | `x = i + 1` | Loop runs, x = last value |
 | **Accumulate** | `x += i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
+
+### Statement gates and value-position `&&`
+
+A condition before a statement value is a shared statement gate. It admits or
+rejects each point of the statement's outer iteration domain for every RHS
+expression and output. If a point is rejected, no sibling RHS evaluation,
+collector append, carried update, or output commit runs for that point. Any
+RHS-local ranges run inside the admitted points.
+
+An `&&` inside a value has narrower scope. It evaluates its right side lazily
+when the left yields and propagates failure only through that value. It does
+not gate sibling RHS expressions or the statement's shared iteration domain.
+The planned `[i && [matrix[i][j]]]` construction uses this local value-position
+meaning; support for a bare range on its left is deferred until PIR represents
+the nested range and collector scopes.
 
 ### Conditional Assignment
 

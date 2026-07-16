@@ -18,6 +18,13 @@ the old value on failure; conditions inside the value propagate their failure to
 the nearest resolver — `=` keeps the old value, a collector cell zero-fills, and
 `||` supplies the fallback.**
 
+Only the first form is a **statement gate**. It admits or rejects a shared
+iteration point for every RHS expression and output in the statement. An `&&`
+inside a value is a local value operator: it evaluates its right side lazily
+when the left yields and propagates failure only through that containing value.
+It does not gate the statement's iteration domain or its sibling RHS
+expressions.
+
 ## Statement gate: keep-old
 
 A condition before the value gates the assignment. If it fails, no assignment
@@ -95,7 +102,7 @@ y > 2          # yields y when y > 2, else fails    (the value is the left opera
 y > 2 && 3     # yields 3 when y > 2, else fails
 ```
 
-`cond && value` is the value-position gating AND: it yields its **right** side
+`cond && value` is the value-position conditional AND: it yields its **right** side
 when the left yields. Chains are last-wins (`a > 2 && b > 3 && 10` is `10` only
 when both hold), and the right side is **lazy** — evaluated at most once, only
 when the left yielded. Propagation composes through arithmetic:
@@ -310,8 +317,8 @@ documented full-control opt-in.
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
-  arithmetic, and `||`/`&&` by one extraction pass; the value-position gating
-  `&&` (yields its right side per slot, lazy right, last-wins chains, binds
+  arithmetic, and `||`/`&&` by one extraction pass; the value-position
+  conditional `&&` (yields its right side per slot, lazy right, last-wins chains, binds
   tighter than `||`, so `c && v || w` is a per-slot if-else); conditions are
   value positions, so chained comparisons gate directly (`i > 2 < 8`,
   leftmost-binding, including chained multi-return gates) in every condition
