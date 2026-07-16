@@ -135,6 +135,35 @@ sibling RHS expressions. Bare ranges on the left of value-position `&&` are
 not implemented yet; this construction is deferred until PIR can represent
 the two nested domains and their collector ownership directly.
 
+`&&` binds a domain; it does not collect or flatten the values yielded by that
+domain. Collector placement therefore determines the resulting rank:
+
+```pluto
+[j && -1]       # one rank-1 row containing one -1 per j
+j && [-1]       # a stream containing one singleton array per j
+[j && [-1]]     # rank 2, with shape len(j) x 1
+```
+
+A row-level fallback used inside the outer collector must produce a row with
+the same runtime shape as every other row that is actually stacked. Reusing
+the `j` domain makes that shape explicit:
+
+```pluto
+result = [
+    i && (
+        i < 2 && [matrix[i][j]]
+        || [j && -1]
+    )
+]
+```
+
+Both alternatives produce a rank-1 row of length `len(j)`. By contrast,
+`i && [matrix[i][j]] || [-1]` has no reachable fallback: a bare range yields
+each domain point and the inner collector resolves to an array. If a genuinely
+failable row condition made `[-1]` reachable, mixing its singleton shape with
+longer rows would fail the outer collector's rectangular shape check. Pluto
+does not pad, truncate, or flatten mismatched rows.
+
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and equal inner dimensions, then zip the outer dimension to
 the shorter input. Concatenation joins the outer dimension and requires every

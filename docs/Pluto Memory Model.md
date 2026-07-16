@@ -218,7 +218,9 @@ when the left yields and propagates failure only through that value. It does
 not gate sibling RHS expressions or the statement's shared iteration domain.
 The planned `[i && [matrix[i][j]]]` construction uses this local value-position
 meaning; support for a bare range on its left is deferred until PIR represents
-the nested range and collector scopes.
+the nested range and collector scopes. The operator only binds that domain;
+materialization remains explicit, so `[j && -1]` forms one row while
+`j && [-1]` yields one singleton array per `j`.
 
 ### Conditional Assignment
 

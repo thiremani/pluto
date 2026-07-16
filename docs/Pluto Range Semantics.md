@@ -299,6 +299,20 @@ collector would stack the resulting rows. This is not statement gating. A
 statement gate would instead sit before the statement's RHS and would admit or
 reject the shared iteration point for every RHS expression.
 
+The value-position `&&` establishes the local range domain but never collects
+its right side. An explicit collector must surround the scalar yields that
+form one array value:
+
+```pluto
+[j && -1]       # one row of length len(j)
+j && [-1]       # one singleton-array yield per j
+[j && [-1]]     # stacks those arrays into a len(j) x 1 value
+```
+
+This same placement rule applies to fallbacks. A row fallback is
+`[j && -1]`, not `j && [-1]`; the former matches the shape of a row collected
+over `j`, while the latter still yields multiple array values.
+
 This range-left extension is deliberately not part of the current semantics.
 It should be implemented only after PIR can state which collector owns each
 range and validate that ownership before LLVM lowering.
