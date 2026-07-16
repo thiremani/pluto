@@ -338,33 +338,37 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 }
 
 func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
-	s := &Symbol{}
-
-	// Handle empty array literal: []
-	if len(lit.Rows) == 0 {
-		arr := info.OutTypes[0].(Array)
-		s.Type = arr
-		s.Val = c.createArrayValue(llvm.Value{}, []llvm.Value{c.ConstI64(0)}, arr)
-		return []*Symbol{s}
-	}
-
 	arr := info.OutTypes[0].(Array)
-	elemType := arr.ElemType
+	length := 0
+	if len(lit.Rows) > 0 {
+		length = len(lit.Rows[0])
+	}
+	dimensions := []llvm.Value{c.ConstI64(uint64(length))}
+	return []*Symbol{c.compileFixedArrayLiteral(lit, arr, dimensions)}
+}
 
-	row := lit.Rows[0]
-	nConst := c.ConstI64(uint64(len(row)))
-	arrVal := c.CreateArrayForType(elemType, nConst)
-
-	for i, cell := range row {
-		idx := c.ConstI64(uint64(i))
-		c.compileArrayLiteralCell(cell, elemType, func(cellSlot *Symbol) bool {
-			return c.setArrayCellSlot(arrVal, idx, cellSlot, elemType)
-		})
+func (c *Compiler) compileFixedArrayLiteral(lit *ast.ArrayLiteral, arrayType Array, dimensions []llvm.Value) *Symbol {
+	cellCount := 0
+	for _, row := range lit.Rows {
+		cellCount += len(row)
+	}
+	if cellCount == 0 || !hasConcreteArrayElemType(arrayType.ElemType) {
+		return &Symbol{Type: arrayType, Val: c.createArrayValue(llvm.Value{}, dimensions, arrayType)}
 	}
 
-	s.Type = arr
-	s.Val = c.createArrayValue(arrVal, []llvm.Value{nConst}, arr)
-	return []*Symbol{s}
+	data := c.CreateArrayForType(arrayType.ElemType, c.ConstI64(uint64(cellCount)))
+	index := 0
+	for _, row := range lit.Rows {
+		for _, cell := range row {
+			cellIndex := c.ConstI64(uint64(index))
+			c.compileArrayLiteralCell(cell, arrayType.ElemType, func(cellSlot *Symbol) bool {
+				return c.setArrayCellSlot(data, cellIndex, cellSlot, arrayType.ElemType)
+			})
+			index++
+		}
+	}
+
+	return &Symbol{Type: arrayType, Val: c.createArrayValue(data, dimensions, arrayType)}
 }
 
 func (c *Compiler) withCollectorLoopNest(ranges []*RangeInfo, probe ast.Expression, condExprs []ast.Expression, body func()) {

@@ -14,21 +14,8 @@ func (c *Compiler) compileRectangularArrayLiteral(lit *ast.ArrayLiteral, arrayTy
 	if rows > 0 {
 		cols = len(lit.Rows[0])
 	}
-
-	data := c.CreateArrayForType(arrayType.ElemType, c.ConstI64(uint64(rows*cols)))
-	for rowIndex, row := range lit.Rows {
-		for colIndex, cell := range row {
-			index := c.ConstI64(uint64(rowIndex*cols + colIndex))
-			c.compileArrayLiteralCell(cell, arrayType.ElemType, func(cellSlot *Symbol) bool {
-				return c.setArrayCellSlot(data, index, cellSlot, arrayType.ElemType)
-			})
-		}
-	}
-
-	return &Symbol{
-		Type: arrayType,
-		Val:  c.createArrayValue(data, []llvm.Value{c.ConstI64(uint64(rows)), c.ConstI64(uint64(cols))}, arrayType),
-	}
+	dimensions := []llvm.Value{c.ConstI64(uint64(rows)), c.ConstI64(uint64(cols))}
+	return c.compileFixedArrayLiteral(lit, arrayType, dimensions)
 }
 
 func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType Array) *Symbol {

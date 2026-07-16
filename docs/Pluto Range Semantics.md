@@ -326,6 +326,12 @@ This same placement rule applies to fallbacks. A row fallback is
 `[j && -1]`, not `j && [-1]`; the former matches the shape of a row collected
 over `j`, while the latter still yields multiple array values.
 
+A bare range binder never fails, so `i && [matrix[i][j]] || [-1]` has no
+reachable fallback: `i` yields every domain point and the inner collector
+always resolves to an array. The eventual validator should diagnose that dead
+fallback. When alternatives are reachable, every row must have the same shape;
+Pluto does not pad, truncate, or flatten mismatched rows.
+
 When a condition such as `i > 0 && [F(i, j)]` fails in value position, the
 enclosing collector retains that `i` position and inserts a zero-filled child
 with the expected `j` shape. `|| [j && -1]` replaces that default with an
