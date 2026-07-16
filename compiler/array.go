@@ -277,22 +277,13 @@ func (c *Compiler) ArrayGetBorrowed(arr *Symbol, elem Type, idx llvm.Value) llvm
 
 // compileArrayExpression materializes a bracket literal according to its solved
 // Array or Table type.
-func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) (res []*Symbol) {
+func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifier) []*Symbol {
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	switch typ := info.OutTypes[0].(type) {
 	case Array:
-		if typ.Rank > 1 {
-			if c.arrayLiteralHasArrayCells(lit) {
-				if len(info.CollectRanges) > 0 {
-					return []*Symbol{c.compileStackedArrayCollector(lit, info, typ)}
-				}
-				return []*Symbol{c.compileStackedArrayLiteral(lit, typ)}
-			}
-			return []*Symbol{c.compileRectangularArrayLiteral(lit, typ)}
-		}
-		return []*Symbol{c.compileArrayLiteralInDomain(lit, info, nil, nil)}
+		return []*Symbol{c.compileArray(lit, info, typ)}
 	case Table:
-		return []*Symbol{c.compileTableLiteral(lit, typ)}
+		return []*Symbol{c.compileTable(lit, typ)}
 	default:
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: lit.Tok(),
@@ -300,6 +291,19 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 		})
 		return nil
 	}
+}
+
+func (c *Compiler) compileArray(lit *ast.ArrayLiteral, info *ExprInfo, arrayType Array) *Symbol {
+	if arrayType.Rank == 1 {
+		return c.compileArrayLiteralInDomain(lit, info, nil, nil)
+	}
+	if !c.arrayLiteralHasArrayCells(lit) {
+		return c.compileRectangularArrayLiteral(lit, arrayType)
+	}
+	if len(info.CollectRanges) == 0 {
+		return c.compileStackedArrayLiteral(lit, arrayType)
+	}
+	return c.compileStackedArrayCollector(lit, info, arrayType)
 }
 
 func (c *Compiler) arrayLiteralHasArrayCells(lit *ast.ArrayLiteral) bool {

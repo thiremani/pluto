@@ -5,7 +5,7 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-func (c *Compiler) compileTableLiteral(lit *ast.ArrayLiteral, tableType Table) *Symbol {
+func (c *Compiler) compileTable(lit *ast.ArrayLiteral, tableType Table) *Symbol {
 	if len(lit.Rows) == 0 {
 		return c.makeZeroValue(tableType)
 	}
