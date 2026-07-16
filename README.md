@@ -223,33 +223,22 @@ scores = [
 ]
 ```
 
-An empty or one-row scalar literal is rank 1. A rectangular, multi-row scalar
-literal is rank 2. Array-valued cells of equal rank and shape stack along a new
-outer dimension, so `[[1 2] [3 4]]` is the same rank-2 value as the `matrix`
-literal above and the rule extends to any rank. Storage is flat and row-major;
-there is no pointer per row. Ragged literals are compile errors and missing
-cells are never padded with default values. Indexing removes the outer
-dimension, so `cube[1][0]` is `[5 6]`.
+One scalar row is rank 1; multiple rectangular scalar rows are rank 2; and
+equal-shaped array cells stack into higher ranks. Storage is flat and
+row-major, and ragged literals are compile errors.
 
-A header row always produces a columnar table; without headers, homogeneous
-columns with different element types infer an unnamed table. A header must
-contain at least one column name, but it may have no data rows. Such a literal
-is an empty table whose printed value retains the header; each projected column
-is an untyped empty array and prints as `[]`. Headerless literals start directly
-with their first data row. The preferred layout uses `  : Name Score`, with the
-outdented `:` leaving the first header aligned with the first value below it.
-Indentation and spacing inside brackets are not semantic. Named columns are
-arrays, so `scores.Score` returns `[10 12]`.
-Header-only tables can be printed and projected, but cannot be passed to
-functions until their column types are established. See
-[Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for the complete
-inference and shape rules.
+A header row produces a columnar table, with named columns projected as arrays
+such as `scores.Score`. The shown hanging `:` is the preferred layout because
+the first header aligns with the first value; whitespace remains non-semantic.
 
 The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
 functions, and adopts an element type when concatenated with a concrete array.
 Once a variable has a concrete array type, assigning `[]` empties its value but
 preserves that element type. Operations such as indexing or arithmetic still
 require a concrete element type.
+
+See [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for complete
+inference, shape, indexing, empty-value, and table rules.
 
 String-array elements print quoted so boundaries stay unambiguous:
 

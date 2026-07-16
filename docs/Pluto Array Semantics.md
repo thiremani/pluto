@@ -15,19 +15,6 @@ dimension lengths beside that buffer; rows are not separately allocated.
 - `[1 2 3]` is a rank-1 `[I64]` value.
 - Multiple homogeneous scalar rows infer a rank-2 array.
 - Array-valued cells of one rank and shape stack into an array one rank higher.
-- Multiple scalar rows with homogeneous but different column types infer an
-  unnamed table. A header always produces a table.
-
-The preferred table layout outdents the `:` marker so the first header and
-first value begin in the same column. Whitespace remains non-semantic:
-
-```pluto
-scores = [
-  : Name Score
-    "Ada" 10
-    "Lin" 12
-]
-```
 
 These two literals therefore have the same rank-2 type and value:
 
@@ -69,6 +56,29 @@ arr = [
 Ranges inside a rank-1 literal remain collectors and may determine its runtime
 length. Array values are nested rather than flattened when used as cells.
 
+### Tables
+
+Multiple scalar rows with homogeneous but different column types infer an
+unnamed table. A header always produces a table and must contain at least one
+column name. Headerless literals start directly with their first data row.
+
+The preferred layout outdents the `:` marker so the first header and first
+value begin in the same column. Whitespace remains non-semantic:
+
+```pluto
+scores = [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+```
+
+Named columns are arrays, so `scores.Score` is `[10 12]`. A header may have no
+data rows; the resulting table retains its header when printed, while each
+projected column is an untyped empty array that prints as `[]`. Header-only
+tables can be printed and projected, but cannot be passed to functions until
+their column types are established.
+
 ## Indexing and operations
 
 `array[i]` indexes the outer dimension. Rank-1 indexing returns a scalar;
@@ -84,7 +94,22 @@ i = 0:2
 selected = [matrix[i]]
 ```
 
-### Planned grouped multi-axis indexing
+Array-scalar operations preserve shape. Array-array element-wise operations
+require equal rank and, when both outer dimensions are nonzero, equal inner
+dimensions; they zip the outer dimension to the shorter input. Concatenation
+joins the outer dimension and applies the same inner-shape check when both
+operands are nonempty. An empty operand contributes no cells and imposes no
+inner-shape constraint; concatenation uses the nonempty operand's inner shape.
+Literal-construction mismatches are compile errors; operation shapes that
+depend on runtime values are checked before proceeding.
+
+Assigning `[]` to a concrete array empties it without changing its established
+leaf type or rank. Untyped empty arrays can specialize functions and refine to
+a concrete leaf type through concatenation.
+
+## Planned rank-N range features
+
+### Grouped multi-axis indexing
 
 Shape-preserving selection across multiple indexed dimensions is not yet
 implemented. It is deferred until ranged collectors are represented in PIR.
@@ -128,10 +153,10 @@ Grouped indexing preserves axes. Chained range indexing, such as
 `[matrix[i][j]]`, keeps the existing flattened range-domain behavior. Mixed
 grouped and chained indexing should initially be rejected.
 
-### Planned nested range construction
+### Nested range construction
 
 Grouped indexing selects from an existing array. Computed rectangular values
-need a separate construction rule. The first planned case is:
+need a separate construction rule:
 
 ```pluto
 i = 0:3
@@ -139,84 +164,12 @@ j = 0:3
 submatrix = [i && [matrix[i][j]]]
 ```
 
-Here `&&` is in value position. It binds the outer `i` yield for the local
-right-hand value; the inner collector owns `j` and produces one row, and the
-outer collector stacks the rows. It is not a statement gate and does not alter
-sibling RHS expressions. Bare ranges on the left of value-position `&&` are
-not implemented yet; this construction is deferred until PIR can represent
-the two nested domains and their collector ownership directly.
+Here value-position `&&` binds the outer `i` domain locally, the inner collector
+owns `j`, and the outer collector stacks the rows. It never becomes a statement
+gate. A skipped array-valued child contributes a zero-filled child of the known
+inner shape, while `||` may supply an explicit shape-compatible fallback.
 
-The binder distinguishes flat cartesian collection from nested dimensions:
-
-```pluto
-flat = [F(i, j)]                     # rank 1 over the i x j domain
-rows = [i && [F(i, j)]]              # rank 2: i rows, j cells
-cols = [j && [F(i, j)]]              # rank 2: j rows, i cells
-cube = [i && [j && [F(i, j, k)]]]    # rank 3: i, then j, then k
-ones = [i && 1]                      # rank 1: one 1 per i
-```
-
-A bare range binder always yields each domain point; its numeric value is not a
-truth test, so `i = 0` still produces a `1` in the last example. Without an
-explicit binder, the nearest collector owns every unbound range mentioned in
-its cells. Ordinary arithmetic does not establish a nested domain.
-
-`&&` binds a domain; it does not collect or flatten the values yielded by that
-domain. Collector placement therefore determines the resulting rank:
-
-```pluto
-[j && -1]       # one rank-1 row containing one -1 per j
-j && [-1]       # a stream containing one singleton array per j
-[j && [-1]]     # rank 2, with shape len(j) x 1
-```
-
-A row-level fallback used inside the outer collector must produce a row with
-the same runtime shape as every other row that is actually stacked. Reusing
-the `j` domain makes that shape explicit:
-
-```pluto
-result = [
-    i && (
-        i < 2 && [matrix[i][j]]
-        || [j && -1]
-    )
-]
-```
-
-Both alternatives produce a rank-1 row of length `len(j)`. By contrast,
-`i && [matrix[i][j]] || [-1]` has no reachable fallback: a bare range yields
-each domain point and the inner collector resolves to an array. If a genuinely
-failable row condition made `[-1]` reachable, mixing its singleton shape with
-longer rows would fail the outer collector's rectangular shape check. Pluto
-does not pad, truncate, or flatten mismatched rows.
-
-A failed array-valued cell preserves the outer domain by contributing a
-zero-filled child with the expected inner shape:
-
-```pluto
-zeroRows = [i > 0 && [F(i, j)]]
-minusRows = [i > 0 && [F(i, j)] || [j && -1]]
-```
-
-`zeroRows` contains a zero row for every `i` that fails `i > 0`.
-`minusRows` uses the explicit row fallback instead. The child shape must be
-known statically or derivable from its bound domains, such as `j` here. If PIR
-cannot establish the shape without evaluating the skipped value, the compiler
-rejects the implicit zero-fill and requires an explicit shape-bearing fallback.
-Use `|| [j && 0]` to state the default zero row, or another compatible value
-such as `|| [j && -1]`.
-Only a statement gate removes a rejected iteration from the shared statement
-domain; value-position `&&` never does.
-
-Array-scalar operations preserve shape. Array-array element-wise operations
-require equal rank and, when both outer dimensions are nonzero, equal inner
-dimensions; they zip the outer dimension to the shorter input. Concatenation
-joins the outer dimension and applies the same inner-shape check when both
-operands are nonempty. An empty operand contributes no cells and imposes no
-inner-shape constraint; concatenation uses the nonempty operand's inner shape.
-Literal-construction mismatches are compile errors; operation shapes that
-depend on runtime values are checked before proceeding.
-
-Assigning `[]` to a concrete array empties it without changing its established
-leaf type or rank. Untyped empty arrays can specialize functions and refine to
-a concrete leaf type through concatenation.
+The domain-binding, collector-placement, and fallback rules are specified in
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction).
+This construction remains deferred until PIR represents range ownership and
+collector boundaries directly.

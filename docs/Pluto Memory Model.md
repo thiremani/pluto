@@ -132,18 +132,12 @@ submatrix = [matrix[i j]]
 rowSums = [Sum(matrix[i j])]
 ```
 
-`matrix[i j]` will be a lazy selection view, not an eagerly allocated slice.
-Scalar indices drop their axes; range indices and omitted trailing axes retain
-theirs. The selection rank is therefore the source rank minus the number of
-scalar indices. When at least one range is present, the leftmost range drives
-iteration and each yield has one less rank. An ordinary `[]` collector stacks
-those yields, restoring the selection rank.
-
-Grouped indexing preserves selected axes. Chained range indexing keeps the
-existing flat range-domain behavior. Mixed grouped and chained indexing should
-initially be rejected rather than assigned an implicit shape rule. This work is
-deferred until PIR models range ownership and collector boundaries explicitly;
-see [Pluto Array Semantics](Pluto%20Array%20Semantics.md).
+`matrix[i j]` will be a borrowed lazy selection rather than an eagerly allocated
+slice; `[matrix[i j]]` will materialize an owned array. The rank, axis, and
+driver rules belong to
+[Pluto Array Semantics](Pluto%20Array%20Semantics.md#grouped-multi-axis-indexing).
+Implementation remains deferred until PIR models range ownership and collector
+boundaries explicitly.
 
 ---
 
@@ -216,14 +210,10 @@ RHS-local ranges run inside the admitted points.
 An `&&` inside a value has narrower scope. It evaluates its right side lazily
 when the left yields and propagates failure only through that value. It does
 not gate sibling RHS expressions or the statement's shared iteration domain.
-The planned `[i && [matrix[i][j]]]` construction uses this local value-position
-meaning; support for a bare range on its left is deferred until PIR represents
-the nested range and collector scopes. The operator only binds that domain;
-materialization remains explicit, so `[j && -1]` forms one row while
-`j && [-1]` yields one singleton array per `j`. The same rule makes
-`[i && 1]` an array containing one `1` per `i`. A failed array-valued cell
-contributes a zero-filled child of its expected shape unless `||` supplies an
-explicit shape-compatible fallback.
+The planned `[i && [matrix[i][j]]]` construction uses this local meaning to bind
+a nested range domain. Its collector-placement and fallback rules belong to
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction)
+and remain deferred until PIR represents those scopes directly.
 
 ### Conditional Assignment
 
