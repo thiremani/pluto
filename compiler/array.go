@@ -331,16 +331,6 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	return lit, info
 }
 
-func (c *Compiler) compileArrayLiteralImmediate(lit *ast.ArrayLiteral, info *ExprInfo) (res []*Symbol) {
-	arr := info.OutTypes[0].(Array)
-	length := 0
-	if len(lit.Rows) > 0 {
-		length = len(lit.Rows[0])
-	}
-	dimensions := []llvm.Value{c.ConstI64(uint64(length))}
-	return []*Symbol{c.compileFixedArrayLiteral(lit, arr, dimensions)}
-}
-
 func (c *Compiler) compileFixedArrayLiteral(lit *ast.ArrayLiteral, arrayType Array, dimensions []llvm.Value) *Symbol {
 	cellCount := 0
 	for _, row := range lit.Rows {
@@ -405,7 +395,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, gateRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
 	collectRanges := mergeUses(gateRanges, info.CollectRanges)
 	if len(collectRanges) == 0 && len(condExprs) == 0 {
-		return c.compileArrayLiteralImmediate(lit, info)[0]
+		return c.compileFixedArrayLiteral(lit, info.OutTypes[0].(Array), nil)
 	}
 	return c.compileArrayLiteralWithLoops(lit, info, collectRanges, condExprs)
 }
