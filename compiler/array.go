@@ -307,15 +307,9 @@ func (c *Compiler) compileArray(lit *ast.ArrayLiteral, info *ExprInfo, arrayType
 }
 
 func (c *Compiler) arrayLiteralHasArrayCells(lit *ast.ArrayLiteral) bool {
-	for _, row := range lit.Rows {
-		for _, cell := range row {
-			info := c.ExprCache[key(c.FuncNameMangled, cell)]
-			if info.OutTypes[0].Kind() == ArrayKind {
-				return true
-			}
-		}
-	}
-	return false
+	// The solver rejects literals that mix scalar and array-valued cells.
+	firstCell := lit.Rows[0][0]
+	return c.ExprCache[key(c.FuncNameMangled, firstCell)].OutTypes[0].Kind() == ArrayKind
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
