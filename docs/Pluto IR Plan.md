@@ -148,9 +148,17 @@ Each value-producing plan node has an abstract outcome:
 | Domain | scalar, fixed output slots, array elements, range iterations |
 | Yield shape | always, scalar condition, per-slot bits, element mask, per-iteration |
 
+Conceptually, an outcome is `(value, yielded)`, analogous to a circuit lane's
+`(data, valid)`. `yielded` has the node's yield shape rather than necessarily
+being one scalar bit. This is plan-level meaning, not a Pluto tuple, SSA pair,
+or required runtime layout.
+
 Zero is never a missing-value marker. A successful comparison may yield zero,
-so value and yield information remain conceptually separate even though PIR does
-not expose machine bits.
+so value and yield information remain conceptually separate. A `gate` consumes
+the relevant yield state as the shared statement-iteration enable. Local
+`value-and`, `map`, and `align` operations propagate yield state with their data;
+`fallback`, collector closure, `advance`, and final `set` resolve it according
+to their documented policies.
 
 `eval` leaves may retain references to typed AST nodes. The builder splits out
 operations that affect evaluation strategy, including ranges, lazy `&&`/`||`,

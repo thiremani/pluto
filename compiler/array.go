@@ -586,63 +586,93 @@ func (c *Compiler) pushAccumCellValue(acc *ArrayAccumulator, valSym *Symbol, isT
 // Array operation functions
 
 // arrayPairShape returns the flat iteration length and dimensions for a zipped
-// pair. Higher-rank arrays zip the outer dimension and require equal inner shape.
+// pair. Every dimension is limited to the shorter corresponding dimension.
 func (c *Compiler) arrayPairShape(left *Symbol, right *Symbol) (llvm.Value, []llvm.Value) {
-	leftType := left.Type.(Array)
-	if leftType.Rank == 1 {
-		leftLen := c.ArrayLen(left, leftType.ElemType)
-		rightLen := c.ArrayLen(right, right.Type.(Array).ElemType)
-		length := c.builder.CreateSelect(
-			c.builder.CreateICmp(llvm.IntULT, leftLen, rightLen, "cmp_len"),
-			leftLen, rightLen, "min_len",
-		)
-		return length, []llvm.Value{length}
-	}
-
 	leftDims := c.arrayDimensions(left)
 	rightDims := c.arrayDimensions(right)
-	zero := c.ConstI64(0)
-	bothNonEmpty := c.builder.CreateAnd(
-		c.builder.CreateICmp(llvm.IntNE, leftDims[0], zero, "left_array_nonempty"),
-		c.builder.CreateICmp(llvm.IntNE, rightDims[0], zero, "right_array_nonempty"),
-		"both_arrays_nonempty",
-	)
-	c.requireSameArrayShapeWhen(bothNonEmpty, leftDims[1:], rightDims[1:], "array_inner_shape")
-	outer := c.builder.CreateSelect(
-		c.builder.CreateICmp(llvm.IntULT, leftDims[0], rightDims[0], "cmp_outer_len"),
-		leftDims[0], rightDims[0], "min_outer_len",
-	)
-	dimensions := append([]llvm.Value{outer}, leftDims[1:]...)
-	length := outer
+	dimensions := make([]llvm.Value, len(leftDims))
+	for i := range leftDims {
+		dimensions[i] = c.builder.CreateSelect(
+			c.builder.CreateICmp(llvm.IntULT, leftDims[i], rightDims[i], "cmp_array_dimension"),
+			leftDims[i], rightDims[i], "min_array_dimension",
+		)
+	}
+
+	length := dimensions[0]
 	for _, dimension := range dimensions[1:] {
 		length = c.builder.CreateMul(length, dimension, "array_zip_len")
 	}
 	return length, dimensions
 }
 
+func (c *Compiler) arrayStrides(dimensions []llvm.Value) []llvm.Value {
+	strides := make([]llvm.Value, len(dimensions))
+	stride := c.ConstI64(1)
+	for i := len(dimensions) - 1; i >= 0; i-- {
+		strides[i] = stride
+		if i > 0 {
+			stride = c.builder.CreateMul(stride, dimensions[i], "array_stride")
+		}
+	}
+	return strides
+}
+
+func (c *Compiler) arrayPairIndices(iter llvm.Value, resultStrides, leftStrides, rightStrides []llvm.Value) (llvm.Value, llvm.Value) {
+	remaining := iter
+	leftIndex := c.ConstI64(0)
+	rightIndex := c.ConstI64(0)
+	for i, resultStride := range resultStrides {
+		coordinate := remaining
+		if i < len(resultStrides)-1 {
+			coordinate = c.builder.CreateUDiv(remaining, resultStride, "array_zip_coordinate")
+			remaining = c.builder.CreateURem(remaining, resultStride, "array_zip_remainder")
+		}
+
+		leftOffset := c.builder.CreateMul(coordinate, leftStrides[i], "array_zip_left_offset")
+		rightOffset := c.builder.CreateMul(coordinate, rightStrides[i], "array_zip_right_offset")
+		leftIndex = c.builder.CreateAdd(leftIndex, leftOffset, "array_zip_left_index")
+		rightIndex = c.builder.CreateAdd(rightIndex, rightOffset, "array_zip_right_index")
+	}
+	return leftIndex, rightIndex
+}
+
 // forEachArrayPair iterates element-wise over an array LHS and either an array
-// or scalar RHS, using loopLen as the iteration count.
+// or scalar RHS. zipDimensions maps a rank-N array pair's result coordinates
+// into each source buffer; it is nil when the RHS is scalar.
 func (c *Compiler) forEachArrayPair(
 	left *Symbol,
 	right *Symbol,
 	loopLen llvm.Value,
+	zipDimensions []llvm.Value,
 	body func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol),
 ) {
 	leftElem := left.Type.(Array).ElemType
 	rightIsArray := right.Type.Kind() == ArrayKind
 	var rightElem Type
+	var resultStrides, leftStrides, rightStrides []llvm.Value
 	if rightIsArray {
 		rightElem = right.Type.(Array).ElemType
+		if len(zipDimensions) > 1 {
+			resultStrides = c.arrayStrides(zipDimensions)
+			leftStrides = c.arrayStrides(c.arrayDimensions(left))
+			rightStrides = c.arrayStrides(c.arrayDimensions(right))
+		}
 	}
 
 	r := c.rangeZeroToN(loopLen)
 	c.createLoop(r, func(iter llvm.Value) {
-		leftVal := c.ArrayGetBorrowed(left, leftElem, iter)
+		leftIndex := iter
+		rightIndex := iter
+		if len(resultStrides) > 0 {
+			leftIndex, rightIndex = c.arrayPairIndices(iter, resultStrides, leftStrides, rightStrides)
+		}
+
+		leftVal := c.ArrayGetBorrowed(left, leftElem, leftIndex)
 		leftSym := &Symbol{Val: leftVal, Type: leftElem}
 
 		currentRight := right
 		if rightIsArray {
-			rightVal := c.ArrayGetBorrowed(right, rightElem, iter)
+			rightVal := c.ArrayGetBorrowed(right, rightElem, rightIndex)
 			currentRight = &Symbol{Val: rightVal, Type: rightElem}
 		}
 
@@ -669,12 +699,11 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 		return c.compileArrayConcat(left, right, leftElem, rightElem, resElem)
 	}
 
-	// Element-wise array operation: arr1 op arr2
-	// Strategy: iterate to min(len(arr1), len(arr2)) - no implicit padding.
-	// This mirrors vector-style zip semantics and avoids silently inventing data.
+	// Element-wise array operation: arr1 op arr2. Zip every dimension to
+	// its minimum without implicit padding or invented data.
 	loopLen, dimensions := c.arrayPairShape(left, right)
 	resVec := c.CreateArrayForType(resElem, loopLen)
-	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
+	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		// compileInfix reads values and produces a new result
 		computed := c.compileInfix(op, leftSym, rightSym, resElem)
 
@@ -761,7 +790,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 	loopLen := c.ArrayLen(arr, arrElem)
 	dimensions := c.arrayDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
-	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+	c.forEachArrayPair(arr, scalar, loopLen, nil, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Respect the original operand order for non-commutative operations
 		var computed *Symbol
 		if arrayOnLeft {
@@ -787,8 +816,8 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 // operand is an array. Each position yields the LHS element where the comparison
 // holds, otherwise 0 — preserving length and position (a 0 marks a failed compare,
 // never a dropped element). This is Pluto's scalar "comparison yields LHS-or-0"
-// applied per element. Array-array zips to min length; array-scalar uses the
-// array's length and broadcasts the scalar.
+// applied per element. Array-array zips every dimension to its minimum;
+// array-scalar uses the array's shape and broadcasts the scalar.
 func (c *Compiler) compileArrayMask(op string, left *Symbol, right *Symbol, expected Type) *Symbol {
 	l := c.derefIfPointer(left, "")
 	r := c.derefIfPointer(right, "")
@@ -823,7 +852,7 @@ func (c *Compiler) maskStore(resElem Type, resVec llvm.Value, iter llvm.Value, l
 func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
 	loopLen, dimensions := c.arrayPairShape(left, right)
 	resVec := c.CreateArrayForType(resElem, loopLen)
-	c.forEachArrayPair(left, right, loopLen, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
+	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		lhs, cond := c.compareScalars(op, leftSym, rightSym)
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
@@ -836,7 +865,7 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 	loopLen := c.ArrayLen(arr, arrElem)
 	dimensions := c.arrayDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
-	c.forEachArrayPair(arr, scalar, loopLen, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
+	c.forEachArrayPair(arr, scalar, loopLen, nil, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Preserve operand order for non-commutative comparisons. The masked value
 		// is always the comparison's LHS (the array element, or the scalar when it
 		// is on the left), which compareScalars returns alongside the result.

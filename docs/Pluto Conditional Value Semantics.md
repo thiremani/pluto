@@ -25,6 +25,27 @@ when the left yields and propagates failure only through that containing value.
 It does not gate the statement's iteration domain or its sibling RHS
 expressions.
 
+### Outcome and circuit model
+
+A useful semantic model is that each value-producing operation has an abstract
+outcome `(value, yielded)`, analogous to a circuit lane carrying `(data, valid)`.
+This is not a Pluto tuple or a required runtime representation. The yield state
+may be scalar, per output slot, per array element, or per range iteration,
+depending on the value's domain.
+
+The value and yield state are distinct: a successful condition may yield the
+value `0`, while a failed condition yields no value. A statement gate consumes
+the condition's yield state as a shared execution-enable signal. If it is off,
+the iteration transaction does not exist and no RHS or output commit runs. A
+value-position condition instead leaves the transaction in place and propagates
+its local missing outcome to the nearest resolver. Assignment keeps old,
+collectors preserve shape with zero-fill, and `||` supplies alternate data.
+
+In short: **a statement gate controls whether an iteration transaction exists;
+a value condition controls whether one data lane yields within an existing
+transaction.** Filtering versus masking is the collection-level consequence of
+that distinction.
+
 ## Statement gate: keep-old
 
 A condition before the value gates the assignment. If it fails, no assignment
@@ -229,8 +250,9 @@ A direct array comparison follows the same rule element-wise: `arr > k` is a
 **mask** — each cell keeps its left value where the comparison holds, else 0, *in
 place* (length- and position-preserving). It is the scalar "yield the left
 operand, else 0" applied per element, so it stays consistent with the collector
-cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips to the
-shorter length, `arr > scalar` spans the array and broadcasts the scalar.
+cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips each
+dimension to its minimum, while `arr > scalar` spans the array and broadcasts
+the scalar.
 
 ```pluto
 [1 3 5 7] > [0 4 4 8]    # [1 0 5 0]   (failed cells masked to 0, in place)

@@ -20,3 +20,13 @@ Polynomial 1 (Float): [-33.6 -103.8]
 Polynomial 2 (Int): [-76 -366]
 Poly zip x*y: [141 1261]
 Poly zip add mix: [221 440]
+Rank 2 zip: [
+    11 22
+    34 45
+]
+Rank 3 zip: [
+    [
+        101 202
+        304 405
+    ]
+]

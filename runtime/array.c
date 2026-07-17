@@ -407,8 +407,8 @@ fail:
 }
 
 /* Aborts the process; called from generated code when a runtime shape check
- * fails (stacking, concatenation, or zipping arrays with unequal inner
- * dimensions). Static shape mismatches are compile errors instead. */
+ * fails while stacking or concatenating arrays. Static shape mismatches are
+ * compile errors instead. */
 void array_shape_fail(size_t expected, size_t got) {
     fprintf(stderr, "pluto: array shape mismatch: expected dimension %zu, got %zu\n",
             expected, got);
