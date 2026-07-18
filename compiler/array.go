@@ -778,17 +778,14 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 		c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 	}
 
-	// Return concatenated array
-	if arrayType.Rank == 1 {
-		dimensions = []llvm.Value{totalLen}
-	}
 	return c.arrayValueSymbol(resVec, arrayType, dimensions)
 }
 
 func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	arrElem := arr.Type.(Array).ElemType
+	arrType := arr.Type.(Array)
+	arrElem := arrType.ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
-	dimensions := c.arrayDimensions(arr)
+	dimensions := c.arrayValueDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, nil, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Respect the original operand order for non-commutative operations
@@ -809,7 +806,7 @@ func (c *Compiler) compileArrayScalarInfix(op string, arr *Symbol, scalar *Symbo
 		c.ArraySetOwnForType(resElem, resVec, iter, resultVal)
 	})
 
-	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arr.Type.(Array).Rank}, dimensions)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arrType.Rank}, dimensions)
 }
 
 // compileArrayMask dispatches value-position comparison masking when at least one
@@ -861,9 +858,10 @@ func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol,
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {
-	arrElem := arr.Type.(Array).ElemType
+	arrType := arr.Type.(Array)
+	arrElem := arrType.ElemType
 	loopLen := c.ArrayLen(arr, arrElem)
-	dimensions := c.arrayDimensions(arr)
+	dimensions := c.arrayValueDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(arr, scalar, loopLen, nil, func(iter llvm.Value, elemSym *Symbol, scalarSym *Symbol) {
 		// Preserve operand order for non-commutative comparisons. The masked value
@@ -877,7 +875,7 @@ func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arr.Type.(Array).Rank}, dimensions)
+	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: arrType.Rank}, dimensions)
 }
 
 func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array) *Symbol {
@@ -885,7 +883,7 @@ func (c *Compiler) compileArrayUnaryPrefix(op string, arr *Symbol, result Array)
 	elem := arrType.ElemType
 	resElem := result.ElemType
 	n := c.ArrayLen(arr, elem)
-	dimensions := c.arrayDimensions(arr)
+	dimensions := c.arrayValueDimensions(arr)
 	resVec := c.CreateArrayForType(resElem, n)
 
 	r := c.rangeZeroToN(n)

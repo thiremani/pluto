@@ -191,6 +191,15 @@ func (c *Compiler) arrayDimensions(symbol *Symbol) []llvm.Value {
 	return dimensions
 }
 
+// arrayValueDimensions returns dimensions carried directly by an array value.
+// Rank-1 length lives in the runtime vector rather than the LLVM array value.
+func (c *Compiler) arrayValueDimensions(symbol *Symbol) []llvm.Value {
+	if symbol.Type.(Array).Rank == 1 {
+		return nil
+	}
+	return c.arrayDimensions(symbol)
+}
+
 func (c *Compiler) requireSameArrayShape(left, right []llvm.Value, name string) {
 	for i := range left {
 		equal := c.builder.CreateICmp(llvm.IntEQ, left[i], right[i], name)
