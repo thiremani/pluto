@@ -753,14 +753,8 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	}
 
 	// Get lengths of both arrays
-	leftLen := c.ConstI64(0)
-	if hasConcreteArrayElemType(leftElem) {
-		leftLen = c.ArrayLen(left, leftElem)
-	}
-	rightLen := c.ConstI64(0)
-	if hasConcreteArrayElemType(rightElem) {
-		rightLen = c.ArrayLen(right, rightElem)
-	}
+	leftLen := c.ArrayLen(left, leftElem)
+	rightLen := c.ArrayLen(right, rightElem)
 
 	// Calculate total length
 	totalLen := c.builder.CreateAdd(leftLen, rightLen, "concat_len")
