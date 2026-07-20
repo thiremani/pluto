@@ -226,7 +226,8 @@ while storage remains flat and row-major. Ragged literals are compile errors.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The shown hanging `:` is the preferred layout because
-the first header aligns with the first value; whitespace remains non-semantic.
+the first header aligns with the first value; spacing within header and data
+rows is otherwise non-semantic.
 
 The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
 functions, and adopts an element type when concatenated with a concrete array.

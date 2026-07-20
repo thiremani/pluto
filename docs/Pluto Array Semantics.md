@@ -99,7 +99,8 @@ unnamed table. A header always produces a table and must contain at least one
 column name. Headerless literals start directly with their first data row.
 
 The preferred layout outdents the `:` marker so the first header and first
-value begin in the same column. Whitespace remains non-semantic:
+value begin in the same column. Spacing within header and data rows is
+otherwise non-semantic:
 
 ```pluto
 scores = [
