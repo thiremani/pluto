@@ -10,16 +10,17 @@ import (
 )
 
 type Lexer struct {
-	FileName     string
-	input        []rune
-	position     int   // current position in input (points to current rune)
-	readPosition int   // current reading position in input (after current rune)
-	curr         rune  // current rune under examination
-	lineOffset   int   // line number
-	column       int   // column number in the line
-	onNewline    bool  // at beginning of new line
-	indentStack  []int // indentation level stack
-	toDeindent   int   // number of deindent tokens to be emitted before we continue with current token
+	FileName      string
+	input         []rune
+	position      int   // current position in input (points to current rune)
+	readPosition  int   // current reading position in input (after current rune)
+	curr          rune  // current rune under examination
+	lineOffset    int   // line number
+	column        int   // column number in the line
+	onNewline     bool  // at beginning of new line
+	continuedLine bool  // preceding backslash suppresses indentation on the next physical line
+	indentStack   []int // indentation level stack
+	toDeindent    int   // number of deindent tokens to be emitted before we continue with current token
 }
 
 const (
@@ -65,9 +66,11 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
 		l.newLine()
-		l.onNewline = true
+		l.onNewline = !l.continuedLine
+		l.continuedLine = false
 	case '\\':
 		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
+		l.continuedLine = l.peekRune() == '\n'
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()

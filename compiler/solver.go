@@ -424,9 +424,9 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeInfo, ast.Expression) {
 	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
-	// Only single-row literals act as collectors. Multiple source rows describe
-	// a statically rectangular array or table instead.
-	if len(al.Headers) > 0 || len(al.Rows) != 1 {
+	// Only inline literals act as collectors. Block rows describe a statically
+	// rectangular array or table even when the block contains a single row.
+	if al.Block || len(al.Headers) > 0 || len(al.Rows) != 1 {
 		info.Ranges = nil
 		info.CollectRanges = nil
 		info.Rewrite = al
@@ -451,6 +451,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 	if changed {
 		newLit := &ast.ArrayLiteral{
 			Token:   al.Token,
+			Block:   al.Block,
 			Headers: append([]string(nil), al.Headers...),
 			Rows:    [][]ast.Expression{newRow},
 			Indices: cloneArrayIndices(al.Indices),
@@ -951,10 +952,12 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 }
 
 // TypeArrayExpression classifies bracket literals as rectangular arrays or
-// tables. Array rank is inferred from row layout and nested array-valued cells.
+// tables. Inline literals contribute one array axis; block literals contribute
+// row and column axes; nested array-valued cells contribute their own axes.
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	if len(al.Headers) == 0 && len(al.Rows) == 0 {
-		return ts.cacheArrayLiteralType(al, Array{ElemType: Empty{}, Rank: 1}, []uint64{0})
+		shape := arrayLiteralLayoutShape(al)
+		return ts.cacheArrayLiteralType(al, Array{ElemType: Empty{}, Rank: len(shape)}, shape)
 	}
 
 	if len(al.Headers) > 0 {
@@ -968,8 +971,15 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 
 	hasArrayCells := false
 	hasScalarCells := false
-	for _, row := range cellTypes {
-		for _, cellType := range row {
+	for rowIndex, row := range cellTypes {
+		for colIndex, cellType := range row {
+			cell := al.Rows[rowIndex][colIndex]
+			if al.Block && ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cell.Tok(),
+					Msg:   "multidimensional array rows require statically sized cells",
+				})
+			}
 			if cellType.Kind() == ArrayKind {
 				hasArrayCells = true
 			} else {
@@ -1023,16 +1033,17 @@ func (ts *TypeSolver) typeBracketLiteralCells(al *ast.ArrayLiteral) ([][]Type, b
 }
 
 func (ts *TypeSolver) typeScalarBracketLiteral(al *ast.ArrayLiteral, cellTypes [][]Type) []Type {
-	if len(al.Rows) == 1 {
+	if !al.Block {
 		elemType := Type(Unresolved{})
-		shape := []uint64{uint64(len(al.Rows[0]))}
+		layoutShape := arrayLiteralLayoutShape(al)
+		shape := layoutShape
 		for col, cellType := range cellTypes[0] {
 			elemType = ts.mergeColType(elemType, cellType, col, al.Tok())
 			if ts.ExprCache[key(ts.FuncNameMangled, al.Rows[0][col])].HasRanges {
 				shape = nil
 			}
 		}
-		return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: 1}, shape)
+		return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: len(layoutShape)}, shape)
 	}
 
 	numCols := len(al.Rows[0])
@@ -1041,32 +1052,32 @@ func (ts *TypeSolver) typeScalarBracketLiteral(al *ast.ArrayLiteral, cellTypes [
 	}
 
 	colTypes := ts.initColTypes(numCols)
-	for rowIndex, row := range cellTypes {
+	for _, row := range cellTypes {
 		for col, cellType := range row {
-			if ts.ExprCache[key(ts.FuncNameMangled, al.Rows[rowIndex][col])].HasRanges {
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: al.Rows[rowIndex][col].Tok(),
-					Msg:   "multidimensional array rows require statically sized cells",
-				})
-			}
 			colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
 		}
 	}
 
 	if elemType, ok := commonArrayElemType(colTypes); ok {
-		shape := []uint64{uint64(len(al.Rows)), uint64(numCols)}
-		return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: 2}, shape)
+		shape := arrayLiteralLayoutShape(al)
+		return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: len(shape)}, shape)
 	}
 
 	return ts.cacheTableLiteralType(al, colTypes)
 }
 
 func (ts *TypeSolver) typeStackedArrayLiteral(al *ast.ArrayLiteral, cellTypes [][]Type) []Type {
+	numCols := len(al.Rows[0])
+	if !ts.validateBracketLiteralShape(al, numCols) {
+		return ts.cacheInvalidBracketLiteral(al)
+	}
+
 	children := make([]ast.Expression, 0)
 	childTypes := make([]Array, 0)
 	for rowIndex, row := range cellTypes {
 		for colIndex, cellType := range row {
-			children = append(children, al.Rows[rowIndex][colIndex])
+			child := al.Rows[rowIndex][colIndex]
+			children = append(children, child)
 			childTypes = append(childTypes, cellType.(Array))
 		}
 	}
@@ -1102,11 +1113,13 @@ func (ts *TypeSolver) typeStackedArrayLiteral(al *ast.ArrayLiteral, cellTypes []
 		}
 	}
 
+	layoutShape := arrayLiteralLayoutShape(al)
+
 	var shape []uint64
 	if shapeKnown && childShape != nil {
-		shape = append([]uint64{uint64(len(children))}, childShape...)
+		shape = append(layoutShape, childShape...)
 	}
-	return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: first.Rank + 1}, shape)
+	return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: first.Rank + len(layoutShape)}, shape)
 }
 
 func (ts *TypeSolver) mergeArrayLeafType(current, next Type, tok token.Token) Type {

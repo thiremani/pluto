@@ -979,7 +979,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
 
-		if lit, ok := expr.(*ast.ArrayLiteral); ok && len(lit.Headers) == 0 && len(lit.Rows) == 1 {
+		if lit, ok := expr.(*ast.ArrayLiteral); ok && !lit.Block && len(lit.Headers) == 0 && len(lit.Rows) == 1 {
 			accumDest := stmt.Name[targetIdx]
 			accumLits = append(accumLits, lit)
 			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))

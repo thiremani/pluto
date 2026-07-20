@@ -300,6 +300,7 @@ func (rl *RangeLiteral) String() string {
 
 type ArrayLiteral struct {
 	Token   token.Token      // the '[' token
+	Block   bool             // '[' is followed by a newline; source rows form two layout axes
 	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
@@ -310,8 +311,10 @@ func (al *ArrayLiteral) Tok() token.Token { return al.Token }
 func (al *ArrayLiteral) String() string {
 	var out bytes.Buffer
 	out.WriteString("[")
-	if len(al.Headers) == 0 && len(al.Rows) == 1 {
-		writeArrayRow(&out, al.Rows[0])
+	if len(al.Headers) == 0 && !al.Block {
+		if len(al.Rows) == 1 {
+			writeArrayRow(&out, al.Rows[0])
+		}
 		out.WriteString("]")
 		return out.String()
 	}
@@ -333,7 +336,7 @@ func (al *ArrayLiteral) String() string {
 		writeArrayRow(&out, row)
 	}
 
-	if len(al.Headers) > 0 || len(al.Rows) > 0 {
+	if al.Block || len(al.Headers) > 0 || len(al.Rows) > 0 {
 		out.WriteString("\n")
 	}
 	out.WriteString("]")
@@ -633,6 +636,7 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 		}
 		return &ArrayLiteral{
 			Token:   e.Token,
+			Block:   e.Block,
 			Headers: append([]string(nil), e.Headers...),
 			Rows:    rows,
 			Indices: maps.Clone(e.Indices),

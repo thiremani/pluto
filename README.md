@@ -206,14 +206,8 @@ matrix = [
 ]
 
 cube = [
-    [
-        1 2
-        3 4
-    ]
-    [
-        5 6
-        7 8
-    ]
+    [1 2] [3 4]
+    [5 6] [7 8]
 ]
 
 scores = [
@@ -223,9 +217,12 @@ scores = [
 ]
 ```
 
-One scalar row is rank 1; multiple rectangular scalar rows are rank 2; and
-equal-shaped array cells stack into higher ranks. Storage is flat and
-row-major, and ragged literals are compile errors.
+Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
+where `[` is followed by a newline, contributes row and column axes even when
+it contains one row. Thus the matrix above is equivalent to
+`[[1 2] [3 4]]`. Use `\` to continue a long inline array across physical
+lines without starting block layout. Array-valued cells stack recursively
+while storage remains flat and row-major. Ragged literals are compile errors.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The shown hanging `:` is the preferred layout because

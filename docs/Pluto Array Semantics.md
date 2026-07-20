@@ -12,9 +12,22 @@ dimension lengths beside that buffer; rows are not separately allocated.
 ## Literal inference
 
 - `[]` is a rank-1 `[Empty]` value.
+- An empty block is a rank-2 `[Empty]` value with shape `[0 0]`.
 - `[1 2 3]` is a rank-1 `[I64]` value.
-- Multiple homogeneous scalar rows infer a rank-2 array.
-- Array-valued cells of one rank and shape stack into an array one rank higher.
+- An inline literal contributes one array axis.
+- A block literal, where `[` is followed by a newline, contributes row and
+  column axes even when it contains only one row.
+- Equal-shaped array-valued cells stack recursively into higher ranks.
+
+A long rank-1 literal remains inline by escaping its physical newline:
+
+```pluto
+values = [1 2 3 4 5 \
+          6 7 8 9 10]
+```
+
+Without the `\`, an inline literal cannot start another logical row. Put a
+newline immediately after `[` to select block layout instead.
 
 These two literals therefore have the same rank-2 type and value:
 
@@ -31,16 +44,38 @@ Nesting composes for higher ranks:
 
 ```pluto
 cube = [
-    [
-        1 2
-        3 4
-    ]
-    [
-        5 6
-        7 8
-    ]
+    [1 2] [3 4]
+    [5 6] [7 8]
 ]
 ```
+
+The cube is equivalent to
+`[[[1 2] [3 4]] [[5 6] [7 8]]]`: the block contributes dimensions `[2 2]`
+and each rank-1 cell contributes the final dimension, giving shape `[2 2 2]`.
+
+The distinction does not depend on the number of rows. These literals have
+different ranks:
+
+```pluto
+vector = [1 2 3]       # shape [3]
+
+oneRowMatrix = [
+    1 2 3
+]                       # shape [1 3]
+```
+
+A block always contributes both layout axes, even when each row contains one
+array-valued cell. Thus the following has shape `[2 1 2]`, not `[2 2]`:
+
+```pluto
+rows = [
+    [1 2]
+    [3 4]
+]
+```
+
+Use `[[1 2] [3 4]]`, or the equivalent multiline scalar matrix above, for
+shape `[2 2]`.
 
 Arrays are rectangular. Every scalar row must have the same number of cells,
 and every stacked child must have the same shape. Pluto reports a shape error;
@@ -53,8 +88,9 @@ arr = [
 ]
 ```
 
-Ranges inside a rank-1 literal remain collectors and may determine its runtime
-length. Array values are nested rather than flattened when used as cells.
+Ranges inside an inline literal remain collectors and may determine its runtime
+length. Block cells must be statically sized. Array values are nested rather
+than flattened when used as cells.
 
 ### Tables
 

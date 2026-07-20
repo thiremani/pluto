@@ -1,7 +1,4 @@
-arrInt =
-[
-  1 2 3 4
-]
+arrInt = [1 2 3 4]
 arrInt
 "arr is -arrInt"
 arrIntWidth = 4
@@ -10,10 +7,7 @@ arrIntWidth = 4
 arrChars = [65 0 66 256]
 "arr chars: |-arrChars%5c|"
 
-arrFloat =
-[
-  1.5 -2.5 3 4.25
-]
+arrFloat = [1.5 -2.5 3 4.25]
 arrFloat
 "arr is -arrFloat"
 "arr float fixed: |-arrFloat%7.2f|"
@@ -21,10 +15,7 @@ arrWidth = 7
 arrPrecision = 1
 "arr float dynamic: |-arrFloat%(-arrWidth).(-arrPrecision)f|"
 
-arrStr =
-[
-  "foo" "bar" "baz"
-]
+arrStr = ["foo" "bar" "baz"]
 arrStr
 "arr is -arrStr"
 "arr str raw: -arrStr%s"
@@ -37,12 +28,16 @@ arr2 = [1 2 3 4]
 arr2
 "arr2 is -arr2"
 
-# bracket on same line, then rows on next line(s)
-arr3 = [
-  1.1 2.3 4 2.1
-]
+# line continuation keeps an inline literal rank 1
+arr3 = [1.1 2.3 \
+    4 2.1]
 arr3
 "arr3 is -arr3"
+
+oneRowMatrix = [
+    1 2 3
+]
+"one-row matrix: -oneRowMatrix"
 
 matrix =
 [
@@ -75,14 +70,8 @@ nestedMatrix = nestedMatrix ⊕ [[5 6]]
 "reset matrix: -nestedMatrix"
 
 rank3 = [
-    [
-        1 2
-        3 4
-    ]
-    [
-        5 6
-        7 8
-    ]
+    [1 2] [3 4]
+    [5 6] [7 8]
 ]
 "rank 3: -rank3"
 rank3Plus = rank3 + 1
@@ -117,6 +106,9 @@ scores =
 
 emptyArray = []
 "empty array: -emptyArray"
+emptyMatrix = [
+]
+"empty matrix: -emptyMatrix"
 rank2Refined = [[]]
 "rank 2 empty: -rank2Refined"
 rank2Refined = [[9]]

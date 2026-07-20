@@ -1110,6 +1110,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	}
 
 	p.nextToken() // consume the '[' token
+	arr.Block = p.curTokenIs(token.NEWLINE)
 
 	for p.curTokenIs(token.NEWLINE) {
 		p.nextToken()
@@ -1152,6 +1153,13 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   "expected ']' to close array literal",
+		})
+		return nil
+	}
+	if len(arr.Headers) == 0 && !arr.Block && len(arr.Rows) > 1 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: arr.Rows[1][0].Tok(),
+			Msg:   "inline array literals have one logical row; use '\\' to continue the row or put a newline immediately after '[' for block layout",
 		})
 		return nil
 	}

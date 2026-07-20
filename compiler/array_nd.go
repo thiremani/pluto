@@ -8,16 +8,6 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-func (c *Compiler) compileRectangularArrayLiteral(lit *ast.ArrayLiteral, arrayType Array) *Symbol {
-	rows := len(lit.Rows)
-	cols := 0
-	if rows > 0 {
-		cols = len(lit.Rows[0])
-	}
-	dimensions := []llvm.Value{c.ConstI64(uint64(rows)), c.ConstI64(uint64(cols))}
-	return c.compileFixedArrayLiteral(lit, arrayType, dimensions)
-}
-
 func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType Array) *Symbol {
 	children := make([]ast.Expression, 0)
 	for _, row := range lit.Rows {
@@ -44,7 +34,9 @@ func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType A
 	}
 
 	dimensions := make([]llvm.Value, 0, arrayType.Rank)
-	dimensions = append(dimensions, c.ConstI64(uint64(len(childSymbols))))
+	for _, dimension := range arrayLiteralLayoutShape(lit) {
+		dimensions = append(dimensions, c.ConstI64(dimension))
+	}
 	dimensions = append(dimensions, childDims...)
 	if !hasConcreteArrayElemType(arrayType.ElemType) {
 		return &Symbol{Type: arrayType, Val: c.createArrayValue(llvm.Value{}, dimensions, arrayType)}

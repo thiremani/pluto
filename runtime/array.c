@@ -366,26 +366,27 @@ static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t 
             if (i > 0 && strbuf_printf(sb, " ") < 0) return -1;
             if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
         }
-    } else if (rank == 2) {
+    } else if (rank == 2 && dimensions[0] > 0 && dimensions[1] == 0) {
+        /* Empty rows need explicit child arrays because blank block rows carry no shape. */
+        for (size_t row = 0; row < dimensions[0]; ++row) {
+            if (row > 0 && strbuf_printf(sb, " ") < 0) return -1;
+            if (strbuf_printf(sb, "[]") < 0) return -1;
+        }
+    } else {
+        /* Block layout consumes two dimensions; each cell prints the remaining rank. */
         for (size_t row = 0; row < dimensions[0]; ++row) {
             if (strbuf_indent(sb, depth + 1) < 0) return -1;
-            if (dimensions[1] == 0) {
-                if (strbuf_printf(sb, "[]") < 0) return -1;
-                continue;
-            }
             for (size_t col = 0; col < dimensions[1]; ++col) {
                 if (col > 0 && strbuf_printf(sb, " ") < 0) return -1;
-                if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+                if (rank == 2) {
+                    if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+                } else if (strbuf_array_nd(sb, values, kind, rank - 2, dimensions + 2,
+                                           depth + 1, value_index) < 0) {
+                    return -1;
+                }
             }
         }
-        if (dimensions[0] > 0 && strbuf_indent(sb, depth) < 0) return -1;
-    } else {
-        for (size_t i = 0; i < dimensions[0]; ++i) {
-            if (strbuf_indent(sb, depth + 1) < 0) return -1;
-            if (strbuf_array_nd(sb, values, kind, rank - 1, dimensions + 1,
-                                depth + 1, value_index) < 0) return -1;
-        }
-        if (dimensions[0] > 0 && strbuf_indent(sb, depth) < 0) return -1;
+        if (strbuf_indent(sb, depth) < 0) return -1;
     }
 
     return strbuf_printf(sb, "]");

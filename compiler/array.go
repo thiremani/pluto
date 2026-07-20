@@ -294,11 +294,8 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 }
 
 func (c *Compiler) compileArray(lit *ast.ArrayLiteral, info *ExprInfo, arrayType Array) *Symbol {
-	if arrayType.Rank == 1 {
+	if !arrayLiteralHasArrayCells(lit, arrayType) {
 		return c.compileArrayLiteralInDomain(lit, info, nil, nil)
-	}
-	if !c.arrayLiteralHasArrayCells(lit) {
-		return c.compileRectangularArrayLiteral(lit, arrayType)
 	}
 	if len(info.CollectRanges) == 0 {
 		return c.compileStackedArrayLiteral(lit, arrayType)
@@ -306,10 +303,23 @@ func (c *Compiler) compileArray(lit *ast.ArrayLiteral, info *ExprInfo, arrayType
 	return c.compileStackedArrayCollector(lit, info, arrayType)
 }
 
-func (c *Compiler) arrayLiteralHasArrayCells(lit *ast.ArrayLiteral) bool {
-	// The solver rejects literals that mix scalar and array-valued cells.
-	firstCell := lit.Rows[0][0]
-	return c.ExprCache[key(c.FuncNameMangled, firstCell)].OutTypes[0].Kind() == ArrayKind
+func arrayLiteralLayoutShape(lit *ast.ArrayLiteral) []uint64 {
+	if !lit.Block {
+		if len(lit.Rows) == 0 {
+			return []uint64{0}
+		}
+		return []uint64{uint64(len(lit.Rows[0]))}
+	}
+
+	columns := uint64(0)
+	if len(lit.Rows) > 0 {
+		columns = uint64(len(lit.Rows[0]))
+	}
+	return []uint64{uint64(len(lit.Rows)), columns}
+}
+
+func arrayLiteralHasArrayCells(lit *ast.ArrayLiteral, arrayType Array) bool {
+	return arrayType.Rank > len(arrayLiteralLayoutShape(lit))
 }
 
 // resolveArrayLiteralRewrite retrieves the potentially rewritten array literal and its ExprInfo.
@@ -395,7 +405,15 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, gateRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
 	collectRanges := mergeUses(gateRanges, info.CollectRanges)
 	if len(collectRanges) == 0 && len(condExprs) == 0 {
-		return c.compileFixedArrayLiteral(lit, info.OutTypes[0].(Array), nil)
+		arrayType := info.OutTypes[0].(Array)
+		var dimensions []llvm.Value
+		if arrayType.Rank > 1 {
+			dimensions = make([]llvm.Value, 0, len(info.ArrayShape))
+			for _, dimension := range info.ArrayShape {
+				dimensions = append(dimensions, c.ConstI64(dimension))
+			}
+		}
+		return c.compileFixedArrayLiteral(lit, arrayType, dimensions)
 	}
 	return c.compileArrayLiteralWithLoops(lit, info, collectRanges, condExprs)
 }

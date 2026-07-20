@@ -107,11 +107,11 @@ assignment root a skipped iteration keeps the destination, so the last
 
 ## One-Dimensional Array Literals
 
-A headerless bracket literal with one scalar row materializes a rank-1 array at
-the point where it appears. Rectangular literals with multiple scalar rows and
-literals containing array-valued cells infer higher-rank arrays; they do not
-use the collector behavior in this section. Heterogeneous rectangular literals
-may infer tables instead.
+An inline headerless bracket literal materializes an array at the point where
+it appears. A `\` line continuation keeps a physically wrapped literal inline.
+A block literal, where `[` is followed by a newline, instead contributes fixed
+row and column axes and does not use the collector behavior in this section,
+even when it contains one row. Heterogeneous block literals may infer tables.
 
 The collector materializes over:
 

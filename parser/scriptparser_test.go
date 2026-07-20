@@ -1146,6 +1146,7 @@ func TestArrayLiterals(t *testing.T) {
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
+				require.False(t, arr.Block)
 			},
 		},
 		{
@@ -1156,6 +1157,7 @@ func TestArrayLiterals(t *testing.T) {
 ]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers for matrix")
+				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2, "expected 2 rows")
 				require.Len(t, arr.Rows[0], 3, "expected 3 elements in first row")
 				require.Len(t, arr.Rows[1], 3, "expected 3 elements in second row")
@@ -1170,6 +1172,17 @@ func TestArrayLiterals(t *testing.T) {
 				require.True(t, testIntegerLiteral(t, arr.Rows[1][0], 4))
 				require.True(t, testIntegerLiteral(t, arr.Rows[1][1], 5))
 				require.True(t, testIntegerLiteral(t, arr.Rows[1][2], 6))
+			},
+		},
+		{
+			name: "one-row block array",
+			input: `[
+    1 2 3
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Len(t, arr.Rows, 1)
+				require.Equal(t, "[\n    1 2 3\n]", arr.String())
 			},
 		},
 		{
@@ -1235,12 +1248,11 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name: "line continuation with unary operators",
-			input: `[
-    a -b \
-    -c d
-]`,
+			input: `[a -b \
+    -c d]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
+				require.False(t, arr.Block)
 				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
 				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
 
@@ -1262,6 +1274,12 @@ func TestArrayLiterals(t *testing.T) {
 				// Check d is just an identifier
 				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
 			},
+		},
+		{
+			name:        "inline array starts a second row",
+			input:       "[1 2\n3 4]",
+			expectError: true,
+			errorMsg:    "inline array literals have one logical row",
 		},
 		{
 			name:  "attached unary plus",
