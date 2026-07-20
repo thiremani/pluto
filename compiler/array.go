@@ -281,7 +281,7 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	switch typ := info.OutTypes[0].(type) {
 	case Array:
-		return []*Symbol{c.compileArrayInDomain(lit, info, typ, nil, nil)}
+		return []*Symbol{c.compileArray(lit, info, typ, nil, nil)}
 	case Table:
 		return []*Symbol{c.compileTable(lit, typ)}
 	default:
@@ -293,7 +293,7 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 	}
 }
 
-func (c *Compiler) compileArrayInDomain(
+func (c *Compiler) compileArray(
 	lit *ast.ArrayLiteral,
 	info *ExprInfo,
 	arrayType Array,

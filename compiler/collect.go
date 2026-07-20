@@ -64,7 +64,7 @@ func (c *Compiler) prepareCollectorTreeFor(expr ast.Expression, gateRanges []*Ra
 func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, gateRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
 	resolved, info := c.resolveArrayLiteralRewrite(lit)
 	arrayType := info.OutTypes[0].(Array)
-	sym := c.compileArrayInDomain(resolved, info, arrayType, gateRanges, condExprs)
+	sym := c.compileArray(resolved, info, arrayType, gateRanges, condExprs)
 	ident, temp := c.newMaterializedCollectorTemp(sym)
 	return ident, []string{temp}
 }
