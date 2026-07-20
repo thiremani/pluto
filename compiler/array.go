@@ -281,7 +281,7 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 	lit, info := c.resolveArrayLiteralRewrite(e)
 	switch typ := info.OutTypes[0].(type) {
 	case Array:
-		return []*Symbol{c.compileArray(lit, info, typ)}
+		return []*Symbol{c.compileArrayInDomain(lit, info, typ, nil, nil)}
 	case Table:
 		return []*Symbol{c.compileTable(lit, typ)}
 	default:
@@ -293,14 +293,22 @@ func (c *Compiler) compileArrayExpression(e *ast.ArrayLiteral, _ []*ast.Identifi
 	}
 }
 
-func (c *Compiler) compileArray(lit *ast.ArrayLiteral, info *ExprInfo, arrayType Array) *Symbol {
+func (c *Compiler) compileArrayInDomain(
+	lit *ast.ArrayLiteral,
+	info *ExprInfo,
+	arrayType Array,
+	gateRanges []*RangeInfo,
+	condExprs []ast.Expression,
+) *Symbol {
+	ranges := mergeUses(gateRanges, info.CollectRanges)
 	if !arrayLiteralHasArrayCells(lit, arrayType) {
-		return c.compileArrayLiteralInDomain(lit, info, nil, nil)
+		return c.compileScalarArray(lit, info, ranges, condExprs)
 	}
-	if len(info.CollectRanges) == 0 {
-		return c.compileStackedArrayLiteral(lit, arrayType)
-	}
-	return c.compileStackedArrayCollector(lit, info, arrayType)
+	return c.compileStackedArray(lit, arrayType, ranges, condExprs)
+}
+
+func isInlineArrayCollector(lit *ast.ArrayLiteral) bool {
+	return !lit.Block && len(lit.Headers) == 0 && len(lit.Rows) == 1
 }
 
 func arrayLiteralLayoutShape(lit *ast.ArrayLiteral) []uint64 {
@@ -365,11 +373,16 @@ func (c *Compiler) compileFixedArrayLiteral(lit *ast.ArrayLiteral, arrayType Arr
 	return &Symbol{Type: arrayType, Val: c.createArrayValue(data, dimensions, arrayType)}
 }
 
-func (c *Compiler) withCollectorLoopNest(ranges []*RangeInfo, probe ast.Expression, condExprs []ast.Expression, body func()) {
-	probes := make([]ast.Expression, 0, len(condExprs)+1)
-	probes = append(probes, probe)
-	probes = append(probes, condExprs...)
-	c.withLoopNestVersioned(ranges, probes, body)
+func (c *Compiler) withCollectorDomain(ranges []*RangeInfo, probe ast.Expression, condExprs []ast.Expression, body func()) {
+	c.withCondRangeLoop(
+		ranges,
+		condExprs,
+		[]ast.Expression{probe},
+		"collect_cond_guard",
+		"collect_cond_if",
+		"collect_cond_cont",
+		body,
+	)
 }
 
 func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *ExprInfo, ranges []*RangeInfo, condExprs []ast.Expression) *Symbol {
@@ -377,23 +390,7 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	elemType := arr.ElemType
 	acc := c.NewArrayAccumulator(arr)
 
-	c.withCollectorLoopNest(ranges, lit, condExprs, func() {
-		if len(condExprs) > 0 {
-			guardPtr := c.pushBoundsGuard("collect_cond_guard")
-			cond := c.evalConditions(condExprs, guardPtr)
-			c.popBoundsGuard()
-
-			ifBlock, contBlock := c.createIfCont(cond, "collect_cond_if", "collect_cond_cont")
-
-			c.builder.SetInsertPointAtEnd(ifBlock)
-			for _, cell := range lit.Rows[0] {
-				c.appendArrayLiteralCell(acc, cell, elemType)
-			}
-			c.builder.CreateBr(contBlock)
-			c.builder.SetInsertPointAtEnd(contBlock)
-			return
-		}
-
+	c.withCollectorDomain(ranges, lit, condExprs, func() {
 		for _, cell := range lit.Rows[0] {
 			c.appendArrayLiteralCell(acc, cell, elemType)
 		}
@@ -402,9 +399,8 @@ func (c *Compiler) compileArrayLiteralWithLoops(lit *ast.ArrayLiteral, info *Exp
 	return c.ArrayAccResult(acc)
 }
 
-func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *ExprInfo, gateRanges []*RangeInfo, condExprs []ast.Expression) *Symbol {
-	collectRanges := mergeUses(gateRanges, info.CollectRanges)
-	if len(collectRanges) == 0 && len(condExprs) == 0 {
+func (c *Compiler) compileScalarArray(lit *ast.ArrayLiteral, info *ExprInfo, ranges []*RangeInfo, condExprs []ast.Expression) *Symbol {
+	if len(ranges) == 0 && len(condExprs) == 0 {
 		arrayType := info.OutTypes[0].(Array)
 		var dimensions []llvm.Value
 		if arrayType.Rank > 1 {
@@ -415,7 +411,7 @@ func (c *Compiler) compileArrayLiteralInDomain(lit *ast.ArrayLiteral, info *Expr
 		}
 		return c.compileFixedArrayLiteral(lit, arrayType, dimensions)
 	}
-	return c.compileArrayLiteralWithLoops(lit, info, collectRanges, condExprs)
+	return c.compileArrayLiteralWithLoops(lit, info, ranges, condExprs)
 }
 
 // withPendingLiteralRanges resolves the solver rewrite on a literal, then
@@ -495,16 +491,6 @@ func (c *Compiler) appendArrayLiteral(acc *ArrayAccumulator, lit *ast.ArrayLiter
 			c.appendArrayLiteralCell(acc, cell, elemType)
 		}
 	})
-}
-
-// appendArrayLiterals dispatches to the appropriate accumulation strategy for
-// top-level 1D array-literal outputs from ranged conditional lowering.
-// Each collector owns its own local value-range domain and appends
-// independently of sibling array outputs.
-func (c *Compiler) appendArrayLiterals(accs []*ArrayAccumulator, values []*ast.ArrayLiteral) {
-	for i, lit := range values {
-		c.appendArrayLiteral(accs[i], lit)
-	}
 }
 
 func (c *Compiler) storeArrayCellSlotWhenInBounds(

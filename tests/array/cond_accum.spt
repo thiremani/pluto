@@ -293,6 +293,15 @@ i = 0:5
 ce = i < 3 i > 1
 "CondLastWins: -ce"
 
+# Statement gates read loop-carried destination values, not their pre-loop seeds.
+foldData = [10 20 30 40 50 40 30 20 70 80 5 4 6 70]
+i = 0:14
+foldMax = 0
+foldMax = foldData[i] > foldMax foldData[i]
+foldMin = i == 0 foldData[i]
+foldMin = foldData[i] < foldMin foldData[i]
+"LoopCarriedGateMax: -foldMax. LoopCarriedGateMin: -foldMin"
+
 # Ranged condition + range literal in infix value (rewrite used)
 rl = 0
 i = 0:3
@@ -327,6 +336,23 @@ condLocalRange = i < 2 [i] + 0:3
 i = 0:6
 sameCondConst = i > 2 1 + [0]
 "SameDriverCondConst: -sameCondConst"
+
+# Array-valued collectors stack rows over the admitted statement domain,
+# including when the collector is nested inside another value expression.
+domainMatrix = [
+    10 11
+    20 21
+    30 31
+]
+i = 0:3
+gatedRows = i < 2 [domainMatrix[i]]
+"GatedRows: -gatedRows"
+i = 0:3
+gatedRows = i < 0 [domainMatrix[i]]
+"GatedRowsEmpty: -gatedRows"
+i = 0:3
+gatedNestedRows = i < 2 [domainMatrix[0]] + 1
+"GatedNestedRows: -gatedNestedRows"
 
 # Collector loops can use the same affine fast path even when the statement
 # condition itself contains affine array accesses.

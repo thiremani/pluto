@@ -8,7 +8,14 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-func (c *Compiler) compileStackedArrayLiteral(lit *ast.ArrayLiteral, arrayType Array) *Symbol {
+type stackedArrayAccumulator struct {
+	array         *ArrayAccumulator
+	arrayType     Array
+	outerLenSlot  llvm.Value
+	childDimSlots []llvm.Value
+}
+
+func (c *Compiler) compileFixedStackedArray(lit *ast.ArrayLiteral, arrayType Array) *Symbol {
 	children := make([]ast.Expression, 0)
 	for _, row := range lit.Rows {
 		children = append(children, row...)
@@ -70,14 +77,26 @@ func (c *Compiler) compileArrayValuedCell(child ast.Expression) []*Symbol {
 	return compiled
 }
 
-func (c *Compiler) compileStackedArrayCollector(lit *ast.ArrayLiteral, info *ExprInfo, arrayType Array) *Symbol {
-	if !hasConcreteArrayElemType(arrayType.ElemType) {
-		return c.makeZeroValue(arrayType)
+func (c *Compiler) compileStackedArray(
+	lit *ast.ArrayLiteral,
+	arrayType Array,
+	ranges []*RangeInfo,
+	condExprs []ast.Expression,
+) *Symbol {
+	if len(ranges) == 0 && len(condExprs) == 0 {
+		return c.compileFixedStackedArray(lit, arrayType)
 	}
 
+	acc := c.newStackedArrayAccumulator(arrayType)
+	c.withCollectorDomain(ranges, lit, condExprs, func() {
+		c.appendStackedArrayLiteral(acc, lit)
+	})
+	return c.stackedArrayAccumulatorResult(acc)
+}
+
+func (c *Compiler) newStackedArrayAccumulator(arrayType Array) *stackedArrayAccumulator {
 	// The runtime accumulator owns the flat leaf buffer. Shape is tracked
 	// separately while lower-rank child arrays are appended.
-	acc := c.NewArrayAccumulator(Array{ElemType: arrayType.ElemType, Rank: 1})
 	outerLenSlot := c.createEntryBlockAlloca(c.mapToLLVMType(I64), "stacked_array_outer_len_mem")
 	c.createStore(c.ConstI64(0), outerLenSlot, I64)
 
@@ -87,27 +106,49 @@ func (c *Compiler) compileStackedArrayCollector(lit *ast.ArrayLiteral, info *Exp
 		c.createStore(c.ConstI64(0), childDimSlots[i], I64)
 	}
 
-	c.withCollectorLoopNest(info.CollectRanges, lit, nil, func() {
-		for _, row := range lit.Rows {
-			for _, child := range row {
-				c.appendStackedArrayChild(acc, outerLenSlot, childDimSlots, child)
-			}
-		}
-	})
+	var array *ArrayAccumulator
+	if hasConcreteArrayElemType(arrayType.ElemType) {
+		array = c.NewArrayAccumulator(Array{ElemType: arrayType.ElemType, Rank: 1})
+	}
 
-	dimensions := make([]llvm.Value, 0, arrayType.Rank)
-	dimensions = append(dimensions, c.createLoad(outerLenSlot, I64, "stacked_array_outer_len"))
-	for _, slot := range childDimSlots {
+	return &stackedArrayAccumulator{
+		array:         array,
+		arrayType:     arrayType,
+		outerLenSlot:  outerLenSlot,
+		childDimSlots: childDimSlots,
+	}
+}
+
+func (c *Compiler) appendStackedArrayLiteral(acc *stackedArrayAccumulator, lit *ast.ArrayLiteral) {
+	for _, row := range lit.Rows {
+		for _, child := range row {
+			c.appendStackedArrayChild(acc, child)
+		}
+	}
+}
+
+func (c *Compiler) appendStackedArrayCollector(acc *stackedArrayAccumulator, lit *ast.ArrayLiteral) {
+	c.withPendingLiteralRanges(lit, func(resolved *ast.ArrayLiteral) {
+		c.appendStackedArrayLiteral(acc, resolved)
+	})
+}
+
+func (c *Compiler) stackedArrayAccumulatorResult(acc *stackedArrayAccumulator) *Symbol {
+	dimensions := make([]llvm.Value, 0, acc.arrayType.Rank)
+	dimensions = append(dimensions, c.createLoad(acc.outerLenSlot, I64, "stacked_array_outer_len"))
+	for _, slot := range acc.childDimSlots {
 		dimensions = append(dimensions, c.createLoad(slot, I64, "stacked_array_dimension"))
 	}
 
-	return &Symbol{Type: arrayType, Val: c.createArrayValue(acc.Vec, dimensions, arrayType)}
+	data := llvm.Value{}
+	if acc.array != nil {
+		data = acc.array.Vec
+	}
+	return &Symbol{Type: acc.arrayType, Val: c.createArrayValue(data, dimensions, acc.arrayType)}
 }
 
 func (c *Compiler) appendStackedArrayChild(
-	acc *ArrayAccumulator,
-	outerLenSlot llvm.Value,
-	childDimSlots []llvm.Value,
+	acc *stackedArrayAccumulator,
 	child ast.Expression,
 ) {
 	compiled := c.compileArrayValuedCell(child)
@@ -122,25 +163,25 @@ func (c *Compiler) appendStackedArrayChild(
 	childSymbol := c.derefIfPointer(compiled[0], "stacked_array_child")
 	childType := childSymbol.Type.(Array)
 	childDimensions := c.arrayDimensions(childSymbol)
-	outerLen := c.createLoad(outerLenSlot, I64, "stacked_array_outer_len")
+	outerLen := c.createLoad(acc.outerLenSlot, I64, "stacked_array_outer_len")
 	firstChild := c.builder.CreateICmp(llvm.IntEQ, outerLen, c.ConstI64(0), "stacked_array_first_child")
 
 	for i, dimension := range childDimensions {
-		stored := c.createLoad(childDimSlots[i], I64, "stacked_array_dimension")
+		stored := c.createLoad(acc.childDimSlots[i], I64, "stacked_array_dimension")
 		equal := c.builder.CreateICmp(llvm.IntEQ, stored, dimension, "stacked_array_shape")
 		c.failShapeOnFalse(c.builder.CreateOr(firstChild, equal, "stacked_array_shape_compatible"), stored, dimension, "stacked_array_shape")
-		c.createStore(c.builder.CreateSelect(firstChild, dimension, stored, "stacked_array_dimension_value"), childDimSlots[i], I64)
+		c.createStore(c.builder.CreateSelect(firstChild, dimension, stored, "stacked_array_dimension_value"), acc.childDimSlots[i], I64)
 	}
 
-	if hasConcreteArrayElemType(childType.ElemType) {
+	if acc.array != nil && hasConcreteArrayElemType(childType.ElemType) {
 		length := c.ArrayLen(childSymbol, childType.ElemType)
 		c.createLoop(c.rangeZeroToN(length), func(iter llvm.Value) {
 			value := c.ArrayGetBorrowed(childSymbol, childType.ElemType, iter)
-			c.pushAccumCellValue(acc, &Symbol{Val: value, Type: childType.ElemType}, false, acc.ElemType)
+			c.pushAccumCellValue(acc.array, &Symbol{Val: value, Type: childType.ElemType}, false, acc.array.ElemType)
 		})
 	}
 
-	c.createStore(c.builder.CreateAdd(outerLen, c.ConstI64(1), "stacked_array_outer_len_next"), outerLenSlot, I64)
+	c.createStore(c.builder.CreateAdd(outerLen, c.ConstI64(1), "stacked_array_outer_len_next"), acc.outerLenSlot, I64)
 	c.freeTemporary(child, []*Symbol{childSymbol})
 }
 

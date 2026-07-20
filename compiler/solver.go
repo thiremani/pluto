@@ -426,7 +426,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 
 	// Only inline literals act as collectors. Block rows describe a statically
 	// rectangular array or table even when the block contains a single row.
-	if al.Block || len(al.Headers) > 0 || len(al.Rows) != 1 {
+	if !isInlineArrayCollector(al) {
 		info.Ranges = nil
 		info.CollectRanges = nil
 		info.Rewrite = al

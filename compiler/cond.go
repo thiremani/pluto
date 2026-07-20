@@ -951,10 +951,50 @@ func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Exp
 	})
 }
 
+type statementArrayCollector struct {
+	literal     *ast.ArrayLiteral
+	destination *ast.Identifier
+	oldValue    *Symbol
+	scalar      *ArrayAccumulator
+	stacked     *stackedArrayAccumulator
+}
+
+func (c *Compiler) newStatementArrayCollector(lit *ast.ArrayLiteral, destination *ast.Identifier, arrayType Array) *statementArrayCollector {
+	collector := &statementArrayCollector{
+		literal:     lit,
+		destination: destination,
+		oldValue:    c.captureOldValues([]*ast.Identifier{destination})[0],
+	}
+	if arrayLiteralHasArrayCells(lit, arrayType) {
+		collector.stacked = c.newStackedArrayAccumulator(arrayType)
+	} else {
+		collector.scalar = c.NewArrayAccumulator(arrayType)
+	}
+	return collector
+}
+
+func (c *Compiler) appendStatementArrayCollector(collector *statementArrayCollector) {
+	if collector.stacked != nil {
+		c.appendStackedArrayCollector(collector.stacked, collector.literal)
+		return
+	}
+	c.appendArrayLiteral(collector.scalar, collector.literal)
+}
+
+func (c *Compiler) commitStatementArrayCollector(collector *statementArrayCollector) {
+	var result *Symbol
+	if collector.stacked != nil {
+		result = c.stackedArrayAccumulatorResult(collector.stacked)
+	} else {
+		result = c.ArrayAccResult(collector.scalar)
+	}
+	c.storeAccumulatedArray(collector.destination, result, collector.oldValue)
+}
+
 // compileCondRangedStatement lowers ranged statement conditions.
 // Statement conditions are shared across the whole assignment. They determine
 // the outer admitted iteration domain, while each RHS expression keeps any
-// extra local drivers to itself inside that shared gate. Top-level 1D array
+// extra local drivers to itself inside that shared gate. Top-level inline array
 // literals accumulate across admitted iterations; all other outputs use normal
 // conditional iteration (last value wins).
 func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
@@ -969,22 +1009,17 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 	// region safe up front instead of only individual RHS shapes.
 	loopProbes := append([]ast.Expression{}, condExprs...)
 
-	accumLits := []*ast.ArrayLiteral{}
-	accumAccs := []*ArrayAccumulator{}
-	accumDests := []*ast.Identifier{}
-	accumOldValues := []*Symbol{}
+	collectors := []*statementArrayCollector{}
 
 	targetIdx := 0
 	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		numOutputs := len(info.OutTypes)
 
-		if lit, ok := expr.(*ast.ArrayLiteral); ok && !lit.Block && len(lit.Headers) == 0 && len(lit.Rows) == 1 {
-			accumDest := stmt.Name[targetIdx]
-			accumLits = append(accumLits, lit)
-			accumAccs = append(accumAccs, c.NewArrayAccumulator(info.OutTypes[0].(Array)))
-			accumDests = append(accumDests, accumDest)
-			accumOldValues = append(accumOldValues, c.captureOldValues([]*ast.Identifier{accumDest})[0])
+		if lit, ok := expr.(*ast.ArrayLiteral); ok && isInlineArrayCollector(lit) {
+			arrayType := info.OutTypes[0].(Array)
+			collectors = append(collectors, c.newStatementArrayCollector(lit, stmt.Name[targetIdx], arrayType))
+
 			resolvedLit, _ := c.resolveArrayLiteralRewrite(lit)
 			loopProbes = append(loopProbes, resolvedLit)
 			targetIdx += numOutputs
@@ -1011,23 +1046,35 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		assignSlots = c.createConditionalTempOutputsFor(assignDests, assignOutTypes)
 	}
 
+	appendCollectors := func() {
+		for _, collector := range collectors {
+			c.appendStatementArrayCollector(collector)
+		}
+	}
+
+	// Guards and RHS staging must read the same loop-carried destination slots.
+	aliases := c.aliasCondDests(assignSlots)
 	c.withCondRangeLoop(condRanges, condExprs, loopProbes, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
-		c.compileCondRangedIteration(assignExprs, assignSlots, accumAccs, accumLits)
+		c.compileCondRangedIteration(assignExprs, assignSlots, appendCollectors)
 	})
+	c.restoreCondDests(aliases)
 
 	if hasAssigns {
 		c.commitConditionalOutputs(assignSlots)
 		DeleteBulk(c.Scopes, slotTempStrings(assignSlots))
 	}
 
-	for i, acc := range accumAccs {
-		result := c.ArrayAccResult(acc)
-		c.storeValue(accumDests[i].Value, result, false)
-		if accumOldValues[i] == nil || c.skipBorrowedOldValueFree(accumOldValues[i]) {
-			continue
-		}
-		c.freeSymbolValue(accumOldValues[i], "old_accum")
+	for _, collector := range collectors {
+		c.commitStatementArrayCollector(collector)
 	}
+}
+
+func (c *Compiler) storeAccumulatedArray(dest *ast.Identifier, result, oldValue *Symbol) {
+	c.storeValue(dest.Value, result, false)
+	if oldValue == nil || c.skipBorrowedOldValueFree(oldValue) {
+		return
+	}
+	c.freeSymbolValue(oldValue, "old_accum")
 }
 
 // compileCondRangedIteration runs inside the per-iteration body of
@@ -1036,12 +1083,11 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 func (c *Compiler) compileCondRangedIteration(
 	assignExprs []ast.Expression,
 	assignSlots []OutputSlot,
-	accumAccs []*ArrayAccumulator,
-	accumLits []*ast.ArrayLiteral,
+	appendCollectors func(),
 ) {
 	// Accum-only: no assigns, just push cells.
 	if len(assignSlots) == 0 {
-		c.appendArrayLiterals(accumAccs, accumLits)
+		appendCollectors()
 		return
 	}
 
@@ -1051,11 +1097,7 @@ func (c *Compiler) compileCondRangedIteration(
 	// leaves that stage temp seeded with the prior value without suppressing
 	// sibling RHS writes.
 	stage := c.stageCondRangedAssignments(assignExprs, assignSlots)
-
-	if len(accumLits) > 0 {
-		c.appendArrayLiterals(accumAccs, accumLits)
-	}
-
+	appendCollectors()
 	c.commitCondRangedStages(assignSlots, stage)
 }
 
