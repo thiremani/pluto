@@ -1,10 +1,7 @@
 package compiler
 
 import (
-	"fmt"
-
 	"github.com/thiremani/pluto/ast"
-	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -23,15 +20,7 @@ func (c *Compiler) compileFixedStackedArray(lit *ast.ArrayLiteral, arrayType Arr
 
 	childSymbols := make([]*Symbol, 0, len(children))
 	for _, child := range children {
-		compiled := c.compileArrayValuedCell(child)
-		if len(compiled) != 1 {
-			c.Errors = append(c.Errors, &token.CompileError{
-				Token: child.Tok(),
-				Msg:   fmt.Sprintf("array cell produced %d values; expected 1", len(compiled)),
-			})
-			return c.makeZeroValue(arrayType)
-		}
-		childSymbols = append(childSymbols, c.derefIfPointer(compiled[0], "stacked_array_child"))
+		childSymbols = append(childSymbols, c.compileArrayValuedCell(child))
 	}
 
 	childType := childSymbols[0].Type.(Array)
@@ -69,12 +58,12 @@ func (c *Compiler) compileFixedStackedArray(lit *ast.ArrayLiteral, arrayType Arr
 	return &Symbol{Type: arrayType, Val: c.createArrayValue(data, dimensions, arrayType)}
 }
 
-func (c *Compiler) compileArrayValuedCell(child ast.Expression) []*Symbol {
-	var compiled []*Symbol
+func (c *Compiler) compileArrayValuedCell(child ast.Expression) *Symbol {
+	var compiled *Symbol
 	c.withArrayLiteralCellMode(func() {
-		compiled = c.compileExpression(child, nil)
+		compiled = c.compileExpression(child, nil)[0]
 	})
-	return compiled
+	return c.derefIfPointer(compiled, "stacked_array_child")
 }
 
 func (c *Compiler) compileStackedArray(
@@ -151,16 +140,7 @@ func (c *Compiler) appendStackedArrayChild(
 	acc *stackedArrayAccumulator,
 	child ast.Expression,
 ) {
-	compiled := c.compileArrayValuedCell(child)
-	if len(compiled) != 1 {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: child.Tok(),
-			Msg:   fmt.Sprintf("array cell produced %d values; expected 1", len(compiled)),
-		})
-		return
-	}
-
-	childSymbol := c.derefIfPointer(compiled[0], "stacked_array_child")
+	childSymbol := c.compileArrayValuedCell(child)
 	childType := childSymbol.Type.(Array)
 	childDimensions := c.arrayDimensions(childSymbol)
 	outerLen := c.createLoad(acc.outerLenSlot, I64, "stacked_array_outer_len")
