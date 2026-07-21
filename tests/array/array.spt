@@ -115,6 +115,12 @@ rank2Refined = [[9]]
 "rank 2 refined: -rank2Refined"
 emptyConcat = [] ⊕ []
 "empty concat: -emptyConcat"
+emptyAdd = [] + []
+"empty add: -emptyAdd"
+emptyCompare = [] > []
+"empty comparison: -emptyCompare"
+emptyAdd = emptyAdd ⊕ [1]
+"refined empty add: -emptyAdd"
 
 emptyTable =
 [

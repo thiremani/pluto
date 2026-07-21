@@ -77,6 +77,9 @@ rank 2 refined: [
     9
 ]
 empty concat: []
+empty add: []
+empty comparison: []
+refined empty add: [1]
 empty table: [
   : Name Score
 ]

@@ -230,10 +230,18 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 }
 
 func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
-	// Update the ExprCache with the refined array element type.
-	// Note: handleInfixArrays only calls this when expr is already array-typed,
-	// so we can unconditionally update.
+	// Update the ExprCache with the result's refined array element type.
+	// handleInfixArrays only calls this when expr is already array-typed.
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	current := info.OutTypes[0].(Array)
+	infix, isInfix := expr.(*ast.InfixExpression)
+	refinesEmptyInfix := isInfix && current.ElemType.Kind() == EmptyKind && hasConcreteArrayElemType(arr.ElemType)
+	if refinesEmptyInfix {
+		// A standalone empty operation is vacuous. If a parent supplies a leaf
+		// type, validate that the original operation supports that type before
+		// refining its operands for codegen.
+		ts.TypeArrayInfix(arr, arr, infix.Operator, infix.Token)
+	}
 	info.OutTypes[0] = arr
 
 	if ident, ok := expr.(*ast.Identifier); ok {
@@ -1718,6 +1726,15 @@ func (ts *TypeSolver) typeInfixArrayMask(leftType, rightType Type, op string, to
 	if rightType.Kind() == ArrayKind {
 		cmpRight = rightType.(Array).ElemType
 	}
+	if cmpLeft.Kind() == EmptyKind && cmpRight.Kind() == EmptyKind {
+		return
+	}
+	if cmpLeft.Kind() == EmptyKind {
+		cmpLeft = cmpRight
+	}
+	if cmpRight.Kind() == EmptyKind {
+		cmpRight = cmpLeft
+	}
 	ts.TypeInfixOp(cmpLeft, cmpRight, op, tok)
 }
 
@@ -2029,18 +2046,20 @@ func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string,
 	rightEmpty := rightElem.Kind() == EmptyKind
 
 	if leftEmpty && rightEmpty {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("operator %q on empty arrays requires an element type", op),
-		})
-		return Unresolved{}
+		return Empty{}
 	}
 
 	if leftEmpty {
-		return rightElem
+		if rightElem.Kind() == UnresolvedKind {
+			return rightElem
+		}
+		return ts.TypeInfixOp(rightElem, rightElem, op, tok)
 	}
 	if rightEmpty {
-		return leftElem
+		if leftElem.Kind() == UnresolvedKind {
+			return leftElem
+		}
+		return ts.TypeInfixOp(leftElem, leftElem, op, tok)
 	}
 
 	leftUnresolved := leftElem.Kind() == UnresolvedKind

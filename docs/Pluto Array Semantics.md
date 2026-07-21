@@ -134,7 +134,8 @@ selected = [matrix[i]]
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and zip every dimension to the shorter corresponding
 dimension, without padding. For example, shapes `[2 3]` and `[3 2]` produce
-shape `[2 2]`. Concatenation joins the outer dimension and requires equal inner
+shape `[2 2]`. An operation on two untyped empty arrays yields another untyped
+empty array. Concatenation joins the outer dimension and requires equal inner
 dimensions when both operands are nonempty. An empty operand contributes no
 cells and imposes no inner-shape constraint; concatenation uses the nonempty
 operand's inner shape. Literal-construction mismatches are compile errors;

@@ -706,6 +706,11 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	// Element-wise array operation: arr1 op arr2. Zip every dimension to
 	// its minimum without implicit padding or invented data.
 	loopLen, dimensions := c.arrayPairShape(left, right)
+	arrayType := Array{ElemType: resElem, Rank: leftArrType.Rank}
+	if leftElem.Kind() == EmptyKind || rightElem.Kind() == EmptyKind {
+		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
+	}
+
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		// compileInfix reads values and produces a new result
@@ -722,7 +727,7 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	})
 
 	// Return result array
-	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: leftArrType.Rank}, dimensions)
+	return c.arrayValueSymbol(resVec, arrayType, dimensions)
 }
 
 func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type, rightElem Type, resElem Type) *Symbol {
@@ -846,13 +851,20 @@ func (c *Compiler) maskStore(resElem Type, resVec llvm.Value, iter llvm.Value, l
 
 func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
 	loopLen, dimensions := c.arrayPairShape(left, right)
+	arrayType := Array{ElemType: resElem, Rank: left.Type.(Array).Rank}
+	leftElem := left.Type.(Array).ElemType
+	rightElem := right.Type.(Array).ElemType
+	if leftElem.Kind() == EmptyKind || rightElem.Kind() == EmptyKind {
+		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
+	}
+
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		lhs, cond := c.compareScalars(op, leftSym, rightSym)
 		c.maskStore(resElem, resVec, iter, lhs, cond)
 	})
 
-	return c.arrayValueSymbol(resVec, Array{ElemType: resElem, Rank: left.Type.(Array).Rank}, dimensions)
+	return c.arrayValueSymbol(resVec, arrayType, dimensions)
 }
 
 func (c *Compiler) compileArrayScalarMask(op string, arr *Symbol, scalar *Symbol, resElem Type, arrayOnLeft bool) *Symbol {

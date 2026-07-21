@@ -322,9 +322,9 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "cannot index an empty array without an element type",
 		},
 		{
-			name:        "EmptyArrayOperator",
-			script:      "result = [] + []",
-			expectError: `operator "+" on empty arrays requires an element type`,
+			name:        "ContextualEmptyArrayOperator",
+			script:      `result = ([] + []) ⊕ ["x"]`,
+			expectError: "for types: Str, Str",
 		},
 		{
 			name:        "ArrayTypeStaysLockedAfterEmptyReset",
