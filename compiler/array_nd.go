@@ -78,7 +78,9 @@ func (c *Compiler) compileStackedArray(
 
 	acc := c.newStackedArrayAccumulator(arrayType)
 	c.withCollectorDomain(ranges, lit, condExprs, func() {
-		c.appendStackedArrayLiteral(acc, lit)
+		for _, child := range ast.ExprChildren(lit) {
+			c.appendStackedArrayChild(acc, child)
+		}
 	})
 	return c.stackedArrayAccumulatorResult(acc)
 }
@@ -108,17 +110,11 @@ func (c *Compiler) newStackedArrayAccumulator(arrayType Array) *stackedArrayAccu
 	}
 }
 
-func (c *Compiler) appendStackedArrayLiteral(acc *stackedArrayAccumulator, lit *ast.ArrayLiteral) {
-	for _, row := range lit.Rows {
-		for _, child := range row {
-			c.appendStackedArrayChild(acc, child)
-		}
-	}
-}
-
 func (c *Compiler) appendStackedArrayCollector(acc *stackedArrayAccumulator, lit *ast.ArrayLiteral) {
 	c.withPendingLiteralRanges(lit, func(resolved *ast.ArrayLiteral) {
-		c.appendStackedArrayLiteral(acc, resolved)
+		for _, child := range ast.ExprChildren(resolved) {
+			c.appendStackedArrayChild(acc, child)
+		}
 	})
 }
 
