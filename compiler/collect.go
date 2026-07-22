@@ -70,6 +70,10 @@ func (c *Compiler) materializeCollectorLiteral(lit *ast.ArrayLiteral, gateRanges
 }
 
 func (c *Compiler) prepareCollectorExpr(expr ast.Expression, gateRanges []*RangeInfo, condExprs []ast.Expression) (ast.Expression, []string) {
+	// Current collector lowering supports only inline literals. Generalized
+	// lowering should also materialize block arrays and tables by concatenating
+	// each admitted occurrence along its outermost row axis while preserving
+	// trailing dimensions or the table schema.
 	if lit, ok := expr.(*ast.ArrayLiteral); ok && isInlineArrayCollector(lit) {
 		return c.materializeCollectorLiteral(lit, gateRanges, condExprs)
 	}
