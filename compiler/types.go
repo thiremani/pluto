@@ -88,8 +88,9 @@ func (u Unresolved) String() string { return "?" } // human-friendly
 func (u Unresolved) Mangle() string { return "X" } // placeholder for unresolved
 func (u Unresolved) Key() Type      { return u }
 
-// Empty is the element type of an empty array whose concrete element type has
-// not been established. Unlike Unresolved, it is a valid, fully resolved type.
+// Empty is the leaf type of a zero-cardinality collection whose concrete
+// element type has not been established. Unlike Unresolved, it is valid and
+// fully resolved.
 type Empty struct{}
 
 func (e Empty) Kind() Kind     { return EmptyKind }
@@ -299,21 +300,6 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
-// isUntypedEmptyTable reports whether t is a header-only table whose column
-// types have not been established.
-func isUntypedEmptyTable(t Type) bool {
-	table, ok := t.(Table)
-	if !ok || len(table.Columns) == 0 {
-		return false
-	}
-	for _, column := range table.Columns {
-		if column.ElemType == nil || column.ElemType.Kind() != UnresolvedKind {
-			return false
-		}
-	}
-	return true
-}
-
 // Array is a homogeneous rectangular value. Rank is part of the type while
 // dimension lengths are runtime properties.
 type Array struct {
@@ -403,6 +389,18 @@ func (t Table) Key() Type {
 		columns[i] = TableColumn{Name: column.Name, ElemType: column.ElemType.Key()}
 	}
 	return Table{Columns: columns}
+}
+
+// isHeaderOnlyTableType reports whether a solver-produced table has only Empty
+// column types, as produced by a header-only literal. Solver-produced tables
+// always have at least one column and non-nil column types.
+func isHeaderOnlyTableType(table Table) bool {
+	for _, column := range table.Columns {
+		if column.ElemType.Kind() != EmptyKind {
+			return false
+		}
+	}
+	return true
 }
 
 // ArrayRange represents an iteration over a range of an array.
@@ -633,6 +631,11 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 			return oldArray.Rank == newArray.Rank
 		}
 	}
+	newTable, newIsTable := newType.(Table)
+	oldTable, oldIsTable := oldType.(Table)
+	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
+		return true
+	}
 	return CanRefineType(oldType, newType)
 }
 
@@ -652,6 +655,11 @@ func mergeBindingSlotType(oldType, newType Type) Type {
 		if oldArray.ElemType.Kind() == EmptyKind {
 			return newType
 		}
+	}
+	newTable, newIsTable := newType.(Table)
+	oldTable, oldIsTable := oldType.(Table)
+	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
+		return oldType
 	}
 	return newType
 }

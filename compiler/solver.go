@@ -573,10 +573,6 @@ func (ts *TypeSolver) Solve() {
 		if pending.funcNameMangled != "" {
 			continue
 		}
-		info := ts.ExprCache[key(pending.funcNameMangled, pending.expr)]
-		if info != nil && pending.exprOutIdx < len(info.OutTypes) && isUntypedEmptyTable(info.OutTypes[pending.exprOutIdx]) {
-			continue
-		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: pending.expr.Tok(),
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
@@ -1047,6 +1043,13 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 	}
 
 	colTypes := ts.initColTypes(numCols)
+	if len(al.Rows) == 0 {
+		for i := range colTypes {
+			colTypes[i] = Empty{}
+		}
+		return ts.cacheTableLiteralType(al, colTypes)
+	}
+
 	for _, row := range al.Rows {
 		for col, cell := range row {
 			cellType, ok := ts.typeCell(cell, al.Tok())
@@ -1227,11 +1230,7 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 	case Table:
 		for _, column := range leftType.Columns {
 			if column.Name == expr.Field {
-				elemType := column.ElemType
-				if elemType.Kind() == UnresolvedKind {
-					elemType = Empty{}
-				}
-				info.OutTypes = []Type{Array{ElemType: elemType, Rank: 1}}
+				info.OutTypes = []Type{Array{ElemType: column.ElemType, Rank: 1}}
 				info.HasRanges = leftInfo.HasRanges
 				return info.OutTypes
 			}

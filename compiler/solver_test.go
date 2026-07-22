@@ -288,11 +288,8 @@ func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 }
 
 func TestCollectionTypeErrors(t *testing.T) {
-	const identity = `out = Identity(x)
-    out = x`
 	cases := []struct {
 		name        string
-		code        string
 		script      string
 		expectError string
 	}{
@@ -332,14 +329,6 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [[Empty]]. Identifier "arr"`,
 		},
 		{
-			name: "UntypedEmptyTableArgument",
-			code: identity,
-			script: `Identity([
-    :Name Score
-])`,
-			expectError: "called with unknown argument type",
-		},
-		{
 			name:        "StackRankMismatch",
 			script:      "m = [[1 2] [[3 4]]]\nm",
 			expectError: "cannot stack rank-1 and rank-2 arrays",
@@ -371,11 +360,7 @@ func TestCollectionTypeErrors(t *testing.T) {
 			ctx := llvm.NewContext()
 			defer ctx.Dispose()
 
-			code := ast.NewCode()
-			if tc.code != "" {
-				code = mustParseCode(t, tc.code)
-			}
-			cc := NewCodeCompiler(ctx, tc.name, "", code)
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
 			require.Empty(t, cc.Compile())
 
 			sl := lexer.New(tc.name+".spt", tc.script)

@@ -136,6 +136,20 @@ emptyScoreSum = emptyTable.Score + [1]
 typedEmptyScores = emptyTable.Score ⊕ [7 8]
 "typed empty scores: -typedEmptyScores"
 
+refinedEmptyTable = [
+  : Name Score
+]
+"initial empty table: -refinedEmptyTable"
+refinedEmptyTable = [
+  : Name Score
+    "Ada" 10
+]
+"refined empty table: -refinedEmptyTable"
+refinedEmptyTable = [
+  : Name Score
+]
+"reset empty table: -refinedEmptyTable"
+
 inferredTable =
 [
     1 "a"

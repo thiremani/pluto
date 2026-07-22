@@ -934,6 +934,18 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 		}
 	}
 
+	targetTable, targetIsTable := target.(Table)
+	sourceTable, sourceIsTable := derefed.Type.(Table)
+	if targetIsTable && sourceIsTable && isHeaderOnlyTableType(sourceTable) && CanRefineType(sourceTable, targetTable) {
+		return &Symbol{
+			Val:      derefed.Val,
+			Type:     targetTable,
+			FuncArg:  derefed.FuncArg,
+			Borrowed: derefed.Borrowed,
+			ReadOnly: derefed.ReadOnly,
+		}
+	}
+
 	return derefed
 }
 
@@ -1011,7 +1023,7 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 		}
 	case Table:
 		for i, column := range t.Columns {
-			if column.ElemType.Kind() != UnresolvedKind {
+			if hasConcreteArrayElemType(column.ElemType) {
 				c.freeArray(c.tableColumnValue(val, i), column.ElemType)
 			}
 		}
@@ -1771,7 +1783,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 			}
 
 			columnValue := c.tableColumnValue(leftSym.Val, i)
-			if column.ElemType.Kind() != UnresolvedKind {
+			if hasConcreteArrayElemType(column.ElemType) {
 				columnValue = c.copyArray(columnValue, column.ElemType)
 			}
 			c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})

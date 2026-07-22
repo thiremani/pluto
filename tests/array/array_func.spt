@@ -36,6 +36,11 @@ tableIdentity = Identity([
 ])
 "TableIdentity: -tableIdentity"
 
+emptyTableIdentity = Identity([
+  : Name Score
+])
+"EmptyTableIdentity: -emptyTableIdentity"
+
 tableCallColumn = Identity([
   : Name Score
     "Ada" 10

@@ -54,7 +54,10 @@ func (c *Compiler) copyTableValue(value llvm.Value, tableType Table) llvm.Value 
 	rows := c.builder.CreateExtractValue(value, 0, "table_rows")
 	columns := make([]llvm.Value, len(tableType.Columns))
 	for i, column := range tableType.Columns {
-		columns[i] = c.copyArray(c.tableColumnValue(value, i), column.ElemType)
+		columns[i] = c.tableColumnValue(value, i)
+		if hasConcreteArrayElemType(column.ElemType) {
+			columns[i] = c.copyArray(columns[i], column.ElemType)
+		}
 	}
 	return c.createTableValue(rows, columns, tableType)
 }
@@ -86,10 +89,9 @@ func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {
 		kindSlot := c.builder.CreateGEP(kindsType, kinds, indices, "table_kind_slot")
 		columnSlot := c.builder.CreateGEP(columnsType, columns, indices, "table_column_slot")
 		c.builder.CreateStore(c.constCString(column.Name), nameSlot)
-		// An unresolved column is an untyped empty array, so rows is zero and the
-		// runtime never reads this placeholder element kind.
+		// Empty columns have zero rows, so the runtime never reads this placeholder.
 		runtimeKind := runtimeElementKinds[IntKind]
-		if column.ElemType.Kind() != UnresolvedKind {
+		if hasConcreteArrayElemType(column.ElemType) {
 			runtimeKind = runtimeElementKinds[column.ElemType.Kind()]
 		}
 		c.builder.CreateStore(llvm.ConstInt(i32, runtimeKind, false), kindSlot)

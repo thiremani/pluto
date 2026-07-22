@@ -112,9 +112,11 @@ scores = [
 
 Named columns are arrays, so `scores.Score` is `[10 12]`. A header may have no
 data rows; the resulting table retains its header when printed, while each
-projected column is an untyped empty array that prints as `[]`. Header-only
-tables can be printed and projected, but cannot be passed to functions until
-their column types are established.
+projected column is an `[Empty]` array that prints as `[]`. Header-only tables
+have `Empty` column types and can be passed to functions; a concrete table with
+the same column names can later establish their leaf types. Assigning a
+header-only table to an established table with the same columns clears its rows
+without changing those established types.
 
 ## Indexing and operations
 

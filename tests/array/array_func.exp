@@ -18,6 +18,9 @@ TableIdentity: [
     "Ada" 10
     "Lin" 12
 ]
+EmptyTableIdentity: [
+  : Name Score
+]
 TableCallColumn: [10 12]
 GatedTableColumn: ["" "Lin"]
 DirectConcatScalar: [0]

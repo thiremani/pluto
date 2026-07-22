@@ -87,6 +87,16 @@ empty table: [
 empty score column: []
 empty score sum: []
 typed empty scores: [7 8]
+initial empty table: [
+  : Name Score
+]
+refined empty table: [
+  : Name Score
+    "Ada" 10
+]
+reset empty table: [
+  : Name Score
+]
 inferred table: [
     1 "a"
     2 "b"
