@@ -115,6 +115,8 @@ rank2Refined = [[9]]
 "rank 2 refined: -rank2Refined"
 emptyConcat = [] ⊕ []
 "empty concat: -emptyConcat"
+nestedEmptyConcat = ([] ⊕ []) ⊕ ["xxa"]
+"nested empty concat: -nestedEmptyConcat"
 emptyAdd = [] + []
 "empty add: -emptyAdd"
 emptyCompare = [] > []
@@ -129,6 +131,8 @@ emptyTable =
 "empty table: -emptyTable"
 emptyScoreColumn = emptyTable.Score
 "empty score column: -emptyScoreColumn"
+emptyScoreSum = emptyTable.Score + [1]
+"empty score sum: -emptyScoreSum"
 typedEmptyScores = emptyTable.Score ⊕ [7 8]
 "typed empty scores: -typedEmptyScores"
 

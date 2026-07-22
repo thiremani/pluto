@@ -142,9 +142,26 @@ operand's inner shape. Literal-construction mismatches are compile errors;
 concatenation shapes that depend on runtime values are checked before
 proceeding.
 
-Assigning `[]` to a concrete array empties it without changing its established
-leaf type or rank. Untyped empty arrays can specialize functions and refine to
-a concrete leaf type through concatenation.
+### Type stability
+
+An expression's concrete type comes only from that expression and its operands;
+an assignment target, parent, or sibling cannot change it. `Unresolved` is a
+temporary solver placeholder. `Empty` is fully resolved and means that an
+array has no concrete leaf-type evidence, not merely that its runtime length is
+zero.
+
+With `arr = [1]`, the distinctions are:
+
+- `[]` has type `[Empty]` and value `[]`.
+- `([] + []) ⊕ ["x"]` has type `[Str]` and value `["x"]`; the inner `+`
+  remains `[Empty]` and is never evaluated on strings.
+- `[arr[5]]` has type `[I64]` and value `[0]`; a fixed-layout literal preserves
+  its cell and zero-fills an out-of-bounds read.
+- `arr[0] > 5 [arr[0]]` has type `[I64]` and value `[]`; the false statement
+  gate filters the value without erasing its leaf type.
+
+Assigning `[]` to an established concrete array similarly empties the value
+without changing that binding's leaf type or rank.
 
 ## Planned rank-N range features
 

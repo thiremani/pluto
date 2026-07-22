@@ -77,6 +77,7 @@ rank 2 refined: [
     9
 ]
 empty concat: []
+nested empty concat: ["xxa"]
 empty add: []
 empty comparison: []
 refined empty add: [1]
@@ -84,6 +85,7 @@ empty table: [
   : Name Score
 ]
 empty score column: []
+empty score sum: []
 typed empty scores: [7 8]
 inferred table: [
     1 "a"

@@ -299,25 +299,19 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
-// isUntypedEmptyCollection reports whether t is a header-only table, or a
-// column projected from one, whose element types have not been established.
-func isUntypedEmptyCollection(t Type) bool {
-	switch tt := t.(type) {
-	case Array:
-		return tt.ElemType != nil && tt.ElemType.Kind() == UnresolvedKind
-	case Table:
-		if len(tt.Columns) == 0 {
-			return false
-		}
-		for _, column := range tt.Columns {
-			if column.ElemType == nil || column.ElemType.Kind() != UnresolvedKind {
-				return false
-			}
-		}
-		return true
-	default:
+// isUntypedEmptyTable reports whether t is a header-only table whose column
+// types have not been established.
+func isUntypedEmptyTable(t Type) bool {
+	table, ok := t.(Table)
+	if !ok || len(table.Columns) == 0 {
 		return false
 	}
+	for _, column := range table.Columns {
+		if column.ElemType == nil || column.ElemType.Kind() != UnresolvedKind {
+			return false
+		}
+	}
+	return true
 }
 
 // Array is a homogeneous rectangular value. Rank is part of the type while
@@ -581,12 +575,11 @@ func TypeEqual(a, b Type) bool {
 	return cmp(a, b)
 }
 
-// CanRefineType checks if oldType can be refined to newType by replacing
-// unresolved components with concrete types.
-// Returns true if refinement is possible (including when types are already equal).
-// Composite/container types are checked recursively.
+// CanRefineType reports whether an inference or binding slot can accept newType.
+// Unresolved components and Empty leaf slots may accept concrete types; this
+// relation does not retag already-solved expression nodes.
 func CanRefineType(oldType, newType Type) bool {
-	// Completely unresolved type can be refined to anything
+	// Slots without concrete leaf evidence can accept any type.
 	if oldType.Kind() == UnresolvedKind || oldType.Kind() == EmptyKind {
 		return true
 	}

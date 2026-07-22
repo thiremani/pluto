@@ -322,11 +322,6 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "cannot index an empty array without an element type",
 		},
 		{
-			name:        "ContextualEmptyArrayOperator",
-			script:      `result = ([] + []) ⊕ ["x"]`,
-			expectError: "for types: Str, Str",
-		},
-		{
 			name:        "ArrayTypeStaysLockedAfterEmptyReset",
 			script:      "arr = [1]\narr = []\narr = [1.5]",
 			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [F64]. Identifier "arr"`,
@@ -396,6 +391,44 @@ func TestCollectionTypeErrors(t *testing.T) {
 			require.Contains(t, ts.Errors[0].Msg, tc.expectError)
 		})
 	}
+}
+
+func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	program := mustParseScript(t, `empty = ([] + []) ⊕ ["x"]
+mixed = [1] + [2.5]
+locked = [1]
+locked = []`)
+	cc := NewCodeCompiler(ctx, "arrayOperandTypes", "", ast.NewCode())
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	emptyStmt := program.Statements[0].(*ast.LetStatement)
+	emptyOuter := emptyStmt.Value[0].(*ast.InfixExpression)
+	emptyInner := emptyOuter.Left.(*ast.InfixExpression)
+	emptyInnerType := ts.ExprCache[key(ts.FuncNameMangled, emptyInner)].OutTypes[0].(Array)
+	emptyOuterType := ts.ExprCache[key(ts.FuncNameMangled, emptyOuter)].OutTypes[0].(Array)
+	require.Equal(t, EmptyKind, emptyInnerType.ElemType.Kind())
+	require.Equal(t, StrKind, emptyOuterType.ElemType.Kind())
+
+	mixedStmt := program.Statements[1].(*ast.LetStatement)
+	mixed := mixedStmt.Value[0].(*ast.InfixExpression)
+	mixedLeftType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Left)].OutTypes[0].(Array)
+	mixedRightType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Right)].OutTypes[0].(Array)
+	mixedType := ts.ExprCache[key(ts.FuncNameMangled, mixed)].OutTypes[0].(Array)
+	require.Equal(t, IntKind, mixedLeftType.ElemType.Kind())
+	require.Equal(t, FloatKind, mixedRightType.ElemType.Kind())
+	require.Equal(t, FloatKind, mixedType.ElemType.Kind())
+
+	resetStmt := program.Statements[3].(*ast.LetStatement)
+	resetType := ts.ExprCache[key(ts.FuncNameMangled, resetStmt.Value[0])].OutTypes[0].(Array)
+	bindingType := ts.BindingTypes[BindingKey{Name: "locked"}].(Array)
+	require.Equal(t, EmptyKind, resetType.ElemType.Kind())
+	require.Equal(t, IntKind, bindingType.ElemType.Kind())
 }
 
 func TestArrayConcatTypeErrors(t *testing.T) {

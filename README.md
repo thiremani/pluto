@@ -230,10 +230,11 @@ the first header aligns with the first value; spacing within header and data
 rows is otherwise non-semantic.
 
 The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
-functions, and adopts an element type when concatenated with a concrete array.
-Once a variable has a concrete array type, assigning `[]` empties its value but
-preserves that element type. Operations such as indexing or arithmetic still
-require a concrete element type.
+functions, and acts as the empty operand when concatenated with a concrete
+array. The concatenation result takes the concrete element type without
+retyping the empty expression. Once a variable has a concrete array type,
+assigning `[]` empties its value but preserves that element type. Operations
+such as indexing or arithmetic still require a concrete element type.
 
 See [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for complete
 inference, shape, indexing, empty-value, and table rules.

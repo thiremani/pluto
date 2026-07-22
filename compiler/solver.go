@@ -116,44 +116,41 @@ func key(funcNameMangled string, expr ast.Expression) ExprKey {
 // TypeSolver infers the types of various expressions
 // It is mainly needed to infer the output types of a function
 // given input arguments
-type pendingExpr struct {
-	expr       ast.Expression
-	outTypeIdx int
-}
-
-type pendingBinding struct {
-	FuncNameMangled string
-	Name            string
+type pendingAssignment struct {
+	funcNameMangled string
+	name            string
+	expr            ast.Expression
+	exprOutIdx      int
 }
 
 type TypeSolver struct {
-	ScriptCompiler  *ScriptCompiler
-	Scopes          []Scope[Type]
-	InProgress      map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc      string              // this is the current func in the main scope we are inferring type for
-	FuncNameMangled string              // current function's mangled name ("" for script level)
-	Converging      bool
-	Errors          []*token.CompileError
-	BindingTypes    map[BindingKey]Type
-	ExprCache       map[ExprKey]*ExprInfo
-	TmpCounter      int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr     bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
-	UnresolvedExprs map[pendingBinding][]pendingExpr
+	ScriptCompiler     *ScriptCompiler
+	Scopes             []Scope[Type]
+	InProgress         map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
+	ScriptFunc         string              // this is the current func in the main scope we are inferring type for
+	FuncNameMangled    string              // current function's mangled name ("" for script level)
+	Converging         bool
+	Errors             []*token.CompileError
+	BindingTypes       map[BindingKey]Type
+	ExprCache          map[ExprKey]*ExprInfo
+	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
+	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
+	PendingAssignments map[pendingAssignment]struct{}
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		ScriptCompiler:  sc,
-		Scopes:          []Scope[Type]{NewScope[Type](FuncScope)},
-		InProgress:      map[string]struct{}{},
-		ScriptFunc:      "",
-		FuncNameMangled: "",
-		Converging:      false,
-		Errors:          []*token.CompileError{},
-		BindingTypes:    make(map[BindingKey]Type),
-		ExprCache:       sc.Compiler.ExprCache,
-		TmpCounter:      0,
-		UnresolvedExprs: make(map[pendingBinding][]pendingExpr),
+		ScriptCompiler:     sc,
+		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
+		InProgress:         map[string]struct{}{},
+		ScriptFunc:         "",
+		FuncNameMangled:    "",
+		Converging:         false,
+		Errors:             []*token.CompileError{},
+		BindingTypes:       make(map[BindingKey]Type),
+		ExprCache:          sc.Compiler.ExprCache,
+		TmpCounter:         0,
+		PendingAssignments: make(map[pendingAssignment]struct{}),
 	}
 }
 
@@ -229,90 +226,18 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 	return Unresolved{}
 }
 
-func (ts *TypeSolver) bindArrayOperand(expr ast.Expression, arr Array) {
-	// Update the ExprCache with the result's refined array element type.
-	// handleInfixArrays only calls this when expr is already array-typed.
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	current := info.OutTypes[0].(Array)
-	infix, isInfix := expr.(*ast.InfixExpression)
-	refinesEmptyInfix := isInfix && current.ElemType.Kind() == EmptyKind && hasConcreteArrayElemType(arr.ElemType)
-	if refinesEmptyInfix {
-		// A standalone empty operation is vacuous. If a parent supplies a leaf
-		// type, validate that the original operation supports that type before
-		// refining its operands for codegen.
-		ts.TypeArrayInfix(arr, arr, infix.Operator, infix.Token)
+func (ts *TypeSolver) trackUnresolvedAssignment(name string, expr ast.Expression, exprOutIdx int, t Type) {
+	pending := pendingAssignment{
+		funcNameMangled: ts.FuncNameMangled,
+		name:            name,
+		expr:            expr,
+		exprOutIdx:      exprOutIdx,
 	}
-	info.OutTypes[0] = arr
-
-	if ident, ok := expr.(*ast.Identifier); ok {
-		// resolve any previously unresolved uses now that we know the concrete array type
-		ts.resolveTrackedExprs(ident.Value, arr)
+	if IsFullyResolvedType(t) {
+		delete(ts.PendingAssignments, pending)
 		return
 	}
-
-	switch e := expr.(type) {
-	case *ast.InfixExpression:
-		// Only recurse if the subexpressions are themselves array-typed
-		if ts.ExprCache[key(ts.FuncNameMangled, e.Left)].OutTypes[0].Kind() == ArrayKind {
-			ts.bindArrayOperand(e.Left, arr)
-		}
-		if ts.ExprCache[key(ts.FuncNameMangled, e.Right)].OutTypes[0].Kind() == ArrayKind {
-			ts.bindArrayOperand(e.Right, arr)
-		}
-	case *ast.PrefixExpression:
-		// Only recurse if the operand is array-typed
-		if ts.ExprCache[key(ts.FuncNameMangled, e.Right)].OutTypes[0].Kind() == ArrayKind {
-			ts.bindArrayOperand(e.Right, arr)
-		}
-	case *ast.ArrayRangeExpression:
-		// For array-range access like arr[1:3], the source must be array-typed.
-		ts.bindArrayOperand(e.Array, arr)
-	}
-}
-
-func (ts *TypeSolver) handleInfixArrays(expr *ast.InfixExpression, leftType, rightType Type) (Type, bool) {
-	if leftType.Kind() != ArrayKind && rightType.Kind() != ArrayKind {
-		return nil, false
-	}
-	finalType := ts.TypeArrayInfix(leftType, rightType, expr.Operator, expr.Token)
-	if arr, ok := finalType.(Array); ok {
-		if leftType.Kind() == ArrayKind {
-			ts.bindArrayOperand(expr.Left, arr)
-		}
-		if rightType.Kind() == ArrayKind {
-			ts.bindArrayOperand(expr.Right, arr)
-		}
-	}
-	return finalType, true
-}
-
-func (ts *TypeSolver) bindAssignment(name string, expr ast.Expression, idx int, t Type) {
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if idx >= len(info.OutTypes) {
-		return
-	}
-
-	// Invariant: assignment typing is one-way from RHS -> LHS.
-	// We refine RHS expression output types from RHS-derived type `t` and then
-	// propagate resolved types to tracked LHS bindings. Do not infer RHS types
-	// from existing destination types, because that can corrupt ExprCache output
-	// types for calls/expressions and lead to incorrect solver convergence.
-	if CanRefineType(info.OutTypes[idx], t) {
-		info.OutTypes[idx] = t
-	}
-
-	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
-	if !IsFullyResolvedType(t) {
-		for _, pending := range ts.UnresolvedExprs[binding] {
-			if pending.outTypeIdx == idx && pending.expr == expr {
-				return
-			}
-		}
-		ts.UnresolvedExprs[binding] = append(ts.UnresolvedExprs[binding], pendingExpr{expr: expr, outTypeIdx: idx})
-		return
-	}
-
-	ts.resolveTrackedExprs(name, t)
+	ts.PendingAssignments[pending] = struct{}{}
 }
 
 // appendUses appends one occurrence s to out, respecting the policy:
@@ -346,32 +271,6 @@ func (ts *TypeSolver) FreshIterName() string {
 	n := ts.TmpCounter
 	ts.TmpCounter++
 	return fmt.Sprintf("tmpIter$%d", n)
-}
-
-func (ts *TypeSolver) resolveTrackedExprs(name string, t Type) {
-	binding := pendingBinding{FuncNameMangled: ts.FuncNameMangled, Name: name}
-	if entries, ok := ts.UnresolvedExprs[binding]; ok {
-		for _, pending := range entries {
-			// Invariant: pending expressions are only registered via bindAssignment
-			// after their ExprCache entry has been created.
-			info := ts.ExprCache[key(ts.FuncNameMangled, pending.expr)]
-			if pending.outTypeIdx >= len(info.OutTypes) {
-				continue
-			}
-			if CanRefineType(info.OutTypes[pending.outTypeIdx], t) {
-				info.OutTypes[pending.outTypeIdx] = t
-			}
-		}
-		if IsFullyResolvedType(t) {
-			delete(ts.UnresolvedExprs, binding)
-		}
-	}
-
-	if typ, ok := Get(ts.Scopes, name); ok {
-		if bindingSlotCompatible(typ, t) {
-			SetExisting(ts.Scopes, name, ts.resolveBindingSlotType(name, typ, t))
-		}
-	}
 }
 
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
@@ -667,23 +566,21 @@ func (ts *TypeSolver) Solve() {
 		}
 	}
 
-	for binding, entries := range ts.UnresolvedExprs {
+	for pending := range ts.PendingAssignments {
 		// Intentional: only report unresolved bindings for script scope.
 		// Function-scope unresolved types may be resolved later when that function
 		// is reached by a concrete script-level call.
-		if binding.FuncNameMangled != "" {
+		if pending.funcNameMangled != "" {
 			continue
 		}
-		for _, pending := range entries {
-			info := ts.ExprCache[key(binding.FuncNameMangled, pending.expr)]
-			if info != nil && pending.outTypeIdx < len(info.OutTypes) && isUntypedEmptyCollection(info.OutTypes[pending.outTypeIdx]) {
-				continue
-			}
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: pending.expr.Tok(),
-				Msg:   fmt.Sprintf("type for %q could not be resolved", binding.Name),
-			})
+		info := ts.ExprCache[key(pending.funcNameMangled, pending.expr)]
+		if info != nil && pending.exprOutIdx < len(info.OutTypes) && isUntypedEmptyTable(info.OutTypes[pending.exprOutIdx]) {
+			continue
 		}
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: pending.expr.Tok(),
+			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
+		})
 	}
 
 }
@@ -930,7 +827,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
 		newType := types[i]
-		ts.bindAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
+		ts.trackUnresolvedAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 
 		typ, exists := Get(ts.Scopes, ident.Value)
 		if !exists {
@@ -1330,7 +1227,11 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 	case Table:
 		for _, column := range leftType.Columns {
 			if column.Name == expr.Field {
-				info.OutTypes = []Type{Array{ElemType: column.ElemType, Rank: 1}}
+				elemType := column.ElemType
+				if elemType.Kind() == UnresolvedKind {
+					elemType = Empty{}
+				}
+				info.OutTypes = []Type{Array{ElemType: elemType, Rank: 1}}
 				info.HasRanges = leftInfo.HasRanges
 				return info.OutTypes
 			}
@@ -1764,9 +1665,8 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		return Array{ElemType: leftType, Rank: rightType.(Array).Rank}, CondArray
 	}
 
-	// Handle any expression involving arrays
-	if finalType, ok := ts.handleInfixArrays(expr, leftType, rightType); ok {
-		return finalType, CondNone
+	if leftType.Kind() == ArrayKind || rightType.Kind() == ArrayKind {
+		return ts.TypeArrayInfix(leftType, rightType, expr.Operator, expr.Token), CondNone
 	}
 
 	resultType := ts.TypeInfixOp(leftType, rightType, expr.Operator, expr.Token)
