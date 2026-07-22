@@ -66,11 +66,6 @@ func (c *Compiler) tableStrArg(s *Symbol) llvm.Value {
 	tableType := s.Type.(Table)
 	rows := c.builder.CreateExtractValue(s.Val, 0, "table_rows")
 	columnCount := len(tableType.Columns)
-	if columnCount == 0 {
-		null := llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-		fnType, fn := c.GetCFunc(TABLE_STR)
-		return c.builder.CreateCall(fnType, fn, []llvm.Value{rows, c.ConstI64(0), null, null, null}, "table_str")
-	}
 
 	i8p := llvm.PointerType(c.Context.Int8Type(), 0)
 	i32 := c.Context.Int32Type()
