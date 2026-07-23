@@ -62,16 +62,16 @@ arr2 = []
 arr2 = arr2 ⊕ [0:5]
 "DirectConcatRange: -arr2"
 
-emptyDirect = AddElem([], 1)
-"AddElemDirect: -emptyDirect"
+emptyDirect = ConcatElem([], 1)
+"ConcatElemDirect: -emptyDirect"
 
 emptyNamed = []
-emptyNamedResult = AddElem(emptyNamed, 2)
-"AddElemNamed: -emptyNamedResult"
+emptyNamedResult = ConcatElem(emptyNamed, 2)
+"ConcatElemNamed: -emptyNamedResult"
 
 emptyInPlace = []
-emptyInPlace = AddElem(emptyInPlace, 3)
-"AddElemInPlace: -emptyInPlace"
+emptyInPlace = ConcatElem(emptyInPlace, 3)
+"ConcatElemInPlace: -emptyInPlace"
 
 emptyConcat = ConcatArrays([], [])
 "ConcatEmpty: -emptyConcat"
@@ -83,7 +83,7 @@ lockedArray = [9]
 "BeforeEmptyReset: -lockedArray"
 lockedArray = []
 "AfterEmptyReset: -lockedArray"
-lockedArray = AddElem(lockedArray, 4)
+lockedArray = ConcatElem(lockedArray, 4)
 "EmptyResetKeepsType: -lockedArray"
 
 # Range call in array literal
