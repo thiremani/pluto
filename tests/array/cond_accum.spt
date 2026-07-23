@@ -298,9 +298,14 @@ foldData = [10 20 30 40 50 40 30 20 70 80 5 4 6 70]
 i = 0:14
 foldMax = 0
 foldMax = foldData[i] > foldMax foldData[i]
+directMax = 0
+directMax = foldData[i] > directMax
 foldMin = i == 0 foldData[i]
 foldMin = foldData[i] < foldMin foldData[i]
+directMin = foldData[0]
+directMin = foldData[i] < directMin
 "LoopCarriedGateMax: -foldMax. LoopCarriedGateMin: -foldMin"
+"DirectMax: -directMax. DirectMin: -directMin"
 
 # Ranged condition + range literal in infix value (rewrite used)
 rl = 0
