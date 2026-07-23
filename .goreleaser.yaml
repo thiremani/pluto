@@ -251,7 +251,7 @@ nfpms:
       - apk
     file_name_template: '{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}'
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
-    maintainer: '{{ or .Env.NFPM_MAINTAINER "Pluto Contributors <opensource@pluto-lang.org>" }}'
+    maintainer: '{{ or .Env.NFPM_MAINTAINER "Tejas <tejasvph@gmail.com>" }}'
     description: Pluto programming language compiler (requires LLVM 22 toolchain on target host).
     license: 'Apache-2.0 WITH LLVM-exception'
     bindir: /usr/bin

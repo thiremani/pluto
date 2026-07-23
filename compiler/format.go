@@ -857,7 +857,7 @@ func maybeMarker(runes []rune, i int) bool {
 // Output format:
 //
 //	Point
-//	    :x y
+//	  : x y
 //	    1 2
 func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value, toFree []llvm.Value) {
 	st := s.Type.(Struct)
@@ -881,7 +881,7 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 		}
 		valueParts = append(valueParts, spec)
 	}
-	fmtStr = st.Name + "\n    :" + strings.Join(headerParts, " ") + "\n    " + strings.Join(valueParts, " ") + "\n"
+	fmtStr = st.Name + "\n  : " + strings.Join(headerParts, " ") + "\n    " + strings.Join(valueParts, " ") + "\n"
 	return
 }
 

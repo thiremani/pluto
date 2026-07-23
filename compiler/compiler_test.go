@@ -313,7 +313,7 @@ greeting = "hello\n\x41"`
 
 func TestStructStringConstantDecodesEscapes(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name
+  : name
     "\x41da\n"`)
 
 	ctx := llvm.NewContext()
@@ -346,10 +346,10 @@ func TestCompilerModuleTargetMetadata(t *testing.T) {
 
 func TestStructRepeatedDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     "Ada" 28`)
 
 	merged := ast.NewCode()
@@ -366,10 +366,10 @@ func TestStructRepeatedDefs(t *testing.T) {
 
 func TestStructAmbiguousFieldOrder(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 
 	merged := ast.NewCode()
@@ -395,10 +395,10 @@ func TestStructAmbiguousFieldOrder(t *testing.T) {
 
 func TestStructUnknownField(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age score
+  : name age score
     "Tejas" 35 100`)
 	codeB := mustParseCode(t, `q = Person
-    :name height
+  : name height
     "Ada" 170`)
 
 	merged := ast.NewCode()
@@ -424,10 +424,10 @@ func TestStructUnknownField(t *testing.T) {
 
 func TestStructFieldTypeMismatch(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     "Ada" 28.5`)
 
 	merged := ast.NewCode()
@@ -453,10 +453,10 @@ func TestStructFieldTypeMismatch(t *testing.T) {
 
 func TestStructSameArityConflictingTypes(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     35 "Ada"`)
 
 	merged := ast.NewCode()
@@ -482,10 +482,10 @@ func TestStructSameArityConflictingTypes(t *testing.T) {
 
 func TestStructSubsetDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 	codeB := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 
 	merged := ast.NewCode()
@@ -503,10 +503,10 @@ func TestStructSubsetDefs(t *testing.T) {
 func TestStructMaxHeaderDef(t *testing.T) {
 	// Smaller statement first, larger definition second — larger wins.
 	codeA := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 	codeB := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 
 	merged := ast.NewCode()
@@ -527,7 +527,7 @@ func TestStructMaxHeaderDef(t *testing.T) {
 
 func TestStructEmptyInit(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35
 q = Person`)
 
@@ -666,10 +666,10 @@ func TestReservedScriptVariableName(t *testing.T) {
 
 func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :height age
+  : height age
     170 28`)
 
 	merged := ast.NewCode()

@@ -179,10 +179,10 @@ y`
 
 func TestTypeStructLiteralCanonicalizesToSchema(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5
 q = Person
-    :age
+  : age
     28
 r = Person`)
 
@@ -212,7 +212,7 @@ r = Person`)
 
 func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 
 	ctx := llvm.NewContext()
@@ -241,7 +241,7 @@ func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
 
 func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 
 	ctx := llvm.NewContext()
