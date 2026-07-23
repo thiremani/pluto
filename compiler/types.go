@@ -13,6 +13,7 @@ type Kind int
 
 const (
 	UnresolvedKind Kind = iota
+	EmptyKind
 	IntKind
 	UintKind
 	FloatKind
@@ -21,6 +22,7 @@ const (
 	RangeKind
 	FuncKind
 	ArrayKind
+	TableKind
 	ArrayRangeKind
 	StructKind
 )
@@ -50,6 +52,7 @@ var PrimitiveTypeNames = []string{
 	"U64", "U32", "U16", "U8",
 	"F64", "F32",
 	"StrG", "StrH", // StrG = global/static (.rodata), StrH = heap
+	"Empty",
 	"X", // Unresolved placeholder
 }
 
@@ -59,6 +62,7 @@ var PrimitiveTypeNames = []string{
 // Sorted by descending length in init() for correct prefix matching.
 var CompoundTypePrefixes = []string{
 	"ArrayRange",
+	"Table",
 	"Array",
 	"Range",
 	"Ptr",
@@ -83,6 +87,16 @@ func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
 func (u Unresolved) Mangle() string { return "X" } // placeholder for unresolved
 func (u Unresolved) Key() Type      { return u }
+
+// Empty is the leaf type of a zero-cardinality collection whose concrete
+// element type has not been established. Unlike Unresolved, it is valid and
+// fully resolved.
+type Empty struct{}
+
+func (e Empty) Kind() Kind     { return EmptyKind }
+func (e Empty) String() string { return "Empty" }
+func (e Empty) Mangle() string { return "Empty" }
+func (e Empty) Key() Type      { return e }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -255,18 +269,17 @@ func IsFullyResolvedType(t Type) bool {
 	switch tt := t.(type) {
 	case Unresolved:
 		return false
-	case Int, Float, StrG, StrH:
+	case Empty, Int, Float, StrG, StrH:
 		return true
 	case Ptr:
 		return IsFullyResolvedType(tt.Elem)
 	case Range:
 		return IsFullyResolvedType(tt.Iter)
 	case Array:
-		if len(tt.ColTypes) == 0 {
-			return false
-		}
-		for _, col := range tt.ColTypes {
-			if !IsFullyResolvedType(col) {
+		return tt.Rank > 0 && tt.ElemType != nil && IsFullyResolvedType(tt.ElemType)
+	case Table:
+		for _, column := range tt.Columns {
+			if column.ElemType == nil || !IsFullyResolvedType(column.ElemType) {
 				return false
 			}
 		}
@@ -287,42 +300,107 @@ func IsFullyResolvedType(t Type) bool {
 	}
 }
 
-// Array represents a tabular array with optional headers and typed columns.
-// Each column has a primitive element type (I64, F64, or Str). Length is the
-// number of rows. Headers may be empty (for matrices without named columns).
+// Array is a homogeneous rectangular value. Rank is part of the type while
+// dimension lengths are runtime properties.
 type Array struct {
-	Headers  []string // column headers (may be empty)
-	ColTypes []Type   // element type per column (must be Int{64}, Float{64}, or Str)
-	Length   int      // number of rows
+	ElemType Type
+	Rank     int
 }
 
 func (a Array) String() string {
-	// Type identity ignores headers and length; show schema only.
-	if len(a.ColTypes) == 0 {
+	if a.ElemType == nil || a.Rank < 1 {
 		return "[]"
 	}
-	var cols []string
-	for _, ct := range a.ColTypes {
-		cols = append(cols, ct.String())
+	result := a.ElemType.String()
+	for range a.Rank {
+		result = "[" + result + "]"
 	}
-	return "[" + strings.Join(cols, " ") + "]"
+	return result
 }
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	s := "Array" + SEP + T + strconv.Itoa(len(a.ColTypes))
-	for _, ct := range a.ColTypes {
-		s += SEP + ct.Mangle()
+	result := a.ElemType.Mangle()
+	for range a.Rank {
+		result = "Array" + SEP + T + "1" + SEP + result
 	}
-	return s
+	return result
 }
 func (a Array) Key() Type {
-	// Array keys ignore headers and length, using only column types
-	keyColTypes := make([]Type, len(a.ColTypes))
-	for i, ct := range a.ColTypes {
-		keyColTypes[i] = ct.Key()
+	return Array{ElemType: a.ElemType.Key(), Rank: a.Rank}
+}
+
+func hasConcreteArrayElemType(elem Type) bool {
+	return elem != nil && elem.Kind() != EmptyKind && elem.Kind() != UnresolvedKind
+}
+
+func arrayIndexResultType(array Array) Type {
+	if array.Rank > 1 {
+		return Array{ElemType: array.ElemType, Rank: array.Rank - 1}
 	}
-	return Array{ColTypes: keyColTypes}
+	if array.ElemType.Kind() == StrKind {
+		return StrH{}
+	}
+	return array.ElemType
+}
+
+// TableColumn pairs an optional source-level name with a homogeneous column
+// element type. Name is empty for positional, unnamed columns.
+type TableColumn struct {
+	Name     string
+	ElemType Type
+}
+
+// Table is an ordered, columnar schema. Row count is a runtime property.
+type Table struct {
+	Columns []TableColumn
+}
+
+func (t Table) String() string {
+	columns := make([]string, len(t.Columns))
+	for i, column := range t.Columns {
+		columns[i] = column.ElemType.String()
+		if column.Name != "" {
+			columns[i] = column.Name + ":" + columns[i]
+		}
+	}
+	return "Table[" + strings.Join(columns, " ") + "]"
+}
+
+func (t Table) Kind() Kind { return TableKind }
+func (t Table) Mangle() string {
+	parts := make([]string, 0, len(t.Columns)*2)
+	for _, column := range t.Columns {
+		encodedName := "u"
+		if column.Name != "" {
+			encodedName = "n" + column.Name
+		}
+		parts = append(parts, MangleIdent(encodedName), column.ElemType.Mangle())
+	}
+	mangled := "Table" + SEP + T + strconv.Itoa(len(parts))
+	if len(parts) > 0 {
+		mangled += SEP + strings.Join(parts, SEP)
+	}
+	return mangled
+}
+func (t Table) Key() Type {
+	columns := make([]TableColumn, len(t.Columns))
+	for i, column := range t.Columns {
+		columns[i] = TableColumn{Name: column.Name, ElemType: column.ElemType.Key()}
+	}
+	return Table{Columns: columns}
+}
+
+// isHeaderOnlyTableType reports whether a solver-produced table has only Empty
+// column types, as produced by a header-only literal. Solver-produced tables
+// always have at least one column and non-nil column types.
+func isHeaderOnlyTableType(table Table) bool {
+	for _, column := range table.Columns {
+		if column.ElemType.Kind() != EmptyKind {
+			return false
+		}
+	}
+	return true
 }
 
 // ArrayRange represents an iteration over a range of an array.
@@ -340,11 +418,7 @@ func (ar ArrayRange) String() string {
 func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
 
 func (ar ArrayRange) Mangle() string {
-	s := "ArrayRange" + SEP + T + strconv.Itoa(len(ar.Array.ColTypes))
-	for _, ct := range ar.Array.ColTypes {
-		s += SEP + ct.Mangle()
-	}
-	return s
+	return "ArrayRange" + SEP + T + "1" + SEP + ar.Array.ElemType.Mangle()
 }
 func (ar ArrayRange) Key() Type {
 	return ArrayRange{
@@ -499,13 +573,12 @@ func TypeEqual(a, b Type) bool {
 	return cmp(a, b)
 }
 
-// CanRefineType checks if oldType can be refined to newType by replacing
-// unresolved components with concrete types.
-// Returns true if refinement is possible (including when types are already equal).
-// Composite/container types are checked recursively.
+// CanRefineType reports whether an inference or binding slot can accept newType.
+// Unresolved components and Empty leaf slots may accept concrete types; this
+// relation does not retag already-solved expression nodes.
 func CanRefineType(oldType, newType Type) bool {
-	// Completely unresolved type can be refined to anything
-	if oldType.Kind() == UnresolvedKind {
+	// Slots without concrete leaf evidence can accept any type.
+	if oldType.Kind() == UnresolvedKind || oldType.Kind() == EmptyKind {
 		return true
 	}
 
@@ -518,6 +591,9 @@ func CanRefineType(oldType, newType Type) bool {
 	case Array:
 		newArr, ok := newType.(Array)
 		return ok && canRefineArray(old, newArr)
+	case Table:
+		newTable, ok := newType.(Table)
+		return ok && canRefineTable(old, newTable)
 	case ArrayRange:
 		newSlice, ok := newType.(ArrayRange)
 		return ok && canRefineArrayRange(old, newSlice)
@@ -543,6 +619,23 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return true
 	}
+	oldArray, oldIsArray := oldType.(Array)
+	newArray, newIsArray := newType.(Array)
+	if oldIsArray && newIsArray {
+		// Empty arrays retain an established leaf type. Rank-1 [] is also the
+		// shape-polymorphic reset spelling for an established higher-rank array.
+		if newArray.ElemType.Kind() == EmptyKind {
+			return newArray.Rank == 1 || oldArray.Rank == newArray.Rank
+		}
+		if oldArray.ElemType.Kind() == EmptyKind {
+			return oldArray.Rank == newArray.Rank
+		}
+	}
+	newTable, newIsTable := newType.(Table)
+	oldTable, oldIsTable := oldType.(Table)
+	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
+		return true
+	}
 	return CanRefineType(oldType, newType)
 }
 
@@ -552,6 +645,21 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return mergeStringFlavor(oldType, newType)
+	}
+	oldArray, oldIsArray := oldType.(Array)
+	newArray, newIsArray := newType.(Array)
+	if oldIsArray && newIsArray {
+		if newArray.ElemType.Kind() == EmptyKind {
+			return oldType
+		}
+		if oldArray.ElemType.Kind() == EmptyKind {
+			return newType
+		}
+	}
+	newTable, newIsTable := newType.(Table)
+	oldTable, oldIsTable := oldType.(Table)
+	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
+		return oldType
 	}
 	return newType
 }
@@ -569,7 +677,20 @@ func canRefineTypes(oldTypes, newTypes []Type) bool {
 }
 
 func canRefineArray(oldArr, newArr Array) bool {
-	return canRefineTypes(oldArr.ColTypes, newArr.ColTypes)
+	return oldArr.Rank == newArr.Rank && CanRefineType(oldArr.ElemType, newArr.ElemType)
+}
+
+func canRefineTable(oldTable, newTable Table) bool {
+	if len(oldTable.Columns) != len(newTable.Columns) {
+		return false
+	}
+	for i, oldColumn := range oldTable.Columns {
+		newColumn := newTable.Columns[i]
+		if oldColumn.Name != newColumn.Name || !CanRefineType(oldColumn.ElemType, newColumn.ElemType) {
+			return false
+		}
+	}
+	return true
 }
 
 func canRefineArrayRange(oldSlice, newSlice ArrayRange) bool {
@@ -590,6 +711,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
 		return eqUnresolved
+	case EmptyKind:
+		return eqEmpty
 	case IntKind:
 		return eqInt
 	case FloatKind:
@@ -604,6 +727,8 @@ func typeComparer(k Kind) func(a, b Type) bool {
 		return eqFunc
 	case ArrayKind:
 		return eqArray
+	case TableKind:
+		return eqTable
 	case ArrayRangeKind:
 		return eqArrayRange
 	case StructKind:
@@ -614,6 +739,7 @@ func typeComparer(k Kind) func(a, b Type) bool {
 }
 
 func eqUnresolved(a, b Type) bool { return true }
+func eqEmpty(a, b Type) bool      { return true }
 
 func eqInt(a, b Type) bool {
 	ai := a.(Int)
@@ -659,10 +785,22 @@ func eqFunc(a, b Type) bool {
 func eqArray(a, b Type) bool {
 	aa := a.(Array)
 	ba := b.(Array)
-	if len(aa.ColTypes) != len(ba.ColTypes) {
+	return aa.Rank == ba.Rank && TypeEqual(aa.ElemType, ba.ElemType)
+}
+
+func eqTable(a, b Type) bool {
+	at := a.(Table)
+	bt := b.(Table)
+	if len(at.Columns) != len(bt.Columns) {
 		return false
 	}
-	return EqualTypes(aa.ColTypes, ba.ColTypes)
+	for i, column := range at.Columns {
+		other := bt.Columns[i]
+		if column.Name != other.Name || !TypeEqual(column.ElemType, other.ElemType) {
+			return false
+		}
+	}
+	return true
 }
 
 func eqArrayRange(a, b Type) bool {
@@ -694,10 +832,10 @@ func eqStruct(a, b Type) bool {
 }
 
 var reservedTypeNames = map[string]struct{}{
-	"Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
+	"Empty": {}, "Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
 	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
 	"U8": {}, "U16": {}, "U32": {}, "U64": {},
 	"F32": {}, "F64": {},
-	"Ptr": {}, "Range": {}, "Array": {}, "ArrayRange": {},
+	"Ptr": {}, "Range": {}, "Array": {}, "Table": {}, "ArrayRange": {},
 	"Func": {}, "Struct": {},
 }

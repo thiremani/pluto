@@ -197,6 +197,7 @@ func TestStringLiteral(t *testing.T) {
 	lit, ok := printStmt.Expression.Arguments[0].(*ast.StringLiteral)
 	require.Truef(t, ok, "expected *ast.StringLiteral, got %T", printStmt.Expression.Arguments[0])
 	require.Equal(t, "hello", lit.Token.Literal)
+	require.Equal(t, input, lit.String())
 }
 
 func TestParsingPrefixExpressions(t *testing.T) {
@@ -574,6 +575,7 @@ func TestConditionThenArrayValue(t *testing.T) {
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][0], 1), "first element mismatch")
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][1], 2), "second element mismatch")
 	require.Truef(t, testIntegerLiteral(t, arr.Rows[0][2], 3), "third element mismatch")
+	require.Equal(t, "[1 2 3]", arr.String())
 }
 
 func TestConditionThenCallValue(t *testing.T) {
@@ -1144,6 +1146,7 @@ func TestArrayLiterals(t *testing.T) {
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
+				require.False(t, arr.Block)
 			},
 		},
 		{
@@ -1154,9 +1157,11 @@ func TestArrayLiterals(t *testing.T) {
 ]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers for matrix")
+				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2, "expected 2 rows")
 				require.Len(t, arr.Rows[0], 3, "expected 3 elements in first row")
 				require.Len(t, arr.Rows[1], 3, "expected 3 elements in second row")
+				require.Equal(t, "[\n    1 2 3\n    4 5 6\n]", arr.String())
 
 				// Check first row: 1 2 3
 				require.True(t, testIntegerLiteral(t, arr.Rows[0][0], 1))
@@ -1170,11 +1175,22 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
+			name: "one-row block array",
+			input: `[
+    1 2 3
+]`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Len(t, arr.Rows, 1)
+				require.Equal(t, "[\n    1 2 3\n]", arr.String())
+			},
+		},
+		{
 			name: "array with headers",
 			input: `[
-  :  Day Product Price
-     "Monday" "Phone" 200
-     "Tuesday" "Laptop" 300
+  : Day Product Price
+    "Monday" "Phone" 200
+    "Tuesday" "Laptop" 300
 ]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Equal(t, []string{"Day", "Product", "Price"}, arr.Headers)
@@ -1225,13 +1241,18 @@ func TestArrayLiterals(t *testing.T) {
 			errorMsg:    "expected identifier for column header",
 		},
 		{
+			name:        "header marker without columns",
+			input:       "[:\n]",
+			expectError: true,
+			errorMsg:    "expected at least one column header after ':'",
+		},
+		{
 			name: "line continuation with unary operators",
-			input: `[
-    a -b \
-    -c d
-]`,
+			input: `[a -b \
+    -c d]`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
+				require.False(t, arr.Block)
 				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
 				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
 
@@ -1252,6 +1273,15 @@ func TestArrayLiterals(t *testing.T) {
 
 				// Check d is just an identifier
 				require.True(t, testIdentifier(t, arr.Rows[0][3], "d"))
+			},
+		},
+		{
+			name:  "second logical row implies block",
+			input: "[1 2\n3 4]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Len(t, arr.Rows, 2)
+				require.Equal(t, "[\n    1 2\n    3 4\n]", arr.String())
 			},
 		},
 		{
@@ -1341,7 +1371,7 @@ val = data[i]`,
 			if len(program.Statements) == 1 {
 				stmt = requireOnlyLetStmt(t, program)
 			} else {
-				require.Len(t, program.Statements, 2, "expected two statements for identifier slice case")
+				require.Len(t, program.Statements, 2, "expected two statements for identifier range case")
 				stmt = program.Statements[1].(*ast.LetStatement)
 			}
 			require.Len(t, stmt.Value, 1, "expected single RHS expression")
@@ -1354,7 +1384,7 @@ val = data[i]`,
 		})
 	}
 
-	// Ensure slices inside expressions parse correctly.
+	// Ensure array ranges inside expressions parse correctly.
 	l := lexer.New("TestArrayIndexInfix", "res = data[0:3] + 1")
 	sp := NewScriptParser(l)
 	program := sp.Parse()

@@ -97,15 +97,20 @@ i > 2 || 0
 
 This yields `i` when the comparison succeeds, otherwise `0`.
 
-`&&` gates a per-iteration value: `i > 2 && i * 10` yields `i * 10` on the
-iterations where the comparison yields and skips the rest. At an assignment
-root a skipped iteration keeps the destination, so the last **yielded** value
-wins (`x = i > 2 && i * 2` over `0:5` ends as `8`). `i > 2 && v || w` resolves
-per iteration as an if-else.
+A value-position `&&` conditionally sequences one per-iteration value into the
+next: `i > 2 && i * 10` yields `i * 10` on the iterations where the comparison
+yields and skips the rest. It is local to the containing value expression; it
+is not a statement gate and does not reject sibling RHS expressions. At an
+assignment root a skipped iteration keeps the destination, so the last
+**yielded** value wins (`x = i > 2 && i * 2` over `0:5` ends as `8`).
+`i > 2 && v || w` resolves per iteration as an if-else.
 
-## Array Literals
+## Array Collectors
 
-`[]` always materializes an array at the point where it appears.
+A one-row inline headerless bracket literal materializes an array at the point
+where it appears. Fixed block literals do not use the collector behavior in
+this section. Their layout and rank rules are defined in
+[Pluto Array Semantics](Pluto%20Array%20Semantics.md#literal-inference).
 
 The collector materializes over:
 
@@ -117,14 +122,10 @@ The collector also does not leak its own ranges upward into the parent
 expression.
 
 Once the literal has materialized, the result is just an ordinary array value.
-Binding always produces an array value. Later statements treat it as an
-ordinary array, the same as any other named binding.
+Binding freezes that value, so later statements treat it like any other named
+array.
 
 ### Collectors And Binding
-
-Binding a collector to a variable freezes the array produced at that binding
-site. Later statements treat it as an ordinary array, the same as any other
-named binding.
 
 For example:
 
@@ -232,13 +233,16 @@ fallback values win over zero-fill.
 ## Gated Collection
 
 Statement conditions outside `[]` gate the active iteration domain.
-They do not preserve shape.
+They do not preserve shape. The gate is shared by the whole statement: for a
+rejected domain point, none of its RHS expressions, collector appends, carried
+updates, or output commits execute. RHS-local ranges are nested inside each
+admitted point.
 
 Example:
 
 ```pluto
 i = 0:10
-arr = i > 2, i < 8 [i]
+arr = i > 2 && i < 8 [i]
 ```
 
 produces:
@@ -248,6 +252,9 @@ produces:
 ```
 
 The conditions select which outer iterations execute the collector at all.
+
+This is distinct from value-position `&&`, which controls only the value that
+contains it and leaves sibling RHS expressions in the same statement alone.
 
 The same admitted domain applies to nested collectors in a non-collector RHS:
 
@@ -269,6 +276,69 @@ arr = [i > 2 < 8]
 ```
 
 keeps the full array shape and zero-fills failed positions.
+
+## Deferred Nested Range Construction
+
+After PIR owns range and collector scopes, value-position `&&` may also bind a
+bare range for a local nested construction:
+
+```pluto
+i = 0:3
+j = 0:3
+result = [i && [matrix[i][j]]]
+```
+
+The outer collector would iterate `i`; the right side of the value-position
+`&&` would run once per `i`; the inner collector would own `j`; and the outer
+collector would stack the resulting rows. This is not statement gating. A
+statement gate would instead sit before the statement's RHS and would admit or
+reject the shared iteration point for every RHS expression.
+
+The binder is what distinguishes loop levels:
+
+```pluto
+[F(i, j)]                    # one flat collector over i x j
+[i && [F(i, j)]]             # outer i collector, inner j collector
+[j && [F(i, j)]]             # outer j collector, inner i collector
+[i && [j && [F(i, j, k)]]]   # three explicitly nested domains
+[i && 1]                     # one scalar 1 per i
+```
+
+The bare range is a domain, not a truth value; the right side also runs for an
+iterator value of zero.
+
+The value-position `&&` establishes the local range domain but never collects
+its right side. An explicit collector must surround the scalar yields that
+form one array value:
+
+```pluto
+[j && -1]       # one row of length len(j)
+j && [-1]       # one singleton-array yield per j
+[j && [-1]]     # stacks those arrays into a len(j) x 1 value
+```
+
+This same placement rule applies to fallbacks. A row fallback is
+`[j && -1]`, not `j && [-1]`; the former matches the shape of a row collected
+over `j`, while the latter still yields multiple array values.
+
+A bare range binder never fails, so `i && [matrix[i][j]] || [-1]` has no
+reachable fallback: `i` yields every domain point and the inner collector
+always resolves to an array. The eventual validator should diagnose that dead
+fallback. When alternatives are reachable, every row must have the same shape;
+Pluto does not pad, truncate, or flatten mismatched rows.
+
+When a condition such as `i > 0 && [F(i, j)]` fails in value position, the
+enclosing collector retains that `i` position and inserts a zero-filled child
+with the expected `j` shape. `|| [j && -1]` replaces that default with an
+explicit row. PIR must be able to derive the skipped child's shape; otherwise
+the compiler requires an explicit shape-bearing fallback instead of guessing.
+`|| [j && 0]` states the default zero row directly; `|| [j && -1]` selects a
+different fill value. A statement gate remains the only form that rejects the
+complete iteration point for every RHS expression.
+
+This range-left extension is deliberately not part of the current semantics.
+It should be implemented only after PIR can state which collector owns each
+range and validate that ownership before LLVM lowering.
 
 ## Statement Conditions And Tuples
 
@@ -314,11 +384,11 @@ Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
-shared scalar update step.
-If one non-collector RHS hits an out-of-bounds failure on that iteration,
-sibling non-collector outputs keep their previous values for that same
-iteration.
-Top-level `[]` collectors still use their own local zero-fill rules for cells.
+shared scalar update step, but each RHS has its own local yield outcome. If one
+RHS hits an out-of-bounds failure, only that RHS keeps its previous value;
+yielding siblings still update. Only rejection by the shared statement gate
+suppresses every sibling. Top-level `[]` collectors use their own local
+zero-fill rules for cells.
 
 ## Nested Collectors
 

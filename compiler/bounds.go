@@ -183,9 +183,18 @@ func (c *Compiler) withActiveBoundsGuard(
 	return true
 }
 
-// arrayIndexInBounds checks idx against [0, len(arr)).
-func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+func (c *Compiler) arrayIndexLength(arr *Symbol, elem Type) llvm.Value {
+	arrayType := arr.Type.(Array)
 	length := c.ArrayLen(arr, elem)
+	if arrayType.Rank > 1 {
+		length = c.arrayDimensions(arr)[0]
+	}
+	return length
+}
+
+// arrayIndexInBounds checks idx against the array's outer dimension.
+func (c *Compiler) arrayIndexInBounds(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
+	length := c.arrayIndexLength(arr, elem)
 	// Unsigned compare rejects negative indices as well (two's-complement wrap
 	// makes them larger than any valid length).
 	return c.builder.CreateICmp(llvm.IntULT, idx, length, "idx_in_bounds")
@@ -448,7 +457,7 @@ func (c *Compiler) affineLoopBoundsForComponents(
 	minIdx := c.affineIndexAt(form.coeff, form.bias, minSrc, "idx_affine_min")
 	maxIdx := c.affineIndexAt(form.coeff, form.bias, maxSrc, "idx_affine_max")
 
-	length := c.ArrayLen(arr, arrElem)
+	length := c.arrayIndexLength(arr, arrElem)
 	zero := c.ConstI64(0)
 	lowOK := c.builder.CreateICmp(llvm.IntSGE, minIdx, zero, "idx_affine_low_ok")
 	highOK := c.builder.CreateICmp(llvm.IntSLT, maxIdx, length, "idx_affine_high_ok")
@@ -491,10 +500,10 @@ func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol,
 	}
 	arraySym := c.derefIfPointer(raw, ident.Value+"_affine_arr")
 	arrType, ok := arraySym.Type.(Array)
-	if !ok || len(arrType.ColTypes) == 0 {
+	if !ok || arrType.ElemType == nil {
 		return nil, nil, false
 	}
-	return arraySym, arrType.ColTypes[0], true
+	return arraySym, arrType.ElemType, true
 }
 
 func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*RangeInfo) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {

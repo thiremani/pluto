@@ -295,8 +295,27 @@ func TestMangle(t *testing.T) {
 			modName:  "arr",
 			relPath:  "",
 			funcName: "len",
-			args:     []Type{Array{ColTypes: []Type{I64}}},
+			args:     []Type{Array{ElemType: I64, Rank: 1}},
 			expected: "Pt_3arr_p_3len_f1_Array_t1_I64",
+		},
+		{
+			name:     "with rank-2 array type",
+			modName:  "matrix",
+			relPath:  "",
+			funcName: "shape",
+			args:     []Type{Array{ElemType: F64, Rank: 2}},
+			expected: "Pt_6matrix_p_5shape_f1_Array_t1_Array_t1_F64",
+		},
+		{
+			name:     "with table type",
+			modName:  "table",
+			relPath:  "",
+			funcName: "rows",
+			args: []Type{Table{Columns: []TableColumn{
+				{Name: "Name", ElemType: StrH{}},
+				{Name: "Score", ElemType: I64},
+			}}},
+			expected: "Pt_5table_p_4rows_f1_Table_t4_5nName_StrH_6nScore_I64",
 		},
 		{
 			name:     "with func type",

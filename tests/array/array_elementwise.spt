@@ -1,5 +1,5 @@
 # Test element-wise array-array operations
-# Result length is min(len(arr1), len(arr2)) (zip semantics)
+# Each result dimension is the minimum corresponding input dimension.
 # No implicit padding; extra elements are ignored.
 
 # Same length arrays
@@ -99,3 +99,26 @@ polyZip = 1 + 4x * y^2 + 3x^2 * y + x^3 * y^3
 # Multi-variable polynomial with mixed powers and addition (zip-to-min)
 polyAdd = 2x^2 + 3y^3 + 5x * y + 7
 "Poly zip add mix: -polyAdd"
+
+# Rank-N arrays zip every dimension to its minimum. Source strides may differ.
+rank2ZipLeft = [
+    1 2 3
+    4 5 6
+]
+rank2ZipRight = [
+    10 20
+    30 40
+    50 60
+]
+rank2Zip = rank2ZipLeft + rank2ZipRight
+"Rank 2 zip: -rank2Zip"
+
+rank3ZipLeft = [
+    [1 2 3] [4 5 6]
+    [7 8 9] [10 11 12]
+]
+rank3ZipRight = [
+    [100 200] [300 400] [500 600]
+]
+rank3Zip = rank3ZipLeft + rank3ZipRight
+"Rank 3 zip: -rank3Zip"

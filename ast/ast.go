@@ -278,7 +278,7 @@ type StringLiteral struct {
 
 func (sl *StringLiteral) expressionNode()  {}
 func (sl *StringLiteral) Tok() token.Token { return sl.Token }
-func (sl *StringLiteral) String() string   { return sl.Token.Literal }
+func (sl *StringLiteral) String() string   { return `"` + sl.Token.Literal + `"` }
 
 // RangeLiteral represents start:stop[:step]
 type RangeLiteral struct {
@@ -300,7 +300,8 @@ func (rl *RangeLiteral) String() string {
 
 type ArrayLiteral struct {
 	Token   token.Token      // the '[' token
-	Headers []string         // column headers (empty for matrices)
+	Block   bool             // '[' is followed by a newline; source rows form two layout axes
+	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
 }
@@ -310,41 +311,49 @@ func (al *ArrayLiteral) Tok() token.Token { return al.Token }
 func (al *ArrayLiteral) String() string {
 	var out bytes.Buffer
 	out.WriteString("[")
+	if len(al.Headers) == 0 && !al.Block {
+		if len(al.Rows) == 1 {
+			writeArrayRow(&out, al.Rows[0])
+		}
+		out.WriteString("]")
+		return out.String()
+	}
 
 	// Print headers if present
 	if len(al.Headers) > 0 {
-		out.WriteString("\n  :  ") // 2 spaces after :
+		out.WriteString("\n  : ")
 		for j, header := range al.Headers {
 			if j > 0 {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
 		}
-		out.WriteString("\n")
 	}
 
 	// Print rows
 	for _, row := range al.Rows {
-		if len(al.Headers) > 0 {
-			out.WriteString("     ") // 5 spaces for header tables
-		} else {
-			out.WriteString("    ") // 4 spaces for matrices
-		}
-		for j, expr := range row {
-			if j > 0 {
-				out.WriteString(" ")
-			}
-			if expr != nil {
-				out.WriteString(expr.String())
-			} else {
-				out.WriteString("<nil>")
-			}
-		}
-		out.WriteString("\n")
+		out.WriteString("\n    ")
+		writeArrayRow(&out, row)
 	}
 
+	if al.Block || len(al.Headers) > 0 || len(al.Rows) > 0 {
+		out.WriteString("\n")
+	}
 	out.WriteString("]")
 	return out.String()
+}
+
+func writeArrayRow(out *bytes.Buffer, row []Expression) {
+	for i, expr := range row {
+		if i > 0 {
+			out.WriteString(" ")
+		}
+		if expr == nil {
+			out.WriteString("<nil>")
+			continue
+		}
+		out.WriteString(expr.String())
+	}
 }
 
 // StructLiteral represents a struct value declared in .pt code mode.
@@ -627,6 +636,7 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 		}
 		return &ArrayLiteral{
 			Token:   e.Token,
+			Block:   e.Block,
 			Headers: append([]string(nil), e.Headers...),
 			Rows:    rows,
 			Indices: maps.Clone(e.Indices),

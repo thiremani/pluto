@@ -53,6 +53,8 @@ func defaultSpecifier(t Type) (string, error) {
 	case ArrayKind:
 		// Arrays are converted to char* via runtime helpers
 		return "%s", nil
+	case TableKind:
+		return "%s", nil
 	case ArrayRangeKind:
 		return "%s", nil
 	case StructKind:
@@ -464,7 +466,10 @@ func (c *Compiler) tryFormatArrayElements(tok token.Token, value string, mainSym
 	}
 
 	arr := mainSym.Type.(Array)
-	elementType := arr.ColTypes[0]
+	if arr.Rank != 1 {
+		return formattedMarker{}, false, nil
+	}
+	elementType := arr.ElemType
 	conversion := rune(spec.text[len(spec.text)-1])
 	if !arrayElementSupportsSpecifier(elementType, conversion) {
 		return formattedMarker{}, false, nil
@@ -594,7 +599,16 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)
 	case ArrayKind:
+		arrType := mainSym.Type.(Array)
+		if arrType.Rank == 1 && !hasConcreteArrayElemType(arrType.ElemType) {
+			result.args = append(result.args, c.constCString("[]"))
+			break
+		}
 		strPtr := c.arrayStrArg(mainSym)
+		result.args = append(result.args, strPtr)
+		result.toFree = append(result.toFree, strPtr)
+	case TableKind:
+		strPtr := c.tableStrArg(mainSym)
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)
 	case StructKind:

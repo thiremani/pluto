@@ -9,8 +9,31 @@ ProdReverse: [5 10]
 SumProductScalar: 5
 ProdScalar: 6
 SquareScalar: 49
+MatrixIdentity: [
+    1 2
+    3 4
+]
+TableIdentity: [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+EmptyTableIdentity: [
+  : Name Score
+]
+TableCallColumn: [10 12]
+GatedTableColumn: ["" "Lin"]
 DirectConcatScalar: [0]
 DirectConcatRange: [0 1 2 3 4]
+ConcatElemDirect: [1]
+ConcatElemNamed: [2]
+ConcatElemEmptyNamed: []
+ConcatElemInPlace: [3]
+ConcatEmpty: []
+IdentityEmpty: []
+BeforeEmptyReset: [9]
+AfterEmptyReset: []
+EmptyResetKeepsType: [4]
 SquareVecRange: [0 1 4 9 16]
 SquareInline: [0 1 4 9 16]
 SquareSameDriver: [4 5 8 13 20]

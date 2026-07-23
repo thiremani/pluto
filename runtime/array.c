@@ -328,52 +328,145 @@ static int strbuf_format_str(StrBuf* sb, const char* fmt, int dynamic_arg_count,
                                  value ? value : "");
 }
 
-const char* arr_i64_str(const PtArrayI64* a) {
+static int strbuf_array_cell(StrBuf* sb, const void* values, int32_t kind, size_t index) {
+    switch (kind) {
+    case PT_ELEM_I64:
+        return strbuf_printf(sb, "%lld", (long long)arr_i64_get((const PtArrayI64*)values, index));
+    case PT_ELEM_F64: {
+        double value = arr_f64_get((const PtArrayF64*)values, index);
+        const char* special = f64_special_str(value);
+        return special ? strbuf_printf(sb, "%s", special) : strbuf_printf(sb, "%g", value);
+    }
+    case PT_ELEM_STR: {
+        char* quoted = str_quote(arr_str_borrow((const PtArrayStr*)values, index));
+        if (!quoted) return -1;
+        int result = strbuf_printf(sb, "%s", quoted);
+        free(quoted);
+        return result;
+    }
+    default:
+        return -1;
+    }
+}
+
+static int strbuf_indent(StrBuf* sb, size_t depth) {
+    if (strbuf_printf(sb, "\n") < 0) return -1;
+    for (size_t i = 0; i < depth; ++i) {
+        if (strbuf_printf(sb, "    ") < 0) return -1;
+    }
+    return 0;
+}
+
+static int strbuf_array_nd(StrBuf* sb, const void* values, int32_t kind, size_t rank,
+                           const size_t* dimensions, size_t depth, size_t* value_index) {
+    if (strbuf_printf(sb, "[") < 0) return -1;
+
+    if (rank == 1) {
+        for (size_t i = 0; i < dimensions[0]; ++i) {
+            if (i > 0 && strbuf_printf(sb, " ") < 0) return -1;
+            if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+        }
+    } else if (rank == 2 && dimensions[0] > 0 && dimensions[1] == 0) {
+        /* Empty rows need explicit child arrays because blank block rows carry no shape. */
+        for (size_t row = 0; row < dimensions[0]; ++row) {
+            if (row > 0 && strbuf_printf(sb, " ") < 0) return -1;
+            if (strbuf_printf(sb, "[]") < 0) return -1;
+        }
+    } else {
+        /* Block layout consumes two dimensions; each cell prints the remaining rank. */
+        for (size_t row = 0; row < dimensions[0]; ++row) {
+            if (strbuf_indent(sb, depth + 1) < 0) return -1;
+            for (size_t col = 0; col < dimensions[1]; ++col) {
+                if (col > 0 && strbuf_printf(sb, " ") < 0) return -1;
+                if (rank == 2) {
+                    if (strbuf_array_cell(sb, values, kind, (*value_index)++) < 0) return -1;
+                } else if (strbuf_array_nd(sb, values, kind, rank - 2, dimensions + 2,
+                                           depth + 1, value_index) < 0) {
+                    return -1;
+                }
+            }
+        }
+        if (strbuf_indent(sb, depth) < 0) return -1;
+    }
+
+    return strbuf_printf(sb, "]");
+}
+
+const char* array_nd_str(const void* values, int32_t kind, size_t rank,
+                         const size_t* dimensions) {
     StrBuf sb = {malloc(256), 0, 256};
     if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_i64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        if (strbuf_printf(&sb, "%lld", (long long)arr_i64_get(a, i)) < 0) { free(sb.data); return NULL; }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
+
+    if (rank == 0 || !dimensions) goto fail;
+    size_t value_index = 0;
+    if (strbuf_array_nd(&sb, values, kind, rank, dimensions, 0, &value_index) < 0) goto fail;
     return sb.data;
+
+fail:
+    free(sb.data);
+    return NULL;
+}
+
+/* Aborts the process; called from generated code when a runtime shape check
+ * fails while stacking or concatenating arrays. Static shape mismatches are
+ * compile errors instead. */
+void array_shape_fail(size_t expected, size_t got) {
+    fprintf(stderr, "pluto: array shape mismatch: expected dimension %zu, got %zu\n",
+            expected, got);
+    fflush(stderr);
+    abort();
+}
+
+const char* table_str(size_t rows, size_t cols, const char* const* names,
+                      const int32_t* kinds, const void* const* columns) {
+    StrBuf sb = {malloc(256), 0, 256};
+    if (!sb.data) return NULL;
+
+    int has_headers = 0;
+    for (size_t col = 0; col < cols; ++col) {
+        if (names[col][0] != '\0') {
+            has_headers = 1;
+            break;
+        }
+    }
+
+    if (strbuf_printf(&sb, "[") < 0) goto fail;
+    if (has_headers) {
+        if (strbuf_printf(&sb, "\n  : ") < 0) goto fail;
+        for (size_t col = 0; col < cols; ++col) {
+            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+            if (strbuf_printf(&sb, "%s", names[col]) < 0) goto fail;
+        }
+    }
+    for (size_t row = 0; row < rows; ++row) {
+        if (strbuf_printf(&sb, "\n    ") < 0) goto fail;
+        for (size_t col = 0; col < cols; ++col) {
+            if (col > 0 && strbuf_printf(&sb, " ") < 0) goto fail;
+            if (strbuf_array_cell(&sb, columns[col], kinds[col], row) < 0) goto fail;
+        }
+    }
+    if ((has_headers || rows > 0) && strbuf_printf(&sb, "\n") < 0) goto fail;
+    if (strbuf_printf(&sb, "]") < 0) goto fail;
+    return sb.data;
+
+fail:
+    free(sb.data);
+    return NULL;
+}
+
+const char* arr_i64_str(const PtArrayI64* a) {
+    size_t length = arr_i64_len(a);
+    return array_nd_str(a, PT_ELEM_I64, 1, &length);
 }
 
 const char* arr_f64_str(const PtArrayF64* a) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    for (size_t i = 0; i < arr_f64_len(a); ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        double val = (double)arr_f64_get(a, i);
-        // Handle special values using common formatting function
-        const char *special = f64_special_str(val);
-        if (special) {
-            if (strbuf_printf(&sb, "%s", special) < 0) { free(sb.data); return NULL; }
-        } else {
-            if (strbuf_printf(&sb, "%g", val) < 0) { free(sb.data); return NULL; }
-        }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_f64_len(a);
+    return array_nd_str(a, PT_ELEM_F64, 1, &length);
 }
 
 const char* arr_str_str(const PtArrayStr* a) {
-    StrBuf sb = {malloc(256), 0, 256};
-    if (!sb.data) return NULL;
-    if (strbuf_printf(&sb, "[") < 0) { free(sb.data); return NULL; }
-    size_t n = arr_str_len(a);
-    for (size_t i = 0; i < n; ++i) {
-        if (i > 0 && strbuf_printf(&sb, " ") < 0) { free(sb.data); return NULL; }
-        char* quoted = str_quote(arr_str_borrow(a, i));
-        if (!quoted) { free(sb.data); return NULL; }
-        int ok = strbuf_printf(&sb, "%s", quoted);
-        free(quoted);
-        if (ok < 0) { free(sb.data); return NULL; }
-    }
-    if (strbuf_printf(&sb, "]") < 0) { free(sb.data); return NULL; }
-    return sb.data;
+    size_t length = arr_str_len(a);
+    return array_nd_str(a, PT_ELEM_STR, 1, &length);
 }
 
 const char* arr_i64_format(const PtArrayI64* a, const char* fmt,

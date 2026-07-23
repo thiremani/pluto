@@ -6,7 +6,8 @@ This document describes Pluto's semantic model and compares it with other major 
 
 1. **Assignment is Copy:** `a = b` creates a new independent value (Snapshot).
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
-3. **Slices are Views:** `s = arr[i]` (where `i` is a Range) is a reference to `arr`.
+3. **Range Selections are Views:** `s = arr[i]` (where `i` is a Range)
+   borrows `arr`; `[]` materializes the selection.
 4. **Ranges are Loop Syntax:** `x = i + 1` generates a loop, not a lazy type.
 5. **Zero-Value Initialization:** Variables in range expressions auto-initialize to zero.
 6. **IterName Determines Looping:** Same range variable → zip, different → cartesian.
@@ -23,7 +24,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Assignment (`a=b`)** | **Copy** | Reference | Move / Copy | Copy | Reference | Copy |
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
-| **Slicing (`a[:]`)** | **View** | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
+| **Range selection (`a[range]`)** | **Borrowed view** | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
 | **Range Usage** | **Loop Syntax** (Immediate) | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
@@ -88,7 +89,7 @@ s := arr[0:2]
 s[0] = 99                    // Mutates arr via s
 ```
 
-**Pluto:** "Arrays are Values, Slices are Views with Locking."
+**Pluto:** "Arrays are Values, Range Selections are Views with Locking."
 
 ```python
 arr = [1 2 3 4 5]
@@ -110,9 +111,11 @@ a[1:5]                       # Copy by default
 @view a[1:5]                 # View (explicit)
 ```
 
-**Pluto:** Slicing `arr[i]` creates a **View** by default.
+**Pluto:** A range-valued `arr[i]` creates an `ArrayRange` view. Wrapping the
+access as `[arr[i]]` materializes the selected values.
 
-**Difference:** Pluto favors Views for slicing (like Go/Rust), Julia favors Copies unless explicitly requested.
+**Difference:** Pluto separates range views from explicit collection, while
+Julia copies a range selection unless a view is requested explicitly.
 
 ---
 
@@ -125,7 +128,8 @@ a[1:5]                       # Copy by default
 // No hidden allocations.
 ```
 
-**Pluto:** Similar model. `ArrayRange` is essentially a Zig slice.
+**Pluto:** `ArrayRange` similarly borrows an array and carries an iteration
+range, but Pluto does not expose a separate slice type.
 
 **Difference:** Pluto manages memory automatically (scope-based), Zig is manual.
 
@@ -144,7 +148,9 @@ y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-No lazy types - intermediate variables store scalar results.
+Bare ranged expressions execute as loop drivers rather than becoming lazy
+values. An explicit range-indexed array access is the separate borrowed-view
+case described above.
 
 ### IterName Determines Loop Structure
 
@@ -170,6 +176,22 @@ result = x * y   # Nested loops: i × j
 | **Last Value** | `x = i + 1` | Loop runs, x = last value |
 | **Accumulate** | `x += i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
+
+### Statement gates and value-position `&&`
+
+A condition before a statement value is a shared statement gate. It admits or
+rejects each point of the statement's outer iteration domain for every RHS
+expression and output. If a point is rejected, no sibling RHS evaluation,
+collector append, carried update, or output commit runs for that point. Any
+RHS-local ranges run inside the admitted points.
+
+An `&&` inside a value has narrower scope. It evaluates its right side lazily
+when the left yields and propagates failure only through that value. It does
+not gate sibling RHS expressions or the statement's shared iteration domain.
+The planned `[i && [matrix[i][j]]]` construction uses this local meaning to bind
+a nested range domain. Its collector-placement and fallback rules belong to
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction)
+and remain deferred until PIR represents those scopes directly.
 
 ### Conditional Assignment
 

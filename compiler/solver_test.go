@@ -287,6 +287,135 @@ func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 	require.True(t, IsStrH(dotTypes[0]), "dot access should reflect widened field flavor")
 }
 
+func TestCollectionTypeErrors(t *testing.T) {
+	cases := []struct {
+		name        string
+		script      string
+		expectError string
+	}{
+		{
+			name:        "DuplicateTableHeader",
+			script:      "table = [\n    :Name Name\n    \"Ada\" \"A\"\n]",
+			expectError: `duplicate table column "Name"`,
+		},
+		{
+			name:        "RaggedTableRow",
+			script:      "table = [\n    :Name Score\n    \"Ada\"\n]",
+			expectError: "bracket literal row 1 has 1 cells, expected 2",
+		},
+		{
+			name:        "RangedTableCell",
+			script:      "i = 0:3\ntable = [\n    :Value\n    i\n]",
+			expectError: "table rows require statically sized cells",
+		},
+		{
+			name:        "RaggedArrayRow",
+			script:      "arr = [\n    1 0\n    0\n]",
+			expectError: "bracket literal row 2 has 1 cells, expected 2",
+		},
+		{
+			name:        "IndexEmptyArray",
+			script:      "empty = []\nempty[0]",
+			expectError: "cannot index an empty array without an element type",
+		},
+		{
+			name:        "ArrayTypeStaysLockedAfterEmptyReset",
+			script:      "arr = [1]\narr = []\narr = [1.5]",
+			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [F64]. Identifier "arr"`,
+		},
+		{
+			name:        "Rank2EmptyIsNotRank1Reset",
+			script:      "arr = [1]\narr = [[]]",
+			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [[Empty]]. Identifier "arr"`,
+		},
+		{
+			name:        "StackRankMismatch",
+			script:      "m = [[1 2] [[3 4]]]\nm",
+			expectError: "cannot stack rank-1 and rank-2 arrays",
+		},
+		{
+			name:        "StackShapeMismatch",
+			script:      "m = [[1 2] [3 4 5]]\nm",
+			expectError: "cannot stack arrays with shapes [2] and [3]",
+		},
+		{
+			name:        "MixedScalarAndArrayCells",
+			script:      "m = [[1 2] 3]\nm",
+			expectError: "cannot mix scalar and array-valued cells in the same array literal",
+		},
+		{
+			name:        "ConcatRankMismatch",
+			script:      "flat = [1 2]\nnested = [[3 4] [5 6]]\njoined = flat ⊕ nested\njoined",
+			expectError: "cannot concatenate arrays with different ranks: 1 and 2",
+		},
+		{
+			name:        "RangeIndexOnRank2",
+			script:      "m = [\n    1 2\n    3 4\n]\nsub = m[0:2]\nsub",
+			expectError: "range indexing is currently supported only for rank-1 arrays",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+
+			sl := lexer.New(tc.name+".spt", tc.script)
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Contains(t, ts.Errors[0].Msg, tc.expectError)
+		})
+	}
+}
+
+func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	program := mustParseScript(t, `empty = ([] + []) ⊕ ["x"]
+mixed = [1] + [2.5]
+locked = [1]
+locked = []`)
+	cc := NewCodeCompiler(ctx, "arrayOperandTypes", "", ast.NewCode())
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	emptyStmt := program.Statements[0].(*ast.LetStatement)
+	emptyOuter := emptyStmt.Value[0].(*ast.InfixExpression)
+	emptyInner := emptyOuter.Left.(*ast.InfixExpression)
+	emptyInnerType := ts.ExprCache[key(ts.FuncNameMangled, emptyInner)].OutTypes[0].(Array)
+	emptyOuterType := ts.ExprCache[key(ts.FuncNameMangled, emptyOuter)].OutTypes[0].(Array)
+	require.Equal(t, EmptyKind, emptyInnerType.ElemType.Kind())
+	require.Equal(t, StrKind, emptyOuterType.ElemType.Kind())
+
+	mixedStmt := program.Statements[1].(*ast.LetStatement)
+	mixed := mixedStmt.Value[0].(*ast.InfixExpression)
+	mixedLeftType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Left)].OutTypes[0].(Array)
+	mixedRightType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Right)].OutTypes[0].(Array)
+	mixedType := ts.ExprCache[key(ts.FuncNameMangled, mixed)].OutTypes[0].(Array)
+	require.Equal(t, IntKind, mixedLeftType.ElemType.Kind())
+	require.Equal(t, FloatKind, mixedRightType.ElemType.Kind())
+	require.Equal(t, FloatKind, mixedType.ElemType.Kind())
+
+	resetStmt := program.Statements[3].(*ast.LetStatement)
+	resetType := ts.ExprCache[key(ts.FuncNameMangled, resetStmt.Value[0])].OutTypes[0].(Array)
+	bindingType := ts.BindingTypes[BindingKey{Name: "locked"}].(Array)
+	require.Equal(t, EmptyKind, resetType.ElemType.Kind())
+	require.Equal(t, IntKind, bindingType.ElemType.Kind())
+}
+
 func TestArrayConcatTypeErrors(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayConcatErrors", "", ast.NewCode())
@@ -347,11 +476,8 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected array type, got %T", resType)
 	}
-	if len(arrType.ColTypes) != 1 {
-		t.Fatalf("expected single-column array type")
-	}
-	if arrType.ColTypes[0].Kind() != FloatKind {
-		t.Fatalf("expected float array result, got %s", arrType.ColTypes[0].String())
+	if arrType.ElemType.Kind() != FloatKind {
+		t.Fatalf("expected float array result, got %s", arrType.ElemType.String())
 	}
 }
 
@@ -851,7 +977,7 @@ func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 
 	outArr, ok := info.OutTypes[0].(Array)
 	require.True(t, ok, "expected scalar-array mask output type to be array")
-	require.Equal(t, IntKind, outArr.ColTypes[0].Kind(), "scalar-array mask should keep scalar LHS element type")
+	require.Equal(t, IntKind, outArr.ElemType.Kind(), "scalar-array mask should keep scalar LHS element type")
 }
 
 func TestArrayLiteralRangesRecording(t *testing.T) {
@@ -909,7 +1035,7 @@ func TestArrayRangeTyping(t *testing.T) {
 	require.True(t, ok, "expected value identifier")
 	value, ok := valueType.(ArrayRange)
 	require.Truef(t, ok, "expected value to be ArrayRange, got %T", valueType)
-	require.EqualValues(t, value.Array.ColTypes[0], Int{Width: 64})
+	require.EqualValues(t, value.Array.ElemType, Int{Width: 64})
 	require.EqualValues(t, value.Range, Range{Iter: Int{Width: 64}})
 
 	sumType, ok := ts.GetIdentifier("sum")

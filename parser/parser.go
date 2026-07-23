@@ -1110,6 +1110,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	}
 
 	p.nextToken() // consume the '[' token
+	arr.Block = p.curTokenIs(token.NEWLINE)
 
 	for p.curTokenIs(token.NEWLINE) {
 		p.nextToken()
@@ -1120,7 +1121,15 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 
 	// Parse headers if present
 	if p.curTokenIs(token.COLON) {
+		headerToken := p.curToken
 		p.nextToken() // consume ':'
+		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: headerToken,
+				Msg:   "expected at least one column header after ':'",
+			})
+			return nil
+		}
 		if !p.parseHeader(arr) {
 			return nil
 		}
@@ -1146,6 +1155,9 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 			Msg:   "expected ']' to close array literal",
 		})
 		return nil
+	}
+	if len(arr.Headers) == 0 && len(arr.Rows) > 1 {
+		arr.Block = true
 	}
 	// Do not consume the closing ']' here. Align with grouped-expression
 	// behavior and leave curToken at the closing token; callers (statement

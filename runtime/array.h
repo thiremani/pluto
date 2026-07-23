@@ -74,6 +74,17 @@ const char* arr_f64_format(const PtArrayF64* a, const char* fmt,
 const char* arr_str_format(const PtArrayStr* a, const char* fmt,
                           int dynamic_arg_count, int first_arg, int second_arg);
 
+typedef enum {
+    PT_ELEM_I64,
+    PT_ELEM_F64,
+    PT_ELEM_STR
+} PtElementKind;
+
+const char* array_nd_str(const void* values, int32_t kind, size_t rank, const size_t* dimensions);
+void array_shape_fail(size_t expected, size_t got);
+const char* table_str(size_t rows, size_t cols, const char* const* names,
+                      const int32_t* kinds, const void* const* columns);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

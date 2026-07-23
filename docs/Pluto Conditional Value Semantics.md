@@ -18,6 +18,34 @@ the old value on failure; conditions inside the value propagate their failure to
 the nearest resolver — `=` keeps the old value, a collector cell zero-fills, and
 `||` supplies the fallback.**
 
+Only the first form is a **statement gate**. It admits or rejects a shared
+iteration point for every RHS expression and output in the statement. An `&&`
+inside a value is a local value operator: it evaluates its right side lazily
+when the left yields and propagates failure only through that containing value.
+It does not gate the statement's iteration domain or its sibling RHS
+expressions.
+
+### Outcome and circuit model
+
+A useful semantic model is that each value-producing operation has an abstract
+outcome `(value, yielded)`, analogous to a circuit lane carrying `(data, valid)`.
+This is not a Pluto tuple or a required runtime representation. The yield state
+may be scalar, per output slot, per array element, or per range iteration,
+depending on the value's domain.
+
+The value and yield state are distinct: a successful condition may yield the
+value `0`, while a failed condition yields no value. A statement gate consumes
+the condition's yield state as a shared execution-enable signal. If it is off,
+the iteration transaction does not exist and no RHS or output commit runs. A
+value-position condition instead leaves the transaction in place and propagates
+its local missing outcome to the nearest resolver. Assignment keeps old,
+collectors preserve shape with zero-fill, and `||` supplies alternate data.
+
+In short: **a statement gate controls whether an iteration transaction exists;
+a value condition controls whether one data lane yields within an existing
+transaction.** Filtering versus masking is the collection-level consequence of
+that distinction.
+
 ## Statement gate: keep-old
 
 A condition before the value gates the assignment. If it fails, no assignment
@@ -95,7 +123,7 @@ y > 2          # yields y when y > 2, else fails    (the value is the left opera
 y > 2 && 3     # yields 3 when y > 2, else fails
 ```
 
-`cond && value` is the value-position gating AND: it yields its **right** side
+`cond && value` is the value-position conditional AND: it yields its **right** side
 when the left yields. Chains are last-wins (`a > 2 && b > 3 && 10` is `10` only
 when both hold), and the right side is **lazy** — evaluated at most once, only
 when the left yielded. Propagation composes through arithmetic:
@@ -194,6 +222,23 @@ is `[0]` (not `[]`), and `[a > 2  a > 99]` is `[5 0]` (not empty or kept-old).
 An `&&` cell propagates into the same resolution: `[b > 2 && 5]` zero-fills when
 the condition fails, and `[b > 2 && 5 || -1]` takes the fallback instead.
 
+For planned nested range construction after PIR migration, the same rule
+extends recursively to array-valued cells. A failed child contributes a
+zero-filled array of its expected shape; an explicit array fallback overrides
+it:
+
+```pluto
+[i > 0 && [F(i, j)]]                  # failed i positions get a zero row
+[i > 0 && [F(i, j)] || [j && -1]]    # failed i positions get a -1 row
+```
+
+The expected child shape must be known or derivable from bound range domains.
+When it is not, the source must supply a shape-bearing fallback such as
+`|| [j && 0]` for a zero row or `|| [j && -1]` for a different fill value.
+Pluto never invents an empty, padded, or flattened child. This is value-position
+resolution and preserves the outer domain; a statement gate instead rejects
+the complete iteration point.
+
 Spacing separates cells, and operators glue their operands into one cell:
 
 ```pluto
@@ -205,8 +250,9 @@ A direct array comparison follows the same rule element-wise: `arr > k` is a
 **mask** — each cell keeps its left value where the comparison holds, else 0, *in
 place* (length- and position-preserving). It is the scalar "yield the left
 operand, else 0" applied per element, so it stays consistent with the collector
-cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips to the
-shorter length, `arr > scalar` spans the array and broadcasts the scalar.
+cell above and with array arithmetic (`+`, `*`): `arr1 > arr2` zips each
+dimension to its minimum, while `arr > scalar` spans the array and broadcasts
+the scalar.
 
 ```pluto
 [1 3 5 7] > [0 4 4 8]    # [1 0 5 0]   (failed cells masked to 0, in place)
@@ -310,8 +356,8 @@ documented full-control opt-in.
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
-  arithmetic, and `||`/`&&` by one extraction pass; the value-position gating
-  `&&` (yields its right side per slot, lazy right, last-wins chains, binds
+  arithmetic, and `||`/`&&` by one extraction pass; the value-position
+  conditional `&&` (yields its right side per slot, lazy right, last-wins chains, binds
   tighter than `||`, so `c && v || w` is a per-slot if-else); conditions are
   value positions, so chained comparisons gate directly (`i > 2 < 8`,
   leftmost-binding, including chained multi-return gates) in every condition

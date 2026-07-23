@@ -31,7 +31,7 @@ Intended for performance-sensitive scripting, numerical work, simulation, and sy
 
 **Purity:** Functions have read-only inputs and writable outputs; structs are raw data with no hidden pointers.
 
-Range-driven auto-vectorization, safe arrays and slices.
+Range-driven auto-vectorization and safe arrays.
 
 Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by construction.
 
@@ -42,7 +42,7 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - Go front-end, LLVM back-end; emits native binaries
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
-- First-class arrays (safe slicing) and link semantics
+- First-class rectangular arrays of any rank, columnar tables, and link semantics
 - Scope-based memory: no nulls, no out-of-bounds, no garbage collector
 - printf-style formatting; arrays/ranges printable
 - Cross-platform (Linux/macOS/Windows)
@@ -196,6 +196,48 @@ y = [1.1 2.2 3.3]
 ```
 
 Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
+
+The same bracket syntax infers higher-rank arrays and tables without a type keyword:
+
+```python
+matrix = [
+    1 2
+    3 4
+]
+
+cube = [
+    [1 2] [3 4]
+    [5 6] [7 8]
+]
+
+scores = [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+```
+
+Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
+where `[` is followed by a newline, contributes row and column axes even when
+it contains one row. Thus the matrix above is equivalent to
+`[[1 2] [3 4]]`. Use `\` to continue a long inline array across physical
+lines without starting block layout. Array-valued cells stack recursively
+while storage remains flat and row-major. Ragged literals are compile errors.
+
+A header row produces a columnar table, with named columns projected as arrays
+such as `scores.Score`. The shown hanging `:` is the preferred layout because
+the first header aligns with the first value; spacing within header and data
+rows is otherwise non-semantic.
+
+The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
+functions, and acts as the empty operand when concatenated with a concrete
+array. The concatenation result takes the concrete element type without
+retyping the empty expression. Once a variable has a concrete array type,
+assigning `[]` empties its value but preserves that element type. Operations
+such as indexing or arithmetic still require a concrete element type.
+
+See [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for complete
+inference, shape, indexing, empty-value, and table rules.
 
 String-array elements print quoted so boundaries stay unambiguous:
 

@@ -1,7 +1,4 @@
-arrInt =
-[
-  1 2 3 4
-]
+arrInt = [1 2 3 4]
 arrInt
 "arr is -arrInt"
 arrIntWidth = 4
@@ -10,10 +7,7 @@ arrIntWidth = 4
 arrChars = [65 0 66 256]
 "arr chars: |-arrChars%5c|"
 
-arrFloat =
-[
-  1.5 -2.5 3 4.25
-]
+arrFloat = [1.5 -2.5 3 4.25]
 arrFloat
 "arr is -arrFloat"
 "arr float fixed: |-arrFloat%7.2f|"
@@ -21,10 +15,7 @@ arrWidth = 7
 arrPrecision = 1
 "arr float dynamic: |-arrFloat%(-arrWidth).(-arrPrecision)f|"
 
-arrStr =
-[
-  "foo" "bar" "baz"
-]
+arrStr = ["foo" "bar" "baz"]
 arrStr
 "arr is -arrStr"
 "arr str raw: -arrStr%s"
@@ -37,9 +28,131 @@ arr2 = [1 2 3 4]
 arr2
 "arr2 is -arr2"
 
-# bracket on same line, then rows on next line(s)
-arr3 = [
-  1.1 2.3 4 2.1
-]
+# line continuation keeps an inline literal rank 1
+arr3 = [1.1 2.3 \
+    4 2.1]
 arr3
 "arr3 is -arr3"
+
+oneRowMatrix = [
+    1 2 3
+]
+"one-row matrix: -oneRowMatrix"
+
+matrix =
+[
+    1 2.5
+    3 4
+]
+"matrix: -matrix"
+
+firstRow = [1 2]
+nestedMatrix = [firstRow [3 4]]
+"nested matrix: -nestedMatrix"
+matrixRow = nestedMatrix[1]
+matrixCell = matrixRow[0]
+"matrix row: -matrixRow"
+"matrix cell: -matrixCell"
+
+rowRange = 0:2
+selectedRows = [nestedMatrix[rowRange]]
+"selected rows: -selectedRows"
+
+rowRangeOOB = 1:4
+selectedRowsOOB = [nestedMatrix[rowRangeOOB]]
+"selected rows OOB: -selectedRowsOOB"
+
+stackedRowOOB = [nestedMatrix[0] nestedMatrix[3]]
+"stacked row OOB: -stackedRowOOB"
+
+nestedMatrix = []
+nestedMatrix = nestedMatrix ⊕ [[5 6]]
+"reset matrix: -nestedMatrix"
+
+rank3 = [
+    [1 2] [3 4]
+    [5 6] [7 8]
+]
+"rank 3: -rank3"
+rank3Plus = rank3 + 1
+"rank 3 plus: -rank3Plus"
+rank3Cell = rank3[1][0][1]
+"rank 3 cell: -rank3Cell"
+
+stringMatrix = [
+    "Ada" ""
+    "Lin" "Mae"
+]
+stringMatrixRow = stringMatrix[0]
+"string matrix: -stringMatrix"
+"string matrix row: -stringMatrixRow"
+
+scores =
+[
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+"table: -scores"
+scoreColumn = scores.Score
+"table scores: -scoreColumn"
+scores =
+[
+  : Name Score
+    "Mae" 20
+]
+"replacement table: -scores"
+"saved table scores: -scoreColumn"
+
+emptyArray = []
+"empty array: -emptyArray"
+emptyMatrix = [
+]
+"empty matrix: -emptyMatrix"
+rank2Refined = [[]]
+"rank 2 empty: -rank2Refined"
+rank2Refined = [[9]]
+"rank 2 refined: -rank2Refined"
+emptyConcat = [] ⊕ []
+"empty concat: -emptyConcat"
+nestedEmptyConcat = ([] ⊕ []) ⊕ ["xxa"]
+"nested empty concat: -nestedEmptyConcat"
+emptyAdd = [] + []
+"empty add: -emptyAdd"
+emptyCompare = [] > []
+"empty comparison: -emptyCompare"
+emptyAdd = emptyAdd ⊕ [1]
+"refined empty add: -emptyAdd"
+
+emptyTable =
+[
+  : Name Score
+]
+"empty table: -emptyTable"
+emptyScoreColumn = emptyTable.Score
+"empty score column: -emptyScoreColumn"
+emptyScoreSum = emptyTable.Score + [1]
+"empty score sum: -emptyScoreSum"
+typedEmptyScores = emptyTable.Score ⊕ [7 8]
+"typed empty scores: -typedEmptyScores"
+
+refinedEmptyTable = [
+  : Name Score
+]
+"initial empty table: -refinedEmptyTable"
+refinedEmptyTable = [
+  : Name Score
+    "Ada" 10
+]
+"refined empty table: -refinedEmptyTable"
+refinedEmptyTable = [
+  : Name Score
+]
+"reset empty table: -refinedEmptyTable"
+
+inferredTable =
+[
+    1 "a"
+    2 "b"
+]
+"inferred table: -inferredTable"

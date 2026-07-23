@@ -18,7 +18,7 @@ It answers four questions for each statement:
 1. What state or collectors must exist before evaluation?
 2. Over which ranges and conditions should the statement execute?
 3. Which values yield, skip, accumulate, or advance on each iteration?
-4. What final values are set on the LHS after evaluation finishes?
+4. Which final outcomes are committed to the LHS after evaluation finishes?
 
 The pipeline becomes:
 
@@ -51,7 +51,7 @@ derives each slot's final effect from shared statement conditions, possibly
 empty ranges, conditional-yield propagation, potentially failing checked
 accesses, and the nearest resolver. A checked or conditional outcome is
 `MayWrite` unless a fallback or closing policy resolves every failure path
-before the final set; for example, `x = arr[i] > 0 || 0` is `MustWrite`, while
+before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, while
 `x = arr[i] > 0 || other[j] > 0` remains `MayWrite`. This matches the compiler's
 existing solver-then-CFG order, so migration requires no pass reordering.
 
@@ -65,7 +65,7 @@ PIR records source-language execution decisions:
 - Pluto types such as `Int`, `String`, and `Array(Int)`
 - LHS targets and simultaneous assignment groups
 - range bindings and nesting order
-- statement conditions and lazy value gates
+- statement gates and lazy value-position `&&`
 - fallback and yield/skip behavior
 - per-value, per-slot, per-element, and per-iteration outcomes
 - checked accesses and the scope affected by OOB
@@ -80,10 +80,19 @@ PIR does not contain:
 - SSA registers, phi nodes, allocas, pointers, loads, or stores
 - register-versus-memory decisions
 - ABI details or concrete cleanup blocks
+- generic user-program operations such as arbitrary `if`, `select`, or mutable
+  assignment
 
 Immutable plan nodes and stable IDs are sufficient. LLVM remains responsible for
 machine-level SSA and storage. A fuller value IR should be introduced only if
 Pluto later needs substantial cross-statement optimization before LLVM.
+
+PIR is implemented as typed Go nodes. Its text form may use conventional IR
+notation (`%result = operation operands : Type`), but that notation is a
+deterministic rendering of the plan tree, not a separately authored or parsed
+program. Ordinary arithmetic, calls, and indexing stay in solved `eval`
+expressions until their range, failure, or ownership behavior requires a
+dedicated semantic node.
 
 ## 3. Statement Lifecycle
 
@@ -92,9 +101,9 @@ Every assignment plan has four ordered phases:
 | Phase | Responsibility |
 | --- | --- |
 | `prepare` | Establish carried values, collectors, targets, and range inputs |
-| `execute` | Run versioned ranges, conditions, gates, fallbacks, yields, skips, collections, and carried updates |
+| `execute` | Run range domains, statement gates, value-position `&&`, fallbacks, yields, skips, collections, and carried updates |
 | `finish` | Close collectors and select final carried or collected outcomes |
-| `set` | Apply final outcomes to all LHS targets simultaneously |
+| `commit` | Apply final outcomes to all LHS targets simultaneously |
 
 The phases describe semantics, not allocations. For example, `carry sum` in
 the prepare phase does not require a stack slot; it means that reads of `sum`
@@ -108,34 +117,36 @@ PIR should use structured control plus a small Pluto-specific vocabulary:
 | --- | --- |
 | `eval(expr)` | Evaluate a solved Pluto expression or ordinary expression fragment |
 | `carry` | Declare state that may advance across iterations (prepare phase) |
-| `collector` | Declare a logical collection result before its loops (prepare phase) |
-| `for` | Iterate one resolved range domain |
-| `if` | Apply ordinary structured control |
-| `gate` | Lazily evaluate a value region only when its left outcome yields |
+| `collector` | Declare a logical collection result before its domains (prepare phase) |
+| `domain` | Execute a region once for each point in one resolved range domain |
+| `gate` | Admit one shared statement iteration; rejection suppresses every RHS outcome and iteration update |
+| `value-and` | Lazily evaluate a local value region only when its left outcome yields |
 | `fallback` | Lazily evaluate an alternative for missing outcomes |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
 | `yield` | Produce a value from the current value or cell region |
 | `skip` | Produce no value; the failure propagates to the nearest resolving region |
 | `continue` | Reject the rest of one range iteration |
-| `break` | Exit a loop because of source-language break semantics |
+| `break` | Exit a range domain because of source-language break semantics |
 | `collect` | Add a yielded cell according to the collector policy |
 | `advance` | Replace loop-carried state at the end of an iteration |
 | `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored by the builder) |
 | `finish` | Close a carry or collector into a final outcome |
-| `set` | Assign final outcomes to semantic LHS targets |
+| `commit` | Apply one simultaneous mapping from final outcomes to semantic LHS targets |
 
 Every operation corresponds to a documented language rule in the semantics
 docs; a new operation requires its rule to be written there first, so the
 vocabulary cannot grow ahead of the language.
 
-`for`, `if`, `break`, and `continue` alone are not enough. A `skip` is
-distinct from `continue`: one RHS may fail while sibling RHS expressions still
-update during the same iteration. A `skip` names no scope of its own — it propagates outward to
-the nearest resolving region (a `fallback`, a collector cell boundary, an
-`advance`, or the final `set`), mirroring the language rule that a failure
-propagates to its nearest resolver. It must remain visible to a surrounding
-`fallback` before any coarser region resolves it.
+Generic loops and branches are intentionally absent. `domain`, `gate`,
+`value-and`, `fallback`, and checked accesses record why control exists and what
+a rejected outcome means; the lowerer emits ordinary LLVM branches and loops.
+A `skip` remains distinct from `continue`: one RHS may fail while sibling RHS
+expressions still update during the same iteration. A `skip` names no scope of
+its own — it propagates outward to the nearest resolving region (a `fallback`,
+a collector cell boundary, an `advance`, or the final `commit`), mirroring the
+language rule that a failure propagates to its nearest resolver. It must remain
+visible to a surrounding `fallback` before any coarser region resolves it.
 
 ## 5. Plan Results
 
@@ -147,9 +158,17 @@ Each value-producing plan node has an abstract outcome:
 | Domain | scalar, fixed output slots, array elements, range iterations |
 | Yield shape | always, scalar condition, per-slot bits, element mask, per-iteration |
 
+Conceptually, an outcome is `(value, yielded)`, analogous to a circuit lane's
+`(data, valid)`. `yielded` has the node's yield shape rather than necessarily
+being one scalar bit. This is plan-level meaning, not a Pluto tuple, SSA pair,
+or required runtime layout.
+
 Zero is never a missing-value marker. A successful comparison may yield zero,
-so value and yield information remain conceptually separate even though PIR does
-not expose machine bits.
+so value and yield information remain conceptually separate. A `gate` consumes
+the relevant yield state as the shared statement-iteration enable. Local
+`value-and`, `map`, and `align` operations propagate yield state with their data;
+`fallback`, collector closure, `advance`, and final `commit` resolve it according
+to their documented policies.
 
 `eval` leaves may retain references to typed AST nodes. The builder splits out
 operations that affect evaluation strategy, including ranges, lazy `&&`/`||`,
@@ -157,7 +176,7 @@ conditional propagation, and collectors. Ordinary arithmetic and calls can stay
 inside `eval` or `map` regions and continue to use the existing expression
 compiler.
 
-## 6. LHS Targets and Final Set
+## 6. LHS Targets and Final Commit
 
 PIR calls LHS locations **targets**, not places or memory addresses:
 
@@ -173,9 +192,38 @@ Targets are evaluated exactly once at the phase required by Pluto's eventual
 assignment semantics. The PIR-to-LLVM lowerer chooses pointers, copies, moves,
 and cleanup paths.
 
-All RHS expressions in one assignment group are evaluated before final `set`.
-The targets are then updated simultaneously. This preserves swaps, sibling
-self-references, and ownership safety without exposing temporary storage in PIR.
+All RHS expressions in one assignment group are evaluated before the final
+`commit`. The target mappings are then applied simultaneously. This preserves
+swaps, sibling self-references, and ownership safety without exposing temporary
+storage in PIR.
+
+Every target slot and outcome has a stable plan ID. The builder records the
+exact `target <- outcome` mapping selected by the solved assignment; the lowerer
+must not reconstruct that mapping from source names, result order, or LLVM
+values. A commit group follows one transfer contract:
+
+1. Every RHS outcome is produced against the pre-commit binding snapshot.
+2. The complete outcome-to-target mapping is known before any target changes.
+3. Moves, copies, and retained borrows are planned across the whole group.
+4. All target mappings take effect simultaneously in Pluto semantics.
+5. Replaced target values are released only after no mapped outcome can still
+   reference or consume them.
+
+For example, `a, b = b, a` produces two outcomes from the same pre-commit
+snapshot and then commits the crossed mapping:
+
+```text
+%to_a = eval #expr_b : T
+%to_b = eval #expr_a : T
+
+commit simultaneous
+    @a <- %to_a
+    @b <- %to_b
+```
+
+For owned heap values, this may lower to an ownership swap without deep copies.
+If one owned source feeds multiple targets, at most one consumer can take it;
+the other owning consumers require a derived copy or materialization.
 
 ## 7. Loop-Carried State
 
@@ -188,33 +236,33 @@ arr = arr ⊕ [2]
 ```
 
 must make iteration `n + 1` observe the values produced by iteration `n`, while
-the real LHS targets are set only after the statement's range execution ends.
+the real LHS targets are committed only after the statement's range execution
+ends.
 
 PIR models this with `carry` and `advance`:
 
 ```text
-statement sum, arr
+pir.statement @update_sum_arr
     prepare
-        carry sum from local(sum)
-        carry arr from local(arr)
+        %sum.carry = carry @sum : Int
+        %arr.carry = carry @arr : Array(Int)
 
     execute
-        for i in range(0, n)
-            iteration
-                next sum from eval(carry(sum) + 1)
-                next arr from eval(carry(arr) ⊕ [2])
+        domain %i = range 0, @n
+            %sum.next = eval %sum.carry + 1 : Int
+            %arr.next = eval %arr.carry ⊕ [2] : Array(Int)
 
-                advance simultaneously
-                    carry sum from next sum on-skip keep-old
-                    carry arr from next arr on-skip keep-old
+            advance simultaneous
+                carry %sum.carry from %sum.next [on-skip=keep]
+                carry %arr.carry from %arr.next [on-skip=keep]
 
     finish
-        final sum from carry(sum)
-        final arr from carry(arr)
+        %sum.final = finish %sum.carry : Int
+        %arr.final = finish %arr.carry : Array(Int)
 
-    set simultaneously
-        local(sum) from final sum
-        local(arr) from final arr
+    commit simultaneous
+        @sum <- %sum.final
+        @arr <- %arr.final
 ```
 
 The `next` and `final` labels are plan-result names, not SSA registers or storage.
@@ -230,7 +278,14 @@ Loop-carried evaluation follows these rules:
 7. A statement-wide rejected iteration advances no carries.
 8. Nested range points advance carries in their defined lexicographic execution
    order.
-9. `finish` exposes only the final carried values to `set`.
+9. `finish` exposes only the final carried values to `commit`.
+
+Within `execute`, a read of an LHS destination resolves to that destination's
+carry, never directly to the unchanged external target. `advance simultaneous`
+updates the complete carry group only after every sibling next-outcome has been
+evaluated. Consequently the next admitted iteration sees the newly advanced
+values, while swaps and sibling self-references still observe one shared
+iteration-start snapshot.
 
 If a destination is fresh, its seed follows existing Pluto declaration and
 zero-value rules. PIR must not bypass read-before-definition validation merely
@@ -248,25 +303,34 @@ Every value-producing outcome carries an ownership annotation:
 | Annotation | Meaning |
 | --- | --- |
 | `owned` | The outcome holds heap state the plan must consume or release exactly once |
-| `borrowed` | The outcome views state owned elsewhere and is never released here |
+| `borrowed(owner, region)` | The outcome views state owned elsewhere, records its provenance and valid lifetime region, and is never released here |
 
-Consumers consume ownership: `set` moves an owned outcome into a target (or
+Consumers consume ownership: `commit` moves an owned outcome into a target (or
 copies when the source must survive), `advance` consumes it as the new carry
 and releases the replaced carry only after the iteration update is safe, and
 `collect` moves or copies it per collector policy.
 
+Ownership is scheduled for a complete simultaneous group, not one mapping at a
+time. This prevents an early target overwrite from releasing a value still used
+by another swap outcome, sibling result, or carry update.
+
 Releases are **derived, not authored**. The builder does not place cleanup:
 structured region exit implicitly discards any owned outcome no consumer
-took, on every path — a skip arm, the untaken side of a gate or fallback, a
+took, on every path — a skip arm, the untaken side of a `value-and` or fallback, a
 rejected iteration, or region end. The validator derives the release
 obligation for each owned outcome on each path and rejects a plan where one
 is consumed twice or escapes its region unconsumed. Expanded PIR prints the
 derived `drop` points so ownership regressions surface as plan diffs. The
 generic lowerer emits the actual frees from those derived obligations.
 
-Borrowed outcomes are never released here; they are copied exactly at the
-consumer that needs ownership (a `set` into a longer-lived target), never
-earlier.
+Borrowed outcomes are never released directly. The validator checks their owner
+and lifetime region. Within a simultaneous commit or advance group, a borrow
+from a target or carry that is itself being replaced may be promoted to transfer
+of that owner's old value when exactly one owning consumer takes it and no
+surviving outcome still needs the old owner. This is what permits an array or
+string swap without deep copies. Otherwise, a consumer that outlives the borrow
+receives a derived copy or materialization. Expanded PIR prints derived
+transfers and materialization points alongside derived `drop` points.
 
 Leak checks remain necessary: a correct plan can still be lowered
 incorrectly, so `--leak-check` stays the runtime backstop for the lowerer.
@@ -292,14 +356,14 @@ Failure scope must be explicit:
 | OOB in one ordinary RHS | `skip`, resolved within that RHS only |
 | Failed value-position comparison | `skip`, available to `fallback` |
 | OOB in one collector cell | `skip`, resolved at the cell boundary; the closing policy decides omit or zero-fill |
-| Failed statement without a range | Final `set` applies keep-old or zero policy |
+| Failed statement without a range | Final `commit` applies keep-old or zero policy |
 
 The normal per-iteration order is:
 
 1. Enter the range point.
 2. Evaluate shared statement conditions.
 3. Continue the range if the shared condition rejects the point.
-4. Evaluate each RHS outcome, including gates, fallbacks, and local OOB checks.
+4. Evaluate each RHS outcome, including value-position `&&`, fallbacks, and local OOB checks.
 5. Collect yielded cells and advance yielded carries simultaneously.
 
 This ordering prevents an OOB in `a = arr[i]` from suppressing a sibling update
@@ -310,18 +374,20 @@ such as `b = i + 1`.
 Collectors have an explicit lifecycle:
 
 ```text
-prepare
-    collector result : Array(Int)
+pir.statement @collect_result
+    prepare
+        %result.collector = collector : Array(Int)
 
-for i in range(0, n)
-    collect result
-        from eval(data[i])
-        on-oob skip
+    execute
+        domain %i = range 0, @n
+            %cell = eval @data[%i] : Int [on-oob=skip]
+            collect %result.collector <- %cell [policy=append-yielded]
 
-finish collector result
-    close append-yielded
+    finish
+        %result.final = finish %result.collector : Array(Int)
 
-set local(result) from collector result
+    commit simultaneous
+        @result <- %result.final
 ```
 
 Supported closing policies initially include:
@@ -346,22 +412,23 @@ index: 2*i + 1
 domain: range(0, n)
 ```
 
-The plan attaches a bounds strategy to the corresponding `for`:
+The plan attaches a bounds strategy to the corresponding `domain`:
 
 ```text
-for i in range(0, n)
-    bounds versioned
-        data[2*i + 1]
+domain %i = range 0, @n [bounds=versioned]
+    access @data[2*%i + 1] [affine]
 ```
 
-Lowering computes one guard before the loop nest:
+Lowering computes one guard before the loop nest. Its eventual LLVM control
+flow is conceptually:
 
 ```text
-if every recorded affine access is safe for the complete domain
-    run the body with those accesses unchecked
-else
-    run the same body with checked accesses
+%all_safe = affine-domain-check ...
+br %all_safe, ^fast, ^checked
 ```
+
+The fast and checked regions are two lowerings of the same PIR domain; PIR does
+not gain a generic `if` operation merely to expose that backend branch.
 
 Affine versioning does not break out of a partially executed fast loop. Switching
 after some iterations could duplicate side effects, collector appends, or carry
@@ -374,38 +441,56 @@ non-affine accesses simply remain checked.
 
 ## 12. Default Text View
 
-The primary PIR view should be deterministic, indentation-based structured text.
-It should resemble the execution plan, not Go structs, JSON, LLVM, or a CFG.
-The canonical text format uses indentation to delimit regions:
+The primary PIR view should be deterministic, indentation-based structured IR.
+It borrows the useful surface conventions of LLVM and MLIR — named outcomes,
+operation-first syntax, explicit operands, and Pluto types — without copying
+LLVM's machine-level basic blocks, phi nodes, pointers, or storage operations.
+The canonical text format uses indentation to delimit semantic regions:
 
 - exactly four ASCII spaces per nesting level
 - no tabs
 - no braces or `end` markers
 - a region ends when indentation returns to its level or an outer level
 - blank lines may separate phases but do not affect structure
+- `%name` denotes a plan outcome, binder, or semantic handle, not a machine
+  register
+- `@name` denotes a semantic target or source binding
+- operations use `%result = operation operands : PlutoType` where they produce
+  an outcome
+- square brackets contain declarative policies or facts, not executable code
 
-The in-memory plan tree remains authoritative; indentation is its canonical text
-representation. If PIR becomes parseable later, its lexer should translate
-indentation changes into `INDENT` and `DEDENT` tokens.
+The in-memory typed plan tree remains authoritative; indentation is only its
+canonical diagnostic rendering. PIR v1 has no parser and is never authored by
+users. A parser should be added only if a concrete compiler-testing or tooling
+need justifies treating the text as an interchange format.
+
+Using LLVM's exact text model would force PIR to express semantic regions as
+basic blocks, branch labels, and phi nodes. That would erase the distinction
+between a statement gate, a local skip, and a fallback, then require later code
+to reconstruct it. PIR therefore adopts LLVM-like result and operation notation
+while keeping Pluto-specific structured regions and Pluto types. LLVM lowering
+is where those regions become CFG blocks and SSA values.
 
 For example:
 
 ```text
-statement x
+pir.statement @assign_x
     source "x = a > 0 && data[i] || -1"
 
     execute
-        fallback
+        %result = fallback : Int
             primary
-                gate
-                    condition eval(a > 0)
-                    then eval(data[i])
-                        on-oob skip
-            otherwise eval(-1)
+                %condition = eval @a > 0 : Int [yield=scalar]
+                %selected = value-and %condition : Int
+                    %loaded = eval @data[@i] : Int [on-oob=skip]
+                    yield %loaded
+                yield %selected
+            otherwise
+                %default = eval -1 : Int
+                yield %default
 
-    set local(x)
-        from fallback result
-        on-skip keep-old
+    commit simultaneous
+        @x <- %result
 ```
 
 Recommended views:
@@ -428,7 +513,7 @@ dispatch, conditional-spine extraction, range preparation, collector rewrites,
 bounds guards, and affine probing.
 
 The LLVM lowerer may still call existing expression and ownership helpers for
-`eval`, `set`, collector, and carry operations during migration. It must not:
+`eval`, `commit`, collector, and carry operations during migration. It must not:
 
 - re-run predicates to choose a different statement strategy
 - discover new ranges by walking the AST
@@ -450,32 +535,44 @@ corresponding LLVM structure.
 
 The PIR validator should reject a plan unless:
 
-1. The phases appear in `prepare`, `execute`, `finish`, `set` order.
+1. The phases appear in `prepare`, `execute`, `finish`, `commit` order.
 2. Every carry and collector is prepared before use and finished at most once.
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
    and `break` names its range.
-5. Every lazy gate and fallback keeps its RHS in a lazy region.
+5. Every lazy `value-and` and fallback keeps its RHS in a lazy region.
 6. Outcome arity, Pluto types, domain, and yield shape match their consumers.
-7. All sibling RHS expressions read the iteration-start carry snapshot.
-8. All carry advances for one iteration are simultaneous.
-9. A skipped carry update preserves that carry without suppressing siblings.
-10. A rejected shared iteration performs no carry advance or collector append.
-11. Final `set` maps each outcome to exactly one compatible target slot.
-12. All targets in one assignment group are set simultaneously.
-13. Every checked access has an explicit OOB scope.
-14. Every unchecked access belongs to a valid whole-domain affine proof.
-15. Each source expression and future nontrivial target is evaluated exactly as
+7. All sibling RHS expressions in a non-ranged statement read the same
+   pre-commit binding snapshot.
+8. All sibling RHS expressions in a ranged iteration read the same
+   iteration-start carry snapshot.
+9. All carry advances for one iteration are simultaneous.
+10. A skipped carry update preserves that carry without suppressing siblings.
+11. A rejected shared iteration performs no carry advance or collector append.
+12. Final `commit` provides exactly one type-compatible outcome mapping for
+    every target slot.
+13. The lowerer consumes the recorded target-to-outcome mapping without
+    rematching by name, position, or generated value.
+14. All targets in one assignment group are committed simultaneously.
+15. Every checked access has an explicit OOB scope.
+16. Every unchecked access belongs to a valid whole-domain affine proof.
+17. Each source expression and future nontrivial target is evaluated exactly as
     many times as the plan states.
-16. The plan contains no LLVM value, machine type, pointer, register, or storage
+18. The plan contains no LLVM value, machine type, pointer, register, or storage
     decision.
-17. Every owned outcome is consumed at most once, and the validator derives
+19. Every owned outcome is consumed at most once, and the validator derives
     exactly one release obligation for every path where it is not consumed —
-    yield, skip, taken and untaken gate/fallback sides, rejected iterations,
+    yield, skip, taken and untaken `value-and`/fallback sides, rejected iterations,
     and region end.
-18. No outcome is used after it is moved or after its derived release point,
-    and borrowed outcomes are copied before any consumer that outlives their
-    owner.
+20. No outcome is used after it is moved or after its derived release point,
+    and a borrowed outcome that outlives its owner is copied, materialized, or
+    validly promoted to ownership transfer before that lifetime ends.
+21. Replaced target and carry values remain live until every outcome in their
+    simultaneous group has finished reading or consuming them.
+22. A target- or carry-origin borrow is promoted to ownership transfer only
+    when its owner is replaced in the same simultaneous group, exactly one
+    owning consumer takes it, and no surviving outcome still depends on the old
+    owner; all other escaping borrows are copied or materialized.
 
 Validator failures are compiler ICEs and should include the source statement and
 the smallest relevant PIR excerpt.
@@ -491,8 +588,8 @@ the smallest relevant PIR excerpt.
 
 ### Phase 1: Plan model, printer, validator, and write effects (1-2 weeks)
 
-- Add immutable statement, region, outcome, target, carry, collector, range, and
-  access plan nodes.
+- Add immutable statement, region, outcome, target, carry, collector, domain,
+  range, and access plan nodes.
 - Record per-target `WriteEffect` (`MustWrite`/`MayWrite`) in the solver and
   migrate the CFG to consume it. Derive the effect after applying statement
   conditions, range execution, checked-access failure, conditional propagation,
@@ -505,9 +602,11 @@ the smallest relevant PIR excerpt.
 **Go/no-go checkpoint:** the dump must explain why `compileLetStatement` selects
 its current lowering without reading LLVM helper code.
 
-### Phase 2: Conditional values, final set, and ownership (2-3 weeks)
+### Phase 2: Conditional values, final commit, and ownership (2-3 weeks)
 
-- Add gate, fallback, map, alignment, per-slot skip, and final-set policies.
+- Add value-and, fallback, map, alignment, per-slot skip, and final-commit policies.
+- Add stable outcome-to-target mappings and validate simultaneous transfer,
+  including swaps, duplicate source use, and ownership-safe replacement.
 - Add owned/borrowed outcome annotations, validator-derived release
   obligations, and generic cleanup lowering for non-ranged statements.
 - Lower selected non-ranged statements from PIR using existing backend helpers.
@@ -515,8 +614,10 @@ its current lowering without reading LLVM helper code.
 
 ### Phase 3: Ranges, carried state, and collectors (2-4 weeks)
 
-- Add prepare/execute/finish/set lowering.
+- Add prepare/execute/finish/commit lowering.
 - Add iteration snapshots and simultaneous carry advance.
+- Resolve reads of ranged destinations through their current carries so the
+  next iteration observes the complete prior advance.
 - Extend ownership to carries (replaced-carry release after a safe update)
   and collector cells.
 - Add collector initialization, cell skip policies, and finalization.
@@ -571,7 +672,7 @@ deleted only when its phase proves the plan replaces it:
   another form. Deleting it is a Phase 2 exit criterion demonstrated by the
   prototype, not assumed.
 - Staging and per-expression commit machinery: the specialized semantics are
-  replaced by carries and simultaneous `set`; the lowerer still needs generic
+  replaced by carries and simultaneous `commit`; the lowerer still needs generic
   storage across branches and iterations, so equivalent backend mechanics
   remain — reorganized, not vanished.
 - Mask sweeps and consumed-temporary marking: replaced by derived release
@@ -625,6 +726,20 @@ long-lived parallel path.
 - nested ranges carry state in the defined execution order
 - final LHS values equal the last carried values after the loop finishes
 
+### Commit and transfer tests
+
+- scalar and heap-value `a, b = b, a` swaps preserve the pre-commit values
+- expanded PIR promotes each eligible target- or carry-origin borrow in a
+  heap-value swap to one ownership transfer rather than two deep copies
+- one source mapped to multiple owning targets derives the required copy and is
+  never moved twice
+- each multi-output expression maps to the intended target slot
+- one skipped target keeps its old value while yielded siblings commit
+- replaced heap targets remain alive until every sibling outcome has finished
+  using them
+- a ranged swap reads one iteration-start snapshot, advances both carries
+  simultaneously, and exposes the advanced pair to the next iteration
+
 ### Differential and backend tests
 
 - compare observable output and diagnostics between old and PIR lowering
@@ -637,13 +752,21 @@ long-lived parallel path.
 
 The statement plan can grow without becoming a machine IR:
 
-- field, index, column, and cell targets extend `set`
+- field, index, column, and cell targets extend `commit`
 - member calls remain solved expressions inside `eval` or `map`
 - source `break` and `continue` extend structured range actions
 - function-result transfer can reuse outcome planning with a different final action
 - conditional arrays extend domains, alignment, and yield masks
+- range-left value-position `&&` can later bind an outer local domain for nested
+  construction such as `[i && [matrix[i][j]]]`; it must remain local to that
+  value and must not become a statement gate or implicit collector — only an
+  explicit `[]` closes the bound domain into an array
+- a skipped array-valued collector cell closes to a zero-filled child of its
+  expected shape, while `||` may provide a shape-compatible child; the validator
+  rejects a plan whose skipped child shape is neither known nor derivable from
+  its bound domains unless an explicit fallback such as `[j && 0]` supplies it
 - gated prints become a statement plan whose final action prints yielded
-  outcomes instead of setting targets
+  outcomes instead of committing targets
 - test contexts can become explicit statement inputs/effects
 
 PIR should remain statement-focused until a concrete feature requires

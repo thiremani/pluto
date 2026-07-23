@@ -15,3 +15,89 @@ quoted arr is ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "ta
 arr2 is [1 2 3 4]
 [1.1 2.3 4 2.1]
 arr3 is [1.1 2.3 4 2.1]
+one-row matrix: [
+    1 2 3
+]
+matrix: [
+    1 2.5
+    3 4
+]
+nested matrix: [
+    1 2
+    3 4
+]
+matrix row: [3 4]
+matrix cell: 3
+selected rows: [
+    1 2
+    3 4
+]
+selected rows OOB: [
+    3 4
+    0 0
+    0 0
+]
+stacked row OOB: [
+    1 2
+    0 0
+]
+reset matrix: [
+    5 6
+]
+rank 3: [
+    [1 2] [3 4]
+    [5 6] [7 8]
+]
+rank 3 plus: [
+    [2 3] [4 5]
+    [6 7] [8 9]
+]
+rank 3 cell: 6
+string matrix: [
+    "Ada" ""
+    "Lin" "Mae"
+]
+string matrix row: ["Ada" ""]
+table: [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+table scores: [10 12]
+replacement table: [
+  : Name Score
+    "Mae" 20
+]
+saved table scores: [10 12]
+empty array: []
+empty matrix: [
+]
+rank 2 empty: [[]]
+rank 2 refined: [
+    9
+]
+empty concat: []
+nested empty concat: ["xxa"]
+empty add: []
+empty comparison: []
+refined empty add: [1]
+empty table: [
+  : Name Score
+]
+empty score column: []
+empty score sum: []
+typed empty scores: [7 8]
+initial empty table: [
+  : Name Score
+]
+refined empty table: [
+  : Name Score
+    "Ada" 10
+]
+reset empty table: [
+  : Name Score
+]
+inferred table: [
+    1 "a"
+    2 "b"
+]

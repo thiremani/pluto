@@ -23,12 +23,69 @@ scalar_sum, scalar_prod = SumAndProduct(2, 3)
 scalar = Square(7)
 "SquareScalar: -scalar"
 
+matrixIdentity = Identity([
+    1 2
+    3 4
+])
+"MatrixIdentity: -matrixIdentity"
+
+tableIdentity = Identity([
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+])
+"TableIdentity: -tableIdentity"
+
+emptyTableIdentity = Identity([
+  : Name Score
+])
+"EmptyTableIdentity: -emptyTableIdentity"
+
+tableCallColumn = Identity([
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]).Score
+"TableCallColumn: -tableCallColumn"
+
+gatedTableColumn = (1 > 0 && Identity([
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+])).Name > "K"
+"GatedTableColumn: -gatedTableColumn"
+
 arr1 = [] ⊕ [0]
 "DirectConcatScalar: -arr1"
 
 arr2 = []
 arr2 = arr2 ⊕ [0:5]
 "DirectConcatRange: -arr2"
+
+emptyDirect = ConcatElem([], 1)
+"ConcatElemDirect: -emptyDirect"
+
+emptyNamed = []
+emptyNamedResult = ConcatElem(emptyNamed, 2)
+"ConcatElemNamed: -emptyNamedResult"
+"ConcatElemEmptyNamed: -emptyNamed"
+
+emptyInPlace = []
+emptyInPlace = ConcatElem(emptyInPlace, 3)
+"ConcatElemInPlace: -emptyInPlace"
+
+emptyConcat = ConcatArrays([], [])
+"ConcatEmpty: -emptyConcat"
+
+emptyIdentity = Identity([])
+"IdentityEmpty: -emptyIdentity"
+
+lockedArray = [9]
+"BeforeEmptyReset: -lockedArray"
+lockedArray = []
+"AfterEmptyReset: -lockedArray"
+lockedArray = ConcatElem(lockedArray, 4)
+"EmptyResetKeepsType: -lockedArray"
 
 # Range call in array literal
 squareVec = [Square(0:5)]

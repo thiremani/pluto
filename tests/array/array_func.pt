@@ -18,3 +18,12 @@ res = PairSum(i, j)
 
 res = Acc(a, x)
     res = a + x
+
+res = Identity(x)
+    res = x
+
+res = ConcatElem(a, elem)
+    res = a ⊕ [elem]
+
+res = ConcatArrays(a, b)
+    res = a ⊕ b
