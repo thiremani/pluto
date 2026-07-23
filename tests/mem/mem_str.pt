@@ -7,6 +7,24 @@ result = identity(s)
 s = getStatic()
     s = "static from func"
 
+# Return a static string while consuming a scalar/range argument.
+s = getStaticAt(x)
+    s = x > -1 "static ranged"
+
+# Conditionally replace a caller-supplied heap output with a static string.
+s = maybeStatic(flag)
+    s = flag > 0 "static changed"
+
+# Propagate one conditionally written static output into another output.
+s, t = shareStaticOutput(flag)
+    s = flag > 0 "shared static"
+    t = s
+
+# Mixed indirect outputs exercise one widened string slot and one exact scalar slot.
+s, n = getStaticPair(x)
+    s = x > -1 "pair static"
+    n = x
+
 # Return a heap string (concatenation)
 s = getHeap()
     s = "heap" ⊕ " from func"

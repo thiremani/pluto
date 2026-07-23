@@ -772,7 +772,7 @@ func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
 		if p.isCondition(exp) {
 			continue
 		}
-		msg := fmt.Sprintf("Expression %q is not a condition. Statement conditions must be comparisons or bare range/array-range drivers", exp.String())
+		msg := fmt.Sprintf("Expression %q is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers", exp.String())
 		ce := &token.CompileError{
 			Token: exp.Tok(),
 			Msg:   msg,

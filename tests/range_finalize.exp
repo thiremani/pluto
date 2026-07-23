@@ -1,0 +1,21 @@
+AscendingFinal: 4
+DescendingFinal: 2
+UnevenFinal: 9
+EmptyFresh: 0
+EmptyExisting: 91
+Collected: [0 1 2 3 4]
+CallFinal: 20
+MarkerFinal: Marker 2
+MarkerEach 0
+MarkerEach 1
+MarkerEach 2
+MarkerWidthFinal: |  7|
+MarkerWidthEach: |7|
+MarkerWidthEach: | 7|
+MarkerWidthEach: |  7|
+LiteralEach 0
+LiteralEach 1
+LiteralEach 2
+SimultaneousRange: 2 77
+SimultaneousArray: 30 88
+SimultaneousString: Marker 2 old

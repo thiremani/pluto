@@ -57,6 +57,16 @@ matrixCell = matrixRow[0]
 rowRange = 0:2
 selectedRows = [nestedMatrix[rowRange]]
 "selected rows: -selectedRows"
+lastSelectedRow = nestedMatrix[rowRange]
+"last selected row: -lastSelectedRow"
+
+emptyRowRange = 0:0
+emptySelectedRow = nestedMatrix[emptyRowRange]
+"empty selected row: -emptySelectedRow"
+
+keptSelectedRow = [9 8]
+keptSelectedRow = nestedMatrix[emptyRowRange]
+"kept selected row: -keptSelectedRow"
 
 rowRangeOOB = 1:4
 selectedRowsOOB = [nestedMatrix[rowRangeOOB]]

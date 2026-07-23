@@ -478,8 +478,8 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 		expErrLen int
 		expErr    string
 	}{
-		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. Statement conditions must be comparisons or bare range/array-range drivers"},
-		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-range drivers TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
+		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
 	}
 
 	for _, tt := range tests {

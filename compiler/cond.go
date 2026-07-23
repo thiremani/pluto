@@ -206,8 +206,19 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 			Type:     Ptr{Elem: outTypes[i]},
 			Borrowed: true,
 		}
+		existing, exists := Get(c.Scopes, ident.Value)
 		seed := c.resolveDestSeed(ident, outTypes[i])
+		// The conditional slot owns its seed independently. Otherwise an
+		// early RHS overwrite can free the real pre-statement destination
+		// before a later sibling RHS has read it.
+		// A fresh zero seed is already owned and must not be copied again.
+		if exists {
+			seed = c.deepCopyIfNeeded(seed)
+		}
 		c.storeSymbolToSlot(tempSym, seed, outTypes[i], tempName+"_seed")
+		if exists {
+			tempSym.WriteFlag = existing.WriteFlag
+		}
 
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
@@ -224,8 +235,9 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 		finalType := s.outType
 		finalVal := c.createLoad(tempSym.Val, finalType, s.dest.Value+"_cond_final")
 		finalSym := &Symbol{
-			Val:  finalVal,
-			Type: finalType,
+			Val:       finalVal,
+			Type:      finalType,
+			WriteFlag: tempSym.WriteFlag,
 		}
 
 		oldSym, exists := Get(c.Scopes, s.dest.Value)
@@ -233,6 +245,7 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 			Put(c.Scopes, s.dest.Value, finalSym)
 			continue
 		}
+		oldValue := c.valueSymbol(s.dest.Value, oldSym, s.dest.Value+"_cond_old")
 
 		if _, ok := oldSym.Type.(Ptr); ok {
 			c.storeSymbolToSlot(oldSym, finalSym, oldSym.Type.(Ptr).Elem, s.dest.Value+"_cond_commit")
@@ -244,12 +257,17 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 			// SetExisting always finds the binding — and it must update it in its own
 			// scope (which may be an outer block), not shadow it via Put in the current.
 			SetExisting(c.Scopes, s.dest.Value, updated)
+			if !c.skipBorrowedOldValueFree(oldValue) {
+				c.freeSymbolValue(oldValue, s.dest.Value+"_cond_old")
+			}
 			continue
 		}
 
-		// Non-pointer symbols are replaced directly. Old value ownership is already
-		// handled in the IF branch assignment into temp slots.
+		// Non-pointer symbols are replaced directly.
 		Put(c.Scopes, s.dest.Value, finalSym)
+		if !c.skipBorrowedOldValueFree(oldValue) {
+			c.freeSymbolValue(oldValue, s.dest.Value+"_cond_old")
+		}
 	}
 }
 
@@ -334,6 +352,9 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 		seed := c.resolveDestSeed(cs.temp, outType)
 		seed = c.deepCopyIfNeeded(seed)
 		c.storeSymbolToSlot(stageTempSym, seed, outType, tempName+"_seed")
+		if commitSym, ok := Get(c.Scopes, cs.temp.Value); ok {
+			stageTempSym.WriteFlag = commitSym.WriteFlag
+		}
 		Put(c.Scopes, tempName, stageTempSym)
 		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
 	}
@@ -344,6 +365,7 @@ func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlo
 	for i := range stage {
 		stageSym, _ := Get(c.Scopes, stage[i].temp.Value)
 		stagedValue := c.valueSymbol(stage[i].temp.Value, stageSym, stage[i].temp.Value+"_stage_final")
+		stagedValue.WriteFlag = stageSym.WriteFlag
 		c.commitSlotValue(commit[i].temp, stagedValue, false)
 	}
 }
@@ -635,6 +657,12 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 			lSym, cmpVal := c.compareScalars(infix.Operator, left[i], right[i])
 			conds[i] = c.andConds(operandCond, cmpVal, fmt.Sprintf("slot_cond_%d", i))
 			lhsSyms[i] = lSym
+			if _, isIdent := infix.Left.(*ast.Identifier); isIdent {
+				// The retained value still belongs to the named binding.
+				// Mark it borrowed so a later assignment copies rather than
+				// transferring that binding's payload through a conditional.
+				lhsSyms[i].Borrowed = true
+			}
 		}
 	}
 
@@ -874,11 +902,27 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 
 func (c *Compiler) isRangeDriverCond(expr ast.Expression) bool {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if len(info.OutTypes) != 1 {
+	if info == nil || len(info.OutTypes) != 1 || len(info.Ranges) == 0 {
 		return false
 	}
 
-	return isRangeDriverType(info.OutTypes[0])
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
+		return true
+	case *ast.ArrayRangeExpression:
+		arrInfo := c.ExprCache[key(c.FuncNameMangled, e.Array)]
+		if arrInfo == nil || arrInfo.HasRanges {
+			return false
+		}
+		switch e.Range.(type) {
+		case *ast.Identifier, *ast.RangeLiteral:
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
 }
 
 func (c *Compiler) collectDriverRanges(expr ast.Expression) []*RangeInfo {
@@ -895,7 +939,7 @@ func (c *Compiler) collectDriverRanges(expr ast.Expression) []*RangeInfo {
 }
 
 // splitCondRanges collects merged ranges and boolean guard expressions
-// from statement conditions. Bare range/array-range drivers contribute only
+// from statement conditions. Bare range/array-selection drivers contribute only
 // ranges; comparisons contribute both ranges and a per-iteration guard.
 // Returns nil, nil if no condition introduces ranges.
 func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {

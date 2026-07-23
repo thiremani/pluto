@@ -33,7 +33,7 @@ Intended for performance-sensitive scripting, numerical work, simulation, and sy
 
 Range-driven auto-vectorization and safe arrays.
 
-Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by construction.
+Scope-based memory (no null values, no unsafe out-of-bounds access, no GC), and concurrency by construction.
 
 ---
 
@@ -43,8 +43,8 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
 - First-class rectangular arrays of any rank, columnar tables, and link semantics
-- Scope-based memory: no nulls, no out-of-bounds, no garbage collector
-- printf-style formatting; arrays/ranges printable
+- Scope-based memory: no null values, no unsafe out-of-bounds access, no garbage collector
+- printf-style formatting; arrays printable and range streams iterable
 - Cross-platform (Linux/macOS/Windows)
 
 ## Command name
@@ -143,18 +143,18 @@ b = Square(2.2)          # float specialization
 c = Square(arr)          # squares each array element
 a, b, c
 
-# Range, mask, and filter (non-accumulated)
+# Range, mask, and filter (non-collected)
 d = Square(1:3)          # range: final iteration result
-e = Square(arr[1:3])     # array-range: final iteration result
+e = Square(arr[1:3])     # range-indexed array: final iteration result
 f = Square(arr > 3)      # element-wise mask: each element kept where > 3, else 0
-g = Square(arr[1:3] > 3) # array-range filter: final iteration result
+g = Square(arr[1:3] > 3) # range-indexed filter: final iteration result
 d, e, f, g
 
 # Accumulation forms
-h = [Square(1:3)]          # range accumulation
-i = [Square(arr[1:3])]     # array-range accumulation
-j = [Square((1:3) > 1)]    # conditional range accumulation
-k = [Square(arr[1:4] > 2)] # conditional array-range accumulation
+h = [Square(1:3)]          # range collection
+i = [Square(arr[1:3])]     # range-indexed collection
+j = [Square((1:3) > 1)]    # conditional range collection
+k = [Square(arr[1:4] > 2)] # conditional range-indexed collection
 h, i, j, k
 ```
 
@@ -174,13 +174,28 @@ Generated code is equivalent to handwritten specialized code. There is no runtim
 
 ## Ranges as the execution primitive
 
-Ranges are first-class values:
+A range literal binds an execution domain:
 
 ```python
-Square(1:5)
+i = 0:5
+last = i          # 4
+values = [i]      # [0 1 2 3 4]
+lastSquare = Square(i)  # 16
 ```
 
-Passing a range to a template executes it across all values. The compiler can map these operations to SIMD instructions — this is range-driven auto-vectorization.
+A bare range at an assignment root keeps its final yield. Brackets
+materialize all yields into an array. Passing a range to a template executes
+the call once for each value. The compiler can map these
+operations to SIMD instructions — this is range-driven auto-vectorization.
+
+Range-indexed array access follows the same rule:
+
+```python
+arr = [10 20 30 40]
+i = 1:4
+last = arr[i]       # 40
+selected = [arr[i]] # [20 30 40]
+```
 
 Data-parallel execution without explicit loop syntax.
 
@@ -195,7 +210,11 @@ x = [1 2 3 4 5]
 y = [1.1 2.2 3.3]
 ```
 
-Arrays are safe by construction — out-of-bounds access is not possible. Comparisons like `arr > 2` produce element-wise masks (each element kept where it holds, else 0) that work anywhere an array does.
+Arrays are bounds-checked: an invalid index never reads outside array storage.
+In a scalar range stream, invalid selection points yield nothing; inside `[]`,
+they zero-fill to preserve shape. Comparisons like `arr > 2` produce
+element-wise masks (each element kept where it holds, else 0) that work
+anywhere an array does.
 
 The same bracket syntax infers higher-rank arrays and tables without a type keyword:
 
@@ -292,7 +311,7 @@ Pluto uses deterministic, scope-based memory:
 
 - No garbage collector
 - No null values
-- No out-of-bounds access
+- No unsafe out-of-bounds memory access
 - Memory freed when scope ends
 
 Predictable performance with minimal runtime overhead.

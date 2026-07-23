@@ -223,6 +223,15 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	c := cfg.ScriptCompiler.Compiler
 
 	switch t := e.(type) {
+	case *ast.Identifier:
+		// A bare named Range is an iterated scalar-finalization root. Unlike a
+		// range literal constructor, an empty driver may leave an existing
+		// destination unchanged, so its write is conditional.
+		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
+	case *ast.StringLiteral:
+		// Formatting markers can reference named Range drivers even though the
+		// dependency is not represented as an AST child.
+		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.InfixExpression, *ast.PrefixExpression:
 		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.ArrayRangeExpression:
@@ -257,7 +266,8 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	case *ast.DotExpression:
 		return cfg.hasRangeExpr(t.Left)
 	default:
-		// Identifiers, literals, etc. are not conditional at root level
+		// Literals and other scalar roots are unconditional. A bare range
+		// literal is a driver constructor rather than an iterated use.
 		return false
 	}
 }

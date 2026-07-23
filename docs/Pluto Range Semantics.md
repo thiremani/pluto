@@ -2,20 +2,22 @@
 
 ## Core Model
 
-Expressions that mention ranges produce ordered per-iteration values.
-Those values are not arrays by default.
+Expressions that mention ranges produce ordered per-iteration values. The
+stream is not collected into an array by default; an individual yield may be a
+scalar or an owned subarray.
 
 There are two explicit closing steps:
 
 1. `[]` closes a value stream into an array.
-2. The root expression of a scalar assignment closes any remaining outer
+2. The root expression of an assignment closes any remaining outer
    iteration by taking the final yielded value in iteration order.
 
-This keeps array materialization and scalar finalization separate.
+This keeps collection and final-value selection separate.
 
 ## Ranges And Drivers
 
-A range or array-range used in an expression contributes an iteration driver.
+A range identifier or range-indexed array access used in an expression
+contributes an iteration driver.
 Multiple distinct drivers form a nested iteration domain in source order.
 Repeated use of the same driver name refers to the same loop, not a nested copy.
 
@@ -28,6 +30,62 @@ x = i + 1
 
 This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
 value, so `x = 5`.
+
+A bare identifier is itself a ranged expression:
+
+```pluto
+i = 0:5
+last = i
+```
+
+`last` becomes `4`. The range binding `i` remains available for later uses.
+To bind another execution domain, write another range literal; range
+`start`/`stop`/`step` fields are not part of the language.
+The bound values are captured when the range is constructed, so later changes
+to the source variables do not mutate the existing range. Functions that need
+those bounds as data should currently receive the scalar values explicitly.
+
+Range-indexed arrays follow the same rule:
+
+```pluto
+arr = [10 20 30 40]
+i = 1:4
+last = arr[i]
+selected = [arr[i]]
+```
+
+`last` becomes `40`, while `selected` becomes `[20 30 40]`. A range-indexed
+access is not a public slice or view value: it is either consumed by its
+surrounding expression, finalized at an assignment root, or materialized by
+`[]`. For a rank-N source, one yield is an owned rank-(N-1) subarray, so the
+final value can itself be an array.
+
+If a range produces no values, a fresh destination retains its type's zero
+value (an empty array for a subarray result) and an existing destination is
+unchanged. Outside `[]`, an out-of-bounds selection point yields nothing, so
+the last valid selected value wins. Inside `[]`, failed cells are zero-filled
+to preserve collection shape, as described below.
+
+Print statements consume drivers rather than exposing their internal
+descriptor; Range descriptors have no printable representation. Printing `i`
+emits one line per yielded value. Printing distinct
+drivers together uses their normal cartesian domain, while repeated uses of
+the same driver share one loop:
+
+```pluto
+i = 0:2
+j = 2:4
+i, j
+```
+
+prints:
+
+```text
+0 2
+0 3
+1 2
+1 3
+```
 
 Distinct drivers nest in source order, so collecting over two ranges walks
 their cartesian product:
@@ -48,7 +106,28 @@ produces:
 
 Calls, infix operators, and prefix operators all follow the same rule:
 they transform the current per-iteration values of their range drivers.
-They do not choose a special "base function" that owns the loop.
+Whether the compiler places a call's loop around the call or in a specialized
+callee is an implementation detail.
+
+An immediate bare range or range-indexed argument may select such a
+range-bearing specialization. In particular, `F(arr[i])` may pass an internal,
+call-scoped `ArrayRange` descriptor so the callee loops over the selection.
+That descriptor is not a language value: it cannot be stored, returned,
+printed, or otherwise escape the call, and the parameter inside `F` observes
+one yielded element or owned subarray at a time.
+
+Driver identity takes priority over loop placement. When one driver occurs in
+multiple call arguments, as in `F(i, i)`, both arguments must observe the same
+iteration; the current lowering runs that loop caller-side. Distinct drivers,
+as in `F(i, j)`, still form their normal cartesian domain. These choices do not
+change the results visible to source code.
+
+Function outputs are staged independently before the call. If an empty driver
+or skipped condition means an output is not written, its staged value is
+preserved. At representation boundaries, such as a static string result being
+assigned into an owned-string destination, the callee receives its declared
+zero value and the caller commits the adapted result only when the callee
+actually writes it.
 
 Examples:
 
@@ -421,7 +500,7 @@ This is a semantic materialization boundary.
 The compiler may later hoist or fuse loops as an optimization, but that does
 not change the language meaning.
 
-## Scalar Contexts
+## Final-Value Contexts
 
 Outside `[]`, ranged expressions remain per-iteration values until the root
 assignment or statement consumes them.
@@ -436,10 +515,29 @@ x = i + 1
 `x` becomes `5`.
 
 ```pluto
+last = i
+```
+
+`last` becomes `4`.
+
+```pluto
 arr = [i + 1]
 ```
 
 `arr` becomes `[1 2 3 4 5]`.
+
+For a range-indexed array, the same boundary chooses between one final value
+and an explicit collection:
+
+```pluto
+data = [10 20 30 40]
+i = 1:4
+last = data[i]       # 40
+many = [data[i]]     # [20 30 40]
+```
+
+With a matrix, `last = matrix[i]` is the final owned row while
+`many = [matrix[i]]` stacks all yielded rows.
 
 ## Self-Reference: Fold
 

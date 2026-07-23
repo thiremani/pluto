@@ -63,6 +63,17 @@ width = 5
 "-missing%(-width)d" # -missing%(5)d
 ```
 
+A marker that reads a `Range` participates in normal range execution. At an
+assignment root, formatting runs once per yield and the final owned string is
+kept; in print position, one formatted line is emitted per yield. Range
+identifiers used for dynamic width or precision are drivers too.
+
+```pluto
+i = 0:3
+last = "item -i" # "item 2"
+"item -i"        # prints item 0, item 1, item 2 on separate lines
+```
+
 ## Literal percent and strict formatting
 
 A `%` outside a resolved marker is ordinary text. A `%` immediately after a

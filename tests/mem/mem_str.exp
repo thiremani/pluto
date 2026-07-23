@@ -24,6 +24,12 @@ left_owned
 reset
 heap from func
 static from func
+keep_heap
+CallStaticSeedKeep: keep_heap
+CallStaticSeedWrite: static changed
+CallStaticShareBefore: < shared_left > < shared_right >
+CallStaticShareSkipped: < shared_left > <  >
+CallStaticShareWritten: < shared static > < shared static >
 slot
 plain
 ["slot" "array"]
@@ -43,3 +49,14 @@ zero
 one
 two
 localarray
+RangeStaticExpression: static ranged
+RangeStaticExpressionEmpty: heap from func
+RangeStaticBare: static ranged
+RangeStaticBareEmpty: heap from func
+RangeStaticConditional: static ranged
+RangeStaticSimultaneous: static ranged heap from func
+RangeStaticPair: pair static 2
+CallHeapSimultaneous: heap from func call_left
+CondHeapSwap: cond_right cond_left
+RangeCondSource: z_source z_source
+RangeCondSelf: z_self

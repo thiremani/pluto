@@ -23,6 +23,17 @@ EmptyTableIdentity: [
 ]
 TableCallColumn: [10 12]
 GatedTableColumn: ["" "Lin"]
+ConditionalTableBefore: [
+  : Name Score
+    "Grace" 30
+]
+ConditionalTableSkipped: [
+  : Name Score
+    "Grace" 30
+]
+ConditionalTableWritten: [
+  : Name Score
+]
 DirectConcatScalar: [0]
 DirectConcatRange: [0 1 2 3 4]
 ConcatElemDirect: [1]
@@ -31,6 +42,32 @@ ConcatElemEmptyNamed: []
 ConcatElemInPlace: [3]
 ConcatEmpty: []
 IdentityEmpty: []
+RangedRankReset: [
+]
+RangedRankResetEmpty: [
+    5 6
+    7 8
+]
+ConditionalRankResetBefore: [
+    11 12
+    13 14
+]
+ConditionalRankResetSkipped: [
+    11 12
+    13 14
+]
+RangedConditionalRankResetBefore: [
+    21 22
+    23 24
+]
+RangedConditionalRankResetSkipped: [
+    21 22
+    23 24
+]
+ZeroWidthRankResetBefore: [[] []]
+ZeroWidthRankResetSkipped: [[] []]
+ZeroWidthRankResetWritten: [
+]
 BeforeEmptyReset: [9]
 AfterEmptyReset: []
 EmptyResetKeepsType: [4]
@@ -43,4 +80,9 @@ RebuildNoAlias: [14]
 RebuildAssign2: [2]
 RebuildNoAlias2: [6]
 PairSumRange: [3 4 4 5]
+ArrayRangeLastNamedRow: [3 4]
+ArrayRangeLastLiteralRow: [7 8]
+ArrayRangeEmptyKeepsRow: [9 10]
+ArrayRangeLastLiteralWord: blue
+ArrayRangeEmptyKeepsWord: keep
 [8 9 11]

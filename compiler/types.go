@@ -403,9 +403,9 @@ func isHeaderOnlyTableType(table Table) bool {
 	return true
 }
 
-// ArrayRange represents an iteration over a range of an array.
-// It carries the underlying array schema so type comparisons and mangling
-// can remain structural; the actual range bounds are runtime values.
+// ArrayRange is an internal, call-scoped view of an array selection. It keeps
+// the full source array and range schemas so specialization identity remains
+// structural without exposing ArrayRange as a source-level storable type.
 type ArrayRange struct {
 	Array Array
 	Range Range
@@ -418,8 +418,9 @@ func (ar ArrayRange) String() string {
 func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
 
 func (ar ArrayRange) Mangle() string {
-	return "ArrayRange" + SEP + T + "1" + SEP + ar.Array.ElemType.Mangle()
+	return "ArrayRange" + SEP + T + "2" + SEP + ar.Array.Mangle() + SEP + ar.Range.Mangle()
 }
+
 func (ar ArrayRange) Key() Type {
 	return ArrayRange{
 		Array: ar.Array.Key().(Array),
@@ -595,8 +596,8 @@ func CanRefineType(oldType, newType Type) bool {
 		newTable, ok := newType.(Table)
 		return ok && canRefineTable(old, newTable)
 	case ArrayRange:
-		newSlice, ok := newType.(ArrayRange)
-		return ok && canRefineArrayRange(old, newSlice)
+		newArrayRange, ok := newType.(ArrayRange)
+		return ok && canRefineArrayRange(old, newArrayRange)
 	case Ptr:
 		newPtr, ok := newType.(Ptr)
 		return ok && CanRefineType(old.Elem, newPtr.Elem)
@@ -693,8 +694,9 @@ func canRefineTable(oldTable, newTable Table) bool {
 	return true
 }
 
-func canRefineArrayRange(oldSlice, newSlice ArrayRange) bool {
-	return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
+func canRefineArrayRange(oldArrayRange, newArrayRange ArrayRange) bool {
+	return CanRefineType(oldArrayRange.Array, newArrayRange.Array) &&
+		CanRefineType(oldArrayRange.Range, newArrayRange.Range)
 }
 
 func canRefineFunc(oldFunc, newFunc Func) bool {
@@ -804,9 +806,10 @@ func eqTable(a, b Type) bool {
 }
 
 func eqArrayRange(a, b Type) bool {
-	aar := a.(ArrayRange)
-	bar := b.(ArrayRange)
-	return eqArray(aar.Array, bar.Array) && eqRange(aar.Range, bar.Range)
+	aArrayRange := a.(ArrayRange)
+	bArrayRange := b.(ArrayRange)
+	return TypeEqual(aArrayRange.Array, bArrayRange.Array) &&
+		TypeEqual(aArrayRange.Range, bArrayRange.Range)
 }
 
 func eqStruct(a, b Type) bool {

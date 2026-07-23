@@ -27,3 +27,13 @@ res = ConcatElem(a, elem)
 
 res = ConcatArrays(a, b)
     res = a ⊕ b
+
+# Rank-1 [] can reset an established higher-rank destination.
+res = ResetArray(x)
+    res = x > -1 []
+
+# A header-only table can conditionally reset an established concrete table.
+res = ResetTable(x)
+    res = x > -1 [
+      : Name Score
+    ]

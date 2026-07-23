@@ -1,16 +1,16 @@
 arr = [10 20 30 40 50]
 
-# Conditional expressions that include ArrayRange operands.
+# Conditional expressions that include range-indexed array operands.
 sum = 0
 # Self-reference: RHS must read from the same temp slot the IF branch writes.
 sum = 2 > 1 sum + arr[1:4]
-"CondArrayRangeExprTrue: -sum"
+"CondRangeSelectionExprTrue: -sum"
 sum = 1 > 2 sum + arr[2:5]
-"CondArrayRangeExprFalseExisting: -sum"
+"CondRangeSelectionExprFalseExisting: -sum"
 newSum = 1 > 2 0 + arr[1:4]
-"CondArrayRangeExprFalseNew: -newSum"
+"CondRangeSelectionExprFalseNew: -newSum"
 newSumTrue = 2 > 1 0 + arr[1:4]
-"CondArrayRangeExprTrueNew: -newSumTrue"
+"CondRangeSelectionExprTrueNew: -newSumTrue"
 
 sx = 5
 sx = 2 > 1 sx + 10
@@ -29,8 +29,8 @@ z = 1 > 2 3x + -x
 
 pr = 7
 pr = 1 > 0 0 + -arr[1:4]
-"CondPrefixArrayRangeTrue: -pr"
+"CondPrefixRangeSelectionTrue: -pr"
 pr = 1 > 2 0 + -arr[1:2]
-"CondPrefixArrayRangeFalseExisting: -pr"
+"CondPrefixRangeSelectionFalseExisting: -pr"
 k = 1 > 2 0 + -arr[1:4]
-"CondPrefixArrayRangeFalseNew: -k"
+"CondPrefixRangeSelectionFalseNew: -k"

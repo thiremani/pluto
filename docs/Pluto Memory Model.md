@@ -4,14 +4,20 @@ This document describes Pluto's semantic model and compares it with other major 
 
 ## The Pluto Model (Summary)
 
-1. **Assignment is Copy:** `a = b` creates a new independent value (Snapshot).
+1. **Materialized Assignment is Copy:** assigning a scalar, array, table, string,
+   or struct creates an independent value.
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
-3. **Range Selections are Views:** `s = arr[i]` (where `i` is a Range)
-   borrows `arr`; `[]` materializes the selection.
-4. **Ranges are Loop Syntax:** `x = i + 1` generates a loop, not a lazy type.
-5. **Zero-Value Initialization:** Variables in range expressions auto-initialize to zero.
-6. **IterName Determines Looping:** Same range variable → zip, different → cartesian.
-7. **Function Arguments by Value:** Scalar parameters passed by value, outputs initialized from parameters.
+3. **Range Selections are Streams:** `s = arr[i]` keeps the final selected
+   value (an element or owned subarray); `s = [arr[i]]` materializes every
+   selected value.
+4. **Ranges are Loop Syntax:** `x = i` and `x = i + 1` generate loops, not lazy
+   values.
+5. **Empty-Domain Initialization:** A fresh destination keeps its type's zero
+   value; an existing destination remains unchanged.
+6. **Driver Identity Determines Looping:** Repeated use of one range shares a
+   loop; distinct ranges form a cartesian domain.
+7. **Function Arguments by Value:** Scalar parameters are passed by value;
+   outputs write into caller destination slots.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -24,7 +30,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Assignment (`a=b`)** | **Copy** | Reference | Move / Copy | Copy | Reference | Copy |
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
-| **Range selection (`a[range]`)** | **Borrowed view** | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
+| **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
 | **Range Usage** | **Loop Syntax** (Immediate) | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
@@ -48,12 +54,15 @@ x = (i+1 for i in iter)   # Lazy generator
 a = [1]; b = a; a[0] = 2  # b sees 1 (independent copy)
 
 i = 0:5
+x = i                      # Loop executes, x = 4 (last yield)
 x = i + 1                  # Loop executes, x = 5 (last value)
-i = 0:10                   # OK! Ranges execute immediately
-y = i + 1                  # New loop, y = 10
+i = 0:10                   # Bind a new reusable Range domain
+y = i + 1                  # Consuming statement runs the loop; y = 10
 ```
 
-**Difference:** Pluto is safer and more predictable. Ranges execute immediately as loops, not lazy generators.
+**Difference:** Pluto is safer and more predictable. A range literal binds a
+reusable execution domain; a consuming statement runs it as a loop rather than
+creating a lazy generator.
 
 ---
 
@@ -66,14 +75,18 @@ let a = vec![1]; let b = a;  // a is MOVED (invalidated)
 let s = &a[..];              // Borrow checking prevents mutation
 ```
 
-**Pluto:** "Copy on Write."
+**Pluto:** "Values + Explicit Collection."
 
 ```python
 a = [1]; b = a               # Both valid and independent
-s = arr[i]                   # Runtime/Compiler checks ownership scope
+i = 0:3
+x = arr[i]                   # Final selected element
+s = [arr[i]]                 # Independent materialized array
 ```
 
-**Difference:** Pluto is easier to use (no borrow checker fighting) but relies on COW optimization instead of static moves.
+**Difference:** Pluto does not expose a borrowed range-selection value, so the
+selection cannot outlive its source. Materialized arrays use value semantics
+and may use COW internally.
 
 ---
 
@@ -89,15 +102,16 @@ s := arr[0:2]
 s[0] = 99                    // Mutates arr via s
 ```
 
-**Pluto:** "Arrays are Values, Range Selections are Views with Locking."
+**Pluto:** "Arrays are Values, Range Selections are Streams."
 
 ```python
 arr = [1 2 3 4 5]
-s = arr[0:2]                 # View (like Go)
-s[0] = 99                    # Mutates arr
+last = arr[0:2]              # 2
+s = [arr[0:2]]               # [1 2], independent of arr
 ```
 
-**Difference:** Pluto enforces **Read/Write Locks** on function arguments automatically, whereas Go allows data races (user must use `sync.Mutex`).
+**Difference:** Pluto does not expose slice aliasing through range indexing.
+Collected selections are ordinary array values.
 
 ---
 
@@ -111,11 +125,12 @@ a[1:5]                       # Copy by default
 @view a[1:5]                 # View (explicit)
 ```
 
-**Pluto:** A range-valued `arr[i]` creates an `ArrayRange` view. Wrapping the
-access as `[arr[i]]` materializes the selected values.
+**Pluto:** A range-valued `arr[i]` is a value stream. At an assignment root it
+keeps the final valid element or owned subarray; `[arr[i]]` materializes the
+selected values.
 
-**Difference:** Pluto separates range views from explicit collection, while
-Julia copies a range selection unless a view is requested explicitly.
+**Difference:** Pluto separates final-value selection from explicit collection;
+it does not expose a persistent range-selection view.
 
 ---
 
@@ -128,8 +143,8 @@ Julia copies a range selection unless a view is requested explicitly.
 // No hidden allocations.
 ```
 
-**Pluto:** `ArrayRange` similarly borrows an array and carries an iteration
-range, but Pluto does not expose a separate slice type.
+**Pluto:** Range-indexed access is consumed as a value stream and does not
+expose a slice value.
 
 **Difference:** Pluto manages memory automatically (scope-based), Zig is manual.
 
@@ -139,42 +154,40 @@ range, but Pluto does not expose a separate slice type.
 
 ### Statement-Level Loop Generation
 
-Ranges generate loops at statement boundaries. All operations inside work on scalar values:
+Ranges generate loops at statement boundaries. Operations consume one yielded
+value at a time; a rank-N selection can yield an owned subarray:
 
 ```python
 i = 0:5
+x = i          # Loop at statement: x = 4 (last yielded iterator)
 x = i + 1      # Loop at statement: x = 5 (last scalar value)
 y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-Bare ranged expressions execute as loop drivers rather than becoming lazy
-values. An explicit range-indexed array access is the separate borrowed-view
-case described above.
+Bare ranged expressions and range-indexed array accesses execute as loop
+drivers rather than becoming lazy values. An assignment root keeps the last
+yield; `[]` collects every yield.
 
-### IterName Determines Loop Structure
+### Driver Identity Determines Loop Structure
 
 ```python
 i = 0:5
 j = 0:5
 
-# Same variable → Zip (single loop)
-x = i + 1
-y = i + 2
-result = x / y   # Single loop over i
+# Repeated use of one driver → one shared loop
+ratio = (i + 1) / (i + 2)
 
-# Different variables → Cartesian (nested loops)
-x = i + 1
-y = j + 1
-result = x * y   # Nested loops: i × j
+# Distinct drivers → cartesian nested loops
+product = (i + 1) * (j + 1)
 ```
 
 ### Three Execution Modes
 
 | Mode | Syntax | Behavior |
 |------|--------|----------|
-| **Last Value** | `x = i + 1` | Loop runs, x = last value |
-| **Accumulate** | `x += i` | Loop runs, x accumulates |
+| **Last Value** | `x = i` or `x = arr[i]` | Loop runs, x = last yielded value |
+| **Accumulate** | `x = x + i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
 
 ### Statement gates and value-position `&&`
@@ -214,10 +227,12 @@ Desugars to: `if (condition) res = expression`
 Pluto sits in a "Sweet Spot" for parallel computing:
 
 1. **Value Semantics (like R/Matlab)** make reasoning about concurrent code easy. "If I have `x`, I own `x`."
-2. **Explicit Views (like Rust/Go)** allow high-performance mutation without copying.
+2. **Explicit Collection** makes every allocation and materialization boundary visible.
 3. **Loop Syntax Ranges (Unique)** provide clean iteration without lazy complexity.
-4. **IterName-Based Zipping (Unique)** makes user intent explicit — same variable name means related iterations.
-5. **Zero-Value Initialization (Unique)** simplifies accumulation patterns.
+4. **Named Driver Reuse (Unique)** makes user intent explicit — repeated use
+   of one range name shares one loop.
+5. **Defined Empty Domains (Unique)** give fresh and existing destinations
+   predictable behavior.
 
 It combines the **safety of R** with the **performance of Rust/Zig** and the **expressiveness of Julia**.
 
@@ -235,8 +250,19 @@ res = sum(a, b)
 ```
 
 - **Parameters**: Input values (passed by value for scalars)
-- **Outputs**: Initialized from corresponding parameters at same position
+- **Outputs**: Independently staged result slots. An existing destination
+  supplies the initial value, while a fresh destination starts at its type's
+  zero value. The real destinations are committed only after every sibling
+  right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
+
+When a caller destination and a function's declared output use different
+representations of a compatible value (for example, owned versus static
+strings, or an empty array type versus a concrete-rank array), the callee sees
+the zero value of its declared representation. A per-output write marker tells
+the caller whether to commit that adapted value. If the function does not
+write the output, the caller's staged value is preserved. This avoids treating
+one ownership or shape representation as if it were another.
 
 ### Call Site
 
@@ -244,9 +270,9 @@ res = sum(a, b)
 res = sum(res, 5)
 # - Parameter 'a' receives value of 'res'
 # - Parameter 'b' receives 5
-# - Output 'res' initialized to 'a' (caller's res value)
+# - Staged output 'res' starts with the caller destination's existing value
 # - Body executes: res = a + b
-# - Result assigned back to caller's res
+# - Result commits back to the caller's res after sibling RHS evaluation
 ```
 
 ### Range Parameters
@@ -256,18 +282,21 @@ res = process(a, i)
     res = a * i
 ```
 
-**Desugars to:**
+**Semantically:**
 ```c
 for (int64_t i_val = 0; i_val < N; i_val++) {
-    res = a * i_val;  // Function receives SCALAR i_val, not range
+    res = a * i_val;
 }
 ```
 
-**Key:** Functions always receive scalar values, not ranges. The loop is generated at the call site.
+**Key:** The function body is evaluated once per yielded range value. Whether
+the compiler places that loop around the call or in a specialized callee is an
+implementation detail.
 
-### Everything Is Scalar Inside Loops
+### Per-Yield Evaluation
 
-When a statement contains range variables, the loop is generated at the statement level, and all operations work on scalars:
+When a statement contains range variables, its source-level meaning is
+per-yield evaluation:
 
 ```python
 i = 0:5
@@ -277,12 +306,12 @@ result = Square(i) + i
 **Desugars to:**
 ```c
 for (int64_t i_val = 0; i_val < 5; i_val++) {
-    result = Square(i_val) + i_val;  // Square called with scalar!
+    result = Square(i_val) + i_val;
 }
 ```
 
-- ✅ Operators work on scalars
-- ✅ Functions receive scalar arguments
+- ✅ Operators work on the current yielded values
+- ✅ Function bodies evaluate once per yielded value
 - ✅ No special "range-aware" operations
 - ✅ Simple, unified model
 
@@ -292,7 +321,8 @@ For complex expressions with named intermediates, use functions:
 
 ```python
 i = 0:5
-res += compute_ratio(i)
+res = 0
+res = res + compute_ratio(i)
     numerator = i + 1
     denominator = i + 2
     res = numerator / denominator
@@ -303,8 +333,8 @@ This avoids the issue where intermediate assignments execute immediately:
 ```python
 i = 0:5
 x = i + 1        # Loop NOW: x = 5 (scalar)
-y = i + 2        # Loop NOW: y = 7 (scalar)
-res += x / y     # No loop! Just res += 5/7
+y = i + 2        # Loop NOW: y = 6 (scalar)
+res = res + x / y # No loop! Just scalar addition of 5/6
 ```
 
 Functions keep intermediates within the loop context.
@@ -316,4 +346,4 @@ Functions keep intermediates within the loop context.
 - **Scope-based deallocation**: Memory freed when variables go out of scope
 - **No GC pauses**: Deterministic cleanup
 - **COW optimization**: Arrays copied only when modified
-- **View safety**: Compiler/runtime prevents dangling references
+- **No range-view lifetimes**: Range-indexed access is finalized or collected

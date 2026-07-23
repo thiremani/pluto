@@ -205,8 +205,8 @@ Built-in compound types use the `_tN_` pattern:
 | Range | `Range_t1_[Iter]` | `Range_t1_I64` |
 | Array | `Array_t1_[Elem]` | `Array_t1_I64` |
 | Rank-N Array | repeated `Array_t1_` | `Array_t1_Array_t1_F64` |
+| Internal ArrayRange | `ArrayRange_t2_[Array]_[Range]` | `ArrayRange_t2_Array_t1_I64_Range_t1_I64` |
 | Table | `Table_t2N_[EncodedName Elem]...` | `Table_t4_5nName_StrH_6nScore_I64` |
-| ArrayRange | `ArrayRange_t1_[Elem]` | `ArrayRange_t1_I64` |
 | Function | `Func_tN_[ParamTypes...]` | `Func_t2_I64_F64` |
 
 **Note:** Function types only mangle parameter types; return types are NOT included (per §2.4 Arity rules).
@@ -219,6 +219,56 @@ Rank-1 arrays lower as the existing opaque runtime-vector pointer. Higher-rank
 arrays lower as `{ data, dim0, ..., dim(N-1) }`, where `data` is one flat row-major
 runtime vector. Dimension lengths are runtime values and do not participate in
 type mangling.
+
+An `ArrayRange` is an internal, call-scoped descriptor used when an immediate
+bare `array[range]` argument is specialized for callee-side iteration. Its two
+type arguments are the full array type and the full range type:
+`ArrayRange_t2_<full Array type>_<full Range type>`. Both are part of the
+mangle, so array rank, array element type, and range iterator type cannot
+collide. For example, a rank-2 I64 array indexed by an I64 range mangles as:
+
+```
+ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64
+```
+
+`ArrayRange` is not a source-level type. It cannot be bound to a variable,
+stored, returned, printed, or otherwise escape the call that created it. The
+function body observes one yielded element or owned subarray per iteration,
+not the descriptor itself.
+
+At the native boundary the descriptor is passed indirectly as a pointer to
+`{ <full lowered Array>, <full lowered Range> }`. For example, the following
+illustrative C declarations show the rank-1 and rank-2 I64 layouts (the
+emitted LLVM structs are structural rather than named with these C names):
+
+```c
+typedef struct {
+    int64_t start;
+    int64_t stop;
+    int64_t step;
+} PtRangeI64;
+
+typedef struct {
+    PtArrayI64 *array;
+    PtRangeI64 range;
+} PtArrayRangeI64Rank1;
+
+typedef struct {
+    PtArrayI64 *data;
+    int64_t dim0;
+    int64_t dim1;
+} PtArrayI64Rank2;
+
+typedef struct {
+    PtArrayI64Rank2 array;
+    PtRangeI64 range;
+} PtArrayRangeI64Rank2;
+```
+
+The descriptor occupies the ordinary source-parameter position. An indirect
+result carrier, when present, comes first; all source parameters follow in
+source order; hidden alias selectors follow them; and a hidden direct-return
+seed, when required, is last.
 
 ---
 
@@ -258,17 +308,76 @@ Module: `github.com/user/math`, RelPath: `stats/integral`
 
 ## 5. Calling Convention
 
-* **SRET:** All functions return `void`. Return via pointer at arg 0.
-* **Pass by reference:** All arguments (including primitives) are pointers.
-* **Methods:** `self` is arg 1 (after SRET).
+The native calling convention is selected from the solved parameter and output
+types:
+
+- `I64` and `F64` parameters are passed directly. Ranges, internal
+  `ArrayRange` descriptors, and other values are passed indirectly.
+- A function with exactly one `I64` or `F64` output returns that scalar
+  directly. A variant bearing a `Range` or internal `ArrayRange` parameter
+  also receives a hidden seed value so an empty range preserves the caller's
+  staged value.
+- All other output lists use an indirect `void` return. Argument zero points
+  to a carrier whose first `N` fields are output pointers and whose next `N`
+  fields are pointers to `i1` write markers.
+- The caller initializes every write marker to false. A callee sets the marker
+  only when that output is actually written. This lets an empty range or
+  skipped conditional preserve an existing caller destination.
+- Output expressions are staged independently at the call site, so one output
+  cannot mutate a destination before a sibling right-hand side reads its
+  statement-start value.
+- When a compatible caller destination has a different ownership or shape
+  representation from the declared output, the ABI slot starts at the declared
+  type's zero value. The caller commits it only if its write marker is set.
+
+Conceptually, a two-output indirect call uses:
 
 ```c
-void Pt_..._6Person_m_5Clone_f2_..._6Person_I64(
-    Person* ret,    // 0: SRET
-    Person* self,   // 1: self
-    I64* count      // 2: argument
-);
+struct Results {
+    T0 *out0;
+    T1 *out1;
+    bool *wrote0;
+    bool *wrote1;
+};
+
+void Pt_example(Results *results, I64 direct_arg, Other *indirect_arg);
 ```
+
+Range-bearing variants may also receive hidden alias selectors for direct
+scalar parameters that refer to an output destination. These preserve
+loop-carried accumulation without changing the source signature or mangled
+specialization identity. They do change the native C signature.
+For compatible indirect parameters, the caller instead passes the matching
+staged output pointer itself, so the callee observes the same loop-carried
+value without another hidden parameter.
+Hidden ABI fields and parameters are not part of name mangling.
+
+An eligible immediate bare `array[range]` call argument may therefore select
+an `ArrayRange` specialization and run its loop inside the callee. This
+placement does not change source semantics. Calls that reuse one driver in
+multiple argument positions, such as `F(i, i)`, must preserve one shared
+iteration domain; the current lowering handles that case caller-side. Distinct
+drivers, such as `F(i, j)`, retain their cartesian domain.
+
+### 5.1 Reserved Collector Specialization Suffix
+
+The following suffix is reserved for a possible future specialization that
+writes each yielded result directly into one or more collectors:
+
+```
+_cN_<item types...>
+```
+
+`N` is the number of item types that follow. Examples are `_c1_I64`,
+`_c1_Array_t1_I64`, and `_c2_I64_F64`. The suffix would follow the ordinary
+function specialization mangle and includes the full type of every collected
+item.
+
+This suffix is reserved only. The current compiler does not emit collector
+specializations, and no collector ABI is implemented. If that ABI is added, a
+collector for an item type `T` will be passed as `PtArrayT *` in the final
+native parameter position; this statement reserves the position but does not
+make it part of the current calling convention.
 
 ---
 

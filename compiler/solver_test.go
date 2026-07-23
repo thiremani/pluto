@@ -348,11 +348,6 @@ func TestCollectionTypeErrors(t *testing.T) {
 			script:      "flat = [1 2]\nnested = [[3 4] [5 6]]\njoined = flat ⊕ nested\njoined",
 			expectError: "cannot concatenate arrays with different ranks: 1 and 2",
 		},
-		{
-			name:        "RangeIndexOnRank2",
-			script:      "m = [\n    1 2\n    3 4\n]\nsub = m[0:2]\nsub",
-			expectError: "range indexing is currently supported only for rank-1 arrays",
-		},
 	}
 
 	for _, tc := range cases {
@@ -789,7 +784,7 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1, "scalar-valued statement condition should emit one diagnostic")
-	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-range driver, got I64")
+	require.Contains(t, ts.Errors[0].Msg, "statement condition must be a comparison or bare range/array-selection driver, got I64")
 }
 
 func TestLogicalAndDiagnostics(t *testing.T) {
@@ -1013,14 +1008,14 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
-func TestArrayRangeTyping(t *testing.T) {
+func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
 	ctx := llvm.NewContext()
 	code := ast.NewCode()
-	cc := NewCodeCompiler(ctx, "arrayRangeTyping", "", code)
+	cc := NewCodeCompiler(ctx, "rangedArrayAccessTyping", "", code)
 	cc.Compile()
 
 	script := "arr = [1 2 3]\nvalue = arr[0:2]\nsum = 0\nsum = sum + arr[0:2]"
-	sl := lexer.New("ArrayRangeTyping.spt", script)
+	sl := lexer.New("RangedArrayAccessTyping.spt", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
@@ -1033,16 +1028,162 @@ func TestArrayRangeTyping(t *testing.T) {
 
 	valueType, ok := ts.GetIdentifier("value")
 	require.True(t, ok, "expected value identifier")
-	value, ok := valueType.(ArrayRange)
-	require.Truef(t, ok, "expected value to be ArrayRange, got %T", valueType)
-	require.EqualValues(t, value.Array.ElemType, Int{Width: 64})
-	require.EqualValues(t, value.Range, Range{Iter: Int{Width: 64}})
+	value, ok := valueType.(Int)
+	require.Truef(t, ok, "expected ranged access to finalize as Int, got %T", valueType)
+	require.EqualValues(t, 64, value.Width)
+
+	valueStmt := program.Statements[1].(*ast.LetStatement)
+	valueExpr := valueStmt.Value[0].(*ast.ArrayRangeExpression)
+	valueInfo := ts.ExprCache[key(ts.FuncNameMangled, valueExpr)]
+	require.Equal(t, []Type{Int{Width: 64}}, valueInfo.OutTypes)
+	require.Len(t, valueInfo.Ranges, 1)
 
 	sumType, ok := ts.GetIdentifier("sum")
 	require.True(t, ok, "expected sum identifier")
 	sumInt, ok := sumType.(Int)
 	require.Truef(t, ok, "expected sum to be Int, got %T", sumType)
 	require.EqualValues(t, 64, sumInt.Width)
+}
+
+func TestImmediateArraySelectionUsesCallScopedArrayRange(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := mustParseCode(t, `out = Identity(x)
+    out = x`)
+	cc := NewCodeCompiler(ctx, "callScopedArrayRange", "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, `i = 0:2
+arr = [1 2 3]
+value = Identity(arr[i])
+arr[i]`)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	valueStmt := program.Statements[2].(*ast.LetStatement)
+	call := valueStmt.Value[0].(*ast.CallExpression)
+	callInfo := ts.ExprCache[key("", call)]
+	require.True(t, callInfo.LoopInside)
+	require.Equal(t, []Type{I64}, callInfo.ScalarCallParamTypes)
+	require.Len(t, callInfo.CallParamTypes, 1)
+
+	arrayRange, ok := callInfo.CallParamTypes[0].(ArrayRange)
+	require.Truef(t, ok, "expected call-only ArrayRange, got %T", callInfo.CallParamTypes[0])
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, arrayRange.Array)
+	require.Equal(t, Range{Iter: I64}, arrayRange.Range)
+
+	selection := call.Arguments[0].(*ast.ArrayRangeExpression)
+	require.Equal(t, []Type{I64}, ts.ExprCache[key("", selection)].OutTypes,
+		"the source expression must remain element-typed outside the call ABI")
+	valueType, ok := ts.GetIdentifier("value")
+	require.True(t, ok)
+	require.Equal(t, I64, valueType)
+
+	printCall := program.Statements[3].(*ast.PrintStatement).Expression
+	printInfo := ts.ExprCache[key("", printCall)]
+	require.False(t, printInfo.LoopInside, "print must consume the selection at the caller")
+	require.Equal(t, []Type{I64}, printInfo.CallParamTypes)
+}
+
+func TestArrayCollectorCreatesScalarVariantForArrayRangeCall(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := mustParseCode(t, `out = Double(x)
+    out = x * 2`)
+	moduleName := "arrayRangeCollector"
+	cc := NewCodeCompiler(ctx, moduleName, "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, `arr = [10 20 30]
+values = [Double(arr[0:3])]
+i = 0:3
+[i], [0:3]`)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	scalarMangled := Mangle(MangleDirPath(moduleName, ""), "Double", []Type{I64})
+	require.Contains(t, ts.ScriptCompiler.Compiler.FuncCache, scalarMangled,
+		"the surrounding array collector invokes a scalar callee per selected element")
+}
+
+func TestRankTwoSelectionSpecializesOverFullArraySchema(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := mustParseCode(t, `out = Identity(x)
+    out = x`)
+	cc := NewCodeCompiler(ctx, "rankTwoCallScopedArrayRange", "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, `rows = 0:2
+matrix = [
+    1 2
+    3 4
+]
+row = Identity(matrix[rows])`)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	call := program.Statements[2].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	info := ts.ExprCache[key("", call)]
+	require.True(t, info.LoopInside)
+	require.Equal(t, []Type{Array{ElemType: I64, Rank: 1}}, info.ScalarCallParamTypes)
+	require.Equal(t, []Type{ArrayRange{
+		Array: Array{ElemType: I64, Rank: 2},
+		Range: Range{Iter: I64},
+	}}, info.CallParamTypes)
+
+	rowType, ok := ts.GetIdentifier("row")
+	require.True(t, ok)
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, rowType)
+}
+
+func TestCallRangePlacementPreservesSharedDriverIdentity(t *testing.T) {
+	ctx := llvm.NewContext()
+	code := mustParseCode(t, `out = Identity(x)
+    out = x
+
+left, right = Keep(a, b)
+    left = a
+    right = b`)
+	cc := NewCodeCompiler(ctx, "callRangePlacement", "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, `i = 0:3
+j = 1:3
+arr = [10 20 30]
+rangeValue = Identity(j)
+distinctLeft, distinctRight = Keep(arr[i], j)
+sharedLeft, sharedRight = Keep(arr[i], i)`)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	rangeCall := program.Statements[3].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	rangeInfo := ts.ExprCache[key("", rangeCall)]
+	require.True(t, rangeInfo.LoopInside, "a bare Range argument should remain callee-iterated")
+	require.Equal(t, []Type{Range{Iter: I64}}, rangeInfo.CallParamTypes)
+	require.Equal(t, []Type{I64}, rangeInfo.ScalarCallParamTypes)
+
+	distinctCall := program.Statements[4].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	distinctInfo := ts.ExprCache[key("", distinctCall)]
+	require.True(t, distinctInfo.LoopInside,
+		"distinct Range and ArrayRange drivers may form the callee's cartesian loop")
+	require.IsType(t, ArrayRange{}, distinctInfo.CallParamTypes[0])
+	require.Equal(t, Range{Iter: I64}, distinctInfo.CallParamTypes[1])
+	require.Equal(t, []Type{I64, I64}, distinctInfo.ScalarCallParamTypes)
+
+	sharedCall := program.Statements[5].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	sharedInfo := ts.ExprCache[key("", sharedCall)]
+	require.False(t, sharedInfo.LoopInside,
+		"a driver reused by arr[i] and i must advance once at the caller")
+	require.Equal(t, []Type{I64, I64}, sharedInfo.CallParamTypes)
+	require.Equal(t, []Type{I64, I64}, sharedInfo.ScalarCallParamTypes)
+	require.Len(t, sharedInfo.Ranges, 1)
+	require.Equal(t, "i", sharedInfo.Ranges[0].Name)
 }
 
 func TestArrayIndexRejectsI1(t *testing.T) {
@@ -1114,7 +1255,7 @@ func TestArrayRangeIndexRequiresI64Iter(t *testing.T) {
 
 	found := false
 	for _, err := range ts.Errors {
-		if strings.Contains(err.Msg, "array range index expects I64 iterator") {
+		if strings.Contains(err.Msg, "range-valued array index expects an I64 iterator") {
 			found = true
 			break
 		}

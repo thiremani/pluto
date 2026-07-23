@@ -97,6 +97,8 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	if directType, ok := directScalarABIReturnType(outTypes); ok {
 		abi.Return.Mode = ABIReturnDirect
 		abi.Return.DirectType = directType
+		// Range-bearing variants need a seed so an empty range preserves the
+		// caller's destination. Ordinary scalar variants return directly.
 		abi.Return.HasSeedParam = abi.HasRangeParams
 	}
 
