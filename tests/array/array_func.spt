@@ -68,6 +68,7 @@ emptyDirect = ConcatElem([], 1)
 emptyNamed = []
 emptyNamedResult = ConcatElem(emptyNamed, 2)
 "ConcatElemNamed: -emptyNamedResult"
+"ConcatElemEmptyNamed: -emptyNamed"
 
 emptyInPlace = []
 emptyInPlace = ConcatElem(emptyInPlace, 3)
