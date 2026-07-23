@@ -757,9 +757,6 @@ The statement plan can grow without becoming a machine IR:
 - source `break` and `continue` extend structured range actions
 - function-result transfer can reuse outcome planning with a different final action
 - conditional arrays extend domains, alignment, and yield masks
-- grouped multi-axis indexing extends borrowed selection domains after PIR migration;
-  scalar indices drop axes, range and omitted indices retain them, and the
-  leftmost range drives the sequence of yielded subarrays
 - range-left value-position `&&` can later bind an outer local domain for nested
   construction such as `[i && [matrix[i][j]]]`; it must remain local to that
   value and must not become a statement gate or implicit collector — only an

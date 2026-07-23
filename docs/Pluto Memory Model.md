@@ -117,28 +117,6 @@ access as `[arr[i]]` materializes the selected values.
 **Difference:** Pluto separates range views from explicit collection, while
 Julia copies a range selection unless a view is requested explicitly.
 
-### Planned rank-N range selection
-
-The current implementation supports one index per bracket. After ranged
-collectors are represented in PIR, grouped indexing will extend the same view
-model to multiple axes:
-
-```pluto
-i = 0:3
-j = 0:3
-
-view = matrix[i j]
-submatrix = [matrix[i j]]
-rowSums = [Sum(matrix[i j])]
-```
-
-`matrix[i j]` will be a borrowed lazy selection rather than an eagerly allocated
-slice; `[matrix[i j]]` will materialize an owned array. The rank, axis, and
-driver rules belong to
-[Pluto Array Semantics](Pluto%20Array%20Semantics.md#grouped-multi-axis-indexing).
-Implementation remains deferred until PIR models range ownership and collector
-boundaries explicitly.
-
 ---
 
 ### 5. vs. Zig

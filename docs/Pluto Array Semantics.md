@@ -14,9 +14,10 @@ dimension lengths beside that buffer; rows are not separately allocated.
 - `[]` is a rank-1 `[Empty]` value.
 - An empty block is a rank-2 `[Empty]` value with shape `[0 0]`.
 - `[1 2 3]` is a rank-1 `[I64]` value.
-- An inline literal contributes one array axis.
-- A block literal, where `[` is followed by a newline, contributes row and
-  column axes even when it contains only one row.
+- A one-row inline literal contributes one array axis.
+- Two or more unescaped logical rows imply block layout.
+- A block literal contributes row and column axes even when it contains only
+  one row. A newline immediately after `[` explicitly selects that layout.
 - Equal-shaped array-valued cells stack recursively into higher ranks.
 
 A long rank-1 literal remains inline by escaping its physical newline:
@@ -26,8 +27,15 @@ values = [1 2 3 4 5 \
           6 7 8 9 10]
 ```
 
-Without the `\`, an inline literal cannot start another logical row. Put a
-newline immediately after `[` to select block layout instead.
+Without the `\`, a second logical row selects block layout:
+
+```pluto
+matrix = [1 2
+          3 4]
+```
+
+A newline immediately after `[` explicitly selects block layout for an empty
+or one-row matrix.
 
 These two literals therefore have the same rank-2 type and value:
 
@@ -120,9 +128,14 @@ without changing those established types.
 
 ## Indexing and operations
 
-`array[i]` indexes the outer dimension. Rank-1 indexing returns a scalar;
-higher-rank indexing returns an owned array with one fewer dimension. Chained
-indexing therefore works naturally.
+Each bracket indexes one outer dimension. Rank-1 indexing returns a scalar;
+higher-rank indexing returns an owned array with one fewer dimension:
+
+```pluto
+cube[1]          # rank 2
+cube[1][2]       # rank 1
+cube[1][2][0]    # scalar
+```
 
 A range-valued index is an iteration driver, not a materialized slice. Wrap
 the access in `[]` to collect its results. For a rank-2 array, this stacks the
@@ -132,6 +145,9 @@ selected rows into another rank-2 array:
 i = 0:2
 selected = [matrix[i]]
 ```
+
+Deferred nested range construction also uses chained indexing and is specified
+in [Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction).
 
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and zip every dimension to the shorter corresponding
@@ -164,70 +180,3 @@ With `arr = [1]`, the distinctions are:
 
 Assigning `[]` to an established concrete array similarly empties the value
 without changing that binding's leaf type or rank.
-
-## Planned rank-N range features
-
-### Grouped multi-axis indexing
-
-Shape-preserving selection across multiple indexed dimensions is not yet
-implemented. It is deferred until ranged collectors are represented in PIR.
-The planned syntax is grouped indexing:
-
-```pluto
-i = 0:3
-j = 0:3
-k = 0:3
-
-submatrix = [matrix[i j]]
-plane = [cube[1 j k]]
-column = [cube[i 1 1]]
-```
-
-A grouped access containing at least one range is a lazy selection view. Its
-rank is:
-
-```text
-source rank - number of scalar indices
-```
-
-Unspecified trailing axes are retained. If a grouped access contains a range,
-the leftmost range drives iteration. Each yield has one less rank than the
-selection; the surrounding collector applies its ordinary rule and stacks the
-yields, restoring the selection rank. It does not need a special
-"materialize without adding a dimension" case.
-
-For example, a rank-3 `cube` follows this ladder:
-
-```pluto
-cube[1]          # rank 2
-cube[1 2]        # rank 1
-cube[1 2 0]      # scalar
-[cube[i j k]]    # rank 3
-[cube[1 j k]]    # rank 2
-[cube[1 2 k]]    # rank 1
-```
-
-Grouped indexing preserves axes. Chained range indexing, such as
-`[matrix[i][j]]`, keeps the existing flattened range-domain behavior. Mixed
-grouped and chained indexing should initially be rejected.
-
-### Nested range construction
-
-Grouped indexing selects from an existing array. Computed rectangular values
-need a separate construction rule:
-
-```pluto
-i = 0:3
-j = 0:3
-submatrix = [i && [matrix[i][j]]]
-```
-
-Here value-position `&&` binds the outer `i` domain locally, the inner collector
-owns `j`, and the outer collector stacks the rows. It never becomes a statement
-gate. A skipped array-valued child contributes a zero-filled child of the known
-inner shape, while `||` may supply an explicit shape-compatible fallback.
-
-The domain-binding, collector-placement, and fallback rules are specified in
-[Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction).
-This construction remains deferred until PIR represents range ownership and
-collector boundaries directly.

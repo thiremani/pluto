@@ -1156,12 +1156,8 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 		})
 		return nil
 	}
-	if len(arr.Headers) == 0 && !arr.Block && len(arr.Rows) > 1 {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: arr.Rows[1][0].Tok(),
-			Msg:   "inline array literals have one logical row; use '\\' to continue the row or put a newline immediately after '[' for block layout",
-		})
-		return nil
+	if len(arr.Headers) == 0 && len(arr.Rows) > 1 {
+		arr.Block = true
 	}
 	// Do not consume the closing ']' here. Align with grouped-expression
 	// behavior and leave curToken at the closing token; callers (statement

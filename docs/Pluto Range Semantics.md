@@ -105,13 +105,12 @@ assignment root a skipped iteration keeps the destination, so the last
 **yielded** value wins (`x = i > 2 && i * 2` over `0:5` ends as `8`).
 `i > 2 && v || w` resolves per iteration as an if-else.
 
-## One-Dimensional Array Literals
+## Array Collectors
 
-An inline headerless bracket literal materializes an array at the point where
-it appears. A `\` line continuation keeps a physically wrapped literal inline.
-A block literal, where `[` is followed by a newline, instead contributes fixed
-row and column axes and does not use the collector behavior in this section,
-even when it contains one row. Heterogeneous block literals may infer tables.
+A one-row inline headerless bracket literal materializes an array at the point
+where it appears. Fixed block literals do not use the collector behavior in
+this section. Their layout and rank rules are defined in
+[Pluto Array Semantics](Pluto%20Array%20Semantics.md#literal-inference).
 
 The collector materializes over:
 
@@ -123,14 +122,10 @@ The collector also does not leak its own ranges upward into the parent
 expression.
 
 Once the literal has materialized, the result is just an ordinary array value.
-Binding always produces an array value. Later statements treat it as an
-ordinary array, the same as any other named binding.
+Binding freezes that value, so later statements treat it like any other named
+array.
 
 ### Collectors And Binding
-
-Binding a collector to a variable freezes the array produced at that binding
-site. Later statements treat it as an ordinary array, the same as any other
-named binding.
 
 For example:
 

@@ -1188,7 +1188,7 @@ func TestArrayLiterals(t *testing.T) {
 		{
 			name: "array with headers",
 			input: `[
-    :Day Product Price
+  : Day Product Price
     "Monday" "Phone" 200
     "Tuesday" "Laptop" 300
 ]`,
@@ -1276,10 +1276,13 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
-			name:        "inline array starts a second row",
-			input:       "[1 2\n3 4]",
-			expectError: true,
-			errorMsg:    "inline array literals have one logical row",
+			name:  "second logical row implies block",
+			input: "[1 2\n3 4]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Len(t, arr.Rows, 2)
+				require.Equal(t, "[\n    1 2\n    3 4\n]", arr.String())
+			},
 		},
 		{
 			name:  "attached unary plus",
