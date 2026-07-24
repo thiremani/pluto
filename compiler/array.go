@@ -980,13 +980,10 @@ func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ 
 	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
 
 	var rangeSym *Symbol
-	switch rangeExpr := expr.Range.(type) {
-	case *ast.Identifier:
-		rangeSym = c.compileIdentifier(rangeExpr)
-	case *ast.RangeLiteral:
-		rangeSym = c.compileRangeExpression(rangeExpr)[0]
-	default:
-		panic(fmt.Sprintf("internal: unsupported ArrayRange call index %T", expr.Range))
+	if rangeIdent, ok := expr.Range.(*ast.Identifier); ok {
+		rangeSym = c.compileIdentifier(rangeIdent)
+	} else {
+		rangeSym = c.compileExpression(expr.Range, nil)[0]
 	}
 	rangeSym = c.derefIfPointer(rangeSym, "array_range_index")
 
