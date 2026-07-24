@@ -2543,7 +2543,7 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	for i := 0; i < abi.NumAliasSlots(); i++ {
 		llvmParams = append(llvmParams, c.Context.Int32Type())
 	}
-	if abi.Return.HasSeedParam {
+	if abi.Return.Mode == ABIReturnDirect {
 		llvmParams = append(llvmParams, c.mapToLLVMType(abi.Return.DirectType))
 	}
 
@@ -3381,7 +3381,7 @@ func (c *Compiler) callArgs(
 	for _, aliasIndex := range call.AliasIndices {
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
-	if sig.ABI.Return.HasSeedParam {
+	if sig.ABI.Return.Mode == ABIReturnDirect {
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")
 		llvmArgs = append(llvmArgs, seed.Val)
 	}

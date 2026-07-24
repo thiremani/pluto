@@ -59,12 +59,22 @@ func TestDirectScalarABIAlwaysHasDestinationSeed(t *testing.T) {
 	for _, outType := range []Type{I64, F64} {
 		abi := classifyFuncABI([]Type{I64}, []Type{outType})
 		require.Equal(t, ABIReturnDirect, abi.Return.Mode)
-		require.True(t, abi.Return.HasSeedParam)
+		require.True(t, TypeEqual(outType, abi.Return.DirectType))
+		require.Equal(t, 1, abi.DirectReturnSeedParamIndex())
 	}
+
+	zeroArg := classifyFuncABI(nil, []Type{I64})
+	require.Equal(t, ABIReturnDirect, zeroArg.Return.Mode)
+	require.Equal(t, 0, zeroArg.DirectReturnSeedParamIndex())
 
 	indirect := classifyFuncABI([]Type{I64}, []Type{I64, I64})
 	require.Equal(t, ABIReturnIndirect, indirect.Return.Mode)
-	require.False(t, indirect.Return.HasSeedParam)
+	require.Nil(t, indirect.Return.DirectType)
+	require.Equal(t, -1, indirect.DirectReturnSeedParamIndex())
+
+	stringReturn := classifyFuncABI(nil, []Type{StrG{}})
+	require.Equal(t, ABIReturnIndirect, stringReturn.Return.Mode)
+	require.Equal(t, -1, stringReturn.DirectReturnSeedParamIndex())
 }
 
 func TestPhase1ScalarABIDirectI64(t *testing.T) {

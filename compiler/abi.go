@@ -22,10 +22,9 @@ type ABIParam struct {
 }
 
 type ABIReturn struct {
-	Mode         ABIReturnMode
-	DirectType   Type
-	OutTypes     []Type
-	HasSeedParam bool
+	Mode       ABIReturnMode
+	DirectType Type
+	OutTypes   []Type
 }
 
 // FuncABI captures the lowered function boundary for one mangled variant.
@@ -95,12 +94,11 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	}
 
 	if directType, ok := directScalarABIReturnType(outTypes); ok {
-		abi.Return.Mode = ABIReturnDirect
-		abi.Return.DirectType = directType
 		// Whether a function body writes its output conditionally is not part
 		// of the type-based mangle. Keep the native C ABI stable across body
-		// changes by giving every direct scalar return a destination seed.
-		abi.Return.HasSeedParam = true
+		// changes: direct-return mode always implies a destination seed.
+		abi.Return.Mode = ABIReturnDirect
+		abi.Return.DirectType = directType
 	}
 
 	return abi
@@ -144,7 +142,7 @@ func (abi FuncABI) AliasFunctionParamIndex(paramIndex int) int {
 }
 
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
-	if abi.Return.Mode != ABIReturnDirect || !abi.Return.HasSeedParam {
+	if abi.Return.Mode != ABIReturnDirect {
 		return -1
 	}
 	return abi.AliasParamBaseIndex() + abi.NumAliasSlots()
