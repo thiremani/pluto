@@ -137,17 +137,35 @@ cube[1][2]       # rank 1
 cube[1][2][0]    # scalar
 ```
 
-A range-valued index is an iteration driver, not a materialized slice. Wrap
-the access in `[]` to collect its results. For a rank-2 array, this stacks the
-selected rows into another rank-2 array:
+A range-valued index is an iteration driver, not a slice or view value.
+An assignment root keeps the final valid selected element or subarray; wrap
+the access in `[]` to collect all selected values:
 
 ```pluto
 i = 0:2
-selected = [matrix[i]]
+last = vector[i]
+selected = [vector[i]]
+
+lastRow = matrix[i]
+selectedRows = [matrix[i]]
 ```
 
-Deferred nested range construction also uses chained indexing and is specified
-in [Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction).
+`last` is the final selected element, while `selected` contains every element.
+For higher-rank arrays, `lastRow` owns the final selected row and
+`selectedRows` stacks every selected row.
+Range-indexed access cannot be stored or printed as an internal view; it must
+be consumed, finalized, or collected.
+
+An immediate bare `array[range]` function argument may be consumed by a
+specialized callee. The compiler can carry the array and range in an internal,
+call-scoped descriptor and perform the iteration there. This descriptor is not
+a source-level value and cannot be stored, returned, printed, or otherwise
+escape the call.
+
+Planned deferred nested range construction also uses chained indexing and is
+specified in
+[Pluto Range Semantics](Pluto%20Range%20Semantics.md#deferred-nested-range-construction);
+it remains deferred until PIR represents those scopes directly.
 
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and zip every dimension to the shorter corresponding

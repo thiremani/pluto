@@ -953,19 +953,6 @@ func (c *Compiler) arrayFormatArg(s *Symbol, info ArrayInfo, elementFormat strin
 	return c.builder.CreateCall(fnTy, fn, formatArgs, "arr_format")
 }
 
-func (c *Compiler) arrayRangeStrArgs(s *Symbol) (arrayStr llvm.Value, rangeStr llvm.Value) {
-	arrRange := s.Type.(ArrayRange)
-	agg := s.Val
-	arrPtr := c.builder.CreateExtractValue(agg, 0, "array_range_arr")
-	arrSym := &Symbol{Val: arrPtr, Type: arrRange.Array}
-	arrayStr = c.arrayStrArg(arrSym)
-
-	rangeVal := c.builder.CreateExtractValue(agg, 1, "array_range_rng")
-	rangeSym := &Symbol{Val: rangeVal, Type: arrRange.Range}
-	rangeStr = c.rangeStrArg(rangeSym)
-	return
-}
-
 func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*Symbol, *Symbol, Array) {
 	arrayLoadName := ""
 	if arrayIdent, ok := expr.Array.(*ast.Identifier); ok {
@@ -982,6 +969,32 @@ func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*S
 	return arraySym, idxSym, arrType
 }
 
+// compileArrayRangeCallArg builds the internal descriptor used only at an
+// immediate call boundary. Ordinary array indexing still lowers to the final
+// selected element/subarray and therefore cannot expose or retain ArrayRange.
+func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ ArrayRange) *Symbol {
+	arrayLoadName := ""
+	if arrayIdent, ok := expr.Array.(*ast.Identifier); ok {
+		arrayLoadName = arrayIdent.Value + "_load"
+	}
+	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
+
+	var rangeSym *Symbol
+	if rangeIdent, ok := expr.Range.(*ast.Identifier); ok {
+		rangeSym = c.compileIdentifier(rangeIdent)
+	} else {
+		rangeSym = c.compileExpression(expr.Range, nil)[0]
+	}
+	rangeSym = c.derefIfPointer(rangeSym, "array_range_index")
+
+	_, arrayIsIdent := expr.Array.(*ast.Identifier)
+	return &Symbol{
+		Val:      c.CreateArrayRange(arraySym.Val, rangeSym.Val, typ),
+		Type:     typ,
+		Borrowed: arrayIsIdent || arraySym.Borrowed,
+	}
+}
+
 func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
 	idxVal := idxSym.Val
 	intType, ok := idxSym.Type.(Int)
@@ -994,9 +1007,14 @@ func (c *Compiler) normalizeArrayIndex(idxSym *Symbol) llvm.Value {
 	return c.builder.CreateIntCast(idxVal, c.Context.Int64Type(), "arr_idx_cast")
 }
 
-func (c *Compiler) storeArrayRangeOutput(output *Symbol, value llvm.Value, valueType Type) {
+func (c *Compiler) storeRangedOutput(output *Symbol, value llvm.Value, valueType Type) {
 	c.freeSymbolValue(output, "old_output")
-	c.createStore(value, output.Val, valueType)
+	c.storeSymbolToSlot(
+		output,
+		&Symbol{Val: value, Type: valueType},
+		output.Type.(Ptr).Elem,
+		"range_output_store",
+	)
 }
 
 func (c *Compiler) compileArraySubarray(array *Symbol, index llvm.Value) *Symbol {
@@ -1049,19 +1067,12 @@ func (c *Compiler) checkedArraySubarray(array *Symbol, index llvm.Value, inBound
 	return c.createLoad(resultSlot, resultType, "array_subarray_checked")
 }
 
-// compileArrayRangeExpression compiles an array indexing expression.
-// If the index is a range (e.g., arr[0:10]), returns an ArrayRange symbol.
-// If the index is a scalar (e.g., arr[4]), returns the element.
-// We check the actual compiled index type, not cached OutTypes, because
-// inside a loop the index may be bound to a scalar even if originally a range.
+// compileArrayRangeExpression compiles an array indexing expression. A ranged
+// index is always finalized or collected through the surrounding loop; only a
+// scalar element/subarray value reaches compileArrayRangeBasic.
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier) []*Symbol {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	pending := c.pendingLoopRanges(info.Ranges)
-	if len(pending) > 0 {
-		// Bare range indices (arr[i] where i is a range) remain ArrayRange views.
-		if len(info.OutTypes) > 0 && info.OutTypes[0].Kind() == ArrayRangeKind {
-			return c.compileArrayRangeBasic(expr)
-		}
+	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return c.compileArrayRangeRanges(info, dest)
 	}
 	return c.compileArrayRangeBasic(expr)
@@ -1070,21 +1081,8 @@ func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, d
 func (c *Compiler) compileArrayRangeBasic(expr *ast.ArrayRangeExpression) []*Symbol {
 	arraySym, idxSym, arrType := c.compileArrayRangeOperands(expr)
 
-	// Check actual compiled index type to determine ArrayRange vs element access
 	if idxSym.Type.Kind() == RangeKind {
-		// ArrayRange from an identifier is a borrowed view into existing storage.
-		_, arrayIsIdent := expr.Array.(*ast.Identifier)
-		borrowed := arrayIsIdent || arraySym.Borrowed
-
-		arrRange := ArrayRange{
-			Array: arrType,
-			Range: idxSym.Type.(Range),
-		}
-		return []*Symbol{{
-			Val:      c.CreateArrayRange(arraySym.Val, idxSym.Val, arrRange),
-			Type:     arrRange,
-			Borrowed: borrowed,
-		}}
+		panic("internal: ranged array access reached scalar lowering without an iterator loop")
 	}
 	// Scalar element access does not retain the source array pointer.
 	// Release temporary array sources on all scalar return paths; a consumed
@@ -1124,7 +1122,8 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
-	outputs := c.makeOutputs(dest, info.OutTypes, true)
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
@@ -1145,11 +1144,11 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			if c.currentLoopBoundsMode() == loopBoundsModeAffineFast && c.isFastAffineAccess(rew) {
 				if arrType.Rank > 1 {
 					subarray := c.compileArraySubarray(arraySym, idxVal)
-					c.storeArrayRangeOutput(output, subarray.Val, resultType)
+					c.storeRangedOutput(output, subarray.Val, resultType)
 					return
 				}
 				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-				c.storeArrayRangeOutput(output, elemVal, resultType)
+				c.storeRangedOutput(output, elemVal, resultType)
 				return
 			}
 
@@ -1160,10 +1159,10 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 				c.builder.SetInsertPointAtEnd(storeBlock)
 				if arrType.Rank > 1 {
 					subarray := c.compileArraySubarray(arraySym, idxVal)
-					c.storeArrayRangeOutput(output, subarray.Val, resultType)
+					c.storeRangedOutput(output, subarray.Val, resultType)
 				} else {
 					elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-					c.storeArrayRangeOutput(output, elemVal, resultType)
+					c.storeRangedOutput(output, elemVal, resultType)
 				}
 				c.builder.CreateBr(contBlock)
 
@@ -1172,7 +1171,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 				if arrType.Rank > 1 {
 					zeroVal = c.zeroArraySubarray(arraySym)
 				}
-				c.storeArrayRangeOutput(output, zeroVal.Val, zeroVal.Type)
+				c.storeRangedOutput(output, zeroVal.Val, zeroVal.Type)
 				c.builder.CreateBr(contBlock)
 
 				c.builder.SetInsertPointAtEnd(contBlock)
@@ -1184,10 +1183,10 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 			c.builder.SetInsertPointAtEnd(storeBlock)
 			if arrType.Rank > 1 {
 				subarray := c.compileArraySubarray(arraySym, idxVal)
-				c.storeArrayRangeOutput(output, subarray.Val, resultType)
+				c.storeRangedOutput(output, subarray.Val, resultType)
 			} else {
 				elemVal := c.ArrayGet(arraySym, arrElemType, idxVal)
-				c.storeArrayRangeOutput(output, elemVal, resultType)
+				c.storeRangedOutput(output, elemVal, resultType)
 			}
 			c.builder.CreateBr(contBlock)
 
@@ -1195,9 +1194,5 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 		})
 	})
 
-	elemType := output.Type.(Ptr).Elem
-	return []*Symbol{{
-		Val:  c.createLoad(output.Val, elemType, "final"),
-		Type: elemType,
-	}}
+	return c.loadOutputValues(outputs, "final")
 }

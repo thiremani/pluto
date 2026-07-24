@@ -81,6 +81,26 @@ callReset
 callReset = getStatic()
 callReset
 
+# A StrG-returning conditional callee still sees the established StrH
+# destination seed when its write is skipped.
+staticCallSeed = "keep" ⊕ "_heap"
+staticCallSeed
+staticCallSeed = maybeStatic(0)
+"CallStaticSeedKeep: -staticCallSeed"
+staticCallSeed = maybeStatic(1)
+"CallStaticSeedWrite: -staticCallSeed"
+
+# Refinement adapters are ABI-zero-seeded inside the callee. An unwritten StrG
+# output preserves its established StrH destination, while an explicit sibling
+# copy of that ABI value commits the empty StrG value safely.
+sharedStaticLeft = "shared" ⊕ "_left"
+sharedStaticRight = "shared" ⊕ "_right"
+"CallStaticShareBefore: < -sharedStaticLeft > < -sharedStaticRight >"
+sharedStaticLeft, sharedStaticRight = shareStaticOutput(0)
+"CallStaticShareSkipped: < -sharedStaticLeft > < -sharedStaticRight >"
+sharedStaticLeft, sharedStaticRight = shareStaticOutput(1)
+"CallStaticShareWritten: < -sharedStaticLeft > < -sharedStaticRight >"
+
 # Array element copy infers StrH for the binding; later static stores should work
 arrSlot = ["slot" "array"]
 elemReset = arrSlot[0]
@@ -151,3 +171,64 @@ elem2
 # Function that uses array elements internally
 result = useArrayElem()
 result
+
+# Ranged indirect calls keep their ABI output flavor separate from an
+# established owning destination. Bare and expression drivers must both
+# preserve empty ranges and remain safe under simultaneous writes.
+rangeStatic = getHeap()
+rangeArg = 0:3
+rangeStatic = getStaticAt(rangeArg + 0)
+"RangeStaticExpression: -rangeStatic"
+
+rangeStatic = getHeap()
+emptyRangeArg = 0:0
+rangeStatic = getStaticAt(emptyRangeArg + 0)
+"RangeStaticExpressionEmpty: -rangeStatic"
+
+rangeStatic = getHeap()
+rangeStatic = getStaticAt(rangeArg)
+"RangeStaticBare: -rangeStatic"
+
+rangeStatic = getHeap()
+rangeStatic = getStaticAt(emptyRangeArg)
+"RangeStaticBareEmpty: -rangeStatic"
+
+rangeStatic = getHeap()
+rangeStatic = 1 > 0 getStaticAt(rangeArg + 0)
+"RangeStaticConditional: -rangeStatic"
+
+rangeStatic = getHeap()
+rangeSibling = "unset"
+rangeStatic, rangeSibling = getStaticAt(rangeArg), rangeStatic
+"RangeStaticSimultaneous: -rangeStatic -rangeSibling"
+
+pairStatic = getHeap()
+pairNumber = -1
+pairStatic, pairNumber = getStaticPair(rangeArg + 0)
+"RangeStaticPair: -pairStatic -pairNumber"
+
+# Ordinary indirect-return calls also stage their outputs until every sibling
+# RHS has read the statement-start values.
+callSiblingLeft = "call" ⊕ "_left"
+callSiblingLeft, callSiblingRight = getHeap(), callSiblingLeft
+"CallHeapSimultaneous: -callSiblingLeft -callSiblingRight"
+
+# Conditional-value RHS expressions remain simultaneous: committing the first
+# heap-string result cannot invalidate a later sibling read.
+condSwapLeft = "cond" ⊕ "_left"
+condSwapRight = "cond" ⊕ "_right"
+condSwapLeft, condSwapRight = condSwapRight > "", condSwapLeft
+"CondHeapSwap: -condSwapLeft -condSwapRight"
+
+# A ranged comparison retains an owned copy of an identifier LHS. Cover both
+# a distinct source and self-reference, where the staged output initially
+# points at the same logical value.
+rangeCompare = 0:3
+rangeCompareSource = "z" ⊕ "_source"
+rangeCompareOut = "old" ⊕ "_out"
+rangeCompareOut = rangeCompareSource > "item -rangeCompare"
+"RangeCondSource: -rangeCompareOut -rangeCompareSource"
+
+rangeCompareSelf = "z" ⊕ "_self"
+rangeCompareSelf = rangeCompareSelf > "item -rangeCompare"
+"RangeCondSelf: -rangeCompareSelf"

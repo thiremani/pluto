@@ -684,6 +684,13 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	}
 
 	p.nextToken()
+	if p.curTokenIs(token.IDENT) && !p.curToken.HadSpace {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "expected a space after ':' in struct field header",
+		})
+		return nil
+	}
 	headers, ok := p.parseStructHeaders()
 	if !ok {
 		return nil
@@ -698,6 +705,21 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	}
 
 	p.nextToken()
+	if !p.curTokenIs(token.INDENT) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct value row must be indented beneath its field header",
+		})
+		return nil
+	}
+	p.nextToken()
+	if p.curToken.Column != headers[0].Column {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "struct value row must align with the first field header",
+		})
+		return nil
+	}
 	row, ok := p.parseStructRowConstants()
 	if !ok {
 		return nil
@@ -712,6 +734,11 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	}
 
 	if p.curTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+	if p.curTokenIs(token.DEINDENT) {
+		// Consume the value-row indentation. The surrounding struct-body
+		// DEINDENT remains current for CodeParser to consume.
 		p.nextToken()
 	}
 
@@ -745,7 +772,7 @@ func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
 		if p.isCondition(exp) {
 			continue
 		}
-		msg := fmt.Sprintf("Expression %q is not a condition. Statement conditions must be comparisons or bare range/array-range drivers", exp.String())
+		msg := fmt.Sprintf("Expression %q is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers", exp.String())
 		ce := &token.CompileError{
 			Token: exp.Tok(),
 			Msg:   msg,

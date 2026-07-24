@@ -17,7 +17,7 @@ Square(i)
 # Named range both direct and in function call
 i, Square(i)
 
-# Two bare ranges - should print as representations
+# Two bare ranges form a cartesian print domain.
 j = 1:3
 i, j
 

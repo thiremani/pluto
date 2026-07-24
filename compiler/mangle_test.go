@@ -291,6 +291,17 @@ func TestMangle(t *testing.T) {
 			expected: "Pt_4iter_p_3sum_f1_Range_t1_I64",
 		},
 		{
+			name:     "with array range type",
+			modName:  "iter",
+			relPath:  "",
+			funcName: "sum",
+			args: []Type{ArrayRange{
+				Array: Array{ElemType: I64, Rank: 2},
+				Range: Range{Iter: I64},
+			}},
+			expected: "Pt_4iter_p_3sum_f1_ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
+		},
+		{
 			name:     "with array type",
 			modName:  "arr",
 			relPath:  "",
@@ -334,6 +345,85 @@ func TestMangle(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestArrayRangeMangleIsStructural(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      ArrayRange
+		expected string
+	}{
+		{
+			name: "rank one I64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 1},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_I64_Range_t1_I64",
+		},
+		{
+			name: "rank two I64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 2},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
+		},
+		{
+			name: "rank one F64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: F64, Rank: 1},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_F64_Range_t1_I64",
+		},
+		{
+			name: "different range iterator",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 1},
+				Range: Range{Iter: F64},
+			},
+			expected: "ArrayRange_t2_Array_t1_I64_Range_t1_F64",
+		},
+	}
+
+	seen := make(map[string]string, len(tests))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mangled := tt.typ.Mangle()
+			assert.Equal(t, tt.expected, mangled)
+			if other, exists := seen[mangled]; exists {
+				t.Errorf("ArrayRange mangle collision between %q and %q: %s", other, tt.name, mangled)
+			}
+			seen[mangled] = tt.name
+		})
+	}
+}
+
+func TestArrayRangeTypeIdentityIsStructural(t *testing.T) {
+	base := ArrayRange{
+		Array: Array{ElemType: I64, Rank: 1},
+		Range: Range{Iter: I64},
+	}
+	same := ArrayRange{
+		Array: Array{ElemType: Int{Width: 64}, Rank: 1},
+		Range: Range{Iter: Int{Width: 64}},
+	}
+
+	assert.True(t, TypeEqual(base, same))
+	assert.True(t, TypeEqual(base, base.Key()))
+	assert.False(t, TypeEqual(base, ArrayRange{
+		Array: Array{ElemType: I64, Rank: 2},
+		Range: Range{Iter: I64},
+	}))
+	assert.False(t, TypeEqual(base, ArrayRange{
+		Array: Array{ElemType: F64, Rank: 1},
+		Range: Range{Iter: I64},
+	}))
+	assert.False(t, TypeEqual(base, ArrayRange{
+		Array: Array{ElemType: I64, Rank: 1},
+		Range: Range{Iter: F64},
+	}))
 }
 
 func TestMangleDistinguishesModuleFromSubdir(t *testing.T) {
@@ -485,6 +575,11 @@ func TestDemangle(t *testing.T) {
 			expected: "iter.sum(Range_t1_I64)",
 		},
 		{
+			name:     "with array range type",
+			mangled:  "Pt_4iter_p_3sum_f1_ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
+			expected: "iter.sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)",
+		},
+		{
 			name:     "with func type",
 			mangled:  "Pt_3hof_p_5apply_f1_Func_t2_I64_F64",
 			expected: "hof.apply(Func_t2_I64_F64)",
@@ -561,6 +656,10 @@ func TestMangleDemangleRoundTrip(t *testing.T) {
 		{"github.com/user/pkg", "sub", "Run", []Type{F64}, "github.com/user/pkg/sub.Run(F64)"},
 		{"math", "", "move", []Type{Struct{Name: "Person"}, I64}, "math.move(Person, I64)"},
 		{"math", "", "pair", []Type{Struct{Name: "Person"}, Struct{Name: "Animal"}}, "math.pair(Person, Animal)"},
+		{"iter", "", "sum", []Type{ArrayRange{
+			Array: Array{ElemType: I64, Rank: 2},
+			Range: Range{Iter: I64},
+		}}, "iter.sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)"},
 		// Mixed nominal identifiers (ASCII + Unicode)
 		{"math", "", "f", []Type{Struct{Name: "foo_π"}, I64}, "math.f(foo_π, I64)"},
 		{"math", "", "f", []Type{Struct{Name: "πbar"}, I64}, "math.f(πbar, I64)"},

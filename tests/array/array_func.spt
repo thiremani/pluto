@@ -55,6 +55,16 @@ gatedTableColumn = (1 > 0 && Identity([
 ])).Name > "K"
 "GatedTableColumn: -gatedTableColumn"
 
+conditionalTable = [
+  : Name Score
+    "Grace" 30
+]
+"ConditionalTableBefore: -conditionalTable"
+conditionalTable = ResetTable(-1)
+"ConditionalTableSkipped: -conditionalTable"
+conditionalTable = ResetTable(1)
+"ConditionalTableWritten: -conditionalTable"
+
 arr1 = [] ⊕ [0]
 "DirectConcatScalar: -arr1"
 
@@ -79,6 +89,48 @@ emptyConcat = ConcatArrays([], [])
 
 emptyIdentity = Identity([])
 "IdentityEmpty: -emptyIdentity"
+
+# Ranged indirect calls returning rank-1 [] bridge safely into rank-N slots.
+resetMatrix = [
+    1 2
+    3 4
+]
+resetDriver = 0:2
+resetMatrix = ResetArray(resetDriver)
+"RangedRankReset: -resetMatrix"
+
+keptMatrix = [
+    5 6
+    7 8
+]
+emptyResetDriver = 0:0
+keptMatrix = ResetArray(emptyResetDriver)
+"RangedRankResetEmpty: -keptMatrix"
+
+# An ordinary conditional [] return keeps an established rank-N destination
+# when the callee leaves its output unwritten.
+conditionalResetMatrix = [
+    11 12
+    13 14
+]
+"ConditionalRankResetBefore: -conditionalResetMatrix"
+conditionalResetMatrix = ResetArray(-1)
+"ConditionalRankResetSkipped: -conditionalResetMatrix"
+
+rangedConditionalResetMatrix = [
+    21 22
+    23 24
+]
+"RangedConditionalRankResetBefore: -rangedConditionalResetMatrix"
+rangedConditionalResetMatrix = ResetArray(-1:0)
+"RangedConditionalRankResetSkipped: -rangedConditionalResetMatrix"
+
+zeroWidthMatrix = [[] []]
+"ZeroWidthRankResetBefore: -zeroWidthMatrix"
+zeroWidthMatrix = ResetArray(-1)
+"ZeroWidthRankResetSkipped: -zeroWidthMatrix"
+zeroWidthMatrix = ResetArray(1)
+"ZeroWidthRankResetWritten: -zeroWidthMatrix"
 
 lockedArray = [9]
 "BeforeEmptyReset: -lockedArray"
@@ -125,6 +177,36 @@ rebuiltNoAlias2 = Rebuild([5 6 7], -1:1)
 # Nested range accumulation via array literal
 pairSum = [PairSum(0:2, 3:5)]
 "PairSumRange: -pairSum"
+
+# A bare rank-N array selection stays internal to the call. Identity receives
+# one rank-reduced row per iteration and the indirect result retains the last.
+rowSource = [
+    1 2
+    3 4
+]
+rowDriver = 0:2
+lastNamedRow = Identity(rowSource[rowDriver])
+"ArrayRangeLastNamedRow: -lastNamedRow"
+
+lastLiteralRow = Identity([
+    5 6
+    7 8
+][rowDriver])
+"ArrayRangeLastLiteralRow: -lastLiteralRow"
+
+keptRow = [9 10]
+emptyRowDriver = 0:0
+keptRow = Identity(rowSource[emptyRowDriver])
+"ArrayRangeEmptyKeepsRow: -keptRow"
+
+# A temporary string backing array is released after the call, while the
+# selected scalar result remains independently owned.
+lastLiteralWord = Identity(["red" "blue"][0:2])
+"ArrayRangeLastLiteralWord: -lastLiteralWord"
+
+keptWord = "keep"
+keptWord = Identity(["red" "blue"][0:0])
+"ArrayRangeEmptyKeepsWord: -keptWord"
 
 # Accumulate in array
 res = [2 3 5]

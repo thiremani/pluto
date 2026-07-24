@@ -369,7 +369,7 @@ func TestFunctionParameterParsing(t *testing.T) {
 
 func TestParseStructDefinition(t *testing.T) {
 	input := `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`
 
 	cp := NewCodeParser(lexer.New("TestParseStructDefinition", input))
@@ -401,7 +401,21 @@ func TestParseStructDefinition(t *testing.T) {
 	_, constExists := code.ConstNames["p"]
 	require.True(t, constExists)
 
-	require.Equal(t, "p = Person\n    :name age height\n    \"Tejas\" 35 184.5", stmt.String())
+	require.Equal(t, "p = Person\n  : name age height\n    \"Tejas\" 35 184.5", stmt.String())
+}
+
+func TestStructDefNextStatement(t *testing.T) {
+	input := `p = Person
+  : name age
+    "Tejas" 35
+answer = 42`
+
+	cp := NewCodeParser(lexer.New("TestStructDefNextStatement", input))
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+	require.Len(t, code.Struct.Statements, 1)
+	require.Len(t, code.Const.Statements, 1)
+	require.Equal(t, "answer", code.Const.Statements[0].Name[0].Value)
 }
 
 func TestStructDefErrors(t *testing.T) {
@@ -413,23 +427,44 @@ func TestStructDefErrors(t *testing.T) {
 		{
 			name: "duplicate struct field header",
 			input: `p = Person
-    :name age age
+  : name age age
     "Tejas" 35 184.5`,
 			errMsg: "duplicate struct field header: age",
 		},
 		{
 			name: "multiple lhs bindings not allowed",
 			input: `p, q = Person
-    :name age
+  : name age
     "Tejas" 35`,
 			errMsg: "struct definition must bind exactly one constant name",
 		},
 		{
 			name: "comma-separated struct row not allowed",
 			input: `p = Person
-    :name age
+  : name age
     "Tejas", 35`,
 			errMsg: "struct value row values must be separated by spaces, not commas",
+		},
+		{
+			name: "struct header requires space after colon",
+			input: `p = Person
+  :name age
+    "Tejas" 35`,
+			errMsg: "expected a space after ':' in struct field header",
+		},
+		{
+			name: "struct row requires nested indent",
+			input: `p = Person
+  : name age
+  "Tejas" 35`,
+			errMsg: "struct value row must be indented beneath its field header",
+		},
+		{
+			name: "struct row must align with header",
+			input: `p = Person
+  : name age
+      "Tejas" 35`,
+			errMsg: "struct value row must align with the first field header",
 		},
 	}
 
@@ -452,10 +487,10 @@ func TestStructDefErrors(t *testing.T) {
 
 func TestStructDefRepeat(t *testing.T) {
 	input := `p = Person
-    :name age
+  : name age
     "Tejas" 35
 q = Person
-    :name age
+  : name age
     "Ada" 28`
 
 	cp := NewCodeParser(lexer.New("TestStructDefRepeat", input))
@@ -466,10 +501,10 @@ q = Person
 
 func TestStructDefSubset(t *testing.T) {
 	input := `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5
 q = Person
-    :age name
+  : age name
     28 "Ada"`
 
 	cp := NewCodeParser(lexer.New("TestStructDefSubset", input))
@@ -480,7 +515,7 @@ q = Person
 
 func TestStructDefZeroInit(t *testing.T) {
 	input := `p = Person
-    :name age
+  : name age
     "Tejas" 35
 q = Person`
 
@@ -496,7 +531,7 @@ q = Person`
 func TestStructDefZeroInitBeforeDef(t *testing.T) {
 	input := `q = Person
 p = Person
-    :name age
+  : name age
     "Tejas" 35`
 
 	cp := NewCodeParser(lexer.New("TestStructDefZeroInitBeforeDef", input))

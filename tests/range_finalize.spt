@@ -1,0 +1,63 @@
+# A bare range identifier at an assignment root keeps its final yield.
+ascendingRange = 0:5
+ascending = ascendingRange
+"AscendingFinal: -ascending"
+
+descendingRange = 6:0:-2
+descending = descendingRange
+"DescendingFinal: -descending"
+
+# The final yield is the last visited value, not stop - step.
+unevenRange = 1:10:4
+uneven = unevenRange
+"UnevenFinal: -uneven"
+
+# An empty range preserves an existing destination and leaves a fresh one at zero.
+emptyRange = 3:3
+fresh = emptyRange
+"EmptyFresh: -fresh"
+
+existing = 91
+existing = emptyRange
+"EmptyExisting: -existing"
+
+# Brackets remain the explicit materialization boundary.
+collected = [ascendingRange]
+"Collected: -collected"
+
+# Function calls evaluate once per yield and the assignment keeps the final result.
+callFinal = useShadow(ascendingRange)
+"CallFinal: -callFinal"
+
+# Formatting markers are ordinary driver uses, including at print roots.
+markerRange = 0:3
+formattedFinal = "Marker -markerRange"
+"MarkerFinal: -formattedFinal"
+"MarkerEach -markerRange"
+
+# Range markers used for dynamic formatting parameters are drivers too.
+widthRange = 1:4
+widthValue = 7
+formattedWidth = "|-widthValue%(-widthRange)d|"
+"MarkerWidthFinal: -formattedWidth"
+"MarkerWidthEach: |-widthValue%(-widthRange)d|"
+
+# A direct literal in print position is also consumed as a driver.
+"LiteralEach", 0:3
+
+# Ranged RHS evaluation preserves simultaneous-assignment reads.
+simRange = 0:3
+first = 77
+second = 0
+first, second = simRange, first
+"SimultaneousRange: -first -second"
+
+simArray = [10 20 30]
+first = 88
+first, second = simArray[simRange], first
+"SimultaneousArray: -first -second"
+
+text = "old"
+otherText = "unset"
+text, otherText = "Marker -markerRange", text
+"SimultaneousString: -text -otherText"

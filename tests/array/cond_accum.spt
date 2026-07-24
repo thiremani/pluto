@@ -18,25 +18,24 @@ i = 0:5
 mixed = i && i < 3 [i]
 "MixedDriverGuard: -mixed"
 
-# Bare array-range expression driver uses its view range as the loop driver
+# A range-indexed array expression can directly drive a statement.
 driverSrc = [10 20 30 40]
 sevens = driverSrc[1:4] [7]
-"ArrayRangeDriver: -sevens"
+"RangeSelectionDriver: -sevens"
 
-# Bare array-range identifier driver behaves the same way
-view = driverSrc[1:4]
-eights = view [8]
-"NamedArrayRangeDriver: -eights"
+# Reuse names the index range, not a persistent selection value.
+selection = 1:4
+eights = driverSrc[selection] [8]
+"RepeatedRangeSelectionDriver: -eights"
 
 # Bare range driver with mixed tuple outputs accumulates arrays and keeps scalar last-value-wins
 i = 0:4
 mixRangeA, mixRangeB = i [i], i + 10
 "RangeMixedTupleA: -mixRangeA. RangeMixedTupleB: -mixRangeB"
 
-# Bare array-range driver does the same with the per-iteration element value
-viewMix = driverSrc[1:4]
-mixViewA, mixViewB = viewMix [8], viewMix
-"ArrayRangeMixedTupleA: -mixViewA. ArrayRangeMixedTupleB: -mixViewB"
+# Reusing the same named index range keeps both selections on one driver.
+mixSelectionA, mixSelectionB = driverSrc[selection] [8], driverSrc[selection]
+"RangeSelectionMixedTupleA: -mixSelectionA. RangeSelectionMixedTupleB: -mixSelectionB"
 
 # Bare range drivers compose as nested loops
 i = 0:2
@@ -44,10 +43,9 @@ j = 0:3
 grid = i && j [i * 10 + j]
 "NestedDrivers: -grid"
 
-# Range and array-range drivers compose as nested loops
+# Range and range-indexed array drivers compose as nested loops
 i = 0:2
-view2 = driverSrc[1:4]
-gridView = i && view2 [9]
+gridView = i && driverSrc[1:4] [9]
 "MixedDrivers: -gridView"
 
 # Bare range driver with scalar RHS keeps last iteration value
@@ -185,11 +183,11 @@ r = 0:3
 litcross = r < 2 0:5
 "LitCross: -litcross"
 
-# Scalar conditional iteration: direct bare array-range view
+# Scalar conditional iteration: direct range-indexed array expression
 arr5 = [10 20 30 40]
 r = 0:3
-viewcross = r < 2 arr5[0:3]
-viewcross
+selectionCross = r < 2 arr5[0:3]
+selectionCross
 
 # Scalar conditional iteration: direct bare range literal false path keeps old value
 seedlit = 88
@@ -197,18 +195,18 @@ r = 0:3
 seedlit = r < 0 0:5
 "SeedLit: -seedlit"
 
-# Scalar conditional iteration: direct bare array-range view false path keeps old value
-seedview = 77
+# A rejected direct range-indexed array expression keeps the old value
+seedSelection = 77
 arr6 = [10 20 30 40]
 r = 0:3
-seedview = r < 0 arr6[0:3]
-seedview
+seedSelection = r < 0 arr6[0:3]
+seedSelection
 
-# Scalar conditional iteration: direct bare string array-range view
+# Direct string selection finalization owns its scalar result
 sarr = ["a" "b" "c" "d"]
 r = 0:3
-strview = r < 2 sarr[0:3]
-"StrView: -strview"
+strSelection = r < 2 sarr[0:3]
+"StrSelection: -strSelection"
 
 # String accumulation
 sarr2 = ["a" "b"]

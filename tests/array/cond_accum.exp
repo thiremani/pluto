@@ -2,10 +2,10 @@ Fill: [0 0 0 0 0]
 LiteralDriver: [1 1 1 1 1]
 IdentifierDriver: [2 2 2 2]
 MixedDriverGuard: [0 1 2]
-ArrayRangeDriver: [7 7 7]
-NamedArrayRangeDriver: [8 8 8]
+RangeSelectionDriver: [7 7 7]
+RepeatedRangeSelectionDriver: [8 8 8]
 RangeMixedTupleA: [0 1 2 3]. RangeMixedTupleB: 13
-ArrayRangeMixedTupleA: [8 8 8]. ArrayRangeMixedTupleB: 40
+RangeSelectionMixedTupleA: [8 8 8]. RangeSelectionMixedTupleB: 40
 NestedDrivers: [0 1 2 10 11 12]
 MixedDrivers: [9 9 9 9 9 9]
 DriverScalar: 5
@@ -36,7 +36,7 @@ LitCross: 4
 30
 SeedLit: 88
 77
-StrView: c
+StrSelection: c
 ["a" "b"]
 TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 1]
 CondLocalDriversA: [1 1]. CondLocalDriversB: 1

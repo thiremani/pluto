@@ -127,6 +127,27 @@ a, b`
 	require.Contains(t, scriptIR, "call void @"+mangled+"(", "expected indirect multi-return call")
 }
 
+func TestRangedArrayOutputMarksIndirectWrite(t *testing.T) {
+	code := `res = LastRow(matrix)
+    i = 0:2
+    res = matrix[i]`
+	script := `matrix = [
+    1 2
+    3 4
+]
+row = LastRow(matrix)
+row`
+
+	moduleName := "ranged_array_output_write"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "LastRow", []Type{
+		Array{ElemType: I64, Rank: 2},
+	})
+
+	require.Contains(t, scriptIR, "define void @"+mangled+"(", "expected an indirect array return")
+	require.Contains(t, scriptIR, "store i1 true, ptr %res_written", "a yielded ranged selection must mark the output as written")
+}
+
 func TestPhase1ScalarABIRangeVariantUsesDirectScalarBoundary(t *testing.T) {
 	code := `res = Acc(a, x)
     res = a + x`
@@ -142,6 +163,112 @@ res`
 	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i32 noundef %2, i64 noundef %3", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
 	require.Contains(t, scriptIR, "call i64 @"+mangled+"(", "expected direct scalar call/return for ranged accumulator case")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
+}
+
+func TestArrayRangeCallUsesOneStructuralDirectVariant(t *testing.T) {
+	code := `out = Square(x)
+    out = x * x`
+	script := `i = 0:3
+arr = [2 3 4]
+res = Square(arr[i])
+res`
+
+	moduleName := "array_range_direct_variant"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	arrayRange := ArrayRange{
+		Array: Array{ElemType: I64, Rank: 1},
+		Range: Range{Iter: I64},
+	}
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Square", []Type{arrayRange})
+
+	require.Contains(t, mangled, "ArrayRange_t2_Array_t1_I64_Range_t1_I64",
+		"the specialization must encode the complete array and range schemas")
+	require.Contains(t, scriptIR,
+		"define noundef i64 @"+mangled+"(ptr noundef nonnull \"captures\"=\"none\" %0, i64 noundef %1)",
+		"the ArrayRange direct variant should receive its descriptor plus the hidden output seed")
+	require.Equal(t, 1, strings.Count(scriptIR, "call i64 @"+mangled+"("),
+		"an immediate bare array selection should enter the callee only once")
+}
+
+func TestRankTwoArrayRangeCallUsesOneIndirectVariant(t *testing.T) {
+	code := `out = Identity(x)
+    out = x`
+	script := `rows = 0:2
+matrix = [
+    1 2
+    3 4
+]
+row = Identity(matrix[rows])
+row`
+
+	moduleName := "array_range_rank_two_indirect"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	arrayRange := ArrayRange{
+		Array: Array{ElemType: I64, Rank: 2},
+		Range: Range{Iter: I64},
+	}
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Identity", []Type{arrayRange})
+
+	require.Contains(t, mangled, "ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
+		"the specialization must retain the rank-two source schema")
+	require.Contains(t, scriptIR, "define void @"+mangled+"(",
+		"the rank-reduced row result should use the indirect array-return ABI")
+	require.Contains(t, scriptIR, "array_subarray_start",
+		"the callee should materialize each selected rank-reduced row")
+	require.Contains(t, scriptIR, "call ptr @arr_i64_copy(",
+		"assigning the callee's row parameter should copy it into the indirect output")
+	require.Contains(t, scriptIR, mangled+"_ret",
+		"the indirect variant should expose output and write-flag slots")
+	require.Equal(t, 1, strings.Count(scriptIR, "call void @"+mangled+"("),
+		"a rank-two selection should be iterated inside one callee invocation")
+}
+
+func TestSharedArrayRangeDriverUsesCallerScalarVariant(t *testing.T) {
+	code := `out = Add(x, y)
+    out = x + y`
+	script := `i = 0:3
+arr = [10 20 30]
+res = Add(arr[i], i)
+res`
+
+	moduleName := "array_range_shared_driver"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	scalarMangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{I64, I64})
+	arrayRangeMangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{
+		ArrayRange{
+			Array: Array{ElemType: I64, Rank: 1},
+			Range: Range{Iter: I64},
+		},
+		Range{Iter: I64},
+	})
+
+	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1)",
+		"a shared driver must select the ordinary scalar specialization")
+	require.GreaterOrEqual(t, strings.Count(scriptIR, "call i64 @"+scalarMangled+"("), 1,
+		"the shared caller-side loop should invoke the scalar specialization")
+	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter)",
+		"the array access and scalar argument should use the same caller-loop iterator")
+	require.NotContains(t, scriptIR, arrayRangeMangled,
+		"arr[i] and i must not become independent callee iterators")
+}
+
+func TestRangeIndirectCallUsesOneCalleeVariant(t *testing.T) {
+	code := `left, right = Pair(x)
+    left = x
+    right = x + 1`
+	script := `left, right = Pair(0:3)
+left, right`
+
+	moduleName := "range_indirect_one_call"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Pair", []Type{Range{Iter: I64}})
+
+	require.Contains(t, scriptIR, "define void @"+mangled+"(",
+		"a multi-output Range specialization should keep the indirect-return ABI")
+	require.Contains(t, scriptIR, mangled+"_ret",
+		"the indirect Range variant should expose output and write-flag slots")
+	require.Equal(t, 1, strings.Count(scriptIR, "call void @"+mangled+"("),
+		"a bare Range should be iterated by one callee invocation")
 }
 
 func TestConditionalDirectCallArgsDoNotPromoteDirectParams(t *testing.T) {
@@ -313,7 +440,7 @@ greeting = "hello\n\x41"`
 
 func TestStructStringConstantDecodesEscapes(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name
+  : name
     "\x41da\n"`)
 
 	ctx := llvm.NewContext()
@@ -346,10 +473,10 @@ func TestCompilerModuleTargetMetadata(t *testing.T) {
 
 func TestStructRepeatedDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     "Ada" 28`)
 
 	merged := ast.NewCode()
@@ -366,10 +493,10 @@ func TestStructRepeatedDefs(t *testing.T) {
 
 func TestStructAmbiguousFieldOrder(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 
 	merged := ast.NewCode()
@@ -395,10 +522,10 @@ func TestStructAmbiguousFieldOrder(t *testing.T) {
 
 func TestStructUnknownField(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age score
+  : name age score
     "Tejas" 35 100`)
 	codeB := mustParseCode(t, `q = Person
-    :name height
+  : name height
     "Ada" 170`)
 
 	merged := ast.NewCode()
@@ -424,10 +551,10 @@ func TestStructUnknownField(t *testing.T) {
 
 func TestStructFieldTypeMismatch(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     "Ada" 28.5`)
 
 	merged := ast.NewCode()
@@ -453,10 +580,10 @@ func TestStructFieldTypeMismatch(t *testing.T) {
 
 func TestStructSameArityConflictingTypes(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :name age
+  : name age
     35 "Ada"`)
 
 	merged := ast.NewCode()
@@ -482,10 +609,10 @@ func TestStructSameArityConflictingTypes(t *testing.T) {
 
 func TestStructSubsetDefs(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 	codeB := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 
 	merged := ast.NewCode()
@@ -503,10 +630,10 @@ func TestStructSubsetDefs(t *testing.T) {
 func TestStructMaxHeaderDef(t *testing.T) {
 	// Smaller statement first, larger definition second — larger wins.
 	codeA := mustParseCode(t, `q = Person
-    :age name
+  : age name
     28 "Ada"`)
 	codeB := mustParseCode(t, `p = Person
-    :name age height
+  : name age height
     "Tejas" 35 184.5`)
 
 	merged := ast.NewCode()
@@ -527,7 +654,7 @@ func TestStructMaxHeaderDef(t *testing.T) {
 
 func TestStructEmptyInit(t *testing.T) {
 	code := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35
 q = Person`)
 
@@ -666,10 +793,10 @@ func TestReservedScriptVariableName(t *testing.T) {
 
 func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
-    :name age
+  : name age
     "Tejas" 35`)
 	codeB := mustParseCode(t, `q = Person
-    :height age
+  : height age
     170 28`)
 
 	merged := ast.NewCode()
@@ -694,7 +821,7 @@ func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	require.True(t, found, "expected redefined struct error, got: %v", errs)
 }
 
-func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
+func TestMakeSeededTempOutputsCopiesPointerSeed(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -720,22 +847,20 @@ func TestSetupRangeOutputsWithPointerSeed(t *testing.T) {
 		ReadOnly: true,
 	})
 
-	// Act: seed a loop temporary for a pointer-valued output.
+	// Act: seed an independent temporary from a pointer-backed destination.
 	dest := []*ast.Identifier{{Value: "seed"}}
 	outTypes := []Type{I64}
-	outputs := c.makeOutputs(dest, outTypes, false)
+	outputs := c.makeSeededTempOutputs(dest, outTypes)
 
 	require.Len(t, outputs, 1, "expect a single output symbol")
-	// When seed is already a pointer, makeOutputs reuses it directly
-	require.Equal(t, global, outputs[0].Val, "expected existing pointer to be reused")
+	require.NotEqual(t, global.String(), outputs[0].Val.String(), "expected an independent output slot")
 	require.Equal(t, ptrType, outputs[0].Type, "expected pointer type to be preserved")
 
 	c.builder.CreateRetVoid()
 
 	ir := c.Module.String()
-	// No store or load needed - we reuse the existing pointer directly
-	require.NotContains(t, ir, "store", "pointer seed should be reused without store")
-	require.NotContains(t, ir, "load i64, ptr @seed_global", "pointer seed should not be dereferenced")
+	require.Contains(t, ir, "load i64, ptr @seed_global", "expected destination seed to be loaded")
+	require.Contains(t, ir, "store i64", "expected destination seed to initialize the independent slot")
 }
 
 func TestCompileCondScalarStrHUsesBranch(t *testing.T) {

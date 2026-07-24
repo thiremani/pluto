@@ -9,9 +9,6 @@ const (
 	FREE          = "free"
 	STRDUP        = "strdup"
 
-	// Range functions
-	RANGE_I64_STR = "range_i64_str"
-
 	// Scalar string functions
 	F64_STR          = "f64_str"
 	F32_STR          = "f32_str"
@@ -63,7 +60,7 @@ const (
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
-// name, like "printf", "free", or "range_i64_str".
+// name, like "printf", "free", or "array_nd_str".
 func (c *Compiler) GetFnType(name string) llvm.Type {
 	// Short helpers to reduce duplication
 	charPtr := llvm.PointerType(c.Context.Int8Type(), 0)
@@ -81,10 +78,6 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(c.Context.VoidType(), []llvm.Type{charPtr}, false)
 	case STRDUP:
 		return llvm.FunctionType(charPtr, []llvm.Type{charPtr}, false)
-
-	// Range functions
-	case RANGE_I64_STR:
-		return llvm.FunctionType(charPtr, []llvm.Type{i64, i64, i64}, false)
 
 	// Scalar string functions
 	case F64_STR:

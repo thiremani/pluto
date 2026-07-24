@@ -1,13 +1,13 @@
 i = 0:5
-loopInside = Square(i)
-"Square of 0:5 with loop inside: -loopInside"
+bareRange = Square(i)
+"Square of bare 0:5: -bareRange"
 
-loopOutside = Square(i + 1)
-"Square of 0:5 with loop outside: -loopOutside"
+rangeExpression = Square(i + 1)
+"Square of 0:5 + 1: -rangeExpression"
 
 j = 0:5
-sumLoopInside = SumSquares(i, j)
-"SumSquares of 0:5, 0:5 with loop inside: -sumLoopInside"
+twoBareRanges = SumSquares(i, j)
+"SumSquares of bare 0:5, 0:5: -twoBareRanges"
 
-sumLoopOutside = SumSquares(i, (j + 1) / (j + 2))
-"SumSquares of 0:5, 0:5 with loop outside: -sumLoopOutside"
+mixedRangeExpression = SumSquares(i, (j + 1) / (j + 2))
+"SumSquares of 0:5 and range expression: -mixedRangeExpression"

@@ -33,36 +33,12 @@ func (c *Compiler) extractRangeSymbol(sym *Symbol, name string) (*Symbol, bool) 
 	return nil, false
 }
 
-// extractArrayRangeSymbol loads an array-range aggregate from a symbol when needed.
-func (c *Compiler) extractArrayRangeSymbol(sym *Symbol, name string) (*Symbol, bool) {
-	switch t := sym.Type.(type) {
-	case ArrayRange:
-		return sym, true
-	case Ptr:
-		arrRangeType, ok := t.Elem.(ArrayRange)
-		if ok {
-			return &Symbol{
-				Val:      c.createLoad(sym.Val, arrRangeType, name+"_arrrange"),
-				Type:     arrRangeType,
-				FuncArg:  sym.FuncArg,
-				Borrowed: true,
-				ReadOnly: sym.ReadOnly,
-			}, true
-		}
-	}
-	return nil, false
-}
-
 func (c *Compiler) rangeAggregateFromSymbol(sym *Symbol, name string) llvm.Value {
 	if rangeSym, ok := c.extractRangeSymbol(sym, name); ok {
 		return rangeSym.Val
 	}
 
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
-		return c.builder.CreateExtractValue(arrRangeSym.Val, 1, name+"_range")
-	}
-
-	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+	panic(fmt.Sprintf("internal: %q is not a Range during lowering (got %s)", name, sym.Type.String()))
 }
 
 func (c *Compiler) iterOverDriverSymbol(sym *Symbol, name string, body func(*Symbol)) {
@@ -78,23 +54,10 @@ func (c *Compiler) iterOverDriverSymbol(sym *Symbol, name string, body func(*Sym
 		return
 	}
 
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
-		c.iterOverArrayRange(arrRangeSym, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  arrRangeSym.FuncArg,
-				Borrowed: true,
-			})
-		})
-		return
-	}
-
-	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+	panic(fmt.Sprintf("internal: %q is not a Range during lowering (got %s)", name, sym.Type.String()))
 }
 
 // rangeAggregateForRI builds the {start,stop,step} aggregate for a driver.
-// Named ArrayRange drivers contribute their underlying range component.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	if ri.RangeLit != nil {
 		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})

@@ -12,11 +12,12 @@ import (
 )
 
 type Symbol struct {
-	Val      llvm.Value
-	Type     Type
-	FuncArg  bool // Symbol originates from function input/output argument context.
-	Borrowed bool // Value/storage is borrowed from another owner (scope cleanup must skip).
-	ReadOnly bool // Input parameter (cannot be written to).
+	Val       llvm.Value
+	Type      Type
+	FuncArg   bool       // Symbol originates from function input/output argument context.
+	Borrowed  bool       // Value/storage is borrowed from another owner (scope cleanup must skip).
+	ReadOnly  bool       // Input parameter (cannot be written to).
+	WriteFlag llvm.Value // Optional i1* set when this logical output is actually written.
 }
 
 // Borrowed-value ownership model:
@@ -39,9 +40,10 @@ type Symbol struct {
 // Memory management:
 //
 //   For function calls (x = f(y)):
-//     - Function produces a new value and writes it to output slot
-//     - This value is MOVED to the destination (ownership transferred)
-//     - Old value in destination is NOT freed (see freeExprOldValues)
+//     - Function writes into an independent, destination-seeded staging slot
+//     - The staged result is MOVED to the real destination after all RHS values
+//       have been evaluated
+//     - The real destination's old value is then freed by freeExprOldValues
 //     - Temps passed as inputs are freed by caller after call returns
 //     - Function cleanup skips borrowed params/slots (caller owns them)
 //
@@ -70,10 +72,11 @@ type FuncArgs struct {
 }
 
 type callArg struct {
-	Expr    ast.Expression
-	Name    string
-	Symbol  *Symbol
-	Lowered *Symbol
+	Expr        ast.Expression
+	Name        string
+	Symbol      *Symbol
+	Lowered     *Symbol
+	OutputAlias int
 }
 
 type callSignature struct {
@@ -123,6 +126,7 @@ func GetCopy(s *Symbol) (newSym *Symbol) {
 	newSym.FuncArg = s.FuncArg
 	newSym.Borrowed = s.Borrowed
 	newSym.ReadOnly = s.ReadOnly
+	newSym.WriteFlag = s.WriteFlag
 	return newSym
 }
 
@@ -255,28 +259,24 @@ func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []
 		if dest == nil || i >= len(dest) {
 			continue
 		}
-		resolved[i] = c.bindingSlotType(dest[i].Value, outType)
-	}
-	return resolved
-}
-
-func outputTypesDiffer(a, b []Type) bool {
-	if len(a) != len(b) {
-		return true
-	}
-	for i := range a {
-		if !TypeEqual(a[i], b[i]) {
-			return true
+		bindingType, ok := c.BindingTypes[BindingKey{
+			FuncNameMangled: c.FuncNameMangled,
+			Name:            dest[i].Value,
+		}]
+		if ok {
+			resolved[i] = bindingType
+			continue
+		}
+		// Conditional lowering writes through synthetic condtmp_* identifiers.
+		// They have no solver binding entry, but their pointer element is the
+		// authoritative slot flavor selected for the real destination.
+		if sym, exists := Get(c.Scopes, dest[i].Value); exists {
+			if ptrType, isPtr := sym.Type.(Ptr); isPtr {
+				resolved[i] = ptrType.Elem
+			}
 		}
 	}
-	return false
-}
-
-func (c *Compiler) callNeedsTempOutputs(info *ExprInfo, dest []*ast.Identifier) bool {
-	if len(info.Ranges) != 0 || dest == nil {
-		return false
-	}
-	return outputTypesDiffer(info.OutTypes, c.resolvedDestTypes(dest, info.OutTypes))
+	return resolved
 }
 
 func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
@@ -485,9 +485,13 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		)
 	case ArrayRangeKind:
 		arrRange := t.(ArrayRange)
-		arrayPtr := llvm.PointerType(c.Context.Int8Type(), 0)
-		rangeTy := c.mapToLLVMType(arrRange.Range)
-		return llvm.StructType([]llvm.Type{arrayPtr, rangeTy}, false)
+		return llvm.StructType(
+			[]llvm.Type{
+				c.mapToLLVMType(arrRange.Array),
+				c.mapToLLVMType(arrRange.Range),
+			},
+			false,
+		)
 	case PtrKind:
 		ptrType := t.(Ptr)
 		elemLLVM := c.mapToLLVMType(ptrType.Elem)
@@ -817,13 +821,6 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 		s.Val = c.createTableValue(c.ConstI64(0), columns, tableType)
 	case RangeKind:
 		s.Val = c.CreateRange(c.ConstI64(0), c.ConstI64(0), c.ConstI64(1), symType)
-	case ArrayRangeKind:
-		arrRangeType := symType.(ArrayRange)
-		// Create zero value for the array part
-		arraySym := c.makeZeroValue(arrRangeType.Array)
-		// Create zero value for the range part
-		rangeSym := c.makeZeroValue(arrRangeType.Range)
-		s.Val = c.CreateArrayRange(arraySym.Val, rangeSym.Val, arrRangeType)
 	case StructKind:
 		structType := symType.(Struct)
 		fieldVals := make([]llvm.Value, len(structType.Fields))
@@ -949,11 +946,25 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 	return derefed
 }
 
+func (c *Compiler) markOutputSlotWritten(dst *Symbol, mergedFrom llvm.Value) {
+	if dst.WriteFlag.IsNil() {
+		return
+	}
+	// Moving a value produced by a stage that tracks the same logical output
+	// is a merge, not a new write. The stage already set the flag only on the
+	// runtime paths that yielded a value.
+	if !mergedFrom.IsNil() && mergedFrom == dst.WriteFlag {
+		return
+	}
+	c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), dst.WriteFlag)
+}
+
 func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, loadName string) *Symbol {
 	ptrType, ok := dst.Type.(Ptr)
 	if !ok {
 		panic("internal: storeSymbolToSlot requires pointer destination")
 	}
+	sourceWriteFlag := src.WriteFlag
 	if target.Kind() != ptrType.Elem.Kind() {
 		target = ptrType.Elem
 	}
@@ -977,6 +988,7 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 
 	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
+	c.markOutputSlotWritten(dst, sourceWriteFlag)
 	return coerced
 }
 
@@ -1028,9 +1040,10 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 			}
 		}
 	case ArrayRange:
-		// Release the backing array payload. Borrowed views are skipped by callers.
-		arrVal := c.builder.CreateExtractValue(val, 0, "arr_range_arr")
-		c.freeValue(arrVal, t.Array)
+		// Call-only ArrayRange descriptors own a temporary backing array when
+		// Borrowed is false. The range metadata itself has no heap storage.
+		arrayVal := c.builder.CreateExtractValue(val, 0, "array_range_arr")
+		c.freeValue(arrayVal, t.Array)
 	}
 }
 
@@ -1060,46 +1073,6 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	}
 	derefed := c.derefIfPointer(sym, loadName)
 	c.freeValue(derefed.Val, derefed.Type)
-}
-
-// shouldSkipOldValueFree returns true when an expression delegates destination
-// old-value cleanup to inner assignment logic, avoiding caller-side double-free.
-//
-// Cases:
-//
-//   - CallExpression writing directly through destination pointers:
-//     The caller passes output pointers to the callee. The callee then applies
-//     normal assignment cleanup when writing to those output params, so caller
-//     freeExprOldValues must skip.
-//
-//   - InfixExpression/PrefixExpression/ArrayRangeExpression with pending ranges:
-//     Range-lowered paths free previous output values per iteration inside the
-//     loop body before storing the next value.
-//
-// All other expressions return false so freeExprOldValues handles cleanup with full
-// assignment context (moved sources and borrowed/non-owning guards).
-func (c *Compiler) shouldSkipOldValueFree(expr ast.Expression, dest []*ast.Identifier) bool {
-	if ce, isCall := expr.(*ast.CallExpression); isCall {
-		info := c.ExprCache[key(c.FuncNameMangled, ce)]
-		if _, ok := directScalarABIReturnType(info.OutTypes); ok {
-			return false
-		}
-		return !c.callNeedsTempOutputs(info, dest)
-	}
-
-	switch e := expr.(type) {
-	case *ast.InfixExpression:
-		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return len(c.pendingLoopRanges(info.Ranges)) > 0
-	case *ast.PrefixExpression:
-		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return len(c.pendingLoopRanges(info.Ranges)) > 0
-	case *ast.ArrayRangeExpression:
-		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		return len(c.pendingLoopRanges(info.Ranges)) > 0
-	default:
-		return false
-	}
 }
 
 // slotAssign is one destination slot of an assignment: where the value is
@@ -1186,6 +1159,7 @@ func (c *Compiler) newExprAssign(expr ast.Expression, bit llvm.Value, res []*Sym
 			owner:      owners[j],
 			value:      sym,
 			rhsName:    rhsName,
+			needsCopy:  sym.Borrowed,
 			oldValue:   olds[j],
 			destBacked: c.aliasesDestSlot(dests[j], sym),
 		}
@@ -1338,17 +1312,10 @@ func (c *Compiler) commitAssignments(assigns []exprAssign) {
 }
 
 // freeExprOldValues frees the destination values one expression's commit
-// replaced, skipping fresh destinations, moved sources, borrowed storage, and
-// expressions that manage destination cleanup themselves (calls writing
-// through destination pointers; ranged lowerings free per iteration).
+// replaced, skipping fresh destinations, moved sources, and borrowed storage.
+// Function calls and ranged expressions return independent staged values, so
+// their real destination cleanup also happens here.
 func (c *Compiler) freeExprOldValues(e exprAssign, movedSources map[string]struct{}) {
-	owners := make([]*ast.Identifier, len(e.slots))
-	for j, slot := range e.slots {
-		owners[j] = slot.owner
-	}
-	if c.shouldSkipOldValueFree(e.expr, owners) {
-		return
-	}
 	for _, slot := range e.slots {
 		if slot.oldValue == nil || c.skipBorrowedOldValueFree(slot.oldValue) {
 			continue
@@ -1454,8 +1421,7 @@ func (c *Compiler) skipBorrowedOldValueFree(sym *Symbol) bool {
 		return true
 	}
 
-	// Borrowed array ranges are non-owning views into another array payload.
-	return sym.Type.Kind() == ArrayRangeKind
+	return false
 }
 
 // captureOldValues captures the current values of destination variables before RHS compilation.
@@ -1513,7 +1479,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		s.Val = c.ConstF64(e.Value)
 		res = []*Symbol{s}
 	case *ast.StringLiteral:
-		res = []*Symbol{c.compileStringLiteral(e.Token)}
+		res = c.compileStringLiteralExpression(e, dest)
 	case *ast.RangeLiteral:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
 		// Root bare range literals can be scalarized by an outer ranged context.
@@ -1531,7 +1497,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.DotExpression:
 		return c.compileDotExpression(e)
 	case *ast.Identifier:
-		res = []*Symbol{c.compileIdentifier(e)}
+		res = c.compileIdentifierExpression(e, dest)
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
@@ -1565,10 +1531,7 @@ func setInstAlignment(inst llvm.Value, t Type) {
 		inst.SetAlignment(8)
 	case Range:
 		setInstAlignment(inst, typ.Iter)
-	case Array, Table:
-		inst.SetAlignment(8)
-	case ArrayRange:
-		// ArrayRange is a struct of { i8*, Range }, so align to the largest member, which is i8*
+	case Array, Table, ArrayRange:
 		inst.SetAlignment(8)
 	case Struct:
 		// Struct alignment follows max-field ABI alignment; Phase 1 fields are scalar/ptr.
@@ -1590,11 +1553,12 @@ func (c *Compiler) makePtr(name string, s *Symbol) (ptr *Symbol, alreadyPtr bool
 
 	// Create the new symbol that represents the pointer to this memory.
 	ptr = &Symbol{
-		Val:      alloca,
-		Type:     Ptr{Elem: s.Type},
-		FuncArg:  s.FuncArg,
-		Borrowed: s.Borrowed,
-		ReadOnly: s.ReadOnly,
+		Val:       alloca,
+		Type:      Ptr{Elem: s.Type},
+		FuncArg:   s.FuncArg,
+		Borrowed:  s.Borrowed,
+		ReadOnly:  s.ReadOnly,
+		WriteFlag: s.WriteFlag,
 	}
 
 	return ptr, false
@@ -1644,11 +1608,12 @@ func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Sy
 	}
 
 	ptr := &Symbol{
-		Val:      slotPtr,
-		Type:     Ptr{Elem: sym.Type},
-		FuncArg:  sym.FuncArg,
-		Borrowed: sym.Borrowed,
-		ReadOnly: sym.ReadOnly,
+		Val:       slotPtr,
+		Type:      Ptr{Elem: sym.Type},
+		FuncArg:   sym.FuncArg,
+		Borrowed:  sym.Borrowed,
+		ReadOnly:  sym.ReadOnly,
+		WriteFlag: sym.WriteFlag,
 	}
 	Put(c.Scopes, name, ptr)
 	c.clearParamAlias(name)
@@ -1696,6 +1661,8 @@ func (c *Compiler) derefIfPointer(s *Symbol, loadName string) *Symbol {
 	newS := GetCopy(s)
 	newS.Val = loadedVal
 	newS.Type = ptrType.Elem
+	// A write flag belongs to the storage slot, not to an ordinary value read.
+	newS.WriteFlag = llvm.Value{}
 	return newS
 }
 
@@ -1749,6 +1716,51 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 		return c.valueSymbol(ident.Value, s, ident.Value+"_load")
 	}
 	return c.derefIfPointer(s, ident.Value+"_load")
+}
+
+// compileStringLiteralExpression lowers formatting markers that reference
+// named Range drivers once per yield and retains the final formatted string.
+func (c *Compiler) compileStringLiteralExpression(lit *ast.StringLiteral, dest []*ast.Identifier) []*Symbol {
+	info := c.ExprCache[key(c.FuncNameMangled, lit)]
+	if info == nil || len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		return []*Symbol{c.compileStringLiteral(lit.Token)}
+	}
+
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
+	output := outputs[0]
+	c.withLoopNest(info.Ranges, func() {
+		value := c.compileStringLiteral(lit.Token)
+		c.storeRangedOutput(output, value.Val, value.Type)
+	})
+
+	return c.loadOutputValues(outputs, "format_range_final")
+}
+
+// compileIdentifierExpression closes a bare named Range driver to its final
+// yielded iterator value. When an outer loop has already shadowed the Range
+// with a scalar, the identifier compiles directly.
+func (c *Compiler) compileIdentifierExpression(ident *ast.Identifier, dest []*ast.Identifier) []*Symbol {
+	info := c.ExprCache[key(c.FuncNameMangled, ident)]
+	if info == nil || len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		return []*Symbol{c.compileIdentifier(ident)}
+	}
+
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
+	output := outputs[0]
+	c.withLoopNest(info.Ranges, func() {
+		value := c.compileIdentifier(ident)
+		c.storeRangedOutput(output, value.Val, value.Type)
+	})
+
+	return c.loadOutputValues(outputs, "range_final")
 }
 
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
@@ -2070,24 +2082,24 @@ func (c *Compiler) CreateRange(start, stop, step llvm.Value, typ Type) llvm.Valu
 	return agg
 }
 
-func (c *Compiler) CreateArrayRange(arrayVal llvm.Value, rangeVal llvm.Value, arrRange ArrayRange) llvm.Value {
-	llvmTy := c.mapToLLVMType(arrRange)
-	agg := llvm.Undef(llvmTy)
+func (c *Compiler) CreateArrayRange(arrayVal, rangeVal llvm.Value, typ ArrayRange) llvm.Value {
+	llvmType := c.mapToLLVMType(typ)
+	agg := llvm.Undef(llvmType)
 	agg = c.builder.CreateInsertValue(agg, arrayVal, 0, "array_range_arr")
 	agg = c.builder.CreateInsertValue(agg, rangeVal, 1, "array_range_rng")
 	return agg
 }
 
-// Modified compileInfixRanges - cleaner with destinations
+// compileInfixRanges evaluates an infix expression once per driver yield and
+// retains one loop-carried result per destination.
 func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo, dest []*ast.Identifier) (res []*Symbol) {
-	// Infix expressions never accumulate (Accumulates is always false for infix)
-	// They loop and store the final value
 	PushScope(&c.Scopes, BlockScope)
 	defer c.popScope()
 
 	// Setup outputs to store values across iterations.
 	// Mark as borrowed so cleanupScope skips them - values are returned via out.
-	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
 
 	rew := info.Rewrite.(*ast.InfixExpression)
 	withCollectorPreparedLoopNest(c, rew, info.Ranges, nil, nil, func(prepared *ast.InfixExpression) {
@@ -2121,17 +2133,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		})
 	})
 
-	// Load final values from outputs
-	out := make([]*Symbol, len(outputs))
-	for i := range outputs {
-		elemType := outputs[i].Type.(Ptr).Elem
-		out[i] = &Symbol{
-			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
-			Type: elemType,
-		}
-	}
-
-	return out
+	return c.loadOutputValues(outputs, "final")
 }
 
 func (c *Compiler) compileRangeInfixSlot(
@@ -2186,8 +2188,15 @@ func (c *Compiler) storeRangeCondScalar(op string, leftSym *Symbol, rightSym *Sy
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(cmpVal, "cond_store", "cond_drop_lhs", "cond_next")
 
 	c.builder.SetInsertPointAtEnd(ifBlock)
+	toStore := lSym
+	if !leftTempsHandledInline {
+		// Identifier LHS values are borrowed from live bindings. Copy before
+		// releasing the loop-carried output, especially for self-reference
+		// where both values can currently point at the same payload.
+		toStore = c.deepCopyIfNeeded(lSym)
+	}
 	c.freeSymbolValue(output, "old_output")
-	c.storeSymbolToSlot(output, lSym, output.Type.(Ptr).Elem, "range_cond_store")
+	c.storeSymbolToSlot(output, toStore, output.Type.(Ptr).Elem, "range_cond_store")
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(elseBlock)
@@ -2226,11 +2235,6 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 			sym.Type = resolved
 			Put(c.Scopes, name, sym)
 		}
-	case ArrayRange:
-		if t.Array.ElemType.Kind() == UnresolvedKind {
-			sym.Type = resolved
-			Put(c.Scopes, name, sym)
-		}
 	case Ptr:
 		if t.Elem.Kind() == UnresolvedKind {
 			sym.Type = Ptr{Elem: resolved}
@@ -2239,47 +2243,6 @@ func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type)
 	default:
 		// No action needed for other types
 	}
-}
-
-func (c *Compiler) makeOutputs(dest []*ast.Identifier, outTypes []Type, borrowed bool) []*Symbol {
-	outputs := make([]*Symbol, len(outTypes))
-
-	for i, outType := range outTypes {
-		// Determine the name for the alloca
-		var name string
-		if i < len(dest) {
-			name = dest[i].Value
-		} else {
-			name = fmt.Sprintf("tmp_out_%d", c.tmpCounter)
-			c.tmpCounter++
-		}
-
-		sym, exists := Get(c.Scopes, name)
-		if exists {
-			// Existing variable - update type if needed and promote to memory
-			c.updateUnresolvedType(name, sym, outType)
-			if sym.Type.Kind() == PtrKind {
-				// Shadow existing pointer symbols in the current scope so temporary
-				// ownership flags (e.g. Borrowed during range lowering) do not
-				// mutate outer-scope symbols.
-				sym = GetCopy(sym)
-				Put(c.Scopes, name, sym)
-			} else {
-				sym = c.promoteToMemory(name)
-			}
-			// Preserve existing borrowed ownership and only add temporary borrowed semantics.
-			// Example: function output params are already Borrowed=true (caller-owned slots).
-			// A call path uses borrowed=false, and must not clear that existing ownership.
-			sym.Borrowed = sym.Borrowed || borrowed
-			outputs[i] = sym
-			continue
-		}
-
-		// New variable or intermediate value - create temp alloca without adding to scope.
-		// The permanent variable will be created by writeTo in FuncScope.
-		outputs[i] = c.makeTempOutput(name, outType, borrowed, nil)
-	}
-	return outputs
 }
 
 func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed *Symbol) *Symbol {
@@ -2301,19 +2264,151 @@ func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed
 	return output
 }
 
-func (c *Compiler) makeTempOutputs(outTypes []Type, borrowed bool, seedFor func(int, Type) *Symbol) []*Symbol {
-	outputs := make([]*Symbol, len(outTypes))
-	for i, outType := range outTypes {
+// makeSeededTempOutputs creates independent result slots. Existing destination
+// values seed output-parameter and empty-range behavior, but heap-backed seeds
+// are copied so evaluating one RHS cannot mutate or free a destination before
+// sibling RHS expressions have read the statement's original values.
+func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type) []*Symbol {
+	resolved := c.resolvedDestTypes(dest, outTypes)
+	outputs := make([]*Symbol, len(resolved))
+	for i, outType := range resolved {
 		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
 		c.tmpCounter++
 
-		var seed *Symbol
-		if seedFor != nil {
-			seed = seedFor(i, outType)
+		var existing *Symbol
+		var exists bool
+		if dest != nil && i < len(dest) {
+			existing, exists = Get(c.Scopes, dest[i].Value)
 		}
-		outputs[i] = c.makeTempOutput(name, outType, borrowed, seed)
+
+		var seed *Symbol
+		if exists {
+			seed = c.deepCopyIfNeeded(c.resolveDestSeed(dest[i], outType))
+		} else {
+			seed = c.makeZeroValue(outType)
+		}
+		outputs[i] = c.makeTempOutput(name, outType, true, seed)
+		if exists {
+			outputs[i].WriteFlag = existing.WriteFlag
+		}
 	}
 	return outputs
+}
+
+type callOutputAdapter struct {
+	abiOutput *Symbol
+	bridged   bool
+}
+
+// makeCallOutputAdapters adapts destination-typed result slots to an indirect
+// callee's declared output types. Matching slots pass through directly. A
+// mismatched slot gets an ABI-typed zero seed; the callee's explicit per-output
+// write flag decides whether that value commits into the destination-typed
+// stage. This prevents one static ownership/shape flavor from masquerading as
+// another inside the callee.
+func (c *Compiler) makeCallOutputAdapters(running []*Symbol, outTypes []Type) []callOutputAdapter {
+	adapters := make([]callOutputAdapter, len(running))
+	for i, output := range running {
+		targetType := output.Type.(Ptr).Elem
+		if TypeEqual(targetType, outTypes[i]) {
+			adapters[i].abiOutput = output
+			continue
+		}
+
+		name := fmt.Sprintf("calladapter_%d", c.tmpCounter)
+		c.tmpCounter++
+		adapters[i].abiOutput = c.makeTempOutput(name, outTypes[i], true, nil)
+		adapters[i].bridged = true
+	}
+	return adapters
+}
+
+func callAdapterOutputs(adapters []callOutputAdapter) []*Symbol {
+	outputs := make([]*Symbol, len(adapters))
+	for i := range adapters {
+		outputs[i] = adapters[i].abiOutput
+	}
+	return outputs
+}
+
+func (c *Compiler) propagateOutputWriteFlag(output *Symbol, didWrite llvm.Value, index int) {
+	if output.WriteFlag.IsNil() {
+		return
+	}
+	previous := c.builder.CreateLoad(c.Context.Int1Type(), output.WriteFlag, fmt.Sprintf("output_written_%d", index))
+	merged := c.builder.CreateOr(previous, didWrite, fmt.Sprintf("output_written_merge_%d", index))
+	c.builder.CreateStore(merged, output.WriteFlag)
+}
+
+// commitCallOutputAdapters commits ABI-flavor temporaries into the independent
+// result slots after (and only after) a call executes. Store/coercion happens
+// before old-value cleanup so shape resets and StrG -> StrH copies can inspect
+// the previous destination safely.
+func (c *Compiler) commitCallOutputAdapters(running []*Symbol, adapters []callOutputAdapter, writeFlags []llvm.Value) {
+	for i, adapter := range adapters {
+		didWrite := c.builder.CreateLoad(c.Context.Int1Type(), writeFlags[i], fmt.Sprintf("call_output_written_%d", i))
+		if !adapter.bridged {
+			c.propagateOutputWriteFlag(running[i], didWrite, i)
+			continue
+		}
+
+		commit := func() {
+			targetType := running[i].Type.(Ptr).Elem
+			oldValue := c.derefIfPointer(running[i], fmt.Sprintf("calladapter_old_%d", i))
+			source := c.derefIfPointer(adapter.abiOutput, fmt.Sprintf("calladapter_result_%d", i))
+			stored := c.storeSymbolToSlot(running[i], source, targetType, fmt.Sprintf("calladapter_store_%d", i))
+			c.freeSymbolValue(oldValue, "")
+			if stored.Val != source.Val {
+				c.freeSymbolValue(source, "")
+			}
+		}
+
+		c.withCondBranch(didWrite, "calladapter", commit, func() {
+			c.freeSymbolValue(adapter.abiOutput, fmt.Sprintf("calladapter_unwritten_%d", i))
+		})
+	}
+}
+
+func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter) {
+	for i, adapter := range adapters {
+		if adapter.bridged {
+			c.freeSymbolValue(adapter.abiOutput, fmt.Sprintf("calladapter_skip_%d", i))
+		}
+	}
+}
+
+// bindRangedTempOutputs makes each destination name resolve to its staged slot
+// while that one ranged expression is compiled. Conditional lowering can make
+// the real destination and a condtmp_* write name alias the same slot, so bind
+// every visible name for that slot as well. This preserves loop-carried
+// self-reference (res = res + i) without exposing the staged value to sibling
+// right-hand sides in a simultaneous assignment; the caller's BlockScope is
+// popped before the next expression is compiled.
+func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
+	for i := 0; i < len(dest) && i < len(outputs); i++ {
+		names := []string{dest[i].Value}
+		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
+			seen := make(map[string]struct{})
+			for scopeIdx := len(c.Scopes) - 1; scopeIdx >= 0; scopeIdx-- {
+				scope := c.Scopes[scopeIdx]
+				for name, sym := range scope.Elems {
+					if _, visited := seen[name]; visited {
+						continue
+					}
+					seen[name] = struct{}{}
+					if sym.Type.Kind() == PtrKind && sym.Val == current.Val {
+						names = append(names, name)
+					}
+				}
+				if scope.ScopeKind == FuncScope {
+					break
+				}
+			}
+		}
+		for _, name := range names {
+			Put(c.Scopes, name, outputs[i])
+		}
+	}
 }
 
 // Destination-aware prefix compilation,
@@ -2367,7 +2462,8 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 
 	// Allocate/seed per-destination temps (seed from existing value or zero).
 	// Mark as borrowed so cleanupScope skips them - the values are returned via out.
-	outputs := c.makeOutputs(dest, c.resolvedDestTypes(dest, info.OutTypes), true)
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.PrefixExpression), info.Ranges, nil, nil, func(prepared *ast.PrefixExpression) {
 		rightRew := prepared.Right
@@ -2387,17 +2483,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		})
 	})
 
-	// Materialize final values
-	out := make([]*Symbol, len(outputs))
-	for i := range outputs {
-		elemType := outputs[i].Type.(Ptr).Elem
-		out[i] = &Symbol{
-			Val:  c.createLoad(outputs[i].Val, elemType, "final"),
-			Type: elemType,
-		}
-	}
-
-	return out
+	return c.loadOutputValues(outputs, "final")
 }
 
 func (c *Compiler) compileRangePrefixSlot(op string, operand *Symbol, expected Type, output *Symbol) {
@@ -2430,9 +2516,10 @@ func (c *Compiler) getReturnStruct(mangled string, outputTypes []Type) llvm.Type
 	}
 	// Otherwise, define it exactly once:
 	st := c.Context.StructCreateNamed(retName)
-	fields := make([]llvm.Type, len(outputTypes))
+	fields := make([]llvm.Type, len(outputTypes)*2)
 	for i, t := range outputTypes {
 		fields[i] = llvm.PointerType(c.mapToLLVMType(t), 0)
+		fields[len(outputTypes)+i] = llvm.PointerType(c.Context.Int1Type(), 0)
 	}
 	st.StructSetBody(fields, false)
 	return st
@@ -2555,6 +2642,9 @@ func (c *Compiler) processIndirectOutputs(fn *ast.FuncStatement, retStruct llvm.
 			Borrowed: true,
 			ReadOnly: false,
 		}
+		flagField := c.builder.CreateStructGEP(retStruct, sretPtr, len(fn.Outputs)+i, outIdent.Value+"_written_field")
+		flagPtrType := llvm.PointerType(c.Context.Int1Type(), 0)
+		retPtrs[i].WriteFlag = c.builder.CreateLoad(flagPtrType, flagField, outIdent.Value+"_written")
 	}
 	return retPtrs
 }
@@ -2621,8 +2711,7 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 			}
 		}
 
-		kind := elemType.Kind()
-		if kind == RangeKind || kind == ArrayRangeKind {
+		if elemType.Kind() == RangeKind || elemType.Kind() == ArrayRangeKind {
 			iterIndices = append(iterIndices, i)
 			continue
 		}
@@ -2683,13 +2772,6 @@ func (c *Compiler) iterOverRange(rangeType Range, rangeVal llvm.Value, body func
 	})
 }
 
-func (c *Compiler) iterOverArrayRange(arrRangeSym *Symbol, body func(llvm.Value, Type)) {
-	c.iterOverArrayRangeState(arrRangeSym, nil, func(iter llvm.Value, iterType Type, _ *Symbol) *Symbol {
-		body(iter, iterType)
-		return nil
-	})
-}
-
 func (c *Compiler) iterOverRangeState(rangeType Range, rangeVal llvm.Value, currentOutput *Symbol, body func(llvm.Value, Type, *Symbol) *Symbol) *Symbol {
 	iterType := rangeType.Iter
 	hasState := currentOutput != nil
@@ -2723,10 +2805,16 @@ func (c *Compiler) iterOverRangeState(rangeType Range, rangeVal llvm.Value, curr
 
 func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *Symbol, body func(llvm.Value, Type, *Symbol) *Symbol) *Symbol {
 	arrRangeType := arrRangeSym.Type.(ArrayRange)
-	arrPtr := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_ptr")
+	arrayVal := c.builder.CreateExtractValue(arrRangeSym.Val, 0, "array_range_arr")
 	rangeVal := c.builder.CreateExtractValue(arrRangeSym.Val, 1, "array_range_bounds")
-	arraySym := &Symbol{Val: arrPtr, Type: arrRangeType.Array}
-	elemType := arrRangeType.Array.ElemType
+	arraySym := &Symbol{
+		Val:      arrayVal,
+		Type:     arrRangeType.Array,
+		Borrowed: true,
+		ReadOnly: true,
+	}
+	resultType := arrayIndexResultType(arrRangeType.Array)
+
 	hasState := currentOutput != nil
 	stateType := llvm.Type{}
 	seed := llvm.Value{}
@@ -2736,28 +2824,41 @@ func (c *Compiler) iterOverArrayRangeState(arrRangeSym *Symbol, currentOutput *S
 	}
 
 	finalVal := c.createLoopCore(rangeVal, seed, stateType, hasState, func(iter llvm.Value, current llvm.Value) llvm.Value {
-		inBounds := c.arrayIndexInBounds(arraySym, elemType, iter)
+		inBounds := c.arrayIndexInBounds(arraySym, arrRangeType.Array.ElemType, iter)
 		preCheck := c.builder.GetInsertBlock()
 		iterBlock, contBlock := c.createIfCont(inBounds, "arr_iter_in_bounds", "arr_iter_cont")
 
 		c.builder.SetInsertPointAtEnd(iterBlock)
-		elemVal := c.ArrayGetBorrowed(arraySym, elemType, iter)
+		var yielded *Symbol
+		if arrRangeType.Array.Rank == 1 {
+			yielded = &Symbol{
+				Val:      c.ArrayGetBorrowed(arraySym, arrRangeType.Array.ElemType, iter),
+				Type:     resultType,
+				Borrowed: true,
+				ReadOnly: true,
+			}
+		} else {
+			yielded = c.compileArraySubarray(arraySym, iter)
+		}
+
 		var state *Symbol
 		if hasState {
 			state = GetCopy(currentOutput)
 			state.Val = current
 		}
-		next := body(elemVal, elemType, state)
+		next := body(yielded.Val, yielded.Type, state)
+		if arrRangeType.Array.Rank > 1 {
+			c.freeSymbolValue(yielded, "array_range_subarray")
+		}
 		c.builder.CreateBr(contBlock)
-
 		iterEnd := c.builder.GetInsertBlock()
+
 		c.builder.SetInsertPointAtEnd(contBlock)
 		if !hasState {
 			return llvm.Value{}
 		}
-		// Array-range iteration can skip the body when the element is out of
-		// bounds, so merge the unchanged incoming state with the body-updated
-		// state before handing it back to createLoopCore.
+		// Out-of-bounds indices skip the function body, so preserve the
+		// incoming direct-return state on that edge.
 		merged := c.builder.CreatePHI(stateType, "arr_iter_state")
 		merged.AddIncoming([]llvm.Value{current}, []llvm.BasicBlock{preCheck})
 		merged.AddIncoming([]llvm.Value{next.Val}, []llvm.BasicBlock{iterEnd})
@@ -2812,7 +2913,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 		rangeVal := c.createLoad(paramPtr, elemType, name+"_range")
 		result = c.iterOverRangeState(rangeType, rangeVal, currentOutput, next)
 	case ArrayRangeKind:
-		arrRangeVal := c.createLoad(paramPtr, elemType, name+"_arrrange")
+		arrRangeVal := c.createLoad(paramPtr, elemType, name+"_array_range")
 		arrRangeSym := &Symbol{
 			Val:      arrRangeVal,
 			Type:     elemType,
@@ -2884,31 +2985,75 @@ func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.
 	return ifBlock, contBlock
 }
 
-func (c *Compiler) compileCallArgs(ce *ast.CallExpression) []callArg {
+func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) []callArg {
 	args := []callArg{}
+	paramIndex := 0
 	for _, callArgExpr := range ce.Arguments {
+		if paramIndex >= len(sig.ParamTypes) {
+			panic("internal: call argument count exceeds resolved signature")
+		}
+		if arrayRangeType, ok := sig.ParamTypes[paramIndex].(ArrayRange); ok {
+			arrayRangeExpr, ok := callArgExpr.(*ast.ArrayRangeExpression)
+			if !ok {
+				panic(fmt.Sprintf("internal: ArrayRange parameter received %T", callArgExpr))
+			}
+			args = append(args, callArg{
+				Expr:        callArgExpr,
+				Symbol:      c.compileArrayRangeCallArg(arrayRangeExpr, arrayRangeType),
+				OutputAlias: -1,
+			})
+			paramIndex++
+			continue
+		}
+
 		if ident, ok := callArgExpr.(*ast.Identifier); ok {
 			args = append(args, callArg{
-				Expr: callArgExpr,
-				Name: ident.Value,
+				Expr:        callArgExpr,
+				Name:        ident.Value,
+				OutputAlias: -1,
 			})
+			paramIndex++
 			continue
 		}
 
 		res := c.compileExpression(callArgExpr, nil)
 		for _, r := range res {
+			if paramIndex >= len(sig.ParamTypes) {
+				panic("internal: compiled call argument count exceeds resolved signature")
+			}
 			args = append(args, callArg{
-				Expr:   callArgExpr,
-				Symbol: r,
+				Expr:        callArgExpr,
+				Symbol:      r,
+				OutputAlias: -1,
 			})
+			paramIndex++
 		}
 	}
+	if paramIndex != len(sig.ParamTypes) {
+		panic(fmt.Sprintf("internal: compiled %d call arguments for %d parameters", paramIndex, len(sig.ParamTypes)))
+	}
 	return args
+}
+
+func (c *Compiler) indirectCallOutputAlias(sig *callSignature, paramIndex int, arg callArg, dest []*ast.Identifier) int {
+	if !sig.ABI.HasRangeParams || sig.ABI.Params[paramIndex].Mode != ABIParamIndirect || arg.Name == "" {
+		return -1
+	}
+	for outputIndex, output := range dest {
+		if output.Value != arg.Name || outputIndex >= len(sig.ABI.Return.OutTypes) {
+			continue
+		}
+		if TypeEqual(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
+			return outputIndex
+		}
+	}
+	return -1
 }
 
 func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature, dest []*ast.Identifier) []int {
 	aliasIndices := c.buildCallParamAliasIndices(sig, args, dest)
 	for i, arg := range args {
+		args[i].OutputAlias = c.indirectCallOutputAlias(sig, i, arg, dest)
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
 			if arg.Name != "" {
@@ -2957,7 +3102,7 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 }
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
-	callArgs := c.compileCallArgs(ce)
+	callArgs := c.compileCallArgs(sig, ce)
 	aliasIndices := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
@@ -2976,41 +3121,45 @@ func (c *Compiler) withPreparedCall(sig *callSignature, ce *ast.CallExpression, 
 }
 
 func (c *Compiler) runCallWithBounds(run func()) {
+	c.runCallWithBoundsElse(run, nil)
+}
+
+func (c *Compiler) runCallWithBoundsElse(run func(), onSkip func()) {
 	if !c.withStmtBoundsGuard(
 		"call_bounds_ok",
 		"call_bounds_run",
 		"call_bounds_skip",
 		"call_bounds_cont",
 		run,
-		nil,
+		onSkip,
 	) {
 		run()
 	}
 }
 
-func (c *Compiler) loadOutputValues(outputs []*Symbol, outTypes []Type, name string) []*Symbol {
+func (c *Compiler) loadOutputValues(outputs []*Symbol, name string) []*Symbol {
 	out := make([]*Symbol, len(outputs))
 	for i := range outputs {
-		elemType := outTypes[i]
+		elemType := outputs[i].Type.(Ptr).Elem
 		loadName := name
 		if len(outputs) > 1 {
 			loadName = fmt.Sprintf("%s_%d", name, i)
 		}
 		out[i] = &Symbol{
-			Val:  c.createLoad(outputs[i].Val, elemType, loadName),
-			Type: elemType,
+			Val:       c.createLoad(outputs[i].Val, elemType, loadName),
+			Type:      elemType,
+			WriteFlag: outputs[i].WriteFlag,
 		}
 	}
 	return out
 }
 
 func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
-	outputs := c.makeTempOutputs(info.OutTypes, true, func(i int, outType Type) *Symbol {
-		if dest != nil && i < len(dest) {
-			return c.resolveDestSeed(dest[i], outType)
-		}
-		return c.makeZeroValue(outType)
-	})
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		c.pushBoundsGuard("call_iter_bounds_guard")
 		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
@@ -3019,10 +3168,16 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 		c.popBoundsGuard()
 	})
 
-	return c.loadOutputValues(outputs, info.OutTypes, "final")
+	return c.loadOutputValues(outputs, "final")
 }
 
-func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
+func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprInfo, dest []*ast.Identifier) []*Symbol {
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
+
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		// Scope bounds checks to this loop iteration: arguments can contain
 		// multiple array reads, and the call should execute only when all are
@@ -3031,15 +3186,15 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 		// Inside loop, ranges are shadowed as scalars. If call arguments contain
 		// conditional expressions, execute the call only when they hold.
 		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
-			c.compileCallInner(sig, rewCall, dest, outputs)
+			c.compileIndirectCallIntoStagedOutputs(sig, rewCall, dest, outputs)
 		})
 		c.popBoundsGuard()
 	})
 
 	// Loop path materializes final values from output slots after iteration.
-	// Slots are seeded by makeOutputs (existing value or zero for new vars), so
+	// Slots are seeded by makeSeededTempOutputs (existing value or zero for new vars), so
 	// empty ranges naturally preserve no-op semantics for existing destinations.
-	return c.loadOutputValues(outputs, info.OutTypes, "final")
+	return c.loadOutputValues(outputs, "final")
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
@@ -3054,6 +3209,11 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !ok {
 		return nil
 	}
+	// Mutual-recursion convergence can leave this call site's cache partially
+	// unresolved even though the selected function variant is now concrete.
+	// Keep every lowering path aligned with the authoritative ABI types.
+	info.OutTypes = append([]Type(nil), sig.ABI.Return.OutTypes...)
+	info.ExprLen = len(info.OutTypes)
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
 		if !info.LoopInside && len(info.Ranges) > 0 {
@@ -3062,47 +3222,22 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 			return c.compileDirectCallWithRanges(sig, info, dest)
 		}
 
-		return c.compileCallInner(sig, ce, dest, nil)
+		return c.compileCallInner(sig, ce, dest)
 	}
 
-	// Direct calls can materialize into temporary outputs first when the
-	// callee's return flavor differs from the destination slot flavor. Those
-	// temporaries are returned as normal RHS values so outer assignment/guard
-	// logic owns the eventual store, restore, and old-value cleanup.
-	if c.callNeedsTempOutputs(info, dest) {
-		tempOutputs := c.makeOutputs(nil, info.OutTypes, false)
-		c.compileCallInner(sig, ce, dest, tempOutputs)
-		return c.loadOutputValues(tempOutputs, info.OutTypes, "call_tmp")
+	if len(info.Ranges) > 0 && !info.LoopInside {
+		return c.compileIndirectCallWithRanges(sig, info, dest)
 	}
 
-	outputs := c.makeOutputs(dest, info.OutTypes, false)
-
-	if !info.LoopInside && len(info.Ranges) > 0 {
-		return c.compileIndirectCallWithRanges(sig, info, dest, outputs)
-	}
-
-	// LoopInside=true or no ranges: direct call
-	c.compileCallInner(sig, ce, dest, outputs)
-
-	// Update output types (e.g., Static flag for strings) when there are no ranges.
-	// Old value freeing is handled by writeTo using captured old values.
-	if !info.HasRanges {
-		c.updateOutputTypes(outputs, info.OutTypes, dest)
-	}
-
-	return outputs
-}
-
-// updateOutputTypes updates the destination symbols in scope to reference the output values.
-// With StrG/StrH types, the type is determined at type-solving time and doesn't change.
-func (c *Compiler) updateOutputTypes(outputs []*Symbol, outTypes []Type, dest []*ast.Identifier) {
-	for i, out := range outputs {
-		if i >= len(outTypes) || dest == nil || i >= len(dest) {
-			continue
-		}
-		// Update the symbol in scope to reference this output
-		Put(c.Scopes, dest[i].Value, out)
-	}
+	// Indirect-return callees write through their output pointers. Always point
+	// them at independent, destination-seeded slots so a call in one RHS cannot
+	// mutate a real destination before sibling RHS expressions have read the
+	// statement-start values. The outer assignment owns the eventual commit and
+	// cleanup. ABI-flavor adapters handle established slots such as StrH when a
+	// callee declares StrG.
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.compileIndirectCallIntoStagedOutputs(sig, ce, dest, outputs)
+	return c.loadOutputValues(outputs, "call_final")
 }
 
 func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llvm.Type, llvm.Type) {
@@ -3137,39 +3272,92 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 	})
 }
 
+func (c *Compiler) compileIndirectCallIntoOutputs(
+	sig *callSignature,
+	ce *ast.CallExpression,
+	dest []*ast.Identifier,
+	outputs []*Symbol,
+	afterCall func([]llvm.Value),
+	onSkip func(),
+) {
+	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		c.runCallWithBoundsElse(func() {
+			writeFlags := c.makeCallOutputWriteFlags(len(outputs))
+			c.builder.CreateCall(
+				call.FuncType,
+				call.Function,
+				c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
+				"",
+			)
+			if afterCall != nil {
+				afterCall(writeFlags)
+			}
+		}, onSkip)
+	})
+}
+
+func (c *Compiler) compileIndirectCallIntoStagedOutputs(
+	sig *callSignature,
+	ce *ast.CallExpression,
+	dest []*ast.Identifier,
+	staged []*Symbol,
+) {
+	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
+	callOutputs := callAdapterOutputs(adapters)
+	c.compileIndirectCallIntoOutputs(
+		sig,
+		ce,
+		dest,
+		callOutputs,
+		func(writeFlags []llvm.Value) { c.commitCallOutputAdapters(staged, adapters, writeFlags) },
+		func() { c.cleanupSkippedCallOutputAdapters(adapters) },
+	)
+}
+
+func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {
+	flags := make([]llvm.Value, count)
+	for i := range flags {
+		name := fmt.Sprintf("call_output_written_%d", c.tmpCounter)
+		c.tmpCounter++
+		flags[i] = c.createEntryBlockAlloca(c.Context.Int1Type(), name)
+		c.builder.CreateStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), flags[i])
+	}
+	return flags
+}
+
 // compileCallInner compiles the actual function call
-func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier, outputs []*Symbol) []*Symbol {
+func (c *Compiler) compileCallInner(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) []*Symbol {
 	var results []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		if sig.ABI.Return.Mode == ABIReturnDirect {
-			seed := c.makeZeroValue(sig.ABI.Return.DirectType)
-			if len(dest) > 0 {
-				seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
-			}
-			resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
-			c.createStore(seed.Val, resultPtr, seed.Type)
-
-			c.runCallWithBounds(func() {
-				callResult := c.callDirect(call.Function, call.FuncType, sig, call, seed)
-				c.createStore(callResult.Val, resultPtr, callResult.Type)
-			})
-
-			results = []*Symbol{{
-				Val:  c.createLoad(resultPtr, sig.ABI.Return.DirectType, sig.FuncName+"_call_ret"),
-				Type: sig.ABI.Return.DirectType,
-			}}
-			return
+		seed := c.makeZeroValue(sig.ABI.Return.DirectType)
+		if len(dest) > 0 {
+			seed = c.directReturnSeedForCall(sig.ABI.Return.DirectType, dest[0], nil)
 		}
+		resultPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sig.ABI.Return.DirectType), sig.FuncName+"_call_tmp")
+		c.createStore(seed.Val, resultPtr, seed.Type)
 
 		c.runCallWithBounds(func() {
-			results = c.callFunction(call.Function, call.FuncType, sig, call, call.RetStruct, outputs)
+			callResult := c.callDirect(call.Function, call.FuncType, sig, call, seed)
+			c.createStore(callResult.Val, resultPtr, callResult.Type)
 		})
+
+		results = []*Symbol{{
+			Val:  c.createLoad(resultPtr, sig.ABI.Return.DirectType, sig.FuncName+"_call_ret"),
+			Type: sig.ABI.Return.DirectType,
+		}}
 	})
 
 	return results
 }
 
-func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llvm.Type, outputs []*Symbol, directSeed *Symbol) []llvm.Value {
+func (c *Compiler) callArgs(
+	sig *callSignature,
+	call preparedCall,
+	retStruct llvm.Type,
+	outputs []*Symbol,
+	writeFlags []llvm.Value,
+	directSeed *Symbol,
+) []llvm.Value {
 	llvmArgs := []llvm.Value{}
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := c.createEntryBlockAlloca(retStruct, "sret_tmp")
@@ -3177,10 +3365,18 @@ func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llv
 			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, i, fmt.Sprintf("sret_field_%d", i))
 			c.builder.CreateStore(out.Val, fieldPtr)
 		}
+		for i, flag := range writeFlags {
+			fieldPtr := c.builder.CreateStructGEP(retStruct, sretPtr, len(outputs)+i, fmt.Sprintf("sret_written_field_%d", i))
+			c.builder.CreateStore(flag, fieldPtr)
+		}
 		llvmArgs = append(llvmArgs, sretPtr)
 	}
 	for _, arg := range call.Args {
-		llvmArgs = append(llvmArgs, arg.Lowered.Val)
+		argVal := arg.Lowered.Val
+		if arg.OutputAlias >= 0 && arg.OutputAlias < len(outputs) {
+			argVal = outputs[arg.OutputAlias].Val
+		}
+		llvmArgs = append(llvmArgs, argVal)
 	}
 	for _, aliasIndex := range call.AliasIndices {
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
@@ -3193,16 +3389,11 @@ func (c *Compiler) callArgs(sig *callSignature, call preparedCall, retStruct llv
 }
 
 func (c *Compiler) callDirect(fn llvm.Value, funcType llvm.Type, sig *callSignature, call preparedCall, directSeed *Symbol) *Symbol {
-	callVal := c.builder.CreateCall(funcType, fn, c.callArgs(sig, call, llvm.Type{}, nil, directSeed), sig.FuncName+"_ret")
+	callVal := c.builder.CreateCall(funcType, fn, c.callArgs(sig, call, llvm.Type{}, nil, nil, directSeed), sig.FuncName+"_ret")
 	return &Symbol{
 		Val:  callVal,
 		Type: sig.ABI.Return.DirectType,
 	}
-}
-
-func (c *Compiler) callFunction(fn llvm.Value, funcType llvm.Type, sig *callSignature, call preparedCall, retStruct llvm.Type, outputs []*Symbol) []*Symbol {
-	c.builder.CreateCall(funcType, fn, c.callArgs(sig, call, retStruct, outputs, nil), "")
-	return outputs
 }
 
 // extract numeric fields of a range struct
@@ -3210,20 +3401,6 @@ func (c *Compiler) rangeComponents(r llvm.Value) (start, stop, step llvm.Value) 
 	start = c.builder.CreateExtractValue(r, 0, "start")
 	stop = c.builder.CreateExtractValue(r, 1, "stop")
 	step = c.builder.CreateExtractValue(r, 2, "step")
-	return
-}
-
-func (c *Compiler) rangeStrArg(s *Symbol) (arg llvm.Value) {
-	start, stop, step := c.rangeComponents(s.Val)
-
-	// call range_i64_str
-	fnType, fn := c.GetCFunc(RANGE_I64_STR)
-	arg = c.builder.CreateCall(
-		fnType,
-		fn,
-		[]llvm.Value{start, stop, step},
-		RANGE_I64_STR,
-	)
 	return
 }
 
@@ -3495,15 +3672,6 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		return
 	}
 
-	// ArrayRange needs special handling (two string args)
-	if s.Type.Kind() == ArrayRangeKind {
-		arrStr, rngStr := c.arrayRangeStrArgs(s)
-		*formatStr += "%s[%s] "
-		*args = append(*args, arrStr, rngStr)
-		*toFree = append(*toFree, arrStr, rngStr)
-		return
-	}
-
 	// Get format specifier for this type
 	spec, err := defaultSpecifier(s.Type)
 	if err != nil {
@@ -3518,10 +3686,6 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 
 	// Handle types that need string conversion
 	switch s.Type.Kind() {
-	case RangeKind:
-		strPtr := c.rangeStrArg(s)
-		*args = append(*args, strPtr)
-		*toFree = append(*toFree, strPtr)
 	case FloatKind:
 		strPtr := c.floatStrArg(s)
 		*args = append(*args, strPtr)

@@ -1,4 +1,3 @@
-#include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -173,25 +172,6 @@ char *str_hex(const char *s, int64_t byte_limit, int32_t uppercase, int32_t alte
     return result;
 }
 
-// Convert a range [s..t) with step p into a NUL-terminated string.
-// Caller is responsible for free()ing the returned buffer.
-char *range_i64_str(int64_t s, int64_t t, int64_t p) {
-    // Reserve enough space: up to 20 digits per number, two colons, plus NUL.
-    // 3*21 + 2 = 65 bytes is plenty.
-    char *buf = malloc(65);
-    if (!buf) return NULL;
-    if (p == 1) {
-        // omit the default ":1"
-        /* bounded print to avoid CRT warnings/overflow */
-        snprintf(buf, 65, "%" PRId64 ":%" PRId64, s, t);
-    } else {
-        /* bounded print to avoid CRT warnings/overflow */
-        snprintf(buf, 65, "%" PRId64 ":%" PRId64 ":%" PRId64, s, t, p);
-    }
-    return buf;
-}
-
-
 /* ---------- portable float formatting ---------- */
 /* Canonicalize special values across platforms:
    - NaN  => "NaN"  (no sign)
@@ -248,11 +228,9 @@ char *f32_str(float xf) {
 
 // Format a string using snprintf with variadic arguments.
 // Uses snprintf to determine size, then allocates exact buffer needed.
-// Returns a newly allocated string that the caller must free().
-// NOTE: Currently, formatted strings are not automatically freed and will
-// leak unless explicitly freed by the caller or at program exit.
-// TODO: Implement proper string lifetime management with reference counting
-// or scope-based cleanup.
+// Returns a newly allocated string. Ownership transfers to generated code,
+// which represents it as StrH and releases it through normal temporary,
+// assignment, argument, and scope cleanup.
 char *sprintf_alloc(const char *fmt, ...) {
     va_list args1, args2;
     va_start(args1, fmt);

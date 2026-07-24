@@ -3,13 +3,13 @@ value = arr[2]
 "Index: -value"
 
 current = arr[1:4]
-"RangeAssign: -current"
+"RangeFinal: -current"
 
 wrapped = [arr[1:3]]
 "RangeWrappedMaterialized: -wrapped"
 
-viewPrint = arr[1:3]
-"RangeViewPrint: -viewPrint"
+# A direct range selection prints its yielded elements, never an internal view.
+"RangeElement", arr[1:3]
 
 sum = 0
 sum = sum + arr[0:5]
@@ -31,6 +31,31 @@ idx = 0:5
 viaIdent = arr[idx]
 "IdentRange: -viaIdent"
 
+descending = arr[4:0:-2]
+"DescendingRange: -descending"
+
+uneven = arr[0:5:2]
+"UnevenRange: -uneven"
+
+# Empty selections keep existing destinations and zero-initialize fresh ones.
+emptyFresh = arr[2:2]
+"EmptyRangeFresh: -emptyFresh"
+
+emptyExisting = 77
+emptyExisting = arr[2:2]
+"EmptyRangeExisting: -emptyExisting"
+
+# Out-of-bounds points are skipped, so the last valid selected element wins.
+lastValid = arr[-2:7]
+"OOBLastValid: -lastValid"
+
+allOOBFresh = arr[8:10]
+"AllOOBFresh: -allOOBFresh"
+
+allOOBExisting = 88
+allOOBExisting = arr[8:10]
+"AllOOBExisting: -allOOBExisting"
+
 pref = -arr[1:4]
 "PrefixRange: -pref"
 
@@ -40,6 +65,7 @@ chain = [1]
 chain = chain ⊕ [chain[idx]]
 "LiteralIterChain: -chain"
 
+# A range-indexed call argument invokes the function for each valid element.
 callRoot = Double(arr[0:5])
 "CallRangeRoot: -callRoot"
 
@@ -55,8 +81,19 @@ callInfixVec = [Double(arr[0:5]) + idx]
 callInfixVecSingleRange = [Double(arr[idx]) + idx]
 "CallInfixVecSingleRange: -callInfixVecSingleRange"
 
-# Borrowed ArrayRange reassignment must not free backing array ownership
-view = arr[0:3]
-view = arr[1:4]
-"BorrowedReassignArr: -arr"
-"BorrowedReassignView: -view"
+# Final string elements become independently owned scalar results.
+words = ["alpha" "beta" "gamma"]
+lastWord = words[0:3]
+"StringRangeFinal: -lastWord"
+lastWord = words[1:2]
+"StringRangeReassign: -lastWord"
+"StringRangeSource: -words"
+
+# A Range parameter can select the final owned value from a function-local
+# array after that local array has been cleaned up.
+localDriver = 0:3
+localWord = LocalWord(localDriver)
+"LocalRangeWord: -localWord"
+
+localPlane = LocalPlane(localDriver)
+"LocalRangePlane: -localPlane"

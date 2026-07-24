@@ -48,14 +48,10 @@ func defaultSpecifier(t Type) (string, error) {
 		return "%s", nil
 	case StrKind:
 		return "%s", nil
-	case RangeKind:
-		return "%s", nil
 	case ArrayKind:
 		// Arrays are converted to char* via runtime helpers
 		return "%s", nil
 	case TableKind:
-		return "%s", nil
-	case ArrayRangeKind:
 		return "%s", nil
 	case StructKind:
 		return "%s", nil
@@ -594,10 +590,6 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		strPtr := c.floatStrArg(mainSym)
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)
-	case RangeKind:
-		strPtr := c.rangeStrArg(mainSym)
-		result.args = append(result.args, strPtr)
-		result.toFree = append(result.toFree, strPtr)
 	case ArrayKind:
 		arrType := mainSym.Type.(Array)
 		if arrType.Rank == 1 && !hasConcreteArrayElemType(arrType.ElemType) {
@@ -616,11 +608,6 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		result.text = fmtStr
 		result.args = append(result.args, fmtArgs...)
 		result.toFree = append(result.toFree, fmtFree...)
-	case ArrayRangeKind:
-		arrStr, rangeStr := c.arrayRangeStrArgs(mainSym)
-		result.text += "[%s]"
-		result.args = append(result.args, arrStr, rangeStr)
-		result.toFree = append(result.toFree, arrStr, rangeStr)
 	default:
 		return false
 	}
@@ -857,7 +844,7 @@ func maybeMarker(runes []rune, i int) bool {
 // Output format:
 //
 //	Point
-//	    :x y
+//	  : x y
 //	    1 2
 func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value, toFree []llvm.Value) {
 	st := s.Type.(Struct)
@@ -881,15 +868,15 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 		}
 		valueParts = append(valueParts, spec)
 	}
-	fmtStr = st.Name + "\n    :" + strings.Join(headerParts, " ") + "\n    " + strings.Join(valueParts, " ") + "\n"
+	fmtStr = st.Name + "\n  : " + strings.Join(headerParts, " ") + "\n    " + strings.Join(valueParts, " ") + "\n"
 	return
 }
 
-// hasValidMarkers checks if a format string contains any markers (-identifier)
-// where the main identifier is defined according to the provided isDefined callback.
-// This aligns with parseMarker/formatString semantics: each marker is resolved
-// independently, including markers in text following an unresolved marker.
-func hasValidMarkers(value string, isDefined func(string) bool) bool {
+// formatMarkerIdentifiers returns the identifiers read by resolved markers in
+// source order. Dynamic width/precision identifiers are included because a
+// named Range there contributes the same iteration driver as a main marker.
+func formatMarkerIdentifiers(value string, isDefined func(string) bool) []string {
+	var identifiers []string
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -900,12 +887,30 @@ func hasValidMarkers(value string, isDefined func(string) bool) bool {
 		if !maybeMarker(runes, i) {
 			continue
 		}
-		// Parse the identifier after the '-'
-		mainId, _ := parseIdentifier(runes, i+1)
-		// Only the main identifier matters - aligns with parseMarker behavior
-		if isDefined(mainId) {
-			return true
+		mainID, end := parseIdentifier(runes, i+1)
+		if !isDefined(mainID) {
+			continue
+		}
+		identifiers = append(identifiers, mainID)
+
+		if end >= len(runes) || runes[end] != '%' {
+			i = end - 1
+			continue
+		}
+		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
+		for _, specID := range spec.ids {
+			if isDefined(specID) {
+				identifiers = append(identifiers, specID)
+			}
+		}
+		if spec.end > end {
+			i = spec.end - 1
 		}
 	}
-	return false
+	return identifiers
+}
+
+// hasValidMarkers checks if a format string contains a resolved marker.
+func hasValidMarkers(value string, isDefined func(string) bool) bool {
+	return len(formatMarkerIdentifiers(value, isDefined)) > 0
 }
