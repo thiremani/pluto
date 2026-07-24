@@ -13,3 +13,14 @@ res
 res = 10
 res = AccViaId(res, 0:-2)
 res
+
+res = 10
+res = ConditionalAcc(res, -1)
+res
+
+res = ConditionalAcc(res, 2)
+res
+
+res = 10
+res = ConditionalAcc(res, -2:3)
+res

@@ -2,6 +2,14 @@ SquareInt: 25
 SquareFloat: 4.84
 SquareArr: [1 4 9 25]
 
+ConditionalSquareKeep: 14
+ConditionalSquareWrite: 49
+ConditionalSquareFresh: 0
+ConditionalSquareForwarded: 14
+ConditionalSquareFloatKeep: 14.5
+ConditionalSquareFloatWrite: 56.25
+ConditionalSquareFloatFresh: 0
+
 SquareRange: 4
 SquareArrRange: 9
 SquareArrMask: [0 0 0 25]

@@ -29,9 +29,9 @@ type ABIReturn struct {
 }
 
 // FuncABI captures the lowered function boundary for one mangled variant.
-// Range-bearing variants may need hidden alias/seed state so direct scalar
-// params and returns still preserve loop-carried accumulation and empty-range
-// no-op semantics inside the callee.
+// Direct scalar returns carry a hidden destination seed so a skipped write
+// preserves the caller's value. Range-bearing variants may additionally need
+// hidden alias state for loop-carried accumulation.
 type FuncABI struct {
 	Params         []ABIParam
 	Return         ABIReturn
@@ -97,9 +97,10 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	if directType, ok := directScalarABIReturnType(outTypes); ok {
 		abi.Return.Mode = ABIReturnDirect
 		abi.Return.DirectType = directType
-		// Range-bearing variants need a seed so an empty range preserves the
-		// caller's destination. Ordinary scalar variants return directly.
-		abi.Return.HasSeedParam = abi.HasRangeParams
+		// Whether a function body writes its output conditionally is not part
+		// of the type-based mangle. Keep the native C ABI stable across body
+		// changes by giving every direct scalar return a destination seed.
+		abi.Return.HasSeedParam = true
 	}
 
 	return abi

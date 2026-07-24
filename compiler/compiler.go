@@ -350,9 +350,9 @@ func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
-// direct scalar return. Range-bearing variants thread this through a hidden ABI
-// param so the callee can preserve empty-range and loop-carried accumulation
-// semantics even though the LLVM return itself is by value.
+// direct scalar return. The callee receives it through a hidden ABI parameter
+// so a skipped output write preserves the destination even though the LLVM
+// return itself is by value.
 func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, output *Symbol) *Symbol {
 	if output != nil {
 		return c.derefIfPointer(output, "call_seed")

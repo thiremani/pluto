@@ -268,7 +268,7 @@ typedef struct {
 The descriptor occupies the ordinary source-parameter position. An indirect
 result carrier, when present, comes first; all source parameters follow in
 source order; hidden alias selectors follow them; and a hidden direct-return
-seed, when required, is last.
+seed is last.
 
 ---
 
@@ -314,9 +314,9 @@ types:
 - `I64` and `F64` parameters are passed directly. Ranges, internal
   `ArrayRange` descriptors, and other values are passed indirectly.
 - A function with exactly one `I64` or `F64` output returns that scalar
-  directly. A variant bearing a `Range` or internal `ArrayRange` parameter
-  also receives a hidden seed value so an empty range preserves the caller's
-  staged value.
+  directly and receives one hidden seed value. The seed preserves the caller's
+  staged value when the callee does not write its output, including a failed
+  conditional assignment or an empty `Range`/internal `ArrayRange`.
 - All other output lists use an indirect `void` return. Argument zero points
   to a carrier whose first `N` fields are output pointers and whose next `N`
   fields are pointers to `i1` write markers.
@@ -329,6 +329,31 @@ types:
 - When a compatible caller destination has a different ownership or shape
   representation from the declared output, the ABI slot starts at the declared
   type's zero value. The caller commits it only if its write marker is set.
+
+The direct-return seed is always present, even when the function body
+unconditionally overwrites its output. Schematically, with mangled names
+abbreviated:
+
+```c
+int64_t Pt_Square_I64(int64_t x, int64_t seed);
+int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
+int64_t Pt_Acc_I64_Range(
+    int64_t a,
+    const PtRangeI64 *range,
+    int32_t a_output_alias,
+    int64_t seed
+);
+```
+
+A C caller passes the destination's current value to request Pluto's keep-old
+semantics, or the output type's zero value for a fresh destination. The seed is
+`noundef` and must still be supplied to a function such as `Square` that does
+not inspect it. Whether the body must write or may skip a write never changes
+the public signature or mangled name. In particular, adding a conditional
+assignment—or changing a reachable output-producing callee from must-write to
+may-write—cannot alter the prototype of an existing symbol. A future seedless
+internal fast path must therefore use a distinct private symbol behind this
+stable boundary.
 
 Conceptually, a two-output indirect call uses:
 

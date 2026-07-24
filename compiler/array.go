@@ -980,6 +980,8 @@ func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ 
 	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
 
 	var rangeSym *Symbol
+	// A named Range must bypass value-root finalization: this call boundary
+	// needs its descriptor, not the last value produced by iterating it.
 	if rangeIdent, ok := expr.Range.(*ast.Identifier); ok {
 		rangeSym = c.compileIdentifier(rangeIdent)
 	} else {

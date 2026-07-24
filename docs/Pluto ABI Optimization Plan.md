@@ -60,13 +60,22 @@ Concretely, it hooks between `TypeLetStatement` / `TypeExpression` (which resolv
 
 ### 3.3 Internal vs external ABI
 
-|                | Internal (Pluto-to-Pluto)             | External (C callers)     |
-| -------------- | ------------------------------------- | ------------------------ |
-| **Convention** | Classified ABI (direct scalars, etc.) | Current all-pointer ABI  |
-| **Stability**  | Can change between compiler versions  | Stable, documented       |
-| **Migration**  | Transparent to Pluto code             | Wrapper thunks if needed |
+The current compiler emits one classified mangled entry point used by both
+Pluto calls and direct C callers. There is not yet a separate stable wrapper:
 
-Name mangling encodes semantic types, not physical ABI. Changing `I64` from pointer-passed to value-passed does not require a mangling change. But the binary calling convention does change, so external callers need ABI wrappers or versioning.
+| Entry point | Consumers | Convention | Stability |
+| --- | --- | --- | --- |
+| Current mangled symbol | Pluto and C | Documented classified ABI | Write-effect-independent within the ABI version |
+| Future private clone | Pluto only | Internally optimized | May vary freely |
+| Future public wrapper | C | Documented wrapper ABI | Stable or explicitly versioned |
+
+Name mangling encodes semantic types, not physical ABI. Changing `I64` from
+pointer-passed to value-passed therefore does not change the name, even though
+it changes the C prototype. Until wrappers exist, every physical ABI decision
+on the current symbol must be derived from its solved signature—not output write
+effects in its body or the bodies of callees. Because return types are inferred
+and not mangled, a body edit that changes the solved parameter/output signature
+is still an ABI-breaking source change even though the symbol name is unchanged.
 
 ## 4. Implementation Phases
 
@@ -77,7 +86,20 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 - pass `I64`/`F64` by value instead of by pointer
 - return single scalar in register instead of via `sret`
 - keep function-body semantics stable by spilling direct scalar params into local addressable slots in the callee
-- preserve range-bearing accumulator / empty-range behavior with hidden alias/seed state where needed
+- give every direct scalar return a final hidden destination seed, preserving
+  skipped conditional writes and empty-range behavior without making the
+  physical signature depend on the function body
+- preserve range-bearing accumulator behavior with additional hidden alias
+  selectors where needed
+
+`MustWrite`/`MayWrite` has limited utility at the public boundary and must not
+decide whether the seed parameter exists. Adding one conditional output write
+to a function body—or making a reachable output-producing callee conditional—
+could otherwise change the C prototype without changing the type-based mangled
+name. Previously compiled C callers would then invoke the same symbol with the
+wrong argument list. Write-effect information may still eliminate seed use
+inside Pluto code; a seedless fast path needs a distinctly named private clone
+behind the stable public entry point.
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 
@@ -108,7 +130,9 @@ Broaden to more scalar types, small direct aggregates in both params and results
 
 ### Phase 5: External ABI wrappers
 
-Once internal ABI is stable, decide whether exported symbols keep the current C ABI (add wrappers) or version the ABI docs explicitly.
+Add stable/versioned public wrappers if private Pluto-only entry points begin
+using more aggressive conventions. Until then, the documented classified
+mangled symbol remains the C boundary.
 
 ### Parallel track: non-ABI loop/codegen work
 
@@ -160,7 +184,8 @@ Each phase should:
 1. **Feature-flag the new ABI** — compile both old and new paths, compare program behavior and test results (not raw IR, which will differ by design)
 2. **Run the full test suite** (`python3 test.py --leak-check`) against both paths
 3. **Benchmark before/after** using `bench/` suite to validate the expected gains
-4. **Merge internal ABI first** — external wrappers come later (Phase 5)
+4. **Keep public symbols write-effect-independent** — private ABI experiments
+   require distinct symbols until external wrappers arrive in Phase 5
 
 ## 6. Practical Recommendation
 

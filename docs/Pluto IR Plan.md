@@ -55,6 +55,15 @@ before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, whil
 `x = arr[i] > 0 || other[j] > 0` remains `MayWrite`. This matches the compiler's
 existing solver-then-CFG order, so migration requires no pass reordering.
 
+This per-target `WriteEffect` is not a public function-ABI classifier. Every
+exported direct `I64`/`F64` return keeps its final hidden seed parameter.
+Collapsing statement effects into a function-level `MustWrite`/`MayWrite`
+summary may optimize internal seed use, but it cannot add or remove that
+parameter: a local conditional or a newly conditional output-producing callee
+would otherwise change the C prototype of the same type-mangled symbol after a
+body-only edit. A seedless variant requires a distinctly named private clone
+behind the stable entry point.
+
 PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
 

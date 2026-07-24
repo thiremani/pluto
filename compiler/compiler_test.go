@@ -55,6 +55,18 @@ out`
 	require.Less(t, division, falseLabel, "the second condition must not escape the lazy RHS block")
 }
 
+func TestDirectScalarABIAlwaysHasDestinationSeed(t *testing.T) {
+	for _, outType := range []Type{I64, F64} {
+		abi := classifyFuncABI([]Type{I64}, []Type{outType})
+		require.Equal(t, ABIReturnDirect, abi.Return.Mode)
+		require.True(t, abi.Return.HasSeedParam)
+	}
+
+	indirect := classifyFuncABI([]Type{I64}, []Type{I64, I64})
+	require.Equal(t, ABIReturnIndirect, indirect.Return.Mode)
+	require.False(t, indirect.Return.HasSeedParam)
+}
+
 func TestPhase1ScalarABIDirectI64(t *testing.T) {
 	code := `res = Add(x, y)
     res = x + y`
@@ -65,8 +77,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{I64, I64})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1)", "expected direct scalar signature with noundef attrs")
-	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3)", "expected direct scalar call")
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)", "expected direct scalar signature with a hidden destination seed")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3, i64 0)", "expected direct scalar call with a fresh-destination seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar return should not use sret struct")
 }
 
@@ -106,8 +118,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "AddF", []Type{F64, F64})
 
-	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1)", "expected direct float signature with noundef attrs")
-	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00)", "expected direct float call")
+	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1, double noundef %2)", "expected direct float signature with a hidden destination seed")
+	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00, double 0.000000e+00)", "expected direct float call with a fresh-destination seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar float return should not use sret struct")
 }
 
@@ -242,11 +254,11 @@ res`
 		Range{Iter: I64},
 	})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1)",
+	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)",
 		"a shared driver must select the ordinary scalar specialization")
 	require.GreaterOrEqual(t, strings.Count(scriptIR, "call i64 @"+scalarMangled+"("), 1,
 		"the shared caller-side loop should invoke the scalar specialization")
-	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter)",
+	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter, i64 %call_seed)",
 		"the array access and scalar argument should use the same caller-loop iterator")
 	require.NotContains(t, scriptIR, arrayRangeMangled,
 		"arr[i] and i must not become independent callee iterators")
