@@ -978,9 +978,6 @@ func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ 
 		arrayLoadName = arrayIdent.Value + "_load"
 	}
 	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
-	if !TypeEqual(arraySym.Type, typ.Array) {
-		panic(fmt.Sprintf("internal: ArrayRange source type mismatch: got %s, want %s", arraySym.Type, typ.Array))
-	}
 
 	var rangeSym *Symbol
 	switch rangeExpr := expr.Range.(type) {
@@ -992,9 +989,6 @@ func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ 
 		panic(fmt.Sprintf("internal: unsupported ArrayRange call index %T", expr.Range))
 	}
 	rangeSym = c.derefIfPointer(rangeSym, "array_range_index")
-	if !TypeEqual(rangeSym.Type, typ.Range) {
-		panic(fmt.Sprintf("internal: ArrayRange index type mismatch: got %s, want %s", rangeSym.Type, typ.Range))
-	}
 
 	_, arrayIsIdent := expr.Array.(*ast.Identifier)
 	return &Symbol{
