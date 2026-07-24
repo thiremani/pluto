@@ -33,7 +33,7 @@ Intended for performance-sensitive scripting, numerical work, simulation, and sy
 
 Range-driven auto-vectorization and safe arrays.
 
-Scope-based memory (no null values, no unsafe out-of-bounds access, no GC), and concurrency by construction.
+Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by construction.
 
 ---
 
@@ -43,7 +43,7 @@ Scope-based memory (no null values, no unsafe out-of-bounds access, no GC), and 
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
 - First-class rectangular arrays of any rank, columnar tables, and link semantics
-- Scope-based memory: no null values, no unsafe out-of-bounds access, no garbage collector
+- Scope-based memory: no nulls, no out-of-bounds, no garbage collector
 - printf-style formatting; arrays printable and range streams iterable
 - Cross-platform (Linux/macOS/Windows)
 
@@ -311,7 +311,7 @@ Pluto uses deterministic, scope-based memory:
 
 - No garbage collector
 - No null values
-- No unsafe out-of-bounds memory access
+- No out-of-bounds access
 - Memory freed when scope ends
 
 Predictable performance with minimal runtime overhead.
