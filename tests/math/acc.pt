@@ -10,3 +10,7 @@ res = Acc(a, x)
 
 res = ConditionalAcc(a, x)
     res = x > 0 a + x
+
+sum, last = AccPair(a, x)
+    sum = a + x
+    last = x

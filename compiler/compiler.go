@@ -72,11 +72,10 @@ type FuncArgs struct {
 }
 
 type callArg struct {
-	Expr        ast.Expression
-	Name        string
-	Symbol      *Symbol
-	Lowered     *Symbol
-	OutputAlias int
+	Expr    ast.Expression
+	Name    string
+	Symbol  *Symbol
+	Lowered *Symbol
 }
 
 type callSignature struct {
@@ -88,11 +87,11 @@ type callSignature struct {
 }
 
 type preparedCall struct {
-	Args         []callArg
-	AliasIndices []int
-	Function     llvm.Value
-	FuncType     llvm.Type
-	RetStruct    llvm.Type
+	Args          []callArg
+	OutputAliases []int // Per source argument; -1 means no destination alias.
+	Function      llvm.Value
+	FuncType      llvm.Type
+	RetStruct     llvm.Type
 }
 
 // BindingKey identifies a variable binding within a specific function variant.
@@ -318,35 +317,42 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
-// buildCallParamAliasIndices records which direct scalar params alias caller
-// destinations for range-bearing variants. The callee uses these indices to
-// redirect a by-value param spill to the matching output slot so loop-carried
-// accumulation keeps the same semantics as the legacy indirect ABI.
-func (c *Compiler) buildCallParamAliasIndices(sig *callSignature, args []callArg, dest []*ast.Identifier) []int {
-	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
-	if dest == nil {
-		return aliasIndices
+// buildCallArgOutputAliases records which named inputs alias caller
+// destinations for range-bearing variants. Direct scalar params encode the
+// selected output through a hidden ABI index; indirect params receive that
+// output's staged pointer directly.
+func (c *Compiler) buildCallArgOutputAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) []int {
+	aliases := make([]int, len(args))
+	for i := range aliases {
+		aliases[i] = -1
+	}
+	if !sig.ABI.HasRangeParams || dest == nil {
+		return aliases
 	}
 
-	for i, arg := range args {
-		aliasSlot := sig.ABI.Params[i].AliasSlot
-		if aliasSlot < 0 || arg.Name == "" {
+	for paramIndex, arg := range args {
+		paramABI := sig.ABI.Params[paramIndex]
+		if arg.Name == "" || (paramABI.Mode == ABIParamDirect && paramABI.AliasSlot < 0) {
 			continue
 		}
 
-		for j := range sig.FnInfo.OutTypes {
-			if j >= len(dest) {
+		for outputIndex, output := range dest {
+			if outputIndex >= len(sig.ABI.Return.OutTypes) {
 				break
 			}
-			if dest[j].Value != arg.Name {
+			if output.Value != arg.Name {
 				continue
 			}
-			aliasIndices[aliasSlot] = j + 1
+			if paramABI.Mode == ABIParamIndirect &&
+				!TypeEqual(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
+				continue
+			}
+			aliases[paramIndex] = outputIndex
 			break
 		}
 	}
 
-	return aliasIndices
+	return aliases
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
@@ -2998,9 +3004,8 @@ func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) [
 				panic(fmt.Sprintf("internal: ArrayRange parameter received %T", callArgExpr))
 			}
 			args = append(args, callArg{
-				Expr:        callArgExpr,
-				Symbol:      c.compileArrayRangeCallArg(arrayRangeExpr, arrayRangeType),
-				OutputAlias: -1,
+				Expr:   callArgExpr,
+				Symbol: c.compileArrayRangeCallArg(arrayRangeExpr, arrayRangeType),
 			})
 			paramIndex++
 			continue
@@ -3008,9 +3013,8 @@ func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) [
 
 		if ident, ok := callArgExpr.(*ast.Identifier); ok {
 			args = append(args, callArg{
-				Expr:        callArgExpr,
-				Name:        ident.Value,
-				OutputAlias: -1,
+				Expr: callArgExpr,
+				Name: ident.Value,
 			})
 			paramIndex++
 			continue
@@ -3022,9 +3026,8 @@ func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) [
 				panic("internal: compiled call argument count exceeds resolved signature")
 			}
 			args = append(args, callArg{
-				Expr:        callArgExpr,
-				Symbol:      r,
-				OutputAlias: -1,
+				Expr:   callArgExpr,
+				Symbol: r,
 			})
 			paramIndex++
 		}
@@ -3035,25 +3038,8 @@ func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) [
 	return args
 }
 
-func (c *Compiler) indirectCallOutputAlias(sig *callSignature, paramIndex int, arg callArg, dest []*ast.Identifier) int {
-	if !sig.ABI.HasRangeParams || sig.ABI.Params[paramIndex].Mode != ABIParamIndirect || arg.Name == "" {
-		return -1
-	}
-	for outputIndex, output := range dest {
-		if output.Value != arg.Name || outputIndex >= len(sig.ABI.Return.OutTypes) {
-			continue
-		}
-		if TypeEqual(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
-			return outputIndex
-		}
-	}
-	return -1
-}
-
-func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature, dest []*ast.Identifier) []int {
-	aliasIndices := c.buildCallParamAliasIndices(sig, args, dest)
+func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSignature) {
 	for i, arg := range args {
-		args[i].OutputAlias = c.indirectCallOutputAlias(sig, i, arg, dest)
 		sym := arg.Symbol
 		if sig.ABI.Params[i].Mode != ABIParamIndirect {
 			if arg.Name != "" {
@@ -3077,7 +3063,6 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 		}
 		args[i].Lowered = sym
 	}
-	return aliasIndices
 }
 
 func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
@@ -3103,14 +3088,15 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
 	callArgs := c.compileCallArgs(sig, ce)
-	aliasIndices := c.lowerCallArgs(sig.FuncName, callArgs, sig, dest)
+	argOutputAliases := c.buildCallArgOutputAliases(sig, callArgs, dest)
+	c.lowerCallArgs(sig.FuncName, callArgs, sig)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
-		Args:         callArgs,
-		AliasIndices: aliasIndices,
-		Function:     fn,
-		FuncType:     funcType,
-		RetStruct:    retStruct,
+		Args:          callArgs,
+		OutputAliases: argOutputAliases,
+		Function:      fn,
+		FuncType:      funcType,
+		RetStruct:     retStruct,
 	}
 }
 
@@ -3371,14 +3357,22 @@ func (c *Compiler) callArgs(
 		}
 		llvmArgs = append(llvmArgs, sretPtr)
 	}
-	for _, arg := range call.Args {
+	for i, arg := range call.Args {
 		argVal := arg.Lowered.Val
-		if arg.OutputAlias >= 0 && arg.OutputAlias < len(outputs) {
-			argVal = outputs[arg.OutputAlias].Val
+		outputAlias := call.OutputAliases[i]
+		if sig.ABI.Params[i].Mode == ABIParamIndirect && outputAlias >= 0 && outputAlias < len(outputs) {
+			argVal = outputs[outputAlias].Val
 		}
 		llvmArgs = append(llvmArgs, argVal)
 	}
-	for _, aliasIndex := range call.AliasIndices {
+	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
+	for i, paramABI := range sig.ABI.Params {
+		if paramABI.AliasSlot < 0 {
+			continue
+		}
+		aliasIndices[paramABI.AliasSlot] = call.OutputAliases[i] + 1
+	}
+	for _, aliasIndex := range aliasIndices {
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
 	if sig.ABI.Return.Mode == ABIReturnDirect {

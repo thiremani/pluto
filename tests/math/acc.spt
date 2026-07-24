@@ -24,3 +24,7 @@ res
 res = 10
 res = ConditionalAcc(res, -2:3)
 res
+
+sum = 10
+sum, last = AccPair(sum, 1:4)
+sum, last
