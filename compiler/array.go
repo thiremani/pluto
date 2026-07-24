@@ -977,11 +977,7 @@ func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ 
 	if arrayIdent, ok := expr.Array.(*ast.Identifier); ok {
 		arrayLoadName = arrayIdent.Value + "_load"
 	}
-	arrayValues := c.compileExpression(expr.Array, nil)
-	if len(arrayValues) != 1 {
-		panic("internal: ArrayRange call argument must have one array source")
-	}
-	arraySym := c.derefIfPointer(arrayValues[0], arrayLoadName)
+	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
 	if !TypeEqual(arraySym.Type, typ.Array) {
 		panic(fmt.Sprintf("internal: ArrayRange source type mismatch: got %s, want %s", arraySym.Type, typ.Array))
 	}
