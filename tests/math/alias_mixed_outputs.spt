@@ -9,3 +9,14 @@ u = 1
 n = "z"
 u, n = MixedStr(u, 0:4)
 "MixedStrSum: -u MixedStrNote: -n"
+
+# The accumulator is the second output here, so it is reached through selector 2.
+rh = 0.0
+rs = 1
+rh, rs = ReversedAcc(rs, 0:4)
+"ReversedHalf: -rh ReversedSum: -rs"
+
+fn = "z"
+ft = 1.0
+fn, ft = FloatAcc(ft, 0:4)
+"FloatNote: -fn FloatTotal: -ft"

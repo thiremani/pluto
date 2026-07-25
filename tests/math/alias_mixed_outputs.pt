@@ -8,3 +8,13 @@ sum, half = MixedAcc(a, x)
 sum, note = MixedStr(a, x)
     sum = a + x
     note = "n"
+
+# Sibling first, so the accumulator sits at the second output and its selector
+# is 2. The skipped slot has to stay a numbering gap rather than shift.
+half, sum = ReversedAcc(a, x)
+    half = x * 0.5
+    sum = a + x
+
+note, total = FloatAcc(b, x)
+    note = "n"
+    total = b + x

@@ -197,14 +197,23 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 }
 
 func TestAliasSelectorSkipsMismatchedOutputs(t *testing.T) {
-	cases := []struct{ name, code string }{
-		{"float sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = x * 0.5"},
-		{"string sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = \"n\""},
-		{"array sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = [x x]"},
+	// The accumulator leads in the first group, so it is reached through
+	// selector 1. In the second group the mismatched output leads, so the
+	// accumulator is selector 2 and the skipped slot must stay a numbering gap.
+	const accFirst = "s = 1\nq, r = Mixed(s, 0:4)\nq, r"
+	const accSecond = "s = 1\nq, s = Mixed(s, 0:4)\nq, s"
+
+	cases := []struct{ name, code, script string }{
+		{"float sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = x * 0.5", accFirst},
+		{"string sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = \"n\"", accFirst},
+		{"array sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = [x x]", accFirst},
+		{"float sibling first", "other, sum = Mixed(a, x)\n    other = x * 0.5\n    sum = a + x", accSecond},
+		{"string sibling first", "other, sum = Mixed(a, x)\n    other = \"n\"\n    sum = a + x", accSecond},
+		{"array sibling first", "other, sum = Mixed(a, x)\n    other = [x x]\n    sum = a + x", accSecond},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifyCompiledFunctions(t, "alias_mismatch", tc.code, "s = 1\nq, r = Mixed(s, 0:4)\nq, r")
+			verifyCompiledFunctions(t, "alias_mismatch", tc.code, tc.script)
 		})
 	}
 }
