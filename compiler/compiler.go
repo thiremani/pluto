@@ -3648,6 +3648,18 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 	c.freeTemporary(expr, nonStringTemps)
 }
 
+// printOwnsHeapString reports whether a printf argument is a temporary this
+// print must release. A named binding's payload is not ours to free, whether
+// the expression names it directly or a root-position comparison yields its
+// left operand's value under a non-Identifier node.
+func printOwnsHeapString(s *Symbol, expr ast.Expression) bool {
+	if !IsStrH(s.Type) || s.Borrowed {
+		return false
+	}
+	_, isIdent := expr.(*ast.Identifier)
+	return !isIdent
+}
+
 // appendPrintSymbol handles printing one symbol based on its type
 func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *string, args *[]llvm.Value, toFree *[]llvm.Value) {
 	// Dereference pointers first - treat print args like function args
@@ -3700,10 +3712,8 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 	case StrKind:
 		*args = append(*args, s.Val)
 		// Heap string temporaries must survive until printf executes.
-		if IsStrH(s.Type) {
-			if _, isIdent := expr.(*ast.Identifier); !isIdent {
-				*toFree = append(*toFree, s.Val)
-			}
+		if printOwnsHeapString(s, expr) {
+			*toFree = append(*toFree, s.Val)
 		}
 	default:
 		*args = append(*args, s.Val)

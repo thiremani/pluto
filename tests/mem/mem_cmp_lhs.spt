@@ -1,0 +1,23 @@
+# Running the comparison over a range makes any per-iteration leak of the
+# comparison LHS observable to the leak checker.
+i = 0:50
+picked = pickByHeapCompare(i)
+"Picked: -picked"
+
+# The same shape at script scope, where the binding outlives the comparison.
+name = "wor" ⊕ "ld"
+flag = 0
+flag = name > "abc" 1
+"Flag: -flag"
+"Name: -name"
+
+# A comparison at print position yields its left operand's payload. That value
+# belongs to the binding, so the print path must not free it: doing so left the
+# name dangling and then double-freed it at scope cleanup.
+label = "mm" ⊕ "nn"
+label > "abc"
+"Label: -label"
+
+chained = "qq" ⊕ "rr"
+chained > "aa" > "A"
+"Chained: -chained"

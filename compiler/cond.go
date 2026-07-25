@@ -658,9 +658,12 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 			conds[i] = c.andConds(operandCond, cmpVal, fmt.Sprintf("slot_cond_%d", i))
 			lhsSyms[i] = lSym
 			if _, isIdent := infix.Left.(*ast.Identifier); isIdent {
-				// The retained value still belongs to the named binding.
-				// Mark it borrowed so a later assignment copies rather than
-				// transferring that binding's payload through a conditional.
+				// The retained value still belongs to the named binding, so a
+				// later assignment must copy rather than transfer that payload.
+				// Borrow a copy: compareScalars returns the scope's own *Symbol
+				// for a non-pointer binding, and marking that would leave the
+				// variable borrowed for life, so cleanup would never free it.
+				lhsSyms[i] = GetCopy(lSym)
 				lhsSyms[i].Borrowed = true
 			}
 		}
