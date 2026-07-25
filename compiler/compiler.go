@@ -264,24 +264,25 @@ func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []
 		if dest == nil || i >= len(dest) {
 			continue
 		}
-		bindingType, ok := c.BindingTypes[BindingKey{
-			FuncNameMangled: c.FuncNameMangled,
-			Name:            dest[i].Value,
-		}]
-		if ok {
-			resolved[i] = bindingType
-			continue
-		}
-		// Conditional lowering writes through synthetic condtmp_* identifiers.
-		// They have no solver binding entry, but their pointer element is the
-		// authoritative slot flavor selected for the real destination.
-		if sym, exists := Get(c.Scopes, dest[i].Value); exists {
-			if ptrType, isPtr := sym.Type.(Ptr); isPtr {
-				resolved[i] = ptrType.Elem
-			}
-		}
+		resolved[i] = c.destSlotType(dest[i].Value, outType)
 	}
 	return resolved
+}
+
+// destSlotType returns the authoritative element type for one destination slot.
+// The solver owns the type of a source binding. Conditional lowering writes
+// through synthetic condtmp_* identifiers, which have no solver entry, so fall
+// back to the storage it already created for them: that pointer's element is
+// the flavor chosen for the real destination. Staging allocates an independent
+// slot, so taking the expression's own type here would let an empty range or a
+// skipped write reset the destination instead of preserving it.
+func (c *Compiler) destSlotType(name string, outType Type) Type {
+	if sym, exists := Get(c.Scopes, name); exists {
+		if ptrType, isPtr := sym.Type.(Ptr); isPtr {
+			outType = ptrType.Elem
+		}
+	}
+	return c.bindingSlotType(name, outType)
 }
 
 // inferCallParamTypes selects the solver-cached call variant to use at the

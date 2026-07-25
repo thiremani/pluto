@@ -1,0 +1,5 @@
+# Conditionally reset an array through a ranged call. The staged slot must take
+# the destination's element flavor rather than this call's empty-array output,
+# or an empty range cannot preserve what the destination already holds.
+res = CondReset(x)
+    res = x > -1 []
