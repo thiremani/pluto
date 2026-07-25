@@ -186,6 +186,29 @@ scaled`
 		"a collector invokes the callee once per scalar yield, so promoting the argument to an internal ArrayRange must still define the scalar variant")
 }
 
+func TestArrayCellSinkSkipsEmptyLoweringResult(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "array_cell_empty_vals", "", ast.NewCode())
+	c := cc.Compiler
+
+	fn := llvm.AddFunction(c.Module, "probe", llvm.FunctionType(ctx.VoidType(), nil, false))
+	c.builder.SetInsertPointAtEnd(c.Context.AddBasicBlock(fn, "entry"))
+
+	slot := c.newArrayCellSlot(I64)
+	cell := &ast.Identifier{Value: "cell"}
+
+	require.Panics(t, func() {
+		c.storeArrayCellSlotWhenInBounds(slot, nil, cell)
+	}, "an empty result with no recorded error is an internal fault and must stay loud")
+
+	c.Errors = append(c.Errors, &token.CompileError{Token: cell.Tok(), Msg: "recorded"})
+	require.NotPanics(t, func() {
+		c.storeArrayCellSlotWhenInBounds(slot, nil, cell)
+	}, "a cell whose lowering recorded an error yields no value; the sink must leave the seed rather than index it")
+}
+
 func TestPhase1ScalarABIRangeVariantUsesDirectScalarBoundary(t *testing.T) {
 	code := `res = Acc(a, x)
     res = a + x`
