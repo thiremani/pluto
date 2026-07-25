@@ -1,3 +1,11 @@
 res = AccFmt(a, x)
     "count-a%n chars"
     res = a + x
+
+# Sibling output first, so the accumulator is the second output and its selector
+# is 2. Writing through %n promotes the parameter to memory, which picks the
+# aliased slot by pointer rather than by value.
+half, res = AccFmtRev(a, x)
+    "count-a%n chars"
+    half = x * 0.5
+    res = a + x

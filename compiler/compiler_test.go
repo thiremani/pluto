@@ -218,6 +218,28 @@ func TestAliasSelectorSkipsMismatchedOutputs(t *testing.T) {
 	}
 }
 
+// Writing a parameter through %n promotes it to memory, which picks the aliased
+// slot by pointer. Opaque pointers make a mistyped pointer select valid IR and
+// the selector never matches the skipped index at runtime, so only the emitted
+// slot selects distinguish this path.
+func TestPointerPromotionSkipsMismatchedOutputSlot(t *testing.T) {
+	code := `half, res = Rev(a, x)
+    "count-a%n chars"
+    half = x * 0.5
+    res = a + x`
+	script := `h = 0.0
+r = 10
+h, r = Rev(r, 1:4)
+h, r`
+
+	ir, _ := compileScriptAndCodeIR(t, "pointer_promotion_gap", code, script)
+
+	require.Contains(t, ir, "%a_slot_1 = select",
+		"the compatible output must stay at selector position 1, not be renumbered")
+	require.NotContains(t, ir, "%a_slot_0 = select",
+		"the mismatched leading output must never be selectable as the parameter's slot")
+}
+
 func TestCollectorOverRangeSelectionRegistersScalarVariant(t *testing.T) {
 	code := `res = Scale(x)
     res = x * 3`
