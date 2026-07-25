@@ -278,14 +278,6 @@ func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []
 	return resolved
 }
 
-func (c *Compiler) addCallTypeError(tok token.Token, msg string) bool {
-	c.Errors = append(c.Errors, &token.CompileError{
-		Token: tok,
-		Msg:   msg,
-	})
-	return false
-}
-
 // inferCallParamTypes selects the solver-cached call variant to use at the
 // current lowering site. Once outer loops have consumed all pending ranges, the
 // scalarized param types become the right callee variant for code generation.
@@ -2227,28 +2219,6 @@ func (c *Compiler) cleanupRangeInfixTemps(
 		c.freeTemporary(leftExpr, left)
 	}
 	c.freeTemporary(rightExpr, right)
-}
-
-func (c *Compiler) updateUnresolvedType(name string, sym *Symbol, resolved Type) {
-	switch t := sym.Type.(type) {
-	case Array:
-		if !hasConcreteArrayElemType(t.ElemType) {
-			sym.Type = resolved
-			Put(c.Scopes, name, sym)
-		}
-	case Table:
-		if !IsFullyResolvedType(t) {
-			sym.Type = resolved
-			Put(c.Scopes, name, sym)
-		}
-	case Ptr:
-		if t.Elem.Kind() == UnresolvedKind {
-			sym.Type = Ptr{Elem: resolved}
-			Put(c.Scopes, name, sym)
-		}
-	default:
-		// No action needed for other types
-	}
 }
 
 func (c *Compiler) makeTempOutput(name string, outType Type, borrowed bool, seed *Symbol) *Symbol {

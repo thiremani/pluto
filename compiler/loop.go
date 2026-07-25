@@ -283,7 +283,3 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 		return llvm.Value{}
 	})
 }
-
-func (c *Compiler) createLoopState(r llvm.Value, seed llvm.Value, stateType llvm.Type, bodyGen func(iter llvm.Value, current llvm.Value) llvm.Value) llvm.Value {
-	return c.createLoopCore(r, seed, stateType, true, bodyGen)
-}
