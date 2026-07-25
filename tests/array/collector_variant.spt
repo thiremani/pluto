@@ -1,0 +1,15 @@
+# A call over a range-indexed array selection inside a collector must
+# instantiate the scalar callee variant, even though promoting the argument to
+# an internal ArrayRange leaves the argument list syntactically unchanged.
+#
+# Neither helper may be called anywhere else in this script: any other call to
+# the same function registers that scalar variant and masks the regression.
+arr = [10 20 30]
+
+i = 0:3
+scaled = [ScaleCell(arr[i])]
+"Scaled: -scaled"
+
+j = 0:3
+offset = [OffsetCell(arr[j]) + j]
+"Offset: -offset"

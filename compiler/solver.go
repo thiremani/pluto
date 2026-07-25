@@ -486,6 +486,16 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	ranges, args, changed := ts.collectExprRanges(call.Arguments)
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 
+	// A surrounding collector consumes these ranges and invokes the call once
+	// per scalar yield, so that scalar callee variant must exist even though the
+	// immediate call selected a range specialization. Promoting an argument to
+	// an internal ArrayRange changes the mangled name without rewriting the
+	// argument list, so this cannot be gated on a syntactic rewrite. LoopInside
+	// is true for any ordinary call, so require ranges to reach only collectors.
+	if _, builtin := Builtins[call.Function.Value]; len(ranges) > 0 && info.LoopInside && !builtin {
+		ts.ensureScalarCallVariant(call)
+	}
+
 	if !changed {
 		info.Ranges = ranges
 		info.Rewrite = call
@@ -495,12 +505,6 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	cp := *call
 	cp.Arguments = args
 	rew = &cp
-	// A surrounding collector consumes these ranges and invokes the rewritten
-	// call once per scalar yield, so make sure that scalar callee variant exists
-	// even though the original immediate call selected a range specialization.
-	if _, builtin := Builtins[call.Function.Value]; info.LoopInside && !builtin {
-		ts.ensureScalarCallVariant(call)
-	}
 	// Cache the rewritten expression with no ranges (ranges have been extracted)
 	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
 		OutTypes:             info.OutTypes,

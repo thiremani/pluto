@@ -170,6 +170,22 @@ row`
 	require.Contains(t, scriptIR, "store i1 true, ptr %res_written", "a yielded ranged selection must mark the output as written")
 }
 
+func TestCollectorOverRangeSelectionRegistersScalarVariant(t *testing.T) {
+	code := `res = Scale(x)
+    res = x * 3`
+	script := `arr = [10 20 30]
+i = 0:3
+scaled = [Scale(arr[i])]
+scaled`
+
+	moduleName := "collector_scalar_variant"
+	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
+	mangled := Mangle(MangleDirPath(moduleName, ""), "Scale", []Type{I64})
+
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(",
+		"a collector invokes the callee once per scalar yield, so promoting the argument to an internal ArrayRange must still define the scalar variant")
+}
+
 func TestPhase1ScalarABIRangeVariantUsesDirectScalarBoundary(t *testing.T) {
 	code := `res = Acc(a, x)
     res = a + x`

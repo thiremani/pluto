@@ -1,0 +1,7 @@
+# Helpers for collector_variant.spt. Each is called from exactly one collector
+# so the script never instantiates their scalar variants through another call.
+res = ScaleCell(x)
+    res = x * 3
+
+res = OffsetCell(x)
+    res = x + 100
