@@ -174,7 +174,7 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 		// 3. Write to the destination variable(s).
 		// Determine the type of write
 		writeKind := Write
-		if len(s.Condition) > 0 || cfg.HasRangeExpr(s.Value) {
+		if len(s.Condition) > 0 || cfg.HasRangeExpr(s.Value) || cfg.HasSkippableCallRoot(s.Value) {
 			writeKind = ConditionalWrite
 		}
 		for _, lhs := range s.Name {
@@ -208,6 +208,25 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
 	for _, v := range values {
 		if cfg.hasRangeExpr(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasSkippableCallRoot reports whether any value is a bare call to a
+// user-defined function. Such a callee may leave an output unwritten, so the
+// caller keeps its previous value and that previous write is not dead. Only
+// root position qualifies: a call feeding an operator always yields a new
+// value. Proving a given callee always writes would need per-specialization
+// range types unavailable here, so this stays conservative.
+func (cfg *CFG) HasSkippableCallRoot(values []ast.Expression) bool {
+	for _, v := range values {
+		call, ok := v.(*ast.CallExpression)
+		if !ok {
+			continue
+		}
+		if _, builtin := Builtins[call.Function.Value]; !builtin {
 			return true
 		}
 	}

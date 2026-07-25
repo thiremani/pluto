@@ -1,0 +1,18 @@
+# A call whose callee may skip its output write is not an unconditional write.
+# The destination keeps its previous value, so that previous assignment is live
+# and dead-store analysis must not reject these statements.
+scalarKept = 7
+scalarKept = KeepScalar(-1)
+"ScalarKept: -scalarKept"
+
+scalarWritten = 7
+scalarWritten = KeepScalar(1)
+"ScalarWritten: -scalarWritten"
+
+arrayKept = [1 2 3]
+arrayKept = KeepArray(-1)
+"ArrayKept: -arrayKept"
+
+arrayWritten = [1 2 3]
+arrayWritten = KeepArray(1)
+"ArrayWritten: -arrayWritten"

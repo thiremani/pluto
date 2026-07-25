@@ -90,6 +90,14 @@ func getValidTestCases() []cfgTestCase {
 			name:  "Var Not Defined",
 			input: `"Value: -x%s"`,
 		},
+		{
+			// The callee may skip its write, leaving the destination's previous
+			// value in place, so that previous write is live.
+			name: "Write then Skippable Call Root",
+			code: `res = maybeWrite(x)
+    res = x > 0 42`,
+			input: "x = 7\nx = maybeWrite(-1)\nx",
+		},
 	}
 }
 
@@ -139,6 +147,15 @@ func getErrorTestCases() []cfgTestCase {
 			name:          "Multi-variable Dead Store",
 			input:         "a=1\nb=2\nc=3\na, b",
 			errorContains: `value assigned to "c" is never used`,
+		},
+		{
+			// A call feeding an operator always contributes to a new value, so
+			// the write stays unconditional and the earlier one is still dead.
+			name: "Call Feeding Operator Stays Unconditional",
+			code: `res = alwaysWrite(x)
+    res = x * 2`,
+			input:         "x = 7\nx = alwaysWrite(3) + 1\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
 		},
 		{
 			name:          "Print Use Before Def",
