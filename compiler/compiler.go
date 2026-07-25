@@ -76,6 +76,11 @@ type callArg struct {
 	Name    string
 	Symbol  *Symbol
 	Lowered *Symbol
+	// AliasSelector is the hidden ABI selector for the caller destination this
+	// argument aliases, exactly as transmitted: 0 means none, N means output
+	// N-1. Encoding it this way keeps the zero value correct for the arguments
+	// that alias nothing.
+	AliasSelector int
 }
 
 type callSignature struct {
@@ -87,11 +92,10 @@ type callSignature struct {
 }
 
 type preparedCall struct {
-	Args          []callArg
-	OutputAliases []int // Per source argument; -1 means no destination alias.
-	Function      llvm.Value
-	FuncType      llvm.Type
-	RetStruct     llvm.Type
+	Args      []callArg
+	Function  llvm.Value
+	FuncType  llvm.Type
+	RetStruct llvm.Type
 }
 
 // BindingKey identifies a variable binding within a specific function variant.
@@ -309,17 +313,13 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
-// buildCallArgOutputAliases records which named inputs alias caller
-// destinations for range-bearing variants. Direct scalar params encode the
-// selected output through a hidden ABI index; indirect params receive that
-// output's staged pointer directly.
-func (c *Compiler) buildCallArgOutputAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) []int {
-	aliases := make([]int, len(args))
-	for i := range aliases {
-		aliases[i] = -1
-	}
+// setCallArgAliasSelectors records on each argument which caller destination it
+// aliases for range-bearing variants. Direct scalar params encode the selected
+// output through a hidden ABI index; indirect params receive that output's
+// staged pointer directly. Arguments that alias nothing keep selector 0.
+func (c *Compiler) setCallArgAliasSelectors(sig *callSignature, args []callArg, dest []*ast.Identifier) {
 	if !sig.ABI.HasRangeParams || dest == nil {
-		return aliases
+		return
 	}
 
 	for paramIndex, arg := range args {
@@ -341,12 +341,10 @@ func (c *Compiler) buildCallArgOutputAliases(sig *callSignature, args []callArg,
 			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
-			aliases[paramIndex] = outputIndex
+			args[paramIndex].AliasSelector = outputIndex + 1
 			break
 		}
 	}
-
-	return aliases
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
@@ -3074,15 +3072,14 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
 	callArgs := c.compileCallArgs(sig, ce)
-	argOutputAliases := c.buildCallArgOutputAliases(sig, callArgs, dest)
+	c.setCallArgAliasSelectors(sig, callArgs, dest)
 	c.lowerCallArgs(sig.FuncName, callArgs, sig)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
-		Args:          callArgs,
-		OutputAliases: argOutputAliases,
-		Function:      fn,
-		FuncType:      funcType,
-		RetStruct:     retStruct,
+		Args:      callArgs,
+		Function:  fn,
+		FuncType:  funcType,
+		RetStruct: retStruct,
 	}
 }
 
@@ -3345,18 +3342,18 @@ func (c *Compiler) callArgs(
 	}
 	for i, arg := range call.Args {
 		argVal := arg.Lowered.Val
-		outputAlias := call.OutputAliases[i]
-		if sig.ABI.Params[i].Mode == ABIParamIndirect && outputAlias >= 0 && outputAlias < len(outputs) {
-			argVal = outputs[outputAlias].Val
+		if sig.ABI.Params[i].Mode == ABIParamIndirect && arg.AliasSelector > 0 && arg.AliasSelector <= len(outputs) {
+			argVal = outputs[arg.AliasSelector-1].Val
 		}
 		llvmArgs = append(llvmArgs, argVal)
 	}
 	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
-	for i, paramABI := range sig.ABI.Params {
-		if paramABI.AliasSlot < 0 {
+	for i, arg := range call.Args {
+		slot := sig.ABI.Params[i].AliasSlot
+		if slot < 0 {
 			continue
 		}
-		aliasIndices[paramABI.AliasSlot] = call.OutputAliases[i] + 1
+		aliasIndices[slot] = arg.AliasSelector
 	}
 	for _, aliasIndex := range aliasIndices {
 		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
