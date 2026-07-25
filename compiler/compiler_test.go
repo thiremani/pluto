@@ -234,8 +234,10 @@ h, r`
 
 	ir, _ := compileScriptAndCodeIR(t, "pointer_promotion_gap", code, script)
 
-	require.Contains(t, ir, "%a_slot_1 = select",
-		"the compatible output must stay at selector position 1, not be renumbered")
+	require.Regexp(t, `%a_alias_1 = icmp eq i32 %\d+, 2`, ir,
+		"the compatible output is the second one, so its ABI selector value must be 2")
+	require.Contains(t, ir, "%a_slot_1 = select i1 %a_alias_1, ptr %res_dest, ptr %a",
+		"selector 2 must choose the caller's res destination, falling back to the parameter spill")
 	require.NotContains(t, ir, "%a_slot_0 = select",
 		"the mismatched leading output must never be selectable as the parameter's slot")
 }

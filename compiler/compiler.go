@@ -335,6 +335,9 @@ func (c *Compiler) buildCallArgOutputAliases(sig *callSignature, args []callArg,
 			if output.Value != arg.Name {
 				continue
 			}
+			// Unreachable for valid source today: a name that is both argument
+			// and destination must hold one type, so the solver rejects the
+			// mismatch first. Kept so all three alias sites share one rule.
 			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
