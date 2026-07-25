@@ -1,0 +1,7 @@
+# A heap-string argument whose same-named destination receives a static output.
+# The ownership flavors differ (StrH in, StrG out), so the input must keep its
+# own pointer: redirecting it to the output's adapter would make this sibling
+# output, which reads the input, see the adapter's value instead.
+out, echo = RefineEcho(s, x)
+    out = "static"
+    echo = x > -1 s ⊕ "!"

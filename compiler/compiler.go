@@ -76,10 +76,12 @@ type callArg struct {
 	Name    string
 	Symbol  *Symbol
 	Lowered *Symbol
-	// AliasSelector is the hidden ABI selector for the caller destination this
-	// argument aliases, exactly as transmitted: 0 means none, N means output
-	// N-1. Encoding it this way keeps the zero value correct for the arguments
-	// that alias nothing.
+	// AliasSelector is the one-based selector for the caller destination this
+	// argument aliases: 0 means none, N means output N-1. Direct scalar params
+	// transmit it as a hidden ABI argument; indirect params consume it
+	// caller-side to pass that output's staged pointer in place of the lowered
+	// argument. One-based keeps the zero value correct for arguments that
+	// alias nothing.
 	AliasSelector int
 }
 
@@ -335,9 +337,12 @@ func (c *Compiler) setCallArgAliasSelectors(sig *callSignature, args []callArg, 
 			if output.Value != arg.Name {
 				continue
 			}
-			// Unreachable for valid source today: a name that is both argument
-			// and destination must hold one type, so the solver rejects the
-			// mismatch first. Kept so all three alias sites share one rule.
+			// An indirect parameter and a same-named output can legitimately
+			// differ in ownership flavor, such as a StrH binding receiving a
+			// StrG output. Redirecting the input to that output's adapter would
+			// make a sibling output that reads the input see the adapter's
+			// value instead. Direct scalars cannot reach this: the solver
+			// rejects a name that would need two numeric types.
 			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
