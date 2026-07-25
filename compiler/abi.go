@@ -48,6 +48,18 @@ func isDirectScalarABIType(t Type) bool {
 	}
 }
 
+// aliasableOutput reports whether an output can back a parameter's alias slot.
+// The hidden selector picks an output by position and the callee then reads that
+// storage as the parameter's own type, so the two must lower identically. There
+// is no numeric conversion anywhere on this path, and a pointer selected across
+// mismatched types would be loaded as the wrong type.
+func aliasableOutput(paramType, outputType Type) bool {
+	if ptr, ok := outputType.(Ptr); ok {
+		outputType = ptr.Elem
+	}
+	return TypeEqual(paramType, outputType)
+}
+
 func directScalarABIReturnType(outTypes []Type) (Type, bool) {
 	if len(outTypes) != 1 {
 		return nil, false

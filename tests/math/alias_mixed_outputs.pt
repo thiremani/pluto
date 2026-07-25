@@ -1,0 +1,10 @@
+# Loop-carried accumulators whose sibling output lowers to a different type
+# than the accumulated parameter. The hidden alias selector must reach the
+# matching output only; the sibling cannot back an I64 parameter's slot.
+sum, half = MixedAcc(a, x)
+    sum = a + x
+    half = x * 0.5
+
+sum, note = MixedStr(a, x)
+    sum = a + x
+    note = "n"

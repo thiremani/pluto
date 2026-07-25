@@ -170,6 +170,45 @@ row`
 	require.Contains(t, scriptIR, "store i1 true, ptr %res_written", "a yielded ranged selection must mark the output as written")
 }
 
+// verifyCompiledFunctions asserts LLVM accepts every function a source pair
+// lowers to. The alias selector picks an output by position, so a mistyped
+// output reaching it yields IR that runs wrong or fails object emission.
+// Verification is per function because module scope additionally trips on
+// format-string globals built in the wrong LLVM context.
+func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string) {
+	t.Helper()
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
+	sc := NewScriptCompiler(ctx, mustParseScript(t, scriptSrc), cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	require.Empty(t, sc.Compile())
+
+	verified := 0
+	for fn := sc.Compiler.Module.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		if fn.IsDeclaration() {
+			continue
+		}
+		require.NoError(t, llvm.VerifyFunction(fn, llvm.ReturnStatusAction), "function %s must verify", fn.Name())
+		verified++
+	}
+	require.NotZero(t, verified, "expected at least one defined function to verify")
+}
+
+func TestAliasSelectorSkipsMismatchedOutputs(t *testing.T) {
+	cases := []struct{ name, code string }{
+		{"float sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = x * 0.5"},
+		{"string sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = \"n\""},
+		{"array sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = [x x]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			verifyCompiledFunctions(t, "alias_mismatch", tc.code, "s = 1\nq, r = Mixed(s, 0:4)\nq, r")
+		})
+	}
+}
+
 func TestCollectorOverRangeSelectionRegistersScalarVariant(t *testing.T) {
 	code := `res = Scale(x)
     res = x * 3`

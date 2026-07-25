@@ -335,8 +335,7 @@ func (c *Compiler) buildCallArgOutputAliases(sig *callSignature, args []callArg,
 			if output.Value != arg.Name {
 				continue
 			}
-			if paramABI.Mode == ABIParamIndirect &&
-				!TypeEqual(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
+			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
 			aliases[paramIndex] = outputIndex
@@ -364,6 +363,9 @@ func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, o
 func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
 	slotPtr := spill
 	for i, output := range outputs {
+		if output == nil {
+			continue
+		}
 		match := c.builder.CreateICmp(
 			llvm.IntEQ,
 			aliasIndex,
@@ -404,6 +406,12 @@ func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias)
 
 	value := sym.Val
 	for i, outputName := range alias.OutputNames {
+		// Skip rather than filter: the selector names an output by position, so
+		// index i must keep meaning the i-th output for the remaining slots.
+		outputSym, ok := Get(c.Scopes, outputName)
+		if !ok || !aliasableOutput(sym.Type, outputSym.Type) {
+			continue
+		}
 		match := c.builder.CreateICmp(
 			llvm.IntEQ,
 			alias.AliasIndex,
@@ -1595,6 +1603,11 @@ func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Sy
 		outputPtrs := make([]*Symbol, len(alias.OutputNames))
 		for i, outputName := range alias.OutputNames {
 			outputSym, _ := Get(c.Scopes, outputName)
+			// Left nil when the output cannot back this slot, so the selector
+			// keeps its positional meaning but never picks a mistyped pointer.
+			if !aliasableOutput(sym.Type, outputSym.Type) {
+				continue
+			}
 			if outputSym.Type.Kind() != PtrKind {
 				// Only params carry alias bindings, so promoting an output here
 				// cannot recurse through another param-alias entry.

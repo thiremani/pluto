@@ -1,0 +1,11 @@
+# Each accumulator must still alias its own output across iterations, so the
+# sums advance 1 -> 1 -> 2 -> 4 -> 7 rather than restarting from the argument.
+s = 1
+h = 0.0
+s, h = MixedAcc(s, 0:4)
+"MixedAccSum: -s MixedAccHalf: -h"
+
+u = 1
+n = "z"
+u, n = MixedStr(u, 0:4)
+"MixedStrSum: -u MixedStrNote: -n"
