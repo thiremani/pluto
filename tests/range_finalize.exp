@@ -17,6 +17,9 @@ MarkerWidthEach: |7|
 MarkerWidthEach: | 7|
 MarkerWidthEach: |  7|
 LiteralDescriptor 0:3
+DrivenMarker i=0 0
+DrivenMarker i=1 1
+DrivenMarker i=2 2
 EmptyDescriptor: 3:3
 SteppedDescriptor: 6:0:-2
 SimultaneousRange: 2 77

@@ -73,6 +73,10 @@ formattedWidth = "|-widthValue%(-widthRange)d|"
 # A range literal in print position is a descriptor value too.
 "LiteralDescriptor", 0:3
 
+# A sibling computation binds the marker's name, so the marker formats that
+# iteration's I64 yield and an explicit %d applies to it.
+"DrivenMarker i=-markerRange%d", markerRange + 0
+
 # Descriptors print their exact bounds, including empty and stepped forms.
 emptyDescriptor = 3:3
 "EmptyDescriptor:", emptyDescriptor

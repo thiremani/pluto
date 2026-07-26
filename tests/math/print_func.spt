@@ -39,3 +39,6 @@ k + 1, SumSquares(k, k)
 # Regression: a descriptor literal must not be rewritten into a loop iterator
 # when a sibling computation drives the print loop.
 0:9, i + 0
+
+# Regression: a descriptor literal beside a literal-range computation.
+0:9, 1:4 + 0
