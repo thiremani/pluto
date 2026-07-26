@@ -63,16 +63,24 @@ width = 5
 "-missing%(-width)d" # -missing%(5)d
 ```
 
-A marker that reads a `Range` participates in normal range execution. At an
-assignment root, formatting runs once per yield and the final owned string is
-kept; in print position, one formatted line is emitted per yield. Range
-identifiers used for dynamic width or precision are drivers too.
+A main marker formats its value whatever the type, so a bare `Range` formats
+its descriptor and contributes no iteration: the string is a single value in
+assignment and in print alike. A Range identifier used for dynamic width or
+precision is consumed as a number, which makes it an iteration driver. An
+explicit numeric conversion on a Range main marker, such as `-i%d`, is a
+compile error — a descriptor is not a number; iterate with a computation
+instead.
 
 ```pluto
 i = 0:3
-last = "item -i" # "item 2"
-"item -i"        # prints item 0, item 1, item 2 on separate lines
+s = "item -i"  # "item 0:3"
+"item -i"      # prints item 0:3 on one line
+w = 1:3
+"|-n%(-w)d|"   # one line per width: |7| then | 7|
 ```
+
+When a sibling computation in the same statement binds the marker's name as a
+driver, the marker formats that iteration's scalar yield instead.
 
 ## Literal percent and strict formatting
 
