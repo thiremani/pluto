@@ -243,9 +243,9 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 
 	switch t := e.(type) {
 	case *ast.Identifier:
-		// A bare named Range is an iterated scalar-finalization root. Unlike a
-		// range literal constructor, an empty driver may leave an existing
-		// destination unchanged, so its write is conditional.
+		// Descriptor-copy assignments clear their cached ranges during typing.
+		// A remaining range here is a scalar use of a driver already bound by
+		// the statement, so an empty driver may leave the destination unchanged.
 		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.StringLiteral:
 		// Formatting markers can reference named Range drivers even though the

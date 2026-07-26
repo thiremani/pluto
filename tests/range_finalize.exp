@@ -1,10 +1,15 @@
-AscendingFinal: 4
-DescendingFinal: 2
-UnevenFinal: 9
-EmptyFresh: 0
-EmptyExisting: 91
+AscendingCopy: [0 1 2 3 4]
+ParenthesizedCopy: [0 1 2 3 4]
+DescendingCopy: [6 4 2]
+UnevenCopy: [1 5 9]
+EmptyRangeFresh: []
+EmptyRangeBefore: [0 1]
+EmptyRangeExisting: []
+EmptyComputeFresh: 0
+EmptyComputeExisting: 91
 Collected: [0 1 2 3 4]
 CallFinal: 20
+ReturnedRange: [2 3 4]
 MarkerFinal: Marker 2
 MarkerEach 0
 MarkerEach 1

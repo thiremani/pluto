@@ -541,10 +541,10 @@ func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 	}
 }
 
-// HandleIdentifierRanges processes identifier expressions, detecting if they refer
-// to range-typed variables and including them in range tracking. A bare named
-// range is a driver use; assignment and print roots close that stream rather
-// than copying or printing the Range descriptor.
+// HandleIdentifierRanges processes identifier expressions, detecting if they
+// refer to range-typed variables and including them in range tracking. The
+// enclosing context decides whether that occurrence consumes the driver or a
+// complete assignment copies the descriptor.
 func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
 	typ, ok := ts.GetIdentifier(ident.Value)
 	if ok && typ.Kind() == RangeKind {
@@ -580,12 +580,21 @@ func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges 
 	return ranges, lit
 }
 
-// finalizeBareRangeIdentifier closes a named Range driver at an assignment
-// root. Range literals remain constructors (`i = 0:n`), while a later bare use
-// (`last = i`) yields the final iterator value.
-func (ts *TypeSolver) finalizeBareRangeIdentifier(expr ast.Expression, types []Type) {
-	ident, ok := expr.(*ast.Identifier)
-	if !ok || len(types) != 1 {
+func rangeDriverNamed(ranges []*RangeInfo, name string) bool {
+	for _, ri := range ranges {
+		if ri.RangeLit == nil && ri.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveBareRangeAssignment distinguishes Range descriptor copies from uses of
+// a Range that an enclosing statement condition has already bound as an
+// iterator. `copy = source` and `copy = 0:n` preserve the descriptor; in
+// `filtered = source > 2 source`, the RHS reads the current scalar yield.
+func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type, condRanges []*RangeInfo) {
+	if len(types) != 1 {
 		return
 	}
 
@@ -594,15 +603,28 @@ func (ts *TypeSolver) finalizeBareRangeIdentifier(expr ast.Expression, types []T
 		return
 	}
 
-	info := ts.ExprCache[key(ts.FuncNameMangled, ident)]
-	if len(info.Ranges) == 0 {
-		info.Ranges = []*RangeInfo{{Name: ident.Value}}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	switch e := expr.(type) {
+	case *ast.Identifier:
+		if !rangeDriverNamed(condRanges, e.Value) {
+			info.Ranges = nil
+			info.HasRanges = false
+			info.Rewrite = nil
+			return
+		}
+		if len(info.Ranges) == 0 {
+			info.Ranges = []*RangeInfo{{Name: e.Value}}
+		}
+		info.OutTypes = []Type{rangeType.Iter}
+		info.ExprLen = 1
+		info.HasRanges = true
+		info.Rewrite = e
+		types[0] = rangeType.Iter
+	case *ast.RangeLiteral:
+		info.Ranges = nil
+		info.HasRanges = false
+		info.Rewrite = nil
 	}
-	info.OutTypes = []Type{rangeType.Iter}
-	info.ExprLen = 1
-	info.HasRanges = true
-	info.Rewrite = ident
-	types[0] = rangeType.Iter
 }
 
 func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
@@ -812,36 +834,17 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 
 // mergeCondRangesIntoValue merges condition ranges into a value expression's
 // ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
-// Bare Range values also merge their own ranges here so a range literal used
-// under an outer statement driver scalarizes in that iteration context. Array
-// indexing is already element-typed in every context. Array literals still
-// control accumulation; non-literal values remain last-value-wins.
-func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []Type, condRanges []*RangeInfo) {
+// Bare Range assignments have already been classified as descriptor copies or
+// reads of a driver bound by this statement. Array indexing is element-typed in
+// every context. Array literals still control accumulation; non-literal values
+// remain last-value-wins.
+func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, condRanges []*RangeInfo) {
 	if len(condRanges) == 0 {
 		return
 	}
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-
-	merged := condRanges
-	// A root range literal normally constructs a Range. Under an outer statement
-	// driver it participates in that iteration context and yields iterator values.
-	if len(exprTypes) == 1 && ts.isBareRangeExpr(expr) {
-		selfRanges := info.Ranges
-		if ident, ok := expr.(*ast.Identifier); ok && exprTypes[0].Kind() == RangeKind {
-			selfRanges = []*RangeInfo{{Name: ident.Value}}
-		}
-		merged = mergeUses(condRanges, selfRanges)
-
-		switch exprTypes[0].Kind() {
-		case RangeKind:
-			iterType := exprTypes[0].(Range).Iter
-			exprTypes[0] = iterType
-			info.OutTypes[0] = iterType
-		}
-	}
-
-	info.Ranges = mergeUses(merged, info.Ranges)
+	info.Ranges = mergeUses(condRanges, info.Ranges)
 	info.HasRanges = true
 }
 
@@ -868,8 +871,8 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
-		ts.finalizeBareRangeIdentifier(expr, exprTypes)
-		ts.mergeCondRangesIntoValue(expr, exprTypes, condRanges)
+		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
+		ts.mergeCondRangesIntoValue(expr, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)

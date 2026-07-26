@@ -2,24 +2,67 @@
 
 ## Core Model
 
-Expressions that mention ranges produce ordered per-iteration values. The
-stream is not collected into an array by default; an individual yield may be a
+A `Range<T>` is a descriptor value. A range literal constructs one, and a
+complete Range-valued assignment copies it:
+
+```pluto
+i = 0:5
+j = i
+k = (i)
+```
+
+`i`, `j`, and `k` contain equal descriptor values with the same captured
+bounds. Parentheses are transparent. Each binding is nevertheless a distinct
+driver identity: consuming `i` and `j` together forms a cartesian domain,
+while repeated uses of `i` share one loop.
+
+Using a Range in an operation creates a ranged computation. `Ranged<T>` is a
+useful description of that expression effect, not a storable source type. An
+operation produces ordered per-iteration values; an individual yield may be a
 scalar or an owned subarray.
 
-There are two explicit closing steps:
+There are two explicit closing steps for a ranged computation:
 
-1. `[]` closes a value stream into an array.
-2. The root expression of an assignment closes any remaining outer
-   iteration by taking the final yielded value in iteration order.
+1. `[]` closes it into an array.
+2. The root expression of an assignment closes any remaining outer iteration
+   by taking the final yielded value in iteration order.
 
-This keeps collection and final-value selection separate.
+A Range descriptor assignment is not a closing step and does not iterate.
+This keeps descriptor copying, collection, and final-value selection separate.
+
+## Migration From Bare-Range Finalization
+
+Previously, assigning a bare named Range kept its final yield. It now copies
+the descriptor:
+
+```pluto
+i = 0:5
+copy = i
+last = i + 0
+```
+
+`copy` is a Range descriptor; `last` is the scalar `4`. Use an operation such
+as `+ 0` when migrating code that intended the old final-value behavior.
+
+This change can be silent for a fresh destination. A later print,
+interpolation, call, index, or collector consumes the copied Range and runs its
+whole domain; printing an empty copied Range emits no line. Assigning a Range
+to an existing scalar is instead rejected as a type-changing reassignment.
+Descriptor copies are unconditional writes and participate in the ordinary
+dead-store checks. Range-indexed expressions such as `last = data[i]` are
+unchanged because indexing is already a ranged computation.
 
 ## Ranges And Drivers
 
-A range identifier or range-indexed array access used in an expression
-contributes an iteration driver.
-Multiple distinct drivers form a nested iteration domain in source order.
-Repeated use of the same driver name refers to the same loop, not a nested copy.
+A range identifier consumed by an operator, array index, interpolation,
+print, collector, statement condition, or function argument contributes an
+iteration driver. A range-indexed array access is itself a ranged computation.
+Multiple distinct drivers form a nested iteration domain in source order: the
+first distinct driver is outermost and the last is innermost. Repeated use of
+the same driver name refers to the same loop, not a nested copy.
+Driver identity belongs to the binding name, not to descriptor equality.
+Substituting one Range name for another can therefore change a shared loop into
+a cartesian domain.
 
 Example:
 
@@ -31,19 +74,29 @@ x = i + 1
 This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
 value, so `x = 5`.
 
-A bare identifier is itself a ranged expression:
+A complete bare Range expression is a descriptor value:
 
 ```pluto
 i = 0:5
-last = i
+copy = i
+last = i + 0
 ```
 
-`last` becomes `4`. The range binding `i` remains available for later uses.
-To bind another execution domain, write another range literal; range
-`start`/`stop`/`step` fields are not part of the language.
+`copy` is another Range descriptor and an independent named driver with the
+same bounds, while `last` becomes `4`. Copy a Range to bind another driver with
+the same bounds, or write another range literal to define different bounds.
+Range `start`/`stop`/`step` fields are not part of the language.
 The bound values are captured when the range is constructed, so later changes
 to the source variables do not mutate the existing range. Functions that need
 those bounds as data should currently receive the scalar values explicitly.
+
+Range is nameable and copyable, but is not yet a fully first-class container
+element. Arrays and tables contain scalar/string elements rather than Range
+descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
+function likewise consumes it as a driver rather than passing inert metadata.
+A function may return a Range descriptor to a binding, but anonymous
+Range-returning expressions are not yet accepted uniformly by every consuming
+context; bind the result before consuming it.
 
 Range-indexed arrays follow the same rule:
 
@@ -58,13 +111,15 @@ selected = [arr[i]]
 access is not a public slice or view value: it is either consumed by its
 surrounding expression, finalized at an assignment root, or materialized by
 `[]`. For a rank-N source, one yield is an owned rank-(N-1) subarray, so the
-final value can itself be an array.
+final value can itself be an array. This ownership is semantic: copy-on-write
+is permitted, but an escaping view into the source is not.
 
-If a range produces no values, a fresh destination retains its type's zero
-value (an empty array for a subarray result) and an existing destination is
-unchanged. Outside `[]`, an out-of-bounds selection point yields nothing, so
-the last valid selected value wins. Inside `[]`, failed cells are zero-filled
-to preserve collection shape, as described below.
+Assigning an empty Range descriptor still performs a normal write. Consuming
+an empty Range produces no yields: a fresh ranged-computation destination
+retains its type's zero value (an empty array for a subarray result), while an
+existing destination is unchanged. Outside `[]`, an out-of-bounds selection
+point yields nothing, so the last valid selected value wins. Inside `[]`,
+failed cells are zero-filled to preserve collection shape, as described below.
 
 Print statements consume drivers rather than exposing their internal
 descriptor; Range descriptors have no printable representation. Printing `i`
@@ -434,13 +489,14 @@ Examples:
 ```pluto
 i = 0:3
 j = 0:2
-x, y = i < 2 [1], j
+x, y = i < 2 [1], j + 0
 ```
 
 The statement condition `i < 2` is shared.
 `x` collects once for each admitted `i`, producing `[1 1]`.
-`y` uses its own local `j` driver inside that shared gate and ends with the
-final `j` value `1`.
+`y`'s operation uses its own local `j` driver inside that shared gate and ends
+with the final result `1`. A bare `j` in this position would instead copy the
+Range descriptor because only `i` belongs to the active statement domain.
 
 Likewise:
 
@@ -461,6 +517,12 @@ If a statement condition and an RHS expression mention the same driver name,
 the statement condition opens that outer loop first.
 Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
+
+Consequently, `filtered = i > 2 i` keeps the final admitted scalar, while
+`copy = outer > 2 i` copies `i` when only `outer` belongs to the statement
+domain. If the statement domain is empty, it performs no write: an existing
+Range destination stays unchanged and a fresh one keeps the zero Range
+descriptor.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
 shared scalar update step, but each RHS has its own local yield outcome. If one
@@ -502,8 +564,9 @@ not change the language meaning.
 
 ## Final-Value Contexts
 
-Outside `[]`, ranged expressions remain per-iteration values until the root
-assignment or statement consumes them.
+Outside `[]`, ranged computations remain per-iteration values until the root
+assignment or statement consumes them. Complete Range expressions remain
+descriptors.
 
 Examples:
 
@@ -515,10 +578,11 @@ x = i + 1
 `x` becomes `5`.
 
 ```pluto
-last = i
+copy = i
 ```
 
-`last` becomes `4`.
+`copy` is another descriptor. To request the final yielded iterator, use an
+operation such as `last = i + 0`; `last` then becomes `4`.
 
 ```pluto
 arr = [i + 1]

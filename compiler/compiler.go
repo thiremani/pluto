@@ -1495,9 +1495,9 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 		res = c.compileStringLiteralExpression(e, dest)
 	case *ast.RangeLiteral:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
-		// Root bare range literals can be scalarized by an outer ranged context.
-		// When all of this literal's ranges are already bound, compile the rewrite
-		// iterator identifier instead of materializing a Range aggregate again.
+		// A consuming expression can lower this literal inside the loop that
+		// already bound its iterator rewrite. Complete descriptor assignments
+		// clear the rewrite and materialize the Range aggregate below.
 		if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 			return []*Symbol{c.compileIdentifier(rewIdent)}
 		}
@@ -1510,7 +1510,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.DotExpression:
 		return c.compileDotExpression(e)
 	case *ast.Identifier:
-		res = c.compileIdentifierExpression(e, dest)
+		res = []*Symbol{c.compileIdentifier(e)}
 	case *ast.InfixExpression:
 		res = c.compileInfixExpression(e, dest)
 	case *ast.PrefixExpression:
@@ -1740,7 +1740,7 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 // named Range drivers once per yield and retains the final formatted string.
 func (c *Compiler) compileStringLiteralExpression(lit *ast.StringLiteral, dest []*ast.Identifier) []*Symbol {
 	info := c.ExprCache[key(c.FuncNameMangled, lit)]
-	if info == nil || len(c.pendingLoopRanges(info.Ranges)) == 0 {
+	if len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		return []*Symbol{c.compileStringLiteral(lit.Token)}
 	}
 
@@ -1756,29 +1756,6 @@ func (c *Compiler) compileStringLiteralExpression(lit *ast.StringLiteral, dest [
 	})
 
 	return c.loadOutputValues(outputs, "format_range_final")
-}
-
-// compileIdentifierExpression closes a bare named Range driver to its final
-// yielded iterator value. When an outer loop has already shadowed the Range
-// with a scalar, the identifier compiles directly.
-func (c *Compiler) compileIdentifierExpression(ident *ast.Identifier, dest []*ast.Identifier) []*Symbol {
-	info := c.ExprCache[key(c.FuncNameMangled, ident)]
-	if info == nil || len(c.pendingLoopRanges(info.Ranges)) == 0 {
-		return []*Symbol{c.compileIdentifier(ident)}
-	}
-
-	PushScope(&c.Scopes, BlockScope)
-	defer c.popScope()
-
-	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
-	c.bindRangedTempOutputs(dest, outputs)
-	output := outputs[0]
-	c.withLoopNest(info.Ranges, func() {
-		value := c.compileIdentifier(ident)
-		c.storeRangedOutput(output, value.Val, value.Type)
-	})
-
-	return c.loadOutputValues(outputs, "range_final")
 }
 
 func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {

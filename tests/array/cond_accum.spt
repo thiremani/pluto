@@ -172,16 +172,18 @@ q = 0:3
 elem = q < 2 arr4[q]
 "ScalarElem: -elem"
 
-# Scalar conditional iteration: cross-range
+# A statement driver gates a distinct bare Range descriptor without consuming it.
 r = 0:3
 i = 0:5
 cross = r < 4 i
-cross
+crossValues = [cross]
+"CrossRange: -crossValues"
 
-# Scalar conditional iteration: direct bare range literal
+# A direct bare Range literal is likewise assigned as a descriptor.
 r = 0:3
 litcross = r < 2 0:5
-"LitCross: -litcross"
+litcrossValues = [litcross]
+"LitCross: -litcrossValues"
 
 # Scalar conditional iteration: direct range-indexed array expression
 arr5 = [10 20 30 40]
@@ -189,11 +191,17 @@ r = 0:3
 selectionCross = r < 2 arr5[0:3]
 selectionCross
 
-# Scalar conditional iteration: direct bare range literal false path keeps old value
-seedlit = 88
+# A rejected descriptor assignment keeps the existing Range value.
+seedlit = 8:10
 r = 0:3
 seedlit = r < 0 0:5
-"SeedLit: -seedlit"
+seedlitValues = [seedlit]
+"SeedLit: -seedlitValues"
+
+# A fresh rejected descriptor assignment keeps the zero Range descriptor.
+freshlit = r < 0 0:5
+freshlitValues = [freshlit]
+"FreshLit: -freshlitValues"
 
 # A rejected direct range-indexed array expression keeps the old value
 seedSelection = 77
@@ -223,7 +231,7 @@ tc, td = i < 2 [0:2], [i]
 # drivers stay local to the expression that mentions them.
 i = 0:3
 j = 0:2
-localLeakA, localLeakB = i < 2 [1], j
+localLeakA, localLeakB = i < 2 [1], j + 0
 "CondLocalDriversA: -localLeakA. CondLocalDriversB: -localLeakB"
 
 # When a statement condition and an RHS mention the same driver, the condition

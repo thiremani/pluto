@@ -5,3 +5,6 @@ res = useShadow(x)
 res = AddMul(x, y)
     i = 10
     res = i * x + y
+
+res = makeRange()
+    res = 2:5

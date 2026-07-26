@@ -1,33 +1,59 @@
-# A bare range identifier at an assignment root keeps its final yield.
+# Bare range assignments copy descriptors. Brackets observe the copied stream.
 ascendingRange = 0:5
 ascending = ascendingRange
-"AscendingFinal: -ascending"
+ascendingValues = [ascending]
+"AscendingCopy: -ascendingValues"
+
+# Parentheses do not change a complete descriptor expression into a computation.
+parenthesized = (ascendingRange)
+parenthesizedValues = [parenthesized]
+"ParenthesizedCopy: -parenthesizedValues"
 
 descendingRange = 6:0:-2
 descending = descendingRange
-"DescendingFinal: -descending"
+descendingValues = [descending]
+"DescendingCopy: -descendingValues"
 
-# The final yield is the last visited value, not stop - step.
+# Uneven descriptors keep their exact traversal after copying.
 unevenRange = 1:10:4
 uneven = unevenRange
-"UnevenFinal: -uneven"
+unevenValues = [uneven]
+"UnevenCopy: -unevenValues"
 
-# An empty range preserves an existing destination and leaves a fresh one at zero.
+# Empty descriptors still assign: both destinations become empty ranges.
 emptyRange = 3:3
-fresh = emptyRange
-"EmptyFresh: -fresh"
+freshRange = emptyRange
+freshRangeValues = [freshRange]
+"EmptyRangeFresh: -freshRangeValues"
+
+existingRange = 0:2
+existingRangeBefore = [existingRange]
+"EmptyRangeBefore: -existingRangeBefore"
+existingRange = emptyRange
+existingRangeValues = [existingRange]
+"EmptyRangeExisting: -existingRangeValues"
+
+# Empty ranged computations yield no value: fresh scalar destinations use zero,
+# while existing scalar destinations retain their seed.
+fresh = emptyRange + 1
+"EmptyComputeFresh: -fresh"
 
 existing = 91
-existing = emptyRange
-"EmptyExisting: -existing"
+existing = emptyRange + 1
+"EmptyComputeExisting: -existing"
 
 # Brackets remain the explicit materialization boundary.
 collected = [ascendingRange]
 "Collected: -collected"
 
-# Function calls evaluate once per yield and the assignment keeps the final result.
-callFinal = useShadow(ascendingRange)
+# A copied descriptor remains consumable by functions.
+callFinal = useShadow(ascending)
 "CallFinal: -callFinal"
+
+# A Range returned by a function is a descriptor once bound.
+returnedRange = makeRange()
+returnedValues = [returnedRange]
+"ReturnedRange: -returnedValues"
 
 # Formatting markers are ordinary driver uses, including at print roots.
 markerRange = 0:3
@@ -45,11 +71,11 @@ formattedWidth = "|-widthValue%(-widthRange)d|"
 # A direct literal in print position is also consumed as a driver.
 "LiteralEach", 0:3
 
-# Ranged RHS evaluation preserves simultaneous-assignment reads.
+# Ranged computations preserve simultaneous-assignment reads.
 simRange = 0:3
 first = 77
 second = 0
-first, second = simRange, first
+first, second = simRange + 0, first
 "SimultaneousRange: -first -second"
 
 simArray = [10 20 30]

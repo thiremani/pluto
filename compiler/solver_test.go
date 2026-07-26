@@ -1008,6 +1008,51 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
+func TestBareRangeAssignmentsCopyDescriptors(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "bareRangeCopies", "", ast.NewCode())
+	program := mustParseScript(t, `source = 0:5
+copy = (source)
+last = source + 0
+outer = 0:2
+gatedCopy = outer < 2 source
+filtered = source > 2 source`)
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	for _, name := range []string{"source", "copy", "gatedCopy"} {
+		typ, ok := ts.GetIdentifier(name)
+		require.Truef(t, ok, "expected %s binding", name)
+		require.Equal(t, Range{Iter: I64}, typ)
+	}
+	for _, name := range []string{"last", "filtered"} {
+		typ, ok := ts.GetIdentifier(name)
+		require.Truef(t, ok, "expected %s binding", name)
+		require.Equal(t, I64, typ)
+	}
+
+	copyExpr := program.Statements[1].(*ast.LetStatement).Value[0]
+	copyInfo := ts.ExprCache[key("", copyExpr)]
+	require.False(t, copyInfo.HasRanges)
+	require.Empty(t, copyInfo.Ranges)
+	require.Nil(t, copyInfo.Rewrite)
+
+	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
+	gatedCopyInfo := ts.ExprCache[key("", gatedCopyExpr)]
+	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
+	require.Len(t, gatedCopyInfo.Ranges, 1)
+	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
+
+	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
+	filteredInfo := ts.ExprCache[key("", filteredExpr)]
+	require.Equal(t, []Type{I64}, filteredInfo.OutTypes)
+	require.Len(t, filteredInfo.Ranges, 1)
+	require.Equal(t, "source", filteredInfo.Ranges[0].Name)
+}
+
 func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
 	ctx := llvm.NewContext()
 	code := ast.NewCode()

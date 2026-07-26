@@ -4,18 +4,20 @@ This document describes Pluto's semantic model and compares it with other major 
 
 ## The Pluto Model (Summary)
 
-1. **Materialized Assignment is Copy:** assigning a scalar, array, table, string,
-   or struct creates an independent value.
+1. **Materialized Assignment is Copy:** assigning a scalar, Range descriptor,
+   array, table, string, or struct creates an independent value.
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
 3. **Range Selections are Streams:** `s = arr[i]` keeps the final selected
    value (an element or owned subarray); `s = [arr[i]]` materializes every
    selected value.
-4. **Ranges are Loop Syntax:** `x = i` and `x = i + 1` generate loops, not lazy
-   values.
-5. **Empty-Domain Initialization:** A fresh destination keeps its type's zero
-   value; an existing destination remains unchanged.
-6. **Driver Identity Determines Looping:** Repeated use of one range shares a
-   loop; distinct ranges form a cartesian domain.
+4. **Ranges are Descriptor Values:** `j = i` copies a Range; consuming it in
+   `x = i + 1`, `arr[i]`, a call, print, interpolation, or `[]` drives a loop.
+5. **Empty-Domain Initialization:** An empty Range descriptor still assigns.
+   An empty ranged computation leaves an existing destination unchanged and a
+   fresh destination at its type's zero value.
+6. **Driver Identity Determines Looping:** Repeated use of one Range binding
+   shares a loop; distinct bindings form a cartesian domain even when their
+   descriptors have equal bounds.
 7. **Function Arguments by Value:** Scalar parameters are passed by value;
    outputs write into caller destination slots.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
@@ -31,7 +33,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
 | **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
-| **Range Usage** | **Loop Syntax** (Immediate) | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
+| **Range Usage** | **Copyable descriptor; operations iterate** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
 
@@ -54,15 +56,16 @@ x = (i+1 for i in iter)   # Lazy generator
 a = [1]; b = a; a[0] = 2  # b sees 1 (independent copy)
 
 i = 0:5
-x = i                      # Loop executes, x = 4 (last yield)
+j = i                      # Descriptor copy; no loop
+x = i + 0                  # Loop executes, x = 4 (last yield)
 x = i + 1                  # Loop executes, x = 5 (last value)
 i = 0:10                   # Bind a new reusable Range domain
 y = i + 1                  # Consuming statement runs the loop; y = 10
 ```
 
 **Difference:** Pluto is safer and more predictable. A range literal binds a
-reusable execution domain; a consuming statement runs it as a loop rather than
-creating a lazy generator.
+reusable descriptor. A bare assignment copies it; a consuming expression runs
+it as a loop rather than creating a lazy generator.
 
 ---
 
@@ -154,20 +157,22 @@ expose a slice value.
 
 ### Statement-Level Loop Generation
 
-Ranges generate loops at statement boundaries. Operations consume one yielded
-value at a time; a rank-N selection can yield an owned subarray:
+Range-consuming expressions generate loops at statement boundaries.
+Operations consume one yielded value at a time; a rank-N selection can yield
+an owned subarray:
 
 ```python
 i = 0:5
-x = i          # Loop at statement: x = 4 (last yielded iterator)
+j = i          # Same bounds, independent named driver
+x = i + 0      # Loop at statement: x = 4 (last yielded iterator)
 x = i + 1      # Loop at statement: x = 5 (last scalar value)
 y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-Bare ranged expressions and range-indexed array accesses execute as loop
-drivers rather than becoming lazy values. An assignment root keeps the last
-yield; `[]` collects every yield.
+Complete Range expressions construct or copy descriptors. Operations and
+range-indexed array accesses consume descriptors as loop drivers. An
+assignment root keeps the last computation yield; `[]` collects every yield.
 
 ### Driver Identity Determines Loop Structure
 
@@ -182,11 +187,12 @@ ratio = (i + 1) / (i + 2)
 product = (i + 1) * (j + 1)
 ```
 
-### Three Execution Modes
+### Four Execution Modes
 
 | Mode | Syntax | Behavior |
 |------|--------|----------|
-| **Last Value** | `x = i` or `x = arr[i]` | Loop runs, x = last yielded value |
+| **Descriptor Copy** | `j = i` | No loop; j receives the Range value |
+| **Last Value** | `x = i + 0` or `x = arr[i]` | Loop runs, x = last yielded value |
 | **Accumulate** | `x = x + i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
 
@@ -215,7 +221,7 @@ Guard expressions with conditions:
 res = arr[i] > res arr[i]
 
 # Conditional update
-res = i * i > 10 i
+res = (i * i) > 10 i
 ```
 
 Desugars to: `if (condition) res = expression`
@@ -228,7 +234,8 @@ Pluto sits in a "Sweet Spot" for parallel computing:
 
 1. **Value Semantics (like R/Matlab)** make reasoning about concurrent code easy. "If I have `x`, I own `x`."
 2. **Explicit Collection** makes every allocation and materialization boundary visible.
-3. **Loop Syntax Ranges (Unique)** provide clean iteration without lazy complexity.
+3. **Range-Driven Execution (Unique)** separates copyable descriptors from
+   operations that iterate without lazy-generator complexity.
 4. **Named Driver Reuse (Unique)** makes user intent explicit — repeated use
    of one range name shares one loop.
 5. **Defined Empty Domains (Unique)** give fresh and existing destinations
@@ -317,15 +324,21 @@ for (int64_t i_val = 0; i_val < 5; i_val++) {
 
 ### Composition Using Functions
 
-For complex expressions with named intermediates, use functions:
+For complex expressions with named intermediates, define a function in `.pt`:
+
+```python
+ratio = compute_ratio(i)
+    numerator = i + 1
+    denominator = i + 2
+    ratio = numerator / denominator
+```
+
+Then consume it from `.spt`:
 
 ```python
 i = 0:5
 res = 0
 res = res + compute_ratio(i)
-    numerator = i + 1
-    denominator = i + 2
-    res = numerator / denominator
 ```
 
 This avoids the issue where intermediate assignments execute immediately:
