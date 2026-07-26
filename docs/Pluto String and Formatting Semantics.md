@@ -67,20 +67,25 @@ A main marker formats its value whatever the type, so a bare `Range` formats
 its descriptor and contributes no iteration: the string is a single value in
 assignment and in print alike. A Range identifier used for dynamic width or
 precision is consumed as a number, which makes it an iteration driver. An
-explicit numeric conversion on a Range main marker, such as `-i%d`, is a
-compile error — a descriptor is not a number; iterate with a computation
-instead.
+explicit numeric conversion such as `-i%d` is a compile error while `i` is an
+undriven Range descriptor — a descriptor is not a number.
 
 ```pluto
 i = 0:3
 s = "item -i"  # "item 0:3"
 "item -i"      # prints item 0:3 on one line
+n = 7
 w = 1:3
 "|-n%(-w)d|"   # one line per width: |7| then | 7|
 ```
 
 When a sibling computation in the same statement binds the marker's name as a
-driver, the marker formats that iteration's scalar yield instead.
+driver, the marker formats that iteration's scalar yield instead — and a
+numeric conversion then applies to that yield:
+
+```pluto
+"i=-i%d", i + 0  # i=0 0, i=1 1, i=2 2
+```
 
 ## Literal percent and strict formatting
 
