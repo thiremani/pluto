@@ -439,7 +439,16 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 
 	c.withArrayLiteralCellMode(func() {
 		c.compileCondExprValue(cell, llvm.Value{}, func() {
+			errorsBefore := len(c.Errors)
 			vals := c.compileExpression(cell, nil)
+			if len(vals) == 0 {
+				// Only an error from this lowering explains the missing value;
+				// leave the seed in place so that diagnostic can surface.
+				if len(c.Errors) > errorsBefore {
+					return
+				}
+				panic("internal: array cell lowering produced no value and recorded no error")
+			}
 			c.storeArrayCellSlotWhenInBounds(cellSlot, vals, cell)
 		})
 	})
@@ -498,17 +507,6 @@ func (c *Compiler) storeArrayCellSlotWhenInBounds(
 	vals []*Symbol,
 	cell ast.Expression,
 ) {
-	if len(vals) == 0 {
-		// Lowering recorded a CompileError and yielded no value. Leaving the
-		// seed in place lets that diagnostic surface instead of an ICE. Without
-		// a recorded error an empty result is an internal fault, not user error,
-		// so stay loud rather than silently dropping the cell.
-		if len(c.Errors) == 0 {
-			panic("internal: array cell lowering produced no value and recorded no error")
-		}
-		return
-	}
-
 	slotElemType := cellSlot.Type.(Ptr).Elem
 	store := func() {
 		cellValue := c.derefIfPointer(vals[0], "")

@@ -258,7 +258,7 @@ scaled`
 		"a collector invokes the callee once per scalar yield, so promoting the argument to an internal ArrayRange must still define the scalar variant")
 }
 
-func TestArrayCellSinkSkipsEmptyLoweringResult(t *testing.T) {
+func TestArrayCellLoweringSurfacesNewError(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -268,17 +268,27 @@ func TestArrayCellSinkSkipsEmptyLoweringResult(t *testing.T) {
 	fn := llvm.AddFunction(c.Module, "probe", llvm.FunctionType(ctx.VoidType(), nil, false))
 	c.builder.SetInsertPointAtEnd(c.Context.AddBasicBlock(fn, "entry"))
 
-	slot := c.newArrayCellSlot(I64)
-	cell := &ast.Identifier{Value: "cell"}
+	cell := &ast.CallExpression{
+		Token: token.Token{Type: token.LPAREN, Literal: token.SYM_LPAREN},
+		Function: &ast.Identifier{
+			Token: token.Token{Type: token.IDENT, Literal: "Missing"},
+			Value: "Missing",
+		},
+	}
+	c.ExprCache[key(c.FuncNameMangled, cell)] = &ExprInfo{
+		OutTypes: []Type{I64},
+		ExprLen:  1,
+	}
+	c.Errors = append(c.Errors, &token.CompileError{Token: cell.Tok(), Msg: "prior"})
+	errorsBefore := len(c.Errors)
 
-	require.Panics(t, func() {
-		c.storeArrayCellSlotWhenInBounds(slot, nil, cell)
-	}, "an empty result with no recorded error is an internal fault and must stay loud")
-
-	c.Errors = append(c.Errors, &token.CompileError{Token: cell.Tok(), Msg: "recorded"})
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
 	require.NotPanics(t, func() {
-		c.storeArrayCellSlotWhenInBounds(slot, nil, cell)
-	}, "a cell whose lowering recorded an error yields no value; the sink must leave the seed rather than index it")
+		c.compileArrayLiteralCell(cell, I64, func(*Symbol) bool { return false })
+	}, "a cell whose lowering records an error must leave its seed rather than index an empty result")
+	require.Len(t, c.Errors, errorsBefore+1)
+	require.Contains(t, c.Errors[errorsBefore].Msg, "function Missing not found")
 }
 
 func TestPhase1ScalarABIRangeVariantUsesDirectScalarBoundary(t *testing.T) {
