@@ -198,7 +198,6 @@ rangeStatic = 1 > 0 getStaticAt(rangeArg + 0)
 "RangeStaticConditional: -rangeStatic"
 
 rangeStatic = getHeap()
-rangeSibling = "unset"
 rangeStatic, rangeSibling = getStaticAt(rangeArg), rangeStatic
 "RangeStaticSimultaneous: -rangeStatic -rangeSibling"
 

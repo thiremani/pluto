@@ -172,18 +172,14 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 			evs = append(evs, cfg.collectReads(expr)...)
 		}
 		// 3. Write to the destination variable(s).
-		// Determine the type of write
-		writeKind := Write
-		if cfg.mayNotWrite(s) {
-			writeKind = ConditionalWrite
-		}
-		for _, lhs := range s.Name {
+		kinds := cfg.destWriteKinds(s)
+		for i, lhs := range s.Name {
 			// Treat '_' as a discard target: do not record writes or liveness.
 			if lhs.Value == "_" {
 				continue
 			}
 
-			ve := VarEvent{Name: lhs.Value, Kind: writeKind, Token: lhs.Tok()}
+			ve := VarEvent{Name: lhs.Value, Kind: kinds[i], Token: lhs.Tok()}
 			Put(cfg.Scopes, lhs.Value, ve)
 			evs = append(evs, ve)
 		}
@@ -214,18 +210,81 @@ func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
 	return false
 }
 
-// mayNotWrite reports whether a statement's destinations may keep their
-// previous values, which makes an earlier write to them live. The sources are
-// independent: an explicit statement condition, a driver that may iterate zero
-// times, a callee that may leave its output alone, and a value that may yield
-// nothing. The last two are genuinely distinct — a skipped callee write is
-// invisible in the caller's ExprCache, while a failed yield never reaches the
-// callee — so both checks are required.
-func (cfg *CFG) mayNotWrite(s *ast.LetStatement) bool {
-	return len(s.Condition) > 0 ||
-		cfg.HasRangeExpr(s.Value) ||
-		cfg.HasSkippableCallRoot(s.Value) ||
-		cfg.anyValueMayNotYield(s.Value)
+// destWriteKinds classifies each destination write of a statement. A statement
+// condition suspends the whole simultaneous assignment. Every other source of
+// a skipped write belongs to one value expression — an empty driver, a callee
+// that keeps its output, a value that never yields — and leaves sibling
+// expressions' writes untouched, so those mark only the destinations their own
+// expression feeds and a dead store behind an unconditional sibling is still
+// reported.
+func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
+	kinds := make([]EventType, len(s.Name))
+	for i := range kinds {
+		kinds[i] = Write
+	}
+	if len(s.Condition) > 0 {
+		for i := range kinds {
+			kinds[i] = ConditionalWrite
+		}
+		return kinds
+	}
+
+	spans, known := cfg.valueOutputSpans(s)
+	if !known {
+		// Without per-expression arity a failable span cannot be placed, so
+		// any failable value must suspend every destination.
+		if cfg.HasRangeExpr(s.Value) || cfg.HasSkippableCallRoot(s.Value) || cfg.anyValueMayNotYield(s.Value) {
+			for i := range kinds {
+				kinds[i] = ConditionalWrite
+			}
+		}
+		return kinds
+	}
+
+	dest := 0
+	for vi, v := range s.Value {
+		failable := cfg.hasRangeExpr(v) || cfg.callRootMaySkip(v) || cfg.valueMayNotYield(v)
+		for j := 0; j < spans[vi] && dest < len(kinds); j++ {
+			if failable {
+				kinds[dest] = ConditionalWrite
+			}
+			dest++
+		}
+	}
+	return kinds
+}
+
+// valueOutputSpans reports how many destinations each value expression feeds.
+// Scripts are typed before analysis, so ExprLen is exact. A .pt body has no
+// typing yet; values pairing one to one with destinations is the only mapping
+// that needs no arity, and anything else falls back to statement-wide
+// classification.
+func (cfg *CFG) valueOutputSpans(s *ast.LetStatement) ([]int, bool) {
+	spans := make([]int, len(s.Value))
+	if cfg.ScriptCompiler == nil {
+		if len(s.Value) != len(s.Name) {
+			return nil, false
+		}
+		for i := range spans {
+			spans[i] = 1
+		}
+		return spans, true
+	}
+
+	c := cfg.ScriptCompiler.Compiler
+	total := 0
+	for i, v := range s.Value {
+		info := c.ExprCache[key(c.FuncNameMangled, v)]
+		if info == nil || info.ExprLen <= 0 {
+			return nil, false
+		}
+		spans[i] = info.ExprLen
+		total += info.ExprLen
+	}
+	if total != len(s.Name) {
+		return nil, false
+	}
+	return spans, true
 }
 
 func (cfg *CFG) anyValueMayNotYield(values []ast.Expression) bool {
@@ -276,22 +335,29 @@ func (cfg *CFG) conditionMayFail(expr ast.Expression) bool {
 }
 
 // HasSkippableCallRoot reports whether any value is a bare call to a
-// user-defined function. Such a callee may leave an output unwritten, so the
-// caller keeps its previous value and that previous write is not dead. Only
-// root position qualifies: a call feeding an operator always yields a new
-// value. Proving a given callee always writes would need per-specialization
-// range types unavailable here, so this stays conservative.
+// user-defined function.
 func (cfg *CFG) HasSkippableCallRoot(values []ast.Expression) bool {
 	for _, v := range values {
-		call, ok := v.(*ast.CallExpression)
-		if !ok {
-			continue
-		}
-		if _, builtin := Builtins[call.Function.Value]; !builtin {
+		if cfg.callRootMaySkip(v) {
 			return true
 		}
 	}
 	return false
+}
+
+// callRootMaySkip reports whether a value is a bare call to a user-defined
+// function. Such a callee may leave an output unwritten, so the caller keeps
+// its previous value and that previous write is not dead. Only root position
+// qualifies: a call feeding an operator always yields a new value. Proving a
+// given callee always writes would need per-specialization range types
+// unavailable here, so this stays conservative.
+func (cfg *CFG) callRootMaySkip(v ast.Expression) bool {
+	call, ok := v.(*ast.CallExpression)
+	if !ok {
+		return false
+	}
+	_, builtin := Builtins[call.Function.Value]
+	return !builtin
 }
 
 // hasRangeExpr checks if an expression contains ranges by looking at ExprCache

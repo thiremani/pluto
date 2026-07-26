@@ -74,7 +74,6 @@ formattedWidth = "|-widthValue%(-widthRange)d|"
 # Ranged computations preserve simultaneous-assignment reads.
 simRange = 0:3
 first = 77
-second = 0
 first, second = simRange + 0, first
 "SimultaneousRange: -first -second"
 
@@ -84,6 +83,5 @@ first, second = simArray[simRange], first
 "SimultaneousArray: -first -second"
 
 text = "old"
-otherText = "unset"
 text, otherText = "Marker -markerRange", text
 "SimultaneousString: -text -otherText"

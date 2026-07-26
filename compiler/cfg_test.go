@@ -109,6 +109,12 @@ func getValidTestCases() []cfgTestCase {
 			name:  "Out Of Bounds Read Preserves Destination",
 			input: "arr = [1]\ny = 10\ny = arr[9]\ny",
 		},
+		{
+			// The failable expression suspends only its own destination, and
+			// b is fresh, so nothing behind the unconditional sibling is dead.
+			name:  "Failable Value Protects Only Its Own Destination",
+			input: "x = 7\na = 10\na, b = x < 5, 30\na, b",
+		},
 	}
 }
 
@@ -183,6 +189,13 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `unconditional assignment to "y" overwrites a previous value that was never used`,
 		},
 		{
+			// A failable sibling no longer suspends the whole statement, so
+			// the dead store behind the unconditional literal is reported.
+			name:          "Failable Sibling Does Not Protect Unconditional Write",
+			input:         "x = 7\na = 10\nb = 20\na, b = x < 5, 30\na, b",
+			errorContains: `unconditional assignment to "b" overwrites a previous value that was never used`,
+		},
+		{
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
 			errorContains: `variable "x" has not been defined`,
@@ -240,6 +253,29 @@ func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expected
 	if len(errors) > 0 {
 		assert.Contains(t, errors[0].Msg, expectedMessage, "Error message mismatch")
 	}
+}
+
+// A ranged expression suspends its own destination only: the sibling literal
+// writes even when the domain is empty, so the store behind it is dead. Range
+// classification needs the solver, so this runs the full script pipeline
+// rather than the bare-CFG harness.
+func TestEmptyDomainDoesNotProtectSiblingWrite(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "emptyDomainSibling", "", ast.NewCode())
+	program := parseInput(t, "emptyDomainSibling", "i = 0:0\na = 1\nb = 2\na, b = i + 0, 30\na, b")
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	errs := sc.Compile()
+	require.NotEmpty(t, errs, "the dead store behind the sibling literal must be reported")
+
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Msg
+	}
+	joined := strings.Join(msgs, "\n")
+	assert.Contains(t, joined, `unconditional assignment to "b"`)
+	assert.NotContains(t, joined, `to "a"`, "the ranged destination must stay protected")
 }
 
 func TestValidateFuncOutputsNotDeadStore(t *testing.T) {
