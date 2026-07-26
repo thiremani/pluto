@@ -98,6 +98,17 @@ func getValidTestCases() []cfgTestCase {
     res = x > 0 42`,
 			input: "x = 7\nx = maybeWrite(-1)\nx",
 		},
+		{
+			// A condition below the value root still leaves the whole RHS able
+			// to yield nothing, so the earlier write stays live.
+			name:  "Nested Condition Below Root",
+			input: "x = 7\ny = 10\ny = (x < 5) + 5\ny",
+		},
+		{
+			// An out-of-bounds read fails its lanes and preserves the target.
+			name:  "Out Of Bounds Read Preserves Destination",
+			input: "arr = [1]\ny = 10\ny = arr[9]\ny",
+		},
 	}
 }
 
@@ -156,6 +167,20 @@ func getErrorTestCases() []cfgTestCase {
     res = x * 2`,
 			input:         "x = 7\nx = alwaysWrite(3) + 1\nx",
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// A || yields whenever its final fallback does, so the resolver
+			// boundary holds and this write is unconditional.
+			name:          "Logical Or With Unconditional Fallback",
+			input:         "x = 7\ny = 10\ny = (x < 5) || 99\ny",
+			errorContains: `unconditional assignment to "y" overwrites a previous value that was never used`,
+		},
+		{
+			// An array literal settles a failed cell locally, so the literal
+			// always yields and the boundary holds.
+			name:          "Array Literal Cell Stays Unconditional",
+			input:         "x = 7\ny = [1]\ny = [x < 5]\ny",
+			errorContains: `unconditional assignment to "y" overwrites a previous value that was never used`,
 		},
 		{
 			name:          "Print Use Before Def",

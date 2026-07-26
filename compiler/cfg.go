@@ -174,7 +174,7 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 		// 3. Write to the destination variable(s).
 		// Determine the type of write
 		writeKind := Write
-		if len(s.Condition) > 0 || cfg.HasRangeExpr(s.Value) || cfg.HasSkippableCallRoot(s.Value) {
+		if cfg.mayNotWrite(s) {
 			writeKind = ConditionalWrite
 		}
 		for _, lhs := range s.Name {
@@ -210,6 +210,67 @@ func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
 		if cfg.hasRangeExpr(v) {
 			return true
 		}
+	}
+	return false
+}
+
+// mayNotWrite reports whether a statement's destinations may keep their
+// previous values, which makes an earlier write to them live. The sources are
+// independent: an explicit statement condition, a driver that may iterate zero
+// times, a callee that may leave its output alone, and a value that may yield
+// nothing. The last two are genuinely distinct — a skipped callee write is
+// invisible in the caller's ExprCache, while a failed yield never reaches the
+// callee — so both checks are required.
+func (cfg *CFG) mayNotWrite(s *ast.LetStatement) bool {
+	return len(s.Condition) > 0 ||
+		cfg.HasRangeExpr(s.Value) ||
+		cfg.HasSkippableCallRoot(s.Value) ||
+		cfg.anyValueMayNotYield(s.Value)
+}
+
+func (cfg *CFG) anyValueMayNotYield(values []ast.Expression) bool {
+	for _, v := range values {
+		if cfg.valueMayNotYield(v) {
+			return true
+		}
+	}
+	return false
+}
+
+// valueMayNotYield reports whether an expression may produce no value, leaving
+// its destination untouched. It shares the solver's traversal, so it counts
+// anywhere in the tree rather than only at a root: `y = Square(x < 5) + 5` is
+// recognized even though the call feeds an operator.
+func (cfg *CFG) valueMayNotYield(expr ast.Expression) bool {
+	return treeCanFail(expr, cfg.nodeMayNotYield)
+}
+
+// nodeMayNotYield classifies one node for diagnostics. Beyond the solver's
+// conditions it counts an array read, whose out-of-bounds case preserves the
+// destination the same way. That widening belongs here and nowhere else: the
+// solver's predicate also decides which programs are valid, so treating
+// indexing as failable there would legalize `arr[9] || -1`. The cost is that a
+// statically safe read like `arr[0]` also suppresses a real dead-store warning.
+func (cfg *CFG) nodeMayNotYield(expr ast.Expression) bool {
+	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
+		return true
+	}
+	return cfg.conditionMayFail(expr)
+}
+
+// conditionMayFail classifies one node. A script has been typed already, so its
+// solver classification is exact. A .pt function body is validated before any
+// specialization exists, so nothing is cached and the syntactic shape is the
+// only signal; erring toward "may fail" there keeps the diagnostic conservative.
+func (cfg *CFG) conditionMayFail(expr ast.Expression) bool {
+	if cfg.ScriptCompiler != nil {
+		c := cfg.ScriptCompiler.Compiler
+		if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil {
+			return info.HasCondScalar() || info.HasCondAnd()
+		}
+	}
+	if infix, ok := expr.(*ast.InfixExpression); ok {
+		return infix.Token.IsComparison() || infix.IsLogicalAnd()
 	}
 	return false
 }

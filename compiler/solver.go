@@ -747,27 +747,41 @@ func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type)
 	return []*RangeInfo{{Name: ident.Value}}
 }
 
-// expressionCanFail reports whether a value-position expression can propagate
-// a failed yield to its parent. Array cells resolve failures locally. A || can
-// fail only when its final fallback can; other nodes propagate a root scalar
-// comparison/&& or a failure from any child.
-func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+// treeCanFail reports whether a value-position expression can propagate a
+// failed yield to its parent, asking nodeFails to classify each node. The
+// solver and the CFG pass different predicates but share this walk, so the two
+// resolver boundaries cannot drift apart: an array literal settles a failed
+// cell locally, and a || fails only when its final fallback does.
+func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool {
 	if _, ok := expr.(*ast.ArrayLiteral); ok {
 		return false
 	}
 	if infix, ok := ast.IsLogicalOr(expr); ok {
-		return ts.expressionCanFail(infix.Right)
+		return treeCanFail(infix.Right, nodeFails)
 	}
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info != nil && (info.HasCondScalar() || info.HasCondAnd()) {
+	if nodeFails(expr) {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if ts.expressionCanFail(child) {
+		if treeCanFail(child, nodeFails) {
 			return true
 		}
 	}
 	return false
+}
+
+// conditionPropagates classifies one node for the solver: a root scalar
+// comparison or gating &&. Conditions only, because this also decides which
+// programs are valid — ||, && and statement conditions all require an operand
+// that can fail — so anything that merely fails to yield at runtime, such as an
+// out-of-bounds read, must not be folded in.
+func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
+}
+
+func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+	return treeCanFail(expr, ts.conditionPropagates)
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
