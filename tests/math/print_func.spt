@@ -35,3 +35,7 @@ j, Square(j + 1)
 # SumSquares(k, k) creates Range variant, but k+1 forces iteration needing scalar variant
 k = 0:2
 k + 1, SumSquares(k, k)
+
+# Regression: a descriptor literal must not be rewritten into a loop iterator
+# when a sibling computation drives the print loop.
+0:9, i + 0

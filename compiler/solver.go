@@ -483,15 +483,16 @@ func (ts *TypeSolver) collectExprRanges(exprs []ast.Expression) (ranges []*Range
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	ranges, args, changed := ts.collectExprRanges(call.Arguments)
-	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
-
-	// Print is a sink rather than an operation, so a bare descriptor argument
-	// prints as a value; only ranges bound by sibling computations remain
-	// drivers of the print loop.
+	var args []ast.Expression
+	var changed bool
+	// Print is a sink rather than an operation, so its bare descriptor
+	// arguments print as values and must not be rewritten into loop iterators.
 	if call.Function.Value == Print {
-		ranges = ts.resolveBareRangePrintArgs(call.Arguments)
+		ranges, args, changed = ts.collectPrintArgRanges(call)
+	} else {
+		ranges, args, changed = ts.collectExprRanges(call.Arguments)
 	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 
 	// A surrounding collector consumes these ranges and invokes the call once
 	// per scalar yield, so that scalar callee variant must exist even though the
@@ -526,35 +527,44 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	return
 }
 
-// resolveBareRangePrintArgs keeps each bare Range print argument a descriptor
-// value unless a sibling computation binds that name as a driver, mirroring
-// resolveBareRangeAssignment at assignment roots. Returns the drivers that
-// remain for the print loop, in source order.
-func (ts *TypeSolver) resolveBareRangePrintArgs(args []ast.Expression) []*RangeInfo {
-	drivers := []*RangeInfo{}
-	for _, arg := range args {
+// collectPrintArgRanges collects drivers for a print statement, deciding
+// descriptor versus driver before any argument is rewritten. Computations
+// contribute drivers exactly as in collectExprRanges. A bare descriptor
+// argument whose name a sibling binds stays a driver; any other bare
+// descriptor keeps its original expression — rewriting it first would leave
+// the print loop referencing an iterator no loop binds — and prints as a
+// value, mirroring resolveBareRangeAssignment at assignment roots.
+func (ts *TypeSolver) collectPrintArgRanges(call *ast.CallExpression) (ranges []*RangeInfo, args []ast.Expression, changed bool) {
+	args = make([]ast.Expression, len(call.Arguments))
+	for i, arg := range call.Arguments {
 		if ts.bareRangeDescriptorArg(arg) {
+			args[i] = arg
 			continue
 		}
-		if info := ts.ExprCache[key(ts.FuncNameMangled, arg)]; info != nil {
-			drivers = mergeUses(drivers, info.Ranges)
-		}
+		argRanges, rew := ts.HandleRanges(arg)
+		args[i] = rew
+		changed = changed || rew != arg
+		ranges = mergeUses(ranges, argRanges)
 	}
 
-	for _, arg := range args {
+	for i, arg := range call.Arguments {
 		if !ts.bareRangeDescriptorArg(arg) {
 			continue
 		}
-		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
-		if ident, ok := arg.(*ast.Identifier); ok && rangeDriverNamed(drivers, ident.Value) {
-			drivers = mergeUses(drivers, info.Ranges)
+		if ident, ok := arg.(*ast.Identifier); ok && rangeDriverNamed(ranges, ident.Value) {
+			argRanges, rew := ts.HandleRanges(arg)
+			args[i] = rew
+			changed = changed || rew != arg
+			ranges = mergeUses(ranges, argRanges)
 			continue
 		}
+		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
 		info.Ranges = nil
 		info.HasRanges = false
 		info.Rewrite = nil
+		args[i] = arg
 	}
-	return drivers
+	return ranges, args, changed
 }
 
 // bareRangeDescriptorArg reports whether a print argument is a complete Range
