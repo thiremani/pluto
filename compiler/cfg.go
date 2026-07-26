@@ -394,13 +394,9 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		}
 		return false
 	case *ast.ArrayLiteral:
-		for _, row := range t.Rows {
-			for _, cell := range row {
-				if cfg.hasRangeExpr(cell) {
-					return true
-				}
-			}
-		}
+		// A collector materializes an array even when its domain is empty, so
+		// its write is unconditional; cells resolve failures locally. Same
+		// boundary as treeCanFail.
 		return false
 	case *ast.StructLiteral:
 		for _, cell := range t.Row {

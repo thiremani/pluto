@@ -255,6 +255,21 @@ func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expected
 	}
 }
 
+// A collector materializes an array even over an empty domain, so its write is
+// unconditional and the store behind it is dead. Range classification needs the
+// solver, so this runs the full script pipeline.
+func TestCollectorWriteIsUnconditional(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "collectorWrite", "", ast.NewCode())
+	program := parseInput(t, "collectorWrite", "i = 0:0\nc = [9]\nc = [i + 0]\nc")
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	errs := sc.Compile()
+	require.NotEmpty(t, errs, "the dead store behind the collector must be reported")
+	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
+}
+
 // A ranged expression suspends its own destination only: the sibling literal
 // writes even when the domain is empty, so the store behind it is dead. Range
 // classification needs the solver, so this runs the full script pipeline
