@@ -79,12 +79,18 @@ w = 1:3
 "|-n%(-w)d|"   # one line per width: |7| then | 7|
 ```
 
-When a sibling computation in the same statement binds the marker's name as a
-driver, the marker formats that iteration's scalar yield instead — and a
-numeric conversion then applies to that yield:
+Within a print statement, another argument that consumes the same named `Range`
+makes it a driver for that print loop. During each iteration, the main marker
+reads the current `I64` yield, so an explicit numeric conversion applies to the
+yield. This sibling binding is specific to print arguments; it does not apply
+across sibling values in an assignment.
 
 ```pluto
-"i=-i%d", i + 0  # i=0 0, i=1 1, i=2 2
+i = 0:3
+"i=-i%d", i + 0
+# i=0 0
+# i=1 1
+# i=2 2
 ```
 
 ## Literal percent and strict formatting

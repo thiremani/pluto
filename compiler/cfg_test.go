@@ -255,17 +255,23 @@ func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expected
 	}
 }
 
+func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileError {
+	t.Helper()
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, name, "", ast.NewCode())
+	program := parseInput(t, name, input)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	return sc.Compile()
+}
+
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.
 func TestCollectorWriteIsUnconditional(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "collectorWrite", "", ast.NewCode())
-	program := parseInput(t, "collectorWrite", "i = 0:0\nc = [9]\nc = [i + 0]\nc")
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
-	errs := sc.Compile()
+	errs := compileScriptForCFGTest(t, "collectorWrite", "i = 0:0\nc = [9]\nc = [i + 0]\nc")
 	require.NotEmpty(t, errs, "the dead store behind the collector must be reported")
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
 }
@@ -274,13 +280,7 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 // even when nothing is admitted, so the store behind it is dead; a scalar
 // sibling under the same gate stays conditional. Needs the solver.
 func TestRangedGateCollectorWriteIsUnconditional(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "rangedGateCollector", "", ast.NewCode())
-	program := parseInput(t, "rangedGateCollector", "i = 0:1\nc = [9]\ns = 42\nc, s = i < 0 [i], i + 7\nc, s")
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
-	errs := sc.Compile()
+	errs := compileScriptForCFGTest(t, "rangedGateCollector", "i = 0:1\nc = [9]\ns = 42\nc, s = i < 0 [i], i + 7\nc, s")
 	require.NotEmpty(t, errs, "the dead store behind the gated collector must be reported")
 
 	msgs := make([]string, len(errs))
@@ -292,18 +292,51 @@ func TestRangedGateCollectorWriteIsUnconditional(t *testing.T) {
 	assert.NotContains(t, joined, `to "s"`, "the scalar sibling commits per admitted iteration and must stay conditional")
 }
 
+func TestGateArrayWriteKinds(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		errorContains string
+	}{
+		{
+			name:          "range literal collector commits",
+			input:         "c = [9]\nc = 0:0 [1]\nc",
+			errorContains: `unconditional assignment to "c"`,
+		},
+		{
+			name:  "ranged block preserves destination",
+			input: "c = [\n    9\n]\ni = 0:1\nc = i < 0 [\n    1\n]\nc",
+		},
+		{
+			name:  "scalar collector preserves destination",
+			input: "flag = 0\nc = [9]\nc = flag > 0 [1]\nc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := compileScriptForCFGTest(t, tt.name, tt.input)
+			if tt.errorContains == "" {
+				require.Empty(t, errs)
+				return
+			}
+
+			require.NotEmpty(t, errs)
+			msgs := make([]string, len(errs))
+			for i, err := range errs {
+				msgs[i] = err.Msg
+			}
+			assert.Contains(t, strings.Join(msgs, "\n"), tt.errorContains)
+		})
+	}
+}
+
 // A ranged expression suspends its own destination only: the sibling literal
 // writes even when the domain is empty, so the store behind it is dead. Range
 // classification needs the solver, so this runs the full script pipeline
 // rather than the bare-CFG harness.
 func TestEmptyDomainDoesNotProtectSiblingWrite(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "emptyDomainSibling", "", ast.NewCode())
-	program := parseInput(t, "emptyDomainSibling", "i = 0:0\na = 1\nb = 2\na, b = i + 0, 30\na, b")
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
-	errs := sc.Compile()
+	errs := compileScriptForCFGTest(t, "emptyDomainSibling", "i = 0:0\na = 1\nb = 2\na, b = i + 0, 30\na, b")
 	require.NotEmpty(t, errs, "the dead store behind the sibling literal must be reported")
 
 	msgs := make([]string, len(errs))

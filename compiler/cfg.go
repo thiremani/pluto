@@ -259,15 +259,8 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 // so that slot's write is unconditional. Sibling slots commit only on admitted
 // iterations and stay conditional.
 func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
-	rangedGate := false
-	for _, cond := range s.Condition {
-		if cfg.hasRangeExpr(cond) {
-			rangedGate = true
-			break
-		}
-	}
 	spans, known := cfg.valueOutputSpans(s)
-	if !rangedGate || !known {
+	if !cfg.hasRangedGate(s.Condition) || !known {
 		for i := range kinds {
 			kinds[i] = ConditionalWrite
 		}
@@ -277,7 +270,7 @@ func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
 	dest := 0
 	for vi, v := range s.Value {
 		lit, isLit := v.(*ast.ArrayLiteral)
-		committed := isLit && len(lit.Rows) == 1
+		committed := isLit && isInlineArrayCollector(lit)
 		for j := 0; j < spans[vi] && dest < len(kinds); j++ {
 			if !committed {
 				kinds[dest] = ConditionalWrite
@@ -285,6 +278,25 @@ func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
 			dest++
 		}
 	}
+}
+
+// hasRangedGate reports whether a statement condition contributes a loop
+// driver. Unlike a value-position range literal, a bare Range in condition
+// position is consumed as a driver, so this uses the typed condition metadata
+// that lowering also consumes rather than hasRangeExpr's value semantics.
+// Untyped .pt analysis stays conservative and treats every gate as skippable.
+func (cfg *CFG) hasRangedGate(conditions []ast.Expression) bool {
+	if cfg.ScriptCompiler == nil {
+		return false
+	}
+
+	c := cfg.ScriptCompiler.Compiler
+	for _, cond := range conditions {
+		if len(c.ExprCache[key(c.FuncNameMangled, cond)].Ranges) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // valueOutputSpans reports how many destinations each value expression feeds.
