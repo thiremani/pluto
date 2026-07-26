@@ -44,9 +44,9 @@ last = i + 0
 `copy` is a Range descriptor; `last` is the scalar `4`. Use an operation such
 as `+ 0` when migrating code that intended the old final-value behavior.
 
-This change can be silent for a fresh destination. A later print,
-interpolation, call, index, or collector consumes the copied Range and runs its
-whole domain; printing an empty copied Range emits no line. Assigning a Range
+This change can be silent for a fresh destination. A later call, index, or
+collector consumes the copied Range and runs its whole domain, while print and
+interpolation format the descriptor itself. Assigning a Range
 to an existing scalar is instead rejected as a type-changing reassignment.
 Descriptor copies are unconditional writes and participate in the ordinary
 dead-store checks. Range-indexed expressions such as `last = data[i]` are
@@ -54,9 +54,12 @@ unchanged because indexing is already a ranged computation.
 
 ## Ranges And Drivers
 
-A range identifier consumed by an operator, array index, interpolation,
-print, collector, statement condition, or function argument contributes an
-iteration driver. A range-indexed array access is itself a ranged computation.
+A range identifier consumed by an operator, array index, collector, statement
+condition, or function argument contributes an iteration driver. Print
+arguments and main interpolation markers are display positions, not
+consumers: a bare Range there formats its descriptor. A width or precision
+operand is consumed as a number, so a named Range in a specifier still
+drives. A range-indexed array access is itself a ranged computation.
 Multiple distinct drivers form a nested iteration domain in source order: the
 first distinct driver is outermost and the last is innermost. Repeated use of
 the same driver name refers to the same loop, not a nested copy.
@@ -121,25 +124,17 @@ existing destination is unchanged. Outside `[]`, an out-of-bounds selection
 point yields nothing, so the last valid selected value wins. Inside `[]`,
 failed cells are zero-filled to preserve collection shape, as described below.
 
-Print statements consume drivers rather than exposing their internal
-descriptor; Range descriptors have no printable representation. Printing `i`
-emits one line per yielded value. Printing distinct
-drivers together uses their normal cartesian domain, while repeated uses of
-the same driver share one loop:
+Print is a sink, not an operation: a bare Range argument or main marker
+formats the descriptor as `start:stop` (or `start:stop:step`), exactly as the
+value it is. Computations still drive the print loop, and a bare name bound as
+a driver by a sibling computation prints its per-iteration scalar:
 
 ```pluto
 i = 0:2
 j = 2:4
-i, j
-```
-
-prints:
-
-```text
-0 2
-0 3
-1 2
-1 3
+i, j            # one line: 0:2 2:4
+i + 0, j + 0    # cartesian: 0 2 / 0 3 / 1 2 / 1 3
+i, Square(i)    # i is driven: 0 0 / 1 1
 ```
 
 Distinct drivers nest in source order, so collecting over two ranges walks

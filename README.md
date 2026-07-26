@@ -182,15 +182,17 @@ copy = i                   # same bounds, independent named driver
 values = [copy]            # [0 1 2 3 4]
 last = i + 0               # 4
 lastSquare = Square(i)     # 16
+i                          # prints the descriptor: 0:5
 ```
 
-A bare range at an assignment root is a value and can be copied. Using it in
-an operation creates a ranged computation: the assignment keeps the final
-yield, brackets materialize all yields into an array, and passing it to a
-template executes the call once for each value. The compiler can map these
-operations to SIMD instructions — this is range-driven auto-vectorization.
-Each named Range binding is a distinct driver: different names form a
-cartesian domain when consumed together, even when their bounds are equal.
+A bare range is a value: assignment copies it and print shows its descriptor.
+Using it in an operation creates a ranged computation: the assignment keeps
+the final yield, brackets materialize all yields into an array, and passing it
+to a template executes the call once for each value. The compiler can map
+these operations to SIMD instructions — this is range-driven
+auto-vectorization. Each named Range binding is a distinct driver: different
+names form a cartesian domain when consumed together, even when their bounds
+are equal.
 
 Range-indexed array access follows the same rule:
 

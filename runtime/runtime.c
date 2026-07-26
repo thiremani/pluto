@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -170,6 +171,22 @@ char *str_hex(const char *s, int64_t byte_limit, int32_t uppercase, int32_t alte
     }
     *out = '\0';
     return result;
+}
+
+// Format a range descriptor [s..t) with step p as a NUL-terminated string.
+// Caller is responsible for free()ing the returned buffer.
+char *range_i64_str(int64_t s, int64_t t, int64_t p) {
+    // Reserve enough space: up to 20 digits per number, two colons, plus NUL.
+    // 3*21 + 2 = 65 bytes is plenty.
+    char *buf = malloc(65);
+    if (!buf) return NULL;
+    if (p == 1) {
+        // omit the default ":1"
+        snprintf(buf, 65, "%" PRId64 ":%" PRId64, s, t);
+    } else {
+        snprintf(buf, 65, "%" PRId64 ":%" PRId64 ":%" PRId64, s, t, p);
+    }
+    return buf;
 }
 
 /* ---------- portable float formatting ---------- */

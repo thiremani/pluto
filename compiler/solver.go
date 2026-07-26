@@ -486,6 +486,13 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	ranges, args, changed := ts.collectExprRanges(call.Arguments)
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 
+	// Print is a sink rather than an operation, so a bare descriptor argument
+	// prints as a value; only ranges bound by sibling computations remain
+	// drivers of the print loop.
+	if call.Function.Value == Print {
+		ranges = ts.resolveBareRangePrintArgs(call.Arguments)
+	}
+
 	// A surrounding collector consumes these ranges and invokes the call once
 	// per scalar yield, so that scalar callee variant must exist even though the
 	// immediate call selected a range specialization. Promoting an argument to
@@ -517,6 +524,50 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
+}
+
+// resolveBareRangePrintArgs keeps each bare Range print argument a descriptor
+// value unless a sibling computation binds that name as a driver, mirroring
+// resolveBareRangeAssignment at assignment roots. Returns the drivers that
+// remain for the print loop, in source order.
+func (ts *TypeSolver) resolveBareRangePrintArgs(args []ast.Expression) []*RangeInfo {
+	drivers := []*RangeInfo{}
+	for _, arg := range args {
+		if ts.bareRangeDescriptorArg(arg) {
+			continue
+		}
+		if info := ts.ExprCache[key(ts.FuncNameMangled, arg)]; info != nil {
+			drivers = mergeUses(drivers, info.Ranges)
+		}
+	}
+
+	for _, arg := range args {
+		if !ts.bareRangeDescriptorArg(arg) {
+			continue
+		}
+		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
+		if ident, ok := arg.(*ast.Identifier); ok && rangeDriverNamed(drivers, ident.Value) {
+			drivers = mergeUses(drivers, info.Ranges)
+			continue
+		}
+		info.Ranges = nil
+		info.HasRanges = false
+		info.Rewrite = nil
+	}
+	return drivers
+}
+
+// bareRangeDescriptorArg reports whether a print argument is a complete Range
+// descriptor: a range literal or a name bound to a Range.
+func (ts *TypeSolver) bareRangeDescriptorArg(arg ast.Expression) bool {
+	switch a := arg.(type) {
+	case *ast.RangeLiteral:
+		return true
+	case *ast.Identifier:
+		typ, ok := ts.GetIdentifier(a.Value)
+		return ok && typ.Kind() == RangeKind
+	}
+	return false
 }
 
 // isBareRangeExpr reports whether expr is a driver that a function can consume
@@ -565,7 +616,11 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 // formatting markers so interpolation follows the same driver semantics as an
 // ordinary identifier expression.
 func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges []*RangeInfo, rew ast.Expression) {
-	for _, name := range formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined) {
+	// A main marker formats its value, so a bare Range there stays a
+	// descriptor. Width and precision operands are consumed as numbers, which
+	// makes a named Range in a specifier an iteration driver.
+	_, specs := formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined)
+	for _, name := range specs {
 		typ, ok := ts.GetIdentifier(name)
 		if !ok || typ.Kind() != RangeKind {
 			continue

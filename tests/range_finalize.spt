@@ -55,21 +55,29 @@ returnedRange = makeRange()
 returnedValues = [returnedRange]
 "ReturnedRange: -returnedValues"
 
-# Formatting markers are ordinary driver uses, including at print roots.
+# A bare Range in a main marker formats the descriptor: the string is one
+# value with no drivers, in interpolation exactly as in assignment.
 markerRange = 0:3
 formattedFinal = "Marker -markerRange"
 "MarkerFinal: -formattedFinal"
-"MarkerEach -markerRange"
+"MarkerDescriptor -markerRange"
 
-# Range markers used for dynamic formatting parameters are drivers too.
+# A width or precision operand is consumed as a number, so a named Range there
+# is still an iteration driver.
 widthRange = 1:4
 widthValue = 7
 formattedWidth = "|-widthValue%(-widthRange)d|"
 "MarkerWidthFinal: -formattedWidth"
 "MarkerWidthEach: |-widthValue%(-widthRange)d|"
 
-# A direct literal in print position is also consumed as a driver.
-"LiteralEach", 0:3
+# A range literal in print position is a descriptor value too.
+"LiteralDescriptor", 0:3
+
+# Descriptors print their exact bounds, including empty and stepped forms.
+emptyDescriptor = 3:3
+"EmptyDescriptor:", emptyDescriptor
+steppedDescriptor = 6:0:-2
+"SteppedDescriptor:", steppedDescriptor
 
 # Ranged computations preserve simultaneous-assignment reads.
 simRange = 0:3
@@ -82,6 +90,8 @@ first = 88
 first, second = simArray[simRange], first
 "SimultaneousArray: -first -second"
 
+# A bare-marker string is a single value, so this write is unconditional; the
+# sibling still reads text's pre-statement value.
 text = "old"
 text, otherText = "Marker -markerRange", text
 "SimultaneousString: -text -otherText"

@@ -17,17 +17,18 @@ Square(i)
 # Named range both direct and in function call
 i, Square(i)
 
-# Two bare ranges form a cartesian print domain.
+# Two bare ranges print as descriptor values on one line.
 j = 1:3
 i, j
 
-# One bare range, one expression - should iterate
+# A computation drives only its own name; the undriven bare range stays a
+# descriptor, printed once per driver yield.
 i, j + 1
 
-# Different ranges - nested iteration (4 x 2 = 8 lines)
+# The undriven bare range prints its descriptor beside each computed value.
 i, Square(j + 1)
 
-# Same range used bare and in expression - single loop
+# Same driver bare and in a computation - the computation binds it, single loop
 j, Square(j + 1)
 
 # Regression test: mixed expression with function not called with scalars before

@@ -17,7 +17,9 @@ u = 0:b:d
 
 [i], [j], [k], [u]
 
-# Distinct bare drivers in one print form a cartesian iteration domain.
+# Bare descriptors print as values on one line; computations over distinct
+# drivers still form a cartesian iteration domain.
 p = 0:2
 q = 2:4
-"Cartesian", p, q
+"Descriptors", p, q
+"Cartesian", p + 0, q + 0

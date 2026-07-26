@@ -11,7 +11,8 @@ This document describes Pluto's semantic model and compares it with other major 
    value (an element or owned subarray); `s = [arr[i]]` materializes every
    selected value.
 4. **Ranges are Descriptor Values:** `j = i` copies a Range; consuming it in
-   `x = i + 1`, `arr[i]`, a call, print, interpolation, or `[]` drives a loop.
+   `x = i + 1`, `arr[i]`, a call, or `[]` drives a loop. Print and main
+   interpolation markers format the descriptor itself.
 5. **Empty-Domain Initialization:** An empty Range descriptor still assigns.
    An empty ranged computation leaves an existing destination unchanged and a
    fresh destination at its type's zero value.

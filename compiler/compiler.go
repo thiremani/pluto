@@ -3364,6 +3364,13 @@ func (c *Compiler) rangeComponents(r llvm.Value) (start, stop, step llvm.Value) 
 	return
 }
 
+// rangeStrArg formats a Range descriptor as "start:stop" or "start:stop:step".
+func (c *Compiler) rangeStrArg(s *Symbol) llvm.Value {
+	start, stop, step := c.rangeComponents(s.Val)
+	fnType, fn := c.GetCFunc(RANGE_I64_STR)
+	return c.builder.CreateCall(fnType, fn, []llvm.Value{start, stop, step}, RANGE_I64_STR)
+}
+
 func (c *Compiler) floatStrArg(s *Symbol) llvm.Value {
 	if s.Type.(Float).Width == 32 {
 		fnTy, fn := c.GetCFunc(F32_STR) // char* f32_str(float)
@@ -3681,6 +3688,10 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		if printOwnsHeapString(s, expr) {
 			*toFree = append(*toFree, s.Val)
 		}
+	case RangeKind:
+		strPtr := c.rangeStrArg(s)
+		*args = append(*args, strPtr)
+		*toFree = append(*toFree, strPtr)
 	default:
 		*args = append(*args, s.Val)
 	}

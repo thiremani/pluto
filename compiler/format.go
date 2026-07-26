@@ -48,6 +48,9 @@ func defaultSpecifier(t Type) (string, error) {
 		return "%s", nil
 	case StrKind:
 		return "%s", nil
+	case RangeKind:
+		// Range descriptors are converted to char* via range_i64_str
+		return "%s", nil
 	case ArrayKind:
 		// Arrays are converted to char* via runtime helpers
 		return "%s", nil
@@ -603,6 +606,10 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 		strPtr := c.tableStrArg(mainSym)
 		result.args = append(result.args, strPtr)
 		result.toFree = append(result.toFree, strPtr)
+	case RangeKind:
+		strPtr := c.rangeStrArg(mainSym)
+		result.args = append(result.args, strPtr)
+		result.toFree = append(result.toFree, strPtr)
 	case StructKind:
 		fmtStr, fmtArgs, fmtFree := c.structFormatArgs(mainSym)
 		result.text = fmtStr
@@ -873,10 +880,11 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 }
 
 // formatMarkerIdentifiers returns the identifiers read by resolved markers in
-// source order. Dynamic width/precision identifiers are included because a
-// named Range there contributes the same iteration driver as a main marker.
-func formatMarkerIdentifiers(value string, isDefined func(string) bool) []string {
-	var identifiers []string
+// source order, separating main-marker identifiers from dynamic
+// width/precision identifiers. A main marker formats its value whatever the
+// type, while a specifier operand is consumed as a number, so only specifier
+// identifiers can turn a named Range into an iteration driver.
+func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -891,7 +899,7 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) []string
 		if !isDefined(mainID) {
 			continue
 		}
-		identifiers = append(identifiers, mainID)
+		mains = append(mains, mainID)
 
 		if end >= len(runes) || runes[end] != '%' {
 			i = end - 1
@@ -900,17 +908,18 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) []string
 		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
 		for _, specID := range spec.ids {
 			if isDefined(specID) {
-				identifiers = append(identifiers, specID)
+				specs = append(specs, specID)
 			}
 		}
 		if spec.end > end {
 			i = spec.end - 1
 		}
 	}
-	return identifiers
+	return mains, specs
 }
 
 // hasValidMarkers checks if a format string contains a resolved marker.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
-	return len(formatMarkerIdentifiers(value, isDefined)) > 0
+	mains, specs := formatMarkerIdentifiers(value, isDefined)
+	return len(mains)+len(specs) > 0
 }
