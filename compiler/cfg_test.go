@@ -270,6 +270,28 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
 }
 
+// A ranged gate always runs its loop and an inline collector under it commits
+// even when nothing is admitted, so the store behind it is dead; a scalar
+// sibling under the same gate stays conditional. Needs the solver.
+func TestRangedGateCollectorWriteIsUnconditional(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "rangedGateCollector", "", ast.NewCode())
+	program := parseInput(t, "rangedGateCollector", "i = 0:1\nc = [9]\ns = 42\nc, s = i < 0 [i], i + 7\nc, s")
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	errs := sc.Compile()
+	require.NotEmpty(t, errs, "the dead store behind the gated collector must be reported")
+
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Msg
+	}
+	joined := strings.Join(msgs, "\n")
+	assert.Contains(t, joined, `unconditional assignment to "c"`)
+	assert.NotContains(t, joined, `to "s"`, "the scalar sibling commits per admitted iteration and must stay conditional")
+}
+
 // A ranged expression suspends its own destination only: the sibling literal
 // writes even when the domain is empty, so the store behind it is dead. Range
 // classification needs the solver, so this runs the full script pipeline

@@ -58,8 +58,10 @@ j = 0:5
 arr = j < 3 [j]
 arr
 
-# Empty result when condition always false
+# Empty result when condition always false: the gated collector still commits,
+# replacing the previous array, so read it first to show the replacement.
 old = [10 20 30]
+"FalseCondBefore: -old"
 k = 0:3
 old = k < 0 [99]
 "FalseCondEmpty: -old"
@@ -391,6 +393,7 @@ nestedCondCell = i > 2 [([0] + i)[0]]
 
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
+seed
 p = 0:3
 seed = p < 2 [9]
 seed

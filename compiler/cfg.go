@@ -223,9 +223,7 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 		kinds[i] = Write
 	}
 	if len(s.Condition) > 0 {
-		for i := range kinds {
-			kinds[i] = ConditionalWrite
-		}
+		cfg.applyGateKinds(s, kinds)
 		return kinds
 	}
 
@@ -252,6 +250,41 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 		}
 	}
 	return kinds
+}
+
+// applyGateKinds classifies destinations under a statement gate. A scalar gate
+// can skip the whole statement, so every write is conditional. A ranged gate
+// always runs its loop, and an inline collector under it is closed and
+// committed even when no iteration is admitted — including an empty domain —
+// so that slot's write is unconditional. Sibling slots commit only on admitted
+// iterations and stay conditional.
+func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
+	rangedGate := false
+	for _, cond := range s.Condition {
+		if cfg.hasRangeExpr(cond) {
+			rangedGate = true
+			break
+		}
+	}
+	spans, known := cfg.valueOutputSpans(s)
+	if !rangedGate || !known {
+		for i := range kinds {
+			kinds[i] = ConditionalWrite
+		}
+		return
+	}
+
+	dest := 0
+	for vi, v := range s.Value {
+		lit, isLit := v.(*ast.ArrayLiteral)
+		committed := isLit && len(lit.Rows) == 1
+		for j := 0; j < spans[vi] && dest < len(kinds); j++ {
+			if !committed {
+				kinds[dest] = ConditionalWrite
+			}
+			dest++
+		}
+	}
 }
 
 // valueOutputSpans reports how many destinations each value expression feeds.
