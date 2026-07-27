@@ -202,14 +202,16 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement, kinds []EventType) []VarEv
 // reported.
 func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 	kinds := make([]EventType, len(s.Name))
-	for i := range kinds {
-		kinds[i] = Write
-	}
+
 	if len(s.Condition) > 0 {
 		for i := range kinds {
 			kinds[i] = ConditionalWrite
 		}
 		return kinds
+	}
+
+	for i := range kinds {
+		kinds[i] = Write
 	}
 
 	c := cfg.ScriptCompiler.Compiler
@@ -234,14 +236,16 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 // inferred bindings are unavailable in this pass.
 func (cfg *CFG) funcDestWriteKinds(s *ast.LetStatement) []EventType {
 	kinds := make([]EventType, len(s.Name))
-	for i := range kinds {
-		kinds[i] = Write
-	}
+
 	if len(s.Condition) > 0 {
 		for i := range kinds {
 			kinds[i] = ConditionalWrite
 		}
 		return kinds
+	}
+
+	for i := range kinds {
+		kinds[i] = Write
 	}
 
 	if len(s.Value) == len(s.Name) {
