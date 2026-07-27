@@ -55,6 +55,20 @@ before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, whil
 `x = arr[i] > 0 || other[j] > 0` remains `MayWrite`. This matches the compiler's
 existing solver-then-CFG order, so migration requires no pass reordering.
 
+Inside a function body, range domain ownership decides which statements an
+empty domain can skip. A Range parameter is bound by the caller and drives the
+whole specialization, so its possibly-empty domain contributes one shared
+effect at the function boundary rather than making every statement that reads
+the parameter independently conditional. A locally created range owns only the
+statements it drives, so its empty domain suspends exactly those slots.
+Template-time CFG has neither distinction — it misreports a body like
+`i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
+computed once per mangled specialization are what resolve it. Any such
+per-specialization cache must bundle write effects, binding types, and
+validation results atomically: FuncCache is already shared across the scripts
+of one run while BindingTypes is rebuilt per script, and that split is exactly
+what produced issue #71's compile-order-dependent wrong output.
+
 This per-target `WriteEffect` is not a public function-ABI classifier. Every
 exported direct `I64`/`F64` return keeps its final hidden seed parameter.
 Collapsing statement effects into a function-level `MustWrite`/`MayWrite`
