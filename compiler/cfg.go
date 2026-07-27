@@ -192,24 +192,6 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
 	return evs
 }
 
-// HasRangeExpr returns true if any RHS expression has a range
-// used in an iterated position, mirroring the solver's iterate behavior.
-// Examples that return true:
-//   - y = y + 1:5
-//   - y = f(x) + 2:3
-//   - y = f(1:5)
-//
-// Example that returns false:
-//   - i = 1:5 (non-iterated range literal, just a plain write of a range value)
-func (cfg *CFG) HasRangeExpr(values []ast.Expression) bool {
-	for _, v := range values {
-		if cfg.hasRangeExpr(v) {
-			return true
-		}
-	}
-	return false
-}
-
 // destWriteKinds classifies each destination write of a statement. A statement
 // condition suspends the whole simultaneous assignment. Every other source of
 // a skipped write belongs to one value expression — an empty driver, a callee
@@ -231,7 +213,7 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 	if !known {
 		// Without per-expression arity a failable span cannot be placed, so
 		// any failable value must suspend every destination.
-		if cfg.HasRangeExpr(s.Value) || cfg.HasSkippableCallRoot(s.Value) || cfg.anyValueMayNotYield(s.Value) {
+		if cfg.anyValueMaySkip(s.Value) {
 			for i := range kinds {
 				kinds[i] = ConditionalWrite
 			}
@@ -241,9 +223,9 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 
 	dest := 0
 	for vi, v := range s.Value {
-		failable := cfg.hasRangeExpr(v) || cfg.callRootMaySkip(v) || cfg.valueMayNotYield(v)
-		for j := 0; j < spans[vi] && dest < len(kinds); j++ {
-			if failable {
+		maySkip := cfg.valueMaySkip(v)
+		for j := 0; j < spans[vi]; j++ {
+			if maySkip {
 				kinds[dest] = ConditionalWrite
 			}
 			dest++
@@ -271,7 +253,7 @@ func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
 	for vi, v := range s.Value {
 		lit, isLit := v.(*ast.ArrayLiteral)
 		committed := isLit && isInlineArrayCollector(lit)
-		for j := 0; j < spans[vi] && dest < len(kinds); j++ {
+		for j := 0; j < spans[vi]; j++ {
 			if !committed {
 				kinds[dest] = ConditionalWrite
 			}
@@ -292,7 +274,8 @@ func (cfg *CFG) hasRangedGate(conditions []ast.Expression) bool {
 
 	c := cfg.ScriptCompiler.Compiler
 	for _, cond := range conditions {
-		if len(c.ExprCache[key(c.FuncNameMangled, cond)].Ranges) > 0 {
+		info := c.ExprCache[key(c.FuncNameMangled, cond)]
+		if info != nil && len(info.Ranges) > 0 {
 			return true
 		}
 	}
@@ -332,13 +315,23 @@ func (cfg *CFG) valueOutputSpans(s *ast.LetStatement) ([]int, bool) {
 	return spans, true
 }
 
-func (cfg *CFG) anyValueMayNotYield(values []ast.Expression) bool {
+// anyValueMaySkip reports whether any RHS expression can leave its destination
+// unchanged.
+func (cfg *CFG) anyValueMaySkip(values []ast.Expression) bool {
 	for _, v := range values {
-		if cfg.valueMayNotYield(v) {
+		if cfg.valueMaySkip(v) {
 			return true
 		}
 	}
 	return false
+}
+
+// valueMaySkip reports whether an RHS expression can leave its destination
+// unchanged: outside an inline collector, an empty range driver can run no
+// iterations; a root call can keep an unwritten output; and a failable value
+// can yield nothing.
+func (cfg *CFG) valueMaySkip(expr ast.Expression) bool {
+	return cfg.hasRangeExpr(expr) || cfg.callRootMaySkip(expr) || cfg.valueMayNotYield(expr)
 }
 
 // valueMayNotYield reports whether an expression may produce no value, leaving
@@ -379,17 +372,6 @@ func (cfg *CFG) conditionMayFail(expr ast.Expression) bool {
 	return false
 }
 
-// HasSkippableCallRoot reports whether any value is a bare call to a
-// user-defined function.
-func (cfg *CFG) HasSkippableCallRoot(values []ast.Expression) bool {
-	for _, v := range values {
-		if cfg.callRootMaySkip(v) {
-			return true
-		}
-	}
-	return false
-}
-
 // callRootMaySkip reports whether a value is a bare call to a user-defined
 // function. Such a callee may leave an output unwritten, so the caller keeps
 // its previous value and that previous write is not dead. Only root position
@@ -405,7 +387,9 @@ func (cfg *CFG) callRootMaySkip(v ast.Expression) bool {
 	return !builtin
 }
 
-// hasRangeExpr checks if an expression contains ranges by looking at ExprCache
+// hasRangeExpr reports whether an RHS expression uses a range in an iterated
+// position, mirroring the solver's behavior. A bare range literal is a
+// descriptor value and therefore does not count.
 func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 	// Only possible when we have ScriptCompiler with ExprCache
 	if cfg.ScriptCompiler == nil {

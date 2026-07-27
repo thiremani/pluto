@@ -903,44 +903,6 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 	})
 }
 
-func (c *Compiler) isRangeDriverCond(expr ast.Expression) bool {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if info == nil || len(info.OutTypes) != 1 || len(info.Ranges) == 0 {
-		return false
-	}
-
-	switch e := expr.(type) {
-	case *ast.Identifier, *ast.RangeLiteral:
-		return true
-	case *ast.ArrayRangeExpression:
-		arrInfo := c.ExprCache[key(c.FuncNameMangled, e.Array)]
-		if arrInfo == nil || arrInfo.HasRanges {
-			return false
-		}
-		switch e.Range.(type) {
-		case *ast.Identifier, *ast.RangeLiteral:
-			return true
-		default:
-			return false
-		}
-	default:
-		return false
-	}
-}
-
-func (c *Compiler) collectDriverRanges(expr ast.Expression) []*RangeInfo {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	if len(info.Ranges) > 0 {
-		return info.Ranges
-	}
-
-	ident, ok := expr.(*ast.Identifier)
-	if !ok {
-		panic(fmt.Sprintf("internal: bare range driver %T missing cached ranges", expr))
-	}
-	return []*RangeInfo{{Name: ident.Value}}
-}
-
 // splitCondRanges collects merged ranges and boolean guard expressions
 // from statement conditions. Bare range/array-selection drivers contribute only
 // ranges; comparisons contribute both ranges and a per-iteration guard.
@@ -950,8 +912,8 @@ func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, [
 	var condExprs []ast.Expression
 	for _, expr := range conditions {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if c.isRangeDriverCond(expr) {
-			ranges = mergeUses(ranges, c.collectDriverRanges(expr))
+		if info.RangeDriverCond {
+			ranges = mergeUses(ranges, info.Ranges)
 			continue
 		}
 

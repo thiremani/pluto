@@ -85,7 +85,8 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 
 - pass `I64`/`F64` by value instead of by pointer
 - return single scalar in register instead of via `sret`
-- keep function-body semantics stable by spilling direct scalar params into local addressable slots in the callee
+- keep direct scalar params as SSA values in function scope, materializing
+  addressable slots only when semantically required
 - give every direct scalar return a final hidden destination seed, preserving
   skipped conditional writes and empty-range behavior without making the
   physical signature depend on the function body

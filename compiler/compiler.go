@@ -124,15 +124,9 @@ const (
 	symbolCode
 )
 
-func GetCopy(s *Symbol) (newSym *Symbol) {
-	newSym = &Symbol{}
-	newSym.Val = s.Val
-	newSym.Type = s.Type
-	newSym.FuncArg = s.FuncArg
-	newSym.Borrowed = s.Borrowed
-	newSym.ReadOnly = s.ReadOnly
-	newSym.WriteFlag = s.WriteFlag
-	return newSym
+func GetCopy(s *Symbol) *Symbol {
+	newSym := *s
+	return &newSym
 }
 
 type Compiler struct {

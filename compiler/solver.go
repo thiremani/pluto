@@ -37,6 +37,7 @@ type ExprInfo struct {
 	ScalarCallParamTypes []Type     // Param types to use once outer loops consume ranges into scalars
 	CompareModes         []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
 	ArrayShape           []uint64   // Statically known dimensions for array literals; nil when runtime-dependent
+	RangeDriverCond      bool       // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -793,25 +794,6 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 	}
 }
 
-func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if len(info.Ranges) > 0 {
-		return info.Ranges
-	}
-
-	// Non-driver conditions (for example, comparisons with no ranged operands)
-	// fall through here harmlessly: they contribute no loop driver ranges.
-	if !ts.isRangeDriverCond(expr, condTypes) {
-		return nil
-	}
-
-	ident, ok := expr.(*ast.Identifier)
-	if !ok {
-		panic(fmt.Sprintf("internal: bare range driver %T missing cached ranges", expr))
-	}
-	return []*RangeInfo{{Name: ident.Value}}
-}
-
 // treeCanFail reports whether a value-position expression can propagate a
 // failed yield to its parent, asking nodeFails to classify each node. The
 // solver and the CFG pass different predicates but share this walk, so the two
@@ -871,7 +853,9 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	if ts.isRangeDriverCond(expr, condTypes) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	info.RangeDriverCond = ts.isRangeDriverCond(expr, condTypes)
+	if info.RangeDriverCond {
 		return
 	}
 
@@ -906,7 +890,7 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
 		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, ts.collectDriverRanges(expr, info.OutTypes))
+		ranges = mergeUses(ranges, info.Ranges)
 	}
 	return ranges
 }

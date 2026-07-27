@@ -267,6 +267,18 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 	return sc.Compile()
 }
 
+func TestHasRangedGateIgnoresMissingExprInfo(t *testing.T) {
+	program := parseInput(t, "missingGateInfo", "x = 1 > 0 2")
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	require.True(t, ok)
+	require.NotEmpty(t, stmt.Condition)
+
+	cfg := NewCFG(&ScriptCompiler{
+		Compiler: &Compiler{ExprCache: make(map[ExprKey]*ExprInfo)},
+	}, nil)
+	assert.False(t, cfg.hasRangedGate(stmt.Condition))
+}
+
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.

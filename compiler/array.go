@@ -982,14 +982,7 @@ func (c *Compiler) compileArrayRangeOperands(expr *ast.ArrayRangeExpression) (*S
 // immediate call boundary. Ordinary array indexing still lowers to the final
 // selected element/subarray and therefore cannot expose or retain ArrayRange.
 func (c *Compiler) compileArrayRangeCallArg(expr *ast.ArrayRangeExpression, typ ArrayRange) *Symbol {
-	arrayLoadName := ""
-	if arrayIdent, ok := expr.Array.(*ast.Identifier); ok {
-		arrayLoadName = arrayIdent.Value + "_load"
-	}
-	arraySym := c.derefIfPointer(c.compileExpression(expr.Array, nil)[0], arrayLoadName)
-
-	rangeSym := c.compileExpression(expr.Range, nil)[0]
-	rangeSym = c.derefIfPointer(rangeSym, "array_range_index")
+	arraySym, rangeSym, _ := c.compileArrayRangeOperands(expr)
 
 	_, arrayIsIdent := expr.Array.(*ast.Identifier)
 	return &Symbol{
