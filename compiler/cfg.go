@@ -158,38 +158,44 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	return evs, spec.end
 }
 
+func (cfg *CFG) extractLetEvents(s *ast.LetStatement, kinds []EventType) []VarEvent {
+	var evs []VarEvent
+	// A LetStatement always follows the same order:
+	// 1. Read all variables used in the Condition(s).
+	for _, expr := range s.Condition {
+		evs = append(evs, cfg.collectReads(expr)...)
+	}
+	// 2. Read all variables used in the Value(s).
+	for _, expr := range s.Value {
+		evs = append(evs, cfg.collectReads(expr)...)
+	}
+	// 3. Write to the destination variable(s).
+	for i, lhs := range s.Name {
+		// Treat '_' as a discard target: do not record writes or liveness.
+		if lhs.Value == "_" {
+			continue
+		}
+
+		ve := VarEvent{Name: lhs.Value, Kind: kinds[i], Token: lhs.Tok()}
+		Put(cfg.Scopes, lhs.Value, ve)
+		evs = append(evs, ve)
+	}
+	return evs
+}
+
 func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
-	var evs []VarEvent // Holds all events for this statement
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
-		// A LetStatement always follows the same order:
-		// 1. Read all variables used in the Condition(s).
-		for _, expr := range s.Condition {
-			evs = append(evs, cfg.collectReads(expr)...)
-		}
-		// 2. Read all variables used in the Value(s).
-		for _, expr := range s.Value {
-			evs = append(evs, cfg.collectReads(expr)...)
-		}
-		// 3. Write to the destination variable(s).
-		kinds := cfg.destWriteKinds(s)
-		for i, lhs := range s.Name {
-			// Treat '_' as a discard target: do not record writes or liveness.
-			if lhs.Value == "_" {
-				continue
-			}
-
-			ve := VarEvent{Name: lhs.Value, Kind: kinds[i], Token: lhs.Tok()}
-			Put(cfg.Scopes, lhs.Value, ve)
-			evs = append(evs, ve)
-		}
-
+		return cfg.extractLetEvents(s, cfg.destWriteKinds(s))
 	case *ast.PrintStatement:
+		var evs []VarEvent
 		for _, expr := range s.Expression.Arguments {
 			evs = append(evs, cfg.collectReads(expr)...)
 		}
+		return evs
+	default:
+		return nil
 	}
-	return evs
 }
 
 // destWriteKinds classifies each destination write of a statement. A statement
@@ -211,22 +217,12 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 		return kinds
 	}
 
-	spans, known := cfg.valueOutputSpans(s)
-	if !known {
-		// Without per-expression arity a failable span cannot be placed, so
-		// any failable value must suspend every destination.
-		if cfg.anyValueMaySkip(s.Value) {
-			for i := range kinds {
-				kinds[i] = ConditionalWrite
-			}
-		}
-		return kinds
-	}
-
+	c := cfg.ScriptCompiler.Compiler
 	dest := 0
-	for vi, v := range s.Value {
+	for _, v := range s.Value {
 		maySkip := cfg.valueMaySkip(v)
-		for j := 0; j < spans[vi]; j++ {
+		span := c.ExprCache[key(c.FuncNameMangled, v)].ExprLen
+		for j := 0; j < span; j++ {
 			if maySkip {
 				kinds[dest] = ConditionalWrite
 			}
@@ -236,82 +232,83 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 	return kinds
 }
 
-// valueOutputSpans reports how many destinations each value expression feeds.
-// Scripts are typed before analysis, so ExprLen is exact. A .pt body has no
-// typing yet; values pairing one to one with destinations is the only mapping
-// that needs no arity, and anything else falls back to statement-wide
-// classification.
-func (cfg *CFG) valueOutputSpans(s *ast.LetStatement) ([]int, bool) {
-	spans := make([]int, len(s.Value))
-	if cfg.ScriptCompiler == nil {
-		if len(s.Value) != len(s.Name) {
-			return nil, false
+// funcDestWriteKinds classifies writes using the syntax available in an
+// untyped .pt function template. Values pair one-to-one with destinations when
+// their counts match. Otherwise output arity is unknown, so any syntactically
+// skippable value protects every destination. Range effects that depend on
+// inferred bindings are unavailable in this pass.
+func (cfg *CFG) funcDestWriteKinds(s *ast.LetStatement) []EventType {
+	kinds := make([]EventType, len(s.Name))
+	for i := range kinds {
+		kinds[i] = Write
+	}
+	if len(s.Condition) > 0 {
+		for i := range kinds {
+			kinds[i] = ConditionalWrite
 		}
-		for i := range spans {
-			spans[i] = 1
-		}
-		return spans, true
+		return kinds
 	}
 
-	c := cfg.ScriptCompiler.Compiler
-	total := 0
-	for i, v := range s.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, v)]
-		if info == nil || info.ExprLen <= 0 {
-			return nil, false
+	if len(s.Value) == len(s.Name) {
+		for i, v := range s.Value {
+			if cfg.funcValueMaySkip(v) {
+				kinds[i] = ConditionalWrite
+			}
 		}
-		spans[i] = info.ExprLen
-		total += info.ExprLen
+		return kinds
 	}
-	if total != len(s.Name) {
-		return nil, false
-	}
-	return spans, true
-}
 
-// anyValueMaySkip reports whether any RHS expression can leave its destination
-// unchanged.
-func (cfg *CFG) anyValueMaySkip(values []ast.Expression) bool {
-	for _, v := range values {
-		if cfg.valueMaySkip(v) {
-			return true
+	for _, v := range s.Value {
+		if !cfg.funcValueMaySkip(v) {
+			continue
 		}
+		for i := range kinds {
+			kinds[i] = ConditionalWrite
+		}
+		break
 	}
-	return false
+	return kinds
 }
 
 // valueMaySkip reports whether an RHS expression can leave its destination
-// unchanged: outside an inline collector, an empty range driver can run no
-// iterations; a root call can keep an unwritten output; and a failable value
-// can yield nothing. The shared tree traversal finds failures below the root,
-// so `y = Square(x < 5) + 5` is recognized even though the call feeds an
-// operator.
+// unchanged in a typed script: outside an inline collector, an empty range
+// driver can run no iterations; a root call can keep an unwritten output; and
+// a failable value can yield nothing. The shared tree traversal finds failures
+// below the root, so `y = Square(x < 5) + 5` is recognized even though the call
+// feeds an operator.
 func (cfg *CFG) valueMaySkip(expr ast.Expression) bool {
 	return cfg.hasRangeExpr(expr) ||
 		cfg.callRootMaySkip(expr) ||
 		treeCanFail(expr, cfg.nodeMayNotYield)
 }
 
-// nodeMayNotYield classifies one node for diagnostics. Beyond conditions it
-// counts an array read, whose out-of-bounds case preserves the destination the
-// same way. That widening belongs here and nowhere else: the solver's predicate
-// also decides which programs are valid, so treating indexing as failable
-// there would legalize `arr[9] || -1`. The cost is that a statically safe read
-// like `arr[0]` also suppresses a real dead-store warning.
-//
-// A script has been typed already, so its solver classification is exact. A
-// .pt function body is validated before any specialization exists, so nothing
-// is cached and the syntactic shape is the only signal; erring toward "may
-// fail" there keeps the diagnostic conservative.
+// funcValueMaySkip applies the syntax-only approximation available in an
+// untyped .pt function template. Calls and syntactically failable values are
+// visible here; range effects that depend on inferred bindings are not.
+func (cfg *CFG) funcValueMaySkip(expr ast.Expression) bool {
+	return cfg.callRootMaySkip(expr) ||
+		treeCanFail(expr, cfg.funcNodeMayNotYield)
+}
+
+// nodeMayNotYield uses exact solver metadata to classify one node in a typed
+// script. It also counts an array read, whose out-of-bounds case preserves the
+// destination. That widening belongs only to diagnostics: applying it to the
+// solver's validity predicate would incorrectly legalize `arr[9] || -1`.
 func (cfg *CFG) nodeMayNotYield(expr ast.Expression) bool {
 	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
 		return true
 	}
-	if cfg.ScriptCompiler != nil {
-		c := cfg.ScriptCompiler.Compiler
-		if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil {
-			return info.HasCondScalar() || info.HasCondAnd()
-		}
+	c := cfg.ScriptCompiler.Compiler
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	return info.HasCondScalar() || info.HasCondAnd()
+}
+
+// funcNodeMayNotYield classifies one node in an untyped .pt function template.
+// Without specialization metadata, comparison and logical-AND syntax is the
+// conservative signal that a scalar specialization may fail to yield.
+func (cfg *CFG) funcNodeMayNotYield(expr ast.Expression) bool {
+	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
+		return true
 	}
 	if infix, ok := expr.(*ast.InfixExpression); ok {
 		return infix.Token.IsComparison() || infix.IsLogicalAnd()
@@ -338,10 +335,6 @@ func (cfg *CFG) callRootMaySkip(v ast.Expression) bool {
 // position, mirroring the solver's behavior. A bare range literal is a
 // descriptor value and therefore does not count.
 func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
-	// Only possible when we have ScriptCompiler with ExprCache
-	if cfg.ScriptCompiler == nil {
-		return false
-	}
 	c := cfg.ScriptCompiler.Compiler
 
 	switch t := e.(type) {
@@ -492,7 +485,7 @@ func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 		Put(cfg.Scopes, param.Value, ve)
 	}
 
-	cfg.forwardPass(fn.Body.Statements)
+	cfg.funcForwardPass(fn.Body.Statements)
 
 	// Build set of output names
 	outSet := make(map[string]struct{}, len(fn.Outputs))
@@ -520,26 +513,44 @@ func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 	cfg.backwardPass(live)
 }
 
-// forwardPass checks for use-before-definition and simple write-after-write errors.
-// This pass iterates forward through the events.
-func (cfg *CFG) forwardPass(statements []ast.Statement) {
-	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
-	lastWrites := make(map[string]VarEvent)
-
-	for _, stmt := range statements {
-		evs := cfg.extractStmtEvents(stmt)
-		for _, e := range evs {
-			switch e.Kind {
-			case Read:
-				cfg.checkRead(lastWrites, e)
-			case Write, ConditionalWrite:
-				cfg.checkWrite(lastWrites, e)
-			default:
-				panic(fmt.Sprintf("unhandled event type: %v", e.Kind))
-			}
+// processForwardEvents applies one statement's events and records them for the
+// backward liveness pass.
+func (cfg *CFG) processForwardEvents(stmt ast.Statement, evs []VarEvent, lastWrites map[string]VarEvent) {
+	for _, e := range evs {
+		switch e.Kind {
+		case Read:
+			cfg.checkRead(lastWrites, e)
+		case Write, ConditionalWrite:
+			cfg.checkWrite(lastWrites, e)
+		default:
+			panic(fmt.Sprintf("unhandled event type: %v", e.Kind))
 		}
-		sn := &StmtNode{Stmt: stmt, Events: evs}
-		block.Stmts = append(block.Stmts, sn)
+	}
+	block := cfg.Blocks[len(cfg.Blocks)-1]
+	block.Stmts = append(block.Stmts, &StmtNode{Stmt: stmt, Events: evs})
+}
+
+// forwardPass checks a typed script for use-before-definition and simple
+// write-after-write errors.
+func (cfg *CFG) forwardPass(statements []ast.Statement) {
+	lastWrites := make(map[string]VarEvent)
+	for _, stmt := range statements {
+		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt), lastWrites)
+	}
+}
+
+// funcForwardPass performs the same checks on an untyped .pt function
+// template, using its syntax-only write classification.
+func (cfg *CFG) funcForwardPass(statements []ast.Statement) {
+	lastWrites := make(map[string]VarEvent)
+	for _, stmt := range statements {
+		var evs []VarEvent
+		if s, ok := stmt.(*ast.LetStatement); ok {
+			evs = cfg.extractLetEvents(s, cfg.funcDestWriteKinds(s))
+		} else {
+			evs = cfg.extractStmtEvents(stmt)
+		}
+		cfg.processForwardEvents(stmt, evs, lastWrites)
 	}
 }
 

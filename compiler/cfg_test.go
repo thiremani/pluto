@@ -238,7 +238,11 @@ func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
 	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", "", cp.Parse())
 	cc.Compile()
 	cfg := NewCFG(nil, cc)
-	cfg.Analyze(prog.Statements)
+	cfg.PushBlock()
+	defer cfg.PopBlock()
+	PushScope(&cfg.Scopes, BlockScope)
+	cfg.funcForwardPass(prog.Statements)
+	cfg.backwardPass(make(map[string]struct{}))
 
 	if expectError {
 		assertHasExpectedError(t, cfg.Errors, tc.errorContains)
@@ -274,6 +278,15 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 	errs := compileScriptForCFGTest(t, "collectorWrite", "i = 0:0\nc = [9]\nc = [i + 0]\nc")
 	require.NotEmpty(t, errs, "the dead store behind the collector must be reported")
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
+}
+
+// Typed comparison metadata distinguishes a scalar condition, which may not
+// yield, from an array mask, which always materializes an array. The untyped
+// function-template fallback intentionally cannot make that distinction.
+func TestArrayComparisonWriteIsUnconditional(t *testing.T) {
+	errs := compileScriptForCFGTest(t, "arrayComparisonWrite", "a = [1 2]\nr = [9 9]\nr = a > 0\nr")
+	require.NotEmpty(t, errs, "the dead store behind the array mask must be reported")
+	assert.Contains(t, errs[0].Msg, `unconditional assignment to "r"`)
 }
 
 // A ranged gate can admit no iterations, so collector and scalar destinations
