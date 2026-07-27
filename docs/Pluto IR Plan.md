@@ -56,11 +56,12 @@ before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, whil
 existing solver-then-CFG order, so migration requires no pass reordering.
 
 Inside a function body, range domain ownership decides which statements an
-empty domain can skip. A Range parameter is bound by the caller and drives the
-whole specialization, so its possibly-empty domain contributes one shared
-effect at the function boundary rather than making every statement that reads
-the parameter independently conditional. A locally created range owns only the
-statements it drives, so its empty domain suspends exactly those slots.
+empty domain can skip. A Range argument establishes a function-level domain
+whose yielded values drive the whole body, so its possibly-empty domain
+contributes one shared effect at the function boundary rather than making every
+statement that reads the parameter independently conditional. A locally
+created range owns only the statements it drives, so its empty domain suspends
+exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
 computed once per mangled specialization are what resolve it. Any such
@@ -68,6 +69,15 @@ per-specialization cache must bundle write effects, binding types, and
 validation results atomically: FuncCache is already shared across the scripts
 of one run while BindingTypes is rebuilt per script, and that split is exactly
 what produced issue #71's compile-order-dependent wrong output.
+
+Output spans, unlike write effects, are structural before any typing: a call
+site must consume exactly `len(callee.Outputs)` destinations, and that arity
+is fixed by the template declaration, so template analysis can place spans for
+direct calls and single-value expressions in mixed statements like
+`a, b, c = MaybePair(x), 5` — the literal's slot is a definite write even
+while the call's slots stay conditional. Only shapes whose slot count
+genuinely needs types, such as multi-slot value-position comparisons, keep the
+all-conditional fallback.
 
 This per-target `WriteEffect` is not a public function-ABI classifier. Every
 exported direct `I64`/`F64` return keeps its final hidden seed parameter.
