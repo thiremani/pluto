@@ -903,33 +903,33 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 	})
 }
 
-// splitCondRanges collects merged ranges and boolean guard expressions
-// from statement conditions. Bare range/array-selection drivers contribute only
-// ranges; comparisons contribute both ranges and a per-iteration guard.
+// splitCondRanges collects merged ranges and boolean guard expressions from
+// statement conditions. Once any condition contributes a range, every
+// non-driver condition remains a per-iteration guard, including scalar
+// conjuncts with no ranges of their own. Bare range/array-selection drivers
+// contribute only ranges.
 // Returns nil, nil if no condition introduces ranges.
 func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
 	var ranges []*RangeInfo
+	for _, expr := range conditions {
+		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		ranges = mergeUses(ranges, info.Ranges)
+	}
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+
 	var condExprs []ast.Expression
 	for _, expr := range conditions {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if info.RangeDriverCond {
-			ranges = mergeUses(ranges, info.Ranges)
 			continue
 		}
-
-		if len(info.Ranges) == 0 {
-			continue
-		}
-
-		ranges = mergeUses(ranges, info.Ranges)
 		if info.Rewrite != nil {
 			condExprs = append(condExprs, info.Rewrite)
 			continue
 		}
 		condExprs = append(condExprs, expr)
-	}
-	if len(ranges) == 0 {
-		return nil, nil
 	}
 	return ranges, condExprs
 }

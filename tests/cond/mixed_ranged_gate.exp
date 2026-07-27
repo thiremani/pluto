@@ -1,0 +1,9 @@
+CollectorScalarFirstFalse: []
+CollectorScalarFirstTrue: [0 1 2 3 4]
+CollectorRangeFirstFalse: []
+CollectorRangeFirstTrue: [0 1 2 3 4]
+ScalarScalarFirstFalse: 10
+ScalarScalarFirstTrue: 11
+ScalarRangeFirstFalse: 30
+ScalarRangeFirstTrue: 11
+LoopCarried: 3
