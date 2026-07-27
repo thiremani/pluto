@@ -158,19 +158,29 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	return evs, spec.end
 }
 
-func (cfg *CFG) extractLetEvents(s *ast.LetStatement, kinds []EventType) []VarEvent {
+// extractStmtEvents records the reads common to every statement and appends
+// destination writes when stmt is a LetStatement. Callers supply write kinds
+// only for a LetStatement; a PrintStatement has no destinations.
+func (cfg *CFG) extractStmtEvents(stmt ast.Statement, kinds []EventType) []VarEvent {
+	var reads []ast.Expression
+	var names []*ast.Identifier
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		reads = make([]ast.Expression, 0, len(s.Condition)+len(s.Value))
+		reads = append(reads, s.Condition...)
+		reads = append(reads, s.Value...)
+		names = s.Name
+	case *ast.PrintStatement:
+		reads = s.Expression.Arguments
+	default:
+		return nil
+	}
+
 	var evs []VarEvent
-	// A LetStatement always follows the same order:
-	// 1. Read all variables used in the Condition(s).
-	for _, expr := range s.Condition {
+	for _, expr := range reads {
 		evs = append(evs, cfg.collectReads(expr)...)
 	}
-	// 2. Read all variables used in the Value(s).
-	for _, expr := range s.Value {
-		evs = append(evs, cfg.collectReads(expr)...)
-	}
-	// 3. Write to the destination variable(s).
-	for i, lhs := range s.Name {
+	for i, lhs := range names {
 		// Treat '_' as a discard target: do not record writes or liveness.
 		if lhs.Value == "_" {
 			continue
@@ -181,21 +191,6 @@ func (cfg *CFG) extractLetEvents(s *ast.LetStatement, kinds []EventType) []VarEv
 		evs = append(evs, ve)
 	}
 	return evs
-}
-
-func (cfg *CFG) extractStmtEvents(stmt ast.Statement) []VarEvent {
-	switch s := stmt.(type) {
-	case *ast.LetStatement:
-		return cfg.extractLetEvents(s, cfg.destWriteKinds(s))
-	case *ast.PrintStatement:
-		var evs []VarEvent
-		for _, expr := range s.Expression.Arguments {
-			evs = append(evs, cfg.collectReads(expr)...)
-		}
-		return evs
-	default:
-		return nil
-	}
 }
 
 // destWriteKinds classifies each destination write of a statement. A statement
@@ -535,7 +530,11 @@ func (cfg *CFG) processForwardEvents(stmt ast.Statement, evs []VarEvent, lastWri
 func (cfg *CFG) forwardPass(statements []ast.Statement) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range statements {
-		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt), lastWrites)
+		var kinds []EventType
+		if s, ok := stmt.(*ast.LetStatement); ok {
+			kinds = cfg.destWriteKinds(s)
+		}
+		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt, kinds), lastWrites)
 	}
 }
 
@@ -544,13 +543,11 @@ func (cfg *CFG) forwardPass(statements []ast.Statement) {
 func (cfg *CFG) funcForwardPass(statements []ast.Statement) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range statements {
-		var evs []VarEvent
+		var kinds []EventType
 		if s, ok := stmt.(*ast.LetStatement); ok {
-			evs = cfg.extractLetEvents(s, cfg.funcDestWriteKinds(s))
-		} else {
-			evs = cfg.extractStmtEvents(stmt)
+			kinds = cfg.funcDestWriteKinds(s)
 		}
-		cfg.processForwardEvents(stmt, evs, lastWrites)
+		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt, kinds), lastWrites)
 	}
 }
 
