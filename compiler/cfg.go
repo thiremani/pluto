@@ -283,37 +283,30 @@ func (cfg *CFG) anyValueMaySkip(values []ast.Expression) bool {
 // valueMaySkip reports whether an RHS expression can leave its destination
 // unchanged: outside an inline collector, an empty range driver can run no
 // iterations; a root call can keep an unwritten output; and a failable value
-// can yield nothing.
+// can yield nothing. The shared tree traversal finds failures below the root,
+// so `y = Square(x < 5) + 5` is recognized even though the call feeds an
+// operator.
 func (cfg *CFG) valueMaySkip(expr ast.Expression) bool {
-	return cfg.hasRangeExpr(expr) || cfg.callRootMaySkip(expr) || cfg.valueMayNotYield(expr)
+	return cfg.hasRangeExpr(expr) ||
+		cfg.callRootMaySkip(expr) ||
+		treeCanFail(expr, cfg.nodeMayNotYield)
 }
 
-// valueMayNotYield reports whether an expression may produce no value, leaving
-// its destination untouched. It shares the solver's traversal, so it counts
-// anywhere in the tree rather than only at a root: `y = Square(x < 5) + 5` is
-// recognized even though the call feeds an operator.
-func (cfg *CFG) valueMayNotYield(expr ast.Expression) bool {
-	return treeCanFail(expr, cfg.nodeMayNotYield)
-}
-
-// nodeMayNotYield classifies one node for diagnostics. Beyond the solver's
-// conditions it counts an array read, whose out-of-bounds case preserves the
-// destination the same way. That widening belongs here and nowhere else: the
-// solver's predicate also decides which programs are valid, so treating
-// indexing as failable there would legalize `arr[9] || -1`. The cost is that a
-// statically safe read like `arr[0]` also suppresses a real dead-store warning.
+// nodeMayNotYield classifies one node for diagnostics. Beyond conditions it
+// counts an array read, whose out-of-bounds case preserves the destination the
+// same way. That widening belongs here and nowhere else: the solver's predicate
+// also decides which programs are valid, so treating indexing as failable
+// there would legalize `arr[9] || -1`. The cost is that a statically safe read
+// like `arr[0]` also suppresses a real dead-store warning.
+//
+// A script has been typed already, so its solver classification is exact. A
+// .pt function body is validated before any specialization exists, so nothing
+// is cached and the syntactic shape is the only signal; erring toward "may
+// fail" there keeps the diagnostic conservative.
 func (cfg *CFG) nodeMayNotYield(expr ast.Expression) bool {
 	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
 		return true
 	}
-	return cfg.conditionMayFail(expr)
-}
-
-// conditionMayFail classifies one node. A script has been typed already, so its
-// solver classification is exact. A .pt function body is validated before any
-// specialization exists, so nothing is cached and the syntactic shape is the
-// only signal; erring toward "may fail" there keeps the diagnostic conservative.
-func (cfg *CFG) conditionMayFail(expr ast.Expression) bool {
 	if cfg.ScriptCompiler != nil {
 		c := cfg.ScriptCompiler.Compiler
 		if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil {
