@@ -267,18 +267,6 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 	return sc.Compile()
 }
 
-func TestHasRangedGateIgnoresMissingExprInfo(t *testing.T) {
-	program := parseInput(t, "missingGateInfo", "x = 1 > 0 2")
-	stmt, ok := program.Statements[0].(*ast.LetStatement)
-	require.True(t, ok)
-	require.NotEmpty(t, stmt.Condition)
-
-	cfg := NewCFG(&ScriptCompiler{
-		Compiler: &Compiler{ExprCache: make(map[ExprKey]*ExprInfo)},
-	}, nil)
-	assert.False(t, cfg.hasRangedGate(stmt.Condition))
-}
-
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.
@@ -288,20 +276,11 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
 }
 
-// A ranged gate always runs its loop and an inline collector under it commits
-// even when nothing is admitted, so the store behind it is dead; a scalar
-// sibling under the same gate stays conditional. Needs the solver.
-func TestRangedGateCollectorWriteIsUnconditional(t *testing.T) {
+// A ranged gate can admit no iterations, so collector and scalar destinations
+// both preserve their prior values and both writes stay conditional.
+func TestRangedGateCollectorWriteIsConditional(t *testing.T) {
 	errs := compileScriptForCFGTest(t, "rangedGateCollector", "i = 0:1\nc = [9]\ns = 42\nc, s = i < 0 [i], i + 7\nc, s")
-	require.NotEmpty(t, errs, "the dead store behind the gated collector must be reported")
-
-	msgs := make([]string, len(errs))
-	for i, e := range errs {
-		msgs[i] = e.Msg
-	}
-	joined := strings.Join(msgs, "\n")
-	assert.Contains(t, joined, `unconditional assignment to "c"`)
-	assert.NotContains(t, joined, `to "s"`, "the scalar sibling commits per admitted iteration and must stay conditional")
+	require.Empty(t, errs)
 }
 
 func TestGateArrayWriteKinds(t *testing.T) {
@@ -311,9 +290,8 @@ func TestGateArrayWriteKinds(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name:          "range literal collector commits",
-			input:         "c = [9]\nc = 0:0 [1]\nc",
-			errorContains: `unconditional assignment to "c"`,
+			name:  "empty ranged gate preserves collector",
+			input: "c = [9]\nc = 0:0 [1]\nc",
 		},
 		{
 			name:  "ranged block preserves destination",

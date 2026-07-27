@@ -58,18 +58,21 @@ j = 0:5
 arr = j < 3 [j]
 arr
 
-# Empty result when condition always false: the gated collector still commits,
-# replacing the previous array, so read it first to show the replacement.
+# When the ranged statement gate admits no iteration, the whole assignment is
+# blocked and the collector keeps its previous value.
 old = [10 20 30]
-"FalseCondBefore: -old"
 k = 0:3
 old = k < 0 [99]
-"FalseCondEmpty: -old"
+"FalseCondBlocked: -old"
 
 # Empty result when the driving range itself is empty
 i = 0:0
 empty = i < 5 [i]
 empty
+
+emptyExisting = [7]
+emptyExisting = i < 5 [i]
+"EmptyDomainBlocked: -emptyExisting"
 
 # Range cell in value literal
 i = 0:3
@@ -224,6 +227,12 @@ i = 0:3
 stracc = i < 2 [sarr2[i]]
 stracc
 
+# An all-false ranged gate preserves the owned string array and releases the
+# unused empty accumulator.
+i = 0:3
+stracc = i < 0 ["unused"]
+"StrAccumBlocked: -stracc"
+
 # Tuple accumulation with mixed value-level ranges keeps each [] collector local.
 i = 0:3
 tc, td = i < 2 [0:2], [i]
@@ -362,7 +371,7 @@ gatedRows = i < 2 [domainMatrix[i]]
 "GatedRows: -gatedRows"
 i = 0:3
 gatedRows = i < 0 [domainMatrix[i]]
-"GatedRowsEmpty: -gatedRows"
+"GatedRowsBlocked: -gatedRows"
 i = 0:3
 gatedNestedRows = i < 2 [domainMatrix[0]] + 1
 "GatedNestedRows: -gatedNestedRows"

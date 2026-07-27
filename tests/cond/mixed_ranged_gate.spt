@@ -4,12 +4,14 @@ driver = 0:7
 falseFlag = 0
 trueFlag = 1
 
-# Inline collectors commit an empty array when a scalar conjunct rejects every
-# iteration, and collect once per iteration when it admits the range.
+# Inline collectors preserve their old values when a scalar conjunct rejects
+# every iteration, and collect once per iteration when it admits the range.
+collectorScalarFirstFalse = [90]
 collectorScalarFirstFalse = falseFlag > 0 && driver < 5 [driver]
 "CollectorScalarFirstFalse: -collectorScalarFirstFalse"
 collectorScalarFirstTrue = trueFlag > 0 && driver < 5 [driver]
 "CollectorScalarFirstTrue: -collectorScalarFirstTrue"
+collectorRangeFirstFalse = [80]
 collectorRangeFirstFalse = driver < 5 && falseFlag > 0 [driver]
 "CollectorRangeFirstFalse: -collectorRangeFirstFalse"
 collectorRangeFirstTrue = driver < 5 && trueFlag > 0 [driver]

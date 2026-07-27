@@ -963,7 +963,6 @@ func (c *Compiler) withCondRangeLoop(allRanges []*RangeInfo, condExprs []ast.Exp
 type statementArrayCollector struct {
 	literal     *ast.ArrayLiteral
 	destination *ast.Identifier
-	oldValue    *Symbol
 	scalar      *ArrayAccumulator
 	stacked     *stackedArrayAccumulator
 }
@@ -972,7 +971,6 @@ func (c *Compiler) newStatementArrayCollector(lit *ast.ArrayLiteral, destination
 	collector := &statementArrayCollector{
 		literal:     lit,
 		destination: destination,
-		oldValue:    c.captureOldValues([]*ast.Identifier{destination})[0],
 	}
 	if arrayLiteralHasArrayCells(lit, arrayType) {
 		collector.stacked = c.newStackedArrayAccumulator(arrayType)
@@ -990,14 +988,31 @@ func (c *Compiler) appendStatementArrayCollector(collector *statementArrayCollec
 	c.appendArrayLiteral(collector.scalar, collector.literal)
 }
 
-func (c *Compiler) commitStatementArrayCollector(collector *statementArrayCollector) {
-	var result *Symbol
-	if collector.stacked != nil {
-		result = c.stackedArrayAccumulatorResult(collector.stacked)
-	} else {
-		result = c.ArrayAccResult(collector.scalar)
+// finishStatementArrayCollectors commits the accumulated results only when the
+// shared statement gate admitted an iteration; otherwise it keeps the seeded
+// destinations and releases the unused accumulators.
+func (c *Compiler) finishStatementArrayCollectors(collectors []*statementArrayCollector, didAdmit llvm.Value) {
+	results := make([]*Symbol, len(collectors))
+	for i, collector := range collectors {
+		if collector.stacked != nil {
+			results[i] = c.stackedArrayAccumulatorResult(collector.stacked)
+		} else {
+			results[i] = c.ArrayAccResult(collector.scalar)
+		}
+		c.ensureSeededDest(collector.destination, results[i])
 	}
-	c.storeAccumulatedArray(collector.destination, result, collector.oldValue)
+
+	c.withCondBranch(didAdmit, "collector_write", func() {
+		for i, collector := range collectors {
+			c.commitSlotValue(collector.destination, results[i], false)
+		}
+	}, func() {
+		// Every accumulator owns a runtime vector even when it collected no
+		// cells, so a blocked statement must release the uncommitted results.
+		for _, result := range results {
+			c.freeTemporarySymbol(result, "collector_skip")
+		}
+	})
 }
 
 // compileCondRangedStatement lowers ranged statement conditions.
@@ -1061,9 +1076,18 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		}
 	}
 
+	var collectorAdmitted llvm.Value
+	if len(collectors) > 0 {
+		collectorAdmitted = c.createEntryBlockAlloca(c.Context.Int1Type(), "cond_collector_admitted")
+		c.createStore(llvm.ConstInt(c.Context.Int1Type(), 0, false), collectorAdmitted, Int{Width: 1})
+	}
+
 	// Guards and RHS staging must read the same loop-carried destination slots.
 	aliases := c.aliasCondDests(assignSlots)
 	c.withCondRangeLoop(condRanges, condExprs, loopProbes, "cond_iter_guard", "cond_iter_if", "cond_iter_cont", func() {
+		if !collectorAdmitted.IsNil() {
+			c.createStore(llvm.ConstInt(c.Context.Int1Type(), 1, false), collectorAdmitted, Int{Width: 1})
+		}
 		c.compileCondRangedIteration(assignExprs, assignSlots, appendCollectors)
 	})
 	c.restoreCondDests(aliases)
@@ -1073,17 +1097,10 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 		DeleteBulk(c.Scopes, slotTempStrings(assignSlots))
 	}
 
-	for _, collector := range collectors {
-		c.commitStatementArrayCollector(collector)
+	if len(collectors) > 0 {
+		didAdmit := c.createLoad(collectorAdmitted, Int{Width: 1}, "cond_collector_admitted")
+		c.finishStatementArrayCollectors(collectors, didAdmit)
 	}
-}
-
-func (c *Compiler) storeAccumulatedArray(dest *ast.Identifier, result, oldValue *Symbol) {
-	c.storeValue(dest.Value, result, false)
-	if oldValue == nil || c.skipBorrowedOldValueFree(oldValue) {
-		return
-	}
-	c.freeSymbolValue(oldValue, "old_accum")
 }
 
 // compileCondRangedIteration runs inside the per-iteration body of

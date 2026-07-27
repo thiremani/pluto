@@ -1,6 +1,6 @@
-CollectorScalarFirstFalse: []
+CollectorScalarFirstFalse: [90]
 CollectorScalarFirstTrue: [0 1 2 3 4]
-CollectorRangeFirstFalse: []
+CollectorRangeFirstFalse: [80]
 CollectorRangeFirstTrue: [0 1 2 3 4]
 ScalarScalarFirstFalse: 10
 ScalarScalarFirstTrue: 11

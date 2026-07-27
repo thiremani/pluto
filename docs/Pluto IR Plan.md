@@ -717,8 +717,8 @@ long-lived parallel path.
 - mixed RHS expressions produce effects aligned per LHS slot, such as
   `[]WriteEffect{MayWrite, MustWrite}` for `a, b = arr[i], i + 1`
 - shared conditions and possibly empty ranges produce `MayWrite` for keep-old or
-  unresolved last-yield targets, while an unconditional collector or zero-fill
-  closing policy can still produce `MustWrite`
+  unresolved last-yield targets, while an ungated collector or cell-local
+  zero-fill closing policy can still produce `MustWrite`
 - a fallback that resolves every conditional or checked-access failure produces
   `MustWrite`
 - a fallback whose final alternative can still fail remains `MayWrite`

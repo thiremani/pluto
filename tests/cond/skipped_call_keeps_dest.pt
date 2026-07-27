@@ -5,3 +5,6 @@ res = KeepScalar(x)
 
 res = KeepArray(x)
     res = x > 0 [7 8]
+
+res = KeepRangedArray(i)
+    res = i < 0 [i]

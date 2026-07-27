@@ -205,7 +205,9 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 		kinds[i] = Write
 	}
 	if len(s.Condition) > 0 {
-		cfg.applyGateKinds(s, kinds)
+		for i := range kinds {
+			kinds[i] = ConditionalWrite
+		}
 		return kinds
 	}
 
@@ -232,54 +234,6 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 		}
 	}
 	return kinds
-}
-
-// applyGateKinds classifies destinations under a statement gate. A scalar gate
-// can skip the whole statement, so every write is conditional. A ranged gate
-// always runs its loop, and an inline collector under it is closed and
-// committed even when no iteration is admitted — including an empty domain —
-// so that slot's write is unconditional. Sibling slots commit only on admitted
-// iterations and stay conditional.
-func (cfg *CFG) applyGateKinds(s *ast.LetStatement, kinds []EventType) {
-	spans, known := cfg.valueOutputSpans(s)
-	if !cfg.hasRangedGate(s.Condition) || !known {
-		for i := range kinds {
-			kinds[i] = ConditionalWrite
-		}
-		return
-	}
-
-	dest := 0
-	for vi, v := range s.Value {
-		lit, isLit := v.(*ast.ArrayLiteral)
-		committed := isLit && isInlineArrayCollector(lit)
-		for j := 0; j < spans[vi]; j++ {
-			if !committed {
-				kinds[dest] = ConditionalWrite
-			}
-			dest++
-		}
-	}
-}
-
-// hasRangedGate reports whether a statement condition contributes a loop
-// driver. Unlike a value-position range literal, a bare Range in condition
-// position is consumed as a driver, so this uses the typed condition metadata
-// that lowering also consumes rather than hasRangeExpr's value semantics.
-// Untyped .pt analysis stays conservative and treats every gate as skippable.
-func (cfg *CFG) hasRangedGate(conditions []ast.Expression) bool {
-	if cfg.ScriptCompiler == nil {
-		return false
-	}
-
-	c := cfg.ScriptCompiler.Compiler
-	for _, cond := range conditions {
-		info := c.ExprCache[key(c.FuncNameMangled, cond)]
-		if info != nil && len(info.Ranges) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // valueOutputSpans reports how many destinations each value expression feeds.

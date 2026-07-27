@@ -367,6 +367,11 @@ rejected domain point, none of its RHS expressions, collector appends, carried
 updates, or output commits execute. RHS-local ranges are nested inside each
 admitted point.
 
+If no domain point is admitted, the statement performs no write and an existing
+collector destination keeps its old value. This differs from an ungated
+collector over an empty range: `[i]` still evaluates to `[]` when `i` itself has
+an empty domain.
+
 Example:
 
 ```pluto

@@ -10,9 +10,9 @@ NestedDrivers: [0 1 2 10 11 12]
 MixedDrivers: [9 9 9 9 9 9]
 DriverScalar: 5
 [0 1 2]
-FalseCondBefore: [10 20 30]
-FalseCondEmpty: []
+FalseCondBlocked: [10 20 30]
 []
+EmptyDomainBlocked: [7]
 RangeCell: [0 1 0 1]
 [10 20 0]
 FloatBounded: [1.5 2.5 0 0]
@@ -40,6 +40,7 @@ FreshLit: []
 77
 StrSelection: c
 ["a" "b"]
+StrAccumBlocked: ["a" "b"]
 TupleValueRangesA: [0 1 0 1]. TupleValueRangesB: [0 1]
 CondLocalDriversA: [1 1]. CondLocalDriversB: 1
 CondSharedReuse: [0 0 1 1 2 2]
@@ -65,7 +66,9 @@ GatedRows: [
     10 11
     20 21
 ]
-GatedRowsEmpty: [
+GatedRowsBlocked: [
+    10 11
+    20 21
 ]
 GatedNestedRows: [
     11 12

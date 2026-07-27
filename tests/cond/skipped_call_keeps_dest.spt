@@ -16,3 +16,7 @@ arrayKept = KeepArray(-1)
 arrayWritten = [1 2 3]
 arrayWritten = KeepArray(1)
 "ArrayWritten: -arrayWritten"
+
+rangedArrayKept = [4 5]
+rangedArrayKept = KeepRangedArray(0:3)
+"RangedArrayKept: -rangedArrayKept"
