@@ -366,7 +366,9 @@ row`
 		"a rank-two selection should be iterated inside one callee invocation")
 }
 
-func TestSharedArrayRangeDriverUsesCallerScalarVariant(t *testing.T) {
+// Shared drivers must advance in lockstep. Until callee specializations encode
+// driver identity, keep the shared loop at the caller and invoke a scalar call.
+func TestSharedDriverUsesScalarCall(t *testing.T) {
 	code := `out = Add(x, y)
     out = x + y`
 	script := `i = 0:3
