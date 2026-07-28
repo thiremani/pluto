@@ -201,19 +201,11 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement, kinds []EventType) []VarEv
 // expression feeds and a dead store behind an unconditional sibling is still
 // reported.
 func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
-	kinds := make([]EventType, len(s.Name))
-
 	if len(s.Condition) > 0 {
-		for i := range kinds {
-			kinds[i] = ConditionalWrite
-		}
-		return kinds
+		return makeWriteKinds(len(s.Name), ConditionalWrite)
 	}
 
-	for i := range kinds {
-		kinds[i] = Write
-	}
-
+	kinds := makeWriteKinds(len(s.Name), Write)
 	c := cfg.ScriptCompiler.Compiler
 	dest := 0
 	for _, v := range s.Value {
@@ -235,19 +227,11 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 // skippable value protects every destination. Range effects that depend on
 // inferred bindings are unavailable in this pass.
 func (cfg *CFG) funcDestWriteKinds(s *ast.LetStatement) []EventType {
-	kinds := make([]EventType, len(s.Name))
-
 	if len(s.Condition) > 0 {
-		for i := range kinds {
-			kinds[i] = ConditionalWrite
-		}
-		return kinds
+		return makeWriteKinds(len(s.Name), ConditionalWrite)
 	}
 
-	for i := range kinds {
-		kinds[i] = Write
-	}
-
+	kinds := makeWriteKinds(len(s.Name), Write)
 	if len(s.Value) == len(s.Name) {
 		for i, v := range s.Value {
 			if cfg.funcValueMaySkip(v) {
@@ -265,6 +249,14 @@ func (cfg *CFG) funcDestWriteKinds(s *ast.LetStatement) []EventType {
 			kinds[i] = ConditionalWrite
 		}
 		break
+	}
+	return kinds
+}
+
+func makeWriteKinds(count int, kind EventType) []EventType {
+	kinds := make([]EventType, count)
+	for i := range kinds {
+		kinds[i] = kind
 	}
 	return kinds
 }
