@@ -489,7 +489,7 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	// Print is a sink rather than an operation, so its bare descriptor
 	// arguments print as values and must not be rewritten into loop iterators.
 	if call.Function.Value == Print {
-		ranges, args, changed = ts.collectPrintArgRanges(call)
+		ranges, args, changed = ts.collectPrintArgRanges(call.Arguments)
 	} else {
 		ranges, args, changed = ts.collectExprRanges(call.Arguments)
 	}
@@ -528,27 +528,30 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	return
 }
 
-// collectPrintArgRanges collects drivers for a print statement, deciding
-// descriptor versus driver before any argument is rewritten. Computations
-// contribute drivers exactly as in collectExprRanges. A bare descriptor
-// argument whose name a sibling binds stays a driver; any other bare
-// descriptor keeps its original expression — rewriting it first would leave
-// the print loop referencing an iterator no loop binds — and prints as a
-// value, mirroring resolveBareRangeAssignment at assignment roots.
-func (ts *TypeSolver) collectPrintArgRanges(call *ast.CallExpression) (ranges []*RangeInfo, args []ast.Expression, changed bool) {
-	args = make([]ast.Expression, len(call.Arguments))
-	for i, arg := range call.Arguments {
+// collectPrintArgRanges keeps bare Range descriptors out of the ordinary
+// argument pass until sibling drivers are known. Every other argument uses
+// collectExprRanges exactly as it does for an ordinary call. A bare descriptor
+// whose name a sibling binds then joins that driver; any other bare descriptor
+// keeps its original expression and prints as a value.
+func (ts *TypeSolver) collectPrintArgRanges(exprs []ast.Expression) (ranges []*RangeInfo, args []ast.Expression, changed bool) {
+	args = append([]ast.Expression(nil), exprs...)
+
+	var ordinaryArgs []ast.Expression
+	var ordinaryIndexes []int
+	for i, arg := range exprs {
 		if ts.bareRangeDescriptorArg(arg) {
-			args[i] = arg
 			continue
 		}
-		argRanges, rew := ts.HandleRanges(arg)
-		args[i] = rew
-		changed = changed || rew != arg
-		ranges = mergeUses(ranges, argRanges)
+		ordinaryArgs = append(ordinaryArgs, arg)
+		ordinaryIndexes = append(ordinaryIndexes, i)
 	}
 
-	for i, arg := range call.Arguments {
+	ranges, rewrites, changed := ts.collectExprRanges(ordinaryArgs)
+	for i, argIndex := range ordinaryIndexes {
+		args[argIndex] = rewrites[i]
+	}
+
+	for i, arg := range exprs {
 		if !ts.bareRangeDescriptorArg(arg) {
 			continue
 		}
@@ -563,7 +566,6 @@ func (ts *TypeSolver) collectPrintArgRanges(call *ast.CallExpression) (ranges []
 		info.Ranges = nil
 		info.HasRanges = false
 		info.Rewrite = nil
-		args[i] = arg
 	}
 	return ranges, args, changed
 }
