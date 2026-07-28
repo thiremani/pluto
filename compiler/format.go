@@ -911,15 +911,13 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, 
 				specs = append(specs, specID)
 			}
 		}
-		if spec.end > end {
-			i = spec.end - 1
-		}
+		i = spec.end - 1
 	}
 	return mains, specs
 }
 
 // hasValidMarkers checks if a format string contains a resolved marker.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
-	mains, specs := formatMarkerIdentifiers(value, isDefined)
-	return len(mains)+len(specs) > 0
+	mains, _ := formatMarkerIdentifiers(value, isDefined)
+	return len(mains) > 0
 }
