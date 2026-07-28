@@ -320,8 +320,7 @@ func (c *Compiler) setCallArgAliasSelectors(sig *callSignature, args []callArg, 
 	}
 
 	for paramIndex, arg := range args {
-		paramABI := sig.ABI.Params[paramIndex]
-		if arg.Name == "" || (paramABI.Mode == ABIParamDirect && paramABI.AliasSlot < 0) {
+		if arg.Name == "" {
 			continue
 		}
 
@@ -971,7 +970,6 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	if !ok {
 		panic("internal: storeSymbolToSlot requires pointer destination")
 	}
-	sourceWriteFlag := src.WriteFlag
 	if target.Kind() != ptrType.Elem.Kind() {
 		target = ptrType.Elem
 	}
@@ -995,7 +993,7 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 
 	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
-	c.markOutputSlotWritten(dst, sourceWriteFlag)
+	c.markOutputSlotWritten(dst, src.WriteFlag)
 	return coerced
 }
 
@@ -2953,23 +2951,16 @@ func (c *Compiler) createIfCont(cond llvm.Value, ifName, contName string) (llvm.
 }
 
 func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) []callArg {
-	args := []callArg{}
-	paramIndex := 0
+	args := make([]callArg, 0, len(sig.ParamTypes))
 	for _, callArgExpr := range ce.Arguments {
-		if paramIndex >= len(sig.ParamTypes) {
-			panic("internal: call argument count exceeds resolved signature")
-		}
-		if arrayRangeType, ok := sig.ParamTypes[paramIndex].(ArrayRange); ok {
-			arrayRangeExpr, ok := callArgExpr.(*ast.ArrayRangeExpression)
-			if !ok {
-				panic(fmt.Sprintf("internal: ArrayRange parameter received %T", callArgExpr))
+		if arrayRangeExpr, ok := callArgExpr.(*ast.ArrayRangeExpression); ok {
+			if arrayRangeType, ok := sig.ParamTypes[len(args)].(ArrayRange); ok {
+				args = append(args, callArg{
+					Expr:   callArgExpr,
+					Symbol: c.compileArrayRangeCallArg(arrayRangeExpr, arrayRangeType),
+				})
+				continue
 			}
-			args = append(args, callArg{
-				Expr:   callArgExpr,
-				Symbol: c.compileArrayRangeCallArg(arrayRangeExpr, arrayRangeType),
-			})
-			paramIndex++
-			continue
 		}
 
 		if ident, ok := callArgExpr.(*ast.Identifier); ok {
@@ -2977,24 +2968,16 @@ func (c *Compiler) compileCallArgs(sig *callSignature, ce *ast.CallExpression) [
 				Expr: callArgExpr,
 				Name: ident.Value,
 			})
-			paramIndex++
 			continue
 		}
 
 		res := c.compileExpression(callArgExpr, nil)
 		for _, r := range res {
-			if paramIndex >= len(sig.ParamTypes) {
-				panic("internal: compiled call argument count exceeds resolved signature")
-			}
 			args = append(args, callArg{
 				Expr:   callArgExpr,
 				Symbol: r,
 			})
-			paramIndex++
 		}
-	}
-	if paramIndex != len(sig.ParamTypes) {
-		panic(fmt.Sprintf("internal: compiled %d call arguments for %d parameters", paramIndex, len(sig.ParamTypes)))
 	}
 	return args
 }
