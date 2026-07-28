@@ -592,14 +592,8 @@ func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 	case *ast.Identifier, *ast.RangeLiteral:
 		return true
 	case *ast.ArrayRangeExpression:
-		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		idxInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Range)]
-		return arrInfo != nil &&
-			!arrInfo.HasRanges &&
-			idxInfo != nil &&
-			len(idxInfo.OutTypes) == 1 &&
-			idxInfo.OutTypes[0].Kind() == RangeKind &&
-			ts.isBareRangeExpr(e.Range)
+		_, _, ok := ts.callScopedArrayRangeType(e)
+		return ok
 	default:
 		return false
 	}
@@ -2353,29 +2347,29 @@ func callArgsShareRangeDriver(exprs []ast.Expression, cache map[ExprKey]*ExprInf
 	return false
 }
 
-// callScopedArrayRangeType returns the internal parameter type for an immediate
-// bare array selection and the yielded type seen by the function body.
+// callScopedArrayRangeType returns the internal parameter type for a bare array
+// selection and the yielded type seen by the function body.
 func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange, Type, bool) {
 	ax, ok := expr.(*ast.ArrayRangeExpression)
-	if !ok || !ts.isBareRangeExpr(ax) {
+	if !ok {
 		return ArrayRange{}, nil, false
 	}
 
 	arrInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Array)]
 	idxInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Range)]
-	if arrInfo == nil || idxInfo == nil || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
+	// An invalid array source can stop before its index is typed.
+	if idxInfo == nil {
+		return ArrayRange{}, nil, false
+	}
+	if arrInfo.HasRanges || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
 		return ArrayRange{}, nil, false
 	}
 
-	arrType, ok := arrInfo.OutTypes[0].(Array)
-	if !ok {
+	arrType, arrayOK := arrInfo.OutTypes[0].(Array)
+	rangeType, rangeOK := idxInfo.OutTypes[0].(Range)
+	if !arrayOK || !rangeOK || !ts.isBareRangeExpr(ax.Range) {
 		return ArrayRange{}, nil, false
 	}
-	rangeType, ok := idxInfo.OutTypes[0].(Range)
-	if !ok {
-		return ArrayRange{}, nil, false
-	}
-
 	return ArrayRange{Array: arrType, Range: rangeType}, arrayIndexResultType(arrType), true
 }
 
