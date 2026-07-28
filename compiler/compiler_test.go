@@ -196,7 +196,7 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 	require.NotZero(t, verified, "expected at least one defined function to verify")
 }
 
-func TestAliasSelectorSkipsMismatchedOutputs(t *testing.T) {
+func TestAliasSelectorTypeGaps(t *testing.T) {
 	// The accumulator leads in the first group, so it is reached through
 	// selector 1. In the second group the mismatched output leads, so the
 	// accumulator is selector 2 and the skipped slot must stay a numbering gap.
@@ -222,7 +222,7 @@ func TestAliasSelectorSkipsMismatchedOutputs(t *testing.T) {
 // slot by pointer. Opaque pointers make a mistyped pointer select valid IR and
 // the selector never matches the skipped index at runtime, so only the emitted
 // slot selects distinguish this path.
-func TestPointerPromotionSkipsMismatchedOutputSlot(t *testing.T) {
+func TestPromotedAliasTypeGap(t *testing.T) {
 	code := `half, res = Rev(a, x)
     "count-a%n chars"
     half = x * 0.5
@@ -242,7 +242,7 @@ h, r`
 		"the mismatched leading output must never be selectable as the parameter's slot")
 }
 
-func TestCollectorOverRangeSelectionRegistersScalarVariant(t *testing.T) {
+func TestRangeCollectorScalarVariant(t *testing.T) {
 	code := `res = Scale(x)
     res = x * 3`
 	script := `arr = [10 20 30]
