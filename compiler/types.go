@@ -596,8 +596,8 @@ func CanRefineType(oldType, newType Type) bool {
 		newTable, ok := newType.(Table)
 		return ok && canRefineTable(old, newTable)
 	case ArrayRange:
-		newArrayRange, ok := newType.(ArrayRange)
-		return ok && canRefineArrayRange(old, newArrayRange)
+		newSlice, ok := newType.(ArrayRange)
+		return ok && canRefineArrayRange(old, newSlice)
 	case Ptr:
 		newPtr, ok := newType.(Ptr)
 		return ok && CanRefineType(old.Elem, newPtr.Elem)
@@ -694,9 +694,8 @@ func canRefineTable(oldTable, newTable Table) bool {
 	return true
 }
 
-func canRefineArrayRange(oldArrayRange, newArrayRange ArrayRange) bool {
-	return CanRefineType(oldArrayRange.Array, newArrayRange.Array) &&
-		CanRefineType(oldArrayRange.Range, newArrayRange.Range)
+func canRefineArrayRange(oldSlice, newSlice ArrayRange) bool {
+	return CanRefineType(oldSlice.Array, newSlice.Array) && CanRefineType(oldSlice.Range, newSlice.Range)
 }
 
 func canRefineFunc(oldFunc, newFunc Func) bool {
@@ -806,10 +805,9 @@ func eqTable(a, b Type) bool {
 }
 
 func eqArrayRange(a, b Type) bool {
-	aArrayRange := a.(ArrayRange)
-	bArrayRange := b.(ArrayRange)
-	return TypeEqual(aArrayRange.Array, bArrayRange.Array) &&
-		TypeEqual(aArrayRange.Range, bArrayRange.Range)
+	aar := a.(ArrayRange)
+	bar := b.(ArrayRange)
+	return eqArray(aar.Array, bar.Array) && eqRange(aar.Range, bar.Range)
 }
 
 func eqStruct(a, b Type) bool {

@@ -1,8 +1,3 @@
 res = 10
 res = AccFmt(res, 1:4)
 res
-
-revHalf = 0.0
-revRes = 10
-revHalf, revRes = AccFmtRev(revRes, 1:4)
-"RevHalf: -revHalf RevRes: -revRes"

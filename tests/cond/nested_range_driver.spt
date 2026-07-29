@@ -1,4 +1,0 @@
-idx = [0 1]
-data = [10 20]
-out = data[idx[0:2]] [1]
-out

@@ -48,6 +48,34 @@ i = 0:2
 gridView = i && driverSrc[1:4] [9]
 "MixedDrivers: -gridView"
 
+# A nested range selection can itself own a statement's iteration domain.
+nestedDriverIdx = [0 1]
+nestedDriverData = [10 20]
+nestedDriverOut = nestedDriverData[nestedDriverIdx[0:2]] [1]
+"NestedRangeSelectionDriver: -nestedDriverOut"
+
+# Scalar conjuncts remain per-iteration guards when another conjunct supplies
+# the range, regardless of their order or destination shape.
+mixedGateDriver = 0:7
+mixedGateFalse = 0
+mixedGateTrue = 1
+
+mixedGateCollector = [90]
+mixedGateCollector = mixedGateFalse > 0 && mixedGateDriver < 5 [mixedGateDriver]
+"MixedGateCollectorBlocked: -mixedGateCollector"
+
+mixedGateScalar = 30
+mixedGateScalar = mixedGateDriver < 5 && mixedGateFalse > 0 mixedGateDriver + 7
+"MixedGateScalarBlocked: -mixedGateScalar"
+
+mixedGateAdmitted = mixedGateTrue > 0 && mixedGateDriver < 5 [mixedGateDriver]
+"MixedGateAdmitted: -mixedGateAdmitted"
+
+# The scalar guard must observe loop-carried updates rather than being hoisted.
+mixedGateLoopCarried = 1
+mixedGateLoopCarried = mixedGateLoopCarried < 3 && mixedGateDriver mixedGateLoopCarried + 1
+"MixedGateLoopCarried: -mixedGateLoopCarried"
+
 # Bare range driver with scalar RHS keeps last iteration value
 i = 0:5
 driverScalar = i i + 1

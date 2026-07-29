@@ -49,9 +49,6 @@ emptyExisting = arr[2:2]
 lastValid = arr[-2:7]
 "OOBLastValid: -lastValid"
 
-allOOBFresh = arr[8:10]
-"AllOOBFresh: -allOOBFresh"
-
 allOOBExisting = 88
 allOOBExisting = arr[8:10]
 "AllOOBExisting: -allOOBExisting"

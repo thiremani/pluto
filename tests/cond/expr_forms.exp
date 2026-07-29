@@ -10,3 +10,4 @@ CondPrefixFalseNew: 0
 CondPrefixRangeSelectionTrue: -40
 CondPrefixRangeSelectionFalseExisting: -40
 CondPrefixRangeSelectionFalseNew: 0
+NestedCallUnderOperator: 10

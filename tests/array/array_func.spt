@@ -107,6 +107,30 @@ emptyResetDriver = 0:0
 keptMatrix = ResetArray(emptyResetDriver)
 "RangedRankResetEmpty: -keptMatrix"
 
+# A statement condition stages a ranged call through a synthetic destination.
+# A non-empty driver must commit the rank-1 [] result into the rank-2 slot.
+gatedWrittenMatrix = [
+    41 42
+    43 44
+]
+gatedResetDriver = 0:2
+gatedWrittenMatrix = 1 > 0 ResetArray(gatedResetDriver + 0)
+"GatedRangedRankResetWritten: -gatedWrittenMatrix"
+
+# With an empty driver, the staged slot must retain its rank-2 value.
+gatedKeptMatrix = [
+    31 32
+    33 34
+]
+gatedEmptyResetDriver = 0:0
+gatedKeptMatrix = 1 > 0 ResetArray(gatedEmptyResetDriver + 0)
+"GatedRangedRankResetEmpty: -gatedKeptMatrix"
+
+# A blocked ranged collector inside a function leaves its caller's output intact.
+rangedArrayKept = [4 5]
+rangedArrayKept = KeepRangedArray(0:3)
+"RangedArrayKept: -rangedArrayKept"
+
 # An ordinary conditional [] return keeps an established rank-N destination
 # when the callee leaves its output unwritten.
 conditionalResetMatrix = [

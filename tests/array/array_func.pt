@@ -32,6 +32,10 @@ res = ConcatArrays(a, b)
 res = ResetArray(x)
     res = x > -1 []
 
+# A ranged collector can leave an indirect output unwritten.
+res = KeepRangedArray(i)
+    res = i < 0 [i]
+
 # A header-only table can conditionally reset an established concrete table.
 res = ResetTable(x)
     res = x > -1 [

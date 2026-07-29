@@ -34,3 +34,9 @@ pr = 1 > 2 0 + -arr[1:2]
 "CondPrefixRangeSelectionFalseExisting: -pr"
 k = 1 > 2 0 + -arr[1:4]
 "CondPrefixRangeSelectionFalseNew: -k"
+
+# A failed condition nested under a call and an operator makes the whole value
+# optional, so the established destination remains live and unchanged.
+nestedCallKeep = 10
+nestedCallKeep = Double(15 < 10) + 5
+"NestedCallUnderOperator: -nestedCallKeep"

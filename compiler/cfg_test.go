@@ -298,9 +298,8 @@ func TestRangedGateCollectorWriteIsConditional(t *testing.T) {
 
 func TestGateArrayWriteKinds(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		errorContains string
+		name  string
+		input string
 	}{
 		{
 			name:  "empty ranged gate preserves collector",
@@ -319,17 +318,7 @@ func TestGateArrayWriteKinds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			errs := compileScriptForCFGTest(t, tt.name, tt.input)
-			if tt.errorContains == "" {
-				require.Empty(t, errs)
-				return
-			}
-
-			require.NotEmpty(t, errs)
-			msgs := make([]string, len(errs))
-			for i, err := range errs {
-				msgs[i] = err.Msg
-			}
-			assert.Contains(t, strings.Join(msgs, "\n"), tt.errorContains)
+			require.Empty(t, errs)
 		})
 	}
 }

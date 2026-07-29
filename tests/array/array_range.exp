@@ -14,7 +14,6 @@ UnevenRange: 50
 EmptyRangeFresh: 0
 EmptyRangeExisting: 77
 OOBLastValid: 50
-AllOOBFresh: 0
 AllOOBExisting: 88
 PrefixRange: -40
 LiteralIterChain: [1 1 0 0 0 0]

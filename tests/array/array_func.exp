@@ -48,6 +48,13 @@ RangedRankResetEmpty: [
     5 6
     7 8
 ]
+GatedRangedRankResetWritten: [
+]
+GatedRangedRankResetEmpty: [
+    31 32
+    33 34
+]
+RangedArrayKept: [4 5]
 ConditionalRankResetBefore: [
     11 12
     13 14

@@ -8,6 +8,11 @@ RangeMixedTupleA: [0 1 2 3]. RangeMixedTupleB: 13
 RangeSelectionMixedTupleA: [8 8 8]. RangeSelectionMixedTupleB: 40
 NestedDrivers: [0 1 2 10 11 12]
 MixedDrivers: [9 9 9 9 9 9]
+NestedRangeSelectionDriver: [1 1]
+MixedGateCollectorBlocked: [90]
+MixedGateScalarBlocked: 30
+MixedGateAdmitted: [0 1 2 3 4]
+MixedGateLoopCarried: 3
 DriverScalar: 5
 [0 1 2]
 FalseCondBlocked: [10 20 30]

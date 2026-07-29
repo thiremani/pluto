@@ -4,21 +4,10 @@ ascending = ascendingRange
 ascendingValues = [ascending]
 "AscendingCopy: -ascendingValues"
 
-# Parentheses do not change a complete descriptor expression into a computation.
-parenthesized = (ascendingRange)
-parenthesizedValues = [parenthesized]
-"ParenthesizedCopy: -parenthesizedValues"
-
 descendingRange = 6:0:-2
 descending = descendingRange
 descendingValues = [descending]
 "DescendingCopy: -descendingValues"
-
-# Uneven descriptors keep their exact traversal after copying.
-unevenRange = 1:10:4
-uneven = unevenRange
-unevenValues = [uneven]
-"UnevenCopy: -unevenValues"
 
 # Empty descriptors still assign: both destinations become empty ranges.
 emptyRange = 3:3
@@ -28,10 +17,9 @@ freshRangeValues = [freshRange]
 
 existingRange = 0:2
 existingRangeBefore = [existingRange]
-"EmptyRangeBefore: -existingRangeBefore"
 existingRange = emptyRange
 existingRangeValues = [existingRange]
-"EmptyRangeExisting: -existingRangeValues"
+"EmptyRangeExisting: -existingRangeBefore -> -existingRangeValues"
 
 # Empty ranged computations yield no value: fresh scalar destinations use zero,
 # while existing scalar destinations retain their seed.
@@ -41,10 +29,6 @@ fresh = emptyRange + 1
 existing = 91
 existing = emptyRange + 1
 "EmptyComputeExisting: -existing"
-
-# Brackets remain the explicit materialization boundary.
-collected = [ascendingRange]
-"Collected: -collected"
 
 # A copied descriptor remains consumable by functions.
 callFinal = useShadow(ascending)

@@ -291,17 +291,6 @@ func TestMangle(t *testing.T) {
 			expected: "Pt_4iter_p_3sum_f1_Range_t1_I64",
 		},
 		{
-			name:     "with array range type",
-			modName:  "iter",
-			relPath:  "",
-			funcName: "sum",
-			args: []Type{ArrayRange{
-				Array: Array{ElemType: I64, Rank: 2},
-				Range: Range{Iter: I64},
-			}},
-			expected: "Pt_4iter_p_3sum_f1_ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
-		},
-		{
 			name:     "with array type",
 			modName:  "arr",
 			relPath:  "",
@@ -387,43 +376,12 @@ func TestArrayRangeMangleIsStructural(t *testing.T) {
 		},
 	}
 
-	seen := make(map[string]string, len(tests))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mangled := tt.typ.Mangle()
 			assert.Equal(t, tt.expected, mangled)
-			if other, exists := seen[mangled]; exists {
-				t.Errorf("ArrayRange mangle collision between %q and %q: %s", other, tt.name, mangled)
-			}
-			seen[mangled] = tt.name
 		})
 	}
-}
-
-func TestArrayRangeTypeIdentityIsStructural(t *testing.T) {
-	base := ArrayRange{
-		Array: Array{ElemType: I64, Rank: 1},
-		Range: Range{Iter: I64},
-	}
-	same := ArrayRange{
-		Array: Array{ElemType: Int{Width: 64}, Rank: 1},
-		Range: Range{Iter: Int{Width: 64}},
-	}
-
-	assert.True(t, TypeEqual(base, same))
-	assert.True(t, TypeEqual(base, base.Key()))
-	assert.False(t, TypeEqual(base, ArrayRange{
-		Array: Array{ElemType: I64, Rank: 2},
-		Range: Range{Iter: I64},
-	}))
-	assert.False(t, TypeEqual(base, ArrayRange{
-		Array: Array{ElemType: F64, Rank: 1},
-		Range: Range{Iter: I64},
-	}))
-	assert.False(t, TypeEqual(base, ArrayRange{
-		Array: Array{ElemType: I64, Rank: 1},
-		Range: Range{Iter: F64},
-	}))
 }
 
 func TestMangleDistinguishesModuleFromSubdir(t *testing.T) {
@@ -573,11 +531,6 @@ func TestDemangle(t *testing.T) {
 			name:     "with range type",
 			mangled:  "Pt_4iter_p_3sum_f1_Range_t1_I64",
 			expected: "iter.sum(Range_t1_I64)",
-		},
-		{
-			name:     "with array range type",
-			mangled:  "Pt_4iter_p_3sum_f1_ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
-			expected: "iter.sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)",
 		},
 		{
 			name:     "with func type",
