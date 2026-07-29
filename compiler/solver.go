@@ -2368,7 +2368,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if loopInside && len(outerTypes) == 1 {
+		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
 				args = append(args, arrayRangeType)
 				innerArgs = append(innerArgs, yieldedType)
