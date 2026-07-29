@@ -97,7 +97,7 @@ type Func struct {
 // For example:
 //
 //	p = Person
-//	    :name age
+//	  : name age
 //	    "Tejas" 35
 type StructStatement struct {
 	Token token.Token // The token.ASSIGN token
@@ -360,8 +360,8 @@ func writeArrayRow(out *bytes.Buffer, row []Expression) {
 // Example:
 // p = Person
 //
-//	:name age
-//	"Tejas" 35
+//	: name age
+//	  "Tejas" 35
 type StructLiteral struct {
 	Token   token.Token // the type name token (e.g. "Person")
 	Headers []token.Token
@@ -375,7 +375,7 @@ func (sl *StructLiteral) String() string {
 	out.WriteString(sl.Token.Literal)
 
 	if len(sl.Headers) > 0 {
-		out.WriteString("\n    :")
+		out.WriteString("\n  : ")
 		for i, header := range sl.Headers {
 			if i > 0 {
 				out.WriteString(" ")

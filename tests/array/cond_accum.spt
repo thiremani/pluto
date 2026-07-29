@@ -18,25 +18,24 @@ i = 0:5
 mixed = i && i < 3 [i]
 "MixedDriverGuard: -mixed"
 
-# Bare array-range expression driver uses its view range as the loop driver
+# A range-indexed array expression can directly drive a statement.
 driverSrc = [10 20 30 40]
 sevens = driverSrc[1:4] [7]
-"ArrayRangeDriver: -sevens"
+"RangeSelectionDriver: -sevens"
 
-# Bare array-range identifier driver behaves the same way
-view = driverSrc[1:4]
-eights = view [8]
-"NamedArrayRangeDriver: -eights"
+# Reuse names the index range, not a persistent selection value.
+selection = 1:4
+eights = driverSrc[selection] [8]
+"RepeatedRangeSelectionDriver: -eights"
 
 # Bare range driver with mixed tuple outputs accumulates arrays and keeps scalar last-value-wins
 i = 0:4
 mixRangeA, mixRangeB = i [i], i + 10
 "RangeMixedTupleA: -mixRangeA. RangeMixedTupleB: -mixRangeB"
 
-# Bare array-range driver does the same with the per-iteration element value
-viewMix = driverSrc[1:4]
-mixViewA, mixViewB = viewMix [8], viewMix
-"ArrayRangeMixedTupleA: -mixViewA. ArrayRangeMixedTupleB: -mixViewB"
+# Reusing the same named index range keeps both selections on one driver.
+mixSelectionA, mixSelectionB = driverSrc[selection] [8], driverSrc[selection]
+"RangeSelectionMixedTupleA: -mixSelectionA. RangeSelectionMixedTupleB: -mixSelectionB"
 
 # Bare range drivers compose as nested loops
 i = 0:2
@@ -44,11 +43,38 @@ j = 0:3
 grid = i && j [i * 10 + j]
 "NestedDrivers: -grid"
 
-# Range and array-range drivers compose as nested loops
+# Range and range-indexed array drivers compose as nested loops
 i = 0:2
-view2 = driverSrc[1:4]
-gridView = i && view2 [9]
+gridView = i && driverSrc[1:4] [9]
 "MixedDrivers: -gridView"
+
+# A nested range selection can itself own a statement's iteration domain.
+nestedDriverIdx = [0 1]
+nestedDriverData = [10 20]
+nestedDriverOut = nestedDriverData[nestedDriverIdx[0:2]] [1]
+"NestedRangeSelectionDriver: -nestedDriverOut"
+
+# Scalar conjuncts remain per-iteration guards when another conjunct supplies
+# the range, regardless of their order or destination shape.
+mixedGateDriver = 0:7
+mixedGateFalse = 0
+mixedGateTrue = 1
+
+mixedGateCollector = [90]
+mixedGateCollector = mixedGateFalse > 0 && mixedGateDriver < 5 [mixedGateDriver]
+"MixedGateCollectorBlocked: -mixedGateCollector"
+
+mixedGateScalar = 30
+mixedGateScalar = mixedGateDriver < 5 && mixedGateFalse > 0 mixedGateDriver + 7
+"MixedGateScalarBlocked: -mixedGateScalar"
+
+mixedGateAdmitted = mixedGateTrue > 0 && mixedGateDriver < 5 [mixedGateDriver]
+"MixedGateAdmitted: -mixedGateAdmitted"
+
+# The scalar guard must observe loop-carried updates rather than being hoisted.
+mixedGateLoopCarried = 1
+mixedGateLoopCarried = mixedGateLoopCarried < 3 && mixedGateDriver mixedGateLoopCarried + 1
+"MixedGateLoopCarried: -mixedGateLoopCarried"
 
 # Bare range driver with scalar RHS keeps last iteration value
 i = 0:5
@@ -60,16 +86,21 @@ j = 0:5
 arr = j < 3 [j]
 arr
 
-# Empty result when condition always false
+# When the ranged statement gate admits no iteration, the whole assignment is
+# blocked and the collector keeps its previous value.
 old = [10 20 30]
 k = 0:3
 old = k < 0 [99]
-"FalseCondEmpty: -old"
+"FalseCondBlocked: -old"
 
 # Empty result when the driving range itself is empty
 i = 0:0
 empty = i < 5 [i]
 empty
+
+emptyExisting = [7]
+emptyExisting = i < 5 [i]
+"EmptyDomainBlocked: -emptyExisting"
 
 # Range cell in value literal
 i = 0:3
@@ -174,47 +205,61 @@ q = 0:3
 elem = q < 2 arr4[q]
 "ScalarElem: -elem"
 
-# Scalar conditional iteration: cross-range
+# A statement driver gates a distinct bare Range descriptor without consuming it.
 r = 0:3
 i = 0:5
 cross = r < 4 i
-cross
+crossValues = [cross]
+"CrossRange: -crossValues"
 
-# Scalar conditional iteration: direct bare range literal
+# A direct bare Range literal is likewise assigned as a descriptor.
 r = 0:3
 litcross = r < 2 0:5
-"LitCross: -litcross"
+litcrossValues = [litcross]
+"LitCross: -litcrossValues"
 
-# Scalar conditional iteration: direct bare array-range view
+# Scalar conditional iteration: direct range-indexed array expression
 arr5 = [10 20 30 40]
 r = 0:3
-viewcross = r < 2 arr5[0:3]
-viewcross
+selectionCross = r < 2 arr5[0:3]
+selectionCross
 
-# Scalar conditional iteration: direct bare range literal false path keeps old value
-seedlit = 88
+# A rejected descriptor assignment keeps the existing Range value.
+seedlit = 8:10
 r = 0:3
 seedlit = r < 0 0:5
-"SeedLit: -seedlit"
+seedlitValues = [seedlit]
+"SeedLit: -seedlitValues"
 
-# Scalar conditional iteration: direct bare array-range view false path keeps old value
-seedview = 77
+# A fresh rejected descriptor assignment keeps the zero Range descriptor.
+freshlit = r < 0 0:5
+freshlitValues = [freshlit]
+"FreshLit: -freshlitValues"
+
+# A rejected direct range-indexed array expression keeps the old value
+seedSelection = 77
 arr6 = [10 20 30 40]
 r = 0:3
-seedview = r < 0 arr6[0:3]
-seedview
+seedSelection = r < 0 arr6[0:3]
+seedSelection
 
-# Scalar conditional iteration: direct bare string array-range view
+# Direct string selection finalization owns its scalar result
 sarr = ["a" "b" "c" "d"]
 r = 0:3
-strview = r < 2 sarr[0:3]
-"StrView: -strview"
+strSelection = r < 2 sarr[0:3]
+"StrSelection: -strSelection"
 
 # String accumulation
 sarr2 = ["a" "b"]
 i = 0:3
 stracc = i < 2 [sarr2[i]]
 stracc
+
+# An all-false ranged gate preserves the owned string array and releases the
+# unused empty accumulator.
+i = 0:3
+stracc = i < 0 ["unused"]
+"StrAccumBlocked: -stracc"
 
 # Tuple accumulation with mixed value-level ranges keeps each [] collector local.
 i = 0:3
@@ -225,7 +270,7 @@ tc, td = i < 2 [0:2], [i]
 # drivers stay local to the expression that mentions them.
 i = 0:3
 j = 0:2
-localLeakA, localLeakB = i < 2 [1], j
+localLeakA, localLeakB = i < 2 [1], j + 0
 "CondLocalDriversA: -localLeakA. CondLocalDriversB: -localLeakB"
 
 # When a statement condition and an RHS mention the same driver, the condition
@@ -352,9 +397,14 @@ domainMatrix = [
 i = 0:3
 gatedRows = i < 2 [domainMatrix[i]]
 "GatedRows: -gatedRows"
+# A distinct seed makes any accidentally admitted row observable.
+gatedRows = [
+    90 91
+    92 93
+]
 i = 0:3
 gatedRows = i < 0 [domainMatrix[i]]
-"GatedRowsEmpty: -gatedRows"
+"GatedRowsBlocked: -gatedRows"
 i = 0:3
 gatedNestedRows = i < 2 [domainMatrix[0]] + 1
 "GatedNestedRows: -gatedNestedRows"
@@ -385,6 +435,7 @@ nestedCondCell = i > 2 [([0] + i)[0]]
 
 # Existing array replaced on successful accumulation (leak check)
 seed = [1 2 3]
+seed
 p = 0:3
 seed = p < 2 [9]
 seed

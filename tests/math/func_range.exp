@@ -1,4 +1,4 @@
-Square of 0:5 with loop inside: 16
-Square of 0:5 with loop outside: 25
-SumSquares of 0:5, 0:5 with loop inside: 32
-SumSquares of 0:5, 0:5 with loop outside: 16.6944444444444
+Square of bare 0:5: 16
+Square of 0:5 + 1: 25
+SumSquares of bare 0:5, 0:5: 32
+SumSquares of 0:5 and range expression: 16.6944444444444

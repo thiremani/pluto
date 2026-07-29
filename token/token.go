@@ -50,7 +50,7 @@ const (
 	LEQ // <=
 	GEQ // >=
 
-	COLON // : is if we want to loop from 0:n. For eg: y += 0:n x
+	COLON // : separates range bounds, as in 0:n or start:stop:step
 	comparison_end
 
 	// Other tokens.

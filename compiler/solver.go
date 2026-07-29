@@ -10,10 +10,8 @@ import (
 )
 
 type RangeInfo struct {
-	Name      string
-	RangeLit  *ast.RangeLiteral
-	ArrayExpr ast.Expression
-	ArrayType Array
+	Name     string
+	RangeLit *ast.RangeLiteral
 }
 
 // CondMode classifies how a comparison in value position is lowered.
@@ -39,6 +37,7 @@ type ExprInfo struct {
 	ScalarCallParamTypes []Type     // Param types to use once outer loops consume ranges into scalars
 	CompareModes         []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
 	ArrayShape           []uint64   // Statically known dimensions for array literals; nil when runtime-dependent
+	RangeDriverCond      bool       // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -293,6 +292,8 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 		return ts.HandleCallRanges(t)
 	case *ast.Identifier:
 		return ts.HandleIdentifierRanges(t)
+	case *ast.StringLiteral:
+		return ts.HandleStringLiteralRanges(t)
 	default:
 		return
 	}
@@ -483,8 +484,26 @@ func (ts *TypeSolver) collectExprRanges(exprs []ast.Expression) (ranges []*Range
 // HandleCallRanges processes function call expressions, handling all arguments
 // and merging their range information for proper loop generation.
 func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	ranges, args, changed := ts.collectExprRanges(call.Arguments)
+	var args []ast.Expression
+	var changed bool
+	// Print is a sink rather than an operation, so its bare descriptor
+	// arguments print as values and must not be rewritten into loop iterators.
+	if call.Function.Value == Print {
+		ranges, args, changed = ts.collectPrintArgRanges(call.Arguments)
+	} else {
+		ranges, args, changed = ts.collectExprRanges(call.Arguments)
+	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+
+	// A surrounding collector consumes these ranges and invokes the call once
+	// per scalar yield, so that scalar callee variant must exist even though the
+	// immediate call selected a range specialization. Promoting an argument to
+	// an internal ArrayRange changes the mangled name without rewriting the
+	// argument list, so this cannot be gated on a syntactic rewrite. LoopInside
+	// is true for any ordinary call, so require ranges to reach only collectors.
+	if _, builtin := Builtins[call.Function.Value]; len(ranges) > 0 && info.LoopInside && !builtin {
+		ts.ensureScalarCallVariant(call)
+	}
 
 	if !changed {
 		info.Ranges = ranges
@@ -509,40 +528,159 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	return
 }
 
-// isBareRangeExpr checks if expression is a bare range expression.
-// These are "simple" range arguments that can be passed to specialized functions.
-// For ArrayRangeExpression, it's only bare if the array part doesn't have ranges
-// and the index is itself bare (e.g., arr[i] is bare, but [i][j] or arr[i+1] is not).
+// collectPrintArgRanges keeps bare Range descriptors out of the ordinary
+// argument pass until sibling drivers are known. Every other argument uses
+// collectExprRanges exactly as it does for an ordinary call. A bare descriptor
+// whose name a sibling binds then joins that driver; any other bare descriptor
+// keeps its original expression and prints as a value.
+func (ts *TypeSolver) collectPrintArgRanges(exprs []ast.Expression) (ranges []*RangeInfo, args []ast.Expression, changed bool) {
+	args = append([]ast.Expression(nil), exprs...)
+
+	var ordinaryArgs []ast.Expression
+	var ordinaryIndexes []int
+	for i, arg := range exprs {
+		if ts.bareRangeDescriptorArg(arg) {
+			continue
+		}
+		ordinaryArgs = append(ordinaryArgs, arg)
+		ordinaryIndexes = append(ordinaryIndexes, i)
+	}
+
+	ranges, rewrites, changed := ts.collectExprRanges(ordinaryArgs)
+	for i, argIndex := range ordinaryIndexes {
+		args[argIndex] = rewrites[i]
+	}
+
+	for i, arg := range exprs {
+		if !ts.bareRangeDescriptorArg(arg) {
+			continue
+		}
+		if ident, ok := arg.(*ast.Identifier); ok && rangeDriverNamed(ranges, ident.Value) {
+			argRanges, rew := ts.HandleRanges(arg)
+			args[i] = rew
+			changed = changed || rew != arg
+			ranges = mergeUses(ranges, argRanges)
+			continue
+		}
+		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
+		info.Ranges = nil
+		info.HasRanges = false
+		info.Rewrite = nil
+	}
+	return ranges, args, changed
+}
+
+// bareRangeDescriptorArg reports whether a print argument is a complete Range
+// descriptor: a range literal or a name bound to a Range.
+func (ts *TypeSolver) bareRangeDescriptorArg(arg ast.Expression) bool {
+	switch a := arg.(type) {
+	case *ast.RangeLiteral:
+		return true
+	case *ast.Identifier:
+		typ, ok := ts.GetIdentifier(a.Value)
+		return ok && typ.Kind() == RangeKind
+	}
+	return false
+}
+
+// isBareRangeExpr reports whether expr is a driver that a function can consume
+// through a range-specialized variant. A ranged array access is eligible only
+// while it is an immediate call argument; collectCallArgs gives that call site
+// an internal ArrayRange type without exposing it to other expression roots.
 func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.Identifier, *ast.RangeLiteral:
 		return true
 	case *ast.ArrayRangeExpression:
-		// Only bare if array doesn't have ranges and index is bare
-		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
+		_, _, ok := ts.callScopedArrayRangeType(e)
+		return ok
 	default:
 		return false
 	}
 }
 
-// HandleIdentifierRanges processes identifier expressions, detecting if they refer
-// to range-typed variables and including them in range tracking.
-// Note: This returns ranges but does NOT set info.Ranges on the identifier itself.
-// This is intentional - bare identifiers like `i` should print as range representations.
-// Ranges are only extracted when the identifier is used in an expression context
-// (e.g., in a function call or infix operation) that needs scalar values.
+// HandleIdentifierRanges processes identifier expressions, detecting if they
+// refer to range-typed variables and including them in range tracking. The
+// enclosing context decides whether that occurrence consumes the driver or a
+// complete assignment copies the descriptor.
 func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
 	typ, ok := ts.GetIdentifier(ident.Value)
-	if ok && (typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind) {
+	if ok && typ.Kind() == RangeKind {
 		ri := &RangeInfo{
 			Name:     ident.Value,
 			RangeLit: nil,
 		}
 		ranges = []*RangeInfo{ri}
+		info := ts.ExprCache[key(ts.FuncNameMangled, ident)]
+		info.Ranges = append([]*RangeInfo(nil), ranges...)
+		info.Rewrite = ident
 	}
 	rew = ident
 	return
+}
+
+// HandleStringLiteralRanges exposes named Range dependencies hidden inside
+// formatting markers so interpolation follows the same driver semantics as an
+// ordinary identifier expression.
+func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges []*RangeInfo, rew ast.Expression) {
+	// A main marker formats its value, so a bare Range there stays a
+	// descriptor. Width and precision operands are consumed as numbers, which
+	// makes a named Range in a specifier an iteration driver.
+	_, specs := formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined)
+	for _, name := range specs {
+		typ, ok := ts.GetIdentifier(name)
+		if !ok || typ.Kind() != RangeKind {
+			continue
+		}
+		ranges = mergeUses(ranges, []*RangeInfo{{Name: name}})
+	}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
+	info.Ranges = append([]*RangeInfo(nil), ranges...)
+	info.HasRanges = len(ranges) > 0
+	info.Rewrite = lit
+	return ranges, lit
+}
+
+func rangeDriverNamed(ranges []*RangeInfo, name string) bool {
+	for _, ri := range ranges {
+		if ri.RangeLit == nil && ri.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveBareRangeAssignment distinguishes Range descriptor copies from uses of
+// a Range that an enclosing statement condition has already bound as an
+// iterator. `copy = source` and `copy = 0:n` preserve the descriptor; in
+// `filtered = source > 2 source`, the RHS reads the current scalar yield.
+func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type, condRanges []*RangeInfo) {
+	if len(types) != 1 {
+		return
+	}
+
+	rangeType, ok := types[0].(Range)
+	if !ok {
+		return
+	}
+
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	switch e := expr.(type) {
+	case *ast.Identifier:
+		if !rangeDriverNamed(condRanges, e.Value) {
+			info.Ranges = nil
+			info.HasRanges = false
+			info.Rewrite = nil
+			return
+		}
+		types[0] = rangeType.Iter
+		info.OutTypes[0] = rangeType.Iter
+	case *ast.RangeLiteral:
+		info.Ranges = nil
+		info.HasRanges = false
+		info.Rewrite = nil
+	}
 }
 
 func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
@@ -612,11 +750,8 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 		}
 		for _, t := range argInfo.OutTypes {
 			innerType := t
-			switch t.Kind() {
-			case RangeKind:
+			if t.Kind() == RangeKind {
 				innerType = t.(Range).Iter
-			case ArrayRangeKind:
-				innerType = t.(ArrayRange).Array.ElemType
 			}
 			scalarArgs = append(scalarArgs, innerType)
 		}
@@ -630,51 +765,62 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 }
 
 func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) bool {
-	return len(condTypes) == 1 &&
-		ts.isBareRangeExpr(expr) &&
-		isRangeDriverType(condTypes[0])
-}
-
-func (ts *TypeSolver) collectDriverRanges(expr ast.Expression, condTypes []Type) []*RangeInfo {
+	if len(condTypes) != 1 {
+		return false
+	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if len(info.Ranges) > 0 {
-		return info.Ranges
+	if len(info.Ranges) == 0 {
+		return false
 	}
 
-	// Non-driver conditions (for example, comparisons with no ranged operands)
-	// fall through here harmlessly: they contribute no loop driver ranges.
-	if !ts.isRangeDriverCond(expr, condTypes) {
-		return nil
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
+		return true
+	case *ast.ArrayRangeExpression:
+		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
+		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
+	default:
+		return false
 	}
-
-	ident, ok := expr.(*ast.Identifier)
-	if !ok {
-		panic(fmt.Sprintf("internal: bare range driver %T missing cached ranges", expr))
-	}
-	return []*RangeInfo{{Name: ident.Value}}
 }
 
-// expressionCanFail reports whether a value-position expression can propagate
-// a failed yield to its parent. Array cells resolve failures locally. A || can
-// fail only when its final fallback can; other nodes propagate a root scalar
-// comparison/&& or a failure from any child.
-func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+// treeCanFail reports whether a value-position expression can propagate a
+// failed yield to its parent, asking nodeFails to classify each node. The
+// solver and the CFG pass different predicates but share this walk, so the two
+// resolver boundaries cannot drift apart: an array literal settles a failed
+// cell locally, and a || fails only when its final fallback does.
+func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool {
 	if _, ok := expr.(*ast.ArrayLiteral); ok {
 		return false
 	}
 	if infix, ok := ast.IsLogicalOr(expr); ok {
-		return ts.expressionCanFail(infix.Right)
+		return treeCanFail(infix.Right, nodeFails)
 	}
-	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info != nil && (info.HasCondScalar() || info.HasCondAnd()) {
+	if nodeFails(expr) {
 		return true
 	}
 	for _, child := range ast.ExprChildren(expr) {
-		if ts.expressionCanFail(child) {
+		if treeCanFail(child, nodeFails) {
 			return true
 		}
 	}
 	return false
+}
+
+// conditionPropagates classifies one node for the solver: a root scalar
+// comparison or gating &&. Conditions only, because this also decides which
+// programs are valid — ||, && and statement conditions all require an operand
+// that can fail — so anything that merely fails to yield at runtime, such as an
+// out-of-bounds read, must not be folded in.
+func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	// An invalid composite can stop typing before all descendants are cached;
+	// logical validation still walks that partial tree to report diagnostics.
+	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
+}
+
+func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
+	return treeCanFail(expr, ts.conditionPropagates)
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
@@ -699,7 +845,9 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	if ts.isRangeDriverCond(expr, condTypes) {
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	info.RangeDriverCond = ts.isRangeDriverCond(expr, condTypes)
+	if info.RangeDriverCond {
 		return
 	}
 
@@ -712,7 +860,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	// A condition that carries a comparison but can never fail (an unconditional
 	// || fallback like `a > 0 || b`, which always yields b) does not gate.
-	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasCondExpr() {
+	if info.HasCondExpr() {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "statement condition can never fail (its || fallback always yields a value)",
@@ -722,7 +870,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	ts.Errors = append(ts.Errors, &token.CompileError{
 		Token: expr.Tok(),
-		Msg:   fmt.Sprintf("statement condition must be a comparison or bare range/array-range driver, got %s", condType),
+		Msg:   fmt.Sprintf("statement condition must be a comparison or bare range/array-selection driver, got %s", condType),
 	})
 }
 
@@ -734,49 +882,24 @@ func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*Ran
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
 		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, ts.collectDriverRanges(expr, info.OutTypes))
+		ranges = mergeUses(ranges, info.Ranges)
 	}
 	return ranges
 }
 
 // mergeCondRangesIntoValue merges condition ranges into a value expression's
 // ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
-// Bare range-like values (identifiers, direct range literals, and bare
-// array-range views) also merge their own ranges here so they scalarize to the
-// iterator / element type only inside that outer ranged context. Outside it
-// they remain Range / ArrayRange values. Array literals still control
-// accumulation; non-literal values remain last-value-wins.
-func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, exprTypes []Type, condRanges []*RangeInfo) {
+// Bare Range assignments have already been classified as descriptor copies or
+// reads of a driver bound by this statement. Array indexing is element-typed in
+// every context. Array literals still control accumulation; non-literal values
+// remain last-value-wins.
+func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, condRanges []*RangeInfo) {
 	if len(condRanges) == 0 {
 		return
 	}
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-
-	merged := condRanges
-	// Bare range values become per-iteration scalars only when the statement
-	// condition already introduced outer iteration. Outside that context they
-	// remain Range / ArrayRange values.
-	if len(exprTypes) == 1 && ts.isBareRangeExpr(expr) {
-		selfRanges := info.Ranges
-		if ident, ok := expr.(*ast.Identifier); ok && exprTypes[0].Kind() == RangeKind {
-			selfRanges = []*RangeInfo{{Name: ident.Value}}
-		}
-		merged = mergeUses(condRanges, selfRanges)
-
-		switch exprTypes[0].Kind() {
-		case RangeKind:
-			iterType := exprTypes[0].(Range).Iter
-			exprTypes[0] = iterType
-			info.OutTypes[0] = iterType
-		case ArrayRangeKind:
-			elemType := arrayIndexResultType(exprTypes[0].(ArrayRange).Array)
-			exprTypes[0] = elemType
-			info.OutTypes[0] = elemType
-		}
-	}
-
-	info.Ranges = mergeUses(merged, info.Ranges)
+	info.Ranges = mergeUses(condRanges, info.Ranges)
 	info.HasRanges = true
 }
 
@@ -803,7 +926,8 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
-		ts.mergeCondRangesIntoValue(expr, exprTypes, condRanges)
+		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
+		ts.mergeCondRangesIntoValue(expr, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)
@@ -1424,7 +1548,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	return types
 }
 
-func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isRoot bool) []Type {
+func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ bool) []Type {
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
@@ -1441,7 +1565,9 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 	}
 	resultType := arrayIndexResultType(arrType)
 
-	idxTypes := ts.TypeExpression(ax.Range, isRoot)
+	// Preserve the Range type long enough to validate the driver. The enclosing
+	// range rewrite later shadows it with a scalar index.
+	idxTypes := ts.TypeExpression(ax.Range, true)
 	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
 	if len(idxTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -1472,41 +1598,20 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, isR
 		}
 	}
 	if idxType.Kind() == RangeKind {
-		if arrType.Rank > 1 {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: ax.Tok(),
-				Msg:   "range indexing is currently supported only for rank-1 arrays",
-			})
-			return info.OutTypes
-		}
 		iterType := idxType.(Range).Iter
 		if !TypeEqual(iterType, I64) {
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: ax.Tok(),
-				Msg:   fmt.Sprintf("array range index expects I64 iterator, got %s", iterType),
+				Msg:   fmt.Sprintf("range-valued array index expects an I64 iterator, got %s", iterType),
 			})
 			return info.OutTypes
 		}
 	}
 
-	if !isRoot {
-		// Nested indexing still removes one outer dimension. A range index is a
-		// rank-1 driver here because higher-rank ranges were rejected above.
-		info.OutTypes = []Type{resultType}
-		info.ExprLen = 1
-		return info.OutTypes
-	}
-
-	if idxType.Kind() == IntKind {
-		info.OutTypes = []Type{resultType}
-		info.ExprLen = 1
-		return info.OutTypes
-	}
-
-	info.OutTypes = []Type{ArrayRange{
-		Array: arrType,
-		Range: idxType.(Range),
-	}}
+	// A ranged index is an ephemeral stream of resultType values, not a
+	// first-class view. Its surrounding context retains the final value,
+	// collects all values, or invokes a function once per yielded element.
+	info.OutTypes = []Type{resultType}
 	info.ExprLen = 1
 	return info.OutTypes
 }
@@ -1611,7 +1716,7 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 		return
 	}
 
-	ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind || t.Kind() == ArrayRangeKind}
+	ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind}
 	return
 }
 
@@ -1759,7 +1864,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
 		CompareModes: compareModes,
 	}
 	return types
@@ -1820,7 +1925,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
 		CompareModes: compareModes,
 	}
 	return types
@@ -1879,7 +1984,8 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 // with it (solver and compiler share the same ExprCache map).
 func treeHasLogicalCond(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
 	if infix, ok := expr.(*ast.InfixExpression); ok && (infix.IsLogicalOr() || infix.IsLogicalAnd()) {
-		if info := cache[key(funcNameMangled, expr)]; info != nil && (info.HasFallbackOr() || info.HasCondAnd()) {
+		info := cache[key(funcNameMangled, expr)]
+		if info.HasFallbackOr() || info.HasCondAnd() {
 			return true
 		}
 	}
@@ -2125,8 +2231,6 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
-	info.CallParamTypes = append([]Type(nil), args...)
-	info.ScalarCallParamTypes = append([]Type(nil), innerArgs...)
 
 	// Compute hasRanges from all arguments
 	hasRanges := false
@@ -2136,6 +2240,14 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 			break
 		}
 	}
+	// Print has no callee body that can own iteration. Any driver arguments are
+	// expanded at the statement and printed as yielded scalar values.
+	if ce.Function.Value == Print {
+		loopInside = false
+		args = innerArgs
+	}
+	info.CallParamTypes = append([]Type(nil), args...)
+	info.ScalarCallParamTypes = append([]Type(nil), innerArgs...)
 
 	// Handle builtins - no template lookup needed
 	if builtin, ok := Builtins[ce.Function.Value]; ok {
@@ -2178,6 +2290,14 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 		}
 	}
 
+	// Reusing one driver in multiple parameters means those parameters advance
+	// together, not as a cartesian product. A callee specialization has one loop
+	// per Range/ArrayRange parameter, so keep this case at the caller where the
+	// shared RangeInfo is naturally deduplicated.
+	if loopInside && callArgsShareRangeDriver(exprs, ts.ExprCache, ts.FuncNameMangled) {
+		loopInside = false
+	}
+
 	if loopInside {
 		return
 	}
@@ -2200,6 +2320,46 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	return
 }
 
+func callArgsShareRangeDriver(exprs []ast.Expression, cache map[ExprKey]*ExprInfo, funcNameMangled string) bool {
+	owner := make(map[string]int)
+	for argIndex, expr := range exprs {
+		info := cache[key(funcNameMangled, expr)]
+		for _, driver := range info.Ranges {
+			if previousArg, exists := owner[driver.Name]; exists && previousArg != argIndex {
+				return true
+			}
+			owner[driver.Name] = argIndex
+		}
+	}
+	return false
+}
+
+// callScopedArrayRangeType returns the internal parameter type for a bare array
+// selection and the yielded type seen by the function body.
+func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange, Type, bool) {
+	ax, ok := expr.(*ast.ArrayRangeExpression)
+	if !ok {
+		return ArrayRange{}, nil, false
+	}
+
+	arrInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Array)]
+	idxInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Range)]
+	// An invalid array source can stop before its index is typed.
+	if idxInfo == nil {
+		return ArrayRange{}, nil, false
+	}
+	if arrInfo.HasRanges || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
+		return ArrayRange{}, nil, false
+	}
+
+	arrType, arrayOK := arrInfo.OutTypes[0].(Array)
+	rangeType, rangeOK := idxInfo.OutTypes[0].(Range)
+	if !arrayOK || !rangeOK || !ts.isBareRangeExpr(ax.Range) {
+		return ArrayRange{}, nil, false
+	}
+	return ArrayRange{Array: arrType, Range: rangeType}, arrayIndexResultType(arrType), true
+}
+
 // collectCallArgs types arguments and builds arg type lists for function lookup.
 // Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
@@ -2207,14 +2367,19 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
-	for _, outerTypes := range outerTypesPerArg {
+	for argIndex, outerTypes := range outerTypesPerArg {
+		if loopInside {
+			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
+				args = append(args, arrayRangeType)
+				innerArgs = append(innerArgs, yieldedType)
+				continue
+			}
+		}
+
 		for _, outerType := range outerTypes {
 			innerType := outerType
-			switch outerType.Kind() {
-			case RangeKind:
+			if outerType.Kind() == RangeKind {
 				innerType = outerType.(Range).Iter
-			case ArrayRangeKind:
-				innerType = outerType.(ArrayRange).Array.ElemType
 			}
 			innerArgs = append(innerArgs, innerType)
 
@@ -2228,43 +2393,6 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-/*
-// getInnerType returns the type that operations work with when given a Range/ArrayRange.
-// Range → Range.Iter, ArrayRange → element type, other → unchanged
-
-	func getInnerType(t Type) Type {
-		switch t.Kind() {
-		case RangeKind:
-			return t.(Range).Iter
-		case ArrayRangeKind:
-			return t.(ArrayRange).Array.ElemType
-		default:
-			return t
-		}
-	}
-
-	func (ts *TypeSolver) appendStandardCallArg(arg Type, args *[]Type, innerArgs *[]Type, hasIter *bool) {
-		var paramType Type
-		switch arg.Kind() {
-		case RangeKind:
-			paramType = arg
-			*innerArgs = append(*innerArgs, getInnerType(arg))
-			*hasIter = true
-		case ArrayRangeKind:
-			arrRange := arg.(ArrayRange)
-			paramType = arrRange
-			// Like Range parameters, ArrayRange parameters are passed as-is to the function.
-			// The function will handle iteration internally via funcLoopNest.
-			// We pass the element type as innerArgs so the function body is typed correctly.
-			*innerArgs = append(*innerArgs, getInnerType(arg))
-			*hasIter = true
-		default:
-			paramType = arg
-			*innerArgs = append(*innerArgs, arg)
-		}
-		*args = append(*args, paramType)
-	}
-*/
 func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string) (Array, bool) {
 	arrayTypes := ts.TypeExpression(source, false) // nested expression
 	if len(arrayTypes) != 1 {

@@ -13,3 +13,20 @@ res
 res = 10
 res = AccViaId(res, 0:-2)
 res
+
+res = 10
+res = ConditionalAcc(res, -1)
+res
+
+res = 10
+res = ConditionalAcc(res, -2:3)
+res
+
+sum = 10
+sum, last = AccPair(sum, 1:4)
+sum, last
+
+reversedHalf = 0.0
+reversedSum = 1
+reversedHalf, reversedSum = ReversedAcc(reversedSum, 0:4)
+"ReversedHalf: -reversedHalf ReversedSum: -reversedSum"

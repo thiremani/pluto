@@ -63,7 +63,7 @@ const (
 )
 
 // GetFnType returns the LLVM FunctionType for a Pluto runtime helper
-// name, like "printf", "free", or "range_i64_str".
+// name, like "printf", "free", or "array_nd_str".
 func (c *Compiler) GetFnType(name string) llvm.Type {
 	// Short helpers to reduce duplication
 	charPtr := llvm.PointerType(c.Context.Int8Type(), 0)

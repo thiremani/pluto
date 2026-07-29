@@ -7,3 +7,16 @@ res = AccViaId(a, x)
 
 res = Acc(a, x)
     res = a + x
+
+res = ConditionalAcc(a, x)
+    res = x > 0 a + x
+
+sum, last = AccPair(a, x)
+    sum = a + x
+    last = x
+
+# Sibling first, so the accumulator sits at the second output and its selector
+# keeps the skipped first output as a numbering gap.
+half, sum = ReversedAcc(a, x)
+    half = x * 0.5
+    sum = a + x

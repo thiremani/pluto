@@ -90,6 +90,31 @@ func getValidTestCases() []cfgTestCase {
 			name:  "Var Not Defined",
 			input: `"Value: -x%s"`,
 		},
+		{
+			// The callee may skip its write, leaving the destination's previous
+			// value in place, so that previous write is live.
+			name: "Write then Skippable Call Root",
+			code: `res = maybeWrite(x)
+    res = x > 0 42`,
+			input: "x = 7\nx = maybeWrite(-1)\nx",
+		},
+		{
+			// A condition below the value root still leaves the whole RHS able
+			// to yield nothing, so the earlier write stays live.
+			name:  "Nested Condition Below Root",
+			input: "x = 7\ny = 10\ny = (x < 5) + 5\ny",
+		},
+		{
+			// An out-of-bounds read fails its lanes and preserves the target.
+			name:  "Out Of Bounds Read Preserves Destination",
+			input: "arr = [1]\ny = 10\ny = arr[9]\ny",
+		},
+		{
+			// The failable expression suspends only its own destination, and
+			// b is fresh, so nothing behind the unconditional sibling is dead.
+			name:  "Failable Value Protects Only Its Own Destination",
+			input: "x = 7\na = 10\na, b = x < 5, 30\na, b",
+		},
 	}
 }
 
@@ -141,6 +166,36 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `value assigned to "c" is never used`,
 		},
 		{
+			// A call feeding an operator always contributes to a new value, so
+			// the write stays unconditional and the earlier one is still dead.
+			name: "Call Feeding Operator Stays Unconditional",
+			code: `res = alwaysWrite(x)
+    res = x * 2`,
+			input:         "x = 7\nx = alwaysWrite(3) + 1\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// A || yields whenever its final fallback does, so the resolver
+			// boundary holds and this write is unconditional.
+			name:          "Logical Or With Unconditional Fallback",
+			input:         "x = 7\ny = 10\ny = (x < 5) || 99\ny",
+			errorContains: `unconditional assignment to "y" overwrites a previous value that was never used`,
+		},
+		{
+			// An array literal settles a failed cell locally, so the literal
+			// always yields and the boundary holds.
+			name:          "Array Literal Cell Stays Unconditional",
+			input:         "x = 7\ny = [1]\ny = [x < 5]\ny",
+			errorContains: `unconditional assignment to "y" overwrites a previous value that was never used`,
+		},
+		{
+			// A failable sibling no longer suspends the whole statement, so
+			// the dead store behind the unconditional literal is reported.
+			name:          "Failable Sibling Does Not Protect Unconditional Write",
+			input:         "x = 7\na = 10\nb = 20\na, b = x < 5, 30\na, b",
+			errorContains: `unconditional assignment to "b" overwrites a previous value that was never used`,
+		},
+		{
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
 			errorContains: `variable "x" has not been defined`,
@@ -183,7 +238,11 @@ func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
 	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", "", cp.Parse())
 	cc.Compile()
 	cfg := NewCFG(nil, cc)
-	cfg.Analyze(prog.Statements)
+	cfg.PushBlock()
+	defer cfg.PopBlock()
+	PushScope(&cfg.Scopes, BlockScope)
+	cfg.funcForwardPass(prog.Statements)
+	cfg.backwardPass(make(map[string]struct{}))
 
 	if expectError {
 		assertHasExpectedError(t, cfg.Errors, tc.errorContains)
@@ -198,6 +257,87 @@ func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expected
 	if len(errors) > 0 {
 		assert.Contains(t, errors[0].Msg, expectedMessage, "Error message mismatch")
 	}
+}
+
+func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileError {
+	t.Helper()
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, name, "", ast.NewCode())
+	program := parseInput(t, name, input)
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	return sc.Compile()
+}
+
+// A collector materializes an array even over an empty domain, so its write is
+// unconditional and the store behind it is dead. Range classification needs the
+// solver, so this runs the full script pipeline.
+func TestCollectorWriteIsUnconditional(t *testing.T) {
+	errs := compileScriptForCFGTest(t, "collectorWrite", "i = 0:0\nc = [9]\nc = [i + 0]\nc")
+	require.NotEmpty(t, errs, "the dead store behind the collector must be reported")
+	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
+}
+
+// Typed comparison metadata distinguishes a scalar condition, which may not
+// yield, from an array mask, which always materializes an array. The untyped
+// function-template fallback intentionally cannot make that distinction.
+func TestArrayComparisonWriteIsUnconditional(t *testing.T) {
+	errs := compileScriptForCFGTest(t, "arrayComparisonWrite", "a = [1 2]\nr = [9 9]\nr = a > 0\nr")
+	require.NotEmpty(t, errs, "the dead store behind the array mask must be reported")
+	assert.Contains(t, errs[0].Msg, `unconditional assignment to "r"`)
+}
+
+// A ranged gate can admit no iterations, so collector and scalar destinations
+// both preserve their prior values and both writes stay conditional.
+func TestRangedGateCollectorWriteIsConditional(t *testing.T) {
+	errs := compileScriptForCFGTest(t, "rangedGateCollector", "i = 0:1\nc = [9]\ns = 42\nc, s = i < 0 [i], i + 7\nc, s")
+	require.Empty(t, errs)
+}
+
+func TestGateArrayWriteKinds(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "empty ranged gate preserves collector",
+			input: "c = [9]\nc = 0:0 [1]\nc",
+		},
+		{
+			name:  "ranged block preserves destination",
+			input: "c = [\n    9\n]\ni = 0:1\nc = i < 0 [\n    1\n]\nc",
+		},
+		{
+			name:  "scalar collector preserves destination",
+			input: "flag = 0\nc = [9]\nc = flag > 0 [1]\nc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := compileScriptForCFGTest(t, tt.name, tt.input)
+			require.Empty(t, errs)
+		})
+	}
+}
+
+// A ranged expression suspends its own destination only: the sibling literal
+// writes even when the domain is empty, so the store behind it is dead. Range
+// classification needs the solver, so this runs the full script pipeline
+// rather than the bare-CFG harness.
+func TestEmptyDomainDoesNotProtectSiblingWrite(t *testing.T) {
+	errs := compileScriptForCFGTest(t, "emptyDomainSibling", "i = 0:0\na = 1\nb = 2\na, b = i + 0, 30\na, b")
+	require.NotEmpty(t, errs, "the dead store behind the sibling literal must be reported")
+
+	msgs := make([]string, len(errs))
+	for i, e := range errs {
+		msgs[i] = e.Msg
+	}
+	joined := strings.Join(msgs, "\n")
+	assert.Contains(t, joined, `unconditional assignment to "b"`)
+	assert.NotContains(t, joined, `to "a"`, "the ranged destination must stay protected")
 }
 
 func TestValidateFuncOutputsNotDeadStore(t *testing.T) {

@@ -13,11 +13,11 @@ type Loop struct {
 	Exit *llvm.BasicBlock
 }
 
-// extractRangeSymbol loads a range aggregate from a symbol when needed.
-func (c *Compiler) extractRangeSymbol(sym *Symbol, name string) (*Symbol, bool) {
+// rangeSymbol loads a range aggregate from a symbol when needed.
+func (c *Compiler) rangeSymbol(sym *Symbol, name string) *Symbol {
 	switch t := sym.Type.(type) {
 	case Range:
-		return sym, true
+		return sym
 	case Ptr:
 		rangeType, ok := t.Elem.(Range)
 		if ok {
@@ -27,74 +27,30 @@ func (c *Compiler) extractRangeSymbol(sym *Symbol, name string) (*Symbol, bool) 
 				FuncArg:  sym.FuncArg,
 				Borrowed: true,
 				ReadOnly: sym.ReadOnly,
-			}, true
+			}
 		}
 	}
-	return nil, false
-}
 
-// extractArrayRangeSymbol loads an array-range aggregate from a symbol when needed.
-func (c *Compiler) extractArrayRangeSymbol(sym *Symbol, name string) (*Symbol, bool) {
-	switch t := sym.Type.(type) {
-	case ArrayRange:
-		return sym, true
-	case Ptr:
-		arrRangeType, ok := t.Elem.(ArrayRange)
-		if ok {
-			return &Symbol{
-				Val:      c.createLoad(sym.Val, arrRangeType, name+"_arrrange"),
-				Type:     arrRangeType,
-				FuncArg:  sym.FuncArg,
-				Borrowed: true,
-				ReadOnly: sym.ReadOnly,
-			}, true
-		}
-	}
-	return nil, false
+	panic(fmt.Sprintf("internal: %q is not a Range during lowering (got %s)", name, sym.Type.String()))
 }
 
 func (c *Compiler) rangeAggregateFromSymbol(sym *Symbol, name string) llvm.Value {
-	if rangeSym, ok := c.extractRangeSymbol(sym, name); ok {
-		return rangeSym.Val
-	}
-
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
-		return c.builder.CreateExtractValue(arrRangeSym.Val, 1, name+"_range")
-	}
-
-	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+	return c.rangeSymbol(sym, name).Val
 }
 
 func (c *Compiler) iterOverDriverSymbol(sym *Symbol, name string, body func(*Symbol)) {
-	if rangeSym, ok := c.extractRangeSymbol(sym, name); ok {
-		c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  rangeSym.FuncArg,
-				Borrowed: true,
-			})
+	rangeSym := c.rangeSymbol(sym, name)
+	c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
+		body(&Symbol{
+			Val:      iter,
+			Type:     iterType,
+			FuncArg:  rangeSym.FuncArg,
+			Borrowed: true,
 		})
-		return
-	}
-
-	if arrRangeSym, ok := c.extractArrayRangeSymbol(sym, name); ok {
-		c.iterOverArrayRange(arrRangeSym, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{
-				Val:      iter,
-				Type:     iterType,
-				FuncArg:  arrRangeSym.FuncArg,
-				Borrowed: true,
-			})
-		})
-		return
-	}
-
-	panic(fmt.Sprintf("internal: %q is not a Range or ArrayRange during lowering (got %s)", name, sym.Type.String()))
+	})
 }
 
 // rangeAggregateForRI builds the {start,stop,step} aggregate for a driver.
-// Named ArrayRange drivers contribute their underlying range component.
 func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	if ri.RangeLit != nil {
 		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
@@ -319,8 +275,4 @@ func (c *Compiler) createLoop(r llvm.Value, bodyGen func(iter llvm.Value)) {
 		bodyGen(iter)
 		return llvm.Value{}
 	})
-}
-
-func (c *Compiler) createLoopState(r llvm.Value, seed llvm.Value, stateType llvm.Type, bodyGen func(iter llvm.Value, current llvm.Value) llvm.Value) llvm.Value {
-	return c.createLoopCore(r, seed, stateType, true, bodyGen)
 }

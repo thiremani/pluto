@@ -32,6 +32,9 @@ selected rows: [
     1 2
     3 4
 ]
+last selected row: [3 4]
+empty selected row: []
+kept selected row: [9 8]
 selected rows OOB: [
     3 4
     0 0

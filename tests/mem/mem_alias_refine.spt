@@ -1,0 +1,7 @@
+# The range driver is what makes the callee alias-bearing, so this only covers
+# the intended path while the call carries a range.
+text = "he" ⊕ "llo"
+sibling = "z"
+i = 0:3
+text, sibling = RefineEcho(text, i)
+"Refined: -text Sibling: -sibling"

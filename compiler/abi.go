@@ -22,16 +22,15 @@ type ABIParam struct {
 }
 
 type ABIReturn struct {
-	Mode         ABIReturnMode
-	DirectType   Type
-	OutTypes     []Type
-	HasSeedParam bool
+	Mode       ABIReturnMode
+	DirectType Type
+	OutTypes   []Type
 }
 
 // FuncABI captures the lowered function boundary for one mangled variant.
-// Range-bearing variants may need hidden alias/seed state so direct scalar
-// params and returns still preserve loop-carried accumulation and empty-range
-// no-op semantics inside the callee.
+// Direct scalar returns carry a hidden destination seed so a skipped write
+// preserves the caller's value. Range-bearing variants may additionally need
+// hidden alias state for loop-carried accumulation.
 type FuncABI struct {
 	Params         []ABIParam
 	Return         ABIReturn
@@ -47,6 +46,18 @@ func isDirectScalarABIType(t Type) bool {
 	default:
 		return false
 	}
+}
+
+// aliasableOutput reports whether an output can back a parameter's alias slot.
+// The hidden selector picks an output by position and the callee then reads that
+// storage as the parameter's own type, so the two must lower identically. There
+// is no numeric conversion anywhere on this path, and a pointer selected across
+// mismatched types would be loaded as the wrong type.
+func aliasableOutput(paramType, outputType Type) bool {
+	if ptr, ok := outputType.(Ptr); ok {
+		outputType = ptr.Elem
+	}
+	return TypeEqual(paramType, outputType)
 }
 
 func directScalarABIReturnType(outTypes []Type) (Type, bool) {
@@ -95,9 +106,11 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	}
 
 	if directType, ok := directScalarABIReturnType(outTypes); ok {
+		// Whether a function body writes its output conditionally is not part
+		// of the type-based mangle. Keep the native C ABI stable across body
+		// changes: direct-return mode always implies a destination seed.
 		abi.Return.Mode = ABIReturnDirect
 		abi.Return.DirectType = directType
-		abi.Return.HasSeedParam = abi.HasRangeParams
 	}
 
 	return abi
@@ -141,7 +154,7 @@ func (abi FuncABI) AliasFunctionParamIndex(paramIndex int) int {
 }
 
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
-	if abi.Return.Mode != ABIReturnDirect || !abi.Return.HasSeedParam {
+	if abi.Return.Mode != ABIReturnDirect {
 		return -1
 	}
 	return abi.AliasParamBaseIndex() + abi.NumAliasSlots()

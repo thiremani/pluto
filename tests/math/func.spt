@@ -9,6 +9,28 @@ arrVal = Square(arr)
 "SquareFloat: -floatVal"
 "SquareArr: -arrVal\n"
 
+# A skipped direct-scalar function output preserves an existing caller
+# destination, while a fresh destination keeps its zero seed.
+conditionalSquareKeep = 14
+conditionalSquareKeep = ConditionalSquare(conditionalSquareKeep - 12)
+conditionalSquareWrite = 14
+conditionalSquareWrite = ConditionalSquare(conditionalSquareWrite - 7)
+conditionalSquareFresh = ConditionalSquare(2)
+conditionalSquareForwarded = 14
+conditionalSquareForwarded = ForwardConditionalSquare(conditionalSquareForwarded - 12)
+conditionalSquareFloatKeep = 14.5
+conditionalSquareFloatKeep = ConditionalSquare(conditionalSquareFloatKeep - 12.5)
+conditionalSquareFloatWrite = ConditionalSquare(7.5)
+conditionalSquareFloatFresh = ConditionalSquare(2.0)
+
+"ConditionalSquareKeep: -conditionalSquareKeep"
+"ConditionalSquareWrite: -conditionalSquareWrite"
+"ConditionalSquareFresh: -conditionalSquareFresh"
+"ConditionalSquareForwarded: -conditionalSquareForwarded"
+"ConditionalSquareFloatKeep: -conditionalSquareFloatKeep"
+"ConditionalSquareFloatWrite: -conditionalSquareFloatWrite"
+"ConditionalSquareFloatFresh: -conditionalSquareFloatFresh\n"
+
 # Range filters and array masks (non-accumulated)
 rangeVal = Square(1:3)
 arrRangeVal = Square(arr[1:3])
@@ -32,7 +54,7 @@ arrRangeFilterKeepPrev = Square(arr[1:3] > 2)
 
 "SquareRangeFilterTailFalse: -rangeFilterTailFalseVal\n"
 
-# Range and array-range accumulation
+# Range and range-indexed array collection
 rangeAccVal = [Square(1:3)]
 arrRangeAccVal = [Square(arr[1:3])]
 arrRangeFilterAccFalseVal = [Square(arr[1:3] > 3)]

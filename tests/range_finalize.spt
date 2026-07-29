@@ -1,0 +1,85 @@
+# Bare range assignments copy descriptors. Brackets observe the copied stream.
+ascendingRange = 0:5
+ascending = ascendingRange
+ascendingValues = [ascending]
+"AscendingCopy: -ascendingValues"
+
+descendingRange = 6:0:-2
+descending = descendingRange
+descendingValues = [descending]
+"DescendingCopy: -descendingValues"
+
+# Empty descriptors still assign: both destinations become empty ranges.
+emptyRange = 3:3
+freshRange = emptyRange
+freshRangeValues = [freshRange]
+"EmptyRangeFresh: -freshRangeValues"
+
+existingRange = 0:2
+existingRangeBefore = [existingRange]
+existingRange = emptyRange
+existingRangeValues = [existingRange]
+"EmptyRangeExisting: -existingRangeBefore -> -existingRangeValues"
+
+# Empty ranged computations yield no value: fresh scalar destinations use zero,
+# while existing scalar destinations retain their seed.
+fresh = emptyRange + 1
+"EmptyComputeFresh: -fresh"
+
+existing = 91
+existing = emptyRange + 1
+"EmptyComputeExisting: -existing"
+
+# A copied descriptor remains consumable by functions.
+callFinal = useShadow(ascending)
+"CallFinal: -callFinal"
+
+# A Range returned by a function is a descriptor once bound.
+returnedRange = makeRange()
+returnedValues = [returnedRange]
+"ReturnedRange: -returnedValues"
+
+# A bare Range in a main marker formats the descriptor: the string is one
+# value with no drivers, in interpolation exactly as in assignment.
+markerRange = 0:3
+formattedFinal = "Marker -markerRange"
+"MarkerFinal: -formattedFinal"
+"MarkerDescriptor -markerRange"
+
+# A width or precision operand is consumed as a number, so a named Range there
+# is still an iteration driver.
+widthRange = 1:4
+widthValue = 7
+formattedWidth = "|-widthValue%(-widthRange)d|"
+"MarkerWidthFinal: -formattedWidth"
+"MarkerWidthEach: |-widthValue%(-widthRange)d|"
+
+# A range literal in print position is a descriptor value too.
+"LiteralDescriptor", 0:3
+
+# A sibling computation binds the marker's name, so the marker formats that
+# iteration's I64 yield and an explicit %d applies to it.
+"DrivenMarker i=-markerRange%d", markerRange + 0
+
+# Descriptors print their exact bounds, including empty and stepped forms.
+emptyDescriptor = 3:3
+"EmptyDescriptor:", emptyDescriptor
+steppedDescriptor = 6:0:-2
+"SteppedDescriptor:", steppedDescriptor
+
+# Ranged computations preserve simultaneous-assignment reads.
+simRange = 0:3
+first = 77
+first, second = simRange + 0, first
+"SimultaneousRange: -first -second"
+
+simArray = [10 20 30]
+first = 88
+first, second = simArray[simRange], first
+"SimultaneousArray: -first -second"
+
+# A bare-marker string is a single value, so this write is unconditional; the
+# sibling still reads text's pre-statement value.
+text = "old"
+text, otherText = "Marker -markerRange", text
+"SimultaneousString: -text -otherText"

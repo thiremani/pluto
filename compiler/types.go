@@ -403,9 +403,9 @@ func isHeaderOnlyTableType(table Table) bool {
 	return true
 }
 
-// ArrayRange represents an iteration over a range of an array.
-// It carries the underlying array schema so type comparisons and mangling
-// can remain structural; the actual range bounds are runtime values.
+// ArrayRange is an internal, call-scoped view of an array selection. It keeps
+// the full source array and range schemas so specialization identity remains
+// structural without exposing ArrayRange as a source-level storable type.
 type ArrayRange struct {
 	Array Array
 	Range Range
@@ -418,8 +418,9 @@ func (ar ArrayRange) String() string {
 func (ar ArrayRange) Kind() Kind { return ArrayRangeKind }
 
 func (ar ArrayRange) Mangle() string {
-	return "ArrayRange" + SEP + T + "1" + SEP + ar.Array.ElemType.Mangle()
+	return "ArrayRange" + SEP + T + "2" + SEP + ar.Array.Mangle() + SEP + ar.Range.Mangle()
 }
+
 func (ar ArrayRange) Key() Type {
 	return ArrayRange{
 		Array: ar.Array.Key().(Array),

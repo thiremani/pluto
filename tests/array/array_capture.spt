@@ -34,9 +34,9 @@ multiRangeCapture = i + [i] - [3j]
 "MultiRangeCapture: -multiRangeCapture"
 
 arrBase = [1 2 3 4 5]
-arrRangeCapture = [arrBase[1:4]]
-"ArrayRangeCapture: -arrRangeCapture"
+rangeSelectionCapture = [arrBase[1:4]]
+"RangeSelectionCapture: -rangeSelectionCapture"
 
-arrRangeConcat = []
-arrRangeConcat = arrRangeConcat ⊕ [arrBase[2:5]]
-"ArrayRangeConcat: -arrRangeConcat"
+rangeSelectionConcat = []
+rangeSelectionConcat = rangeSelectionConcat ⊕ [arrBase[2:5]]
+"RangeSelectionConcat: -rangeSelectionConcat"

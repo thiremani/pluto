@@ -55,6 +55,39 @@ before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, whil
 `x = arr[i] > 0 || other[j] > 0` remains `MayWrite`. This matches the compiler's
 existing solver-then-CFG order, so migration requires no pass reordering.
 
+Inside a function body, range domain ownership decides which statements an
+empty domain can skip. A Range argument establishes a function-level domain
+whose yielded values drive the whole body, so its possibly-empty domain
+contributes one shared effect at the function boundary rather than making every
+statement that reads the parameter independently conditional. A locally
+created range owns only the statements it drives, so its empty domain suspends
+exactly those slots.
+Template-time CFG has neither distinction — it misreports a body like
+`i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
+computed once per mangled specialization are what resolve it. Any such
+per-specialization cache must bundle write effects, binding types, and
+validation results atomically: FuncCache is already shared across the scripts
+of one run while BindingTypes is rebuilt per script, and that split is exactly
+what produced issue #71's compile-order-dependent wrong output.
+
+Output spans, unlike write effects, are structural before any typing: a call
+site must consume exactly `len(callee.Outputs)` destinations, and that arity
+is fixed by the template declaration, so template analysis can place spans for
+direct calls and single-value expressions in mixed statements like
+`a, b, c = MaybePair(x), 5` — the literal's slot is a definite write even
+while the call's slots stay conditional. Only shapes whose slot count
+genuinely needs types, such as multi-slot value-position comparisons, keep the
+all-conditional fallback.
+
+This per-target `WriteEffect` is not a public function-ABI classifier. Every
+exported direct `I64`/`F64` return keeps its final hidden seed parameter.
+Collapsing statement effects into a function-level `MustWrite`/`MayWrite`
+summary may optimize internal seed use, but it cannot add or remove that
+parameter: a local conditional or a newly conditional output-producing callee
+would otherwise change the C prototype of the same type-mangled symbol after a
+body-only edit. A seedless variant requires a distinctly named private clone
+behind the stable entry point.
+
 PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
 
@@ -708,8 +741,8 @@ long-lived parallel path.
 - mixed RHS expressions produce effects aligned per LHS slot, such as
   `[]WriteEffect{MayWrite, MustWrite}` for `a, b = arr[i], i + 1`
 - shared conditions and possibly empty ranges produce `MayWrite` for keep-old or
-  unresolved last-yield targets, while an unconditional collector or zero-fill
-  closing policy can still produce `MustWrite`
+  unresolved last-yield targets, while an ungated collector or cell-local
+  zero-fill closing policy can still produce `MustWrite`
 - a fallback that resolves every conditional or checked-access failure produces
   `MustWrite`
 - a fallback whose final alternative can still fail remains `MayWrite`

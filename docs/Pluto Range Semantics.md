@@ -2,32 +2,112 @@
 
 ## Core Model
 
-Expressions that mention ranges produce ordered per-iteration values.
-Those values are not arrays by default.
-
-There are two explicit closing steps:
-
-1. `[]` closes a value stream into an array.
-2. The root expression of a scalar assignment closes any remaining outer
-   iteration by taking the final yielded value in iteration order.
-
-This keeps array materialization and scalar finalization separate.
-
-## Ranges And Drivers
-
-A range or array-range used in an expression contributes an iteration driver.
-Multiple distinct drivers form a nested iteration domain in source order.
-Repeated use of the same driver name refers to the same loop, not a nested copy.
-
-Example:
+A `Range<T>` is a descriptor value. A range literal constructs one, and a
+complete Range-valued assignment copies it:
 
 ```pluto
 i = 0:5
-x = i + 1
+j = i
+k = (i)
 ```
 
-This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
-value, so `x = 5`.
+`i`, `j`, and `k` contain equal descriptor values with the same captured
+bounds. Parentheses are transparent. Each binding is nevertheless a distinct
+driver identity: consuming `i` and `j` together forms a cartesian domain,
+while repeated uses of `i` share one loop.
+
+Using a Range in an operation creates a ranged computation. `Ranged<T>` is a
+useful description of that expression effect, not a storable source type. An
+operation produces ordered per-iteration values; an individual yield may be a
+scalar or an owned subarray.
+
+There are two explicit closing steps for a ranged computation:
+
+1. `[]` closes it into an array.
+2. The root expression of an assignment closes any remaining outer iteration
+   by taking the final yielded value in iteration order.
+
+A Range descriptor assignment is not a closing step and does not iterate.
+This keeps descriptor copying, collection, and final-value selection separate.
+
+## Migration From Bare-Range Finalization
+
+Previously, assigning a bare named Range kept its final yield. Code that relied
+on that behavior should use an operation such as `last = i + 0`; for
+`i = 0:5`, `last` becomes `4`, while `copy = i` now copies the descriptor.
+
+This change can be silent for a fresh destination. A later call, index, or
+collector consumes the copied Range and runs its whole domain, while print and
+interpolation format the descriptor itself. Assigning a Range
+to an existing scalar is instead rejected as a type-changing reassignment.
+Descriptor copies are unconditional writes and participate in the ordinary
+dead-store checks. Range-indexed expressions such as `last = data[i]` are
+unchanged because indexing is already a ranged computation.
+
+## Ranges And Drivers
+
+A range identifier consumed by an operator, array index, collector, statement
+condition, or function argument contributes an iteration driver. A
+range-indexed array access is itself a ranged computation.
+Multiple distinct drivers form a nested iteration domain in source order: the
+first distinct driver is outermost and the last is innermost. Repeated use of
+the same driver name refers to the same loop, not a nested copy.
+Driver identity belongs to the binding name, not to descriptor equality.
+Substituting one Range name for another can therefore change a shared loop into
+a cartesian domain.
+
+Range `start`/`stop`/`step` fields are not part of the language.
+The bound values are captured when the range is constructed, so later changes
+to the source variables do not mutate the existing range. Functions that need
+those bounds as data should currently receive the scalar values explicitly.
+
+Range is nameable and copyable, but is not yet a fully first-class container
+element. Arrays and tables contain scalar/string elements rather than Range
+descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
+function likewise consumes it as a driver rather than passing inert metadata.
+A function may return a Range descriptor to a binding, but anonymous
+Range-returning expressions are not yet accepted uniformly by every consuming
+context; bind the result before consuming it.
+
+Range-indexed arrays follow the same rule:
+
+```pluto
+arr = [10 20 30 40]
+i = 1:4
+last = arr[i]
+selected = [arr[i]]
+```
+
+`last` becomes `40`, while `selected` becomes `[20 30 40]`. A range-indexed
+access is not a public slice or view value: it is either consumed by its
+surrounding expression, finalized at an assignment root, or materialized by
+`[]`. For a rank-N source, one yield is an owned rank-(N-1) subarray, so the
+final value can itself be an array. This ownership is semantic: copy-on-write
+is permitted, but an escaping view into the source is not.
+
+Assigning an empty Range descriptor still performs a normal write. Consuming
+an empty Range produces no yields: a fresh ranged-computation destination
+retains its type's zero value (an empty array for a subarray result), while an
+existing destination is unchanged. Outside `[]`, an out-of-bounds selection
+point yields nothing, so the last valid selected value wins. Inside `[]`,
+failed cells are zero-filled to preserve collection shape, as described below.
+
+Print is a sink, not an operation: a bare Range argument or main marker
+formats the descriptor as `start:stop` (or `start:stop:step`), exactly as the
+value it is. Computations still drive the print loop, and a bare name bound as
+a driver by a sibling computation prints its per-iteration scalar. A width or
+precision marker consumes its Range operand as a number, so that operand still
+drives; see
+[Pluto String and Formatting Semantics](Pluto%20String%20and%20Formatting%20Semantics.md#interpolation-markers)
+for the formatting rules and examples. For ordinary print arguments:
+
+```pluto
+i = 0:2
+j = 2:4
+i, j            # one line: 0:2 2:4
+i + 0, j + 0    # cartesian: 0 2 / 0 3 / 1 2 / 1 3
+i, Square(i)    # i is driven: 0 0 / 1 1
+```
 
 Distinct drivers nest in source order, so collecting over two ranges walks
 their cartesian product:
@@ -48,7 +128,28 @@ produces:
 
 Calls, infix operators, and prefix operators all follow the same rule:
 they transform the current per-iteration values of their range drivers.
-They do not choose a special "base function" that owns the loop.
+Whether the compiler places a call's loop around the call or in a specialized
+callee is an implementation detail.
+
+An immediate bare range or range-indexed argument may select such a
+range-bearing specialization. In particular, `F(arr[i])` may pass an internal,
+call-scoped `ArrayRange` descriptor so the callee loops over the selection.
+That descriptor is not a language value: it cannot be stored, returned,
+printed, or otherwise escape the call, and the parameter inside `F` observes
+one yielded element or owned subarray at a time.
+
+Driver identity takes priority over loop placement. When one driver occurs in
+multiple call arguments, as in `F(i, i)`, both arguments must observe the same
+iteration; the current lowering runs that loop caller-side. Distinct drivers,
+as in `F(i, j)`, still form their normal cartesian domain. These choices do not
+change the results visible to source code.
+
+Function outputs are staged independently before the call. If an empty driver
+or skipped condition means an output is not written, its staged value is
+preserved. At representation boundaries, such as a static string result being
+assigned into an owned-string destination, the callee receives its declared
+zero value and the caller commits the adapted result only when the callee
+actually writes it.
 
 Examples:
 
@@ -123,7 +224,8 @@ expression.
 
 Once the literal has materialized, the result is just an ordinary array value.
 Binding freezes that value, so later statements treat it like any other named
-array.
+array. With no active drivers, a collector evaluates once and produces a
+singleton array.
 
 ### Collectors And Binding
 
@@ -159,16 +261,6 @@ This produces:
 ```
 
 because `y` is collected as `[0 0 0 0 0]` under the admitted `i` domain.
-
-By contrast:
-
-```pluto
-i = 0:5
-y = [0]
-res = i + y
-```
-
-also produces `[4]`.
 
 Example:
 
@@ -237,6 +329,11 @@ They do not preserve shape. The gate is shared by the whole statement: for a
 rejected domain point, none of its RHS expressions, collector appends, carried
 updates, or output commits execute. RHS-local ranges are nested inside each
 admitted point.
+
+If no domain point is admitted, the statement performs no write and an existing
+collector destination keeps its old value. This differs from an ungated
+collector over an empty range: `[i]` still evaluates to `[]` when `i` itself has
+an empty domain.
 
 Example:
 
@@ -342,26 +439,23 @@ range and validate that ownership before LLVM lowering.
 
 ## Statement Conditions And Tuples
 
-Statement conditions are shared across the whole assignment.
-They determine the admitted outer iteration domain for every output in the
-statement.
-
-Sibling RHS expressions do not share their local value drivers with each
-other.
-Each RHS adds only the extra drivers mentioned inside that expression.
+For tuple assignments, the statement-wide gate described above applies to
+every output. Each RHS adds only the local drivers mentioned inside that
+expression; sibling RHS expressions do not share those drivers.
 
 Examples:
 
 ```pluto
 i = 0:3
 j = 0:2
-x, y = i < 2 [1], j
+x, y = i < 2 [1], j + 0
 ```
 
 The statement condition `i < 2` is shared.
 `x` collects once for each admitted `i`, producing `[1 1]`.
-`y` uses its own local `j` driver inside that shared gate and ends with the
-final `j` value `1`.
+`y`'s operation uses its own local `j` driver inside that shared gate and ends
+with the final result `1`. A bare `j` in this position would instead copy the
+Range descriptor because only `i` belongs to the active statement domain.
 
 Likewise:
 
@@ -382,6 +476,12 @@ If a statement condition and an RHS expression mention the same driver name,
 the statement condition opens that outer loop first.
 Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
+
+Consequently, `filtered = i > 2 i` keeps the final admitted scalar, while
+`copy = outer > 2 i` copies `i` when only `outer` belongs to the statement
+domain. If the statement domain is empty, it performs no write: an existing
+Range destination stays unchanged and a fresh one keeps the zero Range
+descriptor.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
 shared scalar update step, but each RHS has its own local yield outcome. If one
@@ -406,40 +506,10 @@ The statement condition admits `i = 3 4 5`.
 The outer expression then continues with the frozen array value, so the final
 result is `[8 9 10]`.
 
-Sibling expression ranges still do not cross into nested collectors:
-
-```pluto
-i = 0:5
-res = i + [([0] + 1)[0]]
-```
-
-`[0]` is a singleton because it has no internal range and no statement gate.
-`[([0] + 1)[0]]` is also a singleton, and the outer `i` finalizes to `4`, so
-the result is `[5]`.
-
-This is a semantic materialization boundary.
-The compiler may later hoist or fuse loops as an optimization, but that does
-not change the language meaning.
-
-## Scalar Contexts
-
-Outside `[]`, ranged expressions remain per-iteration values until the root
-assignment or statement consumes them.
-
-Examples:
-
-```pluto
-i = 0:5
-x = i + 1
-```
-
-`x` becomes `5`.
-
-```pluto
-arr = [i + 1]
-```
-
-`arr` becomes `[1 2 3 4 5]`.
+This is the same semantic materialization boundary described for all
+collectors: sibling expression ranges do not cross it. The compiler may later
+hoist or fuse loops as an optimization, but that does not change the language
+meaning.
 
 ## Self-Reference: Fold
 
@@ -480,20 +550,3 @@ n = 0:5
 Both produce `[0 1 1.41421 1.73205 2]`. Streams and materialized arrays agree
 wherever both readings exist; the difference is only *when* the array comes
 into being.
-
-## Singleton Arrays
-
-If no range drivers are open inside `[]`, the literal evaluates once and
-produces a singleton array.
-
-Example:
-
-```pluto
-x = 7
-[x]
-```
-
-produces `[7]`.
-
-This is not a special array-literal mode.
-It is the same collector rule applied to an expression with no active drivers.

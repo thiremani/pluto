@@ -1,0 +1,5 @@
+# A heap string used as a comparison LHS. The comparison must not leave the
+# named binding permanently borrowed, or scope cleanup never frees its payload.
+out = pickByHeapCompare(k)
+    label = "he" ⊕ "llo"
+    out = label > "abc" k

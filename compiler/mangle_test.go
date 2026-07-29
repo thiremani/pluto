@@ -336,6 +336,54 @@ func TestMangle(t *testing.T) {
 	}
 }
 
+func TestArrayRangeMangleIsStructural(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      ArrayRange
+		expected string
+	}{
+		{
+			name: "rank one I64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 1},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_I64_Range_t1_I64",
+		},
+		{
+			name: "rank two I64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 2},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64",
+		},
+		{
+			name: "rank one F64 array",
+			typ: ArrayRange{
+				Array: Array{ElemType: F64, Rank: 1},
+				Range: Range{Iter: I64},
+			},
+			expected: "ArrayRange_t2_Array_t1_F64_Range_t1_I64",
+		},
+		{
+			name: "different range iterator",
+			typ: ArrayRange{
+				Array: Array{ElemType: I64, Rank: 1},
+				Range: Range{Iter: F64},
+			},
+			expected: "ArrayRange_t2_Array_t1_I64_Range_t1_F64",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mangled := tt.typ.Mangle()
+			assert.Equal(t, tt.expected, mangled)
+		})
+	}
+}
+
 func TestMangleDistinguishesModuleFromSubdir(t *testing.T) {
 	// This is the key test: ensure module path vs module+subdir produce different results
 	// Module: github.com/user/math/stats (as a single module)
@@ -561,6 +609,10 @@ func TestMangleDemangleRoundTrip(t *testing.T) {
 		{"github.com/user/pkg", "sub", "Run", []Type{F64}, "github.com/user/pkg/sub.Run(F64)"},
 		{"math", "", "move", []Type{Struct{Name: "Person"}, I64}, "math.move(Person, I64)"},
 		{"math", "", "pair", []Type{Struct{Name: "Person"}, Struct{Name: "Animal"}}, "math.pair(Person, Animal)"},
+		{"iter", "", "sum", []Type{ArrayRange{
+			Array: Array{ElemType: I64, Rank: 2},
+			Range: Range{Iter: I64},
+		}}, "iter.sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)"},
 		// Mixed nominal identifiers (ASCII + Unicode)
 		{"math", "", "f", []Type{Struct{Name: "foo_π"}, I64}, "math.f(foo_π, I64)"},
 		{"math", "", "f", []Type{Struct{Name: "πbar"}, I64}, "math.f(πbar, I64)"},

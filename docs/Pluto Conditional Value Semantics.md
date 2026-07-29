@@ -329,9 +329,8 @@ old), sibling expressions in one statement commit independently
 (`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
 argument keeps that call's outputs old as a unit), comparisons and `||`
 fallbacks fed by an OOB read keep old rather than judging a fabricated zero,
-and an unevaluated `||` right side cannot fail anything. The one place OOB
-still reads as `0` is a **collector cell over an explicit range** — the
-documented full-control opt-in.
+and an unevaluated `||` right side cannot fail anything. Inside any collector
+or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
 
 ## Why this model
 

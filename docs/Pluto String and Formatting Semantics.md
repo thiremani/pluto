@@ -63,6 +63,36 @@ width = 5
 "-missing%(-width)d" # -missing%(5)d
 ```
 
+A main marker formats its value whatever the type, so a bare `Range` formats
+its descriptor and contributes no iteration: the string is a single value in
+assignment and in print alike. A Range identifier used for dynamic width or
+precision is consumed as a number, which makes it an iteration driver. An
+explicit numeric conversion such as `-i%d` is a compile error while `i` is an
+undriven Range descriptor — a descriptor is not a number.
+
+```pluto
+i = 0:3
+s = "item -i"  # "item 0:3"
+"item -i"      # prints item 0:3 on one line
+n = 7
+w = 1:3
+"|-n%(-w)d|"   # one line per width: |7| then | 7|
+```
+
+Within a print statement, another argument that consumes the same named `Range`
+makes it a driver for that print loop. During each iteration, the main marker
+reads the current `I64` yield, so an explicit numeric conversion applies to the
+yield. This sibling binding is specific to print arguments; it does not apply
+across sibling values in an assignment.
+
+```pluto
+i = 0:3
+"i=-i%d", i + 0
+# i=0 0
+# i=1 1
+# i=2 2
+```
+
 ## Literal percent and strict formatting
 
 A `%` outside a resolved marker is ordinary text. A `%` immediately after a
