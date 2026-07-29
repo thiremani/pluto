@@ -814,6 +814,8 @@ func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool 
 // out-of-bounds read, must not be folded in.
 func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	// An invalid composite can stop typing before all descendants are cached;
+	// logical validation still walks that partial tree to report diagnostics.
 	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
 }
 
@@ -858,7 +860,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 
 	// A condition that carries a comparison but can never fail (an unconditional
 	// || fallback like `a > 0 || b`, which always yields b) does not gate.
-	if info := ts.ExprCache[key(ts.FuncNameMangled, expr)]; info != nil && info.HasCondExpr() {
+	if info.HasCondExpr() {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Tok(),
 			Msg:   "statement condition can never fail (its || fallback always yields a value)",
@@ -1862,7 +1864,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
 		CompareModes: compareModes,
 	}
 	return types
@@ -1923,7 +1925,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    (leftInfo != nil && leftInfo.HasRanges) || (rightInfo != nil && rightInfo.HasRanges),
+		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
 		CompareModes: compareModes,
 	}
 	return types
@@ -1982,7 +1984,8 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 // with it (solver and compiler share the same ExprCache map).
 func treeHasLogicalCond(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression) bool {
 	if infix, ok := expr.(*ast.InfixExpression); ok && (infix.IsLogicalOr() || infix.IsLogicalAnd()) {
-		if info := cache[key(funcNameMangled, expr)]; info != nil && (info.HasFallbackOr() || info.HasCondAnd()) {
+		info := cache[key(funcNameMangled, expr)]
+		if info.HasFallbackOr() || info.HasCondAnd() {
 			return true
 		}
 	}
@@ -2321,10 +2324,6 @@ func callArgsShareRangeDriver(exprs []ast.Expression, cache map[ExprKey]*ExprInf
 	owner := make(map[string]int)
 	for argIndex, expr := range exprs {
 		info := cache[key(funcNameMangled, expr)]
-		if info == nil {
-			continue
-		}
-
 		seenInArg := make(map[string]struct{})
 		for _, driver := range info.Ranges {
 			if _, seen := seenInArg[driver.Name]; seen {
