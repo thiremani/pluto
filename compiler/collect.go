@@ -1,10 +1,6 @@
 package compiler
 
-import (
-	"fmt"
-
-	"github.com/thiremani/pluto/ast"
-)
+import "github.com/thiremani/pluto/ast"
 
 func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo {
 	// ExprInfo slice fields are solver-owned and treated as immutable after
@@ -37,9 +33,8 @@ func (c *Compiler) registerPreparedExpr(orig ast.Expression, prepared ast.Expres
 }
 
 func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, string) {
-	name := fmt.Sprintf("collecttmp_%d", c.tmpCounter)
-	c.tmpCounter++
-	ident := &ast.Identifier{Value: name}
+	ident := c.freshCompilerIdentifier("collector")
+	name := ident.Value
 	scopeSym := GetCopy(sym)
 	scopeSym.Borrowed = true
 	scopeSym.ReadOnly = true

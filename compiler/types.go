@@ -831,12 +831,3 @@ func eqStruct(a, b Type) bool {
 	}
 	return true
 }
-
-var reservedTypeNames = map[string]struct{}{
-	"Empty": {}, "Int": {}, "Float": {}, "Str": {}, "StrG": {}, "StrH": {}, "StrS": {},
-	"I1": {}, "I8": {}, "I16": {}, "I32": {}, "I64": {},
-	"U8": {}, "U16": {}, "U32": {}, "U64": {},
-	"F32": {}, "F64": {},
-	"Ptr": {}, "Range": {}, "Array": {}, "Table": {}, "ArrayRange": {},
-	"Func": {}, "Struct": {},
-}
