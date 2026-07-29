@@ -817,8 +817,12 @@ func TestStructUseBeforeDef(t *testing.T) {
 }
 
 func TestCompilerIdentifierCannotBeSourceIdentifier(t *testing.T) {
-	name := compilerIdentifierName("iter", 0)
-	l := lexer.New("internal.pt", name)
+	tsCounter, cCounter := 0, 0
+	tsName := freshCompilerIdentifier(tsPrefix, "loop", &tsCounter).Value
+	cName := freshCompilerIdentifier(cPrefix, "loop", &cCounter).Value
+	require.NotEqual(t, tsName, cName)
+
+	l := lexer.New("internal.pt", tsName)
 	tok, err := l.NextToken()
 
 	require.Nil(t, err)

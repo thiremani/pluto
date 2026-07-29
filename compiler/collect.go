@@ -33,7 +33,7 @@ func (c *Compiler) registerPreparedExpr(orig ast.Expression, prepared ast.Expres
 }
 
 func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, string) {
-	ident := c.freshCompilerIdentifier("collector")
+	ident := freshCompilerIdentifier(cPrefix, "collector", &c.tmpCounter)
 	name := ident.Value
 	scopeSym := GetCopy(sym)
 	scopeSym.Borrowed = true

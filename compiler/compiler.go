@@ -184,15 +184,18 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 	}
 }
 
-// compilerIdentifierName creates a scope-only name that source cannot spell.
-// LLVM accepts '$' in local names; callers must never use it for external symbols.
-func compilerIdentifierName(role string, sequence int) string {
-	return fmt.Sprintf("$%s_%d", role, sequence)
-}
+type identifierPrefix string
 
-func (c *Compiler) freshCompilerIdentifier(role string) *ast.Identifier {
-	name := compilerIdentifierName(role, c.tmpCounter)
-	c.tmpCounter++
+const (
+	tsPrefix identifierPrefix = "ts"
+	cPrefix  identifierPrefix = "c"
+)
+
+// freshCompilerIdentifier creates a scope-only name that source cannot spell.
+// LLVM accepts '$' in local names; callers must never use it for external symbols.
+func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int) *ast.Identifier {
+	name := fmt.Sprintf("$%s_%s_%d", prefix, role, *counter)
+	(*counter)++
 	return &ast.Identifier{Value: name}
 }
 
