@@ -674,14 +674,8 @@ func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Ty
 			info.Rewrite = nil
 			return
 		}
-		if len(info.Ranges) == 0 {
-			info.Ranges = []*RangeInfo{{Name: e.Value}}
-		}
-		info.OutTypes = []Type{rangeType.Iter}
-		info.ExprLen = 1
-		info.HasRanges = true
-		info.Rewrite = e
 		types[0] = rangeType.Iter
+		info.OutTypes[0] = rangeType.Iter
 	case *ast.RangeLiteral:
 		info.Ranges = nil
 		info.HasRanges = false
