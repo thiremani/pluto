@@ -816,6 +816,15 @@ func TestStructUseBeforeDef(t *testing.T) {
 	require.True(t, found, "expected undefined struct type error, got: %v", errs)
 }
 
+func TestCompilerIdentifierCannotBeSourceIdentifier(t *testing.T) {
+	name := compilerIdentifierName("iter", 0)
+	l := lexer.New("internal.pt", name)
+	tok, err := l.NextToken()
+
+	require.Nil(t, err)
+	require.NotEqual(t, token.IDENT, tok.Type)
+}
+
 func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
   : name age
