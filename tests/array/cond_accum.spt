@@ -369,6 +369,11 @@ domainMatrix = [
 i = 0:3
 gatedRows = i < 2 [domainMatrix[i]]
 "GatedRows: -gatedRows"
+# A distinct seed makes any accidentally admitted row observable.
+gatedRows = [
+    90 91
+    92 93
+]
 i = 0:3
 gatedRows = i < 0 [domainMatrix[i]]
 "GatedRowsBlocked: -gatedRows"
