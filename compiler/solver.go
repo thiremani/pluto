@@ -2324,13 +2324,7 @@ func callArgsShareRangeDriver(exprs []ast.Expression, cache map[ExprKey]*ExprInf
 	owner := make(map[string]int)
 	for argIndex, expr := range exprs {
 		info := cache[key(funcNameMangled, expr)]
-		seenInArg := make(map[string]struct{})
 		for _, driver := range info.Ranges {
-			if _, seen := seenInArg[driver.Name]; seen {
-				continue
-			}
-			seenInArg[driver.Name] = struct{}{}
-
 			if previousArg, exists := owner[driver.Name]; exists && previousArg != argIndex {
 				return true
 			}
