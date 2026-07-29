@@ -769,7 +769,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 		return false
 	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	if info == nil || len(info.Ranges) == 0 {
+	if len(info.Ranges) == 0 {
 		return false
 	}
 
@@ -778,7 +778,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 		return true
 	case *ast.ArrayRangeExpression:
 		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
-		return arrInfo != nil && !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
+		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
 	}
