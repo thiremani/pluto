@@ -32,17 +32,9 @@ This keeps descriptor copying, collection, and final-value selection separate.
 
 ## Migration From Bare-Range Finalization
 
-Previously, assigning a bare named Range kept its final yield. It now copies
-the descriptor:
-
-```pluto
-i = 0:5
-copy = i
-last = i + 0
-```
-
-`copy` is a Range descriptor; `last` is the scalar `4`. Use an operation such
-as `+ 0` when migrating code that intended the old final-value behavior.
+Previously, assigning a bare named Range kept its final yield. Code that relied
+on that behavior should use an operation such as `last = i + 0`; for
+`i = 0:5`, `last` becomes `4`, while `copy = i` now copies the descriptor.
 
 This change can be silent for a fresh destination. A later call, index, or
 collector consumes the copied Range and runs its whole domain, while print and
@@ -55,11 +47,8 @@ unchanged because indexing is already a ranged computation.
 ## Ranges And Drivers
 
 A range identifier consumed by an operator, array index, collector, statement
-condition, or function argument contributes an iteration driver. Print
-arguments and main interpolation markers are display positions, not
-consumers: a bare Range there formats its descriptor. A width or precision
-operand is consumed as a number, so a named Range in a specifier still
-drives. A range-indexed array access is itself a ranged computation.
+condition, or function argument contributes an iteration driver. A
+range-indexed array access is itself a ranged computation.
 Multiple distinct drivers form a nested iteration domain in source order: the
 first distinct driver is outermost and the last is innermost. Repeated use of
 the same driver name refers to the same loop, not a nested copy.
@@ -67,27 +56,6 @@ Driver identity belongs to the binding name, not to descriptor equality.
 Substituting one Range name for another can therefore change a shared loop into
 a cartesian domain.
 
-Example:
-
-```pluto
-i = 0:5
-x = i + 1
-```
-
-This iterates `i` over `0, 1, 2, 3, 4` and the root assignment keeps the final
-value, so `x = 5`.
-
-A complete bare Range expression is a descriptor value:
-
-```pluto
-i = 0:5
-copy = i
-last = i + 0
-```
-
-`copy` is another Range descriptor and an independent named driver with the
-same bounds, while `last` becomes `4`. Copy a Range to bind another driver with
-the same bounds, or write another range literal to define different bounds.
 Range `start`/`stop`/`step` fields are not part of the language.
 The bound values are captured when the range is constructed, so later changes
 to the source variables do not mutate the existing range. Functions that need
@@ -127,7 +95,11 @@ failed cells are zero-filled to preserve collection shape, as described below.
 Print is a sink, not an operation: a bare Range argument or main marker
 formats the descriptor as `start:stop` (or `start:stop:step`), exactly as the
 value it is. Computations still drive the print loop, and a bare name bound as
-a driver by a sibling computation prints its per-iteration scalar:
+a driver by a sibling computation prints its per-iteration scalar. A width or
+precision marker consumes its Range operand as a number, so that operand still
+drives; see
+[Pluto String and Formatting Semantics](Pluto%20String%20and%20Formatting%20Semantics.md#interpolation-markers)
+for the formatting rules and examples. For ordinary print arguments:
 
 ```pluto
 i = 0:2
@@ -252,7 +224,8 @@ expression.
 
 Once the literal has materialized, the result is just an ordinary array value.
 Binding freezes that value, so later statements treat it like any other named
-array.
+array. With no active drivers, a collector evaluates once and produces a
+singleton array.
 
 ### Collectors And Binding
 
@@ -288,16 +261,6 @@ This produces:
 ```
 
 because `y` is collected as `[0 0 0 0 0]` under the admitted `i` domain.
-
-By contrast:
-
-```pluto
-i = 0:5
-y = [0]
-res = i + y
-```
-
-also produces `[4]`.
 
 Example:
 
@@ -476,13 +439,9 @@ range and validate that ownership before LLVM lowering.
 
 ## Statement Conditions And Tuples
 
-Statement conditions are shared across the whole assignment.
-They determine the admitted outer iteration domain for every output in the
-statement.
-
-Sibling RHS expressions do not share their local value drivers with each
-other.
-Each RHS adds only the extra drivers mentioned inside that expression.
+For tuple assignments, the statement-wide gate described above applies to
+every output. Each RHS adds only the local drivers mentioned inside that
+expression; sibling RHS expressions do not share those drivers.
 
 Examples:
 
@@ -547,61 +506,10 @@ The statement condition admits `i = 3 4 5`.
 The outer expression then continues with the frozen array value, so the final
 result is `[8 9 10]`.
 
-Sibling expression ranges still do not cross into nested collectors:
-
-```pluto
-i = 0:5
-res = i + [([0] + 1)[0]]
-```
-
-`[0]` is a singleton because it has no internal range and no statement gate.
-`[([0] + 1)[0]]` is also a singleton, and the outer `i` finalizes to `4`, so
-the result is `[5]`.
-
-This is a semantic materialization boundary.
-The compiler may later hoist or fuse loops as an optimization, but that does
-not change the language meaning.
-
-## Final-Value Contexts
-
-Outside `[]`, ranged computations remain per-iteration values until the root
-assignment or statement consumes them. Complete Range expressions remain
-descriptors.
-
-Examples:
-
-```pluto
-i = 0:5
-x = i + 1
-```
-
-`x` becomes `5`.
-
-```pluto
-copy = i
-```
-
-`copy` is another descriptor. To request the final yielded iterator, use an
-operation such as `last = i + 0`; `last` then becomes `4`.
-
-```pluto
-arr = [i + 1]
-```
-
-`arr` becomes `[1 2 3 4 5]`.
-
-For a range-indexed array, the same boundary chooses between one final value
-and an explicit collection:
-
-```pluto
-data = [10 20 30 40]
-i = 1:4
-last = data[i]       # 40
-many = [data[i]]     # [20 30 40]
-```
-
-With a matrix, `last = matrix[i]` is the final owned row while
-`many = [matrix[i]]` stacks all yielded rows.
+This is the same semantic materialization boundary described for all
+collectors: sibling expression ranges do not cross it. The compiler may later
+hoist or fuse loops as an optimization, but that does not change the language
+meaning.
 
 ## Self-Reference: Fold
 
@@ -642,20 +550,3 @@ n = 0:5
 Both produce `[0 1 1.41421 1.73205 2]`. Streams and materialized arrays agree
 wherever both readings exist; the difference is only *when* the array comes
 into being.
-
-## Singleton Arrays
-
-If no range drivers are open inside `[]`, the literal evaluates once and
-produces a singleton array.
-
-Example:
-
-```pluto
-x = 7
-[x]
-```
-
-produces `[7]`.
-
-This is not a special array-literal mode.
-It is the same collector rule applied to an expression with no active drivers.
