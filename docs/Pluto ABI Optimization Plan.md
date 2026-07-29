@@ -63,11 +63,11 @@ Concretely, it hooks between `TypeLetStatement` / `TypeExpression` (which resolv
 The current compiler emits one classified mangled entry point used by both
 Pluto calls and direct C callers. There is not yet a separate stable wrapper:
 
-| Entry point | Consumers | Convention | Stability |
-| --- | --- | --- | --- |
+| Entry point            | Consumers   | Convention                | Stability                                       |
+| ---------------------- | ----------- | ------------------------- | ----------------------------------------------- |
 | Current mangled symbol | Pluto and C | Documented classified ABI | Write-effect-independent within the ABI version |
-| Future private clone | Pluto only | Internally optimized | May vary freely |
-| Future public wrapper | C | Documented wrapper ABI | Stable or explicitly versioned |
+| Future private clone   | Pluto only  | Internally optimized      | May vary freely                                 |
+| Future public wrapper  | C           | Documented wrapper ABI     | Stable or explicitly versioned                  |
 
 Name mangling encodes semantic types, not physical ABI. Changing `I64` from
 pointer-passed to value-passed therefore does not change the name, even though
