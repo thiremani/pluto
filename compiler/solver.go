@@ -2240,9 +2240,9 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 			break
 		}
 	}
-	// Print has no callee body that can own iteration, so driver arguments are
-	// always expanded at the statement and printed as yielded scalar values.
-	if ce.Function.Value == Print && hasRanges {
+	// Print has no callee body that can own iteration. Any driver arguments are
+	// expanded at the statement and printed as yielded scalar values.
+	if ce.Function.Value == Print {
 		loopInside = false
 		args = innerArgs
 	}
