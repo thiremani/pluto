@@ -66,6 +66,10 @@ Identifiers support both ASCII and Unicode characters. The mangled form uses len
 * No `__`, no trailing `_`, single `_` reserved
 * No leading zeros in length prefix
 
+Pluto reserves no otherwise valid source identifiers. Compiler-generated scope
+bindings begin with `$`, which is outside the source identifier grammar; those
+names are LLVM-local and never enter the external ABI.
+
 **Structure:** `(<len><ASCII> | u<count>_<hex6>...) (u<count>_<hex6>... (<len><ASCII> | n<digits>(_<len><alpha> | _)?))*`
 
 * ASCII segment: `<length><chars>` where length is char count

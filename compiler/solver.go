@@ -28,7 +28,7 @@ const (
 type ExprInfo struct {
 	Ranges               []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
 	CollectRanges        []*RangeInfo   // ranges owned and materialized internally by this expression's collector (array literals)
-	Rewrite              ast.Expression // expression rewritten with a literal -> tmp value. (0:11) -> tmpIter0 etc.
+	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
 	HasRanges            bool       // True if expression involves ranges (propagated upward during typing)
@@ -266,12 +266,6 @@ func mergeUses(a, b []*RangeInfo) []*RangeInfo {
 	return out
 }
 
-func (ts *TypeSolver) FreshIterName() string {
-	n := ts.TmpCounter
-	ts.TmpCounter++
-	return fmt.Sprintf("tmpIter$%d", n)
-}
-
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
 // It traverses the AST, replacing range literals with temporary identifiers and collecting
 // range information for later compilation into loops.
@@ -302,13 +296,14 @@ func (ts *TypeSolver) HandleRanges(e ast.Expression) (ranges []*RangeInfo, rew a
 // HandleRangeLiteral processes range literal expressions, converting them to temporary
 // identifiers for use in loop generation.
 func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*RangeInfo, rew ast.Expression) {
-	nm := ts.FreshIterName()
+	iter := freshCompilerIdentifier(tsPrefix, "iter", &ts.TmpCounter)
+	iter.Token = rangeLit.Tok()
 	ri := &RangeInfo{
-		Name:     nm,
+		Name:     iter.Value,
 		RangeLit: rangeLit,
 	}
 	ranges = []*RangeInfo{ri}
-	rew = &ast.Identifier{Value: nm, Token: rangeLit.Tok()}
+	rew = iter
 
 	info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]
 	info.Ranges = append([]*RangeInfo(nil), ranges...)

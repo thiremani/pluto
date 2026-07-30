@@ -184,13 +184,19 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 	}
 }
 
-func (c *Compiler) rejectReservedName(tok token.Token, kind string) {
-	if _, reserved := reservedTypeNames[tok.Literal]; reserved {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("%s name %q is a reserved name", kind, tok.Literal),
-		})
-	}
+type identifierPrefix string
+
+const (
+	tsPrefix identifierPrefix = "ts"
+	cPrefix  identifierPrefix = "c"
+)
+
+// freshCompilerIdentifier creates a scope-only name that source cannot spell.
+// LLVM accepts '$' in local names; callers must never use it for external symbols.
+func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int) *ast.Identifier {
+	name := fmt.Sprintf("$%s_%s_%d", prefix, role, *counter)
+	(*counter)++
+	return &ast.Identifier{Value: name}
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
@@ -265,8 +271,8 @@ func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []
 
 // destSlotType returns the authoritative element type for one destination slot.
 // The solver owns the type of a source binding. Conditional lowering writes
-// through synthetic condtmp_* identifiers, which have no solver entry, so fall
-// back to the storage it already created for them: that pointer's element is
+// through synthetic compiler identifiers, which have no solver entry, so fall
+// back to the storage already created for them: that pointer's element is
 // the flavor chosen for the real destination. Staging allocates an independent
 // slot, so taking the expression's own type here would let an empty range or a
 // skipped write reset the destination instead of preserving it.
@@ -2344,11 +2350,11 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 
 // bindRangedTempOutputs makes each destination name resolve to its staged slot
 // while that one ranged expression is compiled. Conditional lowering can make
-// the real destination and a condtmp_* write name alias the same slot, so bind
-// every visible name for that slot as well. This preserves loop-carried
-// self-reference (res = res + i) without exposing the staged value to sibling
-// right-hand sides in a simultaneous assignment; the caller's BlockScope is
-// popped before the next expression is compiled.
+// the real destination and a synthetic conditional write name alias the same
+// slot, so bind every visible name for that slot as well. This preserves
+// loop-carried self-reference (res = res + i) without exposing the staged value
+// to sibling right-hand sides in a simultaneous assignment; the caller's
+// BlockScope is popped before the next expression is compiled.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
 		names := []string{dest[i].Value}
@@ -3518,7 +3524,8 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {
-		// Collector preparation can bind collecttmp_* before the print loop opens.
+		// Collector preparation can bind an internal collector temp before the
+		// print loop opens.
 		// Keep those temporaries scoped to this print statement.
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()

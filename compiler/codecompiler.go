@@ -162,7 +162,6 @@ func collectStructDefs(stmts []*ast.StructStatement) (map[string]*Struct, []*tok
 // validateStructDefs finds the single canonical definition for each struct type,
 // populates StructCache, and reports errors for
 // unknown fields, field order conflicts, and undefined types.
-// Must be called after validateReservedNames.
 func (cc *CodeCompiler) validateStructDefs() {
 	c := cc.Compiler
 	prior := len(c.Errors)
@@ -195,26 +194,8 @@ func (cc *CodeCompiler) validateStructDefs() {
 	}
 }
 
-// validateReservedNames rejects constant, struct type, struct binding,
-// and function names that collide with built-in type names.
-func (cc *CodeCompiler) validateReservedNames() {
-	for _, stmt := range cc.Code.Const.Statements {
-		for _, id := range stmt.Name {
-			cc.Compiler.rejectReservedName(id.Token, "constant")
-		}
-	}
-	for _, stmt := range cc.Code.Struct.Statements {
-		cc.Compiler.rejectReservedName(stmt.Value.Token, "struct type")
-		cc.Compiler.rejectReservedName(stmt.Name.Token, "struct constant")
-	}
-	for _, stmt := range cc.Code.Func.Statements {
-		cc.Compiler.rejectReservedName(stmt.Token, "function")
-	}
-}
-
 // Compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
-	cc.validateReservedNames()
 	cc.validateStructDefs()
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
