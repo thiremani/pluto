@@ -44,8 +44,7 @@ func TestDuplicateFunctionsAcrossFilesAreRejected(t *testing.T) {
 
 	require.Len(t, errs, 1)
 	require.Equal(t, "b.pt", errs[0].Token.FileName)
-	require.Contains(t, errs[0].Msg, "Function Duplicate with 1 parameters has been previously defined")
-	require.Contains(t, errs[0].Msg, "a.pt:")
+	require.Equal(t, "Function Duplicate with 1 parameters has been previously defined at a.pt:1:5", errs[0].Msg)
 }
 
 func TestDuplicateDeclarationsWithinFileFollowSourceOrder(t *testing.T) {
@@ -57,15 +56,14 @@ r = Duplicate(x)
 r = Duplicate(x)
     r = x
 
-answer = 42`)
+other, answer = 0, 42`)
 
 	errs := compileMergedCode(t, code)
 
 	require.Len(t, errs, 2)
 	require.Contains(t, errs[0].Msg, "Function Duplicate with 1 parameters")
 	require.Contains(t, errs[0].Msg, "same.pt:3:")
-	require.Contains(t, errs[1].Msg, "global redeclaration of constant answer")
-	require.Contains(t, errs[1].Msg, "same.pt:1:")
+	require.Equal(t, "same.pt:9:8:global redeclaration of constant answer; previously defined at same.pt:1:1", errs[1].Error())
 }
 
 func TestFunctionOverloadsAcrossFilesAreAllowed(t *testing.T) {

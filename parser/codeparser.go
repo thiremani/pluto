@@ -35,7 +35,7 @@ func (cp *CodeParser) Parse() *ast.Code {
 		case *ast.FuncStatement:
 			cp.addFuncStatement(code, s)
 		case *ast.StructStatement:
-			cp.addStructStatement(code, s)
+			code.AddStatement(s)
 		}
 		cp.p.nextToken()
 	}
@@ -54,10 +54,6 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 		return
 	}
 
-	code.AddStatement(s)
-}
-
-func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement) {
 	code.AddStatement(s)
 }
 

@@ -22,14 +22,6 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func sourceLocation(tok token.Token) string {
-	location := fmt.Sprintf("%d:%d", tok.Line, tok.Column)
-	if tok.FileName != "" {
-		return tok.FileName + ":" + location
-	}
-	return location
-}
-
 func registerGlobalBinding(seen map[string]token.Token, name string, tok token.Token) *token.CompileError {
 	previous, exists := seen[name]
 	if !exists {
@@ -38,7 +30,7 @@ func registerGlobalBinding(seen map[string]token.Token, name string, tok token.T
 	}
 	return &token.CompileError{
 		Token: tok,
-		Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, sourceLocation(previous)),
+		Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, previous.Location()),
 	}
 }
 
@@ -64,7 +56,7 @@ func validateDeclarations(code *ast.Code) []*token.CompileError {
 			}
 			errs = append(errs, &token.CompileError{
 				Token: s.Token,
-				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, sourceLocation(previous)),
+				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, previous.Location()),
 			})
 		case *ast.StructStatement:
 			if err := registerGlobalBinding(globals, s.Name.Value, s.Name.Token); err != nil {

@@ -16,7 +16,7 @@ type Scope[T any] struct {
 
 func NewScope[T any](sk ScopeKind) Scope[T] {
 	return Scope[T]{
-		Elems:     make(map[string]T), // Start with global scope
+		Elems:     make(map[string]T),
 		ScopeKind: sk,
 	}
 }
