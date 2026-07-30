@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"tinygo.org/x/go-llvm"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 )
 
@@ -206,7 +207,8 @@ value = Loop(k)
 
 			firstErrs := compile()
 			require.NotEmpty(t, firstErrs)
-			require.Contains(t, firstErrs[0].Msg, "Function Outer is not converging")
+			require.Contains(t, firstErrs[0].Msg, "Function Outer has inferred output types, but its body could not be fully type-checked")
+			require.NotContains(t, firstErrs[0].Msg, "base case")
 
 			outerMangled := Mangle(codeCompiler.Compiler.MangledPath, "Outer", []Type{I64})
 			cachedOuter := funcCache[outerMangled]
@@ -257,7 +259,7 @@ res = Good(k)
 
 	firstErrs := compile()
 	require.NotEmpty(t, firstErrs)
-	require.Contains(t, firstErrs[0].Msg, "Function Inner is not converging")
+	require.Contains(t, firstErrs[0].Msg, "Function Inner has inferred output types, but its body could not be fully type-checked")
 
 	outerMangled := Mangle(codeCompiler.Compiler.MangledPath, "Outer", []Type{I64})
 	innerMangled := Mangle(codeCompiler.Compiler.MangledPath, "Inner", []Type{I64})
@@ -333,4 +335,75 @@ x, y`),
 		require.Contains(t, ir, "define void @"+evenMangled)
 		require.Contains(t, ir, "define void @"+oddMangled)
 	}
+}
+
+func TestRefreshInferredFuncExprCacheBlocksUnreadyCallee(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	codeCompiler := NewCodeCompiler(ctx, "cacheLocalRefresh", "", mustParseCode(t, `
+res = Outer(k)
+    res = Inner(k)
+
+res = Inner(k)
+    res = Missing(k)
+`))
+	require.Empty(t, codeCompiler.Compile())
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(
+		ctx,
+		mustParseScript(t, ""),
+		codeCompiler,
+		funcCache,
+		codeCompiler.Compiler.ExprCache,
+	)
+	ts := NewTypeSolver(sc)
+
+	outerMangled := Mangle(codeCompiler.Compiler.MangledPath, "Outer", []Type{I64})
+	innerMangled := Mangle(codeCompiler.Compiler.MangledPath, "Inner", []Type{I64})
+	outerTemplate, ok := codeCompiler.lookupFuncTemplate("Outer", 1)
+	require.True(t, ok)
+
+	outer := &Func{Name: "Outer", Params: []Type{I64}, OutTypes: []Type{I64}}
+	inner := &Func{Name: "Inner", Params: []Type{I64}, OutTypes: []Type{I64}}
+	funcCache[innerMangled] = inner
+
+	ts.refreshInferredFuncExprCache(outerMangled, outerTemplate, outer)
+
+	require.Empty(t, ts.Errors, "a local refresh must not type-check an unready callee body")
+	require.Nil(t, inner.semantics, "local refresh must not publish nested semantics")
+}
+
+func TestBindingSlotTypeUsesGeneratedFallback(t *testing.T) {
+	mangled := "Pt_test_generated_fallback"
+	generated := "$c_tmp"
+	fallback := I64
+
+	c := &Compiler{
+		FuncNameMangled: mangled,
+		FuncCache: map[string]*Func{
+			mangled: {
+				semantics: &funcSemantics{
+					bindingTypes: map[string]Type{generated: F64},
+				},
+			},
+		},
+		BindingTypes: map[BindingKey]Type{
+			{FuncNameMangled: mangled, Name: generated}: F64,
+		},
+	}
+
+	require.Equal(t, fallback, c.bindingSlotType(generated, fallback))
+}
+
+func TestFuncExpressionsReadyRejectsUnknownStatement(t *testing.T) {
+	ts := &TypeSolver{}
+	template := &ast.FuncStatement{
+		Body: &ast.BlockStatement{
+			Statements: []ast.Statement{&ast.BlockStatement{}},
+		},
+	}
+
+	require.False(t, ts.funcExpressionsReady("Pt_test_unknown_statement", template))
 }

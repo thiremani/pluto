@@ -236,6 +236,8 @@ func (ts *TypeSolver) funcExpressionsReady(mangled string, template *ast.FuncSta
 			if !ts.expressionSemanticsReady(mangled, s.Expression) {
 				return false
 			}
+		default:
+			return false
 		}
 	}
 	return true
@@ -2696,29 +2698,33 @@ func (ts *TypeSolver) convergeFunc(mangled string, template *ast.FuncStatement, 
 
 		// no further progress possible
 		if !ts.Converging {
+			msg := fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name)
+			if requireLocalSemantics && f.OutputTypesInferred() {
+				msg = fmt.Sprintf("Function %s has inferred output types, but its body could not be fully type-checked", f.Name)
+			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: template.Token,
-				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+				Msg:   msg,
 			})
 			return f.OutTypes
 		}
 	}
-	panic("Could not infer output types for function %s in script" + f.Name)
+	panic(fmt.Sprintf("internal: could not infer output types for function %s after 100 convergence passes", f.Name))
 }
 
 // refreshInferredFuncExprCache runs one extra local type pass to refresh ExprCache
 // entries after a function first reaches fully inferred outputs.
-// Unresolved callees are temporarily blocked so this pass does not recurse into
-// additional function inference.
+// Callees that are not ready for lowering are temporarily blocked so this pass
+// does not recurse into additional function inference or semantic publication.
 func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast.FuncStatement, f *Func) {
 	blocked := make(map[string]struct{}, len(ts.InProgress)+len(ts.ScriptCompiler.Compiler.FuncCache))
-	// Block this function and unresolved callees so this pass stays local.
+	// Block this function and incomplete callees so this pass stays local.
 	blocked[mangled] = struct{}{}
 	for fn := range ts.InProgress {
 		blocked[fn] = struct{}{}
 	}
 	for fn, cached := range ts.ScriptCompiler.Compiler.FuncCache {
-		if !cached.OutputTypesInferred() {
+		if !cached.OutputTypesInferred() || cached.semantics == nil {
 			blocked[fn] = struct{}{}
 		}
 	}

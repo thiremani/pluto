@@ -69,6 +69,10 @@ per-specialization cache must bundle write effects, binding types, and
 validation results atomically: FuncCache is already shared across the scripts
 of one run while BindingTypes is rebuilt per script, and that split is exactly
 what produced issue #71's compile-order-dependent wrong output.
+The #71 fix now publishes binding types and direct-callee dependencies as one
+immutable `funcSemantics` snapshot and validates the script-reachable graph
+before lowering. Phase 1 must extend that same snapshot atomically with write
+effects rather than introduce another per-script cache.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity

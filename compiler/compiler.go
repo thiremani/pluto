@@ -205,12 +205,13 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 		if !ok || f.semantics == nil {
 			panic(fmt.Sprintf("internal: specialization %s reached lowering without semantic metadata", c.FuncNameMangled))
 		}
+		if strings.HasPrefix(name, "$") {
+			return fallback
+		}
 		if typ, ok := f.semantics.bindingType(name); ok {
 			return typ
 		}
-		if !strings.HasPrefix(name, "$") {
-			panic(fmt.Sprintf("internal: specialization %s has no binding type for %s", c.FuncNameMangled, name))
-		}
+		panic(fmt.Sprintf("internal: specialization %s has no binding type for %s", c.FuncNameMangled, name))
 	}
 
 	typ, ok := c.BindingTypes[BindingKey{
