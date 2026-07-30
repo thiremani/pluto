@@ -30,28 +30,30 @@ func sourceLocation(tok token.Token) string {
 	return location
 }
 
+func registerGlobalBinding(seen map[string]token.Token, name string, tok token.Token) *token.CompileError {
+	previous, exists := seen[name]
+	if !exists {
+		seen[name] = tok
+		return nil
+	}
+	return &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, sourceLocation(previous)),
+	}
+}
+
 func validateDeclarations(code *ast.Code) []*token.CompileError {
 	var errs []*token.CompileError
 	globals := make(map[string]token.Token)
 	funcs := make(map[ast.FuncKey]token.Token)
 
-	addGlobal := func(name string, tok token.Token) {
-		previous, exists := globals[name]
-		if !exists {
-			globals[name] = tok
-			return
-		}
-		errs = append(errs, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, sourceLocation(previous)),
-		})
-	}
-
 	for _, stmt := range code.Statements {
 		switch s := stmt.(type) {
 		case *ast.ConstStatement:
 			for _, ident := range s.Name {
-				addGlobal(ident.Value, ident.Token)
+				if err := registerGlobalBinding(globals, ident.Value, ident.Token); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		case *ast.FuncStatement:
 			key := ast.FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
@@ -65,7 +67,9 @@ func validateDeclarations(code *ast.Code) []*token.CompileError {
 				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, sourceLocation(previous)),
 			})
 		case *ast.StructStatement:
-			addGlobal(s.Name.Value, s.Name.Token)
+			if err := registerGlobalBinding(globals, s.Name.Value, s.Name.Token); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errs
