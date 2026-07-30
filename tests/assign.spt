@@ -13,3 +13,6 @@ z
 or = 7
 return = or + 2
 "ZeroKeywords: -or -return"
+Int = 5
+Str = Int + 2
+"TypeNames: -Int -Str"

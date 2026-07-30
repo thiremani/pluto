@@ -28,7 +28,7 @@ const (
 type ExprInfo struct {
 	Ranges               []*RangeInfo   // either value from *ast.Identifier or a newly created value from tmp identifier for *ast.RangeLiteral
 	CollectRanges        []*RangeInfo   // ranges owned and materialized internally by this expression's collector (array literals)
-	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $iter_0.
+	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
 	HasRanges            bool       // True if expression involves ranges (propagated upward during typing)

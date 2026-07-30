@@ -2351,11 +2351,10 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 // bindRangedTempOutputs makes each destination name resolve to its staged slot
 // while that one ranged expression is compiled. Conditional lowering can make
 // the real destination and a synthetic conditional write name alias the same
-// slot, so bind
-// every visible name for that slot as well. This preserves loop-carried
-// self-reference (res = res + i) without exposing the staged value to sibling
-// right-hand sides in a simultaneous assignment; the caller's BlockScope is
-// popped before the next expression is compiled.
+// slot, so bind every visible name for that slot as well. This preserves
+// loop-carried self-reference (res = res + i) without exposing the staged value
+// to sibling right-hand sides in a simultaneous assignment; the caller's
+// BlockScope is popped before the next expression is compiled.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
 		names := []string{dest[i].Value}
