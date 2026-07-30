@@ -196,7 +196,7 @@ func (c *Compiler) createConditionalTempOutputs(stmt *ast.LetStatement) []Output
 func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTypes []Type) []OutputSlot {
 	slots := make([]OutputSlot, len(dest))
 	for i, ident := range dest {
-		tempIdent := freshCompilerIdentifier(cPrefix, "cond", &c.tmpCounter)
+		tempIdent := freshCompilerIdentifier(cPrefix, "cond_"+ident.Value, &c.tmpCounter)
 		tempName := tempIdent.Value
 
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outTypes[i]), tempName+".mem")
@@ -336,7 +336,7 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 	for i, cs := range commit {
 		outType := cs.outType
 
-		tempIdent := freshCompilerIdentifier(cPrefix, "cond_stage", &c.tmpCounter)
+		tempIdent := freshCompilerIdentifier(cPrefix, "cond_stage_"+cs.dest.Value, &c.tmpCounter)
 		tempName := tempIdent.Value
 
 		ptr := c.createEntryBlockAlloca(c.mapToLLVMType(outType), tempName+".mem")

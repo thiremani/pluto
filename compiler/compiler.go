@@ -2244,8 +2244,11 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 	resolved := c.resolvedDestTypes(dest, outTypes)
 	outputs := make([]*Symbol, len(resolved))
 	for i, outType := range resolved {
-		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
-		c.tmpCounter++
+		role := fmt.Sprintf("output_slot_%d", i)
+		if dest != nil && i < len(dest) {
+			role = "output_" + dest[i].Value
+		}
+		name := freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
 
 		var existing *Symbol
 		var exists bool
