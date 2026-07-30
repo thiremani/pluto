@@ -32,15 +32,32 @@ type Program struct {
 }
 
 type Code struct {
-	Const      Const
-	ConstNames map[string]token.Token
-	Func       Func
-	Struct     Struct
+	Statements           []Statement
+	Const                Const
+	ConstNames           map[string]token.Token
+	Func                 Func
+	Struct               Struct
+	DeclarationConflicts []DeclarationConflict
 }
 
 type FuncKey struct {
 	FuncName string
 	Arity    int
+}
+
+type DeclarationKind int
+
+const (
+	GlobalBindingDeclaration DeclarationKind = iota
+	FunctionDeclaration
+)
+
+type DeclarationConflict struct {
+	Kind     DeclarationKind
+	Name     string
+	Arity    int
+	Token    token.Token
+	Previous token.Token
 }
 
 type Struct struct {
@@ -63,6 +80,7 @@ func NewCode() *Code {
 	}
 
 	return &Code{
+		Statements: []Statement{},
 		Const:      Const,
 		ConstNames: make(map[string]token.Token),
 		Func:       Func,
@@ -70,16 +88,66 @@ func NewCode() *Code {
 	}
 }
 
-func (c *Code) Merge(other *Code) {
-	// Merge constants
-	if other != nil {
-		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
-		maps.Copy(c.Const.Map, other.Const.Map)
-		maps.Copy(c.ConstNames, other.ConstNames)
-		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
-		maps.Copy(c.Func.Map, other.Func.Map)
-		c.Struct.Statements = append(c.Struct.Statements, other.Struct.Statements...)
-		maps.Copy(c.Struct.Map, other.Struct.Map) // last-writer-wins; canonical def uses Statements not Map
+func (c *Code) addGlobalBinding(name string, tok token.Token) bool {
+	previous, exists := c.ConstNames[name]
+	if !exists {
+		c.ConstNames[name] = tok
+		return true
+	}
+	c.DeclarationConflicts = append(c.DeclarationConflicts, DeclarationConflict{
+		Kind:     GlobalBindingDeclaration,
+		Name:     name,
+		Token:    tok,
+		Previous: previous,
+	})
+	return false
+}
+
+// AddStatement records a source declaration and updates its lookup indexes.
+func (c *Code) AddStatement(stmt Statement) {
+	c.Statements = append(c.Statements, stmt)
+
+	switch s := stmt.(type) {
+	case *ConstStatement:
+		c.Const.Statements = append(c.Const.Statements, s)
+		for _, ident := range s.Name {
+			if c.addGlobalBinding(ident.Value, ident.Token) {
+				c.Const.Map[ident.Value] = s
+			}
+		}
+	case *FuncStatement:
+		c.Func.Statements = append(c.Func.Statements, s)
+		key := FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
+		previous, exists := c.Func.Map[key]
+		if exists {
+			c.DeclarationConflicts = append(c.DeclarationConflicts, DeclarationConflict{
+				Kind:     FunctionDeclaration,
+				Name:     key.FuncName,
+				Arity:    key.Arity,
+				Token:    s.Token,
+				Previous: previous.Token,
+			})
+			return
+		}
+		c.Func.Map[key] = s
+	case *StructStatement:
+		c.Struct.Statements = append(c.Struct.Statements, s)
+		c.addGlobalBinding(s.Name.Value, s.Name.Token)
+		typeName := s.Value.Token.Literal
+		if _, exists := c.Struct.Map[typeName]; !exists {
+			c.Struct.Map[typeName] = s
+		}
+	}
+}
+
+// Append adds another source file in declaration order. Conflicts are retained
+// for the compiler to report, while lookup maps preserve the first declaration.
+func (c *Code) Append(other *Code) {
+	if other == nil {
+		return
+	}
+	for _, stmt := range other.Statements {
+		c.AddStatement(stmt)
 	}
 }
 

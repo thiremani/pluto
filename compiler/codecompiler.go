@@ -1,9 +1,7 @@
 package compiler
 
 import (
-	"cmp"
 	"fmt"
-	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
@@ -24,21 +22,6 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-type moduleGlobalBinding struct {
-	name  string
-	token token.Token
-}
-
-func compareSourceTokens(a, b token.Token) int {
-	if fileOrder := cmp.Compare(a.FileName, b.FileName); fileOrder != 0 {
-		return fileOrder
-	}
-	if lineOrder := cmp.Compare(a.Line, b.Line); lineOrder != 0 {
-		return lineOrder
-	}
-	return cmp.Compare(a.Column, b.Column)
-}
-
 func sourceLocation(tok token.Token) string {
 	location := fmt.Sprintf("%d:%d", tok.Line, tok.Column)
 	if tok.FileName != "" {
@@ -47,60 +30,21 @@ func sourceLocation(tok token.Token) string {
 	return location
 }
 
-// Keep this binding inventory in sync with CodeParser's ConstNames population:
-// regular constants and struct constants share one global namespace.
-func collectModuleGlobalBindings(code *ast.Code) []moduleGlobalBinding {
-	bindings := make([]moduleGlobalBinding, 0, len(code.ConstNames))
-	for _, stmt := range code.Const.Statements {
-		for _, ident := range stmt.Name {
-			bindings = append(bindings, moduleGlobalBinding{name: ident.Value, token: ident.Token})
-		}
-	}
-	for _, stmt := range code.Struct.Statements {
-		bindings = append(bindings, moduleGlobalBinding{name: stmt.Name.Value, token: stmt.Name.Token})
-	}
-	slices.SortStableFunc(bindings, func(a, b moduleGlobalBinding) int {
-		return compareSourceTokens(a.token, b.token)
-	})
-	return bindings
-}
-
-func validateModuleDeclarations(code *ast.Code) []*token.CompileError {
-	var errs []*token.CompileError
-
-	globals := make(map[string]token.Token)
-	for _, binding := range collectModuleGlobalBindings(code) {
-		previous, exists := globals[binding.name]
-		if !exists {
-			globals[binding.name] = binding.token
-			continue
+func moduleDeclarationErrors(code *ast.Code) []*token.CompileError {
+	errs := make([]*token.CompileError, 0, len(code.DeclarationConflicts))
+	for _, conflict := range code.DeclarationConflicts {
+		var msg string
+		switch conflict.Kind {
+		case ast.GlobalBindingDeclaration:
+			msg = fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", conflict.Name, sourceLocation(conflict.Previous))
+		case ast.FunctionDeclaration:
+			msg = fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", conflict.Name, conflict.Arity, sourceLocation(conflict.Previous))
 		}
 		errs = append(errs, &token.CompileError{
-			Token: binding.token,
-			Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", binding.name, sourceLocation(previous)),
+			Token: conflict.Token,
+			Msg:   msg,
 		})
 	}
-
-	funcs := make(map[ast.FuncKey]token.Token)
-	for _, stmt := range code.Func.Statements {
-		key := ast.FuncKey{
-			FuncName: stmt.Token.Literal,
-			Arity:    len(stmt.Parameters),
-		}
-		previous, exists := funcs[key]
-		if !exists {
-			funcs[key] = stmt.Token
-			continue
-		}
-		errs = append(errs, &token.CompileError{
-			Token: stmt.Token,
-			Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, sourceLocation(previous)),
-		})
-	}
-
-	slices.SortStableFunc(errs, func(a, b *token.CompileError) int {
-		return compareSourceTokens(a.Token, b.Token)
-	})
 	return errs
 }
 
@@ -279,7 +223,7 @@ func (cc *CodeCompiler) validateStructDefs() {
 
 // Compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
-	cc.Compiler.Errors = append(cc.Compiler.Errors, validateModuleDeclarations(cc.Code)...)
+	cc.Compiler.Errors = append(cc.Compiler.Errors, moduleDeclarationErrors(cc.Code)...)
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
 	}

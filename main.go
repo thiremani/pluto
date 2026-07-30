@@ -287,7 +287,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, code
 			errStr += fmt.Sprintf("error parsing code file %s\n", codeFile)
 			continue
 		}
-		pkgCode.Merge(code)
+		pkgCode.Append(code)
 	}
 
 	if errStr != "" {

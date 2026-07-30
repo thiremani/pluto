@@ -620,8 +620,8 @@ func TestStructRepeatedDefs(t *testing.T) {
     "Ada" 28`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -640,8 +640,8 @@ func TestStructAmbiguousFieldOrder(t *testing.T) {
     28 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -669,8 +669,8 @@ func TestStructUnknownField(t *testing.T) {
     "Ada" 170`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -698,8 +698,8 @@ func TestStructFieldTypeMismatch(t *testing.T) {
     "Ada" 28.5`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -727,8 +727,8 @@ func TestStructSameArityConflictingTypes(t *testing.T) {
     35 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -756,8 +756,8 @@ func TestStructSubsetDefs(t *testing.T) {
     28 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -777,8 +777,8 @@ func TestStructMaxHeaderDef(t *testing.T) {
     "Tejas" 35 184.5`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -873,8 +873,8 @@ func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
     170 28`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

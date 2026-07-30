@@ -65,20 +65,6 @@ func (cp *CodeParser) validateConstBindings(code *ast.Code, names []*ast.Identif
 	return prevLen
 }
 
-func (cp *CodeParser) addConstBinding(code *ast.Code, s *ast.ConstStatement) {
-	code.Const.Statements = append(code.Const.Statements, s)
-	for _, id := range s.Name {
-		code.Const.Map[id.Value] = s
-		code.ConstNames[id.Value] = id.Token
-	}
-}
-
-func (cp *CodeParser) addStructConstBinding(code *ast.Code, s *ast.StructStatement) {
-	// Keep struct-bound names in global const names so shared global-const checks
-	// (writes/reads in CFG) stay consistent with regular constants.
-	code.ConstNames[s.Name.Value] = s.Name.Token
-}
-
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 	prevLen := cp.validateConstBindings(code, s.Name)
 
@@ -86,22 +72,17 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 		return
 	}
 
-	cp.addConstBinding(code, s)
+	code.AddStatement(s)
 }
 
 func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement) {
 	prevLen := cp.validateConstBindings(code, []*ast.Identifier{s.Name})
-	typeName := s.Value.Token.Literal
 
 	if len(cp.p.errors) > prevLen {
 		return
 	}
 
-	code.Struct.Statements = append(code.Struct.Statements, s)
-	if _, exists := code.Struct.Map[typeName]; !exists {
-		code.Struct.Map[typeName] = s
-	}
-	cp.addStructConstBinding(code, s)
+	code.AddStatement(s)
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
@@ -130,6 +111,5 @@ func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 		return
 	}
 
-	code.Func.Statements = append(code.Func.Statements, s)
-	code.Func.Map[fKey] = s
+	code.AddStatement(s)
 }

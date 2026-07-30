@@ -25,7 +25,7 @@ func compileMergedCode(t *testing.T, files ...*ast.Code) []*token.CompileError {
 
 	code := ast.NewCode()
 	for _, file := range files {
-		code.Merge(file)
+		code.Append(file)
 	}
 
 	ctx := llvm.NewContext()
