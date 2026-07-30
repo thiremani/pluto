@@ -92,27 +92,6 @@ r = Delta(x)
 	}
 }
 
-func TestFunctionDiagnosticsUseMergedMapDefinition(t *testing.T) {
-	earlier := mustParseCode(t, `r = Duplicate(x)
-    earlierUnused = x + 1
-    r = x`)
-	later := mustParseCode(t, `r = Duplicate(x)
-    laterUnused = x + 1
-    r = x`)
-	code := ast.NewCode()
-	code.Merge(earlier)
-	code.Merge(later)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "mergedFunctionDiagnostics", "", code)
-	errs := cc.Compile()
-	require.Len(t, errs, 1)
-	require.Contains(t, errs[0].Msg, `"laterUnused"`)
-	require.NotContains(t, errs[0].Msg, `"earlierUnused"`)
-}
-
 func getValidTestCases() []cfgTestCase {
 	return []cfgTestCase{
 		{

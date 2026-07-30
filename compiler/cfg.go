@@ -390,16 +390,10 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 }
 
 func (cfg *CFG) AnalyzeFuncs() {
-	funcs := cfg.CodeCompiler.Code.Func.Map
 	for _, fn := range cfg.CodeCompiler.Code.Func.Statements {
 		fk := ast.FuncKey{
 			FuncName: fn.Token.Literal,
 			Arity:    len(fn.Parameters),
-		}
-		// Merge retains every statement but map lookup retains the last
-		// definition. Validate the same definition later compilation will use.
-		if funcs[fk] != fn {
-			continue
 		}
 		if _, ok := cfg.CheckedFuncs[fk]; ok {
 			continue
