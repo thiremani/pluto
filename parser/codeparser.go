@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"fmt"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/token"
@@ -47,26 +46,9 @@ func (cp *CodeParser) Parse() *ast.Code {
 	return code
 }
 
-func (cp *CodeParser) validateConstBindings(code *ast.Code, names []*ast.Identifier) int {
-	prevLen := len(cp.p.errors)
-	cp.p.checkNoDuplicates(names)
-
-	// Check for global redeclarations against all constant bindings.
-	for _, id := range names {
-		if _, ok := code.ConstNames[id.Value]; ok {
-			msg := fmt.Sprintf("global redeclaration of constant %s", id.Value)
-			ce := &token.CompileError{
-				Token: id.Token,
-				Msg:   msg,
-			}
-			cp.p.errors = append(cp.p.errors, ce)
-		}
-	}
-	return prevLen
-}
-
 func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
-	prevLen := cp.validateConstBindings(code, s.Name)
+	prevLen := len(cp.p.errors)
+	cp.p.checkNoDuplicates(s.Name)
 
 	if len(cp.p.errors) > prevLen {
 		return
@@ -76,31 +58,12 @@ func (cp *CodeParser) addConstStatement(code *ast.Code, s *ast.ConstStatement) {
 }
 
 func (cp *CodeParser) addStructStatement(code *ast.Code, s *ast.StructStatement) {
-	prevLen := cp.validateConstBindings(code, []*ast.Identifier{s.Name})
-
-	if len(cp.p.errors) > prevLen {
-		return
-	}
-
 	code.AddStatement(s)
 }
 
 func (cp *CodeParser) addFuncStatement(code *ast.Code, s *ast.FuncStatement) {
 	prevLen := len(cp.p.errors)
 
-	fKey := ast.FuncKey{
-		FuncName: s.Token.Literal,
-		Arity:    len(s.Parameters),
-	}
-	if _, ok := code.Func.Map[fKey]; ok {
-		msg := fmt.Sprintf("Function %s with %d parameters has been previously defined", s.Token.Literal, len(s.Parameters))
-		ce := &token.CompileError{
-			Token: s.Token,
-			Msg:   msg,
-		}
-		cp.p.errors = append(cp.p.errors, ce)
-		return
-	}
 	// Check no duplicates among parameters and outputs
 	// The same name CAN appear in both outputs and parameters when we call the function.
 	// Blanks ("_") are not allowed in function definitions.

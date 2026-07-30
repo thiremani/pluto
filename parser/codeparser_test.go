@@ -31,11 +31,6 @@ func TestParseConstStatement(t *testing.T) {
 			nil,
 			[]string{"duplicate identifier: a in this statement"},
 		},
-		{
-			"a = 5\nb, a = 10, 5",
-			nil,
-			[]string{"global redeclaration of constant a"},
-		},
 	}
 
 	for _, tt := range tests {

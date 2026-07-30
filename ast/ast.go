@@ -32,12 +32,11 @@ type Program struct {
 }
 
 type Code struct {
-	Statements        []Statement
-	Const             Const
-	ConstNames        map[string]token.Token
-	Func              Func
-	Struct            Struct
-	DeclarationErrors []*token.CompileError
+	Statements []Statement
+	Const      Const
+	ConstNames map[string]token.Token
+	Func       Func
+	Struct     Struct
 }
 
 type FuncKey struct {
@@ -72,25 +71,12 @@ func NewCode() *Code {
 	}
 }
 
-func sourceLocation(tok token.Token) string {
-	location := fmt.Sprintf("%d:%d", tok.Line, tok.Column)
-	if tok.FileName != "" {
-		return tok.FileName + ":" + location
-	}
-	return location
-}
-
 func (c *Code) addGlobalBinding(name string, tok token.Token) bool {
-	previous, exists := c.ConstNames[name]
-	if !exists {
-		c.ConstNames[name] = tok
-		return true
+	if _, exists := c.ConstNames[name]; exists {
+		return false
 	}
-	c.DeclarationErrors = append(c.DeclarationErrors, &token.CompileError{
-		Token: tok,
-		Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, sourceLocation(previous)),
-	})
-	return false
+	c.ConstNames[name] = tok
+	return true
 }
 
 // AddStatement records a source declaration and updates its lookup indexes.
@@ -108,15 +94,9 @@ func (c *Code) AddStatement(stmt Statement) {
 	case *FuncStatement:
 		c.Func.Statements = append(c.Func.Statements, s)
 		key := FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
-		previous, exists := c.Func.Map[key]
-		if exists {
-			c.DeclarationErrors = append(c.DeclarationErrors, &token.CompileError{
-				Token: s.Token,
-				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, sourceLocation(previous.Token)),
-			})
-			return
+		if _, exists := c.Func.Map[key]; !exists {
+			c.Func.Map[key] = s
 		}
-		c.Func.Map[key] = s
 	case *StructStatement:
 		c.Struct.Statements = append(c.Struct.Statements, s)
 		c.addGlobalBinding(s.Name.Value, s.Name.Token)
@@ -127,8 +107,8 @@ func (c *Code) AddStatement(stmt Statement) {
 	}
 }
 
-// Append adds another source file in declaration order. Conflicts are retained
-// for the compiler to report, while lookup maps preserve the first declaration.
+// Append adds declarations from another Code in order while lookup maps
+// preserve the first declaration.
 func (c *Code) Append(other *Code) {
 	if other == nil {
 		return

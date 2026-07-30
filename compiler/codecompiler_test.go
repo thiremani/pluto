@@ -48,6 +48,26 @@ func TestDuplicateFunctionsAcrossFilesAreRejected(t *testing.T) {
 	require.Contains(t, errs[0].Msg, "a.pt:")
 }
 
+func TestDuplicateDeclarationsWithinFileFollowSourceOrder(t *testing.T) {
+	code := mustParseCodeFile(t, "same.pt", `answer = 41
+
+r = Duplicate(x)
+    r = x
+
+r = Duplicate(x)
+    r = x
+
+answer = 42`)
+
+	errs := compileMergedCode(t, code)
+
+	require.Len(t, errs, 2)
+	require.Contains(t, errs[0].Msg, "Function Duplicate with 1 parameters")
+	require.Contains(t, errs[0].Msg, "same.pt:3:")
+	require.Contains(t, errs[1].Msg, "global redeclaration of constant answer")
+	require.Contains(t, errs[1].Msg, "same.pt:1:")
+}
+
 func TestFunctionOverloadsAcrossFilesAreAllowed(t *testing.T) {
 	unary := mustParseCodeFile(t, "a.pt", `r = Overload(x)
     r = x`)
