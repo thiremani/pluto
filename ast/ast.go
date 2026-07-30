@@ -32,65 +32,16 @@ type Program struct {
 }
 
 type Code struct {
-	Const      Const
-	ConstNames map[string]token.Token
-	Func       Func
-	Struct     Struct
-}
-
-type FuncKey struct {
-	FuncName string
-	Arity    int
-}
-
-type Struct struct {
-	Statements []*StructStatement
-	Map        map[string]*StructStatement
+	Statements []Statement
 }
 
 func NewCode() *Code {
-	Const := Const{
-		Statements: []*ConstStatement{},
-		Map:        make(map[string]*ConstStatement),
-	}
-	Func := Func{
-		Statements: []*FuncStatement{},
-		Map:        make(map[FuncKey]*FuncStatement),
-	}
-	Struct := Struct{
-		Statements: []*StructStatement{},
-		Map:        make(map[string]*StructStatement),
-	}
-
-	return &Code{
-		Const:      Const,
-		ConstNames: make(map[string]token.Token),
-		Func:       Func,
-		Struct:     Struct,
-	}
+	return &Code{}
 }
 
-func (c *Code) Merge(other *Code) {
-	// Merge constants
-	if other != nil {
-		c.Const.Statements = append(c.Const.Statements, other.Const.Statements...)
-		maps.Copy(c.Const.Map, other.Const.Map)
-		maps.Copy(c.ConstNames, other.ConstNames)
-		c.Func.Statements = append(c.Func.Statements, other.Func.Statements...)
-		maps.Copy(c.Func.Map, other.Func.Map)
-		c.Struct.Statements = append(c.Struct.Statements, other.Struct.Statements...)
-		maps.Copy(c.Struct.Map, other.Struct.Map) // last-writer-wins; canonical def uses Statements not Map
-	}
-}
-
-type Const struct {
-	Statements []*ConstStatement
-	Map        map[string]*ConstStatement
-}
-
-type Func struct {
-	Statements []*FuncStatement
-	Map        map[FuncKey]*FuncStatement
+// Append adds declarations from another Code in order.
+func (c *Code) Append(other *Code) {
+	c.Statements = append(c.Statements, other.Statements...)
 }
 
 // StructStatement represents a struct constant definition in a .pt file.

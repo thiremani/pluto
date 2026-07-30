@@ -2243,8 +2243,11 @@ func (c *Compiler) makeSeededTempOutputs(dest []*ast.Identifier, outTypes []Type
 	resolved := c.resolvedDestTypes(dest, outTypes)
 	outputs := make([]*Symbol, len(resolved))
 	for i, outType := range resolved {
-		name := fmt.Sprintf("calltmp_%d", c.tmpCounter)
-		c.tmpCounter++
+		role := fmt.Sprintf("output_slot_%d", i)
+		if dest != nil && i < len(dest) {
+			role = "output_" + dest[i].Value
+		}
+		name := freshCompilerIdentifier(cPrefix, role, &c.tmpCounter).Value
 
 		var existing *Symbol
 		var exists bool
@@ -2717,7 +2720,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	c.bindFuncOutputs(template, outputs)
 
 	if len(iterIndices) == 0 {
-		c.compileBlockWithArgs(template, nil)
+		c.compileFuncBody(template)
 	} else if sig.ABI.Return.Mode == ABIReturnDirect {
 		// ABIReturnDirect is currently a single scalar output, so the seeded
 		// binding above becomes the initial loop-carried SSA state here.
@@ -2849,7 +2852,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()
 		if currentOutput == nil {
-			c.compileBlockWithArgs(fn, nil)
+			c.compileFuncBody(fn)
 			return nil
 		}
 		return c.compileDirectOutputIterBody(fn, currentOutput)
@@ -2902,17 +2905,14 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
 	// Direct-return ABI is single-output today, so the loop body only needs the
 	// current scalar output binding for fn.Outputs[0].
-	c.compileBlockWithArgs(fn, map[string]*Symbol{fn.Outputs[0].Value: currentOutput})
+	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
+	c.compileFuncBody(fn)
 
 	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
 	return output
 }
 
-// compileBlockWithArgs executes a function body in the writable scope prepared
-// by the caller, seeding any extra scalar bindings needed for that body entry.
-func (c *Compiler) compileBlockWithArgs(fn *ast.FuncStatement, scalars map[string]*Symbol) {
-	PutBulk(c.Scopes, scalars)
-
+func (c *Compiler) compileFuncBody(fn *ast.FuncStatement) {
 	for _, stmt := range fn.Body.Statements {
 		c.compileStatement(stmt)
 	}
@@ -3182,11 +3182,7 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 		return fn, funcType, retStruct
 	}
 
-	fk := ast.FuncKey{
-		FuncName: sig.FuncName,
-		Arity:    len(sig.ParamTypes),
-	}
-	template := c.CodeCompiler.Code.Func.Map[fk]
+	template, _ := c.CodeCompiler.lookupFuncTemplate(sig.FuncName, len(sig.ParamTypes))
 	savedBlock := c.builder.GetInsertBlock()
 
 	fn = c.compileFunc(template, sig, funcType, retStruct)
@@ -3494,7 +3490,9 @@ func (c *Compiler) freeArray(arr llvm.Value, elemType Type) {
 // This should be called before PopScope to free memory for strings and arrays
 func (c *Compiler) cleanupScope() {
 	currentScope := c.Scopes[len(c.Scopes)-1]
-	for _, sym := range currentScope.Elems {
+	for i := len(currentScope.BindingOrder) - 1; i >= 0; i-- {
+		name := currentScope.BindingOrder[i]
+		sym := currentScope.Elems[name]
 		// Skip borrowed symbols - this scope does not own them.
 		if sym.Borrowed {
 			continue

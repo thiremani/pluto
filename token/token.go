@@ -1,7 +1,6 @@
 package token
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -193,6 +192,15 @@ type Token struct {
 
 type CompileErrors []*CompileError
 
+// Location returns the token's source location as filename:line:column or line:column.
+func (t Token) Location() string {
+	location := strconv.Itoa(t.Line) + ":" + strconv.Itoa(t.Column)
+	if t.FileName != "" {
+		return t.FileName + ":" + location
+	}
+	return location
+}
+
 func (t Token) IsComparison() bool {
 	return comparison_beg < t.Type && comparison_end > t.Type
 }
@@ -229,13 +237,7 @@ type CompileError struct {
 }
 
 func (ce *CompileError) Error() string {
-	// core location prefix
-	prefix := fmt.Sprintf("%d:%d", ce.Token.Line, ce.Token.Column)
-	if ce.Token.FileName != "" {
-		prefix = fmt.Sprintf("%s:%s", ce.Token.FileName, prefix)
-	}
-	// message, optionally quoting the literal
-	return fmt.Sprintf("%s:%s", prefix, ce.Msg)
+	return ce.Token.Location() + ":" + ce.Msg
 }
 
 func (ces CompileErrors) String() string {

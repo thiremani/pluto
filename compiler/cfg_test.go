@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -44,6 +45,51 @@ func TestCFGAnalysis(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestFunctionDiagnosticsFollowSourceOrder(t *testing.T) {
+	code := `r = Hotel(x)
+    th = x + 1
+    r = x
+
+r = Alpha(x)
+    ta = x + 1
+    r = x
+
+r = Golf(x)
+    tg = x + 1
+    r = x
+
+r = Bravo(x)
+    tb = x + 1
+    r = x
+
+r = Foxtrot(x)
+    tf = x + 1
+    r = x
+
+r = Charlie(x)
+    tc = x + 1
+    r = x
+
+r = Echo(x)
+    te = x + 1
+    r = x
+
+r = Delta(x)
+    td = x + 1
+    r = x`
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "deterministicDiagnostics", "", mustParseCode(t, code))
+	errs := cc.Compile()
+	require.Len(t, errs, 8)
+
+	for i, name := range []string{"th", "ta", "tg", "tb", "tf", "tc", "te", "td"} {
+		require.Contains(t, errs[i].Msg, fmt.Sprintf("%q", name))
+	}
 }
 
 func getValidTestCases() []cfgTestCase {

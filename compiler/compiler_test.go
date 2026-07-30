@@ -28,6 +28,7 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	}
 
 	cc := NewCodeCompiler(ctx, moduleName, "", codeAST)
+	require.Empty(t, cc.Compile())
 	program := mustParseScript(t, scriptSrc)
 
 	funcCache := make(map[string]*Func)
@@ -37,6 +38,29 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	require.Empty(t, errs)
 
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
+}
+
+func TestEmittedIRIsDeterministic(t *testing.T) {
+	script := `alpha = "a" ⊕ "1"
+bravo = "b" ⊕ "2"
+charlie = "c" ⊕ "3"
+delta = "d" ⊕ "4"
+echo = "e" ⊕ "5"
+foxtrot = "f" ⊕ "6"
+golf = "g" ⊕ "7"
+hotel = "h" ⊕ "8"
+"-alpha -bravo -charlie -delta -echo -foxtrot -golf -hotel"`
+
+	want, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
+	lastBindingCleanup := strings.Index(want, "call void @free(ptr %str_concat_result14)")
+	firstBindingCleanup := strings.Index(want, "call void @free(ptr %str_concat_result)")
+	require.NotEqual(t, -1, lastBindingCleanup)
+	require.NotEqual(t, -1, firstBindingCleanup)
+	require.Less(t, lastBindingCleanup, firstBindingCleanup)
+	for range 10 {
+		got, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestStatementAndShortCircuits(t *testing.T) {
@@ -170,6 +194,7 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
+	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, mustParseScript(t, scriptSrc), cc, make(map[string]*Func), cc.Compiler.ExprCache)
 	require.Empty(t, sc.Compile())
 
@@ -602,8 +627,8 @@ func TestStructRepeatedDefs(t *testing.T) {
     "Ada" 28`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -622,8 +647,8 @@ func TestStructAmbiguousFieldOrder(t *testing.T) {
     28 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -651,8 +676,8 @@ func TestStructUnknownField(t *testing.T) {
     "Ada" 170`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -680,8 +705,8 @@ func TestStructFieldTypeMismatch(t *testing.T) {
     "Ada" 28.5`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -709,8 +734,8 @@ func TestStructSameArityConflictingTypes(t *testing.T) {
     35 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -738,8 +763,8 @@ func TestStructSubsetDefs(t *testing.T) {
     28 "Ada"`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -759,8 +784,8 @@ func TestStructMaxHeaderDef(t *testing.T) {
     "Tejas" 35 184.5`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -789,9 +814,9 @@ q = Person`)
 }
 
 func TestStructUseBeforeDef(t *testing.T) {
-	// Build AST directly: parser now rejects this, so we test the compiler guard independently.
+	// Build the AST directly to test the compiler guard independently.
 	code := ast.NewCode()
-	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
+	code.Statements = append(code.Statements, &ast.StructStatement{
 		Token: token.Token{Type: token.ASSIGN, Literal: "="},
 		Name:  &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "q"}, Value: "q"},
 		Value: &ast.StructLiteral{
@@ -829,6 +854,23 @@ func TestCompilerIdentifierCannotBeSourceIdentifier(t *testing.T) {
 	require.NotEqual(t, token.IDENT, tok.Type)
 }
 
+func TestOutputTempNamesRetainDestinations(t *testing.T) {
+	code := `left, right = Pair(x)
+    left = x
+    right = x + 1`
+	script := `result = 10
+result = 1:3 < 3 result + 1
+left, right = Pair(1:2)
+result, left, right`
+
+	ir, _ := compileScriptAndCodeIR(t, "output_temp_names", code, script)
+
+	require.Contains(t, ir, "$c_cond_result_")
+	require.Contains(t, ir, "$c_cond_stage_result_")
+	require.Contains(t, ir, "$c_output_left_")
+	require.Contains(t, ir, "$c_output_right_")
+}
+
 func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
   : name age
@@ -838,8 +880,8 @@ func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
     170 28`)
 
 	merged := ast.NewCode()
-	merged.Merge(codeA)
-	merged.Merge(codeB)
+	merged.Append(codeA)
+	merged.Append(codeB)
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
