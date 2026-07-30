@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -3494,7 +3495,8 @@ func (c *Compiler) freeArray(arr llvm.Value, elemType Type) {
 // This should be called before PopScope to free memory for strings and arrays
 func (c *Compiler) cleanupScope() {
 	currentScope := c.Scopes[len(c.Scopes)-1]
-	for _, sym := range currentScope.Elems {
+	for _, name := range slices.Sorted(maps.Keys(currentScope.Elems)) {
+		sym := currentScope.Elems[name]
 		// Skip borrowed symbols - this scope does not own them.
 		if sym.Borrowed {
 			continue

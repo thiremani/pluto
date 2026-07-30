@@ -39,6 +39,24 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
 }
 
+func TestEmittedIRIsDeterministic(t *testing.T) {
+	script := `alpha = "a" ⊕ "1"
+bravo = "b" ⊕ "2"
+charlie = "c" ⊕ "3"
+delta = "d" ⊕ "4"
+echo = "e" ⊕ "5"
+foxtrot = "f" ⊕ "6"
+golf = "g" ⊕ "7"
+hotel = "h" ⊕ "8"
+"-alpha -bravo -charlie -delta -echo -foxtrot -golf -hotel"`
+
+	want, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
+	for range 10 {
+		got, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
+		require.Equal(t, want, got)
+	}
+}
+
 func TestStatementAndShortCircuits(t *testing.T) {
 	script := `den = 1:3
 out = den < 0 && (10 ÷ den) > 1 7

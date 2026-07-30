@@ -1,7 +1,9 @@
 package compiler
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
@@ -390,12 +392,24 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 }
 
 func (cfg *CFG) AnalyzeFuncs() {
-	for fk, fn := range cfg.CodeCompiler.Code.Func.Map {
+	funcs := cfg.CodeCompiler.Code.Func.Map
+	keys := make([]ast.FuncKey, 0, len(funcs))
+	for fk := range funcs {
+		keys = append(keys, fk)
+	}
+	slices.SortFunc(keys, func(a, b ast.FuncKey) int {
+		if nameOrder := cmp.Compare(a.FuncName, b.FuncName); nameOrder != 0 {
+			return nameOrder
+		}
+		return cmp.Compare(a.Arity, b.Arity)
+	})
+
+	for _, fk := range keys {
 		if _, ok := cfg.CheckedFuncs[fk]; ok {
 			continue
 		}
 
-		cfg.validateFunc(fn)
+		cfg.validateFunc(funcs[fk])
 		cfg.CheckedFuncs[fk] = struct{}{}
 	}
 }
