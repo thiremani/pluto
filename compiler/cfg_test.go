@@ -47,37 +47,37 @@ func TestCFGAnalysis(t *testing.T) {
 	})
 }
 
-func TestFunctionDiagnosticsAreDeterministic(t *testing.T) {
-	code := `r = Alpha(x)
+func TestFunctionDiagnosticsFollowSourceOrder(t *testing.T) {
+	code := `r = Hotel(x)
+    th = x + 1
+    r = x
+
+r = Alpha(x)
     ta = x + 1
-    r = x
-
-r = Bravo(x)
-    tb = x + 1
-    r = x
-
-r = Charlie(x)
-    tc = x + 1
-    r = x
-
-r = Delta(x)
-    td = x + 1
-    r = x
-
-r = Echo(x)
-    te = x + 1
-    r = x
-
-r = Foxtrot(x)
-    tf = x + 1
     r = x
 
 r = Golf(x)
     tg = x + 1
     r = x
 
-r = Hotel(x)
-    th = x + 1
+r = Bravo(x)
+    tb = x + 1
+    r = x
+
+r = Foxtrot(x)
+    tf = x + 1
+    r = x
+
+r = Charlie(x)
+    tc = x + 1
+    r = x
+
+r = Echo(x)
+    te = x + 1
+    r = x
+
+r = Delta(x)
+    td = x + 1
     r = x`
 
 	ctx := llvm.NewContext()
@@ -87,9 +87,30 @@ r = Hotel(x)
 	errs := cc.Compile()
 	require.Len(t, errs, 8)
 
-	for i, name := range []string{"ta", "tb", "tc", "td", "te", "tf", "tg", "th"} {
+	for i, name := range []string{"th", "ta", "tg", "tb", "tf", "tc", "te", "td"} {
 		require.Contains(t, errs[i].Msg, fmt.Sprintf("%q", name))
 	}
+}
+
+func TestFunctionDiagnosticsUseMergedMapDefinition(t *testing.T) {
+	earlier := mustParseCode(t, `r = Duplicate(x)
+    earlierUnused = x + 1
+    r = x`)
+	later := mustParseCode(t, `r = Duplicate(x)
+    laterUnused = x + 1
+    r = x`)
+	code := ast.NewCode()
+	code.Merge(earlier)
+	code.Merge(later)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "mergedFunctionDiagnostics", "", code)
+	errs := cc.Compile()
+	require.Len(t, errs, 1)
+	require.Contains(t, errs[0].Msg, `"laterUnused"`)
+	require.NotContains(t, errs[0].Msg, `"earlierUnused"`)
 }
 
 func getValidTestCases() []cfgTestCase {

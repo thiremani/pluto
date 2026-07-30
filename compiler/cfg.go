@@ -1,9 +1,7 @@
 package compiler
 
 import (
-	"cmp"
 	"fmt"
-	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
@@ -393,23 +391,21 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 
 func (cfg *CFG) AnalyzeFuncs() {
 	funcs := cfg.CodeCompiler.Code.Func.Map
-	keys := make([]ast.FuncKey, 0, len(funcs))
-	for fk := range funcs {
-		keys = append(keys, fk)
-	}
-	slices.SortFunc(keys, func(a, b ast.FuncKey) int {
-		if nameOrder := cmp.Compare(a.FuncName, b.FuncName); nameOrder != 0 {
-			return nameOrder
+	for _, fn := range cfg.CodeCompiler.Code.Func.Statements {
+		fk := ast.FuncKey{
+			FuncName: fn.Token.Literal,
+			Arity:    len(fn.Parameters),
 		}
-		return cmp.Compare(a.Arity, b.Arity)
-	})
-
-	for _, fk := range keys {
+		// Merge retains every statement but map lookup retains the last
+		// definition. Validate the same definition later compilation will use.
+		if funcs[fk] != fn {
+			continue
+		}
 		if _, ok := cfg.CheckedFuncs[fk]; ok {
 			continue
 		}
 
-		cfg.validateFunc(funcs[fk])
+		cfg.validateFunc(fn)
 		cfg.CheckedFuncs[fk] = struct{}{}
 	}
 }
