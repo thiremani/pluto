@@ -2418,14 +2418,8 @@ func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, 
 // system is built, extend this to look up functions from imported packages and
 // use the imported package's ModName/RelPath for mangling (not the caller's).
 func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*ast.FuncStatement, string, bool) {
-	fk := ast.FuncKey{
-		FuncName: ce.Function.Value,
-		Arity:    len(args),
-	}
-
 	compiler := ts.ScriptCompiler.Compiler
-	code := compiler.CodeCompiler.Code
-	template, ok := code.Func.Map[fk]
+	template, ok := compiler.CodeCompiler.lookupFuncTemplate(ce.Function.Value, len(args))
 	if !ok {
 		cerr := &token.CompileError{
 			Token: ce.Token,

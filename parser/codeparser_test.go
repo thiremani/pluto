@@ -47,9 +47,9 @@ func TestParseConstStatement(t *testing.T) {
 		}
 
 		require.Empty(t, p.Errors())
-		require.Len(t, code.Const.Statements, 1)
+		require.Len(t, code.Statements, 1)
 
-		stmt := code.Const.Statements[0]
+		stmt := code.Statements[0].(*ast.ConstStatement)
 		require.Len(t, stmt.Name, len(tt.expected))
 		for i, ident := range stmt.Name {
 			require.Equal(t, tt.expected[i], ident.Value)
@@ -194,9 +194,9 @@ res = sum(res, x)
 		}
 
 		require.Empty(t, p.Errors())
-		require.Len(t, code.Func.Statements, 1)
+		require.Len(t, code.Statements, 1)
 
-		fn := code.Func.Statements[0]
+		fn := code.Statements[0].(*ast.FuncStatement)
 		require.Equal(t, tt.name, fn.Token.Literal)
 		require.Len(t, fn.Parameters, len(tt.params))
 		for i, param := range fn.Parameters {
@@ -217,13 +217,13 @@ y = add(a, b, c)
 	code := p.Parse()
 
 	require.Empty(t, p.Errors())
-	require.Len(t, code.Func.Statements, 2)
-
-	// Verify both functions exist with different arities
-	key1 := ast.FuncKey{FuncName: "add", Arity: 2}
-	key2 := ast.FuncKey{FuncName: "add", Arity: 3}
-	require.NotNil(t, code.Func.Map[key1])
-	require.NotNil(t, code.Func.Map[key2])
+	require.Len(t, code.Statements, 2)
+	first := code.Statements[0].(*ast.FuncStatement)
+	second := code.Statements[1].(*ast.FuncStatement)
+	require.Equal(t, "add", first.Token.Literal)
+	require.Len(t, first.Parameters, 2)
+	require.Equal(t, "add", second.Token.Literal)
+	require.Len(t, second.Parameters, 3)
 }
 
 func TestMixedValidInvalid(t *testing.T) {
@@ -252,8 +252,8 @@ func TestFuncStatementParsing(t *testing.T) {
 		require.Empty(t, cp.p.errors)
 
 		// Verify function statement
-		require.Len(t, program.Func.Statements, 1, "program should contain 1 function statement")
-		fn := program.Func.Statements[0]
+		require.Len(t, program.Statements, 1, "program should contain 1 function statement")
+		fn := program.Statements[0].(*ast.FuncStatement)
 
 		t.Run("function metadata", func(t *testing.T) {
 			require.Equal(t, "pow", fn.Token.Literal, "function name mismatch")
@@ -342,9 +342,9 @@ func TestFunctionParameterParsing(t *testing.T) {
 			require.Empty(t, cp.p.errors, "parser should have no errors")
 
 			// Check root statements
-			require.NotEmpty(t, program.Func.Statements, "program should have function statements")
+			require.NotEmpty(t, program.Statements, "program should have function statements")
 
-			stmt := program.Func.Statements[0]
+			stmt := program.Statements[0].(*ast.FuncStatement)
 
 			// Test parameter count
 			require.Equal(t, len(tt.expected), len(stmt.Parameters),
@@ -371,8 +371,8 @@ func TestParseStructDefinition(t *testing.T) {
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	require.Len(t, code.Struct.Statements, 1)
-	stmt := code.Struct.Statements[0]
+	require.Len(t, code.Statements, 1)
+	stmt := code.Statements[0].(*ast.StructStatement)
 	require.Equal(t, "p", stmt.Name.Value)
 
 	lit := stmt.Value
@@ -383,18 +383,6 @@ func TestParseStructDefinition(t *testing.T) {
 		require.Equal(t, expectedHeaders[i], tok.Literal)
 	}
 	require.Len(t, lit.Row, 3)
-
-	defStmt, ok := code.Struct.Map["Person"]
-	require.True(t, ok, "expected struct definition in code map")
-	require.Equal(t, stmt, defStmt)
-	require.Len(t, defStmt.Value.Headers, 3)
-	for i, tok := range defStmt.Value.Headers {
-		require.Equal(t, expectedHeaders[i], tok.Literal)
-	}
-
-	// Struct bindings should still be treated as constants globally.
-	_, constExists := code.ConstNames["p"]
-	require.True(t, constExists)
 
 	require.Equal(t, "p = Person\n  : name age height\n    \"Tejas\" 35 184.5", stmt.String())
 }
@@ -408,9 +396,10 @@ answer = 42`
 	cp := NewCodeParser(lexer.New("TestStructDefNextStatement", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
-	require.Len(t, code.Struct.Statements, 1)
-	require.Len(t, code.Const.Statements, 1)
-	require.Equal(t, "answer", code.Const.Statements[0].Name[0].Value)
+	require.Len(t, code.Statements, 2)
+	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
+	constStmt := code.Statements[1].(*ast.ConstStatement)
+	require.Equal(t, "answer", constStmt.Name[0].Value)
 }
 
 func TestStructDefErrors(t *testing.T) {
@@ -491,7 +480,9 @@ q = Person
 	cp := NewCodeParser(lexer.New("TestStructDefRepeat", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
-	require.Len(t, code.Struct.Statements, 2)
+	require.Len(t, code.Statements, 2)
+	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
+	require.IsType(t, &ast.StructStatement{}, code.Statements[1])
 }
 
 func TestStructDefSubset(t *testing.T) {
@@ -505,7 +496,9 @@ q = Person
 	cp := NewCodeParser(lexer.New("TestStructDefSubset", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
-	require.Len(t, code.Struct.Statements, 2)
+	require.Len(t, code.Statements, 2)
+	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
+	require.IsType(t, &ast.StructStatement{}, code.Statements[1])
 }
 
 func TestStructDefZeroInit(t *testing.T) {
@@ -517,10 +510,12 @@ q = Person`
 	cp := NewCodeParser(lexer.New("TestStructDefZeroInit", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
-	require.Len(t, code.Struct.Statements, 2)
-	require.Equal(t, "q", code.Struct.Statements[1].Name.Value)
-	require.Len(t, code.Struct.Statements[1].Value.Headers, 0)
-	require.Len(t, code.Struct.Statements[1].Value.Row, 0)
+	require.Len(t, code.Statements, 2)
+	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
+	stmt := code.Statements[1].(*ast.StructStatement)
+	require.Equal(t, "q", stmt.Name.Value)
+	require.Empty(t, stmt.Value.Headers)
+	require.Empty(t, stmt.Value.Row)
 }
 
 func TestStructDefZeroInitBeforeDef(t *testing.T) {
@@ -532,5 +527,7 @@ p = Person
 	cp := NewCodeParser(lexer.New("TestStructDefZeroInitBeforeDef", input))
 	code := cp.Parse()
 	require.Empty(t, cp.Errors())
-	require.Len(t, code.Struct.Statements, 2)
+	require.Len(t, code.Statements, 2)
+	require.IsType(t, &ast.StructStatement{}, code.Statements[0])
+	require.IsType(t, &ast.StructStatement{}, code.Statements[1])
 }

@@ -42,7 +42,6 @@ type CFG struct {
 	Blocks         []*BasicBlock
 	Scopes         []Scope[VarEvent] // Used ONLY by the forward pass
 	Errors         []*token.CompileError
-	CheckedFuncs   map[ast.FuncKey]struct{} // Map of validated functions
 }
 
 // PushBlock creates and returns a new, empty basic block
@@ -66,7 +65,6 @@ func NewCFG(sc *ScriptCompiler, cc *CodeCompiler) *CFG {
 		Blocks:         make([]*BasicBlock, 0),
 		Scopes:         []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
 		Errors:         make([]*token.CompileError, 0),
-		CheckedFuncs:   make(map[ast.FuncKey]struct{}),
 	}
 }
 
@@ -390,17 +388,13 @@ func (cfg *CFG) Analyze(statements []ast.Statement) {
 }
 
 func (cfg *CFG) AnalyzeFuncs() {
-	for _, fn := range cfg.CodeCompiler.Code.Func.Statements {
-		fk := ast.FuncKey{
-			FuncName: fn.Token.Literal,
-			Arity:    len(fn.Parameters),
-		}
-		if _, ok := cfg.CheckedFuncs[fk]; ok {
+	for _, stmt := range cfg.CodeCompiler.Code.Statements {
+		fn, ok := stmt.(*ast.FuncStatement)
+		if !ok {
 			continue
 		}
 
 		cfg.validateFunc(fn)
-		cfg.CheckedFuncs[fk] = struct{}{}
 	}
 }
 
@@ -571,7 +565,7 @@ func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
 	}
 	// check we are not writing to a constant
 	cc := cfg.CodeCompiler
-	if _, ok := cc.Code.ConstNames[e.Name]; ok {
+	if cc.isGlobalBinding(e.Name) {
 		cfg.addError(e.Token, fmt.Sprintf("cannot write to constant %q", e.Name))
 	}
 	// update the last write type.
@@ -622,7 +616,5 @@ func (cfg *CFG) isDefined(name string) bool {
 	if _, ok := Get(cfg.Scopes, name); ok {
 		return true
 	}
-	cc := cfg.CodeCompiler
-	_, ok := cc.Code.ConstNames[name]
-	return ok
+	return cfg.CodeCompiler.isGlobalBinding(name)
 }

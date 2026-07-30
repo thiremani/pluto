@@ -33,99 +33,18 @@ type Program struct {
 
 type Code struct {
 	Statements []Statement
-	Const      Const
-	ConstNames map[string]token.Token
-	Func       Func
-	Struct     Struct
-}
-
-type FuncKey struct {
-	FuncName string
-	Arity    int
-}
-
-type Struct struct {
-	Statements []*StructStatement
-	Map        map[string]*StructStatement
 }
 
 func NewCode() *Code {
-	Const := Const{
-		Statements: []*ConstStatement{},
-		Map:        make(map[string]*ConstStatement),
-	}
-	Func := Func{
-		Statements: []*FuncStatement{},
-		Map:        make(map[FuncKey]*FuncStatement),
-	}
-	Struct := Struct{
-		Statements: []*StructStatement{},
-		Map:        make(map[string]*StructStatement),
-	}
-
-	return &Code{
-		Const:      Const,
-		ConstNames: make(map[string]token.Token),
-		Func:       Func,
-		Struct:     Struct,
-	}
+	return &Code{}
 }
 
-func (c *Code) addGlobalBinding(name string, tok token.Token) bool {
-	if _, exists := c.ConstNames[name]; exists {
-		return false
-	}
-	c.ConstNames[name] = tok
-	return true
-}
-
-// AddStatement records a source declaration and updates its lookup indexes.
-func (c *Code) AddStatement(stmt Statement) {
-	c.Statements = append(c.Statements, stmt)
-
-	switch s := stmt.(type) {
-	case *ConstStatement:
-		c.Const.Statements = append(c.Const.Statements, s)
-		for _, ident := range s.Name {
-			if c.addGlobalBinding(ident.Value, ident.Token) {
-				c.Const.Map[ident.Value] = s
-			}
-		}
-	case *FuncStatement:
-		c.Func.Statements = append(c.Func.Statements, s)
-		key := FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
-		if _, exists := c.Func.Map[key]; !exists {
-			c.Func.Map[key] = s
-		}
-	case *StructStatement:
-		c.Struct.Statements = append(c.Struct.Statements, s)
-		c.addGlobalBinding(s.Name.Value, s.Name.Token)
-		typeName := s.Value.Token.Literal
-		if _, exists := c.Struct.Map[typeName]; !exists {
-			c.Struct.Map[typeName] = s
-		}
-	}
-}
-
-// Append adds declarations from another Code in order while lookup maps
-// preserve the first declaration.
+// Append adds declarations from another Code in order.
 func (c *Code) Append(other *Code) {
 	if other == nil {
 		return
 	}
-	for _, stmt := range other.Statements {
-		c.AddStatement(stmt)
-	}
-}
-
-type Const struct {
-	Statements []*ConstStatement
-	Map        map[string]*ConstStatement
-}
-
-type Func struct {
-	Statements []*FuncStatement
-	Map        map[FuncKey]*FuncStatement
+	c.Statements = append(c.Statements, other.Statements...)
 }
 
 // StructStatement represents a struct constant definition in a .pt file.

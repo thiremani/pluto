@@ -28,6 +28,7 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	}
 
 	cc := NewCodeCompiler(ctx, moduleName, "", codeAST)
+	require.Empty(t, cc.Compile())
 	program := mustParseScript(t, scriptSrc)
 
 	funcCache := make(map[string]*Func)
@@ -193,6 +194,7 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
+	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, mustParseScript(t, scriptSrc), cc, make(map[string]*Func), cc.Compiler.ExprCache)
 	require.Empty(t, sc.Compile())
 
@@ -812,9 +814,9 @@ q = Person`)
 }
 
 func TestStructUseBeforeDef(t *testing.T) {
-	// Build AST directly: parser now rejects this, so we test the compiler guard independently.
+	// Build the AST directly to test the compiler guard independently.
 	code := ast.NewCode()
-	code.Struct.Statements = append(code.Struct.Statements, &ast.StructStatement{
+	code.Statements = append(code.Statements, &ast.StructStatement{
 		Token: token.Token{Type: token.ASSIGN, Literal: "="},
 		Name:  &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "q"}, Value: "q"},
 		Value: &ast.StructLiteral{

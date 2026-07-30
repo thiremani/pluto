@@ -40,6 +40,7 @@ c = add(a, b)
 `
 	codeAST := mustParseCode(t, codeSrc)
 	codeCompiler := NewCodeCompiler(ctx, "cacheTestCode", "", codeAST)
+	require.Empty(t, codeCompiler.Compile())
 
 	// This is the shared cache that will persist across compilations.
 	funcCache := make(map[string]*Func)

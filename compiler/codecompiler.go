@@ -9,8 +9,15 @@ import (
 )
 
 type CodeCompiler struct {
-	Compiler *Compiler
-	Code     *ast.Code
+	Compiler       *Compiler
+	Code           *ast.Code
+	globalBindings map[string]token.Token
+	funcTemplates  map[funcKey]*ast.FuncStatement
+}
+
+type funcKey struct {
+	name  string
+	arity int
 }
 
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
@@ -22,10 +29,10 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func registerGlobalBinding(seen map[string]token.Token, name string, tok token.Token) *token.CompileError {
-	previous, exists := seen[name]
+func (cc *CodeCompiler) registerGlobalBinding(name string, tok token.Token) *token.CompileError {
+	previous, exists := cc.globalBindings[name]
 	if !exists {
-		seen[name] = tok
+		cc.globalBindings[name] = tok
 		return nil
 	}
 	return &token.CompileError{
@@ -34,37 +41,49 @@ func registerGlobalBinding(seen map[string]token.Token, name string, tok token.T
 	}
 }
 
-func validateDeclarations(code *ast.Code) []*token.CompileError {
+// indexDeclarations builds compiler lookup indexes while reporting redeclarations
+// in source order.
+func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 	var errs []*token.CompileError
-	globals := make(map[string]token.Token)
-	funcs := make(map[ast.FuncKey]token.Token)
+	cc.globalBindings = make(map[string]token.Token)
+	cc.funcTemplates = make(map[funcKey]*ast.FuncStatement)
 
-	for _, stmt := range code.Statements {
+	for _, stmt := range cc.Code.Statements {
 		switch s := stmt.(type) {
 		case *ast.ConstStatement:
 			for _, ident := range s.Name {
-				if err := registerGlobalBinding(globals, ident.Value, ident.Token); err != nil {
+				if err := cc.registerGlobalBinding(ident.Value, ident.Token); err != nil {
 					errs = append(errs, err)
 				}
 			}
 		case *ast.FuncStatement:
-			key := ast.FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
-			previous, exists := funcs[key]
+			key := funcKey{name: s.Token.Literal, arity: len(s.Parameters)}
+			previous, exists := cc.funcTemplates[key]
 			if !exists {
-				funcs[key] = s.Token
+				cc.funcTemplates[key] = s
 				continue
 			}
 			errs = append(errs, &token.CompileError{
 				Token: s.Token,
-				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, previous.Location()),
+				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.name, key.arity, previous.Token.Location()),
 			})
 		case *ast.StructStatement:
-			if err := registerGlobalBinding(globals, s.Name.Value, s.Name.Token); err != nil {
+			if err := cc.registerGlobalBinding(s.Name.Value, s.Name.Token); err != nil {
 				errs = append(errs, err)
 			}
 		}
 	}
 	return errs
+}
+
+func (cc *CodeCompiler) lookupFuncTemplate(name string, arity int) (*ast.FuncStatement, bool) {
+	template, ok := cc.funcTemplates[funcKey{name: name, arity: arity}]
+	return template, ok
+}
+
+func (cc *CodeCompiler) isGlobalBinding(name string) bool {
+	_, ok := cc.globalBindings[name]
+	return ok
 }
 
 // validateStructUsage checks that all headers in a usage reference fields from the definition.
@@ -211,15 +230,21 @@ func collectStructDefs(stmts []*ast.StructStatement) (map[string]*Struct, []*tok
 func (cc *CodeCompiler) validateStructDefs() {
 	c := cc.Compiler
 	prior := len(c.Errors)
+	var stmts []*ast.StructStatement
+	for _, stmt := range cc.Code.Statements {
+		if s, ok := stmt.(*ast.StructStatement); ok {
+			stmts = append(stmts, s)
+		}
+	}
 
-	defs, errs := collectStructDefs(cc.Code.Struct.Statements)
+	defs, errs := collectStructDefs(stmts)
 	if len(errs) > 0 {
 		c.Errors = append(c.Errors, errs...)
 		return
 	}
 
 	// Validate zero-header usages have a definition somewhere.
-	for _, stmt := range cc.Code.Struct.Statements {
+	for _, stmt := range stmts {
 		typeName := stmt.Value.Token.Literal
 		if len(stmt.Value.Headers) == 0 {
 			if _, exists := defs[typeName]; !exists {
@@ -242,7 +267,7 @@ func (cc *CodeCompiler) validateStructDefs() {
 
 // Compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
-	cc.Compiler.Errors = append(cc.Compiler.Errors, validateDeclarations(cc.Code)...)
+	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.indexDeclarations()...)
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
 	}
@@ -253,11 +278,15 @@ func (cc *CodeCompiler) Compile() []*token.CompileError {
 	}
 
 	// Compile constants
-	for _, stmt := range cc.Code.Const.Statements {
-		cc.Compiler.compileConstStatement(stmt)
+	for _, stmt := range cc.Code.Statements {
+		if s, ok := stmt.(*ast.ConstStatement); ok {
+			cc.Compiler.compileConstStatement(s)
+		}
 	}
-	for _, stmt := range cc.Code.Struct.Statements {
-		cc.Compiler.compileStructStatement(stmt)
+	for _, stmt := range cc.Code.Statements {
+		if s, ok := stmt.(*ast.StructStatement); ok {
+			cc.Compiler.compileStructStatement(s)
+		}
 	}
 
 	cfg := NewCFG(nil, cc)

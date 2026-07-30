@@ -3182,11 +3182,7 @@ func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llv
 		return fn, funcType, retStruct
 	}
 
-	fk := ast.FuncKey{
-		FuncName: sig.FuncName,
-		Arity:    len(sig.ParamTypes),
-	}
-	template := c.CodeCompiler.Code.Func.Map[fk]
+	template, _ := c.CodeCompiler.lookupFuncTemplate(sig.FuncName, len(sig.ParamTypes))
 	savedBlock := c.builder.GetInsertBlock()
 
 	fn = c.compileFunc(template, sig, funcType, retStruct)
