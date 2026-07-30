@@ -41,9 +41,6 @@ func NewCode() *Code {
 
 // Append adds declarations from another Code in order.
 func (c *Code) Append(other *Code) {
-	if other == nil {
-		return
-	}
 	c.Statements = append(c.Statements, other.Statements...)
 }
 
