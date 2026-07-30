@@ -22,32 +22,6 @@ func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) 
 	return cc
 }
 
-func sourceLocation(tok token.Token) string {
-	location := fmt.Sprintf("%d:%d", tok.Line, tok.Column)
-	if tok.FileName != "" {
-		return tok.FileName + ":" + location
-	}
-	return location
-}
-
-func moduleDeclarationErrors(code *ast.Code) []*token.CompileError {
-	errs := make([]*token.CompileError, 0, len(code.DeclarationConflicts))
-	for _, conflict := range code.DeclarationConflicts {
-		var msg string
-		switch conflict.Kind {
-		case ast.GlobalBindingDeclaration:
-			msg = fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", conflict.Name, sourceLocation(conflict.Previous))
-		case ast.FunctionDeclaration:
-			msg = fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", conflict.Name, conflict.Arity, sourceLocation(conflict.Previous))
-		}
-		errs = append(errs, &token.CompileError{
-			Token: conflict.Token,
-			Msg:   msg,
-		})
-	}
-	return errs
-}
-
 // validateStructUsage checks that all headers in a usage reference fields from the definition.
 func validateStructUsage(def *Struct, headers []token.Token) []*token.CompileError {
 	var errs []*token.CompileError
@@ -223,7 +197,7 @@ func (cc *CodeCompiler) validateStructDefs() {
 
 // Compile compiles the constants in the AST and adds them to the compiler's symbol table.
 func (cc *CodeCompiler) Compile() []*token.CompileError {
-	cc.Compiler.Errors = append(cc.Compiler.Errors, moduleDeclarationErrors(cc.Code)...)
+	cc.Compiler.Errors = append(cc.Compiler.Errors, cc.Code.DeclarationErrors...)
 	if len(cc.Compiler.Errors) > 0 {
 		return cc.Compiler.Errors
 	}

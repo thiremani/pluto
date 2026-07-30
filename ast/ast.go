@@ -32,32 +32,17 @@ type Program struct {
 }
 
 type Code struct {
-	Statements           []Statement
-	Const                Const
-	ConstNames           map[string]token.Token
-	Func                 Func
-	Struct               Struct
-	DeclarationConflicts []DeclarationConflict
+	Statements        []Statement
+	Const             Const
+	ConstNames        map[string]token.Token
+	Func              Func
+	Struct            Struct
+	DeclarationErrors []*token.CompileError
 }
 
 type FuncKey struct {
 	FuncName string
 	Arity    int
-}
-
-type DeclarationKind int
-
-const (
-	GlobalBindingDeclaration DeclarationKind = iota
-	FunctionDeclaration
-)
-
-type DeclarationConflict struct {
-	Kind     DeclarationKind
-	Name     string
-	Arity    int
-	Token    token.Token
-	Previous token.Token
 }
 
 type Struct struct {
@@ -80,12 +65,19 @@ func NewCode() *Code {
 	}
 
 	return &Code{
-		Statements: []Statement{},
 		Const:      Const,
 		ConstNames: make(map[string]token.Token),
 		Func:       Func,
 		Struct:     Struct,
 	}
+}
+
+func sourceLocation(tok token.Token) string {
+	location := fmt.Sprintf("%d:%d", tok.Line, tok.Column)
+	if tok.FileName != "" {
+		return tok.FileName + ":" + location
+	}
+	return location
 }
 
 func (c *Code) addGlobalBinding(name string, tok token.Token) bool {
@@ -94,11 +86,9 @@ func (c *Code) addGlobalBinding(name string, tok token.Token) bool {
 		c.ConstNames[name] = tok
 		return true
 	}
-	c.DeclarationConflicts = append(c.DeclarationConflicts, DeclarationConflict{
-		Kind:     GlobalBindingDeclaration,
-		Name:     name,
-		Token:    tok,
-		Previous: previous,
+	c.DeclarationErrors = append(c.DeclarationErrors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("global redeclaration of constant %s; previously defined at %s", name, sourceLocation(previous)),
 	})
 	return false
 }
@@ -120,12 +110,9 @@ func (c *Code) AddStatement(stmt Statement) {
 		key := FuncKey{FuncName: s.Token.Literal, Arity: len(s.Parameters)}
 		previous, exists := c.Func.Map[key]
 		if exists {
-			c.DeclarationConflicts = append(c.DeclarationConflicts, DeclarationConflict{
-				Kind:     FunctionDeclaration,
-				Name:     key.FuncName,
-				Arity:    key.Arity,
-				Token:    s.Token,
-				Previous: previous.Token,
+			c.DeclarationErrors = append(c.DeclarationErrors, &token.CompileError{
+				Token: s.Token,
+				Msg:   fmt.Sprintf("Function %s with %d parameters has been previously defined at %s", key.FuncName, key.Arity, sourceLocation(previous.Token)),
 			})
 			return
 		}
