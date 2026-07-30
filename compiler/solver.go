@@ -968,7 +968,11 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		trueValues[ident.Value] = ts.resolveBindingSlotType(ident.Value, typ, newType)
 	}
 
-	PutBulk(ts.Scopes, trueValues)
+	for _, ident := range stmt.Name {
+		if typ, exists := trueValues[ident.Value]; exists {
+			Put(ts.Scopes, ident.Value, typ)
+		}
+	}
 }
 
 // TypeArrayExpression classifies bracket literals as rectangular arrays or

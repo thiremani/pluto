@@ -51,6 +51,11 @@ hotel = "h" ⊕ "8"
 "-alpha -bravo -charlie -delta -echo -foxtrot -golf -hotel"`
 
 	want, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
+	lastBindingCleanup := strings.Index(want, "call void @free(ptr %str_concat_result14)")
+	firstBindingCleanup := strings.Index(want, "call void @free(ptr %str_concat_result)")
+	require.NotEqual(t, -1, lastBindingCleanup)
+	require.NotEqual(t, -1, firstBindingCleanup)
+	require.Less(t, lastBindingCleanup, firstBindingCleanup)
 	for range 10 {
 		got, _ := compileScriptAndCodeIR(t, "deterministic_ir", "", script)
 		require.Equal(t, want, got)

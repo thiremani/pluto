@@ -1,9 +1,5 @@
 package compiler
 
-import (
-	"maps"
-)
-
 type ScopeKind int
 
 const (
@@ -12,8 +8,10 @@ const (
 )
 
 type Scope[T any] struct {
-	Elems     map[string]T
-	ScopeKind ScopeKind
+	Elems map[string]T
+	// BindingOrder records first insertion so owned values can be released in reverse order.
+	BindingOrder []string
+	ScopeKind    ScopeKind
 }
 
 func NewScope[T any](sk ScopeKind) Scope[T] {
@@ -34,14 +32,13 @@ func PopScope[T any](scopes *[]Scope[T]) {
 	*scopes = (*scopes)[:len(*scopes)-1]
 }
 
-// Put does not need a pointer, as it modifies the map within a scope, not the slice itself.
+// Put adds or replaces a binding in the current scope without reordering existing names.
 func Put[T any](scopes []Scope[T], name string, elem T) {
-	scopes[len(scopes)-1].Elems[name] = elem
-}
-
-// PutBulk is also fine without a pointer.
-func PutBulk[T any](scopes []Scope[T], elems map[string]T) {
-	maps.Copy(scopes[len(scopes)-1].Elems, elems)
+	scope := &scopes[len(scopes)-1]
+	if _, exists := scope.Elems[name]; !exists {
+		scope.BindingOrder = append(scope.BindingOrder, name)
+	}
+	scope.Elems[name] = elem
 }
 
 func findScopeIndex[T any](scopes []Scope[T], name string) (int, bool) {
@@ -76,8 +73,16 @@ func Get[T any](scopes []Scope[T], name string) (T, bool) {
 
 // DeleteBulk removes names from the current scope only.
 func DeleteBulk[T any](scopes []Scope[T], names []string) {
-	elems := scopes[len(scopes)-1].Elems
+	scope := &scopes[len(scopes)-1]
 	for _, name := range names {
-		delete(elems, name)
+		delete(scope.Elems, name)
 	}
+
+	order := scope.BindingOrder[:0]
+	for _, name := range scope.BindingOrder {
+		if _, exists := scope.Elems[name]; exists {
+			order = append(order, name)
+		}
+	}
+	scope.BindingOrder = order
 }
