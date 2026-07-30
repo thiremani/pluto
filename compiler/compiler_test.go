@@ -829,6 +829,23 @@ func TestCompilerIdentifierCannotBeSourceIdentifier(t *testing.T) {
 	require.NotEqual(t, token.IDENT, tok.Type)
 }
 
+func TestOutputTempNamesRetainDestinations(t *testing.T) {
+	code := `left, right = Pair(x)
+    left = x
+    right = x + 1`
+	script := `result = 10
+result = 1:3 < 3 result + 1
+left, right = Pair(1:2)
+result, left, right`
+
+	ir, _ := compileScriptAndCodeIR(t, "output_temp_names", code, script)
+
+	require.Contains(t, ir, "$c_cond_result_")
+	require.Contains(t, ir, "$c_cond_stage_result_")
+	require.Contains(t, ir, "$c_output_left_")
+	require.Contains(t, ir, "$c_output_right_")
+}
+
 func TestStructUnknownFieldNoSpuriousError(t *testing.T) {
 	codeA := mustParseCode(t, `p = Person
   : name age
