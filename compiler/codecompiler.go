@@ -47,6 +47,8 @@ func sourceLocation(tok token.Token) string {
 	return location
 }
 
+// Keep this binding inventory in sync with CodeParser's ConstNames population:
+// regular constants and struct constants share one global namespace.
 func collectModuleGlobalBindings(code *ast.Code) []moduleGlobalBinding {
 	bindings := make([]moduleGlobalBinding, 0, len(code.ConstNames))
 	for _, stmt := range code.Const.Statements {
