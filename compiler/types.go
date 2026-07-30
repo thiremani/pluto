@@ -206,10 +206,28 @@ func (r Range) Kind() Kind {
 	return RangeKind
 }
 
+// funcSemantics contains solved metadata whose lifetime must match one mangled
+// function specialization. It is published only after a complete local type
+// pass; ScriptCompiler separately verifies the reachable dependency closure
+// before lowering so recursive specializations can publish independently.
+type funcSemantics struct {
+	bindingTypes map[string]Type
+	callees      []string
+}
+
+func (s *funcSemantics) bindingType(name string) (Type, bool) {
+	if s == nil {
+		return nil, false
+	}
+	typ, ok := s.bindingTypes[name]
+	return typ, ok
+}
+
 type Func struct {
-	Name     string
-	Params   []Type
-	OutTypes []Type // Final function output types (after wrapping for array types)
+	Name      string
+	Params    []Type
+	OutTypes  []Type // Final function output types (after wrapping for array types)
+	semantics *funcSemantics
 }
 
 func (f Func) String() string {

@@ -1,0 +1,4 @@
+nums = Reset(0)
+words = ResetStrings(0)
+nums
+words

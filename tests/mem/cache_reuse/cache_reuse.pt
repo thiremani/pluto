@@ -1,0 +1,9 @@
+res = Reset(k)
+    a = [10 20 30]
+    a = k > 0 []
+    res = a ⊕ [7]
+
+res = ResetStrings(k)
+    a = ["left" ⊕ "!"]
+    a = k > 0 []
+    res = a ⊕ ["right" ⊕ "!"]

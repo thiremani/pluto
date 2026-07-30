@@ -200,6 +200,19 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
+	if c.FuncNameMangled != "" {
+		f, ok := c.FuncCache[c.FuncNameMangled]
+		if !ok || f.semantics == nil {
+			panic(fmt.Sprintf("internal: specialization %s reached lowering without semantic metadata", c.FuncNameMangled))
+		}
+		if typ, ok := f.semantics.bindingType(name); ok {
+			return typ
+		}
+		if !strings.HasPrefix(name, "$") {
+			panic(fmt.Sprintf("internal: specialization %s has no binding type for %s", c.FuncNameMangled, name))
+		}
+	}
+
 	typ, ok := c.BindingTypes[BindingKey{
 		FuncNameMangled: c.FuncNameMangled,
 		Name:            name,
@@ -303,6 +316,13 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: ce.Tok(),
 			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
+		})
+		return nil, false
+	}
+	if fnInfo.semantics == nil {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("internal: function specialization %s is not ready for lowering", mangled),
 		})
 		return nil, false
 	}

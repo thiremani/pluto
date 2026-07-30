@@ -126,11 +126,11 @@ type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
 	InProgress         map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc         string              // this is the current func in the main scope we are inferring type for
 	FuncNameMangled    string              // current function's mangled name ("" for script level)
 	Converging         bool
 	Errors             []*token.CompileError
 	BindingTypes       map[BindingKey]Type
+	funcCallees        map[string]map[string]struct{}
 	ExprCache          map[ExprKey]*ExprInfo
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
@@ -142,11 +142,11 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ScriptCompiler:     sc,
 		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
 		InProgress:         map[string]struct{}{},
-		ScriptFunc:         "",
 		FuncNameMangled:    "",
 		Converging:         false,
 		Errors:             []*token.CompileError{},
 		BindingTypes:       make(map[BindingKey]Type),
+		funcCallees:        make(map[string]map[string]struct{}),
 		ExprCache:          sc.Compiler.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
@@ -154,13 +154,139 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
-	if typ.Kind() == UnresolvedKind {
+	if !IsFullyResolvedType(typ) {
 		return
 	}
 	ts.BindingTypes[BindingKey{
 		FuncNameMangled: ts.FuncNameMangled,
 		Name:            name,
 	}] = typ
+}
+
+func (ts *TypeSolver) clearFuncBindingTypes(mangled string) {
+	for key := range ts.BindingTypes {
+		if key.FuncNameMangled == mangled {
+			delete(ts.BindingTypes, key)
+		}
+	}
+}
+
+func (ts *TypeSolver) recordFuncCallee(mangled string) {
+	callees := ts.funcCallees[ts.FuncNameMangled]
+	if callees == nil {
+		callees = make(map[string]struct{})
+		ts.funcCallees[ts.FuncNameMangled] = callees
+	}
+	callees[mangled] = struct{}{}
+}
+
+func (ts *TypeSolver) clearFuncCallees(mangled string) {
+	delete(ts.funcCallees, mangled)
+}
+
+func (ts *TypeSolver) expressionSemanticsReady(mangled string, expr ast.Expression) bool {
+	info := ts.ExprCache[key(mangled, expr)]
+	if info == nil {
+		return false
+	}
+	for _, typ := range info.OutTypes {
+		if !IsFullyResolvedType(typ) {
+			return false
+		}
+	}
+
+	if call, ok := expr.(*ast.CallExpression); ok {
+		if _, builtin := Builtins[call.Function.Value]; !builtin {
+			for _, typ := range info.CallParamTypes {
+				if !IsFullyResolvedType(typ) {
+					return false
+				}
+			}
+			for _, typ := range info.ScalarCallParamTypes {
+				if !IsFullyResolvedType(typ) {
+					return false
+				}
+			}
+		}
+	}
+
+	for _, child := range ast.ExprChildren(expr) {
+		if !ts.expressionSemanticsReady(mangled, child) {
+			return false
+		}
+	}
+	return true
+}
+
+func (ts *TypeSolver) funcExpressionsReady(mangled string, template *ast.FuncStatement) bool {
+	for _, stmt := range template.Body.Statements {
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			for _, expr := range s.Condition {
+				if !ts.expressionSemanticsReady(mangled, expr) {
+					return false
+				}
+			}
+			for _, expr := range s.Value {
+				if !ts.expressionSemanticsReady(mangled, expr) {
+					return false
+				}
+			}
+		case *ast.PrintStatement:
+			if !ts.expressionSemanticsReady(mangled, s.Expression) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// tryPublishLocalFuncSemantics publishes the solved binding inventory and
+// direct callees for one specialization as a single immutable snapshot. Every
+// source expression and destination must have an authoritative type;
+// compiler-generated destinations are derived from their storage and do not
+// appear in the source body.
+func (ts *TypeSolver) tryPublishLocalFuncSemantics(mangled string, template *ast.FuncStatement, f *Func) bool {
+	if !ts.funcExpressionsReady(mangled, template) {
+		return false
+	}
+
+	for pending := range ts.PendingAssignments {
+		if pending.funcNameMangled == mangled {
+			return false
+		}
+	}
+
+	bindingTypes := make(map[string]Type)
+	for key, typ := range ts.BindingTypes {
+		if key.FuncNameMangled == mangled {
+			bindingTypes[key.Name] = typ
+		}
+	}
+
+	for _, stmt := range template.Body.Statements {
+		let, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+		for _, ident := range let.Name {
+			if _, ok := bindingTypes[ident.Value]; !ok {
+				return false
+			}
+		}
+	}
+
+	callees := make([]string, 0, len(ts.funcCallees[mangled]))
+	for callee := range ts.funcCallees[mangled] {
+		callees = append(callees, callee)
+	}
+	slices.Sort(callees)
+
+	f.semantics = &funcSemantics{
+		bindingTypes: bindingTypes,
+		callees:      callees,
+	}
+	return true
 }
 
 // resolveBindingSlotType computes the binding slot type for a resolved RHS and
@@ -711,7 +837,63 @@ func (ts *TypeSolver) Solve() {
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
 	}
+}
 
+// finalizeReachableFuncSemantics completes and validates only the specialization
+// graph reachable from this script. Local snapshots may be published
+// independently, which lets mutually recursive functions converge; lowering is
+// released only after every node in the reachable closure has a snapshot.
+func (ts *TypeSolver) finalizeReachableFuncSemantics() {
+	visited := make(map[string]struct{})
+	visiting := make(map[string]struct{})
+
+	var finalize func(string) bool
+	finalize = func(mangled string) bool {
+		if _, ok := visited[mangled]; ok {
+			return true
+		}
+		if _, ok := visiting[mangled]; ok {
+			return true
+		}
+
+		f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
+		if f == nil {
+			panic(fmt.Sprintf("internal: missing cached specialization %s during semantic finalization", mangled))
+		}
+
+		visiting[mangled] = struct{}{}
+		defer delete(visiting, mangled)
+
+		if f.semantics == nil {
+			template, ok := ts.ScriptCompiler.Compiler.CodeCompiler.lookupFuncTemplate(f.Name, len(f.Params))
+			if !ok {
+				panic(fmt.Sprintf("internal: missing template for specialization %s during semantic finalization", mangled))
+			}
+			ts.convergeLocalFuncSemantics(mangled, template, f)
+			if len(ts.Errors) != 0 || f.semantics == nil {
+				return false
+			}
+		}
+
+		for _, callee := range f.semantics.callees {
+			if !finalize(callee) {
+				return false
+			}
+		}
+		visited[mangled] = struct{}{}
+		return true
+	}
+
+	roots := make([]string, 0, len(ts.funcCallees[""]))
+	for mangled := range ts.funcCallees[""] {
+		roots = append(roots, mangled)
+	}
+	slices.Sort(roots)
+	for _, mangled := range roots {
+		if !finalize(mangled) {
+			return
+		}
+	}
 }
 
 // TypePrintStatement types a print in value position: a comparison yields its
@@ -2458,9 +2640,10 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	if !ok {
 		f = ts.newFunc(ce, args, mangled, template)
 	}
+	ts.recordFuncCallee(mangled)
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
-	if ts.ScriptFunc != "" {
+	if ts.FuncNameMangled != "" {
 		ts.TypeFunc(mangled, template, f)
 		return f
 	}
@@ -2484,15 +2667,20 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 // This function is assumed to be in the top level script
 // If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
-	ts.ScriptFunc = f.Name
-	defer func() { ts.ScriptFunc = "" }()
+	return ts.convergeFunc(mangled, template, f, false)
+}
+
+func (ts *TypeSolver) convergeLocalFuncSemantics(mangled string, template *ast.FuncStatement, f *Func) []Type {
+	return ts.convergeFunc(mangled, template, f, true)
+}
+
+func (ts *TypeSolver) convergeFunc(mangled string, template *ast.FuncStatement, f *Func, requireLocalSemantics bool) []Type {
 	errsAtEntry := len(ts.Errors)
 	// multiple passes may be needed to infer types for script level function
 	for range 100 {
 		ts.Converging = false
 		inferred := ts.TypeFunc(mangled, template, f)
-		// Root script call only depends on this function's concrete outputs.
-		if inferred {
+		if inferred && (!requireLocalSemantics || f.semantics != nil) {
 			return f.OutTypes
 		}
 
@@ -2546,10 +2734,11 @@ func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast
 	ts.Converging = savedConverging
 }
 
-// TypeFunc attempts to walk the function block and infer types for output variables.
-// It ASSUMES all output types have not been inferred
+// TypeFunc walks a function block and reports whether its output types have
+// been inferred for recursive convergence. A concrete specialization publishes
+// its semantic snapshot only after a fresh, successful final pass.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
-	if f.OutputTypesInferred() {
+	if f.OutputTypesInferred() && f.semantics != nil {
 		return true
 	}
 	if _, ok := ts.InProgress[mangled]; ok {
@@ -2563,10 +2752,18 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	ts.FuncNameMangled = mangled
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
+	errsAtEntry := len(ts.Errors)
 	ts.TypeBlock(template, f)
 	inferred := f.OutputTypesInferred()
 	if inferred {
+		if f.AllTypesInferred() {
+			ts.clearFuncBindingTypes(mangled)
+			ts.clearFuncCallees(mangled)
+		}
 		ts.refreshInferredFuncExprCache(mangled, template, f)
+		if f.AllTypesInferred() && len(ts.Errors) == errsAtEntry {
+			ts.tryPublishLocalFuncSemantics(mangled, template, f)
+		}
 	}
 	return inferred
 }
@@ -2577,6 +2774,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 
 	for i, id := range template.Parameters {
 		Put(ts.Scopes, id.Value, f.Params[i])
+		ts.recordBindingSlotType(id.Value, f.Params[i])
 	}
 
 	oldErrs := len(ts.Errors)

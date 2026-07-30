@@ -12,7 +12,7 @@ import (
 	"github.com/thiremani/pluto/parser"
 )
 
-// mustParseScript is a helper to parse script code for testing.
+// mustParseScript parses script source for compiler tests.
 func mustParseScript(t *testing.T, input string) *ast.Program {
 	l := lexer.New("test.spt", input)
 	p := parser.NewScriptParser(l)
@@ -60,6 +60,12 @@ x`
 
 		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		assert.Contains(t, funcCache, key, "Cache should contain the integer version of add")
+		cachedInt := funcCache[key]
+		require.NotNil(t, cachedInt)
+		require.NotNil(t, cachedInt.semantics)
+		bindingType, ok := cachedInt.semantics.bindingType("c")
+		require.True(t, ok)
+		require.Equal(t, I64, bindingType)
 	})
 
 	t.Run("Compile with Ints again to test cache hit", func(t *testing.T) {
@@ -97,5 +103,18 @@ z`
 
 		mangledFloatKey := "Pt_13cacheTestCode_p_3add_f2_F64_F64"
 		assert.Contains(t, funcCache, mangledFloatKey, "Cache should now contain the float version of add")
+		cachedFloat := funcCache[mangledFloatKey]
+		require.NotNil(t, cachedFloat)
+		require.NotNil(t, cachedFloat.semantics)
+		bindingType, ok := cachedFloat.semantics.bindingType("c")
+		require.True(t, ok)
+		require.Equal(t, F64, bindingType)
+
+		cachedInt := funcCache["Pt_13cacheTestCode_p_3add_f2_I64_I64"]
+		require.NotNil(t, cachedInt)
+		require.NotNil(t, cachedInt.semantics)
+		intBindingType, ok := cachedInt.semantics.bindingType("c")
+		require.True(t, ok)
+		require.Equal(t, I64, intBindingType, "specialization metadata must remain isolated by mangled parameter types")
 	})
 }
