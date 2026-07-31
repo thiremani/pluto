@@ -22,7 +22,6 @@ x, y = isEven(n)
     x = n == 0 "yes"
 
 # define isOdd: returns (x, y) = (is-odd?, is-even?)
-# this function only infers type for y
 x, y = isOdd(n)
     # recursive step: if n≠0, flip the pair returned by isEven(n-1)
     x, y = n != 0 isEven(n - 1)
@@ -54,9 +53,13 @@ x, y`
 	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
+	require.Empty(t, ts.Errors)
+	require.Len(t, funcCache, 2)
 
 	// check func cache
 	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_6isEven_f1_I64"]
+	require.NotNil(t, isEvenFunc)
+	require.True(t, isEvenFunc.AllTypesInferred())
 	if isEvenFunc.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
@@ -65,8 +68,10 @@ x, y`
 	}
 
 	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
-	if isOddFunc.OutTypes[0].Kind() != UnresolvedKind {
-		t.Errorf("isOdd func should remain unresolved for output arg 0 until called from script")
+	require.NotNil(t, isOddFunc)
+	require.True(t, isOddFunc.AllTypesInferred())
+	if isOddFunc.OutTypes[0].Kind() != StrKind {
+		t.Errorf("isOdd func should strkind for output arg 0 after solving the reachable function closure")
 	}
 	if isOddFunc.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isOdd func should strkind for output arg 1")

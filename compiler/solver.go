@@ -135,6 +135,7 @@ type TypeSolver struct {
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
+	allFuncsInferred   bool // all functions visited by the current script-function pass are fully inferred
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -2451,7 +2452,6 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
 	// Fetch existing func cache entry (if any).
-	// Already-inferred fast-path is handled centrally in TypeFunc.
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
@@ -2462,6 +2462,9 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.ScriptFunc != "" {
 		ts.TypeFunc(mangled, template, f)
+		if !f.AllTypesInferred() {
+			ts.allFuncsInferred = false
+		}
 		return f
 	}
 
@@ -2490,11 +2493,8 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// multiple passes may be needed to infer types for script level function
 	for range 100 {
 		ts.Converging = false
-		inferred := ts.TypeFunc(mangled, template, f)
-		// Root script call only depends on this function's concrete outputs.
-		if inferred {
-			return f.OutTypes
-		}
+		ts.allFuncsInferred = true
+		ts.TypeFunc(mangled, template, f)
 
 		// A typing error is fatal for this function: TypeBlock aborts on it
 		// before outputs infer, and the error is deterministic, so another
@@ -2503,6 +2503,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// "not converging" message — the reported errors are the cause, not
 		// cyclic recursion.
 		if len(ts.Errors) > errsAtEntry {
+			return f.OutTypes
+		}
+
+		// Every call is typed synchronously before its sibling or the next script
+		// statement. Return only after one unchanged pass has walked the complete
+		// recursive closure using final signatures and rebuilt its body facts.
+		if f.AllTypesInferred() && ts.allFuncsInferred && !ts.Converging {
 			return f.OutTypes
 		}
 
@@ -2518,40 +2525,10 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	panic("Could not infer output types for function %s in script" + f.Name)
 }
 
-// refreshInferredFuncExprCache runs one extra local type pass to refresh ExprCache
-// entries after a function first reaches fully inferred outputs.
-// Unresolved callees are temporarily blocked so this pass does not recurse into
-// additional function inference.
-func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast.FuncStatement, f *Func) {
-	blocked := make(map[string]struct{}, len(ts.InProgress)+len(ts.ScriptCompiler.Compiler.FuncCache))
-	// Block this function and unresolved callees so this pass stays local.
-	blocked[mangled] = struct{}{}
-	for fn := range ts.InProgress {
-		blocked[fn] = struct{}{}
-	}
-	for fn, cached := range ts.ScriptCompiler.Compiler.FuncCache {
-		if !cached.OutputTypesInferred() {
-			blocked[fn] = struct{}{}
-		}
-	}
-
-	savedInProgress := ts.InProgress
-	savedFuncNameMangled := ts.FuncNameMangled
-	savedConverging := ts.Converging
-	ts.InProgress = blocked
-	ts.FuncNameMangled = mangled
-	ts.TypeBlock(template, f)
-	ts.FuncNameMangled = savedFuncNameMangled
-	ts.InProgress = savedInProgress
-	ts.Converging = savedConverging
-}
-
-// TypeFunc attempts to walk the function block and infer types for output variables.
-// It ASSUMES all output types have not been inferred
+// TypeFunc walks every function in the active script function's recursive
+// closure. InProgress cuts recursive backedges; TypeScriptFunc repeats the
+// traversal until every visited signature is resolved and one pass is stable.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
-	if f.OutputTypesInferred() {
-		return true
-	}
 	if _, ok := ts.InProgress[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
@@ -2564,11 +2541,7 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
-	inferred := f.OutputTypesInferred()
-	if inferred {
-		ts.refreshInferredFuncExprCache(mangled, template, f)
-	}
-	return inferred
+	return f.OutputTypesInferred()
 }
 
 func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {

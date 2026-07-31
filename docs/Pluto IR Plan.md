@@ -64,11 +64,14 @@ created range owns only the statements it drives, so its empty domain suspends
 exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
-computed once per mangled specialization are what resolve it. Any such
-per-specialization cache must bundle write effects, binding types, and
-validation results atomically: FuncCache is already shared across the scripts
-of one run while BindingTypes is rebuilt per script, and that split is exactly
-what produced issue #71's compile-order-dependent wrong output.
+derived while walking each concrete specialization are what resolve it. These
+are current-script analysis products: Phase 1 must re-derive write effects with
+binding types during the final reachable-function body walk, not attach them as
+durable `FuncCache` fields. PIR validation likewise consumes that freshly
+derived state rather than caching results on a specialization. `FuncCache`
+shares signature state across scripts, including in-progress inference, but
+never body-analysis facts. Issue #71's compile-order-dependent wrong output
+came from caching some body facts while rebuilding others.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity

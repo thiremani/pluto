@@ -1,0 +1,8 @@
+nums = Reset(0)
+words = ResetStrings(0)
+outerNums = OuterReset(0)
+outerWords = OuterResetStrings(0)
+nums
+words
+outerNums
+outerWords
