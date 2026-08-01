@@ -655,8 +655,9 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 }
 
 // mergeBindingSlotType assumes bindingSlotCompatible(oldType, newType) is true.
-// For strings it widens to the owning flavor; for all other types callers have
-// already established that newType is a valid refinement of the existing slot.
+// It preserves established collection shapes across empty resets, widens string
+// ownership recursively through structs, and otherwise adopts a valid forward
+// refinement.
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return mergeStringFlavor(oldType, newType)

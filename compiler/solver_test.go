@@ -1595,14 +1595,14 @@ res = Relay(k)
 			cc := NewCodeCompiler(ctx, "outputRefine"+tt.name, "", code)
 			require.Empty(t, cc.Compile())
 
-			sl := lexer.New("TestOutputRefineScript", "v = Root(3)\nv")
-			sp := parser.NewScriptParser(sl)
-			program := sp.Parse()
-			require.Empty(t, sp.Errors())
-
 			funcCache := make(map[string]*Func)
 			exprCache := make(map[ExprKey]*ExprInfo)
 			solve := func() map[BindingKey]Type {
+				sl := lexer.New("TestOutputRefineScript", "v = Root(3)\nv")
+				sp := parser.NewScriptParser(sl)
+				program := sp.Parse()
+				require.Empty(t, sp.Errors())
+
 				sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
 				ts := NewTypeSolver(sc)
 				ts.Solve()
@@ -1662,6 +1662,67 @@ res = Consume(x)
 	heapConsumer := funcCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
 	require.NotNil(t, heapConsumer, "the stable body sweep must remangle Consume with Root's StrH output slot")
 	require.True(t, heapConsumer.AllTypesInferred())
+
+	root := code.Statements[0].(*ast.FuncStatement)
+	consumeStmt := root.Body.Statements[1].(*ast.LetStatement)
+	consumeCall := consumeStmt.Value[0].(*ast.CallExpression)
+	rootMangled := Mangle(cc.Compiler.MangledPath, "Root", []Type{I64})
+	callInfo := ts.ExprCache[key(rootMangled, consumeCall)]
+	require.NotNil(t, callInfo)
+	require.Len(t, callInfo.CallParamTypes, 1)
+	require.Len(t, callInfo.ScalarCallParamTypes, 1)
+	require.True(t, TypeEqual(StrH{}, callInfo.CallParamTypes[0]), "final call metadata must use the output slot's StrH storage type")
+	require.True(t, TypeEqual(StrH{}, callInfo.ScalarCallParamTypes[0]), "final scalar-call metadata must use the output slot's StrH storage type")
+}
+
+func TestFunctionOutputTableJoinMatchesStorage(t *testing.T) {
+	code := mustParseCode(t, `res = RefineTable(k)
+    "-k"
+    res = [
+      : Name Score
+        "Ada" 10
+    ]
+
+res = ResetTable(k)
+    "-k"
+    res = [
+      : Name Score
+    ]
+`)
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "tableOutputJoin", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	headerOnly := Table{Columns: []TableColumn{
+		{Name: "Name", ElemType: Empty{}},
+		{Name: "Score", ElemType: Empty{}},
+	}}
+	concrete := Table{Columns: []TableColumn{
+		{Name: "Name", ElemType: StrH{}},
+		{Name: "Score", ElemType: I64},
+	}}
+
+	refineTemplate := code.Statements[0].(*ast.FuncStatement)
+	refineMangled := Mangle(cc.Compiler.MangledPath, "RefineTable", []Type{I64})
+	refine := &Func{Name: "RefineTable", Params: []Type{I64}, OutTypes: []Type{headerOnly}}
+	require.True(t, ts.TypeFunc(refineMangled, refineTemplate, refine))
+	require.Empty(t, ts.Errors)
+	require.True(t, TypeEqual(concrete, refine.OutTypes[0]))
+	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: refineMangled, Name: "res"}]))
+
+	clear(ts.walkedFuncs)
+	resetTemplate := code.Statements[1].(*ast.FuncStatement)
+	resetMangled := Mangle(cc.Compiler.MangledPath, "ResetTable", []Type{I64})
+	reset := &Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}}
+	revision := ts.outputRevision
+	require.True(t, ts.TypeFunc(resetMangled, resetTemplate, reset))
+	require.Empty(t, ts.Errors)
+	require.Equal(t, revision, ts.outputRevision, "a header-only reset must not narrow or count as output progress")
+	require.True(t, TypeEqual(concrete, reset.OutTypes[0]))
+	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: resetMangled, Name: "res"}]))
 }
 
 // TestRemangledCalleeIsRevisitedAfterArgumentResolves pins that a provisional

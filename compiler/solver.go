@@ -2464,9 +2464,9 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // The entry joins the run-wide FuncCache before its outputs are known, so a
 // later script can find a partial one left behind by an earlier script that
-// failed. TypeBlock only fills slots that are still unresolved; what makes such
-// an entry usable is that the reaching script rewalks the closure before
-// lowering.
+// failed. TypeBlock monotonically joins later body observations into those
+// slots; what makes the entry usable is that the reaching script rewalks the
+// closure to a stable pass before lowering.
 func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
 	f := &Func{
 		Name:     ce.Function.Value,
@@ -2577,10 +2577,10 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 // TypeFunc types one specialization's body at most once per pass. Its return
 // value reports only whether this specialization's output signature is fully
 // inferred; TypeScriptFunc separately decides whether the reachable closure is
-// complete. Marking before
-// the walk cuts recursive backedges and repeated sibling calls alike, so a pass
-// costs one walk per specialization rather than one per path through the call
-// graph; a specialization an earlier statement settled is skipped outright.
+// complete. Marking before the walk cuts recursive backedges and repeated
+// sibling calls alike, so a pass costs one walk per specialization rather than
+// one per path through the call graph; a specialization an earlier statement
+// settled is skipped outright.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
 	if _, ok := ts.settledFuncs[mangled]; ok {
 		return f.OutputTypesInferred()

@@ -75,7 +75,9 @@ body facts while rebuilding others.
 
 The solver may reach a body more than once and offers no "this is the last walk"
 signal: `TypeScriptFunc` repeats the whole closure until one pass changes
-nothing, and only that outermost loop knows which pass was stable. So Phase 1
+nothing, and only that outermost loop knows which pass was stable. A change is
+any monotonic output refinement, including `Array(Empty)` to a concrete array or
+`StrG` to `StrH`, not merely an unresolved slot becoming resolved. So Phase 1
 should derive write effects the way `BindingTypes` does — keyed by mangled name
 and binding, so the last walk overwrites the earlier ones. `ExprCache` is a
 weaker precedent than it looks: a walk that rewrites a range mints a fresh
