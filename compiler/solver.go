@@ -126,7 +126,8 @@ type pendingAssignment struct {
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
-	CurrFuncMangled    string // current function's mangled name ("" for script level)
+	ScriptFunc         string // script-level root currently being solved ("" outside TypeScriptFunc)
+	FuncNameMangled    string // current function's mangled name ("" for script level)
 	Converging         bool
 	outputRevision     uint64 // increments only when a persisted function output changes
 	Errors             []*token.CompileError
@@ -136,7 +137,7 @@ type TypeSolver struct {
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
 	// Per-pass state owned by TypeScriptFunc. Solver-wide fields are safe here
-	// because a non-empty CurrFuncMangled stops TypeScriptFunc from re-entering
+	// because a non-empty ScriptFunc stops TypeScriptFunc from re-entering
 	// itself: while one script-level call is solving, every nested call routes
 	// through TypeFunc.
 	walkedFuncs map[string]struct{} // specializations already walked this pass
@@ -155,7 +156,8 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
 		ScriptCompiler:     sc,
 		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
-		CurrFuncMangled:    "",
+		ScriptFunc:         "",
+		FuncNameMangled:    "",
 		Converging:         false,
 		Errors:             []*token.CompileError{},
 		BindingTypes:       make(map[BindingKey]Type),
@@ -182,7 +184,7 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 		return
 	}
 	ts.BindingTypes[BindingKey{
-		FuncNameMangled: ts.CurrFuncMangled,
+		FuncNameMangled: ts.FuncNameMangled,
 		Name:            name,
 	}] = typ
 }
@@ -251,7 +253,7 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 
 func (ts *TypeSolver) trackUnresolvedAssignment(name string, expr ast.Expression, exprOutIdx int, t Type) {
 	pending := pendingAssignment{
-		funcNameMangled: ts.CurrFuncMangled,
+		funcNameMangled: ts.FuncNameMangled,
 		name:            name,
 		expr:            expr,
 		exprOutIdx:      exprOutIdx,
@@ -329,7 +331,7 @@ func (ts *TypeSolver) HandleRangeLiteral(rangeLit *ast.RangeLiteral) (ranges []*
 	ranges = []*RangeInfo{ri}
 	rew = iter
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, rangeLit)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, rangeLit)]
 	info.Ranges = append([]*RangeInfo(nil), ranges...)
 	info.Rewrite = rew
 	return
@@ -349,7 +351,7 @@ func cloneArrayIndices(indices map[string][]int) map[string][]int {
 }
 
 func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeInfo, ast.Expression) {
-	info := ts.ExprCache[key(ts.CurrFuncMangled, al)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, al)]
 
 	// Only inline literals act as collectors. Block rows describe a statically
 	// rectangular array or table even when the block contains a single row.
@@ -389,7 +391,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 			CollectRanges: append([]*RangeInfo(nil), ranges...),
 			Rewrite:       newLit,
 		}
-		ts.ExprCache[key(ts.CurrFuncMangled, newLit)] = infoCopy
+		ts.ExprCache[key(ts.FuncNameMangled, newLit)] = infoCopy
 		rew = newLit
 	}
 
@@ -402,7 +404,7 @@ func (ts *TypeSolver) HandleArrayLiteralRanges(al *ast.ArrayLiteral) ([]*RangeIn
 }
 
 func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (ranges []*RangeInfo, rew ast.Expression) {
-	info := ts.ExprCache[key(ts.CurrFuncMangled, ar)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, ar)]
 
 	arrRanges, arrRew := ts.HandleRanges(ar.Array)
 	idxRanges, rangeRew := ts.HandleRanges(ar.Range)
@@ -412,7 +414,7 @@ func (ts *TypeSolver) HandleArrayRangeExpression(ar *ast.ArrayRangeExpression) (
 	rew = ar
 	if arrRew != ar.Array || rangeRew != ar.Range {
 		newExpr := &ast.ArrayRangeExpression{Token: ar.Token, Array: arrRew, Range: rangeRew}
-		ts.ExprCache[key(ts.CurrFuncMangled, newExpr)] = &ExprInfo{
+		ts.ExprCache[key(ts.FuncNameMangled, newExpr)] = &ExprInfo{
 			OutTypes: info.OutTypes,
 			ExprLen:  info.ExprLen,
 			Ranges:   append([]*RangeInfo(nil), ranges...),
@@ -441,8 +443,8 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*R
 		rew = &cp
 		// Create a simple ExprCache entry for the rewritten expression
 		// It should have no ranges since temporary iterators are scalars
-		originalInfo := ts.ExprCache[key(ts.CurrFuncMangled, infix)]
-		ts.ExprCache[key(ts.CurrFuncMangled, rew.(*ast.InfixExpression))] = &ExprInfo{
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.InfixExpression))] = &ExprInfo{
 			OutTypes:     append([]Type(nil), originalInfo.OutTypes...), // Same output types as original
 			ExprLen:      originalInfo.ExprLen,
 			HasRanges:    false, // Rewritten operands are scalarized
@@ -452,7 +454,7 @@ func (ts *TypeSolver) HandleInfixRanges(infix *ast.InfixExpression) (ranges []*R
 		}
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, infix)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
@@ -469,8 +471,8 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 		cp := *prefix
 		cp.Right = r
 		rew = &cp
-		originalInfo := ts.ExprCache[key(ts.CurrFuncMangled, prefix)]
-		ts.ExprCache[key(ts.CurrFuncMangled, rew.(*ast.PrefixExpression))] = &ExprInfo{
+		originalInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+		ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.PrefixExpression))] = &ExprInfo{
 			OutTypes:     append([]Type(nil), originalInfo.OutTypes...),
 			ExprLen:      originalInfo.ExprLen,
 			HasRanges:    false, // Rewritten operand is scalarized
@@ -480,7 +482,7 @@ func (ts *TypeSolver) HandlePrefixRanges(prefix *ast.PrefixExpression) (ranges [
 		}
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, prefix)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
 	info.Ranges = ranges
 	info.Rewrite = rew
 	return
@@ -512,7 +514,7 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	} else {
 		ranges, args, changed = ts.collectExprRanges(call.Arguments)
 	}
-	info := ts.ExprCache[key(ts.CurrFuncMangled, call)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
 
 	// A surrounding collector consumes these ranges and invokes the call once
 	// per scalar yield, so that scalar callee variant must exist even though the
@@ -534,7 +536,7 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	cp.Arguments = args
 	rew = &cp
 	// Cache the rewritten expression with no ranges (ranges have been extracted)
-	ts.ExprCache[key(ts.CurrFuncMangled, rew.(*ast.CallExpression))] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, rew.(*ast.CallExpression))] = &ExprInfo{
 		OutTypes:             info.OutTypes,
 		ExprLen:              info.ExprLen,
 		Ranges:               nil,
@@ -581,7 +583,7 @@ func (ts *TypeSolver) collectPrintArgRanges(exprs []ast.Expression) (ranges []*R
 			ranges = mergeUses(ranges, argRanges)
 			continue
 		}
-		info := ts.ExprCache[key(ts.CurrFuncMangled, arg)]
+		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
 		info.Ranges = nil
 		info.HasRanges = false
 		info.Rewrite = nil
@@ -630,7 +632,7 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 			RangeLit: nil,
 		}
 		ranges = []*RangeInfo{ri}
-		info := ts.ExprCache[key(ts.CurrFuncMangled, ident)]
+		info := ts.ExprCache[key(ts.FuncNameMangled, ident)]
 		info.Ranges = append([]*RangeInfo(nil), ranges...)
 		info.Rewrite = ident
 	}
@@ -654,7 +656,7 @@ func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges 
 		ranges = mergeUses(ranges, []*RangeInfo{{Name: name}})
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, lit)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
 	info.Ranges = append([]*RangeInfo(nil), ranges...)
 	info.HasRanges = len(ranges) > 0
 	info.Rewrite = lit
@@ -684,7 +686,7 @@ func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Ty
 		return
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	switch e := expr.(type) {
 	case *ast.Identifier:
 		if !rangeDriverNamed(condRanges, e.Value) {
@@ -758,7 +760,7 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	// Compute scalar types for all arguments
 	scalarArgs := []Type{}
 	for _, arg := range ce.Arguments {
-		argInfo := ts.ExprCache[key(ts.CurrFuncMangled, arg)]
+		argInfo := ts.ExprCache[key(ts.FuncNameMangled, arg)]
 		if argInfo == nil {
 			// This shouldn't happen if TypeExpression was called correctly
 			ts.Errors = append(ts.Errors, &token.CompileError{
@@ -787,7 +789,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 	if len(condTypes) != 1 {
 		return false
 	}
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	if len(info.Ranges) == 0 {
 		return false
 	}
@@ -796,7 +798,7 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 	case *ast.Identifier, *ast.RangeLiteral:
 		return true
 	case *ast.ArrayRangeExpression:
-		arrInfo := ts.ExprCache[key(ts.CurrFuncMangled, e.Array)]
+		arrInfo := ts.ExprCache[key(ts.FuncNameMangled, e.Array)]
 		return !arrInfo.HasRanges && ts.isBareRangeExpr(e.Range)
 	default:
 		return false
@@ -832,7 +834,7 @@ func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool 
 // that can fail — so anything that merely fails to yield at runtime, such as an
 // out-of-bounds read, must not be folded in.
 func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	// An invalid composite can stop typing before all descendants are cached;
 	// logical validation still walks that partial tree to report diagnostics.
 	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
@@ -864,7 +866,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 		return
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	info.RangeDriverCond = ts.isRangeDriverCond(expr, condTypes)
 	if info.RangeDriverCond {
 		return
@@ -900,7 +902,7 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*RangeInfo {
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
-		info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 		ranges = mergeUses(ranges, info.Ranges)
 	}
 	return ranges
@@ -917,7 +919,7 @@ func (ts *TypeSolver) mergeCondRangesIntoValue(expr ast.Expression, condRanges [
 		return
 	}
 
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	info.Ranges = mergeUses(condRanges, info.Ranges)
 	info.HasRanges = true
 }
@@ -1022,7 +1024,7 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	for rowIndex, row := range cellTypes {
 		for colIndex, cellType := range row {
 			cell := al.Rows[rowIndex][colIndex]
-			if al.Block && ts.ExprCache[key(ts.CurrFuncMangled, cell)].HasRanges {
+			if al.Block && ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
 				ts.Errors = append(ts.Errors, &token.CompileError{
 					Token: cell.Tok(),
 					Msg:   "multidimensional array rows require statically sized cells",
@@ -1051,7 +1053,7 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 
 func (ts *TypeSolver) cacheArrayLiteralType(al *ast.ArrayLiteral, arr Array, shape []uint64) []Type {
 	types := []Type{arr}
-	ts.ExprCache[key(ts.CurrFuncMangled, al)] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{
 		OutTypes:   types,
 		ExprLen:    1,
 		HasRanges:  false,
@@ -1062,7 +1064,7 @@ func (ts *TypeSolver) cacheArrayLiteralType(al *ast.ArrayLiteral, arr Array, sha
 
 func (ts *TypeSolver) cacheInvalidBracketLiteral(al *ast.ArrayLiteral) []Type {
 	types := []Type{Unresolved{}}
-	ts.ExprCache[key(ts.CurrFuncMangled, al)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	return types
 }
 
@@ -1087,7 +1089,7 @@ func (ts *TypeSolver) typeScalarBracketLiteral(al *ast.ArrayLiteral, cellTypes [
 		shape := layoutShape
 		for col, cellType := range cellTypes[0] {
 			elemType = ts.mergeColType(elemType, cellType, col, al.Tok())
-			if ts.ExprCache[key(ts.CurrFuncMangled, al.Rows[0][col])].HasRanges {
+			if ts.ExprCache[key(ts.FuncNameMangled, al.Rows[0][col])].HasRanges {
 				shape = nil
 			}
 		}
@@ -1144,7 +1146,7 @@ func (ts *TypeSolver) typeStackedArrayLiteral(al *ast.ArrayLiteral, cellTypes []
 		}
 
 		elemType = ts.mergeArrayLeafType(elemType, childType.ElemType, al.Tok())
-		shape := ts.ExprCache[key(ts.CurrFuncMangled, children[i])].ArrayShape
+		shape := ts.ExprCache[key(ts.FuncNameMangled, children[i])].ArrayShape
 		if shape == nil {
 			shapeKnown = false
 			continue
@@ -1201,7 +1203,7 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 		for col, cell := range row {
 			cellType, ok := ts.typeCell(cell, al.Tok())
 			if ok {
-				if ts.ExprCache[key(ts.CurrFuncMangled, cell)].HasRanges {
+				if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
 					ts.Errors = append(ts.Errors, &token.CompileError{
 						Token: cell.Tok(),
 						Msg:   "table rows require statically sized cells",
@@ -1225,7 +1227,7 @@ func (ts *TypeSolver) cacheTableLiteralType(al *ast.ArrayLiteral, colTypes []Typ
 	}
 
 	table := Table{Columns: columns}
-	ts.ExprCache[key(ts.CurrFuncMangled, al)] = &ExprInfo{OutTypes: []Type{table}, ExprLen: 1}
+	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{OutTypes: []Type{table}, ExprLen: 1}
 	return []Type{table}
 }
 
@@ -1282,7 +1284,7 @@ func commonArrayElemType(colTypes []Type) (Type, bool) {
 func (ts *TypeSolver) TypeStructLiteral(sl *ast.StructLiteral) []Type {
 	types := []Type{Unresolved{}}
 	info := &ExprInfo{OutTypes: types, ExprLen: 1}
-	ts.ExprCache[key(ts.CurrFuncMangled, sl)] = info
+	ts.ExprCache[key(ts.FuncNameMangled, sl)] = info
 
 	schema, ok := ts.getCanonicalStructSchema(sl.Token)
 	if !ok {
@@ -1348,7 +1350,7 @@ func (ts *TypeSolver) getCanonicalStructSchema(typeTok token.Token) (*Struct, bo
 func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 	types := []Type{Unresolved{}}
 	info := &ExprInfo{OutTypes: types, ExprLen: 1}
-	ts.ExprCache[key(ts.CurrFuncMangled, expr)] = info
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = info
 
 	leftTypes := ts.TypeExpression(expr.Left, false)
 	if len(leftTypes) != 1 {
@@ -1359,7 +1361,7 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		return types
 	}
 
-	leftInfo := ts.ExprCache[key(ts.CurrFuncMangled, expr.Left)]
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	switch leftType := leftTypes[0].(type) {
 	case Struct:
 		for _, field := range leftType.Fields {
@@ -1491,7 +1493,7 @@ func allowedCollectionElement(t Type) bool {
 }
 
 func (ts *TypeSolver) boundDependsOnRange(expr ast.Expression) bool {
-	info := ts.ExprCache[key(ts.CurrFuncMangled, expr)]
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	return info.HasRanges
 }
 
@@ -1562,18 +1564,18 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	}
 	if !isRoot {
 		types := []Type{Int{Width: 64}}
-		ts.ExprCache[key(ts.CurrFuncMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
+		ts.ExprCache[key(ts.FuncNameMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
 		return types // nested: return inner type
 	}
 	// root: return Range type
 	types := []Type{Range{Iter: startT[0]}}
-	ts.ExprCache[key(ts.CurrFuncMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
+	ts.ExprCache[key(ts.FuncNameMangled, r)] = &ExprInfo{OutTypes: types, ExprLen: 1, HasRanges: true}
 	return types
 }
 
 func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ bool) []Type {
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-	ts.ExprCache[key(ts.CurrFuncMangled, ax)] = info
+	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
 	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
 	if !ok {
@@ -1591,7 +1593,7 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 	// Preserve the Range type long enough to validate the driver. The enclosing
 	// range rewrite later shadows it with a scalar index.
 	idxTypes := ts.TypeExpression(ax.Range, true)
-	info.HasRanges = ts.ExprCache[key(ts.CurrFuncMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.CurrFuncMangled, ax.Range)].HasRanges
+	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
 	if len(idxTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
@@ -1645,10 +1647,10 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
 		types = append(types, Int{Width: 64})
-		ts.ExprCache[key(ts.CurrFuncMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.FloatLiteral:
 		types = append(types, Float{Width: 64})
-		ts.ExprCache[key(ts.CurrFuncMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.StringLiteral:
 		// Check if string has valid format markers - if so, it's a heap string
 		var strType Type = StrG{}
@@ -1656,7 +1658,7 @@ func (ts *TypeSolver) TypeExpression(expr ast.Expression, isRoot bool) (types []
 			strType = StrH{}
 		}
 		types = append(types, strType)
-		ts.ExprCache[key(ts.CurrFuncMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, e)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 	case *ast.ArrayLiteral:
 		types = append(types, ts.TypeArrayExpression(e)...)
 	case *ast.StructLiteral:
@@ -1735,11 +1737,11 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 		}
 		ts.Errors = append(ts.Errors, cerr)
 		t = Unresolved{}
-		ts.ExprCache[key(ts.CurrFuncMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
 		return
 	}
 
-	ts.ExprCache[key(ts.CurrFuncMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind}
+	ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind}
 	return
 }
 
@@ -1864,8 +1866,8 @@ func anyArrayCell(condTypes []Type) bool {
 }
 
 func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, right []Type) []Type {
-	leftInfo := ts.ExprCache[key(ts.CurrFuncMangled, expr.Left)]
-	rightInfo := ts.ExprCache[key(ts.CurrFuncMangled, expr.Right)]
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	// Value-position || is left-biased fallback (yield left, else right), so the
 	// left must be able to fail or the fallback is dead. Failure may come from
@@ -1884,7 +1886,7 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		compareModes[i] = CondOr
 	}
 
-	ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
 		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
@@ -1907,12 +1909,12 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 			Msg:   fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", len(left), len(right)),
 		})
 		types := []Type{Unresolved{}}
-		ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 		return types
 	}
 
-	leftInfo := ts.ExprCache[key(ts.CurrFuncMangled, expr.Left)]
-	rightInfo := ts.ExprCache[key(ts.CurrFuncMangled, expr.Right)]
+	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
+	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
 	// An array lane is a mask — a value, not a boolean — so it cannot gate:
 	// folding or zipping would silently ignore it (the same rule anyArrayCell
@@ -1945,7 +1947,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		compareModes[i] = CondAnd
 	}
 
-	ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
 		HasRanges:    leftInfo.HasRanges || rightInfo.HasRanges,
@@ -1975,7 +1977,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		}
 		ts.Errors = append(ts.Errors, ce)
 		types = []Type{Unresolved{}}
-		ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
+		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
 		return
 	}
 
@@ -1991,10 +1993,10 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	// Create new entry
-	ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:     types,
 		ExprLen:      len(types),
-		HasRanges:    ts.ExprCache[key(ts.CurrFuncMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.CurrFuncMangled, expr.Right)].HasRanges,
+		HasRanges:    ts.ExprCache[key(ts.FuncNameMangled, expr.Left)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
 		CompareModes: compareModes,
 	}
 
@@ -2239,10 +2241,10 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 	}
 
 	// Create new entry
-	ts.ExprCache[key(ts.CurrFuncMangled, expr)] = &ExprInfo{
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{
 		OutTypes:  types,
 		ExprLen:   len(types),
-		HasRanges: ts.ExprCache[key(ts.CurrFuncMangled, expr.Right)].HasRanges,
+		HasRanges: ts.ExprCache[key(ts.FuncNameMangled, expr.Right)].HasRanges,
 	}
 
 	return
@@ -2251,14 +2253,14 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 // inside a call expression a Range becomes its interior type
 func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []Type {
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
-	ts.ExprCache[key(ts.CurrFuncMangled, ce)] = info
+	ts.ExprCache[key(ts.FuncNameMangled, ce)] = info
 
 	args, innerArgs, loopInside := ts.collectCallArgs(ce, isRoot)
 
 	// Compute hasRanges from all arguments
 	hasRanges := false
 	for _, e := range ce.Arguments {
-		if ts.ExprCache[key(ts.CurrFuncMangled, e)].HasRanges {
+		if ts.ExprCache[key(ts.FuncNameMangled, e)].HasRanges {
 			hasRanges = true
 			break
 		}
@@ -2303,7 +2305,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	outerTypes = make([][]Type, len(exprs))
 	for i, e := range exprs {
 		outerTypes[i] = ts.TypeExpression(e, isRoot)
-		info := ts.ExprCache[key(ts.CurrFuncMangled, e)]
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
 		if !info.HasRanges {
 			continue
 		}
@@ -2317,7 +2319,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 	// together, not as a cartesian product. A callee specialization has one loop
 	// per Range/ArrayRange parameter, so keep this case at the caller where the
 	// shared RangeInfo is naturally deduplicated.
-	if loopInside && callArgsShareRangeDriver(exprs, ts.ExprCache, ts.CurrFuncMangled) {
+	if loopInside && callArgsShareRangeDriver(exprs, ts.ExprCache, ts.FuncNameMangled) {
 		loopInside = false
 	}
 
@@ -2334,7 +2336,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 		if !ok {
 			continue
 		}
-		info := ts.ExprCache[key(ts.CurrFuncMangled, e)]
+		info := ts.ExprCache[key(ts.FuncNameMangled, e)]
 		if !info.LoopInside {
 			continue
 		}
@@ -2365,8 +2367,8 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 		return ArrayRange{}, nil, false
 	}
 
-	arrInfo := ts.ExprCache[key(ts.CurrFuncMangled, ax.Array)]
-	idxInfo := ts.ExprCache[key(ts.CurrFuncMangled, ax.Range)]
+	arrInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Array)]
+	idxInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Range)]
 	// An invalid array source can stop before its index is typed.
 	if idxInfo == nil {
 		return ArrayRange{}, nil, false
@@ -2488,7 +2490,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
-	if ts.CurrFuncMangled != "" {
+	if ts.ScriptFunc != "" {
 		ts.TypeFunc(mangled, template, f)
 		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
 			ts.firstUnresolved = template
@@ -2515,6 +2517,10 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 // This function is assumed to be in the top level script
 // If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
+	savedScriptFunc := ts.ScriptFunc
+	ts.ScriptFunc = f.Name
+	defer func() { ts.ScriptFunc = savedScriptFunc }()
+
 	errsAtEntry := len(ts.Errors)
 	// Sweep the whole closure until a pass changes nothing. Two things force the
 	// repeat: a resolved argument remangles its call site, so specializations
@@ -2568,25 +2574,29 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	}
 }
 
-// TypeFunc types one specialization's body at most once per pass. Marking before
+// TypeFunc types one specialization's body at most once per pass. Its return
+// value reports only whether this specialization's output signature is fully
+// inferred; TypeScriptFunc separately decides whether the reachable closure is
+// complete. Marking before
 // the walk cuts recursive backedges and repeated sibling calls alike, so a pass
 // costs one walk per specialization rather than one per path through the call
 // graph; a specialization an earlier statement settled is skipped outright.
-func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) {
+func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
 	if _, ok := ts.settledFuncs[mangled]; ok {
-		return
+		return f.OutputTypesInferred()
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
-		return
+		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = struct{}{}
 
-	// Set CurrFuncMangled so ExprCache entries are keyed to this function
-	savedCurrFuncMangled := ts.CurrFuncMangled
-	ts.CurrFuncMangled = mangled
-	defer func() { ts.CurrFuncMangled = savedCurrFuncMangled }()
+	// Set FuncNameMangled so ExprCache entries are keyed to this function
+	savedFuncNameMangled := ts.FuncNameMangled
+	ts.FuncNameMangled = mangled
+	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
+	return f.OutputTypesInferred()
 }
 
 func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
