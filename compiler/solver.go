@@ -139,6 +139,12 @@ type TypeSolver struct {
 	// itself: while one script-level call is solving, every nested call routes
 	// through TypeFunc.
 	walkedFuncs map[string]struct{} // specializations already walked this pass
+	// settledFuncs is a measured optimization, not a correctness mechanism:
+	// rewalking before lowering is what fixes issue #71, and dropping this leaves
+	// every test green. It skips a rewalk a later script statement would only
+	// repeat, worth ~5x on scripts with many calls into one closure, and its
+	// per-script lifetime is what makes skipping safe.
+	settledFuncs map[string]struct{}
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -153,6 +159,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]struct{}),
+		settledFuncs:       make(map[string]struct{}),
 	}
 }
 
@@ -2563,6 +2570,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// unchanged pass walked the whole closure with final signatures, so every
 		// body fact this script lowers from was rebuilt against those signatures.
 		if f.AllTypesInferred() && unresolved == nil && !ts.Converging {
+			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
 
@@ -2585,8 +2593,11 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 // TypeFunc types one specialization's body at most once per pass. Marking before
 // the walk cuts recursive backedges and repeated sibling calls alike, so a pass
 // costs one walk per specialization rather than one per path through the call
-// graph.
+// graph; a specialization an earlier statement settled is skipped outright.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) {
+	if _, ok := ts.settledFuncs[mangled]; ok {
+		return
+	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return
 	}
