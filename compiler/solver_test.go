@@ -136,9 +136,7 @@ y`
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1)
-	// Every member of f -> g -> h -> f is equally stuck, so naming any of them is
-	// correct; what must hold is that the report points at the named function's
-	// own declaration rather than at whoever happened to call it.
+	// Any cycle member is valid blame, but the token and message must agree.
 	blamed := ts.Errors[0].Token.Literal
 	require.Contains(t, []string{"f", "g", "h"}, blamed)
 	require.Contains(t, ts.Errors[0].Msg, "Function "+blamed+" is not converging. Check for cyclic recursion and that each function has a base case")
@@ -595,6 +593,34 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 		heapStruct,
 		Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: I64}, {Name: "age", Type: I64}}},
 	))
+}
+
+func TestIncompatibleFunctionOutputAssignmentFailsDuringSolve(t *testing.T) {
+	code := mustParseCode(t, `res = Bad(k)
+    res = k == 0 1
+    res = k != 0 "later"
+`)
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "incompatibleOutput", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(
+		ctx,
+		mustParseScript(t, "value = Bad(0)\nvalue"),
+		cc,
+		make(map[string]*Func),
+		make(map[ExprKey]*ExprInfo),
+	)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	err := ts.Errors[0]
+	require.Equal(t, `cannot reassign type to identifier. Old Type: I64. New Type: Str. Identifier "res"`, err.Msg)
+	require.Equal(t, "res", err.Token.Literal)
+	require.Equal(t, "test.pt:3:5", err.Token.Location())
 }
 
 func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
@@ -1301,10 +1327,7 @@ func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
 	require.Equal(t, origBefore, origInfo.OutTypes[0], "rewritten prefix OutTypes must not alias original")
 }
 
-// closureLeafWalks builds a fan-out call graph of the given depth whose single
-// leaf holds a range literal, solves a script with the given number of call
-// sites, and returns TmpCounter — one range temporary is minted per leaf body
-// walk, so the count is a direct proxy for how often the leaf was retyped.
+// TmpCounter observes leaf walks because the leaf contains one range literal.
 func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	t.Helper()
 
@@ -1344,11 +1367,6 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	return ts.TmpCounter
 }
 
-// TestFuncClosureWalksEachSpecializationOnce pins both memos that keep closure
-// solving linear. Every path through the fan-out graph reaches the same leaf and
-// every call site reaches the same closure, so a traversal that cuts only
-// recursive backedges retypes the leaf 2^depth times, and one that memoizes per
-// pass but not per script retypes it once more per call site.
 func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
 	shallow := closureLeafWalks(t, 8, 1)
 	require.Positive(t, shallow, "TmpCounter must still track leaf body walks")
@@ -1360,8 +1378,6 @@ func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
 	require.Equal(t, shallow, repeated, "leaf walks must not grow with script call sites")
 }
 
-// TestNonConvergingCalleeIsBlamed pins the convergence diagnostic on the function
-// that actually failed. Root m is well formed; bad is the one with no base case.
 func TestNonConvergingCalleeIsBlamed(t *testing.T) {
 	codeStr := `y = m(x)
     y = bad(x)
@@ -1393,9 +1409,7 @@ y = bad(x)
 	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the root's")
 }
 
-// TestWarmFuncCacheRebuildsBindingTypes pins issue #71 at the solver level: the
-// second script shares the run-wide FuncCache/ExprCache, so its function-scope
-// binding types must be rederived rather than inherited from the first script.
+// A warm FuncCache must not suppress per-script binding analysis (#71).
 func TestWarmFuncCacheRebuildsBindingTypes(t *testing.T) {
 	codeStr := `res = Reset(k)
     a = [10 20 30]
@@ -1433,18 +1447,13 @@ res = OuterReset(k)
 	cold := solve()
 	warm := solve()
 
-	// The slot issue #71 got wrong: Reset's a is seeded [10 20 30] and reassigned
-	// [] under a condition, so the warm script must rederive Array(I64) rather
-	// than inherit nothing and fall back to the empty literal's own type.
 	resetA := BindingKey{FuncNameMangled: Mangle(cc.Compiler.MangledPath, "Reset", []Type{I64}), Name: "a"}
 	require.Equal(t, Array{ElemType: I64, Rank: 1}, cold[resetA])
 	require.Equal(t, Array{ElemType: I64, Rank: 1}, warm[resetA])
 	require.Equal(t, cold, warm, "a warm FuncCache must not drop this script's binding types")
 }
 
-// TestWideOutputClosureConverges pins semantic fixed-point convergence without
-// an arbitrary pass ceiling. This one specialization resolves exactly one
-// output per pass, so it needs more than the old 100-pass limit.
+// Wide resolves one of 130 outputs per pass, exceeding the former limit.
 func TestWideOutputClosureConverges(t *testing.T) {
 	const outs = 130
 
@@ -1491,10 +1500,7 @@ func TestWideOutputClosureConverges(t *testing.T) {
 	require.True(t, wide.AllTypesInferred(), "every one of the %d output slots must resolve", outs)
 }
 
-// TestNestedBackEdgeRebuildsBodyFacts pins that the stable pass re-enters every
-// function in the closure, not only the root. C's local p is typed through a back
-// edge into B, so the first walk of C cannot resolve it; only a later sweep that
-// reaches two levels down records it.
+// C's p becomes known only after resolving the C -> B backedge.
 func TestNestedBackEdgeRebuildsBodyFacts(t *testing.T) {
 	code := mustParseCode(t, `res = A(k)
     t = B(k)
@@ -1535,9 +1541,6 @@ res = C(k)
 	}
 }
 
-// TestBrokenCalleeBlamedThroughWrapper pins that the blame walks past an innocent
-// wrapper. Root and AA are both stuck, but only ZBrokenX recurses without a base
-// case, and it sorts last — so a positional scan would blame AA instead.
 func TestBrokenCalleeBlamedThroughWrapper(t *testing.T) {
 	code := mustParseCode(t, `res = Root(k)
     res = AA(k)
@@ -1567,10 +1570,7 @@ res = ZBrokenX(k)
 	require.Equal(t, 7, ts.Errors[0].Token.Line, "must point at ZBrokenX's own declaration")
 }
 
-// TestOutputTypesRefineMonotonically pins that a resolved signature is not
-// necessarily final. Root first resolves to Array(Empty)/StrG, then must widen
-// to Array(I64)/StrH once Relay resolves. The final signature and output storage
-// type must agree on both a cold and warm FuncCache walk.
+// Array(Empty) and StrG outputs must widen on both cold and warm solves.
 func TestOutputTypesRefineMonotonically(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -1626,10 +1626,7 @@ res = Relay(k)
 	}
 }
 
-// TestRefinedOutputSeedsStableBody pins that the final closure sweep seeds an
-// output binding with its cached storage type. Consume(res) appears before the
-// assignment that widens Root's output, so without the seed it remains mangled
-// as Consume(StrG) even after Root has finalized as StrH.
+// Consume precedes Root's StrH refinement and must be remangled on the stable sweep.
 func TestRefinedOutputSeedsStableBody(t *testing.T) {
 	code := mustParseCode(t, `res = Root(k)
     res = "lit"
@@ -1725,9 +1722,6 @@ res = ResetTable(k)
 	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: resetMangled, Name: "res"}]))
 }
 
-// TestRemangledCalleeIsRevisitedAfterArgumentResolves pins that a provisional
-// Leaf(Unresolved) does not let Outer finish. Once A resolves t, a later closure
-// sweep must discover and fully solve Leaf(I64).
 func TestRemangledCalleeIsRevisitedAfterArgumentResolves(t *testing.T) {
 	code := mustParseCode(t, `res = Outer(k)
     t = A(k)

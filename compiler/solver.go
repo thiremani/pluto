@@ -135,20 +135,9 @@ type TypeSolver struct {
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
-	// Per-pass state owned by TypeScriptFunc. Solver-wide fields are safe here
-	// because a non-empty ScriptFunc stops TypeScriptFunc from re-entering
-	// itself: while one script-level call is solving, every nested call routes
-	// through TypeFunc.
-	walkedFuncs map[string]struct{} // specializations already walked this pass
-	// firstUnresolved is the first callee a pass saw without a full signature.
-	// Set on unwind, so the innermost unresolved call wins and a wrapper is not
-	// blamed for what it calls. Nil means the closure resolved.
-	firstUnresolved *ast.FuncStatement
-	// settledFuncs is unnecessary for semantic correctness — rewalking before
-	// lowering is what fixes issue #71 — but it is pinned as a performance
-	// invariant, since it skips a rewalk a later script statement would only
-	// repeat. Its per-script lifetime is what makes skipping safe.
-	settledFuncs map[string]struct{}
+	walkedFuncs        map[string]struct{} // specializations walked in the current pass
+	firstUnresolved    *ast.FuncStatement  // innermost unresolved callee in this pass
+	settledFuncs       map[string]struct{} // specializations stabilized earlier in this script
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -168,9 +157,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	}
 }
 
-// describeTypeChange renders two types for a diagnostic, falling back to their
-// mangled forms when the user-facing names match. String deliberately hides the
-// global/heap string flavor, which would otherwise read as "Str, then Str".
+// Include mangled forms when display names cannot distinguish storage flavors.
 func describeTypeChange(from, to Type) (string, string) {
 	if from.String() != to.String() {
 		return from.String(), to.String()
@@ -2461,11 +2448,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 
 // newFunc creates a new Func entry for the given call expression and caches it.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
-// The entry joins the run-wide FuncCache before its outputs are known, so a
-// later script can find a partial one left behind by an earlier script that
-// failed. TypeBlock monotonically joins later body observations into those
-// slots; what makes the entry usable is that the reaching script rewalks the
-// closure to a stable pass before lowering.
+// Cache before inference so recursive calls can reuse the partial specialization.
 func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
 	f := &Func{
 		Name:     ce.Function.Value,
@@ -2512,50 +2495,32 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	return f
 }
 
-// This is a blocking iterative solver
-// This function is assumed to be in the top level script
-// If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
+// TypeScriptFunc blocks until the reachable function closure is stable.
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
 	savedScriptFunc := ts.ScriptFunc
 	ts.ScriptFunc = f.Name
 	defer func() { ts.ScriptFunc = savedScriptFunc }()
 
 	errsAtEntry := len(ts.Errors)
-	// Sweep the whole closure until a pass changes nothing. Two things force the
-	// repeat: a resolved argument remangles its call site, so specializations
-	// appear mid-solve; and a body typed against an unresolved callee holds stale
-	// facts even once its own signature is final. Clearing walkedFuncs is what
-	// makes every pass re-enter each function rather than only the root. A
-	// worklist re-enqueueing callers would drop the repeat if it ever costs enough.
-	// Every continuing pass persists at least one strict, monotonic output join;
-	// there is no program-size pass limit to reject a valid wide or deeply
-	// refined closure.
+	// Rewalk because resolved arguments can reveal new specializations, while
+	// callers typed before their callees resolve retain stale body facts.
 	for {
 		ts.Converging = false
 		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
 
-		// A typing error is fatal for this function: TypeBlock aborts on it
-		// before outputs infer, and the error is deterministic, so another
-		// pass would only append the same diagnostic again. Stopping here
-		// keeps the error list append-only with no duplicates, and skips the
-		// "not converging" message — the reported errors are the cause, not
-		// cyclic recursion.
+		// Avoid duplicating deterministic diagnostics on later passes.
 		if len(ts.Errors) > errsAtEntry {
 			return f.OutTypes
 		}
 
-		// Every call is typed synchronously before its sibling or the next script
-		// statement. Return only once every visited callee resolved and one
-		// unchanged pass walked the whole closure with final signatures, so every
-		// body fact this script lowers from was rebuilt against those signatures.
+		// An unchanged complete pass refreshes body metadata against final signatures.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
 
-		// no further progress possible
 		if !ts.Converging {
 			blamed := template
 			if ts.firstUnresolved != nil {
@@ -2570,13 +2535,8 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	}
 }
 
-// TypeFunc types one specialization's body at most once per pass. Its return
-// value reports only whether this specialization's output signature is fully
-// inferred; TypeScriptFunc separately decides whether the reachable closure is
-// complete. Marking before the walk cuts recursive backedges and repeated
-// sibling calls alike, so a pass costs one walk per specialization rather than
-// one per path through the call graph; a specialization an earlier statement
-// settled is skipped outright.
+// TypeFunc reports whether a specialization is resolved, walking it at most
+// once per pass and skipping specializations already settled by this script.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
 	if _, ok := ts.settledFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
@@ -2602,10 +2562,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 	for i, id := range template.Parameters {
 		Put(ts.Scopes, id.Value, f.Params[i])
 	}
-	// Lowering seeds every output slot with its inferred ABI/storage type before
-	// executing the body. Mirror that on rewalks so statements before the final
-	// output assignment — including nested calls — are typed against the same
-	// ownership and collection shape lowering will use.
+	// Seed known outputs so rewalked body metadata matches lowering.
 	for i, id := range template.Outputs {
 		if !IsFullyResolvedType(f.OutTypes[i]) {
 			continue
@@ -2652,7 +2609,6 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 			continue
 		}
 
-		// A changed cached signature requires another full closure sweep.
 		ts.Converging = true
 		f.OutTypes[i] = nextOutArg
 	}

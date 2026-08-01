@@ -3144,8 +3144,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !ok {
 		return nil
 	}
-	// Stable closure solving should already have refreshed this call-site entry.
-	// Keep lowering defensively aligned with the authoritative ABI types.
+	// Keep call-site metadata aligned with the selected ABI.
 	info.OutTypes = append([]Type(nil), sig.ABI.Return.OutTypes...)
 	info.ExprLen = len(info.OutTypes)
 
