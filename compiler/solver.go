@@ -128,8 +128,7 @@ type TypeSolver struct {
 	Scopes             []Scope[Type]
 	ScriptFunc         string // script-level root currently being solved ("" outside TypeScriptFunc)
 	FuncNameMangled    string // current function's mangled name ("" for script level)
-	Converging         bool
-	outputRevision     uint64 // increments only when a persisted function output changes
+	Converging         bool   // current closure pass changed at least one cached output
 	Errors             []*token.CompileError
 	BindingTypes       map[BindingKey]Type
 	ExprCache          map[ExprKey]*ExprInfo
@@ -2532,13 +2531,10 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// there is no program-size pass limit to reject a valid wide or deeply
 	// refined closure.
 	for {
-		revisionAtStart := ts.outputRevision
 		ts.Converging = false
 		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
-		changed := ts.outputRevision != revisionAtStart
-		ts.Converging = changed
 
 		// A typing error is fatal for this function: TypeBlock aborts on it
 		// before outputs infer, and the error is deterministic, so another
@@ -2554,13 +2550,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// statement. Return only once every visited callee resolved and one
 		// unchanged pass walked the whole closure with final signatures, so every
 		// body fact this script lowers from was rebuilt against those signatures.
-		if f.AllTypesInferred() && ts.firstUnresolved == nil && !changed {
+		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
 
 		// no further progress possible
-		if !changed {
+		if !ts.Converging {
 			blamed := template
 			if ts.firstUnresolved != nil {
 				blamed = ts.firstUnresolved
@@ -2656,9 +2652,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 			continue
 		}
 
-		// TypeScriptFunc derives progress from this persisted revision rather than
-		// from a hand-maintained pass count or a guessed convergence bound.
-		ts.outputRevision++
+		// A changed cached signature requires another full closure sweep.
 		ts.Converging = true
 		f.OutTypes[i] = nextOutArg
 	}

@@ -1717,10 +1717,10 @@ res = ResetTable(k)
 	resetTemplate := code.Statements[1].(*ast.FuncStatement)
 	resetMangled := Mangle(cc.Compiler.MangledPath, "ResetTable", []Type{I64})
 	reset := &Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}}
-	revision := ts.outputRevision
+	ts.Converging = false
 	require.True(t, ts.TypeFunc(resetMangled, resetTemplate, reset))
 	require.Empty(t, ts.Errors)
-	require.Equal(t, revision, ts.outputRevision, "a header-only reset must not narrow or count as output progress")
+	require.False(t, ts.Converging, "a header-only reset must not narrow or count as output progress")
 	require.True(t, TypeEqual(concrete, reset.OutTypes[0]))
 	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: resetMangled, Name: "res"}]))
 }
