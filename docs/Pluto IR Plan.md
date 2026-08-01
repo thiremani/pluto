@@ -73,7 +73,7 @@ state across scripts, including in-progress inference, but never body-analysis
 facts. Issue #71's compile-order-dependent wrong output came from caching some
 body facts while rebuilding others.
 
-The solver reaches a body more than once and offers no "this is the last walk"
+The solver may reach a body more than once and offers no "this is the last walk"
 signal: `TypeScriptFunc` repeats the whole closure until one pass changes
 nothing, and only that outermost loop knows which pass was stable. So Phase 1
 should derive write effects the way `BindingTypes` does — keyed by mangled name

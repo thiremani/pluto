@@ -1330,7 +1330,7 @@ y = bad(x)
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "test", "", code)
-	cc.Compile()
+	require.Empty(t, cc.Compile())
 
 	sl := lexer.New("TestBlameScript", "x = 6\ny = m(x)\ny")
 	sp := parser.NewScriptParser(sl)
@@ -1385,7 +1385,13 @@ res = OuterReset(k)
 
 	cold := solve()
 	warm := solve()
-	require.NotEmpty(t, cold)
+
+	// The slot issue #71 got wrong: Reset's a is seeded [10 20 30] and reassigned
+	// [] under a condition, so the warm script must rederive Array(I64) rather
+	// than inherit nothing and fall back to the empty literal's own type.
+	resetA := BindingKey{FuncNameMangled: Mangle(cc.Compiler.MangledPath, "Reset", []Type{I64}), Name: "a"}
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, cold[resetA])
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, warm[resetA])
 	require.Equal(t, cold, warm, "a warm FuncCache must not drop this script's binding types")
 }
 
@@ -1481,4 +1487,113 @@ res = C(k)
 		require.Contains(t, ts.BindingTypes, BindingKey{FuncNameMangled: mangled, Name: fn.local},
 			"%s's local %q must be typed by a sweep that reached it", fn.name, fn.local)
 	}
+}
+
+// TestBrokenCalleeBlamedThroughWrapper pins that the blame walks past an innocent
+// wrapper. Root and AA are both stuck, but only ZBrokenX recurses without a base
+// case, and it sorts last — so a positional scan would blame AA instead.
+func TestBrokenCalleeBlamedThroughWrapper(t *testing.T) {
+	code := mustParseCode(t, `res = Root(k)
+    res = AA(k)
+
+res = AA(k)
+    res = ZBrokenX(k)
+
+res = ZBrokenX(k)
+    res = ZBrokenX(k - 1)
+`)
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "wrapperBlame", "", code)
+	require.Empty(t, cc.Compile())
+
+	sl := lexer.New("TestWrapperBlameScript", "v = Root(3)\nv")
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg, "Function ZBrokenX is not converging")
+	require.Equal(t, 7, ts.Errors[0].Token.Line, "must point at ZBrokenX's own declaration")
+}
+
+// TestOutputRefinementIsRejected pins that a signature whose body later disagrees
+// is reported rather than lowered. Root's output resolves to Array(Empty) on the
+// pass that first types it, then to Array(I64) once Relay resolves; lowering the
+// first answer produced an empty array at runtime, and the string flavor of the
+// same shape leaked its heap owner.
+func TestOutputRefinementIsRejected(t *testing.T) {
+	for _, tt := range []struct{ name, seed, grow, want string }{
+		{"array", "[]", "⊕ [1]", "[Empty], then as [I64]"},
+		{"string", `"lit"`, `⊕ "x"`, "Str (StrG), then as Str (StrH)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			code := mustParseCode(t, fmt.Sprintf(`res = Root(k)
+    res = %s
+    res = k > 0 Relay(k)
+
+res = Relay(k)
+    res = Root(k - 1) %s
+`, tt.seed, tt.grow))
+
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			cc := NewCodeCompiler(ctx, "outputRefine"+tt.name, "", code)
+			require.Empty(t, cc.Compile())
+
+			sl := lexer.New("TestOutputRefineScript", "v = Root(3)\nv")
+			sp := parser.NewScriptParser(sl)
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+
+			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.NotEmpty(t, ts.Errors)
+			require.Contains(t, ts.Errors[0].Msg, tt.want)
+		})
+	}
+}
+
+// TestRemangledCalleeStillBounded pins that the pass budget spans every
+// specialization seen, not just the last pass's. t's type is unknown when Leaf(t)
+// is first typed, so pass 0 solves Leaf(Unresolved) and pass 1 solves Leaf(I64)
+// instead; budgeting from the surviving walk alone loses the vanished one.
+func TestRemangledCalleeStillBounded(t *testing.T) {
+	code := mustParseCode(t, `res = Outer(k)
+    t = A(k)
+    res = Leaf(t)
+    res = k == 0 0
+
+res = A(k)
+    p = Outer(k)
+    res = p + 1
+
+res = Leaf(x)
+    res = x + 1
+`)
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "remangle", "", code)
+	require.Empty(t, cc.Compile())
+
+	sl := lexer.New("TestRemangleScript", "v = Outer(0)\nv")
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors)
+	require.Contains(t, funcCache, Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64}))
+	require.Contains(t, funcCache, Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}}),
+		"the provisional specialization must remain in the cache the budget is derived from")
 }

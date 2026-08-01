@@ -139,11 +139,14 @@ type TypeSolver struct {
 	// itself: while one script-level call is solving, every nested call routes
 	// through TypeFunc.
 	walkedFuncs map[string]struct{} // specializations already walked this pass
-	// settledFuncs is a measured optimization, not a correctness mechanism:
-	// rewalking before lowering is what fixes issue #71, and dropping this leaves
-	// every test green. It skips a rewalk a later script statement would only
-	// repeat, worth ~5x on scripts with many calls into one closure, and its
-	// per-script lifetime is what makes skipping safe.
+	// firstUnresolved is the first callee a pass saw without a full signature.
+	// Set on unwind, so the innermost unresolved call wins and a wrapper is not
+	// blamed for what it calls. Nil means the closure resolved.
+	firstUnresolved *ast.FuncStatement
+	// settledFuncs is unnecessary for semantic correctness — rewalking before
+	// lowering is what fixes issue #71 — but it is pinned as a performance
+	// invariant, since it skips a rewalk a later script statement would only
+	// repeat. Its per-script lifetime is what makes skipping safe.
 	settledFuncs map[string]struct{}
 }
 
@@ -161,6 +164,16 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		walkedFuncs:        make(map[string]struct{}),
 		settledFuncs:       make(map[string]struct{}),
 	}
+}
+
+// describeTypeChange renders two types for a diagnostic, falling back to their
+// mangled forms when the user-facing names match. String deliberately hides the
+// global/heap string flavor, which would otherwise read as "Str, then Str".
+func describeTypeChange(from, to Type) (string, string) {
+	if from.String() != to.String() {
+		return from.String(), to.String()
+	}
+	return fmt.Sprintf("%s (%s)", from, from.Mangle()), fmt.Sprintf("%s (%s)", to, to.Mangle())
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
@@ -2447,9 +2460,10 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // newFunc creates a new Func entry for the given call expression and caches it.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // The entry joins the run-wide FuncCache before its outputs are known, so a
-// later script can observe it mid-inference. TypeBlock only fills slots that are
-// still unresolved; what makes a partial entry usable is that the reaching
-// script rewalks the whole closure before lowering.
+// later script can find a partial one left behind by an earlier script that
+// failed. TypeBlock only fills slots that are still unresolved; what makes such
+// an entry usable is that the reaching script rewalks the closure before
+// lowering.
 func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
 	f := &Func{
 		Name:     ce.Function.Value,
@@ -2475,6 +2489,9 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.CurrFuncMangled != "" {
 		ts.TypeFunc(mangled, template, f)
+		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
+			ts.firstUnresolved = template
+		}
 		return f
 	}
 
@@ -2510,25 +2527,6 @@ func (ts *TypeSolver) closurePassLimit(seen map[string]struct{}) int {
 	return slots + 2
 }
 
-// unresolvedCallee returns the template of a specialization the last pass reached
-// through root without it arriving at a full signature, or nil when they all did.
-// Pairing this with root's own AllTypesInferred covers the closure: a root can be
-// fully typed while something it called is not. Skipping root also keeps it from
-// being blamed for a callee's failure, and sorting keeps the choice stable.
-func (ts *TypeSolver) unresolvedCallee(root string) *ast.FuncStatement {
-	cc := ts.ScriptCompiler.Compiler.CodeCompiler
-	for _, mangled := range slices.Sorted(maps.Keys(ts.walkedFuncs)) {
-		cached, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
-		if mangled == root || !ok || cached.AllTypesInferred() {
-			continue
-		}
-		if template, ok := cc.lookupFuncTemplate(cached.Name, len(cached.Params)); ok {
-			return template
-		}
-	}
-	return nil
-}
-
 // This is a blocking iterative solver
 // This function is assumed to be in the top level script
 // If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
@@ -2547,13 +2545,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// worklist re-enqueueing callers would drop the repeat if it ever costs enough.
 	for pass := 0; pass < maxPasses; pass++ {
 		ts.Converging = false
+		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
 		maps.Copy(seenFuncs, ts.walkedFuncs)
 		if limit := ts.closurePassLimit(seenFuncs); limit > maxPasses {
 			maxPasses = limit
 		}
-		unresolved := ts.unresolvedCallee(mangled)
 
 		// A typing error is fatal for this function: TypeBlock aborts on it
 		// before outputs infer, and the error is deterministic, so another
@@ -2569,7 +2567,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// statement. Return only once every visited callee resolved and one
 		// unchanged pass walked the whole closure with final signatures, so every
 		// body fact this script lowers from was rebuilt against those signatures.
-		if f.AllTypesInferred() && unresolved == nil && !ts.Converging {
+		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
@@ -2577,8 +2575,8 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// no further progress possible
 		if !ts.Converging {
 			blamed := template
-			if unresolved != nil {
-				blamed = unresolved
+			if ts.firstUnresolved != nil {
+				blamed = ts.firstUnresolved
 			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: blamed.Token,
@@ -2587,7 +2585,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			return f.OutTypes
 		}
 	}
-	panic(fmt.Sprintf("internal: type inference for %s ran %d passes without resolving an output slot", f.Name, maxPasses))
+	panic(fmt.Sprintf("internal: type inference for %s exceeded its output-refinement convergence bound of %d passes", f.Name, maxPasses))
 }
 
 // TypeFunc types one specialization's body at most once per pass. Marking before
@@ -2640,6 +2638,19 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 
 		oldOutArg := f.OutTypes[i]
 		if IsFullyResolvedType(oldOutArg) {
+			// An output is fixed on the pass that first resolves it, but "resolved"
+			// is not "final": Array(Empty) still refines to Array(I64), StrG to
+			// StrH. Keeping the first answer would hand lowering a signature its own
+			// body disagrees with — wrong results for arrays, a leaked owner for
+			// strings. Refining it instead needs a convergence bound that survives a
+			// slot changing twice, so until then reject rather than miscompile.
+			if IsFullyResolvedType(outArg) && !TypeEqual(oldOutArg, outArg) {
+				was, now := describeTypeChange(oldOutArg, outArg)
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: id.Token,
+					Msg:   fmt.Sprintf("Function %s output %s first inferred as %s, then as %s. Refining an output after it is inferred is not supported yet; give it one type", f.Name, id.Value, was, now),
+				})
+			}
 			continue
 		}
 
