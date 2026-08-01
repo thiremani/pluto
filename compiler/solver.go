@@ -2538,6 +2538,12 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// continued without resolving an output slot, which is a solver bug.
 	seenFuncs := make(map[string]struct{})
 	maxPasses := 100
+	// Sweep the whole closure until a pass changes nothing. Two things force the
+	// repeat: a resolved argument remangles its call site, so specializations
+	// appear mid-solve; and a body typed against an unresolved callee holds stale
+	// facts even once its own signature is final. Clearing walkedFuncs is what
+	// makes every pass re-enter each function rather than only the root. A
+	// worklist re-enqueueing callers would drop the repeat if it ever costs enough.
 	for pass := 0; pass < maxPasses; pass++ {
 		ts.Converging = false
 		clear(ts.walkedFuncs)

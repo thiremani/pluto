@@ -1438,3 +1438,47 @@ func TestWideOutputClosureConverges(t *testing.T) {
 	require.NotNil(t, wide)
 	require.True(t, wide.AllTypesInferred(), "every one of the %d output slots must resolve", outs)
 }
+
+// TestNestedBackEdgeRebuildsBodyFacts pins that the stable pass re-enters every
+// function in the closure, not only the root. C's local p is typed through a back
+// edge into B, so the first walk of C cannot resolve it; only a later sweep that
+// reaches two levels down records it.
+func TestNestedBackEdgeRebuildsBodyFacts(t *testing.T) {
+	code := mustParseCode(t, `res = A(k)
+    t = B(k)
+    res = t + 1
+
+res = B(k)
+    u = C(k)
+    res = u + 1
+
+res = C(k)
+    p = B(k)
+    res = 1
+    res = k > 0 p
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "nestedBackEdge", "", code)
+	require.Empty(t, cc.Compile())
+
+	sl := lexer.New("TestNestedBackEdgeScript", "v = A(2)\nv")
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	for _, fn := range []struct {
+		name  string
+		local string
+	}{{"A", "t"}, {"B", "u"}, {"C", "p"}} {
+		mangled := Mangle(cc.Compiler.MangledPath, fn.name, []Type{I64})
+		require.Contains(t, ts.BindingTypes, BindingKey{FuncNameMangled: mangled, Name: fn.local},
+			"%s's local %q must be typed by a sweep that reached it", fn.name, fn.local)
+	}
+}
