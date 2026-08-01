@@ -398,22 +398,22 @@ locked = []`)
 	emptyStmt := program.Statements[0].(*ast.LetStatement)
 	emptyOuter := emptyStmt.Value[0].(*ast.InfixExpression)
 	emptyInner := emptyOuter.Left.(*ast.InfixExpression)
-	emptyInnerType := ts.ExprCache[key(ts.FuncNameMangled, emptyInner)].OutTypes[0].(Array)
-	emptyOuterType := ts.ExprCache[key(ts.FuncNameMangled, emptyOuter)].OutTypes[0].(Array)
+	emptyInnerType := ts.ExprCache[key(ts.CurrFuncMangled, emptyInner)].OutTypes[0].(Array)
+	emptyOuterType := ts.ExprCache[key(ts.CurrFuncMangled, emptyOuter)].OutTypes[0].(Array)
 	require.Equal(t, EmptyKind, emptyInnerType.ElemType.Kind())
 	require.Equal(t, StrKind, emptyOuterType.ElemType.Kind())
 
 	mixedStmt := program.Statements[1].(*ast.LetStatement)
 	mixed := mixedStmt.Value[0].(*ast.InfixExpression)
-	mixedLeftType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Left)].OutTypes[0].(Array)
-	mixedRightType := ts.ExprCache[key(ts.FuncNameMangled, mixed.Right)].OutTypes[0].(Array)
-	mixedType := ts.ExprCache[key(ts.FuncNameMangled, mixed)].OutTypes[0].(Array)
+	mixedLeftType := ts.ExprCache[key(ts.CurrFuncMangled, mixed.Left)].OutTypes[0].(Array)
+	mixedRightType := ts.ExprCache[key(ts.CurrFuncMangled, mixed.Right)].OutTypes[0].(Array)
+	mixedType := ts.ExprCache[key(ts.CurrFuncMangled, mixed)].OutTypes[0].(Array)
 	require.Equal(t, IntKind, mixedLeftType.ElemType.Kind())
 	require.Equal(t, FloatKind, mixedRightType.ElemType.Kind())
 	require.Equal(t, FloatKind, mixedType.ElemType.Kind())
 
 	resetStmt := program.Statements[3].(*ast.LetStatement)
-	resetType := ts.ExprCache[key(ts.FuncNameMangled, resetStmt.Value[0])].OutTypes[0].(Array)
+	resetType := ts.ExprCache[key(ts.CurrFuncMangled, resetStmt.Value[0])].OutTypes[0].(Array)
 	bindingType := ts.BindingTypes[BindingKey{Name: "locked"}].(Array)
 	require.Equal(t, EmptyKind, resetType.ElemType.Kind())
 	require.Equal(t, IntKind, bindingType.ElemType.Kind())
@@ -536,7 +536,7 @@ a = a ⊕ "d"`
 
 	firstStmt, ok := program.Statements[0].(*ast.LetStatement)
 	require.True(t, ok)
-	firstInfo := ts.ExprCache[key(ts.FuncNameMangled, firstStmt.Value[0])]
+	firstInfo := ts.ExprCache[key(ts.CurrFuncMangled, firstStmt.Value[0])]
 	require.NotNil(t, firstInfo)
 	require.True(t, IsStrG(firstInfo.OutTypes[0]), "plain literal expression should remain StrG")
 
@@ -544,7 +544,7 @@ a = a ⊕ "d"`
 	require.True(t, ok)
 	secondExpr, ok := secondStmt.Value[0].(*ast.InfixExpression)
 	require.True(t, ok)
-	secondInfo := ts.ExprCache[key(ts.FuncNameMangled, secondExpr)]
+	secondInfo := ts.ExprCache[key(ts.CurrFuncMangled, secondExpr)]
 	require.NotNil(t, secondInfo)
 	require.True(t, IsStrH(secondInfo.OutTypes[0]), "concat expression should remain StrH")
 }
@@ -631,7 +631,7 @@ func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	infix, ok := letStmt.Value[0].(*ast.InfixExpression)
 	require.True(t, ok)
 
-	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+	info := ts.ExprCache[key(ts.CurrFuncMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
 	require.Equal(t, CondArray, info.CompareModes[0], "array comparison in value position should be tagged as element-wise mask (CondArray)")
@@ -973,7 +973,7 @@ func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 	infix, ok := letStmt.Value[0].(*ast.InfixExpression)
 	require.True(t, ok)
 
-	info := ts.ExprCache[key(ts.FuncNameMangled, infix)]
+	info := ts.ExprCache[key(ts.CurrFuncMangled, infix)]
 	require.NotNil(t, info)
 	require.Len(t, info.CompareModes, 1, "should have one compare mode entry")
 	require.Equal(t, CondArray, info.CompareModes[0], "scalar-array comparison in value position should be tagged as element-wise mask (CondArray)")
@@ -1008,7 +1008,7 @@ res = [idx]`
 	arrLit, ok := letStmt.Value[0].(*ast.ArrayLiteral)
 	require.True(t, ok)
 
-	info := ts.ExprCache[key(ts.FuncNameMangled, arrLit)]
+	info := ts.ExprCache[key(ts.CurrFuncMangled, arrLit)]
 	require.NotNil(t, info)
 	require.Empty(t, info.Ranges)
 	require.Len(t, info.CollectRanges, 1)
@@ -1087,7 +1087,7 @@ func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
 
 	valueStmt := program.Statements[1].(*ast.LetStatement)
 	valueExpr := valueStmt.Value[0].(*ast.ArrayRangeExpression)
-	valueInfo := ts.ExprCache[key(ts.FuncNameMangled, valueExpr)]
+	valueInfo := ts.ExprCache[key(ts.CurrFuncMangled, valueExpr)]
 	require.Equal(t, []Type{Int{Width: 64}}, valueInfo.OutTypes)
 	require.Len(t, valueInfo.Ranges, 1)
 
@@ -1238,12 +1238,12 @@ func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
 	prefix, ok := letStmt.Value[0].(*ast.PrefixExpression)
 	require.True(t, ok)
 
-	origInfo := ts.ExprCache[key(ts.FuncNameMangled, prefix)]
+	origInfo := ts.ExprCache[key(ts.CurrFuncMangled, prefix)]
 	require.NotNil(t, origInfo)
 	rewPrefix, ok := origInfo.Rewrite.(*ast.PrefixExpression)
 	require.True(t, ok, "expected rewritten prefix expression")
 
-	rewInfo := ts.ExprCache[key(ts.FuncNameMangled, rewPrefix)]
+	rewInfo := ts.ExprCache[key(ts.CurrFuncMangled, rewPrefix)]
 	require.NotNil(t, rewInfo)
 	require.NotEmpty(t, origInfo.OutTypes)
 	require.NotEmpty(t, rewInfo.OutTypes)

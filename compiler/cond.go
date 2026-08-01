@@ -97,7 +97,7 @@ func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out 
 }
 
 func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]struct{}) {
-	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	info := c.ExprCache[key(c.CurrFuncMangled, ce)]
 	if info == nil {
 		return
 	}
@@ -139,7 +139,7 @@ func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
 func (c *Compiler) collectOutTypes(stmt *ast.LetStatement) []Type {
 	outTypes := []Type{}
 	for _, expr := range stmt.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		outTypes = append(outTypes, info.OutTypes...)
 	}
 	return outTypes
@@ -369,7 +369,7 @@ func (c *Compiler) commitStageTempOutputs(commit []OutputSlot, stage []OutputSlo
 }
 
 func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	stageAliases := c.aliasCondDests(stage)
 	defer c.restoreCondDests(stageAliases)
 
@@ -412,7 +412,7 @@ func (c *Compiler) stageCondRangedAssignments(assignExprs []ast.Expression, comm
 	defer c.restoreCondDests(allAliases)
 
 	for _, expr := range assignExprs {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		numOutputs := len(info.OutTypes)
 		exprStage := c.createStageTempOutputsFor(commit[assignTargetIdx : assignTargetIdx+numOutputs])
 
@@ -476,7 +476,7 @@ func (c *Compiler) valuesHaveCondExpr(values []ast.Expression) bool {
 // hasCondExprInTree returns true if any node in the expression tree has
 // conditional value lowering.
 func (c *Compiler) hasCondExprInTree(expr ast.Expression) bool {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	if info != nil && info.HasCondExpr() {
 		return true
 	}
@@ -542,7 +542,7 @@ func broadcastConds(cond llvm.Value, n int) []llvm.Value {
 // children, so their conditions AND into every output slot — for a
 // single-output expression that is exactly the old single gate.
 func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 
 	// Array-literal cells are local-resolution boundaries: each cell resolves
 	// its own condition at its own level. Statement-level extraction must stop
@@ -668,7 +668,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	}
 
 	frame := c.requireCondLHSFrame()
-	frame[key(c.FuncNameMangled, infix)] = lhsSyms
+	frame[key(c.CurrFuncMangled, infix)] = lhsSyms
 
 	// Track the left operand's payloads with the same symbols the frame
 	// retains (the deref'd LHS; the mask's already-released source for array
@@ -676,7 +676,7 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	// neutralizes this temp. Skip a chained inner comparison (a > b < c): its
 	// value came from substituting that already-retained comparison, so it is
 	// the SAME symbol already tracked — re-tracking would free it twice.
-	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
+	if _, chained := frame[key(c.CurrFuncMangled, infix.Left)]; !chained {
 		trackSyms := make([]*Symbol, len(left))
 		for i := range left {
 			trackSyms[i] = lhsSyms[i]
@@ -763,7 +763,7 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 func (c *Compiler) finishLogicalSlots(slots []logicalSlot, node ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
 	conds, loaded := c.loadLogicalResults(slots)
 	frame := c.requireCondLHSFrame()
-	frame[key(c.FuncNameMangled, node)] = loaded
+	frame[key(c.CurrFuncMangled, node)] = loaded
 	temps = append(temps, condTemp{expr: node, syms: loaded})
 	return conds, temps
 }
@@ -910,7 +910,7 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
 	var ranges []*RangeInfo
 	for _, expr := range conditions {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		ranges = mergeUses(ranges, info.Ranges)
 	}
 	if len(ranges) == 0 {
@@ -919,7 +919,7 @@ func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, [
 
 	var condExprs []ast.Expression
 	for _, expr := range conditions {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		if info.RangeDriverCond {
 			continue
 		}
@@ -1035,7 +1035,7 @@ func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges
 
 	targetIdx := 0
 	for _, expr := range stmt.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		numOutputs := len(info.OutTypes)
 
 		if lit, ok := expr.(*ast.ArrayLiteral); ok && isInlineArrayCollector(lit) {
@@ -1138,7 +1138,7 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 
 	targetIdx := 0
 	for _, expr := range stmt.Value {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		numOutputs := len(info.OutTypes)
 		exprSlots := slots[targetIdx : targetIdx+numOutputs]
 
@@ -1146,7 +1146,7 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		// logical node needs extraction to pre-resolve it, and extraction needs
 		// bound iterators. Loop first — the per-iteration
 		// body re-enters the standard extraction with no pending ranges.
-		if len(c.pendingLoopRanges(info.Ranges)) > 0 && treeHasLogicalCond(c.ExprCache, c.FuncNameMangled, expr) {
+		if len(c.pendingLoopRanges(info.Ranges)) > 0 && treeHasLogicalCond(c.ExprCache, c.CurrFuncMangled, expr) {
 			c.withCondBranch(stmtCond, "ranged_logical", func() {
 				c.stageCondRangedExpr(expr, exprSlots)
 			}, nil)
@@ -1206,7 +1206,7 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 	if !ok {
 		return false
 	}
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return false
 	}
@@ -1250,7 +1250,7 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // its own condition when it has one — a call whose argument comparison fails
 // must not run, and the slots reading it are gated by that same condition.
 func (c *Compiler) prepareSpine(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	if infix, ok := expr.(*ast.InfixExpression); ok &&
 		((infix.IsLogicalOr() && info.HasFallbackOr()) || (infix.IsLogicalAnd() && info.HasCondAnd())) {
 		return c.extractSlotConds(expr, temps)
@@ -1296,7 +1296,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 			boundsOK = c.createLoad(guardPtr, Int{Width: 1}, "leaf_bounds_ok")
 		}
 		c.popBoundsGuard()
-		frame[key(c.FuncNameMangled, expr)] = syms
+		frame[key(c.CurrFuncMangled, expr)] = syms
 		temps = append(temps, condTemp{expr: expr, syms: syms})
 		return broadcastConds(boundsOK, len(info.OutTypes)), temps
 	}
@@ -1337,7 +1337,7 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	for i, outType := range info.OutTypes {
 		loaded[i] = &Symbol{Val: c.createLoad(slots[i], outType, fmt.Sprintf("spine_leaf_%d", i)), Type: outType}
 	}
-	frame[key(c.FuncNameMangled, expr)] = loaded
+	frame[key(c.CurrFuncMangled, expr)] = loaded
 	temps = append(temps, condTemp{expr: expr, syms: loaded})
 	return broadcastConds(leafCond, len(info.OutTypes)), temps
 }
@@ -1390,11 +1390,11 @@ func (c *Compiler) storeLogicalValue(side ast.Expression, i int, sl logicalSlot)
 // mark set while building the store arm is ignored — these are exclusive
 // runtime paths, and on this one the mask was never moved.
 func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	if !info.IsMask(i) {
 		return
 	}
-	syms, ok := c.requireCondLHSFrame()[key(c.FuncNameMangled, expr)]
+	syms, ok := c.requireCondLHSFrame()[key(c.CurrFuncMangled, expr)]
 	if !ok || syms[i] == nil {
 		return
 	}
@@ -1407,8 +1407,8 @@ func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
 // combines and array masks) or a borrowed view it must copy on commit.
 func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Symbol, bool) {
 	frame := c.requireCondLHSFrame()
-	if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if syms, ok := frame[key(c.CurrFuncMangled, expr)]; ok {
+		info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 		if info.IsMask(i) {
 			return syms[i], true
 		}
@@ -1423,7 +1423,7 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 	// node (comparison, mask, ||, &&) was pre-resolved into the frame above,
 	// so a conditional mode here means a new CondMode slipped past the spine
 	// dispatch unclassified.
-	if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil &&
+	if info := c.ExprCache[key(c.CurrFuncMangled, expr)]; info != nil &&
 		slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
 		panic(fmt.Sprintf("internal: conditional spine node %s combined as plain arithmetic", infix.Operator))
 	}

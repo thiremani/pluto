@@ -334,7 +334,7 @@ func arrayLiteralHasArrayCells(lit *ast.ArrayLiteral, arrayType Array) bool {
 // The type solver may rewrite array literals to replace range expressions with temporary iterators.
 func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLiteral, *ExprInfo) {
 	lit := e
-	info := c.ExprCache[key(c.FuncNameMangled, e)]
+	info := c.ExprCache[key(c.CurrFuncMangled, e)]
 
 	// Check if the expression was rewritten by the type solver
 	if rew, ok := info.Rewrite.(*ast.ArrayLiteral); ok {
@@ -342,7 +342,7 @@ func (c *Compiler) resolveArrayLiteralRewrite(e *ast.ArrayLiteral) (*ast.ArrayLi
 	}
 
 	// Use the rewritten literal's cache entry if available
-	if alt, ok := c.ExprCache[key(c.FuncNameMangled, lit)]; ok && alt != nil {
+	if alt, ok := c.ExprCache[key(c.CurrFuncMangled, lit)]; ok && alt != nil {
 		info = alt
 	}
 
@@ -1068,7 +1068,7 @@ func (c *Compiler) checkedArraySubarray(array *Symbol, index llvm.Value, inBound
 // index is always finalized or collected through the surrounding loop; only a
 // scalar element/subarray value reaches compileArrayRangeBasic.
 func (c *Compiler) compileArrayRangeExpression(expr *ast.ArrayRangeExpression, dest []*ast.Identifier) []*Symbol {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.CurrFuncMangled, expr)]
 	if len(c.pendingLoopRanges(info.Ranges)) > 0 {
 		return c.compileArrayRangeRanges(info, dest)
 	}
