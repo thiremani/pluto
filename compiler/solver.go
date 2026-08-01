@@ -123,14 +123,6 @@ type pendingAssignment struct {
 	exprOutIdx      int
 }
 
-// unresolvedCallee is the first specialization one pass visited without reaching
-// a full signature. A convergence failure reports it instead of the script-level
-// root, whose own body is usually well-formed.
-type unresolvedCallee struct {
-	name string
-	tok  token.Token
-}
-
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
@@ -147,7 +139,7 @@ type TypeSolver struct {
 	// because ScriptFunc stops TypeScriptFunc from re-entering itself: while one
 	// script-level call is solving, every nested call routes through TypeFunc.
 	walkedFuncs     map[string]struct{} // specializations already walked this pass
-	firstUnresolved *unresolvedCallee
+	firstUnresolved *ast.FuncStatement
 	// settledFuncs is a performance memo, not a correctness mechanism: rewalking
 	// before lowering is what fixes issue #71. It skips a rewalk a later script
 	// statement would only repeat, and its per-script lifetime is what makes
@@ -2485,7 +2477,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	if ts.ScriptFunc != "" {
 		ts.TypeFunc(mangled, template, f)
 		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
-			ts.firstUnresolved = &unresolvedCallee{name: f.Name, tok: template.Token}
+			ts.firstUnresolved = template
 		}
 		return f
 	}
@@ -2555,9 +2547,9 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		}
 
 		// Every call is typed synchronously before its sibling or the next script
-		// statement. Return only after one unchanged pass has walked the complete
-		// closure with final signatures: that pass rebuilt every body fact, so
-		// those specializations are settled for the rest of this script.
+		// statement. Return only once every visited callee resolved and one
+		// unchanged pass walked the whole closure with final signatures: that pass
+		// rebuilt every body fact, so those specializations are settled for this script.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
@@ -2565,13 +2557,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 		// no further progress possible
 		if !ts.Converging {
-			name, tok := f.Name, template.Token
+			blamed := template
 			if ts.firstUnresolved != nil {
-				name, tok = ts.firstUnresolved.name, ts.firstUnresolved.tok
+				blamed = ts.firstUnresolved
 			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", name),
+				Token: blamed.Token,
+				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", blamed.Token.Literal),
 			})
 			return f.OutTypes
 		}
