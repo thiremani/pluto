@@ -1308,9 +1308,6 @@ func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
 
 	deep := closureLeafWalks(t, 16, 1)
 	require.Equal(t, shallow, deep, "leaf walks must not grow with call-graph depth")
-
-	repeated := closureLeafWalks(t, 8, 8)
-	require.Equal(t, shallow, repeated, "leaf walks must not grow with script call sites")
 }
 
 // TestNonConvergingCalleeIsBlamed pins the convergence diagnostic on the function

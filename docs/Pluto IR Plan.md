@@ -82,8 +82,8 @@ weaker precedent than it looks: a walk that rewrites a range mints a fresh
 iterator identity and a fresh entry for the rewritten node, so those entries
 accumulate rather than overwrite. Derivation that appends, counts, or allocates
 per walk inherits that multiplication. If a phase genuinely needs one-shot
-final-pass work, the hook belongs where the stable pass is already recognised,
-next to the `settledFuncs` update in `TypeScriptFunc`.
+final-pass work, the hook belongs where `TypeScriptFunc` already recognises the
+stable pass — the branch that returns once nothing changed.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity
