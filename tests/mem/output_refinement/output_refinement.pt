@@ -1,0 +1,13 @@
+res = RefineArray(k)
+    res = []
+    res = k > 0 GrowArray(k)
+
+res = GrowArray(k)
+    res = RefineArray(k - 1) ⊕ [1]
+
+res = RefineString(k)
+    res = "lit"
+    res = k > 0 GrowString(k)
+
+res = GrowString(k)
+    res = RefineString(k - 1) ⊕ "x"

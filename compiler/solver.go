@@ -128,6 +128,7 @@ type TypeSolver struct {
 	Scopes             []Scope[Type]
 	CurrFuncMangled    string // current function's mangled name ("" for script level)
 	Converging         bool
+	outputRevision     uint64 // increments only when a persisted function output changes
 	Errors             []*token.CompileError
 	BindingTypes       map[BindingKey]Type
 	ExprCache          map[ExprKey]*ExprInfo
@@ -2510,48 +2511,28 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	return f
 }
 
-// closurePassLimit bounds the passes seen can still need. Only TypeBlock
-// resolving an output slot keeps the loop going, so total slots plus one stable
-// pass is sufficient. Specialization count is the wrong measure: one wide
-// signature can need far more passes than the closure has functions. seen must
-// be every specialization walked so far, not just the last pass's: an argument
-// that resolves late remangles its callee, so a provisional specialization can
-// consume passes and then vanish from the walk.
-func (ts *TypeSolver) closurePassLimit(seen map[string]struct{}) int {
-	slots := 0
-	for mangled := range seen {
-		if cached, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]; ok {
-			slots += len(cached.OutTypes)
-		}
-	}
-	return slots + 2
-}
-
 // This is a blocking iterative solver
 // This function is assumed to be in the top level script
 // If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
 	errsAtEntry := len(ts.Errors)
-	// Growing the budget with the closure keeps a deep call chain or a wide
-	// signature from reading as a program-size limit. Exhausting it means a pass
-	// continued without resolving an output slot, which is a solver bug.
-	seenFuncs := make(map[string]struct{})
-	maxPasses := 100
 	// Sweep the whole closure until a pass changes nothing. Two things force the
 	// repeat: a resolved argument remangles its call site, so specializations
 	// appear mid-solve; and a body typed against an unresolved callee holds stale
 	// facts even once its own signature is final. Clearing walkedFuncs is what
 	// makes every pass re-enter each function rather than only the root. A
 	// worklist re-enqueueing callers would drop the repeat if it ever costs enough.
-	for pass := 0; pass < maxPasses; pass++ {
+	// Every continuing pass persists at least one strict, monotonic output join;
+	// there is no program-size pass limit to reject a valid wide or deeply
+	// refined closure.
+	for {
+		revisionAtStart := ts.outputRevision
 		ts.Converging = false
 		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
-		maps.Copy(seenFuncs, ts.walkedFuncs)
-		if limit := ts.closurePassLimit(seenFuncs); limit > maxPasses {
-			maxPasses = limit
-		}
+		changed := ts.outputRevision != revisionAtStart
+		ts.Converging = changed
 
 		// A typing error is fatal for this function: TypeBlock aborts on it
 		// before outputs infer, and the error is deterministic, so another
@@ -2567,13 +2548,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// statement. Return only once every visited callee resolved and one
 		// unchanged pass walked the whole closure with final signatures, so every
 		// body fact this script lowers from was rebuilt against those signatures.
-		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
+		if f.AllTypesInferred() && ts.firstUnresolved == nil && !changed {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
 
 		// no further progress possible
-		if !ts.Converging {
+		if !changed {
 			blamed := template
 			if ts.firstUnresolved != nil {
 				blamed = ts.firstUnresolved
@@ -2585,7 +2566,6 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 			return f.OutTypes
 		}
 	}
-	panic(fmt.Sprintf("internal: type inference for %s exceeded its output-refinement convergence bound of %d passes", f.Name, maxPasses))
 }
 
 // TypeFunc types one specialization's body at most once per pass. Marking before
@@ -2616,6 +2596,17 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 	for i, id := range template.Parameters {
 		Put(ts.Scopes, id.Value, f.Params[i])
 	}
+	// Lowering seeds every output slot with its inferred ABI/storage type before
+	// executing the body. Mirror that on rewalks so statements before the final
+	// output assignment — including nested calls — are typed against the same
+	// ownership and collection shape lowering will use.
+	for i, id := range template.Outputs {
+		if !IsFullyResolvedType(f.OutTypes[i]) {
+			continue
+		}
+		Put(ts.Scopes, id.Value, f.OutTypes[i])
+		ts.recordBindingSlotType(id.Value, f.OutTypes[i])
+	}
 
 	oldErrs := len(ts.Errors)
 	for _, stmt := range template.Body.Statements {
@@ -2636,32 +2627,29 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 			return
 		}
 
-		oldOutArg := f.OutTypes[i]
-		if IsFullyResolvedType(oldOutArg) {
-			// An output is fixed on the pass that first resolves it, but "resolved"
-			// is not "final": Array(Empty) still refines to Array(I64), StrG to
-			// StrH. Keeping the first answer would hand lowering a signature its own
-			// body disagrees with — wrong results for arrays, a leaked owner for
-			// strings. Refining it instead needs a convergence bound that survives a
-			// slot changing twice, so until then reject rather than miscompile.
-			if IsFullyResolvedType(outArg) && !TypeEqual(oldOutArg, outArg) {
-				was, now := describeTypeChange(oldOutArg, outArg)
-				ts.Errors = append(ts.Errors, &token.CompileError{
-					Token: id.Token,
-					Msg:   fmt.Sprintf("Function %s output %s first inferred as %s, then as %s. Refining an output after it is inferred is not supported yet; give it one type", f.Name, id.Value, was, now),
-				})
-			}
+		if !IsFullyResolvedType(outArg) {
 			continue
 		}
 
-		if IsFullyResolvedType(outArg) {
-			// The only place Converging is set. TypeScriptFunc treats a pass that
-			// leaves it false as final, and bounds its passes by the closure's
-			// output slots because each continuing pass consumes one here. Setting
-			// it anywhere else breaks both, and overrunning the bound is an ICE.
-			ts.Converging = true
-			f.OutTypes[i] = outArg
+		oldOutArg := f.OutTypes[i]
+		if !bindingSlotCompatible(oldOutArg, outArg) {
+			was, now := describeTypeChange(oldOutArg, outArg)
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: id.Token,
+				Msg:   fmt.Sprintf("Function %s output %s was inferred as %s, but its body later required the incompatible type %s", f.Name, id.Value, was, now),
+			})
 			continue
 		}
+		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
+		ts.recordBindingSlotType(id.Value, nextOutArg)
+		if TypeEqual(oldOutArg, nextOutArg) {
+			continue
+		}
+
+		// TypeScriptFunc derives progress from this persisted revision rather than
+		// from a hand-maintained pass count or a guessed convergence bound.
+		ts.outputRevision++
+		ts.Converging = true
+		f.OutTypes[i] = nextOutArg
 	}
 }

@@ -620,6 +620,20 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return true
 	}
+	oldStruct, oldIsStruct := oldType.(Struct)
+	newStruct, newIsStruct := newType.(Struct)
+	if oldIsStruct && newIsStruct {
+		if oldStruct.Name != newStruct.Name || len(oldStruct.Fields) != len(newStruct.Fields) {
+			return false
+		}
+		for i, oldField := range oldStruct.Fields {
+			newField := newStruct.Fields[i]
+			if oldField.Name != newField.Name || !bindingSlotCompatible(oldField.Type, newField.Type) {
+				return false
+			}
+		}
+		return true
+	}
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)
 	if oldIsArray && newIsArray {
@@ -646,6 +660,19 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return mergeStringFlavor(oldType, newType)
+	}
+	oldStruct, oldIsStruct := oldType.(Struct)
+	newStruct, newIsStruct := newType.(Struct)
+	if oldIsStruct && newIsStruct {
+		merged := oldStruct
+		merged.Fields = make([]StructField, len(oldStruct.Fields))
+		for i, oldField := range oldStruct.Fields {
+			merged.Fields[i] = StructField{
+				Name: oldField.Name,
+				Type: mergeBindingSlotType(oldField.Type, newStruct.Fields[i].Type),
+			}
+		}
+		return merged
 	}
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)

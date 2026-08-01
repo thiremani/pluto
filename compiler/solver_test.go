@@ -550,6 +550,53 @@ a = a ⊕ "d"`
 	require.True(t, IsStrH(secondInfo.OutTypes[0]), "concat expression should remain StrH")
 }
 
+func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
+	headerOnly := Table{Columns: []TableColumn{
+		{Name: "Name", ElemType: Empty{}},
+		{Name: "Score", ElemType: Empty{}},
+	}}
+	concreteTable := Table{Columns: []TableColumn{
+		{Name: "Name", ElemType: StrH{}},
+		{Name: "Score", ElemType: I64},
+	}}
+	heapStruct := Struct{Name: "Person", Fields: []StructField{
+		{Name: "name", Type: StrH{}},
+		{Name: "age", Type: I64},
+	}}
+	staticStruct := Struct{Name: "Person", Fields: []StructField{
+		{Name: "name", Type: StrG{}},
+		{Name: "age", Type: I64},
+	}}
+
+	for _, tt := range []struct {
+		name       string
+		oldType    Type
+		newType    Type
+		mergedType Type
+	}{
+		{"string widens", StrG{}, StrH{}, StrH{}},
+		{"string never narrows", StrH{}, StrG{}, StrH{}},
+		{"empty array refines", Array{ElemType: Empty{}, Rank: 1}, Array{ElemType: I64, Rank: 1}, Array{ElemType: I64, Rank: 1}},
+		{"empty array resets", Array{ElemType: I64, Rank: 2}, Array{ElemType: Empty{}, Rank: 1}, Array{ElemType: I64, Rank: 2}},
+		{"header table refines", headerOnly, concreteTable, concreteTable},
+		{"header table resets", concreteTable, headerOnly, concreteTable},
+		{"struct field never narrows", heapStruct, staticStruct, heapStruct},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, bindingSlotCompatible(tt.oldType, tt.newType))
+			merged := mergeBindingSlotType(tt.oldType, tt.newType)
+			require.True(t, TypeEqual(tt.mergedType, merged), "got %s, want %s", merged, tt.mergedType)
+			require.True(t, bindingSlotCompatible(merged, tt.newType))
+			require.True(t, TypeEqual(merged, mergeBindingSlotType(merged, tt.newType)), "joining the same observation twice must be idempotent")
+		})
+	}
+
+	require.False(t, bindingSlotCompatible(
+		heapStruct,
+		Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: I64}, {Name: "age", Type: I64}}},
+	))
+}
+
 func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "rangeBoundsDepend", "", ast.NewCode())
@@ -1395,10 +1442,9 @@ res = OuterReset(k)
 	require.Equal(t, cold, warm, "a warm FuncCache must not drop this script's binding types")
 }
 
-// TestWideOutputClosureConverges pins the convergence budget against output-slot
-// count rather than specialization count. This one specialization resolves
-// exactly one output per pass, so it needs far more passes than the closure has
-// functions — a budget derived from function count rejects it.
+// TestWideOutputClosureConverges pins semantic fixed-point convergence without
+// an arbitrary pass ceiling. This one specialization resolves exactly one
+// output per pass, so it needs more than the old 100-pass limit.
 func TestWideOutputClosureConverges(t *testing.T) {
 	const outs = 130
 
@@ -1521,15 +1567,19 @@ res = ZBrokenX(k)
 	require.Equal(t, 7, ts.Errors[0].Token.Line, "must point at ZBrokenX's own declaration")
 }
 
-// TestOutputRefinementIsRejected pins that a signature whose body later disagrees
-// is reported rather than lowered. Root's output resolves to Array(Empty) on the
-// pass that first types it, then to Array(I64) once Relay resolves; lowering the
-// first answer produced an empty array at runtime, and the string flavor of the
-// same shape leaked its heap owner.
-func TestOutputRefinementIsRejected(t *testing.T) {
-	for _, tt := range []struct{ name, seed, grow, want string }{
-		{"array", "[]", "⊕ [1]", "[Empty], then as [I64]"},
-		{"string", `"lit"`, `⊕ "x"`, "Str (StrG), then as Str (StrH)"},
+// TestOutputTypesRefineMonotonically pins that a resolved signature is not
+// necessarily final. Root first resolves to Array(Empty)/StrG, then must widen
+// to Array(I64)/StrH once Relay resolves. The final signature and output storage
+// type must agree on both a cold and warm FuncCache walk.
+func TestOutputTypesRefineMonotonically(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		seed string
+		grow string
+		want Type
+	}{
+		{"array", "[]", "⊕ [1]", Array{ElemType: I64, Rank: 1}},
+		{"string", `"lit"`, `⊕ "x"`, StrH{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code := mustParseCode(t, fmt.Sprintf(`res = Root(k)
@@ -1550,21 +1600,74 @@ res = Relay(k)
 			program := sp.Parse()
 			require.Empty(t, sp.Errors())
 
-			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
-			ts := NewTypeSolver(sc)
-			ts.Solve()
+			funcCache := make(map[string]*Func)
+			exprCache := make(map[ExprKey]*ExprInfo)
+			solve := func() map[BindingKey]Type {
+				sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+				ts := NewTypeSolver(sc)
+				ts.Solve()
+				require.Empty(t, ts.Errors)
+				return ts.BindingTypes
+			}
 
-			require.NotEmpty(t, ts.Errors)
-			require.Contains(t, ts.Errors[0].Msg, tt.want)
+			coldBindings := solve()
+			warmBindings := solve()
+			for _, name := range []string{"Root", "Relay"} {
+				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
+				cached := funcCache[mangled]
+				require.NotNil(t, cached)
+				require.True(t, TypeEqual(tt.want, cached.OutTypes[0]), "%s output: got %s, want %s", name, cached.OutTypes[0], tt.want)
+
+				binding := BindingKey{FuncNameMangled: mangled, Name: "res"}
+				require.True(t, TypeEqual(tt.want, coldBindings[binding]), "%s cold output binding", name)
+				require.True(t, TypeEqual(tt.want, warmBindings[binding]), "%s warm output binding", name)
+			}
 		})
 	}
 }
 
-// TestRemangledCalleeStillBounded pins that the pass budget spans every
-// specialization seen, not just the last pass's. t's type is unknown when Leaf(t)
-// is first typed, so pass 0 solves Leaf(Unresolved) and pass 1 solves Leaf(I64)
-// instead; budgeting from the surviving walk alone loses the vanished one.
-func TestRemangledCalleeStillBounded(t *testing.T) {
+// TestRefinedOutputSeedsStableBody pins that the final closure sweep seeds an
+// output binding with its cached storage type. Consume(res) appears before the
+// assignment that widens Root's output, so without the seed it remains mangled
+// as Consume(StrG) even after Root has finalized as StrH.
+func TestRefinedOutputSeedsStableBody(t *testing.T) {
+	code := mustParseCode(t, `res = Root(k)
+    res = "lit"
+    tmp = Consume(res)
+    "-tmp"
+    res = k > 0 Relay(k)
+
+res = Relay(k)
+    res = Root(k - 1) ⊕ "x"
+
+res = Consume(x)
+    res = x
+`)
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "seedRefinedOutput", "", code)
+	require.Empty(t, cc.Compile())
+
+	sl := lexer.New("TestSeedRefinedOutputScript", "v = Root(3)\nv")
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors)
+	heapConsumer := funcCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
+	require.NotNil(t, heapConsumer, "the stable body sweep must remangle Consume with Root's StrH output slot")
+	require.True(t, heapConsumer.AllTypesInferred())
+}
+
+// TestRemangledCalleeIsRevisitedAfterArgumentResolves pins that a provisional
+// Leaf(Unresolved) does not let Outer finish. Once A resolves t, a later closure
+// sweep must discover and fully solve Leaf(I64).
+func TestRemangledCalleeIsRevisitedAfterArgumentResolves(t *testing.T) {
 	code := mustParseCode(t, `res = Outer(k)
     t = A(k)
     res = Leaf(t)
@@ -1593,7 +1696,9 @@ res = Leaf(x)
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
-	require.Contains(t, funcCache, Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64}))
+	resolved := funcCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
+	require.NotNil(t, resolved)
+	require.True(t, resolved.AllTypesInferred())
 	require.Contains(t, funcCache, Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}}),
-		"the provisional specialization must remain in the cache the budget is derived from")
+		"the provisional specialization must remain visible after the resolved call replaces it")
 }

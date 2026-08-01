@@ -1,0 +1,4 @@
+array = RefineArray(3)
+string = RefineString(3)
+array
+string
