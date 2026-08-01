@@ -65,13 +65,25 @@ exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
 derived while walking each concrete specialization are what resolve it. These
-are current-script analysis products: Phase 1 must re-derive write effects with
-binding types during the final reachable-function body walk, not attach them as
-durable `FuncCache` fields. PIR validation likewise consumes that freshly
-derived state rather than caching results on a specialization. `FuncCache`
-shares signature state across scripts, including in-progress inference, but
-never body-analysis facts. Issue #71's compile-order-dependent wrong output
-came from caching some body facts while rebuilding others.
+are current-script analysis products: Phase 1 must re-derive write effects
+alongside binding types while walking bodies, not attach them as durable
+`FuncCache` fields. PIR validation likewise consumes that freshly derived state
+rather than caching results on a specialization. `FuncCache` shares signature
+state across scripts, including in-progress inference, but never body-analysis
+facts. Issue #71's compile-order-dependent wrong output came from caching some
+body facts while rebuilding others.
+
+The solver reaches a body more than once and offers no "this is the last walk"
+signal: `TypeScriptFunc` repeats the whole closure until one pass changes
+nothing, and only that outermost loop knows which pass was stable. So Phase 1
+should derive write effects the way `BindingTypes` does — keyed by mangled name
+and binding, so the last walk overwrites the earlier ones. `ExprCache` is a
+weaker precedent than it looks: a walk that rewrites a range mints a fresh
+iterator identity and a fresh entry for the rewritten node, so those entries
+accumulate rather than overwrite. Derivation that appends, counts, or allocates
+per walk inherits that multiplication. If a phase genuinely needs one-shot
+final-pass work, the hook belongs where the stable pass is already recognised,
+next to the `settledFuncs` update in `TypeScriptFunc`.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity

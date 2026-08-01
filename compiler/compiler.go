@@ -3144,11 +3144,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !ok {
 		return nil
 	}
-	// Mutual-recursion convergence can leave this call site's cache partially
-	// unresolved even though the selected function variant is now concrete.
-	// Keep every lowering path aligned with the authoritative ABI types.
-	info.OutTypes = append([]Type(nil), sig.ABI.Return.OutTypes...)
-	info.ExprLen = len(info.OutTypes)
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
 		if !info.LoopInside && len(info.Ranges) > 0 {

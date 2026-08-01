@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1250,4 +1251,189 @@ func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
 	origBefore := origInfo.OutTypes[0]
 	rewInfo.OutTypes[0] = Float{Width: 64}
 	require.Equal(t, origBefore, origInfo.OutTypes[0], "rewritten prefix OutTypes must not alias original")
+}
+
+// closureLeafWalks builds a fan-out call graph of the given depth whose single
+// leaf holds a range literal, solves a script with the given number of call
+// sites, and returns TmpCounter — one range temporary is minted per leaf body
+// walk, so the count is a direct proxy for how often the leaf was retyped.
+func closureLeafWalks(t *testing.T, depth, callSites int) int {
+	t.Helper()
+
+	var b strings.Builder
+	for i := range depth {
+		fmt.Fprintf(&b, "res = F%d(k)\n    a = F%d(k)\n    b = F%d(k + 1)\n    res = a + b\n\n", i, i+1, i+1)
+	}
+	fmt.Fprintf(&b, "res = F%d(k)\n    i = 0:2\n    res = k + i\n", depth)
+
+	l := lexer.New("TestFuncClosureCode", b.String())
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "test", "", code)
+	require.Empty(t, cc.Compile())
+
+	var script strings.Builder
+	for i := range callSites {
+		fmt.Fprintf(&script, "v%d = F0(%d)\nv%d\n", i, i, i)
+	}
+	sl := lexer.New("TestFuncClosureScript", script.String())
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors)
+	require.Len(t, funcCache, depth+1)
+	return ts.TmpCounter
+}
+
+// TestFuncClosureWalksEachSpecializationOnce pins both memos that keep closure
+// solving linear. Every path through the fan-out graph reaches the same leaf and
+// every call site reaches the same closure, so a traversal that cuts only
+// recursive backedges retypes the leaf 2^depth times, and one that memoizes per
+// pass but not per script retypes it once more per call site.
+func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
+	shallow := closureLeafWalks(t, 8, 1)
+	require.Positive(t, shallow, "TmpCounter must still track leaf body walks")
+
+	deep := closureLeafWalks(t, 16, 1)
+	require.Equal(t, shallow, deep, "leaf walks must not grow with call-graph depth")
+
+	repeated := closureLeafWalks(t, 8, 8)
+	require.Equal(t, shallow, repeated, "leaf walks must not grow with script call sites")
+}
+
+// TestNonConvergingCalleeIsBlamed pins the convergence diagnostic on the function
+// that actually failed. Root m is well formed; bad is the one with no base case.
+func TestNonConvergingCalleeIsBlamed(t *testing.T) {
+	codeStr := `y = m(x)
+    y = bad(x)
+
+y = bad(x)
+    y = bad(x-1)
+`
+	l := lexer.New("TestBlameCode", codeStr)
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "test", "", code)
+	cc.Compile()
+
+	sl := lexer.New("TestBlameScript", "x = 6\ny = m(x)\ny")
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg, "Function bad is not converging")
+	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the root's")
+}
+
+// TestWarmFuncCacheRebuildsBindingTypes pins issue #71 at the solver level: the
+// second script shares the run-wide FuncCache/ExprCache, so its function-scope
+// binding types must be rederived rather than inherited from the first script.
+func TestWarmFuncCacheRebuildsBindingTypes(t *testing.T) {
+	codeStr := `res = Reset(k)
+    a = [10 20 30]
+    a = k > 0 []
+    res = a ⊕ [7]
+
+res = OuterReset(k)
+    res = Reset(k)
+`
+	l := lexer.New("TestWarmCode", codeStr)
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "test", "", code)
+	require.Empty(t, cc.Compile())
+
+	funcCache := make(map[string]*Func)
+	exprCache := make(map[ExprKey]*ExprInfo)
+	solve := func() map[BindingKey]Type {
+		sl := lexer.New("TestWarmScript", "v = OuterReset(0)\nv")
+		sp := parser.NewScriptParser(sl)
+		program := sp.Parse()
+		require.Empty(t, sp.Errors())
+
+		sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+		ts := NewTypeSolver(sc)
+		ts.Solve()
+		require.Empty(t, ts.Errors)
+		return ts.BindingTypes
+	}
+
+	cold := solve()
+	warm := solve()
+	require.NotEmpty(t, cold)
+	require.Equal(t, cold, warm, "a warm FuncCache must not drop this script's binding types")
+}
+
+// TestWideOutputClosureConverges pins the convergence budget against output-slot
+// count rather than specialization count. This one specialization resolves
+// exactly one output per pass, so it needs far more passes than the closure has
+// functions — a budget derived from function count rejects it.
+func TestWideOutputClosureConverges(t *testing.T) {
+	const outs = 130
+
+	names := func(prefix string) string {
+		parts := make([]string, outs)
+		for i := range parts {
+			parts[i] = fmt.Sprintf("%s%d", prefix, i)
+		}
+		return strings.Join(parts, ", ")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s = Wide(k)\n", names("o"))
+	fmt.Fprintf(&b, "    %s = Wide(k - 1)\n", names("p"))
+	fmt.Fprintf(&b, "    \"-p%d\"\n", outs-1) // consume the tail slot; only o1..oN-1 read p
+	b.WriteString("    o0 = 1\n")
+	for i := 1; i < outs; i++ {
+		fmt.Fprintf(&b, "    o%d = p%d + 1\n", i, i-1)
+	}
+
+	l := lexer.New("TestWideCode", b.String())
+	cp := parser.NewCodeParser(l)
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "test", "", code)
+	require.Empty(t, cc.Compile())
+
+	sl := lexer.New("TestWideScript", fmt.Sprintf("%s = Wide(3)\nv0", names("v")))
+	sp := parser.NewScriptParser(sl)
+	program := sp.Parse()
+	require.Empty(t, sp.Errors())
+
+	funcCache := make(map[string]*Func)
+	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Empty(t, ts.Errors)
+	wide := funcCache[Mangle(cc.Compiler.MangledPath, "Wide", []Type{I64})]
+	require.NotNil(t, wide)
+	require.True(t, wide.AllTypesInferred(), "every one of the %d output slots must resolve", outs)
 }
