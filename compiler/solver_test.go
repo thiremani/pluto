@@ -135,12 +135,13 @@ y`
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	if len(ts.Errors) != 1 {
-		t.Error("Expected a cyclic recursion error, but got none")
-	}
-	if !strings.Contains(ts.Errors[0].Msg, "Function f is not converging. Check for cyclic recursion and that each function has a base case") {
-		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
-	}
+	require.Len(t, ts.Errors, 1)
+	// Every member of f -> g -> h -> f is equally stuck, so naming any of them is
+	// correct; what must hold is that the report points at the named function's
+	// own declaration rather than at whoever happened to call it.
+	blamed := ts.Errors[0].Token.Literal
+	require.Contains(t, []string{"f", "g", "h"}, blamed)
+	require.Contains(t, ts.Errors[0].Msg, "Function "+blamed+" is not converging. Check for cyclic recursion and that each function has a base case")
 }
 
 func TestNoBaseCase(t *testing.T) {

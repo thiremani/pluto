@@ -138,8 +138,7 @@ type TypeSolver struct {
 	// because a non-empty CurrFuncMangled stops TypeScriptFunc from re-entering
 	// itself: while one script-level call is solving, every nested call routes
 	// through TypeFunc.
-	walkedFuncs     map[string]struct{} // specializations already walked this pass
-	firstUnresolved *ast.FuncStatement
+	walkedFuncs map[string]struct{} // specializations already walked this pass
 	// settledFuncs is a performance memo, not a correctness mechanism: rewalking
 	// before lowering is what fixes issue #71. It skips a rewalk a later script
 	// statement would only repeat, and its per-script lifetime is what makes
@@ -2475,9 +2474,6 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.CurrFuncMangled != "" {
 		ts.TypeFunc(mangled, template, f)
-		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
-			ts.firstUnresolved = template
-		}
 		return f
 	}
 
@@ -2513,6 +2509,25 @@ func (ts *TypeSolver) closurePassLimit(seen map[string]struct{}) int {
 	return slots + 2
 }
 
+// unresolvedCallee returns the template of a specialization the last pass reached
+// through root without it arriving at a full signature, or nil when they all did.
+// Pairing this with root's own AllTypesInferred covers the closure: a root can be
+// fully typed while something it called is not. Skipping root also keeps it from
+// being blamed for a callee's failure, and sorting keeps the choice stable.
+func (ts *TypeSolver) unresolvedCallee(root string) *ast.FuncStatement {
+	cc := ts.ScriptCompiler.Compiler.CodeCompiler
+	for _, mangled := range slices.Sorted(maps.Keys(ts.walkedFuncs)) {
+		cached, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
+		if mangled == root || !ok || cached.AllTypesInferred() {
+			continue
+		}
+		if template, ok := cc.lookupFuncTemplate(cached.Name, len(cached.Params)); ok {
+			return template
+		}
+	}
+	return nil
+}
+
 // This is a blocking iterative solver
 // This function is assumed to be in the top level script
 // If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
@@ -2525,13 +2540,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	maxPasses := 100
 	for pass := 0; pass < maxPasses; pass++ {
 		ts.Converging = false
-		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
 		maps.Copy(seenFuncs, ts.walkedFuncs)
 		if limit := ts.closurePassLimit(seenFuncs); limit > maxPasses {
 			maxPasses = limit
 		}
+		unresolved := ts.unresolvedCallee(mangled)
 
 		// A typing error is fatal for this function: TypeBlock aborts on it
 		// before outputs infer, and the error is deterministic, so another
@@ -2547,7 +2562,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// statement. Return only once every visited callee resolved and one
 		// unchanged pass walked the whole closure with final signatures: that pass
 		// rebuilt every body fact, so those specializations are settled for this script.
-		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
+		if f.AllTypesInferred() && unresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
@@ -2555,8 +2570,8 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// no further progress possible
 		if !ts.Converging {
 			blamed := template
-			if ts.firstUnresolved != nil {
-				blamed = ts.firstUnresolved
+			if unresolved != nil {
+				blamed = unresolved
 			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: blamed.Token,
