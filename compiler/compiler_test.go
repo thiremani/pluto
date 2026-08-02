@@ -951,6 +951,8 @@ func TestMakeSeededTempOutputsCopiesPointerSeed(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "ptr_seed_module", "", ast.NewCode())
 	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+	c.FuncNameMangled = "ptr_seed_fn"
+	c.FuncCache[c.FuncNameMangled] = &FuncInfo{Vars: make(map[string]Type)}
 
 	// Simulate the entry block state used by compileFuncBlock.
 	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)

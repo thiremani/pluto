@@ -201,9 +201,6 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 	f := c.FuncCache[c.FuncNameMangled]
-	if f == nil {
-		return fallback
-	}
 	typ, ok := f.Vars[name]
 	if !ok {
 		return fallback
