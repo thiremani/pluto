@@ -124,20 +124,20 @@ type pendingAssignment struct {
 }
 
 type TypeSolver struct {
-	ScriptCompiler        *ScriptCompiler
-	Scopes                []Scope[Type]
-	ScriptFunc            string // script-level root currently being solved ("" outside TypeScriptFunc)
-	FuncNameMangled       string // current function's mangled name ("" for script level)
-	Converging            bool   // current closure pass changed at least one cached output
-	Errors                []*token.CompileError
-	BindingTypes          map[BindingKey]Type
-	ExprCache             map[ExprKey]*ExprInfo
-	TmpCounter            int  // tmpCounter for uniquely naming temporary variables
-	InValueExpr           bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
-	PendingAssignments    map[pendingAssignment]struct{}
-	walkedFuncs           map[string]struct{} // specializations walked in the current pass
-	firstUnresolvedCallee *ast.FuncStatement
-	settledFuncs          map[string]struct{} // specializations stabilized earlier in this script
+	ScriptCompiler     *ScriptCompiler
+	Scopes             []Scope[Type]
+	ScriptFunc         string // script-level root currently being solved ("" outside TypeScriptFunc)
+	FuncNameMangled    string // current function's mangled name ("" for script level)
+	Converging         bool   // current closure pass changed at least one cached output
+	Errors             []*token.CompileError
+	BindingTypes       map[BindingKey]Type
+	ExprCache          map[ExprKey]*ExprInfo
+	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
+	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
+	PendingAssignments map[pendingAssignment]struct{}
+	walkedFuncs        map[string]struct{} // specializations walked in the current pass
+	firstUnresolved    *ast.FuncStatement
+	settledFuncs       map[string]struct{} // specializations stabilized earlier in this script
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -2466,8 +2466,8 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.ScriptFunc != "" {
 		ts.TypeFunc(mangled, template, f)
-		if ts.firstUnresolvedCallee == nil && !f.AllTypesInferred() {
-			ts.firstUnresolvedCallee = template
+		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
+			ts.firstUnresolved = template
 		}
 		return f
 	}
@@ -2498,7 +2498,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	// callers typed before their callees resolve retain stale body facts.
 	for {
 		ts.Converging = false
-		ts.firstUnresolvedCallee = nil
+		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template, f)
 
@@ -2508,15 +2508,15 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		}
 
 		// An unchanged complete pass refreshes body metadata against final signatures.
-		if f.AllTypesInferred() && ts.firstUnresolvedCallee == nil && !ts.Converging {
+		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
 			return f.OutTypes
 		}
 
 		if !ts.Converging {
 			blamed := template
-			if ts.firstUnresolvedCallee != nil {
-				blamed = ts.firstUnresolvedCallee
+			if ts.firstUnresolved != nil {
+				blamed = ts.firstUnresolved
 			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: blamed.Token,
