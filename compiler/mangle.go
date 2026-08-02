@@ -18,6 +18,11 @@ const (
 	OP  = "op" // Operator prefix
 	N   = "n"  // Numeric segment prefix
 	SEP = "_"  // General separator
+	// ENTRY marks a script root. It trails the name like F does, because a
+	// leading marker would be eaten: the separator codes below are consumed
+	// greedily at the start of a segment, so a marker beginning with d, s or h
+	// parses as a path separator instead.
+	ENTRY = "e"
 )
 
 // Path separator characters
@@ -43,6 +48,7 @@ const (
 	SymbolFunc                       // Standalone function
 	SymbolMethod                     // Method on a type (future)
 	SymbolOperator                   // Operator overload (future)
+	SymbolScript                     // Script root body
 )
 
 // Demangled holds the parsed components of a mangled symbol.
@@ -75,10 +81,13 @@ func (d *Demangled) String() string {
 	result.WriteString(".")
 	result.WriteString(d.Name)
 
-	if d.Kind == SymbolFunc {
+	switch d.Kind {
+	case SymbolFunc:
 		result.WriteString("(")
 		result.WriteString(strings.Join(d.ArgTypes, ", "))
 		result.WriteString(")")
+	case SymbolScript:
+		result.WriteString(" (script)")
 	}
 	return result.String()
 }
@@ -284,6 +293,12 @@ func MangleConst(mangledPath, constName string) string {
 	return mangledPath + SEP + MangleIdent(constName)
 }
 
+// MangleScript names a script's root body. The ENTRY suffix keeps it distinct
+// from a constant of the same name, which is otherwise the identical shape.
+func MangleScript(mangledPath, scriptName string) string {
+	return mangledPath + SEP + MangleIdent(scriptName) + SEP + ENTRY
+}
+
 // Demangle converts a mangled symbol back to human-readable form.
 // Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
 // For malformed Pluto symbols, returns the error message.
@@ -343,7 +358,11 @@ func DemangleParsed(mangled string) (*Demangled, error) {
 		result.Name = firstPath
 	}
 
-	// Parse function signature if present
+	// Parse the trailing kind marker if present
+	if rest == SEP+ENTRY {
+		result.Kind = SymbolScript
+		return result, nil
+	}
 	demangleFunc(result, rest)
 
 	return result, nil

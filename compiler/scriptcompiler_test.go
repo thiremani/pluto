@@ -39,7 +39,7 @@ func TestScriptRootIsNamespacedAndCached(t *testing.T) {
 	report := NewScriptCompiler(ctx, "report", mustParseScript(t, "value = 1\nvalue"), cc)
 	summary := NewScriptCompiler(ctx, "summary", mustParseScript(t, "value = 2\nvalue"), cc)
 
-	require.Equal(t, cc.Compiler.MangledPath+SEP+"script"+SEP+MangleIdent("report"), report.Script.Mangle())
+	require.Equal(t, MangleScript(cc.Compiler.MangledPath, "report"), report.Script.Mangle())
 	require.NotEqual(t, report.Script.Mangle(), summary.Script.Mangle())
 	require.NotEqual(t, report.Script.Mangle(), (&Script{Name: "report", MangledPath: "other"}).Mangle())
 	require.Same(t, report.Script.Root, cache.FuncCache[report.Script.Mangle()])

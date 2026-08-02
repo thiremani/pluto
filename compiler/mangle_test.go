@@ -755,3 +755,38 @@ func TestConstDemangleRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestMangleScriptRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		modName string
+		relPath string
+		script  string
+	}{
+		{"simple", "mymod", "", "report"},
+		{"with relpath", "mymod", "sub/dir", "report"},
+		{"named script", "mymod", "", "script"},
+		{"digit leading", "mymod", "", "1a"},
+		{"unicode", "mymod", "", "日本"},
+		{"separator letters", "mymod", "", "shd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := MangleDirPath(tt.modName, tt.relPath)
+			sym := MangleScript(path, tt.script)
+
+			d, err := DemangleParsed(sym)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.modName, d.ModPath)
+			assert.Equal(t, tt.relPath, d.RelPath)
+			assert.Equal(t, tt.script, d.Name)
+			assert.Equal(t, SymbolScript, d.Kind)
+
+			// A script root must not collide with a constant or function of the
+			// same name in the same place; all three share the name segment.
+			assert.NotEqual(t, MangleConst(path, tt.script), sym)
+			assert.NotEqual(t, Mangle(path, tt.script, []Type{I64}), sym)
+		})
+	}
+}

@@ -25,7 +25,7 @@ type Script struct {
 }
 
 func (s *Script) Mangle() string {
-	return s.MangledPath + SEP + "script" + SEP + MangleIdent(s.Name)
+	return MangleScript(s.MangledPath, s.Name)
 }
 
 func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler) *ScriptCompiler {
