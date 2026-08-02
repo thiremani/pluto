@@ -209,9 +209,9 @@ func (r Range) Kind() Kind {
 type Func struct {
 	Name     string
 	Params   []Type
-	OutTypes []Type // Final function output types (after wrapping for array types)
-	Vars     map[string]Type
-	Settled  bool
+	OutTypes []Type          // Final function output types (after wrapping for array types)
+	Vars     map[string]Type // Final binding storage types for this body
+	Settled  bool            // Specialization body metadata is reusable across scripts
 }
 
 func (f Func) String() string {

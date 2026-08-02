@@ -151,6 +151,14 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	}
 }
 
+// Include mangled forms only when display names hide a storage distinction.
+func describeTypeChange(from, to Type) (string, string) {
+	if from.String() != to.String() {
+		return from.String(), to.String()
+	}
+	return fmt.Sprintf("%s (%s)", from, from.Mangle()), fmt.Sprintf("%s (%s)", to, to.Mangle())
+}
+
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
@@ -701,20 +709,18 @@ func (ts *TypeSolver) Solve() {
 		}
 	}
 
+	scriptMangled := ts.ScriptCompiler.Script.Mangle()
 	for pending := range ts.PendingAssignments {
 		// Intentional: only report unresolved bindings for script scope.
 		// Function-scope unresolved types may be resolved later when that function
 		// is reached by a concrete script-level call.
-		if pending.funcNameMangled != ts.ScriptCompiler.Script.Mangle() {
+		if pending.funcNameMangled != scriptMangled {
 			continue
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: pending.expr.Tok(),
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
-	}
-	if len(ts.Errors) == 0 {
-		ts.ScriptCompiler.Script.Root.Settled = true
 	}
 }
 
@@ -2606,12 +2612,11 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 
 		oldOutArg := f.OutTypes[i]
 		if !bindingSlotCompatible(oldOutArg, outArg) {
+			// Assignments reject this earlier; keep finalization fail-closed.
+			was, now := describeTypeChange(oldOutArg, outArg)
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: id.Token,
-				Msg: fmt.Sprintf(
-					"Function %s output %s was inferred as %s (%s), but its body later required the incompatible type %s (%s)",
-					f.Name, id.Value, oldOutArg, oldOutArg.Mangle(), outArg, outArg.Mangle(),
-				),
+				Msg:   fmt.Sprintf("Function %s output %s was inferred as %s, but its body later required the incompatible type %s", f.Name, id.Value, was, now),
 			})
 			continue
 		}

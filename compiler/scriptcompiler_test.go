@@ -52,7 +52,6 @@ func TestScriptRootIsNamespacedAndCached(t *testing.T) {
 	reportSolver := NewTypeSolver(report)
 	reportSolver.Solve()
 	require.Empty(t, reportSolver.Errors)
-	require.True(t, report.Script.Root.Settled)
 	require.Equal(t, I64, report.Script.Root.Vars["value"])
 }
 

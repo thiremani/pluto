@@ -590,7 +590,17 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	))
 }
 
-func TestIncompatibleFunctionOutputAssignmentFailsDuringSolve(t *testing.T) {
+func TestDescribeTypeChangeDisambiguatesStorageFlavor(t *testing.T) {
+	was, now := describeTypeChange(I64, F64)
+	require.Equal(t, "I64", was)
+	require.Equal(t, "F64", now)
+
+	was, now = describeTypeChange(StrG{}, StrH{})
+	require.Equal(t, "Str (StrG)", was)
+	require.Equal(t, "Str (StrH)", now)
+}
+
+func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	code := mustParseCode(t, `res = Bad(k)
     res = k == 0 1
     res = k != 0 "later"

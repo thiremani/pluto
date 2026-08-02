@@ -65,23 +65,25 @@ exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
 derived while walking each concrete specialization are what resolve it. A
-script root or function specialization owns the body facts derived for it.
-`Func.Settled` marks its final variable types and expression metadata reusable
-after its body and reachable function closures have completed. Phase 1 must
-extend that same settlement boundary with write effects instead of adding
-another cache with a shorter lifetime. PIR validation can then consume the
-same coherent analysis. Issue #71's compile-order-dependent wrong output came
-from reusing some body facts while discarding others.
+script root owns its current compilation facts; a function specialization
+publishes reusable facts behind `Func.Settled` after its body and reachable
+function closure have completed. `ScriptCache` keeps those functions and their
+expression metadata on one lifetime. Phase 1 must extend that settlement
+boundary with write effects instead of adding another cache with a shorter
+lifetime. PIR validation can then consume the same coherent analysis. Issue
+#71's compile-order-dependent wrong output came from reusing some body facts
+while discarding others.
 
 The solver may reach a body more than once: `TypeScriptFunc` repeats the whole
 closure until one pass changes nothing. A change is any monotonic output
 refinement, including `Array(Empty)` to a concrete array or `StrG` to `StrH`,
-not merely an unresolved slot becoming resolved. Per-body analysis must
-therefore be cleared and rebuilt when that body is walked, as `Func.Vars` is,
-and become reusable only when the body is settled. Derivation that appends,
-counts, or allocates per walk inherits the multiplication. Work that belongs
-only to the final pass should run where `TypeScriptFunc` recognises the stable
-closure and publishes `Settled`.
+not merely an unresolved slot becoming resolved. Snapshot analysis such as
+`Func.Vars` must therefore be cleared and rebuilt when its body is walked, and
+become reusable only when the body is settled. `ExprCache` is different:
+stable AST entries are overwritten, while generated rewrite nodes may add new
+entries across walks. It is not a safe precedent for append-only analysis.
+Work that belongs only to the final pass should run where `TypeScriptFunc`
+recognises the stable closure and publishes `Settled`.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity
