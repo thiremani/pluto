@@ -9,15 +9,39 @@ import (
 type ScriptCompiler struct {
 	Compiler *Compiler
 	Program  *ast.Program
+	Script   *Script
 }
 
-func NewScriptCompiler(ctx llvm.Context, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
+type Script struct {
+	Name        string
+	MangledPath string
+	Root        *Func
+}
+
+func (s *Script) Mangle() string {
+	return s.MangledPath + SEP + "script" + SEP + MangleIdent(s.Name)
+}
+
+// Function and expression caches must be reused together.
+func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
 	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
 	compiler.FuncCache = funcCache
 	compiler.ExprCache = exprCache
+	script := &Script{
+		Name:        name,
+		MangledPath: cc.Compiler.MangledPath,
+		Root: &Func{
+			Name: name,
+			Vars: make(map[string]Type),
+		},
+	}
+	mangled := script.Mangle()
+	compiler.FuncNameMangled = mangled
+	funcCache[mangled] = script.Root
 	return &ScriptCompiler{
 		Compiler: compiler,
 		Program:  program,
+		Script:   script,
 	}
 }
 
@@ -28,7 +52,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	if len(ts.Errors) != 0 {
 		return ts.Errors
 	}
-	sc.Compiler.BindingTypes = ts.BindingTypes
 
 	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)
 	cfg.Analyze(sc.Program.Statements)

@@ -100,13 +100,6 @@ type preparedCall struct {
 	RetStruct llvm.Type
 }
 
-// BindingKey identifies a variable binding within a specific function variant.
-// Script-level bindings use an empty FuncNameMangled.
-type BindingKey struct {
-	FuncNameMangled string
-	Name            string
-}
-
 // paramAlias tracks an aliased direct scalar param binding for the active
 // function body. The Base check prevents alias behavior from leaking onto a
 // same-name binding introduced later in the scope tree.
@@ -140,9 +133,8 @@ type Compiler struct {
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
 	StructCache     map[string]*Struct
 	FuncCache       map[string]*Func
-	BindingTypes    map[BindingKey]Type
 	ExprCache       map[ExprKey]*ExprInfo
-	FuncNameMangled string // current function's mangled name ("" for script level)
+	FuncNameMangled string // current script root or function specialization key
 	Errors          []*token.CompileError
 	paramAliasStack []map[string]*paramAlias
 	stmtCtxStack    []stmtCtx
@@ -200,10 +192,11 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
-	typ, ok := c.BindingTypes[BindingKey{
-		FuncNameMangled: c.FuncNameMangled,
-		Name:            name,
-	}]
+	f := c.FuncCache[c.FuncNameMangled]
+	if f == nil {
+		return fallback
+	}
+	typ, ok := f.Vars[name]
 	if !ok {
 		return fallback
 	}
@@ -303,6 +296,13 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: ce.Tok(),
 			Msg:   fmt.Sprintf("function %s not found for argument types %v", funcName, paramTypes),
+		})
+		return nil, false
+	}
+	if !fnInfo.Settled {
+		c.Errors = append(c.Errors, &token.CompileError{
+			Token: ce.Tok(),
+			Msg:   fmt.Sprintf("internal: function specialization %s is not ready for lowering", mangled),
 		})
 		return nil, false
 	}

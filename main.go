@@ -335,7 +335,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
 		return llvm.Module{}, fmt.Errorf("parser errors for %s", scriptFile)
 	}
-	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache, exprCache)
 	scriptModule := sc.Compiler.Module
 	moduleReturned := false
 	defer cleanupUnlessReleased(&moduleReturned, scriptModule.Dispose)

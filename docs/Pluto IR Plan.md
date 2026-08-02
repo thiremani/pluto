@@ -64,28 +64,24 @@ created range owns only the statements it drives, so its empty domain suspends
 exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
-derived while walking each concrete specialization are what resolve it. These
-are current-script analysis products: Phase 1 must re-derive write effects
-alongside binding types while walking bodies, not attach them as durable
-`FuncCache` fields. PIR validation likewise consumes that freshly derived state
-rather than caching results on a specialization. `FuncCache` shares signature
-state across scripts, including in-progress inference, but never body-analysis
-facts. Issue #71's compile-order-dependent wrong output came from caching some
-body facts while rebuilding others.
+derived while walking each concrete specialization are what resolve it. A
+script root or function specialization owns the body facts derived for it.
+`Func.Settled` marks its final variable types and expression metadata reusable
+after its body and reachable function closures have completed. Phase 1 must
+extend that same settlement boundary with write effects instead of adding
+another cache with a shorter lifetime. PIR validation can then consume the
+same coherent analysis. Issue #71's compile-order-dependent wrong output came
+from reusing some body facts while discarding others.
 
-The solver may reach a body more than once and offers no "this is the last walk"
-signal: `TypeScriptFunc` repeats the whole closure until one pass changes
-nothing, and only that outermost loop knows which pass was stable. A change is
-any monotonic output refinement, including `Array(Empty)` to a concrete array or
-`StrG` to `StrH`, not merely an unresolved slot becoming resolved. So Phase 1
-should derive write effects the way `BindingTypes` does — keyed by mangled name
-and binding, so the last walk overwrites the earlier ones. `ExprCache` is a
-weaker precedent than it looks: a walk that rewrites a range mints a fresh
-iterator identity and a fresh entry for the rewritten node, so those entries
-accumulate rather than overwrite. Derivation that appends, counts, or allocates
-per walk inherits that multiplication. If a phase genuinely needs one-shot
-final-pass work, the hook belongs where `TypeScriptFunc` already recognises the
-stable pass — the branch that returns once nothing changed.
+The solver may reach a body more than once: `TypeScriptFunc` repeats the whole
+closure until one pass changes nothing. A change is any monotonic output
+refinement, including `Array(Empty)` to a concrete array or `StrG` to `StrH`,
+not merely an unresolved slot becoming resolved. Per-body analysis must
+therefore be cleared and rebuilt when that body is walked, as `Func.Vars` is,
+and become reusable only when the body is settled. Derivation that appends,
+counts, or allocates per walk inherits the multiplication. Work that belongs
+only to the final pass should run where `TypeScriptFunc` recognises the stable
+closure and publishes `Settled`.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity

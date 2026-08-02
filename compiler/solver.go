@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -101,8 +100,7 @@ func (info *ExprInfo) HasCondExpr() bool {
 	return false
 }
 
-// ExprKey is the key for ExprCache, combining function context with expression.
-// FuncNameMangled is the mangled function name ("" for script-level expressions).
+// ExprKey combines a script-root or function-specialization key with an expression.
 type ExprKey struct {
 	FuncNameMangled string
 	Expr            ast.Expression
@@ -126,18 +124,16 @@ type pendingAssignment struct {
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
-	ScriptFunc         string // script-level root currently being solved ("" outside TypeScriptFunc)
-	FuncNameMangled    string // current function's mangled name ("" for script level)
+	ScriptFunc         string // top-level function closure being solved ("" at script root)
+	FuncNameMangled    string // current script root or function specialization key
 	Converging         bool   // current closure pass changed at least one cached output
 	Errors             []*token.CompileError
-	BindingTypes       map[BindingKey]Type
 	ExprCache          map[ExprKey]*ExprInfo
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
 	walkedFuncs        map[string]struct{} // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
-	settledFuncs       map[string]struct{} // specializations stabilized earlier in this script
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -145,15 +141,13 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ScriptCompiler:     sc,
 		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
 		ScriptFunc:         "",
-		FuncNameMangled:    "",
+		FuncNameMangled:    sc.Script.Mangle(),
 		Converging:         false,
 		Errors:             []*token.CompileError{},
-		BindingTypes:       make(map[BindingKey]Type),
 		ExprCache:          sc.Compiler.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]struct{}),
-		settledFuncs:       make(map[string]struct{}),
 	}
 }
 
@@ -161,10 +155,14 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
 	}
-	ts.BindingTypes[BindingKey{
-		FuncNameMangled: ts.FuncNameMangled,
-		Name:            name,
-	}] = typ
+	f := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
+	if f == nil {
+		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
+	}
+	if f.Vars == nil {
+		f.Vars = make(map[string]Type)
+	}
+	f.Vars[name] = typ
 }
 
 // resolveBindingSlotType computes the binding slot type for a resolved RHS and
@@ -707,7 +705,7 @@ func (ts *TypeSolver) Solve() {
 		// Intentional: only report unresolved bindings for script scope.
 		// Function-scope unresolved types may be resolved later when that function
 		// is reached by a concrete script-level call.
-		if pending.funcNameMangled != "" {
+		if pending.funcNameMangled != ts.ScriptCompiler.Script.Mangle() {
 			continue
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -715,7 +713,9 @@ func (ts *TypeSolver) Solve() {
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
 	}
-
+	if len(ts.Errors) == 0 {
+		ts.ScriptCompiler.Script.Root.Settled = true
+	}
 }
 
 // TypePrintStatement types a print in value position: a comparison yields its
@@ -2446,6 +2446,7 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 		Name:     ce.Function.Value,
 		Params:   args,
 		OutTypes: make([]Type, len(template.Outputs)),
+		Vars:     make(map[string]Type),
 	}
 	for i := range f.OutTypes {
 		f.OutTypes[i] = Unresolved{}
@@ -2508,7 +2509,16 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 		// An unchanged complete pass refreshes body metadata against final signatures.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
-			maps.Copy(ts.settledFuncs, ts.walkedFuncs)
+			for walked := range ts.walkedFuncs {
+				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				if cached == nil || !cached.AllTypesInferred() {
+					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
+				}
+			}
+			for walked := range ts.walkedFuncs {
+				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				cached.Settled = true
+			}
 			return f.OutTypes
 		}
 
@@ -2527,15 +2537,24 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 }
 
 // TypeFunc reports whether a specialization is resolved, walking it at most
-// once per pass and skipping specializations already settled by this script.
+// once per pass and skipping specializations already settled in the shared cache.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
-	if _, ok := ts.settledFuncs[mangled]; ok {
-		return f.OutputTypesInferred()
+	if f.Settled {
+		if !f.AllTypesInferred() {
+			panic(fmt.Sprintf("internal: settled specialization %s has unresolved types", mangled))
+		}
+		return true
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = struct{}{}
+	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	if f.Vars == nil {
+		f.Vars = make(map[string]Type)
+	} else {
+		clear(f.Vars)
+	}
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled

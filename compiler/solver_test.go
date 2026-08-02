@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -51,11 +52,11 @@ x, y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
-	require.Len(t, funcCache, 2)
+	require.Len(t, funcCache, 3)
 
 	// check func cache
 	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_6isEven_f1_I64"]
@@ -86,7 +87,7 @@ x, y`
 	nsp := parser.NewScriptParser(nsl)
 	nextProgram := nsp.Parse()
 
-	nsc := NewScriptCompiler(ctx, nextProgram, cc, funcCache, exprCache)
+	nsc := NewScriptCompiler(ctx, t.Name()+"Next", nextProgram, cc, funcCache, exprCache)
 	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
@@ -131,7 +132,7 @@ y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -169,7 +170,7 @@ y`
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -197,7 +198,7 @@ r = Person`)
 	cc := NewCodeCompiler(ctx, "canonicalStruct", "", code)
 	require.Empty(t, cc.Compile())
 
-	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
 	ts := NewTypeSolver(sc)
 
 	require.Len(t, code.Statements, 3, "expected canonical/full, subset, and empty struct statements")
@@ -228,7 +229,7 @@ func TestTypeStructLiteralValidatesAgainstCanonicalSchema(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "canonicalStructValidation", "", code)
 	require.Empty(t, cc.Compile())
 
-	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
 	ts := NewTypeSolver(sc)
 
 	lit := &ast.StructLiteral{
@@ -257,7 +258,7 @@ func TestTypeStructLiteralWidensStringFieldsFromValues(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "structStringFieldWiden", "", code)
 	require.Empty(t, cc.Compile())
 
-	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), &ast.Program{}, cc, make(map[string]*Func), cc.Compiler.ExprCache)
 	ts := NewTypeSolver(sc)
 
 	lit := &ast.StructLiteral{
@@ -370,7 +371,7 @@ func TestCollectionTypeErrors(t *testing.T) {
 			program := sp.Parse()
 			require.Empty(t, sp.Errors())
 
-			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -389,7 +390,7 @@ mixed = [1] + [2.5]
 locked = [1]
 locked = []`)
 	cc := NewCodeCompiler(ctx, "arrayOperandTypes", "", ast.NewCode())
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -413,7 +414,7 @@ locked = []`)
 
 	resetStmt := program.Statements[3].(*ast.LetStatement)
 	resetType := ts.ExprCache[key(ts.FuncNameMangled, resetStmt.Value[0])].OutTypes[0].(Array)
-	bindingType := ts.BindingTypes[BindingKey{Name: "locked"}].(Array)
+	bindingType := sc.Script.Root.Vars["locked"].(Array)
 	require.Equal(t, EmptyKind, resetType.ElemType.Kind())
 	require.Equal(t, IntKind, bindingType.ElemType.Kind())
 }
@@ -447,7 +448,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 			sp := parser.NewScriptParser(sl)
 			program := sp.Parse()
 
-			sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -466,7 +467,7 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -494,7 +495,7 @@ func TestArrayToScalarAssignmentError(t *testing.T) {
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -520,7 +521,7 @@ a = a ⊕ "d"`
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
@@ -529,7 +530,7 @@ a = a ⊕ "d"`
 	require.True(t, ok, "expected identifier a")
 	require.True(t, IsStrH(slotType), "binding a should widen to StrH")
 
-	bindingType, ok := ts.BindingTypes[BindingKey{Name: "a"}]
+	bindingType, ok := sc.Script.Root.Vars["a"]
 	require.True(t, ok, "expected recorded binding type for a")
 	require.True(t, IsStrH(bindingType), "binding map should record StrH for a")
 
@@ -608,6 +609,7 @@ func TestIncompatibleFunctionOutputAssignmentFailsDuringSolve(t *testing.T) {
 
 	sc := NewScriptCompiler(
 		ctx,
+		t.Name(),
 		mustParseScript(t, "value = Bad(0)\nvalue"),
 		cc,
 		make(map[string]*Func),
@@ -660,7 +662,7 @@ j = 0:5:i`,
 			sp := parser.NewScriptParser(sl)
 			program := sp.Parse()
 
-			sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -694,7 +696,7 @@ func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -723,7 +725,7 @@ func TestArrayConditionEmitsSingleDiagnostic(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -746,7 +748,7 @@ func TestMixedArrayScalarStatementConditionRejected(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -775,7 +777,7 @@ func TestChainedTupleComparisonTypes(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -797,7 +799,7 @@ func TestInnerFallbackOrTupleComparisonTypes(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -819,7 +821,7 @@ func TestInnerAndOrInTupleComparisonTypes(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -841,7 +843,7 @@ func TestFunctionBodyRejectionEmittedOnce(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -861,7 +863,7 @@ func TestScalarConditionEmitsTypeDiagnostic(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -932,7 +934,7 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 			program := sp.Parse()
 			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -1008,7 +1010,7 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 			program := sp.Parse()
 			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-			sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 			ts := NewTypeSolver(sc)
 			ts.Solve()
 
@@ -1036,7 +1038,7 @@ func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1071,7 +1073,7 @@ res = [idx]`
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -1100,7 +1102,7 @@ outer = 0:2
 gatedCopy = outer < 2 source
 filtered = source > 2 source`)
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
@@ -1117,19 +1119,19 @@ filtered = source > 2 source`)
 	}
 
 	copyExpr := program.Statements[1].(*ast.LetStatement).Value[0]
-	copyInfo := ts.ExprCache[key("", copyExpr)]
+	copyInfo := ts.ExprCache[key(ts.FuncNameMangled, copyExpr)]
 	require.False(t, copyInfo.HasRanges)
 	require.Empty(t, copyInfo.Ranges)
 	require.Nil(t, copyInfo.Rewrite)
 
 	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
-	gatedCopyInfo := ts.ExprCache[key("", gatedCopyExpr)]
+	gatedCopyInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedCopyExpr)]
 	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
 	require.Len(t, gatedCopyInfo.Ranges, 1)
 	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
 
 	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
-	filteredInfo := ts.ExprCache[key("", filteredExpr)]
+	filteredInfo := ts.ExprCache[key(ts.FuncNameMangled, filteredExpr)]
 	require.Equal(t, []Type{I64}, filteredInfo.OutTypes)
 	require.Len(t, filteredInfo.Ranges, 1)
 	require.Equal(t, "source", filteredInfo.Ranges[0].Name)
@@ -1149,7 +1151,7 @@ func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1183,14 +1185,14 @@ func TestImmediateArraySelectionUsesCallScopedArrayRange(t *testing.T) {
 arr = [1 2 3]
 value = Identity(arr[i])
 arr[i]`)
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
 	valueStmt := program.Statements[2].(*ast.LetStatement)
 	call := valueStmt.Value[0].(*ast.CallExpression)
-	callInfo := ts.ExprCache[key("", call)]
+	callInfo := ts.ExprCache[key(ts.FuncNameMangled, call)]
 	require.True(t, callInfo.LoopInside)
 	require.Equal(t, []Type{I64}, callInfo.ScalarCallParamTypes)
 	require.Len(t, callInfo.CallParamTypes, 1)
@@ -1201,14 +1203,14 @@ arr[i]`)
 	require.Equal(t, Range{Iter: I64}, arrayRange.Range)
 
 	selection := call.Arguments[0].(*ast.ArrayRangeExpression)
-	require.Equal(t, []Type{I64}, ts.ExprCache[key("", selection)].OutTypes,
+	require.Equal(t, []Type{I64}, ts.ExprCache[key(ts.FuncNameMangled, selection)].OutTypes,
 		"the source expression must remain element-typed outside the call ABI")
 	valueType, ok := ts.GetIdentifier("value")
 	require.True(t, ok)
 	require.Equal(t, I64, valueType)
 
 	printCall := program.Statements[3].(*ast.PrintStatement).Expression
-	printInfo := ts.ExprCache[key("", printCall)]
+	printInfo := ts.ExprCache[key(ts.FuncNameMangled, printCall)]
 	require.False(t, printInfo.LoopInside, "print must consume the selection at the caller")
 	require.Equal(t, []Type{I64}, printInfo.CallParamTypes)
 }
@@ -1225,7 +1227,7 @@ func TestArrayIndexRejectsI1(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	Put(ts.Scopes, "idx", Type(Int{Width: 1}))
 	ts.Solve()
@@ -1254,7 +1256,7 @@ func TestArrayIndexAllowsWiderIntKinds(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	Put(ts.Scopes, "idx", Type(Int{Width: 32}))
 	ts.Solve()
@@ -1273,7 +1275,7 @@ func TestArrayRangeIndexRequiresI64Iter(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	Put(ts.Scopes, "idx", Type(Range{Iter: Int{Width: 1}}))
 	ts.Solve()
@@ -1302,7 +1304,7 @@ func TestPrefixRewriteCopiesOutTypes(t *testing.T) {
 	program := sp.Parse()
 	require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors, "unexpected solver errors: %v", ts.Errors)
@@ -1358,12 +1360,12 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, exprCache)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
-	require.Len(t, funcCache, depth+1)
+	require.Len(t, funcCache, depth+2)
 	return ts.TmpCounter
 }
 
@@ -1400,7 +1402,7 @@ y = bad(x)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1409,9 +1411,11 @@ y = bad(x)
 	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the root's")
 }
 
-// A warm FuncCache must not suppress per-script binding analysis (#71).
-func TestWarmFuncCacheRebuildsBindingTypes(t *testing.T) {
+// A settled specialization must carry its variable types across scripts (#71).
+func TestWarmFuncCacheReusesVars(t *testing.T) {
 	codeStr := `res = Reset(k)
+    i = 0:2
+    "-i"
     a = [10 20 30]
     a = k > 0 []
     res = a ⊕ [7]
@@ -1431,26 +1435,35 @@ res = OuterReset(k)
 
 	funcCache := make(map[string]*Func)
 	exprCache := make(map[ExprKey]*ExprInfo)
-	solve := func() map[BindingKey]Type {
+	resetMangled := Mangle(cc.Compiler.MangledPath, "Reset", []Type{I64})
+	type solveResult struct {
+		vars  map[string]Type
+		walks int
+	}
+	solve := func(name string) solveResult {
 		sl := lexer.New("TestWarmScript", "v = OuterReset(0)\nv")
 		sp := parser.NewScriptParser(sl)
 		program := sp.Parse()
 		require.Empty(t, sp.Errors())
 
-		sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+		sc := NewScriptCompiler(ctx, name, program, cc, funcCache, exprCache)
 		ts := NewTypeSolver(sc)
 		ts.Solve()
 		require.Empty(t, ts.Errors)
-		return ts.BindingTypes
+		cached := funcCache[resetMangled]
+		require.NotNil(t, cached)
+		require.True(t, cached.Settled)
+		return solveResult{vars: maps.Clone(cached.Vars), walks: ts.TmpCounter}
 	}
 
-	cold := solve()
-	warm := solve()
+	cold := solve(t.Name() + "Cold")
+	warm := solve(t.Name() + "Warm")
 
-	resetA := BindingKey{FuncNameMangled: Mangle(cc.Compiler.MangledPath, "Reset", []Type{I64}), Name: "a"}
-	require.Equal(t, Array{ElemType: I64, Rank: 1}, cold[resetA])
-	require.Equal(t, Array{ElemType: I64, Rank: 1}, warm[resetA])
-	require.Equal(t, cold, warm, "a warm FuncCache must not drop this script's binding types")
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, cold.vars["a"])
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, warm.vars["a"])
+	require.Equal(t, cold.vars, warm.vars, "a warm FuncCache must retain the specialization's variable types")
+	require.Positive(t, cold.walks)
+	require.Zero(t, warm.walks, "a settled closure must not be walked again by another script")
 }
 
 // Wide resolves one of 130 outputs per pass, exceeding the former limit.
@@ -1490,7 +1503,7 @@ func TestWideOutputClosureConverges(t *testing.T) {
 	require.Empty(t, sp.Errors())
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1526,7 +1539,7 @@ res = C(k)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -1536,7 +1549,10 @@ res = C(k)
 		local string
 	}{{"A", "t"}, {"B", "u"}, {"C", "p"}} {
 		mangled := Mangle(cc.Compiler.MangledPath, fn.name, []Type{I64})
-		require.Contains(t, ts.BindingTypes, BindingKey{FuncNameMangled: mangled, Name: fn.local},
+		cached := sc.Compiler.FuncCache[mangled]
+		require.NotNil(t, cached)
+		require.True(t, cached.Settled)
+		require.Contains(t, cached.Vars, fn.local,
 			"%s's local %q must be typed by a sweep that reached it", fn.name, fn.local)
 	}
 }
@@ -1561,7 +1577,7 @@ res = ZBrokenX(k)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
 
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1597,30 +1613,35 @@ res = Relay(k)
 
 			funcCache := make(map[string]*Func)
 			exprCache := make(map[ExprKey]*ExprInfo)
-			solve := func() map[BindingKey]Type {
+			solve := func(scriptName string) map[string]Type {
 				sl := lexer.New("TestOutputRefineScript", "v = Root(3)\nv")
 				sp := parser.NewScriptParser(sl)
 				program := sp.Parse()
 				require.Empty(t, sp.Errors())
 
-				sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+				sc := NewScriptCompiler(ctx, scriptName, program, cc, funcCache, exprCache)
 				ts := NewTypeSolver(sc)
 				ts.Solve()
 				require.Empty(t, ts.Errors)
-				return ts.BindingTypes
+				bindings := make(map[string]Type)
+				for _, name := range []string{"Root", "Relay"} {
+					mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
+					bindings[name] = funcCache[mangled].Vars["res"]
+				}
+				return bindings
 			}
 
-			coldBindings := solve()
-			warmBindings := solve()
+			coldBindings := solve(t.Name() + "Cold")
+			warmBindings := solve(t.Name() + "Warm")
 			for _, name := range []string{"Root", "Relay"} {
 				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
 				cached := funcCache[mangled]
 				require.NotNil(t, cached)
 				require.True(t, TypeEqual(tt.want, cached.OutTypes[0]), "%s output: got %s, want %s", name, cached.OutTypes[0], tt.want)
 
-				binding := BindingKey{FuncNameMangled: mangled, Name: "res"}
-				require.True(t, TypeEqual(tt.want, coldBindings[binding]), "%s cold output binding", name)
-				require.True(t, TypeEqual(tt.want, warmBindings[binding]), "%s warm output binding", name)
+				require.True(t, cached.Settled)
+				require.True(t, TypeEqual(tt.want, coldBindings[name]), "%s cold output binding", name)
+				require.True(t, TypeEqual(tt.want, warmBindings[name]), "%s warm output binding", name)
 			}
 		})
 	}
@@ -1651,7 +1672,7 @@ res = Consume(x)
 	require.Empty(t, sp.Errors())
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1691,7 +1712,7 @@ res = ResetTable(k)
 	cc := NewCodeCompiler(ctx, "tableOutputJoin", "", code)
 	require.Empty(t, cc.Compile())
 
-	sc := NewScriptCompiler(ctx, &ast.Program{}, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), &ast.Program{}, cc, make(map[string]*Func), make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	headerOnly := Table{Columns: []TableColumn{
 		{Name: "Name", ElemType: Empty{}},
@@ -1708,7 +1729,7 @@ res = ResetTable(k)
 	require.True(t, ts.TypeFunc(refineMangled, refineTemplate, refine))
 	require.Empty(t, ts.Errors)
 	require.True(t, TypeEqual(concrete, refine.OutTypes[0]))
-	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: refineMangled, Name: "res"}]))
+	require.True(t, TypeEqual(concrete, refine.Vars["res"]))
 
 	clear(ts.walkedFuncs)
 	resetTemplate := code.Statements[1].(*ast.FuncStatement)
@@ -1719,7 +1740,7 @@ res = ResetTable(k)
 	require.Empty(t, ts.Errors)
 	require.False(t, ts.Converging, "a header-only reset must not narrow or count as output progress")
 	require.True(t, TypeEqual(concrete, reset.OutTypes[0]))
-	require.True(t, TypeEqual(concrete, ts.BindingTypes[BindingKey{FuncNameMangled: resetMangled, Name: "res"}]))
+	require.True(t, TypeEqual(concrete, reset.Vars["res"]))
 }
 
 func TestRemangledCalleeIsRevisitedAfterArgumentResolves(t *testing.T) {
@@ -1746,7 +1767,7 @@ res = Leaf(x)
 	require.Empty(t, sp.Errors())
 
 	funcCache := make(map[string]*Func)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, make(map[ExprKey]*ExprInfo))
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, funcCache, make(map[ExprKey]*ExprInfo))
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
@@ -1754,6 +1775,9 @@ res = Leaf(x)
 	resolved := funcCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
 	require.NotNil(t, resolved)
 	require.True(t, resolved.AllTypesInferred())
-	require.Contains(t, funcCache, Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}}),
+	require.True(t, resolved.Settled)
+	provisional := funcCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})]
+	require.NotNil(t, provisional,
 		"the provisional specialization must remain visible after the resolved call replaces it")
+	require.False(t, provisional.Settled)
 }
