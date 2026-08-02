@@ -2433,7 +2433,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
-// newFunc creates a new Func entry for the given call expression and caches it.
+// newFunc creates and caches a specialization record for the call.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // Cache before inference so recursive calls can reuse the partial specialization.
 func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
@@ -2536,6 +2536,9 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 // TypeFunc reports whether a specialization is resolved, walking it at most
 // once per pass and skipping specializations already settled in the shared cache.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) bool {
+	if cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled]; cached != f {
+		panic(fmt.Sprintf("internal: specialization %s is not the cached instance", mangled))
+	}
 	if f.Settled {
 		if !f.AllTypesInferred() {
 			panic(fmt.Sprintf("internal: settled specialization %s has unresolved types", mangled))
@@ -2546,9 +2549,6 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = struct{}{}
-	if cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled]; cached != f {
-		panic(fmt.Sprintf("internal: specialization %s is not the cached instance", mangled))
-	}
 	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function

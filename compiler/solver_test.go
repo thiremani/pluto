@@ -1750,10 +1750,12 @@ res = Leaf(x)
 	provisional := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})]
 	require.NotNil(t, provisional)
 	require.False(t, provisional.Settled)
+	provisional.Vars["sentinel"] = I64
 
 	otherSolver := solve(t.Name()+"Other", "v = Other(0)\nv")
 	require.Same(t, provisional, cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})])
 	require.False(t, provisional.Settled)
+	require.NotContains(t, provisional.Vars, "sentinel", "the second script must rewalk the unsettled specialization")
 	floatLeaf := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{F64})]
 	require.NotNil(t, floatLeaf)
 	require.True(t, floatLeaf.Settled)
@@ -1762,6 +1764,7 @@ res = Leaf(x)
 	leafCall := other.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
 	otherMangled := Mangle(cc.Compiler.MangledPath, "Other", []Type{I64})
 	callInfo := otherSolver.ExprCache[key(otherMangled, leafCall)]
+	require.NotNil(t, callInfo)
 	require.Equal(t, []Type{F64}, callInfo.CallParamTypes)
 	require.Equal(t, []Type{F64}, callInfo.ScalarCallParamTypes)
 }

@@ -87,10 +87,10 @@ x`
 	})
 
 	t.Run("Compile with Ints again to test cache hit", func(t *testing.T) {
-		// Get the original *Func pointer from the cache to compare against later.
+		// Get the original *FuncInfo pointer from the cache to compare against later.
 		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		f1 := cache.FuncCache[key]
-		require.NotNil(t, f1, "Func instance from first compile should exist")
+		require.NotNil(t, f1, "FuncInfo instance from first compile should exist")
 
 		scriptB := `y = add(3, 4)
 y`
@@ -104,7 +104,7 @@ y`
 		assert.Len(t, cache.FuncCache, 3, "the second script root should reuse the integer specialization")
 
 		// Assert that the instance in the cache is the exact same one.
-		assert.Same(t, f1, cache.FuncCache[key], "Func instance should be the same pointer, proving no re-creation")
+		assert.Same(t, f1, cache.FuncCache[key], "FuncInfo instance should be the same pointer, proving no re-creation")
 	})
 
 	t.Run("Compile with Floats to test cache miss", func(t *testing.T) {

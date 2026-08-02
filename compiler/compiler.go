@@ -155,11 +155,13 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		}
 	}
 	builder := ctx.NewBuilder()
-	compileInfo := &CompileInfo{
-		FuncCache: make(map[string]*FuncInfo),
-		ExprCache: make(map[ExprKey]*ExprInfo),
-	}
-	if cc != nil {
+	var compileInfo *CompileInfo
+	if cc == nil {
+		compileInfo = &CompileInfo{
+			FuncCache: make(map[string]*FuncInfo),
+			ExprCache: make(map[ExprKey]*ExprInfo),
+		}
+	} else {
 		compileInfo = cc.Compiler.compileInfo
 	}
 
