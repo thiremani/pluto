@@ -315,7 +315,7 @@ func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, code
 }
 
 // CompileScript returns an owned LLVM module. The caller must dispose it.
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (mod llvm.Module, err error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, cache *compiler.ScriptCache) (mod llvm.Module, err error) {
 	// Registered before the module-dispose defer, so unwinding a panic frees
 	// the half-built module first, then the ICE recovery converts the panic.
 	defer recoverICE(scriptFile, &err, os.Stderr)
@@ -335,7 +335,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
 		return llvm.Module{}, fmt.Errorf("parser errors for %s", scriptFile)
 	}
-	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, funcCache, exprCache)
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc, cache)
 	scriptModule := sc.Compiler.Module
 	moduleReturned := false
 	defer cleanupUnlessReleased(&moduleReturned, scriptModule.Dispose)
@@ -641,12 +641,11 @@ func runCompile(opts cliOptions) {
 	}
 
 	binErr := 0
-	funcCache := make(map[string]*compiler.Func)
-	exprCache := make(map[compiler.ExprKey]*compiler.ExprInfo)
+	scriptCache := compiler.NewScriptCache()
 	compileErr, stoppedOnICE := compileScriptsUntilICE(scriptFiles, func(scriptFile string) error {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
+		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, scriptCache)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)

@@ -123,6 +123,7 @@ func GetCopy(s *Symbol) *Symbol {
 }
 
 type Compiler struct {
+	*ScriptCache
 	Scopes          []Scope[*Symbol]
 	Context         llvm.Context
 	Module          llvm.Module
@@ -132,8 +133,6 @@ type Compiler struct {
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
 	StructCache     map[string]*Struct
-	FuncCache       map[string]*Func
-	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current script root or function specialization key
 	Errors          []*token.CompileError
 	paramAliasStack []map[string]*paramAlias
@@ -158,6 +157,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 	builder := ctx.NewBuilder()
 
 	return &Compiler{
+		ScriptCache:     NewScriptCache(),
 		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
 		Context:         ctx,
 		Module:          module,
@@ -167,8 +167,6 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
 		StructCache:     make(map[string]*Struct),
-		FuncCache:       make(map[string]*Func),
-		ExprCache:       make(map[ExprKey]*ExprInfo),
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
 		paramAliasStack: []map[string]*paramAlias{},

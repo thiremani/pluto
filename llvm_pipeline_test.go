@@ -282,7 +282,7 @@ res
 	if err != nil {
 		t.Fatalf("compile code: %v", err)
 	}
-	scriptModule, err := p.CompileScript(scriptFiles[0], "main", cc, codeLL, map[string]*compiler.Func{}, map[compiler.ExprKey]*compiler.ExprInfo{})
+	scriptModule, err := p.CompileScript(scriptFiles[0], "main", cc, codeLL, compiler.NewScriptCache())
 	if err != nil {
 		t.Fatalf("compile script: %v", err)
 	}

@@ -12,6 +12,19 @@ type ScriptCompiler struct {
 	Script   *Script
 }
 
+// ScriptCache keeps function and expression metadata on one cross-script lifetime.
+type ScriptCache struct {
+	FuncCache map[string]*Func
+	ExprCache map[ExprKey]*ExprInfo
+}
+
+func NewScriptCache() *ScriptCache {
+	return &ScriptCache{
+		FuncCache: make(map[string]*Func),
+		ExprCache: make(map[ExprKey]*ExprInfo),
+	}
+}
+
 type Script struct {
 	Name        string
 	MangledPath string
@@ -22,11 +35,9 @@ func (s *Script) Mangle() string {
 	return s.MangledPath + SEP + "script" + SEP + MangleIdent(s.Name)
 }
 
-// Function and expression caches must be reused together.
-func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
+func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler, cache *ScriptCache) *ScriptCompiler {
 	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
-	compiler.FuncCache = funcCache
-	compiler.ExprCache = exprCache
+	compiler.ScriptCache = cache
 	script := &Script{
 		Name:        name,
 		MangledPath: cc.Compiler.MangledPath,
@@ -37,7 +48,7 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 	}
 	mangled := script.Mangle()
 	compiler.FuncNameMangled = mangled
-	funcCache[mangled] = script.Root
+	cache.FuncCache[mangled] = script.Root
 	return &ScriptCompiler{
 		Compiler: compiler,
 		Program:  program,

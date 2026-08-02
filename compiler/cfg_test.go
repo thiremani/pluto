@@ -313,7 +313,7 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 
 	cc := NewCodeCompiler(ctx, name, "", ast.NewCode())
 	program := parseInput(t, name, input)
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc, NewScriptCache())
 	return sc.Compile()
 }
 
