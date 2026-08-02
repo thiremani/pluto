@@ -762,13 +762,14 @@ func TestMangleScriptRoundTrip(t *testing.T) {
 		modName string
 		relPath string
 		script  string
+		want    string
 	}{
-		{"simple", "mymod", "", "report"},
-		{"with relpath", "mymod", "sub/dir", "report"},
-		{"named script", "mymod", "", "script"},
-		{"digit leading", "mymod", "", "1a"},
-		{"unicode", "mymod", "", "日本"},
-		{"separator letters", "mymod", "", "shd"},
+		{"simple", "mymod", "", "report", "mymod.report (script)"},
+		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir.report (script)"},
+		{"named script", "mymod", "", "script", "mymod.script (script)"},
+		{"digit leading", "mymod", "", "1a", "mymod.1a (script)"},
+		{"unicode", "mymod", "", "日本", "mymod.日本 (script)"},
+		{"separator letters", "mymod", "", "shd", "mymod.shd (script)"},
 	}
 
 	for _, tt := range tests {
@@ -782,6 +783,7 @@ func TestMangleScriptRoundTrip(t *testing.T) {
 			assert.Equal(t, tt.relPath, d.RelPath)
 			assert.Equal(t, tt.script, d.Name)
 			assert.Equal(t, SymbolScript, d.Kind)
+			assert.Equal(t, tt.want, Demangle(sym))
 
 			// A script root must not collide with a constant or function of the
 			// same name in the same place; all three share the name segment.

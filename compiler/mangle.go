@@ -18,10 +18,9 @@ const (
 	OP  = "op" // Operator prefix
 	N   = "n"  // Numeric segment prefix
 	SEP = "_"  // General separator
-	// ENTRY marks a script root. It trails the name like F does, because a
-	// leading marker would be eaten: the separator codes below are consumed
-	// greedily at the start of a segment, so a marker beginning with d, s or h
-	// parses as a path separator instead.
+	// ENTRY marks a script root. Like F it trails the name, because the name
+	// position needs a length-prefixed segment: a leading marker yields an empty
+	// name, or a corrupted one when it starts with a separator code (d, s, h).
 	ENTRY = "e"
 )
 
@@ -317,12 +316,15 @@ func Demangle(mangled string) string {
 //   - Function (with relpath): Pt_ModPath_p_RelPath_r_Name_fN[_Type]*
 //   - Constant (no relpath): Pt_ModPath_p_Name
 //   - Constant (with relpath): Pt_ModPath_p_RelPath_r_Name
+//   - Script root (no relpath): Pt_ModPath_p_Name_e
+//   - Script root (with relpath): Pt_ModPath_p_RelPath_r_Name_e
 //
 // Flow after _p_:
 //  1. Parse path (could be relpath or name)
 //  2. If _r_ follows: what we parsed was relpath, parse ident for name
-//  3. If _f<digit> follows: it's a function, parse arity and types
-//  4. Otherwise: it's a constant
+//  3. If _e follows: it's a script root
+//  4. If _f<digit> follows: it's a function, parse arity and types
+//  5. Otherwise: it's a constant
 //
 // Returns error if symbol starts with Pt_ but is malformed (missing _p_ marker).
 // Non-Pluto symbols (no Pt_ prefix) pass through without error.
