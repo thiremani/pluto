@@ -67,10 +67,11 @@ Template-time CFG has neither distinction — it misreports a body like
 derived while walking each concrete specialization are what resolve it. A
 script root owns its current compilation facts; a function specialization
 publishes reusable facts behind `FuncInfo.Settled` after its body and reachable
-function closure have completed. `CompileInfo` keeps those functions and their
-expression metadata on one lifetime. Phase 1 must extend that settlement
-boundary with write effects instead of adding another cache with a shorter
-lifetime. PIR validation can then consume the same coherent analysis. Issue
+function closure have completed. The code compiler owns both `FuncCache` and
+`ExprCache`, and every script compiler inherits both map references. Phase 1
+must extend that shared lifetime with write effects instead of adding another
+cache with a shorter lifetime. PIR validation can then consume the same
+coherent analysis. Issue
 #71's compile-order-dependent wrong output came from reusing some body facts
 while discarding others.
 

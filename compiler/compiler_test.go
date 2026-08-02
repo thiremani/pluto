@@ -327,7 +327,7 @@ func TestArrayCellLoweringSurfacesNewError(t *testing.T) {
 			Value: "Missing",
 		},
 	}
-	c.compileInfo.ExprCache[key(c.FuncNameMangled, cell)] = &ExprInfo{
+	c.ExprCache[key(c.FuncNameMangled, cell)] = &ExprInfo{
 		OutTypes: []Type{I64},
 		ExprLen:  1,
 	}

@@ -11,15 +11,15 @@ func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo 
 }
 
 func (c *Compiler) compileTreeFor(expr ast.Expression) ast.Expression {
-	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if info.Rewrite == nil {
 		return expr
 	}
 	// Solver rewrites are keyed by the original expression node. Backfill an
 	// entry for the rewritten tree on demand so later collector preparation can
 	// register derived nodes against a stable ExprCache entry.
-	if _, ok := c.compileInfo.ExprCache[key(c.FuncNameMangled, info.Rewrite)]; !ok {
-		c.compileInfo.ExprCache[key(c.FuncNameMangled, info.Rewrite)] = cloneExprInfoWithRewrite(info, info.Rewrite)
+	if _, ok := c.ExprCache[key(c.FuncNameMangled, info.Rewrite)]; !ok {
+		c.ExprCache[key(c.FuncNameMangled, info.Rewrite)] = cloneExprInfoWithRewrite(info, info.Rewrite)
 	}
 	return info.Rewrite
 }
@@ -28,8 +28,8 @@ func (c *Compiler) registerPreparedExpr(orig ast.Expression, prepared ast.Expres
 	if orig == prepared {
 		return
 	}
-	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, orig)]
-	c.compileInfo.ExprCache[key(c.FuncNameMangled, prepared)] = cloneExprInfoWithRewrite(info, prepared)
+	info := c.ExprCache[key(c.FuncNameMangled, orig)]
+	c.ExprCache[key(c.FuncNameMangled, prepared)] = cloneExprInfoWithRewrite(info, prepared)
 }
 
 func (c *Compiler) newMaterializedCollectorTemp(sym *Symbol) (*ast.Identifier, string) {

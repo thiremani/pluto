@@ -54,10 +54,10 @@ x, y`
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Empty(t, ts.Errors)
-	require.Len(t, cc.Compiler.compileInfo.FuncCache, 3)
+	require.Len(t, cc.Compiler.FuncCache, 3)
 
 	// check func cache
-	isEvenFunc := ts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_6isEven_f1_I64"]
+	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_6isEven_f1_I64"]
 	require.NotNil(t, isEvenFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
 	if isEvenFunc.Sig.OutTypes[0].Kind() != StrKind {
@@ -67,7 +67,7 @@ x, y`
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
-	isOddFunc := ts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
+	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isOddFunc.AllTypesInferred())
 	if isOddFunc.Sig.OutTypes[0].Kind() != StrKind {
@@ -89,7 +89,7 @@ x, y`
 	nts := NewTypeSolver(nsc)
 	nts.Solve()
 
-	nextOddFunc := nts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
+	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	if nextOddFunc.Sig.OutTypes[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
@@ -1327,7 +1327,7 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
-	require.Len(t, cc.Compiler.compileInfo.FuncCache, depth+2)
+	require.Len(t, cc.Compiler.FuncCache, depth+2)
 	return ts.TmpCounter
 }
 
@@ -1410,7 +1410,7 @@ res = OuterReset(k)
 		ts := NewTypeSolver(sc)
 		ts.Solve()
 		require.Empty(t, ts.Errors)
-		cached := cc.Compiler.compileInfo.FuncCache[resetMangled]
+		cached := cc.Compiler.FuncCache[resetMangled]
 		require.NotNil(t, cached)
 		require.True(t, cached.Settled)
 		return solveResult{vars: maps.Clone(cached.Vars), walks: ts.TmpCounter}
@@ -1467,7 +1467,7 @@ func TestWideOutputClosureConverges(t *testing.T) {
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
-	wide := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Wide", []Type{I64})]
+	wide := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Wide", []Type{I64})]
 	require.NotNil(t, wide)
 	require.True(t, wide.AllTypesInferred(), "every one of the %d output slots must resolve", outs)
 }
@@ -1508,7 +1508,7 @@ res = C(k)
 		local string
 	}{{"A", "t"}, {"B", "u"}, {"C", "p"}} {
 		mangled := Mangle(cc.Compiler.MangledPath, fn.name, []Type{I64})
-		cached := sc.Compiler.compileInfo.FuncCache[mangled]
+		cached := sc.Compiler.FuncCache[mangled]
 		require.NotNil(t, cached)
 		require.True(t, cached.Settled)
 		require.Contains(t, cached.Vars, fn.local,
@@ -1583,7 +1583,7 @@ res = Relay(k)
 				bindings := make(map[string]Type)
 				for _, name := range []string{"Root", "Relay"} {
 					mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
-					bindings[name] = cc.Compiler.compileInfo.FuncCache[mangled].Vars["res"]
+					bindings[name] = cc.Compiler.FuncCache[mangled].Vars["res"]
 				}
 				return bindings
 			}
@@ -1592,7 +1592,7 @@ res = Relay(k)
 			warmBindings := solve(t.Name() + "Warm")
 			for _, name := range []string{"Root", "Relay"} {
 				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
-				cached := cc.Compiler.compileInfo.FuncCache[mangled]
+				cached := cc.Compiler.FuncCache[mangled]
 				require.NotNil(t, cached)
 				require.True(t, TypeEqual(tt.want, cached.Sig.OutTypes[0]), "%s output: got %s, want %s", name, cached.Sig.OutTypes[0], tt.want)
 
@@ -1633,7 +1633,7 @@ res = Consume(x)
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
-	heapConsumer := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
+	heapConsumer := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
 	require.NotNil(t, heapConsumer, "the stable body sweep must remangle Consume with Root's StrH output slot")
 	require.True(t, heapConsumer.AllTypesInferred())
 
@@ -1685,7 +1685,7 @@ res = ResetTable(k)
 		Sig:  Func{Name: "RefineTable", Params: []Type{I64}, OutTypes: []Type{headerOnly}},
 		Vars: make(map[string]Type),
 	}
-	cc.Compiler.compileInfo.FuncCache[refineMangled] = refine
+	cc.Compiler.FuncCache[refineMangled] = refine
 	require.True(t, ts.TypeFunc(refineMangled, refineTemplate, refine))
 	require.Empty(t, ts.Errors)
 	require.True(t, TypeEqual(concrete, refine.Sig.OutTypes[0]))
@@ -1698,7 +1698,7 @@ res = ResetTable(k)
 		Sig:  Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}},
 		Vars: make(map[string]Type),
 	}
-	cc.Compiler.compileInfo.FuncCache[resetMangled] = reset
+	cc.Compiler.FuncCache[resetMangled] = reset
 	ts.Converging = false
 	require.True(t, ts.TypeFunc(resetMangled, resetTemplate, reset))
 	require.Empty(t, ts.Errors)
@@ -1743,20 +1743,20 @@ res = Leaf(x)
 	}
 
 	solve(t.Name()+"Outer", "v = Outer(0)\nv")
-	integerLeaf := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
+	integerLeaf := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
 	require.NotNil(t, integerLeaf)
 	require.True(t, integerLeaf.Settled)
 
-	provisional := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})]
+	provisional := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})]
 	require.NotNil(t, provisional)
 	require.False(t, provisional.Settled)
 	provisional.Vars["sentinel"] = I64
 
 	otherSolver := solve(t.Name()+"Other", "v = Other(0)\nv")
-	require.Same(t, provisional, cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})])
+	require.Same(t, provisional, cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})])
 	require.False(t, provisional.Settled)
 	require.NotContains(t, provisional.Vars, "sentinel", "the second script must rewalk the unsettled specialization")
-	floatLeaf := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{F64})]
+	floatLeaf := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{F64})]
 	require.NotNil(t, floatLeaf)
 	require.True(t, floatLeaf.Settled)
 
