@@ -2489,9 +2489,8 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 
 // TypeScriptFunc blocks until the reachable function closure is stable.
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
-	savedScriptFunc := ts.ScriptFunc
 	ts.ScriptFunc = f.Name
-	defer func() { ts.ScriptFunc = savedScriptFunc }()
+	defer func() { ts.ScriptFunc = "" }()
 
 	errsAtEntry := len(ts.Errors)
 	// Rewalk because resolved arguments can reveal new specializations, while
