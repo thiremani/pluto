@@ -109,7 +109,7 @@ func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]stru
 		return
 	}
 
-	abi := classifyFuncABI(paramTypes, fnInfo.OutTypes)
+	abi := classifyFuncABI(paramTypes, fnInfo.Signature.OutTypes)
 	for i, arg := range ce.Arguments {
 		if abi.Params[i].Mode != ABIParamIndirect {
 			continue

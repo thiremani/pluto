@@ -2273,7 +2273,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info.OutTypes = append([]Type(nil), f.OutTypes...)
+	info.OutTypes = append([]Type(nil), f.Signature.OutTypes...)
 	info.ExprLen = len(info.OutTypes)
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
@@ -2447,21 +2447,23 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // newFunc creates a new Func entry for the given call expression and caches it.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	f := &Func{
-		Name:     ce.Function.Value,
-		Params:   args,
-		OutTypes: make([]Type, len(template.Outputs)),
-		Vars:     make(map[string]Type),
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+	f := &FuncInfo{
+		Signature: Func{
+			Name:     ce.Function.Value,
+			Params:   args,
+			OutTypes: make([]Type, len(template.Outputs)),
+		},
+		Vars: make(map[string]Type),
 	}
-	for i := range f.OutTypes {
-		f.OutTypes[i] = Unresolved{}
+	for i := range f.Signature.OutTypes {
+		f.Signature.OutTypes[i] = Unresolved{}
 	}
 	ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled] = f
 	return f
 }
 
-func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
 	f, ok := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled]
 
@@ -2486,7 +2488,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ce.Token,
-			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
+			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Signature.Name, i+1),
 		})
 		return f
 	}
@@ -2495,8 +2497,8 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 }
 
 // TypeScriptFunc blocks until the reachable function closure is stable.
-func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
-	ts.ScriptFunc = f.Name
+func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) []Type {
+	ts.ScriptFunc = f.Signature.Name
 	defer func() { ts.ScriptFunc = "" }()
 
 	errsAtEntry := len(ts.Errors)
@@ -2510,7 +2512,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 		// Avoid duplicating deterministic diagnostics on later passes.
 		if len(ts.Errors) > errsAtEntry {
-			return f.OutTypes
+			return f.Signature.OutTypes
 		}
 
 		// An unchanged complete pass refreshes body metadata against final signatures.
@@ -2525,7 +2527,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 				cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[walked]
 				cached.Settled = true
 			}
-			return f.OutTypes
+			return f.Signature.OutTypes
 		}
 
 		if !ts.Converging {
@@ -2537,14 +2539,14 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 				Token: blamed.Token,
 				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", blamed.Token.Literal),
 			})
-			return f.OutTypes
+			return f.Signature.OutTypes
 		}
 	}
 }
 
 // TypeFunc reports whether a specialization is resolved, walking it at most
 // once per pass and skipping specializations already settled in the shared cache.
-func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
+func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) bool {
 	if f.Settled {
 		if !f.AllTypesInferred() {
 			panic(fmt.Sprintf("internal: settled specialization %s has unresolved types", mangled))
@@ -2571,20 +2573,20 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	return f.OutputTypesInferred()
 }
 
-func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
+func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 	PushScope(&ts.Scopes, FuncScope)
 	defer PopScope(&ts.Scopes)
 
 	for i, id := range template.Parameters {
-		Put(ts.Scopes, id.Value, f.Params[i])
+		Put(ts.Scopes, id.Value, f.Signature.Params[i])
 	}
 	// Seed known outputs so rewalked body metadata matches lowering.
 	for i, id := range template.Outputs {
-		if !IsFullyResolvedType(f.OutTypes[i]) {
+		if !IsFullyResolvedType(f.Signature.OutTypes[i]) {
 			continue
 		}
-		Put(ts.Scopes, id.Value, f.OutTypes[i])
-		ts.recordBindingSlotType(id.Value, f.OutTypes[i])
+		Put(ts.Scopes, id.Value, f.Signature.OutTypes[i])
+		ts.recordBindingSlotType(id.Value, f.Signature.OutTypes[i])
 	}
 
 	oldErrs := len(ts.Errors)
@@ -2600,7 +2602,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 		if !ok {
 			ce := &token.CompileError{
 				Token: id.Token,
-				Msg:   fmt.Sprintf("Should have either inferred type of output or marked it unresolved. Function %s. output argument: %s", f.Name, id.Value),
+				Msg:   fmt.Sprintf("Should have either inferred type of output or marked it unresolved. Function %s. output argument: %s", f.Signature.Name, id.Value),
 			}
 			ts.Errors = append(ts.Errors, ce)
 			return
@@ -2610,13 +2612,13 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 			continue
 		}
 
-		oldOutArg := f.OutTypes[i]
+		oldOutArg := f.Signature.OutTypes[i]
 		if !bindingSlotCompatible(oldOutArg, outArg) {
 			// Assignments reject this earlier; keep finalization fail-closed.
 			was, now := describeTypeChange(oldOutArg, outArg)
 			ts.Errors = append(ts.Errors, &token.CompileError{
 				Token: id.Token,
-				Msg:   fmt.Sprintf("Function %s output %s was inferred as %s, but its body later required the incompatible type %s", f.Name, id.Value, was, now),
+				Msg:   fmt.Sprintf("Function %s output %s was inferred as %s, but its body later required the incompatible type %s", f.Signature.Name, id.Value, was, now),
 			})
 			continue
 		}
@@ -2627,6 +2629,6 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 		}
 
 		ts.Converging = true
-		f.OutTypes[i] = nextOutArg
+		f.Signature.OutTypes[i] = nextOutArg
 	}
 }

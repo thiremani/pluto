@@ -209,9 +209,7 @@ func (r Range) Kind() Kind {
 type Func struct {
 	Name     string
 	Params   []Type
-	OutTypes []Type          // Final function output types (after wrapping for array types)
-	Vars     map[string]Type // Final binding storage types for this body
-	Settled  bool            // Specialization body metadata is reusable across scripts
+	OutTypes []Type
 }
 
 func (f Func) String() string {
@@ -263,6 +261,21 @@ func (f Func) OutputTypesInferred() bool {
 		}
 	}
 	return true
+}
+
+// FuncInfo holds the mutable facts for one function specialization.
+type FuncInfo struct {
+	Signature Func
+	Vars      map[string]Type
+	Settled   bool
+}
+
+func (f *FuncInfo) AllTypesInferred() bool {
+	return f.Signature.AllTypesInferred()
+}
+
+func (f *FuncInfo) OutputTypesInferred() bool {
+	return f.Signature.OutputTypesInferred()
 }
 
 // IsFullyResolvedType reports whether a type contains no unresolved components.

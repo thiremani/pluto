@@ -14,14 +14,14 @@ type ScriptCompiler struct {
 
 // CompileInfo is shared by every script compiled with one CodeCompiler.
 type CompileInfo struct {
-	FuncCache map[string]*Func
+	FuncCache map[string]*FuncInfo
 	ExprCache map[ExprKey]*ExprInfo
 }
 
 type Script struct {
 	Name        string
 	MangledPath string
-	Root        *Func
+	Root        *FuncInfo
 }
 
 func (s *Script) Mangle() string {
@@ -33,9 +33,9 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 	script := &Script{
 		Name:        name,
 		MangledPath: cc.Compiler.MangledPath,
-		Root: &Func{
-			Name: name,
-			Vars: make(map[string]Type),
+		Root: &FuncInfo{
+			Signature: Func{Name: name},
+			Vars:      make(map[string]Type),
 		},
 	}
 	mangled := script.Mangle()

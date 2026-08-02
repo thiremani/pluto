@@ -66,7 +66,7 @@ Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
 derived while walking each concrete specialization are what resolve it. A
 script root owns its current compilation facts; a function specialization
-publishes reusable facts behind `Func.Settled` after its body and reachable
+publishes reusable facts behind `FuncInfo.Settled` after its body and reachable
 function closure have completed. `CompileInfo` keeps those functions and their
 expression metadata on one lifetime. Phase 1 must extend that settlement
 boundary with write effects instead of adding another cache with a shorter
@@ -78,7 +78,7 @@ The solver may reach a body more than once: `TypeScriptFunc` repeats the whole
 closure until one pass changes nothing. A change is any monotonic output
 refinement, including `Array(Empty)` to a concrete array or `StrG` to `StrH`,
 not merely an unresolved slot becoming resolved. Snapshot analysis such as
-`Func.Vars` must therefore be cleared and rebuilt when its body is walked, and
+`FuncInfo.Vars` must therefore be cleared and rebuilt when its body is walked, and
 become reusable only when the body is settled. `ExprCache` is different:
 stable AST entries are overwritten, while generated rewrite nodes may add new
 entries across walks. It is not a safe precedent for append-only analysis.
