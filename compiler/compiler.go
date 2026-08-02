@@ -3149,9 +3149,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !ok {
 		return nil
 	}
-	// Keep call-site metadata aligned with the selected ABI.
-	info.OutTypes = append([]Type(nil), sig.ABI.Return.OutTypes...)
-	info.ExprLen = len(info.OutTypes)
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
 		if !info.LoopInside && len(info.Ranges) > 0 {

@@ -584,16 +584,6 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	))
 }
 
-func TestDescribeTypeChangeDisambiguatesStorageFlavor(t *testing.T) {
-	was, now := describeTypeChange(I64, F64)
-	require.Equal(t, "I64", was)
-	require.Equal(t, "F64", now)
-
-	was, now = describeTypeChange(StrG{}, StrH{})
-	require.Equal(t, "Str (StrG)", was)
-	require.Equal(t, "Str (StrH)", now)
-}
-
 func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	code := mustParseCode(t, `res = Bad(k)
     res = k == 0 1
@@ -1717,7 +1707,7 @@ res = ResetTable(k)
 	require.True(t, TypeEqual(concrete, reset.Vars["res"]))
 }
 
-func TestRemangledCalleeIsRevisitedAfterArgumentResolves(t *testing.T) {
+func TestUnsettledProvisionalIsRevisitedAcrossScripts(t *testing.T) {
 	code := mustParseCode(t, `res = Outer(k)
     t = A(k)
     res = Leaf(t)
@@ -1727,30 +1717,51 @@ res = A(k)
     p = Outer(k)
     res = p + 1
 
+res = Other(k)
+    t = B(k)
+    res = Leaf(t)
+    res = k == 0 0.5
+
+res = B(k)
+    p = Other(k)
+    res = p + 1.0
+
 res = Leaf(x)
-    res = x + 1
+    res = x
 `)
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "remangle", "", code)
 	require.Empty(t, cc.Compile())
 
-	sl := lexer.New("TestRemangleScript", "v = Outer(0)\nv")
-	sp := parser.NewScriptParser(sl)
-	program := sp.Parse()
-	require.Empty(t, sp.Errors())
+	solve := func(name, source string) *TypeSolver {
+		sc := NewScriptCompiler(ctx, name, mustParseScript(t, source), cc)
+		ts := NewTypeSolver(sc)
+		ts.Solve()
+		require.Empty(t, ts.Errors)
+		return ts
+	}
 
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
-	ts := NewTypeSolver(sc)
-	ts.Solve()
+	solve(t.Name()+"Outer", "v = Outer(0)\nv")
+	integerLeaf := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
+	require.NotNil(t, integerLeaf)
+	require.True(t, integerLeaf.Settled)
 
-	require.Empty(t, ts.Errors)
-	resolved := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
-	require.NotNil(t, resolved)
-	require.True(t, resolved.AllTypesInferred())
-	require.True(t, resolved.Settled)
 	provisional := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})]
-	require.NotNil(t, provisional,
-		"the provisional specialization must remain visible after the resolved call replaces it")
+	require.NotNil(t, provisional)
 	require.False(t, provisional.Settled)
+
+	otherSolver := solve(t.Name()+"Other", "v = Other(0)\nv")
+	require.Same(t, provisional, cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})])
+	require.False(t, provisional.Settled)
+	floatLeaf := cc.Compiler.compileInfo.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{F64})]
+	require.NotNil(t, floatLeaf)
+	require.True(t, floatLeaf.Settled)
+
+	other := code.Statements[2].(*ast.FuncStatement)
+	leafCall := other.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	otherMangled := Mangle(cc.Compiler.MangledPath, "Other", []Type{I64})
+	callInfo := otherSolver.ExprCache[key(otherMangled, leafCall)]
+	require.Equal(t, []Type{F64}, callInfo.CallParamTypes)
+	require.Equal(t, []Type{F64}, callInfo.ScalarCallParamTypes)
 }

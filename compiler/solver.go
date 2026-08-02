@@ -151,14 +151,6 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	}
 }
 
-// Include mangled forms only when display names hide a storage distinction.
-func describeTypeChange(from, to Type) (string, string) {
-	if from.String() != to.String() {
-		return from.String(), to.String()
-	}
-	return fmt.Sprintf("%s (%s)", from, from.Mangle()), fmt.Sprintf("%s (%s)", to, to.Mangle())
-}
-
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
@@ -166,9 +158,6 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	f := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[ts.FuncNameMangled]
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
-	}
-	if f.Vars == nil {
-		f.Vars = make(map[string]Type)
 	}
 	f.Vars[name] = typ
 }
@@ -2557,12 +2546,10 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = struct{}{}
-	ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled] = f
-	if f.Vars == nil {
-		f.Vars = make(map[string]Type)
-	} else {
-		clear(f.Vars)
+	if cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled]; cached != f {
+		panic(fmt.Sprintf("internal: specialization %s is not the cached instance", mangled))
 	}
+	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled
@@ -2614,13 +2601,10 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 
 		oldOutArg := f.Signature.OutTypes[i]
 		if !bindingSlotCompatible(oldOutArg, outArg) {
-			// Assignments reject this earlier; keep finalization fail-closed.
-			was, now := describeTypeChange(oldOutArg, outArg)
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: id.Token,
-				Msg:   fmt.Sprintf("Function %s output %s was inferred as %s, but its body later required the incompatible type %s", f.Signature.Name, id.Value, was, now),
-			})
-			continue
+			panic(fmt.Sprintf(
+				"internal: function %s output %s changed incompatibly from %s to %s",
+				f.Signature.Name, id.Value, oldOutArg.Mangle(), outArg.Mangle(),
+			))
 		}
 		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
 		ts.recordBindingSlotType(id.Value, nextOutArg)
