@@ -265,17 +265,17 @@ func (f Func) OutputTypesInferred() bool {
 
 // FuncInfo holds the mutable facts for one function specialization.
 type FuncInfo struct {
-	Signature Func
-	Vars      map[string]Type
-	Settled   bool
+	Sig     Func
+	Vars    map[string]Type
+	Settled bool
 }
 
 func (f *FuncInfo) AllTypesInferred() bool {
-	return f.Signature.AllTypesInferred()
+	return f.Sig.AllTypesInferred()
 }
 
 func (f *FuncInfo) OutputTypesInferred() bool {
-	return f.Signature.OutputTypesInferred()
+	return f.Sig.OutputTypesInferred()
 }
 
 // IsFullyResolvedType reports whether a type contains no unresolved components.

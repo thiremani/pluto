@@ -319,7 +319,7 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 		Mangled:    mangled,
 		ParamTypes: paramTypes,
 		FnInfo:     fnInfo,
-		ABI:        classifyFuncABI(paramTypes, fnInfo.Signature.OutTypes),
+		ABI:        classifyFuncABI(paramTypes, fnInfo.Sig.OutTypes),
 	}, true
 }
 
@@ -2648,7 +2648,7 @@ func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature,
 func (c *Compiler) processDirectOutputValues(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
 	outputs := make([]*Symbol, len(fn.Outputs))
 	for i := range fn.Outputs {
-		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.Signature.OutTypes[i], sig, function))
+		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.Sig.OutTypes[i], sig, function))
 		output.FuncArg = true
 		output.Borrowed = false
 		output.ReadOnly = false
@@ -2720,7 +2720,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	var outputs []*Symbol
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.Signature.OutTypes)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.Sig.OutTypes)
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}

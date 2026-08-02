@@ -60,20 +60,20 @@ x, y`
 	isEvenFunc := ts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_6isEven_f1_I64"]
 	require.NotNil(t, isEvenFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
-	if isEvenFunc.Signature.OutTypes[0].Kind() != StrKind {
+	if isEvenFunc.Sig.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 0")
 	}
-	if isEvenFunc.Signature.OutTypes[1].Kind() != StrKind {
+	if isEvenFunc.Sig.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isEven func should strkind for output arg 1")
 	}
 
 	isOddFunc := ts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isOddFunc.AllTypesInferred())
-	if isOddFunc.Signature.OutTypes[0].Kind() != StrKind {
+	if isOddFunc.Sig.OutTypes[0].Kind() != StrKind {
 		t.Errorf("isOdd func should strkind for output arg 0 after solving the reachable function closure")
 	}
-	if isOddFunc.Signature.OutTypes[1].Kind() != StrKind {
+	if isOddFunc.Sig.OutTypes[1].Kind() != StrKind {
 		t.Errorf("isOdd func should strkind for output arg 1")
 	}
 
@@ -90,10 +90,10 @@ x, y`
 	nts.Solve()
 
 	nextOddFunc := nts.ScriptCompiler.Compiler.compileInfo.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
-	if nextOddFunc.Signature.OutTypes[0].Kind() != StrKind {
+	if nextOddFunc.Sig.OutTypes[0].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 0")
 	}
-	if nextOddFunc.Signature.OutTypes[1].Kind() != StrKind {
+	if nextOddFunc.Sig.OutTypes[1].Kind() != StrKind {
 		t.Errorf("Next isOdd func should strkind for output arg 1")
 	}
 }
@@ -1594,7 +1594,7 @@ res = Relay(k)
 				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
 				cached := cc.Compiler.compileInfo.FuncCache[mangled]
 				require.NotNil(t, cached)
-				require.True(t, TypeEqual(tt.want, cached.Signature.OutTypes[0]), "%s output: got %s, want %s", name, cached.Signature.OutTypes[0], tt.want)
+				require.True(t, TypeEqual(tt.want, cached.Sig.OutTypes[0]), "%s output: got %s, want %s", name, cached.Sig.OutTypes[0], tt.want)
 
 				require.True(t, cached.Settled)
 				require.True(t, TypeEqual(tt.want, coldBindings[name]), "%s cold output binding", name)
@@ -1682,28 +1682,28 @@ res = ResetTable(k)
 	refineTemplate := code.Statements[0].(*ast.FuncStatement)
 	refineMangled := Mangle(cc.Compiler.MangledPath, "RefineTable", []Type{I64})
 	refine := &FuncInfo{
-		Signature: Func{Name: "RefineTable", Params: []Type{I64}, OutTypes: []Type{headerOnly}},
-		Vars:      make(map[string]Type),
+		Sig:  Func{Name: "RefineTable", Params: []Type{I64}, OutTypes: []Type{headerOnly}},
+		Vars: make(map[string]Type),
 	}
 	cc.Compiler.compileInfo.FuncCache[refineMangled] = refine
 	require.True(t, ts.TypeFunc(refineMangled, refineTemplate, refine))
 	require.Empty(t, ts.Errors)
-	require.True(t, TypeEqual(concrete, refine.Signature.OutTypes[0]))
+	require.True(t, TypeEqual(concrete, refine.Sig.OutTypes[0]))
 	require.True(t, TypeEqual(concrete, refine.Vars["res"]))
 
 	clear(ts.walkedFuncs)
 	resetTemplate := code.Statements[1].(*ast.FuncStatement)
 	resetMangled := Mangle(cc.Compiler.MangledPath, "ResetTable", []Type{I64})
 	reset := &FuncInfo{
-		Signature: Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}},
-		Vars:      make(map[string]Type),
+		Sig:  Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}},
+		Vars: make(map[string]Type),
 	}
 	cc.Compiler.compileInfo.FuncCache[resetMangled] = reset
 	ts.Converging = false
 	require.True(t, ts.TypeFunc(resetMangled, resetTemplate, reset))
 	require.Empty(t, ts.Errors)
 	require.False(t, ts.Converging, "a header-only reset must not narrow or count as output progress")
-	require.True(t, TypeEqual(concrete, reset.Signature.OutTypes[0]))
+	require.True(t, TypeEqual(concrete, reset.Sig.OutTypes[0]))
 	require.True(t, TypeEqual(concrete, reset.Vars["res"]))
 }
 

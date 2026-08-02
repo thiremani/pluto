@@ -34,8 +34,8 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 		Name:        name,
 		MangledPath: cc.Compiler.MangledPath,
 		Root: &FuncInfo{
-			Signature: Func{Name: name},
-			Vars:      make(map[string]Type),
+			Sig:  Func{Name: name},
+			Vars: make(map[string]Type),
 		},
 	}
 	mangled := script.Mangle()
