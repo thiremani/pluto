@@ -123,7 +123,7 @@ func GetCopy(s *Symbol) *Symbol {
 }
 
 type Compiler struct {
-	*ScriptCache
+	compileInfo     *CompileInfo
 	Scopes          []Scope[*Symbol]
 	Context         llvm.Context
 	Module          llvm.Module
@@ -155,9 +155,16 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		}
 	}
 	builder := ctx.NewBuilder()
+	compileInfo := &CompileInfo{
+		FuncCache: make(map[string]*Func),
+		ExprCache: make(map[ExprKey]*ExprInfo),
+	}
+	if cc != nil {
+		compileInfo = cc.Compiler.compileInfo
+	}
 
 	return &Compiler{
-		ScriptCache:     NewScriptCache(),
+		compileInfo:     compileInfo,
 		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
 		Context:         ctx,
 		Module:          module,
@@ -190,7 +197,7 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
-	f := c.FuncCache[c.FuncNameMangled]
+	f := c.compileInfo.FuncCache[c.FuncNameMangled]
 	if f == nil {
 		return fallback
 	}
@@ -289,7 +296,7 @@ func (c *Compiler) inferCallParamTypes(info *ExprInfo) []Type {
 func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression, info *ExprInfo) (*callSignature, bool) {
 	paramTypes := c.inferCallParamTypes(info)
 	mangled := Mangle(c.MangledPath, funcName, paramTypes)
-	fnInfo := c.FuncCache[mangled]
+	fnInfo := c.compileInfo.FuncCache[mangled]
 	if fnInfo == nil {
 		c.Errors = append(c.Errors, &token.CompileError{
 			Token: ce.Tok(),
@@ -1490,7 +1497,7 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.StringLiteral:
 		res = c.compileStringLiteralExpression(e, dest)
 	case *ast.RangeLiteral:
-		info := c.ExprCache[key(c.FuncNameMangled, e)]
+		info := c.compileInfo.ExprCache[key(c.FuncNameMangled, e)]
 		// A consuming expression can lower this literal inside the loop that
 		// already bound its iterator rewrite. Complete descriptor assignments
 		// clear the rewrite and materialize the Range aggregate below.
@@ -1735,7 +1742,7 @@ func (c *Compiler) compileIdentifier(ident *ast.Identifier) *Symbol {
 // compileStringLiteralExpression lowers formatting markers that reference
 // named Range drivers once per yield and retains the final formatted string.
 func (c *Compiler) compileStringLiteralExpression(lit *ast.StringLiteral, dest []*ast.Identifier) []*Symbol {
-	info := c.ExprCache[key(c.FuncNameMangled, lit)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, lit)]
 	if len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		return []*Symbol{c.compileStringLiteral(lit.Token)}
 	}
@@ -1779,7 +1786,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 			}
 
 			columnType := Array{ElemType: column.ElemType, Rank: 1}
-			if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil && len(info.OutTypes) > 0 {
+			if info := c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]; info != nil && len(info.OutTypes) > 0 {
 				if resolved, ok := info.OutTypes[0].(Array); ok {
 					columnType = resolved
 				}
@@ -1817,7 +1824,7 @@ func (c *Compiler) getRawSymbol(name string) (*Symbol, bool) {
 }
 
 func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
 
 	// Return pre-extracted LHS values for conditional expressions
 	if condLHS := c.currentCondLHSFrame(); condLHS != nil {
@@ -1831,7 +1838,7 @@ func (c *Compiler) compileInfixExpression(expr *ast.InfixExpression, dest []*ast
 		// Use rewritten expression if ranges were consumed by an outer loop.
 		if rew, ok := info.Rewrite.(*ast.InfixExpression); ok {
 			expr = rew
-			info = c.ExprCache[key(c.FuncNameMangled, expr)]
+			info = c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
 		}
 		return c.compileInfixBasic(expr, info)
 	}
@@ -2387,7 +2394,7 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 // mirroring compileInfixExpression/compileInfixRanges.
 
 func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
 	// Filter out ranges that are already bound (converted to scalar iterators in outer loops)
 	pending := c.pendingLoopRanges(info.Ranges)
 	// If the result is an array, let the operand handle any collection itself.
@@ -2395,7 +2402,7 @@ func (c *Compiler) compilePrefixExpression(expr *ast.PrefixExpression, dest []*a
 		// Use rewritten expression if ranges were consumed by an outer loop.
 		if rew, ok := info.Rewrite.(*ast.PrefixExpression); ok {
 			expr = rew
-			info = c.ExprCache[key(c.FuncNameMangled, expr)]
+			info = c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
 		}
 		return c.compilePrefixBasic(expr, info)
 	}
@@ -3131,10 +3138,10 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 }
 
 func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Identifier) (res []*Symbol) {
-	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, ce)]
 	if rew, ok := info.Rewrite.(*ast.CallExpression); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
 		ce = rew
-		if rewInfo := c.ExprCache[key(c.FuncNameMangled, ce)]; rewInfo != nil {
+		if rewInfo := c.compileInfo.ExprCache[key(c.FuncNameMangled, ce)]; rewInfo != nil {
 			info = rewInfo
 		}
 	}
@@ -3514,7 +3521,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	defer c.popStmtCtx()
 
 	ce := ps.Expression
-	info := c.ExprCache[key(c.FuncNameMangled, ce)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, ce)]
 
 	// If LoopInside=false, wrap print in loops for all ranges
 	if !info.LoopInside && len(info.Ranges) > 0 {

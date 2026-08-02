@@ -67,7 +67,7 @@ Template-time CFG has neither distinction — it misreports a body like
 derived while walking each concrete specialization are what resolve it. A
 script root owns its current compilation facts; a function specialization
 publishes reusable facts behind `Func.Settled` after its body and reachable
-function closure have completed. `ScriptCache` keeps those functions and their
+function closure have completed. `CompileInfo` keeps those functions and their
 expression metadata on one lifetime. Phase 1 must extend that settlement
 boundary with write effects instead of adding another cache with a shorter
 lifetime. PIR validation can then consume the same coherent analysis. Issue

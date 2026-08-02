@@ -208,7 +208,7 @@ func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
 	dest := 0
 	for _, v := range s.Value {
 		maySkip := cfg.valueMaySkip(v)
-		span := c.ExprCache[key(c.FuncNameMangled, v)].ExprLen
+		span := c.compileInfo.ExprCache[key(c.FuncNameMangled, v)].ExprLen
 		for j := 0; j < span; j++ {
 			if maySkip {
 				kinds[dest] = ConditionalWrite
@@ -288,7 +288,7 @@ func (cfg *CFG) nodeMayNotYield(expr ast.Expression) bool {
 		return true
 	}
 	c := cfg.ScriptCompiler.Compiler
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	info := c.compileInfo.ExprCache[key(c.FuncNameMangled, expr)]
 	return info.HasCondScalar() || info.HasCondAnd()
 }
 
@@ -331,17 +331,17 @@ func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
 		// Descriptor-copy assignments clear their cached ranges during typing.
 		// A remaining range here is a scalar use of a driver already bound by
 		// the statement, so an empty driver may leave the destination unchanged.
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
+		return len(c.compileInfo.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.StringLiteral:
 		// Formatting markers can reference named Range drivers even though the
 		// dependency is not represented as an AST child.
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
+		return len(c.compileInfo.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.InfixExpression, *ast.PrefixExpression:
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
+		return len(c.compileInfo.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.ArrayRangeExpression:
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
+		return len(c.compileInfo.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
 	case *ast.CallExpression:
-		if len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0 {
+		if len(c.compileInfo.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0 {
 			return true
 		}
 		// Check if any argument contains ranges

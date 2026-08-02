@@ -144,7 +144,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		FuncNameMangled:    sc.Script.Mangle(),
 		Converging:         false,
 		Errors:             []*token.CompileError{},
-		ExprCache:          sc.Compiler.ExprCache,
+		ExprCache:          sc.Compiler.compileInfo.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]struct{}),
@@ -163,7 +163,7 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
 	}
-	f := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
+	f := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[ts.FuncNameMangled]
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
 	}
@@ -2457,13 +2457,13 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 	for i := range f.OutTypes {
 		f.OutTypes[i] = Unresolved{}
 	}
-	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled] = f
 	return f
 }
 
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
 	// Fetch existing func cache entry (if any).
-	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
+	f, ok := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
@@ -2516,13 +2516,13 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		// An unchanged complete pass refreshes body metadata against final signatures.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
 			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[walked]
 				if cached == nil || !cached.AllTypesInferred() {
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
 				}
 			}
 			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				cached := ts.ScriptCompiler.Compiler.compileInfo.FuncCache[walked]
 				cached.Settled = true
 			}
 			return f.OutTypes
@@ -2555,7 +2555,7 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = struct{}{}
-	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	ts.ScriptCompiler.Compiler.compileInfo.FuncCache[mangled] = f
 	if f.Vars == nil {
 		f.Vars = make(map[string]Type)
 	} else {

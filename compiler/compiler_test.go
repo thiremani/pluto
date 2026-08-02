@@ -31,8 +31,7 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	require.Empty(t, cc.Compile())
 	program := mustParseScript(t, scriptSrc)
 
-	cache := NewScriptCache()
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc, cache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	errs := sc.Compile()
 	require.Empty(t, errs)
 
@@ -66,7 +65,7 @@ func TestWarmFuncCacheEmitsIdenticalIR(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	code := mustParseCode(t, `res = Reset(k)
+	codeSrc := `res = Reset(k)
     i = 0:2
     "-i"
     a = [10 20 30]
@@ -75,17 +74,19 @@ func TestWarmFuncCacheEmitsIdenticalIR(t *testing.T) {
 
 res = OuterReset(k)
     res = Reset(k)
-`)
-	cc := NewCodeCompiler(ctx, "warm_func_ir", "", code)
-	require.Empty(t, cc.Compile())
+`
+	newCodeCompiler := func() *CodeCompiler {
+		cc := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
+		require.Empty(t, cc.Compile())
+		return cc
+	}
 
-	compile := func(name, source string, cache *ScriptCache) string {
+	compile := func(cc *CodeCompiler, name, source string) string {
 		sc := NewScriptCompiler(
 			ctx,
 			name,
 			mustParseScript(t, source),
 			cc,
-			cache,
 		)
 		require.Empty(t, sc.Compile())
 		return sc.Compiler.GenerateIR()
@@ -93,18 +94,18 @@ res = OuterReset(k)
 
 	target := "value = OuterReset(0)\nvalues = [0:2]\nvalues\nvalue"
 	cold := compile(
+		newCodeCompiler(),
 		t.Name()+"Cold",
 		target,
-		NewScriptCache(),
 	)
 
-	cache := NewScriptCache()
+	cc := newCodeCompiler()
 	compile(
+		cc,
 		t.Name()+"Seed",
 		"first = [0:1]\nfirst\nsecond = [0:1]\nsecond\nvalue = OuterReset(0)\nvalue",
-		cache,
 	)
-	warm := compile(t.Name()+"Warm", target, cache)
+	warm := compile(cc, t.Name()+"Warm", target)
 	require.Equal(t, cold, warm)
 }
 
@@ -240,7 +241,7 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 
 	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
 	require.Empty(t, cc.Compile())
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, scriptSrc), cc, NewScriptCache())
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, scriptSrc), cc)
 	require.Empty(t, sc.Compile())
 
 	verified := 0
@@ -326,7 +327,7 @@ func TestArrayCellLoweringSurfacesNewError(t *testing.T) {
 			Value: "Missing",
 		},
 	}
-	c.ExprCache[key(c.FuncNameMangled, cell)] = &ExprInfo{
+	c.compileInfo.ExprCache[key(c.FuncNameMangled, cell)] = &ExprInfo{
 		OutTypes: []Type{I64},
 		ExprLen:  1,
 	}
@@ -568,8 +569,7 @@ x, six`
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", "", ast.NewCode())
 
-	cache := NewScriptCache()
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc, cache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	sc.Compile()
 	testStr := "x = -x, six = -six"
 	sl := &ast.StringLiteral{
@@ -1036,7 +1036,7 @@ result`
 
 	cc := NewCodeCompiler(ctx, "array_rank_mismatch", "", ast.NewCode())
 	program := mustParseScript(t, script)
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc, NewScriptCache())
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 
 	errs := sc.Compile()
 	require.NotEmpty(t, errs, "expected different array ranks to fail")

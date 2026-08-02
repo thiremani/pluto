@@ -35,9 +35,9 @@ func TestScriptRootIsNamespacedAndCached(t *testing.T) {
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, "scriptRoots", "", ast.NewCode())
-	cache := NewScriptCache()
-	report := NewScriptCompiler(ctx, "report", mustParseScript(t, "value = 1\nvalue"), cc, cache)
-	summary := NewScriptCompiler(ctx, "summary", mustParseScript(t, "value = 2\nvalue"), cc, cache)
+	cache := cc.Compiler.compileInfo
+	report := NewScriptCompiler(ctx, "report", mustParseScript(t, "value = 1\nvalue"), cc)
+	summary := NewScriptCompiler(ctx, "summary", mustParseScript(t, "value = 2\nvalue"), cc)
 
 	require.Equal(t, cc.Compiler.MangledPath+SEP+"script"+SEP+MangleIdent("report"), report.Script.Mangle())
 	require.NotEqual(t, report.Script.Mangle(), summary.Script.Mangle())
@@ -46,8 +46,8 @@ func TestScriptRootIsNamespacedAndCached(t *testing.T) {
 	require.Same(t, summary.Script.Root, cache.FuncCache[summary.Script.Mangle()])
 	require.Equal(t, report.Script.Mangle(), report.Compiler.FuncNameMangled)
 	require.Equal(t, summary.Script.Mangle(), summary.Compiler.FuncNameMangled)
-	require.Same(t, cache, report.Compiler.ScriptCache)
-	require.Same(t, cache, summary.Compiler.ScriptCache)
+	require.Same(t, cache, report.Compiler.compileInfo)
+	require.Same(t, cache, summary.Compiler.compileInfo)
 
 	reportSolver := NewTypeSolver(report)
 	reportSolver.Solve()
@@ -68,13 +68,13 @@ c = add(a, b)
 	require.Empty(t, codeCompiler.Compile())
 
 	// This is the shared cache that will persist across compilations.
-	cache := NewScriptCache()
+	cache := codeCompiler.Compiler.compileInfo
 
 	t.Run("Compile with Ints to populate cache", func(t *testing.T) {
 		scriptA := `x = add(1, 2)
 x`
 		progA := mustParseScript(t, scriptA)
-		scA := NewScriptCompiler(ctx, t.Name(), progA, codeCompiler, cache)
+		scA := NewScriptCompiler(ctx, t.Name(), progA, codeCompiler)
 
 		errs := scA.Compile()
 		require.Empty(t, errs, "First script compilation should succeed")
@@ -95,7 +95,7 @@ x`
 		scriptB := `y = add(3, 4)
 y`
 		progB := mustParseScript(t, scriptB)
-		scB := NewScriptCompiler(ctx, t.Name(), progB, codeCompiler, cache)
+		scB := NewScriptCompiler(ctx, t.Name(), progB, codeCompiler)
 
 		errs := scB.Compile()
 		require.Empty(t, errs, "Second script compilation should succeed")
@@ -111,7 +111,7 @@ y`
 		scriptC := `z = add(1.0, 2.5)
 z`
 		progC := mustParseScript(t, scriptC)
-		scC := NewScriptCompiler(ctx, t.Name(), progC, codeCompiler, cache)
+		scC := NewScriptCompiler(ctx, t.Name(), progC, codeCompiler)
 
 		errs := scC.Compile()
 		require.Empty(t, errs, "Third script compilation should succeed")
