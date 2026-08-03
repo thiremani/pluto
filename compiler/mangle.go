@@ -80,13 +80,10 @@ func (d *Demangled) String() string {
 	result.WriteString(".")
 	result.WriteString(d.Name)
 
-	switch d.Kind {
-	case SymbolFunc:
+	if d.Kind == SymbolFunc {
 		result.WriteString("(")
 		result.WriteString(strings.Join(d.ArgTypes, ", "))
 		result.WriteString(")")
-	case SymbolScript:
-		result.WriteString(" (script)")
 	}
 	return result.String()
 }

@@ -764,12 +764,12 @@ func TestMangleScriptRoundTrip(t *testing.T) {
 		script  string
 		want    string
 	}{
-		{"simple", "mymod", "", "report", "mymod.report (script)"},
-		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir.report (script)"},
-		{"named script", "mymod", "", "script", "mymod.script (script)"},
-		{"digit leading", "mymod", "", "1a", "mymod.1a (script)"},
-		{"unicode", "mymod", "", "日本", "mymod.日本 (script)"},
-		{"separator letters", "mymod", "", "shd", "mymod.shd (script)"},
+		{"simple", "mymod", "", "report", "mymod.report"},
+		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir.report"},
+		{"named script", "mymod", "", "script", "mymod.script"},
+		{"digit leading", "mymod", "", "1a", "mymod.1a"},
+		{"unicode", "mymod", "", "日本", "mymod.日本"},
+		{"separator letters", "mymod", "", "shd", "mymod.shd"},
 	}
 
 	for _, tt := range tests {
