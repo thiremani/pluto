@@ -61,7 +61,7 @@ hotel = "h" ⊕ "8"
 	}
 }
 
-func TestWarmFuncCacheEmitsIdenticalIR(t *testing.T) {
+func TestWarmCachesEmitIdenticalIR(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -92,10 +92,11 @@ res = OuterReset(k)
 		return sc.Compiler.GenerateIR()
 	}
 
+	targetName := t.Name() + "Target"
 	target := "value = OuterReset(0)\nvalues = [0:2]\nvalues\nvalue"
 	cold := compile(
 		newCodeCompiler(),
-		t.Name()+"Cold",
+		targetName,
 		target,
 	)
 
@@ -105,7 +106,7 @@ res = OuterReset(k)
 		t.Name()+"Seed",
 		"first = [0:1]\nfirst\nsecond = [0:1]\nsecond\nvalue = OuterReset(0)\nvalue",
 	)
-	warm := compile(cc, t.Name()+"Warm", target)
+	warm := compile(cc, targetName, target)
 	require.Equal(t, cold, warm)
 }
 
