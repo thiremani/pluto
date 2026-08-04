@@ -34,14 +34,12 @@ x, y = isOdd(n)
 	l := lexer.New("TestMutualRecursionCode", codeStr)
 	cp := parser.NewCodeParser(l)
 	code := cp.Parse()
-
-	if errs := cp.Errors(); len(errs) > 0 {
-		t.Error(strings.Join(errs, ","))
-	}
+	require.Empty(t, cp.Errors())
 
 	ctx := llvm.NewContext()
+	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "test", "", code)
-	cc.Compile()
+	require.Empty(t, cc.Compile())
 
 	script := `x, y = isEven(3)
 x, y`
@@ -49,53 +47,54 @@ x, y`
 	sl := lexer.New("TestMutualRecursionScript", script)
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
+	require.Empty(t, sp.Errors())
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
+
+	stmt := program.Statements[0].(*ast.LetStatement)
+	call := stmt.Value[0].(*ast.CallExpression)
+	args := []Type{I64}
+	template, isEvenMangled, ok := ts.lookupCallTemplate(call, args)
+	require.True(t, ok)
+	isEvenFunc := ts.newFunc(call, args, isEvenMangled, template)
+	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
+
+	walkPass := func() {
+		ts.Converging = false
+		ts.firstUnresolved = nil
+		clear(ts.walkedFuncs)
+		require.True(t, ts.TypeFunc(isEvenMangled, template))
+	}
+
+	walkPass()
+	isOddFunc := cc.Compiler.FuncCache[isOddMangled]
+	require.NotNil(t, isOddFunc)
+	require.True(t, isEvenFunc.AllTypesInferred())
+	require.Equal(t, StrKind, isEvenFunc.Sig.OutTypes[0].Kind())
+	require.Equal(t, StrKind, isEvenFunc.Sig.OutTypes[1].Kind())
+	require.False(t, isOddFunc.AllTypesInferred())
+	require.Equal(t, UnresolvedKind, isOddFunc.Sig.OutTypes[0].Kind())
+	require.Equal(t, StrKind, isOddFunc.Sig.OutTypes[1].Kind())
+	require.NotNil(t, ts.firstUnresolved)
+	require.True(t, ts.Converging)
+
+	walkPass()
+	require.True(t, isOddFunc.AllTypesInferred())
+	require.Equal(t, StrKind, isOddFunc.Sig.OutTypes[0].Kind())
+	require.Equal(t, StrKind, isOddFunc.Sig.OutTypes[1].Kind())
+	require.Nil(t, ts.firstUnresolved)
+	require.True(t, ts.Converging)
+
+	ts.TypeScriptFunc(isEvenMangled, template, isEvenFunc)
+	require.Empty(t, ts.Errors)
+	require.False(t, ts.Converging)
+	require.True(t, isEvenFunc.Settled)
+	require.True(t, isOddFunc.Settled)
+
 	ts.Solve()
 	require.Empty(t, ts.Errors)
 	require.Len(t, cc.Compiler.FuncCache, 3)
-
-	// check func cache
-	isEvenFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_6isEven_f1_I64"]
-	require.NotNil(t, isEvenFunc)
-	require.True(t, isEvenFunc.AllTypesInferred())
-	if isEvenFunc.Sig.OutTypes[0].Kind() != StrKind {
-		t.Errorf("isEven func should strkind for output arg 0")
-	}
-	if isEvenFunc.Sig.OutTypes[1].Kind() != StrKind {
-		t.Errorf("isEven func should strkind for output arg 1")
-	}
-
-	isOddFunc := ts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
-	require.NotNil(t, isOddFunc)
-	require.True(t, isOddFunc.AllTypesInferred())
-	if isOddFunc.Sig.OutTypes[0].Kind() != StrKind {
-		t.Errorf("isOdd func should strkind for output arg 0 after solving the reachable function closure")
-	}
-	if isOddFunc.Sig.OutTypes[1].Kind() != StrKind {
-		t.Errorf("isOdd func should strkind for output arg 1")
-	}
-
-	// now further compile for isOdd
-	nextScript := `x, y = isOdd(17)
-x, y`
-
-	nsl := lexer.New("TestMutualRecursionScript2", nextScript)
-	nsp := parser.NewScriptParser(nsl)
-	nextProgram := nsp.Parse()
-
-	nsc := NewScriptCompiler(ctx, t.Name()+"Next", nextProgram, cc)
-	nts := NewTypeSolver(nsc)
-	nts.Solve()
-
-	nextOddFunc := nts.ScriptCompiler.Compiler.FuncCache["Pt_4test_p_5isOdd_f1_I64"]
-	if nextOddFunc.Sig.OutTypes[0].Kind() != StrKind {
-		t.Errorf("Next isOdd func should strkind for output arg 0")
-	}
-	if nextOddFunc.Sig.OutTypes[1].Kind() != StrKind {
-		t.Errorf("Next isOdd func should strkind for output arg 1")
-	}
 }
 
 func TestCycles(t *testing.T) {
