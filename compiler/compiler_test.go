@@ -75,38 +75,27 @@ func TestWarmCachesEmitIdenticalIR(t *testing.T) {
 res = OuterReset(k)
     res = Reset(k)
 `
-	newCodeCompiler := func() *CodeCompiler {
-		cc := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
-		require.Empty(t, cc.Compile())
-		return cc
-	}
-
-	compile := func(cc *CodeCompiler, name, source string) string {
-		sc := NewScriptCompiler(
-			ctx,
-			name,
-			mustParseScript(t, source),
-			cc,
-		)
-		require.Empty(t, sc.Compile())
-		return sc.Compiler.GenerateIR()
-	}
-
 	targetName := t.Name() + "Target"
 	target := "value = OuterReset(0)\nvalues = [0:2]\nvalues\nvalue"
-	cold := compile(
-		newCodeCompiler(),
-		targetName,
-		target,
-	)
 
-	cc := newCodeCompiler()
-	compile(
-		cc,
+	coldCC := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
+	require.Empty(t, coldCC.Compile())
+	coldSC := NewScriptCompiler(ctx, targetName, mustParseScript(t, target), coldCC)
+	require.Empty(t, coldSC.Compile())
+	cold := coldSC.Compiler.GenerateIR()
+
+	warmCC := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
+	require.Empty(t, warmCC.Compile())
+	seedSC := NewScriptCompiler(
+		ctx,
 		t.Name()+"Seed",
-		"first = [0:1]\nfirst\nsecond = [0:1]\nsecond\nvalue = OuterReset(0)\nvalue",
+		mustParseScript(t, "first = [0:1]\nfirst\nsecond = [0:1]\nsecond\nvalue = OuterReset(0)\nvalue"),
+		warmCC,
 	)
-	warm := compile(cc, targetName, target)
+	require.Empty(t, seedSC.Compile())
+	warmSC := NewScriptCompiler(ctx, targetName, mustParseScript(t, target), warmCC)
+	require.Empty(t, warmSC.Compile())
+	warm := warmSC.Compiler.GenerateIR()
 	require.Equal(t, cold, warm)
 }
 

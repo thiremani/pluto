@@ -305,11 +305,7 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 		return nil, false
 	}
 	if !fnInfo.Settled {
-		c.Errors = append(c.Errors, &token.CompileError{
-			Token: ce.Tok(),
-			Msg:   fmt.Sprintf("internal: function specialization %s is not ready for lowering", mangled),
-		})
-		return nil, false
+		panic(fmt.Sprintf("internal: function specialization %s reached lowering before settlement", mangled))
 	}
 
 	return &callSignature{
