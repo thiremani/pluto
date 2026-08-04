@@ -2460,7 +2460,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled {
-		ts.TypeFunc(mangled, template, f)
+		ts.TypeFunc(mangled, template)
 		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
 			ts.firstUnresolved = template
 		}
@@ -2491,7 +2491,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		ts.Converging = false
 		ts.firstUnresolved = nil
 		clear(ts.walkedFuncs)
-		ts.TypeFunc(mangled, template, f)
+		ts.TypeFunc(mangled, template)
 
 		// Avoid duplicating deterministic diagnostics on later passes.
 		if len(ts.Errors) > errsAtEntry {
@@ -2529,14 +2529,9 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 // TypeFunc reports whether a specialization is resolved, walking it at most
 // once per pass and skipping specializations already settled in the shared cache.
-func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) bool {
-	if cached := ts.ScriptCompiler.Compiler.FuncCache[mangled]; cached != f {
-		panic(fmt.Sprintf("internal: specialization %s is not the cached instance", mangled))
-	}
+func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
+	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if f.Settled {
-		if !f.AllTypesInferred() {
-			panic(fmt.Sprintf("internal: settled specialization %s has unresolved types", mangled))
-		}
 		return true
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {

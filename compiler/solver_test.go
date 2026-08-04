@@ -1686,7 +1686,7 @@ res = ResetTable(k)
 		Vars: make(map[string]Type),
 	}
 	cc.Compiler.FuncCache[refineMangled] = refine
-	require.True(t, ts.TypeFunc(refineMangled, refineTemplate, refine))
+	require.True(t, ts.TypeFunc(refineMangled, refineTemplate))
 	require.Empty(t, ts.Errors)
 	require.True(t, TypeEqual(concrete, refine.Sig.OutTypes[0]))
 	require.True(t, TypeEqual(concrete, refine.Vars["res"]))
@@ -1700,7 +1700,7 @@ res = ResetTable(k)
 	}
 	cc.Compiler.FuncCache[resetMangled] = reset
 	ts.Converging = false
-	require.True(t, ts.TypeFunc(resetMangled, resetTemplate, reset))
+	require.True(t, ts.TypeFunc(resetMangled, resetTemplate))
 	require.Empty(t, ts.Errors)
 	require.False(t, ts.Converging, "a header-only reset must not narrow or count as output progress")
 	require.True(t, TypeEqual(concrete, reset.Sig.OutTypes[0]))
