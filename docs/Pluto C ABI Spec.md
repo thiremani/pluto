@@ -483,7 +483,7 @@ Generic    := (Qualified | Ident) '_t' Num Types
 * Encoded names alternate text and Unicode runs. A pure digit run adds `_` only when Unicode follows; an ASCII continuation is length-prefixed
 * Paths may start with a dot/hyphen separator or numeric segment, but cannot end with a separator
 * Empty path only valid for builtins; user symbols always have a package path
-* `Demangle` uses the display-only form `module/./relative/entity`; validated paths cannot contain a `.` component, so `/./` uniquely marks the module boundary. Scripts append `.spt`. Use `DemangleParsed` for structured data, and do not path-normalize the display
+* `Demangle` uses the display-only full-path form `module/relative/entity`; scripts append `.spt`. The display intentionally omits the module/relative-path boundary, so use `DemangleParsed` when structured `ModPath`, `RelPath`, or `Kind` data is required
 * Numeric path segments preserve source digits; `Num` keeps arities, counts, and length prefixes canonical
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
