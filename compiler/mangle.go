@@ -77,13 +77,14 @@ func (d *Demangled) String() string {
 
 	var result strings.Builder
 	result.WriteString(d.FullPath())
-	result.WriteString("/")
+	if d.Kind == SymbolScript {
+		result.WriteString("/")
+	} else {
+		result.WriteString(".")
+	}
 	result.WriteString(d.Name)
 
-	switch d.Kind {
-	case SymbolScript:
-		result.WriteString(".spt")
-	case SymbolFunc:
+	if d.Kind == SymbolFunc {
 		result.WriteString("(")
 		result.WriteString(strings.Join(d.ArgTypes, ", "))
 		result.WriteString(")")
@@ -299,7 +300,8 @@ func MangleScript(mangledPath, scriptName string) string {
 }
 
 // Demangle converts a mangled symbol back to human-readable form.
-// Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math/Square(I64)"
+// Functions and constants use path.entity; scripts use path/name.
+// Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
 // For malformed Pluto symbols, returns the error message.
 func Demangle(mangled string) string {
 	d, err := DemangleParsed(mangled)

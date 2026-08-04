@@ -445,99 +445,99 @@ func TestDemangle(t *testing.T) {
 		{
 			name:     "simple function",
 			mangled:  "Pt_4math_p_6square_f1_I64",
-			expected: "math/square(I64)",
+			expected: "math.square(I64)",
 		},
 		{
 			name:     "function with multiple args",
 			mangled:  "Pt_4math_p_3add_f2_I64_I64",
-			expected: "math/add(I64, I64)",
+			expected: "math.add(I64, I64)",
 		},
 		{
 			name:     "function no args",
 			mangled:  "Pt_4math_p_2pi_f0",
-			expected: "math/pi()",
+			expected: "math.pi()",
 		},
 		{
 			name:     "function with 11 args",
 			mangled:  "Pt_4math_p_6bigfun_f11_I64_F64_StrG_I32_U8_F32_I16_U64_I8_U32_U16",
-			expected: "math/bigfun(I64, F64, StrG, I32, U8, F32, I16, U64, I8, U32, U16)",
+			expected: "math.bigfun(I64, F64, StrG, I32, U8, F32, I16, U64, I8, U32, U16)",
 		},
 
 		// GitHub paths
 		{
 			name:     "github module path",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64",
-			expected: "github.com/user/math/Square(I64)",
+			expected: "github.com/user/math.Square(I64)",
 		},
 
 		// With relative path
 		{
 			name:     "with relPath",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_4Mean_f1_I64",
-			expected: "github.com/user/math/stats/Mean(I64)",
+			expected: "github.com/user/math/stats.Mean(I64)",
 		},
 		{
 			name:     "with nested relPath",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_5stats_s_8integral_r_4Quad_f1_F64",
-			expected: "github.com/user/math/stats/integral/Quad(F64)",
+			expected: "github.com/user/math/stats/integral.Quad(F64)",
 		},
 
 		// Mixed digit-prefix segments
 		{
 			name:     "mixed digit-prefix in path",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_s_2v1_d_n2_d_n34_3abc_p_4Calc_f1_I64",
-			expected: "github.com/user/math/v1.2.34abc/Calc(I64)",
+			expected: "github.com/user/math/v1.2.34abc.Calc(I64)",
 		},
 		{
 			name:     "numeric then hyphen in path",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4stat_s_2v2_d_n45_h_6abhijk_p_4Mean_f1_F64",
-			expected: "github.com/user/stat/v2.45-abhijk/Mean(F64)",
+			expected: "github.com/user/stat/v2.45-abhijk.Mean(F64)",
 		},
 
 		// Consecutive separators
 		{
 			name:     "double dot",
 			mangled:  "Pt_1a_dd_1b_p_1f_f0",
-			expected: "a..b/f()",
+			expected: "a..b.f()",
 		},
 		{
 			name:     "triple dot",
 			mangled:  "Pt_1a_ddd_1b_p_1f_f0",
-			expected: "a...b/f()",
+			expected: "a...b.f()",
 		},
 		{
 			name:     "mixed consecutive separators",
 			mangled:  "Pt_1a_dh_1b_p_1f_f0",
-			expected: "a.-b/f()",
+			expected: "a.-b.f()",
 		},
 
 		// Constants (_p_ marks end of modpath, _r_ marks end of relpath)
 		{
 			name:     "constant at module root",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_2pi",
-			expected: "github.com/user/math/pi",
+			expected: "github.com/user/math.pi",
 		},
 		{
 			name:     "constant with relPath",
 			mangled:  "Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_2pi",
-			expected: "github.com/user/math/stats/pi",
+			expected: "github.com/user/math/stats.pi",
 		},
 
 		// Complex types - passed through as-is (already readable)
 		{
 			name:     "with pointer type",
 			mangled:  "Pt_3mem_p_5alloc_f1_Ptr_t1_I64",
-			expected: "mem/alloc(Ptr_t1_I64)",
+			expected: "mem.alloc(Ptr_t1_I64)",
 		},
 		{
 			name:     "with range type",
 			mangled:  "Pt_4iter_p_3sum_f1_Range_t1_I64",
-			expected: "iter/sum(Range_t1_I64)",
+			expected: "iter.sum(Range_t1_I64)",
 		},
 		{
 			name:     "with func type",
 			mangled:  "Pt_3hof_p_5apply_f1_Func_t2_I64_F64",
-			expected: "hof/apply(Func_t2_I64_F64)",
+			expected: "hof.apply(Func_t2_I64_F64)",
 		},
 
 		// Not a Pluto symbol
@@ -606,24 +606,24 @@ func TestMangleDemangleRoundTrip(t *testing.T) {
 		args     []Type
 		expected string
 	}{
-		{"math", "", "add", []Type{I64, I64}, "math/add(I64, I64)"},
-		{"github.com/user/pkg", "", "Run", []Type{}, "github.com/user/pkg/Run()"},
-		{"github.com/user/pkg", "sub", "Run", []Type{F64}, "github.com/user/pkg/sub/Run(F64)"},
-		{"math", "", "move", []Type{Struct{Name: "Person"}, I64}, "math/move(Person, I64)"},
-		{"math", "", "pair", []Type{Struct{Name: "Person"}, Struct{Name: "Animal"}}, "math/pair(Person, Animal)"},
+		{"math", "", "add", []Type{I64, I64}, "math.add(I64, I64)"},
+		{"github.com/user/pkg", "", "Run", []Type{}, "github.com/user/pkg.Run()"},
+		{"github.com/user/pkg", "sub", "Run", []Type{F64}, "github.com/user/pkg/sub.Run(F64)"},
+		{"math", "", "move", []Type{Struct{Name: "Person"}, I64}, "math.move(Person, I64)"},
+		{"math", "", "pair", []Type{Struct{Name: "Person"}, Struct{Name: "Animal"}}, "math.pair(Person, Animal)"},
 		{"iter", "", "sum", []Type{ArrayRange{
 			Array: Array{ElemType: I64, Rank: 2},
 			Range: Range{Iter: I64},
-		}}, "iter/sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)"},
+		}}, "iter.sum(ArrayRange_t2_Array_t1_Array_t1_I64_Range_t1_I64)"},
 		// Mixed nominal identifiers (ASCII + Unicode)
-		{"math", "", "f", []Type{Struct{Name: "foo_π"}, I64}, "math/f(foo_π, I64)"},
-		{"math", "", "f", []Type{Struct{Name: "πbar"}, I64}, "math/f(πbar, I64)"},
-		{"math", "", "f", []Type{Struct{Name: "foo_π"}, Struct{Name: "Animal"}}, "math/f(foo_π, Animal)"},
-		{"github.com/user/math/v1.2.34abc", "", "Calc", []Type{I64}, "github.com/user/math/v1.2.34abc/Calc(I64)"},
-		{"github.com/user/stat/v2.45-abhijk", "", "Mean", []Type{F64}, "github.com/user/stat/v2.45-abhijk/Mean(F64)"},
+		{"math", "", "f", []Type{Struct{Name: "foo_π"}, I64}, "math.f(foo_π, I64)"},
+		{"math", "", "f", []Type{Struct{Name: "πbar"}, I64}, "math.f(πbar, I64)"},
+		{"math", "", "f", []Type{Struct{Name: "foo_π"}, Struct{Name: "Animal"}}, "math.f(foo_π, Animal)"},
+		{"github.com/user/math/v1.2.34abc", "", "Calc", []Type{I64}, "github.com/user/math/v1.2.34abc.Calc(I64)"},
+		{"github.com/user/stat/v2.45-abhijk", "", "Mean", []Type{F64}, "github.com/user/stat/v2.45-abhijk.Mean(F64)"},
 		// Consecutive separators
-		{"a..b", "", "f", []Type{}, "a..b/f()"},
-		{"x/1.2..-3/y", "", "g", []Type{I64}, "x/1.2..-3/y/g(I64)"},
+		{"a..b", "", "f", []Type{}, "a..b.f()"},
+		{"x/1.2..-3/y", "", "g", []Type{I64}, "x/1.2..-3/y.g(I64)"},
 	}
 
 	for _, tt := range tests {
@@ -734,17 +734,17 @@ func TestConstDemangleRoundTrip(t *testing.T) {
 		constName string
 		expected  string
 	}{
-		{"math", "", "pi", "math/pi"},
-		{"github.com/user/pkg", "", "VERSION", "github.com/user/pkg/VERSION"},
-		{"github.com/user/pkg", "sub", "MAX", "github.com/user/pkg/sub/MAX"},
+		{"math", "", "pi", "math.pi"},
+		{"github.com/user/pkg", "", "VERSION", "github.com/user/pkg.VERSION"},
+		{"github.com/user/pkg", "sub", "MAX", "github.com/user/pkg/sub.MAX"},
 		// Names containing _f or _r_ (should not confuse demangler)
-		{"pkg", "", "my_func", "pkg/my_func"},
-		{"pkg", "", "my_r_var", "pkg/my_r_var"},
-		{"pkg", "sub", "my_func", "pkg/sub/my_func"},
+		{"pkg", "", "my_func", "pkg.my_func"},
+		{"pkg", "", "my_r_var", "pkg.my_r_var"},
+		{"pkg", "sub", "my_func", "pkg/sub.my_func"},
 		// Relpaths with . or - (should demangle correctly)
-		{"pkg", "v1.2", "pi", "pkg/v1.2/pi"},
-		{"pkg", "stats.v2", "pi", "pkg/stats.v2/pi"},
-		{"pkg", "my-sub", "val", "pkg/my-sub/val"},
+		{"pkg", "v1.2", "pi", "pkg/v1.2.pi"},
+		{"pkg", "stats.v2", "pi", "pkg/stats.v2.pi"},
+		{"pkg", "my-sub", "val", "pkg/my-sub.val"},
 	}
 
 	for _, tt := range tests {
@@ -766,18 +766,18 @@ func TestMangleScriptRoundTrip(t *testing.T) {
 		script  string
 		want    string
 	}{
-		{"simple", "mymod", "", "report", "mymod/report.spt"},
-		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir/report.spt"},
-		{"named script", "mymod", "", "script", "mymod/script.spt"},
-		{"digit leading", "mymod", "", "1a", "mymod/1a.spt"},
-		{"versioned module", "example.com/math/v1.2.3", "", "1", "example.com/math/v1.2.3/1.spt"},
-		{"path separators", "mymod", "sub/dir", "1.2-report", "mymod/sub/dir/1.2-report.spt"},
-		{"leading dot", "mymod", "", ".hidden", "mymod/.hidden.spt"},
-		{"leading hyphen", "mymod", "", "-report", "mymod/-report.spt"},
-		{"uppercase", "mymod", "Reports", "Daily", "mymod/Reports/Daily.spt"},
-		{"digit then unicode", "mymod", "", "2日本", "mymod/2日本.spt"},
-		{"unicode", "mymod", "", "日本", "mymod/日本.spt"},
-		{"separator letters", "mymod", "", "shd", "mymod/shd.spt"},
+		{"simple", "mymod", "", "report", "mymod/report"},
+		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir/report"},
+		{"named script", "mymod", "", "script", "mymod/script"},
+		{"digit leading", "mymod", "", "1a", "mymod/1a"},
+		{"versioned module", "example.com/math/v1.2.3", "", "1", "example.com/math/v1.2.3/1"},
+		{"path separators", "mymod", "sub/dir", "1.2-report", "mymod/sub/dir/1.2-report"},
+		{"leading dot", "mymod", "", ".hidden", "mymod/.hidden"},
+		{"leading hyphen", "mymod", "", "-report", "mymod/-report"},
+		{"uppercase", "mymod", "Reports", "Daily", "mymod/Reports/Daily"},
+		{"digit then unicode", "mymod", "", "2日本", "mymod/2日本"},
+		{"unicode", "mymod", "", "日本", "mymod/日本"},
+		{"separator letters", "mymod", "", "shd", "mymod/shd"},
 	}
 
 	for _, tt := range tests {
@@ -807,9 +807,9 @@ func TestDemangleDisplayUsesFullPath(t *testing.T) {
 	nestedModuleScript := MangleScript(MangleDirPath("github.com/math/stat", ""), "dist")
 	constant := MangleConst(MangleDirPath("github.com/math", "stat"), "dist")
 
-	assert.Equal(t, "github.com/math/stat/dist.spt", Demangle(moduleScript))
-	assert.Equal(t, "github.com/math/stat/dist.spt", Demangle(nestedModuleScript))
-	assert.Equal(t, "github.com/math/stat/dist", Demangle(constant))
+	assert.Equal(t, "github.com/math/stat/dist", Demangle(moduleScript))
+	assert.Equal(t, "github.com/math/stat/dist", Demangle(nestedModuleScript))
+	assert.Equal(t, "github.com/math/stat.dist", Demangle(constant))
 	assert.NotEqual(t, moduleScript, nestedModuleScript)
 	assert.Equal(t, Demangle(moduleScript), Demangle(nestedModuleScript))
 	assert.NotEqual(t, Demangle(moduleScript), Demangle(constant))
