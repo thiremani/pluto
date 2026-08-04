@@ -7,38 +7,34 @@ import (
 )
 
 type ScriptCompiler struct {
-	Compiler *Compiler
-	Program  *ast.Program
-	Script   *Script
+	Compiler      *Compiler
+	Program       *ast.Program
+	Script        *Script
+	ScriptMangled string // immutable script-root key (_e; function keys use _f<N>)
 }
 
 type Script struct {
-	Name        string
-	MangledPath string
-	Root        *FuncInfo
-}
-
-func (s *Script) Mangle() string {
-	return MangleScript(s.MangledPath, s.Name)
+	Name string
+	Root *FuncInfo
 }
 
 func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler) *ScriptCompiler {
 	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
 	script := &Script{
-		Name:        name,
-		MangledPath: cc.Compiler.MangledPath,
+		Name: name,
 		Root: &FuncInfo{
 			Sig:  Func{Name: name},
 			Vars: make(map[string]Type),
 		},
 	}
-	mangled := script.Mangle()
-	compiler.FuncNameMangled = mangled
-	compiler.FuncCache[mangled] = script.Root
+	scriptMangled := MangleScript(cc.Compiler.MangledPath, name)
+	compiler.FuncNameMangled = scriptMangled
+	compiler.FuncCache[scriptMangled] = script.Root
 	return &ScriptCompiler{
-		Compiler: compiler,
-		Program:  program,
-		Script:   script,
+		Compiler:      compiler,
+		Program:       program,
+		Script:        script,
+		ScriptMangled: scriptMangled,
 	}
 }
 

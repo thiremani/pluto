@@ -124,7 +124,6 @@ type pendingAssignment struct {
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
-	ScriptFunc         string // top-level function closure being solved ("" at script root)
 	FuncNameMangled    string // current script root or function specialization key
 	Converging         bool   // current closure pass changed at least one cached output
 	Errors             []*token.CompileError
@@ -140,8 +139,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
 		ScriptCompiler:     sc,
 		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
-		ScriptFunc:         "",
-		FuncNameMangled:    sc.Script.Mangle(),
+		FuncNameMangled:    sc.ScriptMangled,
 		Converging:         false,
 		Errors:             []*token.CompileError{},
 		ExprCache:          sc.Compiler.ExprCache,
@@ -698,12 +696,11 @@ func (ts *TypeSolver) Solve() {
 		}
 	}
 
-	scriptMangled := ts.ScriptCompiler.Script.Mangle()
 	for pending := range ts.PendingAssignments {
 		// Intentional: only report unresolved bindings for script scope.
 		// Function-scope unresolved types may be resolved later when that function
 		// is reached by a concrete script-level call.
-		if pending.funcNameMangled != scriptMangled {
+		if pending.funcNameMangled != ts.ScriptCompiler.ScriptMangled {
 			continue
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -2462,7 +2459,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
-	if ts.ScriptFunc != "" {
+	if ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled {
 		ts.TypeFunc(mangled, template, f)
 		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
 			ts.firstUnresolved = template
@@ -2487,9 +2484,6 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 
 // TypeScriptFunc blocks until the reachable function closure is stable.
 func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) []Type {
-	ts.ScriptFunc = f.Sig.Name
-	defer func() { ts.ScriptFunc = "" }()
-
 	errsAtEntry := len(ts.Errors)
 	// Rewalk because resolved arguments can reveal new specializations, while
 	// callers typed before their callees resolve retain stale body facts.
