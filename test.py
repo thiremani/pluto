@@ -4,6 +4,7 @@ import subprocess
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from difflib import Differ
 
@@ -76,9 +77,11 @@ class TestRunner:
         self.project_root = Path(__file__).parent.resolve()
         self.test_dir = test_dir
 
-    def run_command(self, cmd: list, cwd: Path = None) -> str:
+    def run_command(self, cmd: list, cwd: Path = None, extra_env: dict = None) -> str:
         """Execute a command and return its output"""
         env = build_env(os.environ)
+        if extra_env:
+            env.update(extra_env)
 
         str_cmd = [str(c) for c in cmd]
         try:
@@ -330,6 +333,54 @@ class TestRunner:
             print(f"{Fore.RED}❌ Relative path compilation failed: {e}{Style.RESET_ALL}")
             self.failed += 1
 
+    def test_warm_cache_ir(self, test_dir: Path):
+        """Verify that warming function caches cannot change a script's IR."""
+        print(f"{Fore.CYAN}Testing cold/warm IR equivalence:{Style.RESET_ALL}")
+        try:
+            with tempfile.TemporaryDirectory(prefix="pluto-ir-cache-") as cache:
+                cache_root = Path(cache)
+                cold_cache = cache_root / "cold"
+                self.run_command(
+                    [self.project_root/PLUTO_EXE, "-emit-ir", "b_cached.spt"],
+                    cwd=test_dir,
+                    extra_env={"PTCACHE": str(cold_cache)},
+                )
+
+                cold_matches = list(cold_cache.rglob("b_cached.ll"))
+                if len(cold_matches) != 1:
+                    raise RuntimeError(f"expected one cold b_cached.ll, found {len(cold_matches)}")
+                cold_ir = cold_matches[0].read_text(encoding="utf-8")
+
+                # a_first.spt sorts before b_cached.spt and warms the shared
+                # in-process function caches before b_cached is compiled.
+                warm_cache = cache_root / "warm"
+                warm_output = self.run_command(
+                    [self.project_root/PLUTO_EXE, "-emit-ir"],
+                    cwd=test_dir,
+                    extra_env={"PTCACHE": str(warm_cache)},
+                )
+                seed_pos = warm_output.find("Starting compile for script: a_first")
+                target_pos = warm_output.find("Starting compile for script: b_cached")
+                if seed_pos < 0 or target_pos < 0 or seed_pos >= target_pos:
+                    raise RuntimeError("b_cached was not compiled after the cache-warming script")
+
+                warm_matches = list(warm_cache.rglob("b_cached.ll"))
+                if len(warm_matches) != 1:
+                    raise RuntimeError(f"expected one warm b_cached.ll, found {len(warm_matches)}")
+                warm_ir = warm_matches[0].read_text(encoding="utf-8")
+
+                if cold_ir != warm_ir:
+                    print(f"{Fore.RED}❌ Cold and warm IR differ{Style.RESET_ALL}")
+                    self.show_diff(cold_ir, warm_ir)
+                    self.failed += 1
+                    return
+
+            print(f"{Fore.GREEN}✅ Passed{Style.RESET_ALL}")
+            self.passed += 1
+        except Exception as e:
+            print(f"{Fore.RED}❌ Failed with exception: {e}{Style.RESET_ALL}")
+            self.failed += 1
+
     def run_compiler_tests(self):
         """Run all compiler end-to-end tests"""
         print(f"\n{Fore.YELLOW}=== Running Compiler Tests ==={Style.RESET_ALL}")
@@ -351,6 +402,12 @@ class TestRunner:
             test_dirs = {exp_path.parent for exp_path in TEST_DIR.rglob("*.exp")}
             test_dirs = sorted(test_dirs)  # Sorting provides deterministic order
 
+        cache_reuse_dir = (self.project_root / "tests/mem/cache_reuse").resolve()
+        expect_cache_ir = self.test_dir is None or cache_reuse_dir in {
+            test_dir.resolve() for test_dir in test_dirs
+        }
+        cache_ir_ran = False
+
         for test_dir in test_dirs:
             print(f"\n{Fore.YELLOW}📁 Testing directory: {test_dir}{Style.RESET_ALL}")
 
@@ -364,9 +421,17 @@ class TestRunner:
                 self.failed += num_tests_in_dir
                 continue
 
+            if test_dir.resolve() == cache_reuse_dir:
+                self.test_warm_cache_ir(test_dir)
+                cache_ir_ran = True
+
             # 2. Run each test in the directory
             for exp_file in sorted(test_dir.glob("*.exp")):
                 self._run_single_test(test_dir, exp_file)
+
+        if expect_cache_ir and not cache_ir_ran:
+            print(f"{Fore.RED}❌ Cold/warm IR fixture was not exercised{Style.RESET_ALL}")
+            self.failed += 1
 
         # 3. Test relative path compilation (only when running all tests)
         if not self.test_dir:

@@ -61,44 +61,6 @@ hotel = "h" ⊕ "8"
 	}
 }
 
-func TestWarmCachesEmitIdenticalIR(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	codeSrc := `res = Reset(k)
-    i = 0:2
-    "-i"
-    a = [10 20 30]
-    a = k > 0 []
-    res = a ⊕ [7]
-
-res = OuterReset(k)
-    res = Reset(k)
-`
-	targetName := t.Name() + "Target"
-	target := "value = OuterReset(0)\nvalues = [0:2]\nvalues\nvalue"
-
-	coldCC := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
-	require.Empty(t, coldCC.Compile())
-	coldSC := NewScriptCompiler(ctx, targetName, mustParseScript(t, target), coldCC)
-	require.Empty(t, coldSC.Compile())
-	cold := coldSC.Compiler.GenerateIR()
-
-	warmCC := NewCodeCompiler(ctx, "warm_func_ir", "", mustParseCode(t, codeSrc))
-	require.Empty(t, warmCC.Compile())
-	seedSC := NewScriptCompiler(
-		ctx,
-		t.Name()+"Seed",
-		mustParseScript(t, "first = [0:1]\nfirst\nsecond = [0:1]\nsecond\nvalue = OuterReset(0)\nvalue"),
-		warmCC,
-	)
-	require.Empty(t, seedSC.Compile())
-	warmSC := NewScriptCompiler(ctx, targetName, mustParseScript(t, target), warmCC)
-	require.Empty(t, warmSC.Compile())
-	warm := warmSC.Compiler.GenerateIR()
-	require.Equal(t, cold, warm)
-}
-
 func TestStatementAndShortCircuits(t *testing.T) {
 	script := `den = 1:3
 out = den < 0 && (10 ÷ den) > 1 7
