@@ -18,37 +18,46 @@ All symbols start with `Pt_`, use single `_` as separator (no `__`), and are bij
 | Operator (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Type]_m_op_[Code]_[Fixity]_[Types...]` |
 | Constant (no relpath) | `Pt_[ModPath]_p_[Name]` |
 | Constant (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[Name]` |
+| Script (no relpath) | `Pt_[ModPath]_p_[ScriptName]_e` |
+| Script (with relpath) | `Pt_[ModPath]_p_[RelPath]_r_[ScriptName]_e` |
 
 **Path structure:**
 * `[ModPath]` = module path from `pt.mod` (e.g., `github.com/user/math`)
 * `[RelPath]` = relative subdirectory path (may be empty)
+* `[ScriptName]` = script basename without `.spt`, encoded as the final path component
 * **All symbols:** Always include `_p_` after module path (marks end of module path)
 * **Symbols with relpath:** Always include `_r_` after relpath (marks end of relpath; `d` is reserved for `.` separator)
+* **Script roots:** Always include `_e` after the script name
 
 **Arity rules:**
 * N = number of Pluto arguments (methods include self, SRET excluded)
 * Return type is NOT mangled; overloads differing only by return type are disallowed
 
-### 1.1 Module Path Validation
+### 1.1 Path Validation
 
-Module paths declared in `pt.mod` must satisfy these rules before mangling:
+Module paths, module-relative directory paths, and script basenames must satisfy
+these rules before mangling. A script basename is one path component and cannot
+contain `/`; its `.spt` suffix is not part of the name.
 
 | Rule | Description |
 |------|-------------|
-| Lowercase only | No uppercase letters (`A-Z`) |
+| Module spelling | Module paths use lowercase ASCII |
+| Source-path spelling | Relative directories and script names also allow uppercase ASCII and valid Unicode |
 | Segment separator | Only `/` separates segments (maps to directories) |
-| Valid characters | ASCII lowercase letters, digits, `_`, `.`, `-` |
-| No `__` | Double underscores forbidden |
-| No trailing `_` | Segments cannot end with underscore |
+| Valid ASCII characters | Letters, digits, `_`, `.`, `-` |
+| No boundary underscores | Double underscores and `_` immediately before `.`, `-`, `/`, or the end are forbidden |
 | No trailing `.` | Segments cannot end with dot (Windows compatibility) |
+| No terminal `-` | The complete path or script name cannot end with `-`; the encoder would omit it |
 | No empty segments | No `//` or leading/trailing `/` |
 | No Windows reserved | Base name before first `.` cannot be `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9` |
 
 **Note on Windows reserved names:** Windows treats `con.txt` as `CON`, so we check the base name before the first dot. This means `con.txt.zip` is invalid, but `foo.con` and `.con` are valid (base is `foo` and empty respectively).
 
-**Valid examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`, `.hidden`, `.con`, `-flag`
+**Valid module examples:** `math`, `github.com/user/pkg`, `my-lib/v2`, `foo_bar`, `foo-con`, `v1.2.3`, `.hidden`, `.con`, `-flag`
 
-**Invalid examples:** `MyPkg` (uppercase), `my__pkg` (double underscore), `pkg_` (trailing underscore), `foo.` (trailing dot), `foo//bar` (empty segment), `con` (reserved), `con.txt` (base=con)
+**Valid relative-path and script examples:** `Reports/日本`, `Daily`, `1.2-report`, `.hidden`
+
+**Invalid examples:** module `MyPkg` (uppercase), `my__pkg` (double underscore), `foo_.bar` (boundary underscore), `pkg_` (trailing underscore), `foo.` (trailing dot), `foo-` (terminal hyphen), `foo//bar` (empty segment), `con` (reserved), `con.txt` (base=con)
 
 **Note on segment separator vs mangling:** Validation uses only `/` to split segments, but mangling encodes all of `.`, `/`, `-` as separator codes for C-safe symbol names. These are separate concerns: validation determines what paths are legal, mangling determines how they're encoded.
 
@@ -70,7 +79,7 @@ Pluto reserves no otherwise valid source identifiers. Compiler-generated scope
 bindings begin with `$`, which is outside the source identifier grammar; those
 names are LLVM-local and never enter the external ABI.
 
-**Structure:** `(<len><ASCII> | u<count>_<hex6>...) (u<count>_<hex6>... (<len><ASCII> | n<digits>(_<len><alpha> | _)?))*`
+**Structure:** Encoded names alternate ASCII/digit runs and Unicode runs. The exact grammar is defined in §6.
 
 * ASCII segment: `<length><chars>` where length is char count
 * Unicode segment: `u<count>_` followed by `count` consecutive 6-digit hex values (uppercase)
@@ -78,7 +87,7 @@ names are LLVM-local and never enter the external ABI.
 * After Unicode, if ASCII starts with digit: use `n<digits>` followed by:
   * Nothing if end of identifier
   * `_` if more Unicode follows
-  * `_<len><alpha>` if ASCII follows
+  * `_<len><ASCII>` if ASCII follows
 
 | Identifier | Mangled |
 |------------|---------|
@@ -138,16 +147,19 @@ Version numbers and numeric path segments use `n` prefix.
 | Type | Format | Example |
 |------|--------|---------|
 | Pure numeric | `n<digits>` | `123` → `n123` |
-| Mixed (digit-prefix) | `n<digits>_<len><alpha>` | `45abc` → `n45_3abc` |
+| Mixed ASCII | `n<digits>_<len><ascii>` | `45abc` → `n45_3abc` |
+| Mixed Unicode | `n<digits>_` followed by `UnicodeSeg` | `2日本` → `n2_u2_0065E500672C` |
 
 **Rules:**
-* No leading zeros: use `n2`, not `n02`
-* Mixed segments: leading digits go after `n`, alpha suffix is length-prefixed
-* Disambiguation: After `n<digits>`, continuation `_<len><alpha>` only if payload starts with non-digit
+* Digits are preserved, including leading zeros: `02` → `n02`
+* Mixed segments: leading digits go after `n`; an ASCII continuation is length-prefixed, while Unicode starts with `UnicodeSeg`
+* Disambiguation: After `n<digits>`, `_` introduces either the length-prefixed ASCII continuation or the following Unicode run
 
 **Examples:**
 | Path | Mangled |
 |------|---------|
+| `01` | `n01` |
+| `2日本` | `n2_u2_0065E500672C` |
 | `v1.2.3` | `2v1_d_n2_d_n3` |
 | `v1.2.34abc` | `2v1_d_n2_d_n34_3abc` |
 | `v2.45-abhijk` | `2v2_d_n45_h_6abhijk` |
@@ -157,9 +169,10 @@ Version numbers and numeric path segments use `n` prefix.
 | Marker | Meaning | Entity Location |
 |--------|---------|-----------------|
 | `fN` | Function, N args | Name before marker |
+| `e` | Script entry/root | Script name before marker |
 | `m` | Method separator | Type before, method after |
-| `p` | End of module path | RelPath or name follows |
-| `r` | End of relative path | Constant name follows |
+| `p` | End of module path | RelPath or symbol name follows |
+| `r` | End of relative path | Symbol or script name follows |
 | `tN` | Generic, N type params | Type before marker |
 | `op` | Operator prefix | Opcode follows |
 | `in` | Infix (2 operands) | `a + b` |
@@ -284,6 +297,7 @@ seed is last.
 |--------|---------|
 | `math.Square(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64` |
 | `math.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_2pi` |
+| `report.spt` (script) | `Pt_6github_d_3com_s_4user_s_4math_p_6report_e` |
 
 ### 4.2 With Relative Subdirectory
 
@@ -293,6 +307,7 @@ Module: `github.com/user/math`, RelPath: `stats`
 |--------|---------|
 | `stats.Mean(I64)` | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_4Mean_f1_I64` |
 | `stats.pi` (constant) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_2pi` |
+| `stats/1.2-report.spt` (script) | `Pt_6github_d_3com_s_4user_s_4math_p_5stats_r_n1_d_n2_h_6report_e` |
 
 Module: `github.com/user/math`, RelPath: `stats/integral`
 
@@ -307,6 +322,7 @@ Module: `github.com/user/math`, RelPath: `stats/integral`
 | `Player.Move(I64, I64)` | `Pt_..._6Player_m_4Move_f3_..._6Player_I64_I64` |
 | `Vector + Vector` | `Pt_..._6Vector_m_op_add_in_..._6Vector_..._6Vector` |
 | `/v1.2.3` (version) | `..._s_2v1_d_n2_d_n3_...` |
+| `1.spt` in module `example.com/math/v1.2.3` | `Pt_7example_d_3com_s_4math_s_2v1_d_n2_d_n3_p_n1_e` |
 
 ---
 
@@ -421,20 +437,30 @@ OperatorSym := 'Pt' ModPath '_p_' Ident '_m_op_' Opcode '_' Fixity Types
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_m_op_' Opcode '_' Fixity Types
 ConstantSym := 'Pt' ModPath '_p_' Ident
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident
+ScriptSym   := 'Pt' ModPath '_p_' ScriptName '_e'
+            |  'Pt' ModPath '_p_' RelPath '_r_' ScriptName '_e'
 
 ModPath    := '_' Path
 RelPath    := Path
-Path       := Ident ('_' Separator '_' PathTail)?
-PathTail   := (Ident | NumericSeg) ('_' Separator '_' PathTail)?
+ScriptName := PathComponent
+Path       := (ComponentSep '_')? PathPart ('_' Separator '_' PathPart)*
+PathComponent := (ComponentSep '_')? PathPart ('_' ComponentSep '_' PathPart)*
+PathPart   := Ident
 Separator  := [dsh]+
-NumericSeg := 'n' Num
+ComponentSep := [dh]+
+Digits     := [0-9]+
 Num        := '0' | [1-9][0-9]*                    (* no leading zeros *)
+PosNum     := [1-9][0-9]*
 
-(* Identifier with Unicode support - see §2.1 for details *)
-Ident      := (ASCIISeg | UnicodeSeg) (UnicodeSeg PostUniSeg)*
-PostUniSeg := ASCIISeg | DigitSeg                  (* after Unicode: length-prefixed OR n-prefixed *)
-DigitSeg   := 'n' [0-9]+ ('_' ASCIISeg?)?          (* n<digits>[_[<len><alpha>]] - _ alone if unicode follows *)
-ASCIISeg   := Num ASCIIChars                       (* length-prefixed ASCII *)
+(* Encoded names alternate text and Unicode runs - see §2.1 *)
+Ident         := TextSeg | BeforeUnicode UnicodeTail | UnicodeTail
+UnicodeTail   := UnicodeSeg (BeforeUnicode UnicodeSeg)* TextSeg?
+TextSeg       := ASCIISeg | DigitSeg
+BeforeUnicode := ASCIISeg | DigitASCII | DigitOnly '_'
+DigitSeg      := DigitOnly | DigitASCII
+DigitOnly     := 'n' Digits
+DigitASCII    := DigitOnly '_' ASCIISeg
+ASCIISeg   := PosNum ASCIIChars                    (* length-prefixed ASCII *)
 ASCIIChars := [A-Za-z0-9_]*                        (* 0 to N ASCII chars *)
 UnicodeSeg := 'u' [1-9][0-9]* '_' HexCode+         (* u<count>_<hex6><hex6>... *)
 HexCode    := [0-9A-F]{6}                          (* 6 uppercase hex digits *)
@@ -448,16 +474,17 @@ Fixity := 'in' | 'pre' | 'suf' | 'cir' Num
 Types      := ('_' Type)*
 Type       := Primitive | Qualified | Generic
 Primitive  := 'I1' | 'I8' | ... | 'Str'
-Qualified  := Ident ('_' Separator '_' (Ident | NumericSeg))* '_' Ident
-Generic    := (Qualified | Ident) '_t' [0-9]+ Types
+Qualified  := Ident ('_' Separator '_' Ident)* '_' Ident
+Generic    := (Qualified | Ident) '_t' Num Types
 ```
 
 **Notes:**
 
-* Identifier grammar: `Ident` can start with either ASCII or Unicode segment; after Unicode, digit-starting ASCII uses `DigitSeg` (n-prefix) to avoid length-prefix ambiguity; `DigitSeg` uses `_` alone if more Unicode follows, `_<len><chars>` if ASCII follows, or nothing at end
-* Path grammar enforces: starts with Ident, alternates Separator/(Ident|NumericSeg)
+* Encoded names alternate text and Unicode runs. A pure digit run adds `_` only when Unicode follows; an ASCII continuation is length-prefixed
+* Paths may start with a dot/hyphen separator or numeric segment, but cannot end with a separator
 * Empty path only valid for builtins; user symbols always have a package path
-* `Num` rule enforces no leading zeros for all numeric suffixes (fN, tN, nX, cirN)
+* `Demangle` uses the display-only form `module/./relative/entity`; validated paths cannot contain a `.` component, so `/./` uniquely marks the module boundary. Scripts append `.spt`. Use `DemangleParsed` for structured data, and do not path-normalize the display
+* Numeric path segments preserve source digits; `Num` keeps arities, counts, and length prefixes canonical
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
-* All symbols always have `_p_` after ModPath (marks end of module path); all symbols with relpath use `_r_` to mark end of relpath
+* All symbols always have `_p_` after ModPath; symbols with relpath use `_r_`, and script roots end with `_e`

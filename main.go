@@ -133,9 +133,7 @@ func findModRoot(startDir string) (string, error) {
 		}
 		dir = parent
 	}
-	err := fmt.Errorf("%s not found from %s upward. The %s file should be present in the project file's root directory", MOD_FILE, startDir, MOD_FILE)
-	fmt.Println(err)
-	return "", err
+	return "", fmt.Errorf("%s not found from %s upward. The %s file should be present in the project file's root directory", MOD_FILE, startDir, MOD_FILE)
 }
 
 // parseModuleName opens the given pt.mod file and returns the module path
@@ -157,24 +155,16 @@ func parseModuleName(modFile string) (string, error) {
 		if len(parts) >= 2 && parts[0] == "module" {
 			modPath := parts[1]
 			if err := compiler.ValidateModulePath(modPath); err != nil {
-				err = fmt.Errorf("invalid module path in %s: %w", modFile, err)
-				fmt.Println(err)
-				return "", err
+				return "", fmt.Errorf("invalid module path in %s: %w", modFile, err)
 			}
 			return modPath, nil
 		}
-		err := fmt.Errorf("invalid module line in %s: %q. The module should begin with keyword module followed by module name", modFile, line)
-		fmt.Println(err)
-		return "", err
+		return "", fmt.Errorf("invalid module line in %s: %q. The module should begin with keyword module followed by module name", modFile, line)
 	}
 	if err := scanner.Err(); err != nil {
-		err := fmt.Errorf("reading %s: %w", modFile, err)
-		fmt.Println(err)
-		return "", err
+		return "", fmt.Errorf("reading %s: %w", modFile, err)
 	}
-	err = fmt.Errorf("no module declaration in %s. The first line should begin with keyword module followed by module name", modFile)
-	fmt.Println(err)
-	return "", err
+	return "", fmt.Errorf("no module declaration in %s. The first line should begin with keyword module followed by module name", modFile)
 }
 
 // resolveModPath does up to the directory in cwd that contains pt.mod file
@@ -206,6 +196,9 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 	} else {
 		// ensure forward slashes
 		p.RelPath = filepath.ToSlash(p.RelPath)
+		if err := compiler.ValidateRelativePath(p.RelPath); err != nil {
+			return fmt.Errorf("invalid relative path %q: %w", p.RelPath, err)
+		}
 		p.ModPath = p.ModName + "/" + p.RelPath
 	}
 
@@ -319,6 +312,9 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	// Registered before the module-dispose defer, so unwinding a panic frees
 	// the half-built module first, then the ICE recovery converts the panic.
 	defer recoverICE(scriptFile, &err, os.Stderr)
+	if err := compiler.ValidateScriptName(script); err != nil {
+		return llvm.Module{}, fmt.Errorf("invalid script name %q: %w", script, err)
+	}
 
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
@@ -488,6 +484,7 @@ func New(cwd string, opts cliOptions) *Pluto {
 
 	err = p.resolveModPaths(cwd)
 	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 

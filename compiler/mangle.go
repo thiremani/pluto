@@ -54,7 +54,7 @@ const (
 type Demangled struct {
 	ModPath  string     // Module path (e.g., "github.com/user/math")
 	RelPath  string     // Relative subdirectory path (e.g., "stats/integral")
-	Name     string     // Symbol name (function or constant name)
+	Name     string     // Symbol or script name
 	Kind     SymbolKind // Type of symbol
 	Arity    int        // Number of arguments (for functions)
 	ArgTypes []string   // Argument type names (for functions)
@@ -76,11 +76,18 @@ func (d *Demangled) String() string {
 	}
 
 	var result strings.Builder
-	result.WriteString(d.FullPath())
-	result.WriteString(".")
+	result.WriteString(d.ModPath)
+	result.WriteString("/./")
+	if d.RelPath != "" {
+		result.WriteString(d.RelPath)
+		result.WriteString("/")
+	}
 	result.WriteString(d.Name)
 
-	if d.Kind == SymbolFunc {
+	switch d.Kind {
+	case SymbolScript:
+		result.WriteString(".spt")
+	case SymbolFunc:
 		result.WriteString("(")
 		result.WriteString(strings.Join(d.ArgTypes, ", "))
 		result.WriteString(")")
@@ -99,10 +106,11 @@ func Mangle(mangledPath, funcName string, args []Type) string {
 	return strings.Join(parts, SEP)
 }
 
-// ManglePath converts a module path to its mangled form per Pluto C ABI Spec.
+// ManglePath converts a logical path to its mangled form per Pluto C ABI Spec.
 // Separators: . -> d, / -> s, - -> h
 // Identifiers are length-prefixed.
 // Numeric segments use n prefix.
+// Callers must validate source paths before mangling them.
 // Example: "github.com/user/math" -> "6github_d_3com_s_4user_s_4math"
 func ManglePath(path string) string {
 	var parts []string
@@ -289,14 +297,13 @@ func MangleConst(mangledPath, constName string) string {
 	return mangledPath + SEP + MangleIdent(constName)
 }
 
-// MangleScript names a script's root body. The ENTRY suffix keeps it distinct
-// from a constant of the same name, which is otherwise the identical shape.
+// MangleScript names a validated script basename as the final path component.
 func MangleScript(mangledPath, scriptName string) string {
-	return mangledPath + SEP + MangleIdent(scriptName) + SEP + ENTRY
+	return mangledPath + SEP + ManglePath(scriptName) + SEP + ENTRY
 }
 
 // Demangle converts a mangled symbol back to human-readable form.
-// Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
+// Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math/./Square(I64)"
 // For malformed Pluto symbols, returns the error message.
 func Demangle(mangled string) string {
 	d, err := DemangleParsed(mangled)
@@ -318,7 +325,7 @@ func Demangle(mangled string) string {
 //
 // Flow after _p_:
 //  1. Parse path (could be relpath or name)
-//  2. If _r_ follows: what we parsed was relpath, parse ident for name
+//  2. If _r_ follows: what we parsed was relpath, parse the name
 //  3. If _e follows: it's a script root
 //  4. If _f<digit> follows: it's a function, parse arity and types
 //  5. Otherwise: it's a constant
@@ -352,7 +359,7 @@ func DemangleParsed(mangled string) (*Demangled, error) {
 	if strings.HasPrefix(rest, rMarker) {
 		result.RelPath = firstPath
 		rest = rest[len(rMarker):]
-		result.Name, rest = demangleIdent(rest)
+		result.Name, rest = demanglePath(rest)
 	} else {
 		result.Name = firstPath
 	}
