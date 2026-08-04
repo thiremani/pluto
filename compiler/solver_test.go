@@ -14,6 +14,23 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+func solveScriptTypes(t *testing.T, ctx llvm.Context, cc *CodeCompiler, name, source string) *TypeSolver {
+	t.Helper()
+	sc := NewScriptCompiler(ctx, name, mustParseScript(t, source), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+	return ts
+}
+
+func numberedNames(prefix string, count int) string {
+	parts := make([]string, count)
+	for i := range count {
+		parts[i] = fmt.Sprintf("%s%d", prefix, i)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func TestMutualRecursion(t *testing.T) {
 	codeStr := `# define isEven: returns (x, y) = (is-even?, is-odd?)
 x, y = isEven(n)
@@ -60,14 +77,10 @@ x, y`
 	isEvenFunc := ts.newFunc(call, args, isEvenMangled, template)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
-	walkPass := func() {
-		ts.Converging = false
-		ts.firstUnresolved = nil
-		clear(ts.walkedFuncs)
-		require.True(t, ts.TypeFunc(isEvenMangled, template))
-	}
-
-	walkPass()
+	ts.Converging = false
+	ts.firstUnresolved = nil
+	clear(ts.walkedFuncs)
+	require.True(t, ts.TypeFunc(isEvenMangled, template))
 	isOddFunc := cc.Compiler.FuncCache[isOddMangled]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
@@ -79,7 +92,10 @@ x, y`
 	require.NotNil(t, ts.firstUnresolved)
 	require.True(t, ts.Converging)
 
-	walkPass()
+	ts.Converging = false
+	ts.firstUnresolved = nil
+	clear(ts.walkedFuncs)
+	require.True(t, ts.TypeFunc(isEvenMangled, template))
 	require.True(t, isOddFunc.AllTypesInferred())
 	require.Equal(t, StrKind, isOddFunc.Sig.OutTypes[0].Kind())
 	require.Equal(t, StrKind, isOddFunc.Sig.OutTypes[1].Kind())
@@ -1395,51 +1411,30 @@ res = OuterReset(k)
 	require.Empty(t, cc.Compile())
 
 	resetMangled := Mangle(cc.Compiler.MangledPath, "Reset", []Type{I64})
-	type solveResult struct {
-		vars  map[string]Type
-		walks int
-	}
-	solve := func(name string) solveResult {
-		sl := lexer.New("TestWarmScript", "v = OuterReset(0)\nv")
-		sp := parser.NewScriptParser(sl)
-		program := sp.Parse()
-		require.Empty(t, sp.Errors())
+	coldSolver := solveScriptTypes(t, ctx, cc, t.Name()+"Cold", "v = OuterReset(0)\nv")
+	resetFunc := cc.Compiler.FuncCache[resetMangled]
+	require.NotNil(t, resetFunc)
+	require.True(t, resetFunc.Settled)
+	coldVars := maps.Clone(resetFunc.Vars)
 
-		sc := NewScriptCompiler(ctx, name, program, cc)
-		ts := NewTypeSolver(sc)
-		ts.Solve()
-		require.Empty(t, ts.Errors)
-		cached := cc.Compiler.FuncCache[resetMangled]
-		require.NotNil(t, cached)
-		require.True(t, cached.Settled)
-		return solveResult{vars: maps.Clone(cached.Vars), walks: ts.TmpCounter}
-	}
+	warmSolver := solveScriptTypes(t, ctx, cc, t.Name()+"Warm", "v = OuterReset(0)\nv")
+	require.Same(t, resetFunc, cc.Compiler.FuncCache[resetMangled])
+	warmVars := maps.Clone(resetFunc.Vars)
 
-	cold := solve(t.Name() + "Cold")
-	warm := solve(t.Name() + "Warm")
-
-	require.Equal(t, Array{ElemType: I64, Rank: 1}, cold.vars["a"])
-	require.Equal(t, Array{ElemType: I64, Rank: 1}, warm.vars["a"])
-	require.Equal(t, cold.vars, warm.vars, "a warm FuncCache must retain the specialization's variable types")
-	require.Positive(t, cold.walks)
-	require.Zero(t, warm.walks, "a settled closure must not be walked again by another script")
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, coldVars["a"])
+	require.Equal(t, Array{ElemType: I64, Rank: 1}, warmVars["a"])
+	require.Equal(t, coldVars, warmVars, "a warm FuncCache must retain the specialization's variable types")
+	require.Positive(t, coldSolver.TmpCounter)
+	require.Zero(t, warmSolver.TmpCounter, "a settled closure must not be walked again by another script")
 }
 
 // Wide resolves one of 130 outputs per pass, exceeding the former limit.
 func TestWideOutputClosureConverges(t *testing.T) {
 	const outs = 130
 
-	names := func(prefix string) string {
-		parts := make([]string, outs)
-		for i := range parts {
-			parts[i] = fmt.Sprintf("%s%d", prefix, i)
-		}
-		return strings.Join(parts, ", ")
-	}
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s = Wide(k)\n", names("o"))
-	fmt.Fprintf(&b, "    %s = Wide(k - 1)\n", names("p"))
+	fmt.Fprintf(&b, "%s = Wide(k)\n", numberedNames("o", outs))
+	fmt.Fprintf(&b, "    %s = Wide(k - 1)\n", numberedNames("p", outs))
 	fmt.Fprintf(&b, "    \"-p%d\"\n", outs-1) // consume the tail slot; only o1..oN-1 read p
 	b.WriteString("    o0 = 1\n")
 	for i := 1; i < outs; i++ {
@@ -1456,7 +1451,7 @@ func TestWideOutputClosureConverges(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "test", "", code)
 	require.Empty(t, cc.Compile())
 
-	sl := lexer.New("TestWideScript", fmt.Sprintf("%s = Wide(3)\nv0", names("v")))
+	sl := lexer.New("TestWideScript", fmt.Sprintf("%s = Wide(3)\nv0", numberedNames("v", outs)))
 	sp := parser.NewScriptParser(sl)
 	program := sp.Parse()
 	require.Empty(t, sp.Errors())
@@ -1569,30 +1564,20 @@ res = Relay(k)
 			cc := NewCodeCompiler(ctx, "outputRefine"+tt.name, "", code)
 			require.Empty(t, cc.Compile())
 
-			solve := func(scriptName string) map[string]Type {
-				sl := lexer.New("TestOutputRefineScript", "v = Root(3)\nv")
-				sp := parser.NewScriptParser(sl)
-				program := sp.Parse()
-				require.Empty(t, sp.Errors())
-
-				sc := NewScriptCompiler(ctx, scriptName, program, cc)
-				ts := NewTypeSolver(sc)
-				ts.Solve()
-				require.Empty(t, ts.Errors)
-				bindings := make(map[string]Type)
-				for _, name := range []string{"Root", "Relay"} {
-					mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
-					bindings[name] = cc.Compiler.FuncCache[mangled].Vars["res"]
-				}
-				return bindings
+			solveScriptTypes(t, ctx, cc, t.Name()+"Cold", "v = Root(3)\nv")
+			coldBindings := make(map[string]Type)
+			for _, name := range []string{"Root", "Relay"} {
+				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
+				coldBindings[name] = cc.Compiler.FuncCache[mangled].Vars["res"]
 			}
 
-			coldBindings := solve(t.Name() + "Cold")
-			warmBindings := solve(t.Name() + "Warm")
+			solveScriptTypes(t, ctx, cc, t.Name()+"Warm", "v = Root(3)\nv")
+			warmBindings := make(map[string]Type)
 			for _, name := range []string{"Root", "Relay"} {
 				mangled := Mangle(cc.Compiler.MangledPath, name, []Type{I64})
 				cached := cc.Compiler.FuncCache[mangled]
 				require.NotNil(t, cached)
+				warmBindings[name] = cached.Vars["res"]
 				require.True(t, TypeEqual(tt.want, cached.Sig.OutTypes[0]), "%s output: got %s, want %s", name, cached.Sig.OutTypes[0], tt.want)
 
 				require.True(t, cached.Settled)
@@ -1733,15 +1718,7 @@ res = Leaf(x)
 	cc := NewCodeCompiler(ctx, "remangle", "", code)
 	require.Empty(t, cc.Compile())
 
-	solve := func(name, source string) *TypeSolver {
-		sc := NewScriptCompiler(ctx, name, mustParseScript(t, source), cc)
-		ts := NewTypeSolver(sc)
-		ts.Solve()
-		require.Empty(t, ts.Errors)
-		return ts
-	}
-
-	solve(t.Name()+"Outer", "v = Outer(0)\nv")
+	solveScriptTypes(t, ctx, cc, t.Name()+"Outer", "v = Outer(0)\nv")
 	integerLeaf := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})]
 	require.NotNil(t, integerLeaf)
 	require.True(t, integerLeaf.Settled)
@@ -1751,7 +1728,7 @@ res = Leaf(x)
 	require.False(t, provisional.Settled)
 	provisional.Vars["sentinel"] = I64
 
-	otherSolver := solve(t.Name()+"Other", "v = Other(0)\nv")
+	otherSolver := solveScriptTypes(t, ctx, cc, t.Name()+"Other", "v = Other(0)\nv")
 	require.Same(t, provisional, cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Leaf", []Type{Unresolved{}})])
 	require.False(t, provisional.Settled)
 	require.NotContains(t, provisional.Vars, "sentinel", "the second script must rewalk the unsettled specialization")
