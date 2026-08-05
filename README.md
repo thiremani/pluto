@@ -382,11 +382,8 @@ module github.com/you/yourproject
 
 Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
 
-Module paths use lowercase ASCII. Project subdirectories and `.spt` basenames
-also support uppercase letters and Unicode. ASCII names may contain letters,
-digits, `_`, `.`, or `-`; boundary underscores, trailing dots, and terminal
-hyphens are rejected. Leading digits are valid, so `1.spt` in module
-`example.com/math/v1.2.3` produces executable `1`.
+Module paths, project-relative directories, and script basenames must satisfy
+Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#11-path-validation>).
 
 **Other commands:**
 
