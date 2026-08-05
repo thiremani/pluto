@@ -124,6 +124,7 @@ func GetCopy(s *Symbol) *Symbol {
 
 type Compiler struct {
 	Scopes          []Scope[*Symbol]
+	MangledNames    map[string]string // Global source name to stable LLVM linker name.
 	Context         llvm.Context
 	Module          llvm.Module
 	builder         llvm.Builder
@@ -167,6 +168,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 
 	return &Compiler{
 		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
+		MangledNames:    make(map[string]string),
 		Context:         ctx,
 		Module:          module,
 		builder:         builder,
@@ -403,7 +405,24 @@ func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
 	if !ok {
 		return nil, symbolMissing
 	}
-	return s, symbolCode
+	mangledName, ok := c.CodeCompiler.Compiler.MangledNames[name]
+	if !ok {
+		panic(fmt.Sprintf("internal: code global %q has no mangled name", name))
+	}
+	global := c.Module.NamedGlobal(mangledName)
+	if global.IsNil() {
+		panic(fmt.Sprintf("internal: code global %q is not linked into the script module", mangledName))
+	}
+	// CodeCompiler symbols are shared across scripts and retain LLVM values
+	// owned by the code module. Rebind a copy to this script's linked global.
+	linked := GetCopy(s)
+	linked.Val = global
+	return linked, symbolCode
+}
+
+func (c *Compiler) putGlobal(name, mangledName string, sym *Symbol) {
+	Put(c.Scopes, name, sym)
+	c.MangledNames[name] = mangledName
 }
 
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
@@ -492,13 +511,13 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		elemLLVM := c.mapToLLVMType(r.Iter)
 		// Build a { i64, i64, i64 }-style struct type
 		// false means “not packed”
-		return llvm.StructType(
+		return c.Context.StructType(
 			[]llvm.Type{elemLLVM, elemLLVM, elemLLVM},
 			false,
 		)
 	case ArrayRangeKind:
 		arrRange := t.(ArrayRange)
-		return llvm.StructType(
+		return c.Context.StructType(
 			[]llvm.Type{
 				c.mapToLLVMType(arrRange.Array),
 				c.mapToLLVMType(arrRange.Range),
@@ -521,7 +540,7 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		for i := 1; i < len(fields); i++ {
 			fields[i] = i64
 		}
-		return llvm.StructType(fields, false)
+		return c.Context.StructType(fields, false)
 	case TableKind:
 		table := t.(Table)
 		fields := make([]llvm.Type, len(table.Columns)+1)
@@ -530,7 +549,7 @@ func (c *Compiler) mapToLLVMType(t Type) llvm.Type {
 		for i := range table.Columns {
 			fields[i+1] = arrayPtr
 		}
-		return llvm.StructType(fields, false)
+		return c.Context.StructType(fields, false)
 	case StructKind:
 		return c.getOrCreateStructLLVMType(t.(Struct))
 	default:
@@ -561,7 +580,7 @@ func (c *Compiler) getOrCreateStructLLVMType(structType Struct) llvm.Type {
 // The 'linkage' parameter allows you to specify the desired llvm.Linkage,
 // such as llvm.ExternalLinkage for exported constants or llvm.PrivateLinkage for internal use.
 func (c *Compiler) createGlobalString(name, value string, linkage llvm.Linkage) llvm.Value {
-	strConst := llvm.ConstString(value, true)
+	strConst := c.Context.ConstString(value, true)
 	arrayLength := len(value) + 1
 	arrType := llvm.ArrayType(c.Context.Int8Type(), arrayLength)
 
@@ -578,7 +597,7 @@ func (c *Compiler) constCString(value string) llvm.Value {
 }
 
 func (c *Compiler) createFormatStringGlobal(formatted string) llvm.Value {
-	formatConst := llvm.ConstString(formatted, true)
+	formatConst := c.Context.ConstString(formatted, true)
 	globalName := fmt.Sprintf("str_fmt_%d", c.formatCounter)
 	c.formatCounter++
 
@@ -719,7 +738,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 	default:
 		panic(fmt.Sprintf("unsupported constant type: %T", v))
 	}
-	Put(c.Scopes, name, sym)
+	c.putGlobal(name, mangledName, sym)
 }
 
 func (c *Compiler) compileStructConst(v *ast.StructLiteral, sym *Symbol, mangledName string, linkage llvm.Linkage) bool {
@@ -3008,9 +3027,15 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 			continue
 		}
 
-		sym, _ = c.getRawSymbol(arg.Name)
+		sym, source := c.lookupNamedSymbol(arg.Name)
 		if sym.Type.Kind() != PtrKind {
-			sym = c.promoteToMemory(arg.Name)
+			if source == symbolCode {
+				// Code bindings are shared globals. Spill the linked value into
+				// caller-owned storage without mutating or shadowing that binding.
+				sym, _ = c.makePtr(fmt.Sprintf("%s_arg_%d", funcName, i), sym)
+			} else {
+				sym = c.promoteToMemory(arg.Name)
+			}
 		}
 		args[i].Lowered = sym
 	}
@@ -3679,7 +3704,7 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 func (c *Compiler) createPrintFormatGlobal(formatStr string) llvm.Value {
 	// Add newline and create string constant
 	formatStr = strings.TrimSuffix(formatStr, " ") + "\n"
-	formatConst := llvm.ConstString(formatStr, true)
+	formatConst := c.Context.ConstString(formatStr, true)
 
 	// Create unique global variable
 	globalName := fmt.Sprintf("printf_fmt_%d", c.formatCounter)

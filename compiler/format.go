@@ -628,6 +628,12 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 		if !TypeEqual(mainType, I64) {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
 		}
+		if _, source := c.lookupNamedSymbol(mainID); source == symbolCode {
+			return true, &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("cannot write to constant %q", mainID),
+			}
+		}
 		s := c.promoteToMemory(mainID)
 		result.args = append(result.args, s.Val)
 		return true, nil

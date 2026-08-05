@@ -1,0 +1,3 @@
+first = Echo(fallback)
+second = Echo(greeting)
+first, second

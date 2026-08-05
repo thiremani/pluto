@@ -15,6 +15,15 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
+func linkCodeModuleForTest(t *testing.T, ctx llvm.Context, dst, src llvm.Module) {
+	t.Helper()
+
+	codeBuffer := llvm.WriteBitcodeToMemoryBuffer(src)
+	codeClone, err := ctx.ParseIR(codeBuffer)
+	require.NoError(t, err, "clone code module")
+	require.NoError(t, llvm.LinkModules(dst, codeClone), "link code module")
+}
+
 func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string) (scriptIR string, codeIR string) {
 	t.Helper()
 
@@ -29,11 +38,16 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 
 	cc := NewCodeCompiler(ctx, moduleName, "", codeAST)
 	require.Empty(t, cc.Compile())
+	require.NoError(t, llvm.VerifyModule(cc.Compiler.Module, llvm.ReturnStatusAction), "code module must verify")
 	program := mustParseScript(t, scriptSrc)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	if strings.TrimSpace(codeSrc) != "" {
+		linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+	}
 	errs := sc.Compile()
 	require.Empty(t, errs)
+	require.NoError(t, llvm.VerifyModule(sc.Compiler.Module, llvm.ReturnStatusAction), "script module must verify")
 
 	return sc.Compiler.GenerateIR(), cc.Compiler.GenerateIR()
 }
@@ -180,33 +194,15 @@ row`
 	require.Contains(t, scriptIR, "store i1 true, ptr %res_written", "a yielded ranged selection must mark the output as written")
 }
 
-// verifyCompiledFunctions asserts LLVM accepts every function a source pair
-// lowers to. The alias selector picks an output by position, so a mistyped
-// output reaching it yields IR that runs wrong or fails object emission.
-// Verification is per function because module scope additionally trips on
-// format-string globals built in the wrong LLVM context.
-func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string) {
+// verifyCompiledModules asserts LLVM accepts the complete code and script
+// modules lowered from a source pair.
+func verifyCompiledModules(t *testing.T, moduleName, codeSrc, scriptSrc string) {
 	t.Helper()
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
-	require.Empty(t, cc.Compile())
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, scriptSrc), cc)
-	require.Empty(t, sc.Compile())
-
-	verified := 0
-	for fn := sc.Compiler.Module.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
-		if fn.IsDeclaration() {
-			continue
-		}
-		require.NoError(t, llvm.VerifyFunction(fn, llvm.ReturnStatusAction), "function %s must verify", fn.Name())
-		verified++
-	}
-	require.NotZero(t, verified, "expected at least one defined function to verify")
+	compileScriptAndCodeIR(t, moduleName, codeSrc, scriptSrc)
 }
 
+// The alias selector picks an output by position, so a mistyped output reaching
+// it can produce invalid IR or silently select the wrong slot.
 func TestAliasSelectorTypeGaps(t *testing.T) {
 	const accFirst = "s = 1\nq, r = Mixed(s, 0:4)\nq, r"
 
@@ -217,7 +213,220 @@ func TestAliasSelectorTypeGaps(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifyCompiledFunctions(t, "alias_mismatch", tc.code, tc.script)
+			verifyCompiledModules(t, "alias_mismatch", tc.code, tc.script)
+		})
+	}
+}
+
+func TestContextSensitiveLLVMConstructionsVerify(t *testing.T) {
+	tests := []struct {
+		name       string
+		moduleName string
+		code       string
+		script     string
+	}{
+		{
+			name:       "static strings",
+			moduleName: "verify_static_strings",
+			code:       `greeting = "hello"`,
+			script: `local = "world"
+local`,
+		},
+		{
+			name:       "interpolation",
+			moduleName: "verify_interpolation",
+			script: `name = "Ada"
+message = "hello -name"
+message`,
+		},
+		{
+			name:       "ranges array ranges and rank n arrays",
+			moduleName: "verify_range_arrays",
+			code: `out = Identity(x)
+    out = x`,
+			script: `rows = 0:2
+matrix = [
+    1 2
+    3 4
+]
+row = Identity(matrix[rows])
+row`,
+		},
+		{
+			name:       "tables",
+			moduleName: "verify_tables",
+			script: `scores = [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
+scores`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verifyCompiledModules(t, tt.moduleName, tt.code, tt.script)
+		})
+	}
+}
+
+// LLVM's verifier does not expose context ownership for anonymous aggregate
+// types, so compare their context handles directly.
+func TestMappedAggregateTypesUseCompilerContext(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	c := NewCodeCompiler(ctx, "verify_type_contexts", "", ast.NewCode()).Compiler
+	rangeType := Range{Iter: I64}
+	tests := []struct {
+		name string
+		typ  Type
+	}{
+		{name: "range", typ: rangeType},
+		{name: "array range", typ: ArrayRange{
+			Array: Array{ElemType: I64, Rank: 2},
+			Range: rangeType,
+		}},
+		{name: "rank n array", typ: Array{ElemType: I64, Rank: 2}},
+		{name: "table", typ: Table{Columns: []TableColumn{
+			{Name: "Score", ElemType: I64},
+		}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, c.mapToLLVMType(tt.typ).Context() == ctx,
+				"%s must use the compiler context", tt.name)
+		})
+	}
+}
+
+func TestLinkedCodeConstantsVerify(t *testing.T) {
+	tests := []struct {
+		name       string
+		moduleName string
+		code       string
+		script     string
+	}{
+		{
+			name:       "numeric",
+			moduleName: "verify_numeric_constant",
+			code: `pi = 3.14159
+
+out = Double(value)
+    out = value * 2.0`,
+			script: `twice = Double(pi)
+twice`,
+		},
+		{
+			name:       "string",
+			moduleName: "verify_string_constant",
+			code: `greeting = "hello"
+
+out = Echo(value)
+    out = value`,
+			script: `echoed = Echo(greeting)
+echoed`,
+		},
+		{
+			name:       "struct",
+			moduleName: "verify_struct_constant",
+			code: `person = Person
+  : name age
+    "Ada" 37
+
+age = PersonAge(value)
+    age = value.age`,
+			script: `age = PersonAge(person)
+age`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verifyCompiledModules(t, tt.moduleName, tt.code, tt.script)
+		})
+	}
+}
+
+func TestLinkedCodeGlobalLookupDoesNotMutateSharedSymbol(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "verify_shared_code_symbol", "", mustParseCode(t, `alpha = 1
+answer = 42`))
+	require.Empty(t, cc.Compile())
+	original, ok := Get(cc.Compiler.Scopes, "answer")
+	require.True(t, ok)
+	originalValue := original.Val
+	mangledName, ok := cc.Compiler.MangledNames["answer"]
+	require.True(t, ok)
+	require.Equal(t, MangleConst(cc.Compiler.MangledPath, "answer"), mangledName)
+
+	tests := []struct {
+		name   string
+		script string
+	}{
+		{name: "first", script: "first = answer + 1\nfirst"},
+		{name: "second", script: "second = answer + 2\nsecond"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := NewScriptCompiler(ctx, tt.name, mustParseScript(t, tt.script), cc)
+			linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+			require.Empty(t, sc.Compile())
+
+			linked, source := sc.Compiler.lookupNamedSymbol("answer")
+			expected := sc.Compiler.Module.NamedGlobal(mangledName)
+			require.Equal(t, symbolCode, source)
+			require.NotSame(t, original, linked)
+			require.False(t, expected.IsNil())
+			require.Equal(t, mangledName, linked.Val.Name())
+			require.True(t, linked.Val == expected)
+			require.True(t, linked.Val.GlobalParent() == sc.Compiler.Module)
+			require.True(t, original.Val == originalValue)
+			require.True(t, original.Val.GlobalParent() == cc.Compiler.Module)
+			require.NoError(t, llvm.VerifyModule(sc.Compiler.Module, llvm.ReturnStatusAction))
+		})
+	}
+}
+
+func TestLinkedCodeStringCallDoesNotMutateSharedSymbol(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "verify_shared_code_string", "", mustParseCode(t, `fallback = "goodbye"
+greeting = "hello"
+
+out = Echo(value)
+    out = value`))
+	require.Empty(t, cc.Compile())
+	original, ok := Get(cc.Compiler.Scopes, "greeting")
+	require.True(t, ok)
+	originalValue := original.Val
+	originalType := original.Type
+	mangledName, ok := cc.Compiler.MangledNames["greeting"]
+	require.True(t, ok)
+	require.Equal(t, MangleConst(cc.Compiler.MangledPath, "greeting"), mangledName)
+
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) {
+			sc := NewScriptCompiler(ctx, name, mustParseScript(t, "echoed = Echo(greeting)\nechoed"), cc)
+			linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+			require.Empty(t, sc.Compile())
+
+			linked, source := sc.Compiler.lookupNamedSymbol("greeting")
+			expected := sc.Compiler.Module.NamedGlobal(mangledName)
+			require.Equal(t, symbolCode, source)
+			require.False(t, expected.IsNil())
+			require.True(t, linked.Val == expected)
+			require.True(t, original.Val == originalValue)
+			require.True(t, TypeEqual(original.Type, originalType))
+			require.True(t, original.Val.GlobalParent() == cc.Compiler.Module)
+			_, promotedLocally := Get(sc.Compiler.Scopes, "greeting")
+			require.False(t, promotedLocally)
+			require.NoError(t, llvm.VerifyModule(sc.Compiler.Module, llvm.ReturnStatusAction))
 		})
 	}
 }
@@ -562,6 +771,9 @@ greeting = "hello\n\x41"`
 	c := NewCodeCompiler(llvm.NewContext(), "testConst", "", code)
 	c.Compile()
 	ir := c.Compiler.GenerateIR()
+	require.Equal(t, "Pt_9testConst_p_2pi", c.Compiler.MangledNames["pi"])
+	require.Equal(t, "Pt_9testConst_p_6answer", c.Compiler.MangledNames["answer"])
+	require.Equal(t, "Pt_9testConst_p_8greeting", c.Compiler.MangledNames["greeting"])
 
 	// Constants are now mangled per C ABI spec: Pt_[ModPath]_p_[Name]
 	expPi := "@Pt_9testConst_p_2pi = unnamed_addr constant double 0x400921FB54411744"

@@ -32,6 +32,40 @@ func parseTestIR(t *testing.T, ir string) llvm.Module {
 	return mod
 }
 
+func TestEmitObjectRejectsInvalidModuleBeforeOptimization(t *testing.T) {
+	ctx := llvm.NewContext()
+	codeModule := ctx.NewModule("code")
+	codeGlobal := llvm.AddGlobal(codeModule, ctx.Int64Type(), "answer")
+	codeGlobal.SetInitializer(llvm.ConstInt(ctx.Int64Type(), 42, false))
+
+	scriptModule := ctx.NewModule("script")
+	fnType := llvm.FunctionType(ctx.Int64Type(), nil, false)
+	fn := llvm.AddFunction(scriptModule, "main", fnType)
+	entry := ctx.AddBasicBlock(fn, "entry")
+	builder := ctx.NewBuilder()
+	t.Cleanup(func() {
+		builder.Dispose()
+		scriptModule.Dispose()
+		codeModule.Dispose()
+		ctx.Dispose()
+	})
+	builder.SetInsertPointAtEnd(entry)
+	loaded := builder.CreateLoad(ctx.Int64Type(), codeGlobal, "answer_load")
+	builder.CreateRet(loaded)
+
+	p := &Pluto{}
+	err := p.emitObject(scriptModule, filepath.Join(t.TempDir(), "invalid.o"))
+	if err == nil {
+		t.Fatal("expected invalid cross-module reference to fail verification")
+	}
+	if got := err.Error(); !strings.Contains(got, "compiler generated invalid LLVM IR before optimization") {
+		t.Fatalf("unexpected verification error: %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "Referencing global in another module") {
+		t.Fatalf("verification error does not include LLVM diagnostic: %v", err)
+	}
+}
+
 func TestAnnotateScalarUnrollLoopsMarksSmallScalarRecurrence(t *testing.T) {
 	mod := parseTestIR(t, `
 define i64 @fib_like(i64 %n) {

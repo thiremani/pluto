@@ -230,6 +230,26 @@ width = 3.5
 	}
 }
 
+func TestFormatCountRejectsCodeConstant(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "format_code_constant", "", mustParseCode(t, `answer = 42`))
+	if errs := cc.Compile(); len(errs) != 0 {
+		t.Fatalf("unexpected code compile errors: %v", errs)
+	}
+
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, `"count-answer%n"`), cc)
+	linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+	errs := sc.Compile()
+	if len(errs) != 1 {
+		t.Fatalf("expected one compile error, got %d: %v", len(errs), errs)
+	}
+	if got, want := errs[0].Msg, `cannot write to constant "answer"`; got != want {
+		t.Fatalf("compile error = %q, want %q", got, want)
+	}
+}
+
 func TestValidFormatString(t *testing.T) {
 	tests := []struct {
 		name         string
