@@ -96,6 +96,10 @@ func (cfg buildConfig) newTargetMachine() (llvm.TargetMachine, error) {
 }
 
 func (p *Pluto) emitObject(module llvm.Module, objFile string) error {
+	if err := llvm.VerifyModule(module, llvm.ReturnStatusAction); err != nil {
+		return fmt.Errorf("compiler generated invalid LLVM IR before optimization: %w", err)
+	}
+
 	tm, err := p.Config.newTargetMachine()
 	if err != nil {
 		return err
