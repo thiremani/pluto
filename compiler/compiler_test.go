@@ -360,6 +360,9 @@ answer = 42`))
 	original, ok := Get(cc.Compiler.Scopes, "answer")
 	require.True(t, ok)
 	originalValue := original.Val
+	mangledName, ok := cc.Compiler.MangledNames["answer"]
+	require.True(t, ok)
+	require.Equal(t, MangleConst(cc.Compiler.MangledPath, "answer"), mangledName)
 
 	tests := []struct {
 		name   string
@@ -375,11 +378,11 @@ answer = 42`))
 			require.Empty(t, sc.Compile())
 
 			linked, source := sc.Compiler.lookupNamedSymbol("answer")
-			expected := sc.Compiler.Module.NamedGlobal(originalValue.Name())
+			expected := sc.Compiler.Module.NamedGlobal(mangledName)
 			require.Equal(t, symbolCode, source)
 			require.NotSame(t, original, linked)
 			require.False(t, expected.IsNil())
-			require.Equal(t, originalValue.Name(), linked.Val.Name())
+			require.Equal(t, mangledName, linked.Val.Name())
 			require.True(t, linked.Val == expected)
 			require.True(t, linked.Val.GlobalParent() == sc.Compiler.Module)
 			require.True(t, original.Val == originalValue)
@@ -403,6 +406,9 @@ out = Echo(value)
 	require.True(t, ok)
 	originalValue := original.Val
 	originalType := original.Type
+	mangledName, ok := cc.Compiler.MangledNames["greeting"]
+	require.True(t, ok)
+	require.Equal(t, MangleConst(cc.Compiler.MangledPath, "greeting"), mangledName)
 
 	for _, name := range []string{"first", "second"} {
 		t.Run(name, func(t *testing.T) {
@@ -411,7 +417,7 @@ out = Echo(value)
 			require.Empty(t, sc.Compile())
 
 			linked, source := sc.Compiler.lookupNamedSymbol("greeting")
-			expected := sc.Compiler.Module.NamedGlobal(originalValue.Name())
+			expected := sc.Compiler.Module.NamedGlobal(mangledName)
 			require.Equal(t, symbolCode, source)
 			require.False(t, expected.IsNil())
 			require.True(t, linked.Val == expected)
@@ -765,6 +771,9 @@ greeting = "hello\n\x41"`
 	c := NewCodeCompiler(llvm.NewContext(), "testConst", "", code)
 	c.Compile()
 	ir := c.Compiler.GenerateIR()
+	require.Equal(t, "Pt_9testConst_p_2pi", c.Compiler.MangledNames["pi"])
+	require.Equal(t, "Pt_9testConst_p_6answer", c.Compiler.MangledNames["answer"])
+	require.Equal(t, "Pt_9testConst_p_8greeting", c.Compiler.MangledNames["greeting"])
 
 	// Constants are now mangled per C ABI spec: Pt_[ModPath]_p_[Name]
 	expPi := "@Pt_9testConst_p_2pi = unnamed_addr constant double 0x400921FB54411744"

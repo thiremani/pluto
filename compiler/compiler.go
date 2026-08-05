@@ -124,6 +124,7 @@ func GetCopy(s *Symbol) *Symbol {
 
 type Compiler struct {
 	Scopes          []Scope[*Symbol]
+	MangledNames    map[string]string // Global source name to stable LLVM linker name.
 	Context         llvm.Context
 	Module          llvm.Module
 	builder         llvm.Builder
@@ -167,6 +168,7 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 
 	return &Compiler{
 		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
+		MangledNames:    make(map[string]string),
 		Context:         ctx,
 		Module:          module,
 		builder:         builder,
@@ -403,13 +405,24 @@ func (c *Compiler) lookupNamedSymbol(name string) (*Symbol, symbolSource) {
 	if !ok {
 		return nil, symbolMissing
 	}
-	global := c.Module.NamedGlobal(s.Val.Name())
-	if global.IsNil() {
-		panic(fmt.Sprintf("internal: code global %q is not linked into the script module", s.Val.Name()))
+	mangledName, ok := c.CodeCompiler.Compiler.MangledNames[name]
+	if !ok {
+		panic(fmt.Sprintf("internal: code global %q has no mangled name", name))
 	}
+	global := c.Module.NamedGlobal(mangledName)
+	if global.IsNil() {
+		panic(fmt.Sprintf("internal: code global %q is not linked into the script module", mangledName))
+	}
+	// CodeCompiler symbols are shared across scripts and retain LLVM values
+	// owned by the code module. Rebind a copy to this script's linked global.
 	linked := GetCopy(s)
 	linked.Val = global
 	return linked, symbolCode
+}
+
+func (c *Compiler) putGlobal(name, mangledName string, sym *Symbol) {
+	Put(c.Scopes, name, sym)
+	c.MangledNames[name] = mangledName
 }
 
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
@@ -725,7 +738,7 @@ func (c *Compiler) compileConstBinding(name string, valueExpr ast.Expression) {
 	default:
 		panic(fmt.Sprintf("unsupported constant type: %T", v))
 	}
-	Put(c.Scopes, name, sym)
+	c.putGlobal(name, mangledName, sym)
 }
 
 func (c *Compiler) compileStructConst(v *ast.StructLiteral, sym *Symbol, mangledName string, linkage llvm.Linkage) bool {
