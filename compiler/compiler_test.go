@@ -271,6 +271,8 @@ scores`,
 	}
 }
 
+// LLVM's verifier does not expose context ownership for anonymous aggregate
+// types, so compare their context handles directly.
 func TestMappedAggregateTypesUseCompilerContext(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -310,23 +312,34 @@ func TestLinkedCodeConstantsVerify(t *testing.T) {
 		{
 			name:       "numeric",
 			moduleName: "verify_numeric_constant",
-			code:       `pi = 3.14159`,
-			script: `twice = pi * 2.0
+			code: `pi = 3.14159
+
+out = Double(value)
+    out = value * 2.0`,
+			script: `twice = Double(pi)
 twice`,
 		},
 		{
 			name:       "string",
 			moduleName: "verify_string_constant",
-			code:       `greeting = "hello"`,
-			script:     `greeting`,
+			code: `greeting = "hello"
+
+out = Echo(value)
+    out = value`,
+			script: `echoed = Echo(greeting)
+echoed`,
 		},
 		{
 			name:       "struct",
 			moduleName: "verify_struct_constant",
 			code: `person = Person
   : name age
-    "Ada" 37`,
-			script: `person.name, person.age`,
+    "Ada" 37
+
+age = PersonAge(value)
+    age = value.age`,
+			script: `age = PersonAge(person)
+age`,
 		},
 	}
 
@@ -341,7 +354,8 @@ func TestLinkedCodeGlobalLookupDoesNotMutateSharedSymbol(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "verify_shared_code_symbol", "", mustParseCode(t, `answer = 42`))
+	cc := NewCodeCompiler(ctx, "verify_shared_code_symbol", "", mustParseCode(t, `alpha = 1
+answer = 42`))
 	require.Empty(t, cc.Compile())
 	original, ok := Get(cc.Compiler.Scopes, "answer")
 	require.True(t, ok)
@@ -361,11 +375,51 @@ func TestLinkedCodeGlobalLookupDoesNotMutateSharedSymbol(t *testing.T) {
 			require.Empty(t, sc.Compile())
 
 			linked, source := sc.Compiler.lookupNamedSymbol("answer")
+			expected := sc.Compiler.Module.NamedGlobal(originalValue.Name())
 			require.Equal(t, symbolCode, source)
 			require.NotSame(t, original, linked)
+			require.False(t, expected.IsNil())
+			require.Equal(t, originalValue.Name(), linked.Val.Name())
+			require.True(t, linked.Val == expected)
 			require.True(t, linked.Val.GlobalParent() == sc.Compiler.Module)
 			require.True(t, original.Val == originalValue)
 			require.True(t, original.Val.GlobalParent() == cc.Compiler.Module)
+			require.NoError(t, llvm.VerifyModule(sc.Compiler.Module, llvm.ReturnStatusAction))
+		})
+	}
+}
+
+func TestLinkedCodeStringCallDoesNotMutateSharedSymbol(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "verify_shared_code_string", "", mustParseCode(t, `fallback = "goodbye"
+greeting = "hello"
+
+out = Echo(value)
+    out = value`))
+	require.Empty(t, cc.Compile())
+	original, ok := Get(cc.Compiler.Scopes, "greeting")
+	require.True(t, ok)
+	originalValue := original.Val
+	originalType := original.Type
+
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) {
+			sc := NewScriptCompiler(ctx, name, mustParseScript(t, "echoed = Echo(greeting)\nechoed"), cc)
+			linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+			require.Empty(t, sc.Compile())
+
+			linked, source := sc.Compiler.lookupNamedSymbol("greeting")
+			expected := sc.Compiler.Module.NamedGlobal(originalValue.Name())
+			require.Equal(t, symbolCode, source)
+			require.False(t, expected.IsNil())
+			require.True(t, linked.Val == expected)
+			require.True(t, original.Val == originalValue)
+			require.True(t, TypeEqual(original.Type, originalType))
+			require.True(t, original.Val.GlobalParent() == cc.Compiler.Module)
+			_, promotedLocally := Get(sc.Compiler.Scopes, "greeting")
+			require.False(t, promotedLocally)
 			require.NoError(t, llvm.VerifyModule(sc.Compiler.Module, llvm.ReturnStatusAction))
 		})
 	}

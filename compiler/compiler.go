@@ -3014,9 +3014,15 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 			continue
 		}
 
-		sym, _ = c.getRawSymbol(arg.Name)
+		sym, source := c.lookupNamedSymbol(arg.Name)
 		if sym.Type.Kind() != PtrKind {
-			sym = c.promoteToMemory(arg.Name)
+			if source == symbolCode {
+				// Code bindings are shared globals. Spill the linked value into
+				// caller-owned storage without mutating or shadowing that binding.
+				sym, _ = c.makePtr(fmt.Sprintf("%s_arg_%d", funcName, i), sym)
+			} else {
+				sym = c.promoteToMemory(arg.Name)
+			}
 		}
 		args[i].Lowered = sym
 	}

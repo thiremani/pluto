@@ -1,0 +1,5 @@
+fallback = "goodbye"
+greeting = "hello"
+
+out = Echo(value)
+    out = value
