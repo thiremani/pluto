@@ -31,9 +31,7 @@ func compileScriptAndCodeIR(t *testing.T, moduleName, codeSrc, scriptSrc string)
 	require.Empty(t, cc.Compile())
 	program := mustParseScript(t, scriptSrc)
 
-	funcCache := make(map[string]*Func)
-	exprCache := cc.Compiler.ExprCache
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	errs := sc.Compile()
 	require.Empty(t, errs)
 
@@ -195,7 +193,7 @@ func verifyCompiledFunctions(t *testing.T, moduleName, codeSrc, scriptSrc string
 
 	cc := NewCodeCompiler(ctx, moduleName, "", mustParseCode(t, codeSrc))
 	require.Empty(t, cc.Compile())
-	sc := NewScriptCompiler(ctx, mustParseScript(t, scriptSrc), cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, scriptSrc), cc)
 	require.Empty(t, sc.Compile())
 
 	verified := 0
@@ -523,9 +521,7 @@ x, six`
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "testFormatIdentifiers", "", ast.NewCode())
 
-	funcCache := make(map[string]*Func)
-	exprCache := make(map[ExprKey]*ExprInfo)
-	sc := NewScriptCompiler(ctx, program, cc, funcCache, exprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	sc.Compile()
 	testStr := "x = -x, six = -six"
 	sl := &ast.StringLiteral{
@@ -907,6 +903,8 @@ func TestMakeSeededTempOutputsCopiesPointerSeed(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "ptr_seed_module", "", ast.NewCode())
 	c := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
+	c.FuncNameMangled = "ptr_seed_fn"
+	c.FuncCache[c.FuncNameMangled] = &FuncInfo{Vars: make(map[string]Type)}
 
 	// Simulate the entry block state used by compileFuncBlock.
 	fnType := llvm.FunctionType(ctx.VoidType(), nil, false)
@@ -992,7 +990,7 @@ result`
 
 	cc := NewCodeCompiler(ctx, "array_rank_mismatch", "", ast.NewCode())
 	program := mustParseScript(t, script)
-	sc := NewScriptCompiler(ctx, program, cc, make(map[string]*Func), cc.Compiler.ExprCache)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 
 	errs := sc.Compile()
 	require.NotEmpty(t, errs, "expected different array ranks to fail")

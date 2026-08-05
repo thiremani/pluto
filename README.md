@@ -382,6 +382,9 @@ module github.com/you/yourproject
 
 Pluto walks up from the working directory to find `pt.mod` and treats that directory as the project root.
 
+Module paths, project-relative directories, and script basenames must satisfy
+Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#11-path-validation>).
+
 **Other commands:**
 
 - `./pluto -version` (or `-v`) — show version

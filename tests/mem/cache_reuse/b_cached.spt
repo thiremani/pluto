@@ -1,0 +1,4 @@
+outerNums = OuterReset(0)
+outerWords = OuterResetStrings(0)
+outerNums
+outerWords

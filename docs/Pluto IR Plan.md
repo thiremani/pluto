@@ -64,11 +64,27 @@ created range owns only the statements it drives, so its empty domain suspends
 exactly those slots.
 Template-time CFG has neither distinction — it misreports a body like
 `i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
-computed once per mangled specialization are what resolve it. Any such
-per-specialization cache must bundle write effects, binding types, and
-validation results atomically: FuncCache is already shared across the scripts
-of one run while BindingTypes is rebuilt per script, and that split is exactly
-what produced issue #71's compile-order-dependent wrong output.
+derived while walking each concrete specialization are what resolve it. A
+script root owns its current compilation facts; a function specialization
+publishes reusable facts behind `FuncInfo.Settled` after its body and reachable
+function closure have completed. The code compiler owns both `FuncCache` and
+`ExprCache`, and every script compiler inherits both map references. Phase 1
+must extend that shared lifetime with write effects instead of adding another
+cache with a shorter lifetime. PIR validation can then consume the same
+coherent analysis. Issue
+#71's compile-order-dependent wrong output came from reusing some body facts
+while discarding others.
+
+The solver may reach a body more than once: `TypeScriptFunc` repeats the whole
+closure until one pass changes nothing. A change is any monotonic output
+refinement, including `Array(Empty)` to a concrete array or `StrG` to `StrH`,
+not merely an unresolved slot becoming resolved. Snapshot analysis such as
+`FuncInfo.Vars` must therefore be cleared and rebuilt when its body is walked, and
+become reusable only when the body is settled. `ExprCache` is different:
+stable AST entries are overwritten, while generated rewrite nodes may add new
+entries across walks. It is not a safe precedent for append-only analysis.
+Work that belongs only to the final pass should run where `TypeScriptFunc`
+recognises the stable closure and publishes `Settled`.
 
 Output spans, unlike write effects, are structural before any typing: a call
 site must consume exactly `len(callee.Outputs)` destinations, and that arity

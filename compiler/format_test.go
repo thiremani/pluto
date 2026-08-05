@@ -214,8 +214,7 @@ width = 3.5
 			ctx := llvm.NewContext()
 			cc := NewCodeCompiler(ctx, "TestFormatStringErrors", "", ast.NewCode())
 
-			funcCache := make(map[string]*Func)
-			sc := NewScriptCompiler(ctx, program, cc, funcCache, cc.Compiler.ExprCache)
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 			errs := sc.Compile()
 
 			if len(errs) == 0 {
@@ -553,8 +552,7 @@ precision = 2
 			ctx := llvm.NewContext()
 			cc := NewCodeCompiler(ctx, "TestValidFormatString", "", ast.NewCode())
 
-			funcCache := make(map[string]*Func)
-			sc := NewScriptCompiler(ctx, program, cc, funcCache, cc.Compiler.ExprCache)
+			sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 			if errs := sc.Compile(); len(errs) > 0 {
 				t.Fatalf("unexpected compile errors: %v", errs)
 			}

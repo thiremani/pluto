@@ -26,13 +26,15 @@ func TestValidateModulePath(t *testing.T) {
 		{"mixed segment", "pkg/2foo", false, ""},
 		{"pure numeric", "pkg/123", false, ""},
 		// With new rules: . and - are valid in segments, so these are now valid
-		{"hyphen in name", "foo-con", false, ""},          // foo-con is ONE segment
-		{"hyphen separated", "my-con-pkg", false, ""},     // my-con-pkg is ONE segment
-		{"leading hyphen in segment", "-foo", false, ""},  // -foo is valid
-		{"leading dot in segment", ".hidden", false, ""},  // .hidden is valid (Unix hidden files)
-		{"trailing hyphen in segment", "foo-", false, ""}, // foo- is valid
-		{"double hyphen", "foo--bar", false, ""},          // foo--bar is valid (no __ rule for -)
-		{"double dot", "foo..bar", false, ""},             // foo..bar is valid (no __ rule for .)
+		{"hyphen in name", "foo-con", false, ""},         // foo-con is ONE segment
+		{"hyphen separated", "my-con-pkg", false, ""},    // my-con-pkg is ONE segment
+		{"leading hyphen in segment", "-foo", false, ""}, // -foo is valid
+		{"leading dot in segment", ".hidden", false, ""}, // .hidden is valid (Unix hidden files)
+		{"terminal hyphen", "foo-", true, "ends with hyphen"},
+		{"hyphen before slash", "foo-/bar", false, ""},
+		{"terminal hyphen after slash", "foo/bar-", true, "ends with hyphen"},
+		{"double hyphen", "foo--bar", false, ""}, // foo--bar is valid (no __ rule for -)
+		{"double dot", "foo..bar", false, ""},    // foo..bar is valid (no __ rule for .)
 
 		// Invalid: empty
 		{"empty path", "", true, "cannot be empty"},
@@ -45,6 +47,8 @@ func TestValidateModulePath(t *testing.T) {
 		// Invalid: double underscore
 		{"double underscore", "my__pkg", true, "double underscore"},
 		{"double underscore in segment", "github.com/my__user/pkg", true, "double underscore"},
+		{"underscore before dot", "foo_.bar", true, "underscore before separator"},
+		{"underscore before hyphen", "foo_-bar", true, "underscore before separator"},
 
 		// Invalid: trailing underscore
 		{"trailing underscore", "pkg_", true, "ends with underscore"},
@@ -54,6 +58,7 @@ func TestValidateModulePath(t *testing.T) {
 		{"double slash", "foo//bar", true, "empty segment"},
 		{"leading slash", "/foo", true, "empty segment"},
 		{"trailing slash", "foo/", true, "empty segment"},
+		{"dot segment", "foo/./bar", true, "ends with dot"},
 
 		// Invalid: underscore edge cases
 		{"underscore only segment", "_", true, "ends with underscore"},
@@ -104,4 +109,58 @@ func TestValidateModulePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateScriptName(t *testing.T) {
+	tests := []struct {
+		name    string
+		script  string
+		wantErr string
+	}{
+		{"simple", "report", ""},
+		{"numeric", "1", ""},
+		{"leading-zero numeric", "01", ""},
+		{"version style", "1.2.3", ""},
+		{"hyphenated", "daily-report", ""},
+		{"leading dot", ".hidden", ""},
+		{"empty", "", "cannot be empty"},
+		{"path", "reports/daily", "invalid character"},
+		{"backslash", `reports\daily`, "invalid character"},
+		{"uppercase", "Report", ""},
+		{"double underscore", "daily__report", "double underscore"},
+		{"trailing underscore", "report_", "ends with underscore"},
+		{"trailing dot", "report.", "ends with dot"},
+		{"dot", ".", "ends with dot"},
+		{"trailing hyphen", "report-", "ends with hyphen"},
+		{"reserved", "con.txt", "Windows reserved"},
+		{"unicode", "日本", ""},
+		{"unicode position", "日本!", "position 2"},
+		{"invalid UTF-8", string([]byte{0xff}), "not valid UTF-8"},
+		{"underscore before dot", "daily_.report", "underscore before separator"},
+		{"underscore before hyphen", "daily_-report", "underscore before separator"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateScriptName(tt.script)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestValidateRelativePath(t *testing.T) {
+	assert.NoError(t, ValidateRelativePath(""))
+	assert.NoError(t, ValidateRelativePath("reports/v1.2.3"))
+	assert.NoError(t, ValidateRelativePath("Reports/日本/v1.2.3"))
+	assert.NoError(t, ValidateRelativePath("reports-/daily"))
+	assert.ErrorContains(t, ValidateRelativePath("daily__reports"), "double underscore")
+	assert.ErrorContains(t, ValidateRelativePath("daily_.reports"), "underscore before separator")
+	assert.ErrorContains(t, ValidateRelativePath("reports/daily-"), "ends with hyphen")
+	assert.ErrorContains(t, ValidateRelativePath("reports/./daily"), "ends with dot")
+	assert.ErrorContains(t, ValidateRelativePath("."), "ends with dot")
+	assert.ErrorContains(t, ValidateRelativePath(string([]byte{0xff})), "not valid UTF-8")
 }

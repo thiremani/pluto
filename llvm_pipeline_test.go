@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thiremani/pluto/compiler"
 	"tinygo.org/x/go-llvm"
 )
 
@@ -282,7 +281,7 @@ res
 	if err != nil {
 		t.Fatalf("compile code: %v", err)
 	}
-	scriptModule, err := p.CompileScript(scriptFiles[0], "main", cc, codeLL, map[string]*compiler.Func{}, map[compiler.ExprKey]*compiler.ExprInfo{})
+	scriptModule, err := p.CompileScript(scriptFiles[0], "main", cc, codeLL)
 	if err != nil {
 		t.Fatalf("compile script: %v", err)
 	}

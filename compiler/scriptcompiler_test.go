@@ -30,6 +30,29 @@ func mustParseCode(t *testing.T, input string) *ast.Code {
 	return code
 }
 
+func TestScriptRootIsNamespacedAndCached(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "scriptRoots", "", ast.NewCode())
+	report := NewScriptCompiler(ctx, "report", mustParseScript(t, "value = 1\nvalue"), cc)
+	summary := NewScriptCompiler(ctx, "summary", mustParseScript(t, "value = 2\nvalue"), cc)
+
+	require.Equal(t, MangleScript(cc.Compiler.MangledPath, "report"), report.ScriptMangled)
+	require.NotEqual(t, report.ScriptMangled, summary.ScriptMangled)
+	require.NotEqual(t, report.ScriptMangled, MangleScript("other", "report"))
+	require.Same(t, report.Script.Root, cc.Compiler.FuncCache[report.ScriptMangled])
+	require.Same(t, summary.Script.Root, cc.Compiler.FuncCache[summary.ScriptMangled])
+	require.Equal(t, report.ScriptMangled, report.Compiler.FuncNameMangled)
+	require.Equal(t, summary.ScriptMangled, summary.Compiler.FuncNameMangled)
+
+	reportSolver := NewTypeSolver(report)
+	require.Equal(t, report.ScriptMangled, reportSolver.FuncNameMangled)
+	reportSolver.Solve()
+	require.Empty(t, reportSolver.Errors)
+	require.Equal(t, I64, report.Script.Root.Vars["value"])
+}
+
 func TestFuncCacheReuse(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -42,58 +65,56 @@ c = add(a, b)
 	codeCompiler := NewCodeCompiler(ctx, "cacheTestCode", "", codeAST)
 	require.Empty(t, codeCompiler.Compile())
 
-	// This is the shared cache that will persist across compilations.
-	funcCache := make(map[string]*Func)
-	exprCache := codeCompiler.Compiler.ExprCache
+	funcCache := codeCompiler.Compiler.FuncCache
 
 	t.Run("Compile with Ints to populate cache", func(t *testing.T) {
 		scriptA := `x = add(1, 2)
 x`
 		progA := mustParseScript(t, scriptA)
-		scA := NewScriptCompiler(ctx, progA, codeCompiler, funcCache, exprCache)
+		scA := NewScriptCompiler(ctx, t.Name(), progA, codeCompiler)
 
 		errs := scA.Compile()
 		require.Empty(t, errs, "First script compilation should succeed")
 
 		// Assert that the cache is now populated correctly.
-		require.Len(t, funcCache, 1, "Cache size should be 1 after first compile")
+		require.Len(t, funcCache, 2, "cache should contain the script root and integer specialization")
 
 		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		assert.Contains(t, funcCache, key, "Cache should contain the integer version of add")
 	})
 
 	t.Run("Compile with Ints again to test cache hit", func(t *testing.T) {
-		// Get the original *Func pointer from the cache to compare against later.
+		// Get the original *FuncInfo pointer from the cache to compare against later.
 		key := "Pt_13cacheTestCode_p_3add_f2_I64_I64"
 		f1 := funcCache[key]
-		require.NotNil(t, f1, "Func instance from first compile should exist")
+		require.NotNil(t, f1, "FuncInfo instance from first compile should exist")
 
 		scriptB := `y = add(3, 4)
 y`
 		progB := mustParseScript(t, scriptB)
-		scB := NewScriptCompiler(ctx, progB, codeCompiler, funcCache, exprCache)
+		scB := NewScriptCompiler(ctx, t.Name(), progB, codeCompiler)
 
 		errs := scB.Compile()
 		require.Empty(t, errs, "Second script compilation should succeed")
 
 		// Assert that the cache was reused, not added to.
-		assert.Len(t, funcCache, 1, "Cache size should remain 1, proving reuse")
+		assert.Len(t, funcCache, 3, "the second script root should reuse the integer specialization")
 
 		// Assert that the instance in the cache is the exact same one.
-		assert.Same(t, f1, funcCache[key], "Func instance should be the same pointer, proving no re-creation")
+		assert.Same(t, f1, funcCache[key], "FuncInfo instance should be the same pointer, proving no re-creation")
 	})
 
 	t.Run("Compile with Floats to test cache miss", func(t *testing.T) {
 		scriptC := `z = add(1.0, 2.5)
 z`
 		progC := mustParseScript(t, scriptC)
-		scC := NewScriptCompiler(ctx, progC, codeCompiler, funcCache, exprCache)
+		scC := NewScriptCompiler(ctx, t.Name(), progC, codeCompiler)
 
 		errs := scC.Compile()
 		require.Empty(t, errs, "Third script compilation should succeed")
 
 		// Assert that a NEW entry was added to the cache.
-		assert.Len(t, funcCache, 2, "Cache size should be 2 after compiling a new type")
+		assert.Len(t, funcCache, 5, "the third script root should add one float specialization")
 
 		mangledFloatKey := "Pt_13cacheTestCode_p_3add_f2_F64_F64"
 		assert.Contains(t, funcCache, mangledFloatKey, "Cache should now contain the float version of add")

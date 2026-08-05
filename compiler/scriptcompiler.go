@@ -7,17 +7,34 @@ import (
 )
 
 type ScriptCompiler struct {
-	Compiler *Compiler
-	Program  *ast.Program
+	Compiler      *Compiler
+	Program       *ast.Program
+	Script        *Script
+	ScriptMangled string // immutable script-root key (_e; function keys use _f<N>)
 }
 
-func NewScriptCompiler(ctx llvm.Context, program *ast.Program, cc *CodeCompiler, funcCache map[string]*Func, exprCache map[ExprKey]*ExprInfo) *ScriptCompiler {
+type Script struct {
+	Name string
+	Root *FuncInfo
+}
+
+func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler) *ScriptCompiler {
 	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
-	compiler.FuncCache = funcCache
-	compiler.ExprCache = exprCache
+	script := &Script{
+		Name: name,
+		Root: &FuncInfo{
+			Sig:  Func{Name: name},
+			Vars: make(map[string]Type),
+		},
+	}
+	scriptMangled := MangleScript(cc.Compiler.MangledPath, name)
+	compiler.FuncNameMangled = scriptMangled
+	compiler.FuncCache[scriptMangled] = script.Root
 	return &ScriptCompiler{
-		Compiler: compiler,
-		Program:  program,
+		Compiler:      compiler,
+		Program:       program,
+		Script:        script,
+		ScriptMangled: scriptMangled,
 	}
 }
 
@@ -28,7 +45,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	if len(ts.Errors) != 0 {
 		return ts.Errors
 	}
-	sc.Compiler.BindingTypes = ts.BindingTypes
 
 	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)
 	cfg.Analyze(sc.Program.Statements)

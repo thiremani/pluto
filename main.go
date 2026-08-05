@@ -133,9 +133,7 @@ func findModRoot(startDir string) (string, error) {
 		}
 		dir = parent
 	}
-	err := fmt.Errorf("%s not found from %s upward. The %s file should be present in the project file's root directory", MOD_FILE, startDir, MOD_FILE)
-	fmt.Println(err)
-	return "", err
+	return "", fmt.Errorf("%s not found from %s upward. The %s file should be present in the project file's root directory", MOD_FILE, startDir, MOD_FILE)
 }
 
 // parseModuleName opens the given pt.mod file and returns the module path
@@ -157,24 +155,16 @@ func parseModuleName(modFile string) (string, error) {
 		if len(parts) >= 2 && parts[0] == "module" {
 			modPath := parts[1]
 			if err := compiler.ValidateModulePath(modPath); err != nil {
-				err = fmt.Errorf("invalid module path in %s: %w", modFile, err)
-				fmt.Println(err)
-				return "", err
+				return "", fmt.Errorf("invalid module path in %s: %w", modFile, err)
 			}
 			return modPath, nil
 		}
-		err := fmt.Errorf("invalid module line in %s: %q. The module should begin with keyword module followed by module name", modFile, line)
-		fmt.Println(err)
-		return "", err
+		return "", fmt.Errorf("invalid module line in %s: %q. The module should begin with keyword module followed by module name", modFile, line)
 	}
 	if err := scanner.Err(); err != nil {
-		err := fmt.Errorf("reading %s: %w", modFile, err)
-		fmt.Println(err)
-		return "", err
+		return "", fmt.Errorf("reading %s: %w", modFile, err)
 	}
-	err = fmt.Errorf("no module declaration in %s. The first line should begin with keyword module followed by module name", modFile)
-	fmt.Println(err)
-	return "", err
+	return "", fmt.Errorf("no module declaration in %s. The first line should begin with keyword module followed by module name", modFile)
 }
 
 // resolveModPath does up to the directory in cwd that contains pt.mod file
@@ -206,6 +196,9 @@ func (p *Pluto) resolveModPaths(cwd string) error {
 	} else {
 		// ensure forward slashes
 		p.RelPath = filepath.ToSlash(p.RelPath)
+		if err := compiler.ValidateRelativePath(p.RelPath); err != nil {
+			return fmt.Errorf("invalid relative path %q: %w", p.RelPath, err)
+		}
 		p.ModPath = p.ModName + "/" + p.RelPath
 	}
 
@@ -315,10 +308,13 @@ func (p *Pluto) CompileCode(codeFiles []string) (cc *compiler.CodeCompiler, code
 }
 
 // CompileScript returns an owned LLVM module. The caller must dispose it.
-func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string, funcCache map[string]*compiler.Func, exprCache map[compiler.ExprKey]*compiler.ExprInfo) (mod llvm.Module, err error) {
+func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompiler, codeLL string) (mod llvm.Module, err error) {
 	// Registered before the module-dispose defer, so unwinding a panic frees
 	// the half-built module first, then the ICE recovery converts the panic.
 	defer recoverICE(scriptFile, &err, os.Stderr)
+	if err := compiler.ValidateScriptName(script); err != nil {
+		return llvm.Module{}, fmt.Errorf("invalid script name %q: %w", script, err)
+	}
 
 	source, err := os.ReadFile(scriptFile)
 	if err != nil {
@@ -335,7 +331,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 		fmt.Printf("error parsing scriptFile %s for script %s\n", scriptFile, script)
 		return llvm.Module{}, fmt.Errorf("parser errors for %s", scriptFile)
 	}
-	sc := compiler.NewScriptCompiler(p.Ctx, program, cc, funcCache, exprCache)
+	sc := compiler.NewScriptCompiler(p.Ctx, script, program, cc)
 	scriptModule := sc.Compiler.Module
 	moduleReturned := false
 	defer cleanupUnlessReleased(&moduleReturned, scriptModule.Dispose)
@@ -488,6 +484,7 @@ func New(cwd string, opts cliOptions) *Pluto {
 
 	err = p.resolveModPaths(cwd)
 	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -641,12 +638,10 @@ func runCompile(opts cliOptions) {
 	}
 
 	binErr := 0
-	funcCache := make(map[string]*compiler.Func)
-	exprCache := make(map[compiler.ExprKey]*compiler.ExprInfo)
 	compileErr, stoppedOnICE := compileScriptsUntilICE(scriptFiles, func(scriptFile string) error {
 		script := strings.TrimSuffix(filepath.Base(scriptFile), SPT_SUFFIX)
 		fmt.Println("🛠️ Starting compile for script: " + script)
-		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL, funcCache, exprCache)
+		scriptModule, err := p.CompileScript(scriptFile, script, codeCompiler, codeLL)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Printf("⛓️‍💥 Error while trying to compile %s\n", script)

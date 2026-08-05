@@ -148,6 +148,8 @@ func TestManglePath(t *testing.T) {
 
 		// Numeric segments (version numbers)
 		{"version number", "v1.2.3", "2v1_d_n2_d_n3"},
+		{"leading-zero numeric", "01", "n01"},
+		{"digit then unicode", "2日本", "n2_u2_0065E500672C"},
 		{"mixed numeric", "pkg/v2", "3pkg_s_2v2"},
 		{"pure numeric segment", "lib/123/util", "3lib_s_n123_s_4util"},
 		{"mixed digit-prefix segment", "v1.2.34abc", "2v1_d_n2_d_n34_3abc"},
@@ -754,4 +756,68 @@ func TestConstDemangleRoundTrip(t *testing.T) {
 			assert.Equal(t, tt.expected, demangled)
 		})
 	}
+}
+
+func TestMangleScriptRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		modName string
+		relPath string
+		script  string
+		want    string
+	}{
+		{"simple", "mymod", "", "report", "mymod/report"},
+		{"with relpath", "mymod", "sub/dir", "report", "mymod/sub/dir/report"},
+		{"named script", "mymod", "", "script", "mymod/script"},
+		{"digit leading", "mymod", "", "1a", "mymod/1a"},
+		{"versioned module", "example.com/math/v1.2.3", "", "1", "example.com/math/v1.2.3/1"},
+		{"path separators", "mymod", "sub/dir", "1.2-report", "mymod/sub/dir/1.2-report"},
+		{"leading dot", "mymod", "", ".hidden", "mymod/.hidden"},
+		{"leading hyphen", "mymod", "", "-report", "mymod/-report"},
+		{"uppercase", "mymod", "Reports", "Daily", "mymod/Reports/Daily"},
+		{"digit then unicode", "mymod", "", "2日本", "mymod/2日本"},
+		{"unicode", "mymod", "", "日本", "mymod/日本"},
+		{"separator letters", "mymod", "", "shd", "mymod/shd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NoError(t, ValidateRelativePath(tt.relPath))
+			assert.NoError(t, ValidateScriptName(tt.script))
+
+			path := MangleDirPath(tt.modName, tt.relPath)
+			sym := MangleScript(path, tt.script)
+
+			d, err := DemangleParsed(sym)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.modName, d.ModPath)
+			assert.Equal(t, tt.relPath, d.RelPath)
+			assert.Equal(t, tt.script, d.Name)
+			assert.Equal(t, SymbolScript, d.Kind)
+			assert.Equal(t, tt.want, Demangle(sym))
+
+			assert.NotEqual(t, MangleConst(path, tt.script), sym)
+			assert.NotEqual(t, Mangle(path, tt.script, []Type{I64}), sym)
+		})
+	}
+}
+
+func TestDemangleDisplayUsesFullPath(t *testing.T) {
+	moduleScript := MangleScript(MangleDirPath("github.com/math", "stat"), "dist")
+	nestedModuleScript := MangleScript(MangleDirPath("github.com/math/stat", ""), "dist")
+	constant := MangleConst(MangleDirPath("github.com/math", "stat"), "dist")
+
+	assert.Equal(t, "github.com/math/stat/dist", Demangle(moduleScript))
+	assert.Equal(t, "github.com/math/stat/dist", Demangle(nestedModuleScript))
+	assert.Equal(t, "github.com/math/stat.dist", Demangle(constant))
+	assert.NotEqual(t, moduleScript, nestedModuleScript)
+	assert.Equal(t, Demangle(moduleScript), Demangle(nestedModuleScript))
+	assert.NotEqual(t, Demangle(moduleScript), Demangle(constant))
+}
+
+func TestMangleScriptUsesPathEncoding(t *testing.T) {
+	path := MangleDirPath("example.com/math/v1.2.3", "reports/daily")
+	mangled := MangleScript(path, "1.2-summary")
+
+	assert.Equal(t, "Pt_7example_d_3com_s_4math_s_2v1_d_n2_d_n3_p_7reports_s_5daily_r_n1_d_n2_h_7summary_e", mangled)
 }

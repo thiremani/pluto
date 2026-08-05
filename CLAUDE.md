@@ -155,6 +155,7 @@ CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `p
 - Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
 - Go formatting: `go fmt ./...`; basic checks: `go vet ./...`
 - Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions
+- Avoid local helper closures in production and tests. Keep short logic inline; when extraction is worthwhile, define a package-level function or method and pass dependencies explicitly, even for a single caller. Use closures only when a callback API requires one or lexical capture is essential; test helpers that assert should call `t.Helper()`.
 - Filenames: lowercase with underscores where needed (Go convention)
 
 ## Commit & Pull Request Guidelines

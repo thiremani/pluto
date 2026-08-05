@@ -89,7 +89,7 @@ type callSignature struct {
 	FuncName   string
 	Mangled    string
 	ParamTypes []Type
-	FnInfo     *Func
+	FnInfo     *FuncInfo
 	ABI        FuncABI
 }
 
@@ -98,13 +98,6 @@ type preparedCall struct {
 	Function  llvm.Value
 	FuncType  llvm.Type
 	RetStruct llvm.Type
-}
-
-// BindingKey identifies a variable binding within a specific function variant.
-// Script-level bindings use an empty FuncNameMangled.
-type BindingKey struct {
-	FuncNameMangled string
-	Name            string
 }
 
 // paramAlias tracks an aliased direct scalar param binding for the active
@@ -139,10 +132,9 @@ type Compiler struct {
 	MangledPath     string        // pre-computed "Pt_[ModPath]_p_[RelPath]" or "Pt_[ModPath]_p"
 	CodeCompiler    *CodeCompiler // Optional reference for script compilation
 	StructCache     map[string]*Struct
-	FuncCache       map[string]*Func
-	BindingTypes    map[BindingKey]Type
+	FuncCache       map[string]*FuncInfo
 	ExprCache       map[ExprKey]*ExprInfo
-	FuncNameMangled string // current function's mangled name ("" for script level)
+	FuncNameMangled string // current script root or function specialization key
 	Errors          []*token.CompileError
 	paramAliasStack []map[string]*paramAlias
 	stmtCtxStack    []stmtCtx
@@ -164,6 +156,14 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		}
 	}
 	builder := ctx.NewBuilder()
+	var funcCache map[string]*FuncInfo
+	var exprCache map[ExprKey]*ExprInfo
+	if cc == nil {
+		funcCache = make(map[string]*FuncInfo)
+		exprCache = make(map[ExprKey]*ExprInfo)
+	} else {
+		funcCache, exprCache = cc.Compiler.FuncCache, cc.Compiler.ExprCache
+	}
 
 	return &Compiler{
 		Scopes:          []Scope[*Symbol]{NewScope[*Symbol](FuncScope)},
@@ -175,8 +175,8 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		MangledPath:     mangledPath,
 		CodeCompiler:    cc,
 		StructCache:     make(map[string]*Struct),
-		FuncCache:       make(map[string]*Func),
-		ExprCache:       make(map[ExprKey]*ExprInfo),
+		FuncCache:       funcCache,
+		ExprCache:       exprCache,
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
 		paramAliasStack: []map[string]*paramAlias{},
@@ -200,10 +200,8 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
-	typ, ok := c.BindingTypes[BindingKey{
-		FuncNameMangled: c.FuncNameMangled,
-		Name:            name,
-	}]
+	f := c.FuncCache[c.FuncNameMangled]
+	typ, ok := f.Vars[name]
 	if !ok {
 		return fallback
 	}
@@ -306,13 +304,16 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 		})
 		return nil, false
 	}
+	if !fnInfo.Settled {
+		panic(fmt.Sprintf("internal: function specialization %s reached lowering before settlement", mangled))
+	}
 
 	return &callSignature{
 		FuncName:   funcName,
 		Mangled:    mangled,
 		ParamTypes: paramTypes,
 		FnInfo:     fnInfo,
-		ABI:        classifyFuncABI(paramTypes, fnInfo.OutTypes),
+		ABI:        classifyFuncABI(paramTypes, fnInfo.Sig.OutTypes),
 	}, true
 }
 
@@ -2641,7 +2642,7 @@ func (c *Compiler) directOutputSeed(index int, outType Type, sig *callSignature,
 func (c *Compiler) processDirectOutputValues(fn *ast.FuncStatement, sig *callSignature, function llvm.Value) []*Symbol {
 	outputs := make([]*Symbol, len(fn.Outputs))
 	for i := range fn.Outputs {
-		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.OutTypes[i], sig, function))
+		output := GetCopy(c.directOutputSeed(i, sig.FnInfo.Sig.OutTypes[i], sig, function))
 		output.FuncArg = true
 		output.Borrowed = false
 		output.ReadOnly = false
@@ -2713,7 +2714,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	var outputs []*Symbol
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.OutTypes)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.Sig.OutTypes)
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}
@@ -3144,11 +3145,6 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	if !ok {
 		return nil
 	}
-	// Mutual-recursion convergence can leave this call site's cache partially
-	// unresolved even though the selected function variant is now concrete.
-	// Keep every lowering path aligned with the authoritative ABI types.
-	info.OutTypes = append([]Type(nil), sig.ABI.Return.OutTypes...)
-	info.ExprLen = len(info.OutTypes)
 
 	if sig.ABI.Return.Mode == ABIReturnDirect {
 		if !info.LoopInside && len(info.Ranges) > 0 {

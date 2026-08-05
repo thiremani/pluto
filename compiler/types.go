@@ -209,7 +209,7 @@ func (r Range) Kind() Kind {
 type Func struct {
 	Name     string
 	Params   []Type
-	OutTypes []Type // Final function output types (after wrapping for array types)
+	OutTypes []Type
 }
 
 func (f Func) String() string {
@@ -261,6 +261,21 @@ func (f Func) OutputTypesInferred() bool {
 		}
 	}
 	return true
+}
+
+// FuncInfo holds the mutable facts for one function specialization.
+type FuncInfo struct {
+	Sig     Func
+	Vars    map[string]Type
+	Settled bool
+}
+
+func (f *FuncInfo) AllTypesInferred() bool {
+	return f.Sig.AllTypesInferred()
+}
+
+func (f *FuncInfo) OutputTypesInferred() bool {
+	return f.Sig.OutputTypesInferred()
 }
 
 // IsFullyResolvedType reports whether a type contains no unresolved components.
@@ -620,6 +635,20 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return true
 	}
+	oldStruct, oldIsStruct := oldType.(Struct)
+	newStruct, newIsStruct := newType.(Struct)
+	if oldIsStruct && newIsStruct {
+		if oldStruct.Name != newStruct.Name || len(oldStruct.Fields) != len(newStruct.Fields) {
+			return false
+		}
+		for i, oldField := range oldStruct.Fields {
+			newField := newStruct.Fields[i]
+			if oldField.Name != newField.Name || !bindingSlotCompatible(oldField.Type, newField.Type) {
+				return false
+			}
+		}
+		return true
+	}
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)
 	if oldIsArray && newIsArray {
@@ -640,12 +669,23 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	return CanRefineType(oldType, newType)
 }
 
-// mergeBindingSlotType assumes bindingSlotCompatible(oldType, newType) is true.
-// For strings it widens to the owning flavor; for all other types callers have
-// already established that newType is a valid refinement of the existing slot.
+// mergeBindingSlotType joins compatible observations without narrowing storage.
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
 		return mergeStringFlavor(oldType, newType)
+	}
+	oldStruct, oldIsStruct := oldType.(Struct)
+	newStruct, newIsStruct := newType.(Struct)
+	if oldIsStruct && newIsStruct {
+		merged := oldStruct
+		merged.Fields = make([]StructField, len(oldStruct.Fields))
+		for i, oldField := range oldStruct.Fields {
+			merged.Fields[i] = StructField{
+				Name: oldField.Name,
+				Type: mergeBindingSlotType(oldField.Type, newStruct.Fields[i].Type),
+			}
+		}
+		return merged
 	}
 	oldArray, oldIsArray := oldType.(Array)
 	newArray, newIsArray := newType.(Array)

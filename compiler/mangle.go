@@ -18,6 +18,10 @@ const (
 	OP  = "op" // Operator prefix
 	N   = "n"  // Numeric segment prefix
 	SEP = "_"  // General separator
+	// ENTRY marks a script root. Like F it trails the name, because the name
+	// position needs a length-prefixed segment: a leading marker yields an empty
+	// name, or a corrupted one when it starts with a separator code (d, s, h).
+	ENTRY = "e"
 )
 
 // Path separator characters
@@ -43,13 +47,14 @@ const (
 	SymbolFunc                       // Standalone function
 	SymbolMethod                     // Method on a type (future)
 	SymbolOperator                   // Operator overload (future)
+	SymbolScript                     // Script root body
 )
 
 // Demangled holds the parsed components of a mangled symbol.
 type Demangled struct {
 	ModPath  string     // Module path (e.g., "github.com/user/math")
 	RelPath  string     // Relative subdirectory path (e.g., "stats/integral")
-	Name     string     // Symbol name (function or constant name)
+	Name     string     // Symbol or script name
 	Kind     SymbolKind // Type of symbol
 	Arity    int        // Number of arguments (for functions)
 	ArgTypes []string   // Argument type names (for functions)
@@ -72,7 +77,11 @@ func (d *Demangled) String() string {
 
 	var result strings.Builder
 	result.WriteString(d.FullPath())
-	result.WriteString(".")
+	if d.Kind == SymbolScript {
+		result.WriteString("/")
+	} else {
+		result.WriteString(".")
+	}
 	result.WriteString(d.Name)
 
 	if d.Kind == SymbolFunc {
@@ -94,10 +103,11 @@ func Mangle(mangledPath, funcName string, args []Type) string {
 	return strings.Join(parts, SEP)
 }
 
-// ManglePath converts a module path to its mangled form per Pluto C ABI Spec.
+// ManglePath converts a logical path to its mangled form per Pluto C ABI Spec.
 // Separators: . -> d, / -> s, - -> h
 // Identifiers are length-prefixed.
 // Numeric segments use n prefix.
+// Callers must validate source paths before mangling them.
 // Example: "github.com/user/math" -> "6github_d_3com_s_4user_s_4math"
 func ManglePath(path string) string {
 	var parts []string
@@ -284,7 +294,13 @@ func MangleConst(mangledPath, constName string) string {
 	return mangledPath + SEP + MangleIdent(constName)
 }
 
+// MangleScript names a validated script basename as the final path component.
+func MangleScript(mangledPath, scriptName string) string {
+	return mangledPath + SEP + ManglePath(scriptName) + SEP + ENTRY
+}
+
 // Demangle converts a mangled symbol back to human-readable form.
+// Functions and constants use path.entity; scripts use path/name.
 // Example: "Pt_6github_d_3com_s_4user_s_4math_p_6Square_f1_I64" -> "github.com/user/math.Square(I64)"
 // For malformed Pluto symbols, returns the error message.
 func Demangle(mangled string) string {
@@ -302,12 +318,15 @@ func Demangle(mangled string) string {
 //   - Function (with relpath): Pt_ModPath_p_RelPath_r_Name_fN[_Type]*
 //   - Constant (no relpath): Pt_ModPath_p_Name
 //   - Constant (with relpath): Pt_ModPath_p_RelPath_r_Name
+//   - Script root (no relpath): Pt_ModPath_p_Name_e
+//   - Script root (with relpath): Pt_ModPath_p_RelPath_r_Name_e
 //
 // Flow after _p_:
 //  1. Parse path (could be relpath or name)
-//  2. If _r_ follows: what we parsed was relpath, parse ident for name
-//  3. If _f<digit> follows: it's a function, parse arity and types
-//  4. Otherwise: it's a constant
+//  2. If _r_ follows: what we parsed was relpath, parse the name
+//  3. If _e follows: it's a script root
+//  4. If _f<digit> follows: it's a function, parse arity and types
+//  5. Otherwise: it's a constant
 //
 // Returns error if symbol starts with Pt_ but is malformed (missing _p_ marker).
 // Non-Pluto symbols (no Pt_ prefix) pass through without error.
@@ -338,12 +357,16 @@ func DemangleParsed(mangled string) (*Demangled, error) {
 	if strings.HasPrefix(rest, rMarker) {
 		result.RelPath = firstPath
 		rest = rest[len(rMarker):]
-		result.Name, rest = demangleIdent(rest)
+		result.Name, rest = demanglePath(rest)
 	} else {
 		result.Name = firstPath
 	}
 
-	// Parse function signature if present
+	// Parse the trailing kind marker if present
+	if rest == SEP+ENTRY {
+		result.Kind = SymbolScript
+		return result, nil
+	}
 	demangleFunc(result, rest)
 
 	return result, nil

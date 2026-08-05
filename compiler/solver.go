@@ -100,8 +100,7 @@ func (info *ExprInfo) HasCondExpr() bool {
 	return false
 }
 
-// ExprKey is the key for ExprCache, combining function context with expression.
-// FuncNameMangled is the mangled function name ("" for script-level expressions).
+// ExprKey combines a script-root or function-specialization key with an expression.
 type ExprKey struct {
 	FuncNameMangled string
 	Expr            ast.Expression
@@ -125,31 +124,28 @@ type pendingAssignment struct {
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
-	InProgress         map[string]struct{} // if we are currently in progress of inferring types for func. This is for recursion/mutual recursion
-	ScriptFunc         string              // this is the current func in the main scope we are inferring type for
-	FuncNameMangled    string              // current function's mangled name ("" for script level)
-	Converging         bool
+	FuncNameMangled    string // current script root or function specialization key
+	Converging         bool   // current closure pass changed at least one cached output
 	Errors             []*token.CompileError
-	BindingTypes       map[BindingKey]Type
 	ExprCache          map[ExprKey]*ExprInfo
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
+	walkedFuncs        map[string]struct{} // specializations walked in the current pass
+	firstUnresolved    *ast.FuncStatement
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
 		ScriptCompiler:     sc,
 		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
-		InProgress:         map[string]struct{}{},
-		ScriptFunc:         "",
-		FuncNameMangled:    "",
+		FuncNameMangled:    sc.ScriptMangled,
 		Converging:         false,
 		Errors:             []*token.CompileError{},
-		BindingTypes:       make(map[BindingKey]Type),
 		ExprCache:          sc.Compiler.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
+		walkedFuncs:        make(map[string]struct{}),
 	}
 }
 
@@ -157,10 +153,11 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	if typ.Kind() == UnresolvedKind {
 		return
 	}
-	ts.BindingTypes[BindingKey{
-		FuncNameMangled: ts.FuncNameMangled,
-		Name:            name,
-	}] = typ
+	f := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
+	if f == nil {
+		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
+	}
+	f.Vars[name] = typ
 }
 
 // resolveBindingSlotType computes the binding slot type for a resolved RHS and
@@ -703,7 +700,7 @@ func (ts *TypeSolver) Solve() {
 		// Intentional: only report unresolved bindings for script scope.
 		// Function-scope unresolved types may be resolved later when that function
 		// is reached by a concrete script-level call.
-		if pending.funcNameMangled != "" {
+		if pending.funcNameMangled != ts.ScriptCompiler.ScriptMangled {
 			continue
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -711,7 +708,6 @@ func (ts *TypeSolver) Solve() {
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
 	}
-
 }
 
 // TypePrintStatement types a print in value position: a comparison yields its
@@ -2263,7 +2259,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 	}
 
 	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
-	info.OutTypes = append([]Type(nil), f.OutTypes...)
+	info.OutTypes = append([]Type(nil), f.Sig.OutTypes...)
 	info.ExprLen = len(info.OutTypes)
 	info.HasRanges = hasRanges
 	info.LoopInside = loopInside
@@ -2434,24 +2430,27 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
-// newFunc creates a new Func entry for the given call expression and caches it.
+// newFunc creates and caches a specialization record for the call.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
-	f := &Func{
-		Name:     ce.Function.Value,
-		Params:   args,
-		OutTypes: make([]Type, len(template.Outputs)),
+// Cache before inference so recursive calls can reuse the partial specialization.
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+	f := &FuncInfo{
+		Sig: Func{
+			Name:     ce.Function.Value,
+			Params:   args,
+			OutTypes: make([]Type, len(template.Outputs)),
+		},
+		Vars: make(map[string]Type),
 	}
-	for i := range f.OutTypes {
-		f.OutTypes[i] = Unresolved{}
+	for i := range f.Sig.OutTypes {
+		f.Sig.OutTypes[i] = Unresolved{}
 	}
 	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	return f
 }
 
-func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *Func {
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
-	// Already-inferred fast-path is handled centrally in TypeFunc.
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
@@ -2460,8 +2459,11 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
-	if ts.ScriptFunc != "" {
-		ts.TypeFunc(mangled, template, f)
+	if ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled {
+		ts.TypeFunc(mangled, template)
+		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
+			ts.firstUnresolved = template
+		}
 		return f
 	}
 
@@ -2472,7 +2474,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 		}
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ce.Token,
-			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Name, i+1),
+			Msg:   fmt.Sprintf("Function in script called with unknown argument type. Func Name: %s. Argument #: %d", f.Sig.Name, i+1),
 		})
 		return f
 	}
@@ -2480,83 +2482,63 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	return f
 }
 
-// This is a blocking iterative solver
-// This function is assumed to be in the top level script
-// If it does not resolve eventually to concrete output types then the code cannot and should not proceed further
-func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *Func) []Type {
-	ts.ScriptFunc = f.Name
-	defer func() { ts.ScriptFunc = "" }()
+// TypeScriptFunc blocks until the reachable function closure is stable.
+func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement, f *FuncInfo) []Type {
 	errsAtEntry := len(ts.Errors)
-	// multiple passes may be needed to infer types for script level function
-	for range 100 {
+	// Rewalk because resolved arguments can reveal new specializations, while
+	// callers typed before their callees resolve retain stale body facts.
+	for {
 		ts.Converging = false
-		inferred := ts.TypeFunc(mangled, template, f)
-		// Root script call only depends on this function's concrete outputs.
-		if inferred {
-			return f.OutTypes
-		}
+		ts.firstUnresolved = nil
+		clear(ts.walkedFuncs)
+		ts.TypeFunc(mangled, template)
 
-		// A typing error is fatal for this function: TypeBlock aborts on it
-		// before outputs infer, and the error is deterministic, so another
-		// pass would only append the same diagnostic again. Stopping here
-		// keeps the error list append-only with no duplicates, and skips the
-		// "not converging" message — the reported errors are the cause, not
-		// cyclic recursion.
+		// Avoid duplicating deterministic diagnostics on later passes.
 		if len(ts.Errors) > errsAtEntry {
-			return f.OutTypes
+			return f.Sig.OutTypes
 		}
 
-		// no further progress possible
+		// An unchanged complete pass refreshes body metadata against final signatures.
+		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
+			for walked := range ts.walkedFuncs {
+				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				if cached == nil || !cached.AllTypesInferred() {
+					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
+				}
+			}
+			for walked := range ts.walkedFuncs {
+				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
+				cached.Settled = true
+			}
+			return f.Sig.OutTypes
+		}
+
 		if !ts.Converging {
+			blamed := template
+			if ts.firstUnresolved != nil {
+				blamed = ts.firstUnresolved
+			}
 			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: template.Token,
-				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", f.Name),
+				Token: blamed.Token,
+				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", blamed.Token.Literal),
 			})
-			return f.OutTypes
+			return f.Sig.OutTypes
 		}
 	}
-	panic("Could not infer output types for function %s in script" + f.Name)
 }
 
-// refreshInferredFuncExprCache runs one extra local type pass to refresh ExprCache
-// entries after a function first reaches fully inferred outputs.
-// Unresolved callees are temporarily blocked so this pass does not recurse into
-// additional function inference.
-func (ts *TypeSolver) refreshInferredFuncExprCache(mangled string, template *ast.FuncStatement, f *Func) {
-	blocked := make(map[string]struct{}, len(ts.InProgress)+len(ts.ScriptCompiler.Compiler.FuncCache))
-	// Block this function and unresolved callees so this pass stays local.
-	blocked[mangled] = struct{}{}
-	for fn := range ts.InProgress {
-		blocked[fn] = struct{}{}
-	}
-	for fn, cached := range ts.ScriptCompiler.Compiler.FuncCache {
-		if !cached.OutputTypesInferred() {
-			blocked[fn] = struct{}{}
-		}
-	}
-
-	savedInProgress := ts.InProgress
-	savedFuncNameMangled := ts.FuncNameMangled
-	savedConverging := ts.Converging
-	ts.InProgress = blocked
-	ts.FuncNameMangled = mangled
-	ts.TypeBlock(template, f)
-	ts.FuncNameMangled = savedFuncNameMangled
-	ts.InProgress = savedInProgress
-	ts.Converging = savedConverging
-}
-
-// TypeFunc attempts to walk the function block and infer types for output variables.
-// It ASSUMES all output types have not been inferred
-func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *Func) bool {
-	if f.OutputTypesInferred() {
+// TypeFunc reports whether a specialization is resolved, walking it at most
+// once per pass and skipping specializations already settled in the shared cache.
+func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
+	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
+	if f.Settled {
 		return true
 	}
-	if _, ok := ts.InProgress[mangled]; ok {
+	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
-	ts.InProgress[mangled] = struct{}{}
-	defer func() { delete(ts.InProgress, mangled) }()
+	ts.walkedFuncs[mangled] = struct{}{}
+	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled
@@ -2564,19 +2546,23 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement, f *F
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
-	inferred := f.OutputTypesInferred()
-	if inferred {
-		ts.refreshInferredFuncExprCache(mangled, template, f)
-	}
-	return inferred
+	return f.OutputTypesInferred()
 }
 
-func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
+func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 	PushScope(&ts.Scopes, FuncScope)
 	defer PopScope(&ts.Scopes)
 
 	for i, id := range template.Parameters {
-		Put(ts.Scopes, id.Value, f.Params[i])
+		Put(ts.Scopes, id.Value, f.Sig.Params[i])
+	}
+	// Seed known outputs so rewalked body metadata matches lowering.
+	for i, id := range template.Outputs {
+		if !IsFullyResolvedType(f.Sig.OutTypes[i]) {
+			continue
+		}
+		Put(ts.Scopes, id.Value, f.Sig.OutTypes[i])
+		ts.recordBindingSlotType(id.Value, f.Sig.OutTypes[i])
 	}
 
 	oldErrs := len(ts.Errors)
@@ -2592,21 +2578,30 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *Func) {
 		if !ok {
 			ce := &token.CompileError{
 				Token: id.Token,
-				Msg:   fmt.Sprintf("Should have either inferred type of output or marked it unresolved. Function %s. output argument: %s", f.Name, id.Value),
+				Msg:   fmt.Sprintf("Should have either inferred type of output or marked it unresolved. Function %s. output argument: %s", f.Sig.Name, id.Value),
 			}
 			ts.Errors = append(ts.Errors, ce)
 			return
 		}
 
-		oldOutArg := f.OutTypes[i]
-		if IsFullyResolvedType(oldOutArg) {
+		if !IsFullyResolvedType(outArg) {
 			continue
 		}
 
-		if IsFullyResolvedType(outArg) {
-			ts.Converging = true
-			f.OutTypes[i] = outArg
+		oldOutArg := f.Sig.OutTypes[i]
+		if !bindingSlotCompatible(oldOutArg, outArg) {
+			panic(fmt.Sprintf(
+				"internal: function %s output %s changed incompatibly from %s to %s",
+				f.Sig.Name, id.Value, oldOutArg.Mangle(), outArg.Mangle(),
+			))
+		}
+		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
+		ts.recordBindingSlotType(id.Value, nextOutArg)
+		if TypeEqual(oldOutArg, nextOutArg) {
 			continue
 		}
+
+		ts.Converging = true
+		f.Sig.OutTypes[i] = nextOutArg
 	}
 }
