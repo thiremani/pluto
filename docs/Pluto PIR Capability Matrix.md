@@ -83,7 +83,8 @@ two together rather than treating any single row as a deletion trigger.
 | 5c | none | call | scalar, heap, multi-output | blank (`_`) | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R (sink shipped, §4) | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) |
 | 5d | none | checked | scalar, heap | blank (`_`) | — | — | R (sink shipped, §4) | 5 |
 | 5e | scalar | ordinary, call | scalar, heap, multi-output | blank (`_`) | — | both | R (sink shipped, §4) | 6 |
-| 5f | none | ranged | scalar, heap, multi-output | blank (`_`) | RHS-local | — | R (sink shipped, §4) | 7 |
+| 5f | none | call, ranged | scalar, heap, multi-output | blank (`_`) | RHS-local | all-`MustWrite` | R (sink shipped, §4) | 7 |
+| 5h | none | ranged | scalar, heap | blank (`_`) | RHS-local | — | R (sink shipped, §4) | 7 |
 | 5g | ranged | ordinary, call | scalar, heap | blank (`_`) | shared gate | both | R (sink shipped, §4) | 7 |
 | 6 | none | call | scalar (direct return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
 | 6b | none | call | heap, multi-output (indirect return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
@@ -138,10 +139,11 @@ two together rather than treating any single row as a deletion trigger.
 - **4** — `commitAssignments` copy/move marking. *Tests:* `mem/mem.spt:64,78`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
 - **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`
 - **5b** — per-slot sink; a discarded temporary is dropped (`dropDiscarded`), a discarded named value stays borrowed. *Tests:* `discard`
-- **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output; any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
+- **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
 - **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
-- **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`. *Helpers:* `compileCondStatement`
-- **5f** — `bindRangedTempOutputs` skips blanks, so ranged staging leaves no transient binding; the discarded value is released per iteration. *Tests:* `discard` (single and multi-output). *Helpers:* `compileAssignments`
+- **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`: all-`MustWrite` heap multi-output call (`twoStr`), gate admitting and rejecting. *Missing:* scalar-valued and ordinary-RHS gated blanks; any-`MayWrite` gated call. *Helpers:* `compileCondStatement`
+- **5f** — `bindRangedTempOutputs` skips blanks, so ranged staging leaves no transient binding; the discarded value is released per iteration. *Tests:* `discard`: `_ = mkTag(i)` (single output), `_, _ = twoStr(mkTag(i), "z")` (multi-output). *Missing:* any-`MayWrite` ranged call with its outputs discarded. *Helpers:* `compileAssignments`
+- **5h** — a ranged blank whose RHS is not a call, so the value comes from the expression loop nest rather than staged call outputs. *Missing:* **uncovered**: ordinary ranged blank such as `_ = i + 1`. *Helpers:* `compileAssignments`
 - **5g** — as 5f under a ranged gate: a rejected point produces no value to discard. *Missing:* **uncovered**: blank under a ranged gate. *Helpers:* `compileCondRangedStatement`
 - **6** — `compileCallExpression` → `compileCallInner`. *Tests:* `math/rec.spt`, `math/div`
 - **6b** — destination-seeded output slots via `compileIndirectCallIntoStagedOutputs`. *Tests:* `const_args/*`, `output_refinement`, `mem/mem.spt`
