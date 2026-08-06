@@ -86,28 +86,28 @@ The phases describe semantics, not allocations: `carry sum` in `prepare` does
 not require a stack slot, it means reads of `sum` inside the statement observe
 the statement's current carried value.
 
-A print plan shares the lifecycle but has no `commit`. It terminates in
-`emit-print` sinks that run inside `execute`, once per admitted point — a
-ranged print emits one line per admitted iteration, not one line after
-`finish`.
-
-`emit-print` resolves each argument outcome **independently**, exactly as
-`commit` resolves each target slot, and per flattened output slot for a
-multi-output argument. A skipped outcome emits nothing while its yielded
-siblings still emit in source order; separators appear only between emitted
-outcomes; a point where nothing yields emits no line. So
-`arr[oob], val1, val2` will print `val1` and `val2` once Step 6 lands — the
-same sibling isolation that already makes
+A print plan shares the lifecycle but has no `commit`. Print is **not one
+N-ary call**: if it were, the call-merge rule would suppress the entire line
+whenever one argument failed, exactly as `Id(arr[oob])` keeps `Id`'s whole
+tuple old — a real call's arguments are inputs to one computation and fail
+together. Print arguments are independent display slots, so a print statement
+desugars to **one single-slot emission per flattened output slot**, joined by
+separators. The ordinary call rule then applies per emission, and per-slot
+behavior follows with no print-specific exception: a failed argument
+suppresses exactly its own emission — the same sibling isolation that makes
 `arrVal, val1, val2 = arr[oob], x * y, x + y` keep `arrVal` while committing
-its siblings. Whole-line suppression was considered and rejected: it
-would make print the one construct where a failed outcome silences its
-siblings. `emit-print` consumes the group's owned temporaries — formatted
-strings, materialized cells — including those of skipped outcomes.
+its siblings.
 
-Both of today's print failure behaviors change here, not just the OOB one:
-current lowering gates the entire argument list on the conjunction of every
-argument's conditions, so one failed conditional suppresses its successful
-siblings too (`tests/array/oob_print.spt`).
+`emit-print` names that per-slot emission group. It runs inside `execute`,
+once per admitted point — a ranged print emits one line per admitted
+iteration, not one line after `finish`. Separators join **emitted** slots, not
+source positions (a literal `print(" ")` between arguments would strand a
+separator beside a skipped slot); a point where no slot emits produces no
+line; and the group consumes its owned temporaries — formatted strings,
+materialized cells — including those of skipped slots. Batching every yielded
+slot into one runtime write stays a lowering optimization, not semantics.
+Today's behavior differs on both failure kinds (§9); Step 6 is where it
+changes.
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -135,7 +135,7 @@ machinery's last consumer is gone.
 | `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored) |
 | `finish` | Close a carry or collector into a final outcome |
 | `commit` | Apply one simultaneous mapping from final outcomes to LHS targets |
-| `emit-print` | Per-outcome print sink; see §3 |
+| `emit-print` | Per-slot print emission group; see §3 |
 
 Every operation corresponds to a documented language rule in the semantics
 docs; a new operation requires its rule to be written there first, so the
@@ -146,10 +146,9 @@ Generic loops and branches are intentionally absent. `domain`, `gate`,
 what a rejected outcome means; the lowerer emits ordinary LLVM branches and
 loops. `skip` stays distinct from `continue`: one RHS may fail while sibling
 RHS expressions still update in the same iteration. A `skip` names no scope of
-its own — it propagates outward to the nearest resolving region (a `fallback`,
-a collector cell boundary, an `advance`, a `commit`, or an `emit-print`
-argument), and must remain visible to a surrounding `fallback` before any
-coarser region resolves it.
+its own — it propagates outward to the nearest resolving region (§9 lists
+them), and must remain visible to a surrounding `fallback` before any coarser
+region resolves it.
 
 ## 5. Plan Results
 
@@ -169,8 +168,7 @@ layout.
 Zero is never a missing-value marker — a successful comparison may yield zero —
 so value and yield information stay separate. A `gate` consumes yield state as
 its region enable. `value-and`, `map`, and `align` propagate yield state with
-their data; `fallback`, collector closure, `advance`, `commit`, and
-`emit-print` resolve it per their policies.
+their data; the resolving operations consume it per §9's failure-scope table.
 
 `eval` leaves may reference typed AST nodes. The builder splits out everything
 that affects evaluation strategy — ranges, lazy `&&`/`||`, conditional
@@ -939,9 +937,8 @@ reading LLVM helper code.
   keep-old handling.
 - All non-ranged prints lower as `emit-print` plans (§3), including a
   conditional direct-return call argument, which needs the Step 4 validity
-  variant. Both of today's print failure behaviors change here — the
-  materialized OOB zero and whole-line suppression on a failed conditional — so
-  update `tests/array/oob_print.exp` in the same PR.
+  variant. Both baseline print failure behaviors (§9) change here; update
+  `tests/array/oob_print.exp` in the same PR.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 

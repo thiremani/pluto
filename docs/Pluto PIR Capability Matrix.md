@@ -212,10 +212,12 @@ Print lowering runs with no active assignment bounds guard, so today:
   ("the target-less case of propagation", per `compilePrintStatement`)
 
 Those two failure kinds disagree, and neither matches assignment. **Decision:
-each print argument is an independent outcome** (plan §3). A failed argument
-emits nothing while its siblings still emit, exactly as
-`arrVal, val1, val2 = arr[oob], x * y, x + y` keeps `arrVal` and commits its
-siblings. So `arr[oob], val1, val2` prints `val1` and `val2`.
+print desugars to one single-slot emission per flattened output slot**
+(plan §3) — it is deliberately *not* one N-ary call, which would make the
+call-merge rule suppress the whole line. A failed argument suppresses only its
+own emission, exactly as `arrVal, val1, val2 = arr[oob], x * y, x + y` keeps
+`arrVal` and commits its siblings. So `arr[oob], val1, val2` prints `val1` and
+`val2`.
 
 Whole-line atomicity was considered and rejected: it would make print the one
 construct where a failed outcome silences its siblings.
