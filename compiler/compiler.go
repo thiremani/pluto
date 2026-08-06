@@ -875,7 +875,7 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 func (c *Compiler) writeTo(slots []slotAssign) {
 	for _, slot := range slots {
 		if isDiscard(slot.dest) {
-			c.dropDiscarded(slot)
+			c.drop(slot)
 			continue
 		}
 		c.storeValue(slot.dest.Value, slot.value, slot.needsCopy)
@@ -896,7 +896,7 @@ func (c *Compiler) markCopyRequirements(slots []slotAssign) map[string]struct{} 
 		}
 
 		// A discarded value is never stored, so copying it would only create
-		// garbage to free; dropDiscarded handles its ownership instead.
+		// garbage to free; drop handles its ownership instead.
 		if isDiscard(slot.dest) {
 			continue
 		}
@@ -1116,20 +1116,22 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
-// Blank is the discard spelling. A blank LHS slot is a sink, not a binding:
-// it is never entered into scope and never typed, so repeated blanks in one
-// statement stay independent instead of aliasing one shared symbol.
+// Blank is how a discard is spelled; isDiscard asks whether a slot plays that
+// role. A blank LHS slot is a sink, not a binding: never entered into scope
+// and never typed, so repeated blanks in one statement stay independent
+// instead of aliasing one shared symbol.
 const Blank = "_"
 
 func isDiscard(ident *ast.Identifier) bool {
 	return ident != nil && ident.Value == Blank
 }
 
-// dropDiscarded releases the value a blank slot threw away. A value read from
-// a named variable, or one backed by storage the statement does not own, is
-// borrowed and must survive; anything else is a temporary this statement
-// owns, so freeing it here is what keeps `_ = f()` leak-free.
-func (c *Compiler) dropDiscarded(slot slotAssign) {
+// drop releases the value a discarded slot threw away — the legacy spelling of
+// the plan's derived `drop`. A value read from a named variable, or one backed
+// by storage the statement does not own, is borrowed and must survive;
+// anything else is a temporary this statement owns, so freeing it here is what
+// keeps `_ = f()` leak-free.
+func (c *Compiler) drop(slot slotAssign) {
 	if slot.value == nil || slot.rhsName != "" || slot.destBacked || slot.value.Borrowed {
 		return
 	}

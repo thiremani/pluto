@@ -138,7 +138,7 @@ two together rather than treating any single row as a deletion trigger.
 - **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
 - **4** — `commitAssignments` copy/move marking. *Tests:* `mem/mem.spt:64,78`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
 - **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`
-- **5b** — per-slot sink; a discarded temporary is dropped (`dropDiscarded`), a discarded named value stays borrowed. *Tests:* `discard`
+- **5b** — per-slot sink; a discarded temporary is dropped (`drop`), a discarded named value stays borrowed. *Tests:* `discard`
 - **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
 - **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
 - **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`: all-`MustWrite` heap multi-output call (`twoStr`), gate admitting and rejecting. *Missing:* scalar-valued and ordinary-RHS gated blanks; any-`MayWrite` gated call. *Helpers:* `compileCondStatement`
@@ -292,7 +292,7 @@ other. Measured before the fix:
 
 **`_` is now a per-slot sink: never bound, never typed.** The solver skips it
 when binding LHS names, so it accumulates no type to collide with; `writeTo`
-routes it to `dropDiscarded` instead of `storeValue`; and the conditional
+routes it to `drop` instead of `storeValue`; and the conditional
 commit frees its temp rather than binding it. Ownership follows the borrow
 rule — a discarded *temporary* is owned by the statement and released, while a
 discarded value read from a *named* variable is borrowed and survives. A
