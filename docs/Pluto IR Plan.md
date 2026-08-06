@@ -682,7 +682,7 @@ the clone and returns `value`, which preserves today's
 `didWrite ? value : seed` behavior by construction, including recursive and
 output-self-referential bodies, whose internal calls may target the clone
 directly. The builder selects the variant for every consumer that needs
-failure propagation (per-slot print arguments today, any future
+failure propagation (Step 6's per-slot print arguments, and any future
 failure-propagating context), while plain assignments keep the cheaper seeded
 entry. For a callee whose body is driven by a function-owned
 `Range`/`ArrayRange` domain, `didWrite` is the OR of the per-iteration writes.
@@ -914,8 +914,11 @@ reading LLVM helper code.
   `x = arr[oob] || -1` assigns `-1`, the fallback testing the yielded bit and
   never the value. The solver currently rejects the spelling —
   `conditionPropagates` excludes checked failure, conflicting with §15's
-  checked = `MayYield` / fallback composition. Assignment position lands here
-  with regression tests; print position follows in Step 6.
+  checked = `MayYield` / fallback composition. **This introduces the PIR
+  `fallback` operation in restricted form** — a checked-access left side with
+  an ordinary alternative, in assignment position, with regression tests.
+  Step 6 extends the same operation to full value conditionals and print
+  position; it does not add a second one.
 - The router records an explicit affine → force-checked rule, so affine
   accesses reach checked PIR until Step 10 restores the fast path.
 

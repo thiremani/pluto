@@ -330,16 +330,20 @@ the commit are gated per slot. The one lazy operand is an `&&` right side,
 evaluated at most once when some left slot yielded — so
 `c > 0 && (a > 2 || 7)` composes: the inner `||` resolves inside the gated arm.
 
-An **out-of-bounds read is a failed condition on the lanes it feeds**, merged
-by the same rules: a plain read no-ops its assignment (`x = arr[oob]` keeps
-old), sibling expressions in one statement commit independently
-(`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
-argument keeps that call's outputs old as a unit), comparisons fed by an OOB
-read keep old rather than judging a fabricated zero, and an unevaluated `||`
-right side cannot fail anything. An `||` fallback fed by an OOB read
-**resolves** the failure — see "Checked-access fallback" under Status; today
-the solver still rejects that spelling. Inside any collector or fixed-array
-cell, an OOB read zero-fills that cell to preserve shape.
+An **out-of-bounds read is a failed condition on the lanes it feeds**, and it
+propagates like any other failure. Comparisons and calls are not resolvers:
+they pass the failure onward without judging a fabricated zero — a comparison
+fed by an OOB read fails its lanes, and a call with an OOB argument fails its
+whole output tuple as a unit. The **nearest enclosing resolver** then decides:
+`x = arr[oob]` and `x = arr[oob] > 0` keep `x` (the resolver is `=`); sibling
+expressions in one statement commit independently (`a, b = arr[oob], 5` keeps
+`a`, sets `b`); `x = arr[oob] > 0 || -1` takes `-1`; and `Id(arr[oob]) || -1`
+reaches the fallback after the call propagates its tuple failure (decided —
+see "Checked-access fallback" under Status; today the solver rejects OOB-fed
+`||`). An unevaluated `||` right side cannot fail anything. Inside a collector
+or fixed-array cell, an **unresolved** OOB zero-fills that cell to preserve
+shape — unresolved meaning no closer resolver claimed it first: in
+`[arr[oob] || -1]` the `||` wins and the cell holds `-1`.
 
 ## Why this model
 
