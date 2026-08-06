@@ -97,24 +97,34 @@ neither content nor newline. A `fallback` resolves before this boundary, so
 `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
 `a, arr[oob], arr2[oob], b` emits nothing at all.
 
-When every argument yields, the invocation formats every slot in source order
-with one separator between adjacent slots. An empty string is a successful
-value, not a skip: `a, "", "", b` emits `a` and `b` separated by three
-spaces, distinguishable from an invocation suppressed by failure. The
-invocation runs once per admitted point — a ranged print emits one line per
-fully-yielded iteration — and generic `finish` keeps its single meaning of
-closing carries and collectors; `PrintPlan` needs no finish exception, since
-the invocation itself is the terminal consumer. "One logical line" is the
-contract: whether lowering uses `printf`, a line buffer, or several writes is
-a backend choice, and any single-physical-write atomicity guarantee is a
-lowering/runtime contract, not plan semantics. The invocation consumes the
-group's owned temporaries — formatted strings, materialized cells — on the
-suppressed path too, where elaboration derives their releases.
+When every argument yields, the invocation formats every slot in source
+order, with one space between adjacent **ordinary single-line slots**; each
+slot's formatter keeps its own internal layout, so a whole-`Struct` slot
+spans several lines inside the one invocation (`tests/struct/struct.exp`).
+An empty string is a successful value, not a skip: `a, "", "", b` emits `a`
+and `b` separated by three spaces, distinguishable from an invocation
+suppressed by failure. **The atomic unit is the invocation — one emission
+group — not necessarily one physical line**: a suppressed invocation emits
+none of its output, including a multi-line struct slot's, and a fully-yielded
+ranged print produces one emission group per admitted point. Whether lowering
+uses `printf`, a line buffer, or several writes is a backend choice, and any
+single-physical-write atomicity guarantee is a lowering/runtime contract, not
+plan semantics. Generic `finish` keeps its single meaning of closing carries
+and collectors; `PrintPlan` needs no finish exception, since the invocation
+itself is the terminal consumer, and it consumes the group's owned
+temporaries — formatted strings, materialized cells — on the suppressed path
+too, where elaboration derives their releases.
 
-This model is also the smaller migration: conditional arguments already gate
-the whole emission today, so that behavior is **retained**, and Step 6 only
-brings unresolved checked/OOB failures into the same call-level validity rule
-in place of the materialized zero (§9).
+The suppression *outcome* for a failed conditional matches today, but the
+model is **eager**: `PrintPlan` evaluates and finishes every argument in
+source order before ANDing the yielded bits, whereas today
+`compileCondOperands` evaluates the extracted conditions first and compiles
+the sibling arguments only on the success branch. Sibling evaluation is
+therefore a Step 6 **behavior change**: a sibling with observable effects — a
+callee that itself prints, an owned heap temporary — now runs, and is
+released, even when the invocation is suppressed. The other Step 6 change is
+the OOB case, whose materialized zero becomes suppression under the same
+call-level validity rule (§9).
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -365,12 +375,15 @@ OOB in one ordinary RHS leaves only that RHS's target unchanged.
 Print has **no gate**: `ast.PrintStatement` carries only an argument list.
 Its failure resolver is the **invocation boundary** (§3): print is one N-ary
 call, so an argument failure that no closer `||` resolves suppresses the
-complete invocation and its newline, by the same call-merge rule that keeps
-`Id(arr[oob])`'s tuple old. A failed *conditional* argument already behaves
-this way today — every argument's conditions are ANDed into one gate around
-the emission — and that is **retained**. What changes in Step 6 is only the
-OOB case: today `arr[oob], val1, val2` prints `0 val1 val2` (the failed
-access materializes a zero); afterward it emits nothing.
+complete invocation and all of its output, by the same call-merge rule that
+keeps `Id(arr[oob])`'s tuple old. A failed *conditional* argument already
+suppresses the emission today — every argument's conditions are ANDed into
+one gate around it — and that **outcome is retained**, but evaluation becomes
+eager (§3): today the gate also skips *evaluating* the sibling arguments,
+while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
+changes two observable things: the OOB case — today `arr[oob], val1, val2`
+prints `0 val1 val2`, afterward nothing — and sibling side effects, which now
+occur even on a suppressed invocation.
 
 A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
 evaluating the siblings — is **proposed future syntax, not current language**.
@@ -558,7 +571,7 @@ The validator rejects a plan unless:
     mapping per target slot — a `discard` sink is an explicit mapping, not a
     missing one. A `PrintPlan` instead invokes print exactly once per admitted
     point when every flattened argument slot yielded; any unresolved slot
-    suppresses the invocation and its newline.
+    suppresses the invocation and its entire output.
 13. The lowerer consumes the recorded target-to-outcome mapping without
     rematching by name, position, or generated value.
 14. All targets in one assignment group commit simultaneously.
@@ -949,9 +962,12 @@ reading LLVM helper code.
   keep-old handling.
 - All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
   direct-return call argument, which needs the Step 4 validity variant.
-  Conditional whole-invocation suppression is retained behavior; only the OOB
-  case changes — materialized zero becomes invocation suppression (§9) —
-  so update `tests/array/oob_print.exp` in the same PR.
+  The conditional suppression outcome is retained, but sibling evaluation
+  becomes eager and the OOB materialized zero becomes invocation suppression
+  (§3, §9). Update `tests/array/oob_print.exp` in the same PR, with
+  regressions for a side-effecting or owned-heap sibling of a failed
+  conditional and for a failed sibling suppressing a complete multi-line
+  `Struct` emission.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
@@ -1130,9 +1146,13 @@ deletion at the last consumer.
   zero emits `0`
 - empty strings are successful values, distinguishable from suppression:
   `a, "", "", b` emits `a` and `b` separated by three spaces
-- a failed conditional argument retains today's whole-invocation suppression
-- a ranged print emits one line per fully-yielded point; OOB iterations emit
-  nothing
+- a failed conditional argument retains today's whole-invocation suppression,
+  but its siblings are now evaluated eagerly: a side-effecting callee runs
+  and an owned-heap sibling is allocated and released while the line stays
+  suppressed
+- a failed sibling suppresses a complete multi-line `Struct` emission
+- a ranged print emits one emission group per fully-yielded point; OOB
+  iterations emit nothing
 - a suppressed invocation still releases its owned temporaries (leak-checked)
 - an unwritten direct-return argument suppresses the invocation via the
   `{value, didWrite}` variant

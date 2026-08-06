@@ -113,7 +113,7 @@ any single row as a deletion trigger.
 | 29 | — | ordinary | scalar, heap | none | print | — | — | `compilePrintStatement` direct arm | S | `helloworld`, `str`, `1.2-report` | — | 6 | `printAllExpressions`, `compilePrintStatement` |
 | 29b | — | call | scalar (direct return) | none | print | — | both; any-`MayWrite` needs the Step 4 validity variant | non-ranged direct call argument in print; an unwritten result must suppress the invocation, needing `{value, didWrite}` to feed the all-arguments-yielded condition | R | `math/print_func.spt:4` (`Square(3)`) | conditional direct-return argument (Step 4 prereq) | 6 | — |
 | 29c | — | call | heap, multi-output (indirect return) | none | print | — | both; indirect outputs already carry write flags — no variant needed | non-ranged indirect call argument in print | R | — | **uncovered**: multi-output and heap call results printed directly | 6 | — |
-| 30 | — | conditional | scalar, heap | none | print | — | — | `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call | **S (semantics retained, §5; reroutes off `compileCondOperands`)** | `mem/mem_cmp_lhs.spt`, `array/oob_print` | — | 6 | `compileCondOperands` |
+| 30 | — | conditional | scalar, heap | none | print | — | — | `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call | **S (suppression outcome retained; eager sibling evaluation is a behavior change, §5)** | `mem/mem_cmp_lhs.spt`, `array/oob_print` | side-effecting or owned-heap sibling of a failed conditional (add with Step 6) | 6 | `compileCondOperands` |
 | 31 | — | checked | scalar | none | print | — | — | no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline | **S (behavior changes, §5)** | `array/oob_print` | a suppressed invocation whose arguments own heap temporaries (add with Step 6) | 5, 6 | §5 |
 | 31b | — | checked, ranged | scalar, heap | none | print | call-site loop | — | `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration after Step 6 | **S (behavior changes, §5)** | `array/oob_print` | heap-valued checked+ranged print | 5, 6, 8 | `withCollectorPreparedLoopNest` |
 | 31c | none | checked, ranged | scalar, heap | local | assign | RHS-local | — | per-RHS bounds bit inside the loop nest | R | `math/func_array_range_oob`, `mem/leak/oob_paths` | — | 5, 7 | `commitAssignmentsPerExpr` |
@@ -219,15 +219,22 @@ failure that no closer `||` resolves suppresses the complete invocation and
 its newline. A fallback resolves before the boundary:
 `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
 `a, arr[oob], arr2[oob], b` emits nothing. When every argument yields, slots
-format in source order with one separator between adjacent slots — an empty
-string is a successful value, so `a, "", "", b` emits `a` and `b` separated
-by three spaces, distinguishable from suppression.
+format in source order with one space between adjacent ordinary single-line
+slots; a slot's formatter keeps its internal layout, so a whole-`Struct` slot
+spans several lines inside the one invocation. An empty string is a
+successful value, so `a, "", "", b` emits `a` and `b` separated by three
+spaces, distinguishable from suppression. The atomic unit is the invocation —
+one emission group — not necessarily one physical line.
 
-This retains today's conditional behavior as the language rule and is the
-smaller migration: **only the OOB case changes** — the materialized zero
-becomes invocation suppression. Row 30's semantics are retained while its
-lowering migrates off `compileCondOperands`; the baseline for both failure
-kinds is pinned in `tests/array/oob_print.spt`.
+The suppression outcome for a failed conditional matches today, but
+evaluation becomes **eager**: today `compileCondOperands` evaluates the
+conditions first and compiles sibling arguments only on the success branch,
+while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
+changes two observable things — the OOB materialized zero becomes invocation
+suppression, and sibling side effects now occur even on a suppressed
+invocation. Row 30's suppression outcome is retained while its lowering
+reroutes off `compileCondOperands` and its siblings become eagerly evaluated;
+the baseline for both failure kinds is pinned in `tests/array/oob_print.spt`.
 
 Per-slot printing (a failed slot omitting only itself) was considered and
 rejected in favor of the call rule: print is a call, and calls merge lanes.

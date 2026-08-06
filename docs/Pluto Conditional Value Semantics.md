@@ -369,11 +369,11 @@ shape — unresolved meaning no closer resolver claimed it first: in
   position is value position, the target-less case of propagation: a comparison
   prints its yielded LHS, a failure prints nothing, a ranged comparison filters
   to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
-  That resolution is **whole-line and stays so**: the arguments' conditions
-  are ANDed and gate the entire invocation — retained language behavior under
-  "Print invocation atomicity" below. Only the out-of-bounds case changes,
-  which today materializes a zero and prints. ("Gated print" names the
-  proposed no-comma syntax, not this.)
+  That resolution suppresses the **entire invocation and stays so** —
+  retained language behavior under "Print invocation atomicity" below, which
+  also makes sibling evaluation eager and changes the out-of-bounds case
+  (today a materialized zero prints). ("Gated print" names the proposed
+  no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -405,9 +405,15 @@ shape — unresolved meaning no closer resolver claimed it first: in
   When every argument yields, all slots format in source order with one
   separator between adjacent slots; an empty string and an in-bounds zero are
   successful values, so `a, "", "", b` emits `a` and `b` separated by three
-  spaces — distinguishable from a suppressed invocation. Failed-conditional
-  suppression is today's behavior, retained; the only change is the
-  out-of-bounds case, which today materializes a zero and prints. A
+  spaces — distinguishable from a suppressed invocation. The invocation is
+  the atomic unit, not one physical line: a slot's formatted representation
+  may itself span lines, as whole-`Struct` printing does, and suppression
+  removes all of it. Failed-conditional suppression is today's behavior,
+  retained in outcome — but evaluation becomes eager: today a failed
+  conditional also skips evaluating its sibling arguments, while the decided
+  model evaluates every argument in source order before deciding, so sibling
+  side effects occur even when the invocation is suppressed. The
+  out-of-bounds case changes too: today it materializes a zero and prints. A
   suppressed invocation still releases its owned temporaries. One limit of
   **today's internal ABI**, not a language rule: an unwritten direct-return
   argument currently resolves to its seed and always yields, because the
