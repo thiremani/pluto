@@ -1191,8 +1191,14 @@ The statement plan can grow without becoming a machine IR:
   are pure grouping today, so this is a real language feature (flattened slots
   versus tuple value, per-slot versus group failure, arity, ownership,
   nesting), deferred until after Step 6 handles multiple outcomes. It must
-  never become statement-gate-specific fallback sugar: a gate keeps exactly
-  one resolution, keep-old, which is why `x = a > 2  3 || 7` stays an error.
+  never become statement-gate-specific fallback sugar, because gate and
+  `require` are different PIR operations with different failure actions (§9):
+  a rejected gate is `continue` — the region is never entered, a ranged
+  collector cell is filtered out (`arr = m > 5 [m + 1/2]`), and a non-ranged
+  commit keeps old — while a `require` failure is `skip`, a missing outcome
+  that `fallback`, a collector's zero-fill, or `=` resolves
+  (`arr = [m > 5 && m + 1/2 || -1]`). A gate never supplies a value, which is
+  why `x = a > 2  3 || 7` stays an error.
   Multi-return calls (`val > 5 && Pair(m, n) || Pair(1, 2)`) and the
   seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
   express the semantics today
