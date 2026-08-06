@@ -135,12 +135,12 @@ machinery's last consumer is gone.
 
 | Operation | Meaning |
 | --- | --- |
-| `eval(expr)` | Evaluate a solved Pluto expression or expression fragment |
+| `eval expr` | Evaluate a solved Pluto expression or expression fragment |
 | `carry` | Declare state that may advance across iterations (`prepare`) |
 | `collector` | Declare a logical collection result before its domains (`prepare`) |
 | `domain` | Execute a region once per point in one resolved range domain |
 | `gate` | Admit or reject one shared statement iteration for its whole region |
-| `value-and` | Lazily evaluate a local value region only when its left outcome yields |
+| `require` | Lazily evaluate a local value region only when its left outcome yields (the value-position `&&`, as `fallback` is the value-position `||`) |
 | `fallback` | Lazily evaluate an alternative for missing outcomes |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
@@ -158,7 +158,7 @@ docs; a new operation requires its rule to be written there first, so the
 vocabulary cannot grow ahead of the language.
 
 Generic loops and branches are intentionally absent. `domain`, `gate`,
-`value-and`, `fallback`, and checked accesses record why control exists and
+`require`, `fallback`, and checked accesses record why control exists and
 what a rejected outcome means; the lowerer emits ordinary LLVM branches and
 loops. `skip` stays distinct from `continue`: one RHS may fail while sibling
 RHS expressions still update in the same iteration. A `skip` names no scope of
@@ -183,7 +183,7 @@ layout.
 
 Zero is never a missing-value marker — a successful comparison may yield zero —
 so value and yield information stay separate. A `gate` consumes yield state as
-its region enable. `value-and`, `map`, and `align` propagate yield state with
+its region enable. `require`, `map`, and `align` propagate yield state with
 their data; the resolving operations consume it per §9's failure-scope table.
 
 `eval` leaves may reference typed AST nodes. The builder splits out everything
@@ -210,6 +210,13 @@ owns it, not at statement end: a discarded heap value produced inside a domain
 is released per iteration rather than accumulated across the statement. A
 discard never participates in a carry and never keeps an old value, because
 there is nothing to keep.
+
+No `discard` **operation** exists, only the target. The commit mapping to a
+`discard` target is an arity and validation record (§14), while the actual
+disposal is the ordinary derived `drop` at that smallest owning region's exit —
+immediate by construction, and never authored by the builder, per §8's
+releases-are-derived rule. `_` in source needs no new keyword either; it is
+the existing spelling.
 
 In effect terms (§15) a discard publishes **no target `WriteEffect` and no CFG
 event** — there is no destination to write, read, or kill. Its absence is
@@ -341,7 +348,7 @@ Releases are **derived, not authored**, by a dedicated elaboration pass between
 the builder and the validator: build semantic PIR, elaborate ownership,
 validate, lower. Structured region exit implicitly discards any owned outcome
 no consumer took, on every path — a skip arm, the untaken side of a
-`value-and` or `fallback`, a rejected iteration, or region end. Elaboration
+`require` or `fallback`, a rejected iteration, or region end. Elaboration
 annotates each outcome, plans transfers, copies, and materializations across
 each simultaneous group, and derives one release obligation per unconsumed
 path; the validator rejects a plan where an outcome is consumed twice or
@@ -407,7 +414,7 @@ Per-iteration order:
 
 1. Enter the range point.
 2. Evaluate shared gates; `continue` if any rejects.
-3. Evaluate each RHS outcome, including `value-and`, fallbacks, and local OOB
+3. Evaluate each RHS outcome, including `require`, fallbacks, and local OOB
    checks.
 4. Collect yielded cells and advance yielded carries simultaneously.
 
@@ -447,7 +454,7 @@ output slot.
 A collector is `(value, activated)` state that activates when **its owning
 region is entered** — for a top-level collector, when the statement runs
 ungated or its shared gate admits at least one point; for a collector inside a
-lazy `value-and` or `fallback` arm, only when that arm executes. An ungated
+lazy `require` or `fallback` arm, only when that arm executes. An ungated
 collector over an empty domain still activates and commits `[]`; a collector
 whose owning region is never entered stays inactive and `commit` keeps the
 previous target.
@@ -501,7 +508,7 @@ pir.statement @assign_x
         %result = fallback : Int
             primary
                 %condition = eval @a > 0 : Int [yield=scalar]
-                %selected = value-and %condition : Int
+                %selected = require %condition : Int
                     %loaded = eval @data[@i] : Int [on-oob=skip]
                     yield %loaded
                 yield %selected
@@ -558,7 +565,7 @@ The validator rejects a plan unless:
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
    names its range.
-5. Every lazy `value-and` and `fallback` keeps its RHS in a lazy region.
+5. Every lazy `require` and `fallback` keeps its RHS in a lazy region.
 6. Outcome arity, types, domain, and yield shape match their consumers.
 7. Sibling RHS expressions in a non-ranged statement read the same pre-commit
    binding snapshot.
@@ -641,7 +648,7 @@ rebuilt from scratch on every body walk.
 
 Composition: a checked access is `MayYield`; a `fallback` whose final
 alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
-`value-and` is `MayYield`; ordinary arithmetic propagates the join of its
+`require` is `MayYield`; ordinary arithmetic propagates the join of its
 operands.
 
 Comparisons are **not** uniformly `MayYield` — the state follows the solved
@@ -841,7 +848,7 @@ Pluto has no users yet, so migration optimizes for the clean end state:
    calls the same conditional and collector helpers, and
    `compileInfixExpression` reads the condLHS frame directly. **Resolution:**
    expression-side orchestration migrates too, as nested PIR regions in
-   Steps 6-8 — a conditional array cell becomes a `value-and`/`fallback` region
+   Steps 6-8 — a conditional array cell becomes a `require`/`fallback` region
    inside its collector, a ranged call becomes a `domain` around an `eval`.
    Leaving it in the backend would break §13, since it is exactly AST
    classification and strategy selection. Primitives survive (arithmetic and
@@ -955,7 +962,7 @@ reading LLVM helper code.
 
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 
-- `gate` with keep-old/zero commit policies; `value-and`, `fallback`, `map`,
+- `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval`.
 - Calls with any `MayWrite` output, deferred from Step 4, with per-output
