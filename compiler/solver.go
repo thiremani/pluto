@@ -937,6 +937,13 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 
 	trueValues := make(map[string]Type)
 	for i, ident := range stmt.Name {
+		// A blank slot is a sink: it takes the RHS type for arity but binds
+		// nothing, so it never accumulates a type to collide with a later
+		// blank at a different type.
+		if isDiscard(ident) {
+			continue
+		}
+
 		newType := types[i]
 		ts.trackUnresolvedAssignment(ident.Value, exprRefs[i], exprIdxs[i], newType)
 
@@ -965,6 +972,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	for _, ident := range stmt.Name {
+		if isDiscard(ident) {
+			continue
+		}
 		if typ, exists := trueValues[ident.Value]; exists {
 			Put(ts.Scopes, ident.Value, typ)
 		}

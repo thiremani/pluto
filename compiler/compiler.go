@@ -874,6 +874,10 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 // It delegates per-destination ownership and in-place pointer-slot updates to storeValue.
 func (c *Compiler) writeTo(slots []slotAssign) {
 	for _, slot := range slots {
+		if isDiscard(slot.dest) {
+			c.dropDiscarded(slot)
+			continue
+		}
 		c.storeValue(slot.dest.Value, slot.value, slot.needsCopy)
 	}
 }
@@ -888,6 +892,12 @@ func (c *Compiler) markCopyRequirements(slots []slotAssign) map[string]struct{} 
 		slot := &slots[i]
 		// StrG (static strings): immutable, live forever - no copy needed.
 		if IsStrG(slot.value.Type) {
+			continue
+		}
+
+		// A discarded value is never stored, so copying it would only create
+		// garbage to free; dropDiscarded handles its ownership instead.
+		if isDiscard(slot.dest) {
 			continue
 		}
 
@@ -1106,6 +1116,26 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
+// Blank is the discard spelling. A blank LHS slot is a sink, not a binding:
+// it is never entered into scope and never typed, so repeated blanks in one
+// statement stay independent instead of aliasing one shared symbol.
+const Blank = "_"
+
+func isDiscard(ident *ast.Identifier) bool {
+	return ident != nil && ident.Value == Blank
+}
+
+// dropDiscarded releases the value a blank slot threw away. A value read from
+// a named variable, or one backed by storage the statement does not own, is
+// borrowed and must survive; anything else is a temporary this statement
+// owns, so freeing it here is what keeps `_ = f()` leak-free.
+func (c *Compiler) dropDiscarded(slot slotAssign) {
+	if slot.value == nil || slot.rhsName != "" || slot.destBacked || slot.value.Borrowed {
+		return
+	}
+	c.freeSymbolValue(slot.value, "discard")
+}
+
 // slotAssign is one destination slot of an assignment: where the value is
 // written, which identifier owns move/copy decisions (the real destination,
 // even when writing through a temp), the compiled value and the RHS variable
@@ -1279,6 +1309,11 @@ func (c *Compiler) freeSkippedTemps(e exprAssign) {
 // value. Returns the seed (nil for an existing destination) so the caller can
 // record it as the value a commit replaces.
 func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) *Symbol {
+	// A blank slot has nothing to keep on the skip path, so it needs no seed
+	// and must not be bound.
+	if isDiscard(ident) {
+		return nil
+	}
 	if _, exists := Get(c.Scopes, ident.Value); exists {
 		c.promoteExistingSym(ident.Value)
 		return nil

@@ -878,11 +878,13 @@ seed is borrowed (§7); the effect lattice, body-to-output fold, callee-first
 SCC convergence, comparison and direct-call yield rules, and CFG transfer rules
 (§15); an unreachable `.pt` template gets structural checks only (§15).
 
-Remaining before Step 2A: implement the `_` sink in its own PR, with fixtures
-for repeated blanks, mixed types, heap outcomes, repeated statements, and
-blanks under gates and ranges. Gated print syntax, if wanted, is a separate
-feature PR before Step 6. Any other language change likewise gets its own PR
-with its semantics-doc and rejection-test updates.
+The `_` sink shipped in its own PR: blanks are no longer bound or typed, so
+repeated blanks stay independent, a discarded temporary is released and a
+discarded named value survives, with `tests/discard.spt` covering repeated
+blanks, mixed types, heap outcomes, repeated statements, and blanks under
+gates and ranges. Step 2A is unblocked. Gated print syntax, if wanted, is a
+separate feature PR before Step 6; any other language change likewise gets
+its own PR with its semantics-doc and rejection-test updates.
 
 ### Step 2: Write effects on settled specializations (~1-2 weeks)
 

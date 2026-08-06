@@ -1,0 +1,5 @@
+s1, s2 = twoStr(p, q)
+    s1, s2 = p ⊕ "L", q ⊕ "R"
+
+tag = mkTag(v)
+    tag = "tag-v"

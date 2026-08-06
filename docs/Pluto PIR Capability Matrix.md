@@ -70,9 +70,9 @@ any single row as a deletion trigger.
 | 2 | none | ordinary | heap | local | assign | — | — | `compileAssignments` → `commitAssignments` | R | `mem/mem.spt`, `str`, `array_concat`, `cond_copy` | — | 4 | `commitAssignments` |
 | 3 | none | ordinary | multi-output | local | assign | — | — | `compileAssignments`, arity via `newExprAssign` | R | `partial_returns`, `math/div`, `mem/mem.spt` | — | 4 | `exprAssign` machinery |
 | 4 | none | ordinary (swap, dup source) | heap | local | assign | — | — | `commitAssignments` copy/move marking | R | `mem/mem.spt:64,78` | — | 4 | `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded` |
-| 5 | none | ordinary | scalar | blank (`_`) | assign | — | — | ordinary binding, CFG-exempt | **S** (real sink, §4) | `discard` | repeated blanks, mixed types, repeated statements, gated/ranged blank | own PR, then 3 | §4 |
-| 5b | none | ordinary | heap | blank (`_`) | assign | — | — | ordinary binding, CFG-exempt; duplicate heap blanks alias and leak/abort (§4) | **S** (real sink, §4) | — | heap blank, duplicate heap blanks | own PR, then 4 | §4 |
-| 5c | none | call | scalar, heap, multi-output | blank (`_`) | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | discarded call outputs keep their yield/write validity for cleanup, and the whole-call rule applies unchanged — an any-`MayWrite` call defers to Step 6 even when every output is discarded | **S** (real sink, §4) | — | scalar, heap, and multi-output call-output discard; duplicate blanks on one call | own PR, then 4 (all-`MustWrite`) / 6 (any-`MayWrite`) | §4 |
+| 5 | none | ordinary | scalar | blank (`_`) | assign | — | — | per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt | R (sink shipped, §4) | `discard` | — | 3 | — |
+| 5b | none | ordinary | heap | blank (`_`) | assign | — | — | per-slot sink; a discarded temporary is dropped (`dropDiscarded`), a discarded named value stays borrowed | R (sink shipped, §4) | `discard` | — | 4 | — |
+| 5c | none | call | scalar, heap, multi-output | blank (`_`) | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | discarded call outputs keep their yield/write validity for cleanup, and the whole-call rule applies unchanged — an any-`MayWrite` call defers to Step 6 even when every output is discarded | R (sink shipped, §4) | `discard` (multi-output, gated, ranged) | any-`MayWrite` callee whose outputs are all discarded | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) | — |
 | 6 | none | call | scalar (direct return) | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | `compileCallExpression` → `compileCallInner` | R | `math/rec.spt`, `math/div` | — | 4, 6 | — |
 | 6b | none | call | heap, multi-output (indirect return) | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | destination-seeded output slots via `compileIndirectCallIntoStagedOutputs` | R | `const_args/*`, `output_refinement`, `mem/mem.spt` | — | 4, 6 | — |
 | 7 | none | checked | scalar, heap | local | assign | — | — | `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr` | R | `array/oob_skip`, `mem/leak/oob_paths` | — | 5 | `commitAssignmentsPerExpr` |
@@ -166,42 +166,39 @@ Confirmed by these fixtures and now normative in the plan (plan §7, plan §10):
 "The seed is not a write" is not provable from program output; it belongs to
 the Step 2 effect tests.
 
-## 4. Decided: `_` becomes a real discard sink
+## 4. Shipped: `_` is a real per-slot discard sink
 
-`_` is an ordinary typed binding that only the CFG exempts from liveness and
-dead-write checks ([cfg.go:182](../compiler/cfg.go:182)). Duplicate blank
-targets are permitted in one statement, but every blank slot resolves to the
-same binding, so blanks alias each other. Measured on the current build:
+`_` used to be an ordinary typed binding that only the CFG exempted from
+liveness and dead-write checks, while duplicate blank targets were permitted —
+so every blank slot resolved to the *same* binding and blanks aliased each
+other. Measured before the fix:
 
-| Case | Result |
-| --- | --- |
-| `_ = 1`, `_, b = FOuter(a, u)`, `c, _ = FOuter(a, u)` | works, no leak |
-| `_` at a second type in one script | compile error: `cannot reassign type to identifier. Old Type: I64. New Type: Str. Identifier "_"` |
-| `_, _ = twoStr("a", "b")` | runs, **leaks 16 bytes** (`str_concat`) |
-| the same statement twice | **aborts, SIGTRAP (exit 133), no output** |
+| Case | Before | After |
+| --- | --- | --- |
+| `_ = 1`, `_, b = FOuter(a, u)`, `c, _ = FOuter(a, u)` | works, no leak | unchanged |
+| `_` at a second type in one script | compile error: `cannot reassign type to identifier. Old Type: I64. New Type: Str. Identifier "_"` | works |
+| `_, _ = twoStr("a", "b")` | runs, **leaks 16 bytes** (`str_concat`) | no leak |
+| the same statement twice | **aborts, SIGTRAP (exit 133), no output** | runs clean |
 
-**Decision: `_` becomes a real per-slot discard sink** — never bound, one
-independent sink per slot, with an owned outcome consumed at the exit of the
-**smallest owning region**, so a discarded heap value produced inside a domain
-is released per iteration rather than accumulated across the statement. PIR
-gains the `discard` target of plan §6. This fixes the aliasing, the leak, the
-abort, and the type collision together, and gives multi-output calls a way to
-say "not this one". The alternative — deleting the special case so `_` is an
-ordinary identifier — was rejected because it leaves no spelling for discarding
-an output.
+**`_` is now a per-slot sink: never bound, never typed.** The solver skips it
+when binding LHS names, so it accumulates no type to collide with; `writeTo`
+routes it to `dropDiscarded` instead of `storeValue`; and the conditional
+commit frees its temp rather than binding it. Ownership follows the borrow
+rule — a discarded *temporary* is owned by the statement and released, while a
+discarded value read from a *named* variable is borrowed and survives. A
+discarded heap value produced inside a domain is released per iteration.
+`tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
+repeated statements, borrowed survival, and blanks under gates and ranges.
 
-The outcome behind a discard keeps its type, arity position, and `YieldEffect`
-so cleanup can be derived, but the discard publishes no target `WriteEffect`
-and no CFG event; it needs no third write-lattice state.
+The alternative — deleting the special case so `_` is an ordinary identifier —
+was rejected because it leaves no spelling for discarding an output. The trade
+accepted: `_` stays a reserved special form across parser, solver, CFG, PIR,
+and lowering.
 
-The trade accepted: `_` stays a reserved special form across parser, solver,
-CFG, PIR, and lowering.
-
-Implementation lands in its own PR with the semantics-doc and rejection-test
-changes, and with fixtures for repeated blanks, blanks at mixed types,
-heap-valued blanks, repeated statements, and blanks under gates and ranges.
-The evidence above is manual; the bug is still present in the working tree, and
-the helper `twoStr` used to reproduce it is not in the repository.
+In PIR terms the outcome behind a discard keeps its type, arity position, and
+`YieldEffect` so cleanup can be derived, but the discard publishes no target
+`WriteEffect` and no CFG event; it needs no third write-lattice state. Arity
+still counts blank slots, so a multi-output RHS needs one blank per output.
 
 ## 5. Decided: print — one N-ary invocation, call-level atomicity
 
