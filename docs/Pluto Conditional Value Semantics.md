@@ -334,10 +334,12 @@ An **out-of-bounds read is a failed condition on the lanes it feeds**, merged
 by the same rules: a plain read no-ops its assignment (`x = arr[oob]` keeps
 old), sibling expressions in one statement commit independently
 (`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
-argument keeps that call's outputs old as a unit), comparisons and `||`
-fallbacks fed by an OOB read keep old rather than judging a fabricated zero,
-and an unevaluated `||` right side cannot fail anything. Inside any collector
-or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
+argument keeps that call's outputs old as a unit), comparisons fed by an OOB
+read keep old rather than judging a fabricated zero, and an unevaluated `||`
+right side cannot fail anything. An `||` fallback fed by an OOB read
+**resolves** the failure — see "Checked-access fallback" under Status; today
+the solver still rejects that spelling. Inside any collector or fixed-array
+cell, an OOB read zero-fills that cell to preserve shape.
 
 ## Why this model
 
@@ -400,6 +402,16 @@ or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
   always yields. The migration removes this with a private validity-carrying
   direct-call variant, after which a direct-return argument skips like any
   other slot.
+- **Checked-access fallback (decided, not yet implemented):** the nearest
+  resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
+  `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
+  yielded/in-bounds bit, never the value: an in-bounds zero yields `0`. Today
+  the solver rejects this source ("logical OR in value position requires a
+  conditional left operand") because `conditionPropagates` excludes
+  checked-access failure — in conflict with the propagation rule above, which
+  already names an OOB read a failed condition. Scheduled with checked
+  accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
+  tests when it lands.
 - **Gated print (proposed, not current syntax):** a no-comma prefix form such
   as `arr[oob] val1, val2` would reject the whole line without evaluating the
   siblings, following the general rule that a gate admits or rejects its entire

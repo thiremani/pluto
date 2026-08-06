@@ -650,27 +650,38 @@ Two failure sources must not be conflated:
 - **Callee-internal non-writing** — the callee ran but did not write this
   output. A per-output fact, not a tuple fact.
 
-The **raw effect is preserved**: a `MayWrite` callee output is raw `MayYield`,
-whatever the return mode. Seed resolution is a **contextual resolver at the
-assignment boundary**, not a property of the call: at `=`, the seeded direct
-result resolves the skip — the seed *is* the keep-old outcome — so the
-consumer of the seeded result sees `MustYield`. Print and every other
-failure-propagating context consume the raw, validity-carrying result and see
-the skip.
+The transfer rule keeps the two failure sources separate — conceptually
+`rawYield[i] = invocationYield && didWrite[i]`. A caller-side failure makes
+`invocationYield` false: every slot skips, the commit is skipped, and the
+target stays `MayWrite`. `x = Id(arr[oob])` with an all-`MustWrite` `Id` is
+`MayWrite` — a caller-side failure is **never** converted into a seeded
+`MustYield`. Only after a successful invocation does seed resolution apply,
+as a **contextual resolver at the assignment boundary** for a direct
+`MayWrite` output resolved at an existing target: the seed *is* the keep-old
+outcome, so the consumer of the seeded result sees `MustYield` for the
+callee-internal component. Print and every other failure-propagating context
+consume the raw, validity-carrying result and see the skip.
 
 Boundary resolution implies an **implicit read of the destination seed**, and
-only where the dependency is real: an *existing* target whose direct callee
-output is `MayWrite`, resolved at `=`. A fresh destination, a discard, a
-nested or targetless call, or an all-`MustWrite` callee reads nothing. Step 2A
-records this as a `ReadsSeed` fact on the call site — the CFG is untouched in
-2A — and Step 2B converts the fact into an ordinary CFG read event, so a
-`MustWrite` classification cannot let backward liveness kill the prior value.
+only where the dependency is real: after a successful invocation, at an
+*existing* target whose direct callee output is `MayWrite`, resolved at `=`.
+A fresh destination, a discard, a nested or targetless call, or an
+all-`MustWrite` callee reads nothing. Step 2A records this as a `ReadsSeed`
+fact on the call site — the CFG is untouched in 2A — and Step 2B converts the
+fact into an ordinary CFG read event, so a `MustWrite` classification cannot
+let backward liveness kill the prior value.
 
 The validity-carrying result comes from a **private direct-call variant**
-behind the stable seeded entry point (§1): the clone returns
-`{value, didWrite}` — as an aggregate or an out-flag, an internal ABI detail
-the lowerer owns — the public seeded symbol keeps its prototype and delegates
-to it, and the builder selects the variant for every consumer that needs
+behind the stable seeded entry point (§1). The clone **keeps the seed
+parameter** — the seed is a real input, serving as the initial loop-carried
+state of a ranged body and as the self-reference value — and returns
+`{value, didWrite}` (aggregate or out-flag; an internal ABI detail the
+lowerer owns), where `value` equals the seed whenever `didWrite` is false.
+The public seeded symbol keeps its exact prototype and delegates: it calls
+the clone and returns `value`, which preserves today's
+`didWrite ? value : seed` behavior by construction, including recursive and
+output-self-referential bodies, whose internal calls may target the clone
+directly. The builder selects the variant for every consumer that needs
 failure propagation (per-slot print arguments today, any future
 failure-propagating context), while plain assignments keep the cheaper seeded
 entry. For a callee whose body is driven by a function-owned
@@ -690,7 +701,10 @@ unconditional one. A function-owned domain then weakens the whole result:
 because a `Range` **or `ArrayRange`** parameter wraps the complete body and may
 execute zero times, every output the body writes only inside that domain
 becomes `MayWrite` at the function boundary. A range created *inside* the body
-owns only the statements it drives and does not weaken the boundary.
+weakens only the outputs its statements drive — a possibly empty local range
+makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
+`res` — while unrelated outputs keep their effects. Only a parameter domain
+blanket-weakens the whole boundary.
 
 **Fixed point.** Function-output effects, and only those, need one: a recursive
 callee can refine its outputs after types settle, and `TypeScriptFunc` today
@@ -818,8 +832,8 @@ Pluto has no users yet, so migration optimizes for the clean end state:
 
 Deliverable: [the capability matrix](./Pluto%20PIR%20Capability%20Matrix.md) —
 the reachable-combination table with per-row disposition, tests, cutover step,
-and last consumer; plus new fixtures added without changing lowering, and the
-contracts this plan now records.
+and notable removable helpers; plus new fixtures added without changing
+lowering, and the contracts this plan now records.
 
 Decisions recorded, and mirrored in the semantics docs where they are language
 rules: `_` becomes a real per-slot `discard` sink whose owned outcome is
@@ -858,11 +872,12 @@ lands first. PIR implementation starts only after 2A/2B tests pass.
 ### Step 3: Minimal end-to-end PIR slice (~1-2 weeks)
 
 - The `pir` package: plan nodes, builder, validator, printer, and lowerer for
-  the smallest real vertical — scalar `eval`, local and scalar `discard`
-  targets, simultaneous `commit`. Cut it over through the router immediately
-  rather than building every future node in shadow mode first. (Heap and
-  multi-output discard ownership follows in Step 4; the legacy `_` sink is
-  fixed in its own PR before this step.)
+  the smallest real vertical — `eval` over unmanaged values (scalars and
+  Range descriptors), local and scalar `discard` targets, simultaneous
+  `commit`. Cut it over through the router immediately rather than building
+  every future node in shadow mode first. (Heap and multi-output discard
+  ownership follows in Step 4; the legacy `_` sink is fixed in its own PR
+  before this step.)
 - Settle the package boundary: `pir` cannot import `compiler.Type` or
   `ExprInfo` without an import cycle, so either the facts-to-plan adapter lives
   in `compiler`, or shared semantic DTOs are extracted first.
@@ -895,6 +910,12 @@ reading LLVM helper code.
   (`compileExprAssigns`) whose failure selects keep-old versus commit
   (`commitAssignmentsPerExpr`). Plans record explicit OOB scopes (§9), and the
   bounds-bit idiom reduces to generic guard emission driven by them.
+- Checked-access fallback becomes legal here (decided; see the semantics doc):
+  `x = arr[oob] || -1` assigns `-1`, the fallback testing the yielded bit and
+  never the value. The solver currently rejects the spelling —
+  `conditionPropagates` excludes checked failure, conflicting with §15's
+  checked = `MayYield` / fallback composition. Assignment position lands here
+  with regression tests; print position follows in Step 6.
 - The router records an explicit affine → force-checked rule, so affine
   accesses reach checked PIR until Step 10 restores the fast path.
 
@@ -1046,6 +1067,10 @@ deletion at the last consumer.
   alternative can still fail stays `MayWrite`
 - multi-output expressions keep independent per-slot effects, and an argument
   failure suppresses a call's whole tuple
+- a caller-side call failure (`x = Id(arr[oob])` with an all-`MustWrite`
+  callee) leaves the target `MayWrite` and records no `ReadsSeed`;
+  callee-internal non-writing at an existing target resolves to the seed as
+  `MustYield` with a recorded `ReadsSeed`
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures;
   cached specialization CFG diagnostics replay on reuse
