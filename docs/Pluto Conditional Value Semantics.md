@@ -39,7 +39,8 @@ the condition's yield state as a shared execution-enable signal. If it is off,
 the iteration transaction does not exist and no RHS or output commit runs. A
 value-position condition instead leaves the transaction in place and propagates
 its local missing outcome to the nearest resolver. Assignment keeps old,
-collectors preserve shape with zero-fill, and `||` supplies alternate data.
+collectors preserve shape with zero-fill, `||` supplies alternate data, and a
+print slot emits nothing (decided, not yet implemented — see Status).
 
 In short: **a statement gate controls whether an iteration transaction exists;
 a value condition controls whether one data lane yields within an existing
@@ -350,7 +351,8 @@ shape — unresolved meaning no closer resolver claimed it first: in
 - **One propagation rule:** every failed condition — a comparison, an `&&`, an
   out-of-bounds read — travels the same dataflow lanes, and the resolvers are
   few and explicit: `=` keeps old, a collector cell zero-fills, `||` supplies
-  the fallback. There is no second, locally-resolving conditional form.
+  the fallback, and a print slot emits nothing (decided, not yet implemented).
+  There is no second, locally-resolving conditional form.
 - **The two spellings agree:** the statement gate and value-position
   propagation share the keep-old rule at `=`, so `y = a > 2  10` and
   `y = a > 2 && 10` mean the same thing at a root.

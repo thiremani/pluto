@@ -918,7 +918,15 @@ reading LLVM helper code.
   `fallback` operation in restricted form** — a checked-access left side with
   an ordinary alternative, in assignment position, with regression tests.
   Step 6 extends the same operation to full value conditionals and print
-  position; it does not add a second one.
+  position; it does not add a second one. The solver change is equally
+  restricted: `conditionPropagates` feeds `expressionCanFail`, which
+  statement-gate validation and logical `&&` share, so widening it to accept
+  checked accesses would prematurely legalize checked `&&` and bare checked
+  statement gates. Step 5 instead adds a fallback-specific rule accepting
+  only a checked-access root immediately left of `||`, leaving
+  `conditionPropagates` untouched; Step 6 then generalizes checked failure
+  propagation through comparisons, calls, `&&`, and exactly the gate contexts
+  that are explicitly intended.
 - The router records an explicit affine → force-checked rule, so affine
   accesses reach checked PIR until Step 10 restores the fast path.
 
