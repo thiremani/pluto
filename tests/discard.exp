@@ -7,3 +7,6 @@ RepeatedBlanks: done
 BorrowedSurvives: keepme
 GatedBlank: done
 RangedBlank: done
+RangedMultiBlank: done
+CheckedBlank: done
+MayWriteBlank: done

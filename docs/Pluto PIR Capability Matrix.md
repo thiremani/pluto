@@ -301,4 +301,4 @@ Deferred deliberately — each is cheap to add when its migration step starts:
 - a dependent range (`j = (i + 1):n`) combined with a collector and a gate in
   one callee
 - a scalar-gated heap collector (row 18)
-- ranged gate plus a blank slot, once §4 is executed
+- a blank slot under a *ranged* gate (scalar gates, ranges, checked access, and ranged multi-output blanks are covered by `tests/discard.spt`)

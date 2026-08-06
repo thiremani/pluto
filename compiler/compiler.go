@@ -2415,6 +2415,13 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 // BlockScope is popped before the next expression is compiled.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
+		// A blank binds nothing and nothing can read it back, so it has no
+		// self-reference to preserve — binding it would only expose `_` as a
+		// destination to nested ranged lowering.
+		if isDiscard(dest[i]) {
+			continue
+		}
+
 		names := []string{dest[i].Value}
 		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
 			seen := make(map[string]struct{})

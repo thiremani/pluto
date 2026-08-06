@@ -45,3 +45,22 @@ _, _ = g > 9 twoStr("x", "y")
 i = 0:3
 _ = mkTag(i)
 "RangedBlank: done"
+
+# Ranged multi-output blanks: both staged slots are discarded every iteration,
+# and no transient `_` binding is left behind for nested lowering to find.
+_, _ = twoStr(mkTag(i), "z")
+"RangedMultiBlank: done"
+
+# Checked access into a blank: the guarded path needs no seed to keep.
+arr = [10 20 30]
+sarr = ["a" ⊕ "1" "b" ⊕ "2"]
+_ = arr[9]
+_ = sarr[9]
+_ = arr[1]
+"CheckedBlank: done"
+
+# A conditionally-writing callee with its output discarded, on both the
+# writing and non-writing paths.
+_ = maybeStr(1)
+_ = maybeStr(-1)
+"MayWriteBlank: done"
