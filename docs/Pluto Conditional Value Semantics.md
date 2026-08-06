@@ -391,18 +391,19 @@ shape — unresolved meaning no closer resolver claimed it first: in
   zero-on-failure resolution is wanted. Propagation now applies everywhere —
   `(a > 2 && 10) + 1` keeps the old value when `a <= 2`, exactly like
   `(a > 2) + 1`.
-- **Per-slot printing (decided, not yet implemented):** print is **not one
-  N-ary function call** — if it were, the call-merge rule would suppress the
-  entire line when one argument fails, exactly as `Id(arr[oob])` keeps `Id`'s
-  whole tuple old, because a real call's arguments are inputs to one
-  computation. Print arguments are independent display slots, so a print
-  statement behaves as one single-slot emission per flattened output slot,
-  with separators joining the **emitted** slots (never stranded beside a
-  skipped one) and no line when nothing emits. Per-slot behavior is then the
-  ordinary call rule applied per emission, not a print-specific exception.
-  Caller-side failure still suppresses a call *argument's* complete tuple;
-  outputs of a call that ran resolve independently. So `arr[oob], val1, val2`
-  prints `val1` and `val2`, mirroring
+- **Per-slot printing (decided, not yet implemented):** resolution is per
+  slot, emission is per line. Print is **not one N-ary function call** — if it
+  were, the call-merge rule would suppress the entire line when one argument
+  fails, exactly as `Id(arr[oob])` keeps `Id`'s whole tuple old, because a
+  real call's arguments are inputs to one computation. Print arguments are
+  independent display slots: each resolves on its own (per flattened output
+  slot — caller-side failure suppresses that call *argument's* complete
+  tuple, while outputs of a call that ran resolve independently), and once
+  every slot for the current point is resolved, print joins the yielded slots
+  with single spaces and emits them as **one line**, with nothing emitted
+  when no slot yields. A skipped slot contributes neither value nor
+  separator. So `arr[oob], val1, val2` prints `val1 val2`, and
+  `a, arr[oob], arr2[oob], b` prints `a b` — mirroring
   `arrVal, val1, val2 = arr[oob], x * y, x + y`, which keeps `arrVal` and
   commits its siblings. This replaces both of today's behaviors:
   whole-line gating on a failed conditional, and the materialized zero on an

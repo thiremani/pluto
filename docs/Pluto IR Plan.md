@@ -86,28 +86,34 @@ The phases describe semantics, not allocations: `carry sum` in `prepare` does
 not require a stack slot, it means reads of `sum` inside the statement observe
 the statement's current carried value.
 
-A print plan shares the lifecycle but has no `commit`. Print is **not one
-N-ary call**: if it were, the call-merge rule would suppress the entire line
-whenever one argument failed, exactly as `Id(arr[oob])` keeps `Id`'s whole
-tuple old — a real call's arguments are inputs to one computation and fail
-together. Print arguments are independent display slots, so a print statement
-desugars to **one single-slot emission per flattened output slot**, joined by
-separators. The ordinary call rule then applies per emission, and per-slot
-behavior follows with no print-specific exception: a failed argument
-suppresses exactly its own emission — the same sibling isolation that makes
+A print plan is its own plan type, **`PrintPlan`**: it shares `prepare` and
+`execute`, has no `commit`, and its `finish` emits instead of finalizing
+targets. Print is **not one N-ary call** — that model would let the
+call-merge rule suppress the entire line whenever one argument failed,
+exactly as `Id(arr[oob])` keeps `Id`'s whole tuple old, because a real call's
+arguments are inputs to one computation. Print arguments are independent
+display slots, so **resolution is per slot**: each argument outcome resolves
+independently, per flattened output slot, under §9's ordinary failure rules —
+the same sibling isolation that makes
 `arrVal, val1, val2 = arr[oob], x * y, x + y` keep `arrVal` while committing
 its siblings.
 
-`emit-print` names that per-slot emission group. It runs inside `execute`,
-once per admitted point — a ranged print emits one line per admitted
-iteration, not one line after `finish`. Separators join **emitted** slots, not
-source positions (a literal `print(" ")` between arguments would strand a
-separator beside a skipped slot); a point where no slot emits produces no
-line; and the group consumes its owned temporaries — formatted strings,
-materialized cells — including those of skipped slots. Batching every yielded
-slot into one runtime write stays a lowering optimization, not semantics.
-Today's behavior differs on both failure kinds (§9); Step 6 is where it
-changes.
+**Emission is per line.** For each admitted point, `PrintPlan.finish` takes
+that point's finished outcomes, keeps the yielded slots, joins their
+formatted representations with single spaces, and emits **one logical line**;
+a point where nothing yields emits nothing. A skipped slot contributes
+neither value nor separator: `a, arr[oob], arr2[oob], b` emits `a b`, and
+`a, arr[oob] || -1, arr2[oob], b` emits `a -1 b`. This finish runs **once per
+admitted point** — a ranged print emits one line per iteration — unlike an
+assignment plan's `finish`, which closes carries and collectors once after
+the whole domain. Only `PrintPlan.finish` emits; generic `finish` never
+does. "One logical line" is the whole contract: whether lowering uses
+`printf`, a line buffer, or several writes is a backend choice, and any
+single-physical-write atomicity guarantee is a lowering/runtime contract,
+not plan semantics. `PrintPlan.finish` also consumes the group's owned
+temporaries — formatted strings, materialized cells — including those of
+skipped slots. Today's behavior differs on both failure kinds (§9); Step 6
+is where it changes.
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -133,9 +139,8 @@ machinery's last consumer is gone.
 | `collect` | Add a yielded cell according to the collector policy |
 | `advance` | Replace loop-carried state at the end of an iteration |
 | `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored) |
-| `finish` | Close a carry or collector into a final outcome |
+| `finish` | Close a carry or collector into a final outcome; a `PrintPlan`'s finish instead emits its per-point line (§3) and is the only finish that emits |
 | `commit` | Apply one simultaneous mapping from final outcomes to LHS targets |
-| `emit-print` | Per-slot print emission group; see §3 |
 
 Every operation corresponds to a documented language rule in the semantics
 docs; a new operation requires its rule to be written there first, so the
@@ -316,8 +321,8 @@ Every value-producing outcome carries an annotation:
 
 Consumers consume ownership: `commit` moves an owned outcome into a target (or
 copies when the source must survive), `advance` consumes it per §7, `collect`
-moves or copies it per collector policy, and `emit-print` consumes its argument
-group's temporaries. Ownership is scheduled for a complete simultaneous group,
+moves or copies it per collector policy, and `PrintPlan.finish` consumes its
+argument group's temporaries. Ownership is scheduled for a complete simultaneous group,
 never one mapping at a time, so an early target overwrite cannot release a
 value another swap outcome, sibling, or carry still needs.
 
@@ -361,8 +366,8 @@ its arguments do not yet resolve independently either. Today
 `arr[oob], val1, val2` prints `0 val1 val2` — the failed access materializes a
 zero — and a failed *conditional* argument suppresses the whole line, siblings
 included, because every argument's conditions are ANDed into one gate around
-the emission. Step 6 replaces both with the per-slot rule of §3, after which
-that first line prints `val1 val2`.
+the emission. Step 6 replaces both with §3's per-slot resolution and per-line
+emission, after which that first line prints `val1 val2`.
 
 A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
 evaluating the siblings — is **proposed future syntax, not current language**.
@@ -529,8 +534,9 @@ structure.
 
 The validator rejects a plan unless:
 
-1. Phases appear in `prepare`, `execute`, `finish`, `commit` order; a print
-   plan omits `commit` and terminates through `emit-print` inside `execute`.
+1. Phases appear in `prepare`, `execute`, `finish`, `commit` order; a
+   `PrintPlan` omits `commit`, and its `finish` runs once per admitted point
+   inside `execute` (§3) and is the only `finish` that emits output.
 2. Every carry and collector is prepared before use and finished at most once.
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
@@ -546,8 +552,9 @@ The validator rejects a plan unless:
 11. A rejected shared iteration performs no carry advance or collector append.
 12. An assignment plan's `commit` provides exactly one type-compatible outcome
     mapping per target slot — a `discard` sink is an explicit mapping, not a
-    missing one. A print plan instead resolves each argument independently,
-    where a skipped outcome suppresses only itself.
+    missing one. A `PrintPlan` instead resolves each argument slot
+    independently, and its per-point `finish` emits only the yielded slots,
+    joined by single separators with none stranded beside a skipped slot.
 13. The lowerer consumes the recorded target-to-outcome mapping without
     rematching by name, position, or generated value.
 14. All targets in one assignment group commit simultaneously.
@@ -837,7 +844,8 @@ Decisions recorded, and mirrored in the semantics docs where they are language
 rules: `_` becomes a real per-slot `discard` sink whose owned outcome is
 consumed at its smallest owning region's exit (§6) — today it is an ordinary
 typed binding whose duplicate blanks alias one another, so a repeated heap
-blank leaks and then aborts; printing is per-slot, not whole-line (§3); the
+blank leaks and then aborts; print resolution is per-slot with one grouped
+line emitted by `PrintPlan.finish` per admitted point (§3); the
 gate-versus-slot rule, with gated print marked as future syntax (§9); the carry
 seed is borrowed (§7); the effect lattice, body-to-output fold, callee-first
 SCC convergence, comparison and direct-call yield rules, and CFG transfer rules
@@ -935,9 +943,9 @@ reading LLVM helper code.
   of `eval`.
 - Calls with any `MayWrite` output, deferred from Step 4, with per-output
   keep-old handling.
-- All non-ranged prints lower as `emit-print` plans (§3), including a
-  conditional direct-return call argument, which needs the Step 4 validity
-  variant. Both baseline print failure behaviors (§9) change here; update
+- All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
+  direct-return call argument, which needs the Step 4 validity variant. Both
+  baseline print failure behaviors (§9) change here; update
   `tests/array/oob_print.exp` in the same PR.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)

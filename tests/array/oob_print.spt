@@ -14,6 +14,7 @@
 # successful siblings, so the skipped outcome's own temporary is leak-checked.
 
 arr = [10 20 30]
+arr2 = [40 50]
 v1 = 5
 v2 = 6
 
@@ -25,6 +26,11 @@ v1, arr[9], v2
 
 "--oob last--"
 v1, v2, arr[9]
+
+# Two adjacent failed slots: per-line emission joins only yielded slots, so
+# this becomes "5 6" after Step 6 — no stranded or doubled separators.
+"--double oob middle--"
+v1, arr[9], arr2[9], v2
 
 # An inline concatenation is an owned temporary, unlike a named binding, so a
 # skipped sibling must not leak or double-free it.
