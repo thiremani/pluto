@@ -86,34 +86,35 @@ The phases describe semantics, not allocations: `carry sum` in `prepare` does
 not require a stack slot, it means reads of `sum` inside the statement observe
 the statement's current carried value.
 
-A print plan is its own plan type, **`PrintPlan`**: it shares `prepare` and
-`execute`, has no `commit`, and its `finish` emits instead of finalizing
-targets. Print is **not one N-ary call** — that model would let the
-call-merge rule suppress the entire line whenever one argument failed,
-exactly as `Id(arr[oob])` keeps `Id`'s whole tuple old, because a real call's
-arguments are inputs to one computation. Print arguments are independent
-display slots, so **resolution is per slot**: each argument outcome resolves
-independently, per flattened output slot, under §9's ordinary failure rules —
-the same sibling isolation that makes
-`arrVal, val1, val2 = arr[oob], x * y, x + y` keep `arrVal` while committing
-its siblings.
+A print plan is its own side-effecting plan type, **`PrintPlan`**, modeling
+**one N-ary intrinsic invocation**. Print is a call, and the ordinary
+call-merge rule applies to it: any unresolved argument suppresses the
+complete invocation, exactly as an OOB argument keeps `Id(arr[oob])`'s whole
+output tuple old. For each admitted point, `PrintPlan` evaluates and finishes
+every flattened argument outcome, ANDs their yielded bits, and invokes print
+**exactly once, only if every slot yielded** — an unresolved argument emits
+neither content nor newline. A `fallback` resolves before this boundary, so
+`a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
+`a, arr[oob], arr2[oob], b` emits nothing at all.
 
-**Emission is per line.** For each admitted point, `PrintPlan.finish` takes
-that point's finished outcomes, keeps the yielded slots, joins their
-formatted representations with single spaces, and emits **one logical line**;
-a point where nothing yields emits nothing. A skipped slot contributes
-neither value nor separator: `a, arr[oob], arr2[oob], b` emits `a b`, and
-`a, arr[oob] || -1, arr2[oob], b` emits `a -1 b`. This finish runs **once per
-admitted point** — a ranged print emits one line per iteration — unlike an
-assignment plan's `finish`, which closes carries and collectors once after
-the whole domain. Only `PrintPlan.finish` emits; generic `finish` never
-does. "One logical line" is the whole contract: whether lowering uses
-`printf`, a line buffer, or several writes is a backend choice, and any
-single-physical-write atomicity guarantee is a lowering/runtime contract,
-not plan semantics. `PrintPlan.finish` also consumes the group's owned
-temporaries — formatted strings, materialized cells — including those of
-skipped slots. Today's behavior differs on both failure kinds (§9); Step 6
-is where it changes.
+When every argument yields, the invocation formats every slot in source order
+with one separator between adjacent slots. An empty string is a successful
+value, not a skip: `a, "", "", b` emits `a` and `b` separated by three
+spaces, distinguishable from an invocation suppressed by failure. The
+invocation runs once per admitted point — a ranged print emits one line per
+fully-yielded iteration — and generic `finish` keeps its single meaning of
+closing carries and collectors; `PrintPlan` needs no finish exception, since
+the invocation itself is the terminal consumer. "One logical line" is the
+contract: whether lowering uses `printf`, a line buffer, or several writes is
+a backend choice, and any single-physical-write atomicity guarantee is a
+lowering/runtime contract, not plan semantics. The invocation consumes the
+group's owned temporaries — formatted strings, materialized cells — on the
+suppressed path too, where elaboration derives their releases.
+
+This model is also the smaller migration: conditional arguments already gate
+the whole emission today, so that behavior is **retained**, and Step 6 only
+brings unresolved checked/OOB failures into the same call-level validity rule
+in place of the materialized zero (§9).
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -139,7 +140,7 @@ machinery's last consumer is gone.
 | `collect` | Add a yielded cell according to the collector policy |
 | `advance` | Replace loop-carried state at the end of an iteration |
 | `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored) |
-| `finish` | Close a carry or collector into a final outcome; a `PrintPlan`'s finish instead emits its per-point line (§3) and is the only finish that emits |
+| `finish` | Close a carry or collector into a final outcome |
 | `commit` | Apply one simultaneous mapping from final outcomes to LHS targets |
 
 Every operation corresponds to a documented language rule in the semantics
@@ -321,8 +322,8 @@ Every value-producing outcome carries an annotation:
 
 Consumers consume ownership: `commit` moves an owned outcome into a target (or
 copies when the source must survive), `advance` consumes it per §7, `collect`
-moves or copies it per collector policy, and `PrintPlan.finish` consumes its
-argument group's temporaries. Ownership is scheduled for a complete simultaneous group,
+moves or copies it per collector policy, and the `PrintPlan` invocation
+consumes its argument group's temporaries, on the suppressed path too. Ownership is scheduled for a complete simultaneous group,
 never one mapping at a time, so an early target overwrite cannot release a
 value another swap outcome, sibling, or carry still needs.
 
@@ -361,13 +362,15 @@ resolve a later failure inside it.
 For assignment, a failed statement gate blocks every sibling write, while an
 OOB in one ordinary RHS leaves only that RHS's target unchanged.
 
-Print has **no gate**: `ast.PrintStatement` carries only an argument list. But
-its arguments do not yet resolve independently either. Today
-`arr[oob], val1, val2` prints `0 val1 val2` — the failed access materializes a
-zero — and a failed *conditional* argument suppresses the whole line, siblings
-included, because every argument's conditions are ANDed into one gate around
-the emission. Step 6 replaces both with §3's per-slot resolution and per-line
-emission, after which that first line prints `val1 val2`.
+Print has **no gate**: `ast.PrintStatement` carries only an argument list.
+Its failure resolver is the **invocation boundary** (§3): print is one N-ary
+call, so an argument failure that no closer `||` resolves suppresses the
+complete invocation and its newline, by the same call-merge rule that keeps
+`Id(arr[oob])`'s tuple old. A failed *conditional* argument already behaves
+this way today — every argument's conditions are ANDed into one gate around
+the emission — and that is **retained**. What changes in Step 6 is only the
+OOB case: today `arr[oob], val1, val2` prints `0 val1 val2` (the failed
+access materializes a zero); afterward it emits nothing.
 
 A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
 evaluating the siblings — is **proposed future syntax, not current language**.
@@ -384,7 +387,7 @@ still admits the region.
 | OOB in one ordinary RHS | `skip`, resolved within that RHS only |
 | Failed value-position comparison | `skip`, available to `fallback` |
 | OOB in one collector cell | `skip`, resolved at the cell boundary; the closing policy decides omit or zero-fill |
-| OOB in one print argument | `skip`, resolved at that argument; siblings still emit |
+| OOB in one print argument | `skip`; a closer `fallback` may resolve it, else it suppresses the whole invocation and newline (§3) |
 | Failed statement without a range | `commit` applies keep-old or zero policy |
 
 Per-iteration order:
@@ -535,8 +538,9 @@ structure.
 The validator rejects a plan unless:
 
 1. Phases appear in `prepare`, `execute`, `finish`, `commit` order; a
-   `PrintPlan` omits `commit`, and its `finish` runs once per admitted point
-   inside `execute` (§3) and is the only `finish` that emits output.
+   `PrintPlan` omits `commit`, and its single N-ary invocation runs inside
+   `execute`, once per admitted point, gated on every argument slot yielding
+   (§3).
 2. Every carry and collector is prepared before use and finished at most once.
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
@@ -552,9 +556,9 @@ The validator rejects a plan unless:
 11. A rejected shared iteration performs no carry advance or collector append.
 12. An assignment plan's `commit` provides exactly one type-compatible outcome
     mapping per target slot — a `discard` sink is an explicit mapping, not a
-    missing one. A `PrintPlan` instead resolves each argument slot
-    independently, and its per-point `finish` emits only the yielded slots,
-    joined by single separators with none stranded beside a skipped slot.
+    missing one. A `PrintPlan` instead invokes print exactly once per admitted
+    point when every flattened argument slot yielded; any unresolved slot
+    suppresses the invocation and its newline.
 13. The lowerer consumes the recorded target-to-outcome mapping without
     rematching by name, position, or generated value.
 14. All targets in one assignment group commit simultaneously.
@@ -687,13 +691,13 @@ the clone and returns `value`, which preserves today's
 `didWrite ? value : seed` behavior by construction, including recursive and
 output-self-referential bodies, whose internal calls may target the clone
 directly. The builder selects the variant for every consumer that needs
-failure propagation (Step 6's per-slot print arguments, and any future
-failure-propagating context), while plain assignments keep the cheaper seeded
-entry. For a callee whose body is driven by a function-owned
+failure propagation — Step 6's print invocation, where the raw bit joins the
+aggregate all-arguments-yielded condition, and any future failure-propagating
+context — while plain assignments keep the cheaper seeded entry. For a callee whose body is driven by a function-owned
 `Range`/`ArrayRange` domain, `didWrite` is the OR of the per-iteration writes.
-The variant lands in Step 4; making printing of a resolved seed a permanent
-exception was rejected, since it would leave one construct outside the
-per-slot rule.
+The variant lands in Step 4; letting print treat a resolved seed as always
+yielded was rejected, since an unwritten output would then print stale data
+instead of suppressing the invocation.
 
 ### Convergence and publication
 
@@ -844,8 +848,8 @@ Decisions recorded, and mirrored in the semantics docs where they are language
 rules: `_` becomes a real per-slot `discard` sink whose owned outcome is
 consumed at its smallest owning region's exit (§6) — today it is an ordinary
 typed binding whose duplicate blanks alias one another, so a repeated heap
-blank leaks and then aborts; print resolution is per-slot with one grouped
-line emitted by `PrintPlan.finish` per admitted point (§3); the
+blank leaks and then aborts; print is one N-ary invocation gated on every
+argument yielding, retaining today's conditional suppression (§3); the
 gate-versus-slot rule, with gated print marked as future syntax (§9); the carry
 seed is borrowed (§7); the effect lattice, body-to-output fold, callee-first
 SCC convergence, comparison and direct-call yield rules, and CFG transfer rules
@@ -905,9 +909,9 @@ reading LLVM helper code.
   Step 6, because argument evaluation, tuple failure, and ownership are shared
   across its outputs and individual slots cannot migrate separately. Callee
   output effect is therefore a router axis, recorded in the capability matrix.
-- The private validity-carrying direct-call variant (§15), so a skipped
-  direct-return result can survive the call boundary for Step 6's per-slot
-  printing.
+- The private validity-carrying direct-call variant (§15), so an unwritten
+  direct-return result can suppress Step 6's print invocation instead of
+  printing its seed.
 
 ### Step 5: Checked accesses and OOB scope (~1-2 weeks)
 
@@ -944,9 +948,10 @@ reading LLVM helper code.
 - Calls with any `MayWrite` output, deferred from Step 4, with per-output
   keep-old handling.
 - All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
-  direct-return call argument, which needs the Step 4 validity variant. Both
-  baseline print failure behaviors (§9) change here; update
-  `tests/array/oob_print.exp` in the same PR.
+  direct-return call argument, which needs the Step 4 validity variant.
+  Conditional whole-invocation suppression is retained behavior; only the OOB
+  case changes — materialized zero becomes invocation suppression (§9) —
+  so update `tests/array/oob_print.exp` in the same PR.
 
 ### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
 
@@ -1118,15 +1123,18 @@ deletion at the last consumer.
 
 ### Print tests (land with Step 6)
 
-- a failed argument suppresses only its slot: `arr[oob], val1, val2` emits
-  `val1 val2`
-- adjacent skips strand no separators: `a, arr[oob], arr2[oob], b` emits `a b`
-- a resolved fallback emits its value: `arr[oob] || -1, val1` emits `-1 val1`,
-  and an in-bounds zero emits `0`
-- a point where no slot yields emits no line; a ranged print emits one line
-  per admitted point
-- skipped slots' owned temporaries are released (leak-checked)
-- a conditional direct-return argument skips across the call boundary via the
+- an unresolved OOB argument suppresses the complete invocation and newline:
+  `arr[oob], val1, val2` and `a, arr[oob], arr2[oob], b` emit nothing
+- a resolved fallback lets the whole line print:
+  `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, and an in-bounds
+  zero emits `0`
+- empty strings are successful values, distinguishable from suppression:
+  `a, "", "", b` emits `a` and `b` separated by three spaces
+- a failed conditional argument retains today's whole-invocation suppression
+- a ranged print emits one line per fully-yielded point; OOB iterations emit
+  nothing
+- a suppressed invocation still releases its owned temporaries (leak-checked)
+- an unwritten direct-return argument suppresses the invocation via the
   `{value, didWrite}` variant
 
 ### Cutover and backend tests

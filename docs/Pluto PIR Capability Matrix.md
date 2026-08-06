@@ -78,7 +78,7 @@ any single row as a deletion trigger.
 | 7 | none | checked | scalar, heap | local | assign | — | — | `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr` | R | `array/oob_skip`, `mem/leak/oob_paths` | — | 5 | `commitAssignmentsPerExpr` |
 | 7b | none | checked, conditional (fallback) | scalar, heap | local | assign | — | — | **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates` | **S (decided behavior change; semantics doc "Checked-access fallback")** | — | regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"` | 5 | condLHS spine |
 | 7c | none | checked, conditional (fallback, propagated) | scalar, multi-output | local | assign | — | both (call form) | comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver | **S (decided; semantics doc)** | — | regressions when implemented | 6 | condLHS spine |
-| 7d | — | checked, conditional (fallback) | scalar, heap | none | print | — | — | print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` once per-slot printing exists | **S (decided; semantics doc)** | — | regressions when implemented, incl. a heap-valued print fallback | 6 | condLHS spine |
+| 7d | — | checked, conditional (fallback) | scalar, heap | none | print | — | — | print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print | **S (decided; semantics doc)** | — | regressions when implemented, incl. a heap-valued print fallback | 6 | condLHS spine |
 | 7e | none | checked, conditional (fallback), ranged | scalar | local | assign | RHS-local | — | ranged checked fallback: the fallback resolves per iteration inside the loop nest | **S (decided; semantics doc)** | — | regressions when implemented | 7 | condLHS spine, ranged staging |
 | 7f | none | checked, conditional (fallback), collector | scalar | local | assign | collector-local | — | collector-cell fallback: in `[arr[oob] \|\| -1]` the `\|\|` resolves before the cell's zero-fill | **S (decided; semantics doc)** | — | regressions when implemented | 8 | collector rewrite, condLHS spine |
 | 8 | none | ordinary | Range descriptor | local | assign | — (no domain) | — | plain value copy; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS | R | `range_finalize:2-21` (literal, identifier copy, empty, reassign), `compiler/solver_test.go` | — | 3 | `compileAssignments` |
@@ -111,14 +111,14 @@ any single row as a deletion trigger.
 | 27 | ranged | call | heap | local | assign | shared gate | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | `compileCondRangedStatement` → stage temp | S | `mem/gate_heap` | — | 7 | ranged staging |
 | 28 | ranged | checked | scalar | local | assign | shared gate (affine index) | — | ranged gate over an affine access | S | `array/cond_accum:416,420` | — | 5, 7 | affine decision helpers |
 | 29 | — | ordinary | scalar, heap | none | print | — | — | `compilePrintStatement` direct arm | S | `helloworld`, `str`, `1.2-report` | — | 6 | `printAllExpressions`, `compilePrintStatement` |
-| 29b | — | call | scalar (direct return) | none | print | — | both; any-`MayWrite` needs the Step 4 validity variant | non-ranged direct call argument in print; a skipped result needs `{value, didWrite}` to cross the boundary | R | `math/print_func.spt:4` (`Square(3)`) | conditional direct-return argument (Step 4 prereq) | 6 | — |
+| 29b | — | call | scalar (direct return) | none | print | — | both; any-`MayWrite` needs the Step 4 validity variant | non-ranged direct call argument in print; an unwritten result must suppress the invocation, needing `{value, didWrite}` to feed the all-arguments-yielded condition | R | `math/print_func.spt:4` (`Square(3)`) | conditional direct-return argument (Step 4 prereq) | 6 | — |
 | 29c | — | call | heap, multi-output (indirect return) | none | print | — | both; indirect outputs already carry write flags — no variant needed | non-ranged indirect call argument in print | R | — | **uncovered**: multi-output and heap call results printed directly | 6 | — |
-| 30 | — | conditional | scalar, heap | none | print | — | — | `compileCondOperands` ANDs every argument's conditions and gates the whole `printAllExpressions` call, so one failed conditional suppresses its siblings | **S (behavior changes, §5)** | `mem/mem_cmp_lhs.spt`, `array/oob_print` | — | 6 | `compileCondOperands` |
-| 31 | — | checked | scalar | none | print | — | — | no active bounds guard: prints the materialized zero | **S (behavior changes, §5)** | `array/oob_print` | a skipped outcome that itself owns a heap temporary (add with Step 6) | 5, 6 | §5 |
-| 31b | — | checked, ranged | scalar, heap | none | print | call-site loop | — | `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration | **S (behavior changes, §5)** | `array/oob_print` | heap-valued checked+ranged print | 5, 6, 8 | `withCollectorPreparedLoopNest` |
+| 30 | — | conditional | scalar, heap | none | print | — | — | `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call | **S (semantics retained, §5; reroutes off `compileCondOperands`)** | `mem/mem_cmp_lhs.spt`, `array/oob_print` | — | 6 | `compileCondOperands` |
+| 31 | — | checked | scalar | none | print | — | — | no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline | **S (behavior changes, §5)** | `array/oob_print` | a suppressed invocation whose arguments own heap temporaries (add with Step 6) | 5, 6 | §5 |
+| 31b | — | checked, ranged | scalar, heap | none | print | call-site loop | — | `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration after Step 6 | **S (behavior changes, §5)** | `array/oob_print` | heap-valued checked+ranged print | 5, 6, 8 | `withCollectorPreparedLoopNest` |
 | 31c | none | checked, ranged | scalar, heap | local | assign | RHS-local | — | per-RHS bounds bit inside the loop nest | R | `math/func_array_range_oob`, `mem/leak/oob_paths` | — | 5, 7 | `commitAssignmentsPerExpr` |
 | 32 | — | ranged | scalar | none | print | call-site loop | — | `withCollectorPreparedLoopNest` wraps the print in the argument's loop nest | S | `print_range`, `math/range.spt` | — | 8 | `withCollectorPreparedLoopNest` |
-| 33 | — | call, ranged | scalar (direct), heap, multi-output (indirect) | none | print | call-site loop | both; cutover stays 8 | a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false | R | `math/print_func` (scalar direct only) | heap and multi-output ranged calls in print — uncovered; same Step 4 (validity variant, direct) / Step 6 (per-slot) prerequisites as rows 29b/29c | 8 | `withCollectorPreparedLoopNest` |
+| 33 | — | call, ranged | scalar (direct), heap, multi-output (indirect) | none | print | call-site loop | both; cutover stays 8 | a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false | R | `math/print_func` (scalar direct only) | heap and multi-output ranged calls in print — uncovered; same Step 4 (validity variant, direct) / Step 6 (invocation gating) prerequisites as rows 29b/29c | 8 | `withCollectorPreparedLoopNest` |
 | 33b | — | ordinary | scalar | none | print | function-owned | — | a print statement **inside a function body** whose `Range` parameter drives the body; the print runs once per admitted point of the function-level domain | R | `math/range.pt` (`Triple`; both call sites are Range-driven), `math/acc_fmt.pt` | — | 6 (inner print), 7 (function domain) | — |
 | 34 | — | collector, ranged | scalar | none | print | collector-local | — | `withCollectorPreparedLoopNest` + collector rewrite | S | `print_range`, `range` | — | 8 | collector rewrite |
 | 35 | n/a | n/a | struct | `.pt` global constant | declaration | — | — | `compileStructStatement` → `compileConstBinding`; not an executable statement, so outside statement PIR | R | `struct/struct.pt` | — | n/a | — |
@@ -203,43 +203,43 @@ heap-valued blanks, repeated statements, and blanks under gates and ranges.
 The evidence above is manual; the bug is still present in the working tree, and
 the helper `twoStr` used to reproduce it is not in the repository.
 
-## 5. Decided: print — per-slot resolution, per-line emission
+## 5. Decided: print — one N-ary invocation, call-level atomicity
 
 Print lowering runs with no active assignment bounds guard, so today:
 
 - an out-of-bounds print argument **materializes its zero and still prints**
-- a failed conditional argument in the same position **prints nothing**
-  ("the target-less case of propagation", per `compilePrintStatement`)
+- a failed conditional argument **suppresses the whole line**
+  (`compileCondOperands` ANDs every argument's conditions and gates the one
+  `printAllExpressions` call)
 
-Those two failure kinds disagree, and neither matches assignment. **Decision:
-per-slot resolution, per-line emission** (plan §3). Print is deliberately
-*not* one N-ary call — that would make the call-merge rule suppress the whole
-line — so each argument slot resolves independently, and `PrintPlan.finish`
-then joins the yielded slots with single spaces into one logical line per
-admitted point. A failed argument suppresses only its own slot, exactly as
-`arrVal, val1, val2 = arr[oob], x * y, x + y` keeps `arrVal` and commits its
-siblings: `arr[oob], val1, val2` prints `val1 val2`, and
-`a, arr[oob], arr2[oob], b` prints `a b` with no stranded separators.
+**Decision: print is one N-ary intrinsic invocation, and the ordinary
+call-merge rule applies** (plan §3). The invocation runs exactly once per
+admitted point, only when every flattened argument slot yielded; an argument
+failure that no closer `||` resolves suppresses the complete invocation and
+its newline. A fallback resolves before the boundary:
+`a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
+`a, arr[oob], arr2[oob], b` emits nothing. When every argument yields, slots
+format in source order with one separator between adjacent slots — an empty
+string is a successful value, so `a, "", "", b` emits `a` and `b` separated
+by three spaces, distinguishable from suppression.
 
-Whole-line atomicity was considered and rejected: it would make print the one
-construct where a failed outcome silences its siblings.
+This retains today's conditional behavior as the language rule and is the
+smaller migration: **only the OOB case changes** — the materialized zero
+becomes invocation suppression. Row 30's semantics are retained while its
+lowering migrates off `compileCondOperands`; the baseline for both failure
+kinds is pinned in `tests/array/oob_print.spt`.
 
-Two of today's behaviors change in Step 6, not one. Besides the OOB zero, a
-failed *conditional* argument currently suppresses its successful siblings too,
-because `compileCondOperands` ANDs every argument's conditions and gates the
-whole `printAllExpressions` call. Both are pinned in
-`tests/array/oob_print.spt`, whose multi-argument cases are what distinguish
-per-slot from whole-line suppression.
+Per-slot printing (a failed slot omitting only itself) was considered and
+rejected in favor of the call rule: print is a call, and calls merge lanes.
+Line-level suppression that skips *evaluating* siblings would instead belong
+to a **gated print** (`arr[oob] val1, val2`) — proposed future syntax that
+does not parse today (`PrintStatement` has no gate field) and needs its own
+parser/AST/solver PR, semantics-doc entry, and capability rows.
 
-Line-level suppression would instead belong to a **gated print**
-(`arr[oob] val1, val2`, rejecting the region without evaluating siblings). That
-syntax does not exist: `PrintStatement` has no gate field and the form does not
-parse. It is proposed future syntax, and it needs its own parser/AST/solver PR,
-semantics-doc entry, and capability rows before Step 6 — including the rule
-that the gate tests the yielded/in-bounds bit, not the value.
-
-A per-slot skip also cannot cross a direct-return call boundary today, since a
-direct `I64`/`F64` result carries no validity bit (plan §15).
+An unwritten direct-return argument cannot yet suppress the invocation, since
+a direct `I64`/`F64` result carries no validity bit; the Step 4
+`{value, didWrite}` variant feeds its bit into the invocation's
+all-arguments-yielded condition (plan §15).
 
 ## 6. Correction to the plan's deletion order
 

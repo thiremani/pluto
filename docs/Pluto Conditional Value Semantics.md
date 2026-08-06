@@ -15,8 +15,9 @@ A condition means different things in two places:
 
 The rule, in one line: **conditions left of the value gate the statement and keep
 the old value on failure; conditions inside the value propagate their failure to
-the nearest resolver — `=` keeps the old value, a collector cell zero-fills,
-`||` supplies the fallback, and a print slot emits nothing.**
+the nearest resolver — `=` keeps the old value, a collector cell zero-fills, and
+`||` supplies the fallback; a failure reaching a call or print invocation
+unresolved suppresses that whole invocation.**
 
 Only the first form is a **statement gate**. It admits or rejects a shared
 iteration point for every RHS expression and output in the statement. An `&&`
@@ -39,8 +40,9 @@ the condition's yield state as a shared execution-enable signal. If it is off,
 the iteration transaction does not exist and no RHS or output commit runs. A
 value-position condition instead leaves the transaction in place and propagates
 its local missing outcome to the nearest resolver. Assignment keeps old,
-collectors preserve shape with zero-fill, `||` supplies alternate data, and a
-print slot emits nothing (decided, not yet implemented — see Status).
+collectors preserve shape with zero-fill, and `||` supplies alternate data; a
+failure reaching a print invocation unresolved suppresses the whole line (see
+Status).
 
 In short: **a statement gate controls whether an iteration transaction exists;
 a value condition controls whether one data lane yields within an existing
@@ -118,13 +120,12 @@ the expression until something resolves it:
   one keeps its zero seed.
 - a collector cell — the cell zero-fills (shape is preserved).
 - `||` — the fallback resolves it locally.
-- a print slot — nothing is emitted for that slot, and its siblings still
-  print. *(Decided, not yet implemented; today a failed argument suppresses the
-  whole line. See "Per-slot printing" under Status.)*
 
-The resolving unit is one **flattened output slot**. Caller-side failure —
-a failed invocation or argument — suppresses a call's complete tuple, but
-outputs of a call that did run resolve independently.
+An unresolved failure that reaches an **invocation boundary** merges lanes
+there: a failed call argument suppresses that call's complete output tuple,
+and a failed print argument suppresses the complete print invocation and its
+newline (see "Print invocation atomicity" under Status). Outputs of a call
+that did run resolve independently per flattened output slot.
 
 ```pluto
 y > 2          # yields y when y > 2, else fails    (the value is the left operand)
@@ -351,8 +352,9 @@ shape — unresolved meaning no closer resolver claimed it first: in
 - **One propagation rule:** every failed condition — a comparison, an `&&`, an
   out-of-bounds read — travels the same dataflow lanes, and the resolvers are
   few and explicit: `=` keeps old, a collector cell zero-fills, `||` supplies
-  the fallback, and a print slot emits nothing (decided, not yet implemented).
-  There is no second, locally-resolving conditional form.
+  the fallback, and an unresolved failure at a call or print invocation
+  suppresses the invocation. There is no second, locally-resolving conditional
+  form.
 - **The two spellings agree:** the statement gate and value-position
   propagation share the keep-old rule at `=`, so `y = a > 2  10` and
   `y = a > 2 && 10` mean the same thing at a root.
@@ -367,10 +369,11 @@ shape — unresolved meaning no closer resolver claimed it first: in
   position is value position, the target-less case of propagation: a comparison
   prints its yielded LHS, a failure prints nothing, a ranged comparison filters
   to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
-  Today that resolution is **whole-line**: the arguments' conditions are ANDed
-  and gate the entire line, and an out-of-bounds argument instead materializes
-  a zero and prints. Both are scheduled to change — see "Per-slot printing"
-  below. ("Gated print" now names the proposed no-comma syntax, not this.)
+  That resolution is **whole-line and stays so**: the arguments' conditions
+  are ANDed and gate the entire invocation — retained language behavior under
+  "Print invocation atomicity" below. Only the out-of-bounds case changes,
+  which today materializes a zero and prints. ("Gated print" names the
+  proposed no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -391,29 +394,26 @@ shape — unresolved meaning no closer resolver claimed it first: in
   zero-on-failure resolution is wanted. Propagation now applies everywhere —
   `(a > 2 && 10) + 1` keeps the old value when `a <= 2`, exactly like
   `(a > 2) + 1`.
-- **Per-slot printing (decided, not yet implemented):** resolution is per
-  slot, emission is per line. Print is **not one N-ary function call** — if it
-  were, the call-merge rule would suppress the entire line when one argument
-  fails, exactly as `Id(arr[oob])` keeps `Id`'s whole tuple old, because a
-  real call's arguments are inputs to one computation. Print arguments are
-  independent display slots: each resolves on its own (per flattened output
-  slot — caller-side failure suppresses that call *argument's* complete
-  tuple, while outputs of a call that ran resolve independently), and once
-  every slot for the current point is resolved, print joins the yielded slots
-  with single spaces and emits them as **one line**, with nothing emitted
-  when no slot yields. A skipped slot contributes neither value nor
-  separator. So `arr[oob], val1, val2` prints `val1 val2`, and
-  `a, arr[oob], arr2[oob], b` prints `a b` — mirroring
-  `arrVal, val1, val2 = arr[oob], x * y, x + y`, which keeps `arrVal` and
-  commits its siblings. This replaces both of today's behaviors:
-  whole-line gating on a failed conditional, and the materialized zero on an
-  out-of-bounds argument. A skipped slot's owned temporaries are still
-  released. One limit of **today's internal ABI**, not a language rule: a skip
-  cannot yet cross a direct-return call boundary, whose result carries no
-  validity bit, so such a result is currently resolved at the boundary and
-  always yields. The migration removes this with a private validity-carrying
-  direct-call variant, after which a direct-return argument skips like any
-  other slot.
+- **Print invocation atomicity (decided; OOB case not yet implemented):**
+  print is **one N-ary invocation**, and the ordinary call rule applies to it:
+  an argument failure that no closer `||` resolves suppresses the complete
+  invocation and its newline, exactly as `Id(arr[oob])` keeps `Id`'s whole
+  output tuple old. A fallback resolves before that boundary, so
+  `arr[oob] || -1, val1` emits `-1 val1` and
+  `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
+  `arr[oob], val1, val2` and `a, arr[oob], arr2[oob], b` emit nothing at all.
+  When every argument yields, all slots format in source order with one
+  separator between adjacent slots; an empty string and an in-bounds zero are
+  successful values, so `a, "", "", b` emits `a` and `b` separated by three
+  spaces — distinguishable from a suppressed invocation. Failed-conditional
+  suppression is today's behavior, retained; the only change is the
+  out-of-bounds case, which today materializes a zero and prints. A
+  suppressed invocation still releases its owned temporaries. One limit of
+  **today's internal ABI**, not a language rule: an unwritten direct-return
+  argument currently resolves to its seed and always yields, because the
+  result carries no validity bit; the migration adds a private
+  validity-carrying direct-call variant whose bit joins the invocation's
+  all-arguments-yielded condition.
 - **Checked-access fallback (decided, not yet implemented):** the nearest
   resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
   `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the

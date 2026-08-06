@@ -1,17 +1,20 @@
-# Print arguments that fail, at today's baseline. Two behaviours are pinned
-# here because Step 6 of the PIR plan deliberately changes both:
+# Print arguments that fail, at today's baseline. Print is one N-ary
+# invocation (PIR plan §3): after Step 6, an argument failure that no closer
+# || resolves suppresses the complete invocation and its newline.
 #
-#   - an out-of-bounds argument materializes its zero and still prints, so the
-#     failed slot shows as "0" rather than disappearing;
-#   - a failed value-position conditional suppresses the *whole line*, taking
-#     its successful siblings with it.
+# What each case does after Step 6:
+#   - every unhandled OOB case here emits no line (today it materializes and
+#     prints a zero);
+#   - the failed-conditional case keeps today's whole-line suppression — that
+#     is retained language behavior, not a change;
+#   - ranged OOB iterations emit no line, in-bounds iterations still print;
+#   - a fallback resolves before the invocation boundary and lets the
+#     complete line print;
+#   - empty strings are successful values, so their line always prints and
+#     stays distinguishable from an invocation suppressed by failure.
 #
-# Under per-slot printing a failed argument omits only itself, siblings still
-# print, and separators appear only between emitted slots. The multi-argument
-# cases are what distinguish that from whole-line suppression; the owned heap
-# temporary and the ranged access are what keep cleanup honest on both paths.
-# Still to add when Step 6 lands: a false heap-valued conditional beside
-# successful siblings, so the skipped outcome's own temporary is leak-checked.
+# Still to add when Step 6 lands: leak checks on the suppressed path, where
+# arguments (including successful siblings) own heap temporaries.
 
 arr = [10 20 30]
 arr2 = [40 50]
@@ -27,18 +30,15 @@ v1, arr[9], v2
 "--oob last--"
 v1, v2, arr[9]
 
-# Two adjacent failed slots: per-line emission joins only yielded slots, so
-# this becomes "5 6" after Step 6 — no stranded or doubled separators.
 "--double oob middle--"
 v1, arr[9], arr2[9], v2
 
-# An inline concatenation is an owned temporary, unlike a named binding, so a
-# skipped sibling must not leak or double-free it.
 "--oob beside owned heap temp--"
 "s" ⊕ "t", arr[9], v1
 
-# A ranged checked access: in-bounds iterations print values, out-of-bounds
-# iterations print the materialized zero today and will omit the slot later.
+"--empty args always print--"
+v1, "", "", v2
+
 "--ranged checked--"
 j = 0:5
 v1, arr[j]
