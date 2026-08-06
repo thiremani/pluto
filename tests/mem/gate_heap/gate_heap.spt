@@ -1,0 +1,23 @@
+# A ranged gate whose value is a heap-returning call: each admitted iteration
+# replaces the previous heap value, so the last admitted iteration wins and no
+# intermediate allocation leaks. A gate admitting no point keeps the old value.
+
+i = 0:4
+s = "seed"
+s = i < 2 mkTag(i)
+"RangedGateHeapCall: -s"
+
+q = 0:4
+z = "keepme"
+z = q > 9 mkTag(q)
+"RangedGateHeapCallNoAdmit: -z"
+
+# A Range returned by a function is an ordinary descriptor: it drives a
+# collector domain and a statement gate like any locally created range.
+fr = mkRange(3)
+fc = [fr]
+"FnRangeCollector: -fc"
+
+fg = 0
+fg = fr < 2 fr + 100
+"FnRangeGate: -fg"

@@ -1,0 +1,18 @@
+# Blank targets, as they behave today: `_` is an ordinary typed binding that
+# only the CFG exempts from liveness checks, not a per-slot discard sink.
+# These cases are the safe subset — one scalar blank per statement. The
+# reproduced failures (see docs/Pluto PIR Capability Matrix.md §4): duplicate
+# heap blanks in one statement alias one binding and leak, repeating such a
+# statement aborts, and reusing `_` at a second type fails compilation. A
+# single heap blank is leak-free. Fixtures for the broken cases land with the
+# `_` sink implementation.
+
+a, u = 3, 4
+_ = 1
+"Discard: -a"
+
+_, b = FOuter(a, u)
+"DiscardFirst: -b"
+
+c, _ = FOuter(a, u)
+"DiscardSecond: -c"

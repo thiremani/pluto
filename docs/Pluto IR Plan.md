@@ -1,6 +1,6 @@
 # Pluto Statement IR (PIR) Plan
 
-**Status:** Proposed for review
+**Status:** Accepted 2026-08-05 — roadmap in §16; implementation not yet started
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -12,13 +12,13 @@ assignment explicit before LLVM lowering
 
 ## 1. Decision
 
-PIR v1 should be a **statement execution plan**, not a general-purpose value IR.
-It answers four questions for each statement:
+PIR v1 is a **statement execution plan**, not a general-purpose value IR. It
+answers four questions per statement:
 
 1. What state or collectors must exist before evaluation?
-2. Over which ranges and conditions should the statement execute?
+2. Over which ranges and conditions does the statement execute?
 3. Which values yield, skip, accumulate, or advance on each iteration?
-4. Which final outcomes are committed to the LHS after evaluation finishes?
+4. Which final outcomes reach the LHS?
 
 The pipeline becomes:
 
@@ -26,122 +26,50 @@ The pipeline becomes:
 Pluto source
   -> lexer -> tokens
   -> parser -> AST
-  -> semantic solver -> typed/resolved AST + ExprInfo
+  -> semantic solver -> typed/resolved AST + ExprInfo + effects (§15)
   -> CFG/dataflow validation (use-before-definition, dead writes)
   -> PIR statement builder -> statement plans
+  -> ownership elaboration -> annotated plans
   -> PIR validator -> validated plans
   -> PIR-to-LLVM lowering -> LLVM IR
-  -> LLVM optimization
-  -> native object emission (.o)
-  -> linker + Pluto runtime objects
-  -> executable
+  -> LLVM optimization -> object emission -> link with runtime -> executable
 ```
 
-Responsibilities stay decoupled: the solver owns types, ranges, output
-shapes, and whether an expression may yield conditionally; the CFG owns
-cross-statement dataflow legality (use-before-definition, dead writes,
-write-after-write); PIR owns how an already-valid statement executes; LLVM
-owns SSA, storage, optimization, and ABI. The CFG never reads PIR regions —
-it consumes a small solver-recorded write summary, and PIR consumes the same
-summary independently. The summary is **per LHS slot**, not per statement,
-because a mixed assignment can conditionally skip one target while another
-always writes: `a, b = arr[i], i + 1` is `[]WriteEffect{MayWrite, MustWrite}`
-(the indexed read is bounds-guarded, the arithmetic always lands). The solver
-derives each slot's final effect from shared statement conditions, possibly
-empty ranges, conditional-yield propagation, potentially failing checked
-accesses, and the nearest resolver. A checked or conditional outcome is
-`MayWrite` unless a fallback or closing policy resolves every failure path
-before the final commit; for example, `x = arr[i] > 0 || 0` is `MustWrite`, while
-`x = arr[i] > 0 || other[j] > 0` remains `MayWrite`. This matches the compiler's
-existing solver-then-CFG order, so migration requires no pass reordering.
-
-Inside a function body, range domain ownership decides which statements an
-empty domain can skip. A Range argument establishes a function-level domain
-whose yielded values drive the whole body, so its possibly-empty domain
-contributes one shared effect at the function boundary rather than making every
-statement that reads the parameter independently conditional. A locally
-created range owns only the statements it drives, so its empty domain suspends
-exactly those slots.
-Template-time CFG has neither distinction — it misreports a body like
-`i = 0:n` / `y = 10` / `y = i + 1` as a dead store — and typed effects
-derived while walking each concrete specialization are what resolve it. A
-script root owns its current compilation facts; a function specialization
-publishes reusable facts behind `FuncInfo.Settled` after its body and reachable
-function closure have completed. The code compiler owns both `FuncCache` and
-`ExprCache`, and every script compiler inherits both map references. Phase 1
-must extend that shared lifetime with write effects instead of adding another
-cache with a shorter lifetime. PIR validation can then consume the same
-coherent analysis. Issue
-#71's compile-order-dependent wrong output came from reusing some body facts
-while discarding others.
-
-The solver may reach a body more than once: `TypeScriptFunc` repeats the whole
-closure until one pass changes nothing. A change is any monotonic output
-refinement, including `Array(Empty)` to a concrete array or `StrG` to `StrH`,
-not merely an unresolved slot becoming resolved. Snapshot analysis such as
-`FuncInfo.Vars` must therefore be cleared and rebuilt when its body is walked, and
-become reusable only when the body is settled. `ExprCache` is different:
-stable AST entries are overwritten, while generated rewrite nodes may add new
-entries across walks. It is not a safe precedent for append-only analysis.
-Work that belongs only to the final pass should run where `TypeScriptFunc`
-recognises the stable closure and publishes `Settled`.
-
-Output spans, unlike write effects, are structural before any typing: a call
-site must consume exactly `len(callee.Outputs)` destinations, and that arity
-is fixed by the template declaration, so template analysis can place spans for
-direct calls and single-value expressions in mixed statements like
-`a, b, c = MaybePair(x), 5` — the literal's slot is a definite write even
-while the call's slots stay conditional. Only shapes whose slot count
-genuinely needs types, such as multi-slot value-position comparisons, keep the
-all-conditional fallback.
-
-This per-target `WriteEffect` is not a public function-ABI classifier. Every
-exported direct `I64`/`F64` return keeps its final hidden seed parameter.
-Collapsing statement effects into a function-level `MustWrite`/`MayWrite`
-summary may optimize internal seed use, but it cannot add or remove that
-parameter: a local conditional or a newly conditional output-producing callee
-would otherwise change the C prototype of the same type-mangled symbol after a
-body-only edit. A seedless variant requires a distinctly named private clone
-behind the stable entry point.
+Responsibilities stay decoupled: the solver owns types, ranges, output shapes,
+and effects; the CFG owns cross-statement dataflow legality; PIR owns how an
+already-valid statement executes; LLVM owns SSA, storage, optimization, and
+ABI. The CFG never reads PIR — both consume the solver's effect summary
+independently (§15).
 
 PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
 
+**ABI note.** Per-slot effects are an internal analysis, never a public ABI
+classifier. Every exported direct `I64`/`F64` return keeps its hidden seed
+parameter: a body-only edit must never change the C prototype of a
+type-mangled symbol. A seedless variant requires a distinctly named private
+clone behind the stable entry point.
+
 ## 2. Deliberate Abstraction Level
 
-PIR records source-language execution decisions:
+PIR records source-language execution decisions: Pluto types, LHS targets and
+simultaneous assignment groups, range bindings and nesting order, statement
+gates and lazy value-position `&&`, fallback and yield/skip behavior, per-value
+and per-slot and per-element and per-iteration outcomes, checked accesses and
+their OOB scope, loop-carried values and collectors, affine access forms and
+versioning decisions, and final keep-old/zero-fill/append/last-yield policies.
 
-- Pluto types such as `Int`, `String`, and `Array(Int)`
-- LHS targets and simultaneous assignment groups
-- range bindings and nesting order
-- statement gates and lazy value-position `&&`
-- fallback and yield/skip behavior
-- per-value, per-slot, per-element, and per-iteration outcomes
-- checked accesses and the scope affected by OOB
-- loop-carried values and collectors
-- affine access forms and versioning decisions
-- final keep-old, zero-fill, append, or last-yield policies
+PIR does not contain LLVM types, `llvm.Value`, blocks, SSA registers, phi
+nodes, allocas, pointers, loads, stores, register-versus-memory decisions, ABI
+details, concrete cleanup blocks, or generic user-program operations such as
+arbitrary `if`, `select`, or mutable assignment.
 
-PIR does not contain:
-
-- LLVM types such as `i64`
-- `llvm.Value`, LLVM blocks, or target-specific layout
-- SSA registers, phi nodes, allocas, pointers, loads, or stores
-- register-versus-memory decisions
-- ABI details or concrete cleanup blocks
-- generic user-program operations such as arbitrary `if`, `select`, or mutable
-  assignment
-
-Immutable plan nodes and stable IDs are sufficient. LLVM remains responsible for
-machine-level SSA and storage. A fuller value IR should be introduced only if
+Immutable plan nodes and stable IDs are sufficient. PIR is implemented as typed
+Go nodes; its text form (§12) is a deterministic rendering of the tree, not a
+separately authored program. Ordinary arithmetic, calls, and indexing stay in
+solved `eval` expressions until their range, failure, or ownership behavior
+requires a dedicated semantic node. A fuller value IR is justified only if
 Pluto later needs substantial cross-statement optimization before LLVM.
-
-PIR is implemented as typed Go nodes. Its text form may use conventional IR
-notation (`%result = operation operands : Type`), but that notation is a
-deterministic rendering of the plan tree, not a separately authored or parsed
-program. Ordinary arithmetic, calls, and indexing stay in solved `eval`
-expressions until their range, failure, or ownership behavior requires a
-dedicated semantic node.
 
 ## 3. Statement Lifecycle
 
@@ -154,52 +82,93 @@ Every assignment plan has four ordered phases:
 | `finish` | Close collectors and select final carried or collected outcomes |
 | `commit` | Apply final outcomes to all LHS targets simultaneously |
 
-The phases describe semantics, not allocations. For example, `carry sum` in
-the prepare phase does not require a stack slot; it means that reads of `sum`
-inside the statement observe the statement's current carried value.
+The phases describe semantics, not allocations: `carry sum` in `prepare` does
+not require a stack slot, it means reads of `sum` inside the statement observe
+the statement's current carried value.
+
+A print plan is its own side-effecting plan type, **`PrintPlan`**, modeling
+**one N-ary intrinsic invocation**. Print is a call, and the ordinary
+call-merge rule applies to it: any unresolved argument suppresses the
+complete invocation, exactly as an OOB argument keeps `Id(arr[oob])`'s whole
+output tuple old. For each admitted point, `PrintPlan` evaluates and finishes
+every flattened argument outcome, ANDs their yielded bits, and invokes print
+**exactly once, only if every slot yielded** — an unresolved argument emits
+neither content nor newline. A `fallback` resolves before this boundary, so
+`a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
+`a, arr[oob], arr2[oob], b` emits nothing at all.
+
+When every argument yields, the invocation formats every slot in source
+order, with one space between adjacent **ordinary single-line slots**; each
+slot's formatter keeps its own internal layout, so a whole-`Struct` slot
+spans several lines inside the one invocation (`tests/struct/struct.exp`).
+An empty string is a successful value, not a skip: `a, "", "", b` emits `a`
+and `b` separated by three spaces, distinguishable from an invocation
+suppressed by failure. **The atomic unit is the invocation — one emission
+group — not necessarily one physical line**: a suppressed invocation emits
+none of its output, including a multi-line struct slot's, and a fully-yielded
+ranged print produces one emission group per admitted point. Whether lowering
+uses `printf`, a line buffer, or several writes is a backend choice, and any
+single-physical-write atomicity guarantee is a lowering/runtime contract, not
+plan semantics. Generic `finish` keeps its single meaning of closing carries
+and collectors; `PrintPlan` needs no finish exception, since the invocation
+itself is the terminal consumer, and it consumes the group's owned
+temporaries — formatted strings, materialized cells — on the suppressed path
+too, where elaboration derives their releases.
+
+The suppression *outcome* for a failed conditional matches today, but the
+model is **eager**: `PrintPlan` evaluates and finishes every argument in
+source order before ANDing the yielded bits, whereas today
+`compileCondOperands` evaluates the extracted conditions first and compiles
+the sibling arguments only on the success branch. Sibling evaluation is
+therefore a Step 6 **behavior change**: a sibling with observable effects — a
+callee that itself prints, an owned heap temporary — now runs, and is
+released, even when the invocation is suppressed. The other Step 6 change is
+the OOB case, whose materialized zero becomes suppression under the same
+call-level validity rule (§9).
+
+Prints are migration scope, not a future extension: today's
+`compilePrintStatement` consumes the conditional-extraction and
+collector-preparation machinery, so prints must lower from plans before that
+machinery's last consumer is gone.
 
 ## 4. Core Vocabulary
 
-PIR should use structured control plus a small Pluto-specific vocabulary:
-
 | Operation | Meaning |
 | --- | --- |
-| `eval(expr)` | Evaluate a solved Pluto expression or ordinary expression fragment |
-| `carry` | Declare state that may advance across iterations (prepare phase) |
-| `collector` | Declare a logical collection result before its domains (prepare phase) |
-| `domain` | Execute a region once for each point in one resolved range domain |
-| `gate` | Admit one shared statement iteration; rejection suppresses every RHS outcome and iteration update |
-| `value-and` | Lazily evaluate a local value region only when its left outcome yields |
+| `eval expr` | Evaluate a solved Pluto expression or expression fragment |
+| `carry` | Declare state that may advance across iterations (`prepare`) |
+| `collector` | Declare a logical collection result before its domains (`prepare`) |
+| `domain` | Execute a region once per point in one resolved range domain |
+| `gate` | Admit or reject one shared statement iteration for its whole region |
+| `require` | Lazily evaluate a local value region only when its left outcome yields (the value-position `&&`, as `fallback` is the value-position `||`) |
 | `fallback` | Lazily evaluate an alternative for missing outcomes |
 | `map` | Apply ordinary expression work to yielded child outcomes |
 | `align` | Apply explicit slot, zip-min, or broadcast alignment |
 | `yield` | Produce a value from the current value or cell region |
 | `skip` | Produce no value; the failure propagates to the nearest resolving region |
 | `continue` | Reject the rest of one range iteration |
-| `break` | Exit a range domain because of source-language break semantics |
 | `collect` | Add a yielded cell according to the collector policy |
 | `advance` | Replace loop-carried state at the end of an iteration |
-| `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored by the builder) |
+| `drop` | Derived at region exit: free an owned outcome no consumer took (printed in expanded PIR, never authored) |
 | `finish` | Close a carry or collector into a final outcome |
-| `commit` | Apply one simultaneous mapping from final outcomes to semantic LHS targets |
+| `commit` | Apply one simultaneous mapping from final outcomes to LHS targets |
 
 Every operation corresponds to a documented language rule in the semantics
 docs; a new operation requires its rule to be written there first, so the
 vocabulary cannot grow ahead of the language.
 
 Generic loops and branches are intentionally absent. `domain`, `gate`,
-`value-and`, `fallback`, and checked accesses record why control exists and what
-a rejected outcome means; the lowerer emits ordinary LLVM branches and loops.
-A `skip` remains distinct from `continue`: one RHS may fail while sibling RHS
-expressions still update during the same iteration. A `skip` names no scope of
-its own — it propagates outward to the nearest resolving region (a `fallback`,
-a collector cell boundary, an `advance`, or the final `commit`), mirroring the
-language rule that a failure propagates to its nearest resolver. It must remain
-visible to a surrounding `fallback` before any coarser region resolves it.
+`require`, `fallback`, and checked accesses record why control exists and
+what a rejected outcome means; the lowerer emits ordinary LLVM branches and
+loops. `skip` stays distinct from `continue`: one RHS may fail while sibling
+RHS expressions still update in the same iteration. A `skip` names no scope of
+its own — it propagates outward to the nearest resolving region (§9 lists
+them), and must remain visible to a surrounding `fallback` before any coarser
+region resolves it.
 
 ## 5. Plan Results
 
-Each value-producing plan node has an abstract outcome:
+Each value-producing node has an abstract outcome:
 
 | Property | Examples |
 | --- | --- |
@@ -207,59 +176,82 @@ Each value-producing plan node has an abstract outcome:
 | Domain | scalar, fixed output slots, array elements, range iterations |
 | Yield shape | always, scalar condition, per-slot bits, element mask, per-iteration |
 
-Conceptually, an outcome is `(value, yielded)`, analogous to a circuit lane's
-`(data, valid)`. `yielded` has the node's yield shape rather than necessarily
-being one scalar bit. This is plan-level meaning, not a Pluto tuple, SSA pair,
-or required runtime layout.
+Conceptually an outcome is `(value, yielded)`, analogous to a circuit lane's
+`(data, valid)`; `yielded` has the node's yield shape rather than necessarily
+one scalar bit. This is plan-level meaning, not a Pluto tuple or runtime
+layout.
 
-Zero is never a missing-value marker. A successful comparison may yield zero,
-so value and yield information remain conceptually separate. A `gate` consumes
-the relevant yield state as the shared statement-iteration enable. Local
-`value-and`, `map`, and `align` operations propagate yield state with their data;
-`fallback`, collector closure, `advance`, and final `commit` resolve it according
-to their documented policies.
+Zero is never a missing-value marker — a successful comparison may yield zero —
+so value and yield information stay separate. A `gate` consumes yield state as
+its region enable. `require`, `map`, and `align` propagate yield state with
+their data; the resolving operations consume it per §9's failure-scope table.
 
-`eval` leaves may retain references to typed AST nodes. The builder splits out
-operations that affect evaluation strategy, including ranges, lazy `&&`/`||`,
-conditional propagation, and collectors. Ordinary arithmetic and calls can stay
-inside `eval` or `map` regions and continue to use the existing expression
-compiler.
+`eval` leaves may reference typed AST nodes. The builder splits out everything
+that affects evaluation strategy — ranges, lazy `&&`/`||`, conditional
+propagation, collectors — while ordinary arithmetic and calls stay inside
+`eval` or `map` and continue to use the existing expression compiler.
 
 ## 6. LHS Targets and Final Commit
 
-PIR calls LHS locations **targets**, not places or memory addresses:
+PIR calls LHS locations **targets**:
 
 | Target | Meaning |
 | --- | --- |
-| `local(name)` | Local or output binding |
-| `field(base, field)` | Resolved struct field |
-| `index(base, expression)` | Resolved array element target |
-| `column(table, column)` | Future table column target |
-| `cell(table, row, column)` | Future table cell target |
+| `local(name)` | Ordinary local binding |
+| `output(name)` | Function output binding; a commit on an indirect output also updates its runtime write flag (direct scalar outputs have none) |
+| `discard` | A `_` slot: one independent sink per slot, never bound; see below |
 
-Targets are evaluated exactly once at the phase required by Pluto's eventual
-assignment semantics. The PIR-to-LLVM lowerer chooses pointers, copies, moves,
-and cleanup paths.
+Field, index, column, and cell targets are future extensions (§18).
 
-All RHS expressions in one assignment group are evaluated before the final
-`commit`. The target mappings are then applied simultaneously. This preserves
-swaps, sibling self-references, and ownership safety without exposing temporary
-storage in PIR.
+A `discard` creates no binding and no name, but its **outcome keeps its type,
+arity position, and `YieldEffect`** so ownership elaboration can derive
+cleanup. The owned outcome is consumed at the exit of the smallest region that
+owns it, not at statement end: a discarded heap value produced inside a domain
+is released per iteration rather than accumulated across the statement. A
+discard never participates in a carry and never keeps an old value, because
+there is nothing to keep.
 
-Every target slot and outcome has a stable plan ID. The builder records the
-exact `target <- outcome` mapping selected by the solved assignment; the lowerer
-must not reconstruct that mapping from source names, result order, or LLVM
-values. A commit group follows one transfer contract:
+Two things are deliberately absent, and one is deliberately present. No new
+**Pluto source keyword**: `_` is the existing spelling. No authored PIR
+`discard` **operation**: the commit mapping to a `discard` target is an arity
+and validation record (§14), while the disposal is the ordinary derived `drop`
+at that smallest owning region's exit — immediate by construction and never
+authored by the builder, per §8's releases-are-derived rule. What *is*
+first-class is the `discard` **target variant** above, with its own textual
+spelling in the rendered plan, so a dropped outcome is always a recorded
+mapping rather than a missing one.
+
+In effect terms (§15) a discard publishes **no target `WriteEffect` and no CFG
+event** — there is no destination to write, read, or kill. Its absence is
+structural and positional, not a third lattice state: the statement's
+target-effect vector stays aligned to the LHS slots, with the discard's entry
+simply absent (an aligned optional vector or a sparse `{targetIndex, effect}`
+mapping — `a, _, b` keeps three positions carrying two effects, never a
+compacted two-slot vector that loses the mapping). The RHS `YieldEffect` and
+type vectors remain fully aligned across all slots, discards included.
+
+Targets are evaluated exactly once, at the phase Pluto's assignment semantics
+require. Ownership elaboration decides copies, moves, transfers, and cleanup
+(§8); the lowerer implements those annotated decisions, choosing only
+machine-level representation.
+
+All RHS expressions in one assignment group are evaluated before `commit`, and
+the mappings then apply simultaneously — preserving swaps, sibling
+self-references, and ownership safety without exposing temporary storage. Every
+target slot and outcome has a stable plan ID; the builder records the exact
+`target <- outcome` mapping, and the lowerer must not reconstruct it from
+names, result order, or LLVM values.
+
+A commit group follows one transfer contract:
 
 1. Every RHS outcome is produced against the pre-commit binding snapshot.
 2. The complete outcome-to-target mapping is known before any target changes.
 3. Moves, copies, and retained borrows are planned across the whole group.
-4. All target mappings take effect simultaneously in Pluto semantics.
-5. Replaced target values are released only after no mapped outcome can still
+4. All mappings take effect simultaneously in Pluto semantics.
+5. Replaced values are released only after no mapped outcome can still
    reference or consume them.
 
-For example, `a, b = b, a` produces two outcomes from the same pre-commit
-snapshot and then commits the crossed mapping:
+For example, `a, b = b, a`:
 
 ```text
 %to_a = eval #expr_b : T
@@ -270,25 +262,15 @@ commit simultaneous
     @b <- %to_b
 ```
 
-For owned heap values, this may lower to an ownership swap without deep copies.
-If one owned source feeds multiple targets, at most one consumer can take it;
-the other owning consumers require a derived copy or materialization.
+For owned heap values this may lower to an ownership swap without deep copies.
+If one owned source feeds multiple targets, at most one consumer takes it; the
+others require a derived copy.
 
 ## 7. Loop-Carried State
 
-Ranged assignments that read their own LHS require explicit loop-carried state.
-For example, repeated evaluation of:
-
-```pluto
-sum = sum + 1
-arr = arr ⊕ [2]
-```
-
-must make iteration `n + 1` observe the values produced by iteration `n`, while
-the real LHS targets are committed only after the statement's range execution
-ends.
-
-PIR models this with `carry` and `advance`:
+A ranged assignment that reads its own LHS needs explicit carried state, so
+that iteration `n + 1` observes iteration `n` while the real target is
+committed only after the domain finishes:
 
 ```text
 pir.statement @update_sum_arr
@@ -314,113 +296,142 @@ pir.statement @update_sum_arr
         @arr <- %arr.final
 ```
 
-The `next` and `final` labels are plan-result names, not SSA registers or storage.
+A carry is `(value, updated)` state **scoped to the domain that owns it**.
+Within that domain a read of the LHS resolves to the carry, never to the
+unchanged external target; a sibling driven by its own RHS-local domain neither
+reads nor advances another sibling's carry. The rules:
 
-Loop-carried evaluation follows these rules:
+1. Each iteration starts from a snapshot of every carry, and every sibling RHS
+   under the same shared domain point reads that same snapshot.
+2. All RHS outcomes are evaluated before any carry advances; advances are then
+   simultaneous, so the next admitted iteration sees the complete prior
+   advance while swaps and self-references still see one iteration-start
+   snapshot.
+3. A carry's `updated` bit is set only by its own successful advance. A
+   skipped outcome keeps its carry without suppressing siblings; a rejected
+   shared iteration advances nothing.
+4. Nested range points advance in lexicographic execution order.
+5. `finish` exposes only final carried values, consulting `updated`: a domain
+   that admitted no point — empty range, or a gate that rejected every point —
+   finishes not-updated, and `commit` keeps the old target.
 
-1. Each iteration starts with a snapshot of every carry.
-2. Every sibling RHS in that iteration reads the same snapshot.
-3. RHS outcomes are evaluated before any carry advances.
-4. Yielded outcomes advance their carries simultaneously at iteration end.
-5. A skipped outcome keeps its prior carry while yielded siblings may advance.
-6. The next admitted iteration reads the advanced carries.
-7. A statement-wide rejected iteration advances no carries.
-8. Nested range points advance carries in their defined lexicographic execution
-   order.
-9. `finish` exposes only the final carried values to `commit`.
+The seed is carried state, not a write: it is a **borrow** of the external
+target, never a copy, so a domain admitting no point costs nothing. If the
+destination is fresh, its seed follows normal declaration and zero-value rules;
+PIR must not bypass read-before-definition validation to create a carry.
 
-Within `execute`, a read of an LHS destination resolves to that destination's
-carry, never directly to the unchanged external target. `advance simultaneous`
-updates the complete carry group only after every sibling next-outcome has been
-evaluated. Consequently the next admitted iteration sees the newly advanced
-values, while swaps and sibling self-references still observe one shared
-iteration-start snapshot.
-
-If a destination is fresh, its seed follows existing Pluto declaration and
-zero-value rules. PIR must not bypass read-before-definition validation merely
-to create a carry.
-
-For owned values such as arrays and heap strings, `advance` means semantic
-replacement. The backend must keep the old carried value alive while evaluating
-the RHS, then transfer or copy the new value and release the replaced value only
-after the iteration update is safe.
+An `advance` does not by itself make the new carry owned. The carry takes the
+ownership annotation of the outcome it advances from — `unmanaged` for a
+trivial value, `borrowed` for a self-reference or sibling borrow still valid at
+the next iteration's start, `owned` only for an outcome holding heap state —
+and elaboration materializes a borrow into a copy only when it would escape its
+owner's lifetime. Consequently the borrowed external seed is **never** released
+by an advance; a later advance releases the previous carry only if that carry
+was `owned`; and the external target's old value is released only by a
+successful final `commit`, after the RHS has finished reading it.
 
 ## 8. Ownership, Lifetimes, and Cleanup
 
-Every value-producing outcome carries an ownership annotation:
+Every value-producing outcome carries an annotation:
 
 | Annotation | Meaning |
 | --- | --- |
-| `owned` | The outcome holds heap state the plan must consume or release exactly once |
-| `borrowed(owner, region)` | The outcome views state owned elsewhere, records its provenance and valid lifetime region, and is never released here |
+| `owned` | Holds heap state the plan must consume or release exactly once |
+| `borrowed(owner, region)` | Views state owned elsewhere, records provenance and valid lifetime, never released here |
+| `unmanaged` | A trivial value (integers, floats, condition bits, range descriptors); copied freely, never released or transferred |
 
 Consumers consume ownership: `commit` moves an owned outcome into a target (or
-copies when the source must survive), `advance` consumes it as the new carry
-and releases the replaced carry only after the iteration update is safe, and
-`collect` moves or copies it per collector policy.
+copies when the source must survive), `advance` consumes it per §7, `collect`
+moves or copies it per collector policy, and the `PrintPlan` invocation
+consumes its argument group's temporaries, on the suppressed path too. Ownership is scheduled for a complete simultaneous group,
+never one mapping at a time, so an early target overwrite cannot release a
+value another swap outcome, sibling, or carry still needs.
 
-Ownership is scheduled for a complete simultaneous group, not one mapping at a
-time. This prevents an early target overwrite from releasing a value still used
-by another swap outcome, sibling result, or carry update.
+Releases are **derived, not authored**, by a dedicated elaboration pass between
+the builder and the validator: build semantic PIR, elaborate ownership,
+validate, lower. Structured region exit implicitly discards any owned outcome
+no consumer took, on every path — a skip arm, the untaken side of a
+`require` or `fallback`, a rejected iteration, or region end. Elaboration
+annotates each outcome, plans transfers, copies, and materializations across
+each simultaneous group, and derives one release obligation per unconsumed
+path; the validator rejects a plan where an outcome is consumed twice or
+escapes unconsumed. Expanded PIR prints derived `drop`, transfer, and
+materialization points, so ownership regressions surface as plan diffs.
 
-Releases are **derived, not authored**. The builder does not place cleanup:
-structured region exit implicitly discards any owned outcome no consumer
-took, on every path — a skip arm, the untaken side of a `value-and` or fallback, a
-rejected iteration, or region end. The validator derives the release
-obligation for each owned outcome on each path and rejects a plan where one
-is consumed twice or escapes its region unconsumed. Expanded PIR prints the
-derived `drop` points so ownership regressions surface as plan diffs. The
-generic lowerer emits the actual frees from those derived obligations.
+Borrowed outcomes are never released directly. Within a simultaneous commit or
+advance group, a borrow from a target or carry that is itself being replaced
+may be **promoted to transfer** of that owner's old value when exactly one
+owning consumer takes it and no surviving outcome still needs the old owner —
+this is what permits an array or string swap without deep copies. Every other
+escaping borrow is copied or materialized.
 
-Borrowed outcomes are never released directly. The validator checks their owner
-and lifetime region. Within a simultaneous commit or advance group, a borrow
-from a target or carry that is itself being replaced may be promoted to transfer
-of that owner's old value when exactly one owning consumer takes it and no
-surviving outcome still needs the old owner. This is what permits an array or
-string swap without deep copies. Otherwise, a consumer that outlives the borrow
-receives a derived copy or materialization. Expanded PIR prints derived
-transfers and materialization points alongside derived `drop` points.
+Elaboration is new analysis, not a port: ownership does not exist before LLVM
+today. `ExprInfo` carries type, range, and conditional facts only, while
+`Borrowed` lives on LLVM-bearing `Symbol`s and transfer decisions happen during
+code generation. Leak checks remain the runtime backstop — a correct plan can
+still be lowered incorrectly.
 
-Leak checks remain necessary: a correct plan can still be lowered
-incorrectly, so `--leak-check` stays the runtime backstop for the lowerer.
+## 9. Gates, Failure Scope, and OOB
 
-The dead-write diagnostic is fixed upstream of PIR: the solver records a
-per-target write effect (`MustWrite` versus `MayWrite` per LHS slot — it
-already knows conditional yield and keep-old behavior), and the CFG consumes
-that metadata — curing the misclassification of value-position conditional
-writes that today forces tests to interleave reads, without the CFG ever
-reading PIR. The CFG pass
-itself stays: dataflow legality is not replaced by ownership checking, which
-answers a different question. This fix does not depend on PIR and may land
-before it.
+One rule governs both: **a gate admits or rejects its entire region; a failure
+inside an admitted region propagates to its nearest resolver, which by default
+is its own outcome slot.** A rejected gate does not evaluate its region at all.
+An enclosing gate that already admitted the region does not reach back to
+resolve a later failure inside it.
 
-## 9. Conditions, OOB, and Skip Scope
+For assignment, a failed statement gate blocks every sibling write, while an
+OOB in one ordinary RHS leaves only that RHS's target unchanged.
 
-Failure scope must be explicit:
+Print has **no gate**: `ast.PrintStatement` carries only an argument list.
+Its failure resolver is the **invocation boundary** (§3): print is one N-ary
+call, so an argument failure that no closer `||` resolves suppresses the
+complete invocation and all of its output, by the same call-merge rule that
+keeps `Id(arr[oob])`'s tuple old. A failed *conditional* argument already
+suppresses the emission today — every argument's conditions are ANDed into
+one gate around it — and that **outcome is retained**, but evaluation becomes
+eager (§3): today the gate also skips *evaluating* the sibling arguments,
+while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
+changes two observable things: the OOB case — today `arr[oob], val1, val2`
+prints `0 val1 val2`, afterward nothing — and sibling side effects, which now
+occur even on a suppressed invocation.
+
+A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
+evaluating the siblings — is **proposed future syntax, not current language**.
+It does not parse: the parser builds a `PrintStatement` only from a plain
+expression list, and the solver rejects an OOB read as a statement condition.
+Adding it is a parser/AST/solver feature with its own semantics-doc entry,
+tests, and capability rows, and it must specify that the gate tests the
+access's yielded/in-bounds bit rather than its value, so an in-bounds zero
+still admits the region.
 
 | Failure site | PIR action |
 | --- | --- |
-| Shared ranged statement condition | `continue` |
-| OOB while evaluating that shared condition | `continue` |
+| Shared statement gate, or an OOB while evaluating it (assignment only today) | `continue` (ranged) or reject the statement (non-ranged) |
 | OOB in one ordinary RHS | `skip`, resolved within that RHS only |
 | Failed value-position comparison | `skip`, available to `fallback` |
 | OOB in one collector cell | `skip`, resolved at the cell boundary; the closing policy decides omit or zero-fill |
-| Failed statement without a range | Final `commit` applies keep-old or zero policy |
+| OOB in one print argument | `skip`; a closer `fallback` may resolve it, else it suppresses the whole invocation and newline (§3) |
+| Failed statement without a range | `commit` applies keep-old or zero policy |
 
-The normal per-iteration order is:
+Per-iteration order:
 
 1. Enter the range point.
-2. Evaluate shared statement conditions.
-3. Continue the range if the shared condition rejects the point.
-4. Evaluate each RHS outcome, including value-position `&&`, fallbacks, and local OOB checks.
-5. Collect yielded cells and advance yielded carries simultaneously.
+2. Evaluate shared gates; `continue` if any rejects.
+3. Evaluate each RHS outcome, including `require`, fallbacks, and local OOB
+   checks.
+4. Collect yielded cells and advance yielded carries simultaneously.
 
-This ordering prevents an OOB in `a = arr[i]` from suppressing a sibling update
-such as `b = i + 1`.
+This is what prevents an OOB in `a = arr[i]` from suppressing `b = i + 1`.
+
+Checked accesses have one canonical representation — `eval` with an explicit
+`[on-oob=...]` scope — regardless of which legacy path produced them. A
+**caller-side** failure — a failed invocation or argument — is atomic: the
+call's whole output tuple keeps its old values. A call that actually ran may
+omit individual outputs independently (callee-internal non-writing, §15);
+per-slot divergence otherwise exists only where slots carry independent
+conditions.
 
 ## 10. Collectors
-
-Collectors have an explicit lifecycle:
 
 ```text
 pir.statement @collect_result
@@ -439,88 +450,58 @@ pir.statement @collect_result
         @result <- %result.final
 ```
 
-Supported closing policies initially include:
+Closing policies initially: append only yielded cells; zero-fill a missing
+fixed cell; retain the last yielded scalar; or apply a policy independently per
+output slot.
 
-- append only yielded cells
-- zero-fill a missing fixed cell
-- retain the last yielded scalar value
-- apply a policy independently per output slot
+A collector is `(value, activated)` state that activates when **its owning
+region is entered** — for a top-level collector, when the statement runs
+ungated or its shared gate admits at least one point; for a collector inside a
+lazy `require` or `fallback` arm, only when that arm executes. An ungated
+collector over an empty domain still activates and commits `[]`; a collector
+whose owning region is never entered stays inactive and `commit` keeps the
+previous target.
 
-Collectors and carries may coexist in one statement. A skipped collector cell
-does not suppress an unrelated carried update, and a skipped carried RHS does
-not suppress a sibling collector append.
+Collectors and carries may coexist: a skipped cell does not suppress an
+unrelated carried update, and a skipped carried RHS does not suppress a sibling
+append.
 
 ## 11. Affine Bounds Versioning
 
-Affine analysis records high-level access forms such as:
-
-```text
-array: data
-iterator: i
-index: 2*i + 1
-domain: range(0, n)
-```
-
-The plan attaches a bounds strategy to the corresponding `domain`:
+Affine analysis records high-level access forms (array, iterator, index
+expression, domain) and attaches a bounds strategy to the `domain`:
 
 ```text
 domain %i = range 0, @n [bounds=versioned]
     access @data[2*%i + 1] [affine]
 ```
 
-Lowering computes one guard before the loop nest. Its eventual LLVM control
-flow is conceptually:
-
-```text
-%all_safe = affine-domain-check ...
-br %all_safe, ^fast, ^checked
-```
-
-The fast and checked regions are two lowerings of the same PIR domain; PIR does
-not gain a generic `if` operation merely to expose that backend branch.
-
-Affine versioning does not break out of a partially executed fast loop. Switching
-after some iterations could duplicate side effects, collector appends, or carry
-updates. If the whole-domain guard is false, the checked version runs from the
+Lowering computes one guard before the loop nest and emits fast and checked
+regions as two lowerings of the same PIR domain; PIR gains no generic `if` to
+expose that branch. Versioning never breaks out of a partially executed fast
+loop — switching mid-domain could duplicate side effects, appends, or carry
+updates — so a false whole-domain guard runs the checked version from the
 start.
 
-The validator must reject a versioned access when its array, range, index form,
-or relevant effects can change before or during the loop. Unsupported or
-non-affine accesses simply remain checked.
+The validator rejects a versioned access whose array, range, index form, or
+relevant effects can change before or during the loop. Unsupported or
+non-affine accesses simply stay checked.
 
 ## 12. Default Text View
 
-The primary PIR view should be deterministic, indentation-based structured IR.
-It borrows the useful surface conventions of LLVM and MLIR — named outcomes,
-operation-first syntax, explicit operands, and Pluto types — without copying
-LLVM's machine-level basic blocks, phi nodes, pointers, or storage operations.
-The canonical text format uses indentation to delimit semantic regions:
+The canonical view is deterministic, indentation-based structured IR. It
+borrows LLVM/MLIR surface conventions — named outcomes, operation-first syntax,
+explicit operands, typed results — without their machine-level basic blocks,
+phi nodes, or storage operations. Using LLVM's exact text model would force
+semantic regions into blocks and phis, erasing the distinction between a gate,
+a local skip, and a fallback, and requiring later code to reconstruct it.
 
-- exactly four ASCII spaces per nesting level
-- no tabs
-- no braces or `end` markers
-- a region ends when indentation returns to its level or an outer level
-- blank lines may separate phases but do not affect structure
-- `%name` denotes a plan outcome, binder, or semantic handle, not a machine
-  register
-- `@name` denotes a semantic target or source binding
-- operations use `%result = operation operands : PlutoType` where they produce
-  an outcome
-- square brackets contain declarative policies or facts, not executable code
-
-The in-memory typed plan tree remains authoritative; indentation is only its
-canonical diagnostic rendering. PIR v1 has no parser and is never authored by
-users. A parser should be added only if a concrete compiler-testing or tooling
-need justifies treating the text as an interchange format.
-
-Using LLVM's exact text model would force PIR to express semantic regions as
-basic blocks, branch labels, and phi nodes. That would erase the distinction
-between a statement gate, a local skip, and a fallback, then require later code
-to reconstruct it. PIR therefore adopts LLVM-like result and operation notation
-while keeping Pluto-specific structured regions and Pluto types. LLVM lowering
-is where those regions become CFG blocks and SSA values.
-
-For example:
+Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
+a region ends when indentation returns to its level or an outer one; blank
+lines may separate phases without affecting structure; `%name` is a plan
+outcome or binder, `@name` a semantic target or source binding; operations read
+`%result = operation operands : PlutoType`; square brackets carry declarative
+policies, not executable code.
 
 ```text
 pir.statement @assign_x
@@ -530,7 +511,7 @@ pir.statement @assign_x
         %result = fallback : Int
             primary
                 %condition = eval @a > 0 : Int [yield=scalar]
-                %selected = value-and %condition : Int
+                %selected = require %condition : Int
                     %loaded = eval @data[@i] : Int [on-oob=skip]
                     yield %loaded
                 yield %selected
@@ -542,282 +523,691 @@ pir.statement @assign_x
         @x <- %result
 ```
 
-Recommended views:
+Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
+result shapes, target mappings, access IDs, affine forms, collector and carry
+details, ownership annotations, and derived release points. Compiler temporary
+names and node IDs stay hidden in the concise view.
 
-- `-emit-pir`: concise semantic plan with source locations and Pluto types only
-  where useful
-- `-emit-pir=expanded`: result shapes, target mappings, access IDs, affine forms,
-  collector/carry details, ownership annotations and release points, and the
-  conceptual fast/checked expansion
-
-Compiler temporary names and stable node IDs stay hidden in the default view.
-An optional graph view can be added later for deeply nested ranges, but
-structured text is the review, diff, and golden-test format.
+The in-memory tree is authoritative; the text is its rendering. PIR v1 has no
+parser and is never user-authored; add one only if a concrete tooling need
+justifies treating the text as an interchange format.
 
 ## 13. Representation Boundary
 
-The PIR builder consumes a solved statement and produces an immutable tree of
+The builder consumes a solved statement and produces an immutable tree of
 regions and outcomes. It owns every decision currently spread across statement
 dispatch, conditional-spine extraction, range preparation, collector rewrites,
 bounds guards, and affine probing.
 
-The LLVM lowerer may still call existing expression and ownership helpers for
-`eval`, `commit`, collector, and carry operations during migration. It must not:
+The lowerer may call existing expression and ownership helpers for `eval`,
+`commit`, collector, and carry work. It must not:
 
 - re-run predicates to choose a different statement strategy
-- discover new ranges by walking the AST
+- discover ranges by walking the AST
 - infer whether a failed check skips a value, cell, or iteration
 - infer last-yield, zero-fill, or keep-old behavior from the selected helper
-- rediscover which accesses are affine-fast by AST pointer identity
-- re-derive whether a call handles its own iteration or the statement's loop
-  nest does — the builder consumes the solver's decision
-- make a strategy decision inside an `eval` region by consulting per-slot
-  condition modes: the builder must have split every conditional node out of
-  `eval`, a conditional mode reaching plain expression lowering is a
-  validation failure, and the existing unclassified-mode assertions remain in
-  the expression compiler as backstops
+- rediscover affine-fast accesses by AST pointer identity
+- re-derive whether a call handles its own iteration
+- make a strategy decision inside `eval` by consulting per-slot condition
+  modes — the builder must have split every conditional node out of `eval`, and
+  a conditional mode reaching plain expression lowering is a validation
+  failure. The existing unclassified-mode assertions stay as backstops.
 
-The intended lowering is mechanical: walk the plan in order and emit the
-corresponding LLVM structure.
+Lowering is mechanical: walk the plan in order and emit the corresponding LLVM
+structure.
 
 ## 14. Validation Invariants
 
-The PIR validator should reject a plan unless:
+The validator rejects a plan unless:
 
-1. The phases appear in `prepare`, `execute`, `finish`, `commit` order.
+1. Phases appear in `prepare`, `execute`, `finish`, `commit` order; a
+   `PrintPlan` omits `commit`, and its single N-ary invocation runs inside
+   `execute`, once per admitted point, gated on every argument slot yielding
+   (§3).
 2. Every carry and collector is prepared before use and finished at most once.
 3. Every range iterator is bound before an expression references it.
 4. Every `skip` has an unambiguous nearest resolving region; every `continue`
-   and `break` names its range.
-5. Every lazy `value-and` and fallback keeps its RHS in a lazy region.
-6. Outcome arity, Pluto types, domain, and yield shape match their consumers.
-7. All sibling RHS expressions in a non-ranged statement read the same
-   pre-commit binding snapshot.
-8. All sibling RHS expressions in a ranged iteration read the same
-   iteration-start carry snapshot.
+   names its range.
+5. Every lazy `require` and `fallback` keeps its RHS in a lazy region.
+6. Outcome arity, types, domain, and yield shape match their consumers.
+7. Sibling RHS expressions in a non-ranged statement read the same pre-commit
+   binding snapshot.
+8. Sibling RHS expressions under the same shared domain point read the same
+   iteration-start carry snapshot; RHS-local domains stay independent.
 9. All carry advances for one iteration are simultaneous.
 10. A skipped carry update preserves that carry without suppressing siblings.
 11. A rejected shared iteration performs no carry advance or collector append.
-12. Final `commit` provides exactly one type-compatible outcome mapping for
-    every target slot.
+12. An assignment plan's `commit` provides exactly one type-compatible outcome
+    mapping per target slot — a `discard` sink is an explicit mapping, not a
+    missing one. A `PrintPlan` instead invokes print exactly once per admitted
+    point when every flattened argument slot yielded; any unresolved slot
+    suppresses the invocation and its entire output.
 13. The lowerer consumes the recorded target-to-outcome mapping without
     rematching by name, position, or generated value.
-14. All targets in one assignment group are committed simultaneously.
+14. All targets in one assignment group commit simultaneously.
 15. Every checked access has an explicit OOB scope.
 16. Every unchecked access belongs to a valid whole-domain affine proof.
-17. Each source expression and future nontrivial target is evaluated exactly as
-    many times as the plan states.
-18. The plan contains no LLVM value, machine type, pointer, register, or storage
-    decision.
-19. Every owned outcome is consumed at most once, and the validator derives
-    exactly one release obligation for every path where it is not consumed —
-    yield, skip, taken and untaken `value-and`/fallback sides, rejected iterations,
-    and region end.
-20. No outcome is used after it is moved or after its derived release point,
-    and a borrowed outcome that outlives its owner is copied, materialized, or
-    validly promoted to ownership transfer before that lifetime ends.
-21. Replaced target and carry values remain live until every outcome in their
+17. Each source expression and nontrivial target is evaluated exactly as many
+    times as the plan states.
+18. The plan contains no LLVM value, machine type, pointer, register, or
+    storage decision.
+19. Every owned outcome is consumed at most once, with exactly one derived
+    release obligation per path where it is not — yield, skip, taken and
+    untaken lazy sides, rejected iterations, region end.
+20. No outcome is used after it is moved or released, and a borrowed outcome
+    outliving its owner is copied, materialized, or validly promoted first.
+21. Replaced target and carry values stay live until every outcome in their
     simultaneous group has finished reading or consuming them.
-22. A target- or carry-origin borrow is promoted to ownership transfer only
-    when its owner is replaced in the same simultaneous group, exactly one
-    owning consumer takes it, and no surviving outcome still depends on the old
-    owner; all other escaping borrows are copied or materialized.
+22. A target- or carry-origin borrow is promoted to transfer only when its
+    owner is replaced in the same group, exactly one owning consumer takes it,
+    and no surviving outcome depends on the old owner.
 
-Validator failures are compiler ICEs and should include the source statement and
-the smallest relevant PIR excerpt.
+Validator failures are ICEs and include the source statement and the smallest
+relevant PIR excerpt.
 
-## 15. Implementation Phases
+## 15. Solver Effects
 
-### Phase 0: Semantic corpus (3-5 days)
+Effects are solver-side facts consumed independently by the CFG and by PIR.
+They are **per LHS slot**, not per statement, because a mixed assignment can
+skip one target while another always writes: `a, b = arr[i], i + 1` is
+`[]WriteEffect{MayWrite, MustWrite}`. The target-effect vector stays aligned to
+LHS positions with discard entries structurally absent (§6), never compacted.
 
-- Record representative plain, conditional, ranged, collected, OOB, affine, and
-  self-referential statements.
-- Pin simultaneous sibling and loop-carried update semantics.
-- Decide collector closing policies for every existing context.
+### WriteEffect
 
-### Phase 1: Plan model, printer, validator, and write effects (1-2 weeks)
+The semantic lattice has exactly two states:
 
-- Add immutable statement, region, outcome, target, carry, collector, domain,
-  range, and access plan nodes.
-- Record per-target `WriteEffect` (`MustWrite`/`MayWrite`) in the solver and
-  migrate the CFG to consume it. Derive the effect after applying statement
-  conditions, range execution, checked-access failure, conditional propagation,
-  and nearest-resolver policies, fixing the conditional-write dead-write false
-  positive independently of any lowering change.
-- Build plans in shadow mode without changing LLVM generation.
-- Add deterministic `-emit-pir` output and golden tests.
-- Cover plain assignment, statement conditions, and one simple range.
+| State | Meaning |
+| --- | --- |
+| `MustWrite` | Every execution of the statement commits this slot |
+| `MayWrite` | Not guaranteed to write — may commit on zero or more executions |
 
-**Go/no-go checkpoint:** the dump must explain why `compileLetStatement` selects
-its current lowering without reading LLVM helper code.
+`MayWrite` deliberately covers "writes on no execution at all", so a statically
+empty range needs no third state. Ordering is `MustWrite ⊑ MayWrite`, join is
+the least upper bound, chain height is one. Weakening toward `MayWrite` is the
+safe direction: it silences a diagnostic rather than inventing one.
 
-### Phase 2: Conditional values, final commit, and ownership (2-3 weeks)
+`Uncomputed` and `Invalid` are **analysis states outside the lattice** — they
+track whether a result exists, not what it says. `Uncomputed` means no pass has
+produced a value; `Invalid` means arity or type is unresolved and publishing is
+an ICE. Neither participates in a join.
 
-- Add value-and, fallback, map, alignment, per-slot skip, and final-commit policies.
-- Add stable outcome-to-target mappings and validate simultaneous transfer,
-  including swaps, duplicate source use, and ownership-safe replacement.
-- Add owned/borrowed outcome annotations, validator-derived release
-  obligations, and generic cleanup lowering for non-ranged statements.
-- Lower selected non-ranged statements from PIR using existing backend helpers.
-- Differentially test old and PIR paths, including leak checks.
+A slot is derived `MustWrite` unless statement conditions, possibly empty
+ranges, checked-access failures, conditional propagation, or nearest-resolver
+policy demand `MayWrite`. A checked or conditional outcome is `MayWrite` unless
+a fallback or closing policy resolves every failure path **and** its enclosing
+domain is guaranteed to execute: `x = arr[i] > 0 || 0` is `MustWrite` only for
+a non-ranged `i` or a provably non-empty domain, since a fallback resolves a
+failure within an iteration but cannot manufacture an iteration. With `i` a
+possibly empty range it stays `MayWrite`, as does
+`x = arr[i] > 0 || other[j] > 0` in every case. Statement-local effects are
+rebuilt from scratch on every body walk.
 
-### Phase 3: Ranges, carried state, and collectors (2-4 weeks)
+### YieldEffect
 
-- Add prepare/execute/finish/commit lowering.
-- Add iteration snapshots and simultaneous carry advance.
-- Resolve reads of ranged destinations through their current carries so the
-  next iteration observes the complete prior advance.
-- Extend ownership to carries (replaced-carry release after a safe update)
-  and collector cells.
-- Add collector initialization, cell skip policies, and finalization.
-- Migrate ranged statement conditions and ranged RHS paths incrementally.
+`YieldEffect` describes whether an *expression outcome* produces a value, where
+`WriteEffect` describes whether a *target slot* receives one: `MustYield` or
+`MayYield`, per slot, aligned with `OutTypes`.
 
-**Ownership exit criterion:** the mask sweeps and consumed-temporary marking
-may be deleted only after differential leak checks pass with cleanup emitted
-solely from derived release obligations.
+Composition: a checked access is `MayYield`; a `fallback` whose final
+alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
+`require` is `MayYield`; ordinary arithmetic propagates the join of its
+operands.
 
-### Phase 4: OOB and affine versioning (2-3 weeks)
+Comparisons are **not** uniformly `MayYield` — the state follows the solved
+comparison mode. A scalar value-position comparison may fail to yield, but an
+array comparison produces a length-preserving zero-filled mask and always
+yields, so it is `MustYield`. A multi-output comparison can therefore mix both
+states across its slots, which is why derivation is per slot from the solved
+mode and type rather than from the syntactic operator.
 
-- Inventory checked accesses while building the plan.
-- Attach explicit OOB scopes.
-- Move affine form recognition and whole-domain versioning decisions into PIR.
-- Preserve the checked path as the semantics-first fallback.
+Calls are where the two effects interact. A failure evaluating the invocation
+or its arguments suppresses the **whole tuple** — the call-merge rule — so
+every slot of that call becomes `MayYield` together. But the callee's own
+output slots keep **independent** `WriteEffect`s: one conditional output does
+not make its siblings conditional. A slot is `MustWrite` exactly when its
+outcome is `MustYield` and no enclosing gate, empty domain, or resolver policy
+weakens it.
 
-### Phase 5: New targets (feature-driven)
+**Direct-return calls carry no validity bit today.** An indirect output has a
+runtime write flag, but a direct `I64`/`F64` result is a single value seeded
+from the destination (`compileCallInner`), so a callee that wrote nothing
+returns the seed and the caller cannot tell "skipped" from "yielded the seed".
 
-- Add field and index targets as their source features are implemented.
-- Add table targets and domains when table semantics are specified.
+Two failure sources must not be conflated:
+
+- **Caller-side failure** — the invocation or an argument failed, as in
+  `Id(arr[oob])`. The call never meaningfully ran, the call-merge rule applies,
+  and the whole tuple is `MayYield` regardless of return mode.
+- **Callee-internal non-writing** — the callee ran but did not write this
+  output. A per-output fact, not a tuple fact.
+
+The transfer rule keeps the two failure sources separate — conceptually
+`rawYield[i] = invocationYield && didWrite[i]`. A caller-side failure makes
+`invocationYield` false: every slot skips, the commit is skipped, and the
+target stays `MayWrite`. `x = Id(arr[oob])` with an all-`MustWrite` `Id` is
+`MayWrite` — a caller-side failure is **never** converted into a seeded
+`MustYield`. Only after a successful invocation does seed resolution apply,
+as a **contextual resolver at the assignment boundary** for a direct
+`MayWrite` output resolved at an existing target: the seed *is* the keep-old
+outcome, so the consumer of the seeded result sees `MustYield` for the
+callee-internal component. Print and every other failure-propagating context
+consume the raw, validity-carrying result and see the skip.
+
+Boundary resolution implies an **implicit read of the destination seed**, and
+only where the dependency is real: after a successful invocation, at an
+*existing* target whose direct callee output is `MayWrite`, resolved at `=`.
+A fresh destination, a discard, a nested or targetless call, or an
+all-`MustWrite` callee reads nothing. Step 2A records this as a `ReadsSeed`
+fact on the call site — the CFG is untouched in 2A — and Step 2B converts the
+fact into an ordinary CFG read event, so a `MustWrite` classification cannot
+let backward liveness kill the prior value.
+
+The validity-carrying result comes from a **private direct-call variant**
+behind the stable seeded entry point (§1). The clone **keeps the seed
+parameter** — the seed is a real input, serving as the initial loop-carried
+state of a ranged body and as the self-reference value — and returns
+`{value, didWrite}` (aggregate or out-flag; an internal ABI detail the
+lowerer owns), where `value` equals the seed whenever `didWrite` is false.
+The public seeded symbol keeps its exact prototype and delegates: it calls
+the clone and returns `value`, which preserves today's
+`didWrite ? value : seed` behavior by construction, including recursive and
+output-self-referential bodies, whose internal calls may target the clone
+directly. The builder selects the variant for every consumer that needs
+failure propagation — Step 6's print invocation, where the raw bit joins the
+aggregate all-arguments-yielded condition, and any future failure-propagating
+context — while plain assignments keep the cheaper seeded entry. For a callee whose body is driven by a function-owned
+`Range`/`ArrayRange` domain, `didWrite` is the OR of the per-iteration writes.
+The variant lands in Step 4; letting print treat a resolved seed as always
+yielded was rejected, since an unwritten output would then print stale data
+instead of suppressing the invocation.
+
+### Convergence and publication
+
+**Folding a body into an output summary.** A declared output's summary is the
+sequential fold of the body's per-slot effects for that output, in statement
+order: the output starts `MayWrite` (nothing has written it), a `MustWrite`
+statement slot sets it to `MustWrite`, and a `MayWrite` statement slot leaves
+it unchanged — a later conditional write cannot un-guarantee an earlier
+unconditional one. A function-owned domain then weakens the whole result:
+because a `Range` **or `ArrayRange`** parameter wraps the complete body and may
+execute zero times, every output the body writes only inside that domain
+becomes `MayWrite` at the function boundary. A range created *inside* the body
+weakens only the outputs its statements drive — a possibly empty local range
+makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
+`res` — while unrelated outputs keep their effects. Only a parameter domain
+blanket-weakens the whole boundary.
+
+**Fixed point.** Function-output effects, and only those, need one: a recursive
+callee can refine its outputs after types settle, and `TypeScriptFunc` today
+converges on types alone. Condense the typed specialization call graph into its
+strongly connected components and process them **callee-first** in reverse
+topological order — this is what lets a component assume every callee outside
+it has already published. Within one component:
+
+1. Seed every member's outputs with a provisional `MustWrite` working vector. A
+   recursive call reads that provisional value — which is why `Uncomputed`
+   cannot be a lattice element, as there would be nothing to read.
+2. Iterate the component, recomputing outputs from rebuilt statement effects
+   and callees' current values. Callees outside the component contribute their
+   published summaries.
+3. Weaken monotonically, `MustWrite → MayWrite` only. The working vector
+   **persists across body walks** within the component; it is not cleared with
+   `FuncInfo.Vars`.
+4. Stop when nothing changes — at most one weakening per slot.
+5. Publish one coherent snapshot for the whole component at once.
+
+An `Invalid` output blocks publication for its entire component; provisional
+values are never read outside it.
+
+Only reusable function specializations publish, through `FuncInfo.Settled`,
+which now requires both type convergence and this effect fixed point. A script
+root owns its current compilation facts and is consumed immediately after
+solving, so it needs no settled-publication step. Reading an unpublished or
+`Invalid` effect is an ICE, never a default.
+
+Snapshot analysis such as `FuncInfo.Vars` is cleared and rebuilt whenever a
+body is walked and becomes reusable only once settled. `ExprCache` is not a
+precedent for append-only analysis: stable AST entries are overwritten while
+generated rewrite nodes may add entries across walks. Issue #71's
+compile-order-dependent wrong output came from reusing some body facts while
+discarding others. Specialization CFG success or diagnostics are likewise
+cached on `FuncInfo` and replayed when a later script reuses a settled body.
+
+### CFG consumption
+
+Scripts already run solver then CFG, but `.pt` functions run an untyped
+template CFG (`AnalyzeFuncs`) before any specialization exists. Effect-sensitive
+checks therefore move to settled specializations while template-independent
+structural checks stay early — a pass split, not a reordering. An unreachable
+template gets structural and parser checks only: effects cannot be derived
+without types.
+
+The two diagnostics consume effects differently:
+
+- *Backward (dead store).* A write is dead when its destination is not live
+  afterward, and that holds for `MayWrite` as well as `MustWrite`. What
+  `MayWrite` changes is the **kill**: it does not kill the preceding value's
+  liveness, because that value may survive.
+- *Forward (write-after-write).* Reporting that a write overwrites an unused
+  value requires **both** writes to be `MustWrite`. This is the rule that cures
+  today's conditional-write false positive, which currently forces tests to
+  interleave reads.
+
+Output spans, unlike effects, are structural before typing: a call site
+consumes exactly `len(callee.Outputs)` destinations, fixed by the template
+declaration, so template analysis can place spans for direct calls and
+single-value expressions in mixed statements like `a, b, c = MaybePair(x), 5`.
+Only shapes whose slot count genuinely needs types, such as multi-slot
+value-position comparisons, keep the all-conditional fallback.
+
+Inside a function body, domain ownership decides which statements an empty
+domain can skip. A `Range` or `ArrayRange` **parameter** establishes a
+function-level domain driving the whole body, contributing one shared effect at
+the function boundary rather than making every statement that reads it
+independently conditional. A locally created range owns only the statements it
+drives — `res = a[i * n + j]` under a body-local `j = (i + 1):n` has an
+RHS-local domain, not a function-owned one.
+Template-time CFG has neither distinction — it misreports `i = 0:n` / `y = 10` /
+`y = i + 1` as a dead store — and typed per-specialization effects are what
+resolve it.
+
+The CFG pass itself stays: dataflow legality is a different question from
+ownership checking. This fix does not depend on PIR and lands before it.
+
+## 16. Migration Roadmap
+
+Pluto has no users yet, so migration optimizes for the clean end state:
+
+1. The semantics documents are the specification; the existing suites
+   (`go test -race ./...`, `python3 test.py`, `python3 test.py --leak-check`)
+   are the regression baseline. Every cutover reruns them before and after; a
+   difference is either a plan-path bug or a deliberate fix landing with its
+   semantics-doc and `.exp` update. Never port a bug for compatibility.
+2. No user-facing flag, and no fallback once PIR accepts a statement. A
+   temporary capability router decides per statement whether the plan path
+   supports its combination; unsupported combinations take legacy lowering. A
+   build, validation, or lowering failure on an accepted statement is an ICE,
+   never a silent retry. The router dies in Step 10.
+3. ABI, mangling, and cache layout may change freely — the cache is
+   version-keyed and nothing external links against Pluto output. The §1
+   seed-parameter rule survives only as internal coherence.
+4. The migration unit is a capability combination, not a dispatcher branch.
+   `compileLetStatement`'s branches are not disjoint: its plain tail carries
+   ranges, collectors, checked accesses, calls, and heap values;
+   `compileCondExprStatement` handles ranged logical trees; `compileCondStatement`
+   feeds the general assignment path. Axes: gate (none/scalar/ranged); RHS
+   capabilities as **composable flags** (conditional, checked, ranged,
+   collector, call — one RHS can be several at once); callee output effect for
+   call rows (all-`MustWrite` versus any-`MayWrite`); value kind
+   (scalar/heap/multi-output/self-referential/descriptor/struct/table); target
+   kind (local/output/discard); statement form.
+   Each range domain also carries a role: descriptor value, RHS-local, shared
+   gate, collector-local, function-owned, callee-owned. Each PR migrates a
+   tested cell or rectangle, and the router keys on the same axes.
+5. Legacy code is deleted with its **actual** last consumer. Step 1 found those
+   are not where this plan first assumed: besides prints, ordinary expression
+   lowering (ranged infix, prefix, calls, array indexing, array-literal cells)
+   calls the same conditional and collector helpers, and
+   `compileInfixExpression` reads the condLHS frame directly. **Resolution:**
+   expression-side orchestration migrates too, as nested PIR regions in
+   Steps 6-8 — a conditional array cell becomes a `require`/`fallback` region
+   inside its collector, a ranged call becomes a `domain` around an `eval`.
+   Leaving it in the backend would break §13, since it is exactly AST
+   classification and strategy selection. Primitives survive (arithmetic and
+   comparison emission, storage, loop and guard emission); classification,
+   condLHS extraction, and collector rewriting do not. Step 9 splits
+   accordingly. Evidence and the full consumer table live in
+   [the capability matrix](./Pluto%20PIR%20Capability%20Matrix.md).
+
+### Step 1: Inventory and corpus (~1 week) — in progress
+
+Deliverable: [the capability matrix](./Pluto%20PIR%20Capability%20Matrix.md) —
+the reachable-combination table with per-row disposition, tests, cutover step,
+and notable removable helpers; plus new fixtures added without changing
+lowering, and the contracts this plan now records.
+
+Decisions recorded, and mirrored in the semantics docs where they are language
+rules: `_` becomes a real per-slot `discard` sink whose owned outcome is
+consumed at its smallest owning region's exit (§6) — today it is an ordinary
+typed binding whose duplicate blanks alias one another, so a repeated heap
+blank leaks and then aborts; print is one N-ary invocation gated on every
+argument yielding, retaining today's conditional suppression (§3); the
+gate-versus-slot rule, with gated print marked as future syntax (§9); the carry
+seed is borrowed (§7); the effect lattice, body-to-output fold, callee-first
+SCC convergence, comparison and direct-call yield rules, and CFG transfer rules
+(§15); an unreachable `.pt` template gets structural checks only (§15).
+
+Remaining before Step 2A: implement the `_` sink in its own PR, with fixtures
+for repeated blanks, mixed types, heap outcomes, repeated statements, and
+blanks under gates and ranges. Gated print syntax, if wanted, is a separate
+feature PR before Step 6. Any other language change likewise gets its own PR
+with its semantics-doc and rejection-test updates.
+
+### Step 2: Write effects on settled specializations (~1-2 weeks)
+
+Two PRs, implementing §15.
+
+- **2A — effect model, CFG unchanged.** `WriteEffect` and `YieldEffect` types
+  with per-slot alignment (discard slots structurally absent, §6), derivation,
+  SCC convergence, the `ReadsSeed` fact for boundary-resolved direct calls,
+  and the publication lifecycle. Tests cover derivation, the recursive fixed
+  point, lifecycle, and caching.
+- **2B — specialization-aware CFG.** Move dead-write and write-after-write to
+  settled specializations under the transfer rules; convert `ReadsSeed` facts
+  into ordinary CFG read events; keep structural checks at template time;
+  cache and replay specialization diagnostics; switch scripts and functions to
+  consume summaries; then delete the CFG's duplicated syntactic classifiers.
+
+This fixes the conditional-write false positive, does not depend on PIR, and
+lands first. PIR implementation starts only after 2A/2B tests pass.
+
+### Step 3: Minimal end-to-end PIR slice (~1-2 weeks)
+
+- The `pir` package: plan nodes, builder, validator, printer, and lowerer for
+  the smallest real vertical — `eval` over unmanaged values (scalars and
+  Range descriptors), local and scalar `discard` targets, simultaneous
+  `commit`. Cut it over through the router immediately rather than building
+  every future node in shadow mode first. (Heap and multi-output discard
+  ownership follows in Step 4; the legacy `_` sink is fixed in its own PR
+  before this step.)
+- Settle the package boundary: `pir` cannot import `compiler.Type` or
+  `ExprInfo` without an import cycle, so either the facts-to-plan adapter lives
+  in `compiler`, or shared semantic DTOs are extracted first.
+- Deterministic `-emit-pir` / `-emit-pir=expanded` output and golden tests for
+  every migrated cell.
+
+**Go/no-go:** the dump must explain a migrated statement's lowering without
+reading LLVM helper code.
+
+### Step 4: Heap values, multi-output, calls, ownership (~2-3 weeks)
+
+- Heap and multi-output assignments, calls, swaps, duplicate sources, and
+  heap/multi-output `discard` ownership (§6).
+- The ownership elaboration pass (§8), with generic cleanup lowering.
+- **Calls split by callee effect.** A call that looks ordinary can still have
+  independently `MayWrite` outputs, which needs per-output keep-old handling —
+  a Step 6 capability. So Step 4 migrates calls whose outputs are **all**
+  `MustWrite`; a call with any `MayWrite` output defers **as a whole** to
+  Step 6, because argument evaluation, tuple failure, and ownership are shared
+  across its outputs and individual slots cannot migrate separately. Callee
+  output effect is therefore a router axis, recorded in the capability matrix.
+- The private validity-carrying direct-call variant (§15), so an unwritten
+  direct-return result can suppress Step 6's print invocation instead of
+  printing its seed.
+
+### Step 5: Checked accesses and OOB scope (~1-2 weeks)
+
+- Checked access and per-RHS skip scope are foundational, not a late
+  optimization: every ordinary assignment already creates per-RHS bounds state
+  (`compileExprAssigns`) whose failure selects keep-old versus commit
+  (`commitAssignmentsPerExpr`). Plans record explicit OOB scopes (§9), and the
+  bounds-bit idiom reduces to generic guard emission driven by them.
+- Checked-access fallback becomes legal here (decided; see the semantics doc):
+  `x = arr[oob] || -1` assigns `-1`, the fallback testing the yielded bit and
+  never the value. The solver currently rejects the spelling —
+  `conditionPropagates` excludes checked failure, conflicting with §15's
+  checked = `MayYield` / fallback composition. **This introduces the PIR
+  `fallback` operation in restricted form** — a checked-access left side with
+  an ordinary alternative, in assignment position, with regression tests.
+  Step 6 extends the same operation to full value conditionals and print
+  position; it does not add a second one. The solver change is equally
+  restricted: `conditionPropagates` feeds `expressionCanFail`, which
+  statement-gate validation and logical `&&` share, so widening it to accept
+  checked accesses would prematurely legalize checked `&&` and bare checked
+  statement gates. Step 5 instead adds a fallback-specific rule accepting
+  only a checked-access root immediately left of `||`, leaving
+  `conditionPropagates` untouched; Step 6 then generalizes checked failure
+  propagation through comparisons, calls, `&&`, and exactly the gate contexts
+  that are explicitly intended.
+- The router records an explicit affine → force-checked rule, so affine
+  accesses reach checked PIR until Step 10 restores the fast path.
+
+### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
+
+- `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
+  `align`, per-slot skip, with the builder splitting every conditional node out
+  of `eval`.
+- Calls with any `MayWrite` output, deferred from Step 4, with per-output
+  keep-old handling.
+- All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
+  direct-return call argument, which needs the Step 4 validity variant.
+  The conditional suppression outcome is retained, but sibling evaluation
+  becomes eager and the OOB materialized zero becomes invocation suppression
+  (§3, §9). Update `tests/array/oob_print.exp` in the same PR, with
+  regressions for a side-effecting or owned-heap sibling of a failed
+  conditional and for a failed sibling suppressing a complete multi-line
+  `Struct` emission.
+
+### Step 7: Ranges and carries, then ranged conditionals (~3-4 weeks)
+
+- RHS-local ranges and carries first: `domain` nodes, iteration snapshots, and
+  simultaneous advance per §7.
+- Then ranged gates and ranged conditional combinations, including the ranged
+  logical trees `compileCondExprStatement` routes to staging today; `continue`
+  versus `skip` scopes become explicit.
+- Extend ownership elaboration to carries. Loop emission (`withLoopNest`,
+  `createLoopCore`) stays as generic mechanics driven by `domain` regions.
+
+### Step 8: Collectors and remaining prints (~2-3 weeks)
+
+- Collector initialization, cell skip policies, finalization, and nested
+  collectors as plan nodes per §10; collector cells join ownership
+  elaboration.
+- The remaining ranged and collector print paths migrate. After this step no
+  statement form needs the legacy conditional or collector machinery.
+
+### Step 9: Delete the legacy machinery
+
+Precondition: the Step 5 affine → force-checked rule has already carried every
+affine-containing statement through checked PIR, so nothing is orphaned —
+Step 10 only restores the optimization. Delete inside the PR that removes each
+last consumer where possible; sweep the rest here, in two buckets.
+
+**9a — statement-only helpers**, gone as soon as their statement class
+migrates:
+
+- `compileCondStatement`, `compileCondExprStatement`, and the conditional
+  temp-output staging (`createConditionalTempOutputs`,
+  `commitConditionalOutputs`, `aliasCondDests`, `restoreCondDests`)
+- `splitCondRanges`, `compileCondRangedStatement`, `compileCondRangedIteration`,
+  and the ranged staging machinery (`stageCondRangedExpr`,
+  `stageCondRangedAssignments`, `commitCondRangedStages`,
+  `createStageTempOutputsFor`, `commitStageTempOutputs`)
+- `compileConditions`, the `statementArrayCollector` trio with its two
+  exclusive array helpers (`array.go:496`, `array_nd.go:113`),
+  `commitSlotValue`, `compilePerSlotAssign`/`perSlotCommittable`
+- the `compileAssignments`/`exprAssign` per-expression commit machinery
+  (`compileExprAssigns`, `commitAssignmentsPerExpr`, `keepPriorOnSkip`,
+  `newExprAssign`). It serves far more than Step 3's plain class: heap and
+  multi-output assignments (Step 4), the per-RHS bounds bit (Step 5),
+  conditional lowering through `compileCondAssignments` (Step 6), ungated
+  ranged assignments (Step 7), and ungated collector expressions (Step 8). It
+  is deleted only after every remaining caller has migrated — Step 8 at the
+  earliest — and not again in Step 10.
+- `evalConditions`, `andGates`, `compileGate`, together with
+  `withCondRangeLoop`'s guarded arm and its `condExprs` parameter: the
+  statement path is the only source of a non-empty `condExprs`, so every
+  expression-side caller passes nil and that arm dies with the statement path.
+  `withCondRangeLoop` itself survives as loop-nest emission.
+
+**9b — orchestration helpers**, deleted only after Steps 6-8 migrate ranged
+infix, prefix, calls, array indexing, and array-literal cells:
+
+- the condLHS extraction spine (`extractSlotConds`, `extractComparisonSlots`,
+  `extractFallbackOrSlots`, `extractGatingAndSlots`, `logicalSlot`,
+  `condTemp`), `compileCondOperands`, `compileCondExprValue`, and the condLHS
+  frame itself. The frame provides evaluate-once identity, substitution,
+  comparison reuse, and temporary ownership — more than classification — so
+  some value plumbing at the `eval` boundary may survive in another form. Its
+  deletion is demonstrated, not assumed.
+- the collector rewrite machinery — all of `collect.go`
+- mask sweeps and consumed-temporary marking, gated on leak checks passing
+  with cleanup emitted solely from derived release obligations
+
+### Step 10: Affine versioning and final sweep (~1-2 weeks)
+
+- Move affine form recognition and whole-domain versioning (`isFastAffineAccess`,
+  the decision side of `withLoopNestVersioned`) into the builder; the checked
+  path stays the semantics-first fallback. Remove AST-pointer-identity
+  decisions and statement bounds orchestration.
+- Affine proofs use overflow-safe arithmetic throughout — coefficients,
+  endpoints, negative steps, extreme `I64` bounds — extending `addInt64` and
+  `mulInt64`.
+- Delete the router and the old dispatchers. `compileLetStatement` and
+  `compilePrintStatement` are the router's own entry points, so they are the
+  last things to go, here. The helper-to-release-step inventory is Step 9's
+  9a/9b buckets; the matrix lists per row only the removable orchestration
+  helpers it uses.
+- Field, index, column, and cell targets extend `commit` as their source
+  features land — feature-driven, outside the migration clock. Whole struct
+  and table values are already current capabilities.
 
 ### Deletion discipline
 
-Migration is complete only when the old statement machinery is gone. To avoid
-a permanent dual-path world, each statement class follows one rule:
+Each capability cell follows one rule:
 
-1. Build its PIR in shadow mode.
-2. Add concise and expanded golden plans.
-3. Differentially compare old and PIR lowering.
-4. Run race, full E2E, and leak checks.
-5. Switch the class to PIR.
-6. Remove its old dispatcher, classifier predicates, and specialized lowering
-   in the same migration PR — never parked as a fallback.
+1. Add its golden plans and E2E coverage, then run race, E2E, and leak checks
+   on the legacy lowering to fix the baseline.
+2. Switch the cell to PIR in the router and rerun; output and diagnostics must
+   match, except where the PR deliberately fixes a legacy bug with its
+   semantics-doc and `.exp` update.
+3. Once the router accepts a cell, plan failures are ICEs — never a fallback.
+4. Remove legacy code with its actual last consumer, in the same PR. The
+   router's shrinking legacy set is the deletion checklist.
 
 Zombie fallbacks hide plan bugs and double every future semantics change.
 
-### Target deletion inventory (with proof gates)
+### End state
 
-The end state is one statement-plan builder, one validator, one generic plan
-lowerer, the existing reusable expression/runtime/backend primitives, and no
-duplicated statement classification or specialized conditional orchestration.
-The inventory below is a target, not an upfront guarantee — each item is
-deleted only when its phase proves the plan replaces it:
+One statement-plan builder, one ownership elaboration pass, one validator, one
+generic plan lowerer, the existing reusable primitives, and no duplicated
+statement classification or specialized conditional orchestration. Surviving
+reorganized rather than deleted: loop and guard emission, generic storage
+across branches and iterations, the expression compiler for `eval` regions, the
+CFG pass (restructured around settled-specialization effects), and the runtime.
 
-- Statement dispatch predicates (per-slot committability, spine alignment,
-  logical-tree routing, ranged-condition splitting): deleted class by class as
-  each migrates.
-- The condLHS frame: it provides evaluate-once identity, substitution,
-  comparison reuse, and temporary ownership — more than classification.
-  Named plan outcomes should replace it, but because ordinary expressions stay
-  inside `eval`, some value plumbing at the eval boundary may survive in
-  another form. Deleting it is a Phase 2 exit criterion demonstrated by the
-  prototype, not assumed.
-- Staging and per-expression commit machinery: the specialized semantics are
-  replaced by carries and simultaneous `commit`; the lowerer still needs generic
-  storage across branches and iterations, so equivalent backend mechanics
-  remain — reorganized, not vanished.
-- Mask sweeps and consumed-temporary marking: replaced by derived release
-  obligations; gated on the Phase 3 ownership exit criterion.
-- The repeated bounds-bit idiom: the semantic decisions (what an OOB skips)
-  move into the plan; guard predicates, branches, and temporary guard state
-  remain as generic lowering mechanics.
+Per-step deletions are targets, not guarantees — each lands only when its step
+proves the plan replaces it. The estimated steps total roughly 14-22 focused
+weeks plus the unestimated Step 9 sweep, proceeding cell by cell with immediate
+deletion at the last consumer.
 
-The read/write CFG pass is not on the inventory: it stays, improved by
-consuming the solver's per-target write effects, not replaced.
-
-A useful shadow-plan checkpoint is 1-2 weeks. Migrating the current assignment,
-conditional, range, collector, and affine paths is approximately 5-9 focused
-weeks and should proceed incrementally rather than block unrelated features —
-but incrementally means class by class with immediate deletion, not a
-long-lived parallel path.
-
-## 16. Testing Strategy
+## 17. Testing Strategy
 
 ### PIR golden tests
 
-- solved statement -> deterministic concise PIR
-- solved statement -> deterministic expanded PIR
-- canonical output uses four-space region indentation and contains no tabs,
-  braces, or `end` markers
+- solved statement → deterministic concise and expanded PIR
+- canonical output uses four-space indentation, no tabs, braces, or `end`
 - no LLVM context required
 - negative tests for every validator invariant
-- release points appear in expanded PIR, so ownership regressions surface as
-  plan diffs before any leak-check run
+- derived release points appear in expanded PIR, so ownership regressions
+  surface as plan diffs before any leak-check run
 
-### Write-effect tests
+### Effect tests
 
-- mixed RHS expressions produce effects aligned per LHS slot, such as
-  `[]WriteEffect{MayWrite, MustWrite}` for `a, b = arr[i], i + 1`
-- shared conditions and possibly empty ranges produce `MayWrite` for keep-old or
-  unresolved last-yield targets, while an ungated collector or cell-local
-  zero-fill closing policy can still produce `MustWrite`
-- a fallback that resolves every conditional or checked-access failure produces
-  `MustWrite`
-- a fallback whose final alternative can still fail remains `MayWrite`
-- multi-output expressions retain independent effects for each output slot
+- mixed RHS produces per-slot effects: `[]WriteEffect{MayWrite, MustWrite}` for
+  `a, b = arr[i], i + 1`
+- shared conditions and possibly empty ranges produce `MayWrite` for keep-old
+  or unresolved last-yield targets, while an ungated collector or cell-local
+  zero-fill policy still produces `MustWrite`
+- a fallback resolving every failure produces `MustWrite`; one whose final
+  alternative can still fail stays `MayWrite`
+- multi-output expressions keep independent per-slot effects, and an argument
+  failure suppresses a call's whole tuple
+- a caller-side call failure (`x = Id(arr[oob])` with an all-`MustWrite`
+  callee) leaves the target `MayWrite` and records no `ReadsSeed`;
+  callee-internal non-writing at an existing target resolves to the seed as
+  `MustYield` with a recorded `ReadsSeed`
+- summaries are rebuilt per specialization walk and published only on
+  `Settled`; transitive effects reach a fixed point across recursive closures;
+  cached specialization CFG diagnostics replay on reuse
 
 ### Loop-carried tests
 
-- `sum = sum + 1` observes the previous iteration's sum
-- `arr = arr ⊕ [2]` observes and replaces the previous iteration's array
-- sibling RHS expressions read the same iteration-start snapshot
-- sibling carries advance simultaneously
-- one skipped RHS keeps its carry while another advances
-- a rejected shared condition advances no carry and appends no collector cell
-- nested ranges carry state in the defined execution order
-- final LHS values equal the last carried values after the loop finishes
+- `sum = sum + 1` observes the previous iteration; `arr = arr ⊕ [2]` observes
+  and replaces it
+- siblings under one shared domain point read the same iteration-start
+  snapshot, while RHS-local ranges stay independent
+- sibling carries advance simultaneously; one skipped RHS keeps its carry while
+  another advances
+- a rejected shared gate advances no carry and appends no cell
+- nested ranges carry state in execution order; final LHS values equal the last
+  carried values
 
 ### Commit and transfer tests
 
-- scalar and heap-value `a, b = b, a` swaps preserve the pre-commit values
-- expanded PIR promotes each eligible target- or carry-origin borrow in a
-  heap-value swap to one ownership transfer rather than two deep copies
+- scalar and heap `a, b = b, a` swaps preserve pre-commit values, and expanded
+  PIR shows one ownership transfer rather than two deep copies
 - one source mapped to multiple owning targets derives the required copy and is
   never moved twice
-- each multi-output expression maps to the intended target slot
-- one skipped target keeps its old value while yielded siblings commit
-- replaced heap targets remain alive until every sibling outcome has finished
-  using them
-- a ranged swap reads one iteration-start snapshot, advances both carries
-  simultaneously, and exposes the advanced pair to the next iteration
+- each multi-output expression maps to its intended slot; one skipped target
+  keeps its old value while siblings commit
+- replaced heap targets stay alive until every sibling outcome is done with
+  them
+- a ranged swap reads one snapshot, advances both carries simultaneously, and
+  exposes the advanced pair to the next iteration
 
-### Differential and backend tests
+### Print tests (land with Step 6)
 
-- compare observable output and diagnostics between old and PIR lowering
+- an unresolved OOB argument suppresses the complete invocation and newline:
+  `arr[oob], val1, val2` and `a, arr[oob], arr2[oob], b` emit nothing
+- a resolved fallback lets the whole line print:
+  `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, and an in-bounds
+  zero emits `0`
+- empty strings are successful values, distinguishable from suppression:
+  `a, "", "", b` emits `a` and `b` separated by three spaces
+- a failed conditional argument retains today's whole-invocation suppression,
+  but its siblings are now evaluated eagerly: a side-effecting callee runs
+  and an owned-heap sibling is allocated and released while the line stays
+  suppressed
+- a failed sibling suppresses a complete multi-line `Struct` emission
+- a ranged print emits one emission group per fully-yielded point; OOB
+  iterations emit nothing
+- a suppressed invocation still releases its owned temporaries (leak-checked)
+- an unwritten direct-return argument suppresses the invocation via the
+  `{value, didWrite}` variant
+
+### Cutover and backend tests
+
+- each cutover PR runs the full suites before and after switching its cell
 - retain focused LLVM tests for lazy placement and affine fast/checked loops
-- run `go test -race ./...`
-- run `go vet ./...`
-- run `python3 test.py --leak-check`
+- `go test -race ./...`, `go vet ./...`, `python3 test.py --leak-check`
 
-## 17. Future Extensions
+## 18. Future Extensions
 
 The statement plan can grow without becoming a machine IR:
 
 - field, index, column, and cell targets extend `commit`
 - member calls remain solved expressions inside `eval` or `map`
 - source `break` and `continue` extend structured range actions
-- function-result transfer can reuse outcome planning with a different final action
+- function-result transfer reuses outcome planning with a different terminator
 - conditional arrays extend domains, alignment, and yield masks
-- range-left value-position `&&` can later bind an outer local domain for nested
-  construction such as `[i && [matrix[i][j]]]`; it must remain local to that
-  value and must not become a statement gate or implicit collector — only an
-  explicit `[]` closes the bound domain into an array
+- range-left value-position `&&` can later bind an outer local domain for
+  nested construction such as `[i && [matrix[i][j]]]`; it must stay local to
+  that value and must not become a statement gate or implicit collector — only
+  an explicit `[]` closes the bound domain into an array
+- positional outcome groups such as `(m, n)` could later generalize `require`
+  and `fallback` to tuples — `a, b = val > 5 && (m, n) || (1, 2)`. Parentheses
+  are pure grouping today, so this is a real language feature (flattened slots
+  versus tuple value, per-slot versus group failure, arity, ownership,
+  nesting), deferred until after Step 6 handles multiple outcomes. It must
+  never become statement-gate-specific fallback sugar, because gate and
+  `require` are different PIR operations with different failure actions (§9):
+  a rejected gate is `continue` — the region is never entered, a ranged
+  collector cell is filtered out (`arr = m > 5 [m + 1/2]`), and a non-ranged
+  commit keeps old — while a `require` failure is `skip`, a missing outcome
+  that `fallback`, a collector's zero-fill, or `=` resolves
+  (`arr = [m > 5 && m + 1/2 || -1]`). A gate never supplies a value, which is
+  why `x = a > 2  3 || 7` stays an error.
+  Multi-return calls (`val > 5 && Pair(m, n) || Pair(1, 2)`) and the
+  seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
+  express the semantics today
 - a skipped array-valued collector cell closes to a zero-filled child of its
-  expected shape, while `||` may provide a shape-compatible child; the validator
-  rejects a plan whose skipped child shape is neither known nor derivable from
-  its bound domains unless an explicit fallback such as `[j && 0]` supplies it
-- gated prints become a statement plan whose final action prints yielded
-  outcomes instead of committing targets
-- test contexts can become explicit statement inputs/effects
+  expected shape, while `||` may supply a shape-compatible child; the validator
+  rejects a plan whose skipped child shape is neither known nor derivable
+  unless an explicit fallback such as `[j && 0]` supplies it
+- test contexts can become explicit statement inputs and effects
 
-PIR should remain statement-focused until a concrete feature requires
-cross-statement dataflow. That keeps its value proportional to the compiler
-complexity it is intended to replace.
+PIR stays statement-focused until a concrete feature requires cross-statement
+dataflow, keeping its value proportional to the compiler complexity it
+replaces.

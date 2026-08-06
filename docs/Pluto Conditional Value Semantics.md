@@ -16,7 +16,8 @@ A condition means different things in two places:
 The rule, in one line: **conditions left of the value gate the statement and keep
 the old value on failure; conditions inside the value propagate their failure to
 the nearest resolver — `=` keeps the old value, a collector cell zero-fills, and
-`||` supplies the fallback.**
+`||` supplies the fallback; a failure reaching a call or print invocation
+unresolved suppresses that whole invocation.**
 
 Only the first form is a **statement gate**. It admits or rejects a shared
 iteration point for every RHS expression and output in the statement. An `&&`
@@ -39,7 +40,9 @@ the condition's yield state as a shared execution-enable signal. If it is off,
 the iteration transaction does not exist and no RHS or output commit runs. A
 value-position condition instead leaves the transaction in place and propagates
 its local missing outcome to the nearest resolver. Assignment keeps old,
-collectors preserve shape with zero-fill, and `||` supplies alternate data.
+collectors preserve shape with zero-fill, and `||` supplies alternate data; a
+failure reaching a print invocation unresolved suppresses the whole line (see
+Status).
 
 In short: **a statement gate controls whether an iteration transaction exists;
 a value condition controls whether one data lane yields within an existing
@@ -117,6 +120,12 @@ the expression until something resolves it:
   one keeps its zero seed.
 - a collector cell — the cell zero-fills (shape is preserved).
 - `||` — the fallback resolves it locally.
+
+An unresolved failure that reaches an **invocation boundary** merges lanes
+there: a failed call argument suppresses that call's complete output tuple,
+and a failed print argument suppresses the complete print invocation and its
+newline (see "Print invocation atomicity" under Status). Outputs of a call
+that did run resolve independently per flattened output slot.
 
 ```pluto
 y > 2          # yields y when y > 2, else fails    (the value is the left operand)
@@ -323,21 +332,29 @@ the commit are gated per slot. The one lazy operand is an `&&` right side,
 evaluated at most once when some left slot yielded — so
 `c > 0 && (a > 2 || 7)` composes: the inner `||` resolves inside the gated arm.
 
-An **out-of-bounds read is a failed condition on the lanes it feeds**, merged
-by the same rules: a plain read no-ops its assignment (`x = arr[oob]` keeps
-old), sibling expressions in one statement commit independently
-(`a, b = arr[oob], 5` keeps `a`, sets `b`), a call merges its lanes (an OOB
-argument keeps that call's outputs old as a unit), comparisons and `||`
-fallbacks fed by an OOB read keep old rather than judging a fabricated zero,
-and an unevaluated `||` right side cannot fail anything. Inside any collector
-or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
+An **out-of-bounds read is a failed condition on the lanes it feeds**, and it
+propagates like any other failure. Comparisons and calls are not resolvers:
+they pass the failure onward without judging a fabricated zero — a comparison
+fed by an OOB read fails its lanes, and a call with an OOB argument fails its
+whole output tuple as a unit. The **nearest enclosing resolver** then decides:
+`x = arr[oob]` and `x = arr[oob] > 0` keep `x` (the resolver is `=`); sibling
+expressions in one statement commit independently (`a, b = arr[oob], 5` keeps
+`a`, sets `b`); `x = arr[oob] > 0 || -1` takes `-1`; and `Id(arr[oob]) || -1`
+reaches the fallback after the call propagates its tuple failure (decided —
+see "Checked-access fallback" under Status; today the solver rejects OOB-fed
+`||`). An unevaluated `||` right side cannot fail anything. Inside a collector
+or fixed-array cell, an **unresolved** OOB zero-fills that cell to preserve
+shape — unresolved meaning no closer resolver claimed it first: in
+`[arr[oob] || -1]` the `||` wins and the cell holds `-1`.
 
 ## Why this model
 
 - **One propagation rule:** every failed condition — a comparison, an `&&`, an
   out-of-bounds read — travels the same dataflow lanes, and the resolvers are
   few and explicit: `=` keeps old, a collector cell zero-fills, `||` supplies
-  the fallback. There is no second, locally-resolving conditional form.
+  the fallback, and an unresolved failure at a call or print invocation
+  suppresses the invocation. There is no second, locally-resolving conditional
+  form.
 - **The two spellings agree:** the statement gate and value-position
   propagation share the keep-old rule at `=`, so `y = a > 2  10` and
   `y = a > 2 && 10` mean the same thing at a root.
@@ -348,10 +365,15 @@ or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
 
 ## Status
 
-- **Implemented:** statement gates (keep-old); gated prints — print position
-  is value position, the target-less case of propagation: a comparison prints
-  its yielded LHS, a failure prints nothing, a ranged comparison filters to
-  admitted elements, and the explicit boolean spelling is `cond && 1 || 0`;
+- **Implemented:** statement gates (keep-old); conditional printing — print
+  position is value position, the target-less case of propagation: a comparison
+  prints its yielded LHS, a failure prints nothing, a ranged comparison filters
+  to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
+  That resolution suppresses the **entire invocation and stays so** —
+  retained language behavior under "Print invocation atomicity" below, which
+  also makes sibling evaluation eager and changes the out-of-bounds case
+  (today a materialized zero prints). ("Gated print" names the proposed
+  no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -372,6 +394,50 @@ or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
   zero-on-failure resolution is wanted. Propagation now applies everywhere —
   `(a > 2 && 10) + 1` keeps the old value when `a <= 2`, exactly like
   `(a > 2) + 1`.
+- **Print invocation atomicity (decided; OOB case not yet implemented):**
+  print is **one N-ary invocation**, and the ordinary call rule applies to it:
+  an argument failure that no closer `||` resolves suppresses the complete
+  invocation and its newline, exactly as `Id(arr[oob])` keeps `Id`'s whole
+  output tuple old. A fallback resolves before that boundary, so
+  `arr[oob] || -1, val1` emits `-1 val1` and
+  `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
+  `arr[oob], val1, val2` and `a, arr[oob], arr2[oob], b` emit nothing at all.
+  When every argument yields, all slots format in source order with one
+  separator between adjacent slots; an empty string and an in-bounds zero are
+  successful values, so `a, "", "", b` emits `a` and `b` separated by three
+  spaces — distinguishable from a suppressed invocation. The invocation is
+  the atomic unit, not one physical line: a slot's formatted representation
+  may itself span lines, as whole-`Struct` printing does, and suppression
+  removes all of it. Failed-conditional suppression is today's behavior,
+  retained in outcome — but evaluation becomes eager: today a failed
+  conditional also skips evaluating its sibling arguments, while the decided
+  model evaluates every argument in source order before deciding, so sibling
+  side effects occur even when the invocation is suppressed. The
+  out-of-bounds case changes too: today it materializes a zero and prints. A
+  suppressed invocation still releases its owned temporaries. One limit of
+  **today's internal ABI**, not a language rule: an unwritten direct-return
+  argument currently resolves to its seed and always yields, because the
+  result carries no validity bit; the migration adds a private
+  validity-carrying direct-call variant whose bit joins the invocation's
+  all-arguments-yielded condition.
+- **Checked-access fallback (decided, not yet implemented):** the nearest
+  resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
+  `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
+  yielded/in-bounds bit, never the value: an in-bounds zero yields `0`. Today
+  the solver rejects this source ("logical OR in value position requires a
+  conditional left operand") because `conditionPropagates` excludes
+  checked-access failure — in conflict with the propagation rule above, which
+  already names an OOB read a failed condition. Scheduled with checked
+  accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
+  tests when it lands.
+- **Gated print (proposed, not current syntax):** a no-comma prefix form such
+  as `arr[oob] val1, val2` would reject the whole line without evaluating the
+  siblings, following the general rule that a gate admits or rejects its entire
+  region while a failure inside an admitted region skips only its own slot.
+  This does not parse today — `PrintStatement` has no gate — and needs its own
+  parser, AST, and solver work. If added, the gate must test the access's
+  yielded/in-bounds bit rather than its value, so an in-bounds zero still
+  admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
   `[i > 2 && i * 10]` → `[0 0 0 30 40]`); at an assignment root failing
