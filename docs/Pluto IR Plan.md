@@ -211,12 +211,15 @@ is released per iteration rather than accumulated across the statement. A
 discard never participates in a carry and never keeps an old value, because
 there is nothing to keep.
 
-No `discard` **operation** exists, only the target. The commit mapping to a
-`discard` target is an arity and validation record (§14), while the actual
-disposal is the ordinary derived `drop` at that smallest owning region's exit —
-immediate by construction, and never authored by the builder, per §8's
-releases-are-derived rule. `_` in source needs no new keyword either; it is
-the existing spelling.
+Two things are deliberately absent, and one is deliberately present. No new
+**Pluto source keyword**: `_` is the existing spelling. No authored PIR
+`discard` **operation**: the commit mapping to a `discard` target is an arity
+and validation record (§14), while the disposal is the ordinary derived `drop`
+at that smallest owning region's exit — immediate by construction and never
+authored by the builder, per §8's releases-are-derived rule. What *is*
+first-class is the `discard` **target variant** above, with its own textual
+spelling in the rendered plan, so a dropped outcome is always a recorded
+mapping rather than a missing one.
 
 In effect terms (§15) a discard publishes **no target `WriteEffect` and no CFG
 event** — there is no destination to write, read, or kill. Its absence is
