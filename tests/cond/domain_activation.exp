@@ -1,0 +1,6 @@
+CollectorSeed: [8]
+EmptyUngatedCollector: []
+GatedNoAdmitCollector: [9 9]
+GatedSomeCollector: [0 10]
+EmptyRangeCarry: 7
+GateRejectAllCarry: 100

@@ -1,0 +1,17 @@
+--oob first--
+0 5 6
+--oob middle--
+5 0 6
+--oob last--
+5 6 0
+--oob beside owned heap temp--
+st 0 5
+--ranged checked--
+5 10
+5 20
+5 30
+5 0
+5 0
+--cond middle--
+5 4 6
+--end--

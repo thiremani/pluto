@@ -1,0 +1,44 @@
+# Print arguments that fail, at today's baseline. Two behaviours are pinned
+# here because Step 6 of the PIR plan deliberately changes both:
+#
+#   - an out-of-bounds argument materializes its zero and still prints, so the
+#     failed slot shows as "0" rather than disappearing;
+#   - a failed value-position conditional suppresses the *whole line*, taking
+#     its successful siblings with it.
+#
+# Under per-slot printing a failed argument omits only itself, siblings still
+# print, and separators appear only between emitted slots. The multi-argument
+# cases are what distinguish that from whole-line suppression; the owned heap
+# temporary and the ranged access are what keep cleanup honest on both paths.
+# Still to add when Step 6 lands: a false heap-valued conditional beside
+# successful siblings, so the skipped outcome's own temporary is leak-checked.
+
+arr = [10 20 30]
+v1 = 5
+v2 = 6
+
+"--oob first--"
+arr[9], v1, v2
+
+"--oob middle--"
+v1, arr[9], v2
+
+"--oob last--"
+v1, v2, arr[9]
+
+# An inline concatenation is an owned temporary, unlike a named binding, so a
+# skipped sibling must not leak or double-free it.
+"--oob beside owned heap temp--"
+"s" ⊕ "t", arr[9], v1
+
+# A ranged checked access: in-bounds iterations print values, out-of-bounds
+# iterations print the materialized zero today and will omit the slot later.
+"--ranged checked--"
+j = 0:5
+v1, arr[j]
+
+"--cond middle--"
+k = 0:5
+v1, (k > 3) + 0, v2
+
+"--end--"

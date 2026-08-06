@@ -15,8 +15,8 @@ A condition means different things in two places:
 
 The rule, in one line: **conditions left of the value gate the statement and keep
 the old value on failure; conditions inside the value propagate their failure to
-the nearest resolver — `=` keeps the old value, a collector cell zero-fills, and
-`||` supplies the fallback.**
+the nearest resolver — `=` keeps the old value, a collector cell zero-fills,
+`||` supplies the fallback, and a print slot emits nothing.**
 
 Only the first form is a **statement gate**. It admits or rejects a shared
 iteration point for every RHS expression and output in the statement. An `&&`
@@ -117,6 +117,13 @@ the expression until something resolves it:
   one keeps its zero seed.
 - a collector cell — the cell zero-fills (shape is preserved).
 - `||` — the fallback resolves it locally.
+- a print slot — nothing is emitted for that slot, and its siblings still
+  print. *(Decided, not yet implemented; today a failed argument suppresses the
+  whole line. See "Per-slot printing" under Status.)*
+
+The resolving unit is one **flattened output slot**. Caller-side failure —
+a failed invocation or argument — suppresses a call's complete tuple, but
+outputs of a call that did run resolve independently.
 
 ```pluto
 y > 2          # yields y when y > 2, else fails    (the value is the left operand)
@@ -348,10 +355,14 @@ or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
 
 ## Status
 
-- **Implemented:** statement gates (keep-old); gated prints — print position
-  is value position, the target-less case of propagation: a comparison prints
-  its yielded LHS, a failure prints nothing, a ranged comparison filters to
-  admitted elements, and the explicit boolean spelling is `cond && 1 || 0`;
+- **Implemented:** statement gates (keep-old); conditional printing — print
+  position is value position, the target-less case of propagation: a comparison
+  prints its yielded LHS, a failure prints nothing, a ranged comparison filters
+  to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
+  Today that resolution is **whole-line**: the arguments' conditions are ANDed
+  and gate the entire line, and an out-of-bounds argument instead materializes
+  a zero and prints. Both are scheduled to change — see "Per-slot printing"
+  below. ("Gated print" now names the proposed no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -372,6 +383,31 @@ or fixed-array cell, an OOB read zero-fills that cell to preserve shape.
   zero-on-failure resolution is wanted. Propagation now applies everywhere —
   `(a > 2 && 10) + 1` keeps the old value when `a <= 2`, exactly like
   `(a > 2) + 1`.
+- **Per-slot printing (decided, not yet implemented):** each print argument is
+  an independent outcome, resolved per flattened output slot exactly as `=`
+  resolves each target slot. Caller-side failure still suppresses a call's
+  complete tuple; outputs of a call that ran resolve independently. A failed argument — a failed comparison or an
+  out-of-bounds read — emits nothing while its yielded siblings still emit in
+  source order; separators appear only between emitted slots; a point where
+  nothing yields emits no line. So `arr[oob], val1, val2` prints `val1` and
+  `val2`, mirroring `arrVal, val1, val2 = arr[oob], x * y, x + y`, which keeps
+  `arrVal` and commits its siblings. This replaces both of today's behaviors:
+  whole-line gating on a failed conditional, and the materialized zero on an
+  out-of-bounds argument. A skipped slot's owned temporaries are still
+  released. One limit of **today's internal ABI**, not a language rule: a skip
+  cannot yet cross a direct-return call boundary, whose result carries no
+  validity bit, so such a result is currently resolved at the boundary and
+  always yields. The migration removes this with a private validity-carrying
+  direct-call variant, after which a direct-return argument skips like any
+  other slot.
+- **Gated print (proposed, not current syntax):** a no-comma prefix form such
+  as `arr[oob] val1, val2` would reject the whole line without evaluating the
+  siblings, following the general rule that a gate admits or rejects its entire
+  region while a failure inside an admitted region skips only its own slot.
+  This does not parse today — `PrintStatement` has no gate — and needs its own
+  parser, AST, and solver work. If added, the gate must test the access's
+  yielded/in-bounds bit rather than its value, so an in-bounds zero still
+  admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
   `[i > 2 && i * 10]` → `[0 0 0 30 40]`); at an assignment root failing

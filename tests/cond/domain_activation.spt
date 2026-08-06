@@ -1,0 +1,33 @@
+# Domain activation: what an empty or fully-rejected domain commits.
+# A collector activates when its owning region is entered, so an ungated
+# collector over an empty domain still commits []. A carry advances only on a
+# successful iteration, so its seed is carried state and never a write.
+# Each destination is seeded with a value the correct result must replace or
+# keep, so an inactive collector and an activated empty one differ, and a
+# spurious zero-th iteration is observable.
+
+n = 0
+i = 0:n
+ec = [8]
+"CollectorSeed: -ec"
+ec = [i + 1]
+"EmptyUngatedCollector: -ec"
+
+prev = [9 9]
+j = 0:3
+prev = j > 5 [j]
+"GatedNoAdmitCollector: -prev"
+
+k = 0:3
+gc = k < 2 [k * 10]
+"GatedSomeCollector: -gc"
+
+m = 0:0
+sum = 7
+sum = sum + m + 1
+"EmptyRangeCarry: -sum"
+
+t = 0:3
+acc = 100
+acc = t > 5 acc + t + 1
+"GateRejectAllCarry: -acc"

@@ -1,0 +1,16 @@
+# Blank targets, as they behave today: `_` is an ordinary typed binding that
+# only the CFG exempts from liveness checks, not a per-slot discard sink.
+# These cases are the safe subset — one scalar blank per statement.
+# Repeated blanks in one statement, blanks at two different types, and blanks
+# taking heap outputs are broken today (leak, then abort); they get fixtures
+# once the `_` decision in docs/Pluto PIR Capability Matrix.md is executed.
+
+a, u = 3, 4
+_ = 1
+"Discard: -a"
+
+_, b = FOuter(a, u)
+"DiscardFirst: -b"
+
+c, _ = FOuter(a, u)
+"DiscardSecond: -c"

@@ -1,0 +1,4 @@
+RangedGateHeapCall: tag1
+RangedGateHeapCallNoAdmit: keepme
+FnRangeCollector: [0 1 2]
+FnRangeGate: 101
