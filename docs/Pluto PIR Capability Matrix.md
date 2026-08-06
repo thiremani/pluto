@@ -152,7 +152,7 @@ clock.
 | 11, 23 | A function-returned `Range` driving a collector domain and a shared statement gate | `tests/mem/gate_heap/` |
 | 30, 31 | Out-of-bounds and failed-conditional print arguments | `tests/array/oob_print.spt` |
 
-Confirmed by these fixtures and now normative in the plan (§7, §10):
+Confirmed by these fixtures and now normative in the plan (plan §7, plan §10):
 
 - an ungated collector over an empty domain commits `[]` — the fixture seeds
   the destination first, so an inactive collector would print the seed instead
@@ -203,7 +203,7 @@ heap-valued blanks, repeated statements, and blanks under gates and ranges.
 The evidence above is manual; the bug is still present in the working tree, and
 the helper `twoStr` used to reproduce it is not in the repository.
 
-## 5. Decided: printing is per-slot, not whole-line
+## 5. Decided: print — per-slot resolution, per-line emission
 
 Print lowering runs with no active assignment bounds guard, so today:
 

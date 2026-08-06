@@ -1116,6 +1116,19 @@ deletion at the last consumer.
 - a ranged swap reads one snapshot, advances both carries simultaneously, and
   exposes the advanced pair to the next iteration
 
+### Print tests (land with Step 6)
+
+- a failed argument suppresses only its slot: `arr[oob], val1, val2` emits
+  `val1 val2`
+- adjacent skips strand no separators: `a, arr[oob], arr2[oob], b` emits `a b`
+- a resolved fallback emits its value: `arr[oob] || -1, val1` emits `-1 val1`,
+  and an in-bounds zero emits `0`
+- a point where no slot yields emits no line; a ranged print emits one line
+  per admitted point
+- skipped slots' owned temporaries are released (leak-checked)
+- a conditional direct-return argument skips across the call boundary via the
+  `{value, didWrite}` variant
+
 ### Cutover and backend tests
 
 - each cutover PR runs the full suites before and after switching its cell
