@@ -57,6 +57,7 @@ sarr = ["a" ⊕ "1" "b" ⊕ "2"]
 _ = arr[9]
 _ = sarr[9]
 _ = arr[1]
+_ = sarr[1]
 "CheckedBlank: done"
 
 # A conditionally-writing callee with its output discarded, on both the

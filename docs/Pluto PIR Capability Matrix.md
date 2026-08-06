@@ -54,85 +54,193 @@ drives that body.
 
 ## 2. Reachable combinations
 
+Rows are grouped by statement form, and each group has two parts: a table of
+the **routing axes** the capability router keys on, and a collapsible list
+giving each row's legacy route, coverage, and helpers. Row numbers are stable
+across both, and are not renumbered when a row is split — a letter suffix
+(`5b`, `14i`) keeps existing references valid.
+
 Disposition: **R** retain as-is, **S** simplify during migration, **D** delete
 the behavior (needs its own PR). Coverage counts `.spt`/`.pt` files.
 
-The final column lists **notable PIR-removable orchestration helpers** a row
-uses; it is deliberately non-exhaustive. Primitives that survive migration —
-call lowering, loop and guard emission, storage — are not listed, and a helper
-can be deleted only once its last row has migrated. The helper-to-release-step inventory is plan §16 Step 9 (9a
-statement-only, 9b orchestration); read the two together rather than treating
-any single row as a deletion trigger.
+*Helpers* lists **notable PIR-removable orchestration helpers** a row uses and
+is deliberately non-exhaustive: primitives that survive migration — call
+lowering, loop and guard emission, storage — are omitted, and a helper can be
+deleted only once its last row has migrated. The helper-to-release-step
+inventory is plan §16 Step 9 (9a statement-only, 9b orchestration); read the
+two together rather than treating any single row as a deletion trigger.
 
-| # | Gate | RHS flags | Value kind | Target | Form | Domain role | Callee effect | Legacy route | Disp | Existing tests | Missing | Step | Notable removable helpers |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | none | ordinary | scalar | local | assign | — | — | `compileAssignments` | R | `arithmetic`, `op`, `unary`, `numeric_literals`, `zero_div` | — | 3 | `compileAssignments` |
-| 2 | none | ordinary | heap | local | assign | — | — | `compileAssignments` → `commitAssignments` | R | `mem/mem.spt`, `str`, `array_concat`, `cond_copy` | — | 4 | `commitAssignments` |
-| 3 | none | ordinary | multi-output | local | assign | — | — | `compileAssignments`, arity via `newExprAssign` | R | `partial_returns`, `math/div`, `mem/mem.spt` | — | 4 | `exprAssign` machinery |
-| 4 | none | ordinary (swap, dup source) | heap | local | assign | — | — | `commitAssignments` copy/move marking | R | `mem/mem.spt:64,78` | — | 4 | `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded` |
-| 5 | none | ordinary | scalar | blank (`_`) | assign | — | — | per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt | R (sink shipped, §4) | `discard` | — | 3 | — |
-| 5b | none | ordinary | heap | blank (`_`) | assign | — | — | per-slot sink; a discarded temporary is dropped (`dropDiscarded`), a discarded named value stays borrowed | R (sink shipped, §4) | `discard` | — | 4 | — |
-| 5c | none | call | scalar, heap, multi-output | blank (`_`) | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | discarded call outputs keep their yield/write validity for cleanup, and the whole-call rule applies unchanged — an any-`MayWrite` call defers to Step 6 even when every output is discarded | R (sink shipped, §4) | `discard` (multi-output, gated, ranged) | any-`MayWrite` callee whose outputs are all discarded | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) | — |
-| 6 | none | call | scalar (direct return) | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | `compileCallExpression` → `compileCallInner` | R | `math/rec.spt`, `math/div` | — | 4, 6 | — |
-| 6b | none | call | heap, multi-output (indirect return) | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | destination-seeded output slots via `compileIndirectCallIntoStagedOutputs` | R | `const_args/*`, `output_refinement`, `mem/mem.spt` | — | 4, 6 | — |
-| 7 | none | checked | scalar, heap | local | assign | — | — | `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr` | R | `array/oob_skip`, `mem/leak/oob_paths` | — | 5 | `commitAssignmentsPerExpr` |
-| 7b | none | checked, conditional (fallback) | scalar, heap | local | assign | — | — | **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates` | **S (decided behavior change; semantics doc "Checked-access fallback")** | — | regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"` | 5 | condLHS spine |
-| 7c | none | checked, conditional (fallback, propagated) | scalar, multi-output | local | assign | — | both (call form) | comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver | **S (decided; semantics doc)** | — | regressions when implemented | 6 | condLHS spine |
-| 7d | — | checked, conditional (fallback) | scalar, heap | none | print | — | — | print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print | **S (decided; semantics doc)** | — | regressions when implemented, incl. a heap-valued print fallback | 6 | condLHS spine |
-| 7e | none | checked, conditional (fallback), ranged | scalar | local | assign | RHS-local | — | ranged checked fallback: the fallback resolves per iteration inside the loop nest | **S (decided; semantics doc)** | — | regressions when implemented | 7 | condLHS spine, ranged staging |
-| 7f | none | checked, conditional (fallback), collector | scalar | local | assign | collector-local | — | collector-cell fallback: in `[arr[oob] \|\| -1]` the `\|\|` resolves before the cell's zero-fill | **S (decided; semantics doc)** | — | regressions when implemented | 8 | collector rewrite, condLHS spine |
-| 8 | none | ordinary | Range descriptor | local | assign | — (no domain) | — | plain value copy; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS | R | `range_finalize:2-21` (literal, identifier copy, empty, reassign), `compiler/solver_test.go` | — | 3 | `compileAssignments` |
-| 8b | none | call | Range descriptor | local | assign | — (no domain) | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | call lowering + indirect-return ABI, not descriptor copying | R | `range_finalize:38` (`makeRange`), `mem/gate_heap` | conditionally-written Range return (any-`MayWrite`) | 4, 6 | — |
-| 9 | none | ranged | scalar, self-ref | local | assign | RHS-local | — | `compileAssignments` → expression loop nest (passes nil conditions) | R | `math/range_expr`, `math/range.spt`, `range_shadow.spt`, `cond/domain_activation` | — | 7 | `compileAssignments`, `withCollectorPreparedLoopNest`, `compileCondOperands` |
-| 10 | none | ranged, checked | scalar | local | assign | RHS-local | — | as #9 + `withLoopNestVersioned` affine probe | S | `array/affine_bounds_stmt`, `math/affine_bounds_expr` | — | 7, fast path 10 | affine decision helpers |
-| 11 | none | collector, ranged | scalar, heap | local | assign | collector-local | — | `compileArrayExpression` → `compileArray` → `withCollectorDomain` | S | `range`, `array/array_capture`, `mem/gate_heap` | — | 8 | collector rewrite |
-| 11b | none | collector, call, ranged, conditional, checked | scalar | local | assign | collector-local | both; any-`MayWrite` also needs Step 6 — cutover stays 8 | a call inside a collector cell, its arguments possibly conditional/checked/ranged | S | `math/func.spt:58-69` (`[Square(arr[1:3] > 3)]`, `[Square(arrSelf[1:4])]`) | nested any-`MayWrite` call in a collector — every cited call is `Square`, all-`MustWrite`; add a conditional direct or indirect call fixture when this rectangle migrates | 8 | collector rewrite, condLHS spine |
-| 12 | none | call, ranged | scalar, heap, multi-output | local | assign | call-site loop (`LoopInside=false`) | both; any-`MayWrite` also needs Step 6 call-result — cutover stays 7 | `compileDirectCallWithRanges` / `compileIndirectCallWithRanges` | S | `math/func_range`, `math/func_array_range`, `math/func_nested_range` (calls with collector arguments), `mem/mem_alias_refine.spt` | — | 7 | `compileAssignments`, `compileCondExprValue`, `withCollectorPreparedLoopNest` |
-| 13 | none | call, ranged | scalar, heap, multi-output | local | assign | callee-owned (`LoopInside=true`) | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | callee body iterates: `compileCallInner` for direct returns, destination-seeded staged outputs for indirect and multi-output | R | `math/acc.spt`, `math/acc_desc`, `array/array_range.spt:89-96` (heap via indirect ABI) | — | 7 | — |
-| 14 | none | ordinary | scalar (direct return) | function output | assign | — | — | ordinary function-body statement; a direct `I64`/`F64` output is an SSA value with **no** runtime write flag | R | `math/acc.pt` | — | 4 | — |
-| 14i | none | ordinary | heap, multi-output (indirect return) | function output | assign | — | — | ordinary function-body statement; an indirect output has a runtime write flag set on commit | R | `mem/mem_alias_refine.pt`, `mem/mem.pt` | — | 4 | — |
-| 14a | scalar | ordinary, call | scalar, heap, multi-output | function output | assign | — | both | gated function-body statement: the output is conditionally written, which is what makes the callee `MayWrite` at its boundary (`IsEven`/`IsOdd` conditionally write their indirect output pair) | R | `math/math.pt`, `math/rec.pt`, `mem/mem_cmp_lhs.pt` | — | 6 | `compileCondStatement` |
-| 14c | none | collector | heap | function output | assign | collector-local | — | a body-local collector domain, i.e. a collector driven by a range created inside the body rather than by a parameter | R | — | **uncovered**: `cache_reuse.pt` uses fixed literals, `array_scalar_assign.pt` is parameter-driven (row 14b) | 8 | collector rewrite |
-| 14b | none/scalar | ordinary, checked | scalar, heap | function output | assign | function-owned | — | body driven by a `Range`/`ArrayRange` **parameter**, whose domain wraps the whole body and may execute zero times — this is what weakens the output to `MayWrite` at the boundary | R | `array/array_range.pt` | — | 7 | — |
-| 14e | none/scalar | ordinary, collector, checked | scalar, heap | function output | assign | function-owned + collector-local | — | as 14b with an inner collector: `ArraySetAdd(1:4)` runs a function-owned outer domain around a collector-local `[0:i]`, so full cutover needs collectors | R | `array/array_scalar_assign.pt` (`ArraySetAdd`), `array/array_func.pt` | — | 8 | collector rewrite |
-| 14d | none | ordinary, checked, ranged | scalar | function output | assign | RHS-local (in function) | — | a range created **inside** the body drives one statement; the output is still `MayWrite` at the boundary because that local range can be empty — only the blanket function-owned weakening is absent | R | `math/dependent_range.pt` (`j = (i + 1):n`) | — | 7 | — |
-| 15 | scalar | ordinary | scalar, multi-output | local | assign | — | — | `compileCondStatement` | S | `assign`, `initialize`, `zero_val`, `partial_returns` | — | 6 | `compileCondStatement` |
-| 16 | scalar | ordinary, call | heap, multi-output | local | assign | — | both (Step 6 either way) | `compileCondStatement` + `prePromoteConditionalCallArgs` | S | `cond_copy`, `mem/mem_str.spt`, `math/math.pt` | — | 6 | staging family |
-| 17 | scalar | ordinary | self-referential | local | assign | — | — | `compileCondStatement` + `aliasCondDests` | S | `tests/cond/expr_forms` | — | 6 | `aliasCondDests` |
-| 18 | scalar | collector | scalar, heap | local | assign | collector-local | — | `compileCondStatement` → ordinary collector inside the IF block | S | `mem/cache_reuse/cache_reuse.pt` | scalar-gated heap collector | 8 | collector rewrite |
-| 19 | scalar/none | conditional | scalar | local | assign | — | — | `compileCondExprStatement` → `compileCondExprValue` | S | `cond/value_cond_expr`, `cond/expr_forms`, `math/func.spt` | — | 6 | `compileCondExprStatement` |
-| 20 | scalar/none | conditional | multi-output (slot-aligned) | local | assign | — | — | `compileCondExprStatement` → `compilePerSlotAssign` | S | `cond/value_cond_expr`, `cond/logical_and` | — | 6 | `compilePerSlotAssign` |
-| 21 | scalar/none | conditional, checked | scalar, heap | local | assign | — | — | `compileCondExprStatement` + bounds guard | S | `array/oob_skip`, `cond/logical_and` | — | 5, 6 | condLHS spine |
-| 22 | scalar/none | conditional, ranged (logical tree) | scalar | local | assign | RHS-local | — | `compileCondExprStatement` → `stageCondRangedExpr` | S | `cond/logical_and:143,413` | — | 7 | ranged staging |
-| 23 | ranged | ordinary | scalar, self-ref | local | assign | shared gate | — | `compileCondRangedStatement` → `stageCondRangedAssignments` | S | `array/cond_accum`, `cond/condition_boundary` | — | 7 | `compileCondRangedStatement` |
-| 24 | ranged | collector | scalar, heap | local | assign | shared gate + collector-local | — | `compileCondRangedStatement` → `newStatementArrayCollector` | S | `array/cond_accum`, `cond/domain_activation` | — | 8 | `statementArrayCollector` trio |
-| 25 | ranged | conditional | scalar | local | assign | shared gate | — | `compileCondRangedIteration` → `compileCondExprValue` | S | `cond/value_cond_expr`, `array/array_expr` | — | 7 | `compileCondExprValue` |
-| 26 | ranged | call | multi-output | local | assign | shared gate | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | `compileCondRangedStatement` → `perSlotCommittable` | S | `cond/value_cond_expr:740` | — | 7 | `perSlotCommittable` |
-| 27 | ranged | call | heap | local | assign | shared gate | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | `compileCondRangedStatement` → stage temp | S | `mem/gate_heap` | — | 7 | ranged staging |
-| 28 | ranged | checked | scalar | local | assign | shared gate (affine index) | — | ranged gate over an affine access | S | `array/cond_accum:416,420` | — | 5, 7 | affine decision helpers |
-| 29 | — | ordinary | scalar, heap | none | print | — | — | `compilePrintStatement` direct arm | S | `helloworld`, `str`, `1.2-report` | — | 6 | `printAllExpressions`, `compilePrintStatement` |
-| 29b | — | call | scalar (direct return) | none | print | — | both; any-`MayWrite` needs the Step 4 validity variant | non-ranged direct call argument in print; an unwritten result must suppress the invocation, needing `{value, didWrite}` to feed the all-arguments-yielded condition | R | `math/print_func.spt:4` (`Square(3)`) | conditional direct-return argument (Step 4 prereq) | 6 | — |
-| 29c | — | call | heap, multi-output (indirect return) | none | print | — | both; indirect outputs already carry write flags — no variant needed | non-ranged indirect call argument in print | R | — | **uncovered**: multi-output and heap call results printed directly | 6 | — |
-| 30 | — | conditional | scalar, heap | none | print | — | — | `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call | **S (suppression outcome retained; eager sibling evaluation is a behavior change, §5)** | `mem/mem_cmp_lhs.spt`, `array/oob_print` | side-effecting or owned-heap sibling of a failed conditional (add with Step 6) | 6 | `compileCondOperands` |
-| 31 | — | checked | scalar | none | print | — | — | no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline | **S (behavior changes, §5)** | `array/oob_print` | a suppressed invocation whose arguments own heap temporaries (add with Step 6) | 5, 6 | §5 |
-| 31b | — | checked, ranged | scalar, heap | none | print | call-site loop | — | `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration after Step 6 | **S (behavior changes, §5)** | `array/oob_print` | heap-valued checked+ranged print | 5, 6, 8 | `withCollectorPreparedLoopNest` |
-| 31c | none | checked, ranged | scalar, heap | local | assign | RHS-local | — | per-RHS bounds bit inside the loop nest | R | `math/func_array_range_oob`, `mem/leak/oob_paths` | — | 5, 7 | `commitAssignmentsPerExpr` |
-| 32 | — | ranged | scalar | none | print | call-site loop | — | `withCollectorPreparedLoopNest` wraps the print in the argument's loop nest | S | `print_range`, `math/range.spt` | — | 8 | `withCollectorPreparedLoopNest` |
-| 33 | — | call, ranged | scalar (direct), heap, multi-output (indirect) | none | print | call-site loop | both; cutover stays 8 | a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false | R | `math/print_func` (scalar direct only) | heap and multi-output ranged calls in print — uncovered; same Step 4 (validity variant, direct) / Step 6 (invocation gating) prerequisites as rows 29b/29c | 8 | `withCollectorPreparedLoopNest` |
-| 33b | — | ordinary | scalar | none | print | function-owned | — | a print statement **inside a function body** whose `Range` parameter drives the body; the print runs once per admitted point of the function-level domain | R | `math/range.pt` (`Triple`; both call sites are Range-driven), `math/acc_fmt.pt` | — | 6 (inner print), 7 (function domain) | — |
-| 34 | — | collector, ranged | scalar | none | print | collector-local | — | `withCollectorPreparedLoopNest` + collector rewrite | S | `print_range`, `range` | — | 8 | collector rewrite |
-| 35 | n/a | n/a | struct | `.pt` global constant | declaration | — | — | `compileStructStatement` → `compileConstBinding`; not an executable statement, so outside statement PIR | R | `struct/struct.pt` | — | n/a | — |
-| 35b | none | ordinary | struct value copy | local | assign | — | — | ordinary assignment lowering | R | — | **uncovered**: local struct copy `s2 = s1` | 4 | `compileAssignments` |
-| 35d | none | call | struct value | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | call lowering | R | — | **uncovered**: struct as a parameter or output | 4, 6 | — |
-| 35c | — | ordinary | struct field read | none | print | — | — | print lowering + `compileDotExpression` | R | `struct/struct.spt` | — | 6 | — |
-| 35e | — | ordinary | whole struct value | none | print | — | — | print lowering | R | `struct/struct.spt:5-7` | — | 6 | — |
-| 36 | none | ordinary | table literal (plain cells) | local | assign | — (no domain) | — | `compileArrayExpression` → `compileTable`, cells via `compileArrayLiteralCell`; ranged cells are rejected | R | `array/array.spt`, `array/array_func.spt` | table in the leak suite | 4 | — |
-| 36f | none | conditional, checked (cells) | table literal | local | assign | — (no domain) | — | as row 36, but a conditional or checked cell routes through `compileCondExprValue` | S | — | **uncovered**: conditional and checked table cells | 5, 6 | `compileCondExprValue` |
-| 36b | none | ordinary | table value copy | local | assign | — | — | ordinary assignment lowering | R | — | **uncovered**: plain table copy `t2 = t1` | 4 | `compileAssignments` |
-| 36d | none | call | table value | local | assign | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | call lowering | R | all-`MustWrite`: `array/array_func.*`; any-`MayWrite`: `array/array_func.pt:40-43` + `.spt:63-66` (`ResetTable(-1)` keeps, `ResetTable(1)` writes) | — | 4, 6 | — |
-| 36c | — | ordinary | whole table | none | print | — | — | print lowering | R | `array/array.spt` | — | 6 | — |
-| 36e | — | ordinary | table column read | none | print | — | — | print lowering + column access | R | — | **uncovered**: printing one column | 6 | — |
-| 36g | none | ordinary | table column read | local | assign | — | — | `compileDotExpression` yields the column array, then ordinary assignment | R | `array/array.spt:107` (`scoreColumn = scores.Score`) | — | 4 | `compileAssignments` |
+### Assignment statements
+
+| # | Gate | RHS flags | Value kind | Target | Domain role | Callee effect | Disp | Step |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | none | ordinary | scalar | local | — | — | R | 3 |
+| 2 | none | ordinary | heap | local | — | — | R | 4 |
+| 3 | none | ordinary | multi-output | local | — | — | R | 4 |
+| 4 | none | ordinary (swap, dup source) | heap | local | — | — | R | 4 |
+| 5 | none | ordinary | scalar | blank (`_`) | — | — | R (sink shipped, §4) | 3 |
+| 5b | none | ordinary | heap | blank (`_`) | — | — | R (sink shipped, §4) | 4 |
+| 5c | none | call | scalar, heap, multi-output | blank (`_`) | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R (sink shipped, §4) | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) |
+| 5d | none | checked | scalar, heap | blank (`_`) | — | — | R (sink shipped, §4) | 5 |
+| 5e | scalar | ordinary, call | scalar, heap, multi-output | blank (`_`) | — | both | R (sink shipped, §4) | 6 |
+| 5f | none | ranged | scalar, heap, multi-output | blank (`_`) | RHS-local | — | R (sink shipped, §4) | 7 |
+| 5g | ranged | ordinary, call | scalar, heap | blank (`_`) | shared gate | both | R (sink shipped, §4) | 7 |
+| 6 | none | call | scalar (direct return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 6b | none | call | heap, multi-output (indirect return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 7 | none | checked | scalar, heap | local | — | — | R | 5 |
+| 7b | none | checked, conditional (fallback) | scalar, heap | local | — | — | **S (decided behavior change; semantics doc "Checked-access fallback")** | 5 |
+| 7c | none | checked, conditional (fallback, propagated) | scalar, multi-output | local | — | both (call form) | **S (decided; semantics doc)** | 6 |
+| 7e | none | checked, conditional (fallback), ranged | scalar | local | RHS-local | — | **S (decided; semantics doc)** | 7 |
+| 7f | none | checked, conditional (fallback), collector | scalar | local | collector-local | — | **S (decided; semantics doc)** | 8 |
+| 8 | none | ordinary | Range descriptor | local | — (no domain) | — | R | 3 |
+| 8b | none | call | Range descriptor | local | — (no domain) | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 9 | none | ranged | scalar, self-ref | local | RHS-local | — | R | 7 |
+| 10 | none | ranged, checked | scalar | local | RHS-local | — | S | 7, fast path 10 |
+| 11 | none | collector, ranged | scalar, heap | local | collector-local | — | S | 8 |
+| 11b | none | collector, call, ranged, conditional, checked | scalar | local | collector-local | both; any-`MayWrite` also needs Step 6 — cutover stays 8 | S | 8 |
+| 12 | none | call, ranged | scalar, heap, multi-output | local | call-site loop (`LoopInside=false`) | both; any-`MayWrite` also needs Step 6 call-result — cutover stays 7 | S | 7 |
+| 13 | none | call, ranged | scalar, heap, multi-output | local | callee-owned (`LoopInside=true`) | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | R | 7 |
+| 14 | none | ordinary | scalar (direct return) | function output | — | — | R | 4 |
+| 14i | none | ordinary | heap, multi-output (indirect return) | function output | — | — | R | 4 |
+| 14a | scalar | ordinary, call | scalar, heap, multi-output | function output | — | both | R | 6 |
+| 14c | none | collector | heap | function output | collector-local | — | R | 8 |
+| 14b | none/scalar | ordinary, checked | scalar, heap | function output | function-owned | — | R | 7 |
+| 14e | none/scalar | ordinary, collector, checked | scalar, heap | function output | function-owned + collector-local | — | R | 8 |
+| 14d | none | ordinary, checked, ranged | scalar | function output | RHS-local (in function) | — | R | 7 |
+| 15 | scalar | ordinary | scalar, multi-output | local | — | — | S | 6 |
+| 16 | scalar | ordinary, call | heap, multi-output | local | — | both (Step 6 either way) | S | 6 |
+| 17 | scalar | ordinary | self-referential | local | — | — | S | 6 |
+| 18 | scalar | collector | scalar, heap | local | collector-local | — | S | 8 |
+| 19 | scalar/none | conditional | scalar | local | — | — | S | 6 |
+| 20 | scalar/none | conditional | multi-output (slot-aligned) | local | — | — | S | 6 |
+| 21 | scalar/none | conditional, checked | scalar, heap | local | — | — | S | 5, 6 |
+| 22 | scalar/none | conditional, ranged (logical tree) | scalar | local | RHS-local | — | S | 7 |
+| 23 | ranged | ordinary | scalar, self-ref | local | shared gate | — | S | 7 |
+| 24 | ranged | collector | scalar, heap | local | shared gate + collector-local | — | S | 8 |
+| 25 | ranged | conditional | scalar | local | shared gate | — | S | 7 |
+| 26 | ranged | call | multi-output | local | shared gate | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | S | 7 |
+| 27 | ranged | call | heap | local | shared gate | both; any-`MayWrite` also needs Step 6 — cutover stays 7 | S | 7 |
+| 28 | ranged | checked | scalar | local | shared gate (affine index) | — | S | 5, 7 |
+| 31c | none | checked, ranged | scalar, heap | local | RHS-local | — | R | 5, 7 |
+| 35b | none | ordinary | struct value copy | local | — | — | R | 4 |
+| 35d | none | call | struct value | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 36 | none | ordinary | table literal (plain cells) | local | — (no domain) | — | R | 4 |
+| 36f | none | conditional, checked (cells) | table literal | local | — (no domain) | — | S | 5, 6 |
+| 36b | none | ordinary | table value copy | local | — | — | R | 4 |
+| 36d | none | call | table value | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 36g | none | ordinary | table column read | local | — | — | R | 4 |
+
+<details><summary>Routes, coverage, and helpers</summary>
+
+- **1** — `compileAssignments`. *Tests:* `arithmetic`, `op`, `unary`, `numeric_literals`, `zero_div`. *Helpers:* `compileAssignments`
+- **2** — `compileAssignments` → `commitAssignments`. *Tests:* `mem/mem.spt`, `str`, `array_concat`, `cond_copy`. *Helpers:* `commitAssignments`
+- **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
+- **4** — `commitAssignments` copy/move marking. *Tests:* `mem/mem.spt:64,78`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
+- **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`
+- **5b** — per-slot sink; a discarded temporary is dropped (`dropDiscarded`), a discarded named value stays borrowed. *Tests:* `discard`
+- **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output; any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
+- **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
+- **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`. *Helpers:* `compileCondStatement`
+- **5f** — `bindRangedTempOutputs` skips blanks, so ranged staging leaves no transient binding; the discarded value is released per iteration. *Tests:* `discard` (single and multi-output). *Helpers:* `compileAssignments`
+- **5g** — as 5f under a ranged gate: a rejected point produces no value to discard. *Missing:* **uncovered**: blank under a ranged gate. *Helpers:* `compileCondRangedStatement`
+- **6** — `compileCallExpression` → `compileCallInner`. *Tests:* `math/rec.spt`, `math/div`
+- **6b** — destination-seeded output slots via `compileIndirectCallIntoStagedOutputs`. *Tests:* `const_args/*`, `output_refinement`, `mem/mem.spt`
+- **7** — `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr`. *Tests:* `array/oob_skip`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
+- **7b** — **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates`. *Missing:* regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"`. *Helpers:* condLHS spine
+- **7c** — comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver. *Missing:* regressions when implemented. *Helpers:* condLHS spine
+- **7e** — ranged checked fallback: the fallback resolves per iteration inside the loop nest. *Missing:* regressions when implemented. *Helpers:* condLHS spine, ranged staging
+- **7f** — collector-cell fallback: in `[arr[oob] \|\| -1]` the `\|\|` resolves before the cell's zero-fill. *Missing:* regressions when implemented. *Helpers:* collector rewrite, condLHS spine
+- **8** — plain value copy; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS. *Tests:* `range_finalize:2-21` (literal, identifier copy, empty, reassign), `compiler/solver_test.go`. *Helpers:* `compileAssignments`
+- **8b** — call lowering + indirect-return ABI, not descriptor copying. *Tests:* `range_finalize:38` (`makeRange`), `mem/gate_heap`. *Missing:* conditionally-written Range return (any-`MayWrite`)
+- **9** — `compileAssignments` → expression loop nest (passes nil conditions). *Tests:* `math/range_expr`, `math/range.spt`, `range_shadow.spt`, `cond/domain_activation`. *Helpers:* `compileAssignments`, `withCollectorPreparedLoopNest`, `compileCondOperands`
+- **10** — as #9 + `withLoopNestVersioned` affine probe. *Tests:* `array/affine_bounds_stmt`, `math/affine_bounds_expr`. *Helpers:* affine decision helpers
+- **11** — `compileArrayExpression` → `compileArray` → `withCollectorDomain`. *Tests:* `range`, `array/array_capture`, `mem/gate_heap`. *Helpers:* collector rewrite
+- **11b** — a call inside a collector cell, its arguments possibly conditional/checked/ranged. *Tests:* `math/func.spt:58-69` (`[Square(arr[1:3] > 3)]`, `[Square(arrSelf[1:4])]`). *Missing:* nested any-`MayWrite` call in a collector — every cited call is `Square`, all-`MustWrite`; add a conditional direct or indirect call fixture when this rectangle migrates. *Helpers:* collector rewrite, condLHS spine
+- **12** — `compileDirectCallWithRanges` / `compileIndirectCallWithRanges`. *Tests:* `math/func_range`, `math/func_array_range`, `math/func_nested_range` (calls with collector arguments), `mem/mem_alias_refine.spt`. *Helpers:* `compileAssignments`, `compileCondExprValue`, `withCollectorPreparedLoopNest`
+- **13** — callee body iterates: `compileCallInner` for direct returns, destination-seeded staged outputs for indirect and multi-output. *Tests:* `math/acc.spt`, `math/acc_desc`, `array/array_range.spt:89-96` (heap via indirect ABI)
+- **14** — ordinary function-body statement; a direct `I64`/`F64` output is an SSA value with **no** runtime write flag. *Tests:* `math/acc.pt`
+- **14i** — ordinary function-body statement; an indirect output has a runtime write flag set on commit. *Tests:* `mem/mem_alias_refine.pt`, `mem/mem.pt`
+- **14a** — gated function-body statement: the output is conditionally written, which is what makes the callee `MayWrite` at its boundary (`IsEven`/`IsOdd` conditionally write their indirect output pair). *Tests:* `math/math.pt`, `math/rec.pt`, `mem/mem_cmp_lhs.pt`. *Helpers:* `compileCondStatement`
+- **14c** — a body-local collector domain, i.e. a collector driven by a range created inside the body rather than by a parameter. *Missing:* **uncovered**: `cache_reuse.pt` uses fixed literals, `array_scalar_assign.pt` is parameter-driven (row 14b). *Helpers:* collector rewrite
+- **14b** — body driven by a `Range`/`ArrayRange` **parameter**, whose domain wraps the whole body and may execute zero times — this is what weakens the output to `MayWrite` at the boundary. *Tests:* `array/array_range.pt`
+- **14e** — as 14b with an inner collector: `ArraySetAdd(1:4)` runs a function-owned outer domain around a collector-local `[0:i]`, so full cutover needs collectors. *Tests:* `array/array_scalar_assign.pt` (`ArraySetAdd`), `array/array_func.pt`. *Helpers:* collector rewrite
+- **14d** — a range created **inside** the body drives one statement; the output is still `MayWrite` at the boundary because that local range can be empty — only the blanket function-owned weakening is absent. *Tests:* `math/dependent_range.pt` (`j = (i + 1):n`)
+- **15** — `compileCondStatement`. *Tests:* `assign`, `initialize`, `zero_val`, `partial_returns`. *Helpers:* `compileCondStatement`
+- **16** — `compileCondStatement` + `prePromoteConditionalCallArgs`. *Tests:* `cond_copy`, `mem/mem_str.spt`, `math/math.pt`. *Helpers:* staging family
+- **17** — `compileCondStatement` + `aliasCondDests`. *Tests:* `tests/cond/expr_forms`. *Helpers:* `aliasCondDests`
+- **18** — `compileCondStatement` → ordinary collector inside the IF block. *Tests:* `mem/cache_reuse/cache_reuse.pt`. *Missing:* scalar-gated heap collector. *Helpers:* collector rewrite
+- **19** — `compileCondExprStatement` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `cond/expr_forms`, `math/func.spt`. *Helpers:* `compileCondExprStatement`
+- **20** — `compileCondExprStatement` → `compilePerSlotAssign`. *Tests:* `cond/value_cond_expr`, `cond/logical_and`. *Helpers:* `compilePerSlotAssign`
+- **21** — `compileCondExprStatement` + bounds guard. *Tests:* `array/oob_skip`, `cond/logical_and`. *Helpers:* condLHS spine
+- **22** — `compileCondExprStatement` → `stageCondRangedExpr`. *Tests:* `cond/logical_and:143,413`. *Helpers:* ranged staging
+- **23** — `compileCondRangedStatement` → `stageCondRangedAssignments`. *Tests:* `array/cond_accum`, `cond/condition_boundary`. *Helpers:* `compileCondRangedStatement`
+- **24** — `compileCondRangedStatement` → `newStatementArrayCollector`. *Tests:* `array/cond_accum`, `cond/domain_activation`. *Helpers:* `statementArrayCollector` trio
+- **25** — `compileCondRangedIteration` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `array/array_expr`. *Helpers:* `compileCondExprValue`
+- **26** — `compileCondRangedStatement` → `perSlotCommittable`. *Tests:* `cond/value_cond_expr:740`. *Helpers:* `perSlotCommittable`
+- **27** — `compileCondRangedStatement` → stage temp. *Tests:* `mem/gate_heap`. *Helpers:* ranged staging
+- **28** — ranged gate over an affine access. *Tests:* `array/cond_accum:416,420`. *Helpers:* affine decision helpers
+- **31c** — per-RHS bounds bit inside the loop nest. *Tests:* `math/func_array_range_oob`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
+- **35b** — ordinary assignment lowering. *Missing:* **uncovered**: local struct copy `s2 = s1`. *Helpers:* `compileAssignments`
+- **35d** — call lowering. *Missing:* **uncovered**: struct as a parameter or output
+- **36** — `compileArrayExpression` → `compileTable`, cells via `compileArrayLiteralCell`; ranged cells are rejected. *Tests:* `array/array.spt`, `array/array_func.spt`. *Missing:* table in the leak suite
+- **36f** — as row 36, but a conditional or checked cell routes through `compileCondExprValue`. *Missing:* **uncovered**: conditional and checked table cells. *Helpers:* `compileCondExprValue`
+- **36b** — ordinary assignment lowering. *Missing:* **uncovered**: plain table copy `t2 = t1`. *Helpers:* `compileAssignments`
+- **36d** — call lowering. *Tests:* all-`MustWrite`: `array/array_func.*`; any-`MayWrite`: `array/array_func.pt:40-43` + `.spt:63-66` (`ResetTable(-1)` keeps, `ResetTable(1)` writes)
+- **36g** — `compileDotExpression` yields the column array, then ordinary assignment. *Tests:* `array/array.spt:107` (`scoreColumn = scores.Score`). *Helpers:* `compileAssignments`
+
+</details>
+
+### Print statements
+
+| # | Gate | RHS flags | Value kind | Target | Domain role | Callee effect | Disp | Step |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 7d | — | checked, conditional (fallback) | scalar, heap | none | — | — | **S (decided; semantics doc)** | 6 |
+| 29 | — | ordinary | scalar, heap | none | — | — | S | 6 |
+| 29b | — | call | scalar (direct return) | none | — | both; any-`MayWrite` needs the Step 4 validity variant | R | 6 |
+| 29c | — | call | heap, multi-output (indirect return) | none | — | both; indirect outputs already carry write flags — no variant needed | R | 6 |
+| 30 | — | conditional | scalar, heap | none | — | — | **S (suppression outcome retained; eager sibling evaluation is a behavior change, §5)** | 6 |
+| 31 | — | checked | scalar | none | — | — | **S (behavior changes, §5)** | 5, 6 |
+| 31b | — | checked, ranged | scalar, heap | none | call-site loop | — | **S (behavior changes, §5)** | 5, 6, 8 |
+| 32 | — | ranged | scalar | none | call-site loop | — | S | 8 |
+| 33 | — | call, ranged | scalar (direct), heap, multi-output (indirect) | none | call-site loop | both; cutover stays 8 | R | 8 |
+| 33b | — | ordinary | scalar | none | function-owned | — | R | 6 (inner print), 7 (function domain) |
+| 34 | — | collector, ranged | scalar | none | collector-local | — | S | 8 |
+| 35c | — | ordinary | struct field read | none | — | — | R | 6 |
+| 35e | — | ordinary | whole struct value | none | — | — | R | 6 |
+| 36c | — | ordinary | whole table | none | — | — | R | 6 |
+| 36e | — | ordinary | table column read | none | — | — | R | 6 |
+
+<details><summary>Routes, coverage, and helpers</summary>
+
+- **7d** — print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print. *Missing:* regressions when implemented, incl. a heap-valued print fallback. *Helpers:* condLHS spine
+- **29** — `compilePrintStatement` direct arm. *Tests:* `helloworld`, `str`, `1.2-report`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
+- **29b** — non-ranged direct call argument in print; an unwritten result must suppress the invocation, needing `{value, didWrite}` to feed the all-arguments-yielded condition. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* conditional direct-return argument (Step 4 prereq)
+- **29c** — non-ranged indirect call argument in print. *Missing:* **uncovered**: multi-output and heap call results printed directly
+- **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* side-effecting or owned-heap sibling of a failed conditional (add with Step 6). *Helpers:* `compileCondOperands`
+- **31** — no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline. *Tests:* `array/oob_print`. *Missing:* a suppressed invocation whose arguments own heap temporaries (add with Step 6). *Helpers:* §5
+- **31b** — `withCollectorPreparedLoopNest` around a checked access; zero per failed iteration today, no line for that iteration after Step 6. *Tests:* `array/oob_print`. *Missing:* heap-valued checked+ranged print. *Helpers:* `withCollectorPreparedLoopNest`
+- **32** — `withCollectorPreparedLoopNest` wraps the print in the argument's loop nest. *Tests:* `print_range`, `math/range.spt`. *Helpers:* `withCollectorPreparedLoopNest`
+- **33** — a ranged **call argument**; print never delegates its own argument iteration to a callee, since the solver forces the synthetic print call's `LoopInside` false. *Tests:* `math/print_func` (scalar direct only). *Missing:* heap and multi-output ranged calls in print — uncovered; same Step 4 (validity variant, direct) / Step 6 (invocation gating) prerequisites as rows 29b/29c. *Helpers:* `withCollectorPreparedLoopNest`
+- **33b** — a print statement **inside a function body** whose `Range` parameter drives the body; the print runs once per admitted point of the function-level domain. *Tests:* `math/range.pt` (`Triple`; both call sites are Range-driven), `math/acc_fmt.pt`
+- **34** — `withCollectorPreparedLoopNest` + collector rewrite. *Tests:* `print_range`, `range`. *Helpers:* collector rewrite
+- **35c** — print lowering + `compileDotExpression`. *Tests:* `struct/struct.spt`
+- **35e** — print lowering. *Tests:* `struct/struct.spt:5-7`
+- **36c** — print lowering. *Tests:* `array/array.spt`
+- **36e** — print lowering + column access. *Missing:* **uncovered**: printing one column
+
+</details>
+
+### Declarations
+
+| # | Gate | RHS flags | Value kind | Target | Domain role | Callee effect | Disp | Step |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 35 | n/a | n/a | struct | `.pt` global constant | — | — | R | n/a |
+
+<details><summary>Routes, coverage, and helpers</summary>
+
+- **35** — `compileStructStatement` → `compileConstBinding`; not an executable statement, so outside statement PIR. *Tests:* `struct/struct.pt`
+
+</details>
 
 Whole `Struct` and `Table` values are current capabilities, lowered through
 ordinary assignment, calls, and printing above. `compileTable` builds columnar
