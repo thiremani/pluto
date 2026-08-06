@@ -1186,6 +1186,16 @@ The statement plan can grow without becoming a machine IR:
   nested construction such as `[i && [matrix[i][j]]]`; it must stay local to
   that value and must not become a statement gate or implicit collector — only
   an explicit `[]` closes the bound domain into an array
+- positional outcome groups such as `(m, n)` could later generalize `require`
+  and `fallback` to tuples — `a, b = val > 5 && (m, n) || (1, 2)`. Parentheses
+  are pure grouping today, so this is a real language feature (flattened slots
+  versus tuple value, per-slot versus group failure, arity, ownership,
+  nesting), deferred until after Step 6 handles multiple outcomes. It must
+  never become statement-gate-specific fallback sugar: a gate keeps exactly
+  one resolution, keep-old, which is why `x = a > 2  3 || 7` stays an error.
+  Multi-return calls (`val > 5 && Pair(m, n) || Pair(1, 2)`) and the
+  seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
+  express the semantics today
 - a skipped array-valued collector cell closes to a zero-filled child of its
   expected shape, while `||` may supply a shape-compatible child; the validator
   rejects a plan whose skipped child shape is neither known nor derivable
