@@ -755,7 +755,7 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	// Look up and create the scalar variant
 	template, mangled, ok := ts.lookupCallTemplate(ce, scalarArgs)
 	if ok {
-		ts.InferFuncTypes(ce, scalarArgs, scalarArgs, mangled, template)
+		ts.InferFuncTypes(ce, scalarArgs, mangled, template)
 	}
 }
 
@@ -2272,7 +2272,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 		return info.OutTypes
 	}
 
-	f := ts.InferFuncTypes(ce, innerArgs, args, mangled, template)
+	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
 	info.OutTypes = append([]Type(nil), f.Sig.OutTypes...)
 	info.ExprLen = len(info.OutTypes)
 	info.HasRanges = hasRanges
@@ -2447,7 +2447,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // newFunc creates and caches a specialization record for the call.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs, callArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
 			Name:     ce.Function.Value,
@@ -2456,8 +2456,7 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs, callArgs []Type,
 		},
 		Vars:              make(map[string]Type),
 		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
-		OutputEffects:     slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
-		HasFunctionDomain: hasFunctionDomain(callArgs),
+		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2466,22 +2465,13 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs, callArgs []Type,
 	return f
 }
 
-func hasFunctionDomain(types []Type) bool {
-	for _, typ := range types {
-		if typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind {
-			return true
-		}
-	}
-	return false
-}
-
-func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs, callArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		f = ts.newFunc(ce, bodyArgs, callArgs, mangled, template)
+		f = ts.newFunc(ce, bodyArgs, mangled, template)
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)

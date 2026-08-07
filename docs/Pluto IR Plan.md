@@ -724,26 +724,28 @@ instead of suppressing the invocation.
 
 ### Convergence and publication
 
-**Folding a body into an output summary.** A declared output's summary is the
-sequential fold of the body's per-slot effects for that output, in statement
-order: the output starts `MayWrite` (nothing has written it), a `MustWrite`
-statement slot sets it to `MustWrite`, and a `MayWrite` statement slot leaves
-it unchanged — a later conditional write cannot un-guarantee an earlier
-unconditional one. A function-owned domain then weakens the whole result:
-because a `Range` **or `ArrayRange`** parameter wraps the complete body and may
-execute zero times, every output the body writes only inside that domain
-becomes `MayWrite` at the function boundary. A range created *inside* the body
+**Folding a body into an output summary.** A declared output's body summary is
+the sequential fold of the body's per-slot effects for that output, in
+statement order: the output starts `MayWrite` (nothing has written it), a
+`MustWrite` statement slot sets it to `MustWrite`, and a `MayWrite` statement
+slot leaves it unchanged — a later conditional write cannot un-guarantee an
+earlier unconditional one. The published `BodyOutputEffects` deliberately stop
+before a call-owned domain: a `Range` or `ArrayRange` parameter controls whether
+the scalar body executes, not what the body does when it executes. Each call
+combines that reusable body summary with its solved domain. A provably
+non-empty literal can therefore preserve `MustWrite`, while an empty or unknown
+domain weakens the call to `MayWrite`. A range created *inside* the body still
 weakens only the outputs its statements drive — a possibly empty local range
 makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
-`res` — while unrelated outputs keep their effects. Only a parameter domain
-blanket-weakens the whole boundary.
+`res` — while unrelated outputs keep their effects.
 
-**Fixed point.** Function-output effects, and only those, need one: a recursive
-callee can refine its outputs after types settle, and `TypeScriptFunc` today
-converges on types alone. Condense the typed specialization call graph into its
-strongly connected components and process them **callee-first** in reverse
-topological order — this is what lets a component assume every callee outside
-it has already published. Within one component:
+**Fixed point.** Function-body output effects, and only those, need one: a
+recursive callee can refine its outputs after types settle, and
+`TypeScriptFunc` today converges on types alone. Condense the typed
+specialization call graph into its strongly connected components and process
+them **callee-first** in reverse topological order — this is what lets a
+component assume every callee outside it has already published. Within one
+component:
 
 1. Seed every member's outputs with a provisional `MustWrite` working vector. A
    recursive call reads that provisional value — which is why `Uncomputed`

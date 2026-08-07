@@ -83,14 +83,17 @@ y = Maybe(x)
 	ts := solveScriptTypes(t, ctx, cc, t.Name(), `existing = 7
 existing = Maybe(1)
 fresh = Maybe(1)
+alwaysExisting = 4
+alwaysExisting = Always(1)
 arr = [1]
 other = 9
 other = Always(arr[2])
-existing, other`)
+existing, alwaysExisting, other`)
 	program := ts.ScriptCompiler.Program
 	resolved := program.Statements[1].(*ast.LetStatement)
 	fresh := program.Statements[2].(*ast.LetStatement)
-	callerFailure := program.Statements[5].(*ast.LetStatement)
+	alwaysResolved := program.Statements[4].(*ast.LetStatement)
+	callerFailure := program.Statements[7].(*ast.LetStatement)
 
 	resolvedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[resolved]
 	requireTargetEffects(t, resolvedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
@@ -101,43 +104,90 @@ existing, other`)
 	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 	require.Empty(t, freshEffect.ReadsSeed)
 
+	alwaysResolvedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[alwaysResolved]
+	requireTargetEffects(t, alwaysResolvedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Empty(t, alwaysResolvedEffect.ReadsSeed)
+
 	callerFailureEffect := ts.ScriptCompiler.Script.Root.StatementEffects[callerFailure]
 	requireTargetEffects(t, callerFailureEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 	require.Empty(t, callerFailureEffect.ReadsSeed)
 
 	maybe := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Maybe", []Type{I64})]
 	always := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]
-	require.Equal(t, []WriteEffect{MayWrite}, maybe.OutputEffects)
-	require.Equal(t, []WriteEffect{MustWrite}, always.OutputEffects)
+	require.Equal(t, []WriteEffect{MayWrite}, maybe.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MustWrite}, always.BodyOutputEffects)
 	require.True(t, maybe.Settled)
 	require.True(t, always.Settled)
 }
 
-func TestFunctionDomainWeakensOnlyPublishedOutput(t *testing.T) {
+func TestCallDomainComposesWithBodyOutputEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "domainEffects", "", mustParseCode(t, `y = Increment(x)
     y = x + 1`))
 	require.Empty(t, cc.Compile())
 
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = Increment(0:0)
-result`)
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `existing = 9
+existing = Increment(0:0)
+empty = Increment(0:0)
+nonempty = Increment(0:2)
+existing, empty, nonempty`)
 	mangled := Mangle(cc.Compiler.MangledPath, "Increment", []Type{Range{Iter: I64}})
 	increment := cc.Compiler.FuncCache[mangled]
 	require.NotNil(t, increment)
-	require.True(t, increment.HasFunctionDomain)
-	require.Equal(t, []WriteEffect{MayWrite}, increment.OutputEffects)
+	require.Equal(t, []WriteEffect{MustWrite}, increment.BodyOutputEffects)
 
 	template, ok := cc.lookupFuncTemplate("Increment", 1)
 	require.True(t, ok)
 	bodyStmt := template.Body.Statements[0].(*ast.LetStatement)
 	requireTargetEffects(t, increment.StatementEffects[bodyStmt], TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
 
-	callStmt := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
-	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[callStmt], TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	existing := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
+	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
+	requireTargetEffects(t, existingEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []int{0}, existingEffect.ReadsSeed)
+
+	empty := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
+	emptyEffect := ts.ScriptCompiler.Script.Root.StatementEffects[empty]
+	requireTargetEffects(t, emptyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Empty(t, emptyEffect.ReadsSeed)
+	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, empty.Value[0])].YieldEffects)
+
+	nonempty := ts.ScriptCompiler.Program.Statements[3].(*ast.LetStatement)
+	nonemptyEffect := ts.ScriptCompiler.Script.Root.StatementEffects[nonempty]
+	requireTargetEffects(t, nonemptyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Empty(t, nonemptyEffect.ReadsSeed)
+	require.Equal(t, []YieldEffect{MustYield}, ts.ExprCache[key(ts.FuncNameMangled, nonempty.Value[0])].YieldEffects)
 }
 
-func TestRecursiveOutputEffectsConvergeAcrossSCC(t *testing.T) {
+func TestConditionalBodyRemainsMayWriteAcrossNonemptyDomain(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "conditionalDomainEffects", "", mustParseCode(t, `y = ConditionalSquare(x)
+    y = x > 5 x * x`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `fresh = ConditionalSquare(0:5)
+existing = 9
+existing = ConditionalSquare(0:5)
+fresh, existing`)
+	mangled := Mangle(cc.Compiler.MangledPath, "ConditionalSquare", []Type{Range{Iter: I64}})
+	conditional := cc.Compiler.FuncCache[mangled]
+	require.NotNil(t, conditional)
+	require.Equal(t, []WriteEffect{MayWrite}, conditional.BodyOutputEffects)
+
+	fresh := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
+	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
+	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Empty(t, freshEffect.ReadsSeed)
+
+	existing := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
+	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
+	requireTargetEffects(t, existingEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []int{0}, existingEffect.ReadsSeed)
+}
+
+func TestRecursiveBodyOutputEffectsConvergeAcrossSCC(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "recursiveEffects", "", mustParseCode(t, `y = A(n)
@@ -152,8 +202,8 @@ y = B(n)
 result`)
 	a := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "A", []Type{I64})]
 	b := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
-	require.Equal(t, []WriteEffect{MayWrite}, a.OutputEffects)
-	require.Equal(t, []WriteEffect{MayWrite}, b.OutputEffects)
+	require.Equal(t, []WriteEffect{MayWrite}, a.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MayWrite}, b.BodyOutputEffects)
 	require.True(t, a.Settled)
 	require.True(t, b.Settled)
 }

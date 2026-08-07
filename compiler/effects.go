@@ -245,6 +245,9 @@ func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffect {
 	info := analyzer.info(expr)
 	invocation := analyzer.callInvocationEffect(expr)
+	if analyzer.expressionDomainMayBeEmpty(expr) {
+		invocation = joinYield(invocation, MayYield)
+	}
 
 	effects := make([]YieldEffect, len(info.OutTypes))
 	if _, builtin := Builtins[expr.Function.Value]; builtin {
@@ -254,7 +257,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 		return analyzer.cacheExprEffects(expr, effects)
 	}
 
-	callee := analyzer.callOutputEffects(expr)
+	callee := analyzer.callBodyOutputEffects(expr)
 	if len(callee) != len(effects) {
 		return analyzer.invalidExprEffects(expr)
 	}
@@ -270,7 +273,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	return analyzer.cacheExprEffects(expr, effects)
 }
 
-func (analyzer *effectAnalyzer) callOutputEffects(expr *ast.CallExpression) []WriteEffect {
+func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
 	info := analyzer.info(expr)
 	mangled := Mangle(analyzer.ts.ScriptCompiler.Compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
 	if effects, ok := analyzer.calleeEffects[mangled]; ok {
@@ -280,13 +283,13 @@ func (analyzer *effectAnalyzer) callOutputEffects(expr *ast.CallExpression) []Wr
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing callee specialization %s during effect analysis", mangled))
 	}
-	if !f.Settled || !validPublishedEffects(f.OutputEffects, len(f.Sig.OutTypes)) {
+	if !f.Settled || !validPublishedEffects(f.BodyOutputEffects, len(f.Sig.OutTypes)) {
 		panic(fmt.Sprintf("internal: read of unpublished effects for %s", mangled))
 	}
-	return f.OutputEffects
+	return f.BodyOutputEffects
 }
 
-func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) bool {
+func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
 	info := analyzer.info(expr)
 	if info == nil {
 		return false
@@ -297,6 +300,16 @@ func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) b
 		}
 	}
 	return false
+}
+
+func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) bool {
+	if call, ok := expr.(*ast.CallExpression); ok {
+		info := analyzer.info(call)
+		if info != nil && info.LoopInside {
+			return false
+		}
+	}
+	return analyzer.expressionDomainMayBeEmpty(expr)
 }
 
 func rangeLiteralGuaranteedNonEmpty(literal *ast.RangeLiteral) bool {
@@ -335,8 +348,12 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 	if _, builtin := Builtins[call.Function.Value]; builtin {
 		return false
 	}
-	callee := analyzer.callOutputEffects(call)
-	if slot >= len(callee) || callee[slot] != MayWrite {
+	callee := analyzer.callBodyOutputEffects(call)
+	if slot >= len(callee) {
+		return false
+	}
+	calleeMaySkip := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call)
+	if !calleeMaySkip {
 		return false
 	}
 	info := analyzer.info(call)
@@ -345,6 +362,19 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 	// variant selected later by lowering.
 	_, direct := directScalarABIReturnType(info.OutTypes)
 	return direct
+}
+
+func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression) bool {
+	info := analyzer.info(call)
+	if info == nil || !info.LoopInside || !analyzer.expressionDomainMayBeEmpty(call) {
+		return false
+	}
+	for _, paramType := range info.CallParamTypes {
+		if paramType.Kind() == RangeKind || paramType.Kind() == ArrayRangeKind {
+			return true
+		}
+	}
+	return false
 }
 
 func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, initiallyDefined map[string]struct{}) map[*ast.LetStatement]StatementEffect {
@@ -441,7 +471,7 @@ func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
 	return true
 }
 
-func deriveOutputEffects(template *ast.FuncStatement, statements map[*ast.LetStatement]StatementEffect, hasFunctionDomain bool) []WriteEffect {
+func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.LetStatement]StatementEffect) []WriteEffect {
 	effects := make([]WriteEffect, len(template.Outputs))
 	for i := range effects {
 		effects[i] = MayWrite
@@ -464,11 +494,6 @@ func deriveOutputEffects(template *ast.FuncStatement, statements map[*ast.LetSta
 			if isOutput && write.Effect == MustWrite {
 				effects[index] = MustWrite
 			}
-		}
-	}
-	if hasFunctionDomain {
-		for i := range effects {
-			effects[i] = MayWrite
 		}
 	}
 	return effects
@@ -628,7 +653,7 @@ func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
 				initial := functionInitialBindings(node.template)
 				analyzer := newEffectAnalyzer(ts, name, working)
 				statements := analyzer.deriveStatements(node.template.Body.Statements, initial)
-				derived := deriveOutputEffects(node.template, statements, node.info.HasFunctionDomain)
+				derived := deriveBodyOutputEffects(node.template, statements)
 				if !validPublishedEffects(derived, len(node.info.Sig.OutTypes)) {
 					panic(fmt.Sprintf("internal: invalid effects for specialization %s", name))
 				}
@@ -643,7 +668,7 @@ func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
 		}
 		for _, name := range component {
 			node := graph.nodes[name]
-			node.info.OutputEffects = slices.Clone(working[name])
+			node.info.BodyOutputEffects = slices.Clone(working[name])
 		}
 	}
 }
