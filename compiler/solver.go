@@ -31,13 +31,14 @@ type ExprInfo struct {
 	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
-	HasRanges            bool       // True if expression involves ranges (propagated upward during typing)
-	LoopInside           bool       // For CallExpression: true if function handles iteration, false if call site handles it
-	CallParamTypes       []Type     // Solver-selected call params for the original expression shape
-	ScalarCallParamTypes []Type     // Param types to use once outer loops consume ranges into scalars
-	CompareModes         []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
-	ArrayShape           []uint64   // Statically known dimensions for array literals; nil when runtime-dependent
-	RangeDriverCond      bool       // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
+	HasRanges            bool          // True if expression involves ranges (propagated upward during typing)
+	LoopInside           bool          // For CallExpression: true if function handles iteration, false if call site handles it
+	CallParamTypes       []Type        // Solver-selected call params for the original expression shape
+	ScalarCallParamTypes []Type        // Param types to use once outer loops consume ranges into scalars
+	CompareModes         []CondMode    // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+	ArrayShape           []uint64      // Statically known dimensions for array literals; nil when runtime-dependent
+	RangeDriverCond      bool          // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
+	YieldEffects         []YieldEffect // Per-output production guarantee, derived after types settle.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -708,6 +709,9 @@ func (ts *TypeSolver) Solve() {
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
 	}
+	if len(ts.Errors) == 0 {
+		ts.deriveScriptEffects()
+	}
 }
 
 // TypePrintStatement types a print in value position: a comparison yields its
@@ -751,7 +755,7 @@ func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
 	// Look up and create the scalar variant
 	template, mangled, ok := ts.lookupCallTemplate(ce, scalarArgs)
 	if ok {
-		ts.InferFuncTypes(ce, scalarArgs, mangled, template)
+		ts.InferFuncTypes(ce, scalarArgs, scalarArgs, mangled, template)
 	}
 }
 
@@ -2268,7 +2272,7 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 		return info.OutTypes
 	}
 
-	f := ts.InferFuncTypes(ce, innerArgs, mangled, template)
+	f := ts.InferFuncTypes(ce, innerArgs, args, mangled, template)
 	info.OutTypes = append([]Type(nil), f.Sig.OutTypes...)
 	info.ExprLen = len(info.OutTypes)
 	info.HasRanges = hasRanges
@@ -2443,14 +2447,17 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // newFunc creates and caches a specialization record for the call.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs, callArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
 			Name:     ce.Function.Value,
-			Params:   args,
+			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
-		Vars: make(map[string]Type),
+		Vars:              make(map[string]Type),
+		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
+		OutputEffects:     slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
+		HasFunctionDomain: hasFunctionDomain(callArgs),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2459,13 +2466,22 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 	return f
 }
 
-func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func hasFunctionDomain(types []Type) bool {
+	for _, typ := range types {
+		if typ.Kind() == RangeKind || typ.Kind() == ArrayRangeKind {
+			return true
+		}
+	}
+	return false
+}
+
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs, callArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		f = ts.newFunc(ce, args, mangled, template)
+		f = ts.newFunc(ce, bodyArgs, callArgs, mangled, template)
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
@@ -2478,7 +2494,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	// At script level, all arg types must be resolved before typing
-	for i, arg := range args {
+	for i, arg := range bodyArgs {
 		if IsFullyResolvedType(arg) {
 			continue
 		}
@@ -2516,6 +2532,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
 				}
 			}
+			ts.settleEffects(ts.walkedFuncs)
 			for walked := range ts.walkedFuncs {
 				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
 				cached.Settled = true
