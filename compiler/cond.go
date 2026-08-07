@@ -239,6 +239,14 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 			WriteFlag: tempSym.WriteFlag,
 		}
 
+		// A blank slot binds nothing. The temp owns whatever it holds — the
+		// stored value on the admitted path, its own seed otherwise — so the
+		// shared discard path releases it here rather than leaking it with the temp.
+		if isDiscard(s.dest) {
+			c.drop(slotAssign{dest: s.dest, value: finalSym})
+			continue
+		}
+
 		oldSym, exists := Get(c.Scopes, s.dest.Value)
 		if !exists {
 			Put(c.Scopes, s.dest.Value, finalSym)

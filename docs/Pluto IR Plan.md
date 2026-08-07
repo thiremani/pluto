@@ -860,7 +860,7 @@ Pluto has no users yet, so migration optimizes for the clean end state:
    accordingly. Evidence and the full consumer table live in
    [the capability matrix](./Pluto%20PIR%20Capability%20Matrix.md).
 
-### Step 1: Inventory and corpus (~1 week) — in progress
+### Step 1: Inventory and corpus (~1 week) — complete
 
 Deliverable: [the capability matrix](./Pluto%20PIR%20Capability%20Matrix.md) —
 the reachable-combination table with per-row disposition, tests, cutover step,
@@ -868,21 +868,25 @@ and notable removable helpers; plus new fixtures added without changing
 lowering, and the contracts this plan now records.
 
 Decisions recorded, and mirrored in the semantics docs where they are language
-rules: `_` becomes a real per-slot `discard` sink whose owned outcome is
-consumed at its smallest owning region's exit (§6) — today it is an ordinary
-typed binding whose duplicate blanks alias one another, so a repeated heap
-blank leaks and then aborts; print is one N-ary invocation gated on every
+rules: `_` is a per-slot `discard` sink whose owned outcome is consumed at its
+smallest owning region's exit (§6) — it previously bound one shared typed
+symbol that every blank in a statement aliased, so a repeated heap blank
+leaked and then aborted; print is one N-ary invocation gated on every
 argument yielding, retaining today's conditional suppression (§3); the
 gate-versus-slot rule, with gated print marked as future syntax (§9); the carry
 seed is borrowed (§7); the effect lattice, body-to-output fold, callee-first
 SCC convergence, comparison and direct-call yield rules, and CFG transfer rules
 (§15); an unreachable `.pt` template gets structural checks only (§15).
 
-Remaining before Step 2A: implement the `_` sink in its own PR, with fixtures
-for repeated blanks, mixed types, heap outcomes, repeated statements, and
-blanks under gates and ranges. Gated print syntax, if wanted, is a separate
-feature PR before Step 6. Any other language change likewise gets its own PR
-with its semantics-doc and rejection-test updates.
+The `_` sink shipped in its own PR, Step 1's last prerequisite: blanks are no
+longer bound or typed, so repeated blanks stay independent, a discarded
+temporary is released and a discarded named value survives.
+`tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
+repeated statements, borrowed survival, checked access, ranged multi-output
+blanks, a conditionally-writing callee on both paths, and blanks under gates
+and ranges. **Step 2A is unblocked.** Gated print syntax, if wanted, is a
+separate feature PR before Step 6; any other language change likewise gets
+its own PR with its semantics-doc and rejection-test updates.
 
 ### Step 2: Write effects on settled specializations (~1-2 weeks)
 

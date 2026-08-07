@@ -1,3 +1,12 @@
 Discard: 3
 DiscardFirst: 12
 DiscardSecond: 7
+DiscardMiddle: 7 9
+MixedTypes: 3
+RepeatedBlanks: done
+BorrowedSurvives: keepme
+GatedBlank: done
+RangedBlank: done
+RangedMultiBlank: done
+CheckedBlank: done
+MayWriteBlank: done

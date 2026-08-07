@@ -1,0 +1,8 @@
+s1, s2 = twoStr(p, q)
+    s1, s2 = p ⊕ "L", q ⊕ "R"
+
+tag = mkTag(v)
+    tag = "tag-v"
+
+res = maybeStr(k)
+    res = k > 0 "big" ⊕ "value"

@@ -874,6 +874,10 @@ func (c *Compiler) makeZeroValue(symType Type) *Symbol {
 // It delegates per-destination ownership and in-place pointer-slot updates to storeValue.
 func (c *Compiler) writeTo(slots []slotAssign) {
 	for _, slot := range slots {
+		if isDiscard(slot.dest) {
+			c.drop(slot)
+			continue
+		}
 		c.storeValue(slot.dest.Value, slot.value, slot.needsCopy)
 	}
 }
@@ -886,14 +890,14 @@ func (c *Compiler) markCopyRequirements(slots []slotAssign) map[string]struct{} 
 
 	for i := range slots {
 		slot := &slots[i]
-		// StrG (static strings): immutable, live forever - no copy needed.
-		if IsStrG(slot.value.Type) {
+		// Discards are dropped, while temporary RHS values transfer ownership;
+		// neither requires a copy.
+		if isDiscard(slot.dest) || slot.rhsName == "" {
 			continue
 		}
 
-		// Temporaries (array literals, function results, expressions): transfer ownership directly.
-		// No copy needed - the temporary's memory becomes owned by the LHS variable.
-		if slot.rhsName == "" {
+		// StrG (static strings): immutable, live forever - no copy needed.
+		if IsStrG(slot.value.Type) {
 			continue
 		}
 
@@ -1106,6 +1110,28 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
+// blank is how a discard is spelled; isDiscard asks whether a slot plays that
+// role. A blank LHS slot is a sink, not a binding: never entered into scope
+// and never typed, so repeated blanks in one statement stay independent
+// instead of aliasing one shared symbol.
+const blank = "_"
+
+func isDiscard(ident *ast.Identifier) bool {
+	return ident != nil && ident.Value == blank
+}
+
+// drop releases the value a discarded slot threw away — the legacy spelling of
+// the plan's derived `drop`. A value read from a named variable, or one backed
+// by storage the statement does not own, is borrowed and must survive;
+// anything else is a temporary this statement owns, so freeing it here is what
+// keeps `_ = f()` leak-free.
+func (c *Compiler) drop(slot slotAssign) {
+	if slot.value == nil || slot.rhsName != "" || slot.destBacked || slot.value.Borrowed {
+		return
+	}
+	c.freeSymbolValue(slot.value, "discard")
+}
+
 // slotAssign is one destination slot of an assignment: where the value is
 // written, which identifier owns move/copy decisions (the real destination,
 // even when writing through a temp), the compiled value and the RHS variable
@@ -1279,6 +1305,11 @@ func (c *Compiler) freeSkippedTemps(e exprAssign) {
 // value. Returns the seed (nil for an existing destination) so the caller can
 // record it as the value a commit replaces.
 func (c *Compiler) ensureSeededDest(ident *ast.Identifier, valSym *Symbol) *Symbol {
+	// A blank slot has nothing to keep on the skip path, so it needs no seed
+	// and must not be bound.
+	if isDiscard(ident) {
+		return nil
+	}
 	if _, exists := Get(c.Scopes, ident.Value); exists {
 		c.promoteExistingSym(ident.Value)
 		return nil
@@ -2380,6 +2411,13 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 // BlockScope is popped before the next expression is compiled.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
+		// A blank binds nothing and nothing can read it back, so it has no
+		// self-reference to preserve — binding it would only expose `_` as a
+		// destination to nested ranged lowering.
+		if isDiscard(dest[i]) {
+			continue
+		}
+
 		names := []string{dest[i].Value}
 		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
 			seen := make(map[string]struct{})

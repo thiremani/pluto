@@ -1,11 +1,8 @@
-# Blank targets, as they behave today: `_` is an ordinary typed binding that
-# only the CFG exempts from liveness checks, not a per-slot discard sink.
-# These cases are the safe subset — one scalar blank per statement. The
-# reproduced failures (see docs/Pluto PIR Capability Matrix.md §4): duplicate
-# heap blanks in one statement alias one binding and leak, repeating such a
-# statement aborts, and reusing `_` at a second type fails compilation. A
-# single heap blank is leak-free. Fixtures for the broken cases land with the
-# `_` sink implementation.
+# Blank targets. `_` is a per-slot discard sink, not a binding: it is never
+# entered into scope and never typed, so repeated blanks stay independent
+# instead of aliasing one shared symbol. A discarded temporary is owned by the
+# statement and released; a discarded value read from a named variable is
+# borrowed and must survive.
 
 a, u = 3, 4
 _ = 1
@@ -16,3 +13,55 @@ _, b = FOuter(a, u)
 
 c, _ = FOuter(a, u)
 "DiscardSecond: -c"
+
+p, _, q = FOuter(a, u), 9
+"DiscardMiddle: -p -q"
+
+# Blanks at different types in one script: no binding, so no type collision.
+_ = "text" ⊕ "value"
+_ = 2 * a
+"MixedTypes: -a"
+
+# Repeated blanks in one statement, and the same statement twice: each slot is
+# its own sink, so the heap outputs are released rather than aliased.
+_, _ = twoStr("m", "n")
+_, _ = twoStr("o", "p")
+"RepeatedBlanks: done"
+
+# A named heap variable survives being discarded — the value is borrowed.
+h = "keep" ⊕ "me"
+_ = h
+_, _ = h, h
+"BorrowedSurvives: -h"
+
+# Gated blanks: the taken path drops its value, the skipped path has nothing
+# to keep, and neither leaks.
+g = 5
+_, _ = g > 3 twoStr("x", "y")
+_, _ = g > 9 twoStr("x", "y")
+"GatedBlank: done"
+
+# Ranged blank: the discarded heap value is released every iteration.
+i = 0:3
+_ = mkTag(i)
+"RangedBlank: done"
+
+# Ranged multi-output blanks: both staged slots are discarded every iteration,
+# and no transient `_` binding is left behind for nested lowering to find.
+_, _ = twoStr(mkTag(i), "z")
+"RangedMultiBlank: done"
+
+# Checked access into a blank: the guarded path needs no seed to keep.
+arr = [10 20 30]
+sarr = ["a" ⊕ "1" "b" ⊕ "2"]
+_ = arr[9]
+_ = sarr[9]
+_ = arr[1]
+_ = sarr[1]
+"CheckedBlank: done"
+
+# A conditionally-writing callee with its output discarded, on both the
+# writing and non-writing paths.
+_ = maybeStr(1)
+_ = maybeStr(-1)
+"MayWriteBlank: done"

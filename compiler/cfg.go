@@ -179,8 +179,8 @@ func (cfg *CFG) extractStmtEvents(stmt ast.Statement, kinds []EventType) []VarEv
 		evs = append(evs, cfg.collectReads(expr)...)
 	}
 	for i, lhs := range names {
-		// Treat '_' as a discard target: do not record writes or liveness.
-		if lhs.Value == "_" {
+		// A blank slot binds nothing, so it has no writes or liveness.
+		if isDiscard(lhs) {
 			continue
 		}
 
