@@ -1110,14 +1110,14 @@ func (c *Compiler) freeSymbolValue(sym *Symbol, loadName string) {
 	c.freeValue(derefed.Val, derefed.Type)
 }
 
-// blankIdentifier is how a discard is spelled; isDiscard asks whether a slot
-// plays that role. A blank LHS slot is a sink, not a binding: never entered
-// into scope and never typed, so repeated blanks in one statement stay
-// independent instead of aliasing one shared symbol.
-const blankIdentifier = "_"
+// blank is how a discard is spelled; isDiscard asks whether a slot plays that
+// role. A blank LHS slot is a sink, not a binding: never entered into scope
+// and never typed, so repeated blanks in one statement stay independent
+// instead of aliasing one shared symbol.
+const blank = "_"
 
 func isDiscard(ident *ast.Identifier) bool {
-	return ident != nil && ident.Value == blankIdentifier
+	return ident != nil && ident.Value == blank
 }
 
 // drop releases the value a discarded slot threw away — the legacy spelling of
