@@ -890,20 +890,14 @@ func (c *Compiler) markCopyRequirements(slots []slotAssign) map[string]struct{} 
 
 	for i := range slots {
 		slot := &slots[i]
+		// Discards are dropped, while temporary RHS values transfer ownership;
+		// neither requires a copy.
+		if isDiscard(slot.dest) || slot.rhsName == "" {
+			continue
+		}
+
 		// StrG (static strings): immutable, live forever - no copy needed.
 		if IsStrG(slot.value.Type) {
-			continue
-		}
-
-		// A discarded value is never stored, so copying it would only create
-		// garbage to free; drop handles its ownership instead.
-		if isDiscard(slot.dest) {
-			continue
-		}
-
-		// Temporaries (array literals, function results, expressions): transfer ownership directly.
-		// No copy needed - the temporary's memory becomes owned by the LHS variable.
-		if slot.rhsName == "" {
 			continue
 		}
 
