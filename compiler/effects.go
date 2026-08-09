@@ -103,21 +103,21 @@ func joinYield(left, right YieldEffect) YieldEffect {
 }
 
 type effectAnalyzer struct {
-	ts              *TypeSolver
+	compiler        *Compiler
 	funcNameMangled string
 	calleeEffects   map[string][]WriteEffect
 }
 
-func newEffectAnalyzer(ts *TypeSolver, mangled string, calleeEffects map[string][]WriteEffect) *effectAnalyzer {
+func newEffectAnalyzer(compiler *Compiler, mangled string, calleeEffects map[string][]WriteEffect) *effectAnalyzer {
 	return &effectAnalyzer{
-		ts:              ts,
+		compiler:        compiler,
 		funcNameMangled: mangled,
 		calleeEffects:   calleeEffects,
 	}
 }
 
 func (analyzer *effectAnalyzer) info(expr ast.Expression) *ExprInfo {
-	return analyzer.ts.ExprCache[key(analyzer.funcNameMangled, expr)]
+	return analyzer.compiler.ExprCache[key(analyzer.funcNameMangled, expr)]
 }
 
 func (analyzer *effectAnalyzer) invalidExprEffects(expr ast.Expression) []YieldEffect {
@@ -275,11 +275,11 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 
 func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
 	info := analyzer.info(expr)
-	mangled := Mangle(analyzer.ts.ScriptCompiler.Compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
+	mangled := Mangle(analyzer.compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
 	if effects, ok := analyzer.calleeEffects[mangled]; ok {
 		return effects
 	}
-	f := analyzer.ts.ScriptCompiler.Compiler.FuncCache[mangled]
+	f := analyzer.compiler.FuncCache[mangled]
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing callee specialization %s during effect analysis", mangled))
 	}
@@ -651,7 +651,7 @@ func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
 			for _, name := range component {
 				node := graph.nodes[name]
 				initial := functionInitialBindings(node.template)
-				analyzer := newEffectAnalyzer(ts, name, working)
+				analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, name, working)
 				statements := analyzer.deriveStatements(node.template.Body.Statements, initial)
 				derived := deriveBodyOutputEffects(node.template, statements)
 				if !validPublishedEffects(derived, len(node.info.Sig.OutTypes)) {
@@ -686,7 +686,7 @@ func functionInitialBindings(template *ast.FuncStatement) map[string]struct{} {
 
 func (ts *TypeSolver) deriveScriptEffects() {
 	root := ts.ScriptCompiler.Script.Root
-	analyzer := newEffectAnalyzer(ts, ts.ScriptCompiler.ScriptMangled, nil)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil)
 	root.StatementEffects = analyzer.deriveStatements(ts.ScriptCompiler.Program.Statements, nil)
 	for _, statement := range ts.ScriptCompiler.Program.Statements {
 		stmt, ok := statement.(*ast.LetStatement)
