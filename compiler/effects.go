@@ -116,25 +116,23 @@ func newEffectAnalyzer(compiler *Compiler, mangled string, calleeEffects map[str
 	}
 }
 
-func (analyzer *effectAnalyzer) info(expr ast.Expression) *ExprInfo {
+func (analyzer *effectAnalyzer) exprInfo(expr ast.Expression) *ExprInfo {
 	return analyzer.compiler.ExprCache[key(analyzer.funcNameMangled, expr)]
 }
 
 func (analyzer *effectAnalyzer) invalidExprEffects(expr ast.Expression) []YieldEffect {
-	info := analyzer.info(expr)
-	count := 1
-	if info != nil && len(info.OutTypes) > 0 {
-		count = len(info.OutTypes)
+	info := analyzer.exprInfo(expr)
+	if info == nil {
+		return []YieldEffect{YieldInvalid}
 	}
+	count := max(1, len(info.OutTypes))
 	effects := slices.Repeat([]YieldEffect{YieldInvalid}, count)
-	if info != nil {
-		info.YieldEffects = slices.Clone(effects)
-	}
+	info.YieldEffects = slices.Clone(effects)
 	return effects
 }
 
 func (analyzer *effectAnalyzer) cacheExprEffects(expr ast.Expression, effects []YieldEffect) []YieldEffect {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	if info == nil || len(effects) != len(info.OutTypes) {
 		return analyzer.invalidExprEffects(expr)
 	}
@@ -143,7 +141,7 @@ func (analyzer *effectAnalyzer) cacheExprEffects(expr ast.Expression, effects []
 }
 
 func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	if info == nil || len(info.OutTypes) == 0 || !typesResolved(info.OutTypes) {
 		return analyzer.invalidExprEffects(expr)
 	}
@@ -204,7 +202,7 @@ func alignYieldEffects(effects []YieldEffect, count int) []YieldEffect {
 }
 
 func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEffect {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	left := analyzer.deriveExpr(expr.Left)
 	right := analyzer.deriveExpr(expr.Right)
 	effects := make([]YieldEffect, len(info.OutTypes))
@@ -243,7 +241,7 @@ func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 }
 
 func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffect {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	invocation := analyzer.callInvocationEffect(expr)
 	if analyzer.expressionDomainMayBeEmpty(expr) {
 		invocation = joinYield(invocation, MayYield)
@@ -274,7 +272,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 }
 
 func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	mangled := Mangle(analyzer.compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
 	if effects, ok := analyzer.calleeEffects[mangled]; ok {
 		return effects
@@ -290,7 +288,7 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 }
 
 func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
-	info := analyzer.info(expr)
+	info := analyzer.exprInfo(expr)
 	if info == nil {
 		return false
 	}
@@ -304,7 +302,7 @@ func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) 
 
 func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) bool {
 	if call, ok := expr.(*ast.CallExpression); ok {
-		info := analyzer.info(call)
+		info := analyzer.exprInfo(call)
 		if info != nil && info.LoopInside {
 			return false
 		}
@@ -356,7 +354,7 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 	if !calleeMaySkip {
 		return false
 	}
-	info := analyzer.info(call)
+	info := analyzer.exprInfo(call)
 	// Direct-return eligibility depends only on output types. Using the shared
 	// ABI predicate avoids tying ReadsSeed to either the range or scalar call
 	// variant selected later by lowering.
@@ -365,7 +363,7 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 }
 
 func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression) bool {
-	info := analyzer.info(call)
+	info := analyzer.exprInfo(call)
 	if info == nil || !info.LoopInside || !analyzer.expressionDomainMayBeEmpty(call) {
 		return false
 	}
