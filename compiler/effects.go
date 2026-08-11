@@ -126,15 +126,6 @@ func (analyzer *effectAnalyzer) makeInvalidYieldEffects(expr ast.Expression) []Y
 	return info.YieldEffects
 }
 
-func (analyzer *effectAnalyzer) cacheExprEffects(expr ast.Expression, effects []YieldEffect) []YieldEffect {
-	info := analyzer.exprInfo(expr)
-	if len(effects) != len(info.OutTypes) {
-		return analyzer.makeInvalidYieldEffects(expr)
-	}
-	info.YieldEffects = effects
-	return info.YieldEffects
-}
-
 func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 	info := analyzer.exprInfo(expr)
 	if !typesResolved(info.OutTypes) {
@@ -143,30 +134,31 @@ func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 
 	switch value := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier:
-		return analyzer.cacheExprEffects(expr, broadcastYield(MustYield, len(info.OutTypes)))
+		info.YieldEffects = broadcastYield(MustYield, len(info.OutTypes))
 	case *ast.ArrayLiteral:
 		analyzer.deriveChildren(expr)
-		return analyzer.cacheExprEffects(expr, broadcastYield(MustYield, len(info.OutTypes)))
+		info.YieldEffects = broadcastYield(MustYield, len(info.OutTypes))
 	case *ast.ArrayRangeExpression:
 		analyzer.deriveChildren(expr)
-		return analyzer.cacheExprEffects(expr, broadcastYield(MayYield, len(info.OutTypes)))
+		info.YieldEffects = broadcastYield(MayYield, len(info.OutTypes))
 	case *ast.CallExpression:
 		return analyzer.deriveCall(value)
 	case *ast.InfixExpression:
 		return analyzer.deriveInfix(value)
 	case *ast.PrefixExpression:
 		children := analyzer.deriveChildren(expr)
-		return analyzer.cacheExprEffects(expr, alignYieldEffects(children, len(info.OutTypes)))
+		info.YieldEffects = alignYieldEffects(children, len(info.OutTypes))
 	case *ast.DotExpression:
 		children := analyzer.deriveChildren(expr)
-		return analyzer.cacheExprEffects(expr, alignYieldEffects(children, len(info.OutTypes)))
+		info.YieldEffects = alignYieldEffects(children, len(info.OutTypes))
 	case *ast.RangeLiteral, *ast.StructLiteral:
 		children := analyzer.deriveChildren(expr)
 		combined := foldYieldEffects(children)
-		return analyzer.cacheExprEffects(expr, broadcastYield(combined, len(info.OutTypes)))
+		info.YieldEffects = broadcastYield(combined, len(info.OutTypes))
 	default:
 		return analyzer.makeInvalidYieldEffects(expr)
 	}
+	return info.YieldEffects
 }
 
 func (analyzer *effectAnalyzer) deriveChildren(expr ast.Expression) []YieldEffect {
@@ -200,26 +192,26 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 	info := analyzer.exprInfo(expr)
 	left := analyzer.deriveExpr(expr.Left)
 	right := analyzer.deriveExpr(expr.Right)
-	effects := make([]YieldEffect, len(info.OutTypes))
-	for i := range effects {
+	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
+	for i := range info.YieldEffects {
 		mode := CondNone
 		if i < len(info.CompareModes) {
 			mode = info.CompareModes[i]
 		}
 		switch mode {
 		case CondScalar, CondAnd:
-			effects[i] = MayYield
+			info.YieldEffects[i] = MayYield
 		case CondArray:
-			effects[i] = MustYield
+			info.YieldEffects[i] = MustYield
 		case CondOr:
-			effects[i] = yieldSlot(right, i)
+			info.YieldEffects[i] = yieldSlot(right, i)
 		case CondNone:
-			effects[i] = joinYield(yieldSlot(left, i), yieldSlot(right, i))
+			info.YieldEffects[i] = joinYield(yieldSlot(left, i), yieldSlot(right, i))
 		default:
-			effects[i] = YieldInvalid
+			info.YieldEffects[i] = YieldInvalid
 		}
 	}
-	return analyzer.cacheExprEffects(expr, effects)
+	return info.YieldEffects
 }
 
 func yieldSlot(effects []YieldEffect, index int) YieldEffect {
@@ -242,28 +234,28 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 		invocation = joinYield(invocation, MayYield)
 	}
 
-	effects := make([]YieldEffect, len(info.OutTypes))
+	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 	if _, builtin := Builtins[expr.Function.Value]; builtin {
-		for i := range effects {
-			effects[i] = invocation
+		for i := range info.YieldEffects {
+			info.YieldEffects[i] = invocation
 		}
-		return analyzer.cacheExprEffects(expr, effects)
+		return info.YieldEffects
 	}
 
 	callee := analyzer.callBodyOutputEffects(expr)
-	if len(callee) != len(effects) {
+	if len(callee) != len(info.YieldEffects) {
 		return analyzer.makeInvalidYieldEffects(expr)
 	}
 	for i, effect := range callee {
 		if effect == MustWrite {
-			effects[i] = invocation
+			info.YieldEffects[i] = invocation
 		} else if effect == MayWrite {
-			effects[i] = MayYield
+			info.YieldEffects[i] = MayYield
 		} else {
-			effects[i] = YieldInvalid
+			info.YieldEffects[i] = YieldInvalid
 		}
 	}
-	return analyzer.cacheExprEffects(expr, effects)
+	return info.YieldEffects
 }
 
 func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
