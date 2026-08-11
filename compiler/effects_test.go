@@ -244,7 +244,7 @@ func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {
 	ts := solveScriptTypes(t, ctx, cc, t.Name(), `value = 1
 value`)
 	stmt := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
-	delete(ts.ExprCache, key(ts.FuncNameMangled, stmt.Value[0]))
+	ts.ExprCache[key(ts.FuncNameMangled, stmt.Value[0])].OutTypes = []Type{Unresolved{}}
 
 	require.PanicsWithValue(t,
 		`internal: invalid effects for script statement "value = 1"`,

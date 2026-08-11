@@ -120,30 +120,25 @@ func (analyzer *effectAnalyzer) exprInfo(expr ast.Expression) *ExprInfo {
 	return analyzer.compiler.ExprCache[key(analyzer.funcNameMangled, expr)]
 }
 
-func (analyzer *effectAnalyzer) invalidExprEffects(expr ast.Expression) []YieldEffect {
+func (analyzer *effectAnalyzer) makeInvalidYieldEffects(expr ast.Expression) []YieldEffect {
 	info := analyzer.exprInfo(expr)
-	if info == nil {
-		return []YieldEffect{YieldInvalid}
-	}
-	count := max(1, len(info.OutTypes))
-	effects := slices.Repeat([]YieldEffect{YieldInvalid}, count)
-	info.YieldEffects = slices.Clone(effects)
-	return effects
+	info.YieldEffects = slices.Repeat([]YieldEffect{YieldInvalid}, len(info.OutTypes))
+	return info.YieldEffects
 }
 
 func (analyzer *effectAnalyzer) cacheExprEffects(expr ast.Expression, effects []YieldEffect) []YieldEffect {
 	info := analyzer.exprInfo(expr)
-	if info == nil || len(effects) != len(info.OutTypes) {
-		return analyzer.invalidExprEffects(expr)
+	if len(effects) != len(info.OutTypes) {
+		return analyzer.makeInvalidYieldEffects(expr)
 	}
-	info.YieldEffects = slices.Clone(effects)
-	return effects
+	info.YieldEffects = effects
+	return info.YieldEffects
 }
 
 func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 	info := analyzer.exprInfo(expr)
-	if info == nil || len(info.OutTypes) == 0 || !typesResolved(info.OutTypes) {
-		return analyzer.invalidExprEffects(expr)
+	if !typesResolved(info.OutTypes) {
+		return analyzer.makeInvalidYieldEffects(expr)
 	}
 
 	switch value := expr.(type) {
@@ -170,7 +165,7 @@ func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 		combined := foldYieldEffects(children)
 		return analyzer.cacheExprEffects(expr, broadcastYield(combined, len(info.OutTypes)))
 	default:
-		return analyzer.invalidExprEffects(expr)
+		return analyzer.makeInvalidYieldEffects(expr)
 	}
 }
 
@@ -196,7 +191,7 @@ func broadcastYield(effect YieldEffect, count int) []YieldEffect {
 
 func alignYieldEffects(effects []YieldEffect, count int) []YieldEffect {
 	if len(effects) == count {
-		return slices.Clone(effects)
+		return effects
 	}
 	return broadcastYield(foldYieldEffects(effects), count)
 }
@@ -257,7 +252,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 
 	callee := analyzer.callBodyOutputEffects(expr)
 	if len(callee) != len(effects) {
-		return analyzer.invalidExprEffects(expr)
+		return analyzer.makeInvalidYieldEffects(expr)
 	}
 	for i, effect := range callee {
 		if effect == MustWrite {
@@ -289,9 +284,6 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 
 func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
 	info := analyzer.exprInfo(expr)
-	if info == nil {
-		return false
-	}
 	for _, driver := range info.Ranges {
 		if !rangeLiteralGuaranteedNonEmpty(driver.RangeLit) {
 			return true
@@ -303,7 +295,7 @@ func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) 
 func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) bool {
 	if call, ok := expr.(*ast.CallExpression); ok {
 		info := analyzer.exprInfo(call)
-		if info != nil && info.LoopInside {
+		if info.LoopInside {
 			return false
 		}
 	}
@@ -364,7 +356,7 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 
 func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression) bool {
 	info := analyzer.exprInfo(call)
-	if info == nil || !info.LoopInside || !analyzer.expressionDomainMayBeEmpty(call) {
+	if !info.LoopInside || !analyzer.expressionDomainMayBeEmpty(call) {
 		return false
 	}
 	for _, paramType := range info.CallParamTypes {
