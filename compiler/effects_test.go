@@ -13,6 +13,17 @@ func requireTargetEffects(t *testing.T, effect StatementEffect, expected ...Targ
 	require.Equal(t, expected, effect.Writes)
 }
 
+func TestRewriteExprInfoDoesNotCopySourceYieldEffects(t *testing.T) {
+	source := &ExprInfo{OutTypes: []Type{I64}, YieldEffects: []YieldEffect{MustYield}}
+	rewrite := &ast.IntegerLiteral{}
+
+	cloned := cloneExprInfoWithRewrite(source, rewrite)
+	require.Equal(t, []Type{I64}, cloned.OutTypes)
+	require.Same(t, rewrite, cloned.Rewrite)
+	require.Nil(t, cloned.YieldEffects)
+	require.Equal(t, []YieldEffect{MustYield}, source.YieldEffects)
+}
+
 func TestStatementEffectsStayAlignedAcrossMixedRHSAndDiscard(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -53,6 +64,28 @@ resolved, unresolved`)
 	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[unresolved], TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 	require.Equal(t, []YieldEffect{MustYield}, ts.ExprCache[key(ts.FuncNameMangled, resolved.Value[0])].YieldEffects)
 	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, unresolved.Value[0])].YieldEffects)
+}
+
+func TestArrayMaskPreservesOperandYieldEffect(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "arrayMaskEffects", "", mustParseCode(t, ""))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `matrix = [
+    1 2
+    3 4
+]
+safe = matrix > 0
+outOfBounds = matrix[2] > 0
+safe, outOfBounds`)
+	safe := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
+	outOfBounds := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
+
+	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[safe], TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []YieldEffect{MustYield}, ts.ExprCache[key(ts.FuncNameMangled, safe.Value[0])].YieldEffects)
+	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[outOfBounds], TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, outOfBounds.Value[0])].YieldEffects)
 }
 
 func TestLiteralDomainEffectUsesProvableEmptiness(t *testing.T) {
@@ -120,6 +153,48 @@ existing, alwaysExisting, other`)
 	require.True(t, always.Settled)
 }
 
+func TestFunctionOutputIsNotInitiallyWritten(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "wrapperEffects", "", mustParseCode(t, `y = Maybe(x)
+    y = x > 0 x
+
+y = Wrap(x)
+    y = Maybe(x)
+    y = Maybe(x)`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `fresh = Wrap(1)
+existing = 7
+existing = Wrap(1)
+fresh, existing`)
+	wrap := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Wrap", []Type{I64})]
+	require.NotNil(t, wrap)
+	require.Equal(t, []WriteEffect{MayWrite}, wrap.BodyOutputEffects)
+
+	template, ok := cc.lookupFuncTemplate("Wrap", 1)
+	require.True(t, ok)
+	firstBodyStmt := template.Body.Statements[0].(*ast.LetStatement)
+	firstBodyEffect := wrap.StatementEffects[firstBodyStmt]
+	requireTargetEffects(t, firstBodyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Empty(t, firstBodyEffect.ReadsSeed)
+
+	secondBodyStmt := template.Body.Statements[1].(*ast.LetStatement)
+	secondBodyEffect := wrap.StatementEffects[secondBodyStmt]
+	requireTargetEffects(t, secondBodyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []int{0}, secondBodyEffect.ReadsSeed)
+
+	fresh := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
+	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
+	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Empty(t, freshEffect.ReadsSeed)
+
+	existing := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
+	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
+	requireTargetEffects(t, existingEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []int{0}, existingEffect.ReadsSeed)
+}
+
 func TestCallDomainComposesWithBodyOutputEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -158,6 +233,31 @@ existing, empty, nonempty`)
 	requireTargetEffects(t, nonemptyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
 	require.Empty(t, nonemptyEffect.ReadsSeed)
 	require.Equal(t, []YieldEffect{MustYield}, ts.ExprCache[key(ts.FuncNameMangled, nonempty.Value[0])].YieldEffects)
+	nonemptyInfo := ts.ExprCache[key(ts.FuncNameMangled, nonempty.Value[0])]
+	require.NotEqual(t, nonempty.Value[0], nonemptyInfo.Rewrite)
+	rewriteInfo := ts.ExprCache[key(ts.FuncNameMangled, nonemptyInfo.Rewrite)]
+	require.NotNil(t, rewriteInfo)
+	require.Nil(t, rewriteInfo.YieldEffects)
+}
+
+func TestStatementConditionDomainIsNotCallOwned(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "conditionDomainEffects", "", mustParseCode(t, `y = Increment(x)
+    y = x + 1`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `i = 0:3
+existing = 9
+existing = i > 0 Increment(0:2)
+existing = i > 0 Increment(i)
+existing`)
+	for _, statementIndex := range []int{2, 3} {
+		stmt := ts.ScriptCompiler.Program.Statements[statementIndex].(*ast.LetStatement)
+		effect := ts.ScriptCompiler.Script.Root.StatementEffects[stmt]
+		requireTargetEffects(t, effect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+		require.Empty(t, effect.ReadsSeed)
+	}
 }
 
 func TestConditionalBodyRemainsMayWriteAcrossNonemptyDomain(t *testing.T) {
@@ -250,4 +350,22 @@ value`)
 		`internal: invalid effects for script statement "value = 1"`,
 		ts.deriveScriptEffects,
 	)
+}
+
+func TestMayWriteCallPreservesInvalidInvocationEffect(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "invalidCallEffects", "", mustParseCode(t, `y = Maybe(x)
+    y = x > 0 x`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `value = Maybe(1 + 1)
+value`)
+	stmt := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
+	call := stmt.Value[0].(*ast.CallExpression)
+	argument := call.Arguments[0]
+	ts.ExprCache[key(ts.FuncNameMangled, argument)].OutTypes = []Type{Unresolved{}}
+
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil)
+	require.Equal(t, []YieldEffect{YieldInvalid}, analyzer.deriveExpr(call))
 }

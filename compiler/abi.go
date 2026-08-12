@@ -80,7 +80,7 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 	}
 
 	for _, paramType := range paramTypes {
-		if paramType.Kind() == RangeKind || paramType.Kind() == ArrayRangeKind {
+		if isRangeDriverType(paramType) {
 			abi.HasRangeParams = true
 			break
 		}

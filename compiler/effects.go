@@ -201,12 +201,10 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 		switch mode {
 		case CondScalar, CondAnd:
 			info.YieldEffects[i] = MayYield
-		case CondArray:
-			info.YieldEffects[i] = MustYield
+		case CondArray, CondNone:
+			info.YieldEffects[i] = joinYield(yieldSlot(left, i), yieldSlot(right, i))
 		case CondOr:
 			info.YieldEffects[i] = yieldSlot(right, i)
-		case CondNone:
-			info.YieldEffects[i] = joinYield(yieldSlot(left, i), yieldSlot(right, i))
 		default:
 			info.YieldEffects[i] = YieldInvalid
 		}
@@ -250,7 +248,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 		if effect == MustWrite {
 			info.YieldEffects[i] = invocation
 		} else if effect == MayWrite {
-			info.YieldEffects[i] = MayYield
+			info.YieldEffects[i] = joinYield(invocation, MayYield)
 		} else {
 			info.YieldEffects[i] = YieldInvalid
 		}
@@ -322,7 +320,7 @@ func (analyzer *effectAnalyzer) callInvocationEffect(expr *ast.CallExpression) Y
 	return effect
 }
 
-func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot int, targetExists bool) bool {
+func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot int, targetExists bool, conditionRanges []*RangeInfo) bool {
 	call, ok := expr.(*ast.CallExpression)
 	if !ok || !targetExists {
 		return false
@@ -330,30 +328,31 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 	if _, builtin := Builtins[call.Function.Value]; builtin {
 		return false
 	}
+	// Direct-return eligibility depends only on output types. Check it before
+	// resolving callee effects because indirect calls cannot consume a seed.
+	if _, direct := directScalarABIReturnType(analyzer.exprInfo(call).OutTypes); !direct {
+		return false
+	}
 	callee := analyzer.callBodyOutputEffects(call)
 	if slot >= len(callee) {
 		return false
 	}
-	calleeMaySkip := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call)
-	if !calleeMaySkip {
-		return false
-	}
-	info := analyzer.exprInfo(call)
-	// Direct-return eligibility depends only on output types. Using the shared
-	// ABI predicate avoids tying ReadsSeed to either the range or scalar call
-	// variant selected later by lowering.
-	_, direct := directScalarABIReturnType(info.OutTypes)
-	return direct
+	return callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
 }
 
-func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression) bool {
+func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression, conditionRanges []*RangeInfo) bool {
 	info := analyzer.exprInfo(call)
-	if !info.LoopInside || !analyzer.expressionDomainMayBeEmpty(call) {
+	if !info.LoopInside || !slices.ContainsFunc(info.CallParamTypes, isRangeDriverType) {
 		return false
 	}
-	for _, paramType := range info.CallParamTypes {
-		if paramType.Kind() == RangeKind || paramType.Kind() == ArrayRangeKind {
-			return true
+	// Statement conditions are merged into the call's root ranges for lowering,
+	// but they are owned by the caller. Only argument-sourced ranges can make a
+	// callee-owned domain empty.
+	for _, argument := range call.Arguments {
+		for _, driver := range analyzer.exprInfo(argument).Ranges {
+			if !rangeDriverNamed(conditionRanges, driver.Name) && !rangeLiteralGuaranteedNonEmpty(driver.RangeLit) {
+				return true
+			}
 		}
 	}
 	return false
@@ -384,8 +383,10 @@ func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, ini
 }
 
 func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[string]struct{}) StatementEffect {
+	var conditionRanges []*RangeInfo
 	for _, condition := range stmt.Condition {
 		analyzer.deriveExpr(condition)
+		conditionRanges = mergeUses(conditionRanges, analyzer.exprInfo(condition).Ranges)
 	}
 
 	result := StatementEffect{}
@@ -404,7 +405,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 			}
 
 			_, targetExists := defined[target.Value]
-			if analyzer.directCallResolvesSeed(expr, slot, targetExists) {
+			if analyzer.directCallResolvesSeed(expr, slot, targetExists, conditionRanges) {
 				result.ReadsSeed = append(result.ReadsSeed, targetIndex)
 				yield = analyzer.callInvocationEffect(expr.(*ast.CallExpression))
 			}
@@ -473,7 +474,7 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 		}
 		for _, write := range statementEffect.Writes {
 			index, isOutput := outputIndex[stmt.Name[write.TargetIndex].Value]
-			if isOutput && write.Effect == MustWrite {
+			if isOutput && write.Effect == MustWrite && !slices.Contains(statementEffect.ReadsSeed, write.TargetIndex) {
 				effects[index] = MustWrite
 			}
 		}
@@ -656,12 +657,9 @@ func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
 }
 
 func functionInitialBindings(template *ast.FuncStatement) map[string]struct{} {
-	defined := make(map[string]struct{}, len(template.Parameters)+len(template.Outputs))
+	defined := make(map[string]struct{}, len(template.Parameters))
 	for _, parameter := range template.Parameters {
 		defined[parameter.Value] = struct{}{}
-	}
-	for _, output := range template.Outputs {
-		defined[output.Value] = struct{}{}
 	}
 	return defined
 }

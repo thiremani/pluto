@@ -2743,7 +2743,7 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 			}
 		}
 
-		if elemType.Kind() == RangeKind || elemType.Kind() == ArrayRangeKind {
+		if isRangeDriverType(elemType) {
 			iterIndices = append(iterIndices, i)
 			continue
 		}

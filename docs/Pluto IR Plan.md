@@ -646,8 +646,15 @@ rebuilt from scratch on every body walk.
 ### YieldEffect
 
 `YieldEffect` describes whether an *expression outcome* produces a value, where
-`WriteEffect` describes whether a *target slot* receives one: `MustYield` or
-`MayYield`, per slot, aligned with `OutTypes`.
+`WriteEffect` describes whether a *target slot* receives one. Yield effects are
+`MustYield` or `MayYield`, per slot, aligned with `OutTypes`; write effects are
+`MustWrite` or `MayWrite`.
+
+Yield facts belong to the typed source AST nodes referenced by statements.
+Compiler-local `Rewrite` nodes are lowering artifacts whose scalarization can
+change their local domain, so they do not receive independent or copied
+`YieldEffects`. A consumer lowering a rewrite retains the originating source
+node and reads its effects there.
 
 Composition: a checked access is `MayYield`; a `fallback` whose final
 alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
@@ -655,11 +662,12 @@ alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
 operands.
 
 Comparisons are **not** uniformly `MayYield` — the state follows the solved
-comparison mode. A scalar value-position comparison may fail to yield, but an
-array comparison produces a length-preserving zero-filled mask and always
-yields, so it is `MustYield`. A multi-output comparison can therefore mix both
-states across its slots, which is why derivation is per slot from the solved
-mode and type rather than from the syntactic operator.
+comparison mode. A scalar value-position comparison may fail to yield. An
+array comparison produces a length-preserving zero-filled mask and adds no
+failure of its own, but still inherits failure from either operand; it is
+`MustYield` only when both operands are. A multi-output comparison can
+therefore mix both states across its slots, which is why derivation is per slot
+from the solved mode and type rather than from the syntactic operator.
 
 Calls are where the two effects interact. A failure evaluating the invocation
 or its arguments suppresses the **whole tuple** — the call-merge rule — so
@@ -729,8 +737,11 @@ the sequential fold of the body's per-slot effects for that output, in
 statement order: the output starts `MayWrite` (nothing has written it), a
 `MustWrite` statement slot sets it to `MustWrite`, and a `MayWrite` statement
 slot leaves it unchanged — a later conditional write cannot un-guarantee an
-earlier unconditional one. The published `BodyOutputEffects` deliberately stop
-before a call-owned domain: a `Range` or `ArrayRange` parameter controls whether
+earlier unconditional one. A boundary `MustWrite` obtained by reading the
+destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
+an earlier value does not prove that the body wrote one. The published
+`BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
+`ArrayRange` parameter controls whether
 the scalar body executes, not what the body does when it executes. Each call
 combines that reusable body summary with its solved domain. A provably
 non-empty literal can therefore preserve `MustWrite`, while an empty or unknown

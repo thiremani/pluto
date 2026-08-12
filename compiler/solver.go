@@ -38,7 +38,7 @@ type ExprInfo struct {
 	CompareModes         []CondMode    // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
 	ArrayShape           []uint64      // Statically known dimensions for array literals; nil when runtime-dependent
 	RangeDriverCond      bool          // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
-	YieldEffects         []YieldEffect // Per-output production guarantee, derived after types settle.
+	YieldEffects         []YieldEffect // Per-output guarantee for a typed source expression; nil on lowering rewrites.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -82,16 +82,16 @@ func (info *ExprInfo) HasCondAnd() bool {
 }
 
 // IsMask reports whether output slot i is an array mask — a heap-owned,
-// always-yielding value that must be freed if it is not moved into a result
+// length-preserving value that must be freed if it is not moved into a result
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
 func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
-// HasCondExpr returns true if any slot is a failable conditional expression —
-// a scalar comparison, a ||, or a &&. Always-yielding masks (CondArray) are
-// deliberately excluded: callers ask "can this fail to yield?", which a mask
-// never does.
+// HasCondExpr returns true if any slot adds conditional value control flow — a
+// scalar comparison, a ||, or a &&. Array masks are deliberately excluded:
+// mask construction adds no comparison failure of its own, while operand and
+// bounds failures remain attached to the expressions that produce them.
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar || m == CondOr || m == CondAnd {

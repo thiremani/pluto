@@ -3,10 +3,12 @@ package compiler
 import "github.com/thiremani/pluto/ast"
 
 func cloneExprInfoWithRewrite(info *ExprInfo, rewrite ast.Expression) *ExprInfo {
-	// ExprInfo slice fields are solver-owned and treated as immutable after
-	// solve; prepared/backfilled cache entries share them and only swap Rewrite.
+	// Solved type and range slices are immutable; prepared/backfilled entries
+	// share them and only swap Rewrite. Yield effects belong to the typed source
+	// node because scalarization can change a rewrite's local domain.
 	infoCopy := *info
 	infoCopy.Rewrite = rewrite
+	infoCopy.YieldEffects = nil
 	return &infoCopy
 }
 
