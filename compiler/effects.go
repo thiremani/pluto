@@ -251,14 +251,7 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 	if effects, ok := analyzer.calleeEffects[mangled]; ok {
 		return effects
 	}
-	f := analyzer.compiler.FuncCache[mangled]
-	if f == nil {
-		panic(fmt.Sprintf("internal: missing callee specialization %s during effect analysis", mangled))
-	}
-	if !f.Settled || !validPublishedEffects(f.BodyOutputEffects, len(f.Sig.OutTypes)) {
-		panic(fmt.Sprintf("internal: read of unpublished effects for %s", mangled))
-	}
-	return f.BodyOutputEffects
+	return analyzer.compiler.FuncCache[mangled].BodyOutputEffects
 }
 
 func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
