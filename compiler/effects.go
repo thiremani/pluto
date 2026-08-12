@@ -224,7 +224,7 @@ func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffect {
 	info := analyzer.exprInfo(expr)
 	invocation := analyzer.callInvocationEffect(expr)
-	if analyzer.expressionDomainMayBeEmpty(expr) {
+	if hasPossiblyEmptyRange(info.Ranges, nil) {
 		invocation = joinYield(invocation, MayYield)
 	}
 
@@ -255,10 +255,6 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 	return analyzer.calleeEffects[mangled]
 }
 
-func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
-	return hasPossiblyEmptyRange(analyzer.exprInfo(expr).Ranges, nil)
-}
-
 // hasPossiblyEmptyRange ignores named drivers already owned by an enclosing
 // domain, such as a statement condition around a call.
 func hasPossiblyEmptyRange(ranges, excluded []*RangeInfo) bool {
@@ -274,13 +270,11 @@ func hasPossiblyEmptyRange(ranges, excluded []*RangeInfo) bool {
 }
 
 func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) bool {
-	if call, ok := expr.(*ast.CallExpression); ok {
-		info := analyzer.exprInfo(call)
-		if info.LoopInside {
-			return false
-		}
+	info := analyzer.exprInfo(expr)
+	if _, isCall := expr.(*ast.CallExpression); isCall && info.LoopInside {
+		return false
 	}
-	return analyzer.expressionDomainMayBeEmpty(expr)
+	return hasPossiblyEmptyRange(info.Ranges, nil)
 }
 
 func rangeLiteralGuaranteedNonEmpty(literal *ast.RangeLiteral) bool {
