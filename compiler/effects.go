@@ -134,13 +134,13 @@ func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 
 	switch value := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier:
-		info.YieldEffects = broadcastYield(MustYield, len(info.OutTypes))
+		info.YieldEffects = slices.Repeat([]YieldEffect{MustYield}, len(info.OutTypes))
 	case *ast.ArrayLiteral:
 		analyzer.deriveChildren(expr)
-		info.YieldEffects = broadcastYield(MustYield, len(info.OutTypes))
+		info.YieldEffects = slices.Repeat([]YieldEffect{MustYield}, len(info.OutTypes))
 	case *ast.ArrayRangeExpression:
 		analyzer.deriveChildren(expr)
-		info.YieldEffects = broadcastYield(MayYield, len(info.OutTypes))
+		info.YieldEffects = slices.Repeat([]YieldEffect{MayYield}, len(info.OutTypes))
 	case *ast.CallExpression:
 		return analyzer.deriveCall(value)
 	case *ast.InfixExpression:
@@ -154,7 +154,7 @@ func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 	case *ast.RangeLiteral, *ast.StructLiteral:
 		children := analyzer.deriveChildren(expr)
 		combined := foldYieldEffects(children)
-		info.YieldEffects = broadcastYield(combined, len(info.OutTypes))
+		info.YieldEffects = slices.Repeat([]YieldEffect{combined}, len(info.OutTypes))
 	default:
 		return analyzer.makeInvalidYieldEffects(expr)
 	}
@@ -177,15 +177,11 @@ func foldYieldEffects(effects []YieldEffect) YieldEffect {
 	return result
 }
 
-func broadcastYield(effect YieldEffect, count int) []YieldEffect {
-	return slices.Repeat([]YieldEffect{effect}, count)
-}
-
 func alignYieldEffects(effects []YieldEffect, count int) []YieldEffect {
 	if len(effects) == count {
 		return effects
 	}
-	return broadcastYield(foldYieldEffects(effects), count)
+	return slices.Repeat([]YieldEffect{foldYieldEffects(effects)}, count)
 }
 
 func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEffect {
