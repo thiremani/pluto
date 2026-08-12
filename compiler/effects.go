@@ -248,10 +248,11 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
 	info := analyzer.exprInfo(expr)
 	mangled := Mangle(analyzer.compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
-	if effects, ok := analyzer.calleeEffects[mangled]; ok {
-		return effects
+	f := analyzer.compiler.FuncCache[mangled]
+	if f.Settled {
+		return f.BodyOutputEffects
 	}
-	return analyzer.compiler.FuncCache[mangled].BodyOutputEffects
+	return analyzer.calleeEffects[mangled]
 }
 
 func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
