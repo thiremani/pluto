@@ -229,13 +229,6 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	}
 
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
-	if _, builtin := Builtins[expr.Function.Value]; builtin {
-		for i := range info.YieldEffects {
-			info.YieldEffects[i] = invocation
-		}
-		return info.YieldEffects
-	}
-
 	callee := analyzer.callBodyOutputEffects(expr)
 	if len(callee) != len(info.YieldEffects) {
 		return analyzer.makeInvalidYieldEffects(expr)
