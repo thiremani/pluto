@@ -256,8 +256,16 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 }
 
 func (analyzer *effectAnalyzer) expressionDomainMayBeEmpty(expr ast.Expression) bool {
-	info := analyzer.exprInfo(expr)
-	for _, driver := range info.Ranges {
+	return hasPossiblyEmptyRange(analyzer.exprInfo(expr).Ranges, nil)
+}
+
+// hasPossiblyEmptyRange ignores named drivers already owned by an enclosing
+// domain, such as a statement condition around a call.
+func hasPossiblyEmptyRange(ranges, excluded []*RangeInfo) bool {
+	for _, driver := range ranges {
+		if rangeDriverNamed(excluded, driver.Name) {
+			continue
+		}
 		if !rangeLiteralGuaranteedNonEmpty(driver.RangeLit) {
 			return true
 		}
@@ -319,17 +327,15 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 
 func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression, conditionRanges []*RangeInfo) bool {
 	info := analyzer.exprInfo(call)
-	if !info.LoopInside || !slices.ContainsFunc(info.CallParamTypes, isRangeDriverType) {
+	if !info.LoopInside {
 		return false
 	}
-	// Statement conditions are merged into the call's root ranges for lowering,
-	// but they are owned by the caller. Only argument-sourced ranges can make a
-	// callee-owned domain empty.
+	if !slices.ContainsFunc(info.CallParamTypes, isRangeDriverType) {
+		return false
+	}
 	for _, argument := range call.Arguments {
-		for _, driver := range analyzer.exprInfo(argument).Ranges {
-			if !rangeDriverNamed(conditionRanges, driver.Name) && !rangeLiteralGuaranteedNonEmpty(driver.RangeLit) {
-				return true
-			}
+		if hasPossiblyEmptyRange(analyzer.exprInfo(argument).Ranges, conditionRanges) {
+			return true
 		}
 	}
 	return false
