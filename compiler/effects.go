@@ -228,11 +228,11 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 		invocation = joinYield(invocation, MayYield)
 	}
 
-	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 	callee := analyzer.callBodyOutputEffects(expr)
-	if len(callee) != len(info.YieldEffects) {
-		return analyzer.makeInvalidYieldEffects(expr)
+	if len(callee) != len(info.OutTypes) {
+		panic(fmt.Sprintf("internal: call %s has %d output effects for %d typed outputs", expr.Function.Value, len(callee), len(info.OutTypes)))
 	}
+	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 	for i, effect := range callee {
 		if effect == MustWrite {
 			info.YieldEffects[i] = invocation
