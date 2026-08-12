@@ -303,12 +303,9 @@ func (analyzer *effectAnalyzer) callInvocationEffect(expr *ast.CallExpression) Y
 	return effect
 }
 
-func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot int, targetExists bool, conditionRanges []*RangeInfo) bool {
+func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, targetExists bool, conditionRanges []*RangeInfo) bool {
 	call, ok := expr.(*ast.CallExpression)
 	if !ok || !targetExists {
-		return false
-	}
-	if _, builtin := Builtins[call.Function.Value]; builtin {
 		return false
 	}
 	// Direct-return eligibility depends only on output types. Check it before
@@ -317,10 +314,7 @@ func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot
 		return false
 	}
 	callee := analyzer.callBodyOutputEffects(call)
-	if slot >= len(callee) {
-		return false
-	}
-	return callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
+	return callee[0] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
 }
 
 func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression, conditionRanges []*RangeInfo) bool {
@@ -377,7 +371,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	for _, expr := range stmt.Value {
 		yields := analyzer.deriveExpr(expr)
 		localDomain := analyzer.expressionUsesLocalDomain(expr)
-		for slot, yield := range yields {
+		for _, yield := range yields {
 			if targetIndex >= len(stmt.Name) {
 				return StatementEffect{Writes: []TargetWriteEffect{{TargetIndex: targetIndex, Effect: WriteInvalid}}}
 			}
@@ -388,7 +382,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 			}
 
 			_, targetExists := defined[target.Value]
-			if analyzer.directCallResolvesSeed(expr, slot, targetExists, conditionRanges) {
+			if analyzer.directCallResolvesSeed(expr, targetExists, conditionRanges) {
 				result.ReadsSeed = append(result.ReadsSeed, targetIndex)
 				yield = analyzer.callInvocationEffect(expr.(*ast.CallExpression))
 			}
