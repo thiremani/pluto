@@ -210,7 +210,7 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 
 func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 	if len(effects) == 0 {
-		return YieldInvalid
+		panic("internal: cannot select from empty yield effects")
 	}
 	if len(effects) == 1 {
 		return effects[0]

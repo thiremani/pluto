@@ -24,6 +24,12 @@ func TestRewriteExprInfoDoesNotCopySourceYieldEffects(t *testing.T) {
 	require.Equal(t, []YieldEffect{MustYield}, source.YieldEffects)
 }
 
+func TestYieldSlotRejectsEmptyEffects(t *testing.T) {
+	require.PanicsWithValue(t, "internal: cannot select from empty yield effects", func() {
+		yieldSlot(nil, 0)
+	})
+}
+
 func TestStatementEffectsStayAlignedAcrossMixedRHSAndDiscard(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
