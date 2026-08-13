@@ -413,20 +413,9 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	return result
 }
 
-func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
-	writeIndex := 0
-	for targetIndex, target := range stmt.Name {
-		if isDiscard(target) {
-			continue
-		}
-		write := effect.Writes[writeIndex]
-		if write.TargetIndex != targetIndex || write.Effect != MustWrite && write.Effect != MayWrite {
-			return false
-		}
-		writeIndex++
-	}
-	for _, targetIndex := range effect.ReadsSeed {
-		if isDiscard(stmt.Name[targetIndex]) {
+func validStatementEffect(effect StatementEffect) bool {
+	for _, write := range effect.Writes {
+		if write.Effect != MustWrite && write.Effect != MayWrite {
 			return false
 		}
 	}
@@ -448,7 +437,7 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 			continue
 		}
 		statementEffect, exists := statements[stmt]
-		if !exists || !validStatementEffect(stmt, statementEffect) {
+		if !exists || !validStatementEffect(statementEffect) {
 			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
 		}
 		for _, write := range statementEffect.Writes {
@@ -653,7 +642,7 @@ func (ts *TypeSolver) deriveScriptEffects() {
 			continue
 		}
 		effect, exists := root.StatementEffects[stmt]
-		if !exists || !validStatementEffect(stmt, effect) {
+		if !exists || !validStatementEffect(effect) {
 			panic(fmt.Sprintf("internal: invalid effects for script statement %q", stmt))
 		}
 	}
