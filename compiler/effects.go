@@ -114,10 +114,6 @@ func classifyWriteEffect(yield YieldEffect, maySkip bool) WriteEffect {
 	return MustWrite
 }
 
-func invalidStatementEffect(targetIndex int) StatementEffect {
-	return StatementEffect{Writes: []TargetWriteEffect{{TargetIndex: targetIndex, Effect: WriteInvalid}}}
-}
-
 type effectAnalyzer struct {
 	compiler        *Compiler
 	funcNameMangled string
@@ -394,9 +390,6 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	targetIndex := 0
 	for _, expr := range stmt.Value {
 		yields := analyzer.deriveExpr(expr)
-		if targetIndex+len(yields) > len(stmt.Name) {
-			return invalidStatementEffect(len(stmt.Name))
-		}
 		maySkip := len(stmt.Condition) > 0 || analyzer.expressionUsesLocalDomain(expr)
 		for slot, yield := range yields {
 			index := targetIndex
@@ -416,9 +409,6 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 				Effect:      classifyWriteEffect(yield, maySkip),
 			})
 		}
-	}
-	if targetIndex != len(stmt.Name) {
-		return invalidStatementEffect(targetIndex)
 	}
 	return result
 }
