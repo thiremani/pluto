@@ -916,11 +916,7 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 // contribute only ranges.
 // Returns nil, nil if no condition introduces ranges.
 func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
-	var ranges []*RangeInfo
-	for _, expr := range conditions {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, info.Ranges)
-	}
+	ranges := conditionRanges(c.ExprCache, c.FuncNameMangled, conditions)
 	if len(ranges) == 0 {
 		return nil, nil
 	}

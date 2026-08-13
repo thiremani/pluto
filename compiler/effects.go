@@ -190,17 +190,22 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 	right := analyzer.deriveExpr(expr.Right)
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 	for i := range info.YieldEffects {
+		leftEffect := yieldSlot(left, i)
+		rightEffect := yieldSlot(right, i)
 		mode := CondNone
 		if i < len(info.CompareModes) {
 			mode = info.CompareModes[i]
 		}
 		switch mode {
 		case CondScalar, CondAnd:
-			info.YieldEffects[i] = MayYield
+			info.YieldEffects[i] = joinYield(MayYield, joinYield(leftEffect, rightEffect))
 		case CondArray, CondNone:
-			info.YieldEffects[i] = joinYield(yieldSlot(left, i), yieldSlot(right, i))
+			info.YieldEffects[i] = joinYield(leftEffect, rightEffect)
 		case CondOr:
-			info.YieldEffects[i] = yieldSlot(right, i)
+			info.YieldEffects[i] = rightEffect
+			if leftEffect == YieldInvalid || leftEffect == YieldUncomputed {
+				info.YieldEffects[i] = joinYield(leftEffect, rightEffect)
+			}
 		default:
 			info.YieldEffects[i] = YieldInvalid
 		}
@@ -360,11 +365,10 @@ func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, ini
 }
 
 func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[string]struct{}) StatementEffect {
-	var conditionRanges []*RangeInfo
 	for _, condition := range stmt.Condition {
 		analyzer.deriveExpr(condition)
-		conditionRanges = mergeUses(conditionRanges, analyzer.exprInfo(condition).Ranges)
 	}
+	condRanges := conditionRanges(analyzer.compiler.ExprCache, analyzer.funcNameMangled, stmt.Condition)
 
 	result := StatementEffect{}
 	targetIndex := 0
@@ -382,7 +386,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 			}
 
 			_, targetExists := defined[target.Value]
-			if analyzer.directCallResolvesSeed(expr, slot, targetExists, conditionRanges) {
+			if analyzer.directCallResolvesSeed(expr, slot, targetExists, condRanges) {
 				result.ReadsSeed = append(result.ReadsSeed, targetIndex)
 				yield = analyzer.callInvocationEffect(expr.(*ast.CallExpression))
 			}

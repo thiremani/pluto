@@ -127,12 +127,15 @@ alwaysExisting = Always(1)
 arr = [1]
 other = 9
 other = Always(arr[2])
-existing, alwaysExisting, other`)
+conditioned = 8
+conditioned = 1 > 0 Maybe(1)
+existing, alwaysExisting, other, conditioned`)
 	program := ts.ScriptCompiler.Program
 	resolved := program.Statements[1].(*ast.LetStatement)
 	fresh := program.Statements[2].(*ast.LetStatement)
 	alwaysResolved := program.Statements[4].(*ast.LetStatement)
 	callerFailure := program.Statements[7].(*ast.LetStatement)
+	conditioned := program.Statements[9].(*ast.LetStatement)
 
 	resolvedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[resolved]
 	requireTargetEffects(t, resolvedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
@@ -150,6 +153,10 @@ existing, alwaysExisting, other`)
 	callerFailureEffect := ts.ScriptCompiler.Script.Root.StatementEffects[callerFailure]
 	requireTargetEffects(t, callerFailureEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 	require.Empty(t, callerFailureEffect.ReadsSeed)
+
+	conditionedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[conditioned]
+	requireTargetEffects(t, conditionedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Equal(t, []int{0}, conditionedEffect.ReadsSeed)
 
 	maybe := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Maybe", []Type{I64})]
 	always := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]

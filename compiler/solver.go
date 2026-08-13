@@ -264,6 +264,14 @@ func mergeUses(a, b []*RangeInfo) []*RangeInfo {
 	return out
 }
 
+func conditionRanges(cache map[ExprKey]*ExprInfo, mangled string, conditions []ast.Expression) []*RangeInfo {
+	var ranges []*RangeInfo
+	for _, condition := range conditions {
+		ranges = mergeUses(ranges, cache[key(mangled, condition)].Ranges)
+	}
+	return ranges
+}
+
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
 // It traverses the AST, replacing range literals with temporary identifiers and collecting
 // range information for later compilation into loops.
@@ -869,19 +877,6 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	})
 }
 
-// collectConditionRanges gathers all ranges from condition expressions.
-// When conditions iterate over ranges (e.g. i < 3 where i = 0:5), those
-// ranges must be merged into value ExprInfos so the compiler iterates
-// and accumulates per iteration.
-func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*RangeInfo {
-	var ranges []*RangeInfo
-	for _, expr := range conditions {
-		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, info.Ranges)
-	}
-	return ranges
-}
-
 // mergeCondRangesIntoValue merges condition ranges into a value expression's
 // ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
 // Bare Range assignments have already been classified as descriptor copies or
@@ -912,7 +907,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		ts.validateStatementCondition(expr, condTypes)
 	}
 
-	condRanges := ts.collectConditionRanges(stmt.Condition)
+	condRanges := conditionRanges(ts.ExprCache, ts.FuncNameMangled, stmt.Condition)
 
 	// type values in value-expression context (comparisons become conditional extractors)
 	ts.InValueExpr = true
