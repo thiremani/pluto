@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/thiremani/pluto/ast"
 )
@@ -117,14 +116,16 @@ func classifyWriteEffect(yield YieldEffect, maySkip bool) WriteEffect {
 type effectAnalyzer struct {
 	compiler        *Compiler
 	funcNameMangled string
-	calleeEffects   map[string][]WriteEffect
+	graph           *effectGraph
+	working         [][]WriteEffect
 }
 
-func newEffectAnalyzer(compiler *Compiler, mangled string, calleeEffects map[string][]WriteEffect) *effectAnalyzer {
+func newEffectAnalyzer(compiler *Compiler, mangled string, graph *effectGraph, working [][]WriteEffect) *effectAnalyzer {
 	return &effectAnalyzer{
 		compiler:        compiler,
 		funcNameMangled: mangled,
-		calleeEffects:   calleeEffects,
+		graph:           graph,
+		working:         working,
 	}
 }
 
@@ -269,7 +270,14 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 	if f.Settled {
 		return f.BodyOutputEffects
 	}
-	return analyzer.calleeEffects[mangled]
+	if analyzer.graph == nil {
+		panic(fmt.Sprintf("internal: unsettled callee %s outside effect settlement", mangled))
+	}
+	id, ok := analyzer.graph.byMangled[mangled]
+	if !ok {
+		panic(fmt.Sprintf("internal: unsettled callee %s missing from effect graph", mangled))
+	}
+	return analyzer.working[id]
 }
 
 // hasPossiblyEmptyRange ignores named drivers already owned by an enclosing
@@ -453,20 +461,36 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 	return effects
 }
 
+type effectNodeID int
+
 type effectNode struct {
 	mangled  string
 	info     *FuncInfo
 	template *ast.FuncStatement
-	edges    []string
+	callees  []effectNodeID
+	callers  []effectNodeID
 }
 
+// effectGraph interns specialization names once, then uses compact IDs for
+// traversal and effect state. Both edge directions are retained because SCC
+// discovery follows callees while fixed-point changes propagate to callers.
 type effectGraph struct {
-	nodes map[string]*effectNode
+	nodes     []effectNode
+	byMangled map[string]effectNodeID
 }
 
 func (ts *TypeSolver) buildEffectGraph(walked map[string]struct{}) *effectGraph {
-	graph := &effectGraph{nodes: make(map[string]*effectNode, len(walked))}
+	names := make([]string, 0, len(walked))
 	for mangled := range walked {
+		names = append(names, mangled)
+	}
+	slices.Sort(names)
+
+	graph := &effectGraph{
+		nodes:     make([]effectNode, len(names)),
+		byMangled: make(map[string]effectNodeID, len(names)),
+	}
+	for index, mangled := range names {
 		f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 		if f == nil {
 			panic(fmt.Sprintf("internal: missing walked specialization %s", mangled))
@@ -475,9 +499,12 @@ func (ts *TypeSolver) buildEffectGraph(walked map[string]struct{}) *effectGraph 
 		if !ok {
 			panic(fmt.Sprintf("internal: missing template for specialization %s", mangled))
 		}
-		graph.nodes[mangled] = &effectNode{mangled: mangled, info: f, template: template}
+		id := effectNodeID(index)
+		graph.byMangled[mangled] = id
+		graph.nodes[id] = effectNode{mangled: mangled, info: f, template: template}
 	}
-	for _, node := range graph.nodes {
+	for id := range graph.nodes {
+		node := &graph.nodes[id]
 		calls := collectBodyCalls(node.template.Body.Statements)
 		for _, call := range calls {
 			if _, builtin := Builtins[call.Function.Value]; builtin {
@@ -488,12 +515,18 @@ func (ts *TypeSolver) buildEffectGraph(walked map[string]struct{}) *effectGraph 
 				panic(fmt.Sprintf("internal: missing call facts for %s in specialization %s during effect graph construction", call.Function.Value, node.mangled))
 			}
 			callee := Mangle(ts.ScriptCompiler.Compiler.MangledPath, call.Function.Value, info.CallParamTypes)
-			if _, unsettled := graph.nodes[callee]; unsettled {
-				node.edges = append(node.edges, callee)
+			if calleeID, unsettled := graph.byMangled[callee]; unsettled {
+				node.callees = append(node.callees, calleeID)
 			}
 		}
-		sort.Strings(node.edges)
-		node.edges = slices.Compact(node.edges)
+		slices.Sort(node.callees)
+		node.callees = slices.Compact(node.callees)
+		for _, calleeID := range node.callees {
+			graph.nodes[calleeID].callers = append(graph.nodes[calleeID].callers, effectNodeID(id))
+		}
+	}
+	for id := range graph.nodes {
+		slices.Sort(graph.nodes[id].callers)
 	}
 	return graph
 }
@@ -530,99 +563,129 @@ func collectExprCalls(expr ast.Expression) []*ast.CallExpression {
 type tarjanState struct {
 	graph      *effectGraph
 	index      int
-	indices    map[string]int
-	lowlink    map[string]int
-	stack      []string
-	onStack    map[string]bool
-	components [][]string
+	indices    []int
+	lowlink    []int
+	stack      []effectNodeID
+	onStack    []bool
+	components [][]effectNodeID
 }
 
-func (graph *effectGraph) calleeFirstComponents() [][]string {
+func (graph *effectGraph) calleeFirstComponents() [][]effectNodeID {
 	state := &tarjanState{
 		graph:   graph,
-		indices: make(map[string]int),
-		lowlink: make(map[string]int),
-		onStack: make(map[string]bool),
+		indices: make([]int, len(graph.nodes)),
+		lowlink: make([]int, len(graph.nodes)),
+		onStack: make([]bool, len(graph.nodes)),
 	}
-	names := make([]string, 0, len(graph.nodes))
-	for name := range graph.nodes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if _, visited := state.indices[name]; !visited {
-			state.visit(name)
+	for id := range graph.nodes {
+		if state.indices[id] == 0 {
+			state.visit(effectNodeID(id))
 		}
 	}
 	return state.components
 }
 
-func (state *tarjanState) visit(name string) {
+func (state *tarjanState) visit(id effectNodeID) {
 	state.index++
-	state.indices[name] = state.index
-	state.lowlink[name] = state.index
-	state.stack = append(state.stack, name)
-	state.onStack[name] = true
+	state.indices[id] = state.index
+	state.lowlink[id] = state.index
+	state.stack = append(state.stack, id)
+	state.onStack[id] = true
 
-	for _, edge := range state.graph.nodes[name].edges {
-		if _, visited := state.indices[edge]; !visited {
-			state.visit(edge)
-			state.lowlink[name] = min(state.lowlink[name], state.lowlink[edge])
-		} else if state.onStack[edge] {
-			state.lowlink[name] = min(state.lowlink[name], state.indices[edge])
+	for _, calleeID := range state.graph.nodes[id].callees {
+		if state.indices[calleeID] == 0 {
+			state.visit(calleeID)
+			state.lowlink[id] = min(state.lowlink[id], state.lowlink[calleeID])
+		} else if state.onStack[calleeID] {
+			state.lowlink[id] = min(state.lowlink[id], state.indices[calleeID])
 		}
 	}
-	if state.lowlink[name] != state.indices[name] {
+	if state.lowlink[id] != state.indices[id] {
 		return
 	}
 
-	var component []string
+	var component []effectNodeID
 	for {
 		last := len(state.stack) - 1
 		member := state.stack[last]
 		state.stack = state.stack[:last]
 		state.onStack[member] = false
 		component = append(component, member)
-		if member == name {
+		if member == id {
 			break
 		}
 	}
-	sort.Strings(component)
+	slices.Sort(component)
 	state.components = append(state.components, component)
+}
+
+func effectComponentIndexByNode(components [][]effectNodeID, nodeCount int) []int {
+	indexes := make([]int, nodeCount)
+	for componentIndex, component := range components {
+		for _, id := range component {
+			indexes[id] = componentIndex
+		}
+	}
+	return indexes
+}
+
+// deriveEffectNode refreshes one specialization and reports whether any output
+// weakened from MustWrite to MayWrite.
+func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffect, id effectNodeID) bool {
+	node := &graph.nodes[id]
+	initial := functionInitialBindings(node.template)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, node.mangled, graph, working)
+	statements := analyzer.deriveStatements(node.template.Body.Statements, initial)
+	derived := deriveBodyOutputEffects(node.template, statements)
+	if !validPublishedEffects(derived, len(node.info.Sig.OutTypes)) {
+		panic(fmt.Sprintf("internal: invalid effects for specialization %s", node.mangled))
+	}
+
+	changed := false
+	for outputIndex, effect := range derived {
+		if working[id][outputIndex] == MustWrite && effect == MayWrite {
+			working[id][outputIndex] = MayWrite
+			changed = true
+		}
+	}
+	node.info.StatementEffects = statements
+	return changed
 }
 
 func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
 	graph := ts.buildEffectGraph(walked)
-	working := make(map[string][]WriteEffect, len(graph.nodes))
-	for name, node := range graph.nodes {
-		working[name] = slices.Repeat([]WriteEffect{MustWrite}, len(node.info.Sig.OutTypes))
+	working := make([][]WriteEffect, len(graph.nodes))
+	for id := range graph.nodes {
+		working[id] = slices.Repeat([]WriteEffect{MustWrite}, len(graph.nodes[id].info.Sig.OutTypes))
 	}
 
-	for _, component := range graph.calleeFirstComponents() {
-		changed := true
-		for changed {
-			changed = false
-			for _, name := range component {
-				node := graph.nodes[name]
-				initial := functionInitialBindings(node.template)
-				analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, name, working)
-				statements := analyzer.deriveStatements(node.template.Body.Statements, initial)
-				derived := deriveBodyOutputEffects(node.template, statements)
-				if !validPublishedEffects(derived, len(node.info.Sig.OutTypes)) {
-					panic(fmt.Sprintf("internal: invalid effects for specialization %s", name))
+	components := graph.calleeFirstComponents()
+	componentIndexes := effectComponentIndexByNode(components, len(graph.nodes))
+	queued := make([]bool, len(graph.nodes))
+	for componentIndex, component := range components {
+		// Every member is analyzed once. A weakened summary then requeues only
+		// recursive callers in this SCC; callers in later SCCs have not run yet.
+		pending := slices.Clone(component)
+		for _, id := range pending {
+			queued[id] = true
+		}
+		for next := 0; next < len(pending); next++ {
+			id := pending[next]
+			queued[id] = false
+			if !ts.deriveEffectNode(graph, working, id) {
+				continue
+			}
+			for _, callerID := range graph.nodes[id].callers {
+				if componentIndexes[callerID] != componentIndex || queued[callerID] {
+					continue
 				}
-				for i, effect := range derived {
-					if working[name][i] == MustWrite && effect == MayWrite {
-						working[name][i] = MayWrite
-						changed = true
-					}
-				}
-				node.info.StatementEffects = statements
+				pending = append(pending, callerID)
+				queued[callerID] = true
 			}
 		}
-		for _, name := range component {
-			node := graph.nodes[name]
-			node.info.BodyOutputEffects = slices.Clone(working[name])
+		for _, id := range component {
+			node := &graph.nodes[id]
+			node.info.BodyOutputEffects = slices.Clone(working[id])
 		}
 	}
 }
@@ -637,7 +700,7 @@ func functionInitialBindings(template *ast.FuncStatement) map[string]struct{} {
 
 func (ts *TypeSolver) deriveScriptEffects() {
 	root := ts.ScriptCompiler.Script.Root
-	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil, nil)
 	root.StatementEffects = analyzer.deriveStatements(ts.ScriptCompiler.Program.Statements, nil)
 	for _, statement := range ts.ScriptCompiler.Program.Statements {
 		stmt, ok := statement.(*ast.LetStatement)

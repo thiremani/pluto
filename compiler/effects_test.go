@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -321,6 +322,50 @@ result`)
 	require.True(t, b.Settled)
 }
 
+func TestEffectGraphUsesDeterministicIDsAndReverseEdges(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = A(x)
+    y = B(x)
+    y = B(x)
+
+y = B(x)
+    y = C(x)
+
+y = C(x)
+    y = x`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = A(1)
+result`)
+	names := []string{
+		Mangle(cc.Compiler.MangledPath, "A", []Type{I64}),
+		Mangle(cc.Compiler.MangledPath, "B", []Type{I64}),
+		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
+	}
+	slices.Sort(names)
+	walked := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		walked[name] = struct{}{}
+	}
+
+	graph := ts.buildEffectGraph(walked)
+	for index, name := range names {
+		id := effectNodeID(index)
+		require.Equal(t, id, graph.byMangled[name])
+		require.Equal(t, name, graph.nodes[id].mangled)
+	}
+
+	aID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "A", []Type{I64})]
+	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
+	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
+	require.Equal(t, []effectNodeID{bID}, graph.nodes[aID].callees)
+	require.Equal(t, []effectNodeID{aID}, graph.nodes[bID].callers)
+	require.Equal(t, []effectNodeID{cID}, graph.nodes[bID].callees)
+	require.Equal(t, []effectNodeID{bID}, graph.nodes[cID].callers)
+	require.Equal(t, [][]effectNodeID{{cID}, {bID}, {aID}}, graph.calleeFirstComponents())
+}
+
 func TestEffectGraphRejectsMissingCallFacts(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -379,6 +424,6 @@ value`)
 	argument := call.Arguments[0]
 	ts.ExprCache[key(ts.FuncNameMangled, argument)].OutTypes = []Type{Unresolved{}}
 
-	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil, nil)
 	require.Equal(t, []YieldEffect{YieldInvalid}, analyzer.deriveExpr(call))
 }
