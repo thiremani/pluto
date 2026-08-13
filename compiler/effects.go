@@ -436,13 +436,16 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 		if !ok {
 			continue
 		}
-		statementEffect, exists := statements[stmt]
-		if !exists || !validStatementEffect(statementEffect) {
+		statementEffect := statements[stmt]
+		if !validStatementEffect(statementEffect) {
 			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
 		}
 		for _, write := range statementEffect.Writes {
+			if write.Effect != MustWrite || slices.Contains(statementEffect.ReadsSeed, write.TargetIndex) {
+				continue
+			}
 			index, isOutput := outputIndex[stmt.Name[write.TargetIndex].Value]
-			if isOutput && write.Effect == MustWrite && !slices.Contains(statementEffect.ReadsSeed, write.TargetIndex) {
+			if isOutput {
 				effects[index] = MustWrite
 			}
 		}
