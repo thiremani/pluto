@@ -419,20 +419,14 @@ func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
 		if isDiscard(target) {
 			continue
 		}
-		if writeIndex >= len(effect.Writes) {
-			return false
-		}
 		write := effect.Writes[writeIndex]
 		if write.TargetIndex != targetIndex || write.Effect != MustWrite && write.Effect != MayWrite {
 			return false
 		}
 		writeIndex++
 	}
-	if writeIndex != len(effect.Writes) {
-		return false
-	}
 	for _, targetIndex := range effect.ReadsSeed {
-		if targetIndex < 0 || targetIndex >= len(stmt.Name) || isDiscard(stmt.Name[targetIndex]) {
+		if isDiscard(stmt.Name[targetIndex]) {
 			return false
 		}
 	}
