@@ -102,6 +102,22 @@ func joinYield(left, right YieldEffect) YieldEffect {
 	return MustYield
 }
 
+// classifyWriteEffect keeps analysis states outside the yield lattice invalid
+// so function publication cannot turn missing facts into MayWrite.
+func classifyWriteEffect(yield YieldEffect, maySkip bool) WriteEffect {
+	if yield != MustYield && yield != MayYield {
+		return WriteInvalid
+	}
+	if yield == MayYield || maySkip {
+		return MayWrite
+	}
+	return MustWrite
+}
+
+func invalidStatementEffect(targetIndex int) StatementEffect {
+	return StatementEffect{Writes: []TargetWriteEffect{{TargetIndex: targetIndex, Effect: WriteInvalid}}}
+}
+
 type effectAnalyzer struct {
 	compiler        *Compiler
 	funcNameMangled string
@@ -310,18 +326,22 @@ func (analyzer *effectAnalyzer) callInvocationEffect(expr *ast.CallExpression) Y
 	return effect
 }
 
-func (analyzer *effectAnalyzer) directCallResolvesSeed(expr ast.Expression, slot int, targetExists bool, conditionRanges []*RangeInfo) bool {
+func (analyzer *effectAnalyzer) seedResolvedYield(expr ast.Expression, slot int, targetExists bool, conditionRanges []*RangeInfo) (YieldEffect, bool) {
 	call, ok := expr.(*ast.CallExpression)
 	if !ok || !targetExists {
-		return false
+		return YieldUncomputed, false
 	}
 	// Direct-return eligibility depends only on output types. Check it before
 	// resolving callee effects because indirect calls cannot consume a seed.
 	if _, direct := directScalarABIReturnType(analyzer.exprInfo(call).OutTypes); !direct {
-		return false
+		return YieldUncomputed, false
 	}
 	callee := analyzer.callBodyOutputEffects(call)
-	return callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
+	needsSeed := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
+	if !needsSeed {
+		return YieldUncomputed, false
+	}
+	return analyzer.callInvocationEffect(call), true
 }
 
 func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpression, conditionRanges []*RangeInfo) bool {
@@ -374,37 +394,31 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	targetIndex := 0
 	for _, expr := range stmt.Value {
 		yields := analyzer.deriveExpr(expr)
-		localDomain := analyzer.expressionUsesLocalDomain(expr)
+		if targetIndex+len(yields) > len(stmt.Name) {
+			return invalidStatementEffect(len(stmt.Name))
+		}
+		maySkip := len(stmt.Condition) > 0 || analyzer.expressionUsesLocalDomain(expr)
 		for slot, yield := range yields {
-			if targetIndex >= len(stmt.Name) {
-				return StatementEffect{Writes: []TargetWriteEffect{{TargetIndex: targetIndex, Effect: WriteInvalid}}}
-			}
-			target := stmt.Name[targetIndex]
+			index := targetIndex
+			target := stmt.Name[index]
+			targetIndex++
 			if isDiscard(target) {
-				targetIndex++
 				continue
 			}
 
 			_, targetExists := defined[target.Value]
-			if analyzer.directCallResolvesSeed(expr, slot, targetExists, condRanges) {
-				result.ReadsSeed = append(result.ReadsSeed, targetIndex)
-				yield = analyzer.callInvocationEffect(expr.(*ast.CallExpression))
+			if seededYield, readsSeed := analyzer.seedResolvedYield(expr, slot, targetExists, condRanges); readsSeed {
+				result.ReadsSeed = append(result.ReadsSeed, index)
+				yield = seededYield
 			}
-
-			write := MustWrite
-			if yield != MustYield && yield != MayYield {
-				// Analysis states outside the yield lattice must remain invalid so
-				// function publication cannot turn missing facts into MayWrite.
-				write = WriteInvalid
-			} else if yield == MayYield || len(stmt.Condition) > 0 || localDomain {
-				write = MayWrite
-			}
-			result.Writes = append(result.Writes, TargetWriteEffect{TargetIndex: targetIndex, Effect: write})
-			targetIndex++
+			result.Writes = append(result.Writes, TargetWriteEffect{
+				TargetIndex: index,
+				Effect:      classifyWriteEffect(yield, maySkip),
+			})
 		}
 	}
 	if targetIndex != len(stmt.Name) {
-		return StatementEffect{Writes: []TargetWriteEffect{{TargetIndex: targetIndex, Effect: WriteInvalid}}}
+		return invalidStatementEffect(targetIndex)
 	}
 	return result
 }
