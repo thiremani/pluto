@@ -760,6 +760,12 @@ budget—not mangle length—is the defensive bound and preserves valid finite
 polymorphic recursion. This guarantees controlled compiler failure, not runtime
 termination; totality remains a separate future analysis.
 
+After discovery closes, future post-type interprocedural function analyses may
+share the graph's specialization IDs, caller/callee edges, and callee-first SCC
+ordering while keeping separate facts and transfer rules. Keep `effectGraph`
+until a second consumer lands; then extract a `specializationCallGraph` and add
+call-site or full-reachable-closure data only when that consumer requires it.
+
 **Fixed point.** Function-body output effects, and only those, need one: a
 recursive callee can refine its outputs after types settle, and
 `TypeScriptFunc` today converges on types alone. Condense the typed
