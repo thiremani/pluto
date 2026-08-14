@@ -750,6 +750,16 @@ weakens only the outputs its statements drive — a possibly empty local range
 makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
 `res` — while unrelated outputs keep their effects.
 
+**Finite specialization closure.** SCC settlement assumes discovery has already
+produced a finite graph. It cannot catch
+`f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
+new node, so Tarjan never runs. Before Step 2B, discovery diagnoses structurally
+proven expanding cycles and enforces a deterministic per-`Solve` specialization
+budget before cache allocation, reporting the active signature chain. The
+budget—not mangle length—is the defensive bound and preserves valid finite
+polymorphic recursion. This guarantees controlled compiler failure, not runtime
+termination; totality remains a separate future analysis.
+
 **Fixed point.** Function-body output effects, and only those, need one: a
 recursive callee can refine its outputs after types settle, and
 `TypeScriptFunc` today converges on types alone. Condense the typed
@@ -897,7 +907,7 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2A is unblocked.** Gated print syntax, if wanted, is a
+and ranges. **Step 2A is complete.** Gated print syntax, if wanted, is a
 separate feature PR before Step 6; any other language change likewise gets
 its own PR with its semantics-doc and rejection-test updates.
 
@@ -912,9 +922,10 @@ Two PRs, implementing §15.
   point, lifecycle, and caching.
 - **2B — specialization-aware CFG.** Move dead-write and write-after-write to
   settled specializations under the transfer rules; convert `ReadsSeed` facts
-  into ordinary CFG read events; keep structural checks at template time;
-  cache and replay specialization diagnostics; switch scripts and functions to
-  consume summaries; then delete the CFG's duplicated syntactic classifiers.
+  into ordinary CFG read events; keep structural checks at template time; cache
+  each specialization's diagnostics and call edges so later scripts replay the
+  reachable closure once; switch scripts and functions to consume summaries;
+  then delete the CFG's duplicated syntactic classifiers.
 
 This fixes the conditional-write false positive, does not depend on PIR, and
 lands first. PIR implementation starts only after 2A/2B tests pass.
@@ -1119,6 +1130,12 @@ deletion at the last consumer.
 - negative tests for every validator invariant
 - derived release points appear in expanded PIR, so ownership regressions
   surface as plan diffs before any leak-check run
+
+### Specialization-closure tests
+
+- direct and mutual rank growth fail with the active signature chain, while
+  ordinary recursion, finite polymorphic recursion, synthesized range/scalar
+  companions, and warm-cache reuse remain accepted
 
 ### Effect tests
 
