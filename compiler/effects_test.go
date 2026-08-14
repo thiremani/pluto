@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -322,10 +321,10 @@ result`)
 	require.True(t, b.Settled)
 }
 
-func TestEffectGraphUsesDeterministicIDsAndReverseEdges(t *testing.T) {
+func TestEffectGraphUsesWalkOrderAndReverseEdges(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = A(x)
+	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = Z(x)
     y = B(x)
     C(x)
     y = B(x)
@@ -337,30 +336,29 @@ y = C(x)
     y = x`))
 	require.Empty(t, cc.Compile())
 
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = A(1)
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = Z(1)
 result`)
-	names := []string{
-		Mangle(cc.Compiler.MangledPath, "A", []Type{I64}),
+	walkOrder := []string{
+		Mangle(cc.Compiler.MangledPath, "Z", []Type{I64}),
 		Mangle(cc.Compiler.MangledPath, "B", []Type{I64}),
 		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
 	}
-	slices.Sort(names)
 
-	graph := ts.buildEffectGraph(ts.walkedFuncs)
-	for index, name := range names {
+	graph := ts.buildEffectGraph()
+	for index, name := range walkOrder {
 		id := effectNodeID(index)
 		require.Equal(t, id, graph.byMangled[name])
 		require.Equal(t, name, graph.nodes[id].mangled)
 	}
 
-	aID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "A", []Type{I64})]
+	zID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "Z", []Type{I64})]
 	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
 	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
-	require.Equal(t, []effectNodeID{bID, cID}, graph.nodes[aID].callees)
-	require.Equal(t, []effectNodeID{aID}, graph.nodes[bID].callers)
+	require.Equal(t, []effectNodeID{bID, cID}, graph.nodes[zID].callees)
+	require.Equal(t, []effectNodeID{zID}, graph.nodes[bID].callers)
 	require.Equal(t, []effectNodeID{cID}, graph.nodes[bID].callees)
-	require.Equal(t, []effectNodeID{aID, bID}, graph.nodes[cID].callers)
-	require.Equal(t, [][]effectNodeID{{cID}, {bID}, {aID}}, graph.calleeFirstComponents())
+	require.Equal(t, []effectNodeID{zID, bID}, graph.nodes[cID].callers)
+	require.Equal(t, [][]effectNodeID{{cID}, {bID}, {zID}}, graph.calleeFirstComponents())
 }
 
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {

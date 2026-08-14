@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -466,8 +465,6 @@ type effectNodeID int
 
 type effectNode struct {
 	mangled        string
-	info           *FuncInfo
-	template       *ast.FuncStatement
 	callees        []effectNodeID
 	callers        []effectNodeID
 	componentIndex int
@@ -482,24 +479,23 @@ type effectGraph struct {
 }
 
 func newEffectGraph(walked map[string]walkedSpecialization) *effectGraph {
-	names := slices.Sorted(maps.Keys(walked))
 	graph := &effectGraph{
-		nodes:     make([]effectNode, len(names)),
-		byMangled: make(map[string]effectNodeID, len(names)),
+		nodes:     make([]effectNode, len(walked)),
+		byMangled: make(map[string]effectNodeID, len(walked)),
 	}
-	for index, mangled := range names {
-		walkedFunc := walked[mangled]
-		id := effectNodeID(index)
+	for mangled, walkedFunc := range walked {
+		id := effectNodeID(walkedFunc.walkIndex)
 		graph.byMangled[mangled] = id
-		graph.nodes[id] = effectNode{mangled: mangled, info: walkedFunc.info, template: walkedFunc.template}
+		graph.nodes[id] = effectNode{mangled: mangled}
 	}
 	return graph
 }
 
 func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNodeID) {
 	caller := &graph.nodes[callerID]
+	walked := ts.walkedFuncs[caller.mangled]
 	compiler := ts.ScriptCompiler.Compiler
-	for _, call := range collectBodyCalls(caller.template.Body.Statements) {
+	for _, call := range collectBodyCalls(walked.template.Body.Statements) {
 		info := ts.ExprCache[key(caller.mangled, call)]
 		callee := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
 		if calleeID, unsettled := graph.byMangled[callee]; unsettled {
@@ -513,8 +509,8 @@ func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNod
 	}
 }
 
-func (ts *TypeSolver) buildEffectGraph(walked map[string]walkedSpecialization) *effectGraph {
-	graph := newEffectGraph(walked)
+func (ts *TypeSolver) buildEffectGraph() *effectGraph {
+	graph := newEffectGraph(ts.walkedFuncs)
 	for id := range graph.nodes {
 		ts.addEffectGraphEdges(graph, effectNodeID(id))
 	}
@@ -617,11 +613,12 @@ func (state *tarjanState) visit(id effectNodeID) {
 // weakened from MustWrite to MayWrite.
 func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffect, id effectNodeID) bool {
 	node := &graph.nodes[id]
-	initial := functionInitialBindings(node.template)
+	walked := ts.walkedFuncs[node.mangled]
+	initial := functionInitialBindings(walked.template)
 	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, node.mangled, graph, working)
-	statements := analyzer.deriveStatements(node.template.Body.Statements, initial)
-	derived := deriveBodyOutputEffects(node.template, statements)
-	if !validPublishedEffects(derived, len(node.info.Sig.OutTypes)) {
+	statements := analyzer.deriveStatements(walked.template.Body.Statements, initial)
+	derived := deriveBodyOutputEffects(walked.template, statements)
+	if !validPublishedEffects(derived, len(walked.info.Sig.OutTypes)) {
 		panic(fmt.Sprintf("internal: invalid effects for specialization %s", node.mangled))
 	}
 
@@ -632,7 +629,7 @@ func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffe
 			changed = true
 		}
 	}
-	node.info.StatementEffects = statements
+	walked.info.StatementEffects = statements
 	return changed
 }
 
@@ -664,15 +661,16 @@ func (ts *TypeSolver) settleEffectComponent(graph *effectGraph, working [][]Writ
 	}
 	for _, id := range component {
 		node := &graph.nodes[id]
-		node.info.BodyOutputEffects = slices.Clone(working[id])
+		ts.walkedFuncs[node.mangled].info.BodyOutputEffects = slices.Clone(working[id])
 	}
 }
 
-func (ts *TypeSolver) settleEffects(walked map[string]walkedSpecialization) {
-	graph := ts.buildEffectGraph(walked)
+func (ts *TypeSolver) settleEffects() {
+	graph := ts.buildEffectGraph()
 	working := make([][]WriteEffect, len(graph.nodes))
 	for id := range graph.nodes {
-		working[id] = slices.Repeat([]WriteEffect{MustWrite}, len(graph.nodes[id].info.Sig.OutTypes))
+		walked := ts.walkedFuncs[graph.nodes[id].mangled]
+		working[id] = slices.Repeat([]WriteEffect{MustWrite}, len(walked.info.Sig.OutTypes))
 	}
 
 	components := graph.calleeFirstComponents()

@@ -123,8 +123,10 @@ type pendingAssignment struct {
 }
 
 type walkedSpecialization struct {
-	info     *FuncInfo
-	template *ast.FuncStatement
+	// walkIndex is dense within the current solver pass and becomes the effect graph node ID.
+	walkIndex int
+	info      *FuncInfo
+	template  *ast.FuncStatement
 }
 
 type TypeSolver struct {
@@ -2521,7 +2523,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
-			ts.settleEffects(ts.walkedFuncs)
+			ts.settleEffects()
 			for _, walked := range ts.walkedFuncs {
 				walked.info.Settled = true
 			}
@@ -2552,7 +2554,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
-	ts.walkedFuncs[mangled] = walkedSpecialization{info: f, template: template}
+	ts.walkedFuncs[mangled] = walkedSpecialization{
+		walkIndex: len(ts.walkedFuncs),
+		info:      f,
+		template:  template,
+	}
 	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
