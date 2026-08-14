@@ -327,6 +327,7 @@ func TestEffectGraphUsesDeterministicIDsAndReverseEdges(t *testing.T) {
 	defer ctx.Dispose()
 	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = A(x)
     y = B(x)
+    C(x)
     y = B(x)
 
 y = B(x)
@@ -344,12 +345,8 @@ result`)
 		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
 	}
 	slices.Sort(names)
-	walked := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		walked[name] = struct{}{}
-	}
 
-	graph := ts.buildEffectGraph(walked)
+	graph := ts.buildEffectGraph(ts.walkedFuncs)
 	for index, name := range names {
 		id := effectNodeID(index)
 		require.Equal(t, id, graph.byMangled[name])
@@ -359,38 +356,11 @@ result`)
 	aID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "A", []Type{I64})]
 	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
 	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
-	require.Equal(t, []effectNodeID{bID}, graph.nodes[aID].callees)
+	require.Equal(t, []effectNodeID{bID, cID}, graph.nodes[aID].callees)
 	require.Equal(t, []effectNodeID{aID}, graph.nodes[bID].callers)
 	require.Equal(t, []effectNodeID{cID}, graph.nodes[bID].callees)
-	require.Equal(t, []effectNodeID{bID}, graph.nodes[cID].callers)
+	require.Equal(t, []effectNodeID{aID, bID}, graph.nodes[cID].callers)
 	require.Equal(t, [][]effectNodeID{{cID}, {bID}, {aID}}, graph.calleeFirstComponents())
-}
-
-func TestEffectGraphRejectsMissingCallFacts(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "missingCallEffects", "", mustParseCode(t, `y = Outer(x)
-    y = Inner(x)
-
-y = Inner(x)
-    y = x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = Outer(1)
-result`)
-	outerMangled := Mangle(cc.Compiler.MangledPath, "Outer", []Type{I64})
-	innerMangled := Mangle(cc.Compiler.MangledPath, "Inner", []Type{I64})
-	outerTemplate, ok := cc.lookupFuncTemplate("Outer", 1)
-	require.True(t, ok)
-	call := outerTemplate.Body.Statements[0].(*ast.LetStatement).Value[0].(*ast.CallExpression)
-	delete(ts.ExprCache, key(outerMangled, call))
-
-	require.PanicsWithValue(t,
-		"internal: missing call facts for Inner in specialization "+outerMangled+" during effect graph construction",
-		func() {
-			ts.buildEffectGraph(map[string]struct{}{outerMangled: {}, innerMangled: {}})
-		},
-	)
 }
 
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {

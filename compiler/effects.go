@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -479,54 +480,42 @@ type effectGraph struct {
 	byMangled map[string]effectNodeID
 }
 
-func (ts *TypeSolver) buildEffectGraph(walked map[string]struct{}) *effectGraph {
-	names := make([]string, 0, len(walked))
-	for mangled := range walked {
-		names = append(names, mangled)
-	}
-	slices.Sort(names)
-
+func newEffectGraph(walked map[string]walkedSpecialization) *effectGraph {
+	names := slices.Sorted(maps.Keys(walked))
 	graph := &effectGraph{
 		nodes:     make([]effectNode, len(names)),
 		byMangled: make(map[string]effectNodeID, len(names)),
 	}
 	for index, mangled := range names {
-		f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
-		if f == nil {
-			panic(fmt.Sprintf("internal: missing walked specialization %s", mangled))
-		}
-		template, ok := ts.ScriptCompiler.Compiler.CodeCompiler.lookupFuncTemplate(f.Sig.Name, len(f.Sig.Params))
-		if !ok {
-			panic(fmt.Sprintf("internal: missing template for specialization %s", mangled))
-		}
+		walkedFunc := walked[mangled]
 		id := effectNodeID(index)
 		graph.byMangled[mangled] = id
-		graph.nodes[id] = effectNode{mangled: mangled, info: f, template: template}
+		graph.nodes[id] = effectNode{mangled: mangled, info: walkedFunc.info, template: walkedFunc.template}
 	}
-	for id := range graph.nodes {
-		node := &graph.nodes[id]
-		calls := collectBodyCalls(node.template.Body.Statements)
-		for _, call := range calls {
-			if _, builtin := Builtins[call.Function.Value]; builtin {
-				continue
-			}
-			info := ts.ExprCache[key(node.mangled, call)]
-			if info == nil {
-				panic(fmt.Sprintf("internal: missing call facts for %s in specialization %s during effect graph construction", call.Function.Value, node.mangled))
-			}
-			callee := Mangle(ts.ScriptCompiler.Compiler.MangledPath, call.Function.Value, info.CallParamTypes)
-			if calleeID, unsettled := graph.byMangled[callee]; unsettled {
-				node.callees = append(node.callees, calleeID)
-			}
-		}
-		slices.Sort(node.callees)
-		node.callees = slices.Compact(node.callees)
-		for _, calleeID := range node.callees {
-			graph.nodes[calleeID].callers = append(graph.nodes[calleeID].callers, effectNodeID(id))
+	return graph
+}
+
+func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNodeID) {
+	caller := &graph.nodes[callerID]
+	compiler := ts.ScriptCompiler.Compiler
+	for _, call := range collectBodyCalls(caller.template.Body.Statements) {
+		info := ts.ExprCache[key(caller.mangled, call)]
+		callee := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
+		if calleeID, unsettled := graph.byMangled[callee]; unsettled {
+			caller.callees = append(caller.callees, calleeID)
 		}
 	}
+	slices.Sort(caller.callees)
+	caller.callees = slices.Compact(caller.callees)
+	for _, calleeID := range caller.callees {
+		graph.nodes[calleeID].callers = append(graph.nodes[calleeID].callers, callerID)
+	}
+}
+
+func (ts *TypeSolver) buildEffectGraph(walked map[string]walkedSpecialization) *effectGraph {
+	graph := newEffectGraph(walked)
 	for id := range graph.nodes {
-		slices.Sort(graph.nodes[id].callers)
+		ts.addEffectGraphEdges(graph, effectNodeID(id))
 	}
 	return graph
 }
@@ -543,7 +532,9 @@ func collectBodyCalls(statements []ast.Statement) []*ast.CallExpression {
 				calls = append(calls, collectExprCalls(value)...)
 			}
 		case *ast.PrintStatement:
-			calls = append(calls, collectExprCalls(stmt.Expression)...)
+			for _, argument := range stmt.Expression.Arguments {
+				calls = append(calls, collectExprCalls(argument)...)
+			}
 		}
 	}
 	return calls
@@ -652,7 +643,7 @@ func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffe
 	return changed
 }
 
-func (ts *TypeSolver) settleEffects(walked map[string]struct{}) {
+func (ts *TypeSolver) settleEffects(walked map[string]walkedSpecialization) {
 	graph := ts.buildEffectGraph(walked)
 	working := make([][]WriteEffect, len(graph.nodes))
 	for id := range graph.nodes {

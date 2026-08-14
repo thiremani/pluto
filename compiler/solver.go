@@ -122,6 +122,11 @@ type pendingAssignment struct {
 	exprOutIdx      int
 }
 
+type walkedSpecialization struct {
+	info     *FuncInfo
+	template *ast.FuncStatement
+}
+
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
@@ -132,7 +137,7 @@ type TypeSolver struct {
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
-	walkedFuncs        map[string]struct{} // specializations walked in the current pass
+	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
 }
 
@@ -146,7 +151,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ExprCache:          sc.Compiler.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
-		walkedFuncs:        make(map[string]struct{}),
+		walkedFuncs:        make(map[string]walkedSpecialization),
 	}
 }
 
@@ -2511,16 +2516,14 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 		// An unchanged complete pass refreshes body metadata against final signatures.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
-			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
-				if cached == nil || !cached.AllTypesInferred() {
-					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
+			for mangled, walked := range ts.walkedFuncs {
+				if !walked.info.AllTypesInferred() {
+					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
 			ts.settleEffects(ts.walkedFuncs)
-			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
-				cached.Settled = true
+			for _, walked := range ts.walkedFuncs {
+				walked.info.Settled = true
 			}
 			return f.Sig.OutTypes
 		}
@@ -2549,7 +2552,7 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
-	ts.walkedFuncs[mangled] = struct{}{}
+	ts.walkedFuncs[mangled] = walkedSpecialization{info: f, template: template}
 	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
