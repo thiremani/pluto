@@ -465,11 +465,12 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 type effectNodeID int
 
 type effectNode struct {
-	mangled  string
-	info     *FuncInfo
-	template *ast.FuncStatement
-	callees  []effectNodeID
-	callers  []effectNodeID
+	mangled        string
+	info           *FuncInfo
+	template       *ast.FuncStatement
+	callees        []effectNodeID
+	callers        []effectNodeID
+	componentIndex int
 }
 
 // effectGraph interns specialization names once, then uses compact IDs for
@@ -595,12 +596,14 @@ func (state *tarjanState) visit(id effectNodeID) {
 		return
 	}
 
+	componentIndex := len(state.components)
 	var component []effectNodeID
 	for {
 		last := len(state.stack) - 1
 		member := state.stack[last]
 		state.stack = state.stack[:last]
 		state.onStack[member] = false
+		state.graph.nodes[member].componentIndex = componentIndex
 		component = append(component, member)
 		if member == id {
 			break
@@ -608,16 +611,6 @@ func (state *tarjanState) visit(id effectNodeID) {
 	}
 	slices.Sort(component)
 	state.components = append(state.components, component)
-}
-
-func effectComponentIndexByNode(components [][]effectNodeID, nodeCount int) []int {
-	indexes := make([]int, nodeCount)
-	for componentIndex, component := range components {
-		for _, id := range component {
-			indexes[id] = componentIndex
-		}
-	}
-	return indexes
 }
 
 // deriveEffectNode refreshes one specialization and reports whether any output
@@ -643,6 +636,38 @@ func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffe
 	return changed
 }
 
+func enqueueRecursiveEffectCallers(graph *effectGraph, id effectNodeID, pending []effectNodeID, queued []bool) []effectNodeID {
+	componentIndex := graph.nodes[id].componentIndex
+	for _, callerID := range graph.nodes[id].callers {
+		if graph.nodes[callerID].componentIndex != componentIndex || queued[callerID] {
+			continue
+		}
+		pending = append(pending, callerID)
+		queued[callerID] = true
+	}
+	return pending
+}
+
+// settleEffectComponent weakens one SCC to a fixed point and publishes all
+// members only after their shared worklist drains.
+func (ts *TypeSolver) settleEffectComponent(graph *effectGraph, working [][]WriteEffect, component []effectNodeID, queued []bool) {
+	pending := slices.Clone(component)
+	for _, id := range pending {
+		queued[id] = true
+	}
+	for next := 0; next < len(pending); next++ {
+		id := pending[next]
+		queued[id] = false
+		if ts.deriveEffectNode(graph, working, id) {
+			pending = enqueueRecursiveEffectCallers(graph, id, pending, queued)
+		}
+	}
+	for _, id := range component {
+		node := &graph.nodes[id]
+		node.info.BodyOutputEffects = slices.Clone(working[id])
+	}
+}
+
 func (ts *TypeSolver) settleEffects(walked map[string]walkedSpecialization) {
 	graph := ts.buildEffectGraph(walked)
 	working := make([][]WriteEffect, len(graph.nodes))
@@ -651,33 +676,9 @@ func (ts *TypeSolver) settleEffects(walked map[string]walkedSpecialization) {
 	}
 
 	components := graph.calleeFirstComponents()
-	componentIndexes := effectComponentIndexByNode(components, len(graph.nodes))
 	queued := make([]bool, len(graph.nodes))
-	for componentIndex, component := range components {
-		// Every member is analyzed once. A weakened summary then requeues only
-		// recursive callers in this SCC; callers in later SCCs have not run yet.
-		pending := slices.Clone(component)
-		for _, id := range pending {
-			queued[id] = true
-		}
-		for next := 0; next < len(pending); next++ {
-			id := pending[next]
-			queued[id] = false
-			if !ts.deriveEffectNode(graph, working, id) {
-				continue
-			}
-			for _, callerID := range graph.nodes[id].callers {
-				if componentIndexes[callerID] != componentIndex || queued[callerID] {
-					continue
-				}
-				pending = append(pending, callerID)
-				queued[callerID] = true
-			}
-		}
-		for _, id := range component {
-			node := &graph.nodes[id]
-			node.info.BodyOutputEffects = slices.Clone(working[id])
-		}
+	for _, component := range components {
+		ts.settleEffectComponent(graph, working, component, queued)
 	}
 }
 
