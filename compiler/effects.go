@@ -80,11 +80,13 @@ func validPublishedEffects(effects []WriteEffect, count int) bool {
 	if len(effects) != count {
 		return false
 	}
+
 	for _, effect := range effects {
 		if effect != MustWrite && effect != MayWrite {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -107,9 +109,11 @@ func classifyWriteEffect(yield YieldEffect, maySkip bool) WriteEffect {
 	if yield != MustYield && yield != MayYield {
 		return WriteInvalid
 	}
+
 	if yield == MayYield || maySkip {
 		return MayWrite
 	}
+
 	return MustWrite
 }
 
@@ -171,22 +175,27 @@ func (analyzer *effectAnalyzer) deriveExpr(expr ast.Expression) []YieldEffect {
 	default:
 		return analyzer.makeInvalidYieldEffects(expr)
 	}
+
 	return info.YieldEffects
 }
 
 func (analyzer *effectAnalyzer) deriveChildren(expr ast.Expression) []YieldEffect {
 	var effects []YieldEffect
+
 	for _, child := range ast.ExprChildren(expr) {
 		effects = append(effects, analyzer.deriveExpr(child)...)
 	}
+
 	return effects
 }
 
 func foldYieldEffects(effects []YieldEffect) YieldEffect {
 	result := MustYield
+
 	for _, effect := range effects {
 		result = joinYield(result, effect)
 	}
+
 	return result
 }
 
@@ -194,6 +203,7 @@ func alignYieldEffects(effects []YieldEffect, count int) []YieldEffect {
 	if len(effects) == count {
 		return effects
 	}
+
 	return slices.Repeat([]YieldEffect{foldYieldEffects(effects)}, count)
 }
 
@@ -202,13 +212,16 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 	left := analyzer.deriveExpr(expr.Left)
 	right := analyzer.deriveExpr(expr.Right)
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
+
 	for i := range info.YieldEffects {
 		leftEffect := yieldSlot(left, i)
 		rightEffect := yieldSlot(right, i)
 		mode := CondNone
+
 		if i < len(info.CompareModes) {
 			mode = info.CompareModes[i]
 		}
+
 		switch mode {
 		case CondScalar, CondAnd:
 			info.YieldEffects[i] = joinYield(MayYield, joinYield(leftEffect, rightEffect))
@@ -223,6 +236,7 @@ func (analyzer *effectAnalyzer) deriveInfix(expr *ast.InfixExpression) []YieldEf
 			info.YieldEffects[i] = YieldInvalid
 		}
 	}
+
 	return info.YieldEffects
 }
 
@@ -230,12 +244,15 @@ func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 	if len(effects) == 0 {
 		panic("internal: cannot select from empty yield effects")
 	}
+
 	if len(effects) == 1 {
 		return effects[0]
 	}
+
 	if index >= len(effects) {
 		return foldYieldEffects(effects)
 	}
+
 	return effects[index]
 }
 
@@ -250,7 +267,9 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	if len(callee) != len(info.OutTypes) {
 		panic(fmt.Sprintf("internal: call %s has %d output effects for %d typed outputs", expr.Function.Value, len(callee), len(info.OutTypes)))
 	}
+
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
+
 	for i, effect := range callee {
 		if effect == MustWrite {
 			info.YieldEffects[i] = invocation
@@ -260,6 +279,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 			info.YieldEffects[i] = YieldInvalid
 		}
 	}
+
 	return info.YieldEffects
 }
 
@@ -270,13 +290,16 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 	if f.Settled {
 		return f.BodyOutputEffects
 	}
+
 	if analyzer.graph == nil {
 		panic(fmt.Sprintf("internal: unsettled callee %s outside effect settlement", mangled))
 	}
+
 	id, ok := analyzer.graph.byMangled[mangled]
 	if !ok {
 		panic(fmt.Sprintf("internal: unsettled callee %s missing from effect graph", mangled))
 	}
+
 	return analyzer.working[id]
 }
 
@@ -291,6 +314,7 @@ func hasPossiblyEmptyRange(ranges, excluded []*RangeInfo) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -299,6 +323,7 @@ func (analyzer *effectAnalyzer) expressionUsesLocalDomain(expr ast.Expression) b
 	if _, isCall := expr.(*ast.CallExpression); isCall && info.LoopInside {
 		return false
 	}
+
 	return hasPossiblyEmptyRange(info.Ranges, nil)
 }
 
@@ -306,11 +331,13 @@ func rangeLiteralGuaranteedNonEmpty(literal *ast.RangeLiteral) bool {
 	if literal == nil {
 		return false
 	}
+
 	start, startOK := literal.Start.(*ast.IntegerLiteral)
 	stop, stopOK := literal.Stop.(*ast.IntegerLiteral)
 	if !startOK || !stopOK {
 		return false
 	}
+
 	step := int64(1)
 	if literal.Step != nil {
 		stepLiteral, ok := literal.Step.(*ast.IntegerLiteral)
@@ -319,14 +346,17 @@ func rangeLiteralGuaranteedNonEmpty(literal *ast.RangeLiteral) bool {
 		}
 		step = stepLiteral.Value
 	}
+
 	return step > 0 && start.Value < stop.Value || step < 0 && start.Value > stop.Value
 }
 
 func (analyzer *effectAnalyzer) callInvocationEffect(expr *ast.CallExpression) YieldEffect {
 	effect := MustYield
+
 	for _, argument := range expr.Arguments {
 		effect = joinYield(effect, foldYieldEffects(analyzer.deriveExpr(argument)))
 	}
+
 	return effect
 }
 
@@ -335,16 +365,19 @@ func (analyzer *effectAnalyzer) seedResolvedYield(expr ast.Expression, slot int,
 	if !ok || !targetExists {
 		return YieldUncomputed, false
 	}
+
 	// Direct-return eligibility depends only on output types. Check it before
 	// resolving callee effects because indirect calls cannot consume a seed.
 	if _, direct := directScalarABIReturnType(analyzer.exprInfo(call).OutTypes); !direct {
 		return YieldUncomputed, false
 	}
+
 	callee := analyzer.callBodyOutputEffects(call)
 	needsSeed := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
 	if !needsSeed {
 		return YieldUncomputed, false
 	}
+
 	return analyzer.callInvocationEffect(call), true
 }
 
@@ -356,20 +389,25 @@ func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpres
 	if !slices.ContainsFunc(info.CallParamTypes, isRangeDriverType) {
 		return false
 	}
+
 	for _, argument := range call.Arguments {
 		if hasPossiblyEmptyRange(analyzer.exprInfo(argument).Ranges, conditionRanges) {
 			return true
 		}
 	}
+
 	return false
 }
 
 func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, initiallyDefined map[string]struct{}) map[*ast.LetStatement]StatementEffect {
 	defined := make(map[string]struct{}, len(initiallyDefined))
+
 	for name := range initiallyDefined {
 		defined[name] = struct{}{}
 	}
+
 	results := make(map[*ast.LetStatement]StatementEffect)
+
 	for _, statement := range statements {
 		switch stmt := statement.(type) {
 		case *ast.PrintStatement:
@@ -385,6 +423,7 @@ func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, ini
 			}
 		}
 	}
+
 	return results
 }
 
@@ -392,13 +431,16 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	for _, condition := range stmt.Condition {
 		analyzer.deriveExpr(condition)
 	}
+
 	condRanges := conditionRanges(analyzer.compiler.ExprCache, analyzer.funcNameMangled, stmt.Condition)
 
 	result := StatementEffect{}
 	targetIndex := 0
+
 	for _, expr := range stmt.Value {
 		yields := analyzer.deriveExpr(expr)
 		maySkip := len(stmt.Condition) > 0 || analyzer.expressionUsesLocalDomain(expr)
+
 		for slot, yield := range yields {
 			index := targetIndex
 			target := stmt.Name[index]
@@ -418,6 +460,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 			})
 		}
 	}
+
 	return result
 }
 
@@ -427,27 +470,34 @@ func validStatementEffect(effect StatementEffect) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
 func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.LetStatement]StatementEffect) []WriteEffect {
 	effects := make([]WriteEffect, len(template.Outputs))
+
 	for i := range effects {
 		effects[i] = MayWrite
 	}
+
 	outputIndex := make(map[string]int, len(template.Outputs))
+
 	for i, output := range template.Outputs {
 		outputIndex[output.Value] = i
 	}
+
 	for _, statement := range template.Body.Statements {
 		stmt, ok := statement.(*ast.LetStatement)
 		if !ok {
 			continue
 		}
+
 		statementEffect := statements[stmt]
 		if !validStatementEffect(statementEffect) {
 			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
 		}
+
 		for _, write := range statementEffect.Writes {
 			if write.Effect != MustWrite || slices.Contains(statementEffect.ReadsSeed, write.TargetIndex) {
 				continue
@@ -458,6 +508,7 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 			}
 		}
 	}
+
 	return effects
 }
 
@@ -483,11 +534,13 @@ func newEffectGraph(walked map[string]walkedSpecialization) *effectGraph {
 		nodes:     make([]effectNode, len(walked)),
 		byMangled: make(map[string]effectNodeID, len(walked)),
 	}
+
 	for mangled, walkedFunc := range walked {
 		id := effectNodeID(walkedFunc.walkIndex)
 		graph.byMangled[mangled] = id
 		graph.nodes[id] = effectNode{mangled: mangled}
 	}
+
 	return graph
 }
 
@@ -495,6 +548,7 @@ func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNod
 	caller := &graph.nodes[callerID]
 	walked := ts.walkedFuncs[caller.mangled]
 	compiler := ts.ScriptCompiler.Compiler
+
 	for _, call := range collectBodyCalls(walked.template.Body.Statements) {
 		info := ts.ExprCache[key(caller.mangled, call)]
 		callee := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
@@ -502,8 +556,10 @@ func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNod
 			caller.callees = append(caller.callees, calleeID)
 		}
 	}
+
 	slices.Sort(caller.callees)
 	caller.callees = slices.Compact(caller.callees)
+
 	for _, calleeID := range caller.callees {
 		graph.nodes[calleeID].callers = append(graph.nodes[calleeID].callers, callerID)
 	}
@@ -511,20 +567,24 @@ func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNod
 
 func (ts *TypeSolver) buildEffectGraph() *effectGraph {
 	graph := newEffectGraph(ts.walkedFuncs)
+
 	for id := range graph.nodes {
 		ts.addEffectGraphEdges(graph, effectNodeID(id))
 	}
+
 	return graph
 }
 
 func collectBodyCalls(statements []ast.Statement) []*ast.CallExpression {
 	var calls []*ast.CallExpression
+
 	for _, statement := range statements {
 		switch stmt := statement.(type) {
 		case *ast.LetStatement:
 			for _, condition := range stmt.Condition {
 				calls = append(calls, collectExprCalls(condition)...)
 			}
+
 			for _, value := range stmt.Value {
 				calls = append(calls, collectExprCalls(value)...)
 			}
@@ -534,6 +594,7 @@ func collectBodyCalls(statements []ast.Statement) []*ast.CallExpression {
 			}
 		}
 	}
+
 	return calls
 }
 
@@ -542,9 +603,11 @@ func collectExprCalls(expr ast.Expression) []*ast.CallExpression {
 	if call, ok := expr.(*ast.CallExpression); ok {
 		calls = append(calls, call)
 	}
+
 	for _, child := range ast.ExprChildren(expr) {
 		calls = append(calls, collectExprCalls(child)...)
 	}
+
 	return calls
 }
 
@@ -565,11 +628,13 @@ func (graph *effectGraph) calleeFirstComponents() [][]effectNodeID {
 		lowlink: make([]int, len(graph.nodes)),
 		onStack: make([]bool, len(graph.nodes)),
 	}
+
 	for id := range graph.nodes {
 		if state.indices[id] == 0 {
 			state.visit(effectNodeID(id))
 		}
 	}
+
 	return state.components
 }
 
@@ -588,12 +653,14 @@ func (state *tarjanState) visit(id effectNodeID) {
 			state.lowlink[id] = min(state.lowlink[id], state.indices[calleeID])
 		}
 	}
+
 	if state.lowlink[id] != state.indices[id] {
 		return
 	}
 
 	componentIndex := len(state.components)
 	var component []effectNodeID
+
 	for {
 		last := len(state.stack) - 1
 		member := state.stack[last]
@@ -605,6 +672,7 @@ func (state *tarjanState) visit(id effectNodeID) {
 			break
 		}
 	}
+
 	slices.Sort(component)
 	state.components = append(state.components, component)
 }
@@ -618,6 +686,7 @@ func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffe
 	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, node.mangled, graph, working)
 	statements := analyzer.deriveStatements(walked.template.Body.Statements, initial)
 	derived := deriveBodyOutputEffects(walked.template, statements)
+
 	if !validPublishedEffects(derived, len(walked.info.Sig.OutTypes)) {
 		panic(fmt.Sprintf("internal: invalid effects for specialization %s", node.mangled))
 	}
@@ -629,12 +698,15 @@ func (ts *TypeSolver) deriveEffectNode(graph *effectGraph, working [][]WriteEffe
 			changed = true
 		}
 	}
+
 	walked.info.StatementEffects = statements
+
 	return changed
 }
 
 func enqueueRecursiveEffectCallers(graph *effectGraph, id effectNodeID, pending []effectNodeID, queued []bool) []effectNodeID {
 	componentIndex := graph.nodes[id].componentIndex
+
 	for _, callerID := range graph.nodes[id].callers {
 		if graph.nodes[callerID].componentIndex != componentIndex || queued[callerID] {
 			continue
@@ -642,6 +714,7 @@ func enqueueRecursiveEffectCallers(graph *effectGraph, id effectNodeID, pending 
 		pending = append(pending, callerID)
 		queued[callerID] = true
 	}
+
 	return pending
 }
 
@@ -649,9 +722,11 @@ func enqueueRecursiveEffectCallers(graph *effectGraph, id effectNodeID, pending 
 // members only after their shared worklist drains.
 func (ts *TypeSolver) settleEffectComponent(graph *effectGraph, working [][]WriteEffect, component []effectNodeID, queued []bool) {
 	pending := slices.Clone(component)
+
 	for _, id := range pending {
 		queued[id] = true
 	}
+
 	for next := 0; next < len(pending); next++ {
 		id := pending[next]
 		queued[id] = false
@@ -659,6 +734,7 @@ func (ts *TypeSolver) settleEffectComponent(graph *effectGraph, working [][]Writ
 			pending = enqueueRecursiveEffectCallers(graph, id, pending, queued)
 		}
 	}
+
 	for _, id := range component {
 		node := &graph.nodes[id]
 		ts.walkedFuncs[node.mangled].info.BodyOutputEffects = slices.Clone(working[id])
@@ -668,6 +744,7 @@ func (ts *TypeSolver) settleEffectComponent(graph *effectGraph, working [][]Writ
 func (ts *TypeSolver) settleEffects() {
 	graph := ts.buildEffectGraph()
 	working := make([][]WriteEffect, len(graph.nodes))
+
 	for id := range graph.nodes {
 		walked := ts.walkedFuncs[graph.nodes[id].mangled]
 		working[id] = slices.Repeat([]WriteEffect{MustWrite}, len(walked.info.Sig.OutTypes))
@@ -675,6 +752,7 @@ func (ts *TypeSolver) settleEffects() {
 
 	components := graph.calleeFirstComponents()
 	queued := make([]bool, len(graph.nodes))
+
 	for _, component := range components {
 		ts.settleEffectComponent(graph, working, component, queued)
 	}
@@ -682,9 +760,11 @@ func (ts *TypeSolver) settleEffects() {
 
 func functionInitialBindings(template *ast.FuncStatement) map[string]struct{} {
 	defined := make(map[string]struct{}, len(template.Parameters))
+
 	for _, parameter := range template.Parameters {
 		defined[parameter.Value] = struct{}{}
 	}
+
 	return defined
 }
 
@@ -692,6 +772,7 @@ func (ts *TypeSolver) deriveScriptEffects() {
 	root := ts.ScriptCompiler.Script.Root
 	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil, nil)
 	root.StatementEffects = analyzer.deriveStatements(ts.ScriptCompiler.Program.Statements, nil)
+
 	for _, statement := range ts.ScriptCompiler.Program.Statements {
 		stmt, ok := statement.(*ast.LetStatement)
 		if !ok {
