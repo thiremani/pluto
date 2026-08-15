@@ -553,7 +553,7 @@ func (ts *TypeSolver) addEffectGraphEdges(graph *effectGraph, callerID effectNod
 	for _, call := range collectBodyCalls(walked.template.Body.Statements) {
 		info := ts.ExprCache[key(caller.mangled, call)]
 		callee := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
-		if calleeID, unsettled := graph.byMangled[callee]; unsettled {
+		if calleeID, inGraph := graph.byMangled[callee]; inGraph {
 			caller.callees = append(caller.callees, calleeID)
 		}
 	}
