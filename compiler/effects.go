@@ -271,11 +271,12 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 
 	for i, effect := range callee {
-		if effect == MustWrite {
+		switch effect {
+		case MustWrite:
 			info.YieldEffects[i] = invocation
-		} else if effect == MayWrite {
+		case MayWrite:
 			info.YieldEffects[i] = joinYield(invocation, MayYield)
-		} else {
+		default:
 			info.YieldEffects[i] = YieldInvalid
 		}
 	}
