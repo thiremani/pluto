@@ -42,13 +42,72 @@ func TestSpecializationCFGDiagnosticsReplayColdAndWarm(t *testing.T) {
 
 	coldCFG := coldInfo.CFG
 	_, warmErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Warm", "value = Noisy(2)\nvalue")
-	require.Len(t, warmErrors, 1)
+	require.Len(t, warmErrors, 1, "each script replay must report the reachable diagnostic")
 
 	warmInfo := cc.Compiler.FuncCache[noisyMangled]
 	require.Same(t, coldInfo, warmInfo, "the warm solve must reuse the settled specialization")
 	require.Same(t, coldCFG, warmInfo.CFG, "the warm solve must not republish the CFG result")
 	require.Same(t, coldErrors[0], warmErrors[0],
 		"warm replay must return the same cached diagnostic pointer")
+}
+
+func TestSpecializationCFGReplayDeduplicatesAcrossConcreteTypes(t *testing.T) {
+	code := mustParseCode(t, `result = NoisyTypes(x)
+    unused = x + 1
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayConcreteTypes", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, errors := compileCFGReplayScript(t, ctx, cc, t.Name(), `integer = NoisyTypes(1)
+floating = NoisyTypes(2.0)
+integer, floating`)
+	require.Len(t, errors, 1, "one template diagnostic must be reported once per script")
+
+	integerMangled := Mangle(cc.Compiler.MangledPath, "NoisyTypes", []Type{I64})
+	floatingMangled := Mangle(cc.Compiler.MangledPath, "NoisyTypes", []Type{F64})
+	integerInfo := cc.Compiler.FuncCache[integerMangled]
+	floatingInfo := cc.Compiler.FuncCache[floatingMangled]
+	require.Len(t, integerInfo.CFG.Errors, 1)
+	require.Len(t, floatingInfo.CFG.Errors, 1)
+	require.NotSame(t, integerInfo.CFG.Errors[0], floatingInfo.CFG.Errors[0],
+		"each specialization must retain its immutable analysis result")
+	require.Equal(t, integerInfo.CFG.Errors[0].Error(), floatingInfo.CFG.Errors[0].Error())
+	require.Same(t, integerInfo.CFG.Errors[0], errors[0],
+		"replay must retain the first source-ordered diagnostic")
+}
+
+func TestSpecializationCFGReplayPreservesDistinctTemplateDiagnostics(t *testing.T) {
+	code := mustParseCode(t, `result = NoisyPair(x)
+    firstUnused = x + 1
+    secondUnused = x + 2
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayDistinctDiagnostics", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, errors := compileCFGReplayScript(t, ctx, cc, t.Name(), `integer = NoisyPair(1)
+floating = NoisyPair(2.0)
+integer, floating`)
+	require.Len(t, errors, 2, "distinct source diagnostics must survive specialization deduplication")
+	require.Contains(t, errors[0].Msg, `"secondUnused"`)
+	require.Contains(t, errors[1].Msg, `"firstUnused"`)
+
+	integerMangled := Mangle(cc.Compiler.MangledPath, "NoisyPair", []Type{I64})
+	floatingMangled := Mangle(cc.Compiler.MangledPath, "NoisyPair", []Type{F64})
+	integerInfo := cc.Compiler.FuncCache[integerMangled]
+	floatingInfo := cc.Compiler.FuncCache[floatingMangled]
+	require.Len(t, integerInfo.CFG.Errors, 2)
+	require.Len(t, floatingInfo.CFG.Errors, 2)
+	for index := range errors {
+		require.Same(t, integerInfo.CFG.Errors[index], errors[index])
+	}
 }
 
 func TestUnreachableCachedCFGDiagnosticsDoNotLeak(t *testing.T) {
@@ -135,6 +194,48 @@ func TestPrintOnlyUserCallReplaysCFGDiagnostics(t *testing.T) {
 		collectDirectCallees(sc.Compiler, sc.ScriptMangled, sc.Program.Statements),
 		"a user call reached only through print arguments must be a replay root")
 	require.Same(t, cc.Compiler.FuncCache[mangled].CFG.Errors[0], errors[0])
+}
+
+func TestSpecializationCFGReplayDeduplicatesScalarCompanionDiagnostics(t *testing.T) {
+	code := mustParseCode(t, `result = GatherNoisy(arr)
+    i = 0:3
+    result = [ScaleNoisy(arr[i])]
+
+result = ScaleNoisy(x)
+    unusedScale = x
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayScalarCompanion", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc, errors := compileCFGReplayScript(t, ctx, cc, t.Name(), `arr = [10 20 30]
+result = GatherNoisy(arr)
+result`)
+	require.Len(t, errors, 1, "a primary specialization and scalar companion share one source diagnostic")
+
+	gatherMangled := Mangle(cc.Compiler.MangledPath, "GatherNoisy", []Type{Array{ElemType: I64, Rank: 1}})
+	gatherTemplate, ok := cc.lookupFuncTemplate("GatherNoisy", 1)
+	require.True(t, ok)
+	gatherCalls := collectBodyCalls(gatherTemplate.Body.Statements)
+	require.Len(t, gatherCalls, 1)
+	gatherCall := gatherCalls[0]
+	callInfo := sc.Compiler.ExprCache[key(gatherMangled, gatherCall)]
+	require.True(t, callInfo.ScalarCallVariantEnsured)
+
+	primaryMangled := Mangle(cc.Compiler.MangledPath, "ScaleNoisy", callInfo.CallParamTypes)
+	scalarMangled := Mangle(cc.Compiler.MangledPath, "ScaleNoisy", callInfo.ScalarCallParamTypes)
+	require.NotEqual(t, primaryMangled, scalarMangled)
+	primaryInfo := cc.Compiler.FuncCache[primaryMangled]
+	scalarInfo := cc.Compiler.FuncCache[scalarMangled]
+	require.Len(t, primaryInfo.CFG.Errors, 1)
+	require.Len(t, scalarInfo.CFG.Errors, 1)
+	require.NotSame(t, primaryInfo.CFG.Errors[0], scalarInfo.CFG.Errors[0],
+		"both actual lowering targets must remain independently analyzed")
+	require.Equal(t, primaryInfo.CFG.Errors[0].Error(), scalarInfo.CFG.Errors[0].Error())
+	require.Same(t, primaryInfo.CFG.Errors[0], errors[0])
 }
 
 func TestDiamondCFGReplayIsOnceAndDeterministic(t *testing.T) {
