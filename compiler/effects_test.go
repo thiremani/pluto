@@ -123,7 +123,7 @@ nonempty, empty`)
 	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[empty], TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 }
 
-func TestDirectCallSeedResolutionIsSeparateFromInvocationFailure(t *testing.T) {
+func TestDirectCallSeedEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -134,53 +134,53 @@ y = Maybe(x)
     y = x > 0 x`))
 	require.Empty(t, cc.Compile())
 
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `existing = 7
-existing = Maybe(1)
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `seeded = 7
+seeded = Maybe(1)
 fresh = Maybe(1)
-alwaysExisting = 4
-alwaysExisting = Always(1)
+always = 4
+always = Always(1)
 arr = [1]
-other = 9
-other = Always(arr[2])
-conditioned = 8
-conditioned = 1 > 0 Maybe(1)
-existing, alwaysExisting, other, conditioned`)
+failed = 9
+failed = Always(arr[2])
+gated = 8
+gated = 1 > 0 Maybe(1)
+seeded, always, failed, gated`)
 
 	program := ts.ScriptCompiler.Program
-	resolved := program.Statements[1].(*ast.LetStatement)
+	seeded := program.Statements[1].(*ast.LetStatement)
 	fresh := program.Statements[2].(*ast.LetStatement)
-	alwaysResolved := program.Statements[4].(*ast.LetStatement)
-	callerFailure := program.Statements[7].(*ast.LetStatement)
-	conditioned := program.Statements[9].(*ast.LetStatement)
+	always := program.Statements[4].(*ast.LetStatement)
+	failed := program.Statements[7].(*ast.LetStatement)
+	gated := program.Statements[9].(*ast.LetStatement)
 
-	resolvedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[resolved]
-	requireTargetEffects(t, resolvedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Equal(t, []int{0}, resolvedEffect.ReadsSeed)
-	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, resolved.Value[0])].YieldEffects)
+	seededEffect := ts.ScriptCompiler.Script.Root.StatementEffects[seeded]
+	requireTargetEffects(t, seededEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Equal(t, []int{0}, seededEffect.ReadsSeed)
+	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, seeded.Value[0])].YieldEffects)
 
 	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
 	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 	require.Empty(t, freshEffect.ReadsSeed)
 
-	alwaysResolvedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[alwaysResolved]
-	requireTargetEffects(t, alwaysResolvedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Empty(t, alwaysResolvedEffect.ReadsSeed)
+	alwaysEffect := ts.ScriptCompiler.Script.Root.StatementEffects[always]
+	requireTargetEffects(t, alwaysEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Empty(t, alwaysEffect.ReadsSeed)
 
-	callerFailureEffect := ts.ScriptCompiler.Script.Root.StatementEffects[callerFailure]
-	requireTargetEffects(t, callerFailureEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Empty(t, callerFailureEffect.ReadsSeed)
+	failedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[failed]
+	requireTargetEffects(t, failedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Empty(t, failedEffect.ReadsSeed)
 
-	conditionedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[conditioned]
-	requireTargetEffects(t, conditionedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Equal(t, []int{0}, conditionedEffect.ReadsSeed)
+	gatedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[gated]
+	requireTargetEffects(t, gatedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
+	require.Equal(t, []int{0}, gatedEffect.ReadsSeed)
 
-	maybe := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Maybe", []Type{I64})]
-	always := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]
+	maybeFunc := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Maybe", []Type{I64})]
+	alwaysFunc := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]
 
-	require.Equal(t, []WriteEffect{MayWrite}, maybe.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MustWrite}, always.BodyOutputEffects)
-	require.True(t, maybe.Settled)
-	require.True(t, always.Settled)
+	require.Equal(t, []WriteEffect{MayWrite}, maybeFunc.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MustWrite}, alwaysFunc.BodyOutputEffects)
+	require.True(t, maybeFunc.Settled)
+	require.True(t, alwaysFunc.Settled)
 }
 
 func TestFunctionOutputIsNotInitiallyWritten(t *testing.T) {
