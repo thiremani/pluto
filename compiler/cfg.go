@@ -225,30 +225,22 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
 	for _, stmt := range fn.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
-		cfg.Errors = append(cfg.Errors, reads.Errors...)
+		targets := cfg.validateStatementStructure(stmt, reads, inputNames)
 		for _, event := range reads.Events {
-			cfg.validateStructuralRead(event)
 			if _, isInput := inputNames[event.Name]; isInput {
 				readInputs[event.Name] = struct{}{}
 			}
 		}
 
-		let, ok := stmt.(*ast.LetStatement)
-		if !ok {
-			continue
-		}
-		for _, target := range let.Name {
-			if isDiscard(target) {
-				continue
-			}
-
-			cfg.validateStructuralWrite(target, inputNames)
+		for _, target := range targets {
 			if _, isOutput := outputNames[target.Value]; isOutput {
 				assignedOutputs[target.Value] = struct{}{}
 			}
 		}
 
-		cfg.publishTargets(let.Name)
+		if let, ok := stmt.(*ast.LetStatement); ok {
+			cfg.publishTargets(let.Name)
+		}
 	}
 
 	for _, input := range fn.Parameters {
@@ -311,24 +303,13 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	cfg.backwardPass(live)
 }
 
-func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, structural bool) {
+func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, validateStructure bool) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
-		if structural {
-			cfg.Errors = append(cfg.Errors, reads.Errors...)
-			for _, event := range reads.Events {
-				cfg.validateStructuralRead(event)
-			}
-		}
-
 		let, isLet := stmt.(*ast.LetStatement)
-		if structural && isLet {
-			for _, target := range let.Name {
-				if !isDiscard(target) {
-					cfg.validateStructuralWrite(target, nil)
-				}
-			}
+		if validateStructure {
+			cfg.validateStatementStructure(stmt, reads, nil)
 		}
 
 		events := cfg.typedStatementEvents(stmt, reads.Events, effects)
@@ -337,6 +318,34 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 			cfg.publishTargets(let.Name)
 		}
 	}
+}
+
+// validateStatementStructure reports template-stable read and write errors and
+// returns named targets for caller-specific bookkeeping. It deliberately does
+// not publish targets: typed seed reads must be checked against the pre-write
+// scope before simultaneous assignment commits its destinations.
+func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads readCollection, inputs map[string]struct{}) []*ast.Identifier {
+	cfg.Errors = append(cfg.Errors, reads.Errors...)
+	for _, event := range reads.Events {
+		cfg.validateStructuralRead(event)
+	}
+
+	let, ok := stmt.(*ast.LetStatement)
+	if !ok {
+		return nil
+	}
+
+	targets := make([]*ast.Identifier, 0, len(let.Name))
+	for _, target := range let.Name {
+		if isDiscard(target) {
+			continue
+		}
+
+		cfg.validateStructuralWrite(target, inputs)
+		targets = append(targets, target)
+	}
+
+	return targets
 }
 
 func (cfg *CFG) typedStatementEvents(stmt ast.Statement, reads []VarEvent, effects map[*ast.LetStatement]StatementEffect) []VarEvent {

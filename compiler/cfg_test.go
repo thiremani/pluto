@@ -46,7 +46,7 @@ func TestCFGAnalysis(t *testing.T) {
 	})
 }
 
-func TestUnreachableFunctionDataflowDiagnosticsAreDeferred(t *testing.T) {
+func TestFunctionDataflowDiagnosticsWaitForReachableSpecialization(t *testing.T) {
 	code := `r = Unreachable(x)
     temporary = x + 1
     temporary = x + 2
@@ -58,6 +58,19 @@ func TestUnreachableFunctionDataflowDiagnosticsAreDeferred(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "unreachableLocalDeadStore", "", mustParseCode(t, code))
 	errs := cc.Compile()
 	require.Empty(t, errs)
+
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "result = Unreachable(1)\nresult"), cc)
+	errs = sc.Compile()
+	require.Len(t, errs, 3)
+	assertHasExpectedError(t, errs, `unconditional assignment to "temporary" overwrites a previous value that was never used`)
+
+	deadStores := 0
+	for _, err := range errs {
+		if strings.Contains(err.Msg, `value assigned to "temporary" is never used`) {
+			deadStores++
+		}
+	}
+	require.Equal(t, 2, deadStores)
 }
 
 func getValidTestCases() []cfgTestCase {
@@ -186,6 +199,15 @@ func getErrorTestCases() []cfgTestCase {
 			code: `res = alwaysWrite(x)
     res = x * 2`,
 			input:         "x = 7\nx = alwaysWrite(3) + 1\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// The direct callee writes on every iteration of this proven-nonempty
+			// domain, so it does not read the destination seed and overwrites it.
+			name: "Proven Nonempty MustWrite Call Overwrites Prior Seed",
+			code: `res = alwaysWrite(x)
+    res = x * 2`,
+			input:         "x = 7\nx = alwaysWrite(0:2)\nx",
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
 		},
 		{
