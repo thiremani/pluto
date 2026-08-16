@@ -753,15 +753,26 @@ makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
 **Finite specialization closure.** SCC settlement assumes discovery has already
 produced a finite graph. It cannot catch
 `f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
-new node, so Tarjan never runs. Before Step 2B, discovery enforces a deterministic
-per-`Solve` specialization budget before cache allocation and reports the active
-signature chain. The budget—not mangle length—is the termination bound and
-preserves valid finite polymorphic recursion. Comparing two concrete signatures
-is not enough to prove an expanding cycle: a larger re-entry may immediately
-target a fixed specialization. A richer diagnostic is deferred until it can
-prove the repeated call-site transformation. This guarantees controlled
-compiler failure, not runtime termination; totality remains a separate future
-analysis.
+new node, so Tarjan never runs. Before Step 2B, discovery caps active
+specialization frames in one **recursive inference region** while attempting to
+allocate a missing candidate. The region starts at the earliest active frame
+whose function template repeats in the candidate path; flat sibling calls and
+arbitrarily deep acyclic template chains do not consume the limit.
+First-active-template indexes and the region boundary are maintained in constant
+time, so a wide mutual cycle gets one bound rather than multiplying the limit by
+its number of templates. The guard runs before cache allocation and reports the
+recursive signature chain.
+
+This is an operational cold/unsettled-discovery fuse, not a semantic program
+property or proof that a particular signature transformation expands forever. A
+settled cache hit requires no allocation or body walk and therefore consumes
+none of the budget; warming a finite tail can change whether the resource limit
+is reached. Comparing two concrete signatures is not enough to
+prove growth: a larger re-entry may immediately target a fixed specialization.
+A richer diagnostic is deferred until it can prove the repeated call-site
+transformation. The fuse guarantees controlled compiler failure for unbounded
+specialization discovery, not runtime termination; totality remains a separate
+future analysis.
 
 After discovery closes, effects and CFG share one
 `specializationCallGraph` for each stable newly walked batch. Its dense,
@@ -829,7 +840,9 @@ reads, then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
 therefore observe the simultaneous assignment's pre-commit snapshot. Print
 arguments contribute ordinary reads even though prints have no statement
 effect entry. An unreachable template gets structural and parser checks only:
-effects cannot be derived without types.
+effects cannot be derived without types. Consequently, a library-only package
+whose templates are never instantiated receives no dead-store or
+write-after-write diagnostics in that build.
 
 The two diagnostics consume effects differently:
 
@@ -838,16 +851,21 @@ The two diagnostics consume effects differently:
   `MayWrite` changes is the **kill**: it does not kill the preceding value's
   liveness, because that value may survive.
 - *Forward (write-after-write).* Reporting that a write overwrites an unused
-  value requires **both** writes to be `MustWrite`. This is the rule that cures
-  today's conditional-write false positive, which currently forces tests to
-  interleave reads.
+  value requires **both** writes to be `MustWrite`. This cures the former
+  conditional-write false positive that forced tests to interleave reads merely
+  to silence it. A prior seed overwritten by a proven-`MustWrite` call output
+  without being read is instead a true positive: remove the seed or read it
+  explicitly when its value is semantically required.
 
 After a script solve succeeds, one combined structural/effect-sensitive CFG
 runs on the typed script. The compiler then traverses the script's complete
 direct-callee keys and each cached `DirectCallees` slice depth-first with a
-visited set, replaying every reachable specialization's diagnostics once in
-source-stable order. Warm scripts need no body rewalk, and unreachable cached
-diagnostics never leak. Persistent edges use `CallParamTypes` plus a distinct
+visited set. Every specialization remains analyzed and cached independently;
+the script presents their diagnostics as a first-seen, source-stable set union
+keyed by source location and message, so two type variants of one template do
+not print the same defect twice. Warm scripts need no body rewalk, and
+unreachable cached diagnostics never leak. Persistent edges use
+`CallParamTypes` plus a distinct
 `ScalarCallParamTypes` key only when the final source-call `ExprInfo` records
 that the companion was actually ensured; shared-cache membership alone never
 creates reachability.
@@ -1162,7 +1180,9 @@ deletion at the last consumer.
 
 - direct and mutual rank growth fail with the active signature chain, while
   ordinary recursion, finite polymorphic recursion, synthesized range/scalar
-  companions, and warm-cache reuse remain accepted
+  companions, broad non-recursive specialization sets, and warm-cache reuse
+  remain accepted; a wide mutual growth cycle shares one recursive-region bound,
+  and a settled finite tail is explicitly outside the cold-discovery budget
 
 ### Effect tests
 
