@@ -30,7 +30,8 @@ with duplicate checks. An unreachable function receives structural checks only.
 
 ### In scope
 
-- Deterministic termination protection for specialization discovery.
+- Deterministic budget-based termination protection for specialization
+  discovery.
 - Structural-only template validation.
 - Per-specialization dead-store and write-after-write analysis using settled
   `StatementEffects`.
@@ -99,29 +100,20 @@ ordinary non-convergence diagnostic.
 Land a separate prerequisite PR that adds:
 
 - an active specialization signature chain;
-- best-effort diagnostics for structurally proven strictly expanding cycles;
 - a deterministic per-`Solve` specialization budget checked before cache
   allocation;
 - accounting for newly walked or unsettled discoveries, including synthesized
   scalar companions;
 - no budget charge for an already settled warm-cache hit;
-- an error showing the active signature chain.
+- a neutral budget-exhaustion error showing the configured limit and active
+  signature chain, without claiming that the program is an expanding cycle.
 
-Use distinct diagnostics for the two failure modes:
-
-- a proven expanding cycle reports that cycle and its signature chain;
-- budget exhaustion reports the configured limit and active signature chain,
-  without claiming that the program is an expanding cycle.
-
-The distinction matters operationally: a proven cycle asks the user to change
-recursive type construction, while budget exhaustion may instead mean a large
-but finite program needs simplification or a reviewed policy-limit increase.
-
-The budget is the authoritative termination guarantee. Expanding-cycle
-detection improves error quality but must reject only a proven indefinitely
-expanding transformation. A single larger recursive re-entry is insufficient:
-ambiguous expand-then-descend cases remain subject to ordinary convergence and
-the budget so valid finite polymorphic recursion stays legal.
+The budget is the termination guarantee. Do not infer unbounded growth merely
+by comparing two concrete signatures: a larger recursive re-entry can call a
+fixed specialization next and produce a finite closure. A sound expanding-cycle
+diagnostic would require proving the repeated call-site transformation, which
+is deliberately deferred rather than adding fragile symbolic analysis before
+Step 2B.
 
 The budget value must be a named, documented policy constant chosen and tested
 in the prerequisite PR. It must not depend on mangle length or global
@@ -133,8 +125,12 @@ Run once for every function template during `CodeCompiler.Compile`.
 
 Keep these checks:
 
-- explicit use-before-definition in conditions, RHS expressions, print
-  arguments, and formatting markers/specifiers;
+- explicit use-before-definition in conditions, RHS expressions, and print
+  arguments;
+- reads from resolved formatting markers and their dynamic specifiers, while
+  preserving the language rule that an unknown main marker is literal text;
+- malformed specifiers and undefined dynamic width/precision identifiers
+  attached to a resolved marker;
 - writes to input parameters;
 - writes to module constants and other global bindings;
 - input parameters never explicitly read;
@@ -156,7 +152,9 @@ and publish non-discard destinations only afterward.
 
 No new template RHS-span classifier is needed after dead-store and WAW move to
 specializations. Structural checks operate on explicit LHS targets; typed arity
-and effect alignment remain solver-owned.
+and effect alignment remain solver-owned. Formatting collection returns reads
+and structural errors without mutating CFG state; specialization dataflow uses
+the reads but does not replay template formatting errors.
 
 ## 7. Typed Specialization Dataflow
 
@@ -372,12 +370,14 @@ specializations.
 
 ### Growth guard
 
-- direct and mutual rank growth fail with the active signature chain;
+- direct and mutual rank growth eventually exhaust the budget and fail with the
+  active signature chain;
 - budget rejection happens before the overflowing cache allocation;
-- proven-growth and budget-exhaustion errors are distinguishable and both show
-  the active signature chain;
+- the diagnostic reports budget exhaustion without claiming proven growth;
 - ordinary recursion remains accepted;
 - finite polymorphic recursion remains accepted;
+- a larger recursive re-entry that immediately reaches a fixed specialization
+  remains accepted;
 - synthesized range/scalar companions remain accepted and count
   deterministically;
 - warm settled reuse does not exhaust the per-`Solve` budget.
@@ -466,7 +466,9 @@ Suggested subject:
 `fix(compiler): bound specialization discovery`
 
 Keep termination policy isolated from CFG behavior. Land active-chain reporting,
-proven-growth diagnostics, the per-`Solve` budget, and its acceptance tests.
+the per-`Solve` budget, and its acceptance tests. A richer expanding-cycle
+diagnostic remains future work unless it can prove the repeated call-site
+transformation soundly.
 
 ### PR 2: Step 2B
 

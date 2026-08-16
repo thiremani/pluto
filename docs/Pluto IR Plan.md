@@ -753,12 +753,15 @@ makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
 **Finite specialization closure.** SCC settlement assumes discovery has already
 produced a finite graph. It cannot catch
 `f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
-new node, so Tarjan never runs. Before Step 2B, discovery diagnoses structurally
-proven expanding cycles and enforces a deterministic per-`Solve` specialization
-budget before cache allocation, reporting the active signature chain. The
-budget—not mangle length—is the defensive bound and preserves valid finite
-polymorphic recursion. This guarantees controlled compiler failure, not runtime
-termination; totality remains a separate future analysis.
+new node, so Tarjan never runs. Before Step 2B, discovery enforces a deterministic
+per-`Solve` specialization budget before cache allocation and reports the active
+signature chain. The budget—not mangle length—is the termination bound and
+preserves valid finite polymorphic recursion. Comparing two concrete signatures
+is not enough to prove an expanding cycle: a larger re-entry may immediately
+target a fixed specialization. A richer diagnostic is deferred until it can
+prove the repeated call-site transformation. This guarantees controlled
+compiler failure, not runtime termination; totality remains a separate future
+analysis.
 
 After discovery closes, future post-type interprocedural function analyses may
 share the graph's specialization IDs, caller/callee edges, and callee-first SCC

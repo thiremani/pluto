@@ -3,11 +3,21 @@ package compiler
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
+
+// maxSpecializationsPerSolve is the policy limit for unique unsettled function
+// specializations discovered by one script solve. It bounds malformed recursive
+// type growth independently of shared cache size and mangled-name length.
+const maxSpecializationsPerSolve = 256
+
+// maxSpecializationTraceFrames keeps budget diagnostics useful without making
+// a long signature chain produce a quadratic-size error message.
+const maxSpecializationTraceFrames = 8
 
 type RangeInfo struct {
 	Name     string
@@ -129,6 +139,10 @@ type walkedSpecialization struct {
 	template  *ast.FuncStatement
 }
 
+type activeSpecialization struct {
+	display string
+}
+
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
@@ -141,20 +155,88 @@ type TypeSolver struct {
 	PendingAssignments map[pendingAssignment]struct{}
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
+
+	specializationDiscoveries map[string]struct{}
+	activeSpecializations     []activeSpecialization
+	specializationLimit       int // Defaults to maxSpecializationsPerSolve; tests use smaller bounds.
+	specializationGuardFailed bool
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		ScriptCompiler:     sc,
-		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
-		FuncNameMangled:    sc.ScriptMangled,
-		Converging:         false,
-		Errors:             []*token.CompileError{},
-		ExprCache:          sc.Compiler.ExprCache,
-		TmpCounter:         0,
-		PendingAssignments: make(map[pendingAssignment]struct{}),
-		walkedFuncs:        make(map[string]walkedSpecialization),
+		ScriptCompiler:            sc,
+		Scopes:                    []Scope[Type]{NewScope[Type](FuncScope)},
+		FuncNameMangled:           sc.ScriptMangled,
+		Converging:                false,
+		Errors:                    []*token.CompileError{},
+		ExprCache:                 sc.Compiler.ExprCache,
+		TmpCounter:                0,
+		PendingAssignments:        make(map[pendingAssignment]struct{}),
+		walkedFuncs:               make(map[string]walkedSpecialization),
+		specializationDiscoveries: make(map[string]struct{}),
+		specializationLimit:       maxSpecializationsPerSolve,
 	}
+}
+
+func (ts *TypeSolver) resetSpecializationDiscovery() {
+	clear(ts.specializationDiscoveries)
+	ts.activeSpecializations = ts.activeSpecializations[:0]
+	ts.specializationGuardFailed = false
+}
+
+func (ts *TypeSolver) recordSpecializationDiscovery(mangled, name string, params []Type, tok token.Token) bool {
+	if ts.specializationGuardFailed {
+		return false
+	}
+	if _, exists := ts.specializationDiscoveries[mangled]; exists {
+		return true
+	}
+
+	// The budget is the termination guarantee. A larger active re-entry alone is
+	// not proof of infinite growth: its body may call one fixed specialization.
+	if len(ts.specializationDiscoveries) >= ts.specializationLimit {
+		candidate := activeSpecialization{display: specializationDisplay(mangled, name, params)}
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: tok,
+			Msg: fmt.Sprintf(
+				"specialization budget exhausted (limit %d per Solve); active signature chain: %s",
+				ts.specializationLimit,
+				formatSpecializationChain(ts.activeSpecializations, candidate),
+			),
+		})
+		ts.specializationGuardFailed = true
+		return false
+	}
+
+	ts.specializationDiscoveries[mangled] = struct{}{}
+	return true
+}
+
+func formatSpecializationChain(active []activeSpecialization, candidate activeSpecialization) string {
+	parts := make([]string, 0, len(active)+1)
+	for _, specialization := range active {
+		parts = append(parts, specialization.display)
+	}
+	parts = append(parts, candidate.display)
+
+	if len(parts) > maxSpecializationTraceFrames {
+		tailStart := len(parts) - (maxSpecializationTraceFrames - 1)
+		omitted := tailStart - 1
+		parts = append(
+			[]string{parts[0], fmt.Sprintf("... %d specializations omitted ...", omitted)},
+			parts[tailStart:]...,
+		)
+	}
+
+	return strings.Join(parts, " -> ")
+}
+
+func specializationDisplay(mangled, name string, params []Type) string {
+	parsed, err := DemangleParsed(mangled)
+	if err == nil && parsed.Kind == SymbolFunc && len(parsed.ArgTypes) == len(params) {
+		return fmt.Sprintf("%s(%s)", parsed.Name, strings.Join(parsed.ArgTypes, ", "))
+	}
+	return fmt.Sprintf("%s(%s) [%s]", name, typesStr(params), mangled)
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
@@ -703,6 +785,8 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 }
 
 func (ts *TypeSolver) Solve() {
+	ts.resetSpecializationDiscovery()
+
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
 	for _, stmt := range program.Statements {
@@ -2446,13 +2530,10 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
-// newFunc creates and caches a specialization record for the call.
-// String params keep their StrG/StrH type - functions are mangled separately for each.
-// Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func newFuncInfo(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
-			Name:     ce.Function.Value,
+			Name:     name,
 			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
@@ -2463,6 +2544,15 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled s
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
 	}
+
+	return f
+}
+
+// newFunc creates and caches a specialization record for the call.
+// String params keep their StrG/StrH type - functions are mangled separately for each.
+// Cache before inference so recursive calls can reuse the partial specialization.
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+	f := newFuncInfo(ce.Function.Value, bodyArgs, template)
 	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	return f
 }
@@ -2473,7 +2563,12 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
+		if !ts.recordSpecializationDiscovery(mangled, ce.Function.Value, bodyArgs, ce.Function.Token) {
+			return newFuncInfo(ce.Function.Value, bodyArgs, template)
+		}
 		f = ts.newFunc(ce, bodyArgs, mangled, template)
+	} else if !f.Settled && !ts.recordSpecializationDiscovery(mangled, f.Sig.Name, f.Sig.Params, ce.Function.Token) {
+		return f
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
@@ -2551,6 +2646,9 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	if f.Settled {
 		return true
 	}
+	if !ts.recordSpecializationDiscovery(mangled, f.Sig.Name, f.Sig.Params, template.Token) {
+		return f.OutputTypesInferred()
+	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
@@ -2560,6 +2658,12 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		template:  template,
 	}
 	clear(f.Vars)
+	ts.activeSpecializations = append(ts.activeSpecializations, activeSpecialization{
+		display: specializationDisplay(mangled, f.Sig.Name, f.Sig.Params),
+	})
+	defer func() {
+		ts.activeSpecializations = ts.activeSpecializations[:len(ts.activeSpecializations)-1]
+	}()
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled
