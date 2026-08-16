@@ -83,8 +83,9 @@ the only single-bit reading of a per-slot expression in a position that asks one
 question: *did it yield?* A multi-value expression yields when it produces its
 complete value, i.e. every slot yields. The same reading gives a `||` gate its
 OR semantics (its yield flag — `a > 2 || b > 3` yields when either side does),
-and is why an **array cell is rejected** in a gate: a mask always yields, so a
-gate over one would look meaningful while testing nothing.
+and is why an **array cell is rejected** in a gate: mask comparison results do
+not provide a scalar predicate, so a gate over one would look meaningful while
+testing nothing. Operand and bounds failures still suppress mask production.
 
 ### Conditions are value positions
 
@@ -301,8 +302,9 @@ runs). A `||` falls back **per slot**: slot *i* takes the right side only when
 slot *i* of the left failed to yield, a fallback beats keep-old, and a slot where
 both sides fail keeps its old value (`Pair(5, 7) > Pair(1, 8) || Pair(0, 0)` →
 `5 0`). A `||` inside an operand resolves to its value before the compare
-(`Pair(a > 2 || 7, b) > Pair(1, 1)`). Array slots always yield (a mask is a
-value), so `||` only ever affects scalar slots.
+(`Pair(a > 2 || 7, b) > Pair(1, 1)`). An array-mask comparison adds no failure
+of its own, but still inherits operand and bounds failures; `||` only supplies
+comparison fallback behavior for scalar slots.
 
 Slots merge where an expression produces its outputs together: a **call's**
 outputs all share every argument's condition (ANDed), so `Sum2(Pair(5, 7) >

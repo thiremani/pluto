@@ -75,12 +75,14 @@ x, y`
 	template, isEvenMangled, ok := ts.lookupCallTemplate(call, args)
 	require.True(t, ok)
 	isEvenFunc := ts.newFunc(call, args, isEvenMangled, template)
+	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
 	ts.Converging = false
 	ts.firstUnresolved = nil
 	clear(ts.walkedFuncs)
 	require.True(t, ts.TypeFunc(isEvenMangled, template))
+	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddFunc := cc.Compiler.FuncCache[isOddMangled]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
@@ -107,6 +109,8 @@ x, y`
 	require.False(t, ts.Converging)
 	require.True(t, isEvenFunc.Settled)
 	require.True(t, isOddFunc.Settled)
+	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isEvenFunc.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isOddFunc.BodyOutputEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)

@@ -23,8 +23,9 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 	script := &Script{
 		Name: name,
 		Root: &FuncInfo{
-			Sig:  Func{Name: name},
-			Vars: make(map[string]Type),
+			Sig:              Func{Name: name},
+			Vars:             make(map[string]Type),
+			StatementEffects: make(map[*ast.LetStatement]StatementEffect),
 		},
 	}
 	scriptMangled := MangleScript(cc.Compiler.MangledPath, name)

@@ -622,9 +622,9 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 // compiled once (an inner comparison substitutes its retained LHS, so chains
 // share one evaluation); each scalar slot yields its comparison bit ANDed with
 // the operands' own conditions for that slot, and each array slot becomes an
-// element-wise mask, which always yields and so contributes no condition. LHS
-// values are retained in the condLHS frame; the left operand is tracked as a
-// temporary unless it is a chained comparison that is already tracked.
+// element-wise mask that adds no comparison condition but preserves operand
+// conditions. LHS values are retained in the condLHS frame; the left operand
+// is tracked as a temporary unless it is a chained comparison already tracked.
 func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *ExprInfo, temps []condTemp) ([]llvm.Value, []condTemp) {
 	var lConds, rConds []llvm.Value
 	lConds, temps = c.extractSlotConds(infix.Left, temps)
@@ -916,11 +916,7 @@ func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), 
 // contribute only ranges.
 // Returns nil, nil if no condition introduces ranges.
 func (c *Compiler) splitCondRanges(conditions []ast.Expression) ([]*RangeInfo, []ast.Expression) {
-	var ranges []*RangeInfo
-	for _, expr := range conditions {
-		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, info.Ranges)
-	}
+	ranges := conditionRanges(c.ExprCache, c.FuncNameMangled, conditions)
 	if len(ranges) == 0 {
 		return nil, nil
 	}

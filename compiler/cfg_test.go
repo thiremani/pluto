@@ -326,9 +326,9 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
 }
 
-// Typed comparison metadata distinguishes a scalar condition, which may not
-// yield, from an array mask, which always materializes an array. The untyped
-// function-template fallback intentionally cannot make that distinction.
+// Typed comparison metadata distinguishes a scalar condition from an array
+// mask. With infallible operands this mask materializes unconditionally; the
+// untyped function-template fallback intentionally cannot prove that.
 func TestArrayComparisonWriteIsUnconditional(t *testing.T) {
 	errs := compileScriptForCFGTest(t, "arrayComparisonWrite", "a = [1 2]\nr = [9 9]\nr = a > 0\nr")
 	require.NotEmpty(t, errs, "the dead store behind the array mask must be reported")

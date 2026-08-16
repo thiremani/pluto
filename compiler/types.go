@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 )
 
@@ -265,9 +266,13 @@ func (f Func) OutputTypesInferred() bool {
 
 // FuncInfo holds the mutable facts for one function specialization.
 type FuncInfo struct {
-	Sig     Func
-	Vars    map[string]Type
-	Settled bool
+	Sig              Func
+	Vars             map[string]Type
+	StatementEffects map[*ast.LetStatement]StatementEffect
+	// BodyOutputEffects summarizes the typed scalar body before a call-owned
+	// Range or ArrayRange domain determines whether that body executes.
+	BodyOutputEffects []WriteEffect
+	Settled           bool
 }
 
 func (f *FuncInfo) AllTypesInferred() bool {

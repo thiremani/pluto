@@ -646,8 +646,15 @@ rebuilt from scratch on every body walk.
 ### YieldEffect
 
 `YieldEffect` describes whether an *expression outcome* produces a value, where
-`WriteEffect` describes whether a *target slot* receives one: `MustYield` or
-`MayYield`, per slot, aligned with `OutTypes`.
+`WriteEffect` describes whether a *target slot* receives one. Yield effects are
+`MustYield` or `MayYield`, per slot, aligned with `OutTypes`; write effects are
+`MustWrite` or `MayWrite`.
+
+Yield facts belong to the typed source AST nodes referenced by statements.
+Compiler-local `Rewrite` nodes are lowering artifacts whose scalarization can
+change their local domain, so they do not receive independent or copied
+`YieldEffects`. A consumer lowering a rewrite retains the originating source
+node and reads its effects there.
 
 Composition: a checked access is `MayYield`; a `fallback` whose final
 alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
@@ -655,11 +662,12 @@ alternative is `MustYield` resolves to `MustYield`, otherwise `MayYield`;
 operands.
 
 Comparisons are **not** uniformly `MayYield` — the state follows the solved
-comparison mode. A scalar value-position comparison may fail to yield, but an
-array comparison produces a length-preserving zero-filled mask and always
-yields, so it is `MustYield`. A multi-output comparison can therefore mix both
-states across its slots, which is why derivation is per slot from the solved
-mode and type rather than from the syntactic operator.
+comparison mode. A scalar value-position comparison may fail to yield. An
+array comparison produces a length-preserving zero-filled mask and adds no
+failure of its own, but still inherits failure from either operand; it is
+`MustYield` only when both operands are. A multi-output comparison can
+therefore mix both states across its slots, which is why derivation is per slot
+from the solved mode and type rather than from the syntactic operator.
 
 Calls are where the two effects interact. A failure evaluating the invocation
 or its arguments suppresses the **whole tuple** — the call-merge rule — so
@@ -724,26 +732,47 @@ instead of suppressing the invocation.
 
 ### Convergence and publication
 
-**Folding a body into an output summary.** A declared output's summary is the
-sequential fold of the body's per-slot effects for that output, in statement
-order: the output starts `MayWrite` (nothing has written it), a `MustWrite`
-statement slot sets it to `MustWrite`, and a `MayWrite` statement slot leaves
-it unchanged — a later conditional write cannot un-guarantee an earlier
-unconditional one. A function-owned domain then weakens the whole result:
-because a `Range` **or `ArrayRange`** parameter wraps the complete body and may
-execute zero times, every output the body writes only inside that domain
-becomes `MayWrite` at the function boundary. A range created *inside* the body
+**Folding a body into an output summary.** A declared output's body summary is
+the sequential fold of the body's per-slot effects for that output, in
+statement order: the output starts `MayWrite` (nothing has written it), a
+`MustWrite` statement slot sets it to `MustWrite`, and a `MayWrite` statement
+slot leaves it unchanged — a later conditional write cannot un-guarantee an
+earlier unconditional one. A boundary `MustWrite` obtained by reading the
+destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
+an earlier value does not prove that the body wrote one. The published
+`BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
+`ArrayRange` parameter controls whether
+the scalar body executes, not what the body does when it executes. Each call
+combines that reusable body summary with its solved domain. A provably
+non-empty literal can therefore preserve `MustWrite`, while an empty or unknown
+domain weakens the call to `MayWrite`. A range created *inside* the body still
 weakens only the outputs its statements drive — a possibly empty local range
 makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
-`res` — while unrelated outputs keep their effects. Only a parameter domain
-blanket-weakens the whole boundary.
+`res` — while unrelated outputs keep their effects.
 
-**Fixed point.** Function-output effects, and only those, need one: a recursive
-callee can refine its outputs after types settle, and `TypeScriptFunc` today
-converges on types alone. Condense the typed specialization call graph into its
-strongly connected components and process them **callee-first** in reverse
-topological order — this is what lets a component assume every callee outside
-it has already published. Within one component:
+**Finite specialization closure.** SCC settlement assumes discovery has already
+produced a finite graph. It cannot catch
+`f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
+new node, so Tarjan never runs. Before Step 2B, discovery diagnoses structurally
+proven expanding cycles and enforces a deterministic per-`Solve` specialization
+budget before cache allocation, reporting the active signature chain. The
+budget—not mangle length—is the defensive bound and preserves valid finite
+polymorphic recursion. This guarantees controlled compiler failure, not runtime
+termination; totality remains a separate future analysis.
+
+After discovery closes, future post-type interprocedural function analyses may
+share the graph's specialization IDs, caller/callee edges, and callee-first SCC
+ordering while keeping separate facts and transfer rules. Keep `effectGraph`
+until a second consumer lands; then extract a `specializationCallGraph` and add
+call-site or full-reachable-closure data only when that consumer requires it.
+
+**Fixed point.** Function-body output effects, and only those, need one: a
+recursive callee can refine its outputs after types settle, and
+`TypeScriptFunc` today converges on types alone. Condense the typed
+specialization call graph into its strongly connected components and process
+them **callee-first** in reverse topological order — this is what lets a
+component assume every callee outside it has already published. Within one
+component:
 
 1. Seed every member's outputs with a provisional `MustWrite` working vector. A
    recursive call reads that provisional value — which is why `Uncomputed`
@@ -884,7 +913,7 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2A is unblocked.** Gated print syntax, if wanted, is a
+and ranges. **Step 2A is complete.** Gated print syntax, if wanted, is a
 separate feature PR before Step 6; any other language change likewise gets
 its own PR with its semantics-doc and rejection-test updates.
 
@@ -899,9 +928,10 @@ Two PRs, implementing §15.
   point, lifecycle, and caching.
 - **2B — specialization-aware CFG.** Move dead-write and write-after-write to
   settled specializations under the transfer rules; convert `ReadsSeed` facts
-  into ordinary CFG read events; keep structural checks at template time;
-  cache and replay specialization diagnostics; switch scripts and functions to
-  consume summaries; then delete the CFG's duplicated syntactic classifiers.
+  into ordinary CFG read events; keep structural checks at template time; cache
+  each specialization's diagnostics and call edges so later scripts replay the
+  reachable closure once; switch scripts and functions to consume summaries;
+  then delete the CFG's duplicated syntactic classifiers.
 
 This fixes the conditional-write false positive, does not depend on PIR, and
 lands first. PIR implementation starts only after 2A/2B tests pass.
@@ -1106,6 +1136,12 @@ deletion at the last consumer.
 - negative tests for every validator invariant
 - derived release points appear in expanded PIR, so ownership regressions
   surface as plan diffs before any leak-check run
+
+### Specialization-closure tests
+
+- direct and mutual rank growth fail with the active signature chain, while
+  ordinary recursion, finite polymorphic recursion, synthesized range/scalar
+  companions, and warm-cache reuse remain accepted
 
 ### Effect tests
 

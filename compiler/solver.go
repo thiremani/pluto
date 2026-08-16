@@ -31,13 +31,14 @@ type ExprInfo struct {
 	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
-	HasRanges            bool       // True if expression involves ranges (propagated upward during typing)
-	LoopInside           bool       // For CallExpression: true if function handles iteration, false if call site handles it
-	CallParamTypes       []Type     // Solver-selected call params for the original expression shape
-	ScalarCallParamTypes []Type     // Param types to use once outer loops consume ranges into scalars
-	CompareModes         []CondMode // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
-	ArrayShape           []uint64   // Statically known dimensions for array literals; nil when runtime-dependent
-	RangeDriverCond      bool       // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
+	HasRanges            bool          // True if expression involves ranges (propagated upward during typing)
+	LoopInside           bool          // For CallExpression: true if function handles iteration, false if call site handles it
+	CallParamTypes       []Type        // Solver-selected call params for the original expression shape
+	ScalarCallParamTypes []Type        // Param types to use once outer loops consume ranges into scalars
+	CompareModes         []CondMode    // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+	ArrayShape           []uint64      // Statically known dimensions for array literals; nil when runtime-dependent
+	RangeDriverCond      bool          // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
+	YieldEffects         []YieldEffect // Per-output guarantee for a typed source expression; nil on lowering rewrites.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -81,16 +82,16 @@ func (info *ExprInfo) HasCondAnd() bool {
 }
 
 // IsMask reports whether output slot i is an array mask — a heap-owned,
-// always-yielding value that must be freed if it is not moved into a result
+// length-preserving value that must be freed if it is not moved into a result
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
 func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
-// HasCondExpr returns true if any slot is a failable conditional expression —
-// a scalar comparison, a ||, or a &&. Always-yielding masks (CondArray) are
-// deliberately excluded: callers ask "can this fail to yield?", which a mask
-// never does.
+// HasCondExpr returns true if any slot adds conditional value control flow — a
+// scalar comparison, a ||, or a &&. Array masks are deliberately excluded:
+// mask construction adds no comparison failure of its own, while operand and
+// bounds failures remain attached to the expressions that produce them.
 func (info *ExprInfo) HasCondExpr() bool {
 	for _, m := range info.CompareModes {
 		if m == CondScalar || m == CondOr || m == CondAnd {
@@ -121,6 +122,13 @@ type pendingAssignment struct {
 	exprOutIdx      int
 }
 
+type walkedSpecialization struct {
+	// walkIndex is dense within the current solver pass and becomes the effect graph node ID.
+	walkIndex int
+	info      *FuncInfo
+	template  *ast.FuncStatement
+}
+
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
@@ -131,7 +139,7 @@ type TypeSolver struct {
 	TmpCounter         int  // tmpCounter for uniquely naming temporary variables
 	InValueExpr        bool // value position (LetStatement conditions/values, prints; inherited by nested exprs): comparisons yield their LHS and chain, ||/&& gate and fall back. Every expression context is a value position now; the flag guards statement-structure typing.
 	PendingAssignments map[pendingAssignment]struct{}
-	walkedFuncs        map[string]struct{} // specializations walked in the current pass
+	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
 }
 
@@ -145,7 +153,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		ExprCache:          sc.Compiler.ExprCache,
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
-		walkedFuncs:        make(map[string]struct{}),
+		walkedFuncs:        make(map[string]walkedSpecialization),
 	}
 }
 
@@ -261,6 +269,14 @@ func mergeUses(a, b []*RangeInfo) []*RangeInfo {
 		out = appendUses(out, e, seen)
 	}
 	return out
+}
+
+func conditionRanges(cache map[ExprKey]*ExprInfo, mangled string, conditions []ast.Expression) []*RangeInfo {
+	var ranges []*RangeInfo
+	for _, condition := range conditions {
+		ranges = mergeUses(ranges, cache[key(mangled, condition)].Ranges)
+	}
+	return ranges
 }
 
 // HandleRanges processes expressions to identify and rewrite range literals for loop generation.
@@ -708,6 +724,9 @@ func (ts *TypeSolver) Solve() {
 			Msg:   fmt.Sprintf("type for %q could not be resolved", pending.name),
 		})
 	}
+	if len(ts.Errors) == 0 {
+		ts.deriveScriptEffects()
+	}
 }
 
 // TypePrintStatement types a print in value position: a comparison yields its
@@ -865,19 +884,6 @@ func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes 
 	})
 }
 
-// collectConditionRanges gathers all ranges from condition expressions.
-// When conditions iterate over ranges (e.g. i < 3 where i = 0:5), those
-// ranges must be merged into value ExprInfos so the compiler iterates
-// and accumulates per iteration.
-func (ts *TypeSolver) collectConditionRanges(conditions []ast.Expression) []*RangeInfo {
-	var ranges []*RangeInfo
-	for _, expr := range conditions {
-		info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-		ranges = mergeUses(ranges, info.Ranges)
-	}
-	return ranges
-}
-
 // mergeCondRangesIntoValue merges condition ranges into a value expression's
 // ExprInfo so ranged statement conditions can drive per-iteration RHS lowering.
 // Bare Range assignments have already been classified as descriptor copies or
@@ -908,7 +914,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 		ts.validateStatementCondition(expr, condTypes)
 	}
 
-	condRanges := ts.collectConditionRanges(stmt.Condition)
+	condRanges := conditionRanges(ts.ExprCache, ts.FuncNameMangled, stmt.Condition)
 
 	// type values in value-expression context (comparisons become conditional extractors)
 	ts.InValueExpr = true
@@ -2443,14 +2449,16 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 // newFunc creates and caches a specialization record for the call.
 // String params keep their StrG/StrH type - functions are mangled separately for each.
 // Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
 			Name:     ce.Function.Value,
-			Params:   args,
+			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
-		Vars: make(map[string]Type),
+		Vars:              make(map[string]Type),
+		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
+		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2459,13 +2467,13 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, args []Type, mangled strin
 	return f
 }
 
-func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		f = ts.newFunc(ce, args, mangled, template)
+		f = ts.newFunc(ce, bodyArgs, mangled, template)
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
@@ -2478,7 +2486,7 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, args []Type, mangle
 	}
 
 	// At script level, all arg types must be resolved before typing
-	for i, arg := range args {
+	for i, arg := range bodyArgs {
 		if IsFullyResolvedType(arg) {
 			continue
 		}
@@ -2510,15 +2518,14 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 
 		// An unchanged complete pass refreshes body metadata against final signatures.
 		if f.AllTypesInferred() && ts.firstUnresolved == nil && !ts.Converging {
-			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
-				if cached == nil || !cached.AllTypesInferred() {
-					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", walked))
+			for mangled, walked := range ts.walkedFuncs {
+				if !walked.info.AllTypesInferred() {
+					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
-			for walked := range ts.walkedFuncs {
-				cached := ts.ScriptCompiler.Compiler.FuncCache[walked]
-				cached.Settled = true
+			ts.settleEffects()
+			for _, walked := range ts.walkedFuncs {
+				walked.info.Settled = true
 			}
 			return f.Sig.OutTypes
 		}
@@ -2547,7 +2554,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
-	ts.walkedFuncs[mangled] = struct{}{}
+	ts.walkedFuncs[mangled] = walkedSpecialization{
+		walkIndex: len(ts.walkedFuncs),
+		info:      f,
+		template:  template,
+	}
 	clear(f.Vars)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
