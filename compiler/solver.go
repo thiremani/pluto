@@ -2639,6 +2639,9 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 		}
 		f = ts.newFunc(ce, bodyArgs, mangled, template)
 	}
+	if ts.specializationGuardFailed && !f.Settled {
+		return f
+	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled {

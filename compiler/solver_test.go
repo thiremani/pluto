@@ -1427,6 +1427,29 @@ res = Right(x)
 	}
 }
 
+func TestRecursiveSpecializationFailureStopsSiblingRewalks(t *testing.T) {
+	const testLimit = 3
+
+	code := mustParseCode(t, `res = Grow(x)
+    res = Grow([x])
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+
+	script := "value = Grow(1) + Grow([1]) + Grow([[1]]) + Grow([[[1]]])\nvalue"
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, script), cc)
+	ts := NewTypeSolver(sc)
+	ts.recursiveSpecializationLimit = testLimit
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1, "later calls in the statement must not rewalk the failed unsettled closure")
+	require.Contains(t, ts.Errors[0].Msg, "recursive specialization resource limit exceeded")
+	require.NotContains(t, ts.Errors[0].Msg, "not converging")
+}
+
 func growingMutualCycleCode(templateCount int) string {
 	var code strings.Builder
 	for index := range templateCount {
