@@ -289,7 +289,7 @@ func (cc *CodeCompiler) Compile() []*token.CompileError {
 		}
 	}
 
-	cfg := NewCFG(nil, cc)
+	cfg := NewCFG(cc)
 	cfg.AnalyzeFuncs()
 	cc.Compiler.Errors = append(cc.Compiler.Errors, cfg.Errors...)
 

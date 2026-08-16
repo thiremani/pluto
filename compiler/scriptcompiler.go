@@ -47,10 +47,11 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 		return ts.Errors
 	}
 
-	cfg := NewCFG(sc, sc.Compiler.CodeCompiler)
-	cfg.Analyze(sc.Program.Statements)
-	if len(cfg.Errors) != 0 {
-		// return any data‐flow errors (use‐before‐def, dead stores, etc.)
+	cfg := NewCFG(sc.Compiler.CodeCompiler)
+	cfg.AnalyzeScript(sc.Program.Statements, sc.Script.Root.StatementEffects)
+	directCallees := collectDirectCallees(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
+	cfg.Errors = replaySpecializationCFG(sc.Compiler, directCallees, cfg.Errors)
+	if len(cfg.Errors) > 0 {
 		return cfg.Errors
 	}
 
@@ -65,4 +66,39 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	// Add explicit return 0
 	c.addRet()
 	return c.Errors
+}
+
+func replaySpecializationCFG(compiler *Compiler, roots []string, errors []*token.CompileError) []*token.CompileError {
+	visited := make(map[string]struct{})
+
+	for _, mangled := range roots {
+		errors = replaySpecializationCFGNode(compiler, mangled, visited, errors)
+	}
+
+	return errors
+}
+
+func replaySpecializationCFGNode(compiler *Compiler, mangled string, visited map[string]struct{}, errors []*token.CompileError) []*token.CompileError {
+	if _, seen := visited[mangled]; seen {
+		return errors
+	}
+	visited[mangled] = struct{}{}
+
+	info := compiler.FuncCache[mangled]
+	if info == nil {
+		panic("internal: reachable specialization missing from function cache: " + mangled)
+	}
+	if !info.Settled {
+		panic("internal: reachable specialization is not settled: " + mangled)
+	}
+	if info.CFG == nil {
+		panic("internal: settled specialization has no CFG result: " + mangled)
+	}
+
+	errors = append(errors, info.CFG.Errors...)
+	for _, callee := range info.CFG.DirectCallees {
+		errors = replaySpecializationCFGNode(compiler, callee, visited, errors)
+	}
+
+	return errors
 }

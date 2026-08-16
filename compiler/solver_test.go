@@ -1570,6 +1570,14 @@ scaled`)
 
 	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
+	require.True(t, callInfo.ScalarCallVariantEnsured)
+	require.Equal(t, []string{primaryMangled, scalarMangled},
+		collectDirectCallees(sc.Compiler, sc.ScriptMangled, program.Statements))
+	callInfo.ScalarCallVariantEnsured = false
+	require.Equal(t, []string{primaryMangled},
+		collectDirectCallees(sc.Compiler, sc.ScriptMangled, program.Statements),
+		"a scalar key already present in the shared cache must not create an edge without a call-local ensured fact")
+	callInfo.ScalarCallVariantEnsured = true
 	require.Contains(t, ts.specializationDiscoveries, primaryMangled)
 	require.Contains(t, ts.specializationDiscoveries, scalarMangled,
 		"the collector's ensured scalar companion must consume the same per-solve budget")
@@ -1579,6 +1587,84 @@ scaled`)
 		specializationDisplay(primaryMangled, "Scale", callInfo.ScalarCallParamTypes),
 		specializationDisplay(scalarMangled, "Scale", callInfo.ScalarCallParamTypes),
 		"diagnostic frames must retain the actual specialization key when body parameter types collapse")
+}
+
+func TestSettledSpecializationPublishesCFGDiagnosticsWithoutSolverFailure(t *testing.T) {
+	code := mustParseCode(t, `result = Noisy(x)
+    unused = x
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "specializationCFGDiagnostics", "", code)
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), "value = Noisy(1)\nvalue")
+	mangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
+	info := cc.Compiler.FuncCache[mangled]
+
+	require.Empty(t, ts.Errors, "function CFG diagnostics must not become type-solver failures")
+	require.True(t, info.Settled)
+	require.NotNil(t, info.CFG)
+	require.Len(t, info.CFG.Errors, 1)
+	require.Contains(t, info.CFG.Errors[0].Msg, `"unused"`)
+}
+
+func TestSpecializationCFGRecordsAlreadySettledDirectCallee(t *testing.T) {
+	code := mustParseCode(t, `result = Leaf(x)
+    result = x
+
+result = Wrapper(x)
+    result = Leaf(x)
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "settledCFGEdge", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
+	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
+	leaf := cc.Compiler.FuncCache[leafMangled]
+	require.True(t, leaf.Settled)
+	require.NotNil(t, leaf.CFG)
+	require.Empty(t, leaf.CFG.Errors)
+	require.Empty(t, leaf.CFG.DirectCallees)
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
+	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
+	wrapper := cc.Compiler.FuncCache[wrapperMangled]
+
+	require.True(t, wrapper.Settled)
+	require.NotNil(t, wrapper.CFG)
+	require.Equal(t, []string{leafMangled}, wrapper.CFG.DirectCallees)
+}
+
+func TestSpecializationGraphRejectsSettledCalleeWithoutCFGPublication(t *testing.T) {
+	code := mustParseCode(t, `result = Leaf(x)
+    result = x
+
+result = Wrapper(x)
+    result = Leaf(x)
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "missingSettledCFG", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
+	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
+	cc.Compiler.FuncCache[leafMangled].CFG = nil
+
+	program := mustParseScript(t, "value = Wrapper(1)\nvalue")
+	sc := NewScriptCompiler(ctx, t.Name()+"Wrapper", program, cc)
+	ts := NewTypeSolver(sc)
+	require.PanicsWithValue(t,
+		"internal: settled specialization "+leafMangled+" has no CFG result",
+		ts.Solve,
+	)
 }
 
 func TestNonConvergingCalleeIsBlamed(t *testing.T) {

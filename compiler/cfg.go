@@ -30,25 +30,36 @@ type StmtNode struct {
 	Events []VarEvent
 }
 
-// BasicBlock is a straight‐line sequence of statements.
+// BasicBlock is a straight-line sequence of statements.
 type BasicBlock struct {
 	Stmts []*StmtNode
 }
 
-// CFG holds all blocks for a function (or "main").
-type CFG struct {
-	ScriptCompiler *ScriptCompiler // The context to look up globals, ExprCache, FuncCache (can be nil for CodeCompiler use)
-	CodeCompiler   *CodeCompiler   // The context to look up globals (for backward compatibility)
-	Blocks         []*BasicBlock
-	Scopes         []Scope[VarEvent] // Used ONLY by the forward pass
-	Errors         []*token.CompileError
+type readCollection struct {
+	Events []VarEvent
+	Errors []*token.CompileError
 }
 
-// PushBlock creates and returns a new, empty basic block
+// CFG owns structural template validation and effect-sensitive dataflow.
+type CFG struct {
+	CodeCompiler *CodeCompiler
+	Blocks       []*BasicBlock
+	Scopes       []Scope[VarEvent]
+	Errors       []*token.CompileError
+}
+
+func NewCFG(cc *CodeCompiler) *CFG {
+	return &CFG{
+		CodeCompiler: cc,
+		Blocks:       make([]*BasicBlock, 0),
+		Scopes:       []Scope[VarEvent]{NewScope[VarEvent](FuncScope)},
+		Errors:       make([]*token.CompileError, 0),
+	}
+}
+
+// PushBlock creates a new empty basic block.
 func (cfg *CFG) PushBlock() {
-	cfg.Blocks = append(cfg.Blocks, &BasicBlock{
-		Stmts: []*StmtNode{},
-	})
+	cfg.Blocks = append(cfg.Blocks, &BasicBlock{Stmts: []*StmtNode{}})
 }
 
 func (cfg *CFG) PopBlock() {
@@ -58,44 +69,61 @@ func (cfg *CFG) PopBlock() {
 	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
 }
 
-func NewCFG(sc *ScriptCompiler, cc *CodeCompiler) *CFG {
-	return &CFG{
-		ScriptCompiler: sc,
-		CodeCompiler:   cc,
-		Blocks:         make([]*BasicBlock, 0),
-		Scopes:         []Scope[VarEvent]{NewScope[VarEvent](FuncScope)}, // Start with a global scope
-		Errors:         make([]*token.CompileError, 0),
-	}
-}
-
-// collectReads walks an expression tree and returns a slice of all
-// the identifier names it finds, put in VarEvent. This is a read-only analysis.
-func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
-	// Leaf cases with special handling
+// collectReads is a pure read/formatting analysis. It reports formatting
+// errors to the caller and never publishes bindings or mutates CFG errors.
+func (cfg *CFG) collectReads(expr ast.Expression) readCollection {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral:
-		return nil
+		return readCollection{}
 	case *ast.StringLiteral:
 		return cfg.collectStringReads(e.Token.Literal, e.Token)
 	case *ast.Identifier:
-		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
+		return readCollection{
+			Events: []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}},
+		}
 	}
 
-	// Recurse into children for composite expressions
 	children := ast.ExprChildren(expr)
 	if children == nil {
 		panic(fmt.Sprintf("unhandled expression type: %T", expr))
 	}
-	var evs []VarEvent
+
+	var result readCollection
 	for _, child := range children {
-		evs = append(evs, cfg.collectReads(child)...)
+		result.append(cfg.collectReads(child))
 	}
-	return evs
+
+	return result
 }
 
-func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
-	// Collects all identifiers in the format string.
-	var evs []VarEvent
+func (reads *readCollection) append(other readCollection) {
+	reads.Events = append(reads.Events, other.Events...)
+	reads.Errors = append(reads.Errors, other.Errors...)
+}
+
+func (cfg *CFG) collectStatementReads(stmt ast.Statement) readCollection {
+	var expressions []ast.Expression
+	switch s := stmt.(type) {
+	case *ast.LetStatement:
+		expressions = make([]ast.Expression, 0, len(s.Condition)+len(s.Value))
+		expressions = append(expressions, s.Condition...)
+		expressions = append(expressions, s.Value...)
+	case *ast.PrintStatement:
+		expressions = s.Expression.Arguments
+	default:
+		return readCollection{}
+	}
+
+	var result readCollection
+	for _, expr := range expressions {
+		result.append(cfg.collectReads(expr))
+	}
+
+	return result
+}
+
+func (cfg *CFG) collectStringReads(value string, tok token.Token) readCollection {
+	var result readCollection
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -103,290 +131,65 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 			i = next - 1
 			continue
 		}
-		if maybeMarker(runes, i) {
-			markerEvents, end := cfg.collectMarkerReads(value, tok, runes, i)
-			evs = append(evs, markerEvents...)
-			i = end - 1 // The loop increment advances past the marker.
+		if !maybeMarker(runes, i) {
+			continue
 		}
+
+		markerReads, end := cfg.collectMarkerReads(value, tok, runes, i)
+		result.append(markerReads)
+		i = end - 1
 	}
-	return evs
+
+	return result
 }
 
-// collectMarkerReads collects any identifiers used after marker `-` in the format string.
-// it assumes start is at marker
-func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
-	mainId, end := parseIdentifier(runes, start+1)
-	exists := cfg.isDefined(mainId)
-	if !exists {
-		// nothing to collect if the main identifier is not in the symbol table
-		return nil, end
+// An unknown main marker itself is literal text.
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) (readCollection, int) {
+	mainID, end := parseIdentifier(runes, start+1)
+	if !cfg.isDefined(mainID) {
+		return readCollection{}, end
 	}
 
-	evs = []VarEvent{{Name: mainId, Kind: Read, Token: tok}}
-	// Collect dynamic width/precision reads when an attached specifier follows.
-	if end < len(runes) && runes[end] == '%' {
-		var specifierEvents []VarEvent
-		specifierEvents, end = cfg.collectSpecifierReads(value, tok, runes, end)
-		evs = append(evs, specifierEvents...)
+	result := readCollection{
+		Events: []VarEvent{{Name: mainID, Kind: Read, Token: tok}},
 	}
-	return evs, end
+	if end >= len(runes) || runes[end] != '%' {
+		return result, end
+	}
+
+	specifierReads, specifierEnd := cfg.collectSpecifierReads(value, tok, runes, end)
+	result.append(specifierReads)
+	return result, specifierEnd
 }
 
-// collectSpecifierReads collects all identifiers used in the format specifier
-// It assumes the runes slice is valid start is at the `%` character
-func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (evs []VarEvent, end int) {
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (readCollection, int) {
 	spec, err := parseSpecifierSyntax(tok, value, runes, start)
+	result := readCollection{}
 	if err != nil {
-		cfg.Errors = append(cfg.Errors, err)
-		// Still collect the identifiers to avoid unrelated dead-store diagnostics.
+		result.Errors = append(result.Errors, err)
 		for _, specID := range spec.ids {
 			if cfg.isDefined(specID) {
-				evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
+				result.Events = append(result.Events, VarEvent{Name: specID, Kind: Read, Token: tok})
 			}
 		}
-		return evs, spec.end
+
+		return result, spec.end
 	}
+
 	for _, specID := range spec.ids {
 		if !cfg.isDefined(specID) {
-			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
-			return evs, spec.end
+			result.Errors = append(result.Errors, undefinedSpecifierVariableError(tok, value, specID))
+			return result, spec.end
 		}
-		evs = append(evs, VarEvent{Name: specID, Kind: Read, Token: tok})
+		result.Events = append(result.Events, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
-	return evs, spec.end
+
+	return result, spec.end
 }
 
-// extractStmtEvents records the reads common to every statement and appends
-// destination writes when stmt is a LetStatement. Callers supply write kinds
-// only for a LetStatement; a PrintStatement has no destinations.
-func (cfg *CFG) extractStmtEvents(stmt ast.Statement, kinds []EventType) []VarEvent {
-	var reads []ast.Expression
-	var names []*ast.Identifier
-	switch s := stmt.(type) {
-	case *ast.LetStatement:
-		reads = make([]ast.Expression, 0, len(s.Condition)+len(s.Value))
-		reads = append(reads, s.Condition...)
-		reads = append(reads, s.Value...)
-		names = s.Name
-	case *ast.PrintStatement:
-		reads = s.Expression.Arguments
-	default:
-		return nil
-	}
-
-	var evs []VarEvent
-	for _, expr := range reads {
-		evs = append(evs, cfg.collectReads(expr)...)
-	}
-	for i, lhs := range names {
-		// A blank slot binds nothing, so it has no writes or liveness.
-		if isDiscard(lhs) {
-			continue
-		}
-
-		ve := VarEvent{Name: lhs.Value, Kind: kinds[i], Token: lhs.Tok()}
-		Put(cfg.Scopes, lhs.Value, ve)
-		evs = append(evs, ve)
-	}
-	return evs
-}
-
-// destWriteKinds classifies each destination write of a statement. A statement
-// condition suspends the whole simultaneous assignment. Every other source of
-// a skipped write belongs to one value expression — an empty driver, a callee
-// that keeps its output, a value that never yields — and leaves sibling
-// expressions' writes untouched, so those mark only the destinations their own
-// expression feeds and a dead store behind an unconditional sibling is still
-// reported.
-func (cfg *CFG) destWriteKinds(s *ast.LetStatement) []EventType {
-	if len(s.Condition) > 0 {
-		return makeWriteKinds(len(s.Name), ConditionalWrite)
-	}
-
-	kinds := makeWriteKinds(len(s.Name), Write)
-	c := cfg.ScriptCompiler.Compiler
-	dest := 0
-	for _, v := range s.Value {
-		maySkip := cfg.valueMaySkip(v)
-		span := c.ExprCache[key(c.FuncNameMangled, v)].ExprLen
-		for j := 0; j < span; j++ {
-			if maySkip {
-				kinds[dest] = ConditionalWrite
-			}
-			dest++
-		}
-	}
-	return kinds
-}
-
-// funcDestWriteKinds classifies writes using the syntax available in an
-// untyped .pt function template. Values pair one-to-one with destinations when
-// their counts match. Otherwise output arity is unknown, so any syntactically
-// skippable value protects every destination. Range effects that depend on
-// inferred bindings are unavailable in this pass.
-func (cfg *CFG) funcDestWriteKinds(s *ast.LetStatement) []EventType {
-	if len(s.Condition) > 0 {
-		return makeWriteKinds(len(s.Name), ConditionalWrite)
-	}
-
-	kinds := makeWriteKinds(len(s.Name), Write)
-	if len(s.Value) == len(s.Name) {
-		for i, v := range s.Value {
-			if cfg.funcValueMaySkip(v) {
-				kinds[i] = ConditionalWrite
-			}
-		}
-		return kinds
-	}
-
-	for _, v := range s.Value {
-		if !cfg.funcValueMaySkip(v) {
-			continue
-		}
-		for i := range kinds {
-			kinds[i] = ConditionalWrite
-		}
-		break
-	}
-	return kinds
-}
-
-func makeWriteKinds(count int, kind EventType) []EventType {
-	kinds := make([]EventType, count)
-	for i := range kinds {
-		kinds[i] = kind
-	}
-	return kinds
-}
-
-// valueMaySkip reports whether an RHS expression can leave its destination
-// unchanged in a typed script: outside an inline collector, an empty range
-// driver can run no iterations; a root call can keep an unwritten output; and
-// a failable value can yield nothing. The shared tree traversal finds failures
-// below the root, so `y = Square(x < 5) + 5` is recognized even though the call
-// feeds an operator.
-func (cfg *CFG) valueMaySkip(expr ast.Expression) bool {
-	return cfg.hasRangeExpr(expr) ||
-		cfg.callRootMaySkip(expr) ||
-		treeCanFail(expr, cfg.nodeMayNotYield)
-}
-
-// funcValueMaySkip applies the syntax-only approximation available in an
-// untyped .pt function template. Calls and syntactically failable values are
-// visible here; range effects that depend on inferred bindings are not.
-func (cfg *CFG) funcValueMaySkip(expr ast.Expression) bool {
-	return cfg.callRootMaySkip(expr) ||
-		treeCanFail(expr, cfg.funcNodeMayNotYield)
-}
-
-// nodeMayNotYield uses exact solver metadata to classify one node in a typed
-// script. It also counts an array read, whose out-of-bounds case preserves the
-// destination. That widening belongs only to diagnostics: applying it to the
-// solver's validity predicate would incorrectly legalize `arr[9] || -1`.
-func (cfg *CFG) nodeMayNotYield(expr ast.Expression) bool {
-	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
-		return true
-	}
-	c := cfg.ScriptCompiler.Compiler
-	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	return info.HasCondScalar() || info.HasCondAnd()
-}
-
-// funcNodeMayNotYield classifies one node in an untyped .pt function template.
-// Without specialization metadata, comparison and logical-AND syntax is the
-// conservative signal that a scalar specialization may fail to yield.
-func (cfg *CFG) funcNodeMayNotYield(expr ast.Expression) bool {
-	if _, ok := expr.(*ast.ArrayRangeExpression); ok {
-		return true
-	}
-	if infix, ok := expr.(*ast.InfixExpression); ok {
-		return infix.Token.IsComparison() || infix.IsLogicalAnd()
-	}
-	return false
-}
-
-// callRootMaySkip reports whether a value is a bare call to a user-defined
-// function. Such a callee may leave an output unwritten, so the caller keeps
-// its previous value and that previous write is not dead. Only root position
-// qualifies: a call feeding an operator always yields a new value. Proving a
-// given callee always writes would need per-specialization range types
-// unavailable here, so this stays conservative.
-func (cfg *CFG) callRootMaySkip(v ast.Expression) bool {
-	call, ok := v.(*ast.CallExpression)
-	if !ok {
-		return false
-	}
-	_, builtin := Builtins[call.Function.Value]
-	return !builtin
-}
-
-// hasRangeExpr reports whether an RHS expression uses a range in an iterated
-// position, mirroring the solver's behavior. A bare range literal is a
-// descriptor value and therefore does not count.
-func (cfg *CFG) hasRangeExpr(e ast.Expression) bool {
-	c := cfg.ScriptCompiler.Compiler
-
-	switch t := e.(type) {
-	case *ast.Identifier:
-		// Descriptor-copy assignments clear their cached ranges during typing.
-		// A remaining range here is a scalar use of a driver already bound by
-		// the statement, so an empty driver may leave the destination unchanged.
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
-	case *ast.StringLiteral:
-		// Formatting markers can reference named Range drivers even though the
-		// dependency is not represented as an AST child.
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
-	case *ast.InfixExpression, *ast.PrefixExpression:
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
-	case *ast.ArrayRangeExpression:
-		return len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0
-	case *ast.CallExpression:
-		if len(c.ExprCache[key(c.FuncNameMangled, t)].Ranges) > 0 {
-			return true
-		}
-		// Check if any argument contains ranges
-		for _, arg := range t.Arguments {
-			if cfg.hasRangeExpr(arg) {
-				return true
-			}
-		}
-		return false
-	case *ast.ArrayLiteral:
-		// A collector materializes an array even when its domain is empty, so
-		// its write is unconditional; cells resolve failures locally. Same
-		// boundary as treeCanFail.
-		return false
-	case *ast.StructLiteral:
-		for _, cell := range t.Row {
-			if cfg.hasRangeExpr(cell) {
-				return true
-			}
-		}
-		return false
-	case *ast.DotExpression:
-		return cfg.hasRangeExpr(t.Left)
-	default:
-		// Literals and other scalar roots are unconditional. A bare range
-		// literal is a driver constructor rather than an iterated use.
-		return false
-	}
-}
-
-func (cfg *CFG) Analyze(statements []ast.Statement) {
-	if len(statements) == 0 {
-		return
-	}
-
-	cfg.PushBlock()
-	defer cfg.PopBlock()
-
-	PushScope(&cfg.Scopes, BlockScope) // Start with a global scope
-	// cannot pop global scope
-
-	cfg.forwardPass(statements)                 // Forward pass for use-before-definition and write-after-write
-	cfg.backwardPass(make(map[string]struct{})) // Backward pass for liveness and dead store
-}
-
+// AnalyzeFuncs runs syntax-stable structural validation once for every
+// function template. Effect-sensitive diagnostics are deferred until a
+// concrete specialization is settled.
 func (cfg *CFG) AnalyzeFuncs() {
 	for _, stmt := range cfg.CodeCompiler.Code.Statements {
 		fn, ok := stmt.(*ast.FuncStatement)
@@ -394,226 +197,318 @@ func (cfg *CFG) AnalyzeFuncs() {
 			continue
 		}
 
-		cfg.validateFunc(fn)
+		cfg.validateFuncTemplate(fn)
 	}
 }
 
-func (cfg *CFG) checkInputParam(inParam *ast.Identifier) {
-	// scan once for both reads and illegal writes
-	wasRead := false
-	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
-	for _, sn := range block.Stmts {
-		for _, ev := range sn.Events {
-			if ev.Name != inParam.Value {
-				continue
-			}
-			switch ev.Kind {
-			case Read:
-				wasRead = true
-				// keep scanning to catch a write if it exists
-			case Write, ConditionalWrite:
-				cfg.addError(ev.Token,
-					fmt.Sprintf("cannot write to input parameter %q", inParam.Value))
-				// still want to record whether it was ever read, so don’t break out completely
-			}
+func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
+	PushScope(&cfg.Scopes, FuncScope)
+	defer PopScope(&cfg.Scopes)
+
+	for _, param := range fn.Parameters {
+		cfg.publishTarget(param)
+	}
+
+	outputNames := make(map[string]struct{}, len(fn.Outputs))
+	for _, output := range fn.Outputs {
+		outputNames[output.Value] = struct{}{}
+	}
+
+	inputNames := make(map[string]struct{}, len(fn.Parameters))
+	for _, input := range fn.Parameters {
+		if _, isOutput := outputNames[input.Value]; !isOutput {
+			inputNames[input.Value] = struct{}{}
 		}
 	}
 
-	if !wasRead {
-		cfg.addError(inParam.Tok(),
-			fmt.Sprintf("input parameter %q is never read", inParam.Value))
-	}
-}
-
-// Combined “write‐to‐input” and “unused‐input” check
-func (cfg *CFG) checkInputParams(params []*ast.Identifier) {
-	for _, inParam := range params {
-		cfg.checkInputParam(inParam)
-	}
-}
-
-func (cfg *CFG) checkOutputParam(outParam *ast.Identifier) {
-	// scan once for both writes and reads
-	sawWrite := false
-	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
-	for _, sn := range block.Stmts {
-		for _, ev := range sn.Events {
-			if ev.Name != outParam.Value {
-				continue
-			}
-			switch ev.Kind {
-			case Write, ConditionalWrite:
-				sawWrite = true
-				return
+	readInputs := make(map[string]struct{}, len(inputNames))
+	assignedOutputs := make(map[string]struct{}, len(outputNames))
+	for _, stmt := range fn.Body.Statements {
+		reads := cfg.collectStatementReads(stmt)
+		cfg.Errors = append(cfg.Errors, reads.Errors...)
+		for _, event := range reads.Events {
+			cfg.validateStructuralRead(event)
+			if _, isInput := inputNames[event.Name]; isInput {
+				readInputs[event.Name] = struct{}{}
 			}
 		}
+
+		let, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+		for _, target := range let.Name {
+			if isDiscard(target) {
+				continue
+			}
+
+			cfg.validateStructuralWrite(target, inputNames)
+			if _, isOutput := outputNames[target.Value]; isOutput {
+				assignedOutputs[target.Value] = struct{}{}
+			}
+		}
+
+		cfg.publishTargets(let.Name)
 	}
 
-	if !sawWrite {
-		cfg.addError(outParam.Tok(),
-			fmt.Sprintf("output parameter %q is never assigned", outParam.Value))
+	for _, input := range fn.Parameters {
+		if _, isInput := inputNames[input.Value]; !isInput {
+			continue
+		}
+		if _, wasRead := readInputs[input.Value]; wasRead {
+			continue
+		}
+
+		cfg.addError(input.Tok(), fmt.Sprintf("input parameter %q is never read", input.Value))
+	}
+	for _, output := range fn.Outputs {
+		if _, wasAssigned := assignedOutputs[output.Value]; wasAssigned {
+			continue
+		}
+
+		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
 	}
 }
 
-func (cfg *CFG) checkOutputParams(outputs []*ast.Identifier) {
-	for _, outParam := range outputs {
-		cfg.checkOutputParam(outParam)
+// AnalyzeScript combines structural validation with effect-sensitive dataflow
+// for one fully typed script body.
+func (cfg *CFG) AnalyzeScript(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect) {
+	if len(statements) == 0 {
+		return
 	}
-}
 
-func (cfg *CFG) validateFunc(fn *ast.FuncStatement) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
+	PushScope(&cfg.Scopes, BlockScope)
+	defer PopScope(&cfg.Scopes)
 
+	cfg.typedForwardPass(statements, effects, true)
+	cfg.backwardPass(make(map[string]struct{}))
+}
+
+// AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
+// already produced once from the function template.
+func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo) {
+	if info == nil {
+		panic("internal: cannot analyze CFG for a nil function specialization")
+	}
+
+	cfg.PushBlock()
+	defer cfg.PopBlock()
 	PushScope(&cfg.Scopes, FuncScope)
-	defer PopScope(&cfg.Scopes) // Ensure we pop the function scope after validation
+	defer PopScope(&cfg.Scopes)
 
-	// add the input arguments to the scope
-	for _, param := range fn.Parameters {
-		ve := VarEvent{Name: param.Value, Kind: Write, Token: param.Tok()}
-		Put(cfg.Scopes, param.Value, ve)
+	for _, param := range template.Parameters {
+		cfg.publishTarget(param)
 	}
 
-	cfg.funcForwardPass(fn.Body.Statements)
+	cfg.typedForwardPass(template.Body.Statements, info.StatementEffects, false)
 
-	// Build set of output names
-	outSet := make(map[string]struct{}, len(fn.Outputs))
-	for _, o := range fn.Outputs {
-		outSet[o.Value] = struct{}{}
-	}
-
-	// Filter the params: inputsOnly = params that are NOT outputs
-	var inputsOnly []*ast.Identifier
-	for _, p := range fn.Parameters {
-		if _, isOutput := outSet[p.Value]; !isOutput {
-			inputsOnly = append(inputsOnly, p)
-		}
-	}
-
-	cfg.checkInputParams(inputsOnly)
-	cfg.checkOutputParams(fn.Outputs)
-
-	// seed the live map in backward pass with output parameters
-	// as the output parameters will be used later.
-	live := make(map[string]struct{})
-	for _, output := range fn.Outputs {
+	live := make(map[string]struct{}, len(template.Outputs))
+	for _, output := range template.Outputs {
 		live[output.Value] = struct{}{}
 	}
 	cfg.backwardPass(live)
 }
 
-// processForwardEvents applies one statement's events and records them for the
-// backward liveness pass.
-func (cfg *CFG) processForwardEvents(stmt ast.Statement, evs []VarEvent, lastWrites map[string]VarEvent) {
-	for _, e := range evs {
-		switch e.Kind {
+func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, structural bool) {
+	lastWrites := make(map[string]VarEvent)
+	for _, stmt := range statements {
+		reads := cfg.collectStatementReads(stmt)
+		if structural {
+			cfg.Errors = append(cfg.Errors, reads.Errors...)
+			for _, event := range reads.Events {
+				cfg.validateStructuralRead(event)
+			}
+		}
+
+		let, isLet := stmt.(*ast.LetStatement)
+		if structural && isLet {
+			for _, target := range let.Name {
+				if !isDiscard(target) {
+					cfg.validateStructuralWrite(target, nil)
+				}
+			}
+		}
+
+		events := cfg.typedStatementEvents(stmt, reads.Events, effects)
+		cfg.processDataflowEvents(stmt, events, lastWrites)
+		if isLet {
+			cfg.publishTargets(let.Name)
+		}
+	}
+}
+
+func (cfg *CFG) typedStatementEvents(stmt ast.Statement, reads []VarEvent, effects map[*ast.LetStatement]StatementEffect) []VarEvent {
+	events := append([]VarEvent(nil), reads...)
+	let, ok := stmt.(*ast.LetStatement)
+	if !ok {
+		return events
+	}
+
+	effect, exists := effects[let]
+	if !exists {
+		panic(fmt.Sprintf("internal: missing CFG effects for statement %q", let))
+	}
+	cfg.validateStatementEffect(let, effect)
+
+	for _, targetIndex := range effect.ReadsSeed {
+		target := let.Name[targetIndex]
+		if !cfg.isDefined(target.Value) {
+			panic(fmt.Sprintf("internal: CFG seed read targets undefined binding %q in statement %q", target.Value, let))
+		}
+		events = append(events, VarEvent{Name: target.Value, Kind: Read, Token: target.Tok()})
+	}
+	for _, write := range effect.Writes {
+		target := let.Name[write.TargetIndex]
+		kind := Write
+		if write.Effect == MayWrite {
+			kind = ConditionalWrite
+		}
+		events = append(events, VarEvent{Name: target.Value, Kind: kind, Token: target.Tok()})
+	}
+
+	return events
+}
+
+func (cfg *CFG) validateStatementEffect(stmt *ast.LetStatement, effect StatementEffect) {
+	writtenTargets := make(map[int]struct{}, len(effect.Writes))
+	lastTarget := -1
+	for _, write := range effect.Writes {
+		if write.TargetIndex <= lastTarget || write.TargetIndex < 0 || write.TargetIndex >= len(stmt.Name) {
+			panic(fmt.Sprintf("internal: invalid CFG write target %d for statement %q", write.TargetIndex, stmt))
+		}
+		if isDiscard(stmt.Name[write.TargetIndex]) {
+			panic(fmt.Sprintf("internal: CFG write targets discard slot %d in statement %q", write.TargetIndex, stmt))
+		}
+		if write.Effect != MustWrite && write.Effect != MayWrite {
+			panic(fmt.Sprintf("internal: invalid CFG write effect %s for statement %q", write.Effect, stmt))
+		}
+
+		writtenTargets[write.TargetIndex] = struct{}{}
+		lastTarget = write.TargetIndex
+	}
+
+	namedTargets := 0
+	for index, target := range stmt.Name {
+		if isDiscard(target) {
+			continue
+		}
+		namedTargets++
+		if _, exists := writtenTargets[index]; !exists {
+			panic(fmt.Sprintf("internal: CFG effects omit target %d for statement %q", index, stmt))
+		}
+	}
+	if len(effect.Writes) != namedTargets {
+		panic(fmt.Sprintf("internal: CFG effects have %d writes for %d named targets in statement %q", len(effect.Writes), namedTargets, stmt))
+	}
+
+	seededTargets := make(map[int]struct{}, len(effect.ReadsSeed))
+	lastTarget = -1
+	for _, targetIndex := range effect.ReadsSeed {
+		if targetIndex <= lastTarget || targetIndex < 0 || targetIndex >= len(stmt.Name) {
+			panic(fmt.Sprintf("internal: invalid CFG seed target %d for statement %q", targetIndex, stmt))
+		}
+		if isDiscard(stmt.Name[targetIndex]) {
+			panic(fmt.Sprintf("internal: CFG seed targets discard slot %d in statement %q", targetIndex, stmt))
+		}
+		if _, exists := writtenTargets[targetIndex]; !exists {
+			panic(fmt.Sprintf("internal: CFG seed target %d has no write in statement %q", targetIndex, stmt))
+		}
+		if _, duplicate := seededTargets[targetIndex]; duplicate {
+			panic(fmt.Sprintf("internal: duplicate CFG seed target %d in statement %q", targetIndex, stmt))
+		}
+
+		seededTargets[targetIndex] = struct{}{}
+		lastTarget = targetIndex
+	}
+}
+
+func (cfg *CFG) processDataflowEvents(stmt ast.Statement, events []VarEvent, lastWrites map[string]VarEvent) {
+	for _, event := range events {
+		switch event.Kind {
 		case Read:
-			cfg.checkRead(lastWrites, e)
+			delete(lastWrites, event.Name)
 		case Write, ConditionalWrite:
-			cfg.checkWrite(lastWrites, e)
+			cfg.transferWrite(lastWrites, event)
 		default:
-			panic(fmt.Sprintf("unhandled event type: %v", e.Kind))
+			panic(fmt.Sprintf("unhandled event type: %v", event.Kind))
 		}
 	}
+
 	block := cfg.Blocks[len(cfg.Blocks)-1]
-	block.Stmts = append(block.Stmts, &StmtNode{Stmt: stmt, Events: evs})
+	block.Stmts = append(block.Stmts, &StmtNode{Stmt: stmt, Events: events})
 }
 
-// forwardPass checks a typed script for use-before-definition and simple
-// write-after-write errors.
-func (cfg *CFG) forwardPass(statements []ast.Statement) {
-	lastWrites := make(map[string]VarEvent)
-	for _, stmt := range statements {
-		var kinds []EventType
-		if s, ok := stmt.(*ast.LetStatement); ok {
-			kinds = cfg.destWriteKinds(s)
-		}
-		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt, kinds), lastWrites)
+func (cfg *CFG) transferWrite(lastWrites map[string]VarEvent, event VarEvent) {
+	if previous, exists := lastWrites[event.Name]; exists && previous.Kind == Write && event.Kind == Write {
+		previousLocation := fmt.Sprintf("line %d:%d", previous.Token.Line, previous.Token.Column)
+		cfg.addError(event.Token, fmt.Sprintf("unconditional assignment to %q overwrites a previous value that was never used. It was previously written at %s", event.Name, previousLocation))
 	}
+
+	lastWrites[event.Name] = event
 }
 
-// funcForwardPass performs the same checks on an untyped .pt function
-// template, using its syntax-only write classification.
-func (cfg *CFG) funcForwardPass(statements []ast.Statement) {
-	lastWrites := make(map[string]VarEvent)
-	for _, stmt := range statements {
-		var kinds []EventType
-		if s, ok := stmt.(*ast.LetStatement); ok {
-			kinds = cfg.funcDestWriteKinds(s)
-		}
-		cfg.processForwardEvents(stmt, cfg.extractStmtEvents(stmt, kinds), lastWrites)
-	}
-}
-
-func (cfg *CFG) checkRead(lastWrites map[string]VarEvent, e VarEvent) {
-	if !cfg.isDefined(e.Name) {
-		cfg.addError(e.Token, fmt.Sprintf("variable %q has not been defined", e.Name))
-	}
-	// A read "uses" the value, so clear the last write type.
-	delete(lastWrites, e.Name)
-}
-
-func (cfg *CFG) checkWrite(lastWrites map[string]VarEvent, e VarEvent) {
-	// Write or ConditionalWrite
-	if prevWrite, ok := lastWrites[e.Name]; ok {
-		// Error only on an unconditional write overwriting an unused value.
-		if prevWrite.Kind == Write && e.Kind == Write {
-			// We explicitly format the location of the previous token.
-			prevLocation := fmt.Sprintf("line %d:%d", prevWrite.Token.Line, prevWrite.Token.Column)
-			cfg.addError(e.Token, fmt.Sprintf("unconditional assignment to %q overwrites a previous value that was never used. It was previously written at %s", e.Name, prevLocation))
-		}
-	}
-	// check we are not writing to a constant
-	cc := cfg.CodeCompiler
-	if cc.isGlobalBinding(e.Name) {
-		cfg.addError(e.Token, fmt.Sprintf("cannot write to constant %q", e.Name))
-	}
-	// update the last write type.
-	lastWrites[e.Name] = e
-}
-
-// backwardPass checks for liveness, identifying unused variables and dead stores.
-// This pass iterates backward through the events.
+// backwardPass identifies unused values and dead stores.
 func (cfg *CFG) backwardPass(live map[string]struct{}) {
-	block := cfg.Blocks[len(cfg.Blocks)-1] // Get the last block
+	block := cfg.Blocks[len(cfg.Blocks)-1]
 	for i := len(block.Stmts) - 1; i >= 0; i-- {
-		sn := block.Stmts[i]
-		for j := len(sn.Events) - 1; j >= 0; j-- {
-			e := sn.Events[j]
+		statement := block.Stmts[i]
+		for j := len(statement.Events) - 1; j >= 0; j-- {
+			event := statement.Events[j]
 
-			switch e.Kind {
+			switch event.Kind {
 			case Write:
-				// If we are writing to a variable that is not "live", it's a dead store.
-				if _, ok := live[e.Name]; !ok {
-					cfg.addError(e.Token, fmt.Sprintf("value assigned to %q is never used", e.Name))
+				if _, isLive := live[event.Name]; !isLive {
+					cfg.addError(event.Token, fmt.Sprintf("value assigned to %q is never used", event.Name))
 				}
-				// An unconditional write ALWAYS satisfies the liveness, so we kill it.
-				delete(live, e.Name)
-
+				delete(live, event.Name)
 			case ConditionalWrite:
-				// A conditional write is also a dead store if the var is not live later.
-				if _, ok := live[e.Name]; !ok {
-					cfg.addError(e.Token, fmt.Sprintf("value assigned to %q in conditional statement is never used", e.Name))
+				if _, isLive := live[event.Name]; !isLive {
+					cfg.addError(event.Token, fmt.Sprintf("value assigned to %q in conditional statement is never used", event.Name))
 				}
-				// CRUCIAL: We DO NOT delete the liveness here. Because this write
-				// might not happen, the variable must remain live for whatever
-				// came before it.
-
 			case Read:
-				// A read makes the variable live *before* this point.
-				live[e.Name] = struct{}{}
+				live[event.Name] = struct{}{}
+			default:
+				panic(fmt.Sprintf("unhandled event type: %v", event.Kind))
 			}
 		}
 	}
+}
+
+func (cfg *CFG) validateStructuralRead(event VarEvent) {
+	if !cfg.isDefined(event.Name) {
+		cfg.addError(event.Token, fmt.Sprintf("variable %q has not been defined", event.Name))
+	}
+}
+
+func (cfg *CFG) validateStructuralWrite(target *ast.Identifier, inputs map[string]struct{}) {
+	if _, isInput := inputs[target.Value]; isInput {
+		cfg.addError(target.Tok(), fmt.Sprintf("cannot write to input parameter %q", target.Value))
+	}
+	if cfg.CodeCompiler.isGlobalBinding(target.Value) {
+		cfg.addError(target.Tok(), fmt.Sprintf("cannot write to constant %q", target.Value))
+	}
+}
+
+func (cfg *CFG) publishTargets(targets []*ast.Identifier) {
+	for _, target := range targets {
+		if !isDiscard(target) {
+			cfg.publishTarget(target)
+		}
+	}
+}
+
+func (cfg *CFG) publishTarget(target *ast.Identifier) {
+	Put(cfg.Scopes, target.Value, VarEvent{Name: target.Value, Kind: Write, Token: target.Tok()})
 }
 
 func (cfg *CFG) addError(tok token.Token, msg string) {
 	cfg.Errors = append(cfg.Errors, &token.CompileError{Token: tok, Msg: msg})
 }
 
-// isDefined checks local scopes first, then global constants.
 func (cfg *CFG) isDefined(name string) bool {
-	if _, ok := Get(cfg.Scopes, name); ok {
+	if _, exists := Get(cfg.Scopes, name); exists {
 		return true
 	}
 	return cfg.CodeCompiler.isGlobalBinding(name)

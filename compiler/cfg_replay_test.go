@@ -1,0 +1,217 @@
+package compiler
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/thiremani/pluto/token"
+	"tinygo.org/x/go-llvm"
+)
+
+func compileCFGReplayScript(t *testing.T, ctx llvm.Context, cc *CodeCompiler, name, source string) (*ScriptCompiler, []*token.CompileError) {
+	t.Helper()
+
+	sc := NewScriptCompiler(ctx, name, mustParseScript(t, source), cc)
+
+	return sc, sc.Compile()
+}
+
+func TestSpecializationCFGDiagnosticsReplayColdAndWarm(t *testing.T) {
+	code := mustParseCode(t, `result = Noisy(x)
+    unused = x + 1
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayColdWarm", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, coldErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Cold", "value = Noisy(1)\nvalue")
+	require.Len(t, coldErrors, 1)
+	require.Contains(t, coldErrors[0].Msg, `"unused"`)
+
+	noisyMangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
+	coldInfo := cc.Compiler.FuncCache[noisyMangled]
+	require.NotNil(t, coldInfo)
+	require.True(t, coldInfo.Settled)
+	require.NotNil(t, coldInfo.CFG)
+	require.Len(t, coldInfo.CFG.Errors, 1)
+	require.Same(t, coldInfo.CFG.Errors[0], coldErrors[0],
+		"cold replay must return the immutable cached diagnostic")
+
+	coldCFG := coldInfo.CFG
+	_, warmErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Warm", "value = Noisy(2)\nvalue")
+	require.Len(t, warmErrors, 1)
+
+	warmInfo := cc.Compiler.FuncCache[noisyMangled]
+	require.Same(t, coldInfo, warmInfo, "the warm solve must reuse the settled specialization")
+	require.Same(t, coldCFG, warmInfo.CFG, "the warm solve must not republish the CFG result")
+	require.Same(t, coldErrors[0], warmErrors[0],
+		"warm replay must return the same cached diagnostic pointer")
+}
+
+func TestUnreachableCachedCFGDiagnosticsDoNotLeak(t *testing.T) {
+	code := mustParseCode(t, `result = Noisy(x)
+    unused = x + 1
+    result = x
+
+result = Clean(x)
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayUnreachable", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, noisyErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Noisy", "value = Noisy(1)\nvalue")
+	require.Len(t, noisyErrors, 1)
+
+	noisyMangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
+	noisyInfo := cc.Compiler.FuncCache[noisyMangled]
+	require.NotNil(t, noisyInfo)
+	require.NotNil(t, noisyInfo.CFG)
+	require.Same(t, noisyInfo.CFG.Errors[0], noisyErrors[0])
+
+	_, cleanErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Clean", "value = Clean(1)\nvalue")
+	require.Empty(t, cleanErrors,
+		"a cached diagnostic must not replay when its specialization is unreachable")
+	require.Same(t, noisyInfo, cc.Compiler.FuncCache[noisyMangled])
+}
+
+func TestWrapperReplaysAlreadySettledCalleeCFGDiagnostics(t *testing.T) {
+	code := mustParseCode(t, `result = NoisyLeaf(x)
+    leafDead = x + 1
+    result = x
+
+result = Wrapper(x)
+    result = NoisyLeaf(x)
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplaySettledCallee", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, leafErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Leaf", "value = NoisyLeaf(1)\nvalue")
+	require.Len(t, leafErrors, 1)
+
+	leafMangled := Mangle(cc.Compiler.MangledPath, "NoisyLeaf", []Type{I64})
+	leafInfo := cc.Compiler.FuncCache[leafMangled]
+	require.True(t, leafInfo.Settled)
+	require.NotNil(t, leafInfo.CFG)
+	require.Same(t, leafInfo.CFG.Errors[0], leafErrors[0])
+
+	_, wrapperErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
+	require.Len(t, wrapperErrors, 1)
+	require.Same(t, leafErrors[0], wrapperErrors[0])
+
+	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
+	wrapperInfo := cc.Compiler.FuncCache[wrapperMangled]
+	require.True(t, wrapperInfo.Settled)
+	require.NotNil(t, wrapperInfo.CFG)
+	require.Equal(t, []string{leafMangled}, wrapperInfo.CFG.DirectCallees,
+		"persistent replay edges must include callees settled before the wrapper batch")
+}
+
+func TestPrintOnlyUserCallReplaysCFGDiagnostics(t *testing.T) {
+	code := mustParseCode(t, `result = NoisyPrint(x)
+    printDead = x + 1
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayPrintOnly", "", code)
+	require.Empty(t, cc.Compile())
+
+	sc, errors := compileCFGReplayScript(t, ctx, cc, t.Name(), "NoisyPrint(1)")
+	require.Len(t, errors, 1)
+	require.Contains(t, errors[0].Msg, `"printDead"`)
+
+	mangled := Mangle(cc.Compiler.MangledPath, "NoisyPrint", []Type{I64})
+	require.Equal(t, []string{mangled},
+		collectDirectCallees(sc.Compiler, sc.ScriptMangled, sc.Program.Statements),
+		"a user call reached only through print arguments must be a replay root")
+	require.Same(t, cc.Compiler.FuncCache[mangled].CFG.Errors[0], errors[0])
+}
+
+func TestDiamondCFGReplayIsOnceAndDeterministic(t *testing.T) {
+	code := mustParseCode(t, `result = Shared(x)
+    sharedDead = x + 1
+    result = x
+
+result = Left(x)
+    leftDead = x + 2
+    result = Shared(x)
+
+result = Right(x)
+    rightDead = x + 3
+    result = Shared(x)
+
+result = Diamond(x)
+    diamondDead = x + 4
+    left = Left(x)
+    right = Right(x)
+    result = left + right
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgReplayDiamond", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, errors := compileCFGReplayScript(t, ctx, cc, t.Name(), "value = Diamond(1)\nvalue")
+	require.Len(t, errors, 4)
+
+	for i, name := range []string{"diamondDead", "leftDead", "sharedDead", "rightDead"} {
+		require.Contains(t, errors[i].Msg, `"`+name+`"`,
+			"diagnostics must replay in root-first depth-first source order")
+	}
+
+	sharedMangled := Mangle(cc.Compiler.MangledPath, "Shared", []Type{I64})
+	sharedError := cc.Compiler.FuncCache[sharedMangled].CFG.Errors[0]
+	sharedOccurrences := 0
+	for _, cfgError := range errors {
+		if cfgError == sharedError {
+			sharedOccurrences++
+		}
+	}
+	require.Equal(t, 1, sharedOccurrences,
+		"the visited set must replay a shared diamond callee exactly once")
+}
+
+func TestSpecializationCFGResultsAreIndependentPerType(t *testing.T) {
+	code := mustParseCode(t, `result = MaskOrKeep(x)
+    result = x
+    result = x > 0
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "cfgPerSpecialization", "", code)
+	require.Empty(t, cc.Compile())
+
+	_, scalarErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Scalar", "value = MaskOrKeep(1)\nvalue")
+	require.Empty(t, scalarErrors,
+		"a scalar comparison may skip its write, so the preceding output remains live")
+
+	scalarMangled := Mangle(cc.Compiler.MangledPath, "MaskOrKeep", []Type{I64})
+	scalarCFG := cc.Compiler.FuncCache[scalarMangled].CFG
+	require.NotNil(t, scalarCFG)
+	require.Empty(t, scalarCFG.Errors)
+
+	_, arrayErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Array", "value = MaskOrKeep([1 2])\nvalue")
+	require.NotEmpty(t, arrayErrors,
+		"an array comparison materializes unconditionally and overwrites the preceding output")
+
+	arrayMangled := Mangle(cc.Compiler.MangledPath, "MaskOrKeep", []Type{
+		Array{ElemType: I64, Rank: 1},
+	})
+	arrayCFG := cc.Compiler.FuncCache[arrayMangled].CFG
+	require.NotNil(t, arrayCFG)
+	require.NotSame(t, scalarCFG, arrayCFG)
+	require.NotEmpty(t, arrayCFG.Errors)
+	require.Contains(t, arrayCFG.Errors[0].Msg, `unconditional assignment to "result"`)
+}

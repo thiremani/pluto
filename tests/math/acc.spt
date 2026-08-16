@@ -26,7 +26,6 @@ sum = 10
 sum, last = AccPair(sum, 1:4)
 sum, last
 
-reversedHalf = 0.0
 reversedSum = 1
 reversedHalf, reversedSum = ReversedAcc(reversedSum, 0:4)
 "ReversedHalf: -reversedHalf ReversedSum: -reversedSum"

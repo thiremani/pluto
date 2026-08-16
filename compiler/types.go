@@ -264,7 +264,16 @@ func (f Func) OutputTypesInferred() bool {
 	return true
 }
 
-// FuncInfo holds the mutable facts for one function specialization.
+// SpecializationCFGResult is the immutable dataflow result and persistent
+// direct-call reachability for one settled function specialization.
+type SpecializationCFGResult struct {
+	DirectCallees []string
+	Errors        []*token.CompileError
+}
+
+// FuncInfo holds the mutable facts for one function specialization. Settled
+// means all reusable type, effect, and CFG facts have been published; a settled
+// function specialization always has a non-nil CFG result.
 type FuncInfo struct {
 	Sig              Func
 	Vars             map[string]Type
@@ -272,6 +281,7 @@ type FuncInfo struct {
 	// BodyOutputEffects summarizes the typed scalar body before a call-owned
 	// Range or ArrayRange domain determines whether that body executes.
 	BodyOutputEffects []WriteEffect
+	CFG               *SpecializationCFGResult
 	Settled           bool
 }
 
