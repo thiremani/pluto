@@ -35,11 +35,6 @@ type BasicBlock struct {
 	Stmts []*StmtNode
 }
 
-type readCollection struct {
-	Events []VarEvent
-	Errors []*token.CompileError
-}
-
 // CFG owns structural template validation and effect-sensitive dataflow.
 type CFG struct {
 	CodeCompiler *CodeCompiler
@@ -69,18 +64,16 @@ func (cfg *CFG) PopBlock() {
 	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
 }
 
-// collectReads is a pure read/formatting analysis. It reports formatting
-// errors to the caller and never publishes bindings or mutates CFG errors.
-func (cfg *CFG) collectReads(expr ast.Expression) readCollection {
+// collectReads reports formatting errors through cfg.Errors but never publishes
+// bindings. Callers commit statement destinations after all reads are collected.
+func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral:
-		return readCollection{}
+		return nil
 	case *ast.StringLiteral:
 		return cfg.collectStringReads(e.Token.Literal, e.Token)
 	case *ast.Identifier:
-		return readCollection{
-			Events: []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}},
-		}
+		return []VarEvent{{Name: e.Value, Kind: Read, Token: e.Tok()}}
 	}
 
 	children := ast.ExprChildren(expr)
@@ -88,20 +81,15 @@ func (cfg *CFG) collectReads(expr ast.Expression) readCollection {
 		panic(fmt.Sprintf("unhandled expression type: %T", expr))
 	}
 
-	var result readCollection
+	var reads []VarEvent
 	for _, child := range children {
-		result.append(cfg.collectReads(child))
+		reads = append(reads, cfg.collectReads(child)...)
 	}
 
-	return result
+	return reads
 }
 
-func (reads *readCollection) append(other readCollection) {
-	reads.Events = append(reads.Events, other.Events...)
-	reads.Errors = append(reads.Errors, other.Errors...)
-}
-
-func (cfg *CFG) collectStatementReads(stmt ast.Statement) readCollection {
+func (cfg *CFG) collectStatementReads(stmt ast.Statement) []VarEvent {
 	var expressions []ast.Expression
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
@@ -111,19 +99,19 @@ func (cfg *CFG) collectStatementReads(stmt ast.Statement) readCollection {
 	case *ast.PrintStatement:
 		expressions = s.Expression.Arguments
 	default:
-		return readCollection{}
+		return nil
 	}
 
-	var result readCollection
+	var reads []VarEvent
 	for _, expr := range expressions {
-		result.append(cfg.collectReads(expr))
+		reads = append(reads, cfg.collectReads(expr)...)
 	}
 
-	return result
+	return reads
 }
 
-func (cfg *CFG) collectStringReads(value string, tok token.Token) readCollection {
-	var result readCollection
+func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
+	var reads []VarEvent
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -136,55 +124,53 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) readCollection
 		}
 
 		markerReads, end := cfg.collectMarkerReads(value, tok, runes, i)
-		result.append(markerReads)
+		reads = append(reads, markerReads...)
 		i = end - 1
 	}
 
-	return result
+	return reads
 }
 
 // An unknown main marker itself is literal text.
-func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) (readCollection, int) {
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) ([]VarEvent, int) {
 	mainID, end := parseIdentifier(runes, start+1)
 	if !cfg.isDefined(mainID) {
-		return readCollection{}, end
+		return nil, end
 	}
 
-	result := readCollection{
-		Events: []VarEvent{{Name: mainID, Kind: Read, Token: tok}},
-	}
+	reads := []VarEvent{{Name: mainID, Kind: Read, Token: tok}}
 	if end >= len(runes) || runes[end] != '%' {
-		return result, end
+		return reads, end
 	}
 
 	specifierReads, specifierEnd := cfg.collectSpecifierReads(value, tok, runes, end)
-	result.append(specifierReads)
-	return result, specifierEnd
+	reads = append(reads, specifierReads...)
+	return reads, specifierEnd
 }
 
-func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) (readCollection, int) {
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) ([]VarEvent, int) {
 	spec, err := parseSpecifierSyntax(tok, value, runes, start)
-	result := readCollection{}
+	var reads []VarEvent
 	if err != nil {
-		result.Errors = append(result.Errors, err)
+		cfg.Errors = append(cfg.Errors, err)
 		for _, specID := range spec.ids {
 			if cfg.isDefined(specID) {
-				result.Events = append(result.Events, VarEvent{Name: specID, Kind: Read, Token: tok})
+				reads = append(reads, VarEvent{Name: specID, Kind: Read, Token: tok})
 			}
 		}
 
-		return result, spec.end
+		return reads, spec.end
 	}
 
 	for _, specID := range spec.ids {
 		if !cfg.isDefined(specID) {
-			result.Errors = append(result.Errors, undefinedSpecifierVariableError(tok, value, specID))
-			return result, spec.end
+			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
+			return reads, spec.end
 		}
-		result.Events = append(result.Events, VarEvent{Name: specID, Kind: Read, Token: tok})
+		reads = append(reads, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
 
-	return result, spec.end
+	return reads, spec.end
 }
 
 // AnalyzeFuncs runs syntax-stable structural validation once for every
@@ -226,7 +212,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	for _, stmt := range fn.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
 		targets := cfg.validateStatementStructure(stmt, reads, inputNames)
-		for _, event := range reads.Events {
+		for _, event := range reads {
 			if _, isInput := inputNames[event.Name]; isInput {
 				readInputs[event.Name] = struct{}{}
 			}
@@ -312,7 +298,7 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 			cfg.validateStatementStructure(stmt, reads, nil)
 		}
 
-		events := cfg.typedStatementEvents(stmt, reads.Events, effects)
+		events := cfg.typedStatementEvents(stmt, reads, effects)
 		cfg.processDataflowEvents(stmt, events, lastWrites)
 		if isLet {
 			cfg.publishTargets(let.Name)
@@ -324,9 +310,8 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 // returns named targets for caller-specific bookkeeping. It deliberately does
 // not publish targets: typed seed reads must be checked against the pre-write
 // scope before simultaneous assignment commits its destinations.
-func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads readCollection, inputs map[string]struct{}) []*ast.Identifier {
-	cfg.Errors = append(cfg.Errors, reads.Errors...)
-	for _, event := range reads.Events {
+func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, inputs map[string]struct{}) []*ast.Identifier {
+	for _, event := range reads {
 		cfg.validateStructuralRead(event)
 	}
 
