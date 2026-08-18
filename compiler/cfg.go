@@ -195,13 +195,10 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		cfg.publishTarget(param)
 	}
 
-	inputNames, outputNames := funcTemplateBindingNames(fn)
-	readInputs, assignedOutputs := cfg.validateFuncTemplateBody(fn, inputNames, outputNames)
+	parameterNames, outputNames := funcTemplateBindingNames(fn)
+	readInputs, assignedOutputs := cfg.validateFuncTemplateBody(fn, parameterNames, outputNames)
 
 	for _, input := range fn.Parameters {
-		if _, isInput := inputNames[input.Value]; !isInput {
-			continue
-		}
 		if _, wasRead := readInputs[input.Value]; wasRead {
 			continue
 		}
@@ -223,24 +220,22 @@ func funcTemplateBindingNames(fn *ast.FuncStatement) (map[string]struct{}, map[s
 		outputNames[output.Value] = struct{}{}
 	}
 
-	inputNames := make(map[string]struct{}, len(fn.Parameters))
-	for _, input := range fn.Parameters {
-		if _, isOutput := outputNames[input.Value]; !isOutput {
-			inputNames[input.Value] = struct{}{}
-		}
+	parameterNames := make(map[string]struct{}, len(fn.Parameters))
+	for _, parameter := range fn.Parameters {
+		parameterNames[parameter.Value] = struct{}{}
 	}
 
-	return inputNames, outputNames
+	return parameterNames, outputNames
 }
 
-func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, inputNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
-	readInputs := make(map[string]struct{}, len(inputNames))
+func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, parameterNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
+	readInputs := make(map[string]struct{}, len(parameterNames))
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
 	for _, stmt := range fn.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
-		targets := cfg.validateStatementStructure(stmt, reads, inputNames)
+		targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
 		for _, event := range reads {
-			if _, isInput := inputNames[event.Name]; isInput {
+			if _, isParameter := parameterNames[event.Name]; isParameter {
 				readInputs[event.Name] = struct{}{}
 			}
 		}
@@ -321,7 +316,7 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 // returns named targets for caller-specific bookkeeping. It deliberately does
 // not publish targets: typed seed reads must be checked against the pre-write
 // scope before simultaneous assignment commits its destinations.
-func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, inputs map[string]struct{}) []*ast.Identifier {
+func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters map[string]struct{}) []*ast.Identifier {
 	for _, event := range reads {
 		cfg.validateStructuralRead(event)
 	}
@@ -337,7 +332,7 @@ func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent,
 			continue
 		}
 
-		cfg.validateStructuralWrite(target, inputs)
+		cfg.validateStructuralWrite(target, parameters)
 		targets = append(targets, target)
 	}
 
@@ -487,8 +482,8 @@ func (cfg *CFG) validateStructuralRead(event VarEvent) {
 	}
 }
 
-func (cfg *CFG) validateStructuralWrite(target *ast.Identifier, inputs map[string]struct{}) {
-	if _, isInput := inputs[target.Value]; isInput {
+func (cfg *CFG) validateStructuralWrite(target *ast.Identifier, parameters map[string]struct{}) {
+	if _, isParameter := parameters[target.Value]; isParameter {
 		cfg.addError(target.Tok(), fmt.Sprintf("cannot write to input parameter %q", target.Value))
 	}
 	if cfg.CodeCompiler.isGlobalBinding(target.Value) {
