@@ -195,7 +195,16 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		cfg.publishTarget(param)
 	}
 
-	parameterNames, outputNames := funcTemplateBindingNames(fn)
+	parameterNames := make(map[string]struct{}, len(fn.Parameters))
+	for _, parameter := range fn.Parameters {
+		parameterNames[parameter.Value] = struct{}{}
+	}
+
+	outputNames := make(map[string]struct{}, len(fn.Outputs))
+	for _, output := range fn.Outputs {
+		outputNames[output.Value] = struct{}{}
+	}
+
 	readInputs, assignedOutputs := cfg.validateFuncTemplateBody(fn, parameterNames, outputNames)
 
 	for _, input := range fn.Parameters {
@@ -212,20 +221,6 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 
 		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
 	}
-}
-
-func funcTemplateBindingNames(fn *ast.FuncStatement) (map[string]struct{}, map[string]struct{}) {
-	outputNames := make(map[string]struct{}, len(fn.Outputs))
-	for _, output := range fn.Outputs {
-		outputNames[output.Value] = struct{}{}
-	}
-
-	parameterNames := make(map[string]struct{}, len(fn.Parameters))
-	for _, parameter := range fn.Parameters {
-		parameterNames[parameter.Value] = struct{}{}
-	}
-
-	return parameterNames, outputNames
 }
 
 func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, parameterNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
