@@ -59,7 +59,7 @@ func (cfg *CFG) PushBlock() {
 
 func (cfg *CFG) PopBlock() {
 	if len(cfg.Blocks) == 0 {
-		panic("cannot pop block: no blocks available")
+		panic("internal: cannot pop CFG block: block stack is empty")
 	}
 	cfg.Blocks = cfg.Blocks[:len(cfg.Blocks)-1]
 }
@@ -195,6 +195,29 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		cfg.publishTarget(param)
 	}
 
+	inputNames, outputNames := funcTemplateBindingNames(fn)
+	readInputs, assignedOutputs := cfg.validateFuncTemplateBody(fn, inputNames, outputNames)
+
+	for _, input := range fn.Parameters {
+		if _, isInput := inputNames[input.Value]; !isInput {
+			continue
+		}
+		if _, wasRead := readInputs[input.Value]; wasRead {
+			continue
+		}
+
+		cfg.addError(input.Tok(), fmt.Sprintf("input parameter %q is never read", input.Value))
+	}
+	for _, output := range fn.Outputs {
+		if _, wasAssigned := assignedOutputs[output.Value]; wasAssigned {
+			continue
+		}
+
+		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
+	}
+}
+
+func funcTemplateBindingNames(fn *ast.FuncStatement) (map[string]struct{}, map[string]struct{}) {
 	outputNames := make(map[string]struct{}, len(fn.Outputs))
 	for _, output := range fn.Outputs {
 		outputNames[output.Value] = struct{}{}
@@ -207,6 +230,10 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		}
 	}
 
+	return inputNames, outputNames
+}
+
+func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, inputNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
 	readInputs := make(map[string]struct{}, len(inputNames))
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
 	for _, stmt := range fn.Body.Statements {
@@ -229,23 +256,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		}
 	}
 
-	for _, input := range fn.Parameters {
-		if _, isInput := inputNames[input.Value]; !isInput {
-			continue
-		}
-		if _, wasRead := readInputs[input.Value]; wasRead {
-			continue
-		}
-
-		cfg.addError(input.Tok(), fmt.Sprintf("input parameter %q is never read", input.Value))
-	}
-	for _, output := range fn.Outputs {
-		if _, wasAssigned := assignedOutputs[output.Value]; wasAssigned {
-			continue
-		}
-
-		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
-	}
+	return readInputs, assignedOutputs
 }
 
 // AnalyzeScript combines structural validation with effect-sensitive dataflow

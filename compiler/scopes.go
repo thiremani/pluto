@@ -27,7 +27,7 @@ func PushScope[T any](scopes *[]Scope[T], sk ScopeKind) {
 
 func PopScope[T any](scopes *[]Scope[T]) {
 	if len(*scopes) == 1 {
-		panic("cannot pop global scope")
+		panic("internal: cannot pop global scope")
 	}
 	*scopes = (*scopes)[:len(*scopes)-1]
 }
