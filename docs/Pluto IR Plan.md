@@ -859,7 +859,10 @@ The two diagnostics consume effects differently:
 
 After a script solve succeeds, CFG first treats the script as a zero-input,
 zero-output template for structural validation, then runs effect-sensitive
-dataflow over the typed body with a fresh scope. The compiler then traverses
+dataflow over the typed body with a fresh scope. Structural diagnostics do not
+gate that typed pass: its already-collected explicit reads are reused so one
+compile reports all independent CFG diagnostics without repeating formatting
+errors. The compiler then traverses
 the script's complete
 direct-callee keys and each cached `DirectCallees` slice depth-first with a
 visited set. Every specialization remains analyzed and cached independently;

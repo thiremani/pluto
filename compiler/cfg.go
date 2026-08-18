@@ -165,7 +165,7 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	for _, specID := range spec.ids {
 		if !cfg.isDefined(specID) {
 			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
-			return reads, spec.end
+			continue
 		}
 		reads = append(reads, VarEvent{Name: specID, Kind: Read, Token: tok})
 	}
@@ -227,8 +227,7 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 	readInputs := make(map[string]struct{}, len(parameterNames))
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
 	for _, stmt := range statements {
-		reads := cfg.collectStatementReads(stmt)
-		targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
+		reads, targets := cfg.validateTemplateStatement(stmt, parameterNames)
 		for _, event := range reads {
 			if _, isParameter := parameterNames[event.Name]; isParameter {
 				readInputs[event.Name] = struct{}{}
@@ -240,13 +239,19 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 				assignedOutputs[target.Value] = struct{}{}
 			}
 		}
-
-		if let, ok := stmt.(*ast.LetStatement); ok {
-			cfg.publishTargets(let.Name)
-		}
 	}
 
 	return readInputs, assignedOutputs
+}
+
+func (cfg *CFG) validateTemplateStatement(stmt ast.Statement, parameterNames map[string]struct{}) ([]VarEvent, []*ast.Identifier) {
+	reads := cfg.collectStatementReads(stmt)
+	targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
+	if let, ok := stmt.(*ast.LetStatement); ok {
+		cfg.publishTargets(let.Name)
+	}
+
+	return reads, targets
 }
 
 // AnalyzeScript treats the script as a zero-input, zero-output template before
@@ -256,26 +261,28 @@ func (cfg *CFG) AnalyzeScript(statements []ast.Statement, effects map[*ast.LetSt
 		return
 	}
 
-	errorsAtEntry := len(cfg.Errors)
-	cfg.validateScriptTemplate(statements)
-	if len(cfg.Errors) > errorsAtEntry {
-		return
-	}
+	statementReads := cfg.validateScriptTemplate(statements)
 
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 	PushScope(&cfg.Scopes, BlockScope)
 	defer PopScope(&cfg.Scopes)
 
-	cfg.typedForwardPass(statements, effects)
+	cfg.typedScriptForwardPass(statements, effects, statementReads)
 	cfg.backwardPass(make(map[string]struct{}))
 }
 
-func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) {
+func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent {
 	PushScope(&cfg.Scopes, BlockScope)
 	defer PopScope(&cfg.Scopes)
 
-	cfg.validateTemplateBody(statements, nil, nil)
+	statementReads := make([][]VarEvent, 0, len(statements))
+	for _, stmt := range statements {
+		reads, _ := cfg.validateTemplateStatement(stmt, nil)
+		statementReads = append(statementReads, reads)
+	}
+
+	return statementReads
 }
 
 // AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
@@ -303,13 +310,27 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
-		let, isLet := stmt.(*ast.LetStatement)
+		cfg.processTypedStatement(stmt, reads, effects, lastWrites)
+	}
+}
 
-		events := cfg.typedStatementEvents(stmt, reads, effects)
-		cfg.processDataflowEvents(stmt, events, lastWrites)
-		if isLet {
-			cfg.publishTargets(let.Name)
-		}
+func (cfg *CFG) typedScriptForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, statementReads [][]VarEvent) {
+	if len(statementReads) != len(statements) {
+		panic("internal: script CFG read count does not match statement count")
+	}
+
+	lastWrites := make(map[string]VarEvent)
+	for i, stmt := range statements {
+		cfg.processTypedStatement(stmt, statementReads[i], effects, lastWrites)
+	}
+}
+
+func (cfg *CFG) processTypedStatement(stmt ast.Statement, reads []VarEvent, effects map[*ast.LetStatement]StatementEffect, lastWrites map[string]VarEvent) {
+	events := cfg.typedStatementEvents(stmt, reads, effects)
+	cfg.processDataflowEvents(stmt, events, lastWrites)
+
+	if let, ok := stmt.(*ast.LetStatement); ok {
+		cfg.publishTargets(let.Name)
 	}
 }
 

@@ -316,6 +316,19 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 	return sc.Compile()
 }
 
+func TestScriptCFGAccumulatesStructuralAndTypedErrors(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
+unused = 1
+"Value: -value%(-width).(-precision)f"`)
+
+	require.Len(t, errs, 3)
+	assertContainsExpectedMessages(t, errs, []string{
+		"Undefined variable width within specifier",
+		"Undefined variable precision within specifier",
+		`value assigned to "unused" is never used`,
+	})
+}
+
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.
