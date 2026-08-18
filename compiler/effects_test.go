@@ -14,6 +14,36 @@ func requireTargetEffects(t *testing.T, effect StatementEffect, expected ...Targ
 	require.Equal(t, expected, effect.Writes)
 }
 
+func TestValidStatementEffectShape(t *testing.T) {
+	program := mustParseScript(t, "a, _, b = 1, 2, 3")
+	stmt := program.Statements[0].(*ast.LetStatement)
+	validWrites := []TargetWriteEffect{
+		{TargetIndex: 0, Effect: MustWrite},
+		{TargetIndex: 2, Effect: MayWrite},
+	}
+	tests := []struct {
+		name      string
+		writes    []TargetWriteEffect
+		readsSeed []int
+		valid     bool
+	}{
+		{name: "valid sparse effect", writes: validWrites, readsSeed: []int{0, 2}, valid: true},
+		{name: "missing named target", writes: validWrites[:1]},
+		{name: "write targets discard", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 1, Effect: MustWrite}}},
+		{name: "invalid write state", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 2, Effect: WriteInvalid}}},
+		{name: "duplicate seed target", writes: validWrites, readsSeed: []int{0, 0}},
+		{name: "seed targets discard", writes: validWrites, readsSeed: []int{1}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			effect := StatementEffect{Writes: test.writes, ReadsSeed: test.readsSeed}
+
+			require.Equal(t, test.valid, validStatementEffect(stmt, effect))
+		})
+	}
+}
+
 func TestRewriteExprInfoDoesNotCopySourceYieldEffects(t *testing.T) {
 	source := &ExprInfo{OutTypes: []Type{I64}, YieldEffects: []YieldEffect{MustYield}}
 	rewrite := &ast.IntegerLiteral{}

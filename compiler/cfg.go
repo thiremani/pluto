@@ -205,7 +205,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		outputNames[output.Value] = struct{}{}
 	}
 
-	readInputs, assignedOutputs := cfg.validateFuncTemplateBody(fn, parameterNames, outputNames)
+	readInputs, assignedOutputs := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
 
 	for _, input := range fn.Parameters {
 		if _, wasRead := readInputs[input.Value]; wasRead {
@@ -223,10 +223,10 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 }
 
-func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, parameterNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
+func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
 	readInputs := make(map[string]struct{}, len(parameterNames))
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
-	for _, stmt := range fn.Body.Statements {
+	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
 		targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
 		for _, event := range reads {
@@ -249,10 +249,16 @@ func (cfg *CFG) validateFuncTemplateBody(fn *ast.FuncStatement, parameterNames, 
 	return readInputs, assignedOutputs
 }
 
-// AnalyzeScript combines structural validation with effect-sensitive dataflow
-// for one fully typed script body.
+// AnalyzeScript treats the script as a zero-input, zero-output template before
+// running effect-sensitive dataflow over its fully typed body.
 func (cfg *CFG) AnalyzeScript(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect) {
 	if len(statements) == 0 {
+		return
+	}
+
+	errorsAtEntry := len(cfg.Errors)
+	cfg.validateScriptTemplate(statements)
+	if len(cfg.Errors) > errorsAtEntry {
 		return
 	}
 
@@ -261,8 +267,15 @@ func (cfg *CFG) AnalyzeScript(statements []ast.Statement, effects map[*ast.LetSt
 	PushScope(&cfg.Scopes, BlockScope)
 	defer PopScope(&cfg.Scopes)
 
-	cfg.typedForwardPass(statements, effects, true)
+	cfg.typedForwardPass(statements, effects)
 	cfg.backwardPass(make(map[string]struct{}))
+}
+
+func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) {
+	PushScope(&cfg.Scopes, BlockScope)
+	defer PopScope(&cfg.Scopes)
+
+	cfg.validateTemplateBody(statements, nil, nil)
 }
 
 // AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
@@ -277,7 +290,7 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 		cfg.publishTarget(param)
 	}
 
-	cfg.typedForwardPass(template.Body.Statements, info.StatementEffects, false)
+	cfg.typedForwardPass(template.Body.Statements, info.StatementEffects)
 
 	live := make(map[string]struct{}, len(template.Outputs))
 	for _, output := range template.Outputs {
@@ -286,14 +299,11 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	cfg.backwardPass(live)
 }
 
-func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, validateStructure bool) {
+func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
 		let, isLet := stmt.(*ast.LetStatement)
-		if validateStructure {
-			cfg.validateStatementStructure(stmt, reads, nil)
-		}
 
 		events := cfg.typedStatementEvents(stmt, reads, effects)
 		cfg.processDataflowEvents(stmt, events, lastWrites)
@@ -304,9 +314,8 @@ func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.Le
 }
 
 // validateStatementStructure reports template-stable read and write errors and
-// returns named targets for caller-specific bookkeeping. It deliberately does
-// not publish targets: typed seed reads must be checked against the pre-write
-// scope before simultaneous assignment commits its destinations.
+// returns named targets for caller-specific bookkeeping. The caller publishes
+// them only after all statement reads have been checked.
 func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters map[string]struct{}) []*ast.Identifier {
 	for _, event := range reads {
 		cfg.validateStructuralRead(event)
@@ -341,7 +350,6 @@ func (cfg *CFG) typedStatementEvents(stmt ast.Statement, reads []VarEvent, effec
 	if !exists {
 		panic(fmt.Sprintf("internal: missing CFG effects for statement %q", let))
 	}
-	cfg.validateStatementEffect(let, effect)
 
 	for _, targetIndex := range effect.ReadsSeed {
 		target := let.Name[targetIndex]
@@ -352,67 +360,19 @@ func (cfg *CFG) typedStatementEvents(stmt ast.Statement, reads []VarEvent, effec
 	}
 	for _, write := range effect.Writes {
 		target := let.Name[write.TargetIndex]
-		kind := Write
-		if write.Effect == MayWrite {
+		var kind EventType
+		switch write.Effect {
+		case MustWrite:
+			kind = Write
+		case MayWrite:
 			kind = ConditionalWrite
+		default:
+			panic(fmt.Sprintf("internal: invalid CFG write effect %s for statement %q", write.Effect, let))
 		}
 		events = append(events, VarEvent{Name: target.Value, Kind: kind, Token: target.Tok()})
 	}
 
 	return events
-}
-
-func (cfg *CFG) validateStatementEffect(stmt *ast.LetStatement, effect StatementEffect) {
-	writtenTargets := make(map[int]struct{}, len(effect.Writes))
-	lastTarget := -1
-	for _, write := range effect.Writes {
-		if write.TargetIndex <= lastTarget || write.TargetIndex < 0 || write.TargetIndex >= len(stmt.Name) {
-			panic(fmt.Sprintf("internal: invalid CFG write target %d for statement %q", write.TargetIndex, stmt))
-		}
-		if isDiscard(stmt.Name[write.TargetIndex]) {
-			panic(fmt.Sprintf("internal: CFG write targets discard slot %d in statement %q", write.TargetIndex, stmt))
-		}
-		if write.Effect != MustWrite && write.Effect != MayWrite {
-			panic(fmt.Sprintf("internal: invalid CFG write effect %s for statement %q", write.Effect, stmt))
-		}
-
-		writtenTargets[write.TargetIndex] = struct{}{}
-		lastTarget = write.TargetIndex
-	}
-
-	namedTargets := 0
-	for index, target := range stmt.Name {
-		if isDiscard(target) {
-			continue
-		}
-		namedTargets++
-		if _, exists := writtenTargets[index]; !exists {
-			panic(fmt.Sprintf("internal: CFG effects omit target %d for statement %q", index, stmt))
-		}
-	}
-	if len(effect.Writes) != namedTargets {
-		panic(fmt.Sprintf("internal: CFG effects have %d writes for %d named targets in statement %q", len(effect.Writes), namedTargets, stmt))
-	}
-
-	seededTargets := make(map[int]struct{}, len(effect.ReadsSeed))
-	lastTarget = -1
-	for _, targetIndex := range effect.ReadsSeed {
-		if targetIndex <= lastTarget || targetIndex < 0 || targetIndex >= len(stmt.Name) {
-			panic(fmt.Sprintf("internal: invalid CFG seed target %d for statement %q", targetIndex, stmt))
-		}
-		if isDiscard(stmt.Name[targetIndex]) {
-			panic(fmt.Sprintf("internal: CFG seed targets discard slot %d in statement %q", targetIndex, stmt))
-		}
-		if _, exists := writtenTargets[targetIndex]; !exists {
-			panic(fmt.Sprintf("internal: CFG seed target %d has no write in statement %q", targetIndex, stmt))
-		}
-		if _, duplicate := seededTargets[targetIndex]; duplicate {
-			panic(fmt.Sprintf("internal: duplicate CFG seed target %d in statement %q", targetIndex, stmt))
-		}
-
-		seededTargets[targetIndex] = struct{}{}
-		lastTarget = targetIndex
-	}
 }
 
 func (cfg *CFG) processDataflowEvents(stmt ast.Statement, events []VarEvent, lastWrites map[string]VarEvent) {

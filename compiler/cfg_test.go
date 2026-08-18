@@ -422,6 +422,26 @@ res = freshSelfRead(x)
 	assert.Contains(t, errs[0].Msg, `variable "local" has not been defined`)
 }
 
+func TestScriptTemplateBindingsDoNotLeakIntoTypedPass(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", ast.NewCode())
+	program := mustParseScript(t, "value = 1")
+	stmt := program.Statements[0].(*ast.LetStatement)
+	effects := map[*ast.LetStatement]StatementEffect{
+		stmt: {
+			Writes:    []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+			ReadsSeed: []int{0},
+		},
+	}
+	cfg := NewCFG(cc)
+
+	require.PanicsWithValue(t, `internal: CFG seed read targets undefined binding "value" in statement "value = 1"`, func() {
+		cfg.AnalyzeScript(program.Statements, effects)
+	})
+}
+
 func TestValidateFuncExistingSelfReadAndSwap(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

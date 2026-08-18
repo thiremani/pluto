@@ -469,11 +469,37 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	return result
 }
 
-func validStatementEffect(effect StatementEffect) bool {
-	for _, write := range effect.Writes {
-		if write.Effect != MustWrite && write.Effect != MayWrite {
+// validStatementEffect verifies the sparse effect shape before publication.
+func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
+	writeIndex := 0
+	for targetIndex, target := range stmt.Name {
+		if isDiscard(target) {
+			continue
+		}
+		if writeIndex >= len(effect.Writes) {
 			return false
 		}
+
+		write := effect.Writes[writeIndex]
+		if write.TargetIndex != targetIndex || write.Effect != MustWrite && write.Effect != MayWrite {
+			return false
+		}
+		writeIndex++
+	}
+	if writeIndex != len(effect.Writes) {
+		return false
+	}
+
+	lastTarget := -1
+	for _, targetIndex := range effect.ReadsSeed {
+		if targetIndex <= lastTarget || targetIndex >= len(stmt.Name) {
+			return false
+		}
+		if isDiscard(stmt.Name[targetIndex]) {
+			return false
+		}
+
+		lastTarget = targetIndex
 	}
 
 	return true
@@ -498,8 +524,8 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 			continue
 		}
 
-		statementEffect := statements[stmt]
-		if !validStatementEffect(statementEffect) {
+		statementEffect, exists := statements[stmt]
+		if !exists || !validStatementEffect(stmt, statementEffect) {
 			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
 		}
 
@@ -862,7 +888,7 @@ func (ts *TypeSolver) deriveScriptEffects() {
 			continue
 		}
 		effect, exists := root.StatementEffects[stmt]
-		if !exists || !validStatementEffect(effect) {
+		if !exists || !validStatementEffect(stmt, effect) {
 			panic(fmt.Sprintf("internal: invalid effects for script statement %q", stmt))
 		}
 	}

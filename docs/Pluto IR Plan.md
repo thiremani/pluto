@@ -857,8 +857,10 @@ The two diagnostics consume effects differently:
   without being read is instead a true positive: remove the seed or read it
   explicitly when its value is semantically required.
 
-After a script solve succeeds, one combined structural/effect-sensitive CFG
-runs on the typed script. The compiler then traverses the script's complete
+After a script solve succeeds, CFG first treats the script as a zero-input,
+zero-output template for structural validation, then runs effect-sensitive
+dataflow over the typed body with a fresh scope. The compiler then traverses
+the script's complete
 direct-callee keys and each cached `DirectCallees` slice depth-first with a
 visited set. Every specialization remains analyzed and cached independently;
 the script presents their diagnostics as a first-seen, source-stable set union
