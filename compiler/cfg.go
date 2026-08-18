@@ -268,10 +268,6 @@ func (cfg *CFG) AnalyzeScript(statements []ast.Statement, effects map[*ast.LetSt
 // AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
 // already produced once from the function template.
 func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo) {
-	if info == nil {
-		panic("internal: cannot analyze CFG for a nil function specialization")
-	}
-
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 	PushScope(&cfg.Scopes, FuncScope)
