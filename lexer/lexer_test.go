@@ -791,3 +791,64 @@ print()`
 		checkInput(t, src, expected)
 	})
 }
+
+func TestLineContinuation(t *testing.T) {
+	// A trailing backslash suppresses indentation handling on the next physical
+	// line. This must hold for CRLF input too, since Windows checkouts carry
+	// "\r\n" and the "\r" sits between the backslash and the newline.
+	t.Run("lf", func(t *testing.T) {
+		src := "arr = [1.1 2.3 \\\n    4 2.1]\narr"
+		expected := []Test{
+			{token.IDENT, "arr", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 5},
+			{token.LBRACK, "[", "", 1, 7},
+			{token.FLOAT, "1.1", "", 1, 8},
+			{token.FLOAT, "2.3", "", 1, 12},
+			{token.BACKSLASH, "\\", "", 1, 16},
+			{token.NEWLINE, "\n", "", 1, 17},
+			{token.INT, "4", "", 2, 5},
+			{token.FLOAT, "2.1", "", 2, 7},
+			{token.RBRACK, "]", "", 2, 10},
+			{token.NEWLINE, "\n", "", 2, 11},
+			{token.IDENT, "arr", "", 3, 1},
+			{token.EOF, "", "", 3, 4},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("crlf", func(t *testing.T) {
+		src := "arr = [1.1 2.3 \\\r\n    4 2.1]\r\narr"
+		expected := []Test{
+			{token.IDENT, "arr", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 5},
+			{token.LBRACK, "[", "", 1, 7},
+			{token.FLOAT, "1.1", "", 1, 8},
+			{token.FLOAT, "2.3", "", 1, 12},
+			{token.BACKSLASH, "\\", "", 1, 16},
+			{token.NEWLINE, "\n", "", 1, 18},
+			{token.INT, "4", "", 2, 5},
+			{token.FLOAT, "2.1", "", 2, 7},
+			{token.RBRACK, "]", "", 2, 10},
+			{token.NEWLINE, "\n", "", 2, 12},
+			{token.IDENT, "arr", "", 3, 1},
+			{token.EOF, "", "", 3, 4},
+		}
+		checkInput(t, src, expected)
+	})
+
+	t.Run("lone cr is not a continuation", func(t *testing.T) {
+		// A CR that is not part of a CRLF pair is ordinary whitespace, so the
+		// backslash must not suppress indentation after the later real newline.
+		src := "a \\\rb\n    c"
+		expected := []Test{
+			{token.IDENT, "a", "", 1, 1},
+			{token.BACKSLASH, "\\", "", 1, 3},
+			{token.IDENT, "b", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.INDENT, "c", "", 2, 5},
+			{token.IDENT, "c", "", 2, 5},
+			{token.EOF, "", "", 2, 6},
+		}
+		checkInput(t, src, expected)
+	})
+}
