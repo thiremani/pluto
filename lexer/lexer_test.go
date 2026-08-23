@@ -842,66 +842,83 @@ func TestNewlineNormalization(t *testing.T) {
 		{token.EOF, "", "", 4, 2},
 	}
 	checkInput(t, src, expected)
-}
 
-func TestNormalizeNewlines(t *testing.T) {
-	// Pairing is greedy left to right: a CR binds with an immediately
-	// following LF, otherwise it terminates a line by itself, so adjacent
-	// mixed runs resolve unambiguously.
-	tests := []struct {
-		input string
-		want  string
+	// Adjacent mixed runs pair greedily left to right: CR,CRLF,LF is three
+	// terminators and CRLF,CR is two. Blank lines are consumed by the
+	// indentation handling, so the terminator count shows up in the line
+	// number of the following token.
+	adjacent := []struct {
+		src      string
+		wantLine int
 	}{
-		{"\r\r\n\n", "\n\n\n"}, // CR, CRLF, LF
-		{"\r\n\r", "\n\n"},     // CRLF, then CR at EOF
-		{"\n\r\n", "\n\n"},     // LF, then CRLF
-		{"\r\r", "\n\n"},       // two lone CRs
-		{"\r\n\r\n", "\n\n"},   // two CRLF pairs
-		{"a\rb", "a\nb"},       // lone CR between content
+		{"a\r\r\n\nb", 4},
+		{"a\r\n\rb", 3},
 	}
-	for _, tt := range tests {
-		if got := string(normalizeNewlines([]rune(tt.input))); got != tt.want {
-			t.Errorf("normalizeNewlines(%q) = %q, want %q", tt.input, got, tt.want)
+	for _, tt := range adjacent {
+		adjExpected := []Test{
+			{token.IDENT, "a", "", 1, 1},
+			{token.NEWLINE, "\n", "", 1, 2},
+			{token.IDENT, "b", "", tt.wantLine, 1},
+			{token.EOF, "", "", tt.wantLine, 2},
 		}
+		checkInput(t, tt.src, adjExpected)
 	}
 }
 
 func TestMultilineString(t *testing.T) {
-	// A physical line break inside a string literal is stored as '\n' for
-	// all three ending styles, and the tokens after the closing quote carry
-	// correct line and column positions.
-	expected := []Test{
-		{token.STRING, "a\nb", "", 1, 1},
-		{token.NEWLINE, "\n", "", 2, 3},
-		{token.IDENT, "c", "", 3, 1},
-		{token.EOF, "", "", 3, 2},
-	}
+	// Token.Literal keeps the raw spelling of a physical line break inside a
+	// string, positions stay identical across ending styles, and decoding
+	// yields the same runtime value for all three, so program behavior does
+	// not depend on checkout line-ending conversion.
 	endings := []struct {
-		name   string
-		ending string
+		name    string
+		ending  string
+		literal string
 	}{
-		{"lf", "\n"},
-		{"crlf", "\r\n"},
-		{"cr", "\r"},
+		{"lf", "\n", "a\nb"},
+		{"crlf", "\r\n", "a\r\nb"},
+		{"cr", "\r", "a\rb"},
 	}
 	for _, tc := range endings {
 		t.Run(tc.name, func(t *testing.T) {
 			src := "\"a" + tc.ending + "b\"" + tc.ending + "c"
+			expected := []Test{
+				{token.STRING, tc.literal, "", 1, 1},
+				{token.NEWLINE, "\n", "", 2, 3},
+				{token.IDENT, "c", "", 3, 1},
+				{token.EOF, "", "", 3, 2},
+			}
 			checkInput(t, src, expected)
+			if got := DecodeStringLiteral(tc.literal); got != "a\nb" {
+				t.Fatalf("DecodeStringLiteral(%q) = %q, want %q", tc.literal, got, "a\nb")
+			}
 		})
 	}
 }
 
 func TestMultilineStringInvalidEscape(t *testing.T) {
-	// A physical newline directly after a backslash is an unsupported
-	// escape; error recovery must still count the crossed line so later
-	// diagnostics stay accurate.
-	src := "\"a\\\nb\"\nc"
-	expected := []Test{
-		{token.STRING, "a\\\nb", "1:1:unsupported escape sequence \\\n", 1, 1},
-		{token.NEWLINE, "\n", "", 2, 3},
-		{token.IDENT, "c", "", 3, 1},
-		{token.EOF, "", "", 3, 2},
+	// A physical line break directly after a backslash is an unsupported
+	// escape; error recovery must still count the crossed line, and the
+	// diagnostic reports the logical newline whatever the ending style.
+	endings := []struct {
+		name    string
+		ending  string
+		literal string
+	}{
+		{"lf", "\n", "a\\\nb"},
+		{"crlf", "\r\n", "a\\\r\nb"},
+		{"cr", "\r", "a\\\rb"},
 	}
-	checkInput(t, src, expected)
+	for _, tc := range endings {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "\"a\\" + tc.ending + "b\"" + tc.ending + "c"
+			expected := []Test{
+				{token.STRING, tc.literal, "1:1:unsupported escape sequence \\\n", 1, 1},
+				{token.NEWLINE, "\n", "", 2, 3},
+				{token.IDENT, "c", "", 3, 1},
+				{token.EOF, "", "", 3, 2},
+			}
+			checkInput(t, src, expected)
+		})
+	}
 }

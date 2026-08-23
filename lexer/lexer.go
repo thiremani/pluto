@@ -32,29 +32,8 @@ const (
 	INDENT_TAB_ERR = "indent using tabs not allowed"
 )
 
-// normalizeNewlines rewrites the three physical line ending forms to a
-// single '\n': CRLF becomes one newline and a lone CR becomes a newline.
-// Lexing therefore never sees a raw CR, so line endings behave identically
-// on every platform and inside every construct, including string literals,
-// where a physical CRLF or CR line break is stored as '\n' (the \r escape
-// still produces a carriage return).
-func normalizeNewlines(input []rune) []rune {
-	out := make([]rune, 0, len(input))
-	for i := 0; i < len(input); i++ {
-		if input[i] == '\r' {
-			if i+1 < len(input) && input[i+1] == '\n' {
-				i++
-			}
-			out = append(out, '\n')
-			continue
-		}
-		out = append(out, input[i])
-	}
-	return out
-}
-
 func New(fileName, input string) *Lexer {
-	l := &Lexer{FileName: fileName, input: normalizeNewlines([]rune(input)), lineOffset: 1, onNewline: true}
+	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, onNewline: true}
 	l.readRune()
 	return l
 }
@@ -334,14 +313,28 @@ func (l *Lexer) newLine() {
 	l.column = 0
 }
 
+// readRune advances to the next logical rune. Physical line endings are
+// translated at this boundary: a lone CR is exposed as '\n' and a CRLF
+// pair is consumed together as one logical '\n', so the rest of the lexer
+// sees every line ending as exactly one newline while l.input, position,
+// and readPosition keep the raw source and its indexes.
 func (l *Lexer) readRune() {
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
-	} else {
-		l.curr = l.input[l.readPosition]
+		l.position = l.readPosition
+		l.readPosition++
+		l.column++
+		return
 	}
+	l.curr = l.input[l.readPosition]
 	l.position = l.readPosition
 	l.readPosition++
+	if l.curr == '\r' {
+		l.curr = '\n'
+		if l.readPosition < len(l.input) && l.input[l.readPosition] == '\n' {
+			l.readPosition++
+		}
+	}
 	l.column++
 }
 
@@ -427,6 +420,11 @@ func DecodeStringEscape(raw []rune, start int) (string, int, error) {
 		return string(escaped), start + 2, fmt.Errorf("NUL character is not allowed in string literals")
 	case '0':
 		return string(escaped), start + 2, fmt.Errorf(`NUL escape \0 is not supported`)
+	case '\n', '\r':
+		// A physical line break after a backslash is not an escape. Report
+		// it as the logical newline so the diagnostic does not depend on
+		// the source file's line-ending style.
+		return "\n", start + 2, fmt.Errorf("unsupported escape sequence \\\n")
 	default:
 		return string(escaped), start + 2, fmt.Errorf(`unsupported escape sequence \%c`, escaped)
 	}
@@ -490,6 +488,17 @@ func DecodeStringLiteral(raw string) string {
 	runes := []rune(raw)
 	var out strings.Builder
 	for i := 0; i < len(runes); {
+		if runes[i] == '\r' {
+			// Physical line endings in source are logical newlines; the
+			// runtime value must not depend on checkout line-ending
+			// conversion. The \r escape still produces a carriage return.
+			out.WriteRune('\n')
+			i++
+			if i < len(runes) && runes[i] == '\n' {
+				i++
+			}
+			continue
+		}
 		if runes[i] != '\\' {
 			out.WriteRune(runes[i])
 			i++
@@ -516,12 +525,16 @@ func hexDigitValue(ch rune) (byte, bool) {
 	}
 }
 
+// peekRune returns the next logical rune without advancing; like readRune
+// it presents a raw CR as '\n'.
 func (l *Lexer) peekRune() rune {
 	if l.readPosition >= len(l.input) {
 		return 0
-	} else {
-		return l.input[l.readPosition]
 	}
+	if r := l.input[l.readPosition]; r != '\r' {
+		return r
+	}
+	return '\n'
 }
 
 // readIdentifier reads a Unicode identifier from the input.

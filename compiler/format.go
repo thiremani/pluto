@@ -779,6 +779,17 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 			continue
 		}
 
+		if runes[i] == '\r' {
+			// Physical line endings are logical newlines; the emitted format
+			// string must not depend on checkout line-ending conversion.
+			writeFormatText(&builder, "\n")
+			i++
+			if i < len(runes) && runes[i] == '\n' {
+				i++
+			}
+			continue
+		}
+
 		if !maybeMarker(runes, i) {
 			writeFormatText(&builder, string(runes[i]))
 			i++

@@ -98,11 +98,11 @@ Pluto separates reusable templates from executable scripts:
 | `.spt`    | Script files — executable programs that compile to native binaries           |
 
 Source files are UTF-8. Line endings may be LF, CRLF, or CR; each counts as
-exactly one line terminator (following Unicode's newline guidelines) and is
-normalized to LF before lexing, so a file means the same thing on every
-platform. This applies inside string literals too: a physical line break in
-a string is stored as a newline, and the `\r` escape denotes a literal
-carriage return.
+exactly one line terminator (following Unicode's newline guidelines), so a
+file means the same thing on every platform. A physical line break inside a
+string literal produces a newline in the string's value -- the `\r` escape
+denotes a literal carriage return -- so runtime behavior does not depend on
+how git checks out line endings.
 
 A directory is the unit of compilation:
 
