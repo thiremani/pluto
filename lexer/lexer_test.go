@@ -869,3 +869,17 @@ func TestMultilineString(t *testing.T) {
 		})
 	}
 }
+
+func TestMultilineStringInvalidEscape(t *testing.T) {
+	// A physical newline directly after a backslash is an unsupported
+	// escape; error recovery must still count the crossed line so later
+	// diagnostics stay accurate.
+	src := "\"a\\\nb\"\nc"
+	expected := []Test{
+		{token.STRING, "a\\\nb", "1:1:unsupported escape sequence \\\n", 1, 1},
+		{token.NEWLINE, "\n", "", 2, 3},
+		{token.IDENT, "c", "", 3, 1},
+		{token.EOF, "", "", 3, 2},
+	}
+	checkInput(t, src, expected)
+}

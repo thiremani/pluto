@@ -349,6 +349,17 @@ func (l *Lexer) atEOF() bool {
 	return l.curr == 0 && l.position >= len(l.input)
 }
 
+// readStringRune advances one rune within a string literal. A physical
+// newline stored in string content still ends a line of source, so every
+// advance inside a string goes through here to keep line and column
+// tracking correct, including while recovering from invalid escapes.
+func (l *Lexer) readStringRune() {
+	if l.curr == '\n' {
+		l.newLine()
+	}
+	l.readRune()
+}
+
 func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	var firstErr *token.CompileError
 	start := l.position
@@ -364,21 +375,16 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			l.readRune()
 			continue
 		}
-		if l.curr == '\n' {
-			// A physical line break stored inside the string still ends a line
-			// of source; keep line and column tracking correct for the tokens
-			// that follow the closing quote.
-			l.newLine()
-		} else if l.curr == '\\' {
+		if l.curr == '\\' {
 			_, next, escapeErr := DecodeStringEscape(l.input, l.position)
 			if escapeErr != nil {
 				setError(escapeErr.Error())
 			}
 			for l.position+1 < next {
-				l.readRune()
+				l.readStringRune()
 			}
 		}
-		l.readRune()
+		l.readStringRune()
 	}
 	if l.atEOF() {
 		setError("unterminated string literal")
