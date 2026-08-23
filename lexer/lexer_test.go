@@ -844,6 +844,28 @@ func TestNewlineNormalization(t *testing.T) {
 	checkInput(t, src, expected)
 }
 
+func TestNormalizeNewlines(t *testing.T) {
+	// Pairing is greedy left to right: a CR binds with an immediately
+	// following LF, otherwise it terminates a line by itself, so adjacent
+	// mixed runs resolve unambiguously.
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"\r\r\n\n", "\n\n\n"}, // CR, CRLF, LF
+		{"\r\n\r", "\n\n"},     // CRLF, then CR at EOF
+		{"\n\r\n", "\n\n"},     // LF, then CRLF
+		{"\r\r", "\n\n"},       // two lone CRs
+		{"\r\n\r\n", "\n\n"},   // two CRLF pairs
+		{"a\rb", "a\nb"},       // lone CR between content
+	}
+	for _, tt := range tests {
+		if got := string(normalizeNewlines([]rune(tt.input))); got != tt.want {
+			t.Errorf("normalizeNewlines(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestMultilineString(t *testing.T) {
 	// A physical line break inside a string literal is stored as '\n' for
 	// all three ending styles, and the tokens after the closing quote carry
