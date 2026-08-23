@@ -172,10 +172,6 @@ func TestLLVMTargetCPUDefault(t *testing.T) {
 	t.Setenv(targetCPUEnv, "")
 	cfg := currentBuildConfig()
 
-	if runtime.GOOS != OS_DARWIN && runtime.GOOS != "linux" {
-		require.Empty(t, cfg.llvmTargetCPU())
-		return
-	}
 	require.NotEmpty(t, cfg.llvmTargetCPU())
 	require.NotEqual(t, "native", cfg.llvmTargetCPU())
 }
