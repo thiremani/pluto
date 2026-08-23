@@ -70,14 +70,15 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		l.continuedLine = false
 	case '\\':
 		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
-		next := l.peekRune()
-		if next == '\r' {
+		if l.peekRune() == '\r' {
 			// A backslash continues the line only across a full CRLF; a lone CR
 			// is ordinary whitespace and must not arm the continuation flag.
-			l.continuedLine = l.peekRuneAt(1) == '\n'
-		} else {
-			l.continuedLine = next == '\n'
+			// Step onto the CR (as the shared readRune below would) to see past it.
+			l.readRune()
+			l.continuedLine = l.peekRune() == '\n'
+			return tok, nil
 		}
+		l.continuedLine = l.peekRune() == '\n'
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
@@ -501,16 +502,6 @@ func (l *Lexer) peekRune() rune {
 	} else {
 		return l.input[l.readPosition]
 	}
-}
-
-// peekRuneAt returns the rune offset positions after the one peekRune sees,
-// or 0 past the end of input.
-func (l *Lexer) peekRuneAt(offset int) rune {
-	pos := l.readPosition + offset
-	if pos >= len(l.input) {
-		return 0
-	}
-	return l.input[pos]
 }
 
 // readIdentifier reads a Unicode identifier from the input.
