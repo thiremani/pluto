@@ -372,7 +372,7 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	for l.curr != '"' && !l.atEOF() {
 		if l.curr == 0 {
 			setError("NUL character is not allowed in string literals")
-			l.readRune()
+			l.readStringRune()
 			continue
 		}
 		if l.curr == '\\' {
