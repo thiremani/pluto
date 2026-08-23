@@ -364,7 +364,12 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			l.readRune()
 			continue
 		}
-		if l.curr == '\\' {
+		if l.curr == '\n' {
+			// A physical line break stored inside the string still ends a line
+			// of source; keep line and column tracking correct for the tokens
+			// that follow the closing quote.
+			l.newLine()
+		} else if l.curr == '\\' {
 			_, next, escapeErr := DecodeStringEscape(l.input, l.position)
 			if escapeErr != nil {
 				setError(escapeErr.Error())

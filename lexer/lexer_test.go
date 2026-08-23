@@ -843,3 +843,29 @@ func TestNewlineNormalization(t *testing.T) {
 	}
 	checkInput(t, src, expected)
 }
+
+func TestMultilineString(t *testing.T) {
+	// A physical line break inside a string literal is stored as '\n' for
+	// all three ending styles, and the tokens after the closing quote carry
+	// correct line and column positions.
+	expected := []Test{
+		{token.STRING, "a\nb", "", 1, 1},
+		{token.NEWLINE, "\n", "", 2, 3},
+		{token.IDENT, "c", "", 3, 1},
+		{token.EOF, "", "", 3, 2},
+	}
+	endings := []struct {
+		name   string
+		ending string
+	}{
+		{"lf", "\n"},
+		{"crlf", "\r\n"},
+		{"cr", "\r"},
+	}
+	for _, tc := range endings {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "\"a" + tc.ending + "b\"" + tc.ending + "c"
+			checkInput(t, src, expected)
+		})
+	}
+}
