@@ -32,8 +32,29 @@ const (
 	INDENT_TAB_ERR = "indent using tabs not allowed"
 )
 
+// normalizeNewlines rewrites the three physical line ending forms to a
+// single '\n': CRLF becomes one newline and a lone CR becomes a newline.
+// Lexing therefore never sees a raw CR, so line endings behave identically
+// on every platform and inside every construct, including string literals,
+// where a physical CRLF or CR line break is stored as '\n' (the \r escape
+// still produces a carriage return).
+func normalizeNewlines(input []rune) []rune {
+	out := make([]rune, 0, len(input))
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\r' {
+			if i+1 < len(input) && input[i+1] == '\n' {
+				i++
+			}
+			out = append(out, '\n')
+			continue
+		}
+		out = append(out, input[i])
+	}
+	return out
+}
+
 func New(fileName, input string) *Lexer {
-	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, onNewline: true}
+	l := &Lexer{FileName: fileName, input: normalizeNewlines([]rune(input)), lineOffset: 1, onNewline: true}
 	l.readRune()
 	return l
 }
@@ -70,14 +91,6 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		l.continuedLine = false
 	case '\\':
 		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
-		if l.peekRune() == '\r' {
-			// A backslash continues the line only across a full CRLF; a lone CR
-			// is ordinary whitespace and must not arm the continuation flag.
-			// Step onto the CR (as the shared readRune below would) to see past it.
-			l.readRune()
-			l.continuedLine = l.peekRune() == '\n'
-			return tok, nil
-		}
 		l.continuedLine = l.peekRune() == '\n'
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
@@ -221,10 +234,6 @@ func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
 
 func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 	for {
-		// Skip Windows CR in CRLF sequences without treating it as indentation.
-		for l.curr == '\r' {
-			l.readRune()
-		}
 		for l.curr == ' ' {
 			l.readRune()
 		}
@@ -313,7 +322,7 @@ func (l *Lexer) skipComment() {
 
 func (l *Lexer) skipWhitespace() bool {
 	hadSpace := false
-	for l.curr == ' ' || l.curr == '\t' || l.curr == '\r' {
+	for l.curr == ' ' || l.curr == '\t' {
 		hadSpace = true
 		l.readRune()
 	}
