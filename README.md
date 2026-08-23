@@ -97,6 +97,13 @@ Pluto separates reusable templates from executable scripts:
 | `.pt`     | Template files — functions, operators, structs, constants (act as libraries) |
 | `.spt`    | Script files — executable programs that compile to native binaries           |
 
+Source files are UTF-8. Line endings may be LF, CRLF, or CR; each counts as
+exactly one line terminator (following Unicode's newline guidelines) and is
+normalized to LF before lexing, so a file means the same thing on every
+platform. This applies inside string literals too: a physical line break in
+a string is stored as a newline, and the `\r` escape denotes a literal
+carriage return.
+
 A directory is the unit of compilation:
 
 ```text
