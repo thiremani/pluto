@@ -1,0 +1,4 @@
+s = "line one
+line two"
+s
+"joined: -s!"

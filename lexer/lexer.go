@@ -65,7 +65,6 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		l.newLine()
 		l.onNewline = !l.continuedLine
 		l.continuedLine = false
 	case '\\':
@@ -213,10 +212,6 @@ func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
 
 func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 	for {
-		// Skip Windows CR in CRLF sequences without treating it as indentation.
-		for l.curr == '\r' {
-			l.readRune()
-		}
 		for l.curr == ' ' {
 			l.readRune()
 		}
@@ -238,7 +233,6 @@ func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 		}
 
 		err = nil
-		l.newLine()
 		l.readRune()
 	}
 
@@ -305,7 +299,7 @@ func (l *Lexer) skipComment() {
 
 func (l *Lexer) skipWhitespace() bool {
 	hadSpace := false
-	for l.curr == ' ' || l.curr == '\t' || l.curr == '\r' {
+	for l.curr == ' ' || l.curr == '\t' {
 		hadSpace = true
 		l.readRune()
 	}
@@ -317,14 +311,37 @@ func (l *Lexer) newLine() {
 	l.column = 0
 }
 
+// LogicalRune returns the logical rune at raw index i and the raw index
+// just past it: a CRLF pair is one logical '\n' spanning two raw runes,
+// a lone CR is '\n'. All raw-source walkers share this primitive.
+func LogicalRune(raw []rune, i int) (rune, int) {
+	r := raw[i]
+	if r != '\r' {
+		return r, i + 1
+	}
+	if i+1 < len(raw) && raw[i+1] == '\n' {
+		return '\n', i + 2
+	}
+	return '\n', i + 1
+}
+
+// readRune advances to the next logical rune via LogicalRune; l.input,
+// position, and readPosition hold raw decoded runes and rune indexes
+// (not byte offsets). Leaving a logical newline advances the line count
+// here, at the single point of consumption.
 func (l *Lexer) readRune() {
+	if l.curr == '\n' {
+		l.newLine()
+	}
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
-	} else {
-		l.curr = l.input[l.readPosition]
+		l.position = l.readPosition
+		l.readPosition++
+		l.column++
+		return
 	}
 	l.position = l.readPosition
-	l.readPosition++
+	l.curr, l.readPosition = LogicalRune(l.input, l.readPosition)
 	l.column++
 }
 
@@ -352,7 +369,9 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			if escapeErr != nil {
 				setError(escapeErr.Error())
 			}
-			for l.position+1 < next {
+			// next is a raw index, so advance until the raw readPosition
+			// reaches it; a CRLF pair straddling next is consumed whole.
+			for l.readPosition < next {
 				l.readRune()
 			}
 		}
@@ -399,6 +418,11 @@ func DecodeStringEscape(raw []rune, start int) (string, int, error) {
 		return string(escaped), start + 2, fmt.Errorf("NUL character is not allowed in string literals")
 	case '0':
 		return string(escaped), start + 2, fmt.Errorf(`NUL escape \0 is not supported`)
+	case '\n', '\r':
+		// Report the logical newline and consume the full break, so the
+		// diagnostic and next are the same for LF, CRLF, and CR sources.
+		_, next := LogicalRune(raw, start+1)
+		return "\n", next, fmt.Errorf("unsupported escape sequence \\\n")
 	default:
 		return string(escaped), start + 2, fmt.Errorf(`unsupported escape sequence \%c`, escaped)
 	}
@@ -462,14 +486,16 @@ func DecodeStringLiteral(raw string) string {
 	runes := []rune(raw)
 	var out strings.Builder
 	for i := 0; i < len(runes); {
-		if runes[i] != '\\' {
-			out.WriteRune(runes[i])
-			i++
+		if runes[i] == '\\' {
+			value, next, _ := DecodeStringEscape(runes, i)
+			out.WriteString(value)
+			i = next
 			continue
 		}
-
-		value, next, _ := DecodeStringEscape(runes, i)
-		out.WriteString(value)
+		// A physical line break decodes to '\n' so runtime values do not
+		// depend on checkout line endings; the \r escape is unaffected.
+		r, next := LogicalRune(runes, i)
+		out.WriteRune(r)
 		i = next
 	}
 	return out.String()
@@ -488,12 +514,14 @@ func hexDigitValue(ch rune) (byte, bool) {
 	}
 }
 
+// peekRune returns the next logical rune without advancing; like readRune
+// it presents a raw CR as '\n'.
 func (l *Lexer) peekRune() rune {
 	if l.readPosition >= len(l.input) {
 		return 0
-	} else {
-		return l.input[l.readPosition]
 	}
+	r, _ := LogicalRune(l.input, l.readPosition)
+	return r
 }
 
 // readIdentifier reads a Unicode identifier from the input.
