@@ -923,3 +923,25 @@ func TestMultilineStringInvalidEscape(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
+	// DecodeStringEscape returns the first raw index after the escape, so a
+	// backslash before a CRLF pair must consume the whole break: raw walkers
+	// like DecodeStringLiteral would otherwise process the LF a second time.
+	tests := []struct {
+		name     string
+		raw      string
+		wantNext int
+	}{
+		{"lf", "\\\nx", 2},
+		{"crlf", "\\\r\nx", 3},
+		{"cr", "\\\rx", 2},
+	}
+	for _, tt := range tests {
+		value, next, err := DecodeStringEscape([]rune(tt.raw), 0)
+		if value != "\n" || next != tt.wantNext || err == nil {
+			t.Errorf("%s: DecodeStringEscape = (%q, %d, %v), want (%q, %d, non-nil error)",
+				tt.name, value, next, err, "\n", tt.wantNext)
+		}
+	}
+}

@@ -437,8 +437,10 @@ func DecodeStringEscape(raw []rune, start int) (string, int, error) {
 	case '\n', '\r':
 		// A physical line break after a backslash is not an escape. Report
 		// it as the logical newline so the diagnostic does not depend on
-		// the source file's line-ending style.
-		return "\n", start + 2, fmt.Errorf("unsupported escape sequence \\\n")
+		// the source file's line-ending style, and consume the full break
+		// so next is the first index after the escape even for a CRLF pair.
+		_, next := LogicalRune(raw, start+1)
+		return "\n", next, fmt.Errorf("unsupported escape sequence \\\n")
 	default:
 		return string(escaped), start + 2, fmt.Errorf(`unsupported escape sequence \%c`, escaped)
 	}
