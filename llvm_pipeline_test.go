@@ -336,8 +336,33 @@ res
 	if err := scriptModule.RunPasses(llvmOptPipeline, tm, pbo); err != nil {
 		t.Fatalf("run O3 pipeline: %v", err)
 	}
-	if got := annotateScalarUnrollLoops(scriptModule); got == 0 {
-		t.Fatalf("expected scalar unroll metadata on real Pluto post-O3 IR:\n%s", scriptModule.String())
+	loopMDKind := scriptModule.Context().MDKindID("llvm.loop")
+	// Loops the O3 run already marked must contribute no add chains; that
+	// makes any post-unroll chain growth attributable to the loops annotated
+	// below rather than to pre-existing loop metadata.
+	if got := maxChainedAddsInMarkedLatch(scriptModule); got != 0 {
+		t.Fatalf("expected no add chains in pre-marked loop latches, got %d:\n%s", got, scriptModule.String())
+	}
+	// Record the exact latches the annotator is about to mark (the inlined
+	// copies of the Fib tail recurrence) and the longest add chain they hold.
+	candidates := 0
+	preUnrollChain := 0
+	for fn := scriptModule.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		for _, loop := range scalarUnrollCandidates(fn) {
+			if !loop.term.Metadata(loopMDKind).IsNil() {
+				continue
+			}
+			candidates++
+			if chained := chainedAddsInBlock(loop.latch); chained > preUnrollChain {
+				preUnrollChain = chained
+			}
+		}
+	}
+	if candidates == 0 {
+		t.Fatalf("expected the Fib tail recurrence as a scalar unroll candidate:\n%s", scriptModule.String())
+	}
+	if got := annotateScalarUnrollLoops(scriptModule); got != candidates {
+		t.Fatalf("annotateScalarUnrollLoops() = %d, want %d annotated candidates", got, candidates)
 	}
 	if !strings.Contains(scriptModule.String(), "llvm.loop.unroll.count") {
 		t.Fatalf("expected scalar unroll metadata in real Pluto post-O3 IR:\n%s", scriptModule.String())
@@ -347,7 +372,58 @@ res
 		t.Fatalf("run scalar unroll pipeline: %v", err)
 	}
 	postUnrollIR := scriptModule.String()
-	if !strings.Contains(postUnrollIR, "add_tmp.i.i.3") || !strings.Contains(postUnrollIR, "llvm.loop.unroll.disable") {
-		t.Fatalf("expected unrolled recurrence in real Pluto post-unroll IR:\n%s", postUnrollIR)
+	if !strings.Contains(postUnrollIR, "llvm.loop.unroll.disable") {
+		t.Fatalf("expected unroll-disable metadata in real Pluto post-unroll IR:\n%s", postUnrollIR)
 	}
+	// The 4x unroll replicates the recurrence add inside the metadata-marked
+	// latch, so the same-block add chain must grow past its pre-unroll length.
+	// Checking structure instead of SSA names keeps the assertion independent
+	// of how each target inlines Fib/FibAux.
+	postUnrollChain := maxChainedAddsInMarkedLatch(scriptModule)
+	if postUnrollChain < 3 || postUnrollChain <= preUnrollChain {
+		t.Fatalf("expected unrolled recurrence in real Pluto post-unroll IR: chained adds %d -> %d:\n%s", preUnrollChain, postUnrollChain, postUnrollIR)
+	}
+}
+
+// maxChainedAddsInMarkedLatch returns, across all loop latches that carry
+// llvm.loop metadata, the largest number of add instructions that consume
+// another add from the same block. An unrolled scalar recurrence leaves its
+// replicated adds chained together inside the marked latch, so this grows
+// when the annotated loop is actually unrolled.
+func maxChainedAddsInMarkedLatch(module llvm.Module) int {
+	loopMDKind := module.Context().MDKindID("llvm.loop")
+	best := 0
+	for fn := module.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
+		for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
+			term := bb.LastInstruction()
+			if term.IsNil() || term.Metadata(loopMDKind).IsNil() {
+				continue
+			}
+			if chained := chainedAddsInBlock(bb); chained > best {
+				best = chained
+			}
+		}
+	}
+	return best
+}
+
+// chainedAddsInBlock counts the add instructions in bb that consume another
+// add from the same block. Unrolling a scalar recurrence replicates its add
+// and chains the copies together, so this grows with the unroll factor.
+func chainedAddsInBlock(bb llvm.BasicBlock) int {
+	adds := make(map[llvm.Value]bool)
+	chained := 0
+	for inst := bb.FirstInstruction(); !inst.IsNil(); inst = llvm.NextInstruction(inst) {
+		if inst.InstructionOpcode() != llvm.Add {
+			continue
+		}
+		for i := 0; i < inst.OperandsCount(); i++ {
+			if adds[inst.Operand(i)] {
+				chained++
+				break
+			}
+		}
+		adds[inst] = true
+	}
+	return chained
 }

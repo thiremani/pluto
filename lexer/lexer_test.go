@@ -791,3 +791,148 @@ print()`
 		checkInput(t, src, expected)
 	})
 }
+
+func TestLineContinuation(t *testing.T) {
+	// A trailing backslash continues the line for every ending style, with
+	// an identical token stream, positions included.
+	expected := []Test{
+		{token.IDENT, "arr", "", 1, 1},
+		{token.ASSIGN, "=", "", 1, 5},
+		{token.LBRACK, "[", "", 1, 7},
+		{token.FLOAT, "1.1", "", 1, 8},
+		{token.FLOAT, "2.3", "", 1, 12},
+		{token.BACKSLASH, "\\", "", 1, 16},
+		{token.NEWLINE, "\n", "", 1, 17},
+		{token.INT, "4", "", 2, 5},
+		{token.FLOAT, "2.1", "", 2, 7},
+		{token.RBRACK, "]", "", 2, 10},
+		{token.NEWLINE, "\n", "", 2, 11},
+		{token.IDENT, "arr", "", 3, 1},
+		{token.EOF, "", "", 3, 4},
+	}
+	endings := []struct {
+		name   string
+		ending string
+	}{
+		{"lf", "\n"},
+		{"crlf", "\r\n"},
+		{"cr", "\r"},
+	}
+	for _, tc := range endings {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "arr = [1.1 2.3 \\" + tc.ending + "    4 2.1]" + tc.ending + "arr"
+			checkInput(t, src, expected)
+		})
+	}
+}
+
+func TestNewlineNormalization(t *testing.T) {
+	// Each ending style terminates exactly one line; CRLF is one newline.
+	src := "a\rb\r\nc\nd"
+	expected := []Test{
+		{token.IDENT, "a", "", 1, 1},
+		{token.NEWLINE, "\n", "", 1, 2},
+		{token.IDENT, "b", "", 2, 1},
+		{token.NEWLINE, "\n", "", 2, 2},
+		{token.IDENT, "c", "", 3, 1},
+		{token.NEWLINE, "\n", "", 3, 2},
+		{token.IDENT, "d", "", 4, 1},
+		{token.EOF, "", "", 4, 2},
+	}
+	checkInput(t, src, expected)
+
+	// Adjacent mixed runs pair greedily left to right; blank lines are
+	// swallowed, so the terminator count shows in the next token's line.
+	adjacent := []struct {
+		src      string
+		wantLine int
+	}{
+		{"a\r\r\n\nb", 4},
+		{"a\r\n\rb", 3},
+	}
+	for _, tt := range adjacent {
+		adjExpected := []Test{
+			{token.IDENT, "a", "", 1, 1},
+			{token.NEWLINE, "\n", "", 1, 2},
+			{token.IDENT, "b", "", tt.wantLine, 1},
+			{token.EOF, "", "", tt.wantLine, 2},
+		}
+		checkInput(t, tt.src, adjExpected)
+	}
+}
+
+func TestMultilineString(t *testing.T) {
+	// Token.Literal keeps the raw break spelling; positions and the decoded
+	// runtime value are identical for every ending style.
+	endings := []struct {
+		name    string
+		ending  string
+		literal string
+	}{
+		{"lf", "\n", "a\nb"},
+		{"crlf", "\r\n", "a\r\nb"},
+		{"cr", "\r", "a\rb"},
+	}
+	for _, tc := range endings {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "\"a" + tc.ending + "b\"" + tc.ending + "c"
+			expected := []Test{
+				{token.STRING, tc.literal, "", 1, 1},
+				{token.NEWLINE, "\n", "", 2, 3},
+				{token.IDENT, "c", "", 3, 1},
+				{token.EOF, "", "", 3, 2},
+			}
+			checkInput(t, src, expected)
+			if got := DecodeStringLiteral(tc.literal); got != "a\nb" {
+				t.Fatalf("DecodeStringLiteral(%q) = %q, want %q", tc.literal, got, "a\nb")
+			}
+		})
+	}
+}
+
+func TestMultilineStringInvalidEscape(t *testing.T) {
+	// Recovery from a backslash before a physical break must still count
+	// the crossed line and report one diagnostic for every ending style.
+	endings := []struct {
+		name    string
+		ending  string
+		literal string
+	}{
+		{"lf", "\n", "a\\\nb"},
+		{"crlf", "\r\n", "a\\\r\nb"},
+		{"cr", "\r", "a\\\rb"},
+	}
+	for _, tc := range endings {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "\"a\\" + tc.ending + "b\"" + tc.ending + "c"
+			expected := []Test{
+				{token.STRING, tc.literal, "1:1:unsupported escape sequence \\\n", 1, 1},
+				{token.NEWLINE, "\n", "", 2, 3},
+				{token.IDENT, "c", "", 3, 1},
+				{token.EOF, "", "", 3, 2},
+			}
+			checkInput(t, src, expected)
+		})
+	}
+}
+
+func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
+	// next must be the first raw index after the escape, so a CRLF pair is
+	// consumed whole; raw walkers would otherwise see the LF twice.
+	tests := []struct {
+		name     string
+		raw      string
+		wantNext int
+	}{
+		{"lf", "\\\nx", 2},
+		{"crlf", "\\\r\nx", 3},
+		{"cr", "\\\rx", 2},
+	}
+	for _, tt := range tests {
+		value, next, err := DecodeStringEscape([]rune(tt.raw), 0)
+		if value != "\n" || next != tt.wantNext || err == nil {
+			t.Errorf("%s: DecodeStringEscape = (%q, %d, %v), want (%q, %d, non-nil error)",
+				tt.name, value, next, err, "\n", tt.wantNext)
+		}
+	}
+}
