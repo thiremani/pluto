@@ -329,6 +329,48 @@ unused = 1
 	})
 }
 
+func TestScriptCFGReportsEachMissingSpecifierReferenceAtItsPosition(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
+"Value: -value%(-missing).(-missing)f"`)
+
+	require.Len(t, errs, 2)
+	for _, err := range errs {
+		require.Contains(t, err.Msg, "Undefined variable missing within specifier")
+		require.Equal(t, 2, err.Token.Line)
+	}
+	require.Equal(t, 18, errs[0].Token.Column, "width reference position")
+	require.Equal(t, 29, errs[1].Token.Column, "precision reference position")
+}
+
+// Marker positions resume from a per-string cursor, so read collection over a
+// marker-heavy literal must stay linear in the literal's length.
+func BenchmarkCollectStringReadsManyMarkers(b *testing.B) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cp := parser.NewCodeParser(lexer.New(b.Name(), ""))
+	cc := NewCodeCompiler(ctx, b.Name(), "", cp.Parse())
+	require.Empty(b, cc.Compile())
+
+	cfg := NewCFG(cc)
+	Put(cfg.Scopes, "x", VarEvent{Name: "x", Kind: Write})
+	value := strings.Repeat("-x ", 10000)
+	tok := token.Token{FileName: b.Name(), Line: 1, Column: 1}
+
+	b.ResetTimer()
+	for range b.N {
+		cfg.collectStringReads(value, tok)
+	}
+}
+
+func TestSpecifierErrorPositionSpansLogicalStringLines(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), "value = 5.\n\"head\r\nmid\n-value%(-missing)d\"")
+
+	require.Len(t, errs, 1)
+	require.Contains(t, errs[0].Msg, "Undefined variable missing within specifier")
+	require.Equal(t, 4, errs[0].Token.Line, "CRLF and LF breaks in the literal each advance one line")
+	require.Equal(t, 10, errs[0].Token.Column)
+}
+
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.

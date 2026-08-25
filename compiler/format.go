@@ -145,7 +145,7 @@ func (p specifierPrecision) removeFrom(spec string) string {
 }
 
 type parsedSpecifier struct {
-	ids       []string
+	ids       []specifierID
 	text      string
 	end       int
 	flags     string
@@ -153,12 +153,19 @@ type parsedSpecifier struct {
 	precision specifierPrecision
 }
 
+// specifierID is one dynamic width or precision reference: the identifier and
+// the rune index of its first character in the raw string literal.
+type specifierID struct {
+	name  string
+	index int
+}
+
 type specifierParser struct {
 	tok       token.Token
 	value     string
 	runes     []rune
 	index     int
-	specIDs   []string
+	specIDs   []specifierID
 	spec      strings.Builder
 	flags     strings.Builder
 	length    string
@@ -193,7 +200,7 @@ func (p *specifierParser) parseDynamic() (bool, *token.CompileError) {
 			Msg:   fmt.Sprintf("Expected ) after the identifier %s. Str: %s", specID, p.value),
 		}
 	}
-	p.specIDs = append(p.specIDs, specID)
+	p.specIDs = append(p.specIDs, specifierID{name: specID, index: p.index + 2})
 	p.spec.WriteRune('*')
 	p.index = next + 1
 	return true, nil
@@ -336,6 +343,46 @@ func parseSpecifierSyntax(tok token.Token, value string, runes []rune, start int
 	return p.result(), nil
 }
 
+// stringPositions relocates rune indexes in one raw string literal body to
+// source positions. The body starts one column past the opening quote;
+// logical line breaks advance the line and reset the column, matching the
+// lexer's numbering for LF, CRLF, and CR sources. Queries must not go
+// backwards: the cursor resumes from the previous query instead of
+// rescanning the prefix, so one left-to-right scan stays linear.
+type stringPositions struct {
+	runes []rune
+	tok   token.Token
+	idx   int
+}
+
+func newStringPositions(tok token.Token, runes []rune) *stringPositions {
+	tok.Column++
+	return &stringPositions{runes: runes, tok: tok}
+}
+
+func (sp *stringPositions) at(idx int) token.Token {
+	if idx < sp.idx {
+		panic("internal: string literal positions must be queried left to right")
+	}
+	for sp.idx < idx {
+		r, next := lexer.LogicalRune(sp.runes, sp.idx)
+		if r == '\n' {
+			sp.tok.Line++
+			sp.tok.Column = 1
+		} else {
+			sp.tok.Column++
+		}
+		sp.idx = next
+	}
+
+	return sp.tok
+}
+
+// positionInString is the one-shot form for a single lookup.
+func positionInString(tok token.Token, runes []rune, idx int) token.Token {
+	return newStringPositions(tok, runes).at(idx)
+}
+
 // Assumes runes[start] is a valid start to the identifier (lexer.IsLetter)
 // end is the index after identifier in runes
 func parseIdentifier(runes []rune, start int) (identifier string, end int) {
@@ -363,17 +410,18 @@ func undefinedSpecifierVariableError(tok token.Token, value, specID string) *tok
 	}
 }
 
-func (c *Compiler) resolveDynamicSpecifierSymbols(tok token.Token, value string, specIDs []string) ([]*Symbol, *token.CompileError) {
+func (c *Compiler) resolveDynamicSpecifierSymbols(tok token.Token, value string, runes []rune, specIDs []specifierID) ([]*Symbol, *token.CompileError) {
 	symbols := make([]*Symbol, 0, len(specIDs))
 	for _, specID := range specIDs {
-		specSym, found := c.getIdSym(specID)
+		specSym, found := c.getIdSym(specID.name)
 		if !found {
-			return nil, undefinedSpecifierVariableError(tok, value, specID)
+			idTok := positionInString(tok, runes, specID.index)
+			return nil, undefinedSpecifierVariableError(idTok, value, specID.name)
 		}
 		if !TypeEqual(specSym.Type, I64) {
 			return nil, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("Format specifier variable %s must have type I64, got %s", specID, specSym.Type),
+				Token: positionInString(tok, runes, specID.index),
+				Msg:   fmt.Sprintf("Format specifier variable %s must have type I64, got %s", specID.name, specSym.Type),
 			}
 		}
 		symbols = append(symbols, specSym)
@@ -408,7 +456,7 @@ func (c *Compiler) parseMarker(tok token.Token, value string, runes []rune, i in
 		return result, parseErr
 	}
 
-	specSymbols, resolveErr := c.resolveDynamicSpecifierSymbols(tok, value, spec.ids)
+	specSymbols, resolveErr := c.resolveDynamicSpecifierSymbols(tok, value, runes, spec.ids)
 	if resolveErr != nil {
 		c.Errors = append(c.Errors, resolveErr)
 		return result, resolveErr
@@ -922,8 +970,8 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, 
 		}
 		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
 		for _, specID := range spec.ids {
-			if isDefined(specID) {
-				specs = append(specs, specID)
+			if isDefined(specID.name) {
+				specs = append(specs, specID.name)
 			}
 		}
 		i = spec.end - 1

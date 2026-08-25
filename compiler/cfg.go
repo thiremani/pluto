@@ -113,6 +113,7 @@ func (cfg *CFG) collectStatementReads(stmt ast.Statement) []VarEvent {
 func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 	var reads []VarEvent
 	runes := []rune(value)
+	positions := newStringPositions(tok, runes)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
 			_, next, _ := lexer.DecodeStringEscape(runes, i)
@@ -123,7 +124,7 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 			continue
 		}
 
-		markerReads, end := cfg.collectMarkerReads(value, tok, runes, i)
+		markerReads, end := cfg.collectMarkerReads(value, tok, runes, positions, i)
 		reads = append(reads, markerReads...)
 		i = end - 1
 	}
@@ -132,30 +133,30 @@ func (cfg *CFG) collectStringReads(value string, tok token.Token) []VarEvent {
 }
 
 // An unknown main marker itself is literal text.
-func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, start int) ([]VarEvent, int) {
+func (cfg *CFG) collectMarkerReads(value string, tok token.Token, runes []rune, positions *stringPositions, start int) ([]VarEvent, int) {
 	mainID, end := parseIdentifier(runes, start+1)
 	if !cfg.isDefined(mainID) {
 		return nil, end
 	}
 
-	reads := []VarEvent{{Name: mainID, Kind: Read, Token: tok}}
+	reads := []VarEvent{{Name: mainID, Kind: Read, Token: positions.at(start + 1)}}
 	if end >= len(runes) || runes[end] != '%' {
 		return reads, end
 	}
 
-	specifierReads, specifierEnd := cfg.collectSpecifierReads(value, tok, runes, end)
+	specifierReads, specifierEnd := cfg.collectSpecifierReads(value, tok, runes, positions, end)
 	reads = append(reads, specifierReads...)
 	return reads, specifierEnd
 }
 
-func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, start int) ([]VarEvent, int) {
+func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []rune, positions *stringPositions, start int) ([]VarEvent, int) {
 	spec, err := parseSpecifierSyntax(tok, value, runes, start)
 	var reads []VarEvent
 	if err != nil {
 		cfg.Errors = append(cfg.Errors, err)
 		for _, specID := range spec.ids {
-			if cfg.isDefined(specID) {
-				reads = append(reads, VarEvent{Name: specID, Kind: Read, Token: tok})
+			if cfg.isDefined(specID.name) {
+				reads = append(reads, VarEvent{Name: specID.name, Kind: Read, Token: positions.at(specID.index)})
 			}
 		}
 
@@ -163,11 +164,12 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	}
 
 	for _, specID := range spec.ids {
-		if !cfg.isDefined(specID) {
-			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(tok, value, specID))
+		idTok := positions.at(specID.index)
+		if !cfg.isDefined(specID.name) {
+			cfg.Errors = append(cfg.Errors, undefinedSpecifierVariableError(idTok, value, specID.name))
 			continue
 		}
-		reads = append(reads, VarEvent{Name: specID, Kind: Read, Token: tok})
+		reads = append(reads, VarEvent{Name: specID.name, Kind: Read, Token: idTok})
 	}
 
 	return reads, spec.end
