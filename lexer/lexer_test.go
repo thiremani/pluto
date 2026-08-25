@@ -793,9 +793,10 @@ print()`
 }
 
 func TestLineContinuation(t *testing.T) {
-	// Newlines are normalized before lexing, so a trailing backslash
-	// continues the line identically for LF, CRLF, and lone-CR endings, and
-	// the token stream, positions included, is the same for all three.
+	// The cursor exposes every physical line ending as one logical newline,
+	// so a trailing backslash continues the line identically for LF, CRLF,
+	// and lone-CR endings and the token stream, positions included, is the
+	// same for all three.
 	expected := []Test{
 		{token.IDENT, "arr", "", 1, 1},
 		{token.ASSIGN, "=", "", 1, 5},

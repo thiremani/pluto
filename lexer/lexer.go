@@ -313,11 +313,28 @@ func (l *Lexer) newLine() {
 	l.column = 0
 }
 
+// LogicalRune returns the logical rune at raw index i and the raw index
+// just past it. Physical line endings collapse here: a CRLF pair is one
+// logical '\n' spanning two raw runes, and a lone CR is '\n'. Every
+// walker of raw source shares this single primitive so the translation
+// cannot drift between implementations.
+func LogicalRune(raw []rune, i int) (rune, int) {
+	r := raw[i]
+	if r != '\r' {
+		return r, i + 1
+	}
+	if i+1 < len(raw) && raw[i+1] == '\n' {
+		return '\n', i + 2
+	}
+	return '\n', i + 1
+}
+
 // readRune advances to the next logical rune. Physical line endings are
 // translated at this boundary: a lone CR is exposed as '\n' and a CRLF
 // pair is consumed together as one logical '\n', so the rest of the lexer
 // sees every line ending as exactly one newline while l.input, position,
-// and readPosition keep the raw source and its indexes.
+// and readPosition keep the raw decoded runes and their rune indexes
+// (not byte offsets; invalid UTF-8 is replaced during decoding).
 func (l *Lexer) readRune() {
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
@@ -326,15 +343,8 @@ func (l *Lexer) readRune() {
 		l.column++
 		return
 	}
-	l.curr = l.input[l.readPosition]
 	l.position = l.readPosition
-	l.readPosition++
-	if l.curr == '\r' {
-		l.curr = '\n'
-		if l.readPosition < len(l.input) && l.input[l.readPosition] == '\n' {
-			l.readPosition++
-		}
-	}
+	l.curr, l.readPosition = LogicalRune(l.input, l.readPosition)
 	l.column++
 }
 
@@ -373,7 +383,11 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			if escapeErr != nil {
 				setError(escapeErr.Error())
 			}
-			for l.position+1 < next {
+			// next is a raw index and readPosition is the raw index of the
+			// next unconsumed rune, so recovery advances in raw space; a
+			// CRLF pair straddling next is consumed whole as one logical
+			// rune rather than split.
+			for l.readPosition < next {
 				l.readStringRune()
 			}
 		}
@@ -488,25 +502,17 @@ func DecodeStringLiteral(raw string) string {
 	runes := []rune(raw)
 	var out strings.Builder
 	for i := 0; i < len(runes); {
-		if runes[i] == '\r' {
-			// Physical line endings in source are logical newlines; the
-			// runtime value must not depend on checkout line-ending
-			// conversion. The \r escape still produces a carriage return.
-			out.WriteRune('\n')
-			i++
-			if i < len(runes) && runes[i] == '\n' {
-				i++
-			}
+		if runes[i] == '\\' {
+			value, next, _ := DecodeStringEscape(runes, i)
+			out.WriteString(value)
+			i = next
 			continue
 		}
-		if runes[i] != '\\' {
-			out.WriteRune(runes[i])
-			i++
-			continue
-		}
-
-		value, next, _ := DecodeStringEscape(runes, i)
-		out.WriteString(value)
+		// Physical line endings in source are logical newlines; the runtime
+		// value must not depend on checkout line-ending conversion. The \r
+		// escape still produces a carriage return.
+		r, next := LogicalRune(runes, i)
+		out.WriteRune(r)
 		i = next
 	}
 	return out.String()
@@ -531,10 +537,8 @@ func (l *Lexer) peekRune() rune {
 	if l.readPosition >= len(l.input) {
 		return 0
 	}
-	if r := l.input[l.readPosition]; r != '\r' {
-		return r
-	}
-	return '\n'
+	r, _ := LogicalRune(l.input, l.readPosition)
+	return r
 }
 
 // readIdentifier reads a Unicode identifier from the input.
