@@ -65,7 +65,6 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		l.newLine()
 		l.onNewline = !l.continuedLine
 		l.continuedLine = false
 	case '\\':
@@ -234,7 +233,6 @@ func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 		}
 
 		err = nil
-		l.newLine()
 		l.readRune()
 	}
 
@@ -334,8 +332,14 @@ func LogicalRune(raw []rune, i int) (rune, int) {
 // pair is consumed together as one logical '\n', so the rest of the lexer
 // sees every line ending as exactly one newline while l.input, position,
 // and readPosition keep the raw decoded runes and their rune indexes
+// Leaving a logical newline is counted here, so every consumer -- token
+// scanning, indentation, and string contents alike -- advances lines
+// through this single point.
 // (not byte offsets; invalid UTF-8 is replaced during decoding).
 func (l *Lexer) readRune() {
+	if l.curr == '\n' {
+		l.newLine()
+	}
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
 		l.position = l.readPosition
@@ -352,17 +356,6 @@ func (l *Lexer) atEOF() bool {
 	return l.curr == 0 && l.position >= len(l.input)
 }
 
-// readStringRune advances one rune within a string literal. A physical
-// newline stored in string content still ends a line of source, so every
-// advance inside a string goes through here to keep line and column
-// tracking correct, including while recovering from invalid escapes.
-func (l *Lexer) readStringRune() {
-	if l.curr == '\n' {
-		l.newLine()
-	}
-	l.readRune()
-}
-
 func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	var firstErr *token.CompileError
 	start := l.position
@@ -375,7 +368,7 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 	for l.curr != '"' && !l.atEOF() {
 		if l.curr == 0 {
 			setError("NUL character is not allowed in string literals")
-			l.readStringRune()
+			l.readRune()
 			continue
 		}
 		if l.curr == '\\' {
@@ -388,10 +381,10 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			// CRLF pair straddling next is consumed whole as one logical
 			// rune rather than split.
 			for l.readPosition < next {
-				l.readStringRune()
+				l.readRune()
 			}
 		}
-		l.readStringRune()
+		l.readRune()
 	}
 	if l.atEOF() {
 		setError("unterminated string literal")
