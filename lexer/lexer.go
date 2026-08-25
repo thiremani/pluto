@@ -312,10 +312,8 @@ func (l *Lexer) newLine() {
 }
 
 // LogicalRune returns the logical rune at raw index i and the raw index
-// just past it. Physical line endings collapse here: a CRLF pair is one
-// logical '\n' spanning two raw runes, and a lone CR is '\n'. Every
-// walker of raw source shares this single primitive so the translation
-// cannot drift between implementations.
+// just past it: a CRLF pair is one logical '\n' spanning two raw runes,
+// a lone CR is '\n'. All raw-source walkers share this primitive.
 func LogicalRune(raw []rune, i int) (rune, int) {
 	r := raw[i]
 	if r != '\r' {
@@ -327,15 +325,10 @@ func LogicalRune(raw []rune, i int) (rune, int) {
 	return '\n', i + 1
 }
 
-// readRune advances to the next logical rune. Physical line endings are
-// translated at this boundary: a lone CR is exposed as '\n' and a CRLF
-// pair is consumed together as one logical '\n', so the rest of the lexer
-// sees every line ending as exactly one newline while l.input, position,
-// and readPosition keep the raw decoded runes and their rune indexes
-// (not byte offsets; invalid UTF-8 is replaced during decoding).
-// Leaving a logical newline is counted here, so every consumer -- token
-// scanning, indentation, and string contents alike -- advances lines
-// through this single point.
+// readRune advances to the next logical rune via LogicalRune; l.input,
+// position, and readPosition hold raw decoded runes and rune indexes
+// (not byte offsets). Leaving a logical newline advances the line count
+// here, at the single point of consumption.
 func (l *Lexer) readRune() {
 	if l.curr == '\n' {
 		l.newLine()
@@ -376,10 +369,8 @@ func (l *Lexer) readString(tok token.Token) (string, *token.CompileError) {
 			if escapeErr != nil {
 				setError(escapeErr.Error())
 			}
-			// next is a raw index and readPosition is the raw index of the
-			// next unconsumed rune, so recovery advances in raw space; a
-			// CRLF pair straddling next is consumed whole as one logical
-			// rune rather than split.
+			// next is a raw index, so advance until the raw readPosition
+			// reaches it; a CRLF pair straddling next is consumed whole.
 			for l.readPosition < next {
 				l.readRune()
 			}
@@ -428,10 +419,8 @@ func DecodeStringEscape(raw []rune, start int) (string, int, error) {
 	case '0':
 		return string(escaped), start + 2, fmt.Errorf(`NUL escape \0 is not supported`)
 	case '\n', '\r':
-		// A physical line break after a backslash is not an escape. Report
-		// it as the logical newline so the diagnostic does not depend on
-		// the source file's line-ending style, and consume the full break
-		// so next is the first index after the escape even for a CRLF pair.
+		// Report the logical newline and consume the full break, so the
+		// diagnostic and next are the same for LF, CRLF, and CR sources.
 		_, next := LogicalRune(raw, start+1)
 		return "\n", next, fmt.Errorf("unsupported escape sequence \\\n")
 	default:
@@ -503,9 +492,8 @@ func DecodeStringLiteral(raw string) string {
 			i = next
 			continue
 		}
-		// Physical line endings in source are logical newlines; the runtime
-		// value must not depend on checkout line-ending conversion. The \r
-		// escape still produces a carriage return.
+		// A physical line break decodes to '\n' so runtime values do not
+		// depend on checkout line endings; the \r escape is unaffected.
 		r, next := LogicalRune(runes, i)
 		out.WriteRune(r)
 		i = next

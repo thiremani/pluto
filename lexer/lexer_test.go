@@ -793,10 +793,8 @@ print()`
 }
 
 func TestLineContinuation(t *testing.T) {
-	// The cursor exposes every physical line ending as one logical newline,
-	// so a trailing backslash continues the line identically for LF, CRLF,
-	// and lone-CR endings and the token stream, positions included, is the
-	// same for all three.
+	// A trailing backslash continues the line for every ending style, with
+	// an identical token stream, positions included.
 	expected := []Test{
 		{token.IDENT, "arr", "", 1, 1},
 		{token.ASSIGN, "=", "", 1, 5},
@@ -829,8 +827,7 @@ func TestLineContinuation(t *testing.T) {
 }
 
 func TestNewlineNormalization(t *testing.T) {
-	// LF, CRLF, and a lone CR each terminate exactly one physical line;
-	// CRLF is a single newline, not two.
+	// Each ending style terminates exactly one line; CRLF is one newline.
 	src := "a\rb\r\nc\nd"
 	expected := []Test{
 		{token.IDENT, "a", "", 1, 1},
@@ -844,10 +841,8 @@ func TestNewlineNormalization(t *testing.T) {
 	}
 	checkInput(t, src, expected)
 
-	// Adjacent mixed runs pair greedily left to right: CR,CRLF,LF is three
-	// terminators and CRLF,CR is two. Blank lines are consumed by the
-	// indentation handling, so the terminator count shows up in the line
-	// number of the following token.
+	// Adjacent mixed runs pair greedily left to right; blank lines are
+	// swallowed, so the terminator count shows in the next token's line.
 	adjacent := []struct {
 		src      string
 		wantLine int
@@ -867,10 +862,8 @@ func TestNewlineNormalization(t *testing.T) {
 }
 
 func TestMultilineString(t *testing.T) {
-	// Token.Literal keeps the raw spelling of a physical line break inside a
-	// string, positions stay identical across ending styles, and decoding
-	// yields the same runtime value for all three, so program behavior does
-	// not depend on checkout line-ending conversion.
+	// Token.Literal keeps the raw break spelling; positions and the decoded
+	// runtime value are identical for every ending style.
 	endings := []struct {
 		name    string
 		ending  string
@@ -898,9 +891,8 @@ func TestMultilineString(t *testing.T) {
 }
 
 func TestMultilineStringInvalidEscape(t *testing.T) {
-	// A physical line break directly after a backslash is an unsupported
-	// escape; error recovery must still count the crossed line, and the
-	// diagnostic reports the logical newline whatever the ending style.
+	// Recovery from a backslash before a physical break must still count
+	// the crossed line and report one diagnostic for every ending style.
 	endings := []struct {
 		name    string
 		ending  string
@@ -925,9 +917,8 @@ func TestMultilineStringInvalidEscape(t *testing.T) {
 }
 
 func TestDecodeStringEscapePhysicalBreak(t *testing.T) {
-	// DecodeStringEscape returns the first raw index after the escape, so a
-	// backslash before a CRLF pair must consume the whole break: raw walkers
-	// like DecodeStringLiteral would otherwise process the LF a second time.
+	// next must be the first raw index after the escape, so a CRLF pair is
+	// consumed whole; raw walkers would otherwise see the LF twice.
 	tests := []struct {
 		name     string
 		raw      string

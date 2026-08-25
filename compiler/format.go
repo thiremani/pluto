@@ -780,8 +780,8 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 		}
 
 		if runes[i] == '\r' {
-			// Physical line endings are logical newlines; the emitted format
-			// string must not depend on checkout line-ending conversion.
+			// Physical line breaks emit '\n', independent of checkout line
+			// endings.
 			r, next := lexer.LogicalRune(runes, i)
 			writeFormatText(&builder, string(r))
 			i = next

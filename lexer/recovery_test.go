@@ -8,9 +8,8 @@ import (
 	"github.com/thiremani/pluto/token"
 )
 
-// lexSignature renders the stream of token types, positions, and errors,
-// deliberately omitting literals: raw string spelling differs by ending
-// style while everything else must not.
+// lexSignature renders token types, positions, and errors, omitting
+// literals: raw string spelling differs by ending style, nothing else may.
 func lexSignature(src string) (string, bool) {
 	l := New("", src)
 	var b strings.Builder
@@ -29,11 +28,9 @@ func lexSignature(src string) (string, bool) {
 }
 
 func TestStringRecoveryEndingIndependent(t *testing.T) {
-	// Escape-recovery paths walk raw indexes returned by DecodeStringEscape
-	// while the cursor advances by logical runes; these malformed templates
-	// pin that the two index spaces stay reconciled: token types, positions,
-	// and diagnostics are identical whichever physical ending E expands to,
-	// including CRLF pairs adjacent to escape boundaries and EOF.
+	// Escape recovery walks raw indexes while the cursor advances by logical
+	// runes; these malformed templates pin that the streams stay identical
+	// whichever physical ending E expands to.
 	templates := []string{
 		"\"a\\Eb\"Ec",   // backslash before line break
 		"\"\\xEb\"Ec",   // \x with break as first digit
