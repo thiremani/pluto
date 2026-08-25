@@ -332,10 +332,10 @@ func LogicalRune(raw []rune, i int) (rune, int) {
 // pair is consumed together as one logical '\n', so the rest of the lexer
 // sees every line ending as exactly one newline while l.input, position,
 // and readPosition keep the raw decoded runes and their rune indexes
+// (not byte offsets; invalid UTF-8 is replaced during decoding).
 // Leaving a logical newline is counted here, so every consumer -- token
 // scanning, indentation, and string contents alike -- advances lines
 // through this single point.
-// (not byte offsets; invalid UTF-8 is replaced during decoding).
 func (l *Lexer) readRune() {
 	if l.curr == '\n' {
 		l.newLine()
