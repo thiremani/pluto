@@ -207,7 +207,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		outputNames[output.Value] = struct{}{}
 	}
 
-	readInputs, assignedOutputs := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
+	_, readInputs, assignedOutputs := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
 
 	for _, input := range fn.Parameters {
 		if _, wasRead := readInputs[input.Value]; wasRead {
@@ -225,17 +225,27 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 }
 
-func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames, outputNames map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
+// validateTemplateBody runs structural validation over one template body and
+// returns each statement's reads plus the parameter and output names the body
+// read and assigned. A script is a zero-input, zero-output template: it passes
+// nil name sets and consumes only the reads.
+func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames, outputNames map[string]struct{}) ([][]VarEvent, map[string]struct{}, map[string]struct{}) {
+	statementReads := make([][]VarEvent, 0, len(statements))
 	readInputs := make(map[string]struct{}, len(parameterNames))
 	assignedOutputs := make(map[string]struct{}, len(outputNames))
 	for _, stmt := range statements {
-		reads, targets := cfg.validateTemplateStatement(stmt, parameterNames)
+		reads := cfg.collectStatementReads(stmt)
+		targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
+		if let, ok := stmt.(*ast.LetStatement); ok {
+			cfg.publishTargets(let.Name)
+		}
+
+		statementReads = append(statementReads, reads)
 		for _, event := range reads {
 			if _, isParameter := parameterNames[event.Name]; isParameter {
 				readInputs[event.Name] = struct{}{}
 			}
 		}
-
 		for _, target := range targets {
 			if _, isOutput := outputNames[target.Value]; isOutput {
 				assignedOutputs[target.Value] = struct{}{}
@@ -243,17 +253,7 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 		}
 	}
 
-	return readInputs, assignedOutputs
-}
-
-func (cfg *CFG) validateTemplateStatement(stmt ast.Statement, parameterNames map[string]struct{}) ([]VarEvent, []*ast.Identifier) {
-	reads := cfg.collectStatementReads(stmt)
-	targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
-	if let, ok := stmt.(*ast.LetStatement); ok {
-		cfg.publishTargets(let.Name)
-	}
-
-	return reads, targets
+	return statementReads, readInputs, assignedOutputs
 }
 
 // AnalyzeScript treats the script as a zero-input, zero-output template before
@@ -278,12 +278,7 @@ func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent 
 	PushScope(&cfg.Scopes, BlockScope)
 	defer PopScope(&cfg.Scopes)
 
-	statementReads := make([][]VarEvent, 0, len(statements))
-	for _, stmt := range statements {
-		reads, _ := cfg.validateTemplateStatement(stmt, nil)
-		statementReads = append(statementReads, reads)
-	}
-
+	statementReads, _, _ := cfg.validateTemplateBody(statements, nil, nil)
 	return statementReads
 }
 
