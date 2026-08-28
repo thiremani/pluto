@@ -644,7 +644,7 @@ func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
 	require.Empty(t, cfg.Errors)
 }
 
-func TestSpecializationUsesSparseTargetIndices(t *testing.T) {
+func TestTypedStatementEventsUseSparseTargetIndices(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -652,22 +652,23 @@ func TestSpecializationUsesSparseTargetIndices(t *testing.T) {
     a, _, b = x, x, x`)
 	template := code.Statements[0].(*ast.FuncStatement)
 	statement := template.Body.Statements[0].(*ast.LetStatement)
-	info := &FuncInfo{
-		StatementEffects: map[*ast.LetStatement]StatementEffect{
-			statement: {
-				Writes: []TargetWriteEffect{
-					{TargetIndex: 0, Effect: MustWrite},
-					{TargetIndex: 2, Effect: MayWrite},
-				},
+	effects := map[*ast.LetStatement]StatementEffect{
+		statement: {
+			Writes: []TargetWriteEffect{
+				{TargetIndex: 0, Effect: MustWrite},
+				{TargetIndex: 2, Effect: MustWrite},
 			},
 		},
 	}
 	cc := NewCodeCompiler(ctx, "sparseSpecialization", "", code)
 	cfg := NewCFG(cc)
 
-	cfg.AnalyzeSpecialization(template, info)
+	events := cfg.typedStatementEvents(statement, nil, effects)
 
-	require.Empty(t, cfg.Errors)
+	require.Equal(t, []VarEvent{
+		{Name: "a", Kind: Write, Token: statement.Name[0].Tok()},
+		{Name: "b", Kind: Write, Token: statement.Name[2].Tok()},
+	}, events)
 }
 
 func TestSpecializationRejectsMissingStatementEffects(t *testing.T) {
