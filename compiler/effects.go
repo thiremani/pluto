@@ -586,10 +586,6 @@ func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, st
 		}
 
 		info := compiler.ExprCache[key(callerMangled, call)]
-		if info == nil {
-			panic(fmt.Sprintf("internal: typed call %s in %s has no expression info", call.Function.Value, callerMangled))
-		}
-
 		primary := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
 		requireSpecializationCallTarget(compiler, callerMangled, primary)
 		effectCallees = append(effectCallees, primary)
