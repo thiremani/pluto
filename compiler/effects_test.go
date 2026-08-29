@@ -17,7 +17,13 @@ func requireTargetEffects(t *testing.T, effect StatementEffect, expected ...Targ
 func TestValidStatementEffectShape(t *testing.T) {
 	program := mustParseScript(t, "a, _, b = 1, 2, 3")
 	stmt := program.Statements[0].(*ast.LetStatement)
-	validWrites := []TargetWriteEffect{
+	// This helper validates the published target shape; it does not derive
+	// semantic effects from the statement's RHS.
+	directWrites := []TargetWriteEffect{
+		{TargetIndex: 0, Effect: MustWrite},
+		{TargetIndex: 2, Effect: MustWrite},
+	}
+	mixedWrites := []TargetWriteEffect{
 		{TargetIndex: 0, Effect: MustWrite},
 		{TargetIndex: 2, Effect: MayWrite},
 	}
@@ -27,12 +33,14 @@ func TestValidStatementEffectShape(t *testing.T) {
 		readsSeed []int
 		valid     bool
 	}{
-		{name: "valid sparse effect", writes: validWrites, readsSeed: []int{0, 2}, valid: true},
-		{name: "missing named target", writes: validWrites[:1]},
+		{name: "valid direct writes", writes: directWrites, valid: true},
+		{name: "valid mixed write effects", writes: mixedWrites, valid: true},
+		{name: "valid seed targets", writes: directWrites, readsSeed: []int{0, 2}, valid: true},
+		{name: "missing named target", writes: directWrites[:1]},
 		{name: "write targets discard", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 1, Effect: MustWrite}}},
 		{name: "invalid write state", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 2, Effect: WriteInvalid}}},
-		{name: "duplicate seed target", writes: validWrites, readsSeed: []int{0, 0}},
-		{name: "seed targets discard", writes: validWrites, readsSeed: []int{1}},
+		{name: "duplicate seed target", writes: directWrites, readsSeed: []int{0, 0}},
+		{name: "seed targets discard", writes: directWrites, readsSeed: []int{1}},
 	}
 
 	for _, test := range tests {
