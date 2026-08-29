@@ -74,7 +74,8 @@ x, y`
 	args := []Type{I64}
 	template, isEvenMangled, ok := ts.lookupCallTemplate(call, args)
 	require.True(t, ok)
-	isEvenFunc := ts.newFunc(call, args, isEvenMangled, template)
+	isEvenFunc := newFunc(call.Function.Value, args, template)
+	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
 	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 

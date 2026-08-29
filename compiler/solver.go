@@ -2446,7 +2446,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
-func newFuncInfo(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInfo {
+func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
 			Name:     name,
@@ -2464,29 +2464,24 @@ func newFuncInfo(name string, bodyArgs []Type, template *ast.FuncStatement) *Fun
 	return f
 }
 
-// newFunc creates and caches a specialization record for the call.
-// String params keep their StrG/StrH type - functions are mangled separately for each.
-// Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
-	f := newFuncInfo(ce.Function.Value, bodyArgs, template)
-	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
-	return f
-}
-
 func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
 	// Fetch existing func cache entry (if any).
 	f, ok := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		allowed, guardError := ts.specializationGuard.allowAllocation(mangled, template, ce.Function.Token)
-		if guardError != nil {
-			ts.Errors = append(ts.Errors, guardError)
+		limitEncountered, limitError := ts.specializationGuard.checkAllocationLimit(mangled, template, ce.Function.Token)
+		if limitError != nil {
+			ts.Errors = append(ts.Errors, limitError)
 		}
-		if !allowed {
-			return newFuncInfo(ce.Function.Value, bodyArgs, template)
+
+		f = newFunc(ce.Function.Value, bodyArgs, template)
+		if limitEncountered {
+			return f
 		}
-		f = ts.newFunc(ce, bodyArgs, mangled, template)
+
+		// Cache before inference so recursive calls can reuse the partial specialization.
+		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
 	if ts.specializationGuard.failed && !f.Settled {
 		return f
