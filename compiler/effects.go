@@ -648,27 +648,8 @@ func (ts *TypeSolver) buildSpecializationCallGraph() *specializationCallGraph {
 	for id := range graph.nodes {
 		ts.addSpecializationGraphEdges(graph, specializationNodeID(id))
 	}
-	graph.validatePersistentTargets(ts.ScriptCompiler.Compiler)
 
 	return graph
-}
-
-func (graph *specializationCallGraph) validatePersistentTargets(compiler *Compiler) {
-	for _, node := range graph.nodes {
-		for _, callee := range node.directCallees {
-			if _, current := graph.byMangled[callee]; current {
-				continue
-			}
-
-			info := compiler.FuncCache[callee]
-			if !info.Settled {
-				panic(fmt.Sprintf("internal: specialization %s targets unsettled callee outside its batch: %s", node.mangled, callee))
-			}
-			if info.CFG == nil {
-				panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", callee))
-			}
-		}
-	}
 }
 
 func collectBodyCalls(statements []ast.Statement) []*ast.CallExpression {

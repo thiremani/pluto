@@ -1788,7 +1788,7 @@ result = Wrapper(x)
 	require.Equal(t, []string{leafMangled}, wrapper.CFG.DirectCallees)
 }
 
-func TestSpecializationGraphRejectsSettledCalleeWithoutCFGPublication(t *testing.T) {
+func TestSettledSpecializationRequiresCFGPublication(t *testing.T) {
 	code := mustParseCode(t, `result = Leaf(x)
     result = x
 
