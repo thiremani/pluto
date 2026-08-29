@@ -289,10 +289,6 @@ func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) 
 	mangled := Mangle(analyzer.compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
 	f := analyzer.compiler.FuncCache[mangled]
 	if f.Settled {
-		if f.CFG == nil {
-			panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", mangled))
-		}
-
 		return f.BodyOutputEffects
 	}
 
