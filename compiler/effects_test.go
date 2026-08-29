@@ -393,7 +393,7 @@ result`)
 	require.True(t, b.Settled)
 }
 
-func TestSpecializationCallGraphUsesWalkOrderAndBothEdgeViews(t *testing.T) {
+func TestCallGraphWalkOrderAndEdgeViews(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -440,7 +440,7 @@ result`)
 	require.Empty(t, graph.nodes[cID].directCallees)
 }
 
-func TestSpecializationCallGraphKeepsScalarCompanionOutOfEffectEdges(t *testing.T) {
+func TestCallGraphExcludesScalarEffectEdge(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 

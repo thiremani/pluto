@@ -16,7 +16,7 @@ func compileCFGReplayScript(t *testing.T, ctx llvm.Context, cc *CodeCompiler, na
 	return sc, sc.Compile()
 }
 
-func TestSpecializationCFGDiagnosticsReplayColdAndWarm(t *testing.T) {
+func TestCFGReplayColdAndWarm(t *testing.T) {
 	code := mustParseCode(t, `result = Noisy(x)
     unused = x + 1
     result = x
@@ -51,7 +51,7 @@ func TestSpecializationCFGDiagnosticsReplayColdAndWarm(t *testing.T) {
 		"warm replay must return the same cached diagnostic pointer")
 }
 
-func TestSpecializationCFGReplayDeduplicatesAcrossConcreteTypes(t *testing.T) {
+func TestCFGReplayDeduplicatesConcreteTypes(t *testing.T) {
 	code := mustParseCode(t, `result = NoisyTypes(x)
     unused = x + 1
     result = x
@@ -80,7 +80,7 @@ integer, floating`)
 		"replay must retain the first source-ordered diagnostic")
 }
 
-func TestSpecializationCFGReplayPreservesDistinctTemplateDiagnostics(t *testing.T) {
+func TestCFGReplayPreservesDistinctDiagnostics(t *testing.T) {
 	code := mustParseCode(t, `result = NoisyPair(x)
     firstUnused = x + 1
     secondUnused = x + 2
@@ -139,7 +139,7 @@ result = Clean(x)
 	require.Same(t, noisyInfo, cc.Compiler.FuncCache[noisyMangled])
 }
 
-func TestWrapperReplaysAlreadySettledCalleeCFGDiagnostics(t *testing.T) {
+func TestWrapperReplaysSettledCalleeDiagnostics(t *testing.T) {
 	code := mustParseCode(t, `result = NoisyLeaf(x)
     leafDead = x + 1
     result = x
@@ -196,7 +196,7 @@ func TestPrintOnlyUserCallReplaysCFGDiagnostics(t *testing.T) {
 	require.Same(t, cc.Compiler.FuncCache[mangled].CFG.Errors[0], errors[0])
 }
 
-func TestSpecializationCFGReplayDeduplicatesScalarCompanionDiagnostics(t *testing.T) {
+func TestCFGReplayDeduplicatesScalarCompanion(t *testing.T) {
 	code := mustParseCode(t, `result = GatherNoisy(arr)
     i = 0:3
     result = [ScaleNoisy(arr[i])]
@@ -283,7 +283,7 @@ result = Diamond(x)
 		"the visited set must replay a shared diamond callee exactly once")
 }
 
-func TestSpecializationCFGResultsAreIndependentPerType(t *testing.T) {
+func TestCFGResultsAreIndependentPerType(t *testing.T) {
 	code := mustParseCode(t, `result = MaskOrKeep(x)
     result = x
     result = x > 0

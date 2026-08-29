@@ -46,7 +46,7 @@ func TestCFGAnalysis(t *testing.T) {
 	})
 }
 
-func TestFunctionDataflowDiagnosticsWaitForReachableSpecialization(t *testing.T) {
+func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 	code := `r = Unreachable(x)
     temporary = x + 1
     temporary = x + 2
@@ -316,7 +316,7 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 	return sc.Compile()
 }
 
-func TestScriptCFGAccumulatesStructuralAndTypedErrors(t *testing.T) {
+func TestScriptCFGAccumulatesAllErrors(t *testing.T) {
 	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
 unused = 1
 "Value: -value%(-width).(-precision)f"`)
@@ -329,7 +329,7 @@ unused = 1
 	})
 }
 
-func TestScriptCFGReportsEachMissingSpecifierReferenceAtItsPosition(t *testing.T) {
+func TestMissingSpecifiersReportPositions(t *testing.T) {
 	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
 "Value: -value%(-missing).(-missing)f"`)
 
@@ -362,7 +362,7 @@ func BenchmarkCollectStringReadsManyMarkers(b *testing.B) {
 	}
 }
 
-func TestSpecifierErrorPositionSpansLogicalStringLines(t *testing.T) {
+func TestSpecifierPositionSpansLogicalLines(t *testing.T) {
 	errs := compileScriptForCFGTest(t, t.Name(), "value = 5.\n\"head\r\nmid\n-value%(-missing)d\"")
 
 	require.Len(t, errs, 1)
@@ -439,7 +439,7 @@ func TestEmptyDomainDoesNotProtectSiblingWrite(t *testing.T) {
 	assert.NotContains(t, joined, `to "a"`, "the ranged destination must stay protected")
 }
 
-func TestValidateFuncOutputAssignmentIsStructurallyAccepted(t *testing.T) {
+func TestStructuralOutputAssignmentAccepted(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -477,7 +477,7 @@ res = freshSelfRead(x)
 	assert.Contains(t, errs[0].Msg, `variable "local" has not been defined`)
 }
 
-func TestScriptTemplateBindingsDoNotLeakIntoTypedPass(t *testing.T) {
+func TestTemplateBindingsDoNotLeakIntoTypedPass(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -517,7 +517,7 @@ res = existingSelfReadAndSwap(x, y)
 	require.Empty(t, cc.Compile())
 }
 
-func TestValidateFuncDiscardDoesNotCreateBindingOrError(t *testing.T) {
+func TestDiscardCreatesNoBindingOrError(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -541,7 +541,7 @@ res = discardBinding(x)
 	assert.False(t, exists)
 }
 
-func TestValidateFuncFormattingReadsRemainStructural(t *testing.T) {
+func TestFormattingReadsRemainStructural(t *testing.T) {
 	tests := []struct {
 		name      string
 		body      string
@@ -644,7 +644,7 @@ func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
 	require.Empty(t, cfg.Errors)
 }
 
-func TestTypedStatementEventsUseSparseTargetIndices(t *testing.T) {
+func TestTypedEventsUseSparseTargetIndices(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -671,7 +671,7 @@ func TestTypedStatementEventsUseSparseTargetIndices(t *testing.T) {
 	}, events)
 }
 
-func TestSpecializationRejectsMissingStatementEffects(t *testing.T) {
+func TestCFGRejectsMissingStatementEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 

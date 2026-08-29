@@ -1367,7 +1367,7 @@ func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
 	require.Equal(t, shallow, repeated, "leaf walks must not grow with script call sites")
 }
 
-func TestUnboundedSpecializationGrowthHitsRecursiveLimitWithActiveChain(t *testing.T) {
+func TestRecursiveGrowthLimitReportsActiveChain(t *testing.T) {
 	const testLimit = 3
 
 	for _, tt := range []struct {
@@ -1427,7 +1427,7 @@ res = Right(x)
 	}
 }
 
-func TestRecursiveSpecializationFailureStopsSiblingRewalks(t *testing.T) {
+func TestRecursiveFailureStopsSiblingRewalks(t *testing.T) {
 	const testLimit = 3
 
 	code := mustParseCode(t, `res = Grow(x)
@@ -1464,7 +1464,7 @@ func growingMutualCycleCode(templateCount int) string {
 	return code.String()
 }
 
-func TestWideMutualGrowthHitsOneRecursiveRegionLimit(t *testing.T) {
+func TestMutualGrowthSharesRecursiveLimit(t *testing.T) {
 	const templateCount = 6
 	const testLimit = 10
 
@@ -1508,7 +1508,7 @@ func TestSpecializationTraceIsBounded(t *testing.T) {
 	require.Contains(t, trace, "F20(I64)")
 }
 
-func TestSpecializationTraceKeepsNineFramesAndPluralizesOmissions(t *testing.T) {
+func TestSpecializationTracePluralizesOmissions(t *testing.T) {
 	active := make([]activeSpecialization, 8)
 	for i := range active {
 		active[i] = traceActiveSpecialization(fmt.Sprintf("F%d", i), I64)
@@ -1536,7 +1536,7 @@ const fixedRankRecursionSource = `res = FixedRank(x)
     res = res + nested
 `
 
-func TestLargerRecursiveSpecializationCanReachFixedClosure(t *testing.T) {
+func TestRecursiveGrowthReachesFixedClosure(t *testing.T) {
 	code := mustParseCode(t, fixedRankRecursionSource)
 
 	ctx := llvm.NewContext()
@@ -1551,7 +1551,7 @@ func TestLargerRecursiveSpecializationCanReachFixedClosure(t *testing.T) {
 	}))
 }
 
-func TestRecursiveSpecializationLimitCountsColdDiscoveryNotSettledTail(t *testing.T) {
+func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 	const testLimit = 1
 
 	ctx := llvm.NewContext()
@@ -1612,7 +1612,7 @@ res = Inner(xs)
 	}))
 }
 
-func TestRecursiveSpecializationLimitCheckedBeforeCacheAllocation(t *testing.T) {
+func TestRecursiveLimitPrecedesCacheAllocation(t *testing.T) {
 	code := mustParseCode(t, `res = Identity(x)
     res = x
 `)
@@ -1669,7 +1669,7 @@ func flatSpecializationScript(start, end int) string {
 	return script.String()
 }
 
-func TestRecursiveSpecializationLimitAllowsFlatBreadthColdAndWarm(t *testing.T) {
+func TestRecursiveLimitAllowsFlatBreadth(t *testing.T) {
 	const specializationCount = 300
 	const warmCount = 100
 
@@ -1690,7 +1690,7 @@ func TestRecursiveSpecializationLimitAllowsFlatBreadthColdAndWarm(t *testing.T) 
 	require.Empty(t, warmedSC.Compile(), "warming sibling specializations must not change acceptance")
 }
 
-func TestSynthesizedScalarCompanionDoesNotConsumeRecursiveLimit(t *testing.T) {
+func TestScalarCompanionPreservesRecursiveBudget(t *testing.T) {
 	code := mustParseCode(t, `res = Scale(x)
     res = x * 3
 `)
@@ -1736,7 +1736,7 @@ scaled`)
 		"diagnostic frames must retain the actual specialization key when body parameter types collapse")
 }
 
-func TestSettledSpecializationPublishesCFGDiagnosticsWithoutSolverFailure(t *testing.T) {
+func TestCFGDiagnosticsDoNotFailSolver(t *testing.T) {
 	code := mustParseCode(t, `result = Noisy(x)
     unused = x
     result = x
@@ -1758,7 +1758,7 @@ func TestSettledSpecializationPublishesCFGDiagnosticsWithoutSolverFailure(t *tes
 	require.Contains(t, info.CFG.Errors[0].Msg, `"unused"`)
 }
 
-func TestSpecializationCFGRecordsAlreadySettledDirectCallee(t *testing.T) {
+func TestCFGRecordsSettledDirectCallee(t *testing.T) {
 	code := mustParseCode(t, `result = Leaf(x)
     result = x
 
@@ -1788,7 +1788,7 @@ result = Wrapper(x)
 	require.Equal(t, []string{leafMangled}, wrapper.CFG.DirectCallees)
 }
 
-func TestSettledSpecializationRequiresCFGPublication(t *testing.T) {
+func TestSettledSpecializationRequiresCFG(t *testing.T) {
 	code := mustParseCode(t, `result = Leaf(x)
     result = x
 
