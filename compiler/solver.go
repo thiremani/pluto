@@ -517,7 +517,7 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	// argument list, so this cannot be gated on a syntactic rewrite. LoopInside
 	// is true for any ordinary call, so require ranges to reach only collectors.
 	if _, builtin := Builtins[call.Function.Value]; len(ranges) > 0 && info.LoopInside && !builtin {
-		ts.ensureScalarCallVariant(call)
+		ts.ensureScalarCallVariant(call, info)
 	}
 
 	if !changed {
@@ -754,17 +754,8 @@ func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 // ensureScalarCallVariant ensures the scalar variant of a function exists.
 // This is needed when a call with LoopInside=true (e.g., Square(m) where m is a bare range)
 // is inside a print statement that iterates - at compile time, ranges are shadowed with scalars.
-func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
+func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression, info *ExprInfo) {
 	if _, builtin := Builtins[ce.Function.Value]; builtin {
-		return
-	}
-
-	info := ts.ExprCache[key(ts.FuncNameMangled, ce)]
-	if info == nil {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ce.Token,
-			Msg:   "internal: missing type info for call",
-		})
 		return
 	}
 
@@ -2335,7 +2326,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 		if !info.LoopInside {
 			continue
 		}
-		ts.ensureScalarCallVariant(call)
+		ts.ensureScalarCallVariant(call, info)
 	}
 	return
 }
