@@ -2470,20 +2470,20 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		limitEncountered, limitError := ts.specializationGuard.checkAllocationLimit(mangled, template, ce.Function.Token)
+		limitError := ts.specializationGuard.checkAllocationLimit(mangled, template, ce.Function.Token)
 		if limitError != nil {
 			ts.Errors = append(ts.Errors, limitError)
 		}
 
 		f = newFunc(ce.Function.Value, bodyArgs, template)
-		if limitEncountered {
+		if ts.specializationGuard.limitEncountered {
 			return f
 		}
 
 		// Cache before inference so recursive calls can reuse the partial specialization.
 		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
-	if ts.specializationGuard.failed && !f.Settled {
+	if ts.specializationGuard.limitEncountered && !f.Settled {
 		return f
 	}
 

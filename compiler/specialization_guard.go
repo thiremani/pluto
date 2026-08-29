@@ -35,7 +35,7 @@ type specializationGuard struct {
 	firstTemplateIndex map[*ast.FuncStatement]int
 	regionStart        int
 	limit              int
-	failed             bool
+	limitEncountered   bool
 }
 
 func newSpecializationGuard() specializationGuard {
@@ -50,17 +50,16 @@ func (guard *specializationGuard) reset() {
 	guard.frames = guard.frames[:0]
 	clear(guard.firstTemplateIndex)
 	guard.regionStart = -1
-	guard.failed = false
+	guard.limitEncountered = false
 }
 
 // checkAllocationLimit checks the recursive inference resource limit
 // immediately before a new FuncInfo enters the shared cache. A recurrence
 // starts at the earliest active frame whose template repeats in the candidate
-// path. A true result with no error means an earlier allocation already
-// encountered the limit.
-func (guard *specializationGuard) checkAllocationLimit(mangled string, template *ast.FuncStatement, tok token.Token) (bool, *token.CompileError) {
-	if guard.failed {
-		return true, nil
+// path. It returns an error only when the limit is first encountered.
+func (guard *specializationGuard) checkAllocationLimit(mangled string, template *ast.FuncStatement, tok token.Token) *token.CompileError {
+	if guard.limitEncountered {
+		return nil
 	}
 
 	regionStart := guard.regionStart
@@ -68,12 +67,12 @@ func (guard *specializationGuard) checkAllocationLimit(mangled string, template 
 		regionStart = first
 	}
 	if regionStart < 0 || len(guard.frames)+1-regionStart <= guard.limit {
-		return false, nil
+		return nil
 	}
 
 	candidate := specializationFrame{mangled: mangled, template: template}
-	guard.failed = true
-	return true, &token.CompileError{
+	guard.limitEncountered = true
+	return &token.CompileError{
 		Token: tok,
 		Msg: fmt.Sprintf(
 			"recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region); active signature chain: %s",
