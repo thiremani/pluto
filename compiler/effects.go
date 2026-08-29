@@ -576,15 +576,9 @@ func newSpecializationCallGraph(walked map[string]walkedSpecialization) *special
 	return graph
 }
 
-// collectDirectCallees returns stable first-occurrence lowering and replay
-// targets. The primary specialization precedes a distinct scalar companion.
-// It is shared by function publication and script diagnostic replay.
-func collectDirectCallees(compiler *Compiler, callerMangled string, statements []ast.Statement) []string {
-	directCallees, _ := collectSpecializationCallEdges(compiler, callerMangled, statements)
-
-	return directCallees
-}
-
+// collectSpecializationCallEdges returns stable unique lowering and replay
+// targets plus source-order primary effect dependencies. Each direct primary
+// precedes its distinct scalar companion.
 func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, statements []ast.Statement) ([]string, []string) {
 	seen := make(map[string]struct{})
 	var directCallees []string

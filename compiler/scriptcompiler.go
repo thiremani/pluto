@@ -56,7 +56,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 
 	cfg := NewCFG(sc.Compiler.CodeCompiler)
 	cfg.AnalyzeScript(sc.Program.Statements, sc.Script.Root.StatementEffects)
-	directCallees := collectDirectCallees(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
+	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
 	cfg.Errors = replaySpecializationCFG(sc.Compiler, directCallees, cfg.Errors)
 	if len(cfg.Errors) > 0 {
 		return cfg.Errors

@@ -190,8 +190,8 @@ func TestPrintOnlyUserCallReplaysCFGDiagnostics(t *testing.T) {
 	require.Contains(t, errors[0].Msg, `"printDead"`)
 
 	mangled := Mangle(cc.Compiler.MangledPath, "NoisyPrint", []Type{I64})
-	require.Equal(t, []string{mangled},
-		collectDirectCallees(sc.Compiler, sc.ScriptMangled, sc.Program.Statements),
+	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
+	require.Equal(t, []string{mangled}, directCallees,
 		"a user call reached only through print arguments must be a replay root")
 	require.Same(t, cc.Compiler.FuncCache[mangled].CFG.Errors[0], errors[0])
 }

@@ -1719,11 +1719,11 @@ scaled`)
 	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
 	require.True(t, callInfo.ScalarCallVariantEnsured)
-	require.Equal(t, []string{primaryMangled, scalarMangled},
-		collectDirectCallees(sc.Compiler, sc.ScriptMangled, program.Statements))
+	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
+	require.Equal(t, []string{primaryMangled, scalarMangled}, directCallees)
 	callInfo.ScalarCallVariantEnsured = false
-	require.Equal(t, []string{primaryMangled},
-		collectDirectCallees(sc.Compiler, sc.ScriptMangled, program.Statements),
+	directCallees, _ = collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
+	require.Equal(t, []string{primaryMangled}, directCallees,
 		"a scalar key already present in the shared cache must not create an edge without a call-local ensured fact")
 	callInfo.ScalarCallVariantEnsured = true
 	require.Contains(t, cc.Compiler.FuncCache, primaryMangled)
