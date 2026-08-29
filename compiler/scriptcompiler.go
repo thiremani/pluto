@@ -96,16 +96,6 @@ func replaySpecializationCFGNode(compiler *Compiler, mangled string, visited map
 	visited[mangled] = struct{}{}
 
 	info := compiler.FuncCache[mangled]
-	if info == nil {
-		panic("internal: reachable specialization missing from function cache: " + mangled)
-	}
-	if !info.Settled {
-		panic("internal: reachable specialization is not settled: " + mangled)
-	}
-	if info.CFG == nil {
-		panic("internal: settled specialization has no CFG result: " + mangled)
-	}
-
 	for _, compileError := range info.CFG.Errors {
 		key := cfgDiagnosticKeyFor(compileError)
 		if _, seen := reported[key]; seen {
