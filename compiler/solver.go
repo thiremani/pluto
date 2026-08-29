@@ -3,25 +3,11 @@ package compiler
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
-
-// maxActiveRecursiveSpecializations bounds active specialization frames in one
-// recursive inference region. It is a compiler resource limit, not proof that a
-// recursive type transformation grows without bound.
-const maxActiveRecursiveSpecializations = 256
-
-// maxSpecializationTraceFrames is the number of actual frames retained after a
-// long chain is truncated: the first frame and the final seven frames.
-const maxSpecializationTraceFrames = 8
-
-// maxSpecializationFrameRunes bounds individual signatures after demangling.
-// Recursive array construction can otherwise make even a short trace enormous.
-const maxSpecializationFrameRunes = 160
 
 type RangeInfo struct {
 	Name     string
@@ -147,11 +133,6 @@ type walkedSpecialization struct {
 	template  *ast.FuncStatement
 }
 
-type activeSpecialization struct {
-	mangled  string
-	template *ast.FuncStatement
-}
-
 type TypeSolver struct {
 	ScriptCompiler     *ScriptCompiler
 	Scopes             []Scope[Type]
@@ -165,149 +146,22 @@ type TypeSolver struct {
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
 
-	activeSpecializations        []activeSpecialization
-	firstActiveTemplateIndex     map[*ast.FuncStatement]int
-	recursiveRegionStart         int
-	recursiveSpecializationLimit int // Defaults to maxActiveRecursiveSpecializations; tests use smaller bounds.
-	specializationGuardFailed    bool
+	specializationGuard specializationGuard
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		ScriptCompiler:               sc,
-		Scopes:                       []Scope[Type]{NewScope[Type](FuncScope)},
-		FuncNameMangled:              sc.ScriptMangled,
-		Converging:                   false,
-		Errors:                       []*token.CompileError{},
-		ExprCache:                    sc.Compiler.ExprCache,
-		TmpCounter:                   0,
-		PendingAssignments:           make(map[pendingAssignment]struct{}),
-		walkedFuncs:                  make(map[string]walkedSpecialization),
-		firstActiveTemplateIndex:     make(map[*ast.FuncStatement]int),
-		recursiveRegionStart:         -1,
-		recursiveSpecializationLimit: maxActiveRecursiveSpecializations,
+		ScriptCompiler:      sc,
+		Scopes:              []Scope[Type]{NewScope[Type](FuncScope)},
+		FuncNameMangled:     sc.ScriptMangled,
+		Converging:          false,
+		Errors:              []*token.CompileError{},
+		ExprCache:           sc.Compiler.ExprCache,
+		TmpCounter:          0,
+		PendingAssignments:  make(map[pendingAssignment]struct{}),
+		walkedFuncs:         make(map[string]walkedSpecialization),
+		specializationGuard: newSpecializationGuard(),
 	}
-}
-
-func (ts *TypeSolver) resetSpecializationGuard() {
-	ts.activeSpecializations = ts.activeSpecializations[:0]
-	clear(ts.firstActiveTemplateIndex)
-	ts.recursiveRegionStart = -1
-	ts.specializationGuardFailed = false
-}
-
-// allowSpecializationAllocation checks the recursive inference resource limit
-// immediately before a new FuncInfo enters the shared cache. A recurrence starts
-// at the earliest active frame whose template repeats in the candidate path;
-// acyclic prefixes and flat sibling calls do not accumulate against the limit.
-func (ts *TypeSolver) allowSpecializationAllocation(mangled string, template *ast.FuncStatement, tok token.Token) bool {
-	if ts.specializationGuardFailed {
-		return false
-	}
-
-	regionStart := ts.recursiveRegionStart
-	if first, repeated := ts.firstActiveTemplateIndex[template]; repeated && (regionStart < 0 || first < regionStart) {
-		regionStart = first
-	}
-	if regionStart < 0 || len(ts.activeSpecializations)+1-regionStart <= ts.recursiveSpecializationLimit {
-		return true
-	}
-
-	candidate := activeSpecialization{mangled: mangled, template: template}
-	ts.Errors = append(ts.Errors, &token.CompileError{
-		Token: tok,
-		Msg: fmt.Sprintf(
-			"recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region); active signature chain: %s",
-			ts.recursiveSpecializationLimit,
-			formatSpecializationChain(ts.activeSpecializations[regionStart:], candidate),
-		),
-	})
-	ts.specializationGuardFailed = true
-	return false
-}
-
-func (ts *TypeSolver) pushActiveSpecialization(specialization activeSpecialization) int {
-	previousRegionStart := ts.recursiveRegionStart
-	index := len(ts.activeSpecializations)
-
-	if first, repeated := ts.firstActiveTemplateIndex[specialization.template]; repeated {
-		if ts.recursiveRegionStart < 0 || first < ts.recursiveRegionStart {
-			ts.recursiveRegionStart = first
-		}
-	} else {
-		ts.firstActiveTemplateIndex[specialization.template] = index
-	}
-	ts.activeSpecializations = append(ts.activeSpecializations, specialization)
-
-	return previousRegionStart
-}
-
-func (ts *TypeSolver) popActiveSpecialization(previousRegionStart int) {
-	index := len(ts.activeSpecializations) - 1
-	specialization := ts.activeSpecializations[index]
-
-	if ts.firstActiveTemplateIndex[specialization.template] == index {
-		delete(ts.firstActiveTemplateIndex, specialization.template)
-	}
-	ts.activeSpecializations = ts.activeSpecializations[:index]
-	ts.recursiveRegionStart = previousRegionStart
-}
-
-func formatSpecializationChain(active []activeSpecialization, candidate activeSpecialization) string {
-	totalFrames := len(active) + 1
-	// Keep a nine-frame chain intact: replacing its one middle frame with an
-	// omission marker would not shorten the output.
-	if totalFrames <= maxSpecializationTraceFrames+1 {
-		parts := make([]string, 0, totalFrames)
-		for _, specialization := range active {
-			parts = append(parts, specializationDisplay(specialization))
-		}
-		parts = append(parts, specializationDisplay(candidate))
-
-		return strings.Join(parts, " -> ")
-	}
-
-	tailFrames := maxSpecializationTraceFrames - 1
-	tailStart := totalFrames - tailFrames
-	omitted := totalFrames - maxSpecializationTraceFrames
-	parts := make([]string, 0, maxSpecializationTraceFrames+1)
-	parts = append(parts, specializationDisplay(active[0]), specializationOmission(omitted))
-	for i := tailStart; i < len(active); i++ {
-		parts = append(parts, specializationDisplay(active[i]))
-	}
-	parts = append(parts, specializationDisplay(candidate))
-
-	return strings.Join(parts, " -> ")
-}
-
-func specializationOmission(count int) string {
-	noun := "specializations"
-	if count == 1 {
-		noun = "specialization"
-	}
-
-	return fmt.Sprintf("... %d %s omitted ...", count, noun)
-}
-
-func specializationDisplay(specialization activeSpecialization) string {
-	parsed, err := DemangleParsed(specialization.mangled)
-	display := ""
-	if err == nil && parsed.Kind == SymbolFunc {
-		display = fmt.Sprintf("%s(%s)", parsed.Name, strings.Join(parsed.ArgTypes, ", "))
-	} else {
-		name := "function"
-		if specialization.template != nil {
-			name = specialization.template.Token.Literal
-		}
-		display = fmt.Sprintf("%s [%s]", name, specialization.mangled)
-	}
-
-	runes := []rune(display)
-	if len(runes) <= maxSpecializationFrameRunes {
-		return display
-	}
-
-	return string(runes[:maxSpecializationFrameRunes-3]) + "..."
 }
 
 func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
@@ -856,7 +710,7 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 }
 
 func (ts *TypeSolver) Solve() {
-	ts.resetSpecializationGuard()
+	ts.specializationGuard.reset()
 
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
@@ -2634,12 +2488,16 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		if !ts.allowSpecializationAllocation(mangled, template, ce.Function.Token) {
+		allowed, guardError := ts.specializationGuard.allowAllocation(mangled, template, ce.Function.Token)
+		if guardError != nil {
+			ts.Errors = append(ts.Errors, guardError)
+		}
+		if !allowed {
 			return newFuncInfo(ce.Function.Value, bodyArgs, template)
 		}
 		f = ts.newFunc(ce, bodyArgs, mangled, template)
 	}
-	if ts.specializationGuardFailed && !f.Settled {
+	if ts.specializationGuard.failed && !f.Settled {
 		return f
 	}
 
@@ -2755,11 +2613,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		template:  template,
 	}
 	clear(f.Vars)
-	previousRegionStart := ts.pushActiveSpecialization(activeSpecialization{
+	previousRegionStart := ts.specializationGuard.push(specializationFrame{
 		mangled:  mangled,
 		template: template,
 	})
-	defer ts.popActiveSpecialization(previousRegionStart)
+	defer ts.specializationGuard.pop(previousRegionStart)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled
