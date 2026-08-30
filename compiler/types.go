@@ -357,9 +357,6 @@ func (a Array) String() string {
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	if a.Rank < 1 {
-		return a.ElemType.Mangle()
-	}
 	return strings.Repeat("Array"+SEP+T+"1"+SEP, a.Rank) + a.ElemType.Mangle()
 }
 func (a Array) Key() Type {
