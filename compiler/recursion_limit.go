@@ -27,86 +27,79 @@ type specializationFrame struct {
 	template *ast.FuncStatement
 }
 
-// specializationGuard owns the active recursive-discovery stack and its
-// resource fuse. firstTemplateIndex and regionStart make recurrence tracking
-// constant-time as frames are pushed and popped.
-type specializationGuard struct {
-	frames             []specializationFrame
-	firstTemplateIndex map[*ast.FuncStatement]int
-	regionStart        int
-	limit              int
-	limitEncountered   bool
+// recursionLimit owns the active recursive-discovery stack and its resource
+// fuse. firstFrame and cycleStart make recurrence tracking constant-time as
+// frames are pushed and popped.
+type recursionLimit struct {
+	stack      []specializationFrame
+	firstFrame map[*ast.FuncStatement]int
+	cycleStart int
+	maxFrames  int
+	hit        bool
 }
 
-func newSpecializationGuard() specializationGuard {
-	return specializationGuard{
-		firstTemplateIndex: make(map[*ast.FuncStatement]int),
-		regionStart:        -1,
-		limit:              maxActiveRecursiveSpecializations,
+func newRecursionLimit(maxFrames int) recursionLimit {
+	return recursionLimit{
+		firstFrame: make(map[*ast.FuncStatement]int),
+		cycleStart: -1,
+		maxFrames:  maxFrames,
 	}
 }
 
-func (guard *specializationGuard) reset() {
-	guard.frames = guard.frames[:0]
-	clear(guard.firstTemplateIndex)
-	guard.regionStart = -1
-	guard.limitEncountered = false
-}
-
-// checkAllocationLimit checks the recursive inference resource limit
-// immediately before a new FuncInfo enters the shared cache. A recurrence
-// starts at the earliest active frame whose template repeats in the candidate
-// path. It returns an error only when the limit is first encountered.
-func (guard *specializationGuard) checkAllocationLimit(mangled string, template *ast.FuncStatement, tok token.Token) *token.CompileError {
-	if guard.limitEncountered {
+// check checks the recursive inference resource limit immediately before a new
+// FuncInfo enters the shared cache. A cycle starts at the earliest active frame
+// whose template repeats in the candidate path. It returns an error only when
+// the limit is first encountered.
+func (limit *recursionLimit) check(mangled string, template *ast.FuncStatement, tok token.Token) *token.CompileError {
+	if limit.hit {
 		return nil
 	}
 
-	regionStart := guard.regionStart
-	if first, repeated := guard.firstTemplateIndex[template]; repeated && (regionStart < 0 || first < regionStart) {
-		regionStart = first
+	cycleStart := limit.cycleStart
+	if first, repeated := limit.firstFrame[template]; repeated && (cycleStart < 0 || first < cycleStart) {
+		cycleStart = first
 	}
-	if regionStart < 0 || len(guard.frames)+1-regionStart <= guard.limit {
+	if cycleStart < 0 || len(limit.stack)+1-cycleStart <= limit.maxFrames {
 		return nil
 	}
 
 	candidate := specializationFrame{mangled: mangled, template: template}
-	guard.limitEncountered = true
+	limit.hit = true
 	return &token.CompileError{
 		Token: tok,
 		Msg: fmt.Sprintf(
 			"recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region); active signature chain: %s",
-			guard.limit,
-			formatSpecializationChain(guard.frames[regionStart:], candidate),
+			limit.maxFrames,
+			formatSpecializationChain(limit.stack[cycleStart:], candidate),
 		),
 	}
 }
 
-func (guard *specializationGuard) push(frame specializationFrame) int {
-	previousRegionStart := guard.regionStart
-	index := len(guard.frames)
+func (limit *recursionLimit) push(frame specializationFrame) int {
+	previousCycleStart := limit.cycleStart
+	index := len(limit.stack)
 
-	if first, repeated := guard.firstTemplateIndex[frame.template]; repeated {
-		if guard.regionStart < 0 || first < guard.regionStart {
-			guard.regionStart = first
+	if first, repeated := limit.firstFrame[frame.template]; repeated {
+		if limit.cycleStart < 0 || first < limit.cycleStart {
+			limit.cycleStart = first
 		}
 	} else {
-		guard.firstTemplateIndex[frame.template] = index
+		limit.firstFrame[frame.template] = index
 	}
-	guard.frames = append(guard.frames, frame)
+	limit.stack = append(limit.stack, frame)
 
-	return previousRegionStart
+	return previousCycleStart
 }
 
-func (guard *specializationGuard) pop(previousRegionStart int) {
-	index := len(guard.frames) - 1
-	frame := guard.frames[index]
+func (limit *recursionLimit) pop(previousCycleStart int) {
+	index := len(limit.stack) - 1
+	frame := limit.stack[index]
 
-	if guard.firstTemplateIndex[frame.template] == index {
-		delete(guard.firstTemplateIndex, frame.template)
+	if limit.firstFrame[frame.template] == index {
+		delete(limit.firstFrame, frame.template)
 	}
-	guard.frames = guard.frames[:index]
-	guard.regionStart = previousRegionStart
+	limit.stack = limit.stack[:index]
+	limit.cycleStart = previousCycleStart
 }
 
 func formatSpecializationChain(active []specializationFrame, candidate specializationFrame) string {

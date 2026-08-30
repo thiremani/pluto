@@ -146,21 +146,21 @@ type TypeSolver struct {
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
 
-	specializationGuard specializationGuard
+	recLimit recursionLimit
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 	return &TypeSolver{
-		ScriptCompiler:      sc,
-		Scopes:              []Scope[Type]{NewScope[Type](FuncScope)},
-		FuncNameMangled:     sc.ScriptMangled,
-		Converging:          false,
-		Errors:              []*token.CompileError{},
-		ExprCache:           sc.Compiler.ExprCache,
-		TmpCounter:          0,
-		PendingAssignments:  make(map[pendingAssignment]struct{}),
-		walkedFuncs:         make(map[string]walkedSpecialization),
-		specializationGuard: newSpecializationGuard(),
+		ScriptCompiler:     sc,
+		Scopes:             []Scope[Type]{NewScope[Type](FuncScope)},
+		FuncNameMangled:    sc.ScriptMangled,
+		Converging:         false,
+		Errors:             []*token.CompileError{},
+		ExprCache:          sc.Compiler.ExprCache,
+		TmpCounter:         0,
+		PendingAssignments: make(map[pendingAssignment]struct{}),
+		walkedFuncs:        make(map[string]walkedSpecialization),
+		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
 
@@ -709,9 +709,9 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 	}
 }
 
+// Solve infers the script and its reachable specialization closure. A
+// TypeSolver is single-use.
 func (ts *TypeSolver) Solve() {
-	ts.specializationGuard.reset()
-
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
 	for _, stmt := range program.Statements {
@@ -2470,20 +2470,20 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		limitError := ts.specializationGuard.checkAllocationLimit(mangled, template, ce.Function.Token)
+		limitError := ts.recLimit.check(mangled, template, ce.Function.Token)
 		if limitError != nil {
 			ts.Errors = append(ts.Errors, limitError)
 		}
 
 		f = newFunc(ce.Function.Value, bodyArgs, template)
-		if ts.specializationGuard.limitEncountered {
+		if ts.recLimit.hit {
 			return f
 		}
 
 		// Cache before inference so recursive calls can reuse the partial specialization.
 		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
 	}
-	if ts.specializationGuard.limitEncountered && !f.Settled {
+	if ts.recLimit.hit && !f.Settled {
 		return f
 	}
 
@@ -2599,11 +2599,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		template:  template,
 	}
 	clear(f.Vars)
-	previousRegionStart := ts.specializationGuard.push(specializationFrame{
+	previousCycleStart := ts.recLimit.push(specializationFrame{
 		mangled:  mangled,
 		template: template,
 	})
-	defer ts.specializationGuard.pop(previousRegionStart)
+	defer ts.recLimit.pop(previousCycleStart)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled

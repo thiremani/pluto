@@ -152,7 +152,7 @@ y`
 	ts := NewTypeSolver(sc)
 	// The exact-key f -> g -> h -> f backedge allocates no new specialization,
 	// so ordinary convergence analysis remains responsible even at this limit.
-	ts.specializationGuard.limit = 1
+	ts.recLimit.maxFrames = 1
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1)
@@ -1349,7 +1349,7 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	ts := NewTypeSolver(sc)
 	// An acyclic chain never starts a recursive specialization region, regardless
 	// of its call depth or the recursive-region test limit.
-	ts.specializationGuard.limit = 1
+	ts.recLimit.maxFrames = 1
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
@@ -1405,7 +1405,7 @@ res = Right(x)
 
 			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tt.script), cc)
 			ts := NewTypeSolver(sc)
-			ts.specializationGuard.limit = testLimit
+			ts.recLimit.maxFrames = testLimit
 			ts.Solve()
 
 			require.Len(t, ts.Errors, 1)
@@ -1416,7 +1416,7 @@ res = Right(x)
 			cacheEntriesBeforeRetry := len(cc.Compiler.FuncCache)
 			retrySC := NewScriptCompiler(ctx, t.Name()+"Retry", mustParseScript(t, tt.script), cc)
 			retryTS := NewTypeSolver(retrySC)
-			retryTS.specializationGuard.limit = testLimit
+			retryTS.recLimit.maxFrames = testLimit
 			retryTS.Solve()
 
 			require.Len(t, retryTS.Errors, 1)
@@ -1443,7 +1443,7 @@ func TestRecursiveFailureStopsSiblingRewalks(t *testing.T) {
 	script := "value = Grow(1) + Grow([1]) + Grow([[1]]) + Grow([[[1]]])\nvalue"
 	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, script), cc)
 	ts := NewTypeSolver(sc)
-	ts.specializationGuard.limit = testLimit
+	ts.recLimit.maxFrames = testLimit
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1, "later calls in the statement must not rewalk the failed unsettled closure")
@@ -1476,7 +1476,7 @@ func TestMutualGrowthSharesRecursiveLimit(t *testing.T) {
 
 	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "value = Cycle0(1)\nvalue"), cc)
 	ts := NewTypeSolver(sc)
-	ts.specializationGuard.limit = testLimit
+	ts.recLimit.maxFrames = testLimit
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1)
@@ -1562,7 +1562,7 @@ func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 	require.Empty(t, coldCC.Compile())
 	coldSC := NewScriptCompiler(ctx, t.Name()+"Cold", mustParseScript(t, "value = FixedRank(1)\nvalue"), coldCC)
 	coldTS := NewTypeSolver(coldSC)
-	coldTS.specializationGuard.limit = testLimit
+	coldTS.recLimit.maxFrames = testLimit
 	coldTS.Solve()
 	require.Len(t, coldTS.Errors, 1, "a cold type-changing re-entry consumes recursive discovery work")
 	require.Contains(t, coldTS.Errors[0].Msg, "recursive specialization resource limit exceeded")
@@ -1571,7 +1571,7 @@ func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 	require.Empty(t, warmCC.Compile())
 	tailSC := NewScriptCompiler(ctx, t.Name()+"Tail", mustParseScript(t, "value = FixedRank([[1]])\nvalue"), warmCC)
 	tailTS := NewTypeSolver(tailSC)
-	tailTS.specializationGuard.limit = testLimit
+	tailTS.recLimit.maxFrames = testLimit
 	tailTS.Solve()
 	require.Empty(t, tailTS.Errors)
 
@@ -1583,7 +1583,7 @@ func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 
 	warmSC := NewScriptCompiler(ctx, t.Name()+"Warm", mustParseScript(t, "value = FixedRank(1)\nvalue"), warmCC)
 	warmTS := NewTypeSolver(warmSC)
-	warmTS.specializationGuard.limit = testLimit
+	warmTS.recLimit.maxFrames = testLimit
 	warmTS.Solve()
 	require.Empty(t, warmTS.Errors,
 		"a settled tail consumes no cold specialization-discovery work")
@@ -1630,9 +1630,9 @@ func TestRecursiveLimitPrecedesCacheAllocation(t *testing.T) {
 	call := program.Statements[0].(*ast.LetStatement).Value[0].(*ast.CallExpression)
 	template, mangled, ok := ts.lookupCallTemplate(call, []Type{I64})
 	require.True(t, ok)
-	ts.specializationGuard.limit = 3
-	for rank := 1; rank <= ts.specializationGuard.limit; rank++ {
-		ts.specializationGuard.push(specializationFrame{
+	ts.recLimit.maxFrames = 3
+	for rank := 1; rank <= ts.recLimit.maxFrames; rank++ {
+		ts.recLimit.push(specializationFrame{
 			mangled: Mangle(cc.Compiler.MangledPath, "Identity", []Type{
 				Array{ElemType: I64, Rank: rank},
 			}),
@@ -1707,7 +1707,7 @@ scaled = [Scale(arr[i])]
 scaled`)
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
-	ts.specializationGuard.limit = 1
+	ts.recLimit.maxFrames = 1
 	ts.Solve()
 	require.Empty(t, ts.Errors)
 
