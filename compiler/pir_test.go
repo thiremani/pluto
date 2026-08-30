@@ -10,13 +10,17 @@ import (
 )
 
 // compileScriptPlans runs the full script pipeline and returns the statement
-// plans the PIR router accepted, in source order.
+// plans the PIR router accepted, in source order. Validation is a test-time
+// contract, so every plan the builder emitted is validated here.
 func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
 	t.Helper()
 	cc := NewCodeCompiler(ctx, name, "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, name, mustParseScript(t, script), cc)
 	require.Empty(t, sc.Compile())
+	for _, plan := range sc.Compiler.Plans {
+		require.NoError(t, pir.Validate(plan))
+	}
 	return sc.Compiler.Plans
 }
 

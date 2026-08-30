@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -10,19 +9,23 @@ import (
 
 // planLetStatement is the temporary capability router for assignments (plan
 // §16 rule 2): it accepts a statement exactly when the plan path supports its
-// capability combination, returning the built, validated plan. The Step 3
-// slice is script-root assignments of unmanaged values — scalars and Range
+// capability combination, returning the built plan. The Step 3 slice is
+// script-root assignments of unmanaged values — scalars and Range
 // descriptors — from ordinary expressions to local and scalar discard
 // targets. Function-body statements join when Step 4 handles output targets.
-// Once a statement is accepted, any later plan failure is an ICE, never a
-// fallback to legacy lowering.
+// Once a statement is accepted there is no fallback to legacy lowering: the
+// router trusts solver facts (a missing root ExprInfo panics as an ICE), and
+// plan validation is a test-time contract — the golden tests validate every
+// plan the builder emits.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if !c.atScriptRoot() || len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
 	}
+	// The arity check above already forces every RHS to a single output slot:
+	// each expression yields at least one, and the solver validated the total.
 	for i, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
-		if info == nil || len(info.OutTypes) != 1 || !planValueTypeSupported(info.OutTypes[0]) {
+		if !planValueTypeSupported(info.OutTypes[0]) {
 			return nil, false
 		}
 		if !c.planExprEligible(expr) {
@@ -32,12 +35,7 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 			return nil, false
 		}
 	}
-
-	plan := c.buildLetPlan(stmt)
-	if err := pir.Validate(plan); err != nil {
-		panic(fmt.Sprintf("internal: invalid plan for accepted statement %q: %v", stmt.String(), err))
-	}
-	return plan, true
+	return c.buildLetPlan(stmt), true
 }
 
 // atScriptRoot reports whether statements are currently compiled at the

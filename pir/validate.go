@@ -3,8 +3,9 @@ package pir
 import "fmt"
 
 // Validate checks an AssignPlan against the structural invariants the Step 3
-// slice can express (plan §14). A validation failure on a router-accepted
-// statement is an internal compiler error; the caller decides how to fail.
+// slice can express (plan §14). It is a test-time contract: the production
+// builder is trusted, and the golden tests validate every plan it emits, so
+// builder drift fails tests rather than adding a per-statement runtime check.
 // Fields the builder unconditionally sets are not nil-checked — an
 // impossible nil panics here or in lowering and surfaces as an ICE like any
 // other. Outcome types are the one exception: a slot mapped to a discard is
