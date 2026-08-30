@@ -416,13 +416,20 @@ func TestArrayRankLimit(t *testing.T) {
 	info := atLimit.ExprCache[key(atLimit.FuncNameMangled, atLimitProgram.Statements[0].(*ast.LetStatement).Value[0])]
 	require.Equal(t, MaxArrayRank, info.OutTypes[0].(Array).Rank)
 
-	// Ten levels past the limit: the violation reports once at the level that
-	// exceeds, and enclosing literals must not cascade further errors.
-	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank+10)+"\nx"), cc)
+	// Depth 2000 is the originally reported hang. After the fix it is cheap:
+	// the violation reports once, positioned at the bracket of the literal
+	// that exceeds the limit, and the 1935 enclosing literals must not
+	// cascade further errors.
+	const depth = 2000
+	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(depth)+"\nx"), cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Len(t, ts.Errors, 1)
 	require.Contains(t, ts.Errors[0].Msg, fmt.Sprintf("array rank %d exceeds the current compiler limit of %d", MaxArrayRank+1, MaxArrayRank))
+	require.Equal(t, 1, ts.Errors[0].Token.Line)
+	// "x = " occupies columns 1-4; bracket k sits at column 4+k, and the
+	// rank-(MaxArrayRank+1) literal is bracket depth-MaxArrayRank.
+	require.Equal(t, 4+depth-MaxArrayRank, ts.Errors[0].Token.Column)
 }
 
 func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
