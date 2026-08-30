@@ -417,6 +417,7 @@ func TestUnresolvedCellReportsOnce(t *testing.T) {
 		// "arr = [-[-[-" occupies columns 1-12; the identifier starts at 13.
 		{"WrappedNesting", "arr = [-[-[-missing]]]\narr", 13},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := llvm.NewContext()
