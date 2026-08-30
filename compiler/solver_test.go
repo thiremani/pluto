@@ -398,6 +398,33 @@ func TestCollectionTypeErrors(t *testing.T) {
 	}
 }
 
+func nestedArrayLiteral(depth int) string {
+	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
+}
+
+func TestArrayRankLimit(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "arrayRankLimit", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+
+	atLimitProgram := mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank)+"\nx")
+	atLimit := NewTypeSolver(NewScriptCompiler(ctx, "atLimit", atLimitProgram, cc))
+	atLimit.Solve()
+	require.Empty(t, atLimit.Errors)
+	info := atLimit.ExprCache[key(atLimit.FuncNameMangled, atLimitProgram.Statements[0].(*ast.LetStatement).Value[0])]
+	require.Equal(t, MaxArrayRank, info.OutTypes[0].(Array).Rank)
+
+	// Ten levels past the limit: the violation reports once at the level that
+	// exceeds, and enclosing literals must not cascade further errors.
+	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank+10)+"\nx"), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg, fmt.Sprintf("array rank %d exceeds the current compiler limit of %d", MaxArrayRank+1, MaxArrayRank))
+}
+
 func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

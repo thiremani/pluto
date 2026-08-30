@@ -1038,6 +1038,13 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 }
 
 func (ts *TypeSolver) cacheArrayLiteralType(al *ast.ArrayLiteral, arr Array, shape []uint64) []Type {
+	if arr.Rank > MaxArrayRank {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: al.Tok(),
+			Msg:   fmt.Sprintf("array rank %d exceeds the current compiler limit of %d", arr.Rank, MaxArrayRank),
+		})
+		return ts.cacheInvalidBracketLiteral(al)
+	}
 	types := []Type{arr}
 	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{
 		OutTypes:   types,
@@ -1415,7 +1422,11 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 	}
 	cellType := tps[0]
 	if cellType.Kind() == UnresolvedKind {
-		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
+		// A nested literal that failed to type already reported its own error;
+		// re-reporting here would cascade once per enclosing level.
+		if _, nested := expr.(*ast.ArrayLiteral); !nested {
+			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
+		}
 		return Unresolved{}, false
 	}
 	return cellType, true

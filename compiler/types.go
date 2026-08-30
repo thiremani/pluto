@@ -337,6 +337,13 @@ type Array struct {
 	Rank     int
 }
 
+// MaxArrayRank is a temporary implementation limit, not language semantics:
+// the mangle repeats one wrapper per rank and the LLVM descriptor carries one
+// field per dimension, so compile cost grows superlinearly with rank (a
+// rank-2000 literal hangs the compiler). Remove once issue #90's compact rank
+// encoding and fixed-size descriptor land.
+const MaxArrayRank = 64
+
 func (a Array) String() string {
 	if a.ElemType == nil || a.Rank < 1 {
 		return "[]"
