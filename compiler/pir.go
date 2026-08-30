@@ -8,19 +8,12 @@ import (
 	"github.com/thiremani/pluto/pir"
 )
 
-// planLetStatement is the temporary capability router for assignments (plan
-// §16 rule 2): it accepts a statement exactly when the plan path supports its
-// capability combination, returning the built plan. The Step 3 slice is
-// assignments of unmanaged values — scalars and Range descriptors — from
-// ordinary expressions to local and scalar discard targets. Only the script
-// statement loop invokes the router, so the script-root context is
-// structural; function-body statements join when Step 4 handles output
-// targets. Once a statement is accepted there is no fallback to legacy
-// lowering: the router trusts solver facts (a missing root ExprInfo panics
-// as an ICE), and every accepted plan is validated before lowering — several
-// validator invariants have no natural panic site, so an invalid plan would
-// otherwise miscompile silently (an unmapped outcome never commits; a nil
-// discarded-outcome type fails only under -emit-pir).
+// planLetStatement is the temporary capability router (plan §16 rule 2): it
+// accepts a statement when the plan path supports its combination and
+// returns the built, validated plan. Step 3 accepts unmanaged values —
+// scalars and Range descriptors — from ordinary expressions into local and
+// scalar discard targets. Only the script statement loop invokes it; an
+// accepted statement has no legacy fallback, and a validation failure is an ICE.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
@@ -46,9 +39,7 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 	return plan, true
 }
 
-// planValueTypeSupported bounds Step 3 to unmanaged value kinds: scalars and
-// Range descriptors (plan §8). Heap, multi-output, struct, and table values
-// follow in later steps.
+// planValueTypeSupported bounds Step 3 to unmanaged value kinds (plan §8).
 func planValueTypeSupported(t Type) bool {
 	if !IsFullyResolvedType(t) {
 		return false
@@ -61,10 +52,8 @@ func planValueTypeSupported(t Type) bool {
 	}
 }
 
-// planExprEligible walks one RHS tree and accepts only ordinary expression
-// nodes with no range, conditional, or rewrite behavior anywhere — the
-// capability flags that route to later steps (checked accesses, calls,
-// collectors, and strings are excluded by the node whitelist).
+// planExprEligible accepts only ordinary expression trees: whitelisted node
+// kinds with no range, conditional, or rewrite behavior at any depth.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.Identifier,
@@ -112,17 +101,13 @@ func (c *Compiler) planTargetEligible(ident *ast.Identifier, outType Type) bool 
 	return !sym.FuncArg && !sym.ReadOnly
 }
 
-// scriptRootBindingType is the solver's declared type for a script-root
-// binding — the independent fact a plan's local target records so validation
-// can catch a mismapped outcome. Nil when the solver declared no binding.
-// The router runs only at the script root, where FuncNameMangled is the
-// root key.
+// scriptRootBindingType is the solver's declared type for a binding — an
+// independent fact the plan's local target records so validation can catch a
+// mismapped outcome. FuncNameMangled is the root key wherever this runs.
 func (c *Compiler) scriptRootBindingType(name string) Type {
 	return c.FuncCache[c.FuncNameMangled].Vars[name]
 }
 
-// buildLetPlan constructs the plan for an accepted statement: one eval per
-// RHS in source order and the recorded target <- outcome commit mapping.
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	evals := make([]*pir.Eval, len(stmt.Value))
 	for i, expr := range stmt.Value {
@@ -153,11 +138,9 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	}
 }
 
-// lowerAssignPlan walks the plan in order and emits LLVM through the existing
-// expression compiler: every eval runs against the pre-commit bindings, then
-// the recorded mappings apply simultaneously. Step 3 outcomes are unmanaged,
-// so the commit plans no copies, transfers, or releases — ownership
-// elaboration lands with heap values in Step 4.
+// lowerAssignPlan evaluates every eval against the pre-commit bindings, then
+// applies the recorded mappings. Step 3 outcomes are unmanaged, so the
+// commit plans no copies or releases (ownership elaboration is Step 4).
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()

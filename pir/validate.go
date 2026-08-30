@@ -2,22 +2,12 @@ package pir
 
 import "fmt"
 
-// Validate checks an AssignPlan against the structural invariants the Step 3
-// slice can express (plan §14). It runs on every accepted plan before
-// lowering: several invariants have no natural panic site (an unmapped
-// outcome silently never commits; a nil discarded-outcome type fails only
-// under -emit-pir), so a failure here is an internal compiler error, never a
-// silent miscompile. The caller decides how to fail.
-// Fields the builder unconditionally sets are not nil-checked — an
-// impossible nil panics here or in lowering and surfaces as an ICE like any
-// other. Outcome types are the one exception: a slot mapped to a discard is
-// touched only by -emit-pir rendering, so a nil there would make plan
-// validity depend on the output mode instead of failing every compile.
-// Type compatibility is checked by rendered name —
-// pir has no type system, so semantic equality stays the builder's contract.
-// Name equality suffices for the slice's scalar and Range types; Step 4
-// needs real compatibility semantics (a valid empty-array reset renders
-// differently from its target).
+// Validate runs on every accepted plan before lowering (plan §14): its
+// invariants have no natural panic site (an unmapped outcome silently never
+// commits; a nil discarded-outcome type fails only under -emit-pir), so a
+// failure is an ICE, never a silent miscompile. Types are compared by
+// rendered name — sufficient for scalars and Range; Step 4 needs real
+// compatibility semantics (an empty-array reset renders unlike its target).
 func Validate(p *AssignPlan) error {
 	if p.Name == "" {
 		return fmt.Errorf("plan has no name")

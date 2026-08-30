@@ -8,11 +8,9 @@ import (
 	"github.com/thiremani/pluto/ast"
 )
 
-// Render returns the deterministic text form of a plan (plan §12): four-space
-// indentation, no tabs or braces, %name for plan outcomes, @name for semantic
-// targets. The concise view is the semantic plan; the expanded view adds
-// result shapes and ownership annotations. The in-memory tree stays
-// authoritative — this text is a rendering, never parsed back.
+// Render returns the deterministic text form of a plan (plan §12); expanded
+// adds result shapes, ownership annotations, and target types. The in-memory
+// tree is authoritative — this text is never parsed back.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "pir.statement @%s\n", p.Name)
@@ -32,9 +30,8 @@ func (p *AssignPlan) Render(expanded bool) string {
 	return b.String()
 }
 
-// renderExpr renders an eval operand with source bindings under the @ sigil,
-// mirroring the ast String shapes otherwise. Node kinds outside the current
-// plan capability fall back to the source rendering.
+// renderExpr mirrors the ast String shapes with source bindings under the
+// @ sigil; node kinds outside the plan capability fall back to ast rendering.
 func renderExpr(expr ast.Expression) string {
 	switch e := expr.(type) {
 	case *ast.Identifier:
@@ -72,8 +69,6 @@ func targetString(t Target, expanded bool) string {
 	return "@" + t.Name
 }
 
-// outcomeString renders a slot reference; the slot suffix appears only for a
-// multi-slot eval, so single-outcome plans stay free of index noise.
 func (p *AssignPlan) outcomeString(ref OutcomeRef) string {
 	if len(p.Evals[ref.Outcome].Types) > 1 {
 		return fmt.Sprintf("%%t%d.%d", ref.Outcome, ref.Slot)

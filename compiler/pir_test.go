@@ -10,8 +10,7 @@ import (
 )
 
 // compileScriptPlans runs the full script pipeline and returns the statement
-// plans the PIR router accepted, in source order. The router validates every
-// accepted plan before lowering, so a builder defect fails the compile here.
+// plans the PIR router accepted, in source order.
 func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
 	t.Helper()
 	cc := NewCodeCompiler(ctx, name, "", mustParseCode(t, code))
@@ -119,11 +118,9 @@ g, y, s, z, w`)
 	require.Equal(t, []string{"assign_x", "assign_y", "assign_q"}, planNames(plans))
 }
 
-// TestPlanRouterScriptRootOnly verifies function-body statements stay on
-// legacy lowering: only script-root assignments produce plans, and a call RHS
-// is itself rejected. The eligible assignment after the call also pins that
-// lazy specialization compilation restores FuncNameMangled to the root key,
-// which scriptRootBindingType relies on.
+// TestPlanRouterScriptRootOnly: function-body statements produce no plans,
+// and the assignment after the call pins that lazy specialization compilation
+// restores FuncNameMangled to the root key (scriptRootBindingType relies on it).
 func TestPlanRouterScriptRootOnly(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -143,9 +140,8 @@ func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	// A promoted (pointer-backed) destination stays eligible: the gated
-	// statement in between forces x through memory, and the final plain
-	// assignment must still plan.
+	// The gated statement promotes x to memory; the final plain assignment
+	// must still plan.
 	plans := compileScriptPlans(t, ctx, "planPromoted", "", `x = 1
 x = x > 0 5
 x = x + 1

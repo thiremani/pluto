@@ -377,11 +377,9 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 	return scriptModule, nil
 }
 
-// emitPIR prints one script's statement plans in source order, each followed
-// by a blank separator line. mode is the parsed -emit-pir CLI value: ""
-// prints nothing, "expanded" adds annotations, "concise" is the plain view.
-// A failed write is an error: requested PIR output must not be silently
-// incomplete while the compile reports success.
+// emitPIR prints one script's statement plans in source order. mode is the
+// parsed -emit-pir value ("" prints nothing, "expanded" adds annotations).
+// A failed write is an error: requested output must not be silently partial.
 func emitPIR(w io.Writer, plans []*pir.AssignPlan, mode string) error {
 	if mode == "" {
 		return nil

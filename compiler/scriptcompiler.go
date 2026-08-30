@@ -69,9 +69,8 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	c := sc.Compiler
 	// Create main function
 	c.addMain()
-	// The PIR router runs only on this loop's statements, so the script-root
-	// context is structural: function bodies compile through compileFuncBody
-	// and never reach it.
+	// Routing only this loop's statements makes the script-root context
+	// structural: function bodies never reach the router.
 	for _, stmt := range sc.Program.Statements {
 		if let, isLet := stmt.(*ast.LetStatement); isLet {
 			if plan, planned := c.planLetStatement(let); planned {
