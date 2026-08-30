@@ -415,11 +415,29 @@ func TestUnresolvedCellReportsOnce(t *testing.T) {
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	require.NotEmpty(t, ts.Errors)
-	require.Contains(t, ts.Errors[0].Msg, "undefined identifier: missing")
-	for _, err := range ts.Errors {
-		require.NotContains(t, err.Msg, "cell type could not be resolved")
-	}
+	require.Len(t, ts.Errors, 1)
+	require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
+	require.Equal(t, 1, ts.Errors[0].Token.Line)
+	// "arr = [" occupies columns 1-7; the identifier starts at column 8.
+	require.Equal(t, 8, ts.Errors[0].Token.Column)
+}
+
+// TestSilentUnresolvedCellGetsFallback covers typeCell's other side: an
+// in-scope identifier seeded with Unresolved types without reporting, so the
+// cell must receive exactly the generic fallback diagnostic.
+func TestSilentUnresolvedCellGetsFallback(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "silentCell", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	sc := NewScriptCompiler(ctx, "silentCell", mustParseScript(t, "arr = [mystery]\narr"), cc)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "mystery", Type(Unresolved{}))
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Equal(t, "bracket literal cell type could not be resolved", ts.Errors[0].Msg)
 }
 
 func TestArrayRankLimit(t *testing.T) {

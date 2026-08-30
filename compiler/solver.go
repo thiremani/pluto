@@ -1416,7 +1416,7 @@ func (ts *TypeSolver) initColTypes(n int) []Type {
 // already carries a positioned diagnostic, and re-reporting would cascade
 // once per enclosing level.
 func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
-	reported := len(ts.Errors)
+	errorsBefore := len(ts.Errors)
 	tps := ts.TypeExpression(expr, false) // cells are nested, not root
 	if len(tps) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -1427,7 +1427,7 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 	}
 	cellType := tps[0]
 	if cellType.Kind() == UnresolvedKind {
-		if len(ts.Errors) == reported {
+		if len(ts.Errors) == errorsBefore {
 			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
 		}
 		return Unresolved{}, false
