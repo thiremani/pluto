@@ -2,10 +2,10 @@ package pir
 
 import "fmt"
 
-// Validate runs on every accepted plan before lowering (plan §14): its
-// invariants have no natural panic site (an unmapped outcome silently never
-// commits; a nil discarded-outcome type fails only under -emit-pir), so a
-// failure is an ICE, never a silent miscompile. Types are compared by
+// Validate runs on every accepted plan before lowering (plan §14): several
+// invariants have no guaranteed panic site (an unmapped outcome silently
+// never commits; a nil discarded-outcome type fails only under -emit-pir),
+// so a failure is an ICE, never a silent miscompile. Types are compared by
 // rendered name — sufficient for scalars and Range; Step 4 needs real
 // compatibility semantics (an empty-array reset renders unlike its target).
 func Validate(p *AssignPlan) error {
