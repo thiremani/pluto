@@ -402,29 +402,38 @@ func nestedArrayLiteral(depth int) string {
 	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
 }
 
-// TestUnresolvedCellPairsCauseAndSummary pins the non-literal side of
-// typeCell's policy: the cell's own error is the cause, and the generic
-// summary states the literal-level consequence exactly once — regardless of
-// how deeply the literal is nested, since enclosing levels suppress.
-func TestUnresolvedCellPairsCauseAndSummary(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
+// TestUnresolvedCellReportsOnce pins typeCell's fallback rule: a failure
+// that already produced a specific error reports nothing further, at any
+// nesting depth — whether the levels are literals or wrapper expressions
+// (each errorsBefore count is captured before the cell's whole subtree).
+func TestUnresolvedCellReportsOnce(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		column int
+	}{
+		// "arr = [[[" occupies columns 1-9; the identifier starts at 10.
+		{"NestedLiterals", "arr = [[[missing]]]\narr", 10},
+		// "arr = [-[-[-" occupies columns 1-12; the identifier starts at 13.
+		{"WrappedNesting", "arr = [-[-[-missing]]]\narr", 13},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "unresolvedCell", "", ast.NewCode())
-	require.Empty(t, cc.Compile())
-	sc := NewScriptCompiler(ctx, "unresolvedCell", mustParseScript(t, "arr = [[[missing]]]\narr"), cc)
-	ts := NewTypeSolver(sc)
-	ts.Solve()
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
 
-	require.Len(t, ts.Errors, 2)
-	require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
-	require.Equal(t, 1, ts.Errors[0].Token.Line)
-	// "arr = [[[" occupies columns 1-9; the identifier starts at column 10.
-	require.Equal(t, 10, ts.Errors[0].Token.Column)
-	require.Equal(t, "bracket literal cell type could not be resolved", ts.Errors[1].Msg)
-	// The summary lands on the innermost literal's bracket at column 9; the
-	// two enclosing literals add nothing.
-	require.Equal(t, 9, ts.Errors[1].Token.Column)
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
+			require.Equal(t, 1, ts.Errors[0].Token.Line)
+			require.Equal(t, tc.column, ts.Errors[0].Token.Column)
+		})
+	}
 }
 
 // TestSilentUnresolvedCellGetsFallback covers typeCell's other side: an
