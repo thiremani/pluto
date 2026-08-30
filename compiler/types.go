@@ -227,11 +227,14 @@ func (f Func) Mangle() string {
 	// the same mangled form. This is intentional: Pluto disallows function
 	// overloading by return type alone, so collisions cannot occur.
 	// Note: Key() includes output types for internal type equality checks.
-	s := "Func" + SEP + T + strconv.Itoa(len(f.Params))
+	var b strings.Builder
+	b.WriteString("Func" + SEP + T)
+	b.WriteString(strconv.Itoa(len(f.Params)))
 	for _, p := range f.Params {
-		s += SEP + p.Mangle()
+		b.WriteString(SEP)
+		b.WriteString(p.Mangle())
 	}
-	return s
+	return b.String()
 }
 func (f Func) Key() Type {
 	keyParams := make([]Type, len(f.Params))
@@ -337,24 +340,24 @@ type Array struct {
 	Rank     int
 }
 
+// MaxArrayRank is a temporary implementation limit, not language semantics:
+// the mangled name and LLVM descriptor grow with rank, so compile cost is
+// superlinear (a rank-2000 literal hung the compiler). Checked on solved
+// literal types after parsing, it does not guard parser/AST nesting. Remove
+// once issue #90's compact encoding, fixed-size descriptor, and parser-depth
+// and complexity fuses land.
+const MaxArrayRank = 64
+
 func (a Array) String() string {
 	if a.ElemType == nil || a.Rank < 1 {
 		return "[]"
 	}
-	result := a.ElemType.String()
-	for range a.Rank {
-		result = "[" + result + "]"
-	}
-	return result
+	return strings.Repeat("[", a.Rank) + a.ElemType.String() + strings.Repeat("]", a.Rank)
 }
 
 func (a Array) Kind() Kind { return ArrayKind }
 func (a Array) Mangle() string {
-	result := a.ElemType.Mangle()
-	for range a.Rank {
-		result = "Array" + SEP + T + "1" + SEP + result
-	}
-	return result
+	return strings.Repeat("Array"+SEP+T+"1"+SEP, a.Rank) + a.ElemType.Mangle()
 }
 func (a Array) Key() Type {
 	return Array{ElemType: a.ElemType.Key(), Rank: a.Rank}

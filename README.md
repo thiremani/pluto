@@ -42,7 +42,7 @@ Scope-based memory (no nulls, no out-of-bounds, no GC), and concurrency by const
 - Go front-end, LLVM back-end; emits native binaries
 - Template functions in `.pt`: specialized per argument types (generics by use)
 - Range literals with auto-vectorized execution
-- First-class rectangular arrays of any rank, columnar tables, and link semantics
+- First-class rectangular arrays of any rank (temporarily capped at rank 64 — see Arrays), columnar tables, and link semantics
 - Scope-based memory: no nulls, no out-of-bounds, no garbage collector
 - printf-style formatting; arrays printable and range streams iterable
 - Cross-platform (Linux/macOS/Windows)
@@ -267,6 +267,15 @@ array. The concatenation result takes the concrete element type without
 retyping the empty expression. Once a variable has a concrete array type,
 assigning `[]` empties its value but preserves that element type. Operations
 such as indexing or arithmetic still require a concrete element type.
+
+**Current implementation limit:** the compiler temporarily rejects array
+ranks above 64 with a positioned diagnostic
+(`array rank 65 exceeds the current compiler limit of 64`). Rank is not
+restricted by the language definition — today's type mangle and array
+descriptor grow with rank, so very high ranks made compilation
+pathologically slow. The limit will be raised or removed with
+[#90](https://github.com/thiremani/pluto/issues/90)'s compact rank encoding,
+fixed-size descriptor, and input-complexity fuses.
 
 See [Pluto Array Semantics](docs/Pluto%20Array%20Semantics.md) for complete
 inference, shape, indexing, empty-value, and table rules.

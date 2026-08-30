@@ -398,6 +398,93 @@ func TestCollectionTypeErrors(t *testing.T) {
 	}
 }
 
+func nestedArrayLiteral(depth int, val string) string {
+	return strings.Repeat("[", depth) + val + strings.Repeat("]", depth)
+}
+
+// TestUnresolvedCellReportsOnce pins typeCell's fallback rule: a failure
+// that already produced a specific error reports nothing further, at any
+// nesting depth — whether the levels are literals or wrapper expressions
+// (each errorsBefore count is captured before the cell's whole subtree).
+func TestUnresolvedCellReportsOnce(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		column int
+	}{
+		// "arr = [[[" occupies columns 1-9; the identifier starts at 10.
+		{"NestedLiterals", "arr = " + nestedArrayLiteral(3, "missing") + "\narr", 10},
+		// "arr = [-[-[-" occupies columns 1-12; the identifier starts at 13.
+		{"WrappedNesting", "arr = [-[-[-missing]]]\narr", 13},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
+			require.Equal(t, 1, ts.Errors[0].Token.Line)
+			require.Equal(t, tc.column, ts.Errors[0].Token.Column)
+		})
+	}
+}
+
+// TestSilentUnresolvedCellGetsFallback covers typeCell's other side: an
+// in-scope identifier seeded with Unresolved types without reporting, so the
+// cell must receive exactly the generic fallback diagnostic.
+func TestSilentUnresolvedCellGetsFallback(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "silentCell", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	sc := NewScriptCompiler(ctx, "silentCell", mustParseScript(t, "arr = [mystery]\narr"), cc)
+	ts := NewTypeSolver(sc)
+	Put(ts.Scopes, "mystery", Type(Unresolved{}))
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Equal(t, "bracket literal cell type could not be resolved", ts.Errors[0].Msg)
+}
+
+func TestArrayRankLimit(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "arrayRankLimit", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+
+	atLimitProgram := mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank, "1")+"\nx")
+	atLimit := NewTypeSolver(NewScriptCompiler(ctx, "atLimit", atLimitProgram, cc))
+	atLimit.Solve()
+	require.Empty(t, atLimit.Errors)
+	info := atLimit.ExprCache[key(atLimit.FuncNameMangled, atLimitProgram.Statements[0].(*ast.LetStatement).Value[0])]
+	require.Equal(t, MaxArrayRank, info.OutTypes[0].(Array).Rank)
+
+	// Depth 2000 is the originally reported hang. After the fix it is cheap:
+	// the violation reports once, positioned at the bracket of the literal
+	// that exceeds the limit, and the 1935 enclosing literals must not
+	// cascade further errors.
+	const depth = 2000
+	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(depth, "1")+"\nx"), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg, fmt.Sprintf("array rank %d exceeds the current compiler limit of %d", MaxArrayRank+1, MaxArrayRank))
+	require.Equal(t, 1, ts.Errors[0].Token.Line)
+	// "x = " occupies columns 1-4; bracket k sits at column 4+k, and the
+	// rank-(MaxArrayRank+1) literal is bracket depth-MaxArrayRank.
+	require.Equal(t, 4+depth-MaxArrayRank, ts.Errors[0].Token.Column)
+}
+
 func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

@@ -1038,6 +1038,13 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 }
 
 func (ts *TypeSolver) cacheArrayLiteralType(al *ast.ArrayLiteral, arr Array, shape []uint64) []Type {
+	if arr.Rank > MaxArrayRank {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: al.Tok(),
+			Msg:   fmt.Sprintf("array rank %d exceeds the current compiler limit of %d", arr.Rank, MaxArrayRank),
+		})
+		return ts.cacheInvalidBracketLiteral(al)
+	}
 	types := []Type{arr}
 	ts.ExprCache[key(ts.FuncNameMangled, al)] = &ExprInfo{
 		OutTypes:   types,
@@ -1404,7 +1411,12 @@ func (ts *TypeSolver) initColTypes(n int) []Type {
 }
 
 // typeCell infers the type of a single cell expression. Returns (type, ok).
+// The generic unresolved-cell diagnostic is a fallback for silent failures
+// only: when typing the cell reported a more specific error anywhere in its
+// subtree, adding a summary here would cascade once per enclosing level —
+// through nested literals and wrapper expressions alike.
 func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
+	errorsBefore := len(ts.Errors)
 	tps := ts.TypeExpression(expr, false) // cells are nested, not root
 	if len(tps) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
@@ -1415,7 +1427,9 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 	}
 	cellType := tps[0]
 	if cellType.Kind() == UnresolvedKind {
-		ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
+		if len(ts.Errors) == errorsBefore {
+			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
+		}
 		return Unresolved{}, false
 	}
 	return cellType, true
