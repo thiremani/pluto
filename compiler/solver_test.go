@@ -402,10 +402,9 @@ func nestedArrayLiteral(depth int, val string) string {
 	return strings.Repeat("[", depth) + val + strings.Repeat("]", depth)
 }
 
-// TestUnresolvedCellReportsOnce pins typeCell's fallback rule: a failure
-// that already produced a specific error reports nothing further, at any
-// nesting depth — whether the levels are literals or wrapper expressions
-// (each errorsBefore count is captured before the cell's whole subtree).
+// TestUnresolvedCellReportsOnce: a failure that already produced a specific
+// error reports nothing further, whether the enclosing levels are literals
+// or wrapper expressions.
 func TestUnresolvedCellReportsOnce(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -437,9 +436,8 @@ func TestUnresolvedCellReportsOnce(t *testing.T) {
 	}
 }
 
-// TestSilentUnresolvedCellGetsFallback covers typeCell's other side: an
-// in-scope identifier seeded with Unresolved types without reporting, so the
-// cell must receive exactly the generic fallback diagnostic.
+// TestSilentUnresolvedCellGetsFallback: a seeded Unresolved identifier types
+// without reporting, so the cell gets exactly the generic fallback.
 func TestSilentUnresolvedCellGetsFallback(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -469,10 +467,8 @@ func TestArrayRankLimit(t *testing.T) {
 	info := atLimit.ExprCache[key(atLimit.FuncNameMangled, atLimitProgram.Statements[0].(*ast.LetStatement).Value[0])]
 	require.Equal(t, MaxArrayRank, info.OutTypes[0].(Array).Rank)
 
-	// Depth 2000 is the originally reported hang. After the fix it is cheap:
-	// the violation reports once, positioned at the bracket of the literal
-	// that exceeds the limit, and the 1935 enclosing literals must not
-	// cascade further errors.
+	// Depth 2000 is the originally reported hang: one positioned error, no
+	// cascade from the 1935 enclosing literals.
 	const depth = 2000
 	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(depth, "1")+"\nx"), cc)
 	ts := NewTypeSolver(sc)
