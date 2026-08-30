@@ -1754,9 +1754,9 @@ func TestCFGDiagnosticsDoNotFailSolver(t *testing.T) {
 
 	require.Empty(t, ts.Errors, "function CFG diagnostics must not become type-solver failures")
 	require.True(t, info.Settled)
-	require.NotNil(t, info.CFG)
-	require.Len(t, info.CFG.Errors, 1)
-	require.Contains(t, info.CFG.Errors[0].Msg, `"unused"`)
+	require.NotNil(t, info.CFGResult)
+	require.Len(t, info.CFGResult.Errors, 1)
+	require.Contains(t, info.CFGResult.Errors[0].Msg, `"unused"`)
 }
 
 func TestCFGRecordsSettledDirectCallee(t *testing.T) {
@@ -1776,17 +1776,17 @@ result = Wrapper(x)
 	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
 	leaf := cc.Compiler.FuncCache[leafMangled]
 	require.True(t, leaf.Settled)
-	require.NotNil(t, leaf.CFG)
-	require.Empty(t, leaf.CFG.Errors)
-	require.Empty(t, leaf.CFG.DirectCallees)
+	require.NotNil(t, leaf.CFGResult)
+	require.Empty(t, leaf.CFGResult.Errors)
+	require.Empty(t, leaf.CFGResult.DirectCallees)
 
 	solveScriptTypes(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
 	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
 	wrapper := cc.Compiler.FuncCache[wrapperMangled]
 
 	require.True(t, wrapper.Settled)
-	require.NotNil(t, wrapper.CFG)
-	require.Equal(t, []string{leafMangled}, wrapper.CFG.DirectCallees)
+	require.NotNil(t, wrapper.CFGResult)
+	require.Equal(t, []string{leafMangled}, wrapper.CFGResult.DirectCallees)
 }
 
 func TestSettledSpecializationRequiresCFG(t *testing.T) {
@@ -1804,7 +1804,7 @@ result = Wrapper(x)
 
 	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
 	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
-	cc.Compiler.FuncCache[leafMangled].CFG = nil
+	cc.Compiler.FuncCache[leafMangled].CFGResult = nil
 
 	program := mustParseScript(t, "value = Wrapper(1)\nvalue")
 	sc := NewScriptCompiler(ctx, t.Name()+"Wrapper", program, cc)

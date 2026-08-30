@@ -96,7 +96,7 @@ func replaySpecializationCFGNode(compiler *Compiler, mangled string, visited map
 	visited[mangled] = struct{}{}
 
 	info := compiler.FuncCache[mangled]
-	for _, compileError := range info.CFG.Errors {
+	for _, compileError := range info.CFGResult.Errors {
 		key := cfgDiagnosticKeyFor(compileError)
 		if _, seen := reported[key]; seen {
 			continue
@@ -105,7 +105,7 @@ func replaySpecializationCFGNode(compiler *Compiler, mangled string, visited map
 		reported[key] = struct{}{}
 		errors = append(errors, compileError)
 	}
-	for _, callee := range info.CFG.DirectCallees {
+	for _, callee := range info.CFGResult.DirectCallees {
 		errors = replaySpecializationCFGNode(compiler, callee, visited, reported, errors)
 	}
 

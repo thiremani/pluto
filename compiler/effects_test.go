@@ -475,7 +475,7 @@ result`)
 	require.True(t, scalarInBatch)
 	require.Equal(t, []specializationNodeID{primaryID}, graph.nodes[gatherID].effectCallees)
 	require.Equal(t, []string{primaryMangled, scalarMangled}, graph.nodes[gatherID].directCallees)
-	require.Equal(t, []string{primaryMangled, scalarMangled}, cc.Compiler.FuncCache[gatherMangled].CFG.DirectCallees)
+	require.Equal(t, []string{primaryMangled, scalarMangled}, cc.Compiler.FuncCache[gatherMangled].CFGResult.DirectCallees)
 }
 
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {

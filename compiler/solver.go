@@ -2571,7 +2571,7 @@ func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) 
 	}
 
 	for id, node := range graph.nodes {
-		ts.walkedFuncs[node.mangled].info.CFG = staged[id]
+		ts.walkedFuncs[node.mangled].info.CFGResult = staged[id]
 	}
 
 	for _, node := range graph.nodes {
@@ -2584,7 +2584,7 @@ func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) 
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
 	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if f.Settled {
-		if f.CFG == nil {
+		if f.CFGResult == nil {
 			panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", mangled))
 		}
 

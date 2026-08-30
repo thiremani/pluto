@@ -281,7 +281,7 @@ type FuncInfo struct {
 	// BodyOutputEffects summarizes the typed scalar body before a call-owned
 	// Range or ArrayRange domain determines whether that body executes.
 	BodyOutputEffects []WriteEffect
-	CFG               *SpecializationCFGResult
+	CFGResult         *SpecializationCFGResult
 	Settled           bool
 }
 

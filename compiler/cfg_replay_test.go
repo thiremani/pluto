@@ -35,18 +35,18 @@ func TestCFGReplayColdAndWarm(t *testing.T) {
 	coldInfo := cc.Compiler.FuncCache[noisyMangled]
 	require.NotNil(t, coldInfo)
 	require.True(t, coldInfo.Settled)
-	require.NotNil(t, coldInfo.CFG)
-	require.Len(t, coldInfo.CFG.Errors, 1)
-	require.Same(t, coldInfo.CFG.Errors[0], coldErrors[0],
+	require.NotNil(t, coldInfo.CFGResult)
+	require.Len(t, coldInfo.CFGResult.Errors, 1)
+	require.Same(t, coldInfo.CFGResult.Errors[0], coldErrors[0],
 		"cold replay must return the immutable cached diagnostic")
 
-	coldCFG := coldInfo.CFG
+	coldResult := coldInfo.CFGResult
 	_, warmErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Warm", "value = Noisy(2)\nvalue")
 	require.Len(t, warmErrors, 1, "each script replay must report the reachable diagnostic")
 
 	warmInfo := cc.Compiler.FuncCache[noisyMangled]
 	require.Same(t, coldInfo, warmInfo, "the warm solve must reuse the settled specialization")
-	require.Same(t, coldCFG, warmInfo.CFG, "the warm solve must not republish the CFG result")
+	require.Same(t, coldResult, warmInfo.CFGResult, "the warm solve must not republish the CFG result")
 	require.Same(t, coldErrors[0], warmErrors[0],
 		"warm replay must return the same cached diagnostic pointer")
 }
@@ -71,12 +71,12 @@ integer, floating`)
 	floatingMangled := Mangle(cc.Compiler.MangledPath, "NoisyTypes", []Type{F64})
 	integerInfo := cc.Compiler.FuncCache[integerMangled]
 	floatingInfo := cc.Compiler.FuncCache[floatingMangled]
-	require.Len(t, integerInfo.CFG.Errors, 1)
-	require.Len(t, floatingInfo.CFG.Errors, 1)
-	require.NotSame(t, integerInfo.CFG.Errors[0], floatingInfo.CFG.Errors[0],
+	require.Len(t, integerInfo.CFGResult.Errors, 1)
+	require.Len(t, floatingInfo.CFGResult.Errors, 1)
+	require.NotSame(t, integerInfo.CFGResult.Errors[0], floatingInfo.CFGResult.Errors[0],
 		"each specialization must retain its immutable analysis result")
-	require.Equal(t, integerInfo.CFG.Errors[0].Error(), floatingInfo.CFG.Errors[0].Error())
-	require.Same(t, integerInfo.CFG.Errors[0], errors[0],
+	require.Equal(t, integerInfo.CFGResult.Errors[0].Error(), floatingInfo.CFGResult.Errors[0].Error())
+	require.Same(t, integerInfo.CFGResult.Errors[0], errors[0],
 		"replay must retain the first source-ordered diagnostic")
 }
 
@@ -103,10 +103,10 @@ integer, floating`)
 	floatingMangled := Mangle(cc.Compiler.MangledPath, "NoisyPair", []Type{F64})
 	integerInfo := cc.Compiler.FuncCache[integerMangled]
 	floatingInfo := cc.Compiler.FuncCache[floatingMangled]
-	require.Len(t, integerInfo.CFG.Errors, 2)
-	require.Len(t, floatingInfo.CFG.Errors, 2)
+	require.Len(t, integerInfo.CFGResult.Errors, 2)
+	require.Len(t, floatingInfo.CFGResult.Errors, 2)
 	for index := range errors {
-		require.Same(t, integerInfo.CFG.Errors[index], errors[index])
+		require.Same(t, integerInfo.CFGResult.Errors[index], errors[index])
 	}
 }
 
@@ -130,8 +130,8 @@ result = Clean(x)
 	noisyMangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
 	noisyInfo := cc.Compiler.FuncCache[noisyMangled]
 	require.NotNil(t, noisyInfo)
-	require.NotNil(t, noisyInfo.CFG)
-	require.Same(t, noisyInfo.CFG.Errors[0], noisyErrors[0])
+	require.NotNil(t, noisyInfo.CFGResult)
+	require.Same(t, noisyInfo.CFGResult.Errors[0], noisyErrors[0])
 
 	_, cleanErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Clean", "value = Clean(1)\nvalue")
 	require.Empty(t, cleanErrors,
@@ -159,8 +159,8 @@ result = Wrapper(x)
 	leafMangled := Mangle(cc.Compiler.MangledPath, "NoisyLeaf", []Type{I64})
 	leafInfo := cc.Compiler.FuncCache[leafMangled]
 	require.True(t, leafInfo.Settled)
-	require.NotNil(t, leafInfo.CFG)
-	require.Same(t, leafInfo.CFG.Errors[0], leafErrors[0])
+	require.NotNil(t, leafInfo.CFGResult)
+	require.Same(t, leafInfo.CFGResult.Errors[0], leafErrors[0])
 
 	_, wrapperErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
 	require.Len(t, wrapperErrors, 1)
@@ -169,8 +169,8 @@ result = Wrapper(x)
 	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
 	wrapperInfo := cc.Compiler.FuncCache[wrapperMangled]
 	require.True(t, wrapperInfo.Settled)
-	require.NotNil(t, wrapperInfo.CFG)
-	require.Equal(t, []string{leafMangled}, wrapperInfo.CFG.DirectCallees,
+	require.NotNil(t, wrapperInfo.CFGResult)
+	require.Equal(t, []string{leafMangled}, wrapperInfo.CFGResult.DirectCallees,
 		"persistent replay edges must include callees settled before the wrapper batch")
 }
 
@@ -193,7 +193,7 @@ func TestPrintOnlyUserCallReplaysCFGDiagnostics(t *testing.T) {
 	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
 	require.Equal(t, []string{mangled}, directCallees,
 		"a user call reached only through print arguments must be a replay root")
-	require.Same(t, cc.Compiler.FuncCache[mangled].CFG.Errors[0], errors[0])
+	require.Same(t, cc.Compiler.FuncCache[mangled].CFGResult.Errors[0], errors[0])
 }
 
 func TestCFGReplayDeduplicatesScalarCompanion(t *testing.T) {
@@ -230,12 +230,12 @@ result`)
 	require.NotEqual(t, primaryMangled, scalarMangled)
 	primaryInfo := cc.Compiler.FuncCache[primaryMangled]
 	scalarInfo := cc.Compiler.FuncCache[scalarMangled]
-	require.Len(t, primaryInfo.CFG.Errors, 1)
-	require.Len(t, scalarInfo.CFG.Errors, 1)
-	require.NotSame(t, primaryInfo.CFG.Errors[0], scalarInfo.CFG.Errors[0],
+	require.Len(t, primaryInfo.CFGResult.Errors, 1)
+	require.Len(t, scalarInfo.CFGResult.Errors, 1)
+	require.NotSame(t, primaryInfo.CFGResult.Errors[0], scalarInfo.CFGResult.Errors[0],
 		"both actual lowering targets must remain independently analyzed")
-	require.Equal(t, primaryInfo.CFG.Errors[0].Error(), scalarInfo.CFG.Errors[0].Error())
-	require.Same(t, primaryInfo.CFG.Errors[0], errors[0])
+	require.Equal(t, primaryInfo.CFGResult.Errors[0].Error(), scalarInfo.CFGResult.Errors[0].Error())
+	require.Same(t, primaryInfo.CFGResult.Errors[0], errors[0])
 }
 
 func TestDiamondCFGReplayIsOnceAndDeterministic(t *testing.T) {
@@ -272,7 +272,7 @@ result = Diamond(x)
 	}
 
 	sharedMangled := Mangle(cc.Compiler.MangledPath, "Shared", []Type{I64})
-	sharedError := cc.Compiler.FuncCache[sharedMangled].CFG.Errors[0]
+	sharedError := cc.Compiler.FuncCache[sharedMangled].CFGResult.Errors[0]
 	sharedOccurrences := 0
 	for _, cfgError := range errors {
 		if cfgError == sharedError {
@@ -299,9 +299,9 @@ func TestCFGResultsAreIndependentPerType(t *testing.T) {
 		"a scalar comparison may skip its write, so the preceding output remains live")
 
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "MaskOrKeep", []Type{I64})
-	scalarCFG := cc.Compiler.FuncCache[scalarMangled].CFG
-	require.NotNil(t, scalarCFG)
-	require.Empty(t, scalarCFG.Errors)
+	scalarResult := cc.Compiler.FuncCache[scalarMangled].CFGResult
+	require.NotNil(t, scalarResult)
+	require.Empty(t, scalarResult.Errors)
 
 	_, arrayErrors := compileCFGReplayScript(t, ctx, cc, t.Name()+"Array", "value = MaskOrKeep([1 2])\nvalue")
 	require.NotEmpty(t, arrayErrors,
@@ -310,9 +310,9 @@ func TestCFGResultsAreIndependentPerType(t *testing.T) {
 	arrayMangled := Mangle(cc.Compiler.MangledPath, "MaskOrKeep", []Type{
 		Array{ElemType: I64, Rank: 1},
 	})
-	arrayCFG := cc.Compiler.FuncCache[arrayMangled].CFG
-	require.NotNil(t, arrayCFG)
-	require.NotSame(t, scalarCFG, arrayCFG)
-	require.NotEmpty(t, arrayCFG.Errors)
-	require.Contains(t, arrayCFG.Errors[0].Msg, `unconditional assignment to "result"`)
+	arrayResult := cc.Compiler.FuncCache[arrayMangled].CFGResult
+	require.NotNil(t, arrayResult)
+	require.NotSame(t, scalarResult, arrayResult)
+	require.NotEmpty(t, arrayResult.Errors)
+	require.Contains(t, arrayResult.Errors[0].Msg, `unconditional assignment to "result"`)
 }
