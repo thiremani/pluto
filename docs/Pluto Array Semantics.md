@@ -6,6 +6,13 @@ An array type consists of a scalar leaf type and a rank. `[I64]` is rank 1,
 `[[I64]]` is rank 2, and nesting continues for higher ranks. Dimension lengths
 are runtime values, not part of type identity.
 
+Rank is unbounded in the language definition, but the current compiler
+enforces a temporary implementation limit of 64, rejecting a deeper literal
+with a positioned diagnostic (`array rank 65 exceeds the current compiler
+limit of 64`). The limit exists because the type mangle and the array
+descriptor grow with rank; it will be raised or removed with issue #90's
+compact rank encoding, fixed-size descriptor, and input-complexity fuses.
+
 All ranks use one flat, row-major element buffer. Higher ranks carry their
 dimension lengths beside that buffer; rows are not separately allocated.
 
