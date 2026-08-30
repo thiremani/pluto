@@ -402,6 +402,26 @@ func nestedArrayLiteral(depth int) string {
 	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
 }
 
+// TestUnresolvedCellReportsOnce pins typeCell's dedup rule: a cell whose
+// typing already reported (here an undefined identifier) must not add the
+// generic unresolved-cell error on top.
+func TestUnresolvedCellReportsOnce(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "unresolvedCell", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	sc := NewScriptCompiler(ctx, "unresolvedCell", mustParseScript(t, "arr = [missing]\narr"), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.NotEmpty(t, ts.Errors)
+	require.Contains(t, ts.Errors[0].Msg, "undefined identifier: missing")
+	for _, err := range ts.Errors {
+		require.NotContains(t, err.Msg, "cell type could not be resolved")
+	}
+}
+
 func TestArrayRankLimit(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
