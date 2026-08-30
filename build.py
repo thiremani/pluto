@@ -35,7 +35,7 @@ def release_ldflags(root: Path) -> str:
 
 def main() -> int:
     root = Path(__file__).parent.resolve()
-    parser = argparse.ArgumentParser(description="Build the Pluto compiler with the LLVM 22 byollvm environment.")
+    parser = argparse.ArgumentParser(description="Build the Pluto compiler with the repository-pinned LLVM byollvm environment.")
     parser.add_argument("-o", "--output", default=default_output(), help="output binary path")
     parser.add_argument("--release", action="store_true", help="embed version, commit, and build date")
     args, go_args = parser.parse_known_args()
@@ -43,7 +43,12 @@ def main() -> int:
     if go_args[:1] == ["--"]:
         go_args = go_args[1:]
 
-    env = build_env()
+    try:
+        env = build_env()
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
     cmd = ["go", "build", "-o", args.output]
     if args.release:
         cmd.extend(["-ldflags", release_ldflags(root)])

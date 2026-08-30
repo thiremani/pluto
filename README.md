@@ -366,7 +366,7 @@ If you prefer the conflict-safe command name locally:
 python3 build.py -o plt
 ```
 
-`build.py` sets the LLVM 22 `byollvm` environment for its own subprocess and does not mutate your shell. If you prefer to call Go directly:
+`build.py` reads the supported LLVM major from [`.llvm-version`](.llvm-version), sets the corresponding `byollvm` environment for its own subprocess, and does not mutate your shell. If you prefer to call Go directly:
 
 ```bash
 eval "$(python3 scripts/llvm_env.py --shell)"
@@ -385,6 +385,7 @@ go build -o pluto
 ```bash
 python3 test.py                              # Full E2E suite
 python3 test.py --leak-check                 # Full suite + memory leak detection
+eval "$(python3 scripts/llvm_env.py --shell)"
 go test -race ./lexer ./parser ./compiler    # Unit tests only
 ```
 
@@ -415,13 +416,15 @@ Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#1
 ## Requirements
 
 - Go 1.26+
-- LLVM 22 development libraries and tools on PATH: `llvm-config`, `clang`
+- Development libraries and tools for the LLVM major recorded in [`.llvm-version`](.llvm-version): `llvm-config`, `clang`, `clang++`
 - Python 3.x (for build/test helpers)
 - Leak check tools (only for `python3 test.py --leak-check`):
   - Linux: `valgrind`
   - macOS: `leaks`
 
-Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` derive the required LLVM 22 `byollvm` flags from `llvm-config` for their subprocesses. Direct `go build` and `go test` are supported after `eval "$(python3 scripts/llvm_env.py --shell)"`.
+Pluto builds against LLVM through CGO. [`.llvm-version`](.llvm-version) is the single source of truth for the supported major; print it without requiring an LLVM installation with `python3 scripts/llvm_env.py --llvm-version`.
+
+`python3 build.py` and `python3 test.py` derive the required `byollvm` flags from `llvm-config` for their subprocesses. The helper prefers an explicit `LLVM_CONFIG`, derives the LLVM tool directory from that executable, and verifies that `llvm-config --version` has the pinned major. A mismatch stops the build with an error instead of mixing headers, libraries, and tools from different LLVM installations. Direct LLVM-dependent Go commands (`go build`, `go test`, and `go vet`) must first load the same environment with `eval "$(python3 scripts/llvm_env.py --shell)"` (or set an equivalent `byollvm` environment explicitly); otherwise Go can select the dependency's default LLVM major instead of [`.llvm-version`](.llvm-version).
 
 ---
 
@@ -430,12 +433,15 @@ Pluto builds against LLVM through CGO. `python3 build.py` and `python3 test.py` 
 <details>
 <summary><strong>Linux</strong></summary>
 
-Install LLVM 22 from apt.llvm.org:
+Install the pinned LLVM major from apt.llvm.org:
 
 ```bash
-wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 22
-sudo apt install llvm-22-dev clang-22 lld-22
-export PATH=/usr/lib/llvm-22/bin:$PATH
+LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh "$LLVM_VERSION"
+sudo apt install "llvm-${LLVM_VERSION}-dev" "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}"
+export PATH="/usr/lib/llvm-${LLVM_VERSION}/bin:$PATH"
 ```
 
 Build and test:
@@ -451,17 +457,11 @@ python3 test.py
 <summary><strong>macOS (Homebrew)</strong></summary>
 
 ```bash
-brew install llvm lld
-```
-
-Set PATH for your architecture:
-
-```bash
-# Apple Silicon
-export PATH=/opt/homebrew/opt/llvm/bin:$PATH
-
-# Intel
-export PATH=/usr/local/opt/llvm/bin:$PATH
+LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
+brew install "llvm@${LLVM_VERSION}" "lld@${LLVM_VERSION}"
+LLVM_PREFIX="$(brew --prefix "llvm@${LLVM_VERSION}")"
+export PATH="${LLVM_PREFIX}/bin:$PATH"
+export LLVM_CONFIG="${LLVM_PREFIX}/bin/llvm-config"
 ```
 
 Build and test:
@@ -501,6 +501,7 @@ python test.py
 Notes:
 
 - On Windows the produced binary is `pluto.exe`.
+- The MSYS2 package name is unversioned; the environment helper verifies that its `llvm-config` major matches [`.llvm-version`](.llvm-version).
 - The runtime enables `%n` on UCRT to match POSIX `printf` behavior.
 
 </details>
@@ -558,10 +559,13 @@ Pluto is under active development.
 <summary><strong>Common issues</strong></summary>
 
 **`undefined: llvmHostCPUName` or `undefined: llvmHostCPUFeatures` during build:**
-- Use `python3 build.py` / `python build.py`, or run `eval "$(python3 scripts/llvm_env.py --shell)"` before direct `go build` / `go test`
+- Use `python3 build.py` / `python build.py`, or run `eval "$(python3 scripts/llvm_env.py --shell)"` before direct LLVM-dependent Go commands
 
 **Missing LLVM tools:**
-- Verify `llvm-config` and `clang` from LLVM 22 are on PATH
+- Print the required major with `python3 scripts/llvm_env.py --llvm-version`, then verify matching `llvm-config` and `clang` are on PATH
+
+**LLVM version mismatch:**
+- Point `LLVM_CONFIG` at the pinned installation's `llvm-config`; the helper derives the matching tool directory and rejects a different major
 
 **Stale cache behavior:**
 - Clear current version: `./pluto -clean`

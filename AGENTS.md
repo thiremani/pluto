@@ -12,7 +12,7 @@
 
 - Build compiler: `python3 build.py`
 - Production build with version: `python3 build.py --release`
-- Unit tests (race): `go test -race ./lexer ./parser ./compiler`
+- Unit tests (race): `eval "$(python3 scripts/llvm_env.py --shell)" && go test -race ./lexer ./parser ./compiler`
 - Full suite: `python3 test.py` (builds compiler, runs unit and integration tests)
 - Full suite with leak detection: `python3 test.py --leak-check`
 - Run compiler: `./pluto [directory]` (writes binaries next to sources)
@@ -20,8 +20,8 @@
 - Show version: `./pluto -version` (or `-v`)
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
-Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llvm-config`, `clang`). macOS Homebrew paths: `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`; direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`. See `README.md`.
+Requirements: Go `1.26`, plus development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`). On macOS, install the versioned Homebrew formula shown in `README.md`.
+`python3 build.py` and `python3 test.py` derive the `byollvm` CGO flags from `llvm-config`; the environment helper rejects a major that differs from `.llvm-version`. Direct LLVM-dependent Go commands (`go build`, `go test`, and `go vet`) require `eval "$(python3 scripts/llvm_env.py --shell)"` first (or an equivalent explicit `byollvm` environment). See `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
 ## Architecture Overview
@@ -36,7 +36,7 @@ Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llv
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
 - Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
-- Go formatting: `go fmt ./...`; basic checks: `go vet ./...`.
+- Go formatting: `go fmt ./...`; basic checks: `eval "$(python3 scripts/llvm_env.py --shell)" && go vet ./...`.
 - Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions.
 - Avoid local helper closures in production and tests. Keep short logic inline; when extraction is worthwhile, define a package-level function or method and pass dependencies explicitly, even for a single caller. Use closures only when a callback API requires one or lexical capture is essential; test helpers that assert should call `t.Helper()`.
 - Filenames: lowercase with underscores where needed (Go convention).
@@ -53,7 +53,7 @@ Requirements: Go `1.26`, LLVM `22` development libraries and tools on PATH (`llv
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
@@ -84,7 +84,7 @@ When reviewing PRs or preparing code for review, check:
   - macOS: `rm -rf "$HOME/Library/Caches/pluto"`
   - Linux: `rm -rf "$HOME/.cache/pluto"`
   - Windows: `rd /s /q %LocalAppData%\pluto`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 `llvm-config` and `clang`.
+- `PTCACHE` overrides cache location; ensure PATH includes `llvm-config` and `clang` matching `.llvm-version`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 
 ## Instructions for AI Assistants
