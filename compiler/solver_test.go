@@ -74,7 +74,8 @@ x, y`
 	args := []Type{I64}
 	template, isEvenMangled, ok := ts.lookupCallTemplate(call, args)
 	require.True(t, ok)
-	isEvenFunc := ts.newFunc(call, args, isEvenMangled, template)
+	isEvenFunc := newFunc(call.Function.Value, args, template)
+	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
 	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
@@ -149,6 +150,9 @@ y`
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
+	// The exact-key f -> g -> h -> f backedge allocates no new specialization,
+	// so ordinary convergence analysis remains responsible even at this limit.
+	ts.recLimit.maxFrames = 1
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1)
@@ -1343,6 +1347,9 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
+	// An acyclic chain never starts a recursive specialization region, regardless
+	// of its call depth or the recursive-region test limit.
+	ts.recLimit.maxFrames = 1
 	ts.Solve()
 
 	require.Empty(t, ts.Errors)
@@ -1359,6 +1366,453 @@ func TestFuncClosureWalksEachSpecializationOnce(t *testing.T) {
 
 	repeated := closureLeafWalks(t, 8, 8)
 	require.Equal(t, shallow, repeated, "leaf walks must not grow with script call sites")
+}
+
+func TestRecursiveGrowthLimitReportsActiveChain(t *testing.T) {
+	const testLimit = 3
+
+	for _, tt := range []struct {
+		name       string
+		code       string
+		script     string
+		chainStart string
+	}{
+		{
+			name: "direct",
+			code: `res = Grow(x)
+    res = Grow([x])
+`,
+			script:     "v = Grow(1)\nv",
+			chainStart: "Grow(I64) -> Grow(Array_t1_I64)",
+		},
+		{
+			name: "mutual",
+			code: `res = Left(x)
+    res = Right([x])
+
+res = Right(x)
+    res = Left(x)
+`,
+			script:     "v = Left(1)\nv",
+			chainStart: "Left(I64) -> Right(Array_t1_I64) -> Left(Array_t1_I64)",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, tt.code))
+			require.Empty(t, cc.Compile())
+
+			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tt.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.recLimit.maxFrames = testLimit
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Contains(t, ts.Errors[0].Msg,
+				fmt.Sprintf("recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region)", testLimit))
+			require.Contains(t, ts.Errors[0].Msg, tt.chainStart)
+
+			cacheEntriesBeforeRetry := len(cc.Compiler.FuncCache)
+			retrySC := NewScriptCompiler(ctx, t.Name()+"Retry", mustParseScript(t, tt.script), cc)
+			retryTS := NewTypeSolver(retrySC)
+			retryTS.recLimit.maxFrames = testLimit
+			retryTS.Solve()
+
+			require.Len(t, retryTS.Errors, 1)
+			require.Contains(t, retryTS.Errors[0].Msg,
+				fmt.Sprintf("recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region)", testLimit))
+			require.Len(t, cc.Compiler.FuncCache, cacheEntriesBeforeRetry+1,
+				"a retry may add its script root but must not ratchet the rejected function closure")
+		})
+	}
+}
+
+func TestRecursiveFailureStopsSiblingRewalks(t *testing.T) {
+	const testLimit = 3
+
+	code := mustParseCode(t, `res = Grow(x)
+    res = Grow([x])
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+
+	script := "value = Grow(1) + Grow([1]) + Grow([[1]]) + Grow([[[1]]])\nvalue"
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, script), cc)
+	ts := NewTypeSolver(sc)
+	ts.recLimit.maxFrames = testLimit
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1, "later calls in the statement must not rewalk the failed unsettled closure")
+	require.Contains(t, ts.Errors[0].Msg, "recursive specialization resource limit exceeded")
+	require.NotContains(t, ts.Errors[0].Msg, "not converging")
+}
+
+func growingMutualCycleCode(templateCount int) string {
+	var code strings.Builder
+	for index := range templateCount {
+		next := (index + 1) % templateCount
+		argument := "x"
+		if next == 0 {
+			argument = "[x]"
+		}
+		fmt.Fprintf(&code, "res = Cycle%d(x)\n    res = Cycle%d(%s)\n\n", index, next, argument)
+	}
+
+	return code.String()
+}
+
+func TestMutualGrowthSharesRecursiveLimit(t *testing.T) {
+	const templateCount = 6
+	const testLimit = 10
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "wideMutualGrowth", "", mustParseCode(t, growingMutualCycleCode(templateCount)))
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "value = Cycle0(1)\nvalue"), cc)
+	ts := NewTypeSolver(sc)
+	ts.recLimit.maxFrames = testLimit
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg,
+		fmt.Sprintf("recursive specialization resource limit exceeded (limit %d active specialization frames in one recursive inference region)", testLimit))
+	require.Contains(t, ts.Errors[0].Msg, "Cycle0(I64)")
+	require.LessOrEqual(t, len(cc.Compiler.FuncCache), testLimit+1,
+		"the recursive-region limit must not multiply by the number of templates in the cycle")
+}
+
+func traceSpecializationFrame(name string, typ Type) specializationFrame {
+	template := &ast.FuncStatement{Token: token.Token{Literal: name}}
+
+	return specializationFrame{
+		mangled:  Mangle(MangleDirPath("trace", ""), name, []Type{typ}),
+		template: template,
+	}
+}
+
+func TestSpecializationTraceIsBounded(t *testing.T) {
+	active := make([]specializationFrame, 20)
+	for i := range active {
+		active[i] = traceSpecializationFrame(fmt.Sprintf("F%d", i), I64)
+	}
+
+	trace := formatSpecializationChain(active, traceSpecializationFrame("F20", I64))
+	require.Contains(t, trace, "F0(I64)")
+	require.Contains(t, trace, "13 specializations omitted")
+	require.NotContains(t, trace, "F1(I64)")
+	require.Contains(t, trace, "F20(I64)")
+}
+
+func TestSpecializationTracePluralizesOmissions(t *testing.T) {
+	active := make([]specializationFrame, 8)
+	for i := range active {
+		active[i] = traceSpecializationFrame(fmt.Sprintf("F%d", i), I64)
+	}
+
+	trace := formatSpecializationChain(active, traceSpecializationFrame("F8", I64))
+	require.NotContains(t, trace, "omitted")
+	require.Equal(t, 8, strings.Count(trace, " -> "))
+	require.Equal(t, "... 1 specialization omitted ...", specializationOmission(1))
+	require.Equal(t, "... 2 specializations omitted ...", specializationOmission(2))
+}
+
+func TestSpecializationTraceCapsIndividualFrames(t *testing.T) {
+	name := strings.Repeat("LongName", maxSpecializationFrameRunes)
+	display := specializationDisplay(traceSpecializationFrame(name, I64))
+
+	require.LessOrEqual(t, len([]rune(display)), maxSpecializationFrameRunes)
+	require.True(t, strings.HasSuffix(display, "..."))
+}
+
+const fixedRankRecursionSource = `res = FixedRank(x)
+    "-x"
+    res = 0
+    nested = FixedRank([[1]])
+    res = res + nested
+`
+
+func TestRecursiveGrowthReachesFixedClosure(t *testing.T) {
+	code := mustParseCode(t, fixedRankRecursionSource)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "fixedRankRecursion", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name(), "v = FixedRank(1)\nv")
+	require.Contains(t, cc.Compiler.FuncCache, Mangle(cc.Compiler.MangledPath, "FixedRank", []Type{I64}))
+	require.Contains(t, cc.Compiler.FuncCache, Mangle(cc.Compiler.MangledPath, "FixedRank", []Type{
+		Array{ElemType: I64, Rank: 2},
+	}))
+}
+
+func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
+	const testLimit = 1
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	coldCC := NewCodeCompiler(ctx, "fixedRankColdLimit", "", mustParseCode(t, fixedRankRecursionSource))
+	require.Empty(t, coldCC.Compile())
+	coldSC := NewScriptCompiler(ctx, t.Name()+"Cold", mustParseScript(t, "value = FixedRank(1)\nvalue"), coldCC)
+	coldTS := NewTypeSolver(coldSC)
+	coldTS.recLimit.maxFrames = testLimit
+	coldTS.Solve()
+	require.Len(t, coldTS.Errors, 1, "a cold type-changing re-entry consumes recursive discovery work")
+	require.Contains(t, coldTS.Errors[0].Msg, "recursive specialization resource limit exceeded")
+
+	warmCC := NewCodeCompiler(ctx, "fixedRankWarmLimit", "", mustParseCode(t, fixedRankRecursionSource))
+	require.Empty(t, warmCC.Compile())
+	tailSC := NewScriptCompiler(ctx, t.Name()+"Tail", mustParseScript(t, "value = FixedRank([[1]])\nvalue"), warmCC)
+	tailTS := NewTypeSolver(tailSC)
+	tailTS.recLimit.maxFrames = testLimit
+	tailTS.Solve()
+	require.Empty(t, tailTS.Errors)
+
+	tailMangled := Mangle(warmCC.Compiler.MangledPath, "FixedRank", []Type{
+		Array{ElemType: I64, Rank: 2},
+	})
+	require.Contains(t, warmCC.Compiler.FuncCache, tailMangled)
+	require.True(t, warmCC.Compiler.FuncCache[tailMangled].Settled)
+
+	warmSC := NewScriptCompiler(ctx, t.Name()+"Warm", mustParseScript(t, "value = FixedRank(1)\nvalue"), warmCC)
+	warmTS := NewTypeSolver(warmSC)
+	warmTS.recLimit.maxFrames = testLimit
+	warmTS.Solve()
+	require.Empty(t, warmTS.Errors,
+		"a settled tail consumes no cold specialization-discovery work")
+}
+
+func TestFinitePolymorphicRecursionIsAccepted(t *testing.T) {
+	code := mustParseCode(t, `res = Outer(x)
+    res = 0
+    inner = Inner([x])
+    res = res + inner
+
+res = Inner(xs)
+    res = 0
+    outer = Outer(xs[0])
+    res = res + outer
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "finitePolymorphicRecursion", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name(), "v = Outer(1)\nv")
+	require.Contains(t, cc.Compiler.FuncCache, Mangle(cc.Compiler.MangledPath, "Outer", []Type{I64}))
+	require.Contains(t, cc.Compiler.FuncCache, Mangle(cc.Compiler.MangledPath, "Inner", []Type{
+		Array{ElemType: I64, Rank: 1},
+	}))
+}
+
+func TestRecursiveLimitPrecedesCacheAllocation(t *testing.T) {
+	code := mustParseCode(t, `res = Identity(x)
+    res = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "recursiveSpecializationLimit", "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, "v = Identity(1)\nv")
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	ts := NewTypeSolver(sc)
+
+	call := program.Statements[0].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	template, mangled, ok := ts.lookupCallTemplate(call, []Type{I64})
+	require.True(t, ok)
+	ts.recLimit.maxFrames = 3
+	for rank := 1; rank <= ts.recLimit.maxFrames; rank++ {
+		ts.recLimit.push(specializationFrame{
+			mangled: Mangle(cc.Compiler.MangledPath, "Identity", []Type{
+				Array{ElemType: I64, Rank: rank},
+			}),
+			template: template,
+		})
+	}
+	ts.InferFuncTypes(call, []Type{I64}, mangled, template)
+
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg,
+		"recursive specialization resource limit exceeded (limit 3 active specialization frames in one recursive inference region)")
+	require.Contains(t, ts.Errors[0].Msg, "active signature chain: Identity(Array_t1_I64)")
+	require.Contains(t, ts.Errors[0].Msg, "Identity(I64)")
+	require.Equal(t, call.Function.Token, ts.Errors[0].Token)
+	require.Equal(t, "Identity", ts.Errors[0].Token.Literal)
+	require.Equal(t, call.Function.Token.Location(), ts.Errors[0].Token.Location())
+	require.NotContains(t, cc.Compiler.FuncCache, mangled, "the rejected specialization must not enter the shared cache")
+}
+
+func flatSpecializationCode(count int) string {
+	var code strings.Builder
+	for i := range count {
+		fmt.Fprintf(&code, "res = Flat%d(x)\n    res = x\n\n", i)
+	}
+
+	return code.String()
+}
+
+func flatSpecializationScript(start, end int) string {
+	var script strings.Builder
+	for i := start; i < end; i++ {
+		fmt.Fprintf(&script, "Flat%d(%d)\n", i, i)
+	}
+
+	return script.String()
+}
+
+func TestRecursiveLimitAllowsFlatBreadth(t *testing.T) {
+	const specializationCount = 300
+	const warmCount = 100
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	coldCC := NewCodeCompiler(ctx, "flatSpecializationsCold", "", mustParseCode(t, flatSpecializationCode(specializationCount)))
+	require.Empty(t, coldCC.Compile())
+	coldSC := NewScriptCompiler(ctx, t.Name()+"Cold", mustParseScript(t, flatSpecializationScript(0, specializationCount)), coldCC)
+	require.Empty(t, coldSC.Compile(), "a cold script may instantiate more than 256 unrelated functions")
+
+	warmCC := NewCodeCompiler(ctx, "flatSpecializationsWarm", "", mustParseCode(t, flatSpecializationCode(specializationCount)))
+	require.Empty(t, warmCC.Compile())
+	warmingSC := NewScriptCompiler(ctx, t.Name()+"Warming", mustParseScript(t, flatSpecializationScript(0, warmCount)), warmCC)
+	require.Empty(t, warmingSC.Compile())
+
+	warmedSC := NewScriptCompiler(ctx, t.Name()+"Warmed", mustParseScript(t, flatSpecializationScript(0, specializationCount)), warmCC)
+	require.Empty(t, warmedSC.Compile(), "warming sibling specializations must not change acceptance")
+}
+
+func TestScalarCompanionPreservesRecursiveBudget(t *testing.T) {
+	code := mustParseCode(t, `res = Scale(x)
+    res = x * 3
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "scalarCompanionGuard", "", code)
+	require.Empty(t, cc.Compile())
+
+	program := mustParseScript(t, `arr = [10 20 30]
+i = 0:3
+scaled = [Scale(arr[i])]
+scaled`)
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	ts := NewTypeSolver(sc)
+	ts.recLimit.maxFrames = 1
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	scaledStmt := program.Statements[2].(*ast.LetStatement)
+	collector := scaledStmt.Value[0].(*ast.ArrayLiteral)
+	call := collector.Rows[0][0].(*ast.CallExpression)
+	callInfo := ts.ExprCache[key(ts.FuncNameMangled, call)]
+	require.NotNil(t, callInfo)
+
+	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
+	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
+	require.True(t, callInfo.ScalarCallVariantEnsured)
+	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
+	require.Equal(t, []string{primaryMangled, scalarMangled}, directCallees)
+	callInfo.ScalarCallVariantEnsured = false
+	directCallees, _ = collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
+	require.Equal(t, []string{primaryMangled}, directCallees,
+		"a scalar key already present in the shared cache must not create an edge without a call-local ensured fact")
+	callInfo.ScalarCallVariantEnsured = true
+	require.Contains(t, cc.Compiler.FuncCache, primaryMangled)
+	require.Contains(t, cc.Compiler.FuncCache, scalarMangled)
+	template, ok := cc.lookupFuncTemplate("Scale", 1)
+	require.True(t, ok)
+	require.NotEqual(t,
+		specializationDisplay(specializationFrame{mangled: primaryMangled, template: template}),
+		specializationDisplay(specializationFrame{mangled: scalarMangled, template: template}),
+		"diagnostic frames must retain the actual specialization key when body parameter types collapse")
+}
+
+func TestCFGDiagnosticsDoNotFailSolver(t *testing.T) {
+	code := mustParseCode(t, `result = Noisy(x)
+    unused = x
+    result = x
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "specializationCFGDiagnostics", "", code)
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), "value = Noisy(1)\nvalue")
+	mangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
+	info := cc.Compiler.FuncCache[mangled]
+
+	require.Empty(t, ts.Errors, "function CFG diagnostics must not become type-solver failures")
+	require.True(t, info.Settled)
+	require.NotNil(t, info.CFGResult)
+	require.Len(t, info.CFGResult.Errors, 1)
+	require.Contains(t, info.CFGResult.Errors[0].Msg, `"unused"`)
+}
+
+func TestCFGRecordsSettledDirectCallee(t *testing.T) {
+	code := mustParseCode(t, `result = Leaf(x)
+    result = x
+
+result = Wrapper(x)
+    result = Leaf(x)
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "settledCFGEdge", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
+	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
+	leaf := cc.Compiler.FuncCache[leafMangled]
+	require.True(t, leaf.Settled)
+	require.NotNil(t, leaf.CFGResult)
+	require.Empty(t, leaf.CFGResult.Errors)
+	require.Empty(t, leaf.CFGResult.DirectCallees)
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
+	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
+	wrapper := cc.Compiler.FuncCache[wrapperMangled]
+
+	require.True(t, wrapper.Settled)
+	require.NotNil(t, wrapper.CFGResult)
+	require.Equal(t, []string{leafMangled}, wrapper.CFGResult.DirectCallees)
+}
+
+func TestSettledSpecializationRequiresCFG(t *testing.T) {
+	code := mustParseCode(t, `result = Leaf(x)
+    result = x
+
+result = Wrapper(x)
+    result = Leaf(x)
+`)
+
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cc := NewCodeCompiler(ctx, "missingSettledCFG", "", code)
+	require.Empty(t, cc.Compile())
+
+	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
+	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
+	cc.Compiler.FuncCache[leafMangled].CFGResult = nil
+
+	program := mustParseScript(t, "value = Wrapper(1)\nvalue")
+	sc := NewScriptCompiler(ctx, t.Name()+"Wrapper", program, cc)
+	ts := NewTypeSolver(sc)
+	require.PanicsWithValue(t,
+		"internal: settled specialization "+leafMangled+" has no CFG result",
+		ts.Solve,
+	)
 }
 
 func TestNonConvergingCalleeIsBlamed(t *testing.T) {

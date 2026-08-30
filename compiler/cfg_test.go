@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -47,49 +46,31 @@ func TestCFGAnalysis(t *testing.T) {
 	})
 }
 
-func TestFunctionDiagnosticsFollowSourceOrder(t *testing.T) {
-	code := `r = Hotel(x)
-    th = x + 1
-    r = x
-
-r = Alpha(x)
-    ta = x + 1
-    r = x
-
-r = Golf(x)
-    tg = x + 1
-    r = x
-
-r = Bravo(x)
-    tb = x + 1
-    r = x
-
-r = Foxtrot(x)
-    tf = x + 1
-    r = x
-
-r = Charlie(x)
-    tc = x + 1
-    r = x
-
-r = Echo(x)
-    te = x + 1
-    r = x
-
-r = Delta(x)
-    td = x + 1
+func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
+	code := `r = Unreachable(x)
+    temporary = x + 1
+    temporary = x + 2
     r = x`
 
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "deterministicDiagnostics", "", mustParseCode(t, code))
+	cc := NewCodeCompiler(ctx, "unreachableLocalDeadStore", "", mustParseCode(t, code))
 	errs := cc.Compile()
-	require.Len(t, errs, 8)
+	require.Empty(t, errs)
 
-	for i, name := range []string{"th", "ta", "tg", "tb", "tf", "tc", "te", "td"} {
-		require.Contains(t, errs[i].Msg, fmt.Sprintf("%q", name))
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "result = Unreachable(1)\nresult"), cc)
+	errs = sc.Compile()
+	require.Len(t, errs, 3)
+	assertHasExpectedError(t, errs, `unconditional assignment to "temporary" overwrites a previous value that was never used`)
+
+	deadStores := 0
+	for _, err := range errs {
+		if strings.Contains(err.Msg, `value assigned to "temporary" is never used`) {
+			deadStores++
+		}
 	}
+	require.Equal(t, 2, deadStores)
 }
 
 func getValidTestCases() []cfgTestCase {
@@ -169,12 +150,12 @@ func getErrorTestCases() []cfgTestCase {
 		{
 			name:          "Use Before Definition",
 			input:         "x = y + 1",
-			errorContains: `variable "y" has not been defined`,
+			errorContains: `undefined identifier: y`,
 		},
 		{
 			name:          "Use cond Before definition",
 			input:         "a = b > 2 1",
-			errorContains: `variable "b" has not been defined`,
+			errorContains: `undefined identifier: b`,
 		},
 		{
 			name:          "Unconditional Write After Unconditional Write",
@@ -221,6 +202,15 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
 		},
 		{
+			// The direct callee writes on every iteration of this proven-nonempty
+			// domain, so it does not read the destination seed and overwrites it.
+			name: "Proven Nonempty MustWrite Call Overwrites Prior Seed",
+			code: `res = alwaysWrite(x)
+    res = x * 2`,
+			input:         "x = 7\nx = alwaysWrite(0:2)\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
 			// A || yields whenever its final fallback does, so the resolver
 			// boundary holds and this write is unconditional.
 			name:          "Logical Or With Unconditional Fallback",
@@ -244,7 +234,7 @@ func getErrorTestCases() []cfgTestCase {
 		{
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
-			errorContains: `variable "x" has not been defined`,
+			errorContains: `undefined identifier: x`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",
@@ -278,31 +268,40 @@ type cfgTestCase struct {
 }
 
 func runCFGTest(t *testing.T, tc cfgTestCase, expectError bool) {
+	t.Helper()
+
 	prog := parseInput(t, tc.name, tc.input)
 	cp := parser.NewCodeParser(lexer.New(tc.name, tc.code))
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", "", cp.Parse())
-	cc.Compile()
-	cfg := NewCFG(nil, cc)
-	cfg.PushBlock()
-	defer cfg.PopBlock()
-	PushScope(&cfg.Scopes, BlockScope)
-	cfg.funcForwardPass(prog.Statements)
-	cfg.backwardPass(make(map[string]struct{}))
+	defer ctx.Dispose()
+
+	code := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	cc := NewCodeCompiler(ctx, "TestCFGAnalysis", "", code)
+	errors := cc.Compile()
+	if len(errors) == 0 {
+		sc := NewScriptCompiler(ctx, tc.name, prog, cc)
+		errors = sc.Compile()
+	}
 
 	if expectError {
-		assertHasExpectedError(t, cfg.Errors, tc.errorContains)
+		assertHasExpectedError(t, errors, tc.errorContains)
 	} else {
-		assert.Empty(t, cfg.Errors, "Expected no errors, but got some.")
+		assert.Empty(t, errors, "Expected no errors, but got some.")
 	}
 }
 
 func assertHasExpectedError(t *testing.T, errors []*token.CompileError, expectedMessage string) {
 	assert.NotEmpty(t, errors, "Expected an error, but got none.")
 
-	if len(errors) > 0 {
-		assert.Contains(t, errors[0].Msg, expectedMessage, "Error message mismatch")
+	for _, err := range errors {
+		if strings.Contains(err.Msg, expectedMessage) {
+			return
+		}
 	}
+
+	assert.Fail(t, "Error message mismatch", "expected an error containing %q, got %v", expectedMessage, extractErrorMessages(errors))
 }
 
 func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileError {
@@ -317,6 +316,61 @@ func compileScriptForCFGTest(t *testing.T, name, input string) []*token.CompileE
 	return sc.Compile()
 }
 
+func TestScriptCFGAccumulatesAllErrors(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
+unused = 1
+"Value: -value%(-width).(-precision)f"`)
+
+	require.Len(t, errs, 3)
+	assertContainsExpectedMessages(t, errs, []string{
+		"Undefined variable width within specifier",
+		"Undefined variable precision within specifier",
+		`value assigned to "unused" is never used`,
+	})
+}
+
+func TestMissingSpecifiersReportPositions(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), `value = 5.
+"Value: -value%(-missing).(-missing)f"`)
+
+	require.Len(t, errs, 2)
+	for _, err := range errs {
+		require.Contains(t, err.Msg, "Undefined variable missing within specifier")
+		require.Equal(t, 2, err.Token.Line)
+	}
+	require.Equal(t, 18, errs[0].Token.Column, "width reference position")
+	require.Equal(t, 29, errs[1].Token.Column, "precision reference position")
+}
+
+// Marker positions resume from a per-string cursor, so read collection over a
+// marker-heavy literal must stay linear in the literal's length.
+func BenchmarkCollectStringReadsManyMarkers(b *testing.B) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	cp := parser.NewCodeParser(lexer.New(b.Name(), ""))
+	cc := NewCodeCompiler(ctx, b.Name(), "", cp.Parse())
+	require.Empty(b, cc.Compile())
+
+	cfg := NewCFG(cc)
+	Put(cfg.Scopes, "x", VarEvent{Name: "x", Kind: Write})
+	value := strings.Repeat("-x ", 10000)
+	tok := token.Token{FileName: b.Name(), Line: 1, Column: 1}
+
+	b.ResetTimer()
+	for range b.N {
+		cfg.collectStringReads(value, tok)
+	}
+}
+
+func TestSpecifierPositionSpansLogicalLines(t *testing.T) {
+	errs := compileScriptForCFGTest(t, t.Name(), "value = 5.\n\"head\r\nmid\n-value%(-missing)d\"")
+
+	require.Len(t, errs, 1)
+	require.Contains(t, errs[0].Msg, "Undefined variable missing within specifier")
+	require.Equal(t, 4, errs[0].Token.Line, "CRLF and LF breaks in the literal each advance one line")
+	require.Equal(t, 10, errs[0].Token.Column)
+}
+
 // A collector materializes an array even over an empty domain, so its write is
 // unconditional and the store behind it is dead. Range classification needs the
 // solver, so this runs the full script pipeline.
@@ -326,9 +380,8 @@ func TestCollectorWriteIsUnconditional(t *testing.T) {
 	assert.Contains(t, errs[0].Msg, `unconditional assignment to "c"`)
 }
 
-// Typed comparison metadata distinguishes a scalar condition from an array
-// mask. With infallible operands this mask materializes unconditionally; the
-// untyped function-template fallback intentionally cannot prove that.
+// Typed effects distinguish a scalar condition from an array mask. With
+// infallible operands this mask materializes unconditionally.
 func TestArrayComparisonWriteIsUnconditional(t *testing.T) {
 	errs := compileScriptForCFGTest(t, "arrayComparisonWrite", "a = [1 2]\nr = [9 9]\nr = a > 0\nr")
 	require.NotEmpty(t, errs, "the dead store behind the array mask must be reported")
@@ -386,7 +439,7 @@ func TestEmptyDomainDoesNotProtectSiblingWrite(t *testing.T) {
 	assert.NotContains(t, joined, `to "a"`, "the ranged destination must stay protected")
 }
 
-func TestValidateFuncOutputsNotDeadStore(t *testing.T) {
+func TestStructuralOutputAssignmentAccepted(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -401,30 +454,237 @@ res = onlyOut(x)
 
 	cc := NewCodeCompiler(ctx, "onlyOut", "", codeAST)
 	errs := cc.Compile()
-	// No errors because "res" is an output and seeded live
-	assert.Empty(t, errs, "output-only write should not trigger dead-store")
+	assert.Empty(t, errs)
 }
 
-func TestValidateFuncLocalDeadStore(t *testing.T) {
+func TestValidateFuncFreshSelfReadIsUndefined(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	// A code-mode function with a local "tmp" that is never read
 	code := `
-res = withLocal(x)
-    tmp = x + 1
+res = freshSelfRead(x)
+    local = local + x
     res = x * 2
 `
-	cp := parser.NewCodeParser(lexer.New("withLocal.pt", code))
+	cp := parser.NewCodeParser(lexer.New("freshSelfRead.pt", code))
 	codeAST := cp.Parse()
 	require.Empty(t, cp.Errors())
 
-	cc := NewCodeCompiler(ctx, "withLocal", "", codeAST)
+	cc := NewCodeCompiler(ctx, "freshSelfRead", "", codeAST)
 	errs := cc.Compile()
 
-	// We expect exactly one dead-store error on "tmp"
 	require.Len(t, errs, 1)
-	assert.Contains(t, errs[0].Msg, `value assigned to "tmp" is never used`)
+	assert.Contains(t, errs[0].Msg, `variable "local" has not been defined`)
+}
+
+func TestTemplateBindingsDoNotLeakIntoTypedPass(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", ast.NewCode())
+	program := mustParseScript(t, "value = 1")
+	stmt := program.Statements[0].(*ast.LetStatement)
+	effects := map[*ast.LetStatement]StatementEffect{
+		stmt: {
+			Writes:    []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+			ReadsSeed: []int{0},
+		},
+	}
+	cfg := NewCFG(cc)
+
+	require.PanicsWithValue(t, `internal: CFG seed read targets undefined binding "value" in statement "value = 1"`, func() {
+		cfg.AnalyzeScript(program.Statements, effects)
+	})
+}
+
+func TestValidateFuncExistingSelfReadAndSwap(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := `
+res = existingSelfReadAndSwap(x, y)
+    left = x
+    right = y
+    left = left + 1
+    left, right = right, left
+    res = left + right
+`
+	cp := parser.NewCodeParser(lexer.New("existingSelfReadAndSwap.pt", code))
+	codeAST := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	cc := NewCodeCompiler(ctx, "existingSelfReadAndSwap", "", codeAST)
+	require.Empty(t, cc.Compile())
+}
+
+func TestDiscardCreatesNoBindingOrError(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := `
+res = discardBinding(x)
+    _ = x
+    res = x + 1
+`
+	cp := parser.NewCodeParser(lexer.New("discardBinding.pt", code))
+	codeAST := cp.Parse()
+	require.Empty(t, cp.Errors())
+
+	cc := NewCodeCompiler(ctx, "discardBinding", "", codeAST)
+	require.Empty(t, cc.Compile())
+
+	template := codeAST.Statements[0].(*ast.FuncStatement)
+	discard := template.Body.Statements[0].(*ast.LetStatement)
+	cfg := NewCFG(cc)
+	cfg.publishTargets(discard.Name)
+	_, exists := Get(cfg.Scopes, "_")
+	assert.False(t, exists)
+}
+
+func TestFormattingReadsRemainStructural(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantError string
+	}{
+		{
+			name: "unknown marker is literal",
+			body: `res = unknownMarker(x)
+    "-missing%#-"
+    res = x`,
+		},
+		{
+			name: "malformed resolved specifier",
+			body: `res = malformedSpecifier(x)
+    "-x%#-"
+    res = x`,
+			wantError: "Invalid format specifier string",
+		},
+		{
+			name: "undefined dynamic width",
+			body: `res = undefinedWidth(x)
+    "-x%(-width)d"
+    res = x`,
+			wantError: "Undefined variable width within specifier",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.body))
+			errs := cc.Compile()
+			if test.wantError == "" {
+				require.Empty(t, errs)
+				return
+			}
+
+			assertHasExpectedError(t, errs, test.wantError)
+		})
+	}
+}
+
+func TestSpecializationReadsSeedBeforeWrite(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := mustParseCode(t, `res = Seeded(x)
+    res = x
+    res = Preserve(x)`)
+	template := code.Statements[0].(*ast.FuncStatement)
+	first := template.Body.Statements[0].(*ast.LetStatement)
+	second := template.Body.Statements[1].(*ast.LetStatement)
+	info := &FuncInfo{
+		StatementEffects: map[*ast.LetStatement]StatementEffect{
+			first: {
+				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+			},
+			second: {
+				Writes:    []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+				ReadsSeed: []int{0},
+			},
+		},
+	}
+	cc := NewCodeCompiler(ctx, "seededSpecialization", "", code)
+	cfg := NewCFG(cc)
+
+	cfg.AnalyzeSpecialization(template, info)
+
+	require.Empty(t, cfg.Errors)
+}
+
+func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := mustParseCode(t, `res = Printed(x)
+    local = x + 1
+    local
+    res = x`)
+	template := code.Statements[0].(*ast.FuncStatement)
+	local := template.Body.Statements[0].(*ast.LetStatement)
+	output := template.Body.Statements[2].(*ast.LetStatement)
+	info := &FuncInfo{
+		StatementEffects: map[*ast.LetStatement]StatementEffect{
+			local: {
+				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+			},
+			output: {
+				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+			},
+		},
+	}
+	cc := NewCodeCompiler(ctx, "printedSpecialization", "", code)
+	cfg := NewCFG(cc)
+
+	cfg.AnalyzeSpecialization(template, info)
+
+	require.Empty(t, cfg.Errors)
+}
+
+func TestTypedEventsUseSparseTargetIndices(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := mustParseCode(t, `a, b = Sparse(x)
+    a, _, b = x, x, x`)
+	template := code.Statements[0].(*ast.FuncStatement)
+	statement := template.Body.Statements[0].(*ast.LetStatement)
+	effects := map[*ast.LetStatement]StatementEffect{
+		statement: {
+			Writes: []TargetWriteEffect{
+				{TargetIndex: 0, Effect: MustWrite},
+				{TargetIndex: 2, Effect: MustWrite},
+			},
+		},
+	}
+	cc := NewCodeCompiler(ctx, "sparseSpecialization", "", code)
+	cfg := NewCFG(cc)
+
+	events := cfg.typedStatementEvents(statement, nil, effects)
+
+	require.Equal(t, []VarEvent{
+		{Name: "a", Kind: Write, Token: statement.Name[0].Tok()},
+		{Name: "b", Kind: Write, Token: statement.Name[2].Tok()},
+	}, events)
+}
+
+func TestCFGRejectsMissingStatementEffects(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := mustParseCode(t, `res = MissingEffects(x)
+    res = x`)
+	template := code.Statements[0].(*ast.FuncStatement)
+	info := &FuncInfo{StatementEffects: make(map[*ast.LetStatement]StatementEffect)}
+	cc := NewCodeCompiler(ctx, "missingEffects", "", code)
+	cfg := NewCFG(cc)
+
+	require.PanicsWithValue(t, `internal: missing CFG effects for statement "res = x"`, func() {
+		cfg.AnalyzeSpecialization(template, info)
+	})
 }
 
 func TestValidateFuncInputNotUsed(t *testing.T) {

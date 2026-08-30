@@ -31,14 +31,17 @@ type ExprInfo struct {
 	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
-	HasRanges            bool          // True if expression involves ranges (propagated upward during typing)
-	LoopInside           bool          // For CallExpression: true if function handles iteration, false if call site handles it
-	CallParamTypes       []Type        // Solver-selected call params for the original expression shape
-	ScalarCallParamTypes []Type        // Param types to use once outer loops consume ranges into scalars
-	CompareModes         []CondMode    // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
-	ArrayShape           []uint64      // Statically known dimensions for array literals; nil when runtime-dependent
-	RangeDriverCond      bool          // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
-	YieldEffects         []YieldEffect // Per-output guarantee for a typed source expression; nil on lowering rewrites.
+	HasRanges            bool   // True if expression involves ranges (propagated upward during typing)
+	LoopInside           bool   // For CallExpression: true if function handles iteration, false if call site handles it
+	CallParamTypes       []Type // Solver-selected call params for the original expression shape
+	ScalarCallParamTypes []Type // Param types to use once outer loops consume ranges into scalars
+	// ScalarCallVariantEnsured records that the solver ensured a distinct
+	// nonbuiltin scalar specialization is available for lowering.
+	ScalarCallVariantEnsured bool
+	CompareModes             []CondMode    // Per-slot lowering mode for comparisons in value position (nil for non-comparisons)
+	ArrayShape               []uint64      // Statically known dimensions for array literals; nil when runtime-dependent
+	RangeDriverCond          bool          // Solver-classified loop-domain condition; true implies len(Ranges) > 0.
+	YieldEffects             []YieldEffect // Per-output guarantee for a typed source expression; nil on lowering rewrites.
 }
 
 // HasCondScalar returns true if any slot is a scalar conditional expression.
@@ -123,7 +126,8 @@ type pendingAssignment struct {
 }
 
 type walkedSpecialization struct {
-	// walkIndex is dense within the current solver pass and becomes the effect graph node ID.
+	// walkIndex is dense within the current solver pass and becomes the
+	// specialization call graph node ID.
 	walkIndex int
 	info      *FuncInfo
 	template  *ast.FuncStatement
@@ -141,6 +145,8 @@ type TypeSolver struct {
 	PendingAssignments map[pendingAssignment]struct{}
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
+
+	recLimit recursionLimit
 }
 
 func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
@@ -154,6 +160,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
+		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
 
@@ -510,7 +517,7 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	// argument list, so this cannot be gated on a syntactic rewrite. LoopInside
 	// is true for any ordinary call, so require ranges to reach only collectors.
 	if _, builtin := Builtins[call.Function.Value]; len(ranges) > 0 && info.LoopInside && !builtin {
-		ts.ensureScalarCallVariant(call)
+		ts.ensureScalarCallVariant(call, info)
 	}
 
 	if !changed {
@@ -702,6 +709,8 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 	}
 }
 
+// Solve infers the script and its reachable specialization closure. A
+// TypeSolver is single-use.
 func (ts *TypeSolver) Solve() {
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
@@ -745,32 +754,24 @@ func (ts *TypeSolver) TypePrintStatement(stmt *ast.PrintStatement) {
 // ensureScalarCallVariant ensures the scalar variant of a function exists.
 // This is needed when a call with LoopInside=true (e.g., Square(m) where m is a bare range)
 // is inside a print statement that iterates - at compile time, ranges are shadowed with scalars.
-func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression) {
-	// Compute scalar types for all arguments
-	scalarArgs := []Type{}
-	for _, arg := range ce.Arguments {
-		argInfo := ts.ExprCache[key(ts.FuncNameMangled, arg)]
-		if argInfo == nil {
-			// This shouldn't happen if TypeExpression was called correctly
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: arg.Tok(),
-				Msg:   "internal: missing type info for call argument",
-			})
-			return
-		}
-		for _, t := range argInfo.OutTypes {
-			innerType := t
-			if t.Kind() == RangeKind {
-				innerType = t.(Range).Iter
-			}
-			scalarArgs = append(scalarArgs, innerType)
-		}
+func (ts *TypeSolver) ensureScalarCallVariant(ce *ast.CallExpression, info *ExprInfo) {
+	if _, builtin := Builtins[ce.Function.Value]; builtin {
+		return
 	}
 
-	// Look up and create the scalar variant
+	scalarArgs := slices.Clone(info.ScalarCallParamTypes)
 	template, mangled, ok := ts.lookupCallTemplate(ce, scalarArgs)
-	if ok {
-		ts.InferFuncTypes(ce, scalarArgs, mangled, template)
+	if !ok {
+		return
+	}
+	primary := Mangle(ts.ScriptCompiler.Compiler.MangledPath, ce.Function.Value, info.CallParamTypes)
+	if mangled == primary {
+		return
+	}
+
+	ts.InferFuncTypes(ce, scalarArgs, mangled, template)
+	if _, ensured := ts.ScriptCompiler.Compiler.FuncCache[mangled]; ensured {
+		info.ScalarCallVariantEnsured = true
 	}
 }
 
@@ -795,10 +796,9 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 }
 
 // treeCanFail reports whether a value-position expression can propagate a
-// failed yield to its parent, asking nodeFails to classify each node. The
-// solver and the CFG pass different predicates but share this walk, so the two
-// resolver boundaries cannot drift apart: an array literal settles a failed
-// cell locally, and a || fails only when its final fallback does.
+// failed yield to its parent, asking nodeFails to classify each node. An array
+// literal settles a failed cell locally, and a || fails only when its final
+// fallback does.
 func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool {
 	if _, ok := expr.(*ast.ArrayLiteral); ok {
 		return false
@@ -2326,7 +2326,7 @@ func (ts *TypeSolver) TypeExprsForIter(exprs []ast.Expression, isRoot bool) (out
 		if !info.LoopInside {
 			continue
 		}
-		ts.ensureScalarCallVariant(call)
+		ts.ensureScalarCallVariant(call, info)
 	}
 	return
 }
@@ -2446,13 +2446,10 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	return template, mangled, true
 }
 
-// newFunc creates and caches a specialization record for the call.
-// String params keep their StrG/StrH type - functions are mangled separately for each.
-// Cache before inference so recursive calls can reuse the partial specialization.
-func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled string, template *ast.FuncStatement) *FuncInfo {
+func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInfo {
 	f := &FuncInfo{
 		Sig: Func{
-			Name:     ce.Function.Value,
+			Name:     name,
 			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
@@ -2463,7 +2460,7 @@ func (ts *TypeSolver) newFunc(ce *ast.CallExpression, bodyArgs []Type, mangled s
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
 	}
-	ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+
 	return f
 }
 
@@ -2473,7 +2470,21 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 
 	// Create new Func if not cached (ok means recursive/previously seen call, reuse f)
 	if !ok {
-		f = ts.newFunc(ce, bodyArgs, mangled, template)
+		limitError := ts.recLimit.check(mangled, template, ce.Function.Token)
+		if limitError != nil {
+			ts.Errors = append(ts.Errors, limitError)
+		}
+
+		f = newFunc(ce.Function.Value, bodyArgs, template)
+		if ts.recLimit.hit {
+			return f
+		}
+
+		// Cache before inference so recursive calls can reuse the partial specialization.
+		ts.ScriptCompiler.Compiler.FuncCache[mangled] = f
+	}
+	if ts.recLimit.hit && !f.Settled {
+		return f
 	}
 
 	// Inside a function - unresolved args are allowed (resolved in later passes)
@@ -2523,10 +2534,8 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
-			ts.settleEffects()
-			for _, walked := range ts.walkedFuncs {
-				walked.info.Settled = true
-			}
+			graph := ts.buildSpecializationCallGraph()
+			ts.settleSpecializationBatch(graph)
 			return f.Sig.OutTypes
 		}
 
@@ -2544,11 +2553,41 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	}
 }
 
+// settleSpecializationBatch publishes reusable analysis facts atomically with
+// respect to Settled: every CFG result is staged and installed before any
+// specialization in the batch becomes visible as settled.
+func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) {
+	ts.settleEffects(graph)
+	staged := make([]*SpecializationCFGResult, len(graph.nodes))
+
+	for id, node := range graph.nodes {
+		walked := ts.walkedFuncs[node.mangled]
+		cfg := NewCFG(ts.ScriptCompiler.Compiler.CodeCompiler)
+		cfg.AnalyzeSpecialization(walked.template, walked.info)
+		staged[id] = &SpecializationCFGResult{
+			DirectCallees: slices.Clone(node.directCallees),
+			Errors:        slices.Clone(cfg.Errors),
+		}
+	}
+
+	for id, node := range graph.nodes {
+		ts.walkedFuncs[node.mangled].info.CFGResult = staged[id]
+	}
+
+	for _, node := range graph.nodes {
+		ts.walkedFuncs[node.mangled].info.Settled = true
+	}
+}
+
 // TypeFunc reports whether a specialization is resolved, walking it at most
 // once per pass and skipping specializations already settled in the shared cache.
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
 	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if f.Settled {
+		if f.CFGResult == nil {
+			panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", mangled))
+		}
+
 		return true
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
@@ -2560,6 +2599,11 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		template:  template,
 	}
 	clear(f.Vars)
+	previousCycleStart := ts.recLimit.push(specializationFrame{
+		mangled:  mangled,
+		template: template,
+	})
+	defer ts.recLimit.pop(previousCycleStart)
 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := ts.FuncNameMangled

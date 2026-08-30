@@ -14,6 +14,44 @@ func requireTargetEffects(t *testing.T, effect StatementEffect, expected ...Targ
 	require.Equal(t, expected, effect.Writes)
 }
 
+func TestValidStatementEffectShape(t *testing.T) {
+	program := mustParseScript(t, "a, _, b = 1, 2, 3")
+	stmt := program.Statements[0].(*ast.LetStatement)
+	// This helper validates the published target shape; it does not derive
+	// semantic effects from the statement's RHS.
+	directWrites := []TargetWriteEffect{
+		{TargetIndex: 0, Effect: MustWrite},
+		{TargetIndex: 2, Effect: MustWrite},
+	}
+	mixedWrites := []TargetWriteEffect{
+		{TargetIndex: 0, Effect: MustWrite},
+		{TargetIndex: 2, Effect: MayWrite},
+	}
+	tests := []struct {
+		name      string
+		writes    []TargetWriteEffect
+		readsSeed []int
+		valid     bool
+	}{
+		{name: "valid direct writes", writes: directWrites, valid: true},
+		{name: "valid mixed write effects", writes: mixedWrites, valid: true},
+		{name: "valid seed targets", writes: directWrites, readsSeed: []int{0, 2}, valid: true},
+		{name: "missing named target", writes: directWrites[:1]},
+		{name: "write targets discard", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 1, Effect: MustWrite}}},
+		{name: "invalid write state", writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}, {TargetIndex: 2, Effect: WriteInvalid}}},
+		{name: "duplicate seed target", writes: directWrites, readsSeed: []int{0, 0}},
+		{name: "seed targets discard", writes: directWrites, readsSeed: []int{1}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			effect := StatementEffect{Writes: test.writes, ReadsSeed: test.readsSeed}
+
+			require.Equal(t, test.valid, validStatementEffect(stmt, effect))
+		})
+	}
+}
+
 func TestRewriteExprInfoDoesNotCopySourceYieldEffects(t *testing.T) {
 	source := &ExprInfo{OutTypes: []Type{I64}, YieldEffects: []YieldEffect{MustYield}}
 	rewrite := &ast.IntegerLiteral{}
@@ -355,7 +393,7 @@ result`)
 	require.True(t, b.Settled)
 }
 
-func TestEffectGraphUsesWalkOrderAndReverseEdges(t *testing.T) {
+func TestCallGraphWalkOrderAndEdgeViews(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -380,10 +418,10 @@ result`)
 		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
 	}
 
-	graph := ts.buildEffectGraph()
+	graph := ts.buildSpecializationCallGraph()
 
 	for index, name := range walkOrder {
-		id := effectNodeID(index)
+		id := specializationNodeID(index)
 		require.Equal(t, id, graph.byMangled[name])
 		require.Equal(t, name, graph.nodes[id].mangled)
 	}
@@ -392,11 +430,52 @@ result`)
 	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
 	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
 
-	require.Equal(t, []effectNodeID{bID, cID}, graph.nodes[zID].callees)
-	require.Equal(t, []effectNodeID{zID}, graph.nodes[bID].callers)
-	require.Equal(t, []effectNodeID{cID}, graph.nodes[bID].callees)
-	require.Equal(t, []effectNodeID{zID, bID}, graph.nodes[cID].callers)
-	require.Equal(t, [][]effectNodeID{{cID}, {bID}, {zID}}, graph.calleeFirstComponents())
+	require.Equal(t, []specializationNodeID{bID, cID}, graph.nodes[zID].effectCallees)
+	require.Equal(t, []specializationNodeID{zID}, graph.nodes[bID].effectCallers)
+	require.Equal(t, []specializationNodeID{cID}, graph.nodes[bID].effectCallees)
+	require.Equal(t, []specializationNodeID{zID, bID}, graph.nodes[cID].effectCallers)
+	require.Equal(t, [][]specializationNodeID{{cID}, {bID}, {zID}}, graph.calleeFirstComponents())
+	require.Equal(t, []string{walkOrder[1], walkOrder[2]}, graph.nodes[zID].directCallees)
+	require.Equal(t, []string{walkOrder[2]}, graph.nodes[bID].directCallees)
+	require.Empty(t, graph.nodes[cID].directCallees)
+}
+
+func TestCallGraphExcludesScalarEffectEdge(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "scalarCompanionEdges", "", mustParseCode(t, `result = Gather(arr)
+    i = 0:3
+    result = [Scale(arr[i])]
+
+result = Scale(x)
+    result = x`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `arr = [10 20 30]
+result = Gather(arr)
+result`)
+	gatherMangled := Mangle(cc.Compiler.MangledPath, "Gather", []Type{Array{ElemType: I64, Rank: 1}})
+	gatherTemplate, ok := cc.lookupFuncTemplate("Gather", 1)
+	require.True(t, ok)
+	gatherCall := gatherTemplate.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.ArrayLiteral).Rows[0][0].(*ast.CallExpression)
+	callInfo := ts.ExprCache[key(gatherMangled, gatherCall)]
+	require.True(t, callInfo.ScalarCallVariantEnsured)
+
+	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
+	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.ScalarCallParamTypes)
+	require.NotEqual(t, primaryMangled, scalarMangled)
+
+	graph := ts.buildSpecializationCallGraph()
+	gatherID, gatherInBatch := graph.byMangled[gatherMangled]
+	primaryID, primaryInBatch := graph.byMangled[primaryMangled]
+	_, scalarInBatch := graph.byMangled[scalarMangled]
+	require.True(t, gatherInBatch)
+	require.True(t, primaryInBatch)
+	require.True(t, scalarInBatch)
+	require.Equal(t, []specializationNodeID{primaryID}, graph.nodes[gatherID].effectCallees)
+	require.Equal(t, []string{primaryMangled, scalarMangled}, graph.nodes[gatherID].directCallees)
+	require.Equal(t, []string{primaryMangled, scalarMangled}, cc.Compiler.FuncCache[gatherMangled].CFGResult.DirectCallees)
 }
 
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {

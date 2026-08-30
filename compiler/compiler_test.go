@@ -440,8 +440,7 @@ func TestPromotedAliasTypeGap(t *testing.T) {
     "count-a%n chars"
     half = x * 0.5
     res = a + x`
-	script := `h = 0.0
-r = 10
+	script := `r = 10
 h, r = Rev(r, 1:4)
 h, r`
 

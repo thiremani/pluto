@@ -753,18 +753,34 @@ makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
 **Finite specialization closure.** SCC settlement assumes discovery has already
 produced a finite graph. It cannot catch
 `f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
-new node, so Tarjan never runs. Before Step 2B, discovery diagnoses structurally
-proven expanding cycles and enforces a deterministic per-`Solve` specialization
-budget before cache allocation, reporting the active signature chain. The
-budget—not mangle length—is the defensive bound and preserves valid finite
-polymorphic recursion. This guarantees controlled compiler failure, not runtime
-termination; totality remains a separate future analysis.
+new node, so Tarjan never runs. Before Step 2B, discovery caps active
+specialization frames in one **recursive inference region** while attempting to
+allocate a missing candidate. The region starts at the earliest active frame
+whose function template repeats in the candidate path; flat sibling calls and
+arbitrarily deep acyclic template chains do not consume the limit.
+First-active-template indexes and the region boundary are maintained in constant
+time, so a wide mutual cycle gets one bound rather than multiplying the limit by
+its number of templates. The guard runs before cache allocation and reports the
+recursive signature chain.
 
-After discovery closes, future post-type interprocedural function analyses may
-share the graph's specialization IDs, caller/callee edges, and callee-first SCC
-ordering while keeping separate facts and transfer rules. Keep `effectGraph`
-until a second consumer lands; then extract a `specializationCallGraph` and add
-call-site or full-reachable-closure data only when that consumer requires it.
+This is an operational cold/unsettled-discovery fuse, not a semantic program
+property or proof that a particular signature transformation expands forever. A
+settled cache hit requires no allocation or body walk and therefore consumes
+none of the budget; warming a finite tail can change whether the resource limit
+is reached. Comparing two concrete signatures is not enough to
+prove growth: a larger re-entry may immediately target a fixed specialization.
+A richer diagnostic is deferred until it can prove the repeated call-site
+transformation. The fuse guarantees controlled compiler failure for unbounded
+specialization discovery, not runtime termination; totality remains a separate
+future analysis.
+
+After discovery closes, effects and CFG share one
+`specializationCallGraph` for each stable newly walked batch. Its dense,
+batch-local primary-call edges drive effect SCC settlement; its separate
+source-ordered mangled direct-call keys include settled callees and distinct
+scalar companions actually ensured for lowering. CFG reuses node enumeration
+and persistent reachability, not Tarjan state, effect worklists, or lattice
+working vectors.
 
 **Fixed point.** Function-body output effects, and only those, need one: a
 recursive callee can refine its outputs after types settle, and
@@ -790,10 +806,14 @@ An `Invalid` output blocks publication for its entire component; provisional
 values are never read outside it.
 
 Only reusable function specializations publish, through `FuncInfo.Settled`,
-which now requires both type convergence and this effect fixed point. A script
+which requires type convergence, the effect fixed point, complete direct-call
+keys, and a non-nil cached specialization CFG result. Every batch CFG result is
+staged and installed before any member becomes settled; a diagnostic-bearing
+result is complete and settles just like an empty successful result. A script
 root owns its current compilation facts and is consumed immediately after
 solving, so it needs no settled-publication step. Reading an unpublished or
-`Invalid` effect is an ICE, never a default.
+`Invalid` effect, or a settled specialization with no CFG result, is an ICE,
+never a default.
 
 Snapshot analysis such as `FuncInfo.Vars` is cleared and rebuilt whenever a
 body is walked and becomes reusable only once settled. `ExprCache` is not a
@@ -805,12 +825,24 @@ cached on `FuncInfo` and replayed when a later script reuses a settled body.
 
 ### CFG consumption
 
-Scripts already run solver then CFG, but `.pt` functions run an untyped
-template CFG (`AnalyzeFuncs`) before any specialization exists. Effect-sensitive
-checks therefore move to settled specializations while template-independent
-structural checks stay early — a pass split, not a reordering. An unreachable
-template gets structural and parser checks only: effects cannot be derived
-without types.
+`.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
+pass is structural only: explicit use-before-definition, illegal input/global
+writes, unused inputs, syntactically unassigned outputs, formatting structure,
+and discard behavior. It collects all reads before publishing a statement's
+destinations, so a fresh `x = x + 1` cannot define its own RHS. An unknown main
+format marker remains literal text; malformed specifiers and missing dynamic
+width/precision variables on a resolved marker remain structural errors.
+
+After a stable specialization batch reaches its effect SCC fixed point, each
+node runs effect-sensitive CFG dataflow exactly once and caches its diagnostics.
+For a let, event order is condition reads, RHS reads, `ReadsSeed` destination
+reads, then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
+therefore observe the simultaneous assignment's pre-commit snapshot. Print
+arguments contribute ordinary reads even though prints have no statement
+effect entry. An unreachable template gets structural and parser checks only:
+effects cannot be derived without types. Consequently, a library-only package
+whose templates are never instantiated receives no dead-store or
+write-after-write diagnostics in that build.
 
 The two diagnostics consume effects differently:
 
@@ -819,16 +851,29 @@ The two diagnostics consume effects differently:
   `MayWrite` changes is the **kill**: it does not kill the preceding value's
   liveness, because that value may survive.
 - *Forward (write-after-write).* Reporting that a write overwrites an unused
-  value requires **both** writes to be `MustWrite`. This is the rule that cures
-  today's conditional-write false positive, which currently forces tests to
-  interleave reads.
+  value requires **both** writes to be `MustWrite`. This cures the former
+  conditional-write false positive that forced tests to interleave reads merely
+  to silence it. A prior seed overwritten by a proven-`MustWrite` call output
+  without being read is instead a true positive: remove the seed or read it
+  explicitly when its value is semantically required.
 
-Output spans, unlike effects, are structural before typing: a call site
-consumes exactly `len(callee.Outputs)` destinations, fixed by the template
-declaration, so template analysis can place spans for direct calls and
-single-value expressions in mixed statements like `a, b, c = MaybePair(x), 5`.
-Only shapes whose slot count genuinely needs types, such as multi-slot
-value-position comparisons, keep the all-conditional fallback.
+After a script solve succeeds, CFG first treats the script as a zero-input,
+zero-output template for structural validation, then runs effect-sensitive
+dataflow over the typed body with a fresh scope. Structural diagnostics do not
+gate that typed pass: its already-collected explicit reads are reused so one
+compile reports all independent CFG diagnostics without repeating formatting
+errors. The compiler then traverses
+the script's complete
+direct-callee keys and each cached `DirectCallees` slice depth-first with a
+visited set. Every specialization remains analyzed and cached independently;
+the script presents their diagnostics as a first-seen, source-stable set union
+keyed by source location and message, so two type variants of one template do
+not print the same defect twice. Warm scripts need no body rewalk, and
+unreachable cached diagnostics never leak. Persistent edges use
+`CallParamTypes` plus a distinct
+`ScalarCallParamTypes` key only when the final source-call `ExprInfo` records
+that the companion was actually ensured; shared-cache membership alone never
+creates reachability.
 
 Inside a function body, domain ownership decides which statements an empty
 domain can skip. A `Range` or `ArrayRange` **parameter** establishes a
@@ -837,9 +882,8 @@ the function boundary rather than making every statement that reads it
 independently conditional. A locally created range owns only the statements it
 drives — `res = a[i * n + j]` under a body-local `j = (i + 1):n` has an
 RHS-local domain, not a function-owned one.
-Template-time CFG has neither distinction — it misreports `i = 0:n` / `y = 10` /
-`y = i + 1` as a dead store — and typed per-specialization effects are what
-resolve it.
+Structural template CFG deliberately makes neither distinction — typed
+per-specialization effects resolve it when the function becomes reachable.
 
 The CFG pass itself stays: dataflow legality is a different question from
 ownership checking. This fix does not depend on PIR and lands before it.
@@ -913,7 +957,7 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2A is complete.** Gated print syntax, if wanted, is a
+and ranges. **Step 2 is complete.** Gated print syntax, if wanted, is a
 separate feature PR before Step 6; any other language change likewise gets
 its own PR with its semantics-doc and rejection-test updates.
 
@@ -926,15 +970,15 @@ Two PRs, implementing §15.
   SCC convergence, the `ReadsSeed` fact for boundary-resolved direct calls,
   and the publication lifecycle. Tests cover derivation, the recursive fixed
   point, lifecycle, and caching.
-- **2B — specialization-aware CFG.** Move dead-write and write-after-write to
-  settled specializations under the transfer rules; convert `ReadsSeed` facts
-  into ordinary CFG read events; keep structural checks at template time; cache
-  each specialization's diagnostics and call edges so later scripts replay the
-  reachable closure once; switch scripts and functions to consume summaries;
-  then delete the CFG's duplicated syntactic classifiers.
+- **2B — specialization-aware CFG — complete.** Dead-write and
+  write-after-write run on settled specializations under the transfer rules;
+  `ReadsSeed` facts become ordinary pre-write CFG reads; templates keep only
+  structural checks; each specialization caches immutable diagnostics and
+  complete direct-call keys; scripts replay the reachable closure once; and
+  the duplicated syntactic effect classifiers are deleted.
 
-This fixes the conditional-write false positive, does not depend on PIR, and
-lands first. PIR implementation starts only after 2A/2B tests pass.
+Step 2 fixes the conditional-write false positive without depending on PIR.
+The Step 2B regression and leak suites pass, so PIR implementation can resume.
 
 ### Step 3: Minimal end-to-end PIR slice (~1-2 weeks)
 
@@ -1141,7 +1185,9 @@ deletion at the last consumer.
 
 - direct and mutual rank growth fail with the active signature chain, while
   ordinary recursion, finite polymorphic recursion, synthesized range/scalar
-  companions, and warm-cache reuse remain accepted
+  companions, broad non-recursive specialization sets, and warm-cache reuse
+  remain accepted; a wide mutual growth cycle shares one recursive-region bound,
+  and a settled finite tail is explicitly outside the cold-discovery budget
 
 ### Effect tests
 
