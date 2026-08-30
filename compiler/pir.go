@@ -10,17 +10,16 @@ import (
 // planLetStatement is the temporary capability router for assignments (plan
 // §16 rule 2): it accepts a statement exactly when the plan path supports its
 // capability combination, returning the built plan. The Step 3 slice is
-// script-root assignments of unmanaged values — scalars and Range
-// descriptors — from ordinary expressions to local and scalar discard
-// targets. Function-body statements join when Step 4 handles output targets.
-// Once a statement is accepted there is no fallback to legacy lowering: the
-// router trusts solver facts (a missing root ExprInfo panics as an ICE), and
-// plan validation is a test-time contract — the golden tests validate every
-// plan the builder emits.
+// assignments of unmanaged values — scalars and Range descriptors — from
+// ordinary expressions to local and scalar discard targets. Only the script
+// statement loop invokes the router, so the script-root context is
+// structural; function-body statements join when Step 4 handles output
+// targets. Once a statement is accepted there is no fallback to legacy
+// lowering: the router trusts solver facts (a missing root ExprInfo panics
+// as an ICE), and plan validation is a test-time contract — the golden tests
+// validate every plan the builder emits.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
-	// Function bodies compile with FuncNameMangled swapped to the
-	// specialization key, so this equality holds only at the script root.
-	if c.FuncNameMangled != c.ScriptRootMangled || len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
+	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
 	}
 	// The arity check above already forces every RHS to a single output slot:
@@ -109,12 +108,10 @@ func (c *Compiler) planTargetEligible(ident *ast.Identifier, outType Type) bool 
 // scriptRootBindingType is the solver's declared type for a script-root
 // binding — the independent fact a plan's local target records so validation
 // can catch a mismapped outcome. Nil when the solver declared no binding.
+// The router runs only at the script root, where FuncNameMangled is the
+// root key.
 func (c *Compiler) scriptRootBindingType(name string) Type {
-	root := c.FuncCache[c.ScriptRootMangled]
-	if root == nil {
-		return nil
-	}
-	return root.Vars[name]
+	return c.FuncCache[c.FuncNameMangled].Vars[name]
 }
 
 // buildLetPlan constructs the plan for an accepted statement: one eval per
@@ -155,6 +152,9 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 // so the commit plans no copies, transfers, or releases — ownership
 // elaboration lands with heap values in Step 4.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
+	c.pushStmtCtx()
+	defer c.popStmtCtx()
+
 	outs := make([][]*Symbol, len(plan.Evals))
 	for i, ev := range plan.Evals {
 		outs[i] = c.compileExpression(ev.Expr, nil)

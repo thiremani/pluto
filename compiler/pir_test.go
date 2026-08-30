@@ -18,10 +18,10 @@ func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script strin
 	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, name, mustParseScript(t, script), cc)
 	require.Empty(t, sc.Compile())
-	for _, plan := range sc.Compiler.Plans {
+	for _, plan := range sc.Plans {
 		require.NoError(t, pir.Validate(plan))
 	}
-	return sc.Compiler.Plans
+	return sc.Plans
 }
 
 func planNames(plans []*pir.AssignPlan) []string {
@@ -178,7 +178,7 @@ func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	sc := NewScriptCompiler(ctx, "planAST", program, cc)
 	require.Empty(t, sc.Compile())
 
-	plans := sc.Compiler.Plans
+	plans := sc.Plans
 	require.Len(t, plans, 1)
 	stmt := program.Statements[0].(*ast.LetStatement)
 	require.Same(t, stmt.Value[0], plans[0].Evals[0].Expr)

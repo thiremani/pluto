@@ -370,7 +370,7 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 			return llvm.Module{}, err
 		}
 	}
-	if err := emitPIR(os.Stdout, sc.Compiler.Plans, p.EmitPIR); err != nil {
+	if err := emitPIR(os.Stdout, sc.Plans, p.EmitPIR); err != nil {
 		return llvm.Module{}, err
 	}
 	moduleReturned = true

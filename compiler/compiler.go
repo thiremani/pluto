@@ -7,7 +7,6 @@ import (
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
-	"github.com/thiremani/pluto/pir"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
@@ -140,13 +139,6 @@ type Compiler struct {
 	Errors          []*token.CompileError
 	paramAliasStack []map[string]*paramAlias
 	stmtCtxStack    []stmtCtx
-
-	// ScriptRootMangled is the immutable script-root key ("" for code
-	// compilation); the PIR router fires only while compiling at that root.
-	ScriptRootMangled string
-	// Plans holds the statement plans built this compile in source order;
-	// -emit-pir renders them after a successful compile.
-	Plans []*pir.AssignPlan
 }
 
 type stmtCtx struct {
@@ -1512,12 +1504,6 @@ func (c *Compiler) captureOldValues(idents []*ast.Identifier) []*Symbol {
 func (c *Compiler) compileLetStatement(stmt *ast.LetStatement) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
-
-	if plan, ok := c.planLetStatement(stmt); ok {
-		c.Plans = append(c.Plans, plan)
-		c.lowerAssignPlan(plan)
-		return
-	}
 
 	// Ranged conditions must be checked before compileConditions so ranges
 	// are not prematurely lowered into a single final boolean.

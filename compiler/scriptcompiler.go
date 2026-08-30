@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"github.com/thiremani/pluto/ast"
+	"github.com/thiremani/pluto/pir"
 	"github.com/thiremani/pluto/token"
 	"tinygo.org/x/go-llvm"
 )
@@ -11,6 +12,9 @@ type ScriptCompiler struct {
 	Program       *ast.Program
 	Script        *Script
 	ScriptMangled string // immutable script-root key (_e; function keys use _f<N>)
+	// Plans holds the statement plans the PIR router accepted, in source
+	// order; -emit-pir renders them after a successful compile.
+	Plans []*pir.AssignPlan
 }
 
 type Script struct {
@@ -37,7 +41,6 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 	}
 	scriptMangled := MangleScript(cc.Compiler.MangledPath, name)
 	compiler.FuncNameMangled = scriptMangled
-	compiler.ScriptRootMangled = scriptMangled
 	compiler.FuncCache[scriptMangled] = script.Root
 	return &ScriptCompiler{
 		Compiler:      compiler,
@@ -66,7 +69,17 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	c := sc.Compiler
 	// Create main function
 	c.addMain()
+	// The PIR router runs only on this loop's statements, so the script-root
+	// context is structural: function bodies compile through compileFuncBody
+	// and never reach it.
 	for _, stmt := range sc.Program.Statements {
+		if let, isLet := stmt.(*ast.LetStatement); isLet {
+			if plan, planned := c.planLetStatement(let); planned {
+				sc.Plans = append(sc.Plans, plan)
+				c.lowerAssignPlan(plan)
+				continue
+			}
+		}
 		c.compileStatement(stmt)
 	}
 	// Clean up main scope before returning
