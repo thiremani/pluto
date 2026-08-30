@@ -1411,10 +1411,11 @@ func (ts *TypeSolver) initColTypes(n int) []Type {
 }
 
 // typeCell infers the type of a single cell expression. Returns (type, ok).
-// The generic unresolved-cell error is reported only when typing the cell
-// added no error of its own: a failed nested literal or undefined identifier
-// already carries a positioned diagnostic, and re-reporting would cascade
-// once per enclosing level.
+// A failed nested literal already reported bracket-literal errors of its own,
+// so repeating the summary at every enclosing level would cascade with depth.
+// A non-literal cell's error (say an undefined identifier) is the cause, and
+// the summary adds the literal-level consequence exactly once. A cell that
+// resolves to Unresolved silently always gets the fallback diagnostic.
 func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
 	errorsBefore := len(ts.Errors)
 	tps := ts.TypeExpression(expr, false) // cells are nested, not root
@@ -1427,7 +1428,8 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 	}
 	cellType := tps[0]
 	if cellType.Kind() == UnresolvedKind {
-		if len(ts.Errors) == errorsBefore {
+		_, nestedLiteral := expr.(*ast.ArrayLiteral)
+		if len(ts.Errors) == errorsBefore || !nestedLiteral {
 			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
 		}
 		return Unresolved{}, false

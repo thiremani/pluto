@@ -402,24 +402,29 @@ func nestedArrayLiteral(depth int) string {
 	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
 }
 
-// TestUnresolvedCellReportsOnce pins typeCell's dedup rule: a cell whose
-// typing already reported (here an undefined identifier) must not add the
-// generic unresolved-cell error on top.
-func TestUnresolvedCellReportsOnce(t *testing.T) {
+// TestUnresolvedCellPairsCauseAndSummary pins the non-literal side of
+// typeCell's policy: the cell's own error is the cause, and the generic
+// summary states the literal-level consequence exactly once — regardless of
+// how deeply the literal is nested, since enclosing levels suppress.
+func TestUnresolvedCellPairsCauseAndSummary(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, "unresolvedCell", "", ast.NewCode())
 	require.Empty(t, cc.Compile())
-	sc := NewScriptCompiler(ctx, "unresolvedCell", mustParseScript(t, "arr = [missing]\narr"), cc)
+	sc := NewScriptCompiler(ctx, "unresolvedCell", mustParseScript(t, "arr = [[[missing]]]\narr"), cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 
-	require.Len(t, ts.Errors, 1)
+	require.Len(t, ts.Errors, 2)
 	require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
 	require.Equal(t, 1, ts.Errors[0].Token.Line)
-	// "arr = [" occupies columns 1-7; the identifier starts at column 8.
-	require.Equal(t, 8, ts.Errors[0].Token.Column)
+	// "arr = [[[" occupies columns 1-9; the identifier starts at column 10.
+	require.Equal(t, 10, ts.Errors[0].Token.Column)
+	require.Equal(t, "bracket literal cell type could not be resolved", ts.Errors[1].Msg)
+	// The summary lands on the innermost literal's bracket at column 9; the
+	// two enclosing literals add nothing.
+	require.Equal(t, 9, ts.Errors[1].Token.Column)
 }
 
 // TestSilentUnresolvedCellGetsFallback covers typeCell's other side: an
