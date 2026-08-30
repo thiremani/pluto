@@ -398,8 +398,8 @@ func TestCollectionTypeErrors(t *testing.T) {
 	}
 }
 
-func nestedArrayLiteral(depth int) string {
-	return strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth)
+func nestedArrayLiteral(depth int, val string) string {
+	return strings.Repeat("[", depth) + val + strings.Repeat("]", depth)
 }
 
 // TestUnresolvedCellReportsOnce pins typeCell's fallback rule: a failure
@@ -413,7 +413,7 @@ func TestUnresolvedCellReportsOnce(t *testing.T) {
 		column int
 	}{
 		// "arr = [[[" occupies columns 1-9; the identifier starts at 10.
-		{"NestedLiterals", "arr = [[[missing]]]\narr", 10},
+		{"NestedLiterals", "arr = " + nestedArrayLiteral(3, "missing") + "\narr", 10},
 		// "arr = [-[-[-" occupies columns 1-12; the identifier starts at 13.
 		{"WrappedNesting", "arr = [-[-[-missing]]]\narr", 13},
 	}
@@ -462,7 +462,7 @@ func TestArrayRankLimit(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "arrayRankLimit", "", ast.NewCode())
 	require.Empty(t, cc.Compile())
 
-	atLimitProgram := mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank)+"\nx")
+	atLimitProgram := mustParseScript(t, "x = "+nestedArrayLiteral(MaxArrayRank, "1")+"\nx")
 	atLimit := NewTypeSolver(NewScriptCompiler(ctx, "atLimit", atLimitProgram, cc))
 	atLimit.Solve()
 	require.Empty(t, atLimit.Errors)
@@ -474,7 +474,7 @@ func TestArrayRankLimit(t *testing.T) {
 	// that exceeds the limit, and the 1935 enclosing literals must not
 	// cascade further errors.
 	const depth = 2000
-	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(depth)+"\nx"), cc)
+	sc := NewScriptCompiler(ctx, "aboveLimit", mustParseScript(t, "x = "+nestedArrayLiteral(depth, "1")+"\nx"), cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Len(t, ts.Errors, 1)
