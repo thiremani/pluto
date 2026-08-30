@@ -48,6 +48,7 @@ go test -race ./lexer ./parser ./compiler
 ```bash
 ./pluto [directory]    # Compiles .pt and .spt files in directory
 ./pluto -emit-ir [directory]  # Also keeps linked pre-optimization script .ll files in the cache
+./pluto -emit-pir [directory] # Also print plans for PIR-routed statements (legacy-lowered ones print no plan); -emit-pir=expanded adds annotations
 ./pluto -version       # Show version information (or -v)
 ./pluto -clean         # Clear cache for current version (or -c)
 # Override host CPU tuning (defaults to native)

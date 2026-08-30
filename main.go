@@ -17,6 +17,7 @@ import (
 	"github.com/thiremani/pluto/compiler"
 	"github.com/thiremani/pluto/lexer"
 	"github.com/thiremani/pluto/parser"
+	"github.com/thiremani/pluto/pir"
 
 	"tinygo.org/x/go-llvm"
 )
@@ -64,6 +65,7 @@ type Pluto struct {
 	CacheDir string // Project-specific cache directory (<PTCACHE>/<modulePath>)
 	Config   buildConfig
 	EmitIR   bool
+	EmitPIR  string // "", "concise", or "expanded"
 
 	Ctx llvm.Context // LLVM context and code‐compiler for "code" files
 }
@@ -72,6 +74,7 @@ type cliOptions struct {
 	command string
 	target  string
 	emitIR  bool
+	emitPIR string // "", "concise", or "expanded"
 }
 
 // sanitizeCacheComponent returns a filesystem-safe cache path component.
@@ -367,8 +370,28 @@ func (p *Pluto) CompileScript(scriptFile, script string, cc *compiler.CodeCompil
 			return llvm.Module{}, err
 		}
 	}
+	if err := emitPIR(os.Stdout, sc.Compiler.Plans, p.EmitPIR); err != nil {
+		return llvm.Module{}, err
+	}
 	moduleReturned = true
 	return scriptModule, nil
+}
+
+// emitPIR prints one script's statement plans in source order, each followed
+// by a blank separator line. mode is the parsed -emit-pir CLI value: ""
+// prints nothing, "expanded" adds annotations, "concise" is the plain view.
+// A failed write is an error: requested PIR output must not be silently
+// incomplete while the compile reports success.
+func emitPIR(w io.Writer, plans []*pir.AssignPlan, mode string) error {
+	if mode == "" {
+		return nil
+	}
+	for _, plan := range plans {
+		if _, err := fmt.Fprintf(w, "%s\n", plan.Render(mode == "expanded")); err != nil {
+			return fmt.Errorf("write PIR plan %s: %w", plan.Name, err)
+		}
+	}
+	return nil
 }
 
 func (p *Pluto) writeScriptIR(script string, module llvm.Module) error {
@@ -479,6 +502,7 @@ func New(cwd string, opts cliOptions) *Pluto {
 		PtCache: versionedCache,
 		Config:  cfg,
 		EmitIR:  opts.emitIR,
+		EmitPIR: opts.emitPIR,
 		Ctx:     llvm.NewContext(),
 	}
 
@@ -531,6 +555,10 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		switch arg {
 		case "-emit-ir":
 			opts.emitIR = true
+		case "-emit-pir":
+			opts.emitPIR = "concise"
+		case "-emit-pir=expanded":
+			opts.emitPIR = "expanded"
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return cliOptions{}, fmt.Errorf("unknown flag: %s", arg)
@@ -541,7 +569,7 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 			opts.target = arg
 		}
 	}
-	if opts.command != "" && (opts.target != "" || opts.emitIR) {
+	if opts.command != "" && (opts.target != "" || opts.emitIR || opts.emitPIR != "") {
 		return cliOptions{}, fmt.Errorf("%s cannot be combined with other arguments", commandArg)
 	}
 	return opts, nil

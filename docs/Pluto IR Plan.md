@@ -1,6 +1,7 @@
 # Pluto Statement IR (PIR) Plan
 
-**Status:** Accepted 2026-08-05 — roadmap in §16; implementation not yet started
+**Status:** Accepted 2026-08-05 — roadmap in §16; implemented through Step 3
+(minimal statement slice)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -997,6 +998,19 @@ The Step 2B regression and leak suites pass, so PIR implementation can resume.
 
 **Go/no-go:** the dump must explain a migrated statement's lowering without
 reading LLVM helper code.
+
+Step 3 is complete. The `pir` package holds the plan nodes, the structural
+validator, and the deterministic renderer; the package boundary is settled
+with the facts-to-plan adapter (capability router plus builder) and the plan
+lowerer in `compiler`, and `pir.Type` an opaque name interface satisfied by
+`compiler.Type` — no shared DTO extraction was needed. The router cuts over
+script-root assignments of unmanaged values — scalars and Range descriptors —
+from ordinary RHS expressions to local and scalar discard targets; accepted
+statements lower eval-then-commit through the existing expression compiler,
+and everything else keeps legacy lowering. Function-body locals stay legacy
+until Step 4 handles output targets. Planned statements no longer emit the
+legacy per-RHS bounds-guard alloca or the dead old-value load (LLVM deleted
+both); suite output is unchanged.
 
 ### Step 4: Heap values, multi-output, calls, ownership (~2-3 weeks)
 

@@ -37,6 +37,7 @@ func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *
 	}
 	scriptMangled := MangleScript(cc.Compiler.MangledPath, name)
 	compiler.FuncNameMangled = scriptMangled
+	compiler.ScriptRootMangled = scriptMangled
 	compiler.FuncCache[scriptMangled] = script.Root
 	return &ScriptCompiler{
 		Compiler:      compiler,
