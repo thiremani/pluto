@@ -18,7 +18,9 @@ import (
 // plan validation is a test-time contract — the golden tests validate every
 // plan the builder emits.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
-	if !c.atScriptRoot() || len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
+	// Function bodies compile with FuncNameMangled swapped to the
+	// specialization key, so this equality holds only at the script root.
+	if c.FuncNameMangled != c.ScriptRootMangled || len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
 	}
 	// The arity check above already forces every RHS to a single output slot:
@@ -36,12 +38,6 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 		}
 	}
 	return c.buildLetPlan(stmt), true
-}
-
-// atScriptRoot reports whether statements are currently compiled at the
-// script's top level rather than inside a function specialization body.
-func (c *Compiler) atScriptRoot() bool {
-	return c.ScriptRootMangled != "" && c.FuncNameMangled == c.ScriptRootMangled
 }
 
 // planValueTypeSupported bounds Step 3 to unmanaged value kinds: scalars and
