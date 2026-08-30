@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -16,8 +17,10 @@ import (
 // structural; function-body statements join when Step 4 handles output
 // targets. Once a statement is accepted there is no fallback to legacy
 // lowering: the router trusts solver facts (a missing root ExprInfo panics
-// as an ICE), and plan validation is a test-time contract — the golden tests
-// validate every plan the builder emits.
+// as an ICE), and every accepted plan is validated before lowering — several
+// validator invariants have no natural panic site, so an invalid plan would
+// otherwise miscompile silently (an unmapped outcome never commits; a nil
+// discarded-outcome type fails only under -emit-pir).
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
@@ -36,7 +39,11 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 			return nil, false
 		}
 	}
-	return c.buildLetPlan(stmt), true
+	plan := c.buildLetPlan(stmt)
+	if err := pir.Validate(plan); err != nil {
+		panic(fmt.Sprintf("internal: invalid plan for accepted statement %q: %v", stmt.String(), err))
+	}
+	return plan, true
 }
 
 // planValueTypeSupported bounds Step 3 to unmanaged value kinds: scalars and

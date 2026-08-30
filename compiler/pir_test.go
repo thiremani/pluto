@@ -10,17 +10,14 @@ import (
 )
 
 // compileScriptPlans runs the full script pipeline and returns the statement
-// plans the PIR router accepted, in source order. Validation is a test-time
-// contract, so every plan the builder emitted is validated here.
+// plans the PIR router accepted, in source order. The router validates every
+// accepted plan before lowering, so a builder defect fails the compile here.
 func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script string) []*pir.AssignPlan {
 	t.Helper()
 	cc := NewCodeCompiler(ctx, name, "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, name, mustParseScript(t, script), cc)
 	require.Empty(t, sc.Compile())
-	for _, plan := range sc.Plans {
-		require.NoError(t, pir.Validate(plan))
-	}
 	return sc.Plans
 }
 
@@ -124,7 +121,9 @@ g, y, s, z, w`)
 
 // TestPlanRouterScriptRootOnly verifies function-body statements stay on
 // legacy lowering: only script-root assignments produce plans, and a call RHS
-// is itself rejected.
+// is itself rejected. The eligible assignment after the call also pins that
+// lazy specialization compilation restores FuncNameMangled to the root key,
+// which scriptRootBindingType relies on.
 func TestPlanRouterScriptRootOnly(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -134,9 +133,10 @@ func TestPlanRouterScriptRootOnly(t *testing.T) {
     c = t * 1
 `, `seed = 2
 res = addOne(seed)
-res`)
+after = seed + 1
+res, after`)
 
-	require.Equal(t, []string{"assign_seed"}, planNames(plans))
+	require.Equal(t, []string{"assign_seed", "assign_after"}, planNames(plans))
 }
 
 func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
