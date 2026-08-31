@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"fmt"
+
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
 	"github.com/thiremani/pluto/token"
@@ -74,6 +76,15 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	for _, stmt := range sc.Program.Statements {
 		if let, isLet := stmt.(*ast.LetStatement); isLet {
 			if plan, planned := c.planLetStatement(let); planned {
+				// An invalid plan is a compiler bug: fail the compile and skip
+				// lowering — legacy must not mask the defect.
+				if err := pir.Validate(plan); err != nil {
+					c.Errors = append(c.Errors, &token.CompileError{
+						Token: let.Tok(),
+						Msg:   fmt.Sprintf("internal compiler error: invalid plan for %q: %v", let.String(), err),
+					})
+					continue
+				}
 				sc.Plans = append(sc.Plans, plan)
 				c.lowerAssignPlan(plan)
 				continue

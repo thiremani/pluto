@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -10,10 +9,10 @@ import (
 
 // planLetStatement is the temporary capability router (plan §16 rule 2): it
 // accepts a statement when the plan path supports its combination and
-// returns the built, validated plan. Step 3 accepts unmanaged values —
-// scalars and Range descriptors — from ordinary expressions into local and
-// scalar discard targets. Only the script statement loop invokes it; an
-// accepted statement has no legacy fallback, and a validation failure is an ICE.
+// returns the built plan, which the caller validates before lowering. Step 3
+// accepts unmanaged values — scalars and Range descriptors — from ordinary
+// expressions into local and scalar discard targets. Only the script
+// statement loop invokes it; an accepted statement has no legacy fallback.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
@@ -32,11 +31,7 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 			return nil, false
 		}
 	}
-	plan := c.buildLetPlan(stmt)
-	if err := pir.Validate(plan); err != nil {
-		panic(fmt.Sprintf("internal: invalid plan for accepted statement %q: %v", stmt.String(), err))
-	}
-	return plan, true
+	return c.buildLetPlan(stmt), true
 }
 
 // planValueTypeSupported bounds Step 3 to unmanaged value kinds (plan §8).
