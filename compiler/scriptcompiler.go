@@ -76,14 +76,11 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	for _, stmt := range sc.Program.Statements {
 		if let, isLet := stmt.(*ast.LetStatement); isLet {
 			if plan, planned := c.planLetStatement(let); planned {
-				// An invalid plan is a compiler bug: fail the compile and skip
-				// lowering — legacy must not mask the defect.
+				// An invalid plan is a compiler bug. Panic to recoverICE:
+				// skipping the statement would leave scope state inconsistent
+				// with the solved program for everything after it.
 				if err := pir.Validate(plan); err != nil {
-					c.Errors = append(c.Errors, &token.CompileError{
-						Token: let.Tok(),
-						Msg:   fmt.Sprintf("internal compiler error: invalid plan for %q: %v", let.String(), err),
-					})
-					continue
+					panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
 				}
 				sc.Plans = append(sc.Plans, plan)
 				c.lowerAssignPlan(plan)

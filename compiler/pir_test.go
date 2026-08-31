@@ -98,7 +98,9 @@ s`)
 
 // TestPlanRouterRejections pins the Step 3 capability boundary: statements
 // with gates, conditional values, strings, arrays, checked accesses, ranged
-// RHS, calls, or non-scalar discards keep their legacy lowering.
+// RHS, calls, or non-scalar discards keep their legacy lowering. The string
+// identifier copies (sg, shc) have fully eligible expression trees, so only
+// the value-kind check keeps those heap-managed values out.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -108,14 +110,26 @@ g = x > 2 13
 y = 0
 y = x > 2
 s = "hi"
+sg = s
+sh = s ⊕ "!"
+shc = sh
 arr = [1 2]
 z = arr[0]
 q = 0:3
 w = q + 1
 _ = 0:3
-g, y, s, z, w`)
+g, y, sg, shc, z, w`)
 
 	require.Equal(t, []string{"assign_x", "assign_y", "assign_q"}, planNames(plans))
+}
+
+func TestPlanValueTypeSupported(t *testing.T) {
+	require.True(t, planValueTypeSupported(I64))
+	require.True(t, planValueTypeSupported(F64))
+	require.True(t, planValueTypeSupported(Range{Iter: I64}))
+	require.False(t, planValueTypeSupported(StrG{}))
+	require.False(t, planValueTypeSupported(StrH{}))
+	require.False(t, planValueTypeSupported(Array{ElemType: I64, Rank: 1}))
 }
 
 // TestPlanRouterScriptRootOnly: function-body statements produce no plans,
