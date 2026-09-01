@@ -71,8 +71,19 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 	c := sc.Compiler
 	// Create main function
 	c.addMain()
-	// Routing only this loop's statements makes the script-root context
-	// structural: function bodies never reach the router.
+	sc.compileStatements()
+	// Clean up main scope before returning
+	c.cleanupScope()
+	// Add explicit return 0
+	c.addRet()
+	return c.Errors
+}
+
+// compileStatements lowers the script's statements, routing eligible
+// assignments through PIR plans. Routing only this loop's statements makes
+// the script-root context structural: function bodies never reach the router.
+func (sc *ScriptCompiler) compileStatements() {
+	c := sc.Compiler
 	for _, stmt := range sc.Program.Statements {
 		if let, isLet := stmt.(*ast.LetStatement); isLet {
 			if plan, planned := c.planLetStatement(let); planned {
@@ -89,11 +100,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 		}
 		c.compileStatement(stmt)
 	}
-	// Clean up main scope before returning
-	c.cleanupScope()
-	// Add explicit return 0
-	c.addRet()
-	return c.Errors
 }
 
 func replaySpecializationCFG(compiler *Compiler, roots []string, errors []*token.CompileError) []*token.CompileError {

@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -100,7 +101,7 @@ s`)
 // with gates, conditional values, strings, arrays, checked accesses, ranged
 // RHS, calls, or non-scalar discards keep their legacy lowering. The string
 // identifier copies (sg, shc) have fully eligible expression trees, so only
-// the value-kind check keeps those heap-managed values out.
+// the value-kind check keeps both string flavors out.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -162,6 +163,39 @@ x = x + 1
 x`)
 
 	require.Equal(t, []string{"assign_x", "assign_x"}, planNames(plans))
+}
+
+// TestInvalidPlanPanicsBeforeLowering drives the production
+// build -> validate -> panic wiring: corrupting the solver's binding type is
+// builder drift entering through the exact facts the builder reads. The
+// panic must fire before the plan is recorded, its target installed, or any
+// following statement compiled.
+func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "planInvalid", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	sc := NewScriptCompiler(ctx, "planInvalid", mustParseScript(t, "v = 1\nu = v + 1\nu"), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	sc.Script.Root.Vars["v"] = F64
+	sc.Compiler.addMain()
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "invalid plan must panic")
+		require.Contains(t, fmt.Sprint(r), `invalid plan for "v = 1"`)
+		require.Empty(t, sc.Plans)
+		_, vBound := Get(sc.Compiler.Scopes, "v")
+		require.False(t, vBound)
+		_, uBound := Get(sc.Compiler.Scopes, "u")
+		require.False(t, uBound)
+	}()
+	sc.compileStatements()
+	t.Fatal("compileStatements returned normally")
 }
 
 func TestPlanValidateCatchesBuilderDrift(t *testing.T) {
