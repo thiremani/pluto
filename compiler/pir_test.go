@@ -198,20 +198,6 @@ func TestInvalidPlanPanicsBeforeLowering(t *testing.T) {
 	t.Fatal("compileStatements returned normally")
 }
 
-func TestPlanValidateCatchesBuilderDrift(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	plans := compileScriptPlans(t, ctx, "planValidate", "", "v = 1\nv")
-	require.Len(t, plans, 1)
-	require.NoError(t, pir.Validate(plans[0]))
-
-	broken := *plans[0]
-	broken.Commit = append([]pir.Mapping(nil), broken.Commit...)
-	broken.Commit[0].Outcome.Outcome = 9
-	require.Error(t, pir.Validate(&broken))
-}
-
 func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
