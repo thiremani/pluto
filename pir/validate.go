@@ -57,6 +57,7 @@ func validateEval(plan string, i int, ev *Eval) error {
 			return fmt.Errorf("plan %s: eval %%t%d slot %d has no type", plan, i, s)
 		}
 	}
+
 	return nil
 }
 
@@ -81,6 +82,7 @@ func (p *AssignPlan) validateMapping(m Mapping) error {
 	default:
 		return fmt.Errorf("plan %s: unknown target kind %d", p.Name, m.Target.Kind)
 	}
+
 	return nil
 }
 
