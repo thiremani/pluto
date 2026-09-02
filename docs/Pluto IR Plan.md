@@ -985,7 +985,7 @@ The Step 2B regression and leak suites pass, so PIR implementation can resume.
 
 - The `pir` package: plan nodes, builder, validator, printer, and lowerer for
   the smallest real vertical — `eval` over unmanaged values (scalars and
-  Range descriptors), local and scalar `discard` targets, simultaneous
+  Range descriptors), local and unmanaged `discard` targets, simultaneous
   `commit`. Cut it over through the router immediately rather than building
   every future node in shadow mode first. (Heap and multi-output discard
   ownership follows in Step 4; the legacy `_` sink is fixed in its own PR

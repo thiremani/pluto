@@ -13,8 +13,8 @@ import (
 // accepts unmanaged values — scalars and Range descriptors — from ordinary
 // expressions into local and discard targets; a discarded unmanaged outcome
 // carries no release obligation. Only the script statement loop invokes it,
-// so every target is a script-root binding; an accepted statement has no
-// legacy fallback.
+// so every named target is a script-root binding and discards bind nothing;
+// an accepted statement has no legacy fallback.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false

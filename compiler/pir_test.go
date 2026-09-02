@@ -215,3 +215,22 @@ func TestPlanEvalReferencesSolvedAST(t *testing.T) {
 	require.Same(t, stmt.Value[0], plans[0].Evals[0].Expr)
 	require.Equal(t, I64, plans[0].Commit[0].Target.Type)
 }
+
+// Plan §6 (discard target) and §12: a discarded bare Range descriptor is an
+// unmanaged outcome with no release obligation, so it plans like a scalar.
+func TestPlanGoldenRangeDiscard(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planRangeDiscard", "", "_ = 0:3")
+	require.Equal(t, []string{"assign__"}, planNames(plans))
+	require.Equal(t, `pir.statement @assign__
+    source "_ = 0:3"
+
+    execute
+        %t0 = eval 0:3 : I64:I64:I64
+
+    commit simultaneous
+        discard <- %t0
+`, plans[0].Render(false))
+}
