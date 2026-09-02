@@ -47,7 +47,7 @@ func planValueTypeSupported(t Type) bool {
 }
 
 // planExprEligible accepts only ordinary expression trees: whitelisted node
-// kinds with no range, conditional, or rewrite behavior at any depth.
+// kinds with no range or conditional behavior at any depth.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.Identifier,
@@ -57,11 +57,6 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	}
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	if info.HasRanges || len(info.Ranges) > 0 || len(info.CollectRanges) > 0 {
-		return false
-	}
-	// The solver stores the node itself as its Rewrite when nothing changed;
-	// only a replacement node signals range scalarization.
-	if info.Rewrite != nil && info.Rewrite != expr {
 		return false
 	}
 	for _, m := range info.CompareModes {
