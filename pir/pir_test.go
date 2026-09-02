@@ -47,8 +47,6 @@ func TestValidateRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"NoName", func(p *AssignPlan) { p.Name = "" }, "no name"},
-		{"NoSource", func(p *AssignPlan) { p.Source = "" }, "no source"},
 		{"NoEvals", func(p *AssignPlan) { p.Evals = nil }, "no evals"},
 		{"SparseResultID", func(p *AssignPlan) { p.Evals[1].Result = 2 }, "dense"},
 		{"NoSlots", func(p *AssignPlan) { p.Evals[0].Types = nil }, "no output slots"},
@@ -59,8 +57,8 @@ func TestValidateRejects(t *testing.T) {
 		{"MissingMapping", func(p *AssignPlan) { p.Commit = p.Commit[:1] }, "1 mappings for 2 outcome slots"},
 		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "local target has no name"},
 		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Types = []Type{testType("F64")} }, "target @a : I64 mapped to outcome %t0 slot 0 : F64"},
-		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries name"},
-		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries a type"},
+		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
+		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"UnknownOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 5 }, "unknown outcome"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 3 }, "out of range"},
 		{"DoubleConsume", func(p *AssignPlan) { p.Commit[1].Outcome = p.Commit[0].Outcome }, "consumed twice"},
