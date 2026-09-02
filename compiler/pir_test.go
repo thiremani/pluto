@@ -99,7 +99,8 @@ s`)
 
 // TestPlanRouterRejections pins the Step 3 capability boundary: statements
 // with gates, conditional values, strings, arrays, checked accesses, ranged
-// RHS, calls, or non-scalar discards keep their legacy lowering. The string
+// RHS, or calls keep their legacy lowering, while a discarded Range
+// descriptor plans like a discarded scalar. The string
 // identifier copies (sg, shc) have fully eligible expression trees, so only
 // the value-kind check keeps both string flavors out.
 func TestPlanRouterRejections(t *testing.T) {
@@ -121,7 +122,7 @@ w = q + 1
 _ = 0:3
 g, y, sg, shc, z, w`)
 
-	require.Equal(t, []string{"assign_x", "assign_y", "assign_q"}, planNames(plans))
+	require.Equal(t, []string{"assign_x", "assign_y", "assign_q", "assign__"}, planNames(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {

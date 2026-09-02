@@ -1005,7 +1005,7 @@ with the facts-to-plan adapter (capability router plus builder) and the plan
 lowerer in `compiler`, and `pir.Type` an opaque name interface satisfied by
 `compiler.Type` — no shared DTO extraction was needed. The router cuts over
 script-root assignments of unmanaged values — scalars and Range descriptors —
-from ordinary RHS expressions to local and scalar discard targets; accepted
+from ordinary RHS expressions to local and discard targets; accepted
 statements lower eval-then-commit through the existing expression compiler,
 and everything else keeps legacy lowering. Function-body locals stay legacy
 until Step 4 handles output targets. Planned statements no longer emit the

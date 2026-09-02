@@ -11,23 +11,22 @@ import (
 // accepts a statement when the plan path supports its combination and
 // returns the built plan, which the caller validates before lowering. Step 3
 // accepts unmanaged values — scalars and Range descriptors — from ordinary
-// expressions into local and scalar discard targets. Only the script
-// statement loop invokes it; an accepted statement has no legacy fallback.
+// expressions into local and discard targets; a discarded unmanaged outcome
+// carries no release obligation. Only the script statement loop invokes it,
+// so every target is a script-root binding; an accepted statement has no
+// legacy fallback.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
 	}
 	// The arity check above already forces every RHS to a single output slot:
 	// each expression yields at least one, and the solver validated the total.
-	for i, expr := range stmt.Value {
+	for _, expr := range stmt.Value {
 		info := c.ExprCache[key(c.FuncNameMangled, expr)]
 		if !planValueTypeSupported(info.OutTypes[0]) {
 			return nil, false
 		}
 		if !c.planExprEligible(expr) {
-			return nil, false
-		}
-		if !c.planTargetEligible(stmt.Name[i], info.OutTypes[0]) {
 			return nil, false
 		}
 	}
@@ -56,19 +55,18 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	default:
 		return false
 	}
-	if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil {
-		if info.HasRanges || len(info.Ranges) > 0 || len(info.CollectRanges) > 0 {
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if info.HasRanges || len(info.Ranges) > 0 || len(info.CollectRanges) > 0 {
+		return false
+	}
+	// The solver stores the node itself as its Rewrite when nothing changed;
+	// only a replacement node signals range scalarization.
+	if info.Rewrite != nil && info.Rewrite != expr {
+		return false
+	}
+	for _, m := range info.CompareModes {
+		if m != CondNone {
 			return false
-		}
-		// The solver stores the node itself as its Rewrite when nothing
-		// changed; only a replacement node signals range scalarization.
-		if info.Rewrite != nil && info.Rewrite != expr {
-			return false
-		}
-		for _, m := range info.CompareModes {
-			if m != CondNone {
-				return false
-			}
 		}
 	}
 	for _, child := range ast.ExprChildren(expr) {
@@ -77,23 +75,6 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 		}
 	}
 	return true
-}
-
-// planTargetEligible accepts local bindings and scalar discards. A symbol
-// bound from function argument context routes to the later call/output steps.
-func (c *Compiler) planTargetEligible(ident *ast.Identifier, outType Type) bool {
-	if isDiscard(ident) {
-		k := outType.Kind()
-		return k == IntKind || k == FloatKind
-	}
-	if c.scriptRootBindingType(ident.Value) == nil {
-		return false
-	}
-	sym, exists := Get(c.Scopes, ident.Value)
-	if !exists {
-		return true
-	}
-	return !sym.FuncArg && !sym.ReadOnly
 }
 
 // scriptRootBindingType is the solver's declared type for a binding — an
