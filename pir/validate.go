@@ -9,9 +9,16 @@ import "fmt"
 // rendered name — sufficient for scalars and Range; Step 4 needs real
 // compatibility semantics (an empty-array reset renders unlike its target).
 func Validate(p *AssignPlan) error {
+	if p.Name == "" {
+		return fmt.Errorf("plan has no name")
+	}
+	if p.Source == "" {
+		return fmt.Errorf("plan %s has no source rendering", p.Name)
+	}
 	if len(p.Evals) == 0 {
 		return fmt.Errorf("plan %s has no evals", p.Name)
 	}
+
 	slots := 0
 	for i, ev := range p.Evals {
 		if err := validateEval(p.Name, i, ev); err != nil {
@@ -19,9 +26,11 @@ func Validate(p *AssignPlan) error {
 		}
 		slots += len(ev.Types)
 	}
+
 	if len(p.Commit) != slots {
 		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Name, len(p.Commit), slots)
 	}
+
 	consumed := make(map[OutcomeRef]bool, slots)
 	for _, m := range p.Commit {
 		if err := p.validateMapping(m); err != nil {
@@ -32,6 +41,7 @@ func Validate(p *AssignPlan) error {
 		}
 		consumed[m.Outcome] = true
 	}
+
 	return nil
 }
 

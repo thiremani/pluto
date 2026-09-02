@@ -47,6 +47,8 @@ func TestValidateRejects(t *testing.T) {
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
+		{"NoName", func(p *AssignPlan) { p.Name = "" }, "no name"},
+		{"NoSource", func(p *AssignPlan) { p.Source = "" }, "no source"},
 		{"NoEvals", func(p *AssignPlan) { p.Evals = nil }, "no evals"},
 		{"SparseResultID", func(p *AssignPlan) { p.Evals[1].Result = 2 }, "dense"},
 		{"NoSlots", func(p *AssignPlan) { p.Evals[0].Types = nil }, "no output slots"},
@@ -61,6 +63,8 @@ func TestValidateRejects(t *testing.T) {
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"UnknownOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 5 }, "unknown outcome"},
 		{"SlotOutOfRange", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = 3 }, "out of range"},
+		{"NegativeOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = -1 }, "unknown outcome"},
+		{"NegativeSlot", func(p *AssignPlan) { p.Commit[0].Outcome.Slot = -1 }, "out of range"},
 		{"DoubleConsume", func(p *AssignPlan) { p.Commit[1].Outcome = p.Commit[0].Outcome }, "consumed twice"},
 		{"UnknownTargetKind", func(p *AssignPlan) { p.Commit[0].Target.Kind = 7 }, "unknown target kind"},
 	}
