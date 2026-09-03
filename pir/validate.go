@@ -6,9 +6,9 @@ import "fmt"
 // invariants have no guaranteed panic site (an unmapped outcome silently
 // never commits; a nil discarded-outcome type fails only under -emit-pir),
 // so a failure is an ICE, never a silent miscompile. Types are compared by
-// display spelling — sufficient for scalars and Range; Step 4 replaces this
-// with the compiler's directional binding-compatibility relation (StrG into
-// StrH, an empty-array reset), never mangle equality.
+// display spelling — sufficient for Step 3's Int, Float, and Range outcomes;
+// Step 4 replaces this with the compiler's directional binding-compatibility
+// relation (StrG into StrH, an empty-array reset), never mangle equality.
 func Validate(p *AssignPlan) error {
 	if p.Label == "" {
 		return fmt.Errorf("plan has no label")

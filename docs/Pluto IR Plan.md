@@ -532,19 +532,20 @@ identifiers and MLIR SSA values. Source bindings are bare, spelled exactly
 as in the source; `_` is the discard sink, which no binding can be named;
 and `@` remains unused and reserved for future PIR syntax.
 An `eval` operand is the solved expression rendered without its outermost
-parentheses, so nested grouping remains explicit (`a + (2 * 3)`). The
-complete comma-separated result type list precedes the operand; compound
-types delimit internal spaces with brackets or braces. Types print in the
-compiler's display spelling — `I64`, `[I64]`, `[[I64]]`,
-`Table[Name:Str Score:I64]` — never the symbol mangle, which is neither
-exact identity (function mangles omit result types; a struct mangles to a
-length-encoded name) nor assignment compatibility (`StrG` into `StrH`, an
-empty-array reset). Validation compares this spelling for now; Step 4
-replaces that with the compiler's directional binding-compatibility relation. The renderer covers
-exactly the node kinds
-the router admits and rejects any other as an ICE, so each step that widens
-the router adds the renderer and golden for its new node kinds. `commit` and
-`advance` carry no mode keyword: both are always simultaneous (§14).
+parentheses, so nested grouping remains explicit (`a + (2 * 3)`). The complete
+comma-separated result type list precedes the operand; compound types delimit
+internal spaces with brackets or braces. Types print in the compiler's display
+spelling — `I64`, `[I64]`, `[[I64]]`, `Table[Name:Str Score:I64]` — never the
+symbol mangle, which is neither exact identity (a function mangle omits result
+types; a struct mangle encodes only the nominal name and omits the field
+schema) nor assignment compatibility (`StrG` into `StrH`, an empty-array
+reset). Validation compares this spelling for now; Step 4 replaces that with
+the compiler's directional binding-compatibility relation.
+
+The renderer covers exactly the node kinds the router admits and rejects any
+other as an ICE, so each step that widens the router adds the renderer and
+golden for its new node kinds. `commit` and `advance` carry no mode keyword:
+both are always simultaneous (§14).
 
 ```text
 statement assign_x
@@ -1066,7 +1067,7 @@ both); suite output is unchanged.
 
 - Heap and multi-output assignments, calls, swaps, duplicate sources, and
   heap/multi-output `discard` ownership (§6).
-- The validator's rendered-name type equality becomes the compiler's
+- The validator's display-spelling type equality becomes the compiler's
   directional binding-compatibility relation (`StrG` into `StrH`, an
   empty-array reset) — never mangle equality, which is neither identity nor
   compatibility.
