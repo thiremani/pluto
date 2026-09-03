@@ -527,14 +527,12 @@ reference is `(outcome ('#' slot)? | binding) ('.' field)*` — `#N` selects
 one slot of a multi-output outcome, MLIR-style, and a `.` following a value
 reference is field or column access, `person.name`, `%person_carry.name`,
 or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
-float literal is not an access). A source binding — a read in a payload or a commit target — is bare,
-spelled exactly as in the source, and the discard sink is `_`, which no
-binding can be named. The `%` sigil is borrowed from LLVM and MLIR's
-SSA-value marker and means only "plan-local"; `@` is reserved, unused today,
-for resolved symbols such as functions or module constants once plans carry
-symbol provenance — never an ordinary binding, and implying nothing about
-scope, storage, or a symbol table. An `eval` operand is exactly one parenthesized
-expression rendered structurally with those sigils; the parentheses keep the
+float literal is not an access). A `%name` denotes a plan-local outcome or binder, inspired by LLVM local
+identifiers and MLIR SSA values. Source bindings are bare, spelled exactly
+as in the source; `_` is the discard sink, which no binding can be named;
+and `@` remains unused and reserved for future PIR syntax. An `eval` operand is exactly one parenthesized
+expression rendered using these
+conventions; the parentheses keep the
 type/expression boundary visible even when a type contains spaces, as
 `Table[Name:Str Score:I64]` does. The renderer covers exactly the node kinds
 the router admits and rejects any other as an ICE, so each step that widens
