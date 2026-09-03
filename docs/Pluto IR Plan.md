@@ -255,12 +255,12 @@ A commit group follows one transfer contract:
 For example, `a, b = b, a`:
 
 ```text
-%to_a = eval T (@b)
-%to_b = eval T (@a)
+%to_a = eval T (b)
+%to_b = eval T (a)
 
 commit
-    @a <- %to_a
-    @b <- %to_b
+    a <- %to_a
+    b <- %to_b
 ```
 
 For owned heap values this may lower to an ownership swap without deep copies.
@@ -276,11 +276,11 @@ committed only after the domain finishes:
 ```text
 statement update_sum_arr
     prepare
-        %sum_carry = carry Int @sum
-        %arr_carry = carry Array(Int) @arr
+        %sum_carry = carry Int sum
+        %arr_carry = carry Array(Int) arr
 
     execute
-        domain %i = range 0, @n
+        domain %i = range 0, n
             %sum_next = eval Int (%sum_carry + 1)
             %arr_next = eval Array(Int) (%arr_carry ⊕ [2])
 
@@ -293,8 +293,8 @@ statement update_sum_arr
         %arr_final = finish Array(Int) %arr_carry
 
     commit
-        @sum <- %sum_final
-        @arr <- %arr_final
+        sum <- %sum_final
+        arr <- %arr_final
 ```
 
 A carry is `(value, updated)` state **scoped to the domain that owns it**.
@@ -440,15 +440,15 @@ statement collect_result
         %result_collector = collector Array(Int)
 
     execute
-        domain %i = range 0, @n
-            %cell = eval Int (@data[%i]) [on-oob=skip]
+        domain %i = range 0, n
+            %cell = eval Int (data[%i]) [on-oob=skip]
             collect %result_collector <- %cell [policy=append-yielded]
 
     finish
         %result_final = finish Array(Int) %result_collector
 
     commit
-        @result <- %result_final
+        result <- %result_final
 ```
 
 Closing policies initially: append only yielded cells; zero-fill a missing
@@ -473,8 +473,8 @@ Affine analysis records high-level access forms (array, iterator, index
 expression, domain) and attaches a bounds strategy to the `domain`:
 
 ```text
-domain %i = range 0, @n [bounds=versioned]
-    access @data[2*%i + 1] [affine]
+domain %i = range 0, n [bounds=versioned]
+    access data[2*%i + 1] [affine]
 ```
 
 Lowering computes one guard before the loop nest and emits fast and checked
@@ -501,8 +501,8 @@ Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
 a region ends when indentation returns to its level or an outer one; blank
 lines may separate phases without affecting structure; a line that binds a
 new named result reads `%result = operation Type operands`, where the type
-names the bound value — `%t0 = eval I64 (@b)`, `%selected = require Int
-%condition`, `%t0 = eval I64, F64 (@pair)` for a multi-output outcome —
+names the bound value — `%t0 = eval I64 (b)`, `%selected = require Int
+%condition`, `%t0 = eval I64, F64 (pair)` for a multi-output outcome —
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
 no result type, even where, as with `yield`, they produce their region's
@@ -525,10 +525,15 @@ never collides with a temporary or a carry; `<N>` and `<K>` are ASCII
 digits (§14). A value
 reference is `(outcome ('#' slot)? | binding) ('.' field)*` — `#N` selects
 one slot of a multi-output outcome, MLIR-style, and a `.` following a value
-reference is field or column access, `@person.name`, `%person_carry.name`,
+reference is field or column access, `person.name`, `%person_carry.name`,
 or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
-float literal is not an access). `@name` is a semantic target or source binding,
-spelled as in the source. An `eval` operand is exactly one parenthesized
+float literal is not an access). A source binding — a read in a payload or a commit target — is bare,
+spelled exactly as in the source, and the discard sink is `_`, which no
+binding can be named. The `%` sigil is borrowed from LLVM and MLIR's
+SSA-value marker and means only "plan-local"; `@` is reserved, unused today,
+for resolved symbols such as functions or module constants once plans carry
+symbol provenance — never an ordinary binding, and implying nothing about
+scope, storage, or a symbol table. An `eval` operand is exactly one parenthesized
 expression rendered structurally with those sigils; the parentheses keep the
 type/expression boundary visible even when a type contains spaces, as
 `Table[Name:Str Score:I64]` does. The renderer covers exactly the node kinds
@@ -543,9 +548,9 @@ statement assign_x
     execute
         %result = fallback Int
             primary
-                %condition = eval Int (@a > 0) [yield=scalar]
+                %condition = eval Int (a > 0) [yield=scalar]
                 %selected = require Int %condition
-                    %loaded = eval Int (@data[@i]) [on-oob=skip]
+                    %loaded = eval Int (data[i]) [on-oob=skip]
                     yield %loaded
                 yield %selected
             otherwise
@@ -553,7 +558,7 @@ statement assign_x
                 yield %default
 
     commit
-        @x <- %result
+        x <- %result
 ```
 
 The `statement` header carries a display label derived from the targets

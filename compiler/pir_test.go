@@ -49,22 +49,22 @@ s`)
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 (@b)
-        %t1 = eval I64 (@a)
+        %t0 = eval I64 (b)
+        %t1 = eval I64 (a)
 
     commit
-        @a <- %t0
-        @b <- %t1
+        a <- %t0
+        b <- %t1
 `, plans[2].Render(false))
 
 	require.Equal(t, `statement assign_b
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval I64 (@a + (2 * 3)) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 (a + (2 * 3)) [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        @b : I64 <- %t0
+        b : I64 <- %t0
 `, plans[1].Render(true))
 
 	require.Equal(t, `statement assign__
@@ -74,7 +74,7 @@ s`)
         %t0 = eval I64 (7)
 
     commit
-        discard <- %t0
+        _ <- %t0
 `, plans[3].Render(false))
 
 	require.Equal(t, `statement assign_r
@@ -84,17 +84,17 @@ s`)
         %t0 = eval I64:I64:I64 (0:10:2)
 
     commit
-        @r <- %t0
+        r <- %t0
 `, plans[4].Render(false))
 
 	require.Equal(t, `statement assign_s
     source "s = r"
 
     execute
-        %t0 = eval I64:I64:I64 (@r)
+        %t0 = eval I64:I64:I64 (r)
 
     commit
-        @s <- %t0
+        s <- %t0
 `, plans[5].Render(false))
 }
 
@@ -232,7 +232,7 @@ func TestPlanGoldenRangeDiscard(t *testing.T) {
         %t0 = eval I64:I64:I64 (0:3)
 
     commit
-        discard <- %t0
+        _ <- %t0
 `, plans[0].Render(false))
 }
 
@@ -250,16 +250,16 @@ func TestPlanGoldenUnicode(t *testing.T) {
         %t0 = eval F64 (3.14)
 
     commit
-        @π <- %t0
+        π <- %t0
 `, plans[0].Render(false))
 	require.Equal(t, `statement assign_τ
     source "τ = π"
 
     execute
-        %t0 = eval F64 (@π)
+        %t0 = eval F64 (π)
 
     commit
-        @τ <- %t0
+        τ <- %t0
 `, plans[1].Render(false))
 }
 
@@ -274,9 +274,55 @@ func TestPlanGoldenPrefix(t *testing.T) {
     source "n = (-a)"
 
     execute
-        %t0 = eval I64 (-@a)
+        %t0 = eval I64 (-a)
 
     commit
-        @n <- %t0
+        n <- %t0
 `, plans[1].Render(false))
+}
+
+// Plan §12: source bindings render bare, so a binding named t0 stays distinct
+// from temporary %t0, and a binding named discard from the _ sink.
+func TestPlanGoldenBareBindings(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planBare", "", "t0 = 1\nx = t0\ndiscard = 2\n_ = 3\nx, discard")
+	require.Equal(t, []string{"assign_t0", "assign_x", "assign_discard", "assign__"}, planLabels(plans))
+	require.Equal(t, `statement assign_x
+    source "x = t0"
+
+    execute
+        %t0 = eval I64 (t0)
+
+    commit
+        x <- %t0
+`, plans[1].Render(false))
+	require.Equal(t, `statement assign_t0
+    source "t0 = 1"
+
+    execute
+        %t0 = eval I64 (1)
+
+    commit
+        t0 <- %t0
+`, plans[0].Render(false))
+	require.Equal(t, `statement assign_discard
+    source "discard = 2"
+
+    execute
+        %t0 = eval I64 (2)
+
+    commit
+        discard <- %t0
+`, plans[2].Render(false))
+	require.Equal(t, `statement assign__
+    source "_ = 3"
+
+    execute
+        %t0 = eval I64 (3)
+
+    commit
+        _ <- %t0
+`, plans[3].Render(false))
 }

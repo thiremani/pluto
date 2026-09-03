@@ -1,6 +1,7 @@
 package pir
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,12 +13,13 @@ type testType string
 
 func (t testType) String() string { return string(t) }
 
-func intLit(lit string) ast.Expression {
-	return &ast.IntegerLiteral{Token: token.Token{Literal: lit}}
+func intLit(value int64) ast.Expression {
+	lit := strconv.FormatInt(value, 10)
+	return &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: lit}, Value: value}
 }
 
 func ident(name string) ast.Expression {
-	return &ast.Identifier{Token: token.Token{Literal: name}, Value: name}
+	return &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: name}, Value: name}
 }
 
 func swapPlan() *AssignPlan {
@@ -59,7 +61,7 @@ func TestValidateRejects(t *testing.T) {
 		}, "slot 0 has no type"},
 		{"MissingMapping", func(p *AssignPlan) { p.Commit = p.Commit[:1] }, "1 mappings for 2 outcome slots"},
 		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "local target has no name"},
-		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Types = []Type{testType("F64")} }, "target @a : I64 mapped to outcome %t0 slot 0 : F64"},
+		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Types = []Type{testType("F64")} }, "target a : I64 mapped to outcome %t0 slot 0 : F64"},
 		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"UnknownOutcome", func(p *AssignPlan) { p.Commit[0].Outcome.Outcome = 5 }, "unknown outcome"},
@@ -90,8 +92,8 @@ func TestRenderConcise(t *testing.T) {
 		Label:  "assign_x__",
 		Source: "x, _ = 5, 7",
 		Evals: []*Eval{
-			{Result: 0, Expr: intLit("5"), Types: []Type{testType("I64")}},
-			{Result: 1, Expr: intLit("7"), Types: []Type{testType("I64")}},
+			{Result: 0, Expr: intLit(5), Types: []Type{testType("I64")}},
+			{Result: 1, Expr: intLit(7), Types: []Type{testType("I64")}},
 		},
 		Commit: []Mapping{
 			{Target: Target{Kind: LocalTarget, Name: "x", Type: testType("I64")}, Outcome: OutcomeRef{Outcome: 0}},
@@ -106,8 +108,8 @@ func TestRenderConcise(t *testing.T) {
         %t1 = eval I64 (7)
 
     commit
-        @x <- %t0
-        discard <- %t1
+        x <- %t0
+        _ <- %t1
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -135,11 +137,11 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = pair"
 
     execute
-        %t0 = eval I64, F64 (@pair)
+        %t0 = eval I64, F64 (pair)
 
     commit
-        @a <- %t0#0
-        @b <- %t0#1
+        a <- %t0#0
+        b <- %t0#1
 `
 	if got := p.Render(false); got != want {
 		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -151,7 +153,7 @@ func TestRenderMultiOutput(t *testing.T) {
 // only the explicit rejection produces this exact panic value.
 func TestRenderRejectsUnsupportedNode(t *testing.T) {
 	p := swapPlan()
-	p.Evals[0].Expr = &ast.StringLiteral{Token: token.Token{Literal: "hi"}}
+	p.Evals[0].Expr = &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "hi"}}
 	defer func() {
 		if got := recover(); got != "pir: no renderer for *ast.StringLiteral" {
 			t.Fatalf("expected the renderer rejection panic, got %v", got)
@@ -168,12 +170,12 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 (@b) [shape=scalar] [yield=always] [unmanaged]
-        %t1 = eval I64 (@a) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 (b) [shape=scalar] [yield=always] [unmanaged]
+        %t1 = eval I64 (a) [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        @a : I64 <- %t0
-        @b : I64 <- %t1
+        a : I64 <- %t0
+        b : I64 <- %t1
 `
 	if got != want {
 		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)

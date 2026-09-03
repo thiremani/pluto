@@ -44,13 +44,13 @@ func renderPayload(expr ast.Expression) string {
 	}
 }
 
-// renderExpr mirrors the ast String shapes with source bindings under the
-// @ sigil. It covers exactly the node kinds the router admits; any other is
+// renderExpr mirrors the ast String shapes, source bindings bare as spelled.
+// It covers exactly the node kinds the router admits; any other is
 // an ICE, so widening the router means adding its renderer and golden here.
 func renderExpr(expr ast.Expression) string {
 	switch e := expr.(type) {
 	case *ast.Identifier:
-		return "@" + e.Value
+		return e.Value
 	case *ast.InfixExpression:
 		return "(" + renderExpr(e.Left) + " " + e.Operator + " " + renderExpr(e.Right) + ")"
 	case *ast.PrefixExpression:
@@ -80,12 +80,12 @@ func typesString(types []Type) string {
 
 func targetString(t Target, expanded bool) string {
 	if t.Kind == DiscardTarget {
-		return "discard"
+		return "_"
 	}
 	if expanded && t.Type != nil {
-		return "@" + t.Name + " : " + t.Type.String()
+		return t.Name + " : " + t.Type.String()
 	}
-	return "@" + t.Name
+	return t.Name
 }
 
 func (p *AssignPlan) outcomeString(ref OutcomeRef) string {

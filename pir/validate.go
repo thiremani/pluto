@@ -72,7 +72,7 @@ func (p *AssignPlan) validateMapping(m Mapping) error {
 			return fmt.Errorf("plan %s: local target has no name", p.Label)
 		}
 		if m.Target.Type.String() != outcomeType.String() {
-			return fmt.Errorf("plan %s: target @%s : %s mapped to outcome %%t%d slot %d : %s",
+			return fmt.Errorf("plan %s: target %s : %s mapped to outcome %%t%d slot %d : %s",
 				p.Label, m.Target.Name, m.Target.Type.String(), m.Outcome.Outcome, m.Outcome.Slot, outcomeType.String())
 		}
 	case DiscardTarget:
