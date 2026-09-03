@@ -9,11 +9,9 @@ import (
 )
 
 // maxActiveRecursiveSpecializations is an operational cold-discovery budget,
-// not a runaway detector: it cannot prove a chain infinite, so it rejects any
-// sufficiently deep finite chain discovered cold, while the same closure
-// succeeds once its tail is already settled. The fuse itself is permanent;
-// this value is an implementation default, raisable if a real program needs
-// more. It does not limit flat breadth or acyclic call depth.
+// not a runaway detector: it can reject a deep finite chain discovered cold
+// that would succeed with a settled tail. The fuse is permanent; the value is
+// a raisable default. It does not count flat breadth or acyclic call depth.
 const maxActiveRecursiveSpecializations = 256
 
 // maxSpecializationTraceFrames retains the originating frame and the final

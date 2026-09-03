@@ -1411,10 +1411,8 @@ func (ts *TypeSolver) initColTypes(n int) []Type {
 }
 
 // typeCell infers the type of a single cell expression. Returns (type, ok).
-// The generic unresolved-cell diagnostic is a fallback for silent failures
-// only: when typing the cell reported a more specific error anywhere in its
-// subtree, adding a summary here would cascade once per enclosing level —
-// through nested literals and wrapper expressions alike.
+// The generic unresolved-cell diagnostic fires only when typing the cell
+// reported nothing; re-reporting would cascade once per enclosing level.
 func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool) {
 	errorsBefore := len(ts.Errors)
 	tps := ts.TypeExpression(expr, false) // cells are nested, not root

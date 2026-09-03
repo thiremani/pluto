@@ -341,11 +341,10 @@ type Array struct {
 }
 
 // MaxArrayRank is a temporary implementation limit, not language semantics:
-// the mangled name and LLVM descriptor grow with rank, so compile cost is
-// superlinear (a rank-2000 literal hung the compiler). Checked on solved
-// literal types after parsing, it does not guard parser/AST nesting. Remove
-// once issue #90's compact encoding, fixed-size descriptor, and parser-depth
-// and complexity fuses land.
+// mangles and the LLVM descriptor grow with rank, making compile cost
+// superlinear (rank 2000 hung). Checked post-parse, so it does not guard
+// parser nesting. Remove once #90's compact rank encoding, fixed-size
+// descriptor, parser-depth protection, and input-complexity fuses land.
 const MaxArrayRank = 64
 
 func (a Array) String() string {
