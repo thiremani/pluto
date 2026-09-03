@@ -148,18 +148,33 @@ func TestRenderMultiOutput(t *testing.T) {
 	}
 }
 
-// Plan §12: the renderer covers exactly the router's node kinds. A
-// well-formed string literal rendered fine under the old ast fallback, so
-// only the explicit rejection produces this exact panic value.
+// Plan §12: the renderer rejects an unsupported node anywhere in the tree,
+// not only at the root.
 func TestRenderRejectsUnsupportedNode(t *testing.T) {
-	p := swapPlan()
-	p.Evals[0].Expr = &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "hi"}}
-	defer func() {
-		if got := recover(); got != "pir: no renderer for *ast.StringLiteral" {
-			t.Fatalf("expected the renderer rejection panic, got %v", got)
-		}
-	}()
+	str := &ast.StringLiteral{Token: token.Token{Type: token.STRING, Literal: "hi"}}
+	tests := []struct {
+		name string
+		expr ast.Expression
+	}{
+		{"root", str},
+		{"under infix", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: str}},
+		{"two edges deep", &ast.InfixExpression{Left: ident("a"), Operator: "+", Right: &ast.PrefixExpression{Operator: "-", Right: str}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := swapPlan()
+			p.Evals[0].Expr = tt.expr
+			if got := renderPanic(p); got != "pir: no renderer for *ast.StringLiteral" {
+				t.Fatalf("panic = %v", got)
+			}
+		})
+	}
+}
+
+func renderPanic(p *AssignPlan) (v any) {
+	defer func() { v = recover() }()
 	p.Render(false)
+	return nil
 }
 
 // Plan §12: expanded view adds shapes, ownership, and target types.

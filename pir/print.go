@@ -32,42 +32,29 @@ func (p *AssignPlan) Render(expanded bool) string {
 	return b.String()
 }
 
-// renderPayload omits the surrounding parentheses that renderExpr gives a
-// top-level infix or prefix expression.
+// renderPayload renders an eval operand in the ast's own spelling, minus the
+// pair of parentheses an operator root wraps itself in, after checking that
+// every node is one the router admits; any other is an ICE, so widening the
+// router means admitting its node kind and golden here.
 func renderPayload(expr ast.Expression) string {
-	switch e := expr.(type) {
-	case *ast.InfixExpression:
-		return renderExpr(e.Left) + " " + e.Operator + " " + renderExpr(e.Right)
-	case *ast.PrefixExpression:
-		return e.Operator + renderExpr(e.Right)
-	default:
-		return renderExpr(expr)
+	checkRenderable(expr)
+	s := expr.String()
+	switch expr.(type) {
+	case *ast.InfixExpression, *ast.PrefixExpression:
+		return s[1 : len(s)-1]
 	}
+	return s
 }
 
-// renderExpr mirrors the ast String shapes, source bindings bare as spelled.
-// It covers exactly the node kinds the router admits; any other is
-// an ICE, so widening the router means adding its renderer and golden here.
-func renderExpr(expr ast.Expression) string {
-	switch e := expr.(type) {
-	case *ast.Identifier:
-		return e.Value
-	case *ast.InfixExpression:
-		return "(" + renderExpr(e.Left) + " " + e.Operator + " " + renderExpr(e.Right) + ")"
-	case *ast.PrefixExpression:
-		return "(" + e.Operator + renderExpr(e.Right) + ")"
-	case *ast.IntegerLiteral:
-		return e.Token.Literal
-	case *ast.FloatLiteral:
-		return e.Token.Literal
-	case *ast.RangeLiteral:
-		s := renderExpr(e.Start) + ":" + renderExpr(e.Stop)
-		if e.Step != nil {
-			s += ":" + renderExpr(e.Step)
-		}
-		return s
+func checkRenderable(expr ast.Expression) {
+	switch expr.(type) {
+	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral,
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral:
 	default:
 		panic(fmt.Sprintf("pir: no renderer for %T", expr))
+	}
+	for _, child := range ast.ExprChildren(expr) {
+		checkRenderable(child)
 	}
 }
 
