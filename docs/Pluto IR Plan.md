@@ -1,6 +1,7 @@
 # Pluto Statement IR (PIR) Plan
 
-**Status:** Accepted 2026-08-05 — roadmap in §16; implementation not yet started
+**Status:** Accepted 2026-08-05 — roadmap in §16; implemented through Step 3
+(minimal statement slice)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -172,7 +173,7 @@ Each value-producing node has an abstract outcome:
 
 | Property | Examples |
 | --- | --- |
-| Outputs | `Int`, `(Int, String)`, `Array(Int)` |
+| Outputs | `I64`, `(I64, Str)`, `[I64]` |
 | Domain | scalar, fixed output slots, array elements, range iterations |
 | Yield shape | always, scalar condition, per-slot bits, element mask, per-iteration |
 
@@ -254,12 +255,12 @@ A commit group follows one transfer contract:
 For example, `a, b = b, a`:
 
 ```text
-%to_a = eval #expr_b : T
-%to_b = eval #expr_a : T
+%to_a = eval I64 b
+%to_b = eval I64 a
 
-commit simultaneous
-    @a <- %to_a
-    @b <- %to_b
+commit
+    a <- %to_a
+    b <- %to_b
 ```
 
 For owned heap values this may lower to an ownership swap without deep copies.
@@ -273,27 +274,27 @@ that iteration `n + 1` observes iteration `n` while the real target is
 committed only after the domain finishes:
 
 ```text
-pir.statement @update_sum_arr
+statement update_sum_arr
     prepare
-        %sum.carry = carry @sum : Int
-        %arr.carry = carry @arr : Array(Int)
+        %sum_carry = carry I64 sum
+        %arr_carry = carry [I64] arr
 
     execute
-        domain %i = range 0, @n
-            %sum.next = eval %sum.carry + 1 : Int
-            %arr.next = eval %arr.carry ⊕ [2] : Array(Int)
+        domain %i = range 0, n
+            %sum_next = eval I64 %sum_carry + 1
+            %arr_next = eval [I64] %arr_carry ⊕ [2]
 
-            advance simultaneous
-                carry %sum.carry from %sum.next [on-skip=keep]
-                carry %arr.carry from %arr.next [on-skip=keep]
+            advance
+                carry %sum_carry from %sum_next [on-skip=keep]
+                carry %arr_carry from %arr_next [on-skip=keep]
 
     finish
-        %sum.final = finish %sum.carry : Int
-        %arr.final = finish %arr.carry : Array(Int)
+        %sum_final = finish I64 %sum_carry
+        %arr_final = finish [I64] %arr_carry
 
-    commit simultaneous
-        @sum <- %sum.final
-        @arr <- %arr.final
+    commit
+        sum <- %sum_final
+        arr <- %arr_final
 ```
 
 A carry is `(value, updated)` state **scoped to the domain that owns it**.
@@ -434,20 +435,20 @@ conditions.
 ## 10. Collectors
 
 ```text
-pir.statement @collect_result
+statement collect_result
     prepare
-        %result.collector = collector : Array(Int)
+        %result_collector = collector [I64]
 
     execute
-        domain %i = range 0, @n
-            %cell = eval @data[%i] : Int [on-oob=skip]
-            collect %result.collector <- %cell [policy=append-yielded]
+        domain %i = range 0, n
+            %cell = eval I64 data[%i] [on-oob=skip]
+            collect %result_collector <- %cell [policy=append-yielded]
 
     finish
-        %result.final = finish %result.collector : Array(Int)
+        %result_final = finish [I64] %result_collector
 
-    commit simultaneous
-        @result <- %result.final
+    commit
+        result <- %result_final
 ```
 
 Closing policies initially: append only yielded cells; zero-fill a missing
@@ -472,8 +473,8 @@ Affine analysis records high-level access forms (array, iterator, index
 expression, domain) and attaches a bounds strategy to the `domain`:
 
 ```text
-domain %i = range 0, @n [bounds=versioned]
-    access @data[2*%i + 1] [affine]
+domain %i = range 0, n [bounds=versioned]
+    access data[2*%i + 1] [affine]
 ```
 
 Lowering computes one guard before the loop nest and emits fast and checked
@@ -498,32 +499,78 @@ a local skip, and a fallback, and requiring later code to reconstruct it.
 
 Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
 a region ends when indentation returns to its level or an outer one; blank
-lines may separate phases without affecting structure; `%name` is a plan
-outcome or binder, `@name` a semantic target or source binding; operations read
-`%result = operation operands : PlutoType`; square brackets carry declarative
-policies, not executable code.
+lines may separate phases without affecting structure; a line that binds a
+new named result reads `%result = operation Type operands`, where the type
+names the bound value — `%t0 = eval I64 b`, `%selected = require I64
+%condition`, `%t0 = eval I64, F64 pair` for a multi-output outcome —
+while operations that bind no new `%result` (`domain`, `yield`, `collect`,
+`advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
+no result type, even where, as with `yield`, they produce their region's
+value (§4); a commit mapping reads `target [: Type] <- value`,
+its type shown in the expanded view; square brackets carry declarative
+policies, not executable code. A
+`%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
+`t` followed by digits reserved for them; every other outcome name is a
+Pluto identifier — the language's own Unicode-aware class, so a target `π`
+carries as `%π_carry` and no escaping is ever needed, since identifiers
+cannot contain PIR punctuation. Generated names are opaque display labels,
+`%sum_carry`, `%sum_next`, `%sum_final`: the defining operation says what
+the value is, and nothing parses a name. Every `%` name — outcomes, carries,
+collectors, and domain binders — comes from one per-plan namespace filled in
+deterministic plan-construction order: builder temporaries claim their
+reserved `%t<N>` names directly, and every other requested name that
+matches `t[0-9]+` or collides with an already-allocated name receives the
+smallest `_<K>` suffix that frees it, so a range named `t0` or `sum_carry`
+never collides with a temporary or a carry; `<N>` and `<K>` are ASCII
+digits (§14). A value
+reference is `(outcome ('#' slot)? | binding) ('.' field)*` — `#N` selects
+one slot of a multi-output outcome, MLIR-style, and a `.` following a value
+reference is field or column access, `person.name`, `%person_carry.name`,
+or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
+float literal is not an access). A `%name` denotes a plan-local outcome or binder, inspired by LLVM local
+identifiers and MLIR SSA values. Source bindings are bare, spelled exactly
+as in the source; `_` is the discard sink, which no binding can be named;
+and `@` remains unused and reserved for future PIR syntax.
+An `eval` operand is the solved expression rendered without its outermost
+parentheses, so nested grouping remains explicit (`a + (2 * 3)`). The complete
+comma-separated result type list precedes the operand; compound types delimit
+internal spaces with brackets or braces. Types print in the compiler's display
+spelling — `I64`, `[I64]`, `[[I64]]`, `Table[Name:Str Score:I64]` — never the
+symbol mangle, which is neither exact identity (a function mangle omits result
+types; a struct mangle encodes only the nominal name and omits the field
+schema) nor assignment compatibility (`StrG` into `StrH`, an empty-array
+reset). Validation compares this spelling for now; Step 4 replaces that with
+the compiler's directional binding-compatibility relation.
+
+The renderer covers exactly the node kinds the router admits and rejects any
+other as an ICE, so each step that widens the router adds the renderer and
+golden for its new node kinds. `commit` and `advance` carry no mode keyword:
+both are always simultaneous (§14).
 
 ```text
-pir.statement @assign_x
+statement assign_x
     source "x = a > 0 && data[i] || -1"
 
     execute
-        %result = fallback : Int
+        %result = fallback I64
             primary
-                %condition = eval @a > 0 : Int [yield=scalar]
-                %selected = require %condition : Int
-                    %loaded = eval @data[@i] : Int [on-oob=skip]
+                %condition = eval I64 a > 0 [yield=scalar]
+                %selected = require I64 %condition
+                    %loaded = eval I64 data[i] [on-oob=skip]
                     yield %loaded
                 yield %selected
             otherwise
-                %default = eval -1 : Int
+                %default = eval I64 -1
                 yield %default
 
-    commit simultaneous
-        @x <- %result
+    commit
+        x <- %result
 ```
 
-Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
+The `statement` header carries a display label derived from the targets
+(`assign_a_b`); it is not unique and nothing references it — plans are
+emitted in source order and have no independently referenceable textual
+identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
 result shapes, target mappings, access IDs, affine forms, collector and carry
 details, ownership annotations, and derived release points. Compiler temporary
 names and node IDs stay hidden in the concise view.
@@ -601,6 +648,11 @@ The validator rejects a plan unless:
 22. A target- or carry-origin borrow is promoted to transfer only when its
     owner is replaced in the same group, exactly one owning consumer takes it,
     and no surviving outcome depends on the old owner.
+23. Every `%` name — outcomes, carries, collectors, and domain binders — is
+    allocated from one per-plan namespace and is unique within the plan, so
+    every textual reference is unambiguous; a named node exposes its
+    allocated name to validation. Names are display labels that lowering
+    never parses.
 
 Validator failures are ICEs and include the source statement and the smallest
 relevant PIR excerpt.
@@ -984,7 +1036,7 @@ The Step 2B regression and leak suites pass, so PIR implementation can resume.
 
 - The `pir` package: plan nodes, builder, validator, printer, and lowerer for
   the smallest real vertical — `eval` over unmanaged values (scalars and
-  Range descriptors), local and scalar `discard` targets, simultaneous
+  Range descriptors), local and unmanaged `discard` targets, simultaneous
   `commit`. Cut it over through the router immediately rather than building
   every future node in shadow mode first. (Heap and multi-output discard
   ownership follows in Step 4; the legacy `_` sink is fixed in its own PR
@@ -998,10 +1050,27 @@ The Step 2B regression and leak suites pass, so PIR implementation can resume.
 **Go/no-go:** the dump must explain a migrated statement's lowering without
 reading LLVM helper code.
 
+Step 3 is complete. The `pir` package holds the plan nodes, the structural
+validator, and the deterministic renderer; the package boundary is settled
+with the facts-to-plan adapter (capability router plus builder) and the plan
+lowerer in `compiler`, and `pir.Type` an opaque name interface satisfied by
+`compiler.Type` — no shared DTO extraction was needed. The router cuts over
+script-root assignments of unmanaged values — scalars and Range descriptors —
+from ordinary RHS expressions to local and discard targets; accepted
+statements lower eval-then-commit through the existing expression compiler,
+and everything else keeps legacy lowering. Function-body locals stay legacy
+until Step 4 handles output targets. Planned statements no longer emit the
+legacy per-RHS bounds-guard alloca or the dead old-value load (LLVM deleted
+both); suite output is unchanged.
+
 ### Step 4: Heap values, multi-output, calls, ownership (~2-3 weeks)
 
 - Heap and multi-output assignments, calls, swaps, duplicate sources, and
   heap/multi-output `discard` ownership (§6).
+- The validator's display-spelling type equality becomes the compiler's
+  directional binding-compatibility relation (`StrG` into `StrH`, an
+  empty-array reset) — never mangle equality, which is neither identity nor
+  compatibility.
 - The ownership elaboration pass (§8), with generic cleanup lowering.
 - **Calls split by callee effect.** A call that looks ordinary can still have
   independently `MayWrite` outputs, which needs per-output keep-old handling —
@@ -1180,6 +1249,10 @@ deletion at the last consumer.
 - negative tests for every validator invariant
 - derived release points appear in expanded PIR, so ownership regressions
   surface as plan diffs before any leak-check run
+- a multi-output outcome renders per-slot selectors (`%t0#0`, `%t0#1`), and
+  the renderer rejects a node kind outside the router's set; checked-access,
+  call, and array-literal goldens land with the steps that admit them; a
+  Unicode label and binding (`π = 3.14`, `τ = π`) are pinned now
 
 ### Specialization-closure tests
 
