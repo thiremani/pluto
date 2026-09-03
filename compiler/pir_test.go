@@ -262,3 +262,21 @@ func TestPlanGoldenUnicode(t *testing.T) {
         @τ <- %t0
 `, plans[1].Render(false))
 }
+
+// Plan §12: a prefix payload renders as one parenthesized expression.
+func TestPlanGoldenPrefix(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planPrefix", "", "a = 1\nn = -a\nn")
+	require.Equal(t, []string{"assign_a", "assign_n"}, planLabels(plans))
+	require.Equal(t, `statement assign_n
+    source "n = (-a)"
+
+    execute
+        %t0 = eval I64 (-@a)
+
+    commit
+        @n <- %t0
+`, plans[1].Render(false))
+}

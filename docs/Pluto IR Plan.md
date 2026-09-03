@@ -255,10 +255,10 @@ A commit group follows one transfer contract:
 For example, `a, b = b, a`:
 
 ```text
-%to_a = eval #expr_b : T
-%to_b = eval #expr_a : T
+%to_a = eval T (@b)
+%to_b = eval T (@a)
 
-commit simultaneous
+commit
     @a <- %to_a
     @b <- %to_b
 ```
@@ -274,27 +274,27 @@ that iteration `n + 1` observes iteration `n` while the real target is
 committed only after the domain finishes:
 
 ```text
-pir.statement @update_sum_arr
+statement update_sum_arr
     prepare
-        %sum.carry = carry @sum : Int
-        %arr.carry = carry @arr : Array(Int)
+        %sum_carry = carry Int @sum
+        %arr_carry = carry Array(Int) @arr
 
     execute
         domain %i = range 0, @n
-            %sum.next = eval %sum.carry + 1 : Int
-            %arr.next = eval %arr.carry ⊕ [2] : Array(Int)
+            %sum_next = eval Int (%sum_carry + 1)
+            %arr_next = eval Array(Int) (%arr_carry ⊕ [2])
 
-            advance simultaneous
-                carry %sum.carry from %sum.next [on-skip=keep]
-                carry %arr.carry from %arr.next [on-skip=keep]
+            advance
+                carry %sum_carry from %sum_next [on-skip=keep]
+                carry %arr_carry from %arr_next [on-skip=keep]
 
     finish
-        %sum.final = finish %sum.carry : Int
-        %arr.final = finish %arr.carry : Array(Int)
+        %sum_final = finish Int %sum_carry
+        %arr_final = finish Array(Int) %arr_carry
 
-    commit simultaneous
-        @sum <- %sum.final
-        @arr <- %arr.final
+    commit
+        @sum <- %sum_final
+        @arr <- %arr_final
 ```
 
 A carry is `(value, updated)` state **scoped to the domain that owns it**.
@@ -435,20 +435,20 @@ conditions.
 ## 10. Collectors
 
 ```text
-pir.statement @collect_result
+statement collect_result
     prepare
-        %result.collector = collector : Array(Int)
+        %result_collector = collector Array(Int)
 
     execute
         domain %i = range 0, @n
-            %cell = eval @data[%i] : Int [on-oob=skip]
-            collect %result.collector <- %cell [policy=append-yielded]
+            %cell = eval Int (@data[%i]) [on-oob=skip]
+            collect %result_collector <- %cell [policy=append-yielded]
 
     finish
-        %result.final = finish %result.collector : Array(Int)
+        %result_final = finish Array(Int) %result_collector
 
-    commit simultaneous
-        @result <- %result.final
+    commit
+        @result <- %result_final
 ```
 
 Closing policies initially: append only yielded cells; zero-fill a missing
@@ -499,32 +499,67 @@ a local skip, and a fallback, and requiring later code to reconstruct it.
 
 Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
 a region ends when indentation returns to its level or an outer one; blank
-lines may separate phases without affecting structure; `%name` is a plan
-outcome or binder, `@name` a semantic target or source binding; operations read
-`%result = operation operands : PlutoType`; square brackets carry declarative
-policies, not executable code.
+lines may separate phases without affecting structure; a line that binds a
+new named result reads `%result = operation Type operands`, where the type
+names the bound value — `%t0 = eval I64 (@b)`, `%selected = require Int
+%condition`, `%t0 = eval I64, F64 (@pair)` for a multi-output outcome —
+while operations that bind no new `%result` (`domain`, `yield`, `collect`,
+`advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
+no result type, even where, as with `yield`, they produce their region's
+value (§4); a commit mapping reads `target [: Type] <- value`,
+its type shown in the expanded view; square brackets carry declarative
+policies, not executable code. A
+`%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
+`t` followed by digits reserved for them; every other outcome name is a
+Pluto identifier — the language's own Unicode-aware class, so a target `π`
+carries as `%π_carry` and no escaping is ever needed, since identifiers
+cannot contain PIR punctuation. Generated names are opaque display labels,
+`%sum_carry`, `%sum_next`, `%sum_final`: the defining operation says what
+the value is, and nothing parses a name. Every `%` name — outcomes, carries,
+collectors, and domain binders — comes from one per-plan namespace filled in
+deterministic plan-construction order: builder temporaries claim their
+reserved `%t<N>` names directly, and every other requested name that
+matches `t[0-9]+` or collides with an already-allocated name receives the
+smallest `_<K>` suffix that frees it, so a range named `t0` or `sum_carry`
+never collides with a temporary or a carry; `<N>` and `<K>` are ASCII
+digits (§14). A value
+reference is `(outcome ('#' slot)? | binding) ('.' field)*` — `#N` selects
+one slot of a multi-output outcome, MLIR-style, and a `.` following a value
+reference is field or column access, `@person.name`, `%person_carry.name`,
+or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
+float literal is not an access). `@name` is a semantic target or source binding,
+spelled as in the source. An `eval` operand is exactly one parenthesized
+expression rendered structurally with those sigils; the parentheses keep the
+type/expression boundary visible even when a type contains spaces, as
+`Table[Name:Str Score:I64]` does. The renderer covers exactly the node kinds
+the router admits and rejects any other as an ICE, so each step that widens
+the router adds the renderer and golden for its new node kinds. `commit` and
+`advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
-pir.statement @assign_x
+statement assign_x
     source "x = a > 0 && data[i] || -1"
 
     execute
-        %result = fallback : Int
+        %result = fallback Int
             primary
-                %condition = eval @a > 0 : Int [yield=scalar]
-                %selected = require %condition : Int
-                    %loaded = eval @data[@i] : Int [on-oob=skip]
+                %condition = eval Int (@a > 0) [yield=scalar]
+                %selected = require Int %condition
+                    %loaded = eval Int (@data[@i]) [on-oob=skip]
                     yield %loaded
                 yield %selected
             otherwise
-                %default = eval -1 : Int
+                %default = eval Int (-1)
                 yield %default
 
-    commit simultaneous
+    commit
         @x <- %result
 ```
 
-Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
+The `statement` header carries a display label derived from the targets
+(`assign_a_b`); it is not unique and nothing references it — plans are
+emitted in source order and have no independently referenceable textual
+identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
 result shapes, target mappings, access IDs, affine forms, collector and carry
 details, ownership annotations, and derived release points. Compiler temporary
 names and node IDs stay hidden in the concise view.
@@ -602,6 +637,11 @@ The validator rejects a plan unless:
 22. A target- or carry-origin borrow is promoted to transfer only when its
     owner is replaced in the same group, exactly one owning consumer takes it,
     and no surviving outcome depends on the old owner.
+23. Every `%` name — outcomes, carries, collectors, and domain binders — is
+    allocated from one per-plan namespace and is unique within the plan, so
+    every textual reference is unambiguous; a named node exposes its
+    allocated name to validation. Names are display labels that lowering
+    never parses.
 
 Validator failures are ICEs and include the source statement and the smallest
 relevant PIR excerpt.
@@ -1194,6 +1234,10 @@ deletion at the last consumer.
 - negative tests for every validator invariant
 - derived release points appear in expanded PIR, so ownership regressions
   surface as plan diffs before any leak-check run
+- a multi-output outcome renders per-slot selectors (`%t0#0`, `%t0#1`), and
+  the renderer rejects a node kind outside the router's set; checked-access,
+  call, and array-literal goldens land with the steps that admit them; a
+  Unicode label and binding (`π = 3.14`, `τ = π`) are pinned now
 
 ### Specialization-closure tests
 
