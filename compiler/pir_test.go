@@ -49,8 +49,8 @@ s`)
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 (b)
-        %t1 = eval I64 (a)
+        %t0 = eval I64 b
+        %t1 = eval I64 a
 
     commit
         a <- %t0
@@ -61,7 +61,7 @@ s`)
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval I64 (a + (2 * 3)) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 a + (2 * 3) [shape=scalar] [yield=always] [unmanaged]
 
     commit
         b : I64 <- %t0
@@ -71,7 +71,7 @@ s`)
     source "_ = 7"
 
     execute
-        %t0 = eval I64 (7)
+        %t0 = eval I64 7
 
     commit
         _ <- %t0
@@ -81,7 +81,7 @@ s`)
     source "r = 0:10:2"
 
     execute
-        %t0 = eval I64:I64:I64 (0:10:2)
+        %t0 = eval I64:I64:I64 0:10:2
 
     commit
         r <- %t0
@@ -91,7 +91,7 @@ s`)
     source "s = r"
 
     execute
-        %t0 = eval I64:I64:I64 (r)
+        %t0 = eval I64:I64:I64 r
 
     commit
         s <- %t0
@@ -229,7 +229,7 @@ func TestPlanGoldenRangeDiscard(t *testing.T) {
     source "_ = 0:3"
 
     execute
-        %t0 = eval I64:I64:I64 (0:3)
+        %t0 = eval I64:I64:I64 0:3
 
     commit
         _ <- %t0
@@ -247,7 +247,7 @@ func TestPlanGoldenUnicode(t *testing.T) {
     source "π = 3.14"
 
     execute
-        %t0 = eval F64 (3.14)
+        %t0 = eval F64 3.14
 
     commit
         π <- %t0
@@ -256,14 +256,14 @@ func TestPlanGoldenUnicode(t *testing.T) {
     source "τ = π"
 
     execute
-        %t0 = eval F64 (π)
+        %t0 = eval F64 π
 
     commit
         τ <- %t0
 `, plans[1].Render(false))
 }
 
-// Plan §12: a prefix payload renders as one parenthesized expression.
+// Plan §12: a payload drops its outermost parentheses; a prefix stays bare.
 func TestPlanGoldenPrefix(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -274,7 +274,7 @@ func TestPlanGoldenPrefix(t *testing.T) {
     source "n = (-a)"
 
     execute
-        %t0 = eval I64 (-a)
+        %t0 = eval I64 -a
 
     commit
         n <- %t0
@@ -293,7 +293,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     source "x = t0"
 
     execute
-        %t0 = eval I64 (t0)
+        %t0 = eval I64 t0
 
     commit
         x <- %t0
@@ -302,7 +302,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     source "t0 = 1"
 
     execute
-        %t0 = eval I64 (1)
+        %t0 = eval I64 1
 
     commit
         t0 <- %t0
@@ -311,7 +311,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     source "discard = 2"
 
     execute
-        %t0 = eval I64 (2)
+        %t0 = eval I64 2
 
     commit
         discard <- %t0
@@ -320,7 +320,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     source "_ = 3"
 
     execute
-        %t0 = eval I64 (3)
+        %t0 = eval I64 3
 
     commit
         _ <- %t0

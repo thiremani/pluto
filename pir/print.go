@@ -32,15 +32,16 @@ func (p *AssignPlan) Render(expanded bool) string {
 	return b.String()
 }
 
-// renderPayload delimits an eval operand as exactly one parenthesized
-// expression, so the type/expression boundary stays visible even when a
-// type contains spaces.
+// renderPayload renders an eval operand without the outermost parentheses
+// renderExpr gives a compound node, so inner grouping stays explicit.
 func renderPayload(expr ast.Expression) string {
-	switch expr.(type) {
-	case *ast.InfixExpression, *ast.PrefixExpression:
-		return renderExpr(expr)
+	switch e := expr.(type) {
+	case *ast.InfixExpression:
+		return renderExpr(e.Left) + " " + e.Operator + " " + renderExpr(e.Right)
+	case *ast.PrefixExpression:
+		return e.Operator + renderExpr(e.Right)
 	default:
-		return "(" + renderExpr(expr) + ")"
+		return renderExpr(expr)
 	}
 }
 

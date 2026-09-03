@@ -255,8 +255,8 @@ A commit group follows one transfer contract:
 For example, `a, b = b, a`:
 
 ```text
-%to_a = eval T (b)
-%to_b = eval T (a)
+%to_a = eval T b
+%to_b = eval T a
 
 commit
     a <- %to_a
@@ -281,8 +281,8 @@ statement update_sum_arr
 
     execute
         domain %i = range 0, n
-            %sum_next = eval Int (%sum_carry + 1)
-            %arr_next = eval Array(Int) (%arr_carry ⊕ [2])
+            %sum_next = eval Int %sum_carry + 1
+            %arr_next = eval Array(Int) %arr_carry ⊕ [2]
 
             advance
                 carry %sum_carry from %sum_next [on-skip=keep]
@@ -441,7 +441,7 @@ statement collect_result
 
     execute
         domain %i = range 0, n
-            %cell = eval Int (data[%i]) [on-oob=skip]
+            %cell = eval Int data[%i] [on-oob=skip]
             collect %result_collector <- %cell [policy=append-yielded]
 
     finish
@@ -501,8 +501,8 @@ Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
 a region ends when indentation returns to its level or an outer one; blank
 lines may separate phases without affecting structure; a line that binds a
 new named result reads `%result = operation Type operands`, where the type
-names the bound value — `%t0 = eval I64 (b)`, `%selected = require Int
-%condition`, `%t0 = eval I64, F64 (pair)` for a multi-output outcome —
+names the bound value — `%t0 = eval I64 b`, `%selected = require Int
+%condition`, `%t0 = eval I64, F64 pair` for a multi-output outcome —
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
 no result type, even where, as with `yield`, they produce their region's
@@ -530,11 +530,10 @@ or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
 float literal is not an access). A `%name` denotes a plan-local outcome or binder, inspired by LLVM local
 identifiers and MLIR SSA values. Source bindings are bare, spelled exactly
 as in the source; `_` is the discard sink, which no binding can be named;
-and `@` remains unused and reserved for future PIR syntax. An `eval` operand is exactly one parenthesized
-expression rendered using these
-conventions; the parentheses keep the
-type/expression boundary visible even when a type contains spaces, as
-`Table[Name:Str Score:I64]` does. The renderer covers exactly the node kinds
+and `@` remains unused and reserved for future PIR syntax. An `eval` operand is the solved expression rendered using these
+conventions without its outermost parentheses, so inner grouping stays
+explicit (`a + (2 * 3)`); the type ends at its first top-level space — the
+spaces in `Table[Name:Str Score:I64]` sit inside its brackets. The renderer covers exactly the node kinds
 the router admits and rejects any other as an ICE, so each step that widens
 the router adds the renderer and golden for its new node kinds. `commit` and
 `advance` carry no mode keyword: both are always simultaneous (§14).
@@ -546,13 +545,13 @@ statement assign_x
     execute
         %result = fallback Int
             primary
-                %condition = eval Int (a > 0) [yield=scalar]
+                %condition = eval Int a > 0 [yield=scalar]
                 %selected = require Int %condition
-                    %loaded = eval Int (data[i]) [on-oob=skip]
+                    %loaded = eval Int data[i] [on-oob=skip]
                     yield %loaded
                 yield %selected
             otherwise
-                %default = eval Int (-1)
+                %default = eval Int -1
                 yield %default
 
     commit

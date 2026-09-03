@@ -104,8 +104,8 @@ func TestRenderConcise(t *testing.T) {
     source "x, _ = 5, 7"
 
     execute
-        %t0 = eval I64 (5)
-        %t1 = eval I64 (7)
+        %t0 = eval I64 5
+        %t1 = eval I64 7
 
     commit
         x <- %t0
@@ -137,7 +137,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = pair"
 
     execute
-        %t0 = eval I64, F64 (pair)
+        %t0 = eval I64, F64 pair
 
     commit
         a <- %t0#0
@@ -170,8 +170,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 (b) [shape=scalar] [yield=always] [unmanaged]
-        %t1 = eval I64 (a) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 b [shape=scalar] [yield=always] [unmanaged]
+        %t1 = eval I64 a [shape=scalar] [yield=always] [unmanaged]
 
     commit
         a : I64 <- %t0

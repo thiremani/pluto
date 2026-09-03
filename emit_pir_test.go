@@ -117,7 +117,7 @@ func TestEmitPIRConcise(t *testing.T) {
     source "x = 5"
 
     execute
-        %t0 = eval I64 (5)
+        %t0 = eval I64 5
 
     commit
         x <- %t0
@@ -126,7 +126,7 @@ statement assign_y
     source "y = x"
 
     execute
-        %t0 = eval I64 (x)
+        %t0 = eval I64 x
 
     commit
         y <- %t0
@@ -142,7 +142,7 @@ func TestEmitPIRExpanded(t *testing.T) {
     source "x = 5"
 
     execute
-        %t0 = eval I64 (5) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 5 [shape=scalar] [yield=always] [unmanaged]
 
     commit
         x : I64 <- %t0
