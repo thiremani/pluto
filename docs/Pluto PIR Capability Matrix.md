@@ -24,7 +24,14 @@ keys on the same columns.
 **Callee output effect is a whole-call property.** A call with any `MayWrite`
 output defers to Step 6 as a unit — argument evaluation, tuple failure, and
 ownership are shared across its outputs, so individual slots cannot migrate
-independently.
+independently. An *argument* whose conditional or checked failure remains
+unresolved (`MayYield`) likewise defers the whole call to Step 6 — row 6c is a
+cross-cutting override of every call row, whatever the target or value kind:
+the failure is resolved at the invocation boundary, and strict source-order
+argument evaluation (plan §3) is the Step 6 behavior change that makes the
+combination migratable. A fallback that resolves every failure leaves the
+argument `MustYield` and outside this rule, though the router may still defer
+it until its node is supported.
 
 RHS flags compose: one RHS can be conditional, checked, ranged, collector, and
 a call at once (`tests/math/func.spt` carries all six across its statements).
@@ -33,16 +40,16 @@ disposition, and cutover step are identical across a range of values.
 
 Print has **no gate axis**: `ast.PrintStatement` carries only an expression, so
 its conditionality comes entirely from cond-expressions inside its arguments.
-A gated print (`arr[oob] val1, val2`) is proposed future syntax that does not
-parse today; it gets its own axis value and rows when that feature lands, as
-its own PR before Step 6.
+A gated print (`arr[oob] val1, val2`) is scheduled syntax that does not
+parse today; it gets its own axis value and rows when it lands, in its own
+required PR before Step 6.
 
 **Domain-role note.** `LoopInside` is the callee's flag, and the call site owns
 the loop when it is *false*: `compileCallExpression` selects
 `compileDirectCallWithRanges`/`compileIndirectCallWithRanges` under
 `!info.LoopInside && len(info.Ranges) > 0`
-([compiler.go:3175](../compiler/compiler.go:3175) for the direct-return ABI,
-[:3183](../compiler/compiler.go:3183) for the indirect one).
+([compiler.go:3213](../compiler/compiler.go#L3213) for the direct-return ABI,
+[:3222](../compiler/compiler.go#L3222) for the indirect one).
 `LoopInside=true` — callee-owned iteration — lowers through `compileCallInner`
 **only for direct returns**; indirect and multi-output callees use
 destination-seeded staged outputs instead.
@@ -76,25 +83,27 @@ two together rather than treating any single row as a deletion trigger.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | none | ordinary | scalar | local | — | — | R | 3 |
 | 2 | none | ordinary | heap | local | — | — | R | 4 |
+| 2b | none | ordinary | struct field read | local | — | — | R | 4 |
 | 3 | none | ordinary | multi-output | local | — | — | R | 4 |
 | 4 | none | ordinary (swap, dup source) | heap | local | — | — | R | 4 |
-| 5 | none | ordinary | scalar | blank (`_`) | — | — | R (sink shipped, §4) | 3 |
+| 5 | none | ordinary | scalar, Range descriptor | blank (`_`) | — | — | R (sink shipped, §4) | 3 |
 | 5b | none | ordinary | heap | blank (`_`) | — | — | R (sink shipped, §4) | 4 |
-| 5c | none | call | scalar, heap, multi-output | blank (`_`) | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R (sink shipped, §4) | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) |
+| 5c | none | call | scalar, heap, multi-output | blank (`_`) | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R (sink shipped, §4) | 4 (all-`MustWrite`) / 6 (any-`MayWrite`) |
 | 5d | none | checked | scalar, heap | blank (`_`) | — | — | R (sink shipped, §4) | 5 |
 | 5e | scalar | ordinary, call | scalar, heap, multi-output | blank (`_`) | — | both | R (sink shipped, §4) | 6 |
 | 5f | none | call, ranged | scalar, heap, multi-output | blank (`_`) | RHS-local | all-`MustWrite` | R (sink shipped, §4) | 7 |
 | 5h | none | ranged | scalar, heap | blank (`_`) | RHS-local | — | R (sink shipped, §4) | 7 |
 | 5g | ranged | ordinary, call | scalar, heap | blank (`_`) | shared gate | both | R (sink shipped, §4) | 7 |
-| 6 | none | call | scalar (direct return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
-| 6b | none | call | heap, multi-output (indirect return) | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 6 | none | call | scalar (direct return) | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
+| 6b | none | call | heap, multi-output (indirect return) | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
+| 6c | none | call, conditional or checked (unresolved argument) | any call value kind | any call target | — | both | **S (eager argument evaluation, plan §3; cross-cutting override of every call row)** | 6 |
 | 7 | none | checked | scalar, heap | local | — | — | R | 5 |
 | 7b | none | checked, conditional (fallback) | scalar, heap | local | — | — | **S (decided behavior change; semantics doc "Checked-access fallback")** | 5 |
 | 7c | none | checked, conditional (fallback, propagated) | scalar, multi-output | local | — | both (call form) | **S (decided; semantics doc)** | 6 |
 | 7e | none | checked, conditional (fallback), ranged | scalar | local | RHS-local | — | **S (decided; semantics doc)** | 7 |
 | 7f | none | checked, conditional (fallback), collector | scalar | local | collector-local | — | **S (decided; semantics doc)** | 8 |
 | 8 | none | ordinary | Range descriptor | local | — (no domain) | — | R | 3 |
-| 8b | none | call | Range descriptor | local | — (no domain) | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 8b | none | call | Range descriptor | local | — (no domain) | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
 | 9 | none | ranged | scalar, self-ref | local | RHS-local | — | R | 7 |
 | 10 | none | ranged, checked | scalar | local | RHS-local | — | S | 7, fast path 10 |
 | 11 | none | collector, ranged | scalar, heap | local | collector-local | — | S | 8 |
@@ -124,11 +133,11 @@ two together rather than treating any single row as a deletion trigger.
 | 28 | ranged | checked | scalar | local | shared gate (affine index) | — | S | 5, 7 |
 | 31c | none | checked, ranged | scalar, heap | local | RHS-local | — | R | 5, 7 |
 | 35b | none | ordinary | struct value copy | local | — | — | R | 4 |
-| 35d | none | call | struct value | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 35d | none | call | struct value | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
 | 36 | none | ordinary | table literal (plain cells) | local | — (no domain) | — | R | 4 |
 | 36f | none | conditional, checked (cells) | table literal | local | — (no domain) | — | S | 5, 6 |
 | 36b | none | ordinary | table value copy | local | — | — | R | 4 |
-| 36d | none | call | table value | local | — | split: all-`MustWrite` → 4, any-`MayWrite` → 6 | R | 4, 6 |
+| 36d | none | call | table value | local | — | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
 | 36g | none | ordinary | table column read | local | — | — | R | 4 |
 
 <details><summary>Routes, coverage, and helpers</summary>
@@ -137,7 +146,7 @@ two together rather than treating any single row as a deletion trigger.
 - **2** — `compileAssignments` → `commitAssignments`. *Tests:* `mem/mem.spt`, `str`, `array_concat`, `cond_copy`. *Helpers:* `commitAssignments`
 - **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
 - **4** — `commitAssignments` copy/move marking. *Tests:* `mem/mem.spt:64,78`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
-- **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`
+- **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`; the bare Range-descriptor discard is pinned by `TestPlanGoldenRangeDiscard` in `compiler/pir_test.go`
 - **5b** — per-slot sink; a discarded temporary is dropped (`drop`), a discarded named value stays borrowed. *Tests:* `discard`
 - **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
 - **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
@@ -147,6 +156,7 @@ two together rather than treating any single row as a deletion trigger.
 - **5g** — as 5f under a ranged gate: a rejected point produces no value to discard. *Missing:* **uncovered**: blank under a ranged gate. *Helpers:* `compileCondRangedStatement`
 - **6** — `compileCallExpression` → `compileCallInner`. *Tests:* `math/rec.spt`, `math/div`
 - **6b** — destination-seeded output slots via `compileIndirectCallIntoStagedOutputs`. *Tests:* `const_args/*`, `output_refinement`, `mem/mem.spt`
+- **6c** — an argument whose conditional or checked failure remains unresolved makes the invocation `MayYield` (call-merge, plan §9) regardless of callee effect, so the whole call defers to Step 6 even when every output is `MustWrite`; this overrides every call row above — 5c, 6, 6b, 8b, 35d, 36d, and the function-output and ranged call rows — whatever the target or value kind. An inner fallback that resolves every failure leaves the argument `MustYield` and outside this row. Today `compileCondOperands` evaluates the extracted conditions first and the sibling arguments only on the success branch, so `r = Pair(Loud(a), c > 5)` never runs `Loud`; plan §3 makes argument evaluation strict in source order. *Missing:* **uncovered** — regressions `F(sideEffect(), failingArg)` and `F(failingArg, sideEffect())` land with Step 6. *Helpers:* `compileCondOperands`
 - **7** — `compileExprAssigns` bounds bit → `commitAssignmentsPerExpr`. *Tests:* `array/oob_skip`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
 - **7b** — **rejected today**: `arr[oob] \|\| -1` fails "logical OR in value position requires a conditional left operand"; Step 5 adds a fallback-specific rule (checked-access root immediately left of `\|\|`) without widening `conditionPropagates`. *Missing:* regressions when implemented: `x = arr[oob] \|\| -1` → `-1`, in-bounds zero → `0`, heap `sarr[oob] \|\| "d"`. *Helpers:* condLHS spine
 - **7c** — comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver. *Missing:* regressions when implemented. *Helpers:* condLHS spine
@@ -346,9 +356,9 @@ the baseline for both failure kinds is pinned in `tests/array/oob_print.spt`.
 Per-slot printing (a failed slot omitting only itself) was considered and
 rejected in favor of the call rule: print is a call, and calls merge lanes.
 Line-level suppression that skips *evaluating* siblings would instead belong
-to a **gated print** (`arr[oob] val1, val2`) — proposed future syntax that
-does not parse today (`PrintStatement` has no gate field) and needs its own
-parser/AST/solver PR, semantics-doc entry, and capability rows.
+to a **gated print** (`arr[oob] val1, val2`) — scheduled syntax that
+does not parse today (`PrintStatement` has no gate field) and lands in its
+own required PR before Step 6, with semantics-doc entry and capability rows.
 
 An unwritten direct-return argument cannot yet suppress the invocation, since
 a direct `I64`/`F64` result carries no validity bit; the Step 4

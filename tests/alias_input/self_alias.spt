@@ -1,0 +1,10 @@
+# An input that aliases the output reads the pre-call value for the whole call.
+a = 5
+a = Twice(a)
+a
+w = "hi"
+w = Shout(w)
+w
+v = [1 2]
+v = Grow(v)
+v

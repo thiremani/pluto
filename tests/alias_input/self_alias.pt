@@ -1,0 +1,11 @@
+y = Twice(x)
+    y = x * 2
+    y = y + x
+
+s = Shout(t)
+    s = t ⊕ "!"
+    s = s ⊕ t
+
+r = Grow(q)
+    r = q ⊕ [9]
+    r = r ⊕ q

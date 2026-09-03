@@ -374,7 +374,7 @@ shape — unresolved meaning no closer resolver claimed it first: in
   That resolution suppresses the **entire invocation and stays so** —
   retained language behavior under "Print invocation atomicity" below, which
   also makes sibling evaluation eager and changes the out-of-bounds case
-  (today a materialized zero prints). ("Gated print" names the proposed
+  (today a materialized zero prints). ("Gated print" names the scheduled
   no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
@@ -414,7 +414,13 @@ shape — unresolved meaning no closer resolver claimed it first: in
   retained in outcome — but evaluation becomes eager: today a failed
   conditional also skips evaluating its sibling arguments, while the decided
   model evaluates every argument in source order before deciding, so sibling
-  side effects occur even when the invocation is suppressed. The
+  side effects occur even when the invocation is suppressed. This is the
+  general invocation rule, not a print special case: every call evaluates
+  all of its arguments in source order before suppression decides, so
+  `F(sideEffect(), failingArg)` runs the side effect and
+  `F(failingArg, sideEffect())` still evaluates the argument after the
+  failed one. Ordinary calls are currently lazy in exactly the way print
+  is, and PIR Step 6 is the behavior change for both. The
   out-of-bounds case changes too: today it materializes a zero and prints. A
   suppressed invocation still releases its owned temporaries. One limit of
   **today's internal ABI**, not a language rule: an unwritten direct-return
@@ -432,12 +438,12 @@ shape — unresolved meaning no closer resolver claimed it first: in
   already names an OOB read a failed condition. Scheduled with checked
   accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
   tests when it lands.
-- **Gated print (proposed, not current syntax):** a no-comma prefix form such
+- **Gated print (scheduled before PIR Step 6; not current syntax):** a no-comma prefix form such
   as `arr[oob] val1, val2` would reject the whole line without evaluating the
   siblings, following the general rule that a gate admits or rejects its entire
   region while a failure inside an admitted region skips only its own slot.
   This does not parse today — `PrintStatement` has no gate — and needs its own
-  parser, AST, and solver work. If added, the gate must test the access's
+  parser, AST, and solver work. When it lands, the gate must test the access's
   yielded/in-bounds bit rather than its value, so an in-bounds zero still
   admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
