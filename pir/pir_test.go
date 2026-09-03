@@ -22,7 +22,7 @@ func ident(name string) ast.Expression {
 
 func swapPlan() *AssignPlan {
 	return &AssignPlan{
-		Name:   "assign_a_b",
+		Label:  "assign_a_b",
 		Source: "a, b = b, a",
 		Evals: []*Eval{
 			{Result: 0, Expr: ident("b"), Types: []Type{testType("I64")}},
@@ -41,13 +41,14 @@ func TestValidateAccepts(t *testing.T) {
 	}
 }
 
+// Plan §14: validation invariants.
 func TestValidateRejects(t *testing.T) {
 	cases := []struct {
 		name    string
 		mutate  func(*AssignPlan)
 		wantErr string
 	}{
-		{"NoName", func(p *AssignPlan) { p.Name = "" }, "no name"},
+		{"NoLabel", func(p *AssignPlan) { p.Label = "" }, "no label"},
 		{"NoSource", func(p *AssignPlan) { p.Source = "" }, "no source"},
 		{"NoEvals", func(p *AssignPlan) { p.Evals = nil }, "no evals"},
 		{"SparseResultID", func(p *AssignPlan) { p.Evals[1].Result = 2 }, "dense"},
@@ -83,9 +84,10 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+// Plan §12: text form, concise view.
 func TestRenderConcise(t *testing.T) {
 	p := &AssignPlan{
-		Name:   "assign_x__",
+		Label:  "assign_x__",
 		Source: "x, _ = 5, 7",
 		Evals: []*Eval{
 			{Result: 0, Expr: intLit("5"), Types: []Type{testType("I64")}},
@@ -96,14 +98,14 @@ func TestRenderConcise(t *testing.T) {
 			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 1}},
 		},
 	}
-	want := `pir.statement @assign_x__
+	want := `statement assign_x__
     source "x, _ = 5, 7"
 
     execute
-        %t0 = eval 5 : I64
-        %t1 = eval 7 : I64
+        %t0 = eval I64 (5)
+        %t1 = eval I64 (7)
 
-    commit simultaneous
+    commit
         @x <- %t0
         discard <- %t1
 `
@@ -112,17 +114,64 @@ func TestRenderConcise(t *testing.T) {
 	}
 }
 
+// Plan §12: a multi-output outcome is addressed per slot with a trailing
+// numeric selector.
+func TestRenderMultiOutput(t *testing.T) {
+	p := &AssignPlan{
+		Label:  "assign_a_b",
+		Source: "a, b = pair",
+		Evals: []*Eval{
+			{Result: 0, Expr: ident("pair"), Types: []Type{testType("I64"), testType("F64")}},
+		},
+		Commit: []Mapping{
+			{Target: Target{Kind: LocalTarget, Name: "a", Type: testType("I64")}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
+			{Target: Target{Kind: LocalTarget, Name: "b", Type: testType("F64")}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},
+		},
+	}
+	if err := Validate(p); err != nil {
+		t.Fatalf("multi-output plan rejected: %v", err)
+	}
+	want := `statement assign_a_b
+    source "a, b = pair"
+
+    execute
+        %t0 = eval I64, F64 (@pair)
+
+    commit
+        @a <- %t0#0
+        @b <- %t0#1
+`
+	if got := p.Render(false); got != want {
+		t.Fatalf("multi-output render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Plan §12: the renderer covers exactly the router's node kinds. A
+// well-formed string literal rendered fine under the old ast fallback, so
+// only the explicit rejection produces this exact panic value.
+func TestRenderRejectsUnsupportedNode(t *testing.T) {
+	p := swapPlan()
+	p.Evals[0].Expr = &ast.StringLiteral{Token: token.Token{Literal: "hi"}}
+	defer func() {
+		if got := recover(); got != "pir: no renderer for *ast.StringLiteral" {
+			t.Fatalf("expected the renderer rejection panic, got %v", got)
+		}
+	}()
+	p.Render(false)
+}
+
+// Plan §12: expanded view adds shapes, ownership, and target types.
 func TestRenderExpanded(t *testing.T) {
 	p := swapPlan()
 	got := p.Render(true)
-	want := `pir.statement @assign_a_b
+	want := `statement assign_a_b
     source "a, b = b, a"
 
     execute
-        %t0 = eval @b : I64 [shape=scalar] [yield=always] [unmanaged]
-        %t1 = eval @a : I64 [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 (@b) [shape=scalar] [yield=always] [unmanaged]
+        %t1 = eval I64 (@a) [shape=scalar] [yield=always] [unmanaged]
 
-    commit simultaneous
+    commit
         @a : I64 <- %t0
         @b : I64 <- %t1
 `

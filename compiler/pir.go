@@ -102,7 +102,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	}
 
 	return &pir.AssignPlan{
-		Name:   "assign_" + strings.Join(nameParts, "_"),
+		Label:  "assign_" + strings.Join(nameParts, "_"),
 		Source: stmt.String(),
 		Evals:  evals,
 		Commit: commit,

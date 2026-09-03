@@ -47,7 +47,7 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 	i64 := pirTestType("I64")
 	return []*pir.AssignPlan{
 		{
-			Name:   "assign_x",
+			Label:  "assign_x",
 			Source: "x = 5",
 			Evals: []*pir.Eval{{
 				Result: 0,
@@ -59,7 +59,7 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 			}},
 		},
 		{
-			Name:   "assign_y",
+			Label:  "assign_y",
 			Source: "y = x",
 			Evals: []*pir.Eval{{
 				Result: 0,
@@ -82,17 +82,25 @@ func parsedEmitPIRMode(t *testing.T, args ...string) string {
 	return opts.emitPIR
 }
 
-// brokenWriter fails every write, standing in for a redirected stdout that
-// has gone away.
-type brokenWriter struct{}
+// failingWriter accepts writesLeft writes and then fails every one, standing
+// in for a redirected stdout that goes away mid-stream.
+type failingWriter struct{ writesLeft int }
 
-func (brokenWriter) Write(p []byte) (int, error) {
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.writesLeft > 0 {
+		w.writesLeft--
+		return len(p), nil
+	}
 	return 0, errors.New("output sink closed")
 }
 
+// Labels are not unique, so the diagnostic must identify the failed plan by
+// its one-based source-order number and source text.
 func TestEmitPIRWriteFailure(t *testing.T) {
-	err := emitPIR(brokenWriter{}, emitPIRTestPlans(), parsedEmitPIRMode(t, "-emit-pir"))
-	require.ErrorContains(t, err, "write PIR plan assign_x")
+	plans := []*pir.AssignPlan{emitPIRTestPlans()[0], emitPIRTestPlans()[0]}
+	plans[1].Source = "x = 6"
+	err := emitPIR(&failingWriter{writesLeft: 1}, plans, parsedEmitPIRMode(t, "-emit-pir"))
+	require.ErrorContains(t, err, `write PIR plan 2 assign_x "x = 6"`)
 }
 
 func TestEmitPIRDisabled(t *testing.T) {
@@ -101,40 +109,42 @@ func TestEmitPIRDisabled(t *testing.T) {
 	require.Empty(t, out.String())
 }
 
+// Plan §12: one emission group per plan, blank-line separated.
 func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, emitPIRTestPlans(), parsedEmitPIRMode(t, "-emit-pir")))
-	require.Equal(t, `pir.statement @assign_x
+	require.Equal(t, `statement assign_x
     source "x = 5"
 
     execute
-        %t0 = eval 5 : I64
+        %t0 = eval I64 (5)
 
-    commit simultaneous
+    commit
         @x <- %t0
 
-pir.statement @assign_y
+statement assign_y
     source "y = x"
 
     execute
-        %t0 = eval @x : I64
+        %t0 = eval I64 (@x)
 
-    commit simultaneous
+    commit
         @y <- %t0
 
 `, out.String())
 }
 
+// Plan §12: expanded view adds shapes, ownership, and target types.
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, emitPIRTestPlans()[:1], parsedEmitPIRMode(t, "-emit-pir=expanded")))
-	require.Equal(t, `pir.statement @assign_x
+	require.Equal(t, `statement assign_x
     source "x = 5"
 
     execute
-        %t0 = eval 5 : I64 [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 (5) [shape=scalar] [yield=always] [unmanaged]
 
-    commit simultaneous
+    commit
         @x : I64 <- %t0
 
 `, out.String())

@@ -12,8 +12,8 @@ type Type interface {
 	String() string
 }
 
-// OutcomeID identifies one node's result (%tN); IDs are dense in execution
-// order.
+// OutcomeID identifies one node's result (%t<N>); IDs are dense in execution
+// order. Rendered names are display only — nothing parses them.
 type OutcomeID int
 
 // Eval evaluates one solved source expression. The builder must split out
@@ -59,7 +59,7 @@ type Mapping struct {
 // AssignPlan is the execution plan for one assignment statement. The prepare
 // and finish phases are structurally absent until carries and collectors land.
 type AssignPlan struct {
-	Name   string // deterministic plan symbol, e.g. assign_x
+	Label  string // derived from the targets, e.g. assign_x; not unique, never referenced
 	Source string // source rendering of the statement
 	Evals  []*Eval
 	Commit []Mapping

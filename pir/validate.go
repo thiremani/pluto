@@ -9,26 +9,26 @@ import "fmt"
 // rendered name — sufficient for scalars and Range; Step 4 needs real
 // compatibility semantics (an empty-array reset renders unlike its target).
 func Validate(p *AssignPlan) error {
-	if p.Name == "" {
-		return fmt.Errorf("plan has no name")
+	if p.Label == "" {
+		return fmt.Errorf("plan has no label")
 	}
 	if p.Source == "" {
-		return fmt.Errorf("plan %s has no source rendering", p.Name)
+		return fmt.Errorf("plan %s has no source rendering", p.Label)
 	}
 	if len(p.Evals) == 0 {
-		return fmt.Errorf("plan %s has no evals", p.Name)
+		return fmt.Errorf("plan %s has no evals", p.Label)
 	}
 
 	slots := 0
 	for i, ev := range p.Evals {
-		if err := validateEval(p.Name, i, ev); err != nil {
+		if err := validateEval(p.Label, i, ev); err != nil {
 			return err
 		}
 		slots += len(ev.Types)
 	}
 
 	if len(p.Commit) != slots {
-		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Name, len(p.Commit), slots)
+		return fmt.Errorf("plan %s: commit has %d mappings for %d outcome slots", p.Label, len(p.Commit), slots)
 	}
 
 	consumed := make(map[OutcomeRef]bool, slots)
@@ -37,7 +37,7 @@ func Validate(p *AssignPlan) error {
 			return err
 		}
 		if consumed[m.Outcome] {
-			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Name, m.Outcome.Outcome, m.Outcome.Slot)
+			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
 		}
 		consumed[m.Outcome] = true
 	}
@@ -69,18 +69,18 @@ func (p *AssignPlan) validateMapping(m Mapping) error {
 	switch m.Target.Kind {
 	case LocalTarget:
 		if m.Target.Name == "" {
-			return fmt.Errorf("plan %s: local target has no name", p.Name)
+			return fmt.Errorf("plan %s: local target has no name", p.Label)
 		}
 		if m.Target.Type.String() != outcomeType.String() {
 			return fmt.Errorf("plan %s: target @%s : %s mapped to outcome %%t%d slot %d : %s",
-				p.Name, m.Target.Name, m.Target.Type.String(), m.Outcome.Outcome, m.Outcome.Slot, outcomeType.String())
+				p.Label, m.Target.Name, m.Target.Type.String(), m.Outcome.Outcome, m.Outcome.Slot, outcomeType.String())
 		}
 	case DiscardTarget:
 		if m.Target.Name != "" || m.Target.Type != nil {
-			return fmt.Errorf("plan %s: discard target carries a name or type", p.Name)
+			return fmt.Errorf("plan %s: discard target carries a name or type", p.Label)
 		}
 	default:
-		return fmt.Errorf("plan %s: unknown target kind %d", p.Name, m.Target.Kind)
+		return fmt.Errorf("plan %s: unknown target kind %d", p.Label, m.Target.Kind)
 	}
 
 	return nil
@@ -88,11 +88,11 @@ func (p *AssignPlan) validateMapping(m Mapping) error {
 
 func (p *AssignPlan) slotType(ref OutcomeRef) (Type, error) {
 	if ref.Outcome < 0 || int(ref.Outcome) >= len(p.Evals) {
-		return nil, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Name, ref.Outcome)
+		return nil, fmt.Errorf("plan %s: commit references unknown outcome %%t%d", p.Label, ref.Outcome)
 	}
 	types := p.Evals[ref.Outcome].Types
 	if ref.Slot < 0 || ref.Slot >= len(types) {
-		return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Name, ref.Outcome, ref.Slot)
+		return nil, fmt.Errorf("plan %s: commit references %%t%d slot %d out of range", p.Label, ref.Outcome, ref.Slot)
 	}
 	return types[ref.Slot], nil
 }

@@ -384,11 +384,12 @@ func emitPIR(w io.Writer, plans []*pir.AssignPlan, mode string) error {
 	if mode == "" {
 		return nil
 	}
-	for _, plan := range plans {
+	for i, plan := range plans {
 		if _, err := fmt.Fprintf(w, "%s\n", plan.Render(mode == "expanded")); err != nil {
-			return fmt.Errorf("write PIR plan %s: %w", plan.Name, err)
+			return fmt.Errorf("write PIR plan %d %s %q: %w", i+1, plan.Label, plan.Source, err)
 		}
 	}
+
 	return nil
 }
 

@@ -21,14 +21,15 @@ func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script strin
 	return sc.Plans
 }
 
-func planNames(plans []*pir.AssignPlan) []string {
-	names := make([]string, len(plans))
+func planLabels(plans []*pir.AssignPlan) []string {
+	labels := make([]string, len(plans))
 	for i, p := range plans {
-		names[i] = p.Name
+		labels[i] = p.Label
 	}
-	return names
+	return labels
 }
 
+// Plan §6 (simultaneous commit, swap) and §12 (text form).
 func TestPlanGolden(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -42,57 +43,57 @@ s = r
 a, b
 s`)
 
-	require.Equal(t, []string{"assign_a", "assign_b", "assign_a_b", "assign__", "assign_r", "assign_s"}, planNames(plans))
+	require.Equal(t, []string{"assign_a", "assign_b", "assign_a_b", "assign__", "assign_r", "assign_s"}, planLabels(plans))
 
-	require.Equal(t, `pir.statement @assign_a_b
+	require.Equal(t, `statement assign_a_b
     source "a, b = b, a"
 
     execute
-        %t0 = eval @b : I64
-        %t1 = eval @a : I64
+        %t0 = eval I64 (@b)
+        %t1 = eval I64 (@a)
 
-    commit simultaneous
+    commit
         @a <- %t0
         @b <- %t1
 `, plans[2].Render(false))
 
-	require.Equal(t, `pir.statement @assign_b
+	require.Equal(t, `statement assign_b
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval (@a + (2 * 3)) : I64 [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 (@a + (2 * 3)) [shape=scalar] [yield=always] [unmanaged]
 
-    commit simultaneous
+    commit
         @b : I64 <- %t0
 `, plans[1].Render(true))
 
-	require.Equal(t, `pir.statement @assign__
+	require.Equal(t, `statement assign__
     source "_ = 7"
 
     execute
-        %t0 = eval 7 : I64
+        %t0 = eval I64 (7)
 
-    commit simultaneous
+    commit
         discard <- %t0
 `, plans[3].Render(false))
 
-	require.Equal(t, `pir.statement @assign_r
+	require.Equal(t, `statement assign_r
     source "r = 0:10:2"
 
     execute
-        %t0 = eval 0:10:2 : I64:I64:I64
+        %t0 = eval I64:I64:I64 (0:10:2)
 
-    commit simultaneous
+    commit
         @r <- %t0
 `, plans[4].Render(false))
 
-	require.Equal(t, `pir.statement @assign_s
+	require.Equal(t, `statement assign_s
     source "s = r"
 
     execute
-        %t0 = eval @r : I64:I64:I64
+        %t0 = eval I64:I64:I64 (@r)
 
-    commit simultaneous
+    commit
         @s <- %t0
 `, plans[5].Render(false))
 }
@@ -122,7 +123,7 @@ w = q + 1
 _ = 0:3
 g, y, sg, shc, z, w`)
 
-	require.Equal(t, []string{"assign_x", "assign_y", "assign_q", "assign__"}, planNames(plans))
+	require.Equal(t, []string{"assign_x", "assign_y", "assign_q", "assign__"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
@@ -149,7 +150,7 @@ res = addOne(seed)
 after = seed + 1
 res, after`)
 
-	require.Equal(t, []string{"assign_seed", "assign_after"}, planNames(plans))
+	require.Equal(t, []string{"assign_seed", "assign_after"}, planLabels(plans))
 }
 
 func TestPlanRouterFreshVsExistingTargets(t *testing.T) {
@@ -163,7 +164,7 @@ x = x > 0 5
 x = x + 1
 x`)
 
-	require.Equal(t, []string{"assign_x", "assign_x"}, planNames(plans))
+	require.Equal(t, []string{"assign_x", "assign_x"}, planLabels(plans))
 }
 
 // TestInvalidPlanPanicsBeforeLowering drives the production
@@ -223,14 +224,41 @@ func TestPlanGoldenRangeDiscard(t *testing.T) {
 	defer ctx.Dispose()
 
 	plans := compileScriptPlans(t, ctx, "planRangeDiscard", "", "_ = 0:3")
-	require.Equal(t, []string{"assign__"}, planNames(plans))
-	require.Equal(t, `pir.statement @assign__
+	require.Equal(t, []string{"assign__"}, planLabels(plans))
+	require.Equal(t, `statement assign__
     source "_ = 0:3"
 
     execute
-        %t0 = eval 0:3 : I64:I64:I64
+        %t0 = eval I64:I64:I64 (0:3)
 
-    commit simultaneous
+    commit
         discard <- %t0
 `, plans[0].Render(false))
+}
+
+// Plan §12: plan labels and bindings are Pluto identifiers, Unicode included.
+func TestPlanGoldenUnicode(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planUnicode", "", "π = 3.14\nτ = π\nτ")
+	require.Equal(t, []string{"assign_π", "assign_τ"}, planLabels(plans))
+	require.Equal(t, `statement assign_π
+    source "π = 3.14"
+
+    execute
+        %t0 = eval F64 (3.14)
+
+    commit
+        @π <- %t0
+`, plans[0].Render(false))
+	require.Equal(t, `statement assign_τ
+    source "τ = π"
+
+    execute
+        %t0 = eval F64 (@π)
+
+    commit
+        @τ <- %t0
+`, plans[1].Render(false))
 }
