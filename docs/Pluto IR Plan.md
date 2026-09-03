@@ -173,7 +173,7 @@ Each value-producing node has an abstract outcome:
 
 | Property | Examples |
 | --- | --- |
-| Outputs | `Int`, `(Int, String)`, `Array(Int)` |
+| Outputs | `I64`, `(I64, Str)`, `[I64]` |
 | Domain | scalar, fixed output slots, array elements, range iterations |
 | Yield shape | always, scalar condition, per-slot bits, element mask, per-iteration |
 
@@ -255,8 +255,8 @@ A commit group follows one transfer contract:
 For example, `a, b = b, a`:
 
 ```text
-%to_a = eval T b
-%to_b = eval T a
+%to_a = eval I64 b
+%to_b = eval I64 a
 
 commit
     a <- %to_a
@@ -276,21 +276,21 @@ committed only after the domain finishes:
 ```text
 statement update_sum_arr
     prepare
-        %sum_carry = carry Int sum
-        %arr_carry = carry Array(Int) arr
+        %sum_carry = carry I64 sum
+        %arr_carry = carry [I64] arr
 
     execute
         domain %i = range 0, n
-            %sum_next = eval Int %sum_carry + 1
-            %arr_next = eval Array(Int) %arr_carry ⊕ [2]
+            %sum_next = eval I64 %sum_carry + 1
+            %arr_next = eval [I64] %arr_carry ⊕ [2]
 
             advance
                 carry %sum_carry from %sum_next [on-skip=keep]
                 carry %arr_carry from %arr_next [on-skip=keep]
 
     finish
-        %sum_final = finish Int %sum_carry
-        %arr_final = finish Array(Int) %arr_carry
+        %sum_final = finish I64 %sum_carry
+        %arr_final = finish [I64] %arr_carry
 
     commit
         sum <- %sum_final
@@ -437,15 +437,15 @@ conditions.
 ```text
 statement collect_result
     prepare
-        %result_collector = collector Array(Int)
+        %result_collector = collector [I64]
 
     execute
         domain %i = range 0, n
-            %cell = eval Int data[%i] [on-oob=skip]
+            %cell = eval I64 data[%i] [on-oob=skip]
             collect %result_collector <- %cell [policy=append-yielded]
 
     finish
-        %result_final = finish Array(Int) %result_collector
+        %result_final = finish [I64] %result_collector
 
     commit
         result <- %result_final
@@ -501,7 +501,7 @@ Format rules: four ASCII spaces per level, no tabs, no braces or `end` markers;
 a region ends when indentation returns to its level or an outer one; blank
 lines may separate phases without affecting structure; a line that binds a
 new named result reads `%result = operation Type operands`, where the type
-names the bound value — `%t0 = eval I64 b`, `%selected = require Int
+names the bound value — `%t0 = eval I64 b`, `%selected = require I64
 %condition`, `%t0 = eval I64, F64 pair` for a multi-output outcome —
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
@@ -534,7 +534,13 @@ and `@` remains unused and reserved for future PIR syntax.
 An `eval` operand is the solved expression rendered without its outermost
 parentheses, so nested grouping remains explicit (`a + (2 * 3)`). The
 complete comma-separated result type list precedes the operand; compound
-types delimit internal spaces with brackets or braces. The renderer covers
+types delimit internal spaces with brackets or braces. Types print in the
+compiler's display spelling — `I64`, `[I64]`, `[[I64]]`,
+`Table[Name:Str Score:I64]` — never the symbol mangle, which is neither
+exact identity (function mangles omit result types; a struct mangles to a
+length-encoded name) nor assignment compatibility (`StrG` into `StrH`, an
+empty-array reset). Validation compares this spelling for now; Step 4
+replaces that with the compiler's directional binding-compatibility relation. The renderer covers
 exactly the node kinds
 the router admits and rejects any other as an ICE, so each step that widens
 the router adds the renderer and golden for its new node kinds. `commit` and
@@ -545,15 +551,15 @@ statement assign_x
     source "x = a > 0 && data[i] || -1"
 
     execute
-        %result = fallback Int
+        %result = fallback I64
             primary
-                %condition = eval Int a > 0 [yield=scalar]
-                %selected = require Int %condition
-                    %loaded = eval Int data[i] [on-oob=skip]
+                %condition = eval I64 a > 0 [yield=scalar]
+                %selected = require I64 %condition
+                    %loaded = eval I64 data[i] [on-oob=skip]
                     yield %loaded
                 yield %selected
             otherwise
-                %default = eval Int -1
+                %default = eval I64 -1
                 yield %default
 
     commit
@@ -1060,6 +1066,10 @@ both); suite output is unchanged.
 
 - Heap and multi-output assignments, calls, swaps, duplicate sources, and
   heap/multi-output `discard` ownership (§6).
+- The validator's rendered-name type equality becomes the compiler's
+  directional binding-compatibility relation (`StrG` into `StrH`, an
+  empty-array reset) — never mangle equality, which is neither identity nor
+  compatibility.
 - The ownership elaboration pass (§8), with generic cleanup lowering.
 - **Calls split by callee effect.** A call that looks ordinary can still have
   independently `MayWrite` outputs, which needs per-output keep-old handling —
