@@ -32,8 +32,8 @@ func (p *AssignPlan) Render(expanded bool) string {
 	return b.String()
 }
 
-// renderPayload renders an eval operand without the outermost parentheses
-// renderExpr gives a compound node, so inner grouping stays explicit.
+// renderPayload omits the surrounding parentheses that renderExpr gives a
+// top-level infix or prefix expression.
 func renderPayload(expr ast.Expression) string {
 	switch e := expr.(type) {
 	case *ast.InfixExpression:

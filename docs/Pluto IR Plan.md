@@ -530,10 +530,12 @@ or `%t0#1.name`, exactly as `person.name` in the source (a `.` inside a
 float literal is not an access). A `%name` denotes a plan-local outcome or binder, inspired by LLVM local
 identifiers and MLIR SSA values. Source bindings are bare, spelled exactly
 as in the source; `_` is the discard sink, which no binding can be named;
-and `@` remains unused and reserved for future PIR syntax. An `eval` operand is the solved expression rendered using these
-conventions without its outermost parentheses, so inner grouping stays
-explicit (`a + (2 * 3)`); the type ends at its first top-level space — the
-spaces in `Table[Name:Str Score:I64]` sit inside its brackets. The renderer covers exactly the node kinds
+and `@` remains unused and reserved for future PIR syntax.
+An `eval` operand is the solved expression rendered without its outermost
+parentheses, so nested grouping remains explicit (`a + (2 * 3)`). The
+complete comma-separated result type list precedes the operand; compound
+types delimit internal spaces with brackets or braces. The renderer covers
+exactly the node kinds
 the router admits and rejects any other as an ICE, so each step that widens
 the router adds the renderer and golden for its new node kinds. `commit` and
 `advance` carry no mode keyword: both are always simultaneous (§14).
