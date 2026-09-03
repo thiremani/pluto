@@ -97,6 +97,12 @@ every flattened argument outcome, ANDs their yielded bits, and invokes print
 neither content nor newline. A `fallback` resolves before this boundary, so
 `a, arr[oob] || -1, arr2[oob] || -2, b` emits `a -1 -2 b`, while
 `a, arr[oob], arr2[oob], b` emits nothing at all.
+Zero-filling a failed slot instead was rejected: print has no target whose
+keep-old rule could resolve the missing outcome (`y = 7` then `y = c > 5`
+leaves `y` at 7; only a fresh target shows the zero seed), so the only value
+to invent is zero, which §5 forbids as a missing-value marker. `|| 0` spells
+that placeholder explicitly, and the whole-line default keeps
+`"big:", c, c > 5` a display filter.
 
 When every argument yields, the invocation formats every slot in source
 order, with one space between adjacent **ordinary single-line slots**; each
@@ -126,6 +132,16 @@ callee that itself prints, an owned heap temporary — now runs, and is
 released, even when the invocation is suppressed. The other Step 6 change is
 the OOB case, whose materialized zero becomes suppression under the same
 call-level validity rule (§9).
+
+Argument evaluation is **strict** for every invocation, print included: an
+argument's side effects — including I/O once the language has it — happen
+in source order whether or not the invocation is suppressed, for
+`x = F(io(), arr[oob])` exactly as for a print. Suppression is a property of
+the invocation's output, never of argument evaluation. This is a Step 6
+behavior change for ordinary calls as much as for print: today both evaluate
+the extracted conditions first and their sibling arguments only on the
+success branch, so `r = Pair(Loud(a), c > 5)` currently never runs `Loud`.
+The regressions in §17 pin both together.
 
 Prints are migration scope, not a future extension: today's
 `compilePrintStatement` consumes the conditional-extraction and
@@ -267,6 +283,13 @@ For owned heap values this may lower to an ownership swap without deep copies.
 If one owned source feeds multiple targets, at most one consumer takes it; the
 others require a derived copy.
 
+The same snapshot rule holds across a call boundary: in `a = F(a)` the callee
+reads the pre-call value through its read-only input for the whole call,
+while its output writes land in the destination-seeded staging slot and reach
+`a` only at commit. `tests/alias_input` pins this for direct scalars, heap
+strings, and arrays (`y = x * 2` then `y = y + x` yields 15 for `a = 5`, not
+20); Step 4's call lowering must preserve it.
+
 ## 7. Loop-Carried State
 
 A ranged assignment that reads its own LHS needs explicit carried state, so
@@ -331,6 +354,16 @@ by an advance; a later advance releases the previous carry only if that carry
 was `owned`; and the external target's old value is released only by a
 successful final `commit`, after the RHS has finished reading it.
 
+A carried append must not copy on every iteration. In the example, iteration
+1 reads the borrowed seed and `⊕` materializes one owned copy; from iteration
+2 the carry is `owned`, and because `%arr_next` is the only reader of
+`%arr_carry` in the iteration and advances that same carry, elaboration
+promotes the operand to a **consuming** transfer (§8): the append works in
+place on the buffer it is about to replace. A ranged append is therefore one
+seed copy plus n in-place appends; the amortized O(n) total additionally
+needs a growth-capable buffer in the runtime, which the plan-level license
+does not provide by itself.
+
 ## 8. Ownership, Lifetimes, and Cleanup
 
 Every value-producing outcome carries an annotation:
@@ -366,6 +399,25 @@ owning consumer takes it and no surviving outcome still needs the old owner —
 this is what permits an array or string swap without deep copies. Every other
 escaping borrow is copied or materialized.
 
+The same promotion applies inside `eval`. An `eval` does not consume its
+operands, but elaboration may mark one operand `[consume=%x]` when `%x` is
+`owned` and `unique`, the consuming eval is its only use in the whole
+iteration or group — one occurrence, not merely one reading outcome, since
+an eval of `%carry ⊕ %carry` has one outcome but two reads and consuming the
+first could mutate or reallocate the buffer before the second — and the
+eval's outcome advances or commits into the location `%x` came from; the
+lowerer may then update that buffer in place instead of copying it (§7's
+carried append). The annotation is derived, printed in expanded PIR, and
+validated like any other transfer (§14): an operand consumed in place is
+never read again or released separately.
+
+Exclusivity is tracked separately from ownership. `owned` records a release
+obligation; `unique` records that no other handle shares the buffer. An
+`owned` outcome may share its buffer through copy-on-write materialization —
+it still owns its release and is not a borrow — but it is not `unique`, and
+an in-place update must first detach into a private copy. Borrows stay
+strictly non-owning. Expanded PIR prints both annotations.
+
 Elaboration is new analysis, not a port: ownership does not exist before LLVM
 today. `ExprInfo` carries type, range, and conditional facts only, while
 `Borrowed` lives on LLVM-bearing `Symbol`s and transfer decisions happen during
@@ -394,16 +446,22 @@ eager (§3): today the gate also skips *evaluating* the sibling arguments,
 while `PrintPlan` evaluates every argument before ANDing. Step 6 therefore
 changes two observable things: the OOB case — today `arr[oob], val1, val2`
 prints `0 val1 val2`, afterward nothing — and sibling side effects, which now
-occur even on a suppressed invocation.
+occur even on a suppressed invocation. The suppression is silent by design;
+whether a debug build should report a suppressed invocation is a language
+decision outside this plan, which neither requires nor precludes it.
 
 A gated print such as `arr[oob] val1, val2` — rejecting the whole line without
-evaluating the siblings — is **proposed future syntax, not current language**.
+evaluating the siblings — is **scheduled syntax, not current language**: it
+lands in its own PR before Step 6 (§16).
 It does not parse: the parser builds a `PrintStatement` only from a plain
 expression list, and the solver rejects an OOB read as a statement condition.
 Adding it is a parser/AST/solver feature with its own semantics-doc entry,
 tests, and capability rows, and it must specify that the gate tests the
 access's yielded/in-bounds bit rather than its value, so an in-bounds zero
 still admits the region.
+Once print arguments are strict (§3), the gate is the only spelling of "do
+not evaluate the rest", and it gives print the same gate-versus-value pair
+that assignments already have.
 
 | Failure site | PIR action |
 | --- | --- |
@@ -648,7 +706,10 @@ The validator rejects a plan unless:
 22. A target- or carry-origin borrow is promoted to transfer only when its
     owner is replaced in the same group, exactly one owning consumer takes it,
     and no surviving outcome depends on the old owner.
-23. Every `%` name — outcomes, carries, collectors, and domain binders — is
+23. A `[consume=%x]` annotation names an `owned`, `unique` outcome whose only
+    use in its iteration or group is the consuming eval's single operand
+    occurrence, and nothing uses `%x` afterwards.
+24. Every `%` name — outcomes, carries, collectors, and domain binders — is
     allocated from one per-plan namespace and is unique within the plan, so
     every textual reference is unambiguous; a named node exposes its
     allocated name to validation. Names are display labels that lowering
@@ -1009,9 +1070,9 @@ temporary is released and a discarded named value survives.
 `tests/discard.spt` covers repeated blanks, mixed types, heap outcomes,
 repeated statements, borrowed survival, checked access, ranged multi-output
 blanks, a conditionally-writing callee on both paths, and blanks under gates
-and ranges. **Step 2 is complete.** Gated print syntax, if wanted, is a
-separate feature PR before Step 6; any other language change likewise gets
-its own PR with its semantics-doc and rejection-test updates.
+and ranges. **Step 2 is complete.** Gated print syntax is a required
+separate feature PR before Step 6 (§9, §16); any other language change
+likewise gets its own PR with its semantics-doc and rejection-test updates.
 
 ### Step 2: Write effects on settled specializations (~1-2 weeks)
 
@@ -1071,14 +1132,22 @@ both); suite output is unchanged.
   directional binding-compatibility relation (`StrG` into `StrH`, an
   empty-array reset) — never mangle equality, which is neither identity nor
   compatibility.
-- The ownership elaboration pass (§8), with generic cleanup lowering.
-- **Calls split by callee effect.** A call that looks ordinary can still have
-  independently `MayWrite` outputs, which needs per-output keep-old handling —
-  a Step 6 capability. So Step 4 migrates calls whose outputs are **all**
-  `MustWrite`; a call with any `MayWrite` output defers **as a whole** to
-  Step 6, because argument evaluation, tuple failure, and ownership are shared
-  across its outputs and individual slots cannot migrate separately. Callee
-  output effect is therefore a router axis, recorded in the capability matrix.
+- Field reads: `DotExpression` enters the router with struct values, so a
+  scalar field read assigns through the plan path (matrix row 2b); the
+  `person.name` and `%t0#1.name` goldens of §17 land here.
+- The ownership elaboration pass (§8), with generic cleanup lowering and
+  the consuming-operand promotion; its copy-loud goldens are listed in §17.
+- **Calls split by callee effect and argument yield.** A call that looks
+  ordinary can still have independently `MayWrite` outputs, which needs
+  per-output keep-old handling — a Step 6 capability — and an argument whose
+  conditional or checked failure remains unresolved makes the invocation
+  `MayYield`, which needs Step 6's strict argument evaluation (§3). So Step 4
+  migrates calls whose outputs are **all** `MustWrite` **and** whose arguments
+  are all `MustYield`; any other call defers **as a whole** to Step 6, because
+  argument evaluation, tuple failure, and ownership are shared across its
+  outputs and individual slots cannot migrate separately. Callee output effect
+  and argument yield are therefore router axes, recorded in the capability
+  matrix (rows 6, 6b, 6c).
 - The private validity-carrying direct-call variant (§15), so an unwritten
   direct-return result can suppress Step 6's print invocation instead of
   printing its seed.
@@ -1112,11 +1181,19 @@ both); suite output is unchanged.
 
 ### Step 6: Non-ranged gates, value conditionals, prints (~2-3 weeks)
 
+- Prerequisite, in its own PR before this step: gated print syntax
+  (`c > 5 a, b`, §9), so the lazy form keeps a spelling when value-position
+  print arguments become strict — a gate rejects the line without
+  evaluating it; a failed argument suppresses the line after its siblings
+  ran.
 - `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval`.
 - Calls with any `MayWrite` output, deferred from Step 4, with per-output
-  keep-old handling.
+  keep-old handling; and calls with an argument whose conditional or checked
+  failure remains unresolved (matrix row 6c), which gain strict source-order
+  argument evaluation (§3) with the `F(sideEffect(), failingArg)` and
+  `F(failingArg, sideEffect())` regressions.
 - All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
   direct-return call argument, which needs the Step 4 validity variant.
   The conditional suppression outcome is retained, but sibling evaluation
@@ -1135,6 +1212,14 @@ both); suite output is unchanged.
   versus `skip` scopes become explicit.
 - Extend ownership elaboration to carries. Loop emission (`withLoopNest`,
   `createLoopCore`) stays as generic mechanics driven by `domain` regions.
+- Carried appends use the consuming promotion (§7): one seed copy, then n
+  in-place appends. The amortized bound also needs a growth-capable runtime
+  buffer, scheduled with this step.
+- The plan-wide name allocator (§12) and invariant 24 for the nodes this
+  step introduces: domain binders and carries expose their allocated names,
+  `Validate` rejects a duplicate, and goldens pin a range named `t0`, a
+  range named `sum_carry` beside target `sum`'s carry, and deterministic
+  `_<K>` suffixing.
 
 ### Step 8: Collectors and remaining prints (~2-3 weeks)
 
@@ -1143,6 +1228,10 @@ both); suite output is unchanged.
   elaboration.
 - The remaining ranged and collector print paths migrate. After this step no
   statement form needs the legacy conditional or collector machinery.
+- Collectors join the name allocator and invariant 24: collector nodes
+  expose their allocated names, duplicate rejection covers them, and a
+  golden pins a range named `result_collector` beside target `result`'s
+  collector.
 
 ### Step 9: Delete the legacy machinery
 
@@ -1236,8 +1325,9 @@ CFG pass (restructured around settled-specialization effects), and the runtime.
 
 Per-step deletions are targets, not guarantees — each lands only when its step
 proves the plan replaces it. The estimated steps total roughly 14-22 focused
-weeks plus the unestimated Step 9 sweep, proceeding cell by cell with immediate
-deletion at the last consumer.
+weeks plus the unestimated Step 9 sweep — Steps 4 and 7 (ownership; ranges
+and carries) carry most of the schedule risk — proceeding cell by cell with
+immediate deletion at the last consumer.
 
 ## 17. Testing Strategy
 
@@ -1246,13 +1336,28 @@ deletion at the last consumer.
 - solved statement → deterministic concise and expanded PIR
 - canonical output uses four-space indentation, no tabs, braces, or `end`
 - no LLVM context required
-- negative tests for every validator invariant
+- negative tests for every validator invariant implemented by the current
+  step
 - derived release points appear in expanded PIR, so ownership regressions
   surface as plan diffs before any leak-check run
+- copies are loud: expanded goldens assert the exact set of derived copies —
+  zero for a swap, for a carried append after its seed copy, and for a
+  collector move — so a silent materialization is a test failure rather than
+  a later benchmark surprise
+- each golden cites the plan section it pins, so spec drift surfaces as a
+  citation that no longer matches
 - a multi-output outcome renders per-slot selectors (`%t0#0`, `%t0#1`), and
   the renderer rejects a node kind outside the router's set; checked-access,
   call, and array-literal goldens land with the steps that admit them; a
   Unicode label and binding (`π = 3.14`, `τ = π`) are pinned now
+- field access lands as three regressions: `person.name` in Step 4, which
+  admits `DotExpression` with struct values; a direct pir-level renderer
+  test for slot-then-field composition (`%t0#1.name`) in the same step,
+  since the grammar permits it even though today's `.` requires a
+  single-output receiver, so no source statement produces it; and
+  `%person_carry.name` in Step 7, from a range-driven statement whose RHS
+  reads a field of its own carried target — `i = 0:n` followed by
+  `person = Rename(person.name, i)`
 
 ### Specialization-closure tests
 
@@ -1305,6 +1410,10 @@ deletion at the last consumer.
   them
 - a ranged swap reads one snapshot, advances both carries simultaneously, and
   exposes the advanced pair to the next iteration
+- a ranged append `arr = arr ⊕ [x]` shows one seed materialization and n
+  consuming in-place appends; a plan whose consumed operand has a second
+  use — an eval of `%carry ⊕ %carry` — is rejected (§14.23), and an owned but
+  copy-on-write-shared buffer detaches before an in-place update
 
 ### Print tests (land with Step 6)
 
@@ -1325,18 +1434,33 @@ deletion at the last consumer.
 - a suppressed invocation still releases its owned temporaries (leak-checked)
 - an unwritten direct-return argument suppresses the invocation via the
   `{value, didWrite}` variant
+- ordinary calls evaluate arguments strictly too: `F(sideEffect(), failingArg)`
+  runs the side effect and `F(failingArg, sideEffect())` still evaluates the
+  argument after the failed one, while the output tuple keeps its old values
+  (§3)
 
 ### Cutover and backend tests
 
 - each cutover PR runs the full suites before and after switching its cell
 - retain focused LLVM tests for lazy placement and affine fast/checked loops
 - `go test -race ./...`, `go vet ./...`, `python3 test.py --leak-check`
+- a performance baseline for cross-statement temporaries (`b = [f(i)]` then
+  `c = [g(b[i])]`): PIR is per-statement, so `b` is materialized and never
+  fused away; the baseline records that cost instead of hiding it
 
 ## 18. Future Extensions
 
 The statement plan can grow without becoming a machine IR:
 
-- field, index, column, and cell targets extend `commit`
+- field, index, column, and cell targets extend `commit` with the same
+  snapshot semantics as every other statement: RHS reads see the pre-commit
+  value and element writes land at commit, so `arr[2:7] = arr[0:5]` is
+  well-defined. Disjoint target elements remove target-overlap staging and
+  make the write a candidate for parallel lowering once dependence and
+  effect analysis prove the iterations independent — RHS reads, calls, I/O,
+  collectors, and carries can still impose order; an overlapping read and
+  write range stages through a temporary unless §11's affine analysis proves
+  the ranges disjoint or the copy direction safe
 - member calls remain solved expressions inside `eval` or `map`
 - source `break` and `continue` extend structured range actions
 - function-result transfer reuses outcome planning with a different terminator
