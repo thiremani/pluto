@@ -76,10 +76,11 @@ class TestRunner:
         self.failed = 0
         self.project_root = Path(__file__).parent.resolve()
         self.test_dir = test_dir
+        self.env = build_env(os.environ)
 
     def run_command(self, cmd: list, cwd: Path = None, extra_env: dict = None) -> str:
         """Execute a command and return its output"""
-        env = build_env(os.environ)
+        env = dict(self.env)
         if extra_env:
             env.update(extra_env)
 
@@ -474,5 +475,9 @@ if __name__ == "__main__":
     KEEP_BUILD = args.keep
     LEAK_CHECK = args.leak_check
     test_dir = Path(args.test_dir) if args.test_dir else None
-    runner = TestRunner(test_dir)
+    try:
+        runner = TestRunner(test_dir)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        sys.exit(1)
     runner.run()
