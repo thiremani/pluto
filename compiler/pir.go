@@ -82,33 +82,34 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	return true
 }
 
-// scriptRootBindingType is the solver's declared type for a binding;
-// FuncNameMangled is the root key wherever this runs.
-func (c *Compiler) scriptRootBindingType(name string) Type {
-	return c.FuncCache[c.FuncNameMangled].Vars[name]
-}
-
-// effectiveBindingType is the type of the value a binding holds now. It can
-// differ from the declared type and from the solver's flow-typed read: a
-// store keeps a heap string's flavor even into a binding declared static,
-// and `text = "old"` stores a heap copy while a later read solves as StrG.
-// Ownership must follow this type; semantic types must not.
-func (c *Compiler) effectiveBindingType(name string, solved Type) Type {
-	sym, source := c.lookupNamedSymbol(name)
-	if source == symbolMissing {
-		return c.bindingSlotType(name, solved)
-	}
+// storedType is the type of the value a symbol holds: a Ptr-wrapped binding
+// stores its pointee.
+func storedType(sym *Symbol) Type {
 	if ptr, isPtr := sym.Type.(Ptr); isPtr {
 		return ptr.Elem
 	}
 	return sym.Type
 }
 
+// mustStoredBindingType is the type of the value a binding holds now — the
+// source for ownership, as bindingSlotType is for the semantic type. The two
+// differ: a store keeps a heap string's flavor even into a binding declared
+// static, and `text = "old"` stores a heap copy while a later read solves
+// as StrG. Every caller asks about a binding that has already been stored,
+// so a missing symbol is an internal inconsistency, never a case to guess.
+func (c *Compiler) mustStoredBindingType(name string) Type {
+	sym, source := c.lookupNamedSymbol(name)
+	if source == symbolMissing {
+		panic(fmt.Sprintf("internal: binding %q has no stored value", name))
+	}
+	return storedType(sym)
+}
+
 // widenedRead reports a binding read whose effective storage differs from
 // its solved type.
 func (c *Compiler) widenedRead(ident *ast.Identifier) bool {
 	solved := c.ExprCache[key(c.FuncNameMangled, ident)].OutTypes[0]
-	return !TypeEqual(c.effectiveBindingType(ident.Value, solved), solved)
+	return !TypeEqual(c.mustStoredBindingType(ident.Value), solved)
 }
 
 // planSlot keeps the solver's type as the slot type — an empty reset reads
@@ -117,7 +118,7 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	ident, isIdent := expr.(*ast.Identifier)
 	storage := t
 	if isIdent {
-		storage = c.effectiveBindingType(ident.Value, t)
+		storage = c.mustStoredBindingType(ident.Value)
 	}
 	if !typeNeedsCleanup(storage) {
 		return pir.Slot{Type: t}
@@ -128,10 +129,14 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	return pir.Slot{Type: t, Ownership: pir.Owned}
 }
 
+// planLocalTarget describes one LHS binding. Only a script-local binding has
+// an old value to release, so Fresh and Holds read the script scope directly,
+// as the legacy capture does: a name that resolves only to a code global is
+// fresh here and its global is never freed.
 func (c *Compiler) planLocalTarget(name string) pir.Target {
-	declared := c.scriptRootBindingType(name)
-	_, exists := Get(c.Scopes, name)
-	holds := exists && typeNeedsCleanup(c.effectiveBindingType(name, declared))
+	declared := c.bindingSlotType(name, nil)
+	sym, exists := Get(c.Scopes, name)
+	holds := exists && typeNeedsCleanup(storedType(sym))
 	return pir.Target{Kind: pir.LocalTarget, Name: name, Type: declared, Owns: typeNeedsCleanup(declared), Fresh: !exists, Holds: holds}
 }
 
@@ -202,7 +207,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			continue
 		}
 		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
-		holds := typeNeedsCleanup(c.effectiveBindingType(m.Target.Name, m.Target.Type.(Type)))
+		holds := typeNeedsCleanup(c.mustStoredBindingType(m.Target.Name))
 		if holds != (m.Transfer != pir.Store) {
 			panic(fmt.Sprintf("plan %s: target %s after %s holds heap state: %t", plan.Label, m.Target.Name, m.Transfer, holds))
 		}
