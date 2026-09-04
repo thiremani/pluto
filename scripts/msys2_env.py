@@ -124,8 +124,9 @@ def compute_env(base_env: Mapping[str, str] | None = None) -> Dict[str, str]:
     current_path = source.get("PATH", "")
     env["PATH"] = f"{llvm_bin}{os.pathsep}{current_path}" if current_path else llvm_bin
 
-    # If using MSYS2 Go, set GOROOT to a Windows-style path so the trimmed
-    # Go tool can locate its tree. This does not affect non-MSYS2 Go.
+    # Best-effort compatibility for the MSYS2 Go package (not recommended: it
+    # can lag the toolchain go.mod prefers): give its trimmed Go tool a
+    # Windows-style GOROOT. A go.dev Go on the inherited PATH is unaffected.
     go_path = shutil.which("go", path=source.get("PATH")) or ""
     go_dir = os.path.dirname(go_path)
     norm = go_dir.replace("\\", "/").lower()
