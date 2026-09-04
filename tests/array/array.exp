@@ -72,6 +72,11 @@ replacement table: [
     "Mae" 20
 ]
 saved table scores: [10 12]
+saved table: [
+  : Name Score
+    "Ada" 10
+    "Lin" 12
+]
 empty array: []
 empty matrix: [
 ]

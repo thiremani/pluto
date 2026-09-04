@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/thiremani/pluto/ast"
@@ -9,12 +10,12 @@ import (
 
 // planLetStatement is the temporary capability router (plan §16 rule 2): it
 // accepts a statement when the plan path supports its combination and
-// returns the built plan, which the caller validates before lowering. Step 3
-// accepts unmanaged values — scalars and Range descriptors — from ordinary
-// expressions into local and discard targets; a discarded unmanaged outcome
-// carries no release obligation. Only the script statement loop invokes it,
-// so every named target is a script-root binding and discards bind nothing;
-// an accepted statement has no legacy fallback.
+// returns the built plan, which the caller elaborates and validates before
+// lowering. It accepts ordinary expressions — no gate, range, conditional,
+// checked access, or call — over unmanaged and heap value kinds into local
+// and discard targets. Only the script statement loop invokes it, so every
+// named target is a script-root binding and discards bind nothing; an
+// accepted statement has no legacy fallback.
 func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bool) {
 	if len(stmt.Condition) > 0 || len(stmt.Name) != len(stmt.Value) {
 		return nil, false
@@ -33,13 +34,16 @@ func (c *Compiler) planLetStatement(stmt *ast.LetStatement) (*pir.AssignPlan, bo
 	return c.buildLetPlan(stmt), true
 }
 
-// planValueTypeSupported bounds Step 3 to unmanaged value kinds (plan §8).
+// planValueTypeSupported admits the value kinds whose commit and release the
+// lowerer implements: unmanaged scalars and Range descriptors, and the heap
+// kinds — strings, arrays, tables — plus struct values (plan §8). Function
+// values and call-only ArrayRange descriptors stay out.
 func planValueTypeSupported(t Type) bool {
 	if !IsFullyResolvedType(t) {
 		return false
 	}
 	switch t.Kind() {
-	case IntKind, FloatKind, RangeKind:
+	case IntKind, FloatKind, RangeKind, StrKind, ArrayKind, TableKind, StructKind:
 		return true
 	default:
 		return false
@@ -47,11 +51,17 @@ func planValueTypeSupported(t Type) bool {
 }
 
 // planExprEligible accepts only ordinary expression trees: whitelisted node
-// kinds with no range or conditional behavior at any depth.
+// kinds with no range or conditional behavior at any depth. A block-layout
+// array literal (rank-2 rows, a table) has no one-line spelling for the eval
+// operand yet, so it waits with the literal kinds the renderer refuses.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
-	switch expr.(type) {
-	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.Identifier,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral:
+	switch e := expr.(type) {
+	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression:
+	case *ast.ArrayLiteral:
+		if e.Block || len(e.Headers) > 0 {
+			return false
+		}
 	default:
 		return false
 	}
@@ -79,6 +89,37 @@ func (c *Compiler) scriptRootBindingType(name string) Type {
 	return c.FuncCache[c.FuncNameMangled].Vars[name]
 }
 
+// planSlot annotates one outcome slot (plan §8): a value whose type holds no
+// heap state is unmanaged whatever produced it; a binding read borrows that
+// binding's state; every other producer — a concatenation, an array
+// literal, a heap-formatted string, a copied table column — yields a fresh
+// owned value. A binding read takes the binding's slot type, not the
+// solver's flow-typed read: after `text = "old"` the read of text solves as
+// a static string while the binding stores the materialized heap copy, and
+// only the slot type says that copy must be borrowed rather than shared.
+func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
+	ident, isIdent := expr.(*ast.Identifier)
+	if isIdent {
+		t = c.bindingSlotType(ident.Value, t)
+	}
+	if !typeNeedsCleanup(t) {
+		return pir.Slot{Type: t}
+	}
+	if isIdent {
+		return pir.Slot{Type: t, Ownership: pir.Borrowed, Owner: ident.Value}
+	}
+	return pir.Slot{Type: t, Ownership: pir.Owned}
+}
+
+// planLocalTarget records a script-root binding as a target: its declared
+// type, whether that type makes the binding own heap state, and whether the
+// binding already holds a value this statement replaces.
+func (c *Compiler) planLocalTarget(name string) pir.Target {
+	t := c.scriptRootBindingType(name)
+	_, exists := Get(c.Scopes, name)
+	return pir.Target{Kind: pir.LocalTarget, Name: name, Type: t, Owns: typeNeedsCleanup(t), Fresh: !exists}
+}
+
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	evals := make([]*pir.Eval, len(stmt.Value))
 	for i, expr := range stmt.Value {
@@ -86,7 +127,7 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 		evals[i] = &pir.Eval{
 			Result: pir.OutcomeID(i),
 			Expr:   expr,
-			Types:  []pir.Type{info.OutTypes[0]},
+			Slots:  []pir.Slot{c.planSlot(expr, info.OutTypes[0])},
 		}
 	}
 
@@ -94,9 +135,9 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	nameParts := make([]string, len(stmt.Name))
 	for i, ident := range stmt.Name {
 		nameParts[i] = ident.Value
-		target := pir.Target{Kind: pir.LocalTarget, Name: ident.Value, Type: c.scriptRootBindingType(ident.Value)}
-		if isDiscard(ident) {
-			target = pir.Target{Kind: pir.DiscardTarget}
+		target := pir.Target{Kind: pir.DiscardTarget}
+		if !isDiscard(ident) {
+			target = c.planLocalTarget(ident.Value)
 		}
 		commit[i] = pir.Mapping{Target: target, Outcome: pir.OutcomeRef{Outcome: pir.OutcomeID(i)}}
 	}
@@ -109,22 +150,57 @@ func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
 	}
 }
 
-// lowerAssignPlan evaluates every eval against the pre-commit bindings, then
-// applies the recorded mappings. Step 3 outcomes are unmanaged, so the
-// commit plans no copies or releases (ownership elaboration is Step 4).
+// planBindingCompatible is the validator's type relation: the compiler's
+// directional binding-slot compatibility (StrG into StrH, an empty-array
+// reset), never display or mangle equality. Both types were recorded by the
+// builder from compiler types, so the assertions cannot fail.
+func planBindingCompatible(target, outcome pir.Type) bool {
+	return bindingSlotCompatible(target.(Type), outcome.(Type))
+}
+
+// lowerAssignPlan implements an elaborated plan (plan §6, §13): the old
+// values of replaced targets are captured first, every eval is compiled
+// against the pre-commit bindings, the mappings land in order with the
+// transfer the plan recorded, and the derived releases run last so no
+// mapping reads a freed payload. It decides nothing itself.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
 
+	replaced := make(map[string]*Symbol)
+	for _, d := range plan.Drops {
+		if d.Kind == pir.DropReplaced {
+			sym, _ := Get(c.Scopes, d.Target)
+			replaced[d.Target] = c.valueSymbol(d.Target, sym, d.Target+"_old_load")
+		}
+	}
+
 	outs := make([][]*Symbol, len(plan.Evals))
 	for i, ev := range plan.Evals {
 		outs[i] = c.compileExpression(ev.Expr, nil)
+		for s, slot := range ev.Slots {
+			// The plan's ownership decisions are only sound if an unmanaged
+			// slot really holds no heap state: a misclassified value would be
+			// shared and then released, so builder drift dies here as an ICE.
+			if (slot.Ownership == pir.Unmanaged) == typeNeedsCleanup(outs[i][s].Type) {
+				panic(fmt.Sprintf("plan %s: eval %%t%d slot %d annotated %v but lowers to %s", plan.Label, i, s, slot.Ownership, outs[i][s].Type.String()))
+			}
+		}
 	}
 	for _, m := range plan.Commit {
 		if m.Target.Kind == pir.DiscardTarget {
-			// An unmanaged discarded outcome carries no release obligation.
 			continue
 		}
-		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], false)
+		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
+	}
+	for _, d := range plan.Drops {
+		switch d.Kind {
+		case pir.DropOutcome:
+			c.freeSymbolValue(outs[d.Outcome.Outcome][d.Outcome.Slot], "discard")
+		case pir.DropReplaced:
+			c.freeSymbolValue(replaced[d.Target], "old_assign")
+		default:
+			panic(fmt.Sprintf("plan %s: unknown drop kind %d", plan.Label, d.Kind))
+		}
 	}
 }
