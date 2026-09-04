@@ -20,7 +20,7 @@
 - Show version: `./pluto -version` (or `-v`)
 - Clear cache: `./pluto -clean` (or `-c`, clears cache for current version)
 
-Requirements: Go `1.27` (`go.mod` pins `toolchain go1.27.1`; macOS 13 or later), plus development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`). On macOS, install the versioned Homebrew formula shown in `README.md`.
+Requirements: Go `1.27` (`go.mod` prefers `toolchain go1.27.1`; CI and release jobs enforce it exactly; macOS build hosts need macOS 13 or later), plus development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`). On macOS, install the versioned Homebrew formula shown in `README.md`.
 `python3 build.py` and `python3 test.py` derive the `byollvm` CGO flags from `llvm-config`; the environment helper rejects a major that differs from `.llvm-version`. Direct LLVM-dependent Go commands (`go build`, `go test`, and `go vet`) require `eval "$(python3 scripts/llvm_env.py --shell)"` first (or an equivalent explicit `byollvm` environment). See `README.md`.
 `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning.
 
@@ -53,7 +53,7 @@ Requirements: Go `1.27` (`go.mod` pins `toolchain go1.27.1`; macOS 13 or later),
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with the Go toolchain pinned in `go.mod`, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions installs the Go toolchain `go.mod` prefers and asserts the exact version, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).
