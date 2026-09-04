@@ -6,15 +6,17 @@ package pir
 // plan's own annotations; the validator re-checks every decision.
 //
 // A borrowed outcome is promoted to transfer when its owner is a local
-// target replaced in this group and no earlier mapping already took that
-// owner's old value; the first mapping in commit order wins and the rest
-// copy, so one source feeding several targets is never moved twice. A
-// replaced owning target whose old value nothing took is released after
-// every mapping has landed, and so is an owned outcome mapped to a discard.
+// target whose held heap value is replaced in this group and no earlier
+// mapping already took that value; the first mapping in commit order wins
+// and the rest copy, so one source feeding several targets is never moved
+// twice. A replaced held value nothing took is released after every mapping
+// has landed, and so is an owned outcome mapped to a discard. Materialization
+// follows the declared type (Owns); replacement follows the effective one
+// (Holds).
 func Elaborate(p *AssignPlan) {
 	replaced := make(map[string]bool, len(p.Commit))
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.Owns && !m.Target.Fresh {
+		if m.Target.Kind == LocalTarget && m.Target.Holds {
 			replaced[m.Target.Name] = true
 		}
 	}

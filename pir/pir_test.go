@@ -42,9 +42,15 @@ func borrowedSlot(t Type, owner string) Slot {
 
 func local(name string, t Type) Target { return Target{Kind: LocalTarget, Name: name, Type: t} }
 
-// heapLocal is an existing owning binding (a heap string or array).
+// heapLocal is an existing owning binding holding a heap value.
 func heapLocal(name string, t Type) Target {
-	return Target{Kind: LocalTarget, Name: name, Type: t, Owns: true}
+	return Target{Kind: LocalTarget, Name: name, Type: t, Owns: true, Holds: true}
+}
+
+// widenedLocal is an existing binding declared non-owning that nevertheless
+// holds a heap value a previous transfer left in it.
+func widenedLocal(name string, t Type) Target {
+	return Target{Kind: LocalTarget, Name: name, Type: t, Holds: true}
 }
 
 func swapPlan() *AssignPlan {
@@ -148,6 +154,27 @@ func TestElaborate(t *testing.T) {
 			Evals:  []*Eval{{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Materialize}, []Drop{{Kind: DropReplaced, Target: "s"}}},
+		{"heap transfer into a non-owning fresh target is legal", &AssignPlan{
+			Label: "assign_other", Source: "other = text",
+			Evals:  []*Eval{{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
+			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "other", Type: str, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
+		}, []Transfer{Copy}, nil},
+		{"widened binding releases its held value on a plain store", &AssignPlan{
+			Label: "assign_other", Source: `other = "new"`,
+			Evals:  []*Eval{{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
+			Commit: []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
+		}, []Transfer{Store}, []Drop{{Kind: DropReplaced, Target: "other"}}},
+		{"widened owner is taken by a promoted borrow", &AssignPlan{
+			Label: "assign_a_other", Source: "a, other = other, a",
+			Evals: []*Eval{
+				{Result: 0, Expr: ident("other"), Slots: []Slot{borrowedSlot(str, "other")}},
+				{Result: 1, Expr: ident("a"), Slots: []Slot{borrowedSlot(str, "a")}},
+			},
+			Commit: []Mapping{
+				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
+				{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 1}},
+			},
+		}, []Transfer{Promote, Promote}, nil},
 		{"discarded borrow releases nothing", &AssignPlan{
 			Label: "assign__", Source: "_ = h",
 			Evals:  []*Eval{{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
@@ -202,6 +229,11 @@ func TestValidateRejects(t *testing.T) {
 		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"OwningDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Owns: true} }, "discard target carries"},
+		{"HoldingDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Holds: true} }, "discard target carries"},
+		{"FreshTargetHolds", func(p *AssignPlan) {
+			p.Commit[0].Target.Fresh = true
+			p.Commit[0].Target.Holds = true
+		}, "fresh target a holds a value"},
 		{"DiscardWithTransfer", func(p *AssignPlan) {
 			p.Commit[0].Target = Target{Kind: DiscardTarget}
 			p.Commit[0].Transfer = Move
@@ -227,34 +259,35 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[1].Target.Fresh = true
 			p.Commit[1].Transfer = Materialize
 		}, "b is not replaced in this group"},
+		{"PromoteOfOwnerHoldingNothing", func(p *AssignPlan) {
+			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
+			p.Commit[0].Transfer = Promote
+			p.Commit[1].Target.Owns = true
+			p.Commit[1].Transfer = Materialize
+		}, "b is not replaced in this group"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Evals[1].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfer = Promote
 			p.Commit[1].Transfer = Promote
-			p.Commit[1].Target.Owns = true
+			p.Commit[1].Target.Holds = true
 		}, "b's old value is taken by 2 targets"},
-		{"ReplacedNeverReleased", func(p *AssignPlan) {
-			p.Commit[0].Target.Owns = true
-			p.Commit[0].Transfer = Materialize
-		}, "a's old value is neither taken nor released"},
+		{"ReplacedNeverReleased", func(p *AssignPlan) { p.Commit[0].Target.Holds = true }, "a's old value is neither taken nor released"},
 		{"ReplacedTakenAndDropped", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfer = Promote
-			p.Commit[1].Target.Owns = true
-			p.Commit[1].Transfer = Materialize
+			p.Commit[1].Target.Holds = true
 			p.Drops = []Drop{{Kind: DropReplaced, Target: "b"}}
 		}, "b's old value is both taken and dropped"},
-		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}} }, "a is not a replaced owning target"},
+		{"DropOfUnreplacedTarget", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}} }, "a holds no replaced value"},
 		{"DropOfFreshTarget", func(p *AssignPlan) {
 			p.Commit[0].Target.Owns = true
 			p.Commit[0].Target.Fresh = true
 			p.Commit[0].Transfer = Materialize
 			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}}
-		}, "a is not a replaced owning target"},
+		}, "a holds no replaced value"},
 		{"ReplacedDroppedTwice", func(p *AssignPlan) {
-			p.Commit[0].Target.Owns = true
-			p.Commit[0].Transfer = Materialize
+			p.Commit[0].Target.Holds = true
 			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}, {Kind: DropReplaced, Target: "a"}}
 		}, "a's old value dropped twice"},
 		{"DropOfMappedOutcome", func(p *AssignPlan) { p.Drops = []Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 0}}} }, "not a discarded owned outcome"},

@@ -42,7 +42,7 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
 		}
 		consumed[m.Outcome] = true
-		if m.Target.Kind == LocalTarget && m.Target.Owns && !m.Target.Fresh {
+		if m.Target.Kind == LocalTarget && m.Target.Holds {
 			replaced[m.Target.Name] = true
 		}
 	}
@@ -88,13 +88,16 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		if m.Target.Name == "" {
 			return fmt.Errorf("plan %s: local target has no name", p.Label)
 		}
+		if m.Target.Holds && m.Target.Fresh {
+			return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
+		}
 		if !compatible(m.Target.Type, slot.Type) {
 			return fmt.Errorf("plan %s: target %s : %s mapped to incompatible outcome %%t%d slot %d : %s",
 				p.Label, m.Target.Name, m.Target.Type.String(), m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
 		}
 		return p.validateLocalTransfer(m, slot)
 	case DiscardTarget:
-		if m.Target.Name != "" || m.Target.Type != nil || m.Target.Owns || m.Target.Fresh {
+		if m.Target.Name != "" || m.Target.Type != nil || m.Target.Owns || m.Target.Fresh || m.Target.Holds {
 			return fmt.Errorf("plan %s: discard target carries a name, type, or binding state", p.Label)
 		}
 		if m.Transfer != Store {
@@ -109,7 +112,10 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 
 // validateLocalTransfer pins the transfer Elaborate must have derived for a
 // local mapping (plan §8, §14.20-22). A promoted borrow additionally needs
-// its owner replaced in this group; validateReleases counts the promotions.
+// its owner's held value replaced in this group; validateReleases counts the
+// promotions. A heap transfer into a target whose declared type is not
+// owning is legal: the binding then holds heap state, which the builder
+// reads back from its effective storage on the next statement.
 func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 	want := Store
 	switch slot.Ownership {
@@ -138,7 +144,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 
 func (p *AssignPlan) replacesOwner(name string) bool {
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.Name == name && m.Target.Owns && !m.Target.Fresh {
+		if m.Target.Kind == LocalTarget && m.Target.Name == name && m.Target.Holds {
 			return true
 		}
 	}
@@ -146,9 +152,8 @@ func (p *AssignPlan) replacesOwner(name string) bool {
 }
 
 // validateReleases checks plan §14.19-21: every owned outcome is consumed or
-// released exactly once, and every replaced owning target's old value is
-// either taken by exactly one promoted borrow or released, never both or
-// neither.
+// released exactly once, and every replaced held value is either taken by
+// exactly one promoted borrow or released, never both or neither.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDrop := make(map[OutcomeRef]bool)
@@ -181,7 +186,7 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 			droppedOutcome[d.Outcome] = true
 		case DropReplaced:
 			if !replaced[d.Target] {
-				return fmt.Errorf("plan %s: drop of %s's old value, but %s is not a replaced owning target", p.Label, d.Target, d.Target)
+				return fmt.Errorf("plan %s: drop of %s's old value, but %s holds no replaced value", p.Label, d.Target, d.Target)
 			}
 			if taken[d.Target] > 0 {
 				return fmt.Errorf("plan %s: %s's old value is both taken and dropped", p.Label, d.Target)

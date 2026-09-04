@@ -613,18 +613,22 @@ n, a, s2.age, col, t2`)
 `, plans[4].Render(true))
 }
 
-// Plan §8: a binding read is annotated from the binding's slot type, not the
-// solver's flow-typed read — text solves as a static string here, but the
-// binding stores a materialized heap copy, so the read is a borrow that the
-// replacement promotes to transfer instead of sharing and then releasing.
-func TestPlanGoldenBindingReadUsesSlotType(t *testing.T) {
+// Plan §8: ownership is read from a binding's effective storage, not the
+// solver's flow-typed read. text solves as a static string after
+// `text = "old"` but stores a materialized heap copy; other is declared
+// static yet takes text's heap buffer by transfer, so its later read is a
+// borrow and replacing it releases the held value — a plain store, since the
+// declared type materializes nothing.
+func TestPlanGoldenEffectiveStorage(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planSlotType", "", `text = "old"
+	plans := compileScriptPlans(t, ctx, "planEffective", "", `text = "old"
 text, other = text ⊕ "!", text
-text, other`)
-	require.Equal(t, []string{"assign_text", "assign_text_other"}, planLabels(plans))
+copy = other
+other = "new"
+copy, other, text`)
+	require.Equal(t, []string{"assign_text", "assign_text_other", "assign_copy", "assign_other"}, planLabels(plans))
 	require.Equal(t, `statement assign_text_other
     source "text, other = (text ⊕ \"!\"), text"
 
@@ -636,4 +640,60 @@ text, other`)
         text : Str <- %t0 [move]
         other : Str <- %t1 [transfer]
 `, plans[1].Render(true))
+	require.Equal(t, `statement assign_copy
+    source "copy = other"
+
+    execute
+        %t0 = eval Str other [shape=scalar] [yield=always] [borrowed=other]
+
+    commit
+        copy : Str <- %t0 [copy]
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign_other
+    source "other = \"new\""
+
+    execute
+        %t0 = eval Str "new" [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        other : Str <- %t0
+        drop other [replaced]
+`, plans[3].Render(true))
+	require.False(t, plans[3].Commit[0].Target.Owns)
+	require.True(t, plans[3].Commit[0].Target.Holds)
+}
+
+// Plan §8: the same widening through an empty-array reset — the read of arr
+// solves as [Empty] before the concrete literal merges in, so other is
+// declared empty yet holds the materialized [I64] array it took.
+func TestPlanGoldenEffectiveStorageArray(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planEffectiveArray", "", `arr = []
+other = arr
+arr = [1 2]
+copy = other
+other = []
+copy, other, arr`)
+	require.Equal(t, []string{"assign_arr", "assign_other", "assign_arr", "assign_copy", "assign_other"}, planLabels(plans))
+	require.Equal(t, `statement assign_other
+    source "other = arr"
+
+    execute
+        %t0 = eval [I64] arr [shape=scalar] [yield=always] [borrowed=arr]
+
+    commit
+        other : [Empty] <- %t0 [copy]
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign_other
+    source "other = []"
+
+    execute
+        %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        other : [Empty] <- %t0
+        drop other [replaced]
+`, plans[4].Render(true))
 }

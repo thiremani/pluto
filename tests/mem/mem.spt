@@ -84,3 +84,25 @@ da2 = [300 400]
 da1, da2  # use before overwrite
 da1, da2 = da1, da1
 da1, da2
+
+# A heap value transferred or copied into a binding the solver typed static
+# is still that binding's to release: the read after the transfer borrows it,
+# and replacing it with a static string releases it.
+text = "old"
+text, otherText = text ⊕ "!", text
+copy = otherText
+copy, text
+otherText = "new"
+otherText, copy
+copied = text
+copied
+copied = "static"
+copied
+
+# The same widening through an empty-array reset.
+emptyFirst = []
+takenEmpty = emptyFirst
+emptyFirst = [1 2]
+copiedEmpty = takenEmpty
+takenEmpty = []
+copiedEmpty, takenEmpty, emptyFirst

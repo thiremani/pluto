@@ -22,3 +22,8 @@ duptest other
 duptest duptest
 [100 200] [300 400]
 [100 200] [100 200]
+old old!
+new old
+old!
+static
+[] [] [1 2]

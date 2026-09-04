@@ -1167,17 +1167,28 @@ values from ordinary expressions — string literals, concatenations, inline
 array literals, struct field and table column reads (`DotExpression`) — into
 local and discard targets. The builder annotates every outcome slot
 (`unmanaged` by type, `borrowed` for a binding read, `owned` otherwise) —
-a binding read is typed from the binding's slot type, not the solver's
-flow-typed read, since after `text = "old"` the read solves as a static
-string while the binding stores a materialized heap copy — and every local
-target with whether it owns heap state and whether it is fresh;
+a binding read is typed from the binding's **effective storage**, the type
+of the value it holds now, never the solver's flow-typed read: after
+`text = "old"` the read solves as a static string while the binding stores
+a materialized heap copy, and a heap value moved, copied, or transferred
+into a binding declared static keeps its flavor, so that binding holds heap
+state its declared type does not show — and every local target with its
+declared type (`Owns`: unmanaged values stored here are materialized),
+whether it is fresh, and whether the value it holds owns heap state
+(`Holds`: replacing it releases it), read from the same effective storage;
 `pir.Elaborate` derives each mapping's transfer (move, copy, promoted
-transfer, materialize) and the statement-exit releases; `Validate` checks
+transfer, materialize) and the statement-exit releases — a heap transfer
+into a binding declared non-owning is legal and leaves it holding heap
+state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility
 relation; the lowerer implements the recorded transfers and releases and
 decides nothing, but dies as an ICE if a slot annotated `unmanaged` lowers
-to a heap-holding value or vice versa, so a misclassification can never
-become a shared-then-released buffer. Heap swaps show two transfers and zero copies, a duplicate
+to a heap-holding value or vice versa, or if a store leaves a target holding
+heap state its transfer did not predict, so a misclassification can never
+become a shared-then-released buffer or a silent leak. The transitive case —
+transfer a widened binding into another, then read and replace the second —
+is pinned end to end in `tests/mem/mem.spt` for strings and for an
+empty-array reset. Heap swaps show two transfers and zero copies, a duplicate
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).

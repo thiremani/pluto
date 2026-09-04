@@ -89,18 +89,34 @@ func (c *Compiler) scriptRootBindingType(name string) Type {
 	return c.FuncCache[c.FuncNameMangled].Vars[name]
 }
 
+// effectiveBindingType is the type of the value a binding holds right now —
+// the compiler's own notion of effective storage, which legacy lowering
+// consults for every copy and release. It can differ from the solver's
+// flow-typed read and from the declared slot type: a store keeps a heap
+// string's flavor even into a binding declared static, and a binding read
+// after `text = "old"` solves as static while the binding stores the
+// materialized heap copy. A binding with no value yet has its declared
+// type; a name that is not a binding here keeps the solver's type.
+func (c *Compiler) effectiveBindingType(name string, solved Type) Type {
+	sym, source := c.lookupNamedSymbol(name)
+	if source == symbolMissing {
+		return c.bindingSlotType(name, solved)
+	}
+	if ptr, isPtr := sym.Type.(Ptr); isPtr {
+		return ptr.Elem
+	}
+	return sym.Type
+}
+
 // planSlot annotates one outcome slot (plan §8): a value whose type holds no
 // heap state is unmanaged whatever produced it; a binding read borrows that
-// binding's state; every other producer — a concatenation, an array
-// literal, a heap-formatted string, a copied table column — yields a fresh
-// owned value. A binding read takes the binding's slot type, not the
-// solver's flow-typed read: after `text = "old"` the read of text solves as
-// a static string while the binding stores the materialized heap copy, and
-// only the slot type says that copy must be borrowed rather than shared.
+// binding's effective state; every other producer — a concatenation, an
+// array literal, a heap-formatted string, a copied table column — yields a
+// fresh owned value.
 func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	ident, isIdent := expr.(*ast.Identifier)
 	if isIdent {
-		t = c.bindingSlotType(ident.Value, t)
+		t = c.effectiveBindingType(ident.Value, t)
 	}
 	if !typeNeedsCleanup(t) {
 		return pir.Slot{Type: t}
@@ -112,12 +128,15 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 }
 
 // planLocalTarget records a script-root binding as a target: its declared
-// type, whether that type makes the binding own heap state, and whether the
-// binding already holds a value this statement replaces.
+// type, whether that type materializes unmanaged values, whether the
+// binding is fresh, and whether the value it holds now owns heap state —
+// read from its effective storage, since a heap value transferred into a
+// binding declared static is still the binding's to release.
 func (c *Compiler) planLocalTarget(name string) pir.Target {
-	t := c.scriptRootBindingType(name)
+	declared := c.scriptRootBindingType(name)
 	_, exists := Get(c.Scopes, name)
-	return pir.Target{Kind: pir.LocalTarget, Name: name, Type: t, Owns: typeNeedsCleanup(t), Fresh: !exists}
+	holds := exists && typeNeedsCleanup(c.effectiveBindingType(name, declared))
+	return pir.Target{Kind: pir.LocalTarget, Name: name, Type: declared, Owns: typeNeedsCleanup(declared), Fresh: !exists, Holds: holds}
 }
 
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {
@@ -192,6 +211,13 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			continue
 		}
 		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
+		// The next statement's plan reads this binding's ownership back from
+		// its effective storage, so the store must have left exactly the
+		// heap state the transfer says it did.
+		holds := typeNeedsCleanup(c.effectiveBindingType(m.Target.Name, m.Target.Type.(Type)))
+		if holds != (m.Transfer != pir.Store) {
+			panic(fmt.Sprintf("plan %s: target %s after %s holds heap state: %t", plan.Label, m.Target.Name, m.Transfer, holds))
+		}
 	}
 	for _, d := range plan.Drops {
 		switch d.Kind {

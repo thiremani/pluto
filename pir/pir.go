@@ -58,16 +58,21 @@ const (
 // records its solver-declared binding type — an independent fact, not a copy
 // of the outcome type — so validation can reject a mismapped outcome.
 //
-// Owns reports that the binding's type holds heap state: a value stored here
-// becomes the binding's to release, and a commit replacing an existing value
-// must release the old one. Fresh reports that the binding has no value yet,
-// so the commit replaces nothing.
+// Owns reports that the binding's declared type holds heap state, so an
+// unmanaged value stored here is materialized into an owned copy. Fresh
+// reports that the binding has no value yet, so the commit replaces nothing.
+// Holds reports that the value the binding currently holds owns heap state
+// and must be released when replaced; it is the binding's effective
+// storage, which can be heap while the declared type is not — a heap value
+// moved, copied, or transferred into a binding keeps its flavor — so Holds
+// is recorded separately from Owns and is always false when Fresh.
 type Target struct {
 	Kind  TargetKind
 	Name  string
 	Type  Type
 	Owns  bool
 	Fresh bool
+	Holds bool
 }
 
 // OutcomeRef addresses one slot of one eval's result.
