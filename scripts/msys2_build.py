@@ -30,7 +30,9 @@ def build_pluto(project_root: str | Path | None = None, extra_env: dict | None =
 
     if not shutil.which("go", path=env.get("PATH")):
         print(
-            "error: 'go' not found on PATH. Install MSYS2 Go: pacman -S --needed mingw-w64-ucrt-x86_64-go",
+            "error: 'go' not found on PATH. Install the Go version named by go.mod's toolchain line "
+            "from https://go.dev/dl/ and start the MSYS2 shell with the Windows PATH inherited "
+            "(MSYS2_PATH_TYPE=inherit, or msys2_shell.cmd -ucrt64 -use-full-path); the MSYS2 Go package is not supported.",
             file=sys.stderr,
         )
         raise SystemExit(1)

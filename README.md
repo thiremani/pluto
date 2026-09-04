@@ -485,10 +485,10 @@ Install the LLVM toolchain and Python from MSYS2 — not Go: the MSYS2 Go packag
 pacman -S --needed mingw-w64-ucrt-x86_64-{llvm,clang,lld,python}
 ```
 
-Install Go for Windows from [go.dev/dl](https://go.dev/dl/) at the version named by the `toolchain` line in [`go.mod`](go.mod), then expose it inside MSYS2 by inheriting the Windows `PATH`: set `MSYS2_PATH_TYPE=inherit` before launching the shell, or start it with `msys2_shell.cmd -ucrt64 -use-full-path`. Confirm the shell sees that toolchain:
+Install Go for Windows from [go.dev/dl](https://go.dev/dl/) at the version named by the `toolchain` line in [`go.mod`](go.mod), then expose it inside MSYS2 by inheriting the Windows `PATH`: set `MSYS2_PATH_TYPE=inherit` before launching the shell, or start it with `C:\msys64\msys2_shell.cmd -ucrt64 -use-full-path`. Confirm the shell sees that toolchain:
 
 ```bash
-grep -x "toolchain $(go version | awk '{print $3}')" go.mod
+tr -d '\r' < go.mod | grep -x "toolchain $(go version | awk '{print $3}')"
 ```
 
 Quick build:

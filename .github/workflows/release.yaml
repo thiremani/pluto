@@ -31,7 +31,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -90,7 +90,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Install and configure LLVM
         run: |
@@ -130,7 +130,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Install and configure LLVM
         run: |
@@ -185,7 +185,7 @@ jobs:
         shell: msys2 {0}
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Release artifacts
         shell: msys2 {0}
@@ -214,7 +214,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -258,7 +258,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
