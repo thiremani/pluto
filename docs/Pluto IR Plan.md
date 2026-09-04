@@ -564,9 +564,10 @@ names the bound value — `%t0 = eval I64 b`, `%selected = require I64
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
 no result type, even where, as with `yield`, they produce their region's
-value (§4); a commit mapping reads `[Type] target <- value`,
-its type shown in the expanded view; square brackets carry declarative
-policies, not executable code. The expanded view annotates each eval slot's
+value (§4); a commit mapping reads `target <- value` in the concise view
+and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
+arr <- %t0`; square brackets otherwise carry declarative policies, not
+executable code. The expanded view annotates each eval slot's
 ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]` — appends a mapping's
 derived transfer — `[move]`, `[copy]`, `[transfer]` for a promoted borrow,
 `[materialize]` for an unmanaged value entering an owning binding, nothing

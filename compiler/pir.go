@@ -91,12 +91,13 @@ func storedType(sym *Symbol) Type {
 	return sym.Type
 }
 
-// mustStoredBindingType is the type of the value a binding holds now — the
-// source for ownership, as bindingSlotType is for the semantic type. The two
-// differ: a store keeps a heap string's flavor even into a binding declared
-// static, and `text = "old"` stores a heap copy while a later read solves
-// as StrG. Every caller asks about a binding that has already been stored,
-// so a missing symbol is an internal inconsistency, never a case to guess.
+// mustStoredBindingType is the type of the value a binding holds now, the
+// source for ownership. It is the third type fact beside an RHS slot's
+// semantic type (ExprCache.OutTypes) and a target's merged type
+// (bindingSlotType), and it differs from both: a store keeps a heap string's
+// flavor even into a binding declared static, and `text = "old"` stores a
+// heap copy while a later read solves as StrG. Every caller asks about a
+// binding already stored, so a missing symbol is an internal inconsistency.
 func (c *Compiler) mustStoredBindingType(name string) Type {
 	sym, source := c.lookupNamedSymbol(name)
 	if source == symbolMissing {
@@ -129,10 +130,9 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	return pir.Slot{Type: t, Ownership: pir.Owned}
 }
 
-// planLocalTarget describes one LHS binding. Only a script-local binding has
-// an old value to release, so Fresh and Holds read the script scope directly,
-// as the legacy capture does: a name that resolves only to a code global is
-// fresh here and its global is never freed.
+// planLocalTarget describes one LHS binding. Only an existing script-local
+// binding has an old value to replace, so Fresh and Holds read c.Scopes, as
+// the legacy old-value capture does.
 func (c *Compiler) planLocalTarget(name string) pir.Target {
 	declared := c.bindingSlotType(name, nil)
 	sym, exists := Get(c.Scopes, name)
