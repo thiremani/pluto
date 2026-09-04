@@ -32,7 +32,7 @@ def build_pluto(project_root: str | Path | None = None, extra_env: dict | None =
         print(
             "error: 'go' not found on PATH. Install the Go version named by go.mod's toolchain line "
             "from https://go.dev/dl/ and start the MSYS2 shell with the Windows PATH inherited "
-            "(MSYS2_PATH_TYPE=inherit, or msys2_shell.cmd -ucrt64 -use-full-path); the MSYS2 Go package is not supported.",
+            "(MSYS2_PATH_TYPE=inherit, or msys2_shell.cmd -ucrt64 -use-full-path); the MSYS2 Go package is not recommended because it can lag go.mod.",
             file=sys.stderr,
         )
         raise SystemExit(1)
