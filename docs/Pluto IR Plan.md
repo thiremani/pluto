@@ -566,7 +566,13 @@ while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 no result type, even where, as with `yield`, they produce their region's
 value (§4); a commit mapping reads `target [: Type] <- value`,
 its type shown in the expanded view; square brackets carry declarative
-policies, not executable code. A
+policies, not executable code. The expanded view annotates each eval slot's
+ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]` — appends a mapping's
+derived transfer — `[move]`, `[copy]`, `[transfer]` for a promoted borrow,
+`[materialize]` for an unmanaged value entering an owning binding, nothing
+for a plain store — and follows the mappings with the derived releases,
+`drop %t1` for a discarded owned outcome and `drop x [replaced]` for a
+replaced target's old value, in the order they run (§8). A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
 `t` followed by digits reserved for them; every other outcome name is a
 Pluto identifier — the language's own Unicode-aware class, so a target `π`
@@ -597,13 +603,16 @@ spelling — `I64`, `[I64]`, `[[I64]]`, `Table[Name:Str Score:I64]` — never th
 symbol mangle, which is neither exact identity (a function mangle omits result
 types; a struct mangle encodes only the nominal name and omits the field
 schema) nor assignment compatibility (`StrG` into `StrH`, an empty-array
-reset). Validation compares this spelling for now; Step 4 replaces that with
-the compiler's directional binding-compatibility relation.
+reset). Validation applies the compiler's directional binding-compatibility
+relation, not this spelling: both string flavours display as `Str`, and
+`StrG` into `StrH` is admitted and shown as a materialization.
 
 The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
-golden for its new node kinds. `commit` and `advance` carry no mode keyword:
-both are always simultaneous (§14).
+golden for its new node kinds. A block-layout array literal — rank-2 rows,
+a table — prints on several lines and has no one-line spelling for an eval
+operand yet, so it stays outside the router until one is settled. `commit`
+and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
 statement assign_x
@@ -1151,6 +1160,34 @@ both); suite output is unchanged.
 - The private validity-carrying direct-call variant (§15), so an unwritten
   direct-return result can suppress Step 6's print invocation instead of
   printing its seed.
+
+**First slice landed — heap values and ownership elaboration.** The router
+admits heap value kinds (both string flavours, arrays, tables) and struct
+values from ordinary expressions — string literals, concatenations, inline
+array literals, struct field and table column reads (`DotExpression`) — into
+local and discard targets. The builder annotates every outcome slot
+(`unmanaged` by type, `borrowed` for a binding read, `owned` otherwise) —
+a binding read is typed from the binding's slot type, not the solver's
+flow-typed read, since after `text = "old"` the read solves as a static
+string while the binding stores a materialized heap copy — and every local
+target with whether it owns heap state and whether it is fresh;
+`pir.Elaborate` derives each mapping's transfer (move, copy, promoted
+transfer, materialize) and the statement-exit releases; `Validate` checks
+every decision and applies the compiler's directional binding-compatibility
+relation; the lowerer implements the recorded transfers and releases and
+decides nothing, but dies as an ICE if a slot annotated `unmanaged` lowers
+to a heap-holding value or vice versa, so a misclassification can never
+become a shared-then-released buffer. Heap swaps show two transfers and zero copies, a duplicate
+source is taken once and copied once, and heap/struct/table copies, field
+and column reads, and heap discards are pinned by goldens in
+`compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
+**Remaining in Step 4:** block-layout literals (rank-2 arrays, tables — row
+36) once an eval-operand spelling exists; calls and multi-output outcomes
+with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
+`output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
+needs an outcome-referencing operand; the `unique` annotation and consuming
+promotion, which have no in-place consumer before Step 7's carried append;
+and the validity-carrying direct-call variant.
 
 ### Step 5: Checked accesses and OOB scope (~1-2 weeks)
 
