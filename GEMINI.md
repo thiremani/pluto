@@ -23,12 +23,13 @@ This project is a compiler for the Pluto programming language, written in Go. It
 ### Requirements
 
 *   Go 1.26+
-*   LLVM 22 development libraries and tools (`llvm-config`, `clang`)
+*   Development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`)
 *   Python 3.x (for build/test helpers)
 *   pip (for installing Python dependencies)
 
-On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`.
+`.llvm-version` is the source of truth for the supported LLVM major. On macOS with Homebrew, install it with `LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"; brew install "llvm@${LLVM_VERSION}" "lld@${LLVM_VERSION}"`, then add `$(brew --prefix "llvm@${LLVM_VERSION}")/bin` to PATH.
+
+`python3 build.py` and `python3 test.py` derive the `byollvm` CGO flags from `llvm-config`. The environment helper derives the tools from the same installation and rejects a major that differs from `.llvm-version`. Direct LLVM-dependent Go commands (`go build`, `go test`, and `go vet`) require `eval "$(python3 scripts/llvm_env.py --shell)"` first (or an equivalent explicit `byollvm` environment). See `README.md` for Linux and macOS setup.
 
 ### Commands
 
@@ -61,6 +62,7 @@ On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it
 
 *   **Run unit tests:**
     ```bash
+    eval "$(python3 scripts/llvm_env.py --shell)"
     go test -race ./lexer ./parser ./compiler
     ```
 
@@ -109,14 +111,14 @@ The compiler uses a cache to store intermediate build artifacts (LLVM IR and obj
 To clear the cache for the current version, run `./pluto -clean`. To clear the entire cache manually, delete the appropriate directory.
 
 - Quick smoke check: `./pluto tests/` to see compile/link output.
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 `llvm-config` and `clang`.
+- `PTCACHE` overrides cache location; ensure PATH includes `llvm-config` and `clang` matching `.llvm-version`.
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`.
 - Use `pluto -clean` to clear cache for current version.
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
 - Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
-- Go formatting: `go fmt ./...`; basic checks: `go vet ./...`.
+- Go formatting: `go fmt ./...`; basic checks: `eval "$(python3 scripts/llvm_env.py --shell)" && go vet ./...`.
 - Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions.
 - Avoid local helper closures in production and tests. Keep short logic inline; when extraction is worthwhile, define a package-level function or method and pass dependencies explicitly, even for a single caller. Use closures only when a callback API requires one or lexical capture is essential; test helpers that assert should call `t.Helper()`.
 - Filenames: lowercase with underscores where needed (Go convention).
@@ -133,7 +135,7 @@ To clear the cache for the current version, run `./pluto -clean`. To clear the e
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).

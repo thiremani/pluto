@@ -18,10 +18,17 @@ import uuid
 from pathlib import Path
 from typing import Mapping
 
+if __package__:
+    from .llvm_version import read_llvm_major
+else:
+    from llvm_version import read_llvm_major
+
 
 CPP_DEFS = "-D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
 EXPORT_KEYS = (
     "LLVM_BIN",
+    "LLVM_CONFIG",
+    "LLVM_VERSION",
     "GOFLAGS",
     "CGO_ENABLED",
     "CC",
@@ -43,63 +50,89 @@ def _which(name: str, env: Mapping[str, str]) -> str | None:
     return shutil.which(name, path=env.get("PATH"))
 
 
-def _detect_llvm_bin(env: Mapping[str, str]) -> Path:
-    env_bin = env.get("LLVM_BIN", "").strip()
-    if env_bin:
-        path = Path(env_bin)
-        if path.exists():
+def _resolve_executable(value: str, env: Mapping[str, str]) -> Path | None:
+    found = _which(value, env)
+    path = Path(found or value)
+    return path if path.is_file() else None
+
+
+def _config_from_bin(llvm_bin: Path, llvm_major: str) -> Path | None:
+    names = ["llvm-config.exe", "llvm-config", f"llvm-config-{llvm_major}"]
+    for name in names:
+        path = llvm_bin / name
+        if path.is_file():
             return path
 
-    llvm_home = env.get("LLVM_HOME", "").strip()
-    if llvm_home:
-        path = Path(llvm_home) / "bin"
-        if path.exists():
-            return path
+    return None
 
+
+def _versioned_llvm_bins(llvm_major: str, env: Mapping[str, str]) -> list[Path]:
     if _is_windows_env(env):
-        paths = [
+        return [
             Path("C:/msys64/ucrt64/bin"),
             Path("C:/msys64/mingw64/bin"),
             Path("C:/Program Files/LLVM/bin"),
         ]
-    else:
-        paths = [
-            Path("/usr/lib/llvm-22/bin"),
-            Path("/usr/local/opt/llvm/bin"),
-            Path("/opt/homebrew/opt/llvm/bin"),
-        ]
-    for path in paths:
-        if path.exists():
-            return path
 
-    install = "Windows: install MSYS2 UCRT64 and mingw-w64-ucrt-x86_64-llvm"
-    if not _is_windows_env(env):
-        install = "Linux: install LLVM 22 from apt.llvm.org; macOS: brew install llvm"
-    raise RuntimeError(f"LLVM 22 not found. {install}; or set LLVM_BIN/LLVM_HOME.")
+    return [
+        Path(f"/usr/lib/llvm-{llvm_major}/bin"),
+        Path(f"/usr/local/opt/llvm@{llvm_major}/bin"),
+        Path(f"/opt/homebrew/opt/llvm@{llvm_major}/bin"),
+    ]
 
 
-def _detect_llvm_config(env: Mapping[str, str], llvm_bin: Path) -> Path:
+def _detect_llvm_config(env: Mapping[str, str], llvm_major: str) -> Path:
     env_config = env.get("LLVM_CONFIG", "").strip()
     if env_config:
-        path = Path(_which(env_config, env) or env_config)
-        if path.exists():
+        path = _resolve_executable(env_config, env)
+        if path is not None:
             return path
         raise RuntimeError(f"LLVM_CONFIG points to {env_config}, but it was not found.")
 
-    names = ["llvm-config.exe", "llvm-config"] if _is_windows_env(env) else ["llvm-config"]
-    for name in names:
-        path = llvm_bin / name
-        if path.exists():
+    for key in ("LLVM_BIN", "LLVM_HOME"):
+        value = env.get(key, "").strip()
+        if not value:
+            continue
+        llvm_bin = Path(value) if key == "LLVM_BIN" else Path(value) / "bin"
+        if not llvm_bin.is_dir():
+            raise RuntimeError(f"{key} points to {value}, but its LLVM bin directory was not found.")
+        path = _config_from_bin(llvm_bin, llvm_major)
+        if path is not None:
+            return path
+        raise RuntimeError(f"llvm-config was not found under {llvm_bin}.")
+
+    versioned_name = "llvm-config.exe" if _is_windows_env(env) else f"llvm-config-{llvm_major}"
+    found = _which(versioned_name, env)
+    if found:
+        return Path(found)
+
+    for llvm_bin in _versioned_llvm_bins(llvm_major, env):
+        path = _config_from_bin(llvm_bin, llvm_major)
+        if path is not None:
             return path
 
     found = _which("llvm-config", env)
     if found:
         return Path(found)
-    raise RuntimeError(f"llvm-config not found under {llvm_bin}. Set LLVM_CONFIG, LLVM_BIN, or LLVM_HOME.")
+
+    install = f"install LLVM {llvm_major} and set LLVM_CONFIG to its llvm-config executable"
+    if _is_windows_env(env):
+        install = f"install an MSYS2 LLVM {llvm_major} toolchain and put llvm-config on PATH"
+    raise RuntimeError(f"LLVM {llvm_major} was not found; {install}.")
 
 
 def _llvm_config_output(llvm_config: Path, *args: str) -> str:
     return subprocess.check_output([str(llvm_config), *args], text=True).strip()
+
+
+def _validate_llvm_config(llvm_config: Path, llvm_major: str) -> None:
+    version = _llvm_config_output(llvm_config, "--version")
+    found_major = version.split(".", 1)[0]
+    if found_major != llvm_major:
+        raise RuntimeError(
+            f"Pluto requires LLVM {llvm_major}, but {llvm_config} reports {version}. "
+            "Select the matching llvm-config with LLVM_CONFIG."
+        )
 
 
 def _with_byollvm(goflags: str) -> str:
@@ -132,29 +165,42 @@ def _prepend_path_env(env: dict[str, str], key: str, value: str) -> None:
 
 
 def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Return a subprocess environment configured for Pluto's LLVM 22 build."""
+    """Return a subprocess environment configured for Pluto's pinned LLVM build."""
     env = dict(os.environ if base_env is None else base_env)
+    llvm_major = read_llvm_major()
+    env["LLVM_VERSION"] = llvm_major
 
     if env.get("MSYSTEM") is not None:
-        try:
-            from msys2_env import compute_env  # type: ignore
-        except ModuleNotFoundError as err:
-            if err.name != "msys2_env":
-                raise
-            from scripts.msys2_env import compute_env  # type: ignore
+        if __package__:
+            from .msys2_env import compute_env
+        else:
+            from msys2_env import compute_env
 
-        required = compute_env()
+        required = compute_env(env)
         env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
         for key, value in required.items():
             if key.startswith("CGO_"):
                 _append_env_flags(env, key, value)
-            else:
-                env.setdefault(key, value)
+            elif key != "GOFLAGS":
+                env[key] = value
     else:
-        llvm_bin = _detect_llvm_bin(env)
-        llvm_config = _detect_llvm_config(env, llvm_bin)
+        llvm_config = _detect_llvm_config(env, llvm_major)
+        _validate_llvm_config(llvm_config, llvm_major)
+        llvm_bin = Path(_llvm_config_output(llvm_config, "--bindir"))
+        if not llvm_bin.is_dir():
+            raise RuntimeError(f"{llvm_config} reports missing LLVM bin directory {llvm_bin}.")
+
         env["LLVM_BIN"] = str(llvm_bin)
+        env["LLVM_CONFIG"] = str(llvm_config)
         env["GOFLAGS"] = _with_byollvm(env.get("GOFLAGS", ""))
+        clang_suffix = ".exe" if _is_windows_env(env) else ""
+        clang = llvm_bin / f"clang{clang_suffix}"
+        clangxx = llvm_bin / f"clang++{clang_suffix}"
+        missing_tools = [str(path) for path in (clang, clangxx) if not path.exists()]
+        if missing_tools:
+            raise RuntimeError(f"selected LLVM installation is missing required tools: {', '.join(missing_tools)}")
+        env["CC"] = clang.name
+        env["CXX"] = clangxx.name
         _append_env_flags(env, "CGO_CPPFLAGS", f"{_llvm_config_output(llvm_config, '--cflags')} {CPP_DEFS}")
         _append_env_flags(env, "CGO_CXXFLAGS", f"-std=c++17 {_llvm_config_output(llvm_config, '--cxxflags')}")
         _append_env_flags(
@@ -166,7 +212,7 @@ def build_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
 
     llvm_bin = env.get("LLVM_BIN")
     if llvm_bin:
-        env["PATH"] = f"{llvm_bin}{os.pathsep}{env.get('PATH', '')}"
+        _prepend_path_env(env, "PATH", llvm_bin)
     return env
 
 
@@ -204,12 +250,22 @@ def _write_github_actions(env: Mapping[str, str]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Print or apply Pluto's LLVM 22 byollvm build environment.")
+    parser = argparse.ArgumentParser(description="Print or apply Pluto's pinned byollvm build environment.")
     parser.add_argument("--shell", action="store_true", help="print POSIX shell export commands")
     parser.add_argument("--github-actions", action="store_true", help="write env/path entries to GitHub Actions files")
+    parser.add_argument("--llvm-version", action="store_true", help="print the required LLVM major without probing the toolchain")
     args = parser.parse_args()
 
-    env = build_env()
+    if args.llvm_version:
+        print(read_llvm_major())
+        return 0
+
+    try:
+        env = build_env()
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
     if args.github_actions:
         _write_github_actions(env)
     else:

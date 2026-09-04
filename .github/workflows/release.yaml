@@ -29,19 +29,21 @@ jobs:
           go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
-      - name: Install LLVM and dependencies
+      - name: Install and configure LLVM
         run: |
+          LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev lld-22 clang-22
+          sudo ./llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y \
+            "llvm-${LLVM_VERSION}-dev" \
+            "lld-${LLVM_VERSION}" \
+            "clang-${LLVM_VERSION}"
 
-      - name: Set LLVM environment
-        env:
-          LLVM_BIN: /usr/lib/llvm-22/bin
-          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
-        run: |
-          python3 scripts/llvm_env.py --github-actions
+          LLVM_BIN="/usr/lib/llvm-${LLVM_VERSION}/bin"
+          LLVM_CONFIG="${LLVM_BIN}/llvm-config"
+          LLVM_BIN="$LLVM_BIN" LLVM_CONFIG="$LLVM_CONFIG" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Smoke test
         run: |
@@ -66,7 +68,7 @@ jobs:
 
   release-macos-arm64:
     name: Release (macOS arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     needs: create-release
     steps:
       - name: Checkout code
@@ -80,11 +82,15 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Install LLVM
+      - name: Install and configure LLVM
         run: |
+          LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
           brew update
-          brew install llvm lld
-          LLVM_PREFIX="$(brew --prefix llvm)"
+          brew install "llvm@${LLVM_VERSION}" "lld@${LLVM_VERSION}"
+
+          LLVM_PREFIX="$(brew --prefix "llvm@${LLVM_VERSION}")"
+          LLD_PREFIX="$(brew --prefix "lld@${LLVM_VERSION}")"
+          echo "$LLD_PREFIX/bin" >> "$GITHUB_PATH"
           LLVM_BIN="$LLVM_PREFIX/bin" \
             LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
             python3 scripts/llvm_env.py --github-actions
@@ -97,7 +103,7 @@ jobs:
 
   release-macos-amd64:
     name: Release (macOS x86_64)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     needs: create-release
     steps:
       - name: Checkout code
@@ -111,11 +117,15 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Install LLVM
+      - name: Install and configure LLVM
         run: |
+          LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
           brew update
-          brew install llvm lld
-          LLVM_PREFIX="$(brew --prefix llvm)"
+          brew install "llvm@${LLVM_VERSION}" "lld@${LLVM_VERSION}"
+
+          LLVM_PREFIX="$(brew --prefix "llvm@${LLVM_VERSION}")"
+          LLD_PREFIX="$(brew --prefix "lld@${LLVM_VERSION}")"
+          echo "$LLD_PREFIX/bin" >> "$GITHUB_PATH"
           LLVM_BIN="$LLVM_PREFIX/bin" \
             LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config" \
             python3 scripts/llvm_env.py --github-actions
@@ -175,19 +185,21 @@ jobs:
           go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
-      - name: Install LLVM and dependencies
+      - name: Install and configure LLVM
         run: |
+          LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev lld-22 clang-22
+          sudo ./llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y \
+            "llvm-${LLVM_VERSION}-dev" \
+            "lld-${LLVM_VERSION}" \
+            "clang-${LLVM_VERSION}"
 
-      - name: Set LLVM environment
-        env:
-          LLVM_BIN: /usr/lib/llvm-22/bin
-          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
-        run: |
-          python3 scripts/llvm_env.py --github-actions
+          LLVM_BIN="/usr/lib/llvm-${LLVM_VERSION}/bin"
+          LLVM_CONFIG="${LLVM_BIN}/llvm-config"
+          LLVM_BIN="$LLVM_BIN" LLVM_CONFIG="$LLVM_CONFIG" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:
@@ -212,19 +224,21 @@ jobs:
           go-version: "1.26"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
-      - name: Install LLVM and dependencies
+      - name: Install and configure LLVM
         run: |
+          LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          sudo apt-get install -y llvm-22-dev lld-22 clang-22
+          sudo ./llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y \
+            "llvm-${LLVM_VERSION}-dev" \
+            "lld-${LLVM_VERSION}" \
+            "clang-${LLVM_VERSION}"
 
-      - name: Set LLVM environment
-        env:
-          LLVM_BIN: /usr/lib/llvm-22/bin
-          LLVM_CONFIG: /usr/lib/llvm-22/bin/llvm-config
-        run: |
-          python3 scripts/llvm_env.py --github-actions
+          LLVM_BIN="/usr/lib/llvm-${LLVM_VERSION}/bin"
+          LLVM_CONFIG="${LLVM_BIN}/llvm-config"
+          LLVM_BIN="$LLVM_BIN" LLVM_CONFIG="$LLVM_CONFIG" \
+            python3 scripts/llvm_env.py --github-actions
 
       - name: Release artifacts
         env:

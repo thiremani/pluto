@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Requirements
 
 - Go 1.26+
-- LLVM 22 development libraries and tools (`llvm-config`, `clang`)
+- Development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`)
 - Python 3.x (for build/test helpers)
 - pip (for installing Python dependencies)
 
-On macOS with Homebrew, you can install LLVM with `brew install llvm` and add it to your path. The path is `/opt/homebrew/opt/llvm/bin` (ARM) or `/usr/local/opt/llvm/bin` (Intel).
-`python3 build.py` and `python3 test.py` derive the LLVM 22 byollvm CGO flags from `llvm-config`. Direct `go build`/`go test` can use `eval "$(python3 scripts/llvm_env.py --shell)"`.
+`.llvm-version` is the source of truth for the supported LLVM major. On macOS with Homebrew, install it with `LLVM_VERSION="$(python3 scripts/llvm_env.py --llvm-version)"; brew install "llvm@${LLVM_VERSION}" "lld@${LLVM_VERSION}"`, then add `$(brew --prefix "llvm@${LLVM_VERSION}")/bin` to PATH.
+
+`python3 build.py` and `python3 test.py` derive the `byollvm` CGO flags from `llvm-config`. The environment helper derives the tools from the same installation and rejects a major that differs from `.llvm-version`. Direct LLVM-dependent Go commands (`go build`, `go test`, and `go vet`) require `eval "$(python3 scripts/llvm_env.py --shell)"` first (or an equivalent explicit `byollvm` environment). See `README.md` for Linux and macOS setup.
 
 ## Development Commands
 
@@ -41,6 +42,7 @@ python3 test.py tests/math
 
 ### Running unit tests only
 ```bash
+eval "$(python3 scripts/llvm_env.py --shell)"
 go test -race ./lexer ./parser ./compiler
 ```
 
@@ -125,7 +127,7 @@ The compilation process consists of two main phases:
 - `pt.mod`: Module declaration file (similar to `go.mod`)
 
 ### Testing Infrastructure
-- Unit tests live under each package; run with `go test -race`
+- Unit tests live under each package; run them with the pinned-environment command above
 - End-to-end tests live in `tests/`:
   - Inputs: `.spt` (scripts) and optional `.pt` (shared code)
   - Expected output: `.exp` (line-by-line, supports `re:` regex prefixes)
@@ -135,7 +137,7 @@ The compilation process consists of two main phases:
 - Leak check run: `python3 test.py --leak-check [tests/math]`
 - Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions builds with Go 1.26, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
@@ -147,14 +149,14 @@ CI: GitHub Actions builds with Go 1.26, installs LLVM 22 + valgrind, and runs `p
   - `<PTCACHE>/<version>/runtime/<hash>/` for compiled runtime objects
   - Default host CPU builds: `<PTCACHE>/<version>/<module-path>/{code,script}`
   - Non-default `PLUTO_TARGET_CPU` builds: `<PTCACHE>/<version>/target_cpu-<setting>/<module-path>/{code,script}`
-- `PTCACHE` overrides cache location; ensure PATH includes LLVM 22 tools
+- `PTCACHE` overrides cache location; ensure PATH includes the LLVM tools matching `.llvm-version`
 - `PLUTO_TARGET_CPU` overrides host CPU tuning; set it to `portable` to disable the default `-mcpu=native`
 - Use `pluto -clean` to clear cache for current version
 
 ## Coding Style & Naming Conventions
 - Indentation: Use tabs for indentation across the repository; do not convert leading tabs to spaces. Preserve existing indentation when editing.
 - Go files: Leading indentation MUST be tabs (this is gofmt's default). Run `gofmt -w` (or enable format‑on‑save) before committing. It's fine for gofmt to leave spaces for alignment within a line; the rule applies to leading indentation only.
-- Go formatting: `go fmt ./...`; basic checks: `go vet ./...`
+- Go formatting: `go fmt ./...`; basic checks: `eval "$(python3 scripts/llvm_env.py --shell)" && go vet ./...`
 - Packages: lowercase short names. Exports: `CamelCase`. Tests: `*_test.go` with `TestXxx` functions
 - Avoid local helper closures in production and tests. Keep short logic inline; when extraction is worthwhile, define a package-level function or method and pass dependencies explicitly, even for a single caller. Use closures only when a callback API requires one or lexical capture is essential; test helpers that assert should call `t.Helper()`.
 - Filenames: lowercase with underscores where needed (Go convention)

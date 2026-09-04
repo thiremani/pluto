@@ -26,6 +26,8 @@ This repository now uses GoReleaser via `.goreleaser.yaml` and `.github/workflow
 
 Pluto depends on LLVM and CGO (`tinygo.org/x/go-llvm`). Cross-compiling all targets from a single runner is fragile.
 
+The supported LLVM major is recorded in [`.llvm-version`](../.llvm-version). Release jobs read that file through `python3 scripts/llvm_env.py --llvm-version`, install the corresponding packages, and let the environment helper verify `llvm-config --version` before building. A mismatched installation fails early rather than mixing LLVM headers, libraries, and executables.
+
 The release workflow now:
 
 - runs a smoke gate (`go test -race ./lexer ./parser ./compiler`) on the tagged commit

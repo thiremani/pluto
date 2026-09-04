@@ -290,8 +290,10 @@ homebrew_casks:
     homepage: 'https://github.com/{{ .Env.GITHUB_REPOSITORY }}'
     license: 'Apache-2.0 WITH LLVM-exception'
     dependencies:
-      - formula: llvm
-      - formula: lld
+      # GoReleaser dependency names are not templated; keep these synchronized
+      # with .llvm-version.
+      - formula: llvm@22
+      - formula: lld@22
     binaries:
       - pluto
       - plt
