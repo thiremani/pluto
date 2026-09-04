@@ -43,9 +43,12 @@ func planValueTypeSupported(t Type) bool {
 
 // planExprEligible accepts ordinary expression trees only: whitelisted node
 // kinds with no range or conditional behavior at any depth. Block-layout
-// literals wait for a one-line eval-operand spelling (plan §12), and a field
-// or column read of a widened binding stays legacy: the column's lowered
-// value follows the receiver's effective schema, not the solved type.
+// literals wait for a one-line eval-operand spelling (plan §12). A field or
+// column read plans only off an identifier the router can inspect and that
+// is not widened; any other receiver fails closed. Deferred, not final: the
+// widened case needs ownership resolved against the receiver's effective
+// schema, as planSlot does for identifiers, once compileDotExpression types
+// the column by that schema too.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
@@ -55,7 +58,8 @@ func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 			return false
 		}
 	case *ast.DotExpression:
-		if c.widenedRead(e.Left) {
+		receiver, isIdent := e.Left.(*ast.Identifier)
+		if !isIdent || c.widenedRead(receiver) {
 			return false
 		}
 	default:
@@ -102,11 +106,7 @@ func (c *Compiler) effectiveBindingType(name string, solved Type) Type {
 
 // widenedRead reports a binding read whose effective storage differs from
 // its solved type.
-func (c *Compiler) widenedRead(expr ast.Expression) bool {
-	ident, isIdent := expr.(*ast.Identifier)
-	if !isIdent {
-		return false
-	}
+func (c *Compiler) widenedRead(ident *ast.Identifier) bool {
 	solved := c.ExprCache[key(c.FuncNameMangled, ident)].OutTypes[0]
 	return !TypeEqual(c.effectiveBindingType(ident.Value, solved), solved)
 }

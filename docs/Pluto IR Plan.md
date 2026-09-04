@@ -1200,7 +1200,9 @@ and column reads, and heap discards are pinned by goldens in
 rows 2c and 36) once an eval-operand spelling exists; field and column
 reads of a widened binding (a header-only table holding a concrete schema),
 whose lowered value follows the effective schema rather than the solved
-type and so stay legacy; calls and multi-output outcomes
+type and so stay legacy — the follow-up resolves the column's ownership
+against the receiver's effective schema, as identifier reads already do,
+once `compileDotExpression` types the column by that schema as well; calls and multi-output outcomes
 with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
 `output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
 needs an outcome-referencing operand; the `unique` annotation and consuming
