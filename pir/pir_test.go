@@ -509,13 +509,13 @@ func TestRenderExpandedOwnership(t *testing.T) {
 // literals never break the one-operation-per-line format, at the root or
 // nested under an operator; ordinary non-ASCII stays raw.
 func TestRenderEscapesControls(t *testing.T) {
-	multi := strLit("a\nb\tc\rd\x01e")
+	multi := strLit("a\nb\tc\rd\x01e\x7f")
 	cases := []struct {
 		expr ast.Expression
 		want string
 	}{
-		{multi, `%t0 = eval Str "a\nb\tc\rd\x01e"`},
-		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\rd\x01e" ⊕ "z"`},
+		{multi, `%t0 = eval Str "a\nb\tc\rd\x01e\x7f"`},
+		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\rd\x01e\x7f" ⊕ "z"`},
 		{strLit("π\u0085x\u2028y\u2029z\u009f"), `%t0 = eval Str "π\u0085x\u2028y\u2029z\u009f"`},
 	}
 	for _, tc := range cases {

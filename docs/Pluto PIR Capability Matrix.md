@@ -7,7 +7,8 @@ capability combination, not a dispatcher branch. This file enumerates the
 reachable combinations, what each currently routes to, which tests cover it,
 which step migrates it, and the notable removable helpers it currently uses.
 The actual helper-release inventory is plan §16 Step 9; the capability router
-keys on the same columns.
+keys on the same axes — most are table columns, and a folded axis (literal
+layout) is recorded in the Value kind of the rows it splits.
 
 ## 1. Axes
 
@@ -63,8 +64,9 @@ drives that body.
 ## 2. Reachable combinations
 
 Rows are grouped by statement form, and each group has two parts: a table of
-the **routing axes** the capability router keys on, and a collapsible list
-giving each row's legacy route, coverage, and helpers. Row numbers are stable
+the **routing axes** the capability router keys on (folded axes appear
+inside Value kind), and a collapsible list giving each row's legacy route,
+coverage, and helpers. Row numbers are stable
 across both, and are not renumbered when a row is split — a letter suffix
 (`5b`, `14i`) keeps existing references valid.
 
@@ -202,7 +204,7 @@ two together rather than treating any single row as a deletion trigger.
 - **36f** — as row 36, but a conditional or checked cell routes through `compileCondExprValue`. *Missing:* **uncovered**: conditional and checked table cells. *Helpers:* `compileCondExprValue`
 - **36b** — ordinary assignment lowering; **now planned** (a table read is a borrow that copies). *Tests:* `array/array.spt` (`savedScores = scores`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 - **36d** — call lowering. *Tests:* all-`MustWrite`: `array/array_func.*`; any-`MayWrite`: `array/array_func.pt:40-43` + `.spt:63-66` (`ResetTable(-1)` keeps, `ResetTable(1)` writes)
-- **36g** — `compileDotExpression` yields the column array, then ordinary assignment; **now planned** (the copied column is an owned outcome that moves). *Tests:* `array/array.spt:107` (`scoreColumn = scores.Score`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
+- **36g** — `compileDotExpression` yields the column array, then ordinary assignment; **now planned for an unwidened receiver** (the copied column is an owned outcome that moves). A widened receiver — a table binding whose effective schema differs from its solved type — stays legacy, since the column is lowered by the effective schema (`TestPlanRouterRejectsWidenedReceiver`; `mem/mem.spt` `takenTable.Value`). *Tests:* `array/array.spt:107` (`scoreColumn = scores.Score`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 
 </details>
 
