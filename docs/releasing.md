@@ -28,6 +28,8 @@ Pluto depends on LLVM and CGO (`tinygo.org/x/go-llvm`). Cross-compiling all targ
 
 The supported LLVM major is recorded in [`.llvm-version`](../.llvm-version). Release jobs read that file through `python3 scripts/llvm_env.py --llvm-version`, install the corresponding packages, and let the environment helper verify `llvm-config --version` before building. A mismatched installation fails early rather than mixing LLVM headers, libraries, and executables.
 
+Go is pinned in `go.mod` (`go 1.27` as the language baseline, `toolchain go1.27.1` as the preferred toolchain). Release jobs install it from `go.mod`, run with `GOTOOLCHAIN=local` so no other toolchain is selected, and assert that `go version` matches the pinned toolchain; the Windows job still installs the rolling MSYS2 Go package and is not yet exact. Go 1.27 requires macOS 13 (Ventura) or later, which is therefore the minimum supported macOS for Pluto binaries.
+
 The release workflow now:
 
 - runs a smoke gate (`go test -race ./lexer ./parser ./compiler`) on the tagged commit

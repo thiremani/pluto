@@ -12,6 +12,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   validate-release:
     name: Validate tagged commit
@@ -24,9 +27,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -78,9 +86,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
 
       - name: Install and configure LLVM
         run: |
@@ -113,9 +126,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
 
       - name: Install and configure LLVM
         run: |
@@ -180,9 +198,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -219,9 +242,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
