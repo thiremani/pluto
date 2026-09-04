@@ -1,7 +1,7 @@
 # Pluto Statement IR (PIR) Plan
 
-**Status:** Accepted 2026-08-05 — roadmap in §16; implemented through Step 3
-(minimal statement slice)
+**Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
+in progress (first slice landed: heap values and ownership elaboration)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -609,9 +609,11 @@ relation, not this spelling: both string flavours display as `Str`, and
 
 The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
-golden for its new node kinds. A block-layout array literal — rank-2 rows,
-a table — prints on several lines and has no one-line spelling for an eval
-operand yet, so it stays outside the router until one is settled. `commit`
+golden for its new node kinds. An eval operand is always one physical line:
+control characters inside a string literal are escaped (`"line one\nline
+two"`). A block-layout array literal — rank-2 rows, a table — prints on
+several lines and has no one-line spelling for an eval operand yet, so it
+stays outside the router until one is settled (matrix rows 2c and 36). `commit`
 and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
@@ -1167,15 +1169,17 @@ values from ordinary expressions — string literals, concatenations, inline
 array literals, struct field and table column reads (`DotExpression`) — into
 local and discard targets. The builder annotates every outcome slot
 (`unmanaged` by type, `borrowed` for a binding read, `owned` otherwise) —
-a binding read is typed from the binding's **effective storage**, the type
-of the value it holds now, never the solver's flow-typed read: after
-`text = "old"` the read solves as a static string while the binding stores
-a materialized heap copy, and a heap value moved, copied, or transferred
-into a binding declared static keeps its flavor, so that binding holds heap
-state its declared type does not show — and every local target with its
-declared type (`Owns`: unmanaged values stored here are materialized),
-whether it is fresh, and whether the value it holds owns heap state
-(`Holds`: replacing it releases it), read from the same effective storage;
+a slot keeps the solver's semantic type — an empty reset reads as
+`[Empty]` and may still reset a `[F64]` binding — while its ownership
+follows the binding's **effective storage**, the type of the value held
+now: after `text = "old"` the read solves as a static string while the
+binding stores a materialized heap copy, and a heap value moved, copied, or
+transferred into a binding declared static keeps its flavor, so that
+binding holds heap state its declared type does not show — and every local
+target with its declared type (`Owns`: unmanaged values stored here are
+materialized), whether it is fresh, and whether the value it holds owns
+heap state (`Holds`: replacing it releases it), read from the same
+effective storage;
 `pir.Elaborate` derives each mapping's transfer (move, copy, promoted
 transfer, materialize) and the statement-exit releases — a heap transfer
 into a binding declared non-owning is legal and leaves it holding heap

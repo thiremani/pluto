@@ -20,6 +20,7 @@ keys on the same columns.
 | Target kind | local, function output, discard (`_`), global constant, none (print) |
 | Statement form | assignment, declaration, print |
 | Domain role | none, RHS-local, shared gate, collector-local, function-owned, callee-owned |
+| Literal layout (array and table literals) | inline (one source row), block (rows on their own lines: rank-2 arrays, tables) |
 
 **Callee output effect is a whole-call property.** A call with any `MayWrite`
 output defers to Step 6 as a unit — argument evaluation, tuple failure, and
@@ -84,6 +85,7 @@ two together rather than treating any single row as a deletion trigger.
 | 1 | none | ordinary | scalar | local | — | — | R | 3 |
 | 2 | none | ordinary | heap | local | — | — | R | 4 |
 | 2b | none | ordinary | struct field read | local | — | — | R | 4 |
+| 2c | none | ordinary | heap (block-layout array literal) | local | — | — | R | 4 (deferred: needs a one-line eval-operand spelling, plan §12) |
 | 3 | none | ordinary | multi-output | local | — | — | R | 4 |
 | 4 | none | ordinary (swap, dup source) | heap | local | — | — | R | 4 |
 | 5 | none | ordinary | scalar, Range descriptor | blank (`_`) | — | — | R (sink shipped, §4) | 3 |
@@ -143,8 +145,9 @@ two together rather than treating any single row as a deletion trigger.
 <details><summary>Routes, coverage, and helpers</summary>
 
 - **1** — `compileAssignments`. *Tests:* `arithmetic`, `op`, `unary`, `numeric_literals`, `zero_div`. *Helpers:* `compileAssignments`
-- **2** — `compileAssignments` → `commitAssignments`; **now planned** at script root for ordinary expressions (string literals, concatenations, inline array literals, binding reads) — block-layout literals stay legacy (row 36). *Tests:* `mem/mem.spt`, `str`, `array_concat`, `cond_copy`; goldens `TestPlanGoldenMaterialize`, `TestPlanGoldenArrays` in `compiler/pir_test.go`. *Helpers:* `commitAssignments`
-- **2b** — `compileDotExpression` extracts the field, then ordinary assignment; **now planned** (a struct field is a constant, so the outcome is unmanaged). *Tests:* `struct/struct.spt`; golden `TestPlanGoldenStructAndTable`
+- **2** — `compileAssignments` → `commitAssignments`; **now planned** at script root for ordinary expressions (string literals including multiline ones, concatenations, inline array literals, binding reads) — block-layout literals stay legacy (rows 2c, 36). *Tests:* `mem/mem.spt` (incl. widened bindings and the empty reset into a differently typed binding), `str`, `multiline_str`, `array_concat`, `cond_copy`; goldens `TestPlanGoldenMaterialize`, `TestPlanGoldenArrays`, `TestPlanGoldenEffectiveStorage*`, `TestPlanGoldenMultilineString` in `compiler/pir_test.go`. *Helpers:* `commitAssignments`
+- **2b** — `compileDotExpression` extracts the field, then ordinary assignment; **now planned** (a struct field is a constant, so the outcome is unmanaged). *Tests:* `struct/struct.spt` (`copiedName = p.name`); golden `TestPlanGoldenStructAndTable`
+- **2c** — a headerless block-layout array literal (rank-2 rows on their own lines): `compileArrayExpression` → `compileArray`, ordinary assignment. Still legacy after Step 4's first slice for the same reason as row 36: the literal prints on several lines and the eval operand has no one-line spelling yet (plan §12). *Tests:* `array/array.spt` (`oneRowMatrix`, `rank3`, `stringMatrix`)
 - **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
 - **4** — `commitAssignments` copy/move marking; **now planned**: `pir.Elaborate` promotes a borrow to transfer when its owner is replaced in the group and copies every later borrow of that owner. *Tests:* `mem/mem.spt:64,78`; goldens `TestPlanGoldenHeapSwap`, `TestPlanGoldenDuplicateSource`, `TestPlanGoldenReplaceAndDiscard`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
 - **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`; the bare Range-descriptor discard is pinned by `TestPlanGoldenRangeDiscard` in `compiler/pir_test.go`
@@ -193,7 +196,7 @@ two together rather than treating any single row as a deletion trigger.
 - **27** — `compileCondRangedStatement` → stage temp. *Tests:* `mem/gate_heap`. *Helpers:* ranged staging
 - **28** — ranged gate over an affine access. *Tests:* `array/cond_accum:416,420`. *Helpers:* affine decision helpers
 - **31c** — per-RHS bounds bit inside the loop nest. *Tests:* `math/func_array_range_oob`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
-- **35b** — ordinary assignment lowering; **now planned** (a struct value is unmanaged: its fields are constants). *Tests:* `struct/struct.spt` (`s2 = p`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
+- **35b** — ordinary assignment lowering; **now planned** (a struct value is unmanaged: its fields are constants). *Tests:* `struct/struct.spt` (`s2 = p`, whole-struct copy); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 - **35d** — call lowering. *Missing:* **uncovered**: struct as a parameter or output
 - **36** — `compileArrayExpression` → `compileTable`, cells via `compileArrayLiteralCell`; ranged cells are rejected. Still legacy after Step 4's first slice: a table literal is block-layout and has no one-line eval-operand spelling yet (plan §12). *Tests:* `array/array.spt`, `array/array_func.spt`. *Missing:* table in the leak suite
 - **36f** — as row 36, but a conditional or checked cell routes through `compileCondExprValue`. *Missing:* **uncovered**: conditional and checked table cells. *Helpers:* `compileCondExprValue`

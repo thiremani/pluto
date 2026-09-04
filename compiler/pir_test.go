@@ -663,9 +663,10 @@ copy, other, text`)
 	require.True(t, plans[3].Commit[0].Target.Holds)
 }
 
-// Plan §8: the same widening through an empty-array reset — the read of arr
-// solves as [Empty] before the concrete literal merges in, so other is
-// declared empty yet holds the materialized [I64] array it took.
+// Plan §8: the same widening through an empty-array reset. The read of arr
+// keeps its semantic [Empty] type — that is what lets it later reset a
+// [F64] binding — while its ownership follows the materialized [I64] array
+// backing it, so other is declared empty yet holds and releases heap state.
 func TestPlanGoldenEffectiveStorageArray(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -673,19 +674,32 @@ func TestPlanGoldenEffectiveStorageArray(t *testing.T) {
 	plans := compileScriptPlans(t, ctx, "planEffectiveArray", "", `arr = []
 other = arr
 arr = [1 2]
+floats = [1.5]
+arr, floats
+floats = other
 copy = other
 other = []
-copy, other, arr`)
-	require.Equal(t, []string{"assign_arr", "assign_other", "assign_arr", "assign_copy", "assign_other"}, planLabels(plans))
+copy, other, floats`)
+	require.Equal(t, []string{"assign_arr", "assign_other", "assign_arr", "assign_floats", "assign_floats", "assign_copy", "assign_other"}, planLabels(plans))
 	require.Equal(t, `statement assign_other
     source "other = arr"
 
     execute
-        %t0 = eval [I64] arr [shape=scalar] [yield=always] [borrowed=arr]
+        %t0 = eval [Empty] arr [shape=scalar] [yield=always] [borrowed=arr]
 
     commit
         other : [Empty] <- %t0 [copy]
 `, plans[1].Render(true))
+	require.Equal(t, `statement assign_floats
+    source "floats = other"
+
+    execute
+        %t0 = eval [Empty] other [shape=scalar] [yield=always] [borrowed=other]
+
+    commit
+        floats : [F64] <- %t0 [copy]
+        drop floats [replaced]
+`, plans[4].Render(true))
 	require.Equal(t, `statement assign_other
     source "other = []"
 
@@ -695,5 +709,23 @@ copy, other, arr`)
     commit
         other : [Empty] <- %t0
         drop other [replaced]
-`, plans[4].Render(true))
+`, plans[6].Render(true))
+}
+
+// Plan §12: a multiline string literal is one eval operand on one line, its
+// control characters escaped; the source line is quoted the same way.
+func TestPlanGoldenMultilineString(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planMultiline", "", "s = \"line one\nline two\"\ns")
+	require.Equal(t, `statement assign_s
+    source "s = \"line one\nline two\""
+
+    execute
+        %t0 = eval Str "line one\nline two"
+
+    commit
+        s <- %t0
+`, plans[0].Render(false))
 }

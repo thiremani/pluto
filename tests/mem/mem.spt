@@ -99,10 +99,14 @@ copied
 copied = "static"
 copied
 
-# The same widening through an empty-array reset.
+# The same widening through an empty-array reset; the taken empty array keeps
+# its empty type, so it still resets a differently typed binding.
 emptyFirst = []
 takenEmpty = emptyFirst
 emptyFirst = [1 2]
+floats = [1.5]
+floats
+floats = takenEmpty
 copiedEmpty = takenEmpty
 takenEmpty = []
-copiedEmpty, takenEmpty, emptyFirst
+copiedEmpty, takenEmpty, emptyFirst, floats

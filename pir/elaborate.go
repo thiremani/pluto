@@ -1,18 +1,11 @@
 package pir
 
-// Elaborate derives the ownership decisions of a commit group (plan §6, §8):
-// the transfer of every mapping and the releases the statement owes at its
-// exit. It runs between the builder and Validate and consults only the
-// plan's own annotations; the validator re-checks every decision.
-//
-// A borrowed outcome is promoted to transfer when its owner is a local
-// target whose held heap value is replaced in this group and no earlier
-// mapping already took that value; the first mapping in commit order wins
-// and the rest copy, so one source feeding several targets is never moved
-// twice. A replaced held value nothing took is released after every mapping
-// has landed, and so is an owned outcome mapped to a discard. Materialization
-// follows the declared type (Owns); replacement follows the effective one
-// (Holds).
+// Elaborate derives each mapping's transfer and the statement's releases
+// (plan §6, §8) from the plan's own annotations; Validate re-checks them.
+// The first mapping in commit order takes a replaced owner's value and later
+// borrows of it copy, so one source feeding several targets is never moved
+// twice. Materialization follows the declared type (Owns); replacement and
+// promotion follow the effective one (Holds).
 func Elaborate(p *AssignPlan) {
 	replaced := make(map[string]bool, len(p.Commit))
 	for _, m := range p.Commit {

@@ -8,12 +8,8 @@ import (
 	"github.com/thiremani/pluto/ast"
 )
 
-// Render returns the deterministic text form of a plan (plan §12):
-// lines that bind a named result read `%result = operation Type operands`, commit
-// mappings `target [: Type] <- value`. `expanded` adds result shapes,
-// ownership annotations, target types, each mapping's derived transfer, and
-// the derived releases after the mappings. The in-memory tree is
-// authoritative — this text is never parsed back.
+// Render returns the deterministic text form of a plan (plan §12); the
+// in-memory tree is authoritative and this text is never parsed back.
 func (p *AssignPlan) Render(expanded bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "statement %s\n", p.Label)
@@ -42,20 +38,37 @@ func (p *AssignPlan) Render(expanded bool) string {
 	return b.String()
 }
 
-// renderPayload renders an eval operand in the ast's own spelling, minus the
-// pair of parentheses an operator root wraps itself in, after checking that
-// every node is one the router admits; any other is an ICE, so widening the
-// router means admitting its node kind and golden here. Block-layout array
-// literals print on several lines and have no one-line spelling yet, so
-// they stay outside the router and the renderer alike.
+// renderPayload renders an eval operand on one line: the ast's own spelling
+// minus the pair an operator root wraps itself in, with control characters
+// inside string literals escaped. Any node the router does not admit is an
+// ICE, so widening the router means admitting its kind and golden here.
 func renderPayload(expr ast.Expression) string {
 	checkRenderable(expr)
 	s := expr.String()
 	switch expr.(type) {
 	case *ast.InfixExpression, *ast.PrefixExpression:
-		return s[1 : len(s)-1]
+		s = s[1 : len(s)-1]
 	}
-	return s
+	return escapeControls(s)
+}
+
+func escapeControls(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func checkRenderable(expr ast.Expression) {
@@ -82,7 +95,6 @@ func typesString(slots []Slot) string {
 	return strings.Join(names, ", ")
 }
 
-// ownershipString renders one annotation per slot, in slot order.
 func ownershipString(slots []Slot) string {
 	var b strings.Builder
 	for _, slot := range slots {

@@ -1,20 +1,18 @@
 // Package pir models one Pluto statement as a typed execution plan
 // (docs/Pluto IR Plan.md): source-level execution decisions, never LLVM
-// values or storage. The compiler package owns the facts-to-plan adapter and
-// the lowerer; pir owns the nodes, ownership elaboration, the validator, and
-// the text rendering.
+// values or storage. The compiler package owns the builder and the lowerer;
+// pir owns the nodes, ownership elaboration, validation, and rendering.
 package pir
 
 import "github.com/thiremani/pluto/ast"
 
-// Type is the Pluto type of an outcome; pir treats a type as its name — the
-// concrete type system lives in the compiler package.
+// Type is the Pluto type of an outcome; pir treats a type as its name.
 type Type interface {
 	String() string
 }
 
 // OutcomeID identifies one node's result (%t<N>); IDs are dense in execution
-// order. Rendered names are display only — nothing parses them.
+// order.
 type OutcomeID int
 
 // Ownership is an outcome slot's annotation (plan §8).
@@ -29,16 +27,17 @@ const (
 	Borrowed
 )
 
-// Slot is one output of an eval: its type and ownership annotation.
+// Slot is one output of an eval. Type is the solver's semantic type;
+// Ownership follows the value's effective storage, which may hold heap state
+// the type does not show (an empty reset backed by a typed array).
 type Slot struct {
 	Type      Type
 	Ownership Ownership
 	Owner     string // the borrowed-from binding; empty unless Borrowed
 }
 
-// Eval evaluates one solved source expression. The builder must split out
-// anything that affects evaluation strategy (ranges, conditionals, checked
-// accesses, collectors) before an expression may appear here.
+// Eval evaluates one solved source expression; the builder splits out
+// anything that affects evaluation strategy before an expression lands here.
 type Eval struct {
 	Result OutcomeID
 	Expr   ast.Expression
@@ -54,18 +53,12 @@ const (
 	DiscardTarget
 )
 
-// Target is one LHS location. A discard has no name and no type; a local
-// records its solver-declared binding type — an independent fact, not a copy
-// of the outcome type — so validation can reject a mismapped outcome.
-//
-// Owns reports that the binding's declared type holds heap state, so an
-// unmanaged value stored here is materialized into an owned copy. Fresh
-// reports that the binding has no value yet, so the commit replaces nothing.
-// Holds reports that the value the binding currently holds owns heap state
-// and must be released when replaced; it is the binding's effective
-// storage, which can be heap while the declared type is not — a heap value
-// moved, copied, or transferred into a binding keeps its flavor — so Holds
-// is recorded separately from Owns and is always false when Fresh.
+// Target is one LHS location; a discard has no name and no type. Owns: the
+// declared type holds heap state, so an unmanaged value stored here is
+// materialized. Fresh: no value yet. Holds: the value held now owns heap
+// state and is released when replaced — effective storage, which can be
+// heap while the declared type is not, so it is recorded apart from Owns and
+// is always false when Fresh.
 type Target struct {
 	Kind  TargetKind
 	Name  string
@@ -75,34 +68,25 @@ type Target struct {
 	Holds bool
 }
 
-// OutcomeRef addresses one slot of one eval's result.
 type OutcomeRef struct {
 	Outcome OutcomeID
 	Slot    int
 }
 
-// Transfer is how a commit mapping hands its outcome to its target, derived
-// by Elaborate from the slot's ownership and the target (plan §6, §8).
+// Transfer is how a commit mapping hands its outcome to its target (plan
+// §6, §8); Elaborate derives it.
 type Transfer int
 
 const (
-	// Store writes an unmanaged value into a non-owning target.
-	Store Transfer = iota
-	// Materialize writes an unmanaged value into an owning target, which
-	// makes an owned copy of it.
-	Materialize
-	// Move hands an owned outcome to the target.
-	Move
-	// Copy gives the target its own copy of a borrowed outcome; the owner
-	// survives.
-	Copy
-	// Promote is a borrow promoted to transfer: the owner is replaced in the
-	// same group, so the target takes the owner's old value without a copy.
-	Promote
+	Store       Transfer = iota // unmanaged value into a non-owning target
+	Materialize                 // unmanaged value into an owning target: an owned copy is made
+	Move                        // owned outcome handed to the target
+	Copy                        // borrowed outcome copied; the owner survives
+	Promote                     // borrow promoted to transfer: the owner is replaced in the same group
 )
 
-// Mapping is one recorded target <- outcome commit pair; the lowerer must
-// consume it as recorded, never rematching by name or position.
+// Mapping is one recorded target <- outcome commit pair; the lowerer
+// consumes it as recorded, never rematching by name or position.
 type Mapping struct {
 	Target   Target
 	Outcome  OutcomeRef
@@ -112,23 +96,19 @@ type Mapping struct {
 type DropKind int
 
 const (
-	// DropOutcome releases an owned outcome no target took.
-	DropOutcome DropKind = iota
-	// DropReplaced releases a local target's old value once every mapping
-	// has landed.
-	DropReplaced
+	DropOutcome  DropKind = iota // an owned outcome no target took
+	DropReplaced                 // a local target's old value, after every mapping
 )
 
-// Drop is one derived release (plan §8): never authored by the builder,
-// always at the statement's exit after every mapping.
+// Drop is one derived release (plan §8), never authored by the builder.
 type Drop struct {
 	Kind    DropKind
 	Outcome OutcomeRef // DropOutcome
 	Target  string     // DropReplaced
 }
 
-// AssignPlan is the execution plan for one assignment statement. The prepare
-// and finish phases are structurally absent until carries and collectors land.
+// AssignPlan is the execution plan for one assignment statement; prepare and
+// finish phases are absent until carries and collectors land.
 type AssignPlan struct {
 	Label  string // derived from the targets, e.g. assign_x; not unique, never referenced
 	Source string // source rendering of the statement

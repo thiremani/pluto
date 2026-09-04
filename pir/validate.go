@@ -2,13 +2,11 @@ package pir
 
 import "fmt"
 
-// Validate runs on every elaborated plan before lowering (plan §14): several
-// invariants have no guaranteed panic site (an unmapped outcome silently
-// never commits; a nil discarded-outcome type fails only under -emit-pir; a
-// missing release leaks), so a failure is an ICE, never a silent miscompile.
-// compatible is the compiler's directional binding-compatibility relation
-// (target, outcome) — StrG into StrH, an empty-array reset — never display
-// or mangle equality, which are neither identity nor compatibility.
+// Validate runs on every elaborated plan before lowering (plan §14). Several
+// invariants have no natural panic site — an unmapped outcome silently never
+// commits, a missing release leaks — so a failure is an ICE. compatible is
+// the compiler's directional binding-compatibility relation (target,
+// outcome), never display or mangle equality.
 func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 	if p.Label == "" {
 		return fmt.Errorf("plan has no label")
@@ -110,12 +108,9 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 	return nil
 }
 
-// validateLocalTransfer pins the transfer Elaborate must have derived for a
-// local mapping (plan §8, §14.20-22). A promoted borrow additionally needs
-// its owner's held value replaced in this group; validateReleases counts the
-// promotions. A heap transfer into a target whose declared type is not
-// owning is legal: the binding then holds heap state, which the builder
-// reads back from its effective storage on the next statement.
+// validateLocalTransfer pins the transfer Elaborate must have derived (plan
+// §8, §14.20-22). A heap transfer into a target declared non-owning is
+// legal: the binding then holds heap state the next statement reads back.
 func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 	want := Store
 	switch slot.Ownership {
@@ -151,9 +146,8 @@ func (p *AssignPlan) replacesOwner(name string) bool {
 	return false
 }
 
-// validateReleases checks plan §14.19-21: every owned outcome is consumed or
-// released exactly once, and every replaced held value is either taken by
-// exactly one promoted borrow or released, never both or neither.
+// validateReleases checks plan §14.19-21: every owned outcome and every
+// replaced held value is consumed or released exactly once.
 func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	taken := make(map[string]int, len(replaced))
 	needDrop := make(map[OutcomeRef]bool)

@@ -504,3 +504,27 @@ func TestRenderExpandedOwnership(t *testing.T) {
 		t.Fatalf("replace concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// Plan §12: control characters inside string literals never break the
+// one-operation-per-line format, at the root or nested under an operator.
+func TestRenderEscapesControls(t *testing.T) {
+	multi := strLit("a\nb\tc\rd\x01e")
+	cases := []struct {
+		expr ast.Expression
+		want string
+	}{
+		{multi, `%t0 = eval Str "a\nb\tc\rd\x01e"`},
+		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\rd\x01e" ⊕ "z"`},
+	}
+	for _, tc := range cases {
+		p := swapPlan()
+		p.Evals = p.Evals[:1]
+		p.Evals[0].Expr = tc.expr
+		p.Evals[0].Slots[0].Type = testType("Str")
+		p.Commit = p.Commit[:1]
+		got := p.Render(false)
+		if !strings.Contains(got, "        "+tc.want+"\n") || strings.Count(got, "\n") != 8 {
+			t.Fatalf("render mismatch:\n%s", got)
+		}
+	}
+}
