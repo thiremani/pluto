@@ -22,7 +22,7 @@ This project is a compiler for the Pluto programming language, written in Go. It
 
 ### Requirements
 
-*   Go 1.26+
+*   Go 1.27+ (`go.mod` names the preferred toolchain, which CI and release jobs enforce exactly; macOS build hosts need macOS 13 or later)
 *   Development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`)
 *   Python 3.x (for build/test helpers)
 *   pip (for installing Python dependencies)
@@ -135,7 +135,7 @@ To clear the cache for the current version, run `./pluto -clean`. To clear the e
   - Linux: `valgrind`
   - macOS: `leaks`
 
-CI: GitHub Actions builds with Go 1.26, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions installs the Go toolchain `go.mod` prefers and asserts the exact version, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ## Commit & Pull Request Guidelines
 - Commit style: Conventional Commits for the subject line (e.g., `feat(parser): ...`, `refactor(compiler): ...`).

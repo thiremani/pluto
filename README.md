@@ -415,7 +415,8 @@ Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#1
 
 ## Requirements
 
-- Go 1.26+
+- Go 1.27+ (`go.mod` names the preferred toolchain; CI and release jobs enforce that exact version)
+- Building on macOS requires macOS 13 (Ventura) or later, the Go 1.27 host minimum; the deployment target of release binaries is not yet pinned
 - Development libraries and tools for the LLVM major recorded in [`.llvm-version`](.llvm-version): `llvm-config`, `clang`, `clang++`
 - Python 3.x (for build/test helpers)
 - Leak check tools (only for `python3 test.py --leak-check`):
@@ -478,10 +479,16 @@ python3 test.py
 
 Install [MSYS2](https://www.msys2.org) and use the "MSYS2 UCRT64" shell.
 
-Install packages:
+Install the LLVM toolchain and Python from MSYS2 — not Go: the MSYS2 Go package is a rolling build that can lag the toolchain [`go.mod`](go.mod) prefers, so the release workflow does not use it either:
 
 ```bash
-pacman -S --needed mingw-w64-ucrt-x86_64-{go,llvm,clang,lld,python}
+pacman -S --needed mingw-w64-ucrt-x86_64-{llvm,clang,lld,python}
+```
+
+Install Go for Windows from [go.dev/dl](https://go.dev/dl/) at the version named by the `toolchain` line in [`go.mod`](go.mod), then expose it inside MSYS2 by inheriting the Windows `PATH`: set `MSYS2_PATH_TYPE=inherit` before launching the shell, or start it with `C:\msys64\msys2_shell.cmd -ucrt64 -use-full-path`. Confirm the shell sees that toolchain:
+
+```bash
+tr -d '\r' < go.mod | grep -x "toolchain $(go version | awk '{print $3}')"
 ```
 
 Quick build:

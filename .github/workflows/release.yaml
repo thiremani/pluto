@@ -24,9 +24,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -78,9 +83,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Install and configure LLVM
         run: |
@@ -113,9 +123,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Install and configure LLVM
         run: |
@@ -147,17 +162,30 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # path-type: inherit lets the Go that setup-go installed win inside the
+      # MSYS2 shell; the rolling MSYS2 Go package is deliberately not installed.
       - name: Set up MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: true
+          path-type: inherit
           install: >-
-            mingw-w64-ucrt-x86_64-go
             mingw-w64-ucrt-x86_64-llvm
             mingw-w64-ucrt-x86_64-clang
             mingw-w64-ucrt-x86_64-lld
             mingw-w64-ucrt-x86_64-python
+
+      - name: Verify Go toolchain
+        shell: msys2 {0}
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Release artifacts
         shell: msys2 {0}
@@ -165,7 +193,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           eval "$(python scripts/llvm_env.py --shell)"
-          go version
           go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --clean --skip=announce,homebrew,scoop,winget,chocolatey,nfpm
 
   release-linux:
@@ -180,9 +207,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM
@@ -219,9 +251,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       # Following the instruction on https://tinygo.org/docs/guides/build/bring-your-own-llvm/
       - name: Install and configure LLVM

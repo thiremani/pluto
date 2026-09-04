@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Requirements
 
-- Go 1.26+
+- Go 1.27+ (`go.mod` names the preferred toolchain, which CI and release jobs enforce exactly; macOS build hosts need macOS 13 or later)
 - Development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`)
 - Python 3.x (for build/test helpers)
 - pip (for installing Python dependencies)
@@ -137,7 +137,7 @@ The compilation process consists of two main phases:
 - Leak check run: `python3 test.py --leak-check [tests/math]`
 - Leak tools by platform: Linux=`valgrind`, macOS=`leaks`
 
-CI: GitHub Actions builds with Go 1.26, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
+CI: GitHub Actions installs the Go toolchain `go.mod` prefers and asserts the exact version, installs the LLVM major from `.llvm-version` plus valgrind, and runs `python3 test.py --leak-check` on pushes/PRs.
 
 ### Cache System
 - Uses `PTCACHE` environment variable or platform-specific cache directories
