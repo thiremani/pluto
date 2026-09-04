@@ -90,8 +90,8 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 			return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
 		}
 		if !compatible(m.Target.Type, slot.Type) {
-			return fmt.Errorf("plan %s: target %s : %s mapped to incompatible outcome %%t%d slot %d : %s",
-				p.Label, m.Target.Name, m.Target.Type.String(), m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
+			return fmt.Errorf("plan %s: target %s %s mapped to incompatible outcome %%t%d slot %d of type %s",
+				p.Label, m.Target.Type.String(), m.Target.Name, m.Outcome.Outcome, m.Outcome.Slot, slot.Type.String())
 		}
 		return p.validateLocalTransfer(m, slot)
 	case DiscardTarget:

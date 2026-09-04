@@ -136,7 +136,7 @@ func targetString(t Target, expanded bool) string {
 		return "_"
 	}
 	if expanded && t.Type != nil {
-		return t.Name + " : " + t.Type.String()
+		return t.Type.String() + " " + t.Name
 	}
 	return t.Name
 }

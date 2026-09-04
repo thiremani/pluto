@@ -145,7 +145,7 @@ func TestEmitPIRExpanded(t *testing.T) {
         %t0 = eval I64 5 [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        x : I64 <- %t0
+        I64 x <- %t0
 
 `, out.String())
 }

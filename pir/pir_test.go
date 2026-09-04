@@ -225,7 +225,7 @@ func TestValidateRejects(t *testing.T) {
 		{"UnknownOwnership", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = 9 }, "unknown ownership"},
 		{"MissingMapping", func(p *AssignPlan) { p.Commit = p.Commit[:1] }, "1 mappings for 2 outcome slots"},
 		{"UnnamedLocal", func(p *AssignPlan) { p.Commit[0].Target.Name = "" }, "local target has no name"},
-		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Slots[0].Type = testType("F64") }, "target a : I64 mapped to incompatible outcome %t0 slot 0 : F64"},
+		{"TypeMismatch", func(p *AssignPlan) { p.Evals[0].Slots[0].Type = testType("F64") }, "target I64 a mapped to incompatible outcome %t0 slot 0 of type F64"},
 		{"NamedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Name: "x"} }, "discard target carries"},
 		{"TypedDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Type: testType("I64")} }, "discard target carries"},
 		{"OwningDiscard", func(p *AssignPlan) { p.Commit[0].Target = Target{Kind: DiscardTarget, Owns: true} }, "discard target carries"},
@@ -390,8 +390,8 @@ func TestRenderMultiOutput(t *testing.T) {
         %t0 = eval I64, Str pair [shape=scalar] [yield=always] [unmanaged] [owned]
 
     commit
-        a : I64 <- %t0#0
-        b : Str <- %t0#1 [move]
+        I64 a <- %t0#0
+        Str b <- %t0#1 [move]
         drop b [replaced]
 `
 	if got := p.Render(true); got != wantExpanded {
@@ -446,8 +446,8 @@ func TestRenderExpanded(t *testing.T) {
         %t1 = eval I64 a [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        a : I64 <- %t0
-        b : I64 <- %t1
+        I64 a <- %t0
+        I64 b <- %t1
 `
 	if got != want {
 		t.Fatalf("expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -466,8 +466,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
         %t1 = eval Str a [shape=scalar] [yield=always] [borrowed=a]
 
     commit
-        a : Str <- %t0 [transfer]
-        b : Str <- %t1 [transfer]
+        Str a <- %t0 [transfer]
+        Str b <- %t1 [transfer]
 `
 	if got := elaborated(heapSwapPlan()).Render(true); got != want {
 		t.Fatalf("heap swap render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
@@ -480,7 +480,7 @@ func TestRenderExpandedOwnership(t *testing.T) {
         %t1 = eval Str "a" ⊕ "b" [shape=scalar] [yield=always] [owned]
 
     commit
-        x : Str <- %t0 [move]
+        Str x <- %t0 [move]
         _ <- %t1
         drop %t1
         drop x [replaced]

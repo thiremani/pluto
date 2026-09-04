@@ -67,7 +67,7 @@ s`)
         %t0 = eval I64 a + (2 * 3) [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        b : I64 <- %t0
+        I64 b <- %t0
 `, plans[1].Render(true))
 
 	require.Equal(t, `statement assign__
@@ -156,7 +156,7 @@ func TestPlanValueTypeSupported(t *testing.T) {
 
 // TestPlanRouterScriptRootOnly: function-body statements produce no plans,
 // and the assignment after the call pins that lazy specialization compilation
-// restores FuncNameMangled to the root key (scriptRootBindingType relies on it).
+// restores FuncNameMangled to the root key (bindingSlotType relies on it).
 func TestPlanRouterScriptRootOnly(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -364,7 +364,7 @@ h1, h2`)
         %t0 = eval Str "foo" ⊕ "bar" [shape=scalar] [yield=always] [owned]
 
     commit
-        h1 : Str <- %t0 [move]
+        Str h1 <- %t0 [move]
 `, plans[0].Render(true))
 	require.Equal(t, `statement assign_h1_h2
     source "h1, h2 = h2, h1"
@@ -374,8 +374,8 @@ h1, h2`)
         %t1 = eval Str h1 [shape=scalar] [yield=always] [borrowed=h1]
 
     commit
-        h1 : Str <- %t0 [transfer]
-        h2 : Str <- %t1 [transfer]
+        Str h1 <- %t0 [transfer]
+        Str h2 <- %t1 [transfer]
 `, plans[2].Render(true))
 }
 
@@ -398,8 +398,8 @@ d1, d2`)
         %t1 = eval Str d1 [shape=scalar] [yield=always] [borrowed=d1]
 
     commit
-        d1 : Str <- %t0 [transfer]
-        d2 : Str <- %t1 [copy]
+        Str d1 <- %t0 [transfer]
+        Str d2 <- %t1 [copy]
         drop d2 [replaced]
 `, plans[2].Render(true))
 }
@@ -427,7 +427,7 @@ x, y`)
         %t0 = eval Str x ⊕ "!" [shape=scalar] [yield=always] [owned]
 
     commit
-        x : Str <- %t0 [move]
+        Str x <- %t0 [move]
         drop x [replaced]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign__
@@ -457,8 +457,8 @@ x, y`)
         %t1 = eval Str x [shape=scalar] [yield=always] [borrowed=x]
 
     commit
-        x : Str <- %t0 [move]
-        y : Str <- %t1 [transfer]
+        Str x <- %t0 [move]
+        Str y <- %t1 [transfer]
         drop y [replaced]
 `, plans[5].Render(true))
 }
@@ -484,7 +484,7 @@ s, t`)
         %t0 = eval Str "hi" [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        s : Str <- %t0 [materialize]
+        Str s <- %t0 [materialize]
 `, plans[0].Render(true))
 	require.Equal(t, `statement assign_t
     source "t = g"
@@ -493,7 +493,7 @@ s, t`)
         %t0 = eval Str g [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        t : Str <- %t0
+        Str t <- %t0
 `, plans[3].Render(true))
 }
 
@@ -519,7 +519,7 @@ arr1, arr2`)
         %t0 = eval [I64] [1 2 3] [shape=scalar] [yield=always] [owned]
 
     commit
-        arr1 : [I64] <- %t0 [move]
+        [I64] arr1 <- %t0 [move]
 `, plans[0].Render(true))
 	require.Equal(t, `statement assign_arr2
     source "arr2 = arr1"
@@ -528,7 +528,7 @@ arr1, arr2`)
         %t0 = eval [I64] arr1 [shape=scalar] [yield=always] [borrowed=arr1]
 
     commit
-        arr2 : [I64] <- %t0 [copy]
+        [I64] arr2 <- %t0 [copy]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign_arr2
     source "arr2 = [4 5 6]"
@@ -537,7 +537,7 @@ arr1, arr2`)
         %t0 = eval [I64] [4 5 6] [shape=scalar] [yield=always] [owned]
 
     commit
-        arr2 : [I64] <- %t0 [move]
+        [I64] arr2 <- %t0 [move]
         drop arr2 [replaced]
 `, plans[2].Render(true))
 	require.Equal(t, `statement assign_arr1
@@ -547,7 +547,7 @@ arr1, arr2`)
         %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        arr1 : [I64] <- %t0 [materialize]
+        [I64] arr1 <- %t0 [materialize]
         drop arr1 [replaced]
 `, plans[3].Render(true))
 }
@@ -582,7 +582,7 @@ n, a, s2.age, col, t2`)
         %t0 = eval Str p.name [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        n : Str <- %t0
+        Str n <- %t0
 `, plans[0].Render(true))
 	require.Equal(t, `statement assign_s2
     source "s2 = p"
@@ -591,7 +591,7 @@ n, a, s2.age, col, t2`)
         %t0 = eval Person{name:Str age:I64} p [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        s2 : Person{name:Str age:I64} <- %t0
+        Person{name:Str age:I64} s2 <- %t0
 `, plans[2].Render(true))
 	require.Equal(t, `statement assign_col
     source "col = scores.Score"
@@ -600,7 +600,7 @@ n, a, s2.age, col, t2`)
         %t0 = eval [I64] scores.Score [shape=scalar] [yield=always] [owned]
 
     commit
-        col : [I64] <- %t0 [move]
+        [I64] col <- %t0 [move]
 `, plans[3].Render(true))
 	require.Equal(t, `statement assign_t2
     source "t2 = scores"
@@ -609,7 +609,7 @@ n, a, s2.age, col, t2`)
         %t0 = eval Table[Name:Str Score:I64] scores [shape=scalar] [yield=always] [borrowed=scores]
 
     commit
-        t2 : Table[Name:Str Score:I64] <- %t0 [copy]
+        Table[Name:Str Score:I64] t2 <- %t0 [copy]
 `, plans[4].Render(true))
 }
 
@@ -637,8 +637,8 @@ copy, other, text`)
         %t1 = eval Str text [shape=scalar] [yield=always] [borrowed=text]
 
     commit
-        text : Str <- %t0 [move]
-        other : Str <- %t1 [transfer]
+        Str text <- %t0 [move]
+        Str other <- %t1 [transfer]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign_copy
     source "copy = other"
@@ -647,7 +647,7 @@ copy, other, text`)
         %t0 = eval Str other [shape=scalar] [yield=always] [borrowed=other]
 
     commit
-        copy : Str <- %t0 [copy]
+        Str copy <- %t0 [copy]
 `, plans[2].Render(true))
 	require.Equal(t, `statement assign_other
     source "other = \"new\""
@@ -656,7 +656,7 @@ copy, other, text`)
         %t0 = eval Str "new" [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        other : Str <- %t0
+        Str other <- %t0
         drop other [replaced]
 `, plans[3].Render(true))
 	require.False(t, plans[3].Commit[0].Target.Owns)
@@ -688,7 +688,7 @@ copy, other, floats`)
         %t0 = eval [Empty] arr [shape=scalar] [yield=always] [borrowed=arr]
 
     commit
-        other : [Empty] <- %t0 [copy]
+        [Empty] other <- %t0 [copy]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign_floats
     source "floats = other"
@@ -697,7 +697,7 @@ copy, other, floats`)
         %t0 = eval [Empty] other [shape=scalar] [yield=always] [borrowed=other]
 
     commit
-        floats : [F64] <- %t0 [copy]
+        [F64] floats <- %t0 [copy]
         drop floats [replaced]
 `, plans[4].Render(true))
 	require.Equal(t, `statement assign_other
@@ -707,7 +707,7 @@ copy, other, floats`)
         %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        other : [Empty] <- %t0
+        [Empty] other <- %t0
         drop other [replaced]
 `, plans[6].Render(true))
 }
