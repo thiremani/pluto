@@ -415,8 +415,8 @@ Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#1
 
 ## Requirements
 
-- Go 1.27+ (`go.mod` pins `toolchain go1.27.1`)
-- On macOS, macOS 13 (Ventura) or later: Go 1.27 no longer supports macOS 12
+- Go 1.27+ (`go.mod` prefers `toolchain go1.27.1`; CI and release jobs enforce that exact version)
+- Building on macOS requires macOS 13 (Ventura) or later, the Go 1.27 host minimum; the deployment target of release binaries is not yet pinned
 - Development libraries and tools for the LLVM major recorded in [`.llvm-version`](.llvm-version): `llvm-config`, `clang`, `clang++`
 - Python 3.x (for build/test helpers)
 - Leak check tools (only for `python3 test.py --leak-check`):
