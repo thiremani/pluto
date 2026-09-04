@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Requirements
 
-- Go 1.27+ (`go.mod` prefers `toolchain go1.27.1`; CI and release jobs enforce it exactly; macOS build hosts need macOS 13 or later)
+- Go 1.27+ (`go.mod` names the preferred toolchain, which CI and release jobs enforce exactly; macOS build hosts need macOS 13 or later)
 - Development libraries and tools for the LLVM major in `.llvm-version` (`llvm-config`, `clang`, `clang++`)
 - Python 3.x (for build/test helpers)
 - pip (for installing Python dependencies)
