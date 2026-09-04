@@ -1196,8 +1196,11 @@ empty-array reset. Heap swaps show two transfers and zero copies, a duplicate
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
-**Remaining in Step 4:** block-layout literals (rank-2 arrays, tables — row
-36) once an eval-operand spelling exists; calls and multi-output outcomes
+**Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
+rows 2c and 36) once an eval-operand spelling exists; field and column
+reads of a widened binding (a header-only table holding a concrete schema),
+whose lowered value follows the effective schema rather than the solved
+type and so stay legacy; calls and multi-output outcomes
 with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
 `output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
 needs an outcome-referencing operand; the `unique` annotation and consuming

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/thiremani/pluto/ast"
 )
@@ -52,6 +53,8 @@ func renderPayload(expr ast.Expression) string {
 	return escapeControls(s)
 }
 
+// escapeControls keeps an operand on one physical line: C0 and C1 controls
+// and the Unicode line and paragraph separators are escaped.
 func escapeControls(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -62,8 +65,10 @@ func escapeControls(s string) string {
 			b.WriteString(`\t`)
 		case r == '\r':
 			b.WriteString(`\r`)
-		case r < 0x20 || r == 0x7f:
+		case r < 0x80 && unicode.IsControl(r):
 			fmt.Fprintf(&b, `\x%02x`, r)
+		case unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r):
+			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
 			b.WriteRune(r)
 		}

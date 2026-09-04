@@ -729,3 +729,28 @@ func TestPlanGoldenMultilineString(t *testing.T) {
         s <- %t0
 `, plans[0].Render(false))
 }
+
+// Plan §16 Step 4: a column read of a widened binding stays legacy. taken is
+// declared header-only from its flow-typed read but holds the concrete
+// schema it copied, and the column's lowered value follows that schema, so
+// the plan could not annotate it truthfully.
+func TestPlanRouterRejectsWidenedReceiver(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planWidenedReceiver", "", `scores =
+[
+  : Name Value
+    "Ada" 10
+]
+headerOnly =
+[
+  : Name Value
+]
+taken = headerOnly
+headerOnly = scores
+col = taken.Value
+direct = scores.Value
+col, direct, taken, headerOnly`)
+	require.Equal(t, []string{"assign_taken", "assign_headerOnly", "assign_direct"}, planLabels(plans))
+}

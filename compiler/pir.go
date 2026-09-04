@@ -43,13 +43,19 @@ func planValueTypeSupported(t Type) bool {
 
 // planExprEligible accepts ordinary expression trees only: whitelisted node
 // kinds with no range or conditional behavior at any depth. Block-layout
-// literals wait for a one-line eval-operand spelling (plan §12).
+// literals wait for a one-line eval-operand spelling (plan §12), and a field
+// or column read of a widened binding stays legacy: the column's lowered
+// value follows the receiver's effective schema, not the solved type.
 func (c *Compiler) planExprEligible(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Identifier,
-		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral, *ast.DotExpression:
+		*ast.InfixExpression, *ast.PrefixExpression, *ast.RangeLiteral:
 	case *ast.ArrayLiteral:
 		if e.Block || len(e.Headers) > 0 {
+			return false
+		}
+	case *ast.DotExpression:
+		if c.widenedRead(e.Left) {
 			return false
 		}
 	default:
@@ -92,6 +98,17 @@ func (c *Compiler) effectiveBindingType(name string, solved Type) Type {
 		return ptr.Elem
 	}
 	return sym.Type
+}
+
+// widenedRead reports a binding read whose effective storage differs from
+// its solved type.
+func (c *Compiler) widenedRead(expr ast.Expression) bool {
+	ident, isIdent := expr.(*ast.Identifier)
+	if !isIdent {
+		return false
+	}
+	solved := c.ExprCache[key(c.FuncNameMangled, ident)].OutTypes[0]
+	return !TypeEqual(c.effectiveBindingType(ident.Value, solved), solved)
 }
 
 // planSlot keeps the solver's type as the slot type — an empty reset reads

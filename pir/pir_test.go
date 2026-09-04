@@ -505,8 +505,9 @@ func TestRenderExpandedOwnership(t *testing.T) {
 	}
 }
 
-// Plan §12: control characters inside string literals never break the
-// one-operation-per-line format, at the root or nested under an operator.
+// Plan §12: control characters and Unicode line breaks inside string
+// literals never break the one-operation-per-line format, at the root or
+// nested under an operator; ordinary non-ASCII stays raw.
 func TestRenderEscapesControls(t *testing.T) {
 	multi := strLit("a\nb\tc\rd\x01e")
 	cases := []struct {
@@ -515,6 +516,7 @@ func TestRenderEscapesControls(t *testing.T) {
 	}{
 		{multi, `%t0 = eval Str "a\nb\tc\rd\x01e"`},
 		{concat(multi, strLit("z")), `%t0 = eval Str "a\nb\tc\rd\x01e" ⊕ "z"`},
+		{strLit("π\u0085x\u2028y\u2029z\u009f"), `%t0 = eval Str "π\u0085x\u2028y\u2029z\u009f"`},
 	}
 	for _, tc := range cases {
 		p := swapPlan()

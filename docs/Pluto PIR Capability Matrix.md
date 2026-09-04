@@ -20,7 +20,7 @@ keys on the same columns.
 | Target kind | local, function output, discard (`_`), global constant, none (print) |
 | Statement form | assignment, declaration, print |
 | Domain role | none, RHS-local, shared gate, collector-local, function-owned, callee-owned |
-| Literal layout (array and table literals) | inline (one source row), block (rows on their own lines: rank-2 arrays, tables) |
+| Literal layout (array and table literals) | inline (one source row), block (rows on their own lines: rank-2 arrays, tables) — not a table column; folded into Value kind on rows 2c and 36 |
 
 **Callee output effect is a whole-call property.** A call with any `MayWrite`
 output defers to Step 6 as a unit — argument evaluation, tuple failure, and
@@ -146,7 +146,7 @@ two together rather than treating any single row as a deletion trigger.
 
 - **1** — `compileAssignments`. *Tests:* `arithmetic`, `op`, `unary`, `numeric_literals`, `zero_div`. *Helpers:* `compileAssignments`
 - **2** — `compileAssignments` → `commitAssignments`; **now planned** at script root for ordinary expressions (string literals including multiline ones, concatenations, inline array literals, binding reads) — block-layout literals stay legacy (rows 2c, 36). *Tests:* `mem/mem.spt` (incl. widened bindings and the empty reset into a differently typed binding), `str`, `multiline_str`, `array_concat`, `cond_copy`; goldens `TestPlanGoldenMaterialize`, `TestPlanGoldenArrays`, `TestPlanGoldenEffectiveStorage*`, `TestPlanGoldenMultilineString` in `compiler/pir_test.go`. *Helpers:* `commitAssignments`
-- **2b** — `compileDotExpression` extracts the field, then ordinary assignment; **now planned** (a struct field is a constant, so the outcome is unmanaged). *Tests:* `struct/struct.spt` (`copiedName = p.name`); golden `TestPlanGoldenStructAndTable`
+- **2b** — `compileDotExpression` extracts the field, then ordinary assignment; **now planned** (a struct field is a constant, so the outcome is unmanaged). A field or column read whose receiver is a widened binding stays legacy (`TestPlanRouterRejectsWidenedReceiver`; `mem/mem.spt` `takenTable.Value`). *Tests:* `struct/struct.spt` (`copiedName = p.name`); golden `TestPlanGoldenStructAndTable`
 - **2c** — a headerless block-layout array literal (rank-2 rows on their own lines): `compileArrayExpression` → `compileArray`, ordinary assignment. Still legacy after Step 4's first slice for the same reason as row 36: the literal prints on several lines and the eval operand has no one-line spelling yet (plan §12). *Tests:* `array/array.spt` (`oneRowMatrix`, `rank3`, `stringMatrix`)
 - **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
 - **4** — `commitAssignments` copy/move marking; **now planned**: `pir.Elaborate` promotes a borrow to transfer when its owner is replaced in the group and copies every later borrow of that owner. *Tests:* `mem/mem.spt:64,78`; goldens `TestPlanGoldenHeapSwap`, `TestPlanGoldenDuplicateSource`, `TestPlanGoldenReplaceAndDiscard`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`

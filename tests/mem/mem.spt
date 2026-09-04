@@ -110,3 +110,18 @@ floats = takenEmpty
 copiedEmpty = takenEmpty
 takenEmpty = []
 copiedEmpty, takenEmpty, emptyFirst, floats
+
+# A column read of a widened header-only table.
+scoresW =
+[
+  : Name Value
+    "Ada" 10
+]
+headerOnly =
+[
+  : Name Value
+]
+takenTable = headerOnly
+headerOnly = scoresW
+takenColumn = takenTable.Value
+takenColumn, takenTable, headerOnly

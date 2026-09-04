@@ -28,3 +28,9 @@ old!
 static
 [1.5]
 [] [] [1 2] []
+[] [
+  : Name Value
+] [
+  : Name Value
+    "Ada" 10
+]
