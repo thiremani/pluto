@@ -20,7 +20,7 @@ jobs:
       - name: Verify Go toolchain
         run: |
           go version
-          grep -qx "toolchain $(go version | awk '{print $3}')" go.mod
+          tr -d '\r' < go.mod | grep -qx "toolchain $(go version | awk '{print $3}')"
 
       - name: Run helper tests
         run: |
