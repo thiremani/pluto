@@ -91,18 +91,14 @@ func storedType(sym *Symbol) Type {
 	return sym.Type
 }
 
-// mustStoredBindingType is the type of the value a binding holds now, the
-// source for ownership. It is the third type fact beside an RHS slot's
-// semantic type (ExprCache.OutTypes) and a target's merged type
-// (bindingSlotType), and it differs from both: a store keeps a heap string's
-// flavor even into a binding declared static, and `text = "old"` stores a
-// heap copy while a later read solves as StrG. Every caller asks about a
-// binding already stored, so a missing symbol is an internal inconsistency.
-func (c *Compiler) mustStoredBindingType(name string) Type {
-	sym, source := c.lookupNamedSymbol(name)
-	if source == symbolMissing {
-		panic(fmt.Sprintf("internal: binding %q has no stored value", name))
-	}
+// storedBindingType is the type of the value a binding holds now, the source
+// for ownership. It is the third type fact beside an RHS slot's semantic type
+// (ExprCache.OutTypes) and a target's merged type (bindingSlotType), and it
+// differs from both: a store keeps a heap string's flavor even into a binding
+// declared static, and `text = "old"` stores a heap copy while a later read
+// solves as StrG.
+func (c *Compiler) storedBindingType(name string) Type {
+	sym, _ := c.lookupNamedSymbol(name)
 	return storedType(sym)
 }
 
@@ -110,7 +106,7 @@ func (c *Compiler) mustStoredBindingType(name string) Type {
 // its solved type.
 func (c *Compiler) widenedRead(ident *ast.Identifier) bool {
 	solved := c.ExprCache[key(c.FuncNameMangled, ident)].OutTypes[0]
-	return !TypeEqual(c.mustStoredBindingType(ident.Value), solved)
+	return !TypeEqual(c.storedBindingType(ident.Value), solved)
 }
 
 // planSlot keeps the solver's type as the slot type — an empty reset reads
@@ -119,7 +115,7 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	ident, isIdent := expr.(*ast.Identifier)
 	storage := t
 	if isIdent {
-		storage = c.mustStoredBindingType(ident.Value)
+		storage = c.storedBindingType(ident.Value)
 	}
 	if !typeNeedsCleanup(storage) {
 		return pir.Slot{Type: t}
@@ -207,7 +203,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 			continue
 		}
 		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
-		holds := typeNeedsCleanup(c.mustStoredBindingType(m.Target.Name))
+		holds := typeNeedsCleanup(c.storedBindingType(m.Target.Name))
 		if holds != (m.Transfer != pir.Store) {
 			panic(fmt.Sprintf("plan %s: target %s after %s holds heap state: %t", plan.Label, m.Target.Name, m.Transfer, holds))
 		}
