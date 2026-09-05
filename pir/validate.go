@@ -40,7 +40,7 @@ func Validate(p *AssignPlan, compatible func(target, outcome Type) bool) error {
 			return fmt.Errorf("plan %s: outcome %%t%d slot %d consumed twice", p.Label, m.Outcome.Outcome, m.Outcome.Slot)
 		}
 		consumed[m.Outcome] = true
-		if m.Target.Kind == LocalTarget && m.Target.Holds {
+		if m.Target.Kind == LocalTarget && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
 	}
@@ -86,7 +86,7 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		if m.Target.Name == "" {
 			return fmt.Errorf("plan %s: local target has no name", p.Label)
 		}
-		if m.Target.Holds && m.Target.Fresh {
+		if m.Target.HoldsHeap && m.Target.Fresh {
 			return fmt.Errorf("plan %s: fresh target %s holds a value", p.Label, m.Target.Name)
 		}
 		if !compatible(m.Target.Type, slot.Type) {
@@ -95,7 +95,7 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		}
 		return p.validateLocalTransfer(m, slot)
 	case DiscardTarget:
-		if m.Target.Name != "" || m.Target.Type != nil || m.Target.Owns || m.Target.Fresh || m.Target.Holds {
+		if m.Target.Name != "" || m.Target.Type != nil || m.Target.MaterializeUnmanaged || m.Target.Fresh || m.Target.HoldsHeap {
 			return fmt.Errorf("plan %s: discard target carries a name, type, or binding state", p.Label)
 		}
 		if m.Transfer != Store {
@@ -125,7 +125,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 		}
 		want = Copy
 	default:
-		if m.Target.Owns {
+		if m.Target.MaterializeUnmanaged {
 			want = Materialize
 		}
 	}
@@ -139,7 +139,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 
 func (p *AssignPlan) replacesOwner(name string) bool {
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.Name == name && m.Target.Holds {
+		if m.Target.Kind == LocalTarget && m.Target.Name == name && m.Target.HoldsHeap {
 			return true
 		}
 	}

@@ -122,13 +122,20 @@ func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 }
 
 // planLocalTarget describes one LHS binding. Only an existing script-local
-// binding has an old value to replace, so Fresh and Holds read c.Scopes, as
-// the legacy old-value capture does.
+// binding has an old value to replace, so Fresh and HoldsHeap read c.Scopes,
+// as the legacy old-value capture does.
 func (c *Compiler) planLocalTarget(name string) pir.Target {
-	declared := c.bindingSlotType(name, nil)
+	targetType := c.bindingSlotType(name, nil)
 	sym, exists := Get(c.Scopes, name)
-	holds := exists && typeNeedsCleanup(storedType(sym))
-	return pir.Target{Kind: pir.LocalTarget, Name: name, Type: declared, Owns: typeNeedsCleanup(declared), Fresh: !exists, Holds: holds}
+	return pir.Target{
+		Kind: pir.LocalTarget,
+		Name: name,
+		Type: targetType,
+
+		MaterializeUnmanaged: typeNeedsCleanup(targetType),
+		Fresh:                !exists,
+		HoldsHeap:            exists && typeNeedsCleanup(storedType(sym)),
+	}
 }
 
 func (c *Compiler) buildLetPlan(stmt *ast.LetStatement) *pir.AssignPlan {

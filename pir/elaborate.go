@@ -4,12 +4,12 @@ package pir
 // (plan §6, §8) from the plan's own annotations; Validate re-checks them.
 // The first mapping in commit order takes a replaced owner's value and later
 // borrows of it copy, so one source feeding several targets is never moved
-// twice. Materialization follows the declared type (Owns); replacement and
-// promotion follow the effective one (Holds).
+// twice. Materialization follows the target type (MaterializeUnmanaged);
+// replacement and promotion follow the value held (HoldsHeap).
 func Elaborate(p *AssignPlan) {
 	replaced := make(map[string]bool, len(p.Commit))
 	for _, m := range p.Commit {
-		if m.Target.Kind == LocalTarget && m.Target.Holds {
+		if m.Target.Kind == LocalTarget && m.Target.HoldsHeap {
 			replaced[m.Target.Name] = true
 		}
 	}
@@ -47,7 +47,7 @@ func localTransfer(slot Slot, target Target, replaced, taken map[string]bool) Tr
 		}
 		return Copy
 	}
-	if target.Owns {
+	if target.MaterializeUnmanaged {
 		return Materialize
 	}
 	return Store

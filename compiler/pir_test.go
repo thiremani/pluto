@@ -659,8 +659,8 @@ copy, other, text`)
         Str other <- %t0
         drop other [replaced]
 `, plans[3].Render(true))
-	require.False(t, plans[3].Commit[0].Target.Owns)
-	require.True(t, plans[3].Commit[0].Target.Holds)
+	require.False(t, plans[3].Commit[0].Target.MaterializeUnmanaged)
+	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
 }
 
 // Plan §8: the same widening through an empty-array reset. The read of arr

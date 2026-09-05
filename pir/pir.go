@@ -53,19 +53,23 @@ const (
 	DiscardTarget
 )
 
-// Target is one LHS location; a discard has no name and no type. Owns: the
-// declared type holds heap state, so an unmanaged value stored here is
-// materialized. Fresh: no value yet. Holds: the value held now owns heap
-// state and is released when replaced — effective storage, which can be
-// heap while the declared type is not, so it is recorded apart from Owns and
-// is always false when Fresh.
+// Target is one LHS location; a discard has no name and no type. Type is the
+// binding's merged target type. The two ownership facts answer different
+// moments: MaterializeUnmanaged is the rule for the next store — the target
+// type holds heap state, so an unmanaged value stored here becomes an owned
+// copy — while HoldsHeap is the obligation on the previous value — it owns
+// heap state that a replacement must take or release. A binding can hold heap
+// while its target type is static (a transfer widened it), so the two are
+// recorded separately. Fresh: no previous value at all; HoldsHeap is then
+// false, but the reverse inference is not valid.
 type Target struct {
-	Kind  TargetKind
-	Name  string
-	Type  Type
-	Owns  bool
-	Fresh bool
-	Holds bool
+	Kind TargetKind
+	Name string
+	Type Type
+
+	MaterializeUnmanaged bool
+	Fresh                bool
+	HoldsHeap            bool
 }
 
 type OutcomeRef struct {
