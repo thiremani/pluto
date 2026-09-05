@@ -1177,10 +1177,10 @@ now: after `text = "old"` the read solves as a static string while the
 binding stores a materialized heap copy, and a heap value moved, copied, or
 transferred into a binding declared static keeps its flavor, so that
 binding holds heap state its declared type does not show — and every local
-target with its merged target type (`MaterializeUnmanaged`: unmanaged
-values stored here become owned copies), whether it is fresh, and whether
-the value it holds owns heap state (`HoldsHeap`: a replacement must take or
-release it), read from the same effective storage;
+target with its merged target type (`TypeOwnsHeap`: that type requires
+heap cleanup, so an unmanaged value stored here is materialized), whether it
+is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
+replacement must take or release it), read from the same effective storage;
 `pir.Elaborate` derives each mapping's transfer (move, copy, promoted
 transfer, materialize) and the statement-exit releases — a heap transfer
 into a binding declared non-owning is legal and leaves it holding heap

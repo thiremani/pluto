@@ -659,7 +659,7 @@ copy, other, text`)
         Str other <- %t0
         drop other [replaced]
 `, plans[3].Render(true))
-	require.False(t, plans[3].Commit[0].Target.MaterializeUnmanaged)
+	require.False(t, plans[3].Commit[0].Target.TypeOwnsHeap)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
 }
 

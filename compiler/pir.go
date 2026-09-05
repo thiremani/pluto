@@ -132,9 +132,9 @@ func (c *Compiler) planLocalTarget(name string) pir.Target {
 		Name: name,
 		Type: targetType,
 
-		MaterializeUnmanaged: typeNeedsCleanup(targetType),
-		Fresh:                !exists,
-		HoldsHeap:            exists && typeNeedsCleanup(storedType(sym)),
+		TypeOwnsHeap: typeNeedsCleanup(targetType),
+		Fresh:        !exists,
+		HoldsHeap:    exists && typeNeedsCleanup(storedType(sym)),
 	}
 }
 

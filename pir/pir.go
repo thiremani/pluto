@@ -54,22 +54,19 @@ const (
 )
 
 // Target is one LHS location; a discard has no name and no type. Type is the
-// binding's merged target type. The two ownership facts answer different
-// moments: MaterializeUnmanaged is the rule for the next store — the target
-// type holds heap state, so an unmanaged value stored here becomes an owned
-// copy — while HoldsHeap is the obligation on the previous value — it owns
-// heap state that a replacement must take or release. A binding can hold heap
-// while its target type is static (a transfer widened it), so the two are
-// recorded separately. Fresh: no previous value at all; HoldsHeap is then
-// false, but the reverse inference is not valid.
+// binding's merged target type. TypeOwnsHeap: that type requires heap
+// cleanup. HoldsHeap: the previously stored value carries a heap-ownership
+// obligation a replacement must take or release. The two differ when a
+// transfer widened a static-typed binding, so both are recorded. Fresh: no
+// previous value; HoldsHeap is then false, but the reverse is not inferred.
 type Target struct {
 	Kind TargetKind
 	Name string
 	Type Type
 
-	MaterializeUnmanaged bool
-	Fresh                bool
-	HoldsHeap            bool
+	TypeOwnsHeap bool
+	Fresh        bool
+	HoldsHeap    bool
 }
 
 type OutcomeRef struct {

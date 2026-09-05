@@ -95,7 +95,7 @@ func (p *AssignPlan) validateMapping(m Mapping, compatible func(target, outcome 
 		}
 		return p.validateLocalTransfer(m, slot)
 	case DiscardTarget:
-		if m.Target.Name != "" || m.Target.Type != nil || m.Target.MaterializeUnmanaged || m.Target.Fresh || m.Target.HoldsHeap {
+		if m.Target.Name != "" || m.Target.Type != nil || m.Target.TypeOwnsHeap || m.Target.Fresh || m.Target.HoldsHeap {
 			return fmt.Errorf("plan %s: discard target carries a name, type, or binding state", p.Label)
 		}
 		if m.Transfer != Store {
@@ -125,7 +125,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 		}
 		want = Copy
 	default:
-		if m.Target.MaterializeUnmanaged {
+		if m.Target.TypeOwnsHeap {
 			want = Materialize
 		}
 	}
