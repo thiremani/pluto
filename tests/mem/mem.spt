@@ -84,3 +84,44 @@ da2 = [300 400]
 da1, da2  # use before overwrite
 da1, da2 = da1, da1
 da1, da2
+
+# A heap value transferred or copied into a binding the solver typed static
+# is still that binding's to release: the read after the transfer borrows it,
+# and replacing it with a static string releases it.
+text = "old"
+text, otherText = text ⊕ "!", text
+copy = otherText
+copy, text
+otherText = "new"
+otherText, copy
+copied = text
+copied
+copied = "static"
+copied
+
+# The same widening through an empty-array reset; the taken empty array keeps
+# its empty type, so it still resets a differently typed binding.
+emptyFirst = []
+takenEmpty = emptyFirst
+emptyFirst = [1 2]
+floats = [1.5]
+floats
+floats = takenEmpty
+copiedEmpty = takenEmpty
+takenEmpty = []
+copiedEmpty, takenEmpty, emptyFirst, floats
+
+# A column read of a widened header-only table.
+scoresW =
+[
+  : Name Value
+    "Ada" 10
+]
+headerOnly =
+[
+  : Name Value
+]
+takenTable = headerOnly
+headerOnly = scoresW
+takenColumn = takenTable.Value
+takenColumn, takenTable, headerOnly

@@ -407,8 +407,8 @@ Pluto's portable naming rules; see [Path Validation](<docs/Pluto C ABI Spec.md#1
 - `./pluto -version` (or `-v`) — show version
 - `./pluto -clean` (or `-c`) — clear cache for current version
 - `./pluto -emit-ir [directory]` — also write linked pre-optimization script `.ll` files to the cache
-- `./pluto -emit-pir [directory]` — also print the statement plans (PIR) for statements routed through PIR; currently script-root assignments of ungated ordinary expressions yielding scalars or bare Range descriptors to local or discard targets — gated, conditional, checked, range-driven, call, and function-body statements still use legacy lowering and print no plan
-- `./pluto -emit-pir=expanded [directory]` — as `-emit-pir`, with result shapes, ownership annotations, and target types
+- `./pluto -emit-pir [directory]` — also print the statement plans (PIR) for statements routed through PIR; currently script-root assignments of ungated ordinary expressions — scalars, bare Range descriptors, strings, inline array literals, struct and table values, field and column reads — to local or discard targets; gated, conditional, checked, range-driven, call, block-layout-literal (rank-2 arrays, tables), and function-body statements still use legacy lowering and print no plan
+- `./pluto -emit-pir=expanded [directory]` — as `-emit-pir`, with result shapes, ownership annotations, target types, each commit mapping's derived transfer, and the derived releases
 - `PLUTO_TARGET_CPU` defaults to `native`; set it to a CPU name or `portable` to override host CPU tuning
 
 ---

@@ -7,7 +7,8 @@ capability combination, not a dispatcher branch. This file enumerates the
 reachable combinations, what each currently routes to, which tests cover it,
 which step migrates it, and the notable removable helpers it currently uses.
 The actual helper-release inventory is plan §16 Step 9; the capability router
-keys on the same columns.
+keys on the same axes — most are table columns, and a folded axis (literal
+layout) is recorded in the Value kind of the rows it splits.
 
 ## 1. Axes
 
@@ -20,6 +21,7 @@ keys on the same columns.
 | Target kind | local, function output, discard (`_`), global constant, none (print) |
 | Statement form | assignment, declaration, print |
 | Domain role | none, RHS-local, shared gate, collector-local, function-owned, callee-owned |
+| Literal layout (array and table literals) | inline (one source row), block (rows on their own lines: rank-2 arrays, tables) — not a table column; folded into Value kind on rows 2c and 36 |
 
 **Callee output effect is a whole-call property.** A call with any `MayWrite`
 output defers to Step 6 as a unit — argument evaluation, tuple failure, and
@@ -62,8 +64,9 @@ drives that body.
 ## 2. Reachable combinations
 
 Rows are grouped by statement form, and each group has two parts: a table of
-the **routing axes** the capability router keys on, and a collapsible list
-giving each row's legacy route, coverage, and helpers. Row numbers are stable
+the **routing axes** the capability router keys on (folded axes appear
+inside Value kind), and a collapsible list giving each row's legacy route,
+coverage, and helpers. Row numbers are stable
 across both, and are not renumbered when a row is split — a letter suffix
 (`5b`, `14i`) keeps existing references valid.
 
@@ -84,6 +87,7 @@ two together rather than treating any single row as a deletion trigger.
 | 1 | none | ordinary | scalar | local | — | — | R | 3 |
 | 2 | none | ordinary | heap | local | — | — | R | 4 |
 | 2b | none | ordinary | struct field read | local | — | — | R | 4 |
+| 2c | none | ordinary | heap (block-layout array literal) | local | — | — | R | 4 (deferred: needs a one-line eval-operand spelling, plan §12) |
 | 3 | none | ordinary | multi-output | local | — | — | R | 4 |
 | 4 | none | ordinary (swap, dup source) | heap | local | — | — | R | 4 |
 | 5 | none | ordinary | scalar, Range descriptor | blank (`_`) | — | — | R (sink shipped, §4) | 3 |
@@ -143,11 +147,13 @@ two together rather than treating any single row as a deletion trigger.
 <details><summary>Routes, coverage, and helpers</summary>
 
 - **1** — `compileAssignments`. *Tests:* `arithmetic`, `op`, `unary`, `numeric_literals`, `zero_div`. *Helpers:* `compileAssignments`
-- **2** — `compileAssignments` → `commitAssignments`. *Tests:* `mem/mem.spt`, `str`, `array_concat`, `cond_copy`. *Helpers:* `commitAssignments`
+- **2** — `compileAssignments` → `commitAssignments`; **now planned** at script root for ordinary expressions (string literals including multiline ones, concatenations, inline array literals, binding reads) — block-layout literals stay legacy (rows 2c, 36). *Tests:* `mem/mem.spt` (incl. widened bindings and the empty reset into a differently typed binding), `str`, `multiline_str`, `array_concat`, `cond_copy`; goldens `TestPlanGoldenMaterialize`, `TestPlanGoldenArrays`, `TestPlanGoldenEffectiveStorage*`, `TestPlanGoldenMultilineString` in `compiler/pir_test.go`. *Helpers:* `commitAssignments`
+- **2b** — `compileDotExpression` extracts the field, then ordinary assignment; **now planned** (a struct field is a constant, so the outcome is unmanaged). A field or column read whose receiver is a widened binding stays legacy (`TestPlanRouterRejectsWidenedReceiver`; `mem/mem.spt` `takenTable.Value`). *Tests:* `struct/struct.spt` (`copiedName = p.name`); golden `TestPlanGoldenStructAndTable`
+- **2c** — a headerless block-layout array literal (rank-2 rows on their own lines): `compileArrayExpression` → `compileArray`, ordinary assignment. Still legacy after Step 4's first slice for the same reason as row 36: the literal prints on several lines and the eval operand has no one-line spelling yet (plan §12). *Tests:* `array/array.spt` (`oneRowMatrix`, `rank3`, `stringMatrix`)
 - **3** — `compileAssignments`, arity via `newExprAssign`. *Tests:* `partial_returns`, `math/div`, `mem/mem.spt`. *Helpers:* `exprAssign` machinery
-- **4** — `commitAssignments` copy/move marking. *Tests:* `mem/mem.spt:64,78`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
+- **4** — `commitAssignments` copy/move marking; **now planned**: `pir.Elaborate` promotes a borrow to transfer when its owner is replaced in the group and copies every later borrow of that owner. *Tests:* `mem/mem.spt:64,78`; goldens `TestPlanGoldenHeapSwap`, `TestPlanGoldenDuplicateSource`, `TestPlanGoldenReplaceAndDiscard`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
 - **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`; the bare Range-descriptor discard is pinned by `TestPlanGoldenRangeDiscard` in `compiler/pir_test.go`
-- **5b** — per-slot sink; a discarded temporary is dropped (`drop`), a discarded named value stays borrowed. *Tests:* `discard`
+- **5b** — per-slot sink; a discarded temporary is dropped (`drop`), a discarded named value stays borrowed; **now planned** for ordinary heap expressions: the derived `drop %tN` appears in expanded PIR. *Tests:* `discard`; golden `TestPlanGoldenReplaceAndDiscard`
 - **5c** — discarded call outputs keep their yield/write validity for cleanup; the whole-call rule is unchanged, so an any-`MayWrite` call defers to Step 6 even when every output is discarded. *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; any-`MayWrite` direct-scalar and multi-output callees with all outputs discarded
 - **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
 - **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`: all-`MustWrite` heap multi-output call (`twoStr`), gate admitting and rejecting. *Missing:* scalar-valued and ordinary-RHS gated blanks; any-`MayWrite` gated call. *Helpers:* `compileCondStatement`
@@ -192,13 +198,13 @@ two together rather than treating any single row as a deletion trigger.
 - **27** — `compileCondRangedStatement` → stage temp. *Tests:* `mem/gate_heap`. *Helpers:* ranged staging
 - **28** — ranged gate over an affine access. *Tests:* `array/cond_accum:416,420`. *Helpers:* affine decision helpers
 - **31c** — per-RHS bounds bit inside the loop nest. *Tests:* `math/func_array_range_oob`, `mem/leak/oob_paths`. *Helpers:* `commitAssignmentsPerExpr`
-- **35b** — ordinary assignment lowering. *Missing:* **uncovered**: local struct copy `s2 = s1`. *Helpers:* `compileAssignments`
+- **35b** — ordinary assignment lowering; **now planned** (a struct value is unmanaged: its fields are constants). *Tests:* `struct/struct.spt` (`s2 = p`, whole-struct copy); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 - **35d** — call lowering. *Missing:* **uncovered**: struct as a parameter or output
-- **36** — `compileArrayExpression` → `compileTable`, cells via `compileArrayLiteralCell`; ranged cells are rejected. *Tests:* `array/array.spt`, `array/array_func.spt`. *Missing:* table in the leak suite
+- **36** — `compileArrayExpression` → `compileTable`, cells via `compileArrayLiteralCell`; ranged cells are rejected. Still legacy after Step 4's first slice: a table literal is block-layout and has no one-line eval-operand spelling yet (plan §12). *Tests:* `array/array.spt`, `array/array_func.spt`. *Missing:* table in the leak suite
 - **36f** — as row 36, but a conditional or checked cell routes through `compileCondExprValue`. *Missing:* **uncovered**: conditional and checked table cells. *Helpers:* `compileCondExprValue`
-- **36b** — ordinary assignment lowering. *Missing:* **uncovered**: plain table copy `t2 = t1`. *Helpers:* `compileAssignments`
+- **36b** — ordinary assignment lowering; **now planned** (a table read is a borrow that copies). *Tests:* `array/array.spt` (`savedScores = scores`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 - **36d** — call lowering. *Tests:* all-`MustWrite`: `array/array_func.*`; any-`MayWrite`: `array/array_func.pt:40-43` + `.spt:63-66` (`ResetTable(-1)` keeps, `ResetTable(1)` writes)
-- **36g** — `compileDotExpression` yields the column array, then ordinary assignment. *Tests:* `array/array.spt:107` (`scoreColumn = scores.Score`). *Helpers:* `compileAssignments`
+- **36g** — `compileDotExpression` yields the column array, then ordinary assignment; **now planned for an unwidened receiver** (the copied column is an owned outcome that moves). A widened receiver — a table binding whose effective schema differs from its solved type — stays legacy, since the column is lowered by the effective schema (`TestPlanRouterRejectsWidenedReceiver`; `mem/mem.spt` `takenTable.Value`). *Tests:* `array/array.spt:107` (`scoreColumn = scores.Score`); golden `TestPlanGoldenStructAndTable`. *Helpers:* `compileAssignments`
 
 </details>
 

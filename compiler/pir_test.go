@@ -17,6 +17,9 @@ func compileScriptPlans(t *testing.T, ctx llvm.Context, name, code, script strin
 	cc := NewCodeCompiler(ctx, name, "", mustParseCode(t, code))
 	require.Empty(t, cc.Compile())
 	sc := NewScriptCompiler(ctx, name, mustParseScript(t, script), cc)
+	if code != "" {
+		linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+	}
 	require.Empty(t, sc.Compile())
 	return sc.Plans
 }
@@ -64,7 +67,7 @@ s`)
         %t0 = eval I64 a + (2 * 3) [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        b : I64 <- %t0
+        I64 b <- %t0
 `, plans[1].Render(true))
 
 	require.Equal(t, `statement assign__
@@ -98,17 +101,18 @@ s`)
 `, plans[5].Render(false))
 }
 
-// TestPlanRouterRejections pins the Step 3 capability boundary: statements
-// with gates, conditional values, strings, arrays, checked accesses, ranged
-// RHS, or calls keep their legacy lowering, while a discarded Range
-// descriptor plans like a discarded scalar. The string
-// identifier copies (sg, shc) have fully eligible expression trees, so only
-// the value-kind check keeps both string flavors out.
+// TestPlanRouterRejections pins the capability boundary: statements with
+// gates, conditional values, checked accesses, ranged RHS, calls, and
+// block-layout literals keep their legacy lowering, while ordinary heap
+// values — both string flavours, concatenations, inline array literals —
+// plan alongside scalars and Range descriptors.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planRejections", "", `x = 5
+	plans := compileScriptPlans(t, ctx, "planRejections", `c = Twice(a)
+    c = a * 2
+`, `x = 5
 g = x > 2 13
 y = 0
 y = x > 2
@@ -121,23 +125,38 @@ z = arr[0]
 q = 0:3
 w = q + 1
 _ = 0:3
-g, y, sg, shc, z, w`)
+d = Twice(x)
+m = [
+    1 2
+    3 4
+]
+tbl = [
+  : Name Score
+    "Ada" 1
+]
+rc = [q]
+cc = [x > 2]
+g, y, sg, shc, z, w, d, m, tbl, rc, cc`)
 
-	require.Equal(t, []string{"assign_x", "assign_y", "assign_q", "assign__"}, planLabels(plans))
+	require.Equal(t, []string{"assign_x", "assign_y", "assign_s", "assign_sg", "assign_sh", "assign_shc", "assign_arr", "assign_q", "assign__"}, planLabels(plans))
 }
 
 func TestPlanValueTypeSupported(t *testing.T) {
 	require.True(t, planValueTypeSupported(I64))
 	require.True(t, planValueTypeSupported(F64))
 	require.True(t, planValueTypeSupported(Range{Iter: I64}))
-	require.False(t, planValueTypeSupported(StrG{}))
-	require.False(t, planValueTypeSupported(StrH{}))
-	require.False(t, planValueTypeSupported(Array{ElemType: I64, Rank: 1}))
+	require.True(t, planValueTypeSupported(StrG{}))
+	require.True(t, planValueTypeSupported(StrH{}))
+	require.True(t, planValueTypeSupported(Array{ElemType: I64, Rank: 1}))
+	require.True(t, planValueTypeSupported(Table{Columns: []TableColumn{{Name: "Score", ElemType: I64}}}))
+	require.False(t, planValueTypeSupported(Array{ElemType: Unresolved{}, Rank: 1}))
+	require.False(t, planValueTypeSupported(ArrayRange{Array: Array{ElemType: I64, Rank: 1}, Range: Range{Iter: I64}}))
+	require.False(t, planValueTypeSupported(Func{}))
 }
 
 // TestPlanRouterScriptRootOnly: function-body statements produce no plans,
 // and the assignment after the call pins that lazy specialization compilation
-// restores FuncNameMangled to the root key (scriptRootBindingType relies on it).
+// restores FuncNameMangled to the root key (bindingSlotType relies on it).
 func TestPlanRouterScriptRootOnly(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -325,4 +344,413 @@ func TestPlanGoldenBareBindings(t *testing.T) {
     commit
         _ <- %t0
 `, plans[3].Render(false))
+}
+
+// Plan §6, §8, §17: a heap swap is two promoted borrows — zero copies, zero
+// releases — while the fresh bindings before it move their owned outcomes.
+func TestPlanGoldenHeapSwap(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planHeapSwap", "", `h1 = "foo" ⊕ "bar"
+h2 = "baz" ⊕ "qux"
+h1, h2 = h2, h1
+h1, h2`)
+	require.Equal(t, []string{"assign_h1", "assign_h2", "assign_h1_h2"}, planLabels(plans))
+	require.Equal(t, `statement assign_h1
+    source "h1 = (\"foo\" ⊕ \"bar\")"
+
+    execute
+        %t0 = eval Str "foo" ⊕ "bar" [shape=scalar] [yield=always] [owned]
+
+    commit
+        Str h1 <- %t0 [move]
+`, plans[0].Render(true))
+	require.Equal(t, `statement assign_h1_h2
+    source "h1, h2 = h2, h1"
+
+    execute
+        %t0 = eval Str h2 [shape=scalar] [yield=always] [borrowed=h2]
+        %t1 = eval Str h1 [shape=scalar] [yield=always] [borrowed=h1]
+
+    commit
+        Str h1 <- %t0 [transfer]
+        Str h2 <- %t1 [transfer]
+`, plans[2].Render(true))
+}
+
+// Plan §8, §17: one owned source feeding two targets is taken once and
+// copied once, and the target whose old value nothing took releases it.
+func TestPlanGoldenDuplicateSource(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planDupSource", "", `d1 = "dup" ⊕ "test"
+d2 = "other" ⊕ "!"
+d1, d2
+d1, d2 = d1, d1
+d1, d2`)
+	require.Equal(t, `statement assign_d1_d2
+    source "d1, d2 = d1, d1"
+
+    execute
+        %t0 = eval Str d1 [shape=scalar] [yield=always] [borrowed=d1]
+        %t1 = eval Str d1 [shape=scalar] [yield=always] [borrowed=d1]
+
+    commit
+        Str d1 <- %t0 [transfer]
+        Str d2 <- %t1 [copy]
+        drop d2 [replaced]
+`, plans[2].Render(true))
+}
+
+// Plan §6, §8: replacing an owned value moves the outcome and releases the
+// old value after the mapping; a discarded owned outcome is released, a
+// discarded borrow is not; a mixed group shows move, transfer, and release
+// together.
+func TestPlanGoldenReplaceAndDiscard(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planReplace", "", `x = "a" ⊕ "b"
+x = x ⊕ "!"
+_ = x ⊕ "?"
+_ = x
+y = "c" ⊕ "d"
+x, y = y ⊕ "!", x
+x, y`)
+	require.Equal(t, []string{"assign_x", "assign_x", "assign__", "assign__", "assign_y", "assign_x_y"}, planLabels(plans))
+	require.Equal(t, `statement assign_x
+    source "x = (x ⊕ \"!\")"
+
+    execute
+        %t0 = eval Str x ⊕ "!" [shape=scalar] [yield=always] [owned]
+
+    commit
+        Str x <- %t0 [move]
+        drop x [replaced]
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign__
+    source "_ = (x ⊕ \"?\")"
+
+    execute
+        %t0 = eval Str x ⊕ "?" [shape=scalar] [yield=always] [owned]
+
+    commit
+        _ <- %t0
+        drop %t0
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign__
+    source "_ = x"
+
+    execute
+        %t0 = eval Str x [shape=scalar] [yield=always] [borrowed=x]
+
+    commit
+        _ <- %t0
+`, plans[3].Render(true))
+	require.Equal(t, `statement assign_x_y
+    source "x, y = (y ⊕ \"!\"), x"
+
+    execute
+        %t0 = eval Str y ⊕ "!" [shape=scalar] [yield=always] [owned]
+        %t1 = eval Str x [shape=scalar] [yield=always] [borrowed=x]
+
+    commit
+        Str x <- %t0 [move]
+        Str y <- %t1 [transfer]
+        drop y [replaced]
+`, plans[5].Render(true))
+}
+
+// Plan §8, §12: a static string into a heap-string binding materializes an
+// owned copy, which the directional compatibility relation admits though
+// both flavours display as Str; a binding that only ever holds static
+// strings owns nothing and stores plainly.
+func TestPlanGoldenMaterialize(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planMaterialize", "", `s = "hi"
+s = s ⊕ "!"
+g = "static"
+t = g
+s, t`)
+	require.Equal(t, []string{"assign_s", "assign_s", "assign_g", "assign_t"}, planLabels(plans))
+	require.Equal(t, `statement assign_s
+    source "s = \"hi\""
+
+    execute
+        %t0 = eval Str "hi" [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        Str s <- %t0 [materialize]
+`, plans[0].Render(true))
+	require.Equal(t, `statement assign_t
+    source "t = g"
+
+    execute
+        %t0 = eval Str g [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        Str t <- %t0
+`, plans[3].Render(true))
+}
+
+// Plan §8, §12: inline array literals are owned outcomes, an array read is
+// a borrow that copies, and an empty-literal reset is an unmanaged value
+// materialized into the owning binding — the second case the directional
+// relation exists for.
+func TestPlanGoldenArrays(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planArrays", "", `arr1 = [1 2 3]
+arr2 = arr1
+arr1, arr2
+arr2 = [4 5 6]
+arr1 = []
+arr1, arr2`)
+	require.Equal(t, []string{"assign_arr1", "assign_arr2", "assign_arr2", "assign_arr1"}, planLabels(plans))
+	require.Equal(t, `statement assign_arr1
+    source "arr1 = [1 2 3]"
+
+    execute
+        %t0 = eval [I64] [1 2 3] [shape=scalar] [yield=always] [owned]
+
+    commit
+        [I64] arr1 <- %t0 [move]
+`, plans[0].Render(true))
+	require.Equal(t, `statement assign_arr2
+    source "arr2 = arr1"
+
+    execute
+        %t0 = eval [I64] arr1 [shape=scalar] [yield=always] [borrowed=arr1]
+
+    commit
+        [I64] arr2 <- %t0 [copy]
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign_arr2
+    source "arr2 = [4 5 6]"
+
+    execute
+        %t0 = eval [I64] [4 5 6] [shape=scalar] [yield=always] [owned]
+
+    commit
+        [I64] arr2 <- %t0 [move]
+        drop arr2 [replaced]
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign_arr1
+    source "arr1 = []"
+
+    execute
+        %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        [I64] arr1 <- %t0 [materialize]
+        drop arr1 [replaced]
+`, plans[3].Render(true))
+}
+
+// Plan §16 Step 4, §17: a struct field read (matrix row 2b) and a struct
+// value copy (35b) are unmanaged; a table column read (36g) is an owned
+// copy and a table value copy (36b) a borrow. The table literal itself is a
+// block-layout literal and stays legacy.
+func TestPlanGoldenStructAndTable(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planStructTable", `p = Person
+  : name age
+    "Tejas" 35
+`, `n = p.name
+a = p.age
+s2 = p
+scores =
+[
+  : Name Score
+    "Ada" 10
+]
+col = scores.Score
+t2 = scores
+n, a, s2.age, col, t2`)
+	require.Equal(t, []string{"assign_n", "assign_a", "assign_s2", "assign_col", "assign_t2"}, planLabels(plans))
+	require.Equal(t, `statement assign_n
+    source "n = p.name"
+
+    execute
+        %t0 = eval Str p.name [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        Str n <- %t0
+`, plans[0].Render(true))
+	require.Equal(t, `statement assign_s2
+    source "s2 = p"
+
+    execute
+        %t0 = eval Person{name:Str age:I64} p [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        Person{name:Str age:I64} s2 <- %t0
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign_col
+    source "col = scores.Score"
+
+    execute
+        %t0 = eval [I64] scores.Score [shape=scalar] [yield=always] [owned]
+
+    commit
+        [I64] col <- %t0 [move]
+`, plans[3].Render(true))
+	require.Equal(t, `statement assign_t2
+    source "t2 = scores"
+
+    execute
+        %t0 = eval Table[Name:Str Score:I64] scores [shape=scalar] [yield=always] [borrowed=scores]
+
+    commit
+        Table[Name:Str Score:I64] t2 <- %t0 [copy]
+`, plans[4].Render(true))
+}
+
+// Plan §8: ownership is read from a binding's effective storage, not the
+// solver's flow-typed read. text solves as a static string after
+// `text = "old"` but stores a materialized heap copy; other is declared
+// static yet takes text's heap buffer by transfer, so its later read is a
+// borrow and replacing it releases the held value — a plain store, since the
+// declared type materializes nothing.
+func TestPlanGoldenEffectiveStorage(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planEffective", "", `text = "old"
+text, other = text ⊕ "!", text
+copy = other
+other = "new"
+copy, other, text`)
+	require.Equal(t, []string{"assign_text", "assign_text_other", "assign_copy", "assign_other"}, planLabels(plans))
+	require.Equal(t, `statement assign_text_other
+    source "text, other = (text ⊕ \"!\"), text"
+
+    execute
+        %t0 = eval Str text ⊕ "!" [shape=scalar] [yield=always] [owned]
+        %t1 = eval Str text [shape=scalar] [yield=always] [borrowed=text]
+
+    commit
+        Str text <- %t0 [move]
+        Str other <- %t1 [transfer]
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign_copy
+    source "copy = other"
+
+    execute
+        %t0 = eval Str other [shape=scalar] [yield=always] [borrowed=other]
+
+    commit
+        Str copy <- %t0 [copy]
+`, plans[2].Render(true))
+	require.Equal(t, `statement assign_other
+    source "other = \"new\""
+
+    execute
+        %t0 = eval Str "new" [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        Str other <- %t0
+        drop other [replaced]
+`, plans[3].Render(true))
+	require.False(t, plans[3].Commit[0].Target.TypeOwnsHeap)
+	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
+}
+
+// Plan §8: the same widening through an empty-array reset. The read of arr
+// keeps its semantic [Empty] type — that is what lets it later reset a
+// [F64] binding — while its ownership follows the materialized [I64] array
+// backing it, so other is declared empty yet holds and releases heap state.
+func TestPlanGoldenEffectiveStorageArray(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planEffectiveArray", "", `arr = []
+other = arr
+arr = [1 2]
+floats = [1.5]
+arr, floats
+floats = other
+copy = other
+other = []
+copy, other, floats`)
+	require.Equal(t, []string{"assign_arr", "assign_other", "assign_arr", "assign_floats", "assign_floats", "assign_copy", "assign_other"}, planLabels(plans))
+	require.Equal(t, `statement assign_other
+    source "other = arr"
+
+    execute
+        %t0 = eval [Empty] arr [shape=scalar] [yield=always] [borrowed=arr]
+
+    commit
+        [Empty] other <- %t0 [copy]
+`, plans[1].Render(true))
+	require.Equal(t, `statement assign_floats
+    source "floats = other"
+
+    execute
+        %t0 = eval [Empty] other [shape=scalar] [yield=always] [borrowed=other]
+
+    commit
+        [F64] floats <- %t0 [copy]
+        drop floats [replaced]
+`, plans[4].Render(true))
+	require.Equal(t, `statement assign_other
+    source "other = []"
+
+    execute
+        %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
+
+    commit
+        [Empty] other <- %t0
+        drop other [replaced]
+`, plans[6].Render(true))
+}
+
+// Plan §12: a multiline string literal is one eval operand on one line, its
+// control characters escaped; the source line is quoted the same way.
+func TestPlanGoldenMultilineString(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planMultiline", "", "s = \"line one\nline two\"\ns")
+	require.Equal(t, `statement assign_s
+    source "s = \"line one\nline two\""
+
+    execute
+        %t0 = eval Str "line one\nline two"
+
+    commit
+        s <- %t0
+`, plans[0].Render(false))
+}
+
+// Plan §16 Step 4: a column read of a widened binding stays legacy. taken is
+// declared header-only from its flow-typed read but holds the concrete
+// schema it copied, and the column's lowered value follows that schema, so
+// the plan could not annotate it truthfully.
+func TestPlanRouterRejectsWidenedReceiver(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	plans := compileScriptPlans(t, ctx, "planWidenedReceiver", "", `scores =
+[
+  : Name Value
+    "Ada" 10
+]
+headerOnly =
+[
+  : Name Value
+]
+taken = headerOnly
+headerOnly = scores
+col = taken.Value
+direct = scores.Value
+col, direct, taken, headerOnly`)
+	require.Equal(t, []string{"assign_taken", "assign_headerOnly", "assign_direct"}, planLabels(plans))
 }

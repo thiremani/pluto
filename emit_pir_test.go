@@ -52,7 +52,7 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5},
-				Types:  []pir.Type{i64},
+				Slots:  []pir.Slot{{Type: i64}},
 			}},
 			Commit: []pir.Mapping{{
 				Target: pir.Target{Kind: pir.LocalTarget, Name: "x", Type: i64},
@@ -64,7 +64,7 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
-				Types:  []pir.Type{i64},
+				Slots:  []pir.Slot{{Type: i64}},
 			}},
 			Commit: []pir.Mapping{{
 				Target: pir.Target{Kind: pir.LocalTarget, Name: "y", Type: i64},
@@ -145,7 +145,7 @@ func TestEmitPIRExpanded(t *testing.T) {
         %t0 = eval I64 5 [shape=scalar] [yield=always] [unmanaged]
 
     commit
-        x : I64 <- %t0
+        I64 x <- %t0
 
 `, out.String())
 }
