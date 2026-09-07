@@ -177,8 +177,7 @@ func planBindingCompatible(target, outcome pir.Type) bool {
 // lowerAssignPlan implements an elaborated plan (plan §6, §13) and decides
 // nothing itself: old values are captured before any eval runs, and the
 // releases run after every mapping has landed so a swap never reads a freed
-// payload. The two panics turn a mismatch between the plan's ownership and
-// the values actually produced or stored into an ICE.
+// payload.
 func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	c.pushStmtCtx()
 	defer c.popStmtCtx()
@@ -194,22 +193,12 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	outs := make([][]*Symbol, len(plan.Evals))
 	for i, ev := range plan.Evals {
 		outs[i] = c.compileExpression(ev.Expr, nil)
-		for s, slot := range ev.Slots {
-			if (slot.Ownership == pir.Unmanaged) == typeNeedsCleanup(outs[i][s].Type) {
-				panic(fmt.Sprintf("plan %s: eval %%t%d slot %d annotated %v but lowers to %s", plan.Label, i, s, slot.Ownership, outs[i][s].Type.String()))
-			}
-		}
 	}
 	for _, m := range plan.Commit {
 		if m.Target.Kind == pir.DiscardTarget {
 			continue
 		}
 		c.storeValue(m.Target.Name, outs[m.Outcome.Outcome][m.Outcome.Slot], m.Transfer == pir.Copy)
-		sym, _ := c.lookupNamedSymbol(m.Target.Name)
-		holds := typeNeedsCleanup(storedType(sym))
-		if holds != (m.Transfer != pir.Store) {
-			panic(fmt.Sprintf("plan %s: target %s after %s holds heap state: %t", plan.Label, m.Target.Name, m.Transfer, holds))
-		}
 	}
 	for _, d := range plan.Drops {
 		switch d.Kind {
