@@ -266,7 +266,9 @@ A commit group follows one transfer contract:
 3. Moves, copies, and retained borrows are planned across the whole group.
 4. All mappings take effect simultaneously in Pluto semantics.
 5. Replaced values are released only after no mapped outcome can still
-   reference or consume them.
+   reference or consume them. The implemented schedule is the conservative
+   one — evaluate every outcome, land every mapping, then release what
+   nothing took — not the earliest safe point.
 
 For example, `a, b = b, a`:
 
@@ -572,7 +574,7 @@ ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]` — appends a mapping's
 derived transfer — `[move]`, `[copy]`, `[transfer]` for a promoted borrow,
 `[materialize]` for an unmanaged value entering an owning binding, nothing
 for a plain store — and follows the mappings with the derived releases,
-`drop %t1` for a discarded owned outcome and `drop x [replaced]` for a
+`drop %t1` for a discarded owned outcome and `drop x [old]` for a
 replaced target's old value, in the order they run (§8). A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
 `t` followed by digits reserved for them; every other outcome name is a

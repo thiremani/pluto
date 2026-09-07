@@ -400,7 +400,7 @@ d1, d2`)
     commit
         Str d1 <- %t0 [transfer]
         Str d2 <- %t1 [copy]
-        drop d2 [replaced]
+        drop d2 [old]
 `, plans[2].Render(true))
 }
 
@@ -428,7 +428,7 @@ x, y`)
 
     commit
         Str x <- %t0 [move]
-        drop x [replaced]
+        drop x [old]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign__
     source "_ = (x ⊕ \"?\")"
@@ -459,7 +459,7 @@ x, y`)
     commit
         Str x <- %t0 [move]
         Str y <- %t1 [transfer]
-        drop y [replaced]
+        drop y [old]
 `, plans[5].Render(true))
 }
 
@@ -538,7 +538,7 @@ arr1, arr2`)
 
     commit
         [I64] arr2 <- %t0 [move]
-        drop arr2 [replaced]
+        drop arr2 [old]
 `, plans[2].Render(true))
 	require.Equal(t, `statement assign_arr1
     source "arr1 = []"
@@ -548,7 +548,7 @@ arr1, arr2`)
 
     commit
         [I64] arr1 <- %t0 [materialize]
-        drop arr1 [replaced]
+        drop arr1 [old]
 `, plans[3].Render(true))
 }
 
@@ -657,7 +657,7 @@ copy, other, text`)
 
     commit
         Str other <- %t0
-        drop other [replaced]
+        drop other [old]
 `, plans[3].Render(true))
 	require.False(t, plans[3].Commit[0].Target.TypeOwnsHeap)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
@@ -698,7 +698,7 @@ copy, other, floats`)
 
     commit
         [F64] floats <- %t0 [copy]
-        drop floats [replaced]
+        drop floats [old]
 `, plans[4].Render(true))
 	require.Equal(t, `statement assign_other
     source "other = []"
@@ -708,7 +708,7 @@ copy, other, floats`)
 
     commit
         [Empty] other <- %t0
-        drop other [replaced]
+        drop other [old]
 `, plans[6].Render(true))
 }
 

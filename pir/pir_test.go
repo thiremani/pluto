@@ -392,7 +392,7 @@ func TestRenderMultiOutput(t *testing.T) {
     commit
         I64 a <- %t0#0
         Str b <- %t0#1 [move]
-        drop b [replaced]
+        drop b [old]
 `
 	if got := p.Render(true); got != wantExpanded {
 		t.Fatalf("multi-output expanded render mismatch:\ngot:\n%s\nwant:\n%s", got, wantExpanded)
@@ -483,7 +483,7 @@ func TestRenderExpandedOwnership(t *testing.T) {
         Str x <- %t0 [move]
         _ <- %t1
         drop %t1
-        drop x [replaced]
+        drop x [old]
 `
 	if got := elaborated(replacePlan()).Render(true); got != want {
 		t.Fatalf("replace render mismatch:\ngot:\n%s\nwant:\n%s", got, want)

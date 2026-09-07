@@ -150,7 +150,7 @@ func (p *AssignPlan) outcomeString(ref OutcomeRef) string {
 
 func (p *AssignPlan) dropString(d Drop) string {
 	if d.Kind == DropReplaced {
-		return "drop " + d.Target + " [replaced]"
+		return "drop " + d.Target + " [old]"
 	}
 	return "drop " + p.outcomeString(d.Outcome)
 }
