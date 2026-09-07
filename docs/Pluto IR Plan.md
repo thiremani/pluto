@@ -1187,10 +1187,8 @@ into a binding declared non-owning is legal and leaves it holding heap
 state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility
 relation; the lowerer implements the recorded transfers and releases and
-decides nothing, but dies as an ICE if a slot annotated `unmanaged` lowers
-to a heap-holding value or vice versa, or if a store leaves a target holding
-heap state its transfer did not predict, so a misclassification can never
-become a shared-then-released buffer or a silent leak. The transitive case —
+decides nothing; a plan lowered wrongly is the leak-checked suite's to
+catch, the runtime backstop §8 names. The transitive case —
 transfer a widened binding into another, then read and replace the second —
 is pinned end to end in `tests/mem/mem.spt` for strings and for an
 empty-array reset. Heap swaps show two transfers and zero copies, a duplicate
