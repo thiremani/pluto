@@ -536,24 +536,8 @@ func TestRenderEscapesControls(t *testing.T) {
 // omits the unmanaged default.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
-	render := func(slots []Slot) string {
-		p := &AssignPlan{
-			Label:  "assign___",
-			Source: "_, _ = pair",
-			Evals:  []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
-			Commit: []Mapping{
-				{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
-				{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},
-			},
-		}
-		Elaborate(p)
-		if err := Validate(p, sameSpelling); err != nil {
-			t.Fatalf("plan rejected: %v", err)
-		}
-		return p.Render(true)
-	}
-	first := render([]Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
-	second := render([]Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
+	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
+	second := renderDiscardedPair(t, []Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
 	if !strings.Contains(first, "eval Str, Str pair [unmanaged] [borrowed=x]\n") {
 		t.Fatalf("first layout lost its positions:\n%s", first)
 	}
@@ -563,4 +547,24 @@ func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	if first == second {
 		t.Fatal("swapped ownership layouts rendered identically")
 	}
+}
+
+// renderDiscardedPair renders `_, _ = pair` with the given two-slot ownership
+// layout in the expanded view.
+func renderDiscardedPair(t *testing.T, slots []Slot) string {
+	t.Helper()
+	p := &AssignPlan{
+		Label:  "assign___",
+		Source: "_, _ = pair",
+		Evals:  []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
+		Commit: []Mapping{
+			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
+			{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},
+		},
+	}
+	Elaborate(p)
+	if err := Validate(p, sameSpelling); err != nil {
+		t.Fatalf("plan rejected: %v", err)
+	}
+	return p.Render(true)
 }
