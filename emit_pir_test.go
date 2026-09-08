@@ -134,7 +134,7 @@ statement assign_y
 `, out.String())
 }
 
-// Plan §12: expanded view adds shapes, ownership, and target types.
+// Plan §12: expanded view adds ownership and target types.
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, emitPIRTestPlans()[:1], parsedEmitPIRMode(t, "-emit-pir=expanded")))
