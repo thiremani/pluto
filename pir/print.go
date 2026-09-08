@@ -100,8 +100,9 @@ func typesString(slots []Slot) string {
 	return strings.Join(names, ", ")
 }
 
-// ownershipString omits the unmanaged default, as a plain store omits its
-// transfer: a slot with no annotation is unmanaged.
+// ownershipString omits the unmanaged default for a single slot, as a plain
+// store omits its transfer. A multi-slot eval annotates every slot in order,
+// since dropping one would shift the positions of the rest.
 func ownershipString(slots []Slot) string {
 	var b strings.Builder
 	for _, slot := range slots {
@@ -110,6 +111,10 @@ func ownershipString(slots []Slot) string {
 			b.WriteString(" [owned]")
 		case Borrowed:
 			b.WriteString(" [borrowed=" + slot.Owner + "]")
+		default:
+			if len(slots) > 1 {
+				b.WriteString(" [unmanaged]")
+			}
 		}
 	}
 	return b.String()

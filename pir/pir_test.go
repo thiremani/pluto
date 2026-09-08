@@ -387,7 +387,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = pair"
 
     execute
-        %t0 = eval I64, Str pair [owned]
+        %t0 = eval I64, Str pair [unmanaged] [owned]
 
     commit
         I64 a <- %t0#0
@@ -528,5 +528,39 @@ func TestRenderEscapesControls(t *testing.T) {
 		if !strings.Contains(got, "        "+tc.want+"\n") || strings.Count(got, "\n") != 8 {
 			t.Fatalf("render mismatch:\n%s", got)
 		}
+	}
+}
+
+// Plan §12: a multi-slot eval keeps every slot's ownership in position, so two
+// layouts over identical displayed types render differently; a single slot
+// omits the unmanaged default.
+func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
+	str := testType("Str")
+	render := func(slots []Slot) string {
+		p := &AssignPlan{
+			Label:  "assign___",
+			Source: "_, _ = pair",
+			Evals:  []*Eval{{Result: 0, Expr: ident("pair"), Slots: slots}},
+			Commit: []Mapping{
+				{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 0}},
+				{Target: Target{Kind: DiscardTarget}, Outcome: OutcomeRef{Outcome: 0, Slot: 1}},
+			},
+		}
+		Elaborate(p)
+		if err := Validate(p, sameSpelling); err != nil {
+			t.Fatalf("plan rejected: %v", err)
+		}
+		return p.Render(true)
+	}
+	first := render([]Slot{unmanagedSlot(str), borrowedSlot(str, "x")})
+	second := render([]Slot{borrowedSlot(str, "x"), unmanagedSlot(str)})
+	if !strings.Contains(first, "eval Str, Str pair [unmanaged] [borrowed=x]\n") {
+		t.Fatalf("first layout lost its positions:\n%s", first)
+	}
+	if !strings.Contains(second, "eval Str, Str pair [borrowed=x] [unmanaged]\n") {
+		t.Fatalf("second layout lost its positions:\n%s", second)
+	}
+	if first == second {
+		t.Fatal("swapped ownership layouts rendered identically")
 	}
 }

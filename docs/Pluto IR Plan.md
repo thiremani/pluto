@@ -570,8 +570,10 @@ value (§4); a commit mapping reads `target <- value` in the concise view
 and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
 arr <- %t0`; square brackets otherwise carry declarative policies, not
 executable code. The expanded view annotates each eval slot's
-ownership — `[owned]`, `[borrowed=h]`; a slot with neither is unmanaged,
-as a mapping with no transfer is a plain store — appends a mapping's
+ownership — `[owned]`, `[borrowed=h]`; a single slot with neither is
+unmanaged, as a mapping with no transfer is a plain store, while a
+multi-slot eval spells every slot in order, `[unmanaged] [owned]`, so
+positions stay readable — appends a mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
 binding; `[transfer]` for a promoted borrow; nothing for a plain store — and follows the mappings with the derived releases,
