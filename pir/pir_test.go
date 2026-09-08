@@ -387,7 +387,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = pair"
 
     execute
-        %t0 = eval I64, Str pair [unmanaged] [owned]
+        %t0 = eval I64, Str pair [owned]
 
     commit
         I64 a <- %t0#0
@@ -442,8 +442,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 b [unmanaged]
-        %t1 = eval I64 a [unmanaged]
+        %t0 = eval I64 b
+        %t1 = eval I64 a
 
     commit
         I64 a <- %t0
