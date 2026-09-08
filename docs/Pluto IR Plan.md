@@ -643,9 +643,12 @@ The `statement` header carries a display label derived from the targets
 (`assign_a_b`); it is not unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
 identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
-result shapes, target mappings, access IDs, affine forms, collector and carry
-details, ownership annotations, and derived release points. Compiler temporary
-names and node IDs stay hidden in the concise view.
+ownership annotations, target types, derived transfers, and derived release
+points, and — as the node kinds that vary them arrive — result domains and
+yield shapes (§5), target mappings, access IDs, affine forms, and collector
+and carry details. An annotation that every admitted node would print
+identically is omitted until then. Compiler temporary names and node IDs stay
+hidden in the concise view.
 
 The in-memory tree is authoritative; the text is its rendering. PIR v1 has no
 parser and is never user-authored; add one only if a concrete tooling need

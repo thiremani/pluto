@@ -19,7 +19,7 @@ func (p *AssignPlan) Render(expanded bool) string {
 	for _, ev := range p.Evals {
 		fmt.Fprintf(&b, "        %%t%d = eval %s %s", ev.Result, typesString(ev.Slots), renderPayload(ev.Expr))
 		if expanded {
-			b.WriteString(" [shape=scalar] [yield=always]" + ownershipString(ev.Slots))
+			b.WriteString(ownershipString(ev.Slots))
 		}
 		b.WriteString("\n")
 	}

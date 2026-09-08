@@ -64,7 +64,7 @@ s`)
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval I64 a + (2 * 3) [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 a + (2 * 3) [unmanaged]
 
     commit
         I64 b <- %t0
@@ -361,7 +361,7 @@ h1, h2`)
     source "h1 = (\"foo\" ⊕ \"bar\")"
 
     execute
-        %t0 = eval Str "foo" ⊕ "bar" [shape=scalar] [yield=always] [owned]
+        %t0 = eval Str "foo" ⊕ "bar" [owned]
 
     commit
         Str h1 <- %t0 [move]
@@ -370,8 +370,8 @@ h1, h2`)
     source "h1, h2 = h2, h1"
 
     execute
-        %t0 = eval Str h2 [shape=scalar] [yield=always] [borrowed=h2]
-        %t1 = eval Str h1 [shape=scalar] [yield=always] [borrowed=h1]
+        %t0 = eval Str h2 [borrowed=h2]
+        %t1 = eval Str h1 [borrowed=h1]
 
     commit
         Str h1 <- %t0 [transfer]
@@ -394,8 +394,8 @@ d1, d2`)
     source "d1, d2 = d1, d1"
 
     execute
-        %t0 = eval Str d1 [shape=scalar] [yield=always] [borrowed=d1]
-        %t1 = eval Str d1 [shape=scalar] [yield=always] [borrowed=d1]
+        %t0 = eval Str d1 [borrowed=d1]
+        %t1 = eval Str d1 [borrowed=d1]
 
     commit
         Str d1 <- %t0 [transfer]
@@ -424,7 +424,7 @@ x, y`)
     source "x = (x ⊕ \"!\")"
 
     execute
-        %t0 = eval Str x ⊕ "!" [shape=scalar] [yield=always] [owned]
+        %t0 = eval Str x ⊕ "!" [owned]
 
     commit
         Str x <- %t0 [move]
@@ -434,7 +434,7 @@ x, y`)
     source "_ = (x ⊕ \"?\")"
 
     execute
-        %t0 = eval Str x ⊕ "?" [shape=scalar] [yield=always] [owned]
+        %t0 = eval Str x ⊕ "?" [owned]
 
     commit
         _ <- %t0
@@ -444,7 +444,7 @@ x, y`)
     source "_ = x"
 
     execute
-        %t0 = eval Str x [shape=scalar] [yield=always] [borrowed=x]
+        %t0 = eval Str x [borrowed=x]
 
     commit
         _ <- %t0
@@ -453,8 +453,8 @@ x, y`)
     source "x, y = (y ⊕ \"!\"), x"
 
     execute
-        %t0 = eval Str y ⊕ "!" [shape=scalar] [yield=always] [owned]
-        %t1 = eval Str x [shape=scalar] [yield=always] [borrowed=x]
+        %t0 = eval Str y ⊕ "!" [owned]
+        %t1 = eval Str x [borrowed=x]
 
     commit
         Str x <- %t0 [move]
@@ -481,7 +481,7 @@ s, t`)
     source "s = \"hi\""
 
     execute
-        %t0 = eval Str "hi" [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval Str "hi" [unmanaged]
 
     commit
         Str s <- %t0 [materialize]
@@ -490,7 +490,7 @@ s, t`)
     source "t = g"
 
     execute
-        %t0 = eval Str g [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval Str g [unmanaged]
 
     commit
         Str t <- %t0
@@ -516,7 +516,7 @@ arr1, arr2`)
     source "arr1 = [1 2 3]"
 
     execute
-        %t0 = eval [I64] [1 2 3] [shape=scalar] [yield=always] [owned]
+        %t0 = eval [I64] [1 2 3] [owned]
 
     commit
         [I64] arr1 <- %t0 [move]
@@ -525,7 +525,7 @@ arr1, arr2`)
     source "arr2 = arr1"
 
     execute
-        %t0 = eval [I64] arr1 [shape=scalar] [yield=always] [borrowed=arr1]
+        %t0 = eval [I64] arr1 [borrowed=arr1]
 
     commit
         [I64] arr2 <- %t0 [copy]
@@ -534,7 +534,7 @@ arr1, arr2`)
     source "arr2 = [4 5 6]"
 
     execute
-        %t0 = eval [I64] [4 5 6] [shape=scalar] [yield=always] [owned]
+        %t0 = eval [I64] [4 5 6] [owned]
 
     commit
         [I64] arr2 <- %t0 [move]
@@ -544,7 +544,7 @@ arr1, arr2`)
     source "arr1 = []"
 
     execute
-        %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval [Empty] [] [unmanaged]
 
     commit
         [I64] arr1 <- %t0 [materialize]
@@ -579,7 +579,7 @@ n, a, s2.age, col, t2`)
     source "n = p.name"
 
     execute
-        %t0 = eval Str p.name [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval Str p.name [unmanaged]
 
     commit
         Str n <- %t0
@@ -588,7 +588,7 @@ n, a, s2.age, col, t2`)
     source "s2 = p"
 
     execute
-        %t0 = eval Person{name:Str age:I64} p [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval Person{name:Str age:I64} p [unmanaged]
 
     commit
         Person{name:Str age:I64} s2 <- %t0
@@ -597,7 +597,7 @@ n, a, s2.age, col, t2`)
     source "col = scores.Score"
 
     execute
-        %t0 = eval [I64] scores.Score [shape=scalar] [yield=always] [owned]
+        %t0 = eval [I64] scores.Score [owned]
 
     commit
         [I64] col <- %t0 [move]
@@ -606,7 +606,7 @@ n, a, s2.age, col, t2`)
     source "t2 = scores"
 
     execute
-        %t0 = eval Table[Name:Str Score:I64] scores [shape=scalar] [yield=always] [borrowed=scores]
+        %t0 = eval Table[Name:Str Score:I64] scores [borrowed=scores]
 
     commit
         Table[Name:Str Score:I64] t2 <- %t0 [copy]
@@ -633,8 +633,8 @@ copy, other, text`)
     source "text, other = (text ⊕ \"!\"), text"
 
     execute
-        %t0 = eval Str text ⊕ "!" [shape=scalar] [yield=always] [owned]
-        %t1 = eval Str text [shape=scalar] [yield=always] [borrowed=text]
+        %t0 = eval Str text ⊕ "!" [owned]
+        %t1 = eval Str text [borrowed=text]
 
     commit
         Str text <- %t0 [move]
@@ -644,7 +644,7 @@ copy, other, text`)
     source "copy = other"
 
     execute
-        %t0 = eval Str other [shape=scalar] [yield=always] [borrowed=other]
+        %t0 = eval Str other [borrowed=other]
 
     commit
         Str copy <- %t0 [copy]
@@ -653,7 +653,7 @@ copy, other, text`)
     source "other = \"new\""
 
     execute
-        %t0 = eval Str "new" [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval Str "new" [unmanaged]
 
     commit
         Str other <- %t0
@@ -685,7 +685,7 @@ copy, other, floats`)
     source "other = arr"
 
     execute
-        %t0 = eval [Empty] arr [shape=scalar] [yield=always] [borrowed=arr]
+        %t0 = eval [Empty] arr [borrowed=arr]
 
     commit
         [Empty] other <- %t0 [copy]
@@ -694,7 +694,7 @@ copy, other, floats`)
     source "floats = other"
 
     execute
-        %t0 = eval [Empty] other [shape=scalar] [yield=always] [borrowed=other]
+        %t0 = eval [Empty] other [borrowed=other]
 
     commit
         [F64] floats <- %t0 [copy]
@@ -704,7 +704,7 @@ copy, other, floats`)
     source "other = []"
 
     execute
-        %t0 = eval [Empty] [] [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval [Empty] [] [unmanaged]
 
     commit
         [Empty] other <- %t0

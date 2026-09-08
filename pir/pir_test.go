@@ -387,7 +387,7 @@ func TestRenderMultiOutput(t *testing.T) {
     source "a, b = pair"
 
     execute
-        %t0 = eval I64, Str pair [shape=scalar] [yield=always] [unmanaged] [owned]
+        %t0 = eval I64, Str pair [unmanaged] [owned]
 
     commit
         I64 a <- %t0#0
@@ -442,8 +442,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 b [shape=scalar] [yield=always] [unmanaged]
-        %t1 = eval I64 a [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 b [unmanaged]
+        %t1 = eval I64 a [unmanaged]
 
     commit
         I64 a <- %t0
@@ -462,8 +462,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval Str b [shape=scalar] [yield=always] [borrowed=b]
-        %t1 = eval Str a [shape=scalar] [yield=always] [borrowed=a]
+        %t0 = eval Str b [borrowed=b]
+        %t1 = eval Str a [borrowed=a]
 
     commit
         Str a <- %t0 [transfer]
@@ -476,8 +476,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
     source "x, _ = x ⊕ \"!\", \"a\" ⊕ \"b\""
 
     execute
-        %t0 = eval Str x ⊕ "!" [shape=scalar] [yield=always] [owned]
-        %t1 = eval Str "a" ⊕ "b" [shape=scalar] [yield=always] [owned]
+        %t0 = eval Str x ⊕ "!" [owned]
+        %t1 = eval Str "a" ⊕ "b" [owned]
 
     commit
         Str x <- %t0 [move]
