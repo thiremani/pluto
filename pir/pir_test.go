@@ -442,8 +442,8 @@ func TestRenderExpanded(t *testing.T) {
     source "a, b = b, a"
 
     execute
-        %t0 = eval I64 b
-        %t1 = eval I64 a
+        %t0 = eval I64 b [unmanaged]
+        %t1 = eval I64 a [unmanaged]
 
     commit
         I64 a <- %t0
@@ -531,9 +531,8 @@ func TestRenderEscapesControls(t *testing.T) {
 	}
 }
 
-// Plan §12: a multi-slot eval keeps every slot's ownership in position, so two
-// layouts over identical displayed types render differently; a single slot
-// omits the unmanaged default.
+// Plan §12: every slot's ownership prints in position, so two layouts over
+// identical displayed types render differently.
 func TestRenderMultiSlotOwnershipPositions(t *testing.T) {
 	str := testType("Str")
 	first := renderDiscardedPair(t, []Slot{unmanagedSlot(str), borrowedSlot(str, "x")})

@@ -64,7 +64,7 @@ s`)
     source "b = (a + (2 * 3))"
 
     execute
-        %t0 = eval I64 a + (2 * 3)
+        %t0 = eval I64 a + (2 * 3) [unmanaged]
 
     commit
         I64 b <- %t0
@@ -481,7 +481,7 @@ s, t`)
     source "s = \"hi\""
 
     execute
-        %t0 = eval Str "hi"
+        %t0 = eval Str "hi" [unmanaged]
 
     commit
         Str s <- %t0 [copy]
@@ -490,7 +490,7 @@ s, t`)
     source "t = g"
 
     execute
-        %t0 = eval Str g
+        %t0 = eval Str g [unmanaged]
 
     commit
         Str t <- %t0
@@ -544,7 +544,7 @@ arr1, arr2`)
     source "arr1 = []"
 
     execute
-        %t0 = eval [Empty] []
+        %t0 = eval [Empty] [] [unmanaged]
 
     commit
         [I64] arr1 <- %t0 [copy]
@@ -579,7 +579,7 @@ n, a, s2.age, col, t2`)
     source "n = p.name"
 
     execute
-        %t0 = eval Str p.name
+        %t0 = eval Str p.name [unmanaged]
 
     commit
         Str n <- %t0
@@ -588,7 +588,7 @@ n, a, s2.age, col, t2`)
     source "s2 = p"
 
     execute
-        %t0 = eval Person{name:Str age:I64} p
+        %t0 = eval Person{name:Str age:I64} p [unmanaged]
 
     commit
         Person{name:Str age:I64} s2 <- %t0
@@ -653,7 +653,7 @@ copy, other, text`)
     source "other = \"new\""
 
     execute
-        %t0 = eval Str "new"
+        %t0 = eval Str "new" [unmanaged]
 
     commit
         Str other <- %t0
@@ -704,7 +704,7 @@ copy, other, floats`)
     source "other = []"
 
     execute
-        %t0 = eval [Empty] []
+        %t0 = eval [Empty] [] [unmanaged]
 
     commit
         [Empty] other <- %t0
