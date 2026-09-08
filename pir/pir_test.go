@@ -149,11 +149,11 @@ func TestElaborate(t *testing.T) {
 			Evals:  []*Eval{{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
 			Commit: []Mapping{{Target: Target{Kind: LocalTarget, Name: "t", Type: str, TypeOwnsHeap: true, Fresh: true}, Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Copy}, nil},
-		{"unmanaged into an owning target materializes", &AssignPlan{
+		{"unmanaged into an owning target is copied", &AssignPlan{
 			Label: "assign_s", Source: `s = "hi"`,
 			Evals:  []*Eval{{Result: 0, Expr: strLit("hi"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit: []Mapping{{Target: heapLocal("s", str), Outcome: OutcomeRef{Outcome: 0}}},
-		}, []Transfer{Materialize}, []Drop{{Kind: DropReplaced, Target: "s"}}},
+		}, []Transfer{Copy}, []Drop{{Kind: DropReplaced, Target: "s"}}},
 		{"heap transfer into a non-owning fresh target is legal", &AssignPlan{
 			Label: "assign_other", Source: "other = text",
 			Evals:  []*Eval{{Result: 0, Expr: ident("text"), Slots: []Slot{borrowedSlot(str, "text")}}},
@@ -245,7 +245,7 @@ func TestValidateRejects(t *testing.T) {
 		{"DoubleConsume", func(p *AssignPlan) { p.Commit[1].Outcome = p.Commit[0].Outcome }, "consumed twice"},
 		{"UnknownTargetKind", func(p *AssignPlan) { p.Commit[0].Target.Kind = 7 }, "unknown target kind"},
 		{"UnmanagedMoved", func(p *AssignPlan) { p.Commit[0].Transfer = Move }, "uses transfer move; ownership requires store"},
-		{"UnmanagedIntoOwnerNotMaterialized", func(p *AssignPlan) { p.Commit[0].Target.TypeOwnsHeap = true }, "uses transfer store; ownership requires materialize"},
+		{"UnmanagedIntoOwnerNotCopied", func(p *AssignPlan) { p.Commit[0].Target.TypeOwnsHeap = true }, "uses transfer store; ownership requires copy"},
 		{"OwnedNotMoved", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = Owned }, "uses transfer store; ownership requires move"},
 		{"BorrowedNotCopied", func(p *AssignPlan) { p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b") }, "uses transfer store; ownership requires copy"},
 		{"PromoteOfSurvivingOwner", func(p *AssignPlan) {
@@ -257,13 +257,13 @@ func TestValidateRejects(t *testing.T) {
 			p.Commit[0].Transfer = Promote
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Target.Fresh = true
-			p.Commit[1].Transfer = Materialize
+			p.Commit[1].Transfer = Copy
 		}, "b is not replaced in this group"},
 		{"PromoteOfOwnerHoldingNothing", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Commit[0].Transfer = Promote
 			p.Commit[1].Target.TypeOwnsHeap = true
-			p.Commit[1].Transfer = Materialize
+			p.Commit[1].Transfer = Copy
 		}, "b is not replaced in this group"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
@@ -283,7 +283,7 @@ func TestValidateRejects(t *testing.T) {
 		{"DropOfFreshTarget", func(p *AssignPlan) {
 			p.Commit[0].Target.TypeOwnsHeap = true
 			p.Commit[0].Target.Fresh = true
-			p.Commit[0].Transfer = Materialize
+			p.Commit[0].Transfer = Copy
 			p.Drops = []Drop{{Kind: DropReplaced, Target: "a"}}
 		}, "a holds no replaced value"},
 		{"ReplacedDroppedTwice", func(p *AssignPlan) {

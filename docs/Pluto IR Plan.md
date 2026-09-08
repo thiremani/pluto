@@ -572,9 +572,9 @@ arr <- %t0`; square brackets otherwise carry declarative policies, not
 executable code. The expanded view annotates each eval slot's
 ownership — `[owned]`, `[borrowed=h]`; a slot with neither is unmanaged,
 as a mapping with no transfer is a plain store — appends a mapping's
-derived transfer — `[move]`, `[copy]`, `[transfer]` for a promoted borrow,
-`[materialize]` for an unmanaged value entering an owning binding, nothing
-for a plain store — and follows the mappings with the derived releases,
+derived transfer — `[move]`; `[copy]` when the target gets its own owned
+copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
+binding; `[transfer]` for a promoted borrow; nothing for a plain store — and follows the mappings with the derived releases,
 `drop %t1` for a discarded owned outcome and `drop x [old]` for a
 replaced target's old value, in the order they run (§8). A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
@@ -609,7 +609,7 @@ types; a struct mangle encodes only the nominal name and omits the field
 schema) nor assignment compatibility (`StrG` into `StrH`, an empty-array
 reset). Validation applies the compiler's directional binding-compatibility
 relation, not this spelling: both string flavours display as `Str`, and
-`StrG` into `StrH` is admitted and shown as a materialization.
+`StrG` into `StrH` is admitted and shown as a copy.
 
 The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
@@ -1184,11 +1184,11 @@ binding stores a materialized heap copy, and a heap value moved, copied, or
 transferred into a binding declared static keeps its flavor, so that
 binding holds heap state its declared type does not show — and every local
 target with its merged target type (`TypeOwnsHeap`: that type requires
-heap cleanup, so an unmanaged value stored here is materialized), whether it
+heap cleanup, so an unmanaged value stored here is copied), whether it
 is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
 replacement must take or release it), read from the same effective storage;
 `pir.Elaborate` derives each mapping's transfer (move, copy, promoted
-transfer, materialize) and the statement-exit releases — a heap transfer
+transfer) and the statement-exit releases — a heap transfer
 into a binding declared non-owning is legal and leaves it holding heap
 state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility

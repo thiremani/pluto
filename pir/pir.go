@@ -79,11 +79,10 @@ type OutcomeRef struct {
 type Transfer int
 
 const (
-	Store       Transfer = iota // unmanaged value into a non-owning target
-	Materialize                 // unmanaged value into an owning target: an owned copy is made
-	Move                        // owned outcome handed to the target
-	Copy                        // borrowed outcome copied; the owner survives
-	Promote                     // borrow promoted to transfer: the owner is replaced in the same group
+	Store   Transfer = iota // unmanaged value into a non-owning target
+	Move                    // owned outcome handed to the target
+	Copy                    // the target gets its own owned copy: of a borrowed outcome, or of an unmanaged value entering a TypeOwnsHeap target
+	Promote                 // borrow promoted to transfer: the owner is replaced in the same group
 )
 
 // Mapping is one recorded target <- outcome commit pair; the lowerer

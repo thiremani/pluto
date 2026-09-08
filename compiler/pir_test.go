@@ -463,15 +463,15 @@ x, y`)
 `, plans[5].Render(true))
 }
 
-// Plan §8, §12: a static string into a heap-string binding materializes an
-// owned copy, which the directional compatibility relation admits though
-// both flavours display as Str; a binding that only ever holds static
+// Plan §8, §12: a static string into a heap-string binding is copied into an
+// owned heap string, which the directional compatibility relation admits
+// though both flavours display as Str; a binding that only ever holds static
 // strings owns nothing and stores plainly.
-func TestPlanGoldenMaterialize(t *testing.T) {
+func TestPlanGoldenStaticIntoHeap(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planMaterialize", "", `s = "hi"
+	plans := compileScriptPlans(t, ctx, "planStaticIntoHeap", "", `s = "hi"
 s = s ⊕ "!"
 g = "static"
 t = g
@@ -484,7 +484,7 @@ s, t`)
         %t0 = eval Str "hi"
 
     commit
-        Str s <- %t0 [materialize]
+        Str s <- %t0 [copy]
 `, plans[0].Render(true))
 	require.Equal(t, `statement assign_t
     source "t = g"
@@ -499,7 +499,7 @@ s, t`)
 
 // Plan §8, §12: inline array literals are owned outcomes, an array read is
 // a borrow that copies, and an empty-literal reset is an unmanaged value
-// materialized into the owning binding — the second case the directional
+// copied into the owning binding — the second case the directional
 // relation exists for.
 func TestPlanGoldenArrays(t *testing.T) {
 	ctx := llvm.NewContext()
@@ -547,7 +547,7 @@ arr1, arr2`)
         %t0 = eval [Empty] []
 
     commit
-        [I64] arr1 <- %t0 [materialize]
+        [I64] arr1 <- %t0 [copy]
         drop arr1 [old]
 `, plans[3].Render(true))
 }
@@ -618,7 +618,7 @@ n, a, s2.age, col, t2`)
 // `text = "old"` but stores a materialized heap copy; other is declared
 // static yet takes text's heap buffer by transfer, so its later read is a
 // borrow and replacing it releases the held value — a plain store, since the
-// declared type materializes nothing.
+// declared type copies nothing.
 func TestPlanGoldenEffectiveStorage(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()

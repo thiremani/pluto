@@ -119,8 +119,6 @@ func (t Transfer) String() string {
 	switch t {
 	case Store:
 		return "store"
-	case Materialize:
-		return "materialize"
 	case Move:
 		return "move"
 	case Copy:

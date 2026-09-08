@@ -126,7 +126,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 		want = Copy
 	default:
 		if m.Target.TypeOwnsHeap {
-			want = Materialize
+			want = Copy
 		}
 	}
 	if m.Transfer != want {

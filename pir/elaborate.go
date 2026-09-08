@@ -4,8 +4,8 @@ package pir
 // (plan §6, §8) from the plan's own annotations; Validate re-checks them.
 // The first mapping in commit order takes a replaced owner's value and later
 // borrows of it copy, so one source feeding several targets is never moved
-// twice. An unmanaged input materializes into a TypeOwnsHeap target; owned
-// and borrowed inputs move, copy, or transfer regardless of it. Replacement
+// twice. An unmanaged input is copied into a TypeOwnsHeap target; owned and
+// borrowed inputs move, copy, or transfer regardless of it. Replacement
 // and promotion follow HoldsHeap.
 func Elaborate(p *AssignPlan) {
 	replaced := make(map[string]bool, len(p.Commit))
@@ -49,7 +49,7 @@ func localTransfer(slot Slot, target Target, replaced, taken map[string]bool) Tr
 		return Copy
 	}
 	if target.TypeOwnsHeap {
-		return Materialize
+		return Copy
 	}
 	return Store
 }
