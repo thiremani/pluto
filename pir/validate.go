@@ -153,8 +153,8 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	needDrop := make(map[OutcomeRef]bool)
 	for _, m := range p.Commit {
 		slot := p.Evals[m.Outcome.Outcome].Slots[m.Outcome.Slot]
-		// Only a moved borrow takes its owner's old value; a moved owned outcome
-		// leaves the target's old value to be released.
+		// Only a moved borrow takes its owner's old value; moving an owned
+		// outcome does not itself take the target's old value.
 		if slot.Ownership == Borrowed && m.Transfer == Move {
 			taken[slot.Owner]++
 		}
