@@ -103,16 +103,15 @@ func replacePlan() *AssignPlan {
 	}
 }
 
-func elaborated(p *AssignPlan) *AssignPlan {
-	Elaborate(p)
-	return p
-}
-
 func TestValidateAccepts(t *testing.T) {
+	heapSwap := heapSwapPlan()
+	Elaborate(heapSwap)
+	replace := replacePlan()
+	Elaborate(replace)
 	for name, p := range map[string]*AssignPlan{
 		"scalar swap":    swapPlan(),
-		"heap swap":      elaborated(heapSwapPlan()),
-		"replace + drop": elaborated(replacePlan()),
+		"heap swap":      heapSwap,
+		"replace + drop": replace,
 	} {
 		if err := Validate(p, sameSpelling); err != nil {
 			t.Fatalf("%s: valid plan rejected: %v", name, err)
@@ -469,7 +468,9 @@ func TestRenderExpandedOwnership(t *testing.T) {
         Str a <- %t0 [move]
         Str b <- %t1 [move]
 `
-	if got := elaborated(heapSwapPlan()).Render(true); got != want {
+	heapSwap := heapSwapPlan()
+	Elaborate(heapSwap)
+	if got := heapSwap.Render(true); got != want {
 		t.Fatalf("heap swap render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	want = `statement assign x, _
@@ -485,7 +486,9 @@ func TestRenderExpandedOwnership(t *testing.T) {
         drop %t1
         drop x [old]
 `
-	if got := elaborated(replacePlan()).Render(true); got != want {
+	replace := replacePlan()
+	Elaborate(replace)
+	if got := replace.Render(true); got != want {
 		t.Fatalf("replace render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	// The concise view omits every derived decision.
@@ -500,7 +503,7 @@ func TestRenderExpandedOwnership(t *testing.T) {
         x <- %t0
         _ <- %t1
 `
-	if got := elaborated(replacePlan()).Render(false); got != want {
+	if got := replace.Render(false); got != want {
 		t.Fatalf("replace concise render mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
