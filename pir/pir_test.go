@@ -130,7 +130,7 @@ func TestElaborate(t *testing.T) {
 		drops     []Drop
 	}{
 		{"scalar swap stores", swapPlan(), []Transfer{Store, Store}, nil},
-		{"heap swap transfers both, copies nothing", heapSwapPlan(), []Transfer{Promote, Promote}, nil},
+		{"heap swap moves both old values, copies nothing", heapSwapPlan(), []Transfer{Move, Move}, nil},
 		{"owned replacement moves and releases the old value", replacePlan(), []Transfer{Move, Store},
 			[]Drop{{Kind: DropOutcome, Outcome: OutcomeRef{Outcome: 1}}, {Kind: DropReplaced, Target: "x"}}},
 		{"duplicate source: first takes, second copies", &AssignPlan{
@@ -143,7 +143,7 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("d1", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: heapLocal("d2", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Promote, Copy}, []Drop{{Kind: DropReplaced, Target: "d2"}}},
+		}, []Transfer{Move, Copy}, []Drop{{Kind: DropReplaced, Target: "d2"}}},
 		{"borrow of a surviving owner copies", &AssignPlan{
 			Label: "assign_t", Source: "t = s",
 			Evals:  []*Eval{{Result: 0, Expr: ident("s"), Slots: []Slot{borrowedSlot(str, "s")}}},
@@ -164,7 +164,7 @@ func TestElaborate(t *testing.T) {
 			Evals:  []*Eval{{Result: 0, Expr: strLit("new"), Slots: []Slot{unmanagedSlot(str)}}},
 			Commit: []Mapping{{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 0}}},
 		}, []Transfer{Store}, []Drop{{Kind: DropReplaced, Target: "other"}}},
-		{"widened owner is taken by a promoted borrow", &AssignPlan{
+		{"widened owner is taken by a moved borrow", &AssignPlan{
 			Label: "assign_a_other", Source: "a, other = other, a",
 			Evals: []*Eval{
 				{Result: 0, Expr: ident("other"), Slots: []Slot{borrowedSlot(str, "other")}},
@@ -174,7 +174,7 @@ func TestElaborate(t *testing.T) {
 				{Target: heapLocal("a", str), Outcome: OutcomeRef{Outcome: 0}},
 				{Target: widenedLocal("other", str), Outcome: OutcomeRef{Outcome: 1}},
 			},
-		}, []Transfer{Promote, Promote}, nil},
+		}, []Transfer{Move, Move}, nil},
 		{"discarded borrow releases nothing", &AssignPlan{
 			Label: "assign__", Source: "_ = h",
 			Evals:  []*Eval{{Result: 0, Expr: ident("h"), Slots: []Slot{borrowedSlot(str, "h")}}},
@@ -248,34 +248,34 @@ func TestValidateRejects(t *testing.T) {
 		{"UnmanagedIntoOwnerNotCopied", func(p *AssignPlan) { p.Commit[0].Target.TypeOwnsHeap = true }, "uses transfer store; ownership requires copy"},
 		{"OwnedNotMoved", func(p *AssignPlan) { p.Evals[0].Slots[0].Ownership = Owned }, "uses transfer store; ownership requires move"},
 		{"BorrowedNotCopied", func(p *AssignPlan) { p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b") }, "uses transfer store; ownership requires copy"},
-		{"PromoteOfSurvivingOwner", func(p *AssignPlan) {
+		{"MovedBorrowOfSurvivingOwner", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "z")
-			p.Commit[0].Transfer = Promote
+			p.Commit[0].Transfer = Move
 		}, "target a takes z's old value, but z is not replaced in this group"},
-		{"PromoteOfFreshOwner", func(p *AssignPlan) {
+		{"MovedBorrowOfFreshOwner", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Promote
+			p.Commit[0].Transfer = Move
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Target.Fresh = true
 			p.Commit[1].Transfer = Copy
 		}, "b is not replaced in this group"},
-		{"PromoteOfOwnerHoldingNothing", func(p *AssignPlan) {
+		{"MovedBorrowOfOwnerHoldingNothing", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Promote
+			p.Commit[0].Transfer = Move
 			p.Commit[1].Target.TypeOwnsHeap = true
 			p.Commit[1].Transfer = Copy
 		}, "b is not replaced in this group"},
 		{"OwnerTakenTwice", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
 			p.Evals[1].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Promote
-			p.Commit[1].Transfer = Promote
+			p.Commit[0].Transfer = Move
+			p.Commit[1].Transfer = Move
 			p.Commit[1].Target.HoldsHeap = true
 		}, "b's old value is taken by 2 targets"},
 		{"ReplacedNeverReleased", func(p *AssignPlan) { p.Commit[0].Target.HoldsHeap = true }, "a's old value is neither taken nor released"},
 		{"ReplacedTakenAndDropped", func(p *AssignPlan) {
 			p.Evals[0].Slots[0] = borrowedSlot(testType("I64"), "b")
-			p.Commit[0].Transfer = Promote
+			p.Commit[0].Transfer = Move
 			p.Commit[1].Target.HoldsHeap = true
 			p.Drops = []Drop{{Kind: DropReplaced, Target: "b"}}
 		}, "b's old value is both taken and dropped"},
@@ -466,8 +466,8 @@ func TestRenderExpandedOwnership(t *testing.T) {
         %t1 = eval Str a [borrowed=a]
 
     commit
-        Str a <- %t0 [transfer]
-        Str b <- %t1 [transfer]
+        Str a <- %t0 [move]
+        Str b <- %t1 [move]
 `
 	if got := elaborated(heapSwapPlan()).Render(true); got != want {
 		t.Fatalf("heap swap render mismatch:\ngot:\n%s\nwant:\n%s", got, want)

@@ -575,7 +575,9 @@ order, so a multi-slot eval reads `[unmanaged] [owned]` — appends a
 mapping's
 derived transfer — `[move]`; `[copy]` when the target gets its own owned
 copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
-binding; `[transfer]` for a promoted borrow; nothing for a plain store — and follows the mappings with the derived releases,
+binding; `[move]` on a borrowed outcome means the target takes the
+owner's old value, the borrow having been promoted to transfer (§8); nothing
+for a plain store — and follows the mappings with the derived releases,
 `drop %t1` for a discarded owned outcome and `drop x [old]` for a
 replaced target's old value, in the order they run (§8). A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
@@ -1188,8 +1190,8 @@ target with its merged target type (`TypeOwnsHeap`: that type requires
 heap cleanup, so an unmanaged value stored here is copied), whether it
 is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
 replacement must take or release it), read from the same effective storage;
-`pir.Elaborate` derives each mapping's transfer (move, copy, promoted
-transfer) and the statement-exit releases — a heap transfer
+`pir.Elaborate` derives each mapping's transfer (move, copy — a moved
+borrow is the promoted transfer of §8) and the statement-exit releases — a heap transfer
 into a binding declared non-owning is legal and leaves it holding heap
 state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility

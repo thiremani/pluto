@@ -117,7 +117,7 @@ func (p *AssignPlan) validateLocalTransfer(m Mapping, slot Slot) error {
 	case Owned:
 		want = Move
 	case Borrowed:
-		if m.Transfer == Promote {
+		if m.Transfer == Move {
 			if !p.replacesOwner(slot.Owner) {
 				return fmt.Errorf("plan %s: target %s takes %s's old value, but %s is not replaced in this group", p.Label, m.Target.Name, slot.Owner, slot.Owner)
 			}
@@ -153,7 +153,9 @@ func (p *AssignPlan) validateReleases(replaced map[string]bool) error {
 	needDrop := make(map[OutcomeRef]bool)
 	for _, m := range p.Commit {
 		slot := p.Evals[m.Outcome.Outcome].Slots[m.Outcome.Slot]
-		if m.Transfer == Promote {
+		// Only a moved borrow takes its owner's old value; a moved owned outcome
+		// leaves the target's old value to be released.
+		if slot.Ownership == Borrowed && m.Transfer == Move {
 			taken[slot.Owner]++
 		}
 		if m.Target.Kind == DiscardTarget && slot.Ownership == Owned {

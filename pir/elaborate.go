@@ -44,7 +44,7 @@ func localTransfer(slot Slot, target Target, replaced, taken map[string]bool) Tr
 	case Borrowed:
 		if replaced[slot.Owner] && !taken[slot.Owner] {
 			taken[slot.Owner] = true
-			return Promote
+			return Move
 		}
 		return Copy
 	}

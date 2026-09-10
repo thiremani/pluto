@@ -125,8 +125,6 @@ func (t Transfer) String() string {
 		return "move"
 	case Copy:
 		return "copy"
-	case Promote:
-		return "transfer"
 	}
 	return fmt.Sprintf("transfer(%d)", int(t))
 }

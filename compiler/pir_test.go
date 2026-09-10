@@ -346,7 +346,7 @@ func TestPlanGoldenBareBindings(t *testing.T) {
 `, plans[3].Render(false))
 }
 
-// Plan §6, §8, §17: a heap swap is two promoted borrows — zero copies, zero
+// Plan §6, §8, §17: a heap swap is two moved borrows — zero copies, zero
 // releases — while the fresh bindings before it move their owned outcomes.
 func TestPlanGoldenHeapSwap(t *testing.T) {
 	ctx := llvm.NewContext()
@@ -374,8 +374,8 @@ h1, h2`)
         %t1 = eval Str h1 [borrowed=h1]
 
     commit
-        Str h1 <- %t0 [transfer]
-        Str h2 <- %t1 [transfer]
+        Str h1 <- %t0 [move]
+        Str h2 <- %t1 [move]
 `, plans[2].Render(true))
 }
 
@@ -398,7 +398,7 @@ d1, d2`)
         %t1 = eval Str d1 [borrowed=d1]
 
     commit
-        Str d1 <- %t0 [transfer]
+        Str d1 <- %t0 [move]
         Str d2 <- %t1 [copy]
         drop d2 [old]
 `, plans[2].Render(true))
@@ -458,7 +458,7 @@ x, y`)
 
     commit
         Str x <- %t0 [move]
-        Str y <- %t1 [transfer]
+        Str y <- %t1 [move]
         drop y [old]
 `, plans[5].Render(true))
 }
@@ -638,7 +638,7 @@ copy, other, text`)
 
     commit
         Str text <- %t0 [move]
-        Str other <- %t1 [transfer]
+        Str other <- %t1 [move]
 `, plans[1].Render(true))
 	require.Equal(t, `statement assign_copy
     source "copy = other"
