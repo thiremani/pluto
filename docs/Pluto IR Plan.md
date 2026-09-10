@@ -579,7 +579,14 @@ binding; `[move]` on a borrowed outcome means the target takes the
 owner's old value, the borrow having been promoted to transfer (§8); nothing
 for a plain store — and follows the mappings with the derived releases,
 `drop %t1` for a discarded owned outcome and `drop x [old]` for a
-replaced target's old value, in the order they run (§8). A
+replaced target's old value, in the order they run (§8). Read the two
+kinds of annotation differently: an eval's states an outcome's ownership
+obligation, not how it was produced — an `[owned]` column read allocated,
+an `[owned]` concatenation did not copy anything — and a mapping's states
+how the destination acquires the value. Assignment always has value
+semantics; a bare store of an unmanaged struct, a `[copy]`, and a `[move]`
+are three implementations of it, and copies made inside an `eval` are not
+shown. A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
 `t` followed by digits reserved for them; every other outcome name is a
 Pluto identifier — the language's own Unicode-aware class, so a target `π`
