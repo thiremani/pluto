@@ -631,7 +631,7 @@ stays outside the router until one is settled (matrix rows 2c and 36). `commit`
 and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
-statement assign_x
+statement assign x
     source "x = a > 0 && data[i] || -1"
 
     execute
@@ -651,7 +651,9 @@ statement assign_x
 ```
 
 The `statement` header carries a display label derived from the targets
-(`assign_a_b`); it is not unique and nothing references it — plans are
+(`assign a, b` — targets comma-separated, since `_` is an identifier
+character and a joined `assign_a_b` could not be read back); it is not
+unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
 identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
 ownership annotations, target types, derived transfers, and derived release

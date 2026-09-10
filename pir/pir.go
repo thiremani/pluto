@@ -109,7 +109,7 @@ type Drop struct {
 // AssignPlan is the execution plan for one assignment statement; prepare and
 // finish phases are absent until carries and collectors land.
 type AssignPlan struct {
-	Label  string // derived from the targets, e.g. assign_x; not unique, never referenced
+	Label  string // derived from the targets, e.g. "assign a, b"; not unique, never referenced
 	Source string // source rendering of the statement
 	Evals  []*Eval
 	Commit []Mapping
