@@ -213,7 +213,6 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 
 	body := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
-	cfg.CodeCompiler.lateInputReads[fn] = body.lateInputReads
 	readInputs, assignedOutputs := body.readInputs, body.assignedOutputs
 
 	for _, input := range fn.Parameters {
@@ -232,14 +231,11 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 }
 
-// templateBody is the structural summary of one template body. lateInputReads
-// names the parameters read in a statement after the first statement that
-// writes an output; reads within that statement precede its writes.
+// templateBody is the structural summary of one template body.
 type templateBody struct {
 	statementReads  [][]VarEvent
 	readInputs      map[string]struct{}
 	assignedOutputs map[string]struct{}
-	lateInputReads  map[string]struct{}
 }
 
 // validateTemplateBody runs structural validation over one template body. A
@@ -250,7 +246,6 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 		statementReads:  make([][]VarEvent, 0, len(statements)),
 		readInputs:      make(map[string]struct{}, len(parameterNames)),
 		assignedOutputs: make(map[string]struct{}, len(outputNames)),
-		lateInputReads:  make(map[string]struct{}),
 	}
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
@@ -261,12 +256,8 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 
 		body.statementReads = append(body.statementReads, reads)
 		for _, event := range reads {
-			if _, isParameter := parameterNames[event.Name]; !isParameter {
-				continue
-			}
-			body.readInputs[event.Name] = struct{}{}
-			if len(body.assignedOutputs) > 0 {
-				body.lateInputReads[event.Name] = struct{}{}
+			if _, isParameter := parameterNames[event.Name]; isParameter {
+				body.readInputs[event.Name] = struct{}{}
 			}
 		}
 		for _, target := range targets {

@@ -470,9 +470,9 @@ count, value`
 		"an input no output can alias must not be copied per iteration")
 }
 
-func TestIterationSnapshotCopiesAliasableInputReadAfterWrite(t *testing.T) {
-	// The heap-string input can back the heap-string output, and the body
-	// reads it after writing that output, so each iteration works on a copy.
+func TestIterationSnapshotCopiesAliasableInput(t *testing.T) {
+	// The heap-string input can back the heap-string output, so each
+	// iteration works on a private copy whatever the statement order.
 	code := `out, seen = FoldStr(current, item)
     out = current ⊕ item
     seen = current`

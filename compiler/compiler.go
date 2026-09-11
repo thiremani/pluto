@@ -69,9 +69,6 @@ type Symbol struct {
 type FuncArgs struct {
 	Inputs      []*Symbol // lowered function inputs (range iterators remain pointer-backed)
 	IterIndices []int     // Indices of iterator params
-	// LateInputs names parameters read after an output write; each scalar
-	// iteration reads a snapshot taken at its start.
-	LateInputs map[string]struct{}
 }
 
 type callArg struct {
@@ -2698,7 +2695,6 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
-		LateInputs:  c.CodeCompiler.lateInputReadsFor(template),
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2912,10 +2908,10 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 // snapshotIterationInputs fixes each non-iterator input for one scalar
 // iteration. An input that aliases an output shares its storage, so a read
 // after the output's write would observe the new value. A direct scalar reads
-// the carried output once here; an indirect input read after an output write
-// keeps a private copy of its value for the iteration, freed with the scope,
-// but only when some output could back it: the caller aliases identical
-// storage types only, so any other input never shares output storage.
+// the carried output once here; an indirect input that some output could back
+// keeps a private copy of its value for the iteration, freed with the scope.
+// The caller aliases identical storage types only, so any other input never
+// shares output storage and is left in place.
 func (c *Compiler) snapshotIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) {
 	for i, param := range fn.Parameters {
 		if slices.Contains(fa.IterIndices, i) {
@@ -2928,10 +2924,7 @@ func (c *Compiler) snapshotIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) 
 			Put(c.Scopes, name, c.directParamValue(name, sym, alias))
 			continue
 		}
-		if _, late := fa.LateInputs[name]; !late || sym.Type.Kind() != PtrKind {
-			continue
-		}
-		if !c.inputCanAliasOutput(fn, sym.Type.(Ptr).Elem) {
+		if sym.Type.Kind() != PtrKind || !c.inputCanAliasOutput(fn, sym.Type.(Ptr).Elem) {
 			continue
 		}
 
