@@ -19,6 +19,11 @@ type, and stored type separately, as the corrected code comment already does.
 
 ## 1. Next compiler PR: seed dependency analysis
 
+Resolved by [PR #102](https://github.com/thiremani/pluto/pull/102), which
+publishes a per-output `SeedEffect` beside `BodyOutputEffects`, records
+`StatementEffect.CalleeReadsSeed` at call sites, and consumes both in the CFG;
+[PIR plan, section 15](./Pluto%20IR%20Plan.md) is the canonical description.
+
 Preserve the existing seeded-output semantics and public ABI. Correct the
 analysis before deciding whether a later language version should change those
 semantics.
@@ -92,27 +97,27 @@ discipline. Unknown analysis must not silently mean no seed reads.
 
 ### Acceptance criteria
 
-- [ ] The reproducer compiles without a redundant print and produces 21; the
+- [x] The reproducer compiles without a redundant print and produces 21; the
   fresh-target variant produces 1.
-- [ ] Unconditional seed-dependent writes remain `MustWrite`, with the old
+- [x] Unconditional seed-dependent writes remain `MustWrite`, with the old
   destination live where needed.
-- [ ] A definite overwrite before any read removes the incoming-seed dependency;
+- [x] A definite overwrite before any read removes the incoming-seed dependency;
   a conditional overwrite does not. Copying the seed to a local first preserves
   the dependency even if the output is subsequently overwritten.
-- [ ] A seed read only in a condition or printed string still counts when the
+- [x] A seed read only in a condition or printed string still counts when the
   output is later unconditionally overwritten. Seed reads are not limited to
   dependencies of the returned value.
-- [ ] Nested calls, recursive summaries, multiple outputs, cross-output seed
+- [x] Nested calls, recursive summaries, multiple outputs, cross-output seed
   reads, and zero/one/many-iteration cases are covered.
-- [ ] Fresh targets, discards, incompatible-storage zero seeds, caller argument
+- [x] Fresh targets, discards, incompatible-storage zero seeds, caller argument
   failure, and caller-side retention keep their existing distinct behavior.
-- [ ] CFG and PIR consume settled solver facts rather than independently
+- [x] CFG and PIR consume settled solver facts rather than independently
   rediscovering dependencies. Existing unused-write diagnostics still work.
-- [ ] Direct and indirect calls preserve staging and alias-input regressions.
+- [x] Direct and indirect calls preserve staging and alias-input regressions.
   Public symbols and prototypes do not change with body effects; every public
   direct scalar return retains its existing hidden seed parameter.
-- [ ] Cold and warm caches agree on summaries, diagnostics, and output.
-- [ ] Effect tests, CFG regression tests, ABI/IR checks, race tests, and relevant
+- [x] Cold and warm caches agree on summaries, diagnostics, and output.
+- [x] Effect tests, CFG regression tests, ABI/IR checks, race tests, and relevant
   leak checks pass. Run the full leak suite before submitting the compiler PR.
 
 ## 2. Formatting: model `%n` as an explicit write operand
@@ -198,7 +203,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; next compiler PR before broadening call routing |
+| Seed/effect correctness | Section 1; resolved by [PR #102](https://github.com/thiremani/pluto/pull/102) |
 | `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
