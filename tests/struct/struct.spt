@@ -1,6 +1,10 @@
 p.name, p.age, p.height
 q.name, q.age, q.height
 r.age, r.height
+s2 = p
+s2.name, s2.age, s2.height
+copiedName = p.name
+copiedName
 "-p"
 p
 p, 99

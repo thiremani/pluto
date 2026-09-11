@@ -87,10 +87,11 @@ func (sc *ScriptCompiler) compileStatements() {
 	for _, stmt := range sc.Program.Statements {
 		if let, isLet := stmt.(*ast.LetStatement); isLet {
 			if plan, planned := c.planLetStatement(let); planned {
+				pir.Elaborate(plan)
 				// An invalid plan is a compiler bug. Panic to recoverICE:
 				// skipping the statement would leave scope state inconsistent
 				// with the solved program for everything after it.
-				if err := pir.Validate(plan); err != nil {
+				if err := pir.Validate(plan, planBindingCompatible); err != nil {
 					panic(fmt.Sprintf("invalid plan for %q: %v", let.String(), err))
 				}
 				sc.Plans = append(sc.Plans, plan)

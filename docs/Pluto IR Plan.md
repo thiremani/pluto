@@ -1,7 +1,7 @@
 # Pluto Statement IR (PIR) Plan
 
-**Status:** Accepted 2026-08-05 — roadmap in §16; implemented through Step 3
-(minimal statement slice)
+**Status:** Accepted 2026-08-05 — roadmap in §16; Steps 1-3 complete, Step 4
+in progress (first slice landed: heap values and ownership elaboration)
 
 **Scope:** A typed, structured execution plan for one Pluto statement
 
@@ -266,7 +266,9 @@ A commit group follows one transfer contract:
 3. Moves, copies, and retained borrows are planned across the whole group.
 4. All mappings take effect simultaneously in Pluto semantics.
 5. Replaced values are released only after no mapped outcome can still
-   reference or consume them.
+   reference or consume them. The implemented schedule is the conservative
+   one — evaluate every outcome, land every mapping, then release what
+   nothing took — not the earliest safe point.
 
 For example, `a, b = b, a`:
 
@@ -564,9 +566,28 @@ names the bound value — `%t0 = eval I64 b`, `%selected = require I64
 while operations that bind no new `%result` (`domain`, `yield`, `collect`,
 `advance`, `commit`, `gate`, `skip`, `continue`, `drop`, among others) print
 no result type, even where, as with `yield`, they produce their region's
-value (§4); a commit mapping reads `target [: Type] <- value`,
-its type shown in the expanded view; square brackets carry declarative
-policies, not executable code. A
+value (§4); a commit mapping reads `target <- value` in the concise view
+and `Type target <- value` in the expanded one — `Str h1 <- %t0`, `[I64]
+arr <- %t0`; square brackets otherwise carry declarative policies, not
+executable code. The expanded view annotates each eval slot's
+ownership — `[owned]`, `[borrowed=h]`, `[unmanaged]`, one per slot in
+order, so a multi-slot eval reads `[unmanaged] [owned]` — appends a
+mapping's
+derived transfer — `[move]`; `[copy]` when the target gets its own owned
+copy, of a borrowed outcome or of an unmanaged value entering a heap-typed
+binding; `[move]` on a borrowed outcome means the target takes the
+owner's old value, the borrow having been promoted to transfer (§8); nothing
+for a plain store — and follows the mappings with the derived releases,
+`drop %t1` for a discarded owned outcome and `drop x [old]` for a
+replaced target's old value, in the order they run (§8). Read the two
+kinds of annotation differently: an eval's states an outcome's ownership
+obligation, not how it was produced — an `[owned]` column read and an
+`[owned]` concatenation both allocated and copied, and the annotation says
+neither — and a mapping's states
+how the destination acquires the value. Assignment always has value
+semantics; a bare store of an unmanaged struct, a `[copy]`, and a `[move]`
+are three implementations of it, and copies made inside an `eval` are not
+shown. A
 `%name` is a plan outcome or binder: builder temporaries are `%t<N>`, with
 `t` followed by digits reserved for them; every other outcome name is a
 Pluto identifier — the language's own Unicode-aware class, so a target `π`
@@ -597,16 +618,21 @@ spelling — `I64`, `[I64]`, `[[I64]]`, `Table[Name:Str Score:I64]` — never th
 symbol mangle, which is neither exact identity (a function mangle omits result
 types; a struct mangle encodes only the nominal name and omits the field
 schema) nor assignment compatibility (`StrG` into `StrH`, an empty-array
-reset). Validation compares this spelling for now; Step 4 replaces that with
-the compiler's directional binding-compatibility relation.
+reset). Validation applies the compiler's directional binding-compatibility
+relation, not this spelling: both string flavours display as `Str`, and
+`StrG` into `StrH` is admitted and shown as a copy.
 
 The renderer covers exactly the node kinds the router admits and rejects any
 other as an ICE, so each step that widens the router adds the renderer and
-golden for its new node kinds. `commit` and `advance` carry no mode keyword:
-both are always simultaneous (§14).
+golden for its new node kinds. An eval operand is always one physical line:
+control characters inside a string literal are escaped (`"line one\nline
+two"`). A block-layout array literal — rank-2 rows, a table — prints on
+several lines and has no one-line spelling for an eval operand yet, so it
+stays outside the router until one is settled (matrix rows 2c and 36). `commit`
+and `advance` carry no mode keyword: both are always simultaneous (§14).
 
 ```text
-statement assign_x
+statement assign x
     source "x = a > 0 && data[i] || -1"
 
     execute
@@ -626,12 +652,17 @@ statement assign_x
 ```
 
 The `statement` header carries a display label derived from the targets
-(`assign_a_b`); it is not unique and nothing references it — plans are
+(`assign a, b` — targets comma-separated, since `_` is an identifier
+character and a joined `assign_a_b` could not be read back); it is not
+unique and nothing references it — plans are
 emitted in source order and have no independently referenceable textual
 identity. Two views: `-emit-pir` is the concise semantic plan; `-emit-pir=expanded` adds
-result shapes, target mappings, access IDs, affine forms, collector and carry
-details, ownership annotations, and derived release points. Compiler temporary
-names and node IDs stay hidden in the concise view.
+ownership annotations, target types, derived transfers, and derived release
+points, and — as the node kinds that vary them arrive — result domains and
+yield shapes (§5), target mappings, access IDs, affine forms, and collector
+and carry details. An annotation that every admitted node would print
+identically is omitted until then. Compiler temporary names and node IDs stay
+hidden in the concise view.
 
 The in-memory tree is authoritative; the text is its rendering. PIR v1 has no
 parser and is never user-authored; add one only if a concrete tooling need
@@ -1151,6 +1182,50 @@ both); suite output is unchanged.
 - The private validity-carrying direct-call variant (§15), so an unwritten
   direct-return result can suppress Step 6's print invocation instead of
   printing its seed.
+
+**First slice landed — heap values and ownership elaboration.** The router
+admits heap value kinds (both string flavours, arrays, tables) and struct
+values from ordinary expressions — string literals, concatenations, inline
+array literals, struct field and table column reads (`DotExpression`) — into
+local and discard targets. The builder annotates every outcome slot
+(`unmanaged` by type, `borrowed` for a binding read, `owned` otherwise) —
+a slot keeps the solver's semantic type — an empty reset reads as
+`[Empty]` and may still reset a `[F64]` binding — while its ownership
+follows the binding's **effective storage**, the type of the value held
+now: after `text = "old"` the read solves as a static string while the
+binding stores a materialized heap copy, and a heap value moved, copied, or
+transferred into a binding declared static keeps its flavor, so that
+binding holds heap state its declared type does not show — and every local
+target with its merged target type (`TypeOwnsHeap`: that type requires
+heap cleanup, so an unmanaged value stored here is copied), whether it
+is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
+replacement must take or release it), read from the same effective storage;
+`pir.Elaborate` derives each mapping's transfer (move, copy — a moved
+borrow is the promoted transfer of §8) and the statement-exit releases — a heap transfer
+into a binding declared non-owning is legal and leaves it holding heap
+state, which the next statement's plan reads back; `Validate` checks
+every decision and applies the compiler's directional binding-compatibility
+relation; the lowerer implements the recorded transfers and releases and
+decides nothing; a plan lowered wrongly is the leak-checked suite's to
+catch, the runtime backstop §8 names. The transitive case —
+transfer a widened binding into another, then read and replace the second —
+is pinned end to end in `tests/mem/mem.spt` for strings and for an
+empty-array reset. Heap swaps show two transfers and zero copies, a duplicate
+source is taken once and copied once, and heap/struct/table copies, field
+and column reads, and heap discards are pinned by goldens in
+`compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
+**Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
+rows 2c and 36) once an eval-operand spelling exists; field and column
+reads of a widened binding (a header-only table holding a concrete schema),
+whose lowered value follows the effective schema rather than the solved
+type and so stay legacy — the follow-up resolves the column's ownership
+against the receiver's effective schema, as identifier reads already do,
+once `compileDotExpression` types the column by that schema as well; calls and multi-output outcomes
+with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
+`output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
+needs an outcome-referencing operand; the `unique` annotation and consuming
+promotion, which have no in-place consumer before Step 7's carried append;
+and the validity-carrying direct-call variant.
 
 ### Step 5: Checked accesses and OOB scope (~1-2 weeks)
 

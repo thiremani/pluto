@@ -106,6 +106,7 @@ scores =
 "table: -scores"
 scoreColumn = scores.Score
 "table scores: -scoreColumn"
+savedScores = scores
 scores =
 [
   : Name Score
@@ -113,6 +114,7 @@ scores =
 ]
 "replacement table: -scores"
 "saved table scores: -scoreColumn"
+"saved table: -savedScores"
 
 emptyArray = []
 "empty array: -emptyArray"

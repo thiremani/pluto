@@ -47,24 +47,24 @@ func emitPIRTestPlans() []*pir.AssignPlan {
 	i64 := pirTestType("I64")
 	return []*pir.AssignPlan{
 		{
-			Label:  "assign_x",
+			Label:  "assign x",
 			Source: "x = 5",
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "5"}, Value: 5},
-				Types:  []pir.Type{i64},
+				Slots:  []pir.Slot{{Type: i64}},
 			}},
 			Commit: []pir.Mapping{{
 				Target: pir.Target{Kind: pir.LocalTarget, Name: "x", Type: i64},
 			}},
 		},
 		{
-			Label:  "assign_y",
+			Label:  "assign y",
 			Source: "y = x",
 			Evals: []*pir.Eval{{
 				Result: 0,
 				Expr:   &ast.Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
-				Types:  []pir.Type{i64},
+				Slots:  []pir.Slot{{Type: i64}},
 			}},
 			Commit: []pir.Mapping{{
 				Target: pir.Target{Kind: pir.LocalTarget, Name: "y", Type: i64},
@@ -100,7 +100,7 @@ func TestEmitPIRWriteFailure(t *testing.T) {
 	plans := []*pir.AssignPlan{emitPIRTestPlans()[0], emitPIRTestPlans()[0]}
 	plans[1].Source = "x = 6"
 	err := emitPIR(&failingWriter{writesLeft: 1}, plans, parsedEmitPIRMode(t, "-emit-pir"))
-	require.ErrorContains(t, err, `write PIR plan 2 assign_x "x = 6"`)
+	require.ErrorContains(t, err, `write PIR plan 2 assign x "x = 6"`)
 }
 
 func TestEmitPIRDisabled(t *testing.T) {
@@ -113,7 +113,7 @@ func TestEmitPIRDisabled(t *testing.T) {
 func TestEmitPIRConcise(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, emitPIRTestPlans(), parsedEmitPIRMode(t, "-emit-pir")))
-	require.Equal(t, `statement assign_x
+	require.Equal(t, `statement assign x
     source "x = 5"
 
     execute
@@ -122,7 +122,7 @@ func TestEmitPIRConcise(t *testing.T) {
     commit
         x <- %t0
 
-statement assign_y
+statement assign y
     source "y = x"
 
     execute
@@ -134,18 +134,18 @@ statement assign_y
 `, out.String())
 }
 
-// Plan §12: expanded view adds shapes, ownership, and target types.
+// Plan §12: expanded view adds ownership and target types.
 func TestEmitPIRExpanded(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, emitPIR(&out, emitPIRTestPlans()[:1], parsedEmitPIRMode(t, "-emit-pir=expanded")))
-	require.Equal(t, `statement assign_x
+	require.Equal(t, `statement assign x
     source "x = 5"
 
     execute
-        %t0 = eval I64 5 [shape=scalar] [yield=always] [unmanaged]
+        %t0 = eval I64 5 [unmanaged]
 
     commit
-        x : I64 <- %t0
+        I64 x <- %t0
 
 `, out.String())
 }
