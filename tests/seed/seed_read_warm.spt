@@ -1,0 +1,14 @@
+# Compiled after seed_read.spt in the same run, so every callee is already
+# settled and its seed facts are replayed from the shared cache.
+seeded = 20
+seeded = MaybeIncrement(-1)
+"WarmSeeded: -seeded"
+nested = 20
+nested = Outer(-1)
+"WarmNested: -nested"
+many = 20
+many = AccRange(0:3)
+"WarmMany: -many"
+tag = "hi"
+tag = MaybeTag(-1, "x")
+"WarmTag: -tag"

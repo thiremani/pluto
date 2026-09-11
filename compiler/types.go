@@ -284,8 +284,12 @@ type FuncInfo struct {
 	// BodyOutputEffects summarizes the typed scalar body before a call-owned
 	// Range or ArrayRange domain determines whether that body executes.
 	BodyOutputEffects []WriteEffect
-	CFGResult         *SpecializationCFGResult
-	Settled           bool
+	// BodySeedEffects records, per output, whether that body may read the
+	// output's incoming value before definitely replacing it. It is published
+	// together with BodyOutputEffects; the two facts are independent.
+	BodySeedEffects []SeedEffect
+	CFGResult       *SpecializationCFGResult
+	Settled         bool
 }
 
 func (f *FuncInfo) AllTypesInferred() bool {

@@ -376,6 +376,15 @@ func (cfg *CFG) typedStatementEvents(stmt ast.Statement, reads []VarEvent, effec
 		}
 		events = append(events, VarEvent{Name: target.Value, Kind: Read, Token: target.Tok()})
 	}
+	// A callee that reads its seed observes an existing destination. A fresh
+	// destination supplies a zero seed, so there is nothing to read.
+	for _, targetIndex := range effect.CalleeReadsSeed {
+		target := let.Name[targetIndex]
+		if !cfg.isDefined(target.Value) {
+			continue
+		}
+		events = append(events, VarEvent{Name: target.Value, Kind: Read, Token: target.Tok()})
+	}
 	for _, write := range effect.Writes {
 		target := let.Name[write.TargetIndex]
 		var kind EventType

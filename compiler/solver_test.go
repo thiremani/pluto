@@ -77,6 +77,7 @@ x, y`
 	isEvenFunc := newFunc(call.Function.Value, args, template)
 	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
 	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
+	require.Equal(t, []SeedEffect{SeedUncomputed, SeedUncomputed}, isEvenFunc.BodySeedEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
 	ts.Converging = false
@@ -112,6 +113,8 @@ x, y`
 	require.True(t, isOddFunc.Settled)
 	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isEvenFunc.BodyOutputEffects)
 	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isOddFunc.BodyOutputEffects)
+	require.Equal(t, []SeedEffect{NoSeedRead, NoSeedRead}, isEvenFunc.BodySeedEffects)
+	require.Equal(t, []SeedEffect{NoSeedRead, NoSeedRead}, isOddFunc.BodySeedEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)

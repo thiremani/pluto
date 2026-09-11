@@ -849,11 +849,14 @@ consume the raw, validity-carrying result and see the skip.
 Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
 *existing* target whose direct callee output is `MayWrite`, resolved at `=`.
-A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee reads nothing. Step 2A records this as a `ReadsSeed`
-fact on the call site — the CFG is untouched in 2A — and Step 2B converts the
-fact into an ordinary CFG read event, so a `MustWrite` classification cannot
-let backward liveness kill the prior value.
+A fresh destination, a discard, or a nested or targetless call resolves
+nothing at the boundary. An all-`MustWrite` callee needs no boundary
+resolution either, but its body may still read the seed; that is the separate
+`SeedEffect` fact below, and the two must not be conflated. Step 2A records
+boundary resolution as a `ReadsSeed` fact on the call site — the CFG is
+untouched in 2A — and Step 2B converts the fact into an ordinary CFG read
+event, so a `MustWrite` classification cannot let backward liveness kill the
+prior value.
 
 The validity-carrying result comes from a **private direct-call variant**
 behind the stable seeded entry point (§1). The clone **keeps the seed
@@ -874,6 +877,47 @@ The variant lands in Step 4; letting print treat a resolved seed as always
 yielded was rejected, since an unwritten output would then print stale data
 instead of suppressing the invocation.
 
+### SeedEffect
+
+`SeedEffect` records, per declared output, whether the scalar body can read
+that output's **incoming value** before definitely replacing it: `NoSeedRead`
+or `MaySeedRead`, with `Uncomputed` and `Invalid` as publication states
+outside the lattice. It is independent of `WriteEffect`. `y = x > 0 x` then
+`y = y + 1` is `MustWrite` and `MaySeedRead`: the last statement always
+writes, but its value depends on the seed, so `a = 20` followed by that call
+must print 21 and compile without an intervening read. `y = x` then
+`y = y + 1` is `MustWrite` and `NoSeedRead`: the definite overwrite comes
+first. A conditionally writing body may inspect its seed or leave preservation
+entirely to the caller; `MayWrite` alone says nothing about which.
+
+Three facts stay separate, each with its own consumer:
+
+| Fact | Question | Where |
+| --- | --- | --- |
+| Body write effect | Does this output receive a body-produced value whenever the scalar body runs? | `BodyOutputEffects`; yield propagation and call routing |
+| Seed-read dependency | Can the body read this output's incoming value before it is definitely replaced? | `BodySeedEffects`; caller liveness and future scheduling |
+| Boundary resolution | Does this assignment use its existing destination to resolve a non-writing direct result? | `StatementEffect.ReadsSeed`; keep-old at `=` |
+
+The body fold is order-sensitive. Explicit reads — conditions, values, print
+arguments, and resolved formatting markers with their dynamic width and
+precision operands — and implicit reads through a callee whose output is
+`MaySeedRead` happen before the statement's writes. An output stops being
+observable once a raw `MustWrite` replaces it; a boundary-resolved write only
+preserves the seed and replaces nothing. The fact is sticky: copying the seed
+to a local before the overwrite keeps the dependency, as does a read only in a
+condition or a printed string. Reads feeding another output count, so
+`a, b = F(x)` with `b = a + 1` before `a = x` reads `a`'s seed. A
+function-owned `Range` domain needs no special case: the first iteration is
+the body, and a zero-iteration call is already resolved at the boundary.
+
+At a call site the callee's fact composes into `StatementEffect.CalleeReadsSeed`
+for every named target, whatever the ABI: an indirect output reads its
+destination-seeded staging slot exactly as a direct return reads its hidden
+seed parameter. Only boundary resolution is direct-ABI specific. A fresh
+destination supplies a zero seed, so the CFG emits a read only for a defined
+binding, while the enclosing body's fold treats a call at a not-yet-replaced
+output as a read of that output.
+
 ### Convergence and publication
 
 **Folding a body into an output summary.** A declared output's body summary is
@@ -886,8 +930,10 @@ destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
 an earlier value does not prove that the body wrote one. The published
 `BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
 `ArrayRange` parameter controls whether
-the scalar body executes, not what the body does when it executes. Each call
-combines that reusable body summary with its solved domain. A provably
+the scalar body executes, not what the body does when it executes. The seed
+fold runs beside the write fold over the same statement effects, and the two
+summaries publish together as `BodyOutputEffects` and `BodySeedEffects`. Each
+call combines that reusable body summary with its solved domain. A provably
 non-empty literal can therefore preserve `MustWrite`, while an empty or unknown
 domain weakens the call to `MayWrite`. A range created *inside* the body still
 weakens only the outputs its statements drive — a possibly empty local range
@@ -934,17 +980,20 @@ them **callee-first** in reverse topological order — this is what lets a
 component assume every callee outside it has already published. Within one
 component:
 
-1. Seed every member's outputs with a provisional `MustWrite` working vector. A
-   recursive call reads that provisional value — which is why `Uncomputed`
-   cannot be a lattice element, as there would be nothing to read.
+1. Seed every member's outputs with provisional `MustWrite` and `NoSeedRead`
+   working vectors. A recursive call reads those provisional values — which is
+   why `Uncomputed` cannot be a lattice element, as there would be nothing to
+   read.
 2. Iterate the component, recomputing outputs from rebuilt statement effects
    and callees' current values. Callees outside the component contribute their
    published summaries.
-3. Weaken monotonically, `MustWrite → MayWrite` only. The working vector
-   **persists across body walks** within the component; it is not cleared with
+3. Move monotonically toward the conservative side only: `MustWrite →
+   MayWrite` and `NoSeedRead → MaySeedRead`. Either change requeues the
+   member's callers within the component. The working vectors **persist across
+   body walks** within the component; they are not cleared with
    `FuncInfo.Vars`.
-4. Stop when nothing changes — at most one weakening per slot.
-5. Publish one coherent snapshot for the whole component at once.
+4. Stop when nothing changes — at most one change per slot and fact.
+5. Publish one coherent snapshot of both facts for the whole component at once.
 
 An `Invalid` output blocks publication for its entire component; provisional
 values are never read outside it.
@@ -980,8 +1029,9 @@ width/precision variables on a resolved marker remain structural errors.
 After a stable specialization batch reaches its effect SCC fixed point, each
 node runs effect-sensitive CFG dataflow exactly once and caches its diagnostics.
 For a let, event order is condition reads, RHS reads, `ReadsSeed` destination
-reads, then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
-therefore observe the simultaneous assignment's pre-commit snapshot. Print
+reads, `CalleeReadsSeed` destination reads for defined bindings, then sparse
+`StatementEffect.Writes` mapped by `TargetIndex`; all reads therefore observe
+the simultaneous assignment's pre-commit snapshot. Print
 arguments contribute ordinary reads even though prints have no statement
 effect entry. An unreachable template gets structural and parser checks only:
 effects cannot be derived without types. Consequently, a library-only package
@@ -998,8 +1048,9 @@ The two diagnostics consume effects differently:
   value requires **both** writes to be `MustWrite`. This cures the former
   conditional-write false positive that forced tests to interleave reads merely
   to silence it. A prior seed overwritten by a proven-`MustWrite` call output
-  without being read is instead a true positive: remove the seed or read it
-  explicitly when its value is semantically required.
+  that neither the caller nor the callee body reads is instead a true
+  positive: remove the seed or read it explicitly when its value is
+  semantically required.
 
 After a script solve succeeds, CFG first treats the script as a zero-input,
 zero-output template for structural validation, then runs effect-sensitive

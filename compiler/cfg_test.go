@@ -142,6 +142,48 @@ func getValidTestCases() []cfgTestCase {
 			name:  "Failable Value Protects Only Its Own Destination",
 			input: "x = 7\na = 10\na, b = x < 5, 30\na, b",
 		},
+		{
+			// The callee always writes, but its value depends on the incoming
+			// seed, so the prior value is read rather than overwritten.
+			name: "Seed Dependent Call Reads Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1`,
+			input: "x = 20\nx = maybeIncrement(-1)\nx",
+		},
+		{
+			// The dependency composes through a wrapper whose only statement
+			// forwards the output to a seed-reading callee.
+			name: "Nested Seed Dependent Call Reads Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = outer(x)
+    res = maybeIncrement(x)`,
+			input: "x = 20\nx = outer(-1)\nx",
+		},
+		{
+			// Inside a body, the inner call reads the reset value, which keeps
+			// that unconditional write live.
+			name: "Reset Before Seed Dependent Call Inside Body",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = resetThenIncrement(x)
+    res = 0
+    res = maybeIncrement(x)`,
+			input: "x = resetThenIncrement(-1)\nx",
+		},
+		{
+			// An indirect output reads its destination-seeded staging slot.
+			name: "Indirect Seed Dependent Call Reads Prior Value",
+			code: `s = maybeTag(n, t)
+    s = n > 0 t
+    s = s ⊕ "!"`,
+			input: "w = \"hi\"\nw = maybeTag(-1, \"x\")\nw",
+		},
 	}
 }
 
@@ -209,6 +251,39 @@ func getErrorTestCases() []cfgTestCase {
     res = x * 2`,
 			input:         "x = 7\nx = alwaysWrite(0:2)\nx",
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// A definite overwrite before the read removes the seed dependency,
+			// so the prior value really is unused.
+			name: "Overwrite Before Seed Read Still Overwrites Prior Value",
+			code: `res = overwrite(x)
+    res = x
+    res = res + 1`,
+			input:         "x = 7\nx = overwrite(3)\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// The nested read observes the reset, never the caller's value.
+			name: "Reset Before Nested Seed Read Overwrites Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = resetThenIncrement(x)
+    res = 0
+    res = maybeIncrement(x)`,
+			input:         "x = 7\nx = resetThenIncrement(-1)\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// A fresh destination supplies a zero seed; the callee's read does
+			// not make the result used.
+			name: "Fresh Seed Dependent Result Is Unused",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1`,
+			input:         "x = maybeIncrement(-1)",
+			errorContains: `value assigned to "x" is never used`,
 		},
 		{
 			// A || yields whenever its final fallback does, so the resolver

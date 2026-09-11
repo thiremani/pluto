@@ -1,0 +1,36 @@
+seeded = 20
+seeded = MaybeIncrement(-1)
+"Seeded: -seeded"
+fresh = MaybeIncrement(-1)
+"Fresh: -fresh"
+written = 20
+written = MaybeIncrement(5)
+"Written: -written"
+nested = 20
+nested = Outer(-1)
+"Nested: -nested"
+reset = ResetThenIncrement(-1)
+"Reset: -reset"
+crossA = 20
+crossA, crossB = Cross(-1)
+"Cross: -crossA -crossB"
+printed = 20
+printed = Printed(-1)
+"Printed: -printed"
+zero = 20
+zero = AccRange(0:0)
+"Zero: -zero"
+one = 20
+one = AccRange(0:1)
+"One: -one"
+many = 20
+many = AccRange(0:3)
+"Many: -many"
+manyFresh = AccRange(0:3)
+"ManyFresh: -manyFresh"
+tag = "hi"
+tag = MaybeTag(-1, "x")
+"Tag: -tag"
+tagWritten = "hi"
+tagWritten = MaybeTag(1, "x")
+"TagWritten: -tagWritten"

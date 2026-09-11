@@ -1,0 +1,31 @@
+# A body whose last statement always writes can still depend on the incoming
+# output seed. Each caller below assigns such a call over an existing value
+# without reading it first; the analysis keeps that value live.
+y = MaybeIncrement(x)
+    y = x > 0 x
+    y = y + 1
+
+y = Outer(x)
+    y = MaybeIncrement(x)
+
+y = ResetThenIncrement(x)
+    y = 0
+    y = MaybeIncrement(x)
+
+a, b = Cross(x)
+    a = x > 0 x
+    b = a + 1
+    a = x
+
+y = Printed(x)
+    y = x > 0 x
+    "inside -y"
+    y = x
+
+y = AccRange(r)
+    y = r > 5 r
+    y = y + r
+
+s = MaybeTag(n, t)
+    s = n > 0 t
+    s = s ⊕ "!"

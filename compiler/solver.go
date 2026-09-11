@@ -2468,6 +2468,7 @@ func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInf
 		Vars:              make(map[string]Type),
 		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
 		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
+		BodySeedEffects:   slices.Repeat([]SeedEffect{SeedUncomputed}, len(template.Outputs)),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
