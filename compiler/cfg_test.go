@@ -276,6 +276,18 @@ res = resetThenIncrement(x)
 			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
 		},
 		{
+			// A heap destination cannot seed a static-string output: the
+			// callee's staging slot gets an ABI-typed zero seed, so the
+			// destination's value is never observed and the overwrite is real.
+			name: "Incompatible Storage Seed Does Not Reach Callee",
+			code: `s = readStatic(n)
+    s = n > 0 "x"
+    "seen <-s>"
+    s = "done"`,
+			input:         "value = \"never\" ⊕ \"read\"\nvalue = readStatic(0)\nvalue",
+			errorContains: `unconditional assignment to "value" overwrites a previous value that was never used`,
+		},
+		{
 			// A fresh destination supplies a zero seed; the callee's read does
 			// not make the result used.
 			name: "Fresh Seed Dependent Result Is Unused",

@@ -911,9 +911,14 @@ function-owned `Range` domain needs no special case: the first iteration is
 the body, and a zero-iteration call is already resolved at the boundary.
 
 At a call site the callee's fact composes into `StatementEffect.CalleeReadsSeed`
-for every named target, whatever the ABI: an indirect output reads its
-destination-seeded staging slot exactly as a direct return reads its hidden
-seed parameter. Only boundary resolution is direct-ABI specific. A fresh
+whatever the ABI, but only when the seed reaches the callee: an indirect
+output reads its destination-seeded staging slot exactly as a direct return
+reads its hidden seed parameter, and lowering seeds that slot from the
+destination only when the two storage types are identical
+(`makeCallOutputAdapters`). A mismatched flavor — a `StrH` destination for a
+`StrG` output, say — gets an ABI-typed zero seed, so the callee never observes
+the destination's value and no read is recorded; the prior value stays an
+overwrite candidate. Only boundary resolution is direct-ABI specific. A fresh
 destination supplies a zero seed, so the CFG emits a read only for a defined
 binding, while the enclosing body's fold treats a call at a not-yet-replaced
 output as a read of that output.

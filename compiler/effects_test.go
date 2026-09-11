@@ -821,3 +821,36 @@ existing, empty, fresh`)
 	require.Empty(t, fresh.ReadsSeed)
 	require.Equal(t, []int{0}, fresh.CalleeReadsSeed)
 }
+
+func TestCalleeSeedReadRequiresCompatibleStorage(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "storageSeedEffects", "", mustParseCode(t, `s = ReadStatic(n)
+    s = n > 0 "x"
+    "seen <-s>"
+    s = "done"`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `static = "hi"
+static = ReadStatic(0)
+heap = "never" ⊕ "read"
+heap = ReadStatic(0)
+static, heap`)
+
+	requireBodyEffects(t, cc, "ReadStatic", []WriteEffect{MustWrite}, []SeedEffect{MaySeedRead})
+
+	// A static destination shares the callee's storage, so its value seeds
+	// the callee's staging slot and is read there.
+	static := scriptStatementEffect(t, ts, 1)
+	requireTargetEffects(t, static, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Empty(t, static.ReadsSeed)
+	require.Equal(t, []int{0}, static.CalleeReadsSeed)
+
+	// A heap destination gets an ABI-typed zero seed instead, so nothing of
+	// the destination reaches the callee and no read is recorded.
+	heap := scriptStatementEffect(t, ts, 3)
+	requireTargetEffects(t, heap, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
+	require.Empty(t, heap.ReadsSeed)
+	require.Empty(t, heap.CalleeReadsSeed)
+}

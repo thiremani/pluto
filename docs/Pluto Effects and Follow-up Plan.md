@@ -111,8 +111,10 @@ discipline. Unknown analysis must not silently mean no seed reads.
   reads, and zero/one/many-iteration cases are covered.
 - [x] Fresh targets, discards, incompatible-storage zero seeds, caller argument
   failure, and caller-side retention keep their existing distinct behavior.
-- [x] CFG and PIR consume settled solver facts rather than independently
+- [ ] CFG and PIR consume settled solver facts rather than independently
   rediscovering dependencies. Existing unused-write diagnostics still work.
+  PR #102 covers the CFG; PIR does not route calls yet, so its consumption of
+  `BodySeedEffects`/`CalleeReadsSeed` is owed by Step 4 call routing.
 - [x] Direct and indirect calls preserve staging and alias-input regressions.
   Public symbols and prototypes do not change with body effects; every public
   direct scalar return retains its existing hidden seed parameter.

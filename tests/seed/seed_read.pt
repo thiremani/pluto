@@ -29,3 +29,8 @@ y = AccRange(r)
 s = MaybeTag(n, t)
     s = n > 0 t
     s = s ⊕ "!"
+
+s = ReadStatic(n)
+    s = n > 0 "x"
+    "seen <-s>"
+    s = "done"

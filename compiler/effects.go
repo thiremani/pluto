@@ -100,11 +100,11 @@ type TargetWriteEffect struct {
 // StatementEffect contains the target facts derived for one assignment.
 // ReadsSeed holds LHS indices whose existing value resolves a direct MayWrite
 // callee output at the assignment boundary; such a write preserves a value
-// rather than producing one. CalleeReadsSeed holds LHS indices whose incoming
-// value the callee body itself may read before definitely replacing it,
-// whatever the write effect. It is recorded for every named target because a
-// fresh destination supplies a zero seed: consumers decide whether an
-// existing value is involved.
+// rather than producing one. CalleeReadsSeed holds LHS indices whose value the
+// callee body itself may read before definitely replacing it, whatever the
+// write effect: the callee may read its seed and the destination's storage
+// lets that seed reach it. A fresh destination still supplies a zero seed, so
+// consumers decide whether an existing value is involved.
 type StatementEffect struct {
 	Writes          []TargetWriteEffect
 	ReadsSeed       []int
@@ -463,21 +463,45 @@ func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpres
 	return false
 }
 
-// calleeSeedEffects returns the callee's per-output seed facts for a resolved
-// call and nil for every other expression, which reads no destination. An
-// unpublished fact is an ICE: unknown analysis must not mean no seed reads.
-func (analyzer *effectAnalyzer) calleeSeedEffects(expr ast.Expression) []SeedEffect {
+// calleeReadsSeed reports whether a resolved call's callee may read the
+// destination of one output slot. Only a call reads a destination, and an
+// unpublished seed fact is an ICE: unknown analysis must not mean no seed
+// reads. The read composes only when the seed reaches the callee. Lowering
+// seeds an indirect output's staging slot from the destination only when the
+// two storage types are identical (makeCallOutputAdapters); a mismatched
+// flavor gets an ABI-typed zero seed, so the callee never observes the
+// destination's value. A direct scalar return always matches its destination.
+func (analyzer *effectAnalyzer) calleeReadsSeed(expr ast.Expression, slot int, target string) bool {
 	call, ok := expr.(*ast.CallExpression)
-	if !ok || !typesResolved(analyzer.exprInfo(call).OutTypes) {
-		return nil
+	if !ok {
+		return false
+	}
+
+	info := analyzer.exprInfo(call)
+	if !typesResolved(info.OutTypes) {
+		return false
 	}
 
 	seeds := analyzer.callBodyEffects(call).seeds
-	if !validPublishedSeedEffects(seeds, len(analyzer.exprInfo(call).OutTypes)) {
+	if !validPublishedSeedEffects(seeds, len(info.OutTypes)) {
 		panic(fmt.Sprintf("internal: call %s has unpublished seed effects %v", call.Function.Value, seeds))
 	}
+	if seeds[slot] != MaySeedRead {
+		return false
+	}
 
-	return seeds
+	return TypeEqual(analyzer.bindingSlotType(target), info.OutTypes[slot])
+}
+
+// bindingSlotType returns the solver's slot type for a named target, the
+// same authority lowering's destSlotType consults for an assignment.
+func (analyzer *effectAnalyzer) bindingSlotType(name string) Type {
+	slotType, recorded := analyzer.compiler.FuncCache[analyzer.funcNameMangled].Vars[name]
+	if !recorded {
+		panic(fmt.Sprintf("internal: target %s of %s has no recorded slot type", name, analyzer.funcNameMangled))
+	}
+
+	return slotType
 }
 
 func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, initiallyDefined map[string]struct{}) map[*ast.LetStatement]StatementEffect {
@@ -521,7 +545,6 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 	for _, expr := range stmt.Value {
 		yields := analyzer.deriveExpr(expr)
 		maySkip := len(stmt.Condition) > 0 || analyzer.expressionUsesLocalDomain(expr)
-		calleeSeeds := analyzer.calleeSeedEffects(expr)
 
 		for slot, yield := range yields {
 			index := targetIndex
@@ -536,7 +559,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 				result.ReadsSeed = append(result.ReadsSeed, index)
 				yield = seededYield
 			}
-			if calleeSeeds != nil && calleeSeeds[slot] == MaySeedRead {
+			if analyzer.calleeReadsSeed(expr, slot, target.Value) {
 				result.CalleeReadsSeed = append(result.CalleeReadsSeed, index)
 			}
 			result.Writes = append(result.Writes, TargetWriteEffect{

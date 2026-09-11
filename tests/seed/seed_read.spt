@@ -34,3 +34,10 @@ tag = MaybeTag(-1, "x")
 tagWritten = "hi"
 tagWritten = MaybeTag(1, "x")
 "TagWritten: -tagWritten"
+static = "hi"
+static = ReadStatic(0)
+"Static: -static"
+heap = "never" ⊕ "read"
+heap
+heap = ReadStatic(0)
+"Heap: -heap"

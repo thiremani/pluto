@@ -12,3 +12,8 @@ Many: 23
 ManyFresh: 3
 Tag: hi!
 TagWritten: x!
+seen <hi>
+Static: done
+neverread
+seen <>
+Heap: done
