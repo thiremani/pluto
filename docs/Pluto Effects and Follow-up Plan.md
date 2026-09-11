@@ -19,8 +19,8 @@ type, and stored type separately, as the corrected code comment already does.
 
 ## 1. Next compiler PR: seed dependency analysis
 
-Resolved by a language rule instead of an analysis (branch
-`feat-write-only-outputs`, superseding the closed
+Resolved by a language rule instead of an analysis
+([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
 [PR #102](https://github.com/thiremani/pluto/pull/102)): declared outputs are
 write-only inside their template, so a body can never observe its incoming
 seed and the reproducer below is rejected at `y = y + 1`. The hidden seed and
@@ -31,8 +31,10 @@ aliased to a destination reads the previous iteration's output rather than the
 current iteration's write. The canonical description is in
 [the memory model](./Pluto%20Memory%20Model.md) under "Parameters and Outputs".
 
-Still open from the same review: a call argument is specialized on the
-binding's flow type at the call, while its storage uses the merged slot type.
+Still open from the same review, filed as
+[issue #103](https://github.com/thiremani/pluto/issues/103): a call argument is
+specialized on the binding's flow type at the call, while its storage uses the
+merged slot type.
 `s = "a"` followed by `s, prev = FoldStr(s, "b")`, where `FoldStr` writes
 `out = current ⊕ item` and `seen = current`, prints an empty `prev`, and a
 static destination used as a ranged accumulator does not feed back across
@@ -215,7 +217,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the write-only-outputs rule on `feat-write-only-outputs`; flow-versus-slot call specialization still open |
+| Seed/effect correctness | Section 1; resolved by the write-only-outputs rule in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
 | `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
