@@ -10,8 +10,7 @@ res = BiasAndScale(x, bias, scale)
     res = tmp * scale
 
 res = Rebuild(vec, i)
-    res = [i + 1]
-    res = res + vec
+    res = [i + 1] + vec
 
 res = PairSum(i, j)
     res = i + j

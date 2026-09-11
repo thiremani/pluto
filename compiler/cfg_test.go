@@ -142,6 +142,28 @@ func getValidTestCases() []cfgTestCase {
 			name:  "Failable Value Protects Only Its Own Destination",
 			input: "x = 7\na = 10\na, b = x < 5, 30\na, b",
 		},
+		{
+			// Writing an output twice never reads it, and a call may target it.
+			name: "Output Rewritten And Targeted By Nested Call",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+res = refine(x)
+    res = x
+    res = x > 5 x * x
+    res = maybe(x)`,
+			input: "x = refine(3)\nx",
+		},
+		{
+			// Intermediate values live in locals; the caller may still reuse a
+			// variable as both argument and destination.
+			name: "Local Accumulator Feeds Output",
+			code: `res = accumulate(a, x)
+    total = a + x
+    total = total * 2
+    res = total`,
+			input: "x = 7\nx = accumulate(x, 3)\nx",
+		},
 	}
 }
 
@@ -235,6 +257,77 @@ func getErrorTestCases() []cfgTestCase {
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
 			errorContains: `undefined identifier: x`,
+		},
+		{
+			// The seed-dependent body from the effects plan is rejected at the
+			// read, not silently resolved at the caller.
+			name: "Output Read After Conditional Write",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1`,
+			input:         "x = maybeIncrement(-1)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Output Read After Definite Write",
+			code: `res = overwrite(x)
+    res = x
+    res = res + 1`,
+			input:         "x = overwrite(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Output Read In Condition",
+			code: `res = gated(x)
+    res = x
+    res = res > 5 x * x`,
+			input:         "x = gated(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Output Read As Call Argument",
+			code: `res = id(x)
+    res = x
+
+res = forwarded(x)
+    res = x
+    res = id(res)`,
+			input:         "x = forwarded(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Output Read By Print",
+			code: `res = printed(x)
+    res = x
+    res`,
+			input:         "x = printed(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			// A marker naming an output is a read even before any assignment,
+			// where it would otherwise pass as literal text.
+			name: "Output Read By Format Marker",
+			code: `res = marked(x)
+    "seed -res"
+    res = x`,
+			input:         "x = marked(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Output Read By Dynamic Width",
+			code: `res = widened(x)
+    res = x
+    "-x%(-res)d"`,
+			input:         "x = widened(3)\nx",
+			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+		},
+		{
+			name: "Sibling Output Read",
+			code: `a, b = cross(x)
+    a = x
+    b = a + 1`,
+			input:         "p, q = cross(3)\np, q",
+			errorContains: `output "a" is read inside its function; outputs are write-only, use a local`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",
@@ -764,7 +857,7 @@ res = readFirst(x)
     res = x * 2
 `,
 			wantMsgs: []string{
-				`variable "res" has not been defined`, // or your specific "use before definition" text
+				`output "res" is read inside its function; outputs are write-only, use a local`,
 			},
 		},
 		{

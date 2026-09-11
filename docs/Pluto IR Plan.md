@@ -850,10 +850,14 @@ Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
 *existing* target whose direct callee output is `MayWrite`, resolved at `=`.
 A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee reads nothing. Step 2A records this as a `ReadsSeed`
-fact on the call site — the CFG is untouched in 2A — and Step 2B converts the
-fact into an ordinary CFG read event, so a `MustWrite` classification cannot
-let backward liveness kill the prior value.
+all-`MustWrite` callee reads nothing. That last case holds by construction:
+declared outputs are write-only inside their template (the structural CFG
+rejects every read, including formatting markers), so a body can never observe
+its incoming seed and the seed stays an unobservable keep-old carrier. Step 2A
+records boundary resolution as a `ReadsSeed` fact on the call site — the CFG
+is untouched in 2A — and Step 2B converts the fact into an ordinary CFG read
+event, so a `MustWrite` classification cannot let backward liveness kill the
+prior value.
 
 The validity-carrying result comes from a **private direct-call variant**
 behind the stable seeded entry point (§1). The clone **keeps the seed

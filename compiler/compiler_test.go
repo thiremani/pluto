@@ -435,23 +435,22 @@ out = Echo(value)
 // slot by pointer. Opaque pointers make a mistyped pointer select valid IR and
 // the selector never matches the skipped index at runtime, so only the emitted
 // slot selects distinguish this path.
-func TestPromotedAliasTypeGap(t *testing.T) {
+func TestIterationSnapshotSelectsCompatibleOutput(t *testing.T) {
 	code := `half, res = Rev(a, x)
-    "count-a%n chars"
     half = x * 0.5
     res = a + x`
 	script := `r = 10
 h, r = Rev(r, 1:4)
 h, r`
 
-	ir, _ := compileScriptAndCodeIR(t, "pointer_promotion_gap", code, script)
+	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_gap", code, script)
 
-	require.Regexp(t, `%a_alias_1 = icmp eq i32 %\d+, 2`, ir,
+	require.Regexp(t, `%a_alias_match_1 = icmp eq i32 %\d+, 2`, ir,
 		"the compatible output is the second one, so its ABI selector value must be 2")
-	require.Contains(t, ir, "%a_slot_1 = select i1 %a_alias_1, ptr %res_dest, ptr %a",
-		"selector 2 must choose the caller's res destination, falling back to the parameter spill")
-	require.NotContains(t, ir, "%a_slot_0 = select",
-		"the mismatched leading output must never be selectable as the parameter's slot")
+	require.Regexp(t, `%a_alias_value_1 = select i1 %a_alias_match_1, i64 %res_alias_load_1, i64 %\d+`, ir,
+		"selector 2 must read the caller's res destination once per iteration, falling back to the parameter")
+	require.NotContains(t, ir, "%a_alias_match_0",
+		"the mismatched leading output must never be selectable as the parameter's value")
 }
 
 func TestRangeCollectorScalarVariant(t *testing.T) {

@@ -1,11 +1,19 @@
 y = Twice(x)
-    y = x * 2
-    y = y + x
+    y = x * 2 + x
 
 s = Shout(t)
-    s = t ⊕ "!"
-    s = s ⊕ t
+    s = t ⊕ "!" ⊕ t
 
 r = Grow(q)
-    r = q ⊕ [9]
-    r = r ⊕ q
+    r = q ⊕ [9] ⊕ q
+
+# The input is read after the output is written. Without a range, the whole
+# call sees the pre-call value; with a range, each iteration sees the value
+# it started with, and the next iteration receives the written output.
+out, seen = Fold(current, item)
+    out = current + item
+    seen = current
+
+out, seen = FoldStr(current, item)
+    out = current ⊕ item
+    seen = current

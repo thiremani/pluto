@@ -69,6 +69,9 @@ type Symbol struct {
 type FuncArgs struct {
 	Inputs      []*Symbol // lowered function inputs (range iterators remain pointer-backed)
 	IterIndices []int     // Indices of iterator params
+	// LateInputs names parameters read after an output write; each scalar
+	// iteration reads a snapshot taken at its start.
+	LateInputs map[string]struct{}
 }
 
 type callArg struct {
@@ -234,19 +237,15 @@ func identNames(idents []*ast.Identifier) []string {
 }
 
 // bindParamAlias records the output names eagerly, but the outputs themselves
-// are resolved lazily from scope when the param is later read or promoted.
-// This allows direct outputs to remain values, be replaced in scope, or be
-// promoted to slots without invalidating the alias metadata.
+// are resolved from scope when an iteration snapshots the param
+// (snapshotIterationInputs). This allows direct outputs to remain values or
+// be replaced in scope without invalidating the alias metadata.
 func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputNames []string) {
 	c.currentParamAliases()[name] = &paramAlias{
 		Base:        sym,
 		AliasIndex:  aliasIndex,
 		OutputNames: append([]string(nil), outputNames...),
 	}
-}
-
-func (c *Compiler) clearParamAlias(name string) {
-	delete(c.currentParamAliases(), name)
 }
 
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
@@ -367,23 +366,6 @@ func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, o
 		return c.resolveDestSeed(dest, outType)
 	}
 	return c.makeZeroValue(outType)
-}
-
-func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
-	slotPtr := spill
-	for i, output := range outputs {
-		if output == nil {
-			continue
-		}
-		match := c.builder.CreateICmp(
-			llvm.IntEQ,
-			aliasIndex,
-			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
-			fmt.Sprintf("%s_alias_%d", name, i),
-		)
-		slotPtr = c.builder.CreateSelect(match, output.Val, slotPtr, fmt.Sprintf("%s_slot_%d", name, i))
-	}
-	return slotPtr
 }
 
 func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
@@ -1635,10 +1617,6 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
 
-	if alias, ok := c.paramAliasFor(name, sym); ok {
-		return c.promoteAlias(name, sym, alias)
-	}
-
 	ptr, alreadyPtr := c.makePtr(name, sym)
 	if alreadyPtr {
 		return ptr
@@ -1647,43 +1625,6 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
 	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
 	Put(c.Scopes, name, ptr)
-	return ptr
-}
-
-func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Symbol {
-	paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
-	c.createStore(sym.Val, paramPtr, sym.Type)
-
-	slotPtr := paramPtr
-	if len(alias.OutputNames) > 0 {
-		outputPtrs := make([]*Symbol, len(alias.OutputNames))
-		for i, outputName := range alias.OutputNames {
-			outputSym, _ := Get(c.Scopes, outputName)
-			// Left nil when the output cannot back this slot, so the selector
-			// keeps its positional meaning but never picks a mistyped pointer.
-			if !aliasableOutput(sym.Type, outputSym.Type) {
-				continue
-			}
-			if outputSym.Type.Kind() != PtrKind {
-				// Only params carry alias bindings, so promoting an output here
-				// cannot recurse through another param-alias entry.
-				outputSym = c.promoteToMemory(outputName)
-			}
-			outputPtrs[i] = outputSym
-		}
-		slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, outputPtrs)
-	}
-
-	ptr := &Symbol{
-		Val:       slotPtr,
-		Type:      Ptr{Elem: sym.Type},
-		FuncArg:   sym.FuncArg,
-		Borrowed:  sym.Borrowed,
-		ReadOnly:  sym.ReadOnly,
-		WriteFlag: sym.WriteFlag,
-	}
-	Put(c.Scopes, name, ptr)
-	c.clearParamAlias(name)
 	return ptr
 }
 
@@ -2757,6 +2698,7 @@ func (c *Compiler) compileFuncIter(template *ast.FuncStatement, inputs []*Symbol
 	fa := &FuncArgs{
 		Inputs:      inputs,
 		IterIndices: iterIndices,
+		LateInputs:  c.CodeCompiler.lateInputReadsFor(template),
 	}
 	return c.funcLoopNest(template, fa, 0, currentOutput)
 }
@@ -2909,11 +2851,18 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	if level == len(fa.IterIndices) {
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()
+		// Direct-return ABI is single-output today, so the loop body only
+		// needs the current scalar output binding for fn.Outputs[0].
+		if currentOutput != nil {
+			Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
+		}
+		c.snapshotIterationInputs(fn, fa)
+		c.compileFuncBody(fn)
 		if currentOutput == nil {
-			c.compileFuncBody(fn)
 			return nil
 		}
-		return c.compileDirectOutputIterBody(fn, currentOutput)
+		output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
+		return output
 	}
 
 	paramIdx := fa.IterIndices[level]
@@ -2960,14 +2909,32 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	return result
 }
 
-func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
-	// Direct-return ABI is single-output today, so the loop body only needs the
-	// current scalar output binding for fn.Outputs[0].
-	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
-	c.compileFuncBody(fn)
+// snapshotIterationInputs fixes each non-iterator input for one scalar
+// iteration. An input that aliases an output shares its storage, so a read
+// after the output's write would observe the new value. A direct scalar reads
+// the carried output once here; an indirect input read after an output write
+// keeps a private copy of its value for the iteration, freed with the scope.
+func (c *Compiler) snapshotIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) {
+	for i, param := range fn.Parameters {
+		if slices.Contains(fa.IterIndices, i) {
+			continue
+		}
 
-	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
-	return output
+		name := param.Value
+		sym, _ := Get(c.Scopes, name)
+		if alias, aliased := c.paramAliasFor(name, sym); aliased {
+			Put(c.Scopes, name, c.directParamValue(name, sym, alias))
+			continue
+		}
+		if _, late := fa.LateInputs[name]; !late || sym.Type.Kind() != PtrKind {
+			continue
+		}
+
+		snapshot := c.deepCopyIfNeeded(c.derefIfPointer(sym, name+"_iter_input"))
+		snapshot.FuncArg = true
+		snapshot.ReadOnly = true
+		Put(c.Scopes, name, snapshot)
+	}
 }
 
 func (c *Compiler) compileFuncBody(fn *ast.FuncStatement) {

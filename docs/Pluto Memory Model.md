@@ -257,11 +257,19 @@ res = sum(a, b)
     res = a + b
 ```
 
-- **Parameters**: Input values (passed by value for scalars)
-- **Outputs**: Independently staged result slots. An existing destination
-  supplies the initial value, while a fresh destination starts at its type's
-  zero value. The real destinations are committed only after every sibling
-  right-hand side has been evaluated.
+- **Parameters**: Input values (passed by value for scalars). Inside the
+  body an input is fixed: a range-bearing variant captures every non-iterator
+  input at the start of each scalar iteration, so an input that the caller
+  aliases to a destination never observes that output's write mid-iteration.
+- **Outputs**: Write-only inside their template. A body may assign an output
+  any number of times, conditionally or not, and a nested call may target it,
+  but reading it anywhere — a value, a condition, a call argument, a print, or
+  a formatting marker — is a compile error. Intermediate values live in
+  locals. Outputs are independently staged result slots: an existing
+  destination supplies the initial value and a fresh destination starts at
+  its type's zero value, so a body that writes nothing preserves the caller's
+  value without ever seeing it. The real destinations are committed only
+  after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
 When a caller destination and a function's declared output use different
@@ -282,6 +290,16 @@ res = sum(res, 5)
 # - Body executes: res = a + b
 # - Result commits back to the caller's res after sibling RHS evaluation
 ```
+
+Reusing a variable as both an argument and a destination is how a caller
+feeds an old value into a transformation. The template itself sees only its
+declared inputs; `res = res + 1` inside `sum` would be rejected.
+
+With a range, the same reuse is an accumulation: `sum = Acc(sum, 1:5)` runs
+the body once per yield, and the input that aliases the destination receives
+the previous iteration's output at the start of the next iteration. Within an
+iteration that input is stable. An empty range leaves an existing destination
+unchanged and a fresh destination at its zero value.
 
 ### Range Parameters
 

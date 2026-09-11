@@ -13,6 +13,11 @@ type CodeCompiler struct {
 	Code           *ast.Code
 	globalBindings map[string]token.Token
 	funcTemplates  map[funcKey]*ast.FuncStatement
+	// lateInputReads records, per template, the parameters read after an
+	// output has been written. Lowering snapshots those inputs per iteration
+	// of a range-bearing variant, since an aliased input would otherwise
+	// observe the output's new value.
+	lateInputReads map[*ast.FuncStatement]map[string]struct{}
 }
 
 type funcKey struct {
@@ -23,10 +28,22 @@ type funcKey struct {
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
 	mangledPath := MangleDirPath(modName, relPath)
 	cc := &CodeCompiler{
-		Compiler: NewCompiler(ctx, mangledPath, nil),
-		Code:     code,
+		Compiler:       NewCompiler(ctx, mangledPath, nil),
+		Code:           code,
+		lateInputReads: make(map[*ast.FuncStatement]map[string]struct{}),
 	}
 	return cc
+}
+
+// lateInputReadsFor returns the parameters a template reads after writing an
+// output. AnalyzeFuncs records the fact for every template before any script
+// lowers a call, so a missing entry is an ICE.
+func (cc *CodeCompiler) lateInputReadsFor(template *ast.FuncStatement) map[string]struct{} {
+	late, recorded := cc.lateInputReads[template]
+	if !recorded {
+		panic(fmt.Sprintf("internal: template %s was lowered before structural analysis", template.Token.Literal))
+	}
+	return late
 }
 
 func (cc *CodeCompiler) registerGlobalBinding(name string, tok token.Token) *token.CompileError {

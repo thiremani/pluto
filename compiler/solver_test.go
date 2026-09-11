@@ -1615,9 +1615,10 @@ func TestSpecializationTraceCapsIndividualFrames(t *testing.T) {
 
 const fixedRankRecursionSource = `res = FixedRank(x)
     "-x"
-    res = 0
+    total = 0
     nested = FixedRank([[1]])
-    res = res + nested
+    total = total + nested
+    res = total
 `
 
 func TestRecursiveGrowthReachesFixedClosure(t *testing.T) {
@@ -1674,14 +1675,16 @@ func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 
 func TestFinitePolymorphicRecursionIsAccepted(t *testing.T) {
 	code := mustParseCode(t, `res = Outer(x)
-    res = 0
+    total = 0
     inner = Inner([x])
-    res = res + inner
+    total = total + inner
+    res = total
 
 res = Inner(xs)
-    res = 0
+    total = 0
     outer = Outer(xs[0])
-    res = res + outer
+    total = total + outer
+    res = total
 `)
 
 	ctx := llvm.NewContext()
@@ -2127,51 +2130,6 @@ res = Relay(k)
 			}
 		})
 	}
-}
-
-// Consume precedes Root's StrH refinement and must be remangled on the stable sweep.
-func TestRefinedOutputSeedsStableBody(t *testing.T) {
-	code := mustParseCode(t, `res = Root(k)
-    res = "lit"
-    tmp = Consume(res)
-    "-tmp"
-    res = k > 0 Relay(k)
-
-res = Relay(k)
-    res = Root(k - 1) ⊕ "x"
-
-res = Consume(x)
-    res = x
-`)
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "seedRefinedOutput", "", code)
-	require.Empty(t, cc.Compile())
-
-	sl := lexer.New("TestSeedRefinedOutputScript", "v = Root(3)\nv")
-	sp := parser.NewScriptParser(sl)
-	program := sp.Parse()
-	require.Empty(t, sp.Errors())
-
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
-	ts := NewTypeSolver(sc)
-	ts.Solve()
-
-	require.Empty(t, ts.Errors)
-	heapConsumer := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
-	require.NotNil(t, heapConsumer, "the stable body sweep must remangle Consume with Root's StrH output slot")
-	require.True(t, heapConsumer.AllTypesInferred())
-
-	root := code.Statements[0].(*ast.FuncStatement)
-	consumeStmt := root.Body.Statements[1].(*ast.LetStatement)
-	consumeCall := consumeStmt.Value[0].(*ast.CallExpression)
-	rootMangled := Mangle(cc.Compiler.MangledPath, "Root", []Type{I64})
-	callInfo := ts.ExprCache[key(rootMangled, consumeCall)]
-	require.NotNil(t, callInfo)
-	require.Len(t, callInfo.CallParamTypes, 1)
-	require.Len(t, callInfo.ScalarCallParamTypes, 1)
-	require.True(t, TypeEqual(StrH{}, callInfo.CallParamTypes[0]), "final call metadata must use the output slot's StrH storage type")
-	require.True(t, TypeEqual(StrH{}, callInfo.ScalarCallParamTypes[0]), "final scalar-call metadata must use the output slot's StrH storage type")
 }
 
 func TestFunctionOutputTableJoinMatchesStorage(t *testing.T) {

@@ -1,10 +1,12 @@
 y = Triple(x)
-    y = 3x
-    y
+    tripled = 3x
+    tripled
+    y = tripled
 
 res = Sum(curr, x)
-    res = curr + x
-    res
+    total = curr + x
+    total
+    res = total
 
 yes = Divides(in, y, x)
     yes = in * (y % x)

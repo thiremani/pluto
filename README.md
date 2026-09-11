@@ -134,7 +134,7 @@ y = Square(x)
 	y = x * x
 ```
 
-Inputs are read-only — they flow in. Outputs are writable — they flow out. Every function is a transformation.
+Inputs are read-only — they flow in. Outputs are write-only inside the template — they flow out; use a local for intermediate values. Every function is a transformation. A caller may reuse a variable as both argument and destination, `a = Square(a)`, which is how an old value reaches the function.
 
 ### Generics by use
 

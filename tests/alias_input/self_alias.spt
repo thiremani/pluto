@@ -8,3 +8,16 @@ w
 v = [1 2]
 v = Grow(v)
 v
+single = 10
+single, was = Fold(single, 5)
+single, was
+value = 10
+value, before = Fold(value, 1:3)
+value, before
+empty = 10
+empty, never = Fold(empty, 0:0)
+empty, never
+items = ["b" "c"]
+text = "a" ⊕ ""
+text, last = FoldStr(text, items[0:2])
+text, last

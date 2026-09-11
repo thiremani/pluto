@@ -193,8 +193,13 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
+	// Outputs are published up front so that a formatting marker naming one
+	// resolves as a read and is rejected, instead of passing as literal text.
 	for _, param := range fn.Parameters {
 		cfg.publishTarget(param)
+	}
+	for _, output := range fn.Outputs {
+		cfg.publishTarget(output)
 	}
 
 	parameterNames := make(map[string]struct{}, len(fn.Parameters))
@@ -207,7 +212,9 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		outputNames[output.Value] = struct{}{}
 	}
 
-	_, readInputs, assignedOutputs := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
+	body := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
+	cfg.CodeCompiler.lateInputReads[fn] = body.lateInputReads
+	readInputs, assignedOutputs := body.readInputs, body.assignedOutputs
 
 	for _, input := range fn.Parameters {
 		if _, wasRead := readInputs[input.Value]; wasRead {
@@ -225,35 +232,51 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 }
 
-// validateTemplateBody runs structural validation over one template body and
-// returns each statement's reads plus the parameter and output names the body
-// read and assigned. A script is a zero-input, zero-output template: it passes
-// nil name sets and consumes only the reads.
-func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames, outputNames map[string]struct{}) ([][]VarEvent, map[string]struct{}, map[string]struct{}) {
-	statementReads := make([][]VarEvent, 0, len(statements))
-	readInputs := make(map[string]struct{}, len(parameterNames))
-	assignedOutputs := make(map[string]struct{}, len(outputNames))
+// templateBody is the structural summary of one template body. lateInputReads
+// names the parameters read in a statement after the first statement that
+// writes an output; reads within that statement precede its writes.
+type templateBody struct {
+	statementReads  [][]VarEvent
+	readInputs      map[string]struct{}
+	assignedOutputs map[string]struct{}
+	lateInputReads  map[string]struct{}
+}
+
+// validateTemplateBody runs structural validation over one template body. A
+// script is a zero-input, zero-output template: it passes nil name sets and
+// consumes only the reads.
+func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames, outputNames map[string]struct{}) templateBody {
+	body := templateBody{
+		statementReads:  make([][]VarEvent, 0, len(statements)),
+		readInputs:      make(map[string]struct{}, len(parameterNames)),
+		assignedOutputs: make(map[string]struct{}, len(outputNames)),
+		lateInputReads:  make(map[string]struct{}),
+	}
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
-		targets := cfg.validateStatementStructure(stmt, reads, parameterNames)
+		targets := cfg.validateStatementStructure(stmt, reads, parameterNames, outputNames)
 		if let, ok := stmt.(*ast.LetStatement); ok {
 			cfg.publishTargets(let.Name)
 		}
 
-		statementReads = append(statementReads, reads)
+		body.statementReads = append(body.statementReads, reads)
 		for _, event := range reads {
-			if _, isParameter := parameterNames[event.Name]; isParameter {
-				readInputs[event.Name] = struct{}{}
+			if _, isParameter := parameterNames[event.Name]; !isParameter {
+				continue
+			}
+			body.readInputs[event.Name] = struct{}{}
+			if len(body.assignedOutputs) > 0 {
+				body.lateInputReads[event.Name] = struct{}{}
 			}
 		}
 		for _, target := range targets {
 			if _, isOutput := outputNames[target.Value]; isOutput {
-				assignedOutputs[target.Value] = struct{}{}
+				body.assignedOutputs[target.Value] = struct{}{}
 			}
 		}
 	}
 
-	return statementReads, readInputs, assignedOutputs
+	return body
 }
 
 // AnalyzeScript treats the script as a zero-input, zero-output template before
@@ -278,8 +301,7 @@ func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent 
 	PushScope(&cfg.Scopes, BlockScope)
 	defer PopScope(&cfg.Scopes)
 
-	statementReads, _, _ := cfg.validateTemplateBody(statements, nil, nil)
-	return statementReads
+	return cfg.validateTemplateBody(statements, nil, nil).statementReads
 }
 
 // AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
@@ -334,9 +356,9 @@ func (cfg *CFG) processTypedStatement(stmt ast.Statement, reads []VarEvent, effe
 // validateStatementStructure reports template-stable read and write errors and
 // returns named targets for caller-specific bookkeeping. The caller publishes
 // them only after all statement reads have been checked.
-func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters map[string]struct{}) []*ast.Identifier {
+func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters, outputs map[string]struct{}) []*ast.Identifier {
 	for _, event := range reads {
-		cfg.validateStructuralRead(event)
+		cfg.validateStructuralRead(event, outputs)
 	}
 
 	let, ok := stmt.(*ast.LetStatement)
@@ -445,7 +467,14 @@ func (cfg *CFG) backwardPass(live map[string]struct{}) {
 	}
 }
 
-func (cfg *CFG) validateStructuralRead(event VarEvent) {
+// validateStructuralRead enforces that a declared output is write-only inside
+// its template: a body transforms inputs into outputs and never observes an
+// output's value, so the incoming destination seed can never leak in.
+func (cfg *CFG) validateStructuralRead(event VarEvent, outputs map[string]struct{}) {
+	if _, isOutput := outputs[event.Name]; isOutput {
+		cfg.addError(event.Token, fmt.Sprintf("output %q is read inside its function; outputs are write-only, use a local", event.Name))
+		return
+	}
 	if !cfg.isDefined(event.Name) {
 		cfg.addError(event.Token, fmt.Sprintf("variable %q has not been defined", event.Name))
 	}
