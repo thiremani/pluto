@@ -2913,7 +2913,9 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 // iteration. An input that aliases an output shares its storage, so a read
 // after the output's write would observe the new value. A direct scalar reads
 // the carried output once here; an indirect input read after an output write
-// keeps a private copy of its value for the iteration, freed with the scope.
+// keeps a private copy of its value for the iteration, freed with the scope,
+// but only when some output could back it: the caller aliases identical
+// storage types only, so any other input never shares output storage.
 func (c *Compiler) snapshotIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) {
 	for i, param := range fn.Parameters {
 		if slices.Contains(fa.IterIndices, i) {
@@ -2929,12 +2931,28 @@ func (c *Compiler) snapshotIterationInputs(fn *ast.FuncStatement, fa *FuncArgs) 
 		if _, late := fa.LateInputs[name]; !late || sym.Type.Kind() != PtrKind {
 			continue
 		}
+		if !c.inputCanAliasOutput(fn, sym.Type.(Ptr).Elem) {
+			continue
+		}
 
 		snapshot := c.deepCopyIfNeeded(c.derefIfPointer(sym, name+"_iter_input"))
 		snapshot.FuncArg = true
 		snapshot.ReadOnly = true
 		Put(c.Scopes, name, snapshot)
 	}
+}
+
+// inputCanAliasOutput mirrors setCallArgAliasSelectors: a caller passes an
+// output's staged storage as an input only when the two types lower
+// identically.
+func (c *Compiler) inputCanAliasOutput(fn *ast.FuncStatement, paramType Type) bool {
+	for _, output := range fn.Outputs {
+		outputSym, _ := Get(c.Scopes, output.Value)
+		if aliasableOutput(paramType, outputSym.Type) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compiler) compileFuncBody(fn *ast.FuncStatement) {

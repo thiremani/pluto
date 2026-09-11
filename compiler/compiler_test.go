@@ -453,6 +453,41 @@ h, r`
 		"the mismatched leading output must never be selectable as the parameter's value")
 }
 
+func TestIterationSnapshotSkipsInputsNoOutputCanAlias(t *testing.T) {
+	// Both outputs are integers, so writing them can never change the array
+	// input even though it is read after the first output write. Copying it
+	// per iteration would make the call quadratic.
+	code := `count, value = Read(data, index)
+    count = index
+    value = data[index]`
+	script := `data = [0:8]
+count, value = Read(data, 0:8)
+count, value`
+
+	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_skip", code, script)
+
+	require.NotContains(t, ir, "@arr_i64_copy",
+		"an input no output can alias must not be copied per iteration")
+}
+
+func TestIterationSnapshotCopiesAliasableInputReadAfterWrite(t *testing.T) {
+	// The heap-string input can back the heap-string output, and the body
+	// reads it after writing that output, so each iteration works on a copy.
+	code := `out, seen = FoldStr(current, item)
+    out = current ⊕ item
+    seen = current`
+	script := `items = ["b" "c"]
+text = "a" ⊕ ""
+text, last = FoldStr(text, items[0:2])
+text, last`
+
+	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_copy", code, script)
+
+	require.Contains(t, ir, "%current_iter_input", "the aliased input is loaded once per iteration")
+	require.Regexp(t, `%str_copy\d* = call ptr @\w+\(ptr %current_iter_input\)`, ir,
+		"the snapshot copies the loaded input before the body runs")
+}
+
 func TestRangeCollectorScalarVariant(t *testing.T) {
 	code := `res = Scale(x)
     res = x * 3`
