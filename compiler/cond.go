@@ -222,6 +222,7 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
 		Put(c.Scopes, tempName, tempSym)
+		c.condTempDest[tempName] = ident.Value
 		slots[i] = OutputSlot{dest: ident, temp: tempIdent, outType: outTypes[i]}
 	}
 	return slots
@@ -362,6 +363,7 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 			stageTempSym.WriteFlag = commitSym.WriteFlag
 		}
 		Put(c.Scopes, tempName, stageTempSym)
+		c.condTempDest[tempName] = cs.dest.Value
 		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
 	}
 	return stage

@@ -52,6 +52,25 @@ out, seen = ConditionalFold(current, item)
     out = item > 0 current + item
     seen = current
 
+# Caller-driven ranges rebind the shared input to the staged output while the
+# loop runs; the nested call must still select the sharing variant, on the
+# first ranged call and on a later one.
+out, seen = NestedRange(current)
+    out, seen = FoldAfter(current, (1:3) + 0)
+
+out, seen = NestedRangeTwice(current)
+    out, seen = FoldAfter(current, (1:3) + 0)
+    out, seen = FoldAfter(current, (3:5) + 0)
+
+out, seen = NestedArrayTwice(current)
+    out, seen = ArrayAfter(current, (1:3) + 0)
+    out, seen = ArrayAfter(current, (3:5) + 0)
+
+# A conditional call writes through synthetic destinations that stand in for
+# the outputs; sharing follows them to the real output.
+out, seen = ConditionalNested(current, item)
+    out, seen = item > 0 FoldAfter(current, item)
+
 out = BumpTwice(current, item)
     out = current + item
     out = current + item

@@ -80,6 +80,21 @@ skipped, skippedSeen = ConditionalFold(skipped, -1)
 repeated = 10
 repeated = BumpTwice(repeated, 1:3)
 "RepeatedWrites:", repeated
+nestedRange = 10
+nestedRange, nestedRangeSeen = NestedRange(nestedRange)
+"NestedRange:", nestedRange, nestedRangeSeen
+nestedTwice = 10
+nestedTwice, nestedTwiceSeen = NestedRangeTwice(nestedTwice)
+"NestedRangeTwice:", nestedTwice, nestedTwiceSeen
+nestedArrayTwice = [10]
+nestedArrayTwice, nestedArrayTwiceSeen = NestedArrayTwice(nestedArrayTwice)
+"NestedArrayTwice:", nestedArrayTwice, nestedArrayTwiceSeen
+condNested = 10
+condNested, condNestedSeen = ConditionalNested(condNested, 5)
+"ConditionalNested:", condNested, condNestedSeen
+condNestedSkipped = 10
+condNestedSkipped, condNestedSkippedSeen = ConditionalNested(condNestedSkipped, -1)
+"ConditionalNestedSkipped:", condNestedSkipped, condNestedSkippedSeen
 
 # Sharing is internal to the call: a sibling RHS still reads the caller's
 # pre-assignment binding until every RHS finishes.

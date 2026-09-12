@@ -111,7 +111,9 @@ type preparedCall struct {
 
 // paramAlias records that a parameter of the active function body shares its
 // caller binding with the named output. The Base check prevents alias behavior
-// from leaking onto a same-name binding introduced later in the scope tree.
+// from leaking onto a same-name binding introduced later in the scope tree; a
+// lowering that rebinds the parameter on purpose, such as ranged staging,
+// registers the new symbol as a further base.
 type paramAlias struct {
 	Base   *Symbol
 	Output string
@@ -145,9 +147,12 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current script root or function specialization key
 	Errors          []*token.CompileError
-	paramAliasStack []map[string]*paramAlias
+	paramAliasStack []map[string][]*paramAlias
 	outputSlotTypes map[string]Type
-	stmtCtxStack    []stmtCtx
+	// condTempDest maps a synthetic conditional destination to the source
+	// destination it stands in for, so call-site aliasing sees through it.
+	condTempDest map[string]string
+	stmtCtxStack []stmtCtx
 }
 
 type stmtCtx struct {
@@ -190,7 +195,8 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       exprCache,
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
-		paramAliasStack: []map[string]*paramAlias{},
+		paramAliasStack: []map[string][]*paramAlias{},
+		condTempDest:    make(map[string]string),
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -222,7 +228,7 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 	return typ
 }
 
-func (c *Compiler) currentParamAliases() map[string]*paramAlias {
+func (c *Compiler) currentParamAliases() map[string][]*paramAlias {
 	if len(c.paramAliasStack) == 0 {
 		return nil
 	}
@@ -230,7 +236,7 @@ func (c *Compiler) currentParamAliases() map[string]*paramAlias {
 }
 
 func (c *Compiler) pushParamAliases() {
-	c.paramAliasStack = append(c.paramAliasStack, make(map[string]*paramAlias))
+	c.paramAliasStack = append(c.paramAliasStack, make(map[string][]*paramAlias))
 }
 
 func (c *Compiler) popParamAliases() {
@@ -249,15 +255,29 @@ func identNames(idents []*ast.Identifier) []string {
 // value on every input read. The output may remain a value or be replaced in
 // scope without invalidating the input's reference to it.
 func (c *Compiler) bindParamAlias(name string, sym *Symbol, output string) {
-	c.currentParamAliases()[name] = &paramAlias{Base: sym, Output: output}
+	aliases := c.currentParamAliases()
+	aliases[name] = append(aliases[name], &paramAlias{Base: sym, Output: output})
 }
 
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
-	alias, ok := c.currentParamAliases()[name]
-	if !ok || alias.Base != sym {
-		return nil, false
+	for _, alias := range c.currentParamAliases()[name] {
+		if alias.Base == sym {
+			return alias, true
+		}
 	}
-	return alias, true
+	return nil, false
+}
+
+// destinationBase resolves a synthetic conditional destination to the source
+// destination it commits into, following stage temps through commit temps.
+func (c *Compiler) destinationBase(name string) string {
+	for {
+		base, synthetic := c.condTempDest[name]
+		if !synthetic {
+			return name
+		}
+		name = base
+	}
 }
 
 func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
@@ -349,7 +369,8 @@ func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []
 			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
-			if output.Value != arg.Name && !c.inputAliasesOutput(arg.Name, output.Value) {
+			base := c.destinationBase(output.Value)
+			if base != arg.Name && !c.inputAliasesOutput(arg.Name, base) {
 				continue
 			}
 			if pattern == nil {
@@ -2375,7 +2396,9 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 		}
 
 		names := []string{dest[i].Value}
+		aliased := make(map[string]string)
 		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
+			base := c.destinationBase(dest[i].Value)
 			seen := make(map[string]struct{})
 			for scopeIdx := len(c.Scopes) - 1; scopeIdx >= 0; scopeIdx-- {
 				scope := c.Scopes[scopeIdx]
@@ -2385,8 +2408,9 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 						continue
 					}
 					seen[name] = struct{}{}
-					if alias, aliased := c.paramAliasFor(name, sym); aliased && alias.Output == dest[i].Value {
+					if alias, ok := c.paramAliasFor(name, sym); ok && alias.Output == base {
 						names = append(names, name)
+						aliased[name] = alias.Output
 						continue
 					}
 					if sym.Type.Kind() == PtrKind && sym.Val == current.Val {
@@ -2400,6 +2424,11 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 		}
 		for _, name := range names {
 			Put(c.Scopes, name, outputs[i])
+			// The rebound input keeps its alias, so a nested call inside the
+			// loop still selects the sharing variant.
+			if output, ok := aliased[name]; ok {
+				c.bindParamAlias(name, outputs[i], output)
+			}
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # Pluto C ABI & Name Mangling Specification
 
-**Version:** 2.0 | **Status:** Draft | **Target:** C11 / C++17
+**Version:** 2.1 | **Status:** Draft | **Target:** C11 / C++17
 
 ## 1. Overview
 
@@ -359,12 +359,7 @@ abbreviated:
 ```c
 int64_t Pt_Square_I64(int64_t x, int64_t seed);
 int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
-int64_t Pt_Acc_I64_Range(
-    int64_t a,
-    const PtRangeI64 *range,
-    int32_t a_output_alias,
-    int64_t seed
-);
+int64_t Pt_Acc_I64_Range(int64_t a, const PtRangeI64 *range, int64_t seed);
 ```
 
 A C caller passes the destination's current value to request Pluto's keep-old
@@ -398,10 +393,22 @@ direct scalar input reads the output's current value, and for a compatible
 indirect input the caller passes the matching staged output pointer itself.
 Each read therefore observes the selected output's current value, and both
 forms carry output values into subsequent range iterations. The caller's real
-destinations remain unchanged until the surrounding assignment commits. A
-native caller cannot request a variant: passing the same address for a
-pointer input and an output shares them naturally, and a register scalar is
-always a plain value.
+destinations remain unchanged until the surrounding assignment commits.
+
+A native caller cannot request a variant. Passing the same address for a
+pointer input and an output shares them only within the called body's own
+statements: a nested Pluto call inside that body stages its outputs and
+commits them afterwards, so it does not extend the sharing. A register scalar
+is always a plain value. Sharing across nested calls is guaranteed for Pluto
+callers, whose call sites select the variants statically.
+
+**Changes in 2.1.** Version 2.0 gave range-bearing variants a hidden `i32`
+alias selector per direct scalar parameter, placed after the source parameters
+and before the seed. Version 2.1 removes those selectors: every variant's
+native signature is the source parameters followed by the seed, and aliasing
+is lowered as private variants instead. The prototype of a range-bearing
+function such as `Acc` therefore changes, and its seed moves one position
+earlier. Functions without a `Range` or `ArrayRange` parameter are unchanged.
 
 An eligible immediate bare `array[range]` call argument may therefore select
 an `ArrayRange` specialization and run its loop inside the callee. This
