@@ -19,9 +19,40 @@ type, and stored type separately, as the corrected code comment already does.
 
 ## 1. Next compiler PR: seed dependency analysis
 
-Preserve the existing seeded-output semantics and public ABI. Correct the
-analysis before deciding whether a later language version should change those
-semantics.
+Resolved by a language rule instead of an analysis
+([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
+[PR #102](https://github.com/thiremani/pluto/pull/102)): declared outputs are
+write-only inside their template, so the reproducer below is rejected at
+`y = y + 1`. The hidden seed and destination-seeded staging slots continue to
+preserve outputs that are not written. A caller can explicitly connect an
+input to an output by reusing the same binding: later statements then observe
+writes through that output, in ordinary and ranged calls alike. Inputs are
+read-only bindings, not frozen values. No per-iteration input snapshot is
+needed. Sharing is a compile-time fact of each call site and lowers to a
+private alias variant of the specialization, so the native calling convention
+stays independent of body effects. It is not unchanged: range-bearing
+variants on master carried hidden alias selectors, and removing them changes
+those prototypes, recorded as ABI 2.1 in
+[the C ABI specification](./Pluto%20C%20ABI%20Spec.md). Still outstanding on
+that boundary: a native caller that passes one address as both an input and an
+output shares them only within the called body, because a nested Pluto call
+stages its outputs. A generic pointer entry that resolves unknown sharing at
+run time, alongside the private variants, would close that gap; nested
+staging would still need alias handling inside it. The canonical description
+of the language rule is in
+[the memory model](./Pluto%20Memory%20Model.md) under "Parameters and Outputs".
+
+The storage mismatch filed as
+[issue #103](https://github.com/thiremani/pluto/issues/103) is addressed by
+specializing binding arguments on their merged storage type and revisiting
+calls when a later assignment widens that storage. Under live-reference
+semantics, `s = "a"` followed by `s, prev = FoldStr(s, "b")`, where the body
+writes `out = current ⊕ item` before `seen = current`, must produce `ab ab`.
+Compatible wider output storage is handled by a private lowering variant,
+preserving sharing without changing unrelated input types. These cases are
+covered by `tests/alias_input`.
+
+The original analysis plan is kept below for the record.
 
 ### Confirmed failure
 
@@ -121,18 +152,24 @@ Retaining `%n` with a real write contract is a viable proposed direction. Its
 destination is an effectful operand even though it appears inside formatting
 syntax. This plan does not choose new source syntax or silently remove `%n`.
 
-The baseline accepts a function that receives `x = 99`, evaluates
-`"hello-x%n"`, and then returns `x`; it prints `hello` and returns 5.
-`formatSpecialValue` in `compiler/format.go` checks the type and code globals,
-but does not reject read-only parameters. CFG marker handling records reads.
-`TestPromotedAliasTypeGap` deliberately uses this path, so its coverage needs a
-replacement when the read-only rule is enforced.
+The recorded baseline `840b147` accepts a function that receives `x = 99`,
+evaluates `"hello-x%n"`, and then returns `x`; it prints `hello` and returns 5.
+At that baseline, `formatSpecialValue` checks the type and code globals but
+does not reject read-only parameters.
 
-Required work if `%n` is retained:
+The live-reference update now rejects `%n` writes to input and iterator
+parameters through `Symbol.ReadOnly`, with ordinary and ranged rejection
+covered by `TestFormatCountRejectsInputParameter`. The former
+`TestPromotedAliasTypeGap` no longer mutates an input; its output-position
+coverage remains in `TestAliasedInputReadsOutputInVariant`. The `acc_fmt`
+fixture now writes a local count. CFG marker handling still records reads,
+so the formatting write effects below remain unimplemented.
 
-- Resolve and validate the destination as a writable location. Reject input
-  parameters, constants, and unsupported targets through the normal rules.
-  Identify inputs structurally; `Symbol.FuncArg` also covers writable outputs.
+Remaining work if `%n` is retained:
+
+- Resolve and validate the destination as a writable location through the
+  normal rules, including unsupported targets. Retain the implemented input
+  and constant rejection; `Symbol.FuncArg` alone also covers writable outputs.
 - Record its write separately from reads of other markers and dynamic widths
   or precisions. `%n` does not inherently read the destination's previous value.
 - Describe whether execution reaches the write and whether it initializes the
@@ -149,8 +186,9 @@ Required work if `%n` is retained:
   `vsnprintf` twice, so sizing and output passes need an explicit effect contract.
 - Do not let an unmodeled formatting write enter an ordinary PIR `eval` as if it
   were effect-free. Keep unsupported cases legacy or reject them explicitly.
-- Test read-only rejection, writable locals/outputs, old-value liveness,
-  repeated markers, sequencing, skipped execution, aliases, and failure paths.
+- Extend the existing rejection tests with writable locals/outputs, old-value
+  liveness, repeated markers, sequencing, skipped execution, aliases, and
+  failure paths.
 
 An explicit formatter/count output is another possible surface design. Choose
 that separately if it makes programs clearer; correctness does not require it.
@@ -198,7 +236,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; next compiler PR before broadening call routing |
+| Seed/effect correctness | Section 1; resolved by the write-only-outputs rule in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
 | `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |

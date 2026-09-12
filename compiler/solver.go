@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -145,6 +146,8 @@ type TypeSolver struct {
 	PendingAssignments map[pendingAssignment]struct{}
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
+	storageRevision    uint64          // increments when a previously observed binding slot widens
+	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
 
 	recLimit recursionLimit
 }
@@ -171,6 +174,20 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	f := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
+	}
+	previous, exists := f.Vars[name]
+	if !exists {
+		previous, exists = ts.previousSlotTypes[name]
+	}
+	if exists {
+		// Rewalks retain storage learned from later statements. Publishing it
+		// only after the declaration keeps name resolution in source order.
+		if bindingSlotCompatible(typ, previous) {
+			typ = mergeBindingSlotType(typ, previous)
+		}
+		if !TypeEqual(previous, typ) {
+			ts.storageRevision++
+		}
 	}
 	f.Vars[name] = typ
 }
@@ -714,10 +731,26 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 func (ts *TypeSolver) Solve() {
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
-	for _, stmt := range program.Statements {
-		ts.TypeStatement(stmt)
-		if len(ts.Errors) > oldErrs {
-			return
+	initialScope := ts.Scopes[0]
+
+	// A later assignment can widen the storage read by an earlier call.
+	// Rebuild source-order facts until those call signatures match the slots.
+	for {
+		ts.Scopes[0] = Scope[Type]{
+			Elems:        maps.Clone(initialScope.Elems),
+			BindingOrder: slices.Clone(initialScope.BindingOrder),
+			ScopeKind:    initialScope.ScopeKind,
+		}
+		revision := ts.storageRevision
+
+		for _, stmt := range program.Statements {
+			ts.TypeStatement(stmt)
+			if len(ts.Errors) > oldErrs {
+				return
+			}
+		}
+		if revision == ts.storageRevision {
+			break
 		}
 	}
 
@@ -2387,10 +2420,21 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 // Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
 	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
+	_, builtin := Builtins[ce.Function.Value]
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
+		if ident, ok := ce.Arguments[argIndex].(*ast.Identifier); ok && !builtin {
+			// Calls receive the binding's actual slot, including ownership
+			// widening learned from later writes. Other expressions retain
+			// their flow type (an empty value can still reset another array).
+			body := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
+			if slotType, exists := body.Vars[ident.Value]; exists {
+				outerTypes = []Type{slotType}
+			}
+		}
+
 		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
 				args = append(args, arrayRangeType)
@@ -2610,7 +2654,12 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		info:      f,
 		template:  template,
 	}
-	clear(f.Vars)
+	revision := ts.storageRevision
+	previousSlots := ts.previousSlotTypes
+	ts.previousSlotTypes = f.Vars
+	f.Vars = make(map[string]Type)
+	defer func() { ts.previousSlotTypes = previousSlots }()
+
 	previousCycleStart := ts.recLimit.push(specializationFrame{
 		mangled:  mangled,
 		template: template,
@@ -2623,6 +2672,10 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
+	if revision != ts.storageRevision {
+		ts.Converging = true
+	}
+
 	return f.OutputTypesInferred()
 }
 

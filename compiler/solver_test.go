@@ -643,6 +643,84 @@ a = a ⊕ "d"`
 	require.True(t, IsStrH(secondInfo.OutTypes[0]), "concat expression should remain StrH")
 }
 
+func TestCallArgumentsUseSettledBindingSlotTypes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		seed   string
+		append string
+		item   string
+		want   Type
+	}{
+		{"string scalar", `"hello"`, "item", `"abc"`, StrH{}},
+		{"array range", "[]", "[item]", "1:3", Array{ElemType: I64, Rank: 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			code := mustParseCode(t, fmt.Sprintf(`out, before = Fold(current, item)
+    out = current ⊕ %s
+    before = current
+`, tt.append))
+			cc := NewCodeCompiler(ctx, t.Name(), "", code)
+			require.Empty(t, cc.Compile())
+			source := fmt.Sprintf("value = %s\nvalue, before = Fold(value, %s)\nvalue, before", tt.seed, tt.item)
+
+			for _, run := range []string{"Cold", "Warm"} {
+				ts := solveScriptTypes(t, ctx, cc, t.Name()+run, source)
+				stmt := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
+				call := stmt.Value[0].(*ast.CallExpression)
+				info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+				root := ts.ScriptCompiler.Script.Root
+				require.True(t, TypeEqual(tt.want, root.Vars["value"]))
+				require.True(t, TypeEqual(tt.want, info.CallParamTypes[0]), "call must specialize on the storage used by lowering")
+				require.True(t, TypeEqual(tt.want, info.ScalarCallParamTypes[0]))
+				require.True(t, TypeEqual(tt.want, info.OutTypes[1]), "copying the input must retain its ownership type")
+				argInfo := ts.ExprCache[key(ts.FuncNameMangled, call.Arguments[0])]
+				seed := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement).Value[0]
+				seedInfo := ts.ExprCache[key(ts.FuncNameMangled, seed)]
+				require.True(t, TypeEqual(seedInfo.OutTypes[0], argInfo.OutTypes[0]), "argument expressions retain their flow type")
+				callee := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Fold", info.CallParamTypes)]
+				require.NotNil(t, callee)
+				require.True(t, callee.Settled)
+			}
+		})
+	}
+}
+
+func TestLocalSlotRefinementRemanglesNestedCalls(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	code := mustParseCode(t, `out, before = Wrapper(item)
+    current = "hello"
+    current, previous = Fold(current, item)
+    out = current
+    before = previous
+
+out, before = Fold(current, item)
+    out = current ⊕ "-item"
+    before = current
+`)
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+	wrapperKey := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
+	foldKey := Mangle(cc.Compiler.MangledPath, "Fold", []Type{StrH{}, I64})
+	wrapperTemplate := code.Statements[0].(*ast.FuncStatement)
+	call := wrapperTemplate.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+
+	for _, run := range []string{"Cold", "Warm"} {
+		ts := solveScriptTypes(t, ctx, cc, t.Name()+run, "value, before = Wrapper(2)\nvalue, before")
+		wrapper := cc.Compiler.FuncCache[wrapperKey]
+		require.NotNil(t, wrapper)
+		require.True(t, wrapper.Settled)
+		require.True(t, IsStrH(wrapper.Vars["current"]))
+		require.True(t, IsStrH(wrapper.Sig.OutTypes[1]))
+		require.Equal(t, []string{foldKey}, wrapper.CFGResult.DirectCallees)
+		info := ts.ExprCache[key(wrapperKey, call)]
+		require.True(t, IsStrH(info.CallParamTypes[0]))
+		require.True(t, IsStrH(info.OutTypes[1]))
+	}
+}
+
 func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	headerOnly := Table{Columns: []TableColumn{
 		{Name: "Name", ElemType: Empty{}},
@@ -1615,9 +1693,10 @@ func TestSpecializationTraceCapsIndividualFrames(t *testing.T) {
 
 const fixedRankRecursionSource = `res = FixedRank(x)
     "-x"
-    res = 0
+    total = 0
     nested = FixedRank([[1]])
-    res = res + nested
+    total = total + nested
+    res = total
 `
 
 func TestRecursiveGrowthReachesFixedClosure(t *testing.T) {
@@ -1674,14 +1753,16 @@ func TestRecursiveLimitCountsColdDiscovery(t *testing.T) {
 
 func TestFinitePolymorphicRecursionIsAccepted(t *testing.T) {
 	code := mustParseCode(t, `res = Outer(x)
-    res = 0
+    total = 0
     inner = Inner([x])
-    res = res + inner
+    total = total + inner
+    res = total
 
 res = Inner(xs)
-    res = 0
+    total = 0
     outer = Outer(xs[0])
-    res = res + outer
+    total = total + outer
+    res = total
 `)
 
 	ctx := llvm.NewContext()
@@ -2127,51 +2208,6 @@ res = Relay(k)
 			}
 		})
 	}
-}
-
-// Consume precedes Root's StrH refinement and must be remangled on the stable sweep.
-func TestRefinedOutputSeedsStableBody(t *testing.T) {
-	code := mustParseCode(t, `res = Root(k)
-    res = "lit"
-    tmp = Consume(res)
-    "-tmp"
-    res = k > 0 Relay(k)
-
-res = Relay(k)
-    res = Root(k - 1) ⊕ "x"
-
-res = Consume(x)
-    res = x
-`)
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "seedRefinedOutput", "", code)
-	require.Empty(t, cc.Compile())
-
-	sl := lexer.New("TestSeedRefinedOutputScript", "v = Root(3)\nv")
-	sp := parser.NewScriptParser(sl)
-	program := sp.Parse()
-	require.Empty(t, sp.Errors())
-
-	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
-	ts := NewTypeSolver(sc)
-	ts.Solve()
-
-	require.Empty(t, ts.Errors)
-	heapConsumer := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Consume", []Type{StrH{}})]
-	require.NotNil(t, heapConsumer, "the stable body sweep must remangle Consume with Root's StrH output slot")
-	require.True(t, heapConsumer.AllTypesInferred())
-
-	root := code.Statements[0].(*ast.FuncStatement)
-	consumeStmt := root.Body.Statements[1].(*ast.LetStatement)
-	consumeCall := consumeStmt.Value[0].(*ast.CallExpression)
-	rootMangled := Mangle(cc.Compiler.MangledPath, "Root", []Type{I64})
-	callInfo := ts.ExprCache[key(rootMangled, consumeCall)]
-	require.NotNil(t, callInfo)
-	require.Len(t, callInfo.CallParamTypes, 1)
-	require.Len(t, callInfo.ScalarCallParamTypes, 1)
-	require.True(t, TypeEqual(StrH{}, callInfo.CallParamTypes[0]), "final call metadata must use the output slot's StrH storage type")
-	require.True(t, TypeEqual(StrH{}, callInfo.ScalarCallParamTypes[0]), "final scalar-call metadata must use the output slot's StrH storage type")
 }
 
 func TestFunctionOutputTableJoinMatchesStorage(t *testing.T) {

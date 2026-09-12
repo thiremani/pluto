@@ -201,15 +201,16 @@ func verifyCompiledModules(t *testing.T, moduleName, codeSrc, scriptSrc string) 
 	compileScriptAndCodeIR(t, moduleName, codeSrc, scriptSrc)
 }
 
-// The alias selector picks an output by position, so a mistyped output reaching
-// it can produce invalid IR or silently select the wrong slot.
-func TestAliasSelectorTypeGaps(t *testing.T) {
-	const accFirst = "s = 1\nq, r = Mixed(s, 0:4)\nq, r"
+// A shared input may only alias an output of its own type. With an
+// incompatible output declared first, the variant must pass over it and bind
+// the input to the compatible sibling, producing valid IR for each kind.
+func TestAliasVariantSkipsIncompatibleOutputs(t *testing.T) {
+	const sharedSecond = "s = 1\nr, s = Mixed(s, 0:4)\nr, s"
 
 	cases := []struct{ name, code, script string }{
-		{"float sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = x * 0.5", accFirst},
-		{"string sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = \"n\"", accFirst},
-		{"array sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = [x x]", accFirst},
+		{"float first", "other, sum = Mixed(a, x)\n    other = x * 0.5\n    sum = a + x", sharedSecond},
+		{"string first", "other, sum = Mixed(a, x)\n    other = \"n\"\n    sum = a + x", sharedSecond},
+		{"array first", "other, sum = Mixed(a, x)\n    other = [x x]\n    sum = a + x", sharedSecond},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -431,27 +432,62 @@ out = Echo(value)
 	}
 }
 
-// Writing a parameter through %n promotes it to memory, which picks the aliased
-// slot by pointer. Opaque pointers make a mistyped pointer select valid IR and
-// the selector never matches the skipped index at runtime, so only the emitted
-// slot selects distinguish this path.
-func TestPromotedAliasTypeGap(t *testing.T) {
+// A call whose argument names one of its own destinations lowers to a private
+// variant in which that input reads the output's storage. The pattern names
+// outputs by declared position, so a leading output whose type cannot back the
+// input keeps its slot in the name.
+func TestAliasedInputReadsOutputInVariant(t *testing.T) {
 	code := `half, res = Rev(a, x)
-    "count-a%n chars"
     half = x * 0.5
     res = a + x`
 	script := `r = 10
 h, r = Rev(r, 1:4)
 h, r`
 
-	ir, _ := compileScriptAndCodeIR(t, "pointer_promotion_gap", code, script)
+	ir, _ := compileScriptAndCodeIR(t, "input_alias_variant", code, script)
+	mangled := Mangle(MangleDirPath("input_alias_variant", ""), "Rev", []Type{I64, Range{Iter: I64}})
 
-	require.Regexp(t, `%a_alias_1 = icmp eq i32 %\d+, 2`, ir,
-		"the compatible output is the second one, so its ABI selector value must be 2")
-	require.Contains(t, ir, "%a_slot_1 = select i1 %a_alias_1, ptr %res_dest, ptr %a",
-		"selector 2 must choose the caller's res destination, falling back to the parameter spill")
-	require.NotContains(t, ir, "%a_slot_0 = select",
-		"the mismatched leading output must never be selectable as the parameter's slot")
+	require.Contains(t, ir, "define internal void @"+mangled+"_a2_2_0(",
+		"the aliased call must lower to a private variant naming the second output for the first input")
+	require.Contains(t, ir, "%a_alias_load = load i64, ptr %res_dest",
+		"inside the variant the input reads the res output's storage directly")
+	require.NotContains(t, ir, "alias_match", "no run-time selection remains")
+	require.NotContains(t, ir, "define void @"+mangled+"(", "the unaliased specialization is not emitted when only the variant is called")
+}
+
+func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
+	// Both outputs are integers, so writing them can never change the array
+	// input even though it is read after the first output write. Copying it
+	// per iteration would make the call quadratic.
+	code := `count, value = Read(data, index)
+    count = index
+    value = data[index]`
+	script := `data = [0:8]
+count, value = Read(data, 0:8)
+count, value`
+
+	ir, _ := compileScriptAndCodeIR(t, "unrelated_array_input", code, script)
+
+	require.NotContains(t, ir, "@arr_i64_copy",
+		"an input no output can alias must not be copied per iteration")
+}
+
+func TestRangedCallDoesNotCopyArrayInputWithMatchingOutputType(t *testing.T) {
+	// The output has the same type as the input, but each iteration selects
+	// only one element. Copying the input would turn this linear call quadratic.
+	code := `out = Pick(data, index)
+    out = [data[index]]`
+	script := `data = [0:8]
+result = Pick(data, 0:8)
+result`
+
+	ir, _ := compileScriptAndCodeIR(t, "matching_array_input", code, script)
+	mangled := Mangle(MangleDirPath("matching_array_input", ""), "Pick", []Type{Array{ElemType: I64, Rank: 1}, Range{Iter: I64}})
+
+	require.NotContains(t, ir, "@arr_i64_copy",
+		"a matching output type must not introduce an input copy on every iteration")
+	require.NotContains(t, ir, mangled+"_a",
+		"an input that shares no destination calls the public specialization, not an alias variant")
 }
 
 func TestRangeCollectorScalarVariant(t *testing.T) {
@@ -514,9 +550,9 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "Acc", []Type{I64, Range{Iter: I64}})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(", "range-bearing variant should keep the direct scalar return")
-	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i32 noundef %2, i64 noundef %3", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
-	require.Contains(t, scriptIR, "call i64 @"+mangled+"(", "expected direct scalar call/return for ranged accumulator case")
+	require.Contains(t, scriptIR, "define internal noundef i64 @"+mangled+"_a2_1_0(", "the self-aliased range-bearing call lowers to a private variant that keeps the direct scalar return")
+	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i64 noundef %2", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"_a2_1_0(", "expected direct scalar call/return for ranged accumulator case")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 

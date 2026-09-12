@@ -1,4 +1,4 @@
-# An input that aliases the output reads the pre-call value for the whole call.
+# Reads in a single assignment precede its output write.
 a = 5
 a = Twice(a)
 a
@@ -8,3 +8,103 @@ w
 v = [1 2]
 v = Grow(v)
 v
+
+# Cross-aliases make statement order significant: only the simultaneous form swaps.
+sequentialLeft, sequentialRight = 1, 2
+sequentialLeft, sequentialRight = SequentialSwap(sequentialLeft, sequentialRight)
+"SequentialSwap:", sequentialLeft, sequentialRight
+simultaneousLeft, simultaneousRight = 1, 2
+simultaneousLeft, simultaneousRight = SimultaneousSwap(simultaneousLeft, simultaneousRight)
+"SimultaneousSwap:", simultaneousLeft, simultaneousRight
+
+# Both statement orders, in ordinary and ranged calls.
+plainBefore = 10
+plainBefore, seenBefore = FoldBefore(plainBefore, 5)
+"IntPlainBefore:", plainBefore, seenBefore
+plainAfter = 10
+plainAfter, seenAfter = FoldAfter(plainAfter, 5)
+"IntPlainAfter:", plainAfter, seenAfter
+rangeBefore = 10
+rangeBefore, rangeSeenBefore = FoldBefore(rangeBefore, 1:3)
+"IntRangeBefore:", rangeBefore, rangeSeenBefore
+rangeAfter = 10
+rangeAfter, rangeSeenAfter = FoldAfter(rangeAfter, 1:3)
+"IntRangeAfter:", rangeAfter, rangeSeenAfter
+empty = 10
+empty, never = FoldAfter(empty, 0:0)
+"Empty:", empty, never
+separate = 10
+separateOut, separateSeen = FoldAfter(separate, 5)
+"Separate:", separate, separateOut, separateSeen
+
+# Heap ownership and the static-to-heap specialization regression.
+items = ["b" "c"]
+heapBefore = "a" ⊕ ""
+heapBefore, heapSeenBefore = ConcatBefore(heapBefore, items[0:2])
+"HeapRangeBefore:", heapBefore, heapSeenBefore
+heapAfter = "a" ⊕ ""
+heapAfter, heapSeenAfter = ConcatAfter(heapAfter, items[0:2])
+"HeapRangeAfter:", heapAfter, heapSeenAfter
+staticText = "hello"
+staticText, staticSeen = ConcatAfter(staticText, "abc")
+"StaticPlainAfter:", staticText, staticSeen
+
+# Array copies must preserve a value saved before a later append.
+arrayBefore = [10]
+arrayBefore, arraySeenBefore = ArrayBefore(arrayBefore, 1:3)
+"ArrayRangeBefore:", arrayBefore, arraySeenBefore
+arrayAfter = [10]
+arrayAfter, arraySeenAfter = ArrayAfter(arrayAfter, 1:3)
+"ArrayRangeAfter:", arrayAfter, arraySeenAfter
+
+# Nested calls forward sharing even though their argument and target use
+# different local names in the outer template.
+nested = 10
+nested, nestedSeen = NestedFold(nested, 5)
+"NestedNumber:", nested, nestedSeen
+nestedText = "hello" ⊕ ""
+nestedText, nestedTextSeen = NestedConcat(nestedText, "abc")
+"NestedString:", nestedText, nestedTextSeen
+nestedArray = [10]
+nestedArray, nestedArraySeen = NestedArrayRange(nestedArray)
+"NestedArrayRange:", nestedArray, nestedArraySeen
+
+# A skipped write leaves the shared value unchanged; multiple writes each
+# read the latest value through the input.
+taken = 10
+taken, takenSeen = ConditionalFold(taken, 5)
+"ConditionalTaken:", taken, takenSeen
+skipped = 10
+skipped, skippedSeen = ConditionalFold(skipped, -1)
+"ConditionalSkipped:", skipped, skippedSeen
+repeated = 10
+repeated = BumpTwice(repeated, 1:3)
+"RepeatedWrites:", repeated
+nestedRange = 10
+nestedRange, nestedRangeSeen = NestedRange(nestedRange)
+"NestedRange:", nestedRange, nestedRangeSeen
+nestedTwice = 10
+nestedTwice, nestedTwiceSeen = NestedRangeTwice(nestedTwice)
+"NestedRangeTwice:", nestedTwice, nestedTwiceSeen
+nestedArrayTwice = [10]
+nestedArrayTwice, nestedArrayTwiceSeen = NestedArrayTwice(nestedArrayTwice)
+"NestedArrayTwice:", nestedArrayTwice, nestedArrayTwiceSeen
+condNested = 10
+condNested, condNestedSeen = ConditionalNested(condNested, 5)
+"ConditionalNested:", condNested, condNestedSeen
+condNestedSkipped = 10
+condNestedSkipped, condNestedSkippedSeen = ConditionalNested(condNestedSkipped, -1)
+"ConditionalNestedSkipped:", condNestedSkipped, condNestedSkippedSeen
+
+# Sharing is internal to the call: a sibling RHS still reads the caller's
+# pre-assignment binding until every RHS finishes.
+staged = "hello" ⊕ ""
+staged, stagedSeen, old = ConcatAfter(staged, "abc"), staged
+"StagedString:", staged, stagedSeen, old
+
+# An untyped empty output resets the actual shared slot. The output's storage
+# must follow its aliased second input, without changing the unrelated rank.
+flat = [1 2]
+matrix = [[3 4]]
+matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
+"ResetArray:", matrix, flatSeen, matrixSeen

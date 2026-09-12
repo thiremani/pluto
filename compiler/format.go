@@ -682,6 +682,12 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 				Msg:   fmt.Sprintf("cannot write to constant %q", mainID),
 			}
 		}
+		if mainSym.ReadOnly {
+			return true, &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("cannot write to input parameter %q", mainID),
+			}
+		}
 		s := c.promoteToMemory(mainID)
 		result.args = append(result.args, s.Val)
 		return true, nil

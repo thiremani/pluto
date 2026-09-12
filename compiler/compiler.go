@@ -33,7 +33,7 @@ type Symbol struct {
 //
 // Assignment semantics: when assigning a borrowed symbol to a local variable, the value
 // is COPIED, just like `x = s` copies in regular scope. This ensures:
-//   - No aliasing between caller's input and output variables
+//   - Input/output references may alias; ordinary local assignments still copy
 //   - Local variables get independent copies (with Borrowed=false)
 //   - Consistent semantics: x = identity(s) behaves like x = s
 //
@@ -76,21 +76,30 @@ type callArg struct {
 	Name    string
 	Symbol  *Symbol
 	Lowered *Symbol
-	// AliasSelector is the one-based selector for the caller destination this
-	// argument aliases: 0 means none, N means output N-1. Direct scalar params
-	// transmit it as a hidden ABI argument; indirect params consume it
-	// caller-side to pass that output's staged pointer in place of the lowered
-	// argument. One-based keeps the zero value correct for arguments that
-	// alias nothing.
-	AliasSelector int
+	// AliasOutput is the one-based caller destination this argument shares a
+	// binding with: 0 means none, N means output N-1. It is decided at compile
+	// time from the call's names, so it selects a lowering variant rather than
+	// travelling as an argument. One-based keeps the zero value correct for
+	// arguments that alias nothing.
+	AliasOutput int
 }
 
+// callSignature is one call site's view of a specialization. Mangled is the
+// solver's key; the lowered symbol additionally encodes call-site facts that
+// change the emitted body but not its types: wider output storage and which
+// inputs share a binding with which outputs.
 type callSignature struct {
-	FuncName   string
-	Mangled    string
-	ParamTypes []Type
-	FnInfo     *FuncInfo
-	ABI        FuncABI
+	FuncName string
+	Mangled  string
+	// OutputStorage lists every output slot's storage type when a caller
+	// destination is wider than the declared output; nil otherwise.
+	OutputStorage []Type
+	// AliasPattern holds, per parameter, the one-based output it shares a
+	// binding with at this call site, or 0. Nil means no parameter aliases.
+	AliasPattern []int
+	ParamTypes   []Type
+	FnInfo       *FuncInfo
+	ABI          FuncABI
 }
 
 type preparedCall struct {
@@ -100,13 +109,14 @@ type preparedCall struct {
 	RetStruct llvm.Type
 }
 
-// paramAlias tracks an aliased direct scalar param binding for the active
-// function body. The Base check prevents alias behavior from leaking onto a
-// same-name binding introduced later in the scope tree.
+// paramAlias records that a parameter of the active function body shares its
+// caller binding with the named output. The Base check prevents alias behavior
+// from leaking onto a same-name binding introduced later in the scope tree; a
+// lowering that rebinds the parameter on purpose, such as ranged staging,
+// registers the new symbol as a further base.
 type paramAlias struct {
-	Base        *Symbol
-	AliasIndex  llvm.Value
-	OutputNames []string
+	Base   *Symbol
+	Output string
 }
 
 type symbolSource int
@@ -137,8 +147,12 @@ type Compiler struct {
 	ExprCache       map[ExprKey]*ExprInfo
 	FuncNameMangled string // current script root or function specialization key
 	Errors          []*token.CompileError
-	paramAliasStack []map[string]*paramAlias
-	stmtCtxStack    []stmtCtx
+	paramAliasStack []map[string][]*paramAlias
+	outputSlotTypes map[string]Type
+	// condTempDest maps a synthetic conditional destination to the source
+	// destination it stands in for, so call-site aliasing sees through it.
+	condTempDest map[string]string
+	stmtCtxStack []stmtCtx
 }
 
 type stmtCtx struct {
@@ -181,7 +195,8 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		ExprCache:       exprCache,
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
-		paramAliasStack: []map[string]*paramAlias{},
+		paramAliasStack: []map[string][]*paramAlias{},
+		condTempDest:    make(map[string]string),
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -202,6 +217,9 @@ func freshCompilerIdentifier(prefix identifierPrefix, role string, counter *int)
 }
 
 func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
+	if typ, exists := c.outputSlotTypes[name]; exists {
+		return typ
+	}
 	f := c.FuncCache[c.FuncNameMangled]
 	typ, ok := f.Vars[name]
 	if !ok {
@@ -210,7 +228,7 @@ func (c *Compiler) bindingSlotType(name string, fallback Type) Type {
 	return typ
 }
 
-func (c *Compiler) currentParamAliases() map[string]*paramAlias {
+func (c *Compiler) currentParamAliases() map[string][]*paramAlias {
 	if len(c.paramAliasStack) == 0 {
 		return nil
 	}
@@ -218,7 +236,7 @@ func (c *Compiler) currentParamAliases() map[string]*paramAlias {
 }
 
 func (c *Compiler) pushParamAliases() {
-	c.paramAliasStack = append(c.paramAliasStack, make(map[string]*paramAlias))
+	c.paramAliasStack = append(c.paramAliasStack, make(map[string][]*paramAlias))
 }
 
 func (c *Compiler) popParamAliases() {
@@ -233,28 +251,33 @@ func identNames(idents []*ast.Identifier) []string {
 	return names
 }
 
-// bindParamAlias records the output names eagerly, but the outputs themselves
-// are resolved lazily from scope when the param is later read or promoted.
-// This allows direct outputs to remain values, be replaced in scope, or be
-// promoted to slots without invalidating the alias metadata.
-func (c *Compiler) bindParamAlias(name string, sym *Symbol, aliasIndex llvm.Value, outputNames []string) {
-	c.currentParamAliases()[name] = &paramAlias{
-		Base:        sym,
-		AliasIndex:  aliasIndex,
-		OutputNames: append([]string(nil), outputNames...),
-	}
-}
-
-func (c *Compiler) clearParamAlias(name string) {
-	delete(c.currentParamAliases(), name)
+// bindParamAlias records the shared output by name and resolves its current
+// value on every input read. The output may remain a value or be replaced in
+// scope without invalidating the input's reference to it.
+func (c *Compiler) bindParamAlias(name string, sym *Symbol, output string) {
+	aliases := c.currentParamAliases()
+	aliases[name] = append(aliases[name], &paramAlias{Base: sym, Output: output})
 }
 
 func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
-	alias, ok := c.currentParamAliases()[name]
-	if !ok || alias.Base != sym {
-		return nil, false
+	for _, alias := range c.currentParamAliases()[name] {
+		if alias.Base == sym {
+			return alias, true
+		}
 	}
-	return alias, true
+	return nil, false
+}
+
+// destinationBase resolves a synthetic conditional destination to the source
+// destination it commits into, following stage temps through commit temps.
+func (c *Compiler) destinationBase(name string) string {
+	for {
+		base, synthetic := c.condTempDest[name]
+		if !synthetic {
+			return name
+		}
+		name = base
+	}
 }
 
 func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
@@ -319,15 +342,18 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
-// setCallArgAliasSelectors records on each argument which caller destination it
-// aliases for range-bearing variants. Direct scalar params encode the selected
-// output through a hidden ABI index; indirect params receive that output's
-// staged pointer directly. Arguments that alias nothing keep selector 0.
-func (c *Compiler) setCallArgAliasSelectors(sig *callSignature, args []callArg, dest []*ast.Identifier) {
-	if !sig.ABI.HasRangeParams || dest == nil {
+// setCallArgAliases records on each argument which caller destination it
+// shares a binding with, and derives the call's alias pattern from them. A
+// direct scalar param then reads the output's current value inside the
+// variant; an indirect param receives that output's staged pointer instead of
+// its own. Everything is decided from names, so a nested call inside a variant
+// forwards its enclosing input's alias without any run-time state.
+func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) {
+	if dest == nil {
 		return
 	}
 
+	var pattern []int
 	for paramIndex, arg := range args {
 		if arg.Name == "" {
 			continue
@@ -337,22 +363,38 @@ func (c *Compiler) setCallArgAliasSelectors(sig *callSignature, args []callArg, 
 			if outputIndex >= len(sig.ABI.Return.OutTypes) {
 				break
 			}
-			if output.Value != arg.Name {
-				continue
-			}
-			// An indirect parameter and a same-named output can legitimately
-			// differ in ownership flavor, such as a StrH binding receiving a
-			// StrG output. Redirecting the input to that output's adapter would
-			// make a sibling output that reads the input see the adapter's
-			// value instead. Direct scalars cannot reach this: the solver
-			// rejects a name that would need two numeric types.
+			// Output storage variants preserve compatible ownership widening.
+			// A remaining type mismatch cannot share the input's representation
+			// and must not select that output as its storage.
 			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
 				continue
 			}
-			args[paramIndex].AliasSelector = outputIndex + 1
+			base := c.destinationBase(output.Value)
+			if base != arg.Name && !c.inputAliasesOutput(arg.Name, base) {
+				continue
+			}
+			if pattern == nil {
+				pattern = make([]int, len(args))
+			}
+			args[paramIndex].AliasOutput = outputIndex + 1
+			pattern[paramIndex] = outputIndex + 1
 			break
 		}
 	}
+
+	sig.AliasPattern = pattern
+}
+
+// inputAliasesOutput reports whether a name read inside a variant is an input
+// that already shares the given output's binding, so a nested call targeting
+// that output with this input keeps the same storage.
+func (c *Compiler) inputAliasesOutput(input, output string) bool {
+	sym, ok := Get(c.Scopes, input)
+	if !ok {
+		return false
+	}
+	alias, ok := c.paramAliasFor(input, sym)
+	return ok && alias.Output == output
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
@@ -367,23 +409,6 @@ func (c *Compiler) directReturnSeedForCall(outType Type, dest *ast.Identifier, o
 		return c.resolveDestSeed(dest, outType)
 	}
 	return c.makeZeroValue(outType)
-}
-
-func (c *Compiler) selectAliasedParamPtr(name string, spill llvm.Value, aliasIndex llvm.Value, outputs []*Symbol) llvm.Value {
-	slotPtr := spill
-	for i, output := range outputs {
-		if output == nil {
-			continue
-		}
-		match := c.builder.CreateICmp(
-			llvm.IntEQ,
-			aliasIndex,
-			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
-			fmt.Sprintf("%s_alias_%d", name, i),
-		)
-		slotPtr = c.builder.CreateSelect(match, output.Val, slotPtr, fmt.Sprintf("%s_slot_%d", name, i))
-	}
-	return slotPtr
 }
 
 func (c *Compiler) localValSymbol(name string, loadName string) (*Symbol, bool) {
@@ -425,37 +450,24 @@ func (c *Compiler) putGlobal(name, mangledName string, sym *Symbol) {
 	c.MangledNames[name] = mangledName
 }
 
+// directParamValue reads a direct scalar input that shares its binding with
+// an output: the output's current value is the input's value.
 func (c *Compiler) directParamValue(name string, sym *Symbol, alias *paramAlias) *Symbol {
-	if alias == nil || len(alias.OutputNames) == 0 {
-		return sym
-	}
-
-	value := sym.Val
-	for i, outputName := range alias.OutputNames {
-		// Skip rather than filter: the selector names an output by position, so
-		// index i must keep meaning the i-th output for the remaining slots.
-		outputSym, ok := Get(c.Scopes, outputName)
-		if !ok || !aliasableOutput(sym.Type, outputSym.Type) {
-			continue
-		}
-		match := c.builder.CreateICmp(
-			llvm.IntEQ,
-			alias.AliasIndex,
-			llvm.ConstInt(c.Context.Int32Type(), uint64(i+1), false),
-			fmt.Sprintf("%s_alias_match_%d", name, i),
-		)
-		output, _ := c.localValSymbol(outputName, fmt.Sprintf("%s_alias_load_%d", outputName, i))
-		aliasVal := c.coerceSymbolForType(output, sym.Type, fmt.Sprintf("%s_alias_value_%d", outputName, i))
-		value = c.builder.CreateSelect(match, aliasVal.Val, value, fmt.Sprintf("%s_alias_value_%d", name, i))
+	output, ok := c.localValSymbol(alias.Output, name+"_alias_load")
+	if !ok {
+		panic(fmt.Sprintf("internal: input %s aliases unbound output %s", name, alias.Output))
 	}
 
 	resolved := GetCopy(sym)
-	resolved.Val = value
+	resolved.Val = c.coerceSymbolForType(output, sym.Type, name+"_alias_value").Val
 	return resolved
 }
 
+// valueSymbol reads a binding. An aliased direct scalar input reads its
+// output's current value; an aliased indirect input already points at that
+// output's storage, so it reads through its own pointer like any other.
 func (c *Compiler) valueSymbol(name string, sym *Symbol, loadName string) *Symbol {
-	if alias, ok := c.paramAliasFor(name, sym); ok {
+	if alias, ok := c.paramAliasFor(name, sym); ok && sym.Type.Kind() != PtrKind {
 		return c.directParamValue(name, sym, alias)
 	}
 	return c.derefIfPointer(sym, loadName)
@@ -1040,7 +1052,12 @@ func (c *Compiler) storeValue(name string, rhsSym *Symbol, shouldCopy bool) {
 	if !exists || oldSym.Type.Kind() != PtrKind {
 		targetType := c.bindingSlotType(name, valueToStore.Type)
 		valueToStore = c.coerceSymbolForType(valueToStore, targetType, name+"_rhs_load")
-		Put(c.Scopes, name, valueToStore)
+
+		// Parameter permissions belong to the binding, not a copied value.
+		stored := GetCopy(valueToStore)
+		stored.FuncArg = exists && oldSym.FuncArg
+		stored.ReadOnly = exists && oldSym.ReadOnly
+		Put(c.Scopes, name, stored)
 		return
 	}
 
@@ -1635,10 +1652,6 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 		panic("Compiler error: trying to promote to memory an undefined variable: " + name)
 	}
 
-	if alias, ok := c.paramAliasFor(name, sym); ok {
-		return c.promoteAlias(name, sym, alias)
-	}
-
 	ptr, alreadyPtr := c.makePtr(name, sym)
 	if alreadyPtr {
 		return ptr
@@ -1647,43 +1660,6 @@ func (c *Compiler) promoteToMemory(name string) *Symbol {
 	// CRITICAL: Update the symbol table immediately. This is the intended side effect.
 	// From now on, any reference to `name` in the current scope will resolve to this new pointer symbol.
 	Put(c.Scopes, name, ptr)
-	return ptr
-}
-
-func (c *Compiler) promoteAlias(name string, sym *Symbol, alias *paramAlias) *Symbol {
-	paramPtr := c.createEntryBlockAlloca(c.mapToLLVMType(sym.Type), name)
-	c.createStore(sym.Val, paramPtr, sym.Type)
-
-	slotPtr := paramPtr
-	if len(alias.OutputNames) > 0 {
-		outputPtrs := make([]*Symbol, len(alias.OutputNames))
-		for i, outputName := range alias.OutputNames {
-			outputSym, _ := Get(c.Scopes, outputName)
-			// Left nil when the output cannot back this slot, so the selector
-			// keeps its positional meaning but never picks a mistyped pointer.
-			if !aliasableOutput(sym.Type, outputSym.Type) {
-				continue
-			}
-			if outputSym.Type.Kind() != PtrKind {
-				// Only params carry alias bindings, so promoting an output here
-				// cannot recurse through another param-alias entry.
-				outputSym = c.promoteToMemory(outputName)
-			}
-			outputPtrs[i] = outputSym
-		}
-		slotPtr = c.selectAliasedParamPtr(name, paramPtr, alias.AliasIndex, outputPtrs)
-	}
-
-	ptr := &Symbol{
-		Val:       slotPtr,
-		Type:      Ptr{Elem: sym.Type},
-		FuncArg:   sym.FuncArg,
-		Borrowed:  sym.Borrowed,
-		ReadOnly:  sym.ReadOnly,
-		WriteFlag: sym.WriteFlag,
-	}
-	Put(c.Scopes, name, ptr)
-	c.clearParamAlias(name)
 	return ptr
 }
 
@@ -2405,10 +2381,12 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 // bindRangedTempOutputs makes each destination name resolve to its staged slot
 // while that one ranged expression is compiled. Conditional lowering can make
 // the real destination and a synthetic conditional write name alias the same
-// slot, so bind every visible name for that slot as well. This preserves
-// loop-carried self-reference (res = res + i) without exposing the staged value
-// to sibling right-hand sides in a simultaneous assignment; the caller's
-// BlockScope is popped before the next expression is compiled.
+// slot, so bind every visible name for that slot as well. An input that
+// shares the destination is rebound to the staged slot too and keeps its
+// alias, so a nested call inside the loop still selects the sharing variant.
+// This preserves loop-carried self-reference without exposing staged values to
+// sibling right-hand sides in a simultaneous assignment. The caller pops its
+// BlockScope before compiling the next expression.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
 		// A blank binds nothing and nothing can read it back, so it has no
@@ -2419,15 +2397,23 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 		}
 
 		names := []string{dest[i].Value}
+		aliased := make(map[string]string)
 		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
+			base := c.destinationBase(dest[i].Value)
 			seen := make(map[string]struct{})
 			for scopeIdx := len(c.Scopes) - 1; scopeIdx >= 0; scopeIdx-- {
 				scope := c.Scopes[scopeIdx]
-				for name, sym := range scope.Elems {
+				for _, name := range scope.BindingOrder {
+					sym := scope.Elems[name]
 					if _, visited := seen[name]; visited {
 						continue
 					}
 					seen[name] = struct{}{}
+					if alias, ok := c.paramAliasFor(name, sym); ok && alias.Output == base {
+						names = append(names, name)
+						aliased[name] = alias.Output
+						continue
+					}
 					if sym.Type.Kind() == PtrKind && sym.Val == current.Val {
 						names = append(names, name)
 					}
@@ -2439,6 +2425,11 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 		}
 		for _, name := range names {
 			Put(c.Scopes, name, outputs[i])
+			// The rebound input keeps its alias, so a nested call inside the
+			// loop still selects the sharing variant.
+			if output, ok := aliased[name]; ok {
+				c.bindParamAlias(name, outputs[i], output)
+			}
 		}
 	}
 }
@@ -2572,9 +2563,6 @@ func (c *Compiler) getFuncType(mangled string, abi FuncABI) (llvm.Type, llvm.Typ
 	for _, param := range abi.Params {
 		llvmParams = append(llvmParams, c.mapToLLVMType(param.Lowered))
 	}
-	for i := 0; i < abi.NumAliasSlots(); i++ {
-		llvmParams = append(llvmParams, c.Context.Int32Type())
-	}
 	if abi.Return.Mode == ABIReturnDirect {
 		llvmParams = append(llvmParams, c.mapToLLVMType(abi.Return.DirectType))
 	}
@@ -2603,7 +2591,10 @@ func (c *Compiler) addPointerParamAttributes(function llvm.Value, index int) {
 }
 
 func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, funcType llvm.Type, retStruct llvm.Type) llvm.Value {
-	function := llvm.AddFunction(c.Module, sig.Mangled, funcType)
+	function := llvm.AddFunction(c.Module, sig.loweredName(), funcType)
+	if sig.isVariant() {
+		function.SetLinkage(llvm.InternalLinkage)
+	}
 
 	if sig.ABI.UsesIndirectReturn() {
 		sretAttr := c.Context.CreateTypeAttribute(llvm.AttributeKindID("sret"), retStruct)
@@ -2622,9 +2613,6 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 		c.addPointerParamAttributes(function, paramIndex)
 	}
 
-	for i := 0; i < sig.ABI.NumAliasSlots(); i++ {
-		c.addNoundefAttribute(function, sig.ABI.AliasParamBaseIndex()+i+1)
-	}
 	if seedParamIndex := sig.ABI.DirectReturnSeedParamIndex(); seedParamIndex >= 0 {
 		c.addNoundefAttribute(function, seedParamIndex+1)
 	}
@@ -2637,9 +2625,15 @@ func (c *Compiler) compileFunc(template *ast.FuncStatement, sig *callSignature, 
 	// Set FuncNameMangled so ExprCache entries are keyed to this function
 	savedFuncNameMangled := c.FuncNameMangled
 	c.FuncNameMangled = sig.Mangled
+	savedOutputSlots := c.outputSlotTypes
+	c.outputSlotTypes = make(map[string]Type, len(template.Outputs))
+	for i, output := range template.Outputs {
+		c.outputSlotTypes[output.Value] = sig.ABI.Return.OutTypes[i]
+	}
 	c.pushParamAliases()
 	retVal, hasDirectRet := c.compileFuncBlock(template, sig, retStruct, function)
 	c.popParamAliases()
+	c.outputSlotTypes = savedOutputSlots
 	c.FuncNameMangled = savedFuncNameMangled
 
 	if hasDirectRet {
@@ -2730,9 +2724,6 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 				FuncArg:  true,
 				ReadOnly: true,
 			}
-			if aliasParamIndex := sig.ABI.AliasFunctionParamIndex(i); aliasParamIndex >= 0 {
-				c.bindParamAlias(name, inputs[i], function.Param(aliasParamIndex), outputNames)
-			}
 		} else {
 			inputs[i] = &Symbol{
 				Val:      paramVal,
@@ -2741,6 +2732,12 @@ func (c *Compiler) processParams(template *ast.FuncStatement, sig *callSignature
 				Borrowed: true,
 				ReadOnly: true,
 			}
+		}
+		// An aliased indirect param already points at the output's staged
+		// storage; the binding lets nested calls and caller-side ranges
+		// forward that sharing by name.
+		if i < len(sig.AliasPattern) && sig.AliasPattern[i] > 0 {
+			c.bindParamAlias(name, inputs[i], outputNames[sig.AliasPattern[i]-1])
 		}
 
 		if isRangeDriverType(elemType) {
@@ -2771,7 +2768,7 @@ func (c *Compiler) compileFuncBlock(template *ast.FuncStatement, sig *callSignat
 	var outputs []*Symbol
 	if sig.ABI.UsesIndirectReturn() {
 		sretPtr := function.Param(0)
-		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.FnInfo.Sig.OutTypes)
+		outputs = c.processIndirectOutputs(template, retStruct, sretPtr, sig.ABI.Return.OutTypes)
 	} else {
 		outputs = c.processDirectOutputValues(template, sig, function)
 	}
@@ -2909,11 +2906,17 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 	if level == len(fa.IterIndices) {
 		PushScope(&c.Scopes, BlockScope)
 		defer c.popScope()
+		// Direct-return ABI is single-output today, so the loop body only
+		// needs the current scalar output binding for fn.Outputs[0].
+		if currentOutput != nil {
+			Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
+		}
+		c.compileFuncBody(fn)
 		if currentOutput == nil {
-			c.compileFuncBody(fn)
 			return nil
 		}
-		return c.compileDirectOutputIterBody(fn, currentOutput)
+		output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
+		return output
 	}
 
 	paramIdx := fa.IterIndices[level]
@@ -2926,7 +2929,7 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 			Type:     iterType,
 			FuncArg:  true,
 			Borrowed: true,
-			ReadOnly: false,
+			ReadOnly: true,
 		}
 		PushScope(&c.Scopes, BlockScope)
 		Put(c.Scopes, name, iterSym)
@@ -2958,16 +2961,6 @@ func (c *Compiler) funcLoopNest(fn *ast.FuncStatement, fa *FuncArgs, level int, 
 		panic("unsupported iterator kind in funcLoopNest")
 	}
 	return result
-}
-
-func (c *Compiler) compileDirectOutputIterBody(fn *ast.FuncStatement, currentOutput *Symbol) *Symbol {
-	// Direct-return ABI is single-output today, so the loop body only needs the
-	// current scalar output binding for fn.Outputs[0].
-	Put(c.Scopes, fn.Outputs[0].Value, currentOutput)
-	c.compileFuncBody(fn)
-
-	output, _ := c.localValSymbol(fn.Outputs[0].Value, fn.Outputs[0].Value+"_iter_out")
-	return output
 }
 
 func (c *Compiler) compileFuncBody(fn *ast.FuncStatement) {
@@ -3102,7 +3095,7 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
 	callArgs := c.compileCallArgs(sig, ce)
-	c.setCallArgAliasSelectors(sig, callArgs, dest)
+	c.setCallArgAliases(sig, callArgs, dest)
 	c.lowerCallArgs(sig.FuncName, callArgs, sig)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
@@ -3227,16 +3220,16 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// them at independent, destination-seeded slots so a call in one RHS cannot
 	// mutate a real destination before sibling RHS expressions have read the
 	// statement-start values. The outer assignment owns the eventual commit and
-	// cleanup. ABI-flavor adapters handle established slots such as StrH when a
-	// callee declares StrG.
+	// cleanup. Private output-storage variants preserve compatible widening,
+	// such as an established StrH slot receiving a declared StrG output.
 	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
 	c.compileIndirectCallIntoStagedOutputs(sig, ce, dest, outputs)
 	return c.loadOutputValues(outputs, "call_final")
 }
 
 func (c *Compiler) getOrCompileCallFunction(sig *callSignature) (llvm.Value, llvm.Type, llvm.Type) {
-	funcType, retStruct := c.getFuncType(sig.Mangled, sig.ABI)
-	fn := c.Module.NamedFunction(sig.Mangled)
+	funcType, retStruct := c.getFuncType(sig.loweredName(), sig.ABI)
+	fn := c.Module.NamedFunction(sig.loweredName())
 	if !fn.IsNil() {
 		return fn, funcType, retStruct
 	}
@@ -3292,6 +3285,7 @@ func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	dest []*ast.Identifier,
 	staged []*Symbol,
 ) {
+	c.specializeOutputStorage(sig, staged)
 	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
 	callOutputs := callAdapterOutputs(adapters)
 	c.compileIndirectCallIntoOutputs(
@@ -3302,6 +3296,40 @@ func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 		func(writeFlags []llvm.Value) { c.commitCallOutputAdapters(staged, adapters, writeFlags) },
 		func() { c.cleanupSkippedCallOutputAdapters(adapters) },
 	)
+}
+
+// loweredName is the symbol of the private variant this call site lowers to,
+// or the public specialization when no call-site fact changes the body.
+func (sig *callSignature) loweredName() string {
+	return MangleVariant(sig.Mangled, sig.OutputStorage, sig.AliasPattern)
+}
+
+func (sig *callSignature) isVariant() bool {
+	return sig.OutputStorage != nil || sig.AliasPattern != nil
+}
+
+// specializeOutputStorage keeps a writable output and a compatible input on
+// the same representation. In particular an untyped empty array result must
+// reset the actual array slot, rather than a separate zero-seeded adapter that
+// its input cannot observe. Solver facts remain keyed by the source signature;
+// only the private function's output storage and ownership change.
+func (c *Compiler) specializeOutputStorage(sig *callSignature, outputs []*Symbol) {
+	changed := false
+	for i, output := range outputs {
+		storage := output.Type.(Ptr).Elem
+		declared := sig.ABI.Return.OutTypes[i]
+		if TypeEqual(storage, declared) || !bindingSlotCompatible(storage, declared) {
+			continue
+		}
+		if !TypeEqual(mergeBindingSlotType(storage, declared), storage) {
+			continue
+		}
+		sig.ABI.Return.OutTypes[i] = storage
+		changed = true
+	}
+	if changed {
+		sig.OutputStorage = slices.Clone(sig.ABI.Return.OutTypes)
+	}
 }
 
 func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {
@@ -3363,21 +3391,10 @@ func (c *Compiler) callArgs(
 	}
 	for i, arg := range call.Args {
 		argVal := arg.Lowered.Val
-		if sig.ABI.Params[i].Mode == ABIParamIndirect && arg.AliasSelector > 0 && arg.AliasSelector <= len(outputs) {
-			argVal = outputs[arg.AliasSelector-1].Val
+		if sig.ABI.Params[i].Mode == ABIParamIndirect && arg.AliasOutput > 0 && arg.AliasOutput <= len(outputs) {
+			argVal = outputs[arg.AliasOutput-1].Val
 		}
 		llvmArgs = append(llvmArgs, argVal)
-	}
-	aliasIndices := make([]int, sig.ABI.NumAliasSlots())
-	for i, arg := range call.Args {
-		slot := sig.ABI.Params[i].AliasSlot
-		if slot < 0 {
-			continue
-		}
-		aliasIndices[slot] = arg.AliasSelector
-	}
-	for _, aliasIndex := range aliasIndices {
-		llvmArgs = append(llvmArgs, llvm.ConstInt(c.Context.Int32Type(), uint64(aliasIndex), false))
 	}
 	if sig.ABI.Return.Mode == ABIReturnDirect {
 		seed := c.coerceSymbolForType(directSeed, sig.ABI.Return.DirectType, sig.FuncName+"_seed")

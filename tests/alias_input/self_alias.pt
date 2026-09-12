@@ -1,11 +1,86 @@
 y = Twice(x)
-    y = x * 2
-    y = y + x
+    y = x * 2 + x
 
 s = Shout(t)
-    s = t ⊕ "!"
-    s = s ⊕ t
+    s = t ⊕ "!" ⊕ t
 
 r = Grow(q)
-    r = q ⊕ [9]
-    r = r ⊕ q
+    r = q ⊕ [9] ⊕ q
+
+a, b = SequentialSwap(x, y)
+    a = y
+    b = x
+
+a, b = SimultaneousSwap(x, y)
+    a, b = y, x
+
+# An input shared with an output observes writes from earlier statements.
+out, before = FoldBefore(current, item)
+    before = current
+    out = current + item
+
+out, after = FoldAfter(current, item)
+    out = current + item
+    after = current
+
+out, before = ConcatBefore(current, item)
+    before = current
+    out = current ⊕ item
+
+out, after = ConcatAfter(current, item)
+    out = current ⊕ item
+    after = current
+
+out, before = ArrayBefore(current, item)
+    before = current
+    out = current ⊕ [item]
+
+out, after = ArrayAfter(current, item)
+    out = current ⊕ [item]
+    after = current
+
+out, seen = NestedFold(current, item)
+    out, seen = FoldAfter(current, item)
+
+out, seen = NestedConcat(current, item)
+    out, seen = ConcatAfter(current, item)
+
+# The ranged call rebinds the shared input to its staged slot; the nested
+# call made inside that loop must still select the sharing variant.
+out, seen = NestedArrayRange(current)
+    out, seen = NestedArrayDeep(current, (1:3) + 0)
+
+out, seen = NestedArrayDeep(current, item)
+    out, seen = ArrayAfter(current, item)
+
+out, seen = ConditionalFold(current, item)
+    out = item > 0 current + item
+    seen = current
+
+# Caller-driven ranges rebind the shared input to the staged output while the
+# loop runs; the nested call must still select the sharing variant, on the
+# first ranged call and on a later one.
+out, seen = NestedRange(current)
+    out, seen = FoldAfter(current, (1:3) + 0)
+
+out, seen = NestedRangeTwice(current)
+    out, seen = FoldAfter(current, (1:3) + 0)
+    out, seen = FoldAfter(current, (3:5) + 0)
+
+out, seen = NestedArrayTwice(current)
+    out, seen = ArrayAfter(current, (1:3) + 0)
+    out, seen = ArrayAfter(current, (3:5) + 0)
+
+# A conditional call writes through synthetic destinations that stand in for
+# the outputs; sharing follows them to the real output.
+out, seen = ConditionalNested(current, item)
+    out, seen = item > 0 FoldAfter(current, item)
+
+out = BumpTwice(current, item)
+    out = current + item
+    out = current + item
+
+out, left, right = ResetPair(first, second)
+    out = []
+    left = first
+    right = second

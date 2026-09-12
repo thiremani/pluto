@@ -285,12 +285,16 @@ For owned heap values this may lower to an ownership swap without deep copies.
 If one owned source feeds multiple targets, at most one consumer takes it; the
 others require a derived copy.
 
-The same snapshot rule holds across a call boundary: in `a = F(a)` the callee
-reads the pre-call value through its read-only input for the whole call,
-while its output writes land in the destination-seeded staging slot and reach
-`a` only at commit. `tests/alias_input` pins this for direct scalars, heap
-strings, and arrays (`y = x * 2` then `y = y + x` yields 15 for `a = 5`, not
-20); Step 4's call lowering must preserve it.
+At a call boundary, `a = F(a)` connects the callee input and output to the
+same destination-seeded staging slot. The input name is read-only, but each
+read observes earlier output writes to that slot. Reads within one assignment
+still precede its writes. The real `a` changes only at the outer assignment's
+commit, so sibling RHS expressions continue to read the pre-commit binding.
+`tests/alias_input` pins both statement orders for ordinary and ranged calls,
+with direct scalars, static and heap strings, and arrays: starting at 10,
+`out = current + item` before `seen = current` yields `15 15` for item 5;
+reversing those body statements yields `15 10`. Step 4's call lowering must
+preserve this distinction between internal sharing and external commit.
 
 ## 7. Loop-Carried State
 
@@ -850,10 +854,16 @@ Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
 *existing* target whose direct callee output is `MayWrite`, resolved at `=`.
 A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee reads nothing. Step 2A records this as a `ReadsSeed`
-fact on the call site — the CFG is untouched in 2A — and Step 2B converts the
-fact into an ordinary CFG read event, so a `MustWrite` classification cannot
-let backward liveness kill the prior value.
+all-`MustWrite` callee introduces no implicit seed read. Declared outputs are
+write-only inside their template (the structural CFG rejects every read,
+including formatting markers), so the body cannot read the hidden seed through
+an output name. An input explicitly shared with an output can observe the
+staged value and later writes; that dependency is already an explicit argument
+read at the call site. Step 2A
+records boundary resolution as a `ReadsSeed` fact on the call site — the CFG
+is untouched in 2A — and Step 2B converts the fact into an ordinary CFG read
+event, so a `MustWrite` classification cannot let backward liveness kill the
+prior value.
 
 The validity-carrying result comes from a **private direct-call variant**
 behind the stable seeded entry point (§1). The clone **keeps the seed
