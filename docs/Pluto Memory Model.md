@@ -313,8 +313,15 @@ out, after = FoldAfter(current, item)
 Starting with `value = 10`, `value, seen = FoldBefore(value, 5)` produces
 `15 10`, while `value, seen = FoldAfter(value, 5)` produces `15 15`. Assigning
 the first output to a different binding leaves `current` unchanged, so
-`other, seen = FoldAfter(value, 5)` instead produces `15 10`. Reads within one
-assignment still precede its writes.
+`other, seen = FoldAfter(value, 5)` instead produces `15 10`.
+
+Reads within one assignment precede its writes, inside a body as much as at
+the call site. `out, before = current + item, current` therefore gives
+`before` the value from before that statement even when `current` shares
+`out`; the sharing becomes visible only to later statements. Keeping an old
+value across a write is an explicit assignment that creates an independent
+value, such as `saved = current` before `out = current + item`; the copy it
+may cost sits at that assignment, not inside the call.
 
 Use a simultaneous assignment when swapping through shared inputs. In
 `a, b = Swap(x, y)`, the body `a = y` followed by `b = x` makes

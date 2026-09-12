@@ -145,7 +145,7 @@ value = 10
 value, seen = Fold(value, 5)  # value = 15, seen = 15
 ```
 
-Moving `seen = current` before `out = current + item` instead makes `seen` equal 10. The same order applies to each iteration of a ranged call.
+Moving `seen = current` before `out = current + item` instead makes `seen` equal 10. The same order applies to each iteration of a ranged call. To keep an old value across a write, save it first with an explicit assignment; that is where any copy happens.
 
 ### Generics by use
 
