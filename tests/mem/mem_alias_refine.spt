@@ -1,5 +1,4 @@
-# The range driver is what makes the callee alias-bearing, so this only covers
-# the intended path while the call carries a range.
+# Each iteration observes the output's earlier write through its shared input.
 text = "he" ⊕ "llo"
 sibling = "z"
 i = 0:3

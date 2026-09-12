@@ -125,7 +125,7 @@ Compile and run:
 
 Templates are defined once with a clear input/output contract. The first line declares the output and input — the indented body describes the transformation.
 
-Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference** — calling a template directly modifies the output variable in the caller's scope.
+Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference**. A caller may connect an input and an output to the same variable; inside the call, later input reads observe writes through that output. The caller's variable receives the result after every right-hand side of the assignment has been evaluated.
 
 `math.pt`
 ```python
@@ -134,7 +134,18 @@ y = Square(x)
 	y = x * x
 ```
 
-Inputs are read-only — they flow in. Outputs are write-only inside the template — they flow out; use a local for intermediate values. Every function is a transformation. A caller may reuse a variable as both argument and destination, `a = Square(a)`, which is how an old value reaches the function.
+Inputs are read-only — they flow in. Outputs are write-only inside the template — they flow out; use a local for intermediate values. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
+
+```python
+out, seen = Fold(current, item)
+    out = current + item
+    seen = current
+
+value = 10
+value, seen = Fold(value, 5)  # value = 15, seen = 15
+```
+
+Moving `seen = current` before `out = current + item` instead makes `seen` equal 10. The same order applies to each iteration of a ranged call.
 
 ### Generics by use
 

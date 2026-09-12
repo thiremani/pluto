@@ -111,8 +111,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "Add", []Type{I64, I64})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)", "expected direct scalar signature with a hidden destination seed")
-	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3, i64 0)", "expected direct scalar call with a fresh-destination seed")
+	require.Contains(t, scriptIR, "define noundef i64 @"+mangled+"(i64 noundef %0, i64 noundef %1, i32 noundef %2, i32 noundef %3, i64 noundef %4)", "expected direct scalar signature with alias selectors and a hidden destination seed")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"(i64 2, i64 3, i32 0, i32 0, i64 0)", "expected direct scalar call with no aliases and a fresh-destination seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar return should not use sret struct")
 }
 
@@ -152,8 +152,8 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "AddF", []Type{F64, F64})
 
-	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1, double noundef %2)", "expected direct float signature with a hidden destination seed")
-	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00, double 0.000000e+00)", "expected direct float call with a fresh-destination seed")
+	require.Contains(t, scriptIR, "define noundef double @"+mangled+"(double noundef %0, double noundef %1, i32 noundef %2, i32 noundef %3, double noundef %4)", "expected direct float signature with alias selectors and a hidden destination seed")
+	require.Contains(t, scriptIR, "call double @"+mangled+"(double 2.500000e+00, double 3.500000e+00, i32 0, i32 0, double 0.000000e+00)", "expected direct float call with no aliases and a fresh-destination seed")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar float return should not use sret struct")
 }
 
@@ -431,11 +431,9 @@ out = Echo(value)
 	}
 }
 
-// Writing a parameter through %n promotes it to memory, which picks the aliased
-// slot by pointer. Opaque pointers make a mistyped pointer select valid IR and
-// the selector never matches the skipped index at runtime, so only the emitted
-// slot selects distinguish this path.
-func TestIterationSnapshotSelectsCompatibleOutput(t *testing.T) {
+// Alias selectors retain the declared output positions even when an earlier
+// output has a type that cannot back the input.
+func TestInputAliasSelectsCompatibleOutput(t *testing.T) {
 	code := `half, res = Rev(a, x)
     half = x * 0.5
     res = a + x`
@@ -443,17 +441,17 @@ func TestIterationSnapshotSelectsCompatibleOutput(t *testing.T) {
 h, r = Rev(r, 1:4)
 h, r`
 
-	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_gap", code, script)
+	ir, _ := compileScriptAndCodeIR(t, "input_alias_gap", code, script)
 
 	require.Regexp(t, `%a_alias_match_1 = icmp eq i32 %\d+, 2`, ir,
 		"the compatible output is the second one, so its ABI selector value must be 2")
 	require.Regexp(t, `%a_alias_value_1 = select i1 %a_alias_match_1, i64 %res_alias_load_1, i64 %\d+`, ir,
-		"selector 2 must read the caller's res destination once per iteration, falling back to the parameter")
+		"selector 2 must read the current res output, falling back to the parameter")
 	require.NotContains(t, ir, "%a_alias_match_0",
 		"the mismatched leading output must never be selectable as the parameter's value")
 }
 
-func TestIterationSnapshotSkipsInputsNoOutputCanAlias(t *testing.T) {
+func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
 	// Both outputs are integers, so writing them can never change the array
 	// input even though it is read after the first output write. Copying it
 	// per iteration would make the call quadratic.
@@ -464,28 +462,27 @@ func TestIterationSnapshotSkipsInputsNoOutputCanAlias(t *testing.T) {
 count, value = Read(data, 0:8)
 count, value`
 
-	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_skip", code, script)
+	ir, _ := compileScriptAndCodeIR(t, "unrelated_array_input", code, script)
 
 	require.NotContains(t, ir, "@arr_i64_copy",
 		"an input no output can alias must not be copied per iteration")
 }
 
-func TestIterationSnapshotCopiesAliasableInput(t *testing.T) {
-	// The heap-string input can back the heap-string output, so each
-	// iteration works on a private copy whatever the statement order.
-	code := `out, seen = FoldStr(current, item)
-    out = current ⊕ item
-    seen = current`
-	script := `items = ["b" "c"]
-text = "a" ⊕ ""
-text, last = FoldStr(text, items[0:2])
-text, last`
+func TestRangedCallDoesNotCopyArrayInputWithMatchingOutputType(t *testing.T) {
+	// The output has the same type as the input, but each iteration selects
+	// only one element. Copying the input would turn this linear call quadratic.
+	code := `out = Pick(data, index)
+    out = [data[index]]`
+	script := `data = [0:8]
+result = Pick(data, 0:8)
+result`
 
-	ir, _ := compileScriptAndCodeIR(t, "iteration_snapshot_copy", code, script)
+	ir, _ := compileScriptAndCodeIR(t, "matching_array_input", code, script)
 
-	require.Contains(t, ir, "%current_iter_input", "the aliased input is loaded once per iteration")
-	require.Regexp(t, `%str_copy\d* = call ptr @\w+\(ptr %current_iter_input\)`, ir,
-		"the snapshot copies the loaded input before the body runs")
+	require.NotContains(t, ir, "@arr_i64_copy",
+		"a matching output type must not introduce an input copy on every iteration")
+	require.NotContains(t, ir, "%data_arg_ref",
+		"an input with a known-zero alias selector must use its original pointer directly")
 }
 
 func TestRangeCollectorScalarVariant(t *testing.T) {
@@ -629,11 +626,11 @@ res`
 		Range{Iter: I64},
 	})
 
-	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1, i64 noundef %2)",
+	require.Contains(t, scriptIR, "define noundef i64 @"+scalarMangled+"(i64 noundef %0, i64 noundef %1, i32 noundef %2, i32 noundef %3, i64 noundef %4)",
 		"a shared driver must select the ordinary scalar specialization")
 	require.GreaterOrEqual(t, strings.Count(scriptIR, "call i64 @"+scalarMangled+"("), 1,
 		"the shared caller-side loop should invoke the scalar specialization")
-	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter, i64 %call_seed)",
+	require.Contains(t, scriptIR, "call i64 @"+scalarMangled+"(i64 %get, i64 %iter, i32 0, i32 0, i64 %call_seed)",
 		"the array access and scalar argument should use the same caller-loop iterator")
 	require.NotContains(t, scriptIR, arrayRangeMangled,
 		"arr[i] and i must not become independent callee iterators")

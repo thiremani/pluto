@@ -28,10 +28,14 @@ After Phase 1, `fib_tail` is no longer a strong argument for a Pluto-level tail-
 Pluto's source-level semantics stay unchanged:
 
 - assignments copy
-- inputs are logically read-only
-- outputs are logically writable results flowing back to the caller
+- input names are read-only, but can observe writes through a shared output
+- output names are write-only, and results reach the caller at assignment commit
 
-These are **language semantics**. How values physically move across a call boundary is the **lowered calling convention** — a separate concern. A read-only `I64` input can be passed by value without changing Pluto semantics. A single `I64` output can be returned in a register while still behaving like a Pluto output.
+These are **language semantics**. How values physically move across a call
+boundary is the **lowered calling convention** — a separate concern. An `I64`
+input can be passed by value provided alias metadata redirects each read to
+its shared output when required. A single `I64` output can be returned in a
+register while still behaving like a Pluto output.
 
 ## 3. Architecture
 
@@ -90,8 +94,9 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 - give every direct scalar return a final hidden destination seed, preserving
   skipped conditional writes and empty-range behavior without making the
   physical signature depend on the function body
-- preserve range-bearing accumulator behavior with additional hidden alias
-  selectors where needed
+- preserve live input/output sharing in both ordinary and range-bearing calls
+  with one hidden alias selector for every direct scalar input; reads use the
+  selected output's current value, including writes in the same iteration
 
 `MustWrite`/`MayWrite` has limited utility at the public boundary and must not
 decide whether the seed parameter exists. Adding one conditional output write

@@ -1,3 +1,4 @@
 res = AccFmt(a, x)
-    "count-a%n chars"
-    res = a + x
+    count = a
+    "count-count%n chars"
+    res = count + x

@@ -307,7 +307,7 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 		cfg.publishTarget(param)
 	}
 
-	cfg.typedForwardPass(template.Body.Statements, info.StatementEffects)
+	cfg.typedForwardPass(template, info)
 
 	live := make(map[string]struct{}, len(template.Outputs))
 	for _, output := range template.Outputs {
@@ -316,11 +316,39 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	cfg.backwardPass(live)
 }
 
-func (cfg *CFG) typedForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect) {
+// inputOutputAliases lists outputs that a caller could share with each input.
+// Specializations are reused across calls, so liveness must conservatively
+// retain writes observable through any compatible input reference. These are
+// scalar body types, so this also conservatively includes iterator inputs.
+func inputOutputAliases(template *ast.FuncStatement, info *FuncInfo) map[string][]*ast.Identifier {
+	aliases := make(map[string][]*ast.Identifier, len(template.Parameters))
+	for i, paramType := range info.Sig.Params {
+		for j, outputType := range info.Sig.OutTypes {
+			if !bindingSlotCompatible(paramType, outputType) {
+				continue
+			}
+			name := template.Parameters[i].Value
+			aliases[name] = append(aliases[name], template.Outputs[j])
+		}
+	}
+
+	return aliases
+}
+
+func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo) {
+	aliases := inputOutputAliases(template, info)
 	lastWrites := make(map[string]VarEvent)
-	for _, stmt := range statements {
+	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
-		cfg.processTypedStatement(stmt, reads, effects, lastWrites)
+		for _, read := range reads {
+			for _, output := range aliases[read.Name] {
+				if !cfg.isDefined(output.Value) {
+					continue
+				}
+				reads = append(reads, VarEvent{Name: output.Value, Kind: Read, Token: read.Token})
+			}
+		}
+		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 	}
 }
 
@@ -459,8 +487,8 @@ func (cfg *CFG) backwardPass(live map[string]struct{}) {
 }
 
 // validateStructuralRead enforces that a declared output is write-only inside
-// its template: a body transforms inputs into outputs and never observes an
-// output's value, so the incoming destination seed can never leak in.
+// its template. A body may observe output writes through an explicitly passed
+// input that shares the output's binding, but never through the output name.
 func (cfg *CFG) validateStructuralRead(event VarEvent, outputs map[string]struct{}) {
 	if _, isOutput := outputs[event.Name]; isOutput {
 		cfg.addError(event.Token, fmt.Sprintf("output %q is read inside its function; outputs are write-only, use a local", event.Name))

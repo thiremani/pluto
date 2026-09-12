@@ -29,12 +29,11 @@ type ABIReturn struct {
 
 // FuncABI captures the lowered function boundary for one mangled variant.
 // Direct scalar returns carry a hidden destination seed so a skipped write
-// preserves the caller's value. Range-bearing variants may additionally need
-// hidden alias state for loop-carried accumulation.
+// preserves the caller's value. Direct scalar inputs carry hidden alias state
+// so reads can observe writes through an output that shares their binding.
 type FuncABI struct {
-	Params         []ABIParam
-	Return         ABIReturn
-	HasRangeParams bool
+	Params []ABIParam
+	Return ABIReturn
 }
 
 func isDirectScalarABIType(t Type) bool {
@@ -79,13 +78,6 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		},
 	}
 
-	for _, paramType := range paramTypes {
-		if isRangeDriverType(paramType) {
-			abi.HasRangeParams = true
-			break
-		}
-	}
-
 	aliasSlot := 0
 	for i, paramType := range paramTypes {
 		paramABI := ABIParam{
@@ -97,10 +89,8 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		if isDirectScalarABIType(paramType) {
 			paramABI.Mode = ABIParamDirect
 			paramABI.Lowered = paramType
-			if abi.HasRangeParams {
-				paramABI.AliasSlot = aliasSlot
-				aliasSlot++
-			}
+			paramABI.AliasSlot = aliasSlot
+			aliasSlot++
 		}
 		abi.Params[i] = paramABI
 	}

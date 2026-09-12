@@ -7,13 +7,56 @@ s = Shout(t)
 r = Grow(q)
     r = q ⊕ [9] ⊕ q
 
-# The input is read after the output is written. Without a range, the whole
-# call sees the pre-call value; with a range, each iteration sees the value
-# it started with, and the next iteration receives the written output.
-out, seen = Fold(current, item)
+a, b = SequentialSwap(x, y)
+    a = y
+    b = x
+
+a, b = SimultaneousSwap(x, y)
+    a, b = y, x
+
+# An input shared with an output observes writes from earlier statements.
+out, before = FoldBefore(current, item)
+    before = current
     out = current + item
+
+out, after = FoldAfter(current, item)
+    out = current + item
+    after = current
+
+out, before = ConcatBefore(current, item)
+    before = current
+    out = current ⊕ item
+
+out, after = ConcatAfter(current, item)
+    out = current ⊕ item
+    after = current
+
+out, before = ArrayBefore(current, item)
+    before = current
+    out = current ⊕ [item]
+
+out, after = ArrayAfter(current, item)
+    out = current ⊕ [item]
+    after = current
+
+out, seen = NestedFold(current, item)
+    out, seen = FoldAfter(current, item)
+
+out, seen = NestedConcat(current, item)
+    out, seen = ConcatAfter(current, item)
+
+out, seen = NestedArrayRange(current)
+    out, seen = ArrayAfter(current, (1:3) + 0)
+
+out, seen = ConditionalFold(current, item)
+    out = item > 0 current + item
     seen = current
 
-out, seen = FoldStr(current, item)
-    out = current ⊕ item
-    seen = current
+out = BumpTwice(current, item)
+    out = current + item
+    out = current + item
+
+out, left, right = ResetPair(first, second)
+    out = []
+    left = first
+    right = second

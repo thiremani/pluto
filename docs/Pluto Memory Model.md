@@ -257,10 +257,12 @@ res = sum(a, b)
     res = a + b
 ```
 
-- **Parameters**: Input values (passed by value for scalars). Inside the
-  body an input is fixed: a range-bearing variant captures every non-iterator
-  input at the start of each scalar iteration, so an input that the caller
-  aliases to a destination never observes that output's write mid-iteration.
+- **Parameters**: Read-only bindings. A template cannot assign through an
+  input name, but an input may share a result slot with an output when the
+  caller uses the same binding as argument and destination. Each input read
+  observes that slot's current value, including writes from earlier statements
+  in the body. This rule applies to both ordinary and ranged calls and is
+  independent of whether the implementation passes the value or a pointer.
 - **Outputs**: Write-only inside their template. A body may assign an output
   any number of times, conditionally or not, and a nested call may target it,
   but reading it anywhere — a value, a condition, a call argument, a print, or
@@ -268,23 +270,26 @@ res = sum(a, b)
   locals. Outputs are independently staged result slots: an existing
   destination supplies the initial value and a fresh destination starts at
   its type's zero value, so a body that writes nothing preserves the caller's
-  value without ever seeing it. The real destinations are committed only
+  value. The body may observe that value through an explicitly aliased input;
+  it cannot read the output name itself. The real destinations are committed only
   after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
-When a caller destination and a function's declared output use different
-representations of a compatible value (for example, owned versus static
-strings, or an empty array type versus a concrete-rank array), the callee sees
-the zero value of its declared representation. A per-output write marker tells
-the caller whether to commit that adapted value. If the function does not
-write the output, the caller's staged value is preserved. This avoids treating
-one ownership or shape representation as if it were another.
+Calls specialize binding arguments on their actual storage type. When a
+caller's destination has a compatible wider representation than the declared
+output (for example, an owned string slot receiving a static string, or a
+concrete-rank array slot receiving `[]`), a private lowering variant uses that
+wider output storage. An aliased input and output therefore continue to share
+one slot: assigning `[]` makes a later input read observe the empty array.
+An unrelated input keeps its own type and value. Other representation changes
+use a separate output adapter with a per-output write marker; the caller only
+commits its value when the callee actually writes the output.
 
 ### Call Site
 
 ```python
 res = sum(res, 5)
-# - Parameter 'a' receives value of 'res'
+# - Parameter 'a' shares the call's staged result slot for 'res'
 # - Parameter 'b' receives 5
 # - Staged output 'res' starts with the caller destination's existing value
 # - Body executes: res = a + b
@@ -292,14 +297,43 @@ res = sum(res, 5)
 ```
 
 Reusing a variable as both an argument and a destination is how a caller
-feeds an old value into a transformation. The template itself sees only its
-declared inputs; `res = res + 1` inside `sum` would be rejected.
+connects an input to a call's staged output. The template itself reads through
+its declared inputs; `res = res + 1` inside `sum` would be rejected.
+
+```python
+out, before = FoldBefore(current, item)
+    before = current
+    out = current + item
+
+out, after = FoldAfter(current, item)
+    out = current + item
+    after = current
+```
+
+Starting with `value = 10`, `value, seen = FoldBefore(value, 5)` produces
+`15 10`, while `value, seen = FoldAfter(value, 5)` produces `15 15`. Assigning
+the first output to a different binding leaves `current` unchanged, so
+`other, seen = FoldAfter(value, 5)` instead produces `15 10`. Reads within one
+assignment still precede its writes.
+
+Use a simultaneous assignment when swapping through shared inputs. In
+`a, b = Swap(x, y)`, the body `a = y` followed by `b = x` makes
+`p, q = Swap(p, q)` produce `2 2` from `p, q = 1, 2`: the second statement
+reads the value just written through `a`. The body `a, b = y, x` instead
+produces `2 1`, because both reads happen before either write.
+
+The sharing is internal to each call. For
+`value, seen, old = FoldAfter(value, 5), value`, the result is `15 15 10`:
+`seen` observes the call's updated slot, while the sibling right-hand side
+reads the caller's binding before the assignment commits.
 
 With a range, the same reuse is an accumulation: `sum = Acc(sum, 1:5)` runs
-the body once per yield, and the input that aliases the destination receives
-the previous iteration's output at the start of the next iteration. Within an
-iteration that input is stable. An empty range leaves an existing destination
-unchanged and a fresh destination at its zero value.
+the body once per yield, and each iteration continues from the previous
+iteration's output. The body's statement order still applies within each
+iteration. Starting from 10, `FoldBefore(value, 1:3)` produces `13 11` and
+`FoldAfter(value, 1:3)` produces `13 13` when their first output targets
+`value`. An empty range leaves an existing destination unchanged and a fresh
+destination at its zero value.
 
 ### Range Parameters
 

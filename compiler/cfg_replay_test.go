@@ -285,8 +285,9 @@ result = Diamond(x)
 
 func TestCFGResultsAreIndependentPerType(t *testing.T) {
 	code := mustParseCode(t, `result = MaskOrKeep(x)
-    result = x
-    result = x > 0
+    local = x
+    result = local
+    result = local > 0
 `)
 
 	ctx := llvm.NewContext()

@@ -73,6 +73,33 @@ func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 	require.Equal(t, 2, deadStores)
 }
 
+func TestInputAliasOutputWriteLiveness(t *testing.T) {
+	tests := []cfgTestCase{
+		{
+			name: "Repeated Output Write",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item`,
+			input: "value = 10\nvalue = BumpTwice(value, 5)\nvalue",
+		},
+		{
+			name: "Incompatible Input Output Storage",
+			code: `out = Replaced(current)
+    out = "first"
+    current
+    out = "second"`,
+			input:         "value = Replaced(1)\nvalue",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runCFGTest(t, tt, tt.errorContains != "")
+		})
+	}
+}
+
 func getValidTestCases() []cfgTestCase {
 	return []cfgTestCase{
 		{

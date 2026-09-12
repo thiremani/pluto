@@ -1,7 +1,26 @@
 15
 hi!hi
 [1 2 9 1 2]
-15 10
-13 11
-10 0
-abc ab
+SequentialSwap: 2 2
+SimultaneousSwap: 2 1
+IntPlainBefore: 15 10
+IntPlainAfter: 15 15
+IntRangeBefore: 13 11
+IntRangeAfter: 13 13
+Empty: 10 0
+Separate: 10 15 10
+HeapRangeBefore: abc ab
+HeapRangeAfter: abc abc
+StaticPlainAfter: helloabc helloabc
+ArrayRangeBefore: [10 1 2] [10 1]
+ArrayRangeAfter: [10 1 2] [10 1 2]
+NestedNumber: 15 15
+NestedString: helloabc helloabc
+NestedArrayRange: [10 1 2] [10 1 2]
+ConditionalTaken: 15 15
+ConditionalSkipped: 10 10
+RepeatedWrites: 16
+StagedString: helloabc helloabc hello
+ResetArray: [
+] [1 2] [
+]
