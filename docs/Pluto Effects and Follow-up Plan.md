@@ -28,9 +28,9 @@ preserve outputs that are not written. A caller can explicitly connect an
 input to an output by reusing the same binding: later statements then observe
 writes through that output, in ordinary and ranged calls alike. Inputs are
 read-only bindings, not frozen values. No per-iteration input snapshot is
-needed. Direct scalar inputs use hidden alias selectors for ordinary as well
-as ranged variants, which changes the native calling convention while keeping
-its classification independent of body effects. The canonical description is in
+needed. Sharing is a compile-time fact of each call site and lowers to a
+private alias variant of the specialization, so the native calling convention
+is unchanged and stays independent of body effects. The canonical description is in
 [the memory model](./Pluto%20Memory%20Model.md) under "Parameters and Outputs".
 
 The storage mismatch filed as
@@ -151,8 +151,8 @@ does not reject read-only parameters.
 The live-reference update now rejects `%n` writes to input and iterator
 parameters through `Symbol.ReadOnly`, with ordinary and ranged rejection
 covered by `TestFormatCountRejectsInputParameter`. The former
-`TestPromotedAliasTypeGap` no longer mutates an input; its output-selector
-coverage remains in `TestInputAliasSelectsCompatibleOutput`. The `acc_fmt`
+`TestPromotedAliasTypeGap` no longer mutates an input; its output-position
+coverage remains in `TestAliasedInputReadsOutputInVariant`. The `acc_fmt`
 fixture now writes a local count. CFG marker handling still records reads,
 so the formatting write effects below remain unimplemented.
 

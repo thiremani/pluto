@@ -1,6 +1,6 @@
 # Pluto C ABI & Name Mangling Specification
 
-**Version:** 2.1 | **Status:** Draft | **Target:** C11 / C++17
+**Version:** 2.0 | **Status:** Draft | **Target:** C11 / C++17
 
 ## 1. Overview
 
@@ -284,8 +284,7 @@ typedef struct {
 
 The descriptor occupies the ordinary source-parameter position. An indirect
 result carrier, when present, comes first; all source parameters follow in
-source order; hidden alias selectors follow them; and a hidden direct-return
-seed is last.
+source order; and a hidden direct-return seed is last.
 
 ---
 
@@ -331,10 +330,8 @@ Module: `github.com/user/math`, RelPath: `stats/integral`
 The native calling convention is selected from the solved parameter and output
 types:
 
-- `I64` and `F64` parameters are passed directly, with a hidden `i32` alias
-  selector for each direct parameter after all source parameters, in source
-  order. Ranges, internal `ArrayRange` descriptors, and other values are
-  passed indirectly.
+- `I64` and `F64` parameters are passed directly. Ranges, internal
+  `ArrayRange` descriptors, and other values are passed indirectly.
 - A function with exactly one `I64` or `F64` output returns that scalar
   directly and receives one hidden seed value. The seed preserves the caller's
   staged value when the callee does not write its output, including a failed
@@ -360,8 +357,8 @@ unconditionally overwrites its output. Schematically, with mangled names
 abbreviated:
 
 ```c
-int64_t Pt_Square_I64(int64_t x, int32_t x_output_alias, int64_t seed);
-int64_t Pt_ConditionalSquare_I64(int64_t x, int32_t x_output_alias, int64_t seed);
+int64_t Pt_Square_I64(int64_t x, int64_t seed);
+int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
 int64_t Pt_Acc_I64_Range(
     int64_t a,
     const PtRangeI64 *range,
@@ -390,28 +387,24 @@ struct Results {
     bool *wrote1;
 };
 
-void Pt_example(
-    Results *results,
-    I64 direct_arg,
-    Other *indirect_arg,
-    int32_t direct_arg_output_alias
-);
+void Pt_example(Results *results, I64 direct_arg, Other *indirect_arg);
 ```
 
-Every ordinary or range-bearing variant receives one hidden alias selector
-for each direct scalar parameter. Zero selects the explicit argument value;
-a positive value `k` selects output slot `k - 1`, whose type must match the
-parameter. Each input read observes the selected output's current value, so a
-write through an output is visible to a later read through an aliased input.
-For compatible indirect parameters, the caller instead passes the matching
-staged output pointer itself, without another hidden parameter. Both forms
-also carry output values into subsequent range iterations. The caller's real
-destinations remain unchanged until the surrounding assignment commits.
-
-Version 2.1 adds these selectors to ordinary variants as well as ranged ones;
-C callers must supply zero for inputs that do not alias an output. This changes
-the native C signature. Hidden ABI fields and parameters are not part of name
-mangling.
+A call whose argument and destination are the same binding shares the input
+with that output. This is a compile-time fact of the call site, so it never
+appears in the exported signature. The compiler lowers such a call to a
+private variant of the specialization, an internal symbol named
+`<mangled>$alias$<p1>$<p2>...` with one entry per parameter: `0` for an
+unshared input, `k` for an input sharing output slot `k - 1`, whose type must
+match the parameter. Inside the variant a direct scalar input reads the
+output's current value, and for a compatible indirect input the caller passes
+the matching staged output pointer itself. Each read therefore observes the
+selected output's current value, and both forms carry output values into
+subsequent range iterations. The caller's real destinations remain unchanged
+until the surrounding assignment commits. A native caller cannot request a
+variant: passing the same address for a pointer input and an output shares
+them naturally, and a register scalar is always a plain value. Hidden ABI
+fields and private variants are not part of name mangling.
 
 An eligible immediate bare `array[range]` call argument may therefore select
 an `ArrayRange` specialization and run its loop inside the callee. This

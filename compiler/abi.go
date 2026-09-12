@@ -15,10 +15,9 @@ const (
 )
 
 type ABIParam struct {
-	Source    Type
-	Lowered   Type
-	Mode      ABIParamMode
-	AliasSlot int
+	Source  Type
+	Lowered Type
+	Mode    ABIParamMode
 }
 
 type ABIReturn struct {
@@ -29,8 +28,9 @@ type ABIReturn struct {
 
 // FuncABI captures the lowered function boundary for one mangled variant.
 // Direct scalar returns carry a hidden destination seed so a skipped write
-// preserves the caller's value. Direct scalar inputs carry hidden alias state
-// so reads can observe writes through an output that shares their binding.
+// preserves the caller's value. Whether an input shares a caller binding with
+// an output is a compile-time property of each call site, lowered as a private
+// variant of the function; it never appears in the native signature.
 type FuncABI struct {
 	Params []ABIParam
 	Return ABIReturn
@@ -48,7 +48,7 @@ func isDirectScalarABIType(t Type) bool {
 }
 
 // aliasableOutput reports whether an output can back a parameter's alias slot.
-// The hidden selector picks an output by position and the callee then reads that
+// The alias pattern names an output by position and the callee then reads that
 // storage as the parameter's own type, so the two must lower identically. There
 // is no numeric conversion anywhere on this path, and a pointer selected across
 // mismatched types would be loaded as the wrong type.
@@ -78,19 +78,15 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		},
 	}
 
-	aliasSlot := 0
 	for i, paramType := range paramTypes {
 		paramABI := ABIParam{
-			Source:    paramType,
-			Lowered:   Ptr{Elem: paramType},
-			Mode:      ABIParamIndirect,
-			AliasSlot: -1,
+			Source:  paramType,
+			Lowered: Ptr{Elem: paramType},
+			Mode:    ABIParamIndirect,
 		}
 		if isDirectScalarABIType(paramType) {
 			paramABI.Mode = ABIParamDirect
 			paramABI.Lowered = paramType
-			paramABI.AliasSlot = aliasSlot
-			aliasSlot++
 		}
 		abi.Params[i] = paramABI
 	}
@@ -110,16 +106,6 @@ func (abi FuncABI) UsesIndirectReturn() bool {
 	return abi.Return.Mode == ABIReturnIndirect
 }
 
-func (abi FuncABI) NumAliasSlots() int {
-	count := 0
-	for _, param := range abi.Params {
-		if param.AliasSlot >= 0 {
-			count++
-		}
-	}
-	return count
-}
-
 func (abi FuncABI) sourceParamBaseIndex() int {
 	if abi.UsesIndirectReturn() {
 		return 1
@@ -131,21 +117,9 @@ func (abi FuncABI) SourceFunctionParamIndex(paramIndex int) int {
 	return abi.sourceParamBaseIndex() + paramIndex
 }
 
-func (abi FuncABI) AliasParamBaseIndex() int {
-	return abi.sourceParamBaseIndex() + len(abi.Params)
-}
-
-func (abi FuncABI) AliasFunctionParamIndex(paramIndex int) int {
-	slot := abi.Params[paramIndex].AliasSlot
-	if slot < 0 {
-		return -1
-	}
-	return abi.AliasParamBaseIndex() + slot
-}
-
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
 	if abi.Return.Mode != ABIReturnDirect {
 		return -1
 	}
-	return abi.AliasParamBaseIndex() + abi.NumAliasSlots()
+	return abi.sourceParamBaseIndex() + len(abi.Params)
 }

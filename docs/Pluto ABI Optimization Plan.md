@@ -95,8 +95,9 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
   skipped conditional writes and empty-range behavior without making the
   physical signature depend on the function body
 - preserve live input/output sharing in both ordinary and range-bearing calls
-  with one hidden alias selector for every direct scalar input; reads use the
-  selected output's current value, including writes in the same iteration
+  by lowering a call whose argument names its own destination to a private
+  alias variant, in which reads use that output's current value, including
+  writes in the same iteration; the exported signature is unchanged
 
 `MustWrite`/`MayWrite` has limited utility at the public boundary and must not
 decide whether the seed parameter exists. Adding one conditional output write
