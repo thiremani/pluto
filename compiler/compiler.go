@@ -2381,8 +2381,9 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 // bindRangedTempOutputs makes each destination name resolve to its staged slot
 // while that one ranged expression is compiled. Conditional lowering can make
 // the real destination and a synthetic conditional write name alias the same
-// slot, so bind every visible name for that slot as well. Input references may
-// share it at run time and follow the staged slot through a pointer select.
+// slot, so bind every visible name for that slot as well. An input that
+// shares the destination is rebound to the staged slot too and keeps its
+// alias, so a nested call inside the loop still selects the sharing variant.
 // This preserves loop-carried self-reference without exposing staged values to
 // sibling right-hand sides in a simultaneous assignment. The caller pops its
 // BlockScope before compiling the next expression.

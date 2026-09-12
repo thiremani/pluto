@@ -23,7 +23,6 @@ RepeatedWrites: 16
 NestedRange: 13 13
 NestedRangeTwice: 20 20
 NestedArrayTwice: [10 1 2 3 4] [10 1 2 3 4]
-NestedArrayDeep: [10 1 2] [10 1 2]
 ConditionalNested: 15 15
 ConditionalNestedSkipped: 10 0
 StagedString: helloabc helloabc hello

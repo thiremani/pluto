@@ -201,15 +201,16 @@ func verifyCompiledModules(t *testing.T, moduleName, codeSrc, scriptSrc string) 
 	compileScriptAndCodeIR(t, moduleName, codeSrc, scriptSrc)
 }
 
-// The alias selector picks an output by position, so a mistyped output reaching
-// it can produce invalid IR or silently select the wrong slot.
-func TestAliasSelectorTypeGaps(t *testing.T) {
-	const accFirst = "s = 1\nq, r = Mixed(s, 0:4)\nq, r"
+// A shared input may only alias an output of its own type. With an
+// incompatible output declared first, the variant must pass over it and bind
+// the input to the compatible sibling, producing valid IR for each kind.
+func TestAliasVariantSkipsIncompatibleOutputs(t *testing.T) {
+	const sharedSecond = "s = 1\nr, s = Mixed(s, 0:4)\nr, s"
 
 	cases := []struct{ name, code, script string }{
-		{"float sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = x * 0.5", accFirst},
-		{"string sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = \"n\"", accFirst},
-		{"array sibling", "sum, other = Mixed(a, x)\n    sum = a + x\n    other = [x x]", accFirst},
+		{"float first", "other, sum = Mixed(a, x)\n    other = x * 0.5\n    sum = a + x", sharedSecond},
+		{"string first", "other, sum = Mixed(a, x)\n    other = \"n\"\n    sum = a + x", sharedSecond},
+		{"array first", "other, sum = Mixed(a, x)\n    other = [x x]\n    sum = a + x", sharedSecond},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -481,11 +482,12 @@ result = Pick(data, 0:8)
 result`
 
 	ir, _ := compileScriptAndCodeIR(t, "matching_array_input", code, script)
+	mangled := Mangle(MangleDirPath("matching_array_input", ""), "Pick", []Type{Array{ElemType: I64, Rank: 1}, Range{Iter: I64}})
 
 	require.NotContains(t, ir, "@arr_i64_copy",
 		"a matching output type must not introduce an input copy on every iteration")
-	require.NotContains(t, ir, "%data_arg_ref",
-		"an input with a known-zero alias selector must use its original pointer directly")
+	require.NotContains(t, ir, mangled+"_a",
+		"an input that shares no destination calls the public specialization, not an alias variant")
 }
 
 func TestRangeCollectorScalarVariant(t *testing.T) {

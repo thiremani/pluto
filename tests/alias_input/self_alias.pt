@@ -45,8 +45,13 @@ out, seen = NestedFold(current, item)
 out, seen = NestedConcat(current, item)
     out, seen = ConcatAfter(current, item)
 
+# The ranged call rebinds the shared input to its staged slot; the nested
+# call made inside that loop must still select the sharing variant.
 out, seen = NestedArrayRange(current)
-    out, seen = ArrayAfter(current, (1:3) + 0)
+    out, seen = NestedArrayDeep(current, (1:3) + 0)
+
+out, seen = NestedArrayDeep(current, item)
+    out, seen = ArrayAfter(current, item)
 
 out, seen = ConditionalFold(current, item)
     out = item > 0 current + item
@@ -65,11 +70,6 @@ out, seen = NestedRangeTwice(current)
 out, seen = NestedArrayTwice(current)
     out, seen = ArrayAfter(current, (1:3) + 0)
     out, seen = ArrayAfter(current, (3:5) + 0)
-
-# One more wrapper layer: the alias must survive two levels of forwarding
-# before the ranged call rebinds it.
-out, seen = NestedArrayDeep(current)
-    out, seen = NestedArrayRange(current)
 
 # A conditional call writes through synthetic destinations that stand in for
 # the outputs; sharing follows them to the real output.
