@@ -404,11 +404,14 @@ callers, whose call sites select the variants statically.
 
 **Changes in 2.1.** Version 2.0 gave range-bearing variants a hidden `i32`
 alias selector per direct scalar parameter, placed after the source parameters
-and before the seed. Version 2.1 removes those selectors: every variant's
-native signature is the source parameters followed by the seed, and aliasing
-is lowered as private variants instead. The prototype of a range-bearing
-function such as `Acc` therefore changes, and its seed moves one position
-earlier. Functions without a `Range` or `ArrayRange` parameter are unchanged.
+and, for direct returns, before the seed. Version 2.1 removes those selectors,
+and aliasing is lowered as private variants instead. A direct-return
+function's native signature is therefore its source parameters followed by
+the seed; an indirect-return function keeps its leading result carrier
+followed by the source parameters, with no seed. The prototype of a
+range-bearing function such as `Acc` changes, and for a direct return its
+seed moves one position earlier. Functions without a `Range` or `ArrayRange`
+parameter are unchanged.
 
 An eligible immediate bare `array[range]` call argument may therefore select
 an `ArrayRange` specialization and run its loop inside the callee. This

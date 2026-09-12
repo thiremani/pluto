@@ -66,6 +66,11 @@ out, seen = NestedArrayTwice(current)
     out, seen = ArrayAfter(current, (1:3) + 0)
     out, seen = ArrayAfter(current, (3:5) + 0)
 
+# One more wrapper layer: the alias must survive two levels of forwarding
+# before the ranged call rebinds it.
+out, seen = NestedArrayDeep(current)
+    out, seen = NestedArrayRange(current)
+
 # A conditional call writes through synthetic destinations that stand in for
 # the outputs; sharing follows them to the real output.
 out, seen = ConditionalNested(current, item)

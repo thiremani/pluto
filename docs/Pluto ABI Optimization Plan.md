@@ -97,7 +97,9 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
 - preserve live input/output sharing in both ordinary and range-bearing calls
   by lowering a call whose argument names its own destination to a private
   alias variant, in which reads use that output's current value, including
-  writes in the same iteration; the exported signature is unchanged
+  writes in the same iteration; exported prototypes no longer carry alias
+  selectors, which changes range-bearing prototypes (ABI 2.1) and leaves
+  every other function's signature as it was
 
 `MustWrite`/`MayWrite` has limited utility at the public boundary and must not
 decide whether the seed parameter exists. Adding one conditional output write

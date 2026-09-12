@@ -30,7 +30,16 @@ writes through that output, in ordinary and ranged calls alike. Inputs are
 read-only bindings, not frozen values. No per-iteration input snapshot is
 needed. Sharing is a compile-time fact of each call site and lowers to a
 private alias variant of the specialization, so the native calling convention
-is unchanged and stays independent of body effects. The canonical description is in
+stays independent of body effects. It is not unchanged: range-bearing
+variants on master carried hidden alias selectors, and removing them changes
+those prototypes, recorded as ABI 2.1 in
+[the C ABI specification](./Pluto%20C%20ABI%20Spec.md). Still outstanding on
+that boundary: a native caller that passes one address as both an input and an
+output shares them only within the called body, because a nested Pluto call
+stages its outputs. A generic pointer entry that resolves unknown sharing at
+run time, alongside the private variants, would close that gap; nested
+staging would still need alias handling inside it. The canonical description
+of the language rule is in
 [the memory model](./Pluto%20Memory%20Model.md) under "Parameters and Outputs".
 
 The storage mismatch filed as

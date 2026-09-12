@@ -89,6 +89,9 @@ nestedTwice, nestedTwiceSeen = NestedRangeTwice(nestedTwice)
 nestedArrayTwice = [10]
 nestedArrayTwice, nestedArrayTwiceSeen = NestedArrayTwice(nestedArrayTwice)
 "NestedArrayTwice:", nestedArrayTwice, nestedArrayTwiceSeen
+nestedArrayDeep = [10]
+nestedArrayDeep, nestedArrayDeepSeen = NestedArrayDeep(nestedArrayDeep)
+"NestedArrayDeep:", nestedArrayDeep, nestedArrayDeepSeen
 condNested = 10
 condNested, condNestedSeen = ConditionalNested(condNested, 5)
 "ConditionalNested:", condNested, condNestedSeen
