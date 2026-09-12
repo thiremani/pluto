@@ -446,7 +446,7 @@ h, r`
 	ir, _ := compileScriptAndCodeIR(t, "input_alias_variant", code, script)
 	mangled := Mangle(MangleDirPath("input_alias_variant", ""), "Rev", []Type{I64, Range{Iter: I64}})
 
-	require.Contains(t, ir, `define internal void @"`+mangled+`$alias$2$0"(`,
+	require.Contains(t, ir, "define internal void @"+mangled+"_a2_2_0(",
 		"the aliased call must lower to a private variant naming the second output for the first input")
 	require.Contains(t, ir, "%a_alias_load = load i64, ptr %res_dest",
 		"inside the variant the input reads the res output's storage directly")
@@ -548,9 +548,9 @@ res`
 	scriptIR, _ := compileScriptAndCodeIR(t, moduleName, code, script)
 	mangled := Mangle(MangleDirPath(moduleName, ""), "Acc", []Type{I64, Range{Iter: I64}})
 
-	require.Contains(t, scriptIR, `define internal noundef i64 @"`+mangled+`$alias$1$0"(`, "the self-aliased range-bearing call lowers to a private variant that keeps the direct scalar return")
+	require.Contains(t, scriptIR, "define internal noundef i64 @"+mangled+"_a2_1_0(", "the self-aliased range-bearing call lowers to a private variant that keeps the direct scalar return")
 	require.Contains(t, scriptIR, "i64 noundef %0, ptr noundef nonnull \"captures\"=\"none\" %1, i64 noundef %2", "range-bearing variant should keep the range indirect but lower scalar input/output directly with param attrs")
-	require.Contains(t, scriptIR, `call i64 @"`+mangled+`$alias$1$0"(`, "expected direct scalar call/return for ranged accumulator case")
+	require.Contains(t, scriptIR, "call i64 @"+mangled+"_a2_1_0(", "expected direct scalar call/return for ranged accumulator case")
 	require.NotContains(t, scriptIR, mangled+"_ret", "single-scalar range variant should not use sret struct")
 }
 

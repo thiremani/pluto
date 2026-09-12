@@ -821,3 +821,38 @@ func TestMangleScriptUsesPathEncoding(t *testing.T) {
 
 	assert.Equal(t, "Pt_7example_d_3com_s_4math_s_2v1_d_n2_d_n3_p_7reports_s_5daily_r_n1_d_n2_h_7summary_e", mangled)
 }
+
+func TestMangleVariantRoundTrip(t *testing.T) {
+	base := Mangle(MangleDirPath("math", ""), "Fold", []Type{I64, StrH{}})
+	tests := []struct {
+		name     string
+		storage  []Type
+		pattern  []int
+		mangled  string
+		expected string
+	}{
+		{name: "public specialization", mangled: base, expected: "math.Fold(I64, StrH)"},
+		{name: "alias variant", pattern: []int{1, 0}, mangled: base + "_a2_1_0", expected: "math.Fold(I64, StrH) [in1->out1]"},
+		{name: "storage variant", storage: []Type{StrH{}, StrH{}}, mangled: base + "_o2_StrH_StrH", expected: "math.Fold(I64, StrH) -> (StrH, StrH)"},
+		{name: "storage and alias variant", storage: []Type{StrH{}, I64}, pattern: []int{2, 1}, mangled: base + "_o2_StrH_I64_a2_2_1", expected: "math.Fold(I64, StrH) -> (StrH, I64) [in1->out2, in2->out1]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mangled := MangleVariant(base, tt.storage, tt.pattern)
+			assert.Equal(t, tt.mangled, mangled)
+			assert.Equal(t, tt.expected, Demangle(mangled))
+
+			parsed, err := DemangleParsed(mangled)
+			assert.NoError(t, err)
+			assert.Equal(t, SymbolFunc, parsed.Kind)
+			assert.Equal(t, []string{"I64", "StrH"}, parsed.ArgTypes)
+			assert.Equal(t, tt.pattern, parsed.AliasPattern)
+			if tt.storage == nil {
+				assert.Nil(t, parsed.OutputStorage)
+				return
+			}
+			assert.Len(t, parsed.OutputStorage, len(tt.storage))
+		})
+	}
+}

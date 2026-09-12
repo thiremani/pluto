@@ -89,9 +89,11 @@ type callArg struct {
 // change the emitted body but not its types: wider output storage and which
 // inputs share a binding with which outputs.
 type callSignature struct {
-	FuncName    string
-	Mangled     string
-	StorageName string // private lowering variant when output slots have wider storage
+	FuncName string
+	Mangled  string
+	// OutputStorage lists every output slot's storage type when a caller
+	// destination is wider than the declared output; nil otherwise.
+	OutputStorage []Type
 	// AliasPattern holds, per parameter, the one-based output it shares a
 	// binding with at this call site, or 0. Nil means no parameter aliases.
 	AliasPattern []int
@@ -3269,23 +3271,11 @@ func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 // loweredName is the symbol of the private variant this call site lowers to,
 // or the public specialization when no call-site fact changes the body.
 func (sig *callSignature) loweredName() string {
-	name := sig.Mangled
-	if sig.StorageName != "" {
-		name = sig.StorageName
-	}
-	if sig.AliasPattern == nil {
-		return name
-	}
-
-	name += "$alias"
-	for _, output := range sig.AliasPattern {
-		name += fmt.Sprintf("$%d", output)
-	}
-	return name
+	return MangleVariant(sig.Mangled, sig.OutputStorage, sig.AliasPattern)
 }
 
 func (sig *callSignature) isVariant() bool {
-	return sig.StorageName != "" || sig.AliasPattern != nil
+	return sig.OutputStorage != nil || sig.AliasPattern != nil
 }
 
 // specializeOutputStorage keeps a writable output and a compatible input on
@@ -3307,13 +3297,8 @@ func (c *Compiler) specializeOutputStorage(sig *callSignature, outputs []*Symbol
 		sig.ABI.Return.OutTypes[i] = storage
 		changed = true
 	}
-	if !changed {
-		return
-	}
-
-	sig.StorageName = sig.Mangled + "$outputs"
-	for _, output := range sig.ABI.Return.OutTypes {
-		sig.StorageName += "$" + output.Mangle()
+	if changed {
+		sig.OutputStorage = slices.Clone(sig.ABI.Return.OutTypes)
 	}
 }
 
