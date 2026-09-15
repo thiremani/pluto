@@ -982,7 +982,7 @@ cached on `FuncInfo` and replayed when a later script reuses a settled body.
 `.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
 pass is structural only: explicit use-before-definition, illegal input/global
 writes, unused inputs, syntactically unassigned outputs, formatting structure,
-and discard behavior. It collects all reads before publishing a statement's
+and discard behavior. It collects all reads before declaring a statement's
 destinations, so a fresh `x = x + 1` cannot define its own RHS. An unknown main
 format marker remains literal text; malformed specifiers and missing dynamic
 width/precision variables on a resolved marker remain structural errors.

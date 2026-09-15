@@ -472,7 +472,7 @@ func BenchmarkCollectStringReadsManyMarkers(b *testing.B) {
 	require.Empty(b, cc.Compile())
 
 	cfg := NewCFG(cc)
-	Put(cfg.Scopes, "x", VarEvent{Name: "x", Kind: Write})
+	Put(cfg.Scopes, "x", struct{}{})
 	value := strings.Repeat("-x ", 10000)
 	tok := token.Token{FileName: b.Name(), Line: 1, Column: 1}
 
@@ -656,7 +656,7 @@ res = discardBinding(x)
 	template := codeAST.Statements[0].(*ast.FuncStatement)
 	discard := template.Body.Statements[0].(*ast.LetStatement)
 	cfg := NewCFG(cc)
-	cfg.publishTargets(discard.Name)
+	cfg.declareTargets(discard.Name)
 	_, exists := Get(cfg.Scopes, "_")
 	assert.False(t, exists)
 }

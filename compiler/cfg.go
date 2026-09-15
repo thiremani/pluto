@@ -39,7 +39,7 @@ type BasicBlock struct {
 type CFG struct {
 	CodeCompiler *CodeCompiler
 	Blocks       []*BasicBlock
-	Scopes       []Scope[VarEvent]
+	Scopes       []Scope[struct{}]
 	Errors       []*token.CompileError
 }
 
@@ -47,7 +47,7 @@ func NewCFG(cc *CodeCompiler) *CFG {
 	return &CFG{
 		CodeCompiler: cc,
 		Blocks:       make([]*BasicBlock, 0),
-		Scopes:       []Scope[VarEvent]{NewScope[VarEvent](FuncScope)},
+		Scopes:       []Scope[struct{}]{NewScope[struct{}](FuncScope)},
 		Errors:       make([]*token.CompileError, 0),
 	}
 }
@@ -193,13 +193,13 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
-	// Outputs are published up front so that a formatting marker naming one
+	// Outputs are declared up front so that a formatting marker naming one
 	// resolves as a read and is rejected, instead of passing as literal text.
 	for _, param := range fn.Parameters {
-		cfg.publishTarget(param)
+		cfg.declareName(param)
 	}
 	for _, output := range fn.Outputs {
-		cfg.publishTarget(output)
+		cfg.declareName(output)
 	}
 
 	parameterNames := make(map[string]struct{}, len(fn.Parameters))
@@ -251,7 +251,7 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 		reads := cfg.collectStatementReads(stmt)
 		targets := cfg.validateStatementStructure(stmt, reads, parameterNames, outputNames)
 		if let, ok := stmt.(*ast.LetStatement); ok {
-			cfg.publishTargets(let.Name)
+			cfg.declareTargets(let.Name)
 		}
 
 		body.statementReads = append(body.statementReads, reads)
@@ -304,7 +304,7 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	defer PopScope(&cfg.Scopes)
 
 	for _, param := range template.Parameters {
-		cfg.publishTarget(param)
+		cfg.declareName(param)
 	}
 
 	cfg.typedForwardPass(template, info)
@@ -368,7 +368,7 @@ func (cfg *CFG) processTypedStatement(stmt ast.Statement, reads []VarEvent, effe
 	cfg.processDataflowEvents(stmt, events, lastWrites)
 
 	if let, ok := stmt.(*ast.LetStatement); ok {
-		cfg.publishTargets(let.Name)
+		cfg.declareTargets(let.Name)
 	}
 }
 
@@ -508,16 +508,18 @@ func (cfg *CFG) validateStructuralWrite(target *ast.Identifier, parameters map[s
 	}
 }
 
-func (cfg *CFG) publishTargets(targets []*ast.Identifier) {
+func (cfg *CFG) declareTargets(targets []*ast.Identifier) {
 	for _, target := range targets {
 		if !isDiscard(target) {
-			cfg.publishTarget(target)
+			cfg.declareName(target)
 		}
 	}
 }
 
-func (cfg *CFG) publishTarget(target *ast.Identifier) {
-	Put(cfg.Scopes, target.Value, VarEvent{Name: target.Value, Kind: Write, Token: target.Tok()})
+// declareName makes a name resolvable in the current scope. It records no
+// event: reads and writes reach the dataflow passes only through VarEvents.
+func (cfg *CFG) declareName(target *ast.Identifier) {
+	Put(cfg.Scopes, target.Value, struct{}{})
 }
 
 func (cfg *CFG) addError(tok token.Token, msg string) {
