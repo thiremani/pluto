@@ -295,9 +295,11 @@ func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent 
 	return cfg.validateTemplateBody(statements, nil, nil).statementReads
 }
 
-// AnalyzeSpecialization runs only typed dataflow. Structural diagnostics were
-// already produced once from the function template.
-func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo) {
+// AnalyzeSpecialization runs only typed dataflow, in one alias context:
+// pattern names, per parameter, the one-based output that parameter shares at
+// the call being analyzed, and nil is the unshared context. Structural
+// diagnostics were already produced once from the function template.
+func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo, pattern []int) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 	PushScope(&cfg.Scopes, FuncScope)
@@ -307,7 +309,7 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 		cfg.declareName(param)
 	}
 
-	cfg.typedForwardPass(template, info)
+	cfg.typedForwardPass(template, info, sharedOutputs(template, pattern))
 
 	live := make(map[string]struct{}, len(template.Outputs))
 	for _, output := range template.Outputs {
@@ -316,40 +318,28 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	cfg.backwardPass(live)
 }
 
-// possibleInputOutputAliases over-approximates sharing: every output whose
-// storage a compatible input could share, whatever any actual call does, and
-// iterator inputs as well since these are scalar body types. One CFG result
-// serves every alias pattern of a type specialization, so liveness keeps any
-// write such an input might observe. This is the chosen diagnostic policy:
-// a body's unused-write diagnostics do not depend on a call's alias pattern,
-// at the cost of leaving a write undiagnosed in calls that do not share.
-func possibleInputOutputAliases(template *ast.FuncStatement, info *FuncInfo) map[string][]*ast.Identifier {
-	aliases := make(map[string][]*ast.Identifier, len(template.Parameters))
-	for i, paramType := range info.Sig.Params {
-		for j, outputType := range info.Sig.OutTypes {
-			if !bindingSlotCompatible(paramType, outputType) {
-				continue
-			}
-			name := template.Parameters[i].Value
-			aliases[name] = append(aliases[name], template.Outputs[j])
+// sharedOutputs maps each input that shares an output in this context to that
+// output, so a read of the input is also a read of the output's latest write.
+func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]*ast.Identifier {
+	shared := make(map[string]*ast.Identifier, len(pattern))
+	for i, slot := range pattern {
+		if slot > 0 {
+			shared[template.Parameters[i].Value] = template.Outputs[slot-1]
 		}
 	}
-
-	return aliases
+	return shared
 }
 
-func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo) {
-	aliases := possibleInputOutputAliases(template, info)
+func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, shared map[string]*ast.Identifier) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
 		for _, read := range reads {
-			for _, output := range aliases[read.Name] {
-				if !cfg.isDefined(output.Value) {
-					continue
-				}
-				reads = append(reads, VarEvent{Name: output.Value, Kind: Read, Token: read.Token})
+			output, ok := shared[read.Name]
+			if !ok || !cfg.isDefined(output.Value) {
+				continue
 			}
+			reads = append(reads, VarEvent{Name: output.Value, Kind: Read, Token: read.Token})
 		}
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 	}

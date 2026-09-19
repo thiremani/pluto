@@ -83,6 +83,37 @@ func TestInputAliasOutputWriteLiveness(t *testing.T) {
 			input: "value = 10\nvalue = BumpTwice(value, 5)\nvalue",
 		},
 		{
+			// The same body called without sharing: the first write is dead.
+			name: "Repeated Output Write Unshared",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item`,
+			input:         "value = 10\nother = BumpTwice(value, 5)\nother",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
+			// Sharing reaches a nested call through the wrapper's own alias.
+			name: "Repeated Output Write Through Wrapper",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item
+
+out = Bump(current, item)
+    out = BumpTwice(current, item)`,
+			input: "value = 10\nvalue = Bump(value, 5)\nvalue",
+		},
+		{
+			name: "Repeated Output Write Through Unshared Wrapper",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item
+
+out = Bump(current, item)
+    out = BumpTwice(current, item)`,
+			input:         "value = 10\nother = Bump(value, 5)\nother",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
 			name: "Incompatible Input Output Storage",
 			code: `out = Replaced(current)
     out = "first"
@@ -730,7 +761,7 @@ func TestSpecializationReadsSeedBeforeWrite(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "seededSpecialization", "", code)
 	cfg := NewCFG(cc)
 
-	cfg.AnalyzeSpecialization(template, info)
+	cfg.AnalyzeSpecialization(template, info, nil)
 
 	require.Empty(t, cfg.Errors)
 }
@@ -759,7 +790,7 @@ func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "printedSpecialization", "", code)
 	cfg := NewCFG(cc)
 
-	cfg.AnalyzeSpecialization(template, info)
+	cfg.AnalyzeSpecialization(template, info, nil)
 
 	require.Empty(t, cfg.Errors)
 }
@@ -803,7 +834,7 @@ func TestCFGRejectsMissingStatementEffects(t *testing.T) {
 	cfg := NewCFG(cc)
 
 	require.PanicsWithValue(t, `internal: missing CFG effects for statement "res = x"`, func() {
-		cfg.AnalyzeSpecialization(template, info)
+		cfg.AnalyzeSpecialization(template, info, nil)
 	})
 }
 

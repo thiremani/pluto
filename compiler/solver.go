@@ -2619,7 +2619,7 @@ func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) 
 	for id, node := range graph.nodes {
 		walked := ts.walkedFuncs[node.mangled]
 		cfg := NewCFG(ts.ScriptCompiler.Compiler.CodeCompiler)
-		cfg.AnalyzeSpecialization(walked.template, walked.info)
+		cfg.AnalyzeSpecialization(walked.template, walked.info, nil)
 		staged[id] = &SpecializationCFGResult{
 			DirectCallees: slices.Clone(node.directCallees),
 			Errors:        slices.Clone(cfg.Errors),

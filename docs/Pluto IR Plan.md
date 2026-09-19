@@ -1010,15 +1010,20 @@ The two diagnostics consume effects differently:
   to silence it. A prior seed overwritten by a proven-`MustWrite` call output
   without being read is instead a true positive: remove the seed or read it
   explicitly when its value is semantically required.
-- *Shared inputs.* Inside a body, a read of an input counts as a read of every
-  output whose storage that input could share, because a caller may pass one
-  binding as both. This is a deliberate over-approximation and a diagnostic
-  policy: one CFG result serves every alias pattern of a type specialization,
-  so a body's unused-write diagnostics never depend on a particular call's
-  sharing. The cost is that a write observable only under sharing, such as
-  `out = current + 1` written twice, goes undiagnosed in calls that do not
-  share. Per-pattern warnings computed where the pattern is known remain a
-  possible future refinement.
+- *Shared inputs.* Inside a body, a read of an input that shares an output at
+  the call being analyzed counts as a read of that output's latest write. The
+  dataflow therefore runs per **alias context**: settlement analyzes the
+  unshared context once per type specialization, and the script walk analyzes
+  each shared context on first reach and caches it on the specialization. A
+  script call site fixes its context from names; inside a callee, each nested
+  call derives its context from the enclosing one by the same rule lowering
+  uses to pick a variant, including output-storage widening, so a body is
+  analyzed exactly as it is lowered. Diagnostics are exact per context and
+  deduplicated by location and message: `out = current + 1` written twice is
+  accepted for `x = Twice(x)` and reported for `y = Twice(x)`, because the
+  first write is dead there. A body may consequently fail to compile because
+  of an unshared call elsewhere; that is the chosen policy for unused-write
+  errors, which are errors rather than warnings throughout.
 
 After a script solve succeeds, CFG first treats the script as a zero-input,
 zero-output template for structural validation, then runs effect-sensitive

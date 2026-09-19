@@ -343,58 +343,47 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 }
 
 // setCallArgAliases records on each argument which caller destination it
-// shares a binding with, and derives the call's alias pattern from them. A
-// direct scalar param then reads the output's current value inside the
-// variant; an indirect param receives that output's staged pointer instead of
-// its own. Everything is decided from names, so a nested call inside a variant
-// forwards its enclosing input's alias without any run-time state.
+// shares a binding with, and derives the call's alias pattern from them
+// through the rule the CFG also uses. A direct scalar param then reads the
+// output's current value inside the variant; an indirect param receives that
+// output's staged pointer instead of its own. Everything is decided from
+// names, so a nested call inside a variant forwards its enclosing input's
+// alias without any run-time state.
 func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) {
 	if dest == nil {
 		return
 	}
 
-	var pattern []int
-	for paramIndex, arg := range args {
-		if arg.Name == "" {
-			continue
-		}
-
-		for outputIndex, output := range dest {
-			if outputIndex >= len(sig.ABI.Return.OutTypes) {
-				break
-			}
-			// Output storage variants preserve compatible ownership widening.
-			// A remaining type mismatch cannot share the input's representation
-			// and must not select that output as its storage.
-			if !aliasableOutput(sig.ParamTypes[paramIndex], sig.ABI.Return.OutTypes[outputIndex]) {
-				continue
-			}
-			base := c.destinationBase(output.Value)
-			if base != arg.Name && !c.inputAliasesOutput(arg.Name, base) {
-				continue
-			}
-			if pattern == nil {
-				pattern = make([]int, len(args))
-			}
-			args[paramIndex].AliasOutput = outputIndex + 1
-			pattern[paramIndex] = outputIndex + 1
-			break
-		}
+	argNames := make([]string, len(args))
+	for i, arg := range args {
+		argNames[i] = arg.Name
+	}
+	dests := make([]string, len(dest))
+	for i, output := range dest {
+		dests[i] = c.destinationBase(output.Value)
 	}
 
+	pattern := aliasPattern(argNames, dests, sig.ParamTypes, sig.ABI.Return.OutTypes, c.enclosingAliases())
+	for i, slot := range pattern {
+		args[i].AliasOutput = slot
+	}
 	sig.AliasPattern = pattern
 }
 
-// inputAliasesOutput reports whether a name read inside a variant is an input
-// that already shares the given output's binding, so a nested call targeting
-// that output with this input keeps the same storage.
-func (c *Compiler) inputAliasesOutput(input, output string) bool {
-	sym, ok := Get(c.Scopes, input)
-	if !ok {
-		return false
+// enclosingAliases maps each input of the body being lowered to the output it
+// shares under the current variant, for the bindings currently in scope.
+func (c *Compiler) enclosingAliases() map[string]string {
+	aliases := make(map[string]string)
+	for name := range c.currentParamAliases() {
+		sym, ok := Get(c.Scopes, name)
+		if !ok {
+			continue
+		}
+		if alias, ok := c.paramAliasFor(name, sym); ok {
+			aliases[name] = alias.Output
+		}
 	}
-	alias, ok := c.paramAliasFor(input, sym)
-	return ok && alias.Output == output
+	return aliases
 }
 
 // directReturnSeedForCall captures the caller's current destination value for a
@@ -3316,15 +3305,12 @@ func (sig *callSignature) isVariant() bool {
 func (c *Compiler) specializeOutputStorage(sig *callSignature, outputs []*Symbol) {
 	changed := false
 	for i, output := range outputs {
-		storage := output.Type.(Ptr).Elem
 		declared := sig.ABI.Return.OutTypes[i]
-		if TypeEqual(storage, declared) || !bindingSlotCompatible(storage, declared) {
+		widened := widenedOutputStorage(declared, output.Type.(Ptr).Elem)
+		if TypeEqual(widened, declared) {
 			continue
 		}
-		if !TypeEqual(mergeBindingSlotType(storage, declared), storage) {
-			continue
-		}
-		sig.ABI.Return.OutTypes[i] = storage
+		sig.ABI.Return.OutTypes[i] = widened
 		changed = true
 	}
 	if changed {

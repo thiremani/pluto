@@ -267,11 +267,15 @@ func (f Func) OutputTypesInferred() bool {
 	return true
 }
 
-// SpecializationCFGResult is the immutable dataflow result and persistent
-// direct-call reachability for one settled function specialization.
+// SpecializationCFGResult is the dataflow result and persistent direct-call
+// reachability for one settled function specialization. Errors is the
+// unshared context, produced at settlement; contexts in which an input shares
+// an output are analyzed on first reach by the script walk and kept here so
+// later scripts reuse them.
 type SpecializationCFGResult struct {
 	DirectCallees []string
 	Errors        []*token.CompileError
+	shared        map[string][]*token.CompileError
 }
 
 // FuncInfo holds the mutable facts for one function specialization. Settled
