@@ -29,3 +29,4 @@ StagedString: helloabc helloabc hello
 ResetArray: [
 ] [1 2] [
 ]
+WidenedWrapper: second first

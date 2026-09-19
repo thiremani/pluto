@@ -80,6 +80,14 @@ out = BumpTwice(current, item)
     out = current + item
     out = current + item
 
+out, seen = Reset(current)
+    out = "first"
+    seen = current
+    out = "second"
+
+out, seen = Wrap(current)
+    out, seen = Reset(current)
+
 out, left, right = ResetPair(first, second)
     out = []
     left = first

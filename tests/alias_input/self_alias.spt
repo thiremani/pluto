@@ -108,3 +108,9 @@ flat = [1 2]
 matrix = [[3 4]]
 matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
 "ResetArray:", matrix, flatSeen, matrixSeen
+
+# The wrapper widens its output to the caller's heap string, and the nested
+# call shares that storage, so its intermediate write is observed.
+wrapped = "hello" ⊕ "!"
+wrapped, wrappedSeen = Wrap(wrapped)
+"WidenedWrapper:", wrapped, wrappedSeen

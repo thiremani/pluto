@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -108,12 +109,12 @@ func (sc *ScriptCompiler) compileStatements() {
 // it with. A script call site fixes its own context from names; inside a
 // callee, each nested call derives its context from the enclosing one by the
 // same rule lowering applies, so a body is analyzed exactly as it is lowered.
-// Contexts are visited once, root-first and depth-first in source order, and
-// diagnostics are deduplicated by location and message.
+// Each lowered variant is visited once, root-first and depth-first in source
+// order, and diagnostics are deduplicated by location and message.
 func replaySpecializationCFG(compiler *Compiler, scriptMangled string, statements []ast.Statement, vars map[string]Type, errors []*token.CompileError) []*token.CompileError {
 	walk := &cfgWalk{
 		compiler: compiler,
-		visited:  make(map[cfgContext]struct{}),
+		visited:  make(map[string]struct{}),
 		reported: make(map[cfgDiagnosticKey]struct{}, len(errors)),
 		errors:   errors,
 	}
@@ -125,15 +126,9 @@ func replaySpecializationCFG(compiler *Compiler, scriptMangled string, statement
 	return walk.errors
 }
 
-// cfgContext is one specialization in one alias context.
-type cfgContext struct {
-	mangled string
-	pattern string
-}
-
 type cfgWalk struct {
 	compiler *Compiler
-	visited  map[cfgContext]struct{}
+	visited  map[string]struct{} // lowered variant symbols already walked
 	reported map[cfgDiagnosticKey]struct{}
 	errors   []*token.CompileError
 }
@@ -201,13 +196,18 @@ func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTy
 	mangled := Mangle(walk.compiler.MangledPath, site.call.Function.Value, paramTypes)
 	requireSpecializationCallTarget(walk.compiler, callerMangled, mangled)
 	callee := walk.compiler.FuncCache[mangled]
-	pattern := walk.sitePattern(callerMangled, site, paramTypes, callee.Sig.OutTypes, vars, enclosing)
+	storage := siteOutputStorage(site, callee.Sig.OutTypes, vars)
+	pattern := walk.sitePattern(callerMangled, site, paramTypes, storage, enclosing)
 
-	context := cfgContext{mangled: mangled, pattern: aliasPatternKey(pattern)}
-	if _, seen := walk.visited[context]; seen {
+	var variantStorage []Type
+	if !slices.EqualFunc(storage, callee.Sig.OutTypes, TypeEqual) {
+		variantStorage = storage
+	}
+	variant := MangleVariant(mangled, variantStorage, pattern)
+	if _, seen := walk.visited[variant]; seen {
 		return
 	}
-	walk.visited[context] = struct{}{}
+	walk.visited[variant] = struct{}{}
 
 	template, ok := walk.compiler.CodeCompiler.lookupFuncTemplate(callee.Sig.Name, len(callee.Sig.Params))
 	if !ok {
@@ -228,13 +228,34 @@ func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTy
 			nested[template.Parameters[i].Value] = template.Outputs[slot-1].Value
 		}
 	}
-	walk.visitSites(mangled, template.Body.Statements, callee.Vars, nested)
+	// The body's outputs bind to this variant's storage, as lowering's
+	// outputSlotTypes do, so nested destinations widen the same way.
+	bodyVars := maps.Clone(callee.Vars)
+	for j, output := range template.Outputs {
+		bodyVars[output.Value] = storage[j]
+	}
+	walk.visitSites(mangled, template.Body.Statements, bodyVars, nested)
+}
+
+// siteOutputStorage returns each output's storage at one call site: widened
+// to its destination's binding, as lowering widens it, else the declared type.
+func siteOutputStorage(site cfgCallSite, outTypes []Type, vars map[string]Type) []Type {
+	storage := slices.Clone(outTypes)
+	for j, dest := range site.dests {
+		if j >= len(outTypes) {
+			break
+		}
+		if slot, known := vars[dest.Value]; known {
+			storage[j] = widenedOutputStorage(outTypes[j], slot)
+		}
+	}
+	return storage
 }
 
 // sitePattern derives a call's alias pattern the way lowering will: one name
 // per parameter position for plain identifier arguments, the destinations by
-// their source names, and each output widened to its destination's storage.
-func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTypes, outTypes []Type, vars map[string]Type, enclosing map[string]string) []int {
+// their source names, and the outputs at this site's storage.
+func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTypes, storage []Type, enclosing map[string]string) []int {
 	if site.dests == nil {
 		return nil
 	}
@@ -249,21 +270,11 @@ func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTy
 		position += width
 	}
 
-	dests := make([]string, 0, len(site.dests))
-	widened := make([]Type, 0, len(site.dests))
+	dests := make([]string, len(site.dests))
 	for j, dest := range site.dests {
-		if j >= len(outTypes) {
-			break
-		}
-		dests = append(dests, dest.Value)
-		storage, known := vars[dest.Value]
-		if !known {
-			storage = outTypes[j]
-		}
-		widened = append(widened, widenedOutputStorage(outTypes[j], storage))
+		dests[j] = dest.Value
 	}
-
-	return aliasPattern(argNames, dests, paramTypes, widened, enclosing)
+	return aliasPattern(argNames, dests, paramTypes, storage, enclosing)
 }
 
 // contextErrors returns the callee's diagnostics in one alias context,

@@ -122,6 +122,32 @@ out = Bump(current, item)
 			input:         "value = Replaced(1)\nvalue",
 			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
 		},
+		{
+			// The wrapper's destination widens its output to a heap string, and
+			// the nested call shares that storage, as lowering does.
+			name: "Repeated Output Write Through Widening Wrapper",
+			code: `out, seen = Reset(current)
+    out = "first"
+    seen = current
+    out = "second"
+
+out, seen = Wrap(current)
+    out, seen = Reset(current)`,
+			input: `value = "hello" ⊕ "!"
+value, seen = Wrap(value)
+value, seen`,
+		},
+		{
+			name: "Repeated Empty Array Write Through Widening Wrapper",
+			code: `out, seen = ResetEmpty(current)
+    out = []
+    seen = current
+    out = []
+
+out, seen = WrapEmpty(current)
+    out, seen = ResetEmpty(current)`,
+			input: "value = [1 2]\nvalue, seen = WrapEmpty(value)\nvalue, seen",
+		},
 	}
 
 	for _, tt := range tests {
