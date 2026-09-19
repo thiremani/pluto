@@ -316,11 +316,14 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	cfg.backwardPass(live)
 }
 
-// inputOutputAliases lists outputs that a caller could share with each input.
-// Specializations are reused across calls, so liveness must conservatively
-// retain writes observable through any compatible input reference. These are
-// scalar body types, so this also conservatively includes iterator inputs.
-func inputOutputAliases(template *ast.FuncStatement, info *FuncInfo) map[string][]*ast.Identifier {
+// possibleInputOutputAliases over-approximates sharing: every output whose
+// storage a compatible input could share, whatever any actual call does, and
+// iterator inputs as well since these are scalar body types. One CFG result
+// serves every alias pattern of a type specialization, so liveness keeps any
+// write such an input might observe. This is the chosen diagnostic policy:
+// a body's unused-write diagnostics do not depend on a call's alias pattern,
+// at the cost of leaving a write undiagnosed in calls that do not share.
+func possibleInputOutputAliases(template *ast.FuncStatement, info *FuncInfo) map[string][]*ast.Identifier {
 	aliases := make(map[string][]*ast.Identifier, len(template.Parameters))
 	for i, paramType := range info.Sig.Params {
 		for j, outputType := range info.Sig.OutTypes {
@@ -336,7 +339,7 @@ func inputOutputAliases(template *ast.FuncStatement, info *FuncInfo) map[string]
 }
 
 func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo) {
-	aliases := inputOutputAliases(template, info)
+	aliases := possibleInputOutputAliases(template, info)
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)

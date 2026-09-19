@@ -1010,6 +1010,15 @@ The two diagnostics consume effects differently:
   to silence it. A prior seed overwritten by a proven-`MustWrite` call output
   without being read is instead a true positive: remove the seed or read it
   explicitly when its value is semantically required.
+- *Shared inputs.* Inside a body, a read of an input counts as a read of every
+  output whose storage that input could share, because a caller may pass one
+  binding as both. This is a deliberate over-approximation and a diagnostic
+  policy: one CFG result serves every alias pattern of a type specialization,
+  so a body's unused-write diagnostics never depend on a particular call's
+  sharing. The cost is that a write observable only under sharing, such as
+  `out = current + 1` written twice, goes undiagnosed in calls that do not
+  share. Per-pattern warnings computed where the pattern is known remain a
+  possible future refinement.
 
 After a script solve succeeds, CFG first treats the script as a zero-input,
 zero-output template for structural validation, then runs effect-sensitive
