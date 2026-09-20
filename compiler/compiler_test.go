@@ -455,6 +455,26 @@ h, r`
 	require.NotContains(t, ir, "define void @"+mangled+"(", "the unaliased specialization is not emitted when only the variant is called")
 }
 
+// An unshared static-string output written into an owned-string destination
+// is converted after the call, so the call uses the public specialization;
+// only sharing selects a private variant.
+func TestUnsharedWidenedDestinationUsesPublicSpecialization(t *testing.T) {
+	code := `out, seen = Replace(current)
+    out = "new"
+    seen = current`
+	script := `value = "hello" ⊕ "!"
+other = "keep" ⊕ ""
+other
+other, seen = Replace(value)
+other, seen`
+
+	ir, _ := compileScriptAndCodeIR(t, "unshared_widened", code, script)
+	mangled := Mangle(MangleDirPath("unshared_widened", ""), "Replace", []Type{StrH{}})
+
+	require.Contains(t, ir, "define void @"+mangled+"(", "the unshared call uses the public specialization")
+	require.NotContains(t, ir, "@"+mangled+"_a", "destination storage alone selects no private variant")
+}
+
 func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
 	// Both outputs are integers, so writing them can never change the array
 	// input even though it is read after the first output write. Copying it

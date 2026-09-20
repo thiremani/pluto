@@ -114,3 +114,16 @@ matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
 wrapped = "hello" ⊕ "!"
 wrapped, wrappedSeen = Wrap(wrapped)
 "WidenedWrapper:", wrapped, wrappedSeen
+
+# Without sharing, a static output is converted into the owned destination
+# after the call, and an untyped empty output resets the typed destination.
+wideOther = "keep" ⊕ ""
+wideSource = "hello" ⊕ "!"
+"UnsharedWidenedBefore:", wideOther
+wideOther, wideSeen = Tag(wideSource)
+"UnsharedWidened:", wideOther, wideSeen, wideSource
+resetTarget = [9]
+resetSource = [1 2]
+"UnsharedResetBefore:", resetTarget
+resetTarget, resetLeft, resetRight = ResetPair(resetSource, resetSource)
+"UnsharedReset:", resetTarget, resetLeft, resetRight

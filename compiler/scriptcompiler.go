@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -64,7 +63,7 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 
 	cfg := NewCFG(sc.Compiler.CodeCompiler)
 	cfg.AnalyzeScript(sc.Program.Statements, sc.Script.Root.StatementEffects)
-	cfg.Errors = replaySpecializationCFG(sc.Compiler, sc.ScriptMangled, sc.Program.Statements, sc.Script.Root.Vars, cfg.Errors)
+	cfg.Errors = replaySpecializationCFG(sc.Compiler, sc.ScriptMangled, sc.Program.Statements, cfg.Errors)
 	if len(cfg.Errors) > 0 {
 		return cfg.Errors
 	}
@@ -111,7 +110,7 @@ func (sc *ScriptCompiler) compileStatements() {
 // same rule lowering applies, so a body is analyzed exactly as it is lowered.
 // Each lowered variant is visited once, root-first and depth-first in source
 // order, and diagnostics are deduplicated by location and message.
-func replaySpecializationCFG(compiler *Compiler, scriptMangled string, statements []ast.Statement, vars map[string]Type, errors []*token.CompileError) []*token.CompileError {
+func replaySpecializationCFG(compiler *Compiler, scriptMangled string, statements []ast.Statement, errors []*token.CompileError) []*token.CompileError {
 	walk := &cfgWalk{
 		compiler: compiler,
 		visited:  make(map[string]struct{}),
@@ -122,7 +121,7 @@ func replaySpecializationCFG(compiler *Compiler, scriptMangled string, statement
 		walk.reported[cfgDiagnosticKeyFor(compileError)] = struct{}{}
 	}
 
-	walk.visitSites(scriptMangled, statements, vars, nil)
+	walk.visitSites(scriptMangled, statements, nil)
 	return walk.errors
 }
 
@@ -178,32 +177,27 @@ func appendNestedCallSites(sites []cfgCallSite, expr ast.Expression) []cfgCallSi
 	return sites
 }
 
-func (walk *cfgWalk) visitSites(callerMangled string, statements []ast.Statement, vars map[string]Type, enclosing map[string]string) {
+func (walk *cfgWalk) visitSites(callerMangled string, statements []ast.Statement, enclosing map[string]string) {
 	for _, site := range bodyCallSites(walk.compiler, callerMangled, statements) {
 		if _, builtin := Builtins[site.call.Function.Value]; builtin {
 			continue
 		}
 
 		info := walk.compiler.ExprCache[key(callerMangled, site.call)]
-		walk.visitCallee(callerMangled, site, info.CallParamTypes, vars, enclosing)
+		walk.visitCallee(callerMangled, site, info.CallParamTypes, enclosing)
 		if info.ScalarCallVariantEnsured {
-			walk.visitCallee(callerMangled, site, info.ScalarCallParamTypes, vars, enclosing)
+			walk.visitCallee(callerMangled, site, info.ScalarCallParamTypes, enclosing)
 		}
 	}
 }
 
-func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTypes []Type, vars map[string]Type, enclosing map[string]string) {
+func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTypes []Type, enclosing map[string]string) {
 	mangled := Mangle(walk.compiler.MangledPath, site.call.Function.Value, paramTypes)
 	requireSpecializationCallTarget(walk.compiler, callerMangled, mangled)
 	callee := walk.compiler.FuncCache[mangled]
-	storage := siteOutputStorage(site, callee.Sig.OutTypes, vars)
-	pattern := walk.sitePattern(callerMangled, site, paramTypes, storage, enclosing)
+	pattern := walk.sitePattern(callerMangled, site, paramTypes, callee.Sig.OutTypes, enclosing)
 
-	var variantStorage []Type
-	if !slices.EqualFunc(storage, callee.Sig.OutTypes, TypeEqual) {
-		variantStorage = storage
-	}
-	variant := MangleVariant(mangled, variantStorage, pattern)
+	variant := MangleVariant(mangled, pattern)
 	if _, seen := walk.visited[variant]; seen {
 		return
 	}
@@ -228,34 +222,13 @@ func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTy
 			nested[template.Parameters[i].Value] = template.Outputs[slot-1].Value
 		}
 	}
-	// The body's outputs bind to this variant's storage, as lowering's
-	// outputSlotTypes do, so nested destinations widen the same way.
-	bodyVars := maps.Clone(callee.Vars)
-	for j, output := range template.Outputs {
-		bodyVars[output.Value] = storage[j]
-	}
-	walk.visitSites(mangled, template.Body.Statements, bodyVars, nested)
-}
-
-// siteOutputStorage returns each output's storage at one call site: widened
-// to its destination's binding, as lowering widens it, else the declared type.
-func siteOutputStorage(site cfgCallSite, outTypes []Type, vars map[string]Type) []Type {
-	storage := slices.Clone(outTypes)
-	for j, dest := range site.dests {
-		if j >= len(outTypes) {
-			break
-		}
-		if slot, known := vars[dest.Value]; known {
-			storage[j] = widenedOutputStorage(outTypes[j], slot)
-		}
-	}
-	return storage
+	walk.visitSites(mangled, template.Body.Statements, nested)
 }
 
 // sitePattern derives a call's alias pattern the way lowering will: one name
-// per parameter position for plain identifier arguments, the destinations by
-// their source names, and the outputs at this site's storage.
-func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTypes, storage []Type, enclosing map[string]string) []int {
+// per parameter position for plain identifier arguments, and the destinations
+// by their source names.
+func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTypes, outTypes []Type, enclosing map[string]string) []int {
 	if site.dests == nil {
 		return nil
 	}
@@ -274,7 +247,7 @@ func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTy
 	for j, dest := range site.dests {
 		dests[j] = dest.Value
 	}
-	return aliasPattern(argNames, dests, paramTypes, storage, enclosing)
+	return aliasPattern(argNames, dests, paramTypes, outTypes, enclosing)
 }
 
 // contextErrors returns the callee's diagnostics in one alias context,

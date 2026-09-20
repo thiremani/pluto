@@ -30,3 +30,7 @@ ResetArray: [
 ] [1 2] [
 ]
 WidenedWrapper: second first
+UnsharedWidenedBefore: keep
+UnsharedWidened: tagged hello! hello!
+UnsharedResetBefore: [9]
+UnsharedReset: [] [1 2] [1 2]

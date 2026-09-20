@@ -15,7 +15,6 @@ const (
 	F   = "f"  // Function arity marker
 	T   = "t"  // Generic type params marker
 	A   = "a"  // Alias variant marker: per-parameter output slot pattern
-	O   = "o"  // Output storage variant marker: widened output slot types
 	M   = "m"  // Method separator
 	OP  = "op" // Operator prefix
 	N   = "n"  // Numeric segment prefix
@@ -60,9 +59,6 @@ type Demangled struct {
 	Kind     SymbolKind // Type of symbol
 	Arity    int        // Number of arguments (for functions)
 	ArgTypes []string   // Argument type names (for functions)
-	// OutputStorage lists every output slot's storage type for a private
-	// output-storage variant; nil for the public specialization.
-	OutputStorage []string
 	// AliasPattern holds, per parameter, the one-based output slot the
 	// parameter shares at the call site, 0 for none; nil when no parameter
 	// aliases. Present only on private alias variants.
@@ -98,11 +94,6 @@ func (d *Demangled) String() string {
 		result.WriteString(strings.Join(d.ArgTypes, ", "))
 		result.WriteString(")")
 	}
-	if d.OutputStorage != nil {
-		result.WriteString(" -> (")
-		result.WriteString(strings.Join(d.OutputStorage, ", "))
-		result.WriteString(")")
-	}
 	if aliases := d.aliasDisplay(); aliases != "" {
 		result.WriteString(" [")
 		result.WriteString(aliases)
@@ -136,19 +127,11 @@ func Mangle(mangledPath, funcName string, args []Type) string {
 }
 
 // MangleVariant names a private lowering variant of a function specialization
-// per Pluto C ABI Spec §5.2. An output-storage suffix _oN_<Types...> lists
-// every output slot's storage type; an alias suffix _aN_<slot>... carries one
-// entry per parameter, 0 for a parameter sharing no output and k for one
-// sharing output k-1. A nil slice omits its suffix, so two nils return the
-// public specialization symbol unchanged.
-func MangleVariant(mangled string, outputStorage []Type, aliasPattern []int) string {
+// per Pluto C ABI Spec §5.2. The alias suffix _aN_<slot>... carries one entry
+// per parameter, 0 for a parameter sharing no output and k for one sharing
+// output k-1. A nil pattern returns the public specialization symbol.
+func MangleVariant(mangled string, aliasPattern []int) string {
 	parts := []string{mangled}
-	if outputStorage != nil {
-		parts = append(parts, O+strconv.Itoa(len(outputStorage)))
-		for _, storage := range outputStorage {
-			parts = append(parts, storage.Mangle())
-		}
-	}
 	if aliasPattern != nil {
 		parts = append(parts, A+strconv.Itoa(len(aliasPattern)))
 		for _, slot := range aliasPattern {
@@ -456,23 +439,9 @@ func demangleFunc(result *Demangled, rest string) {
 	demangleVariant(result, rest)
 }
 
-// demangleVariant parses the optional private-variant suffixes that follow a
-// function's argument types: _oN and N storage types, then _aN and N slots.
+// demangleVariant parses the optional private-variant suffix that follows a
+// function's argument types: _aN and N slots.
 func demangleVariant(result *Demangled, rest string) {
-	if after, ok := strings.CutPrefix(rest, SEP+O); ok && startsWithDigit(after) {
-		count, remaining := parseArity(after)
-		result.OutputStorage = []string{}
-		for i := 0; i < count && strings.HasPrefix(remaining, SEP); i++ {
-			typeName, next := demangleType(remaining[len(SEP):])
-			if typeName == "" {
-				break
-			}
-			result.OutputStorage = append(result.OutputStorage, typeName)
-			remaining = next
-		}
-		rest = remaining
-	}
-
 	after, ok := strings.CutPrefix(rest, SEP+A)
 	if !ok || !startsWithDigit(after) {
 		return

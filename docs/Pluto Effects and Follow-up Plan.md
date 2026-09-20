@@ -48,7 +48,7 @@ specializing binding arguments on their merged storage type and revisiting
 calls when a later assignment widens that storage. Under live-reference
 semantics, `s = "a"` followed by `s, prev = FoldStr(s, "b")`, where the body
 writes `out = current ⊕ item` before `seen = current`, must produce `ab ab`.
-Compatible wider output storage is handled by a private lowering variant,
+A shared output takes its input's storage inside the private alias variant,
 preserving sharing without changing unrelated input types. These cases are
 covered by `tests/alias_input`.
 

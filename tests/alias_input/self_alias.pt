@@ -88,6 +88,10 @@ out, seen = Reset(current)
 out, seen = Wrap(current)
     out, seen = Reset(current)
 
+out, seen = Tag(current)
+    seen = current
+    out = "tagged"
+
 out, left, right = ResetPair(first, second)
     out = []
     left = first

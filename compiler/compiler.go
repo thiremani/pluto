@@ -85,15 +85,12 @@ type callArg struct {
 }
 
 // callSignature is one call site's view of a specialization. Mangled is the
-// solver's key; the lowered symbol additionally encodes call-site facts that
-// change the emitted body but not its types: wider output storage and which
-// inputs share a binding with which outputs.
+// solver's key; the lowered symbol additionally encodes the one call-site
+// fact that changes the emitted body but not its types: which inputs share a
+// binding with which outputs.
 type callSignature struct {
 	FuncName string
 	Mangled  string
-	// OutputStorage lists every output slot's storage type when a caller
-	// destination is wider than the declared output; nil otherwise.
-	OutputStorage []Type
 	// AliasPattern holds, per parameter, the one-based output it shares a
 	// binding with at this call site, or 0. Nil means no parameter aliases.
 	AliasPattern []int
@@ -346,9 +343,9 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 // shares a binding with, and derives the call's alias pattern from them
 // through the rule the CFG also uses. A direct scalar param then reads the
 // output's current value inside the variant; an indirect param receives that
-// output's staged pointer instead of its own. Everything is decided from
-// names, so a nested call inside a variant forwards its enclosing input's
-// alias without any run-time state.
+// output's staged pointer instead of its own. A shared output takes its
+// input's storage, so the variant writes the representation the input reads
+// and the caller's staged slot passes through without an adapter.
 func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) {
 	if dest == nil {
 		return
@@ -366,6 +363,9 @@ func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []
 	pattern := aliasPattern(argNames, dests, sig.ParamTypes, sig.ABI.Return.OutTypes, c.enclosingAliases())
 	for i, slot := range pattern {
 		args[i].AliasOutput = slot
+		if slot > 0 {
+			sig.ABI.Return.OutTypes[slot-1] = sig.ParamTypes[i]
+		}
 	}
 	sig.AliasPattern = pattern
 }
@@ -3209,8 +3209,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// them at independent, destination-seeded slots so a call in one RHS cannot
 	// mutate a real destination before sibling RHS expressions have read the
 	// statement-start values. The outer assignment owns the eventual commit and
-	// cleanup. Private output-storage variants preserve compatible widening,
-	// such as an established StrH slot receiving a declared StrG output.
+	// cleanup.
 	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
 	c.compileIndirectCallIntoStagedOutputs(sig, ce, dest, outputs)
 	return c.loadOutputValues(outputs, "call_final")
@@ -3244,15 +3243,19 @@ func (c *Compiler) compileDirectCallIntoOutput(sig *callSignature, ce *ast.CallE
 	})
 }
 
-func (c *Compiler) compileIndirectCallIntoOutputs(
+// compileIndirectCallIntoStagedOutputs calls into destination-typed staged
+// slots. A shared output passes its slot straight through, since the alias
+// pattern gave it the input's storage; an unshared output of another
+// representation goes through an adapter committed only when written.
+func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	sig *callSignature,
 	ce *ast.CallExpression,
 	dest []*ast.Identifier,
-	outputs []*Symbol,
-	afterCall func([]llvm.Value),
-	onSkip func(),
+	staged []*Symbol,
 ) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
+		outputs := callAdapterOutputs(adapters)
 		c.runCallWithBoundsElse(func() {
 			writeFlags := c.makeCallOutputWriteFlags(len(outputs))
 			c.builder.CreateCall(
@@ -3261,61 +3264,19 @@ func (c *Compiler) compileIndirectCallIntoOutputs(
 				c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
 				"",
 			)
-			if afterCall != nil {
-				afterCall(writeFlags)
-			}
-		}, onSkip)
+			c.commitCallOutputAdapters(staged, adapters, writeFlags)
+		}, func() { c.cleanupSkippedCallOutputAdapters(adapters) })
 	})
 }
 
-func (c *Compiler) compileIndirectCallIntoStagedOutputs(
-	sig *callSignature,
-	ce *ast.CallExpression,
-	dest []*ast.Identifier,
-	staged []*Symbol,
-) {
-	c.specializeOutputStorage(sig, staged)
-	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
-	callOutputs := callAdapterOutputs(adapters)
-	c.compileIndirectCallIntoOutputs(
-		sig,
-		ce,
-		dest,
-		callOutputs,
-		func(writeFlags []llvm.Value) { c.commitCallOutputAdapters(staged, adapters, writeFlags) },
-		func() { c.cleanupSkippedCallOutputAdapters(adapters) },
-	)
-}
-
 // loweredName is the symbol of the private variant this call site lowers to,
-// or the public specialization when no call-site fact changes the body.
+// or the public specialization when no parameter shares an output.
 func (sig *callSignature) loweredName() string {
-	return MangleVariant(sig.Mangled, sig.OutputStorage, sig.AliasPattern)
+	return MangleVariant(sig.Mangled, sig.AliasPattern)
 }
 
 func (sig *callSignature) isVariant() bool {
-	return sig.OutputStorage != nil || sig.AliasPattern != nil
-}
-
-// specializeOutputStorage keeps a writable output and a compatible input on
-// the same representation. In particular an untyped empty array result must
-// reset the actual array slot, rather than a separate zero-seeded adapter that
-// its input cannot observe. Solver facts remain keyed by the source signature;
-// only the private function's output storage and ownership change.
-func (c *Compiler) specializeOutputStorage(sig *callSignature, outputs []*Symbol) {
-	changed := false
-	for i, output := range outputs {
-		declared := sig.ABI.Return.OutTypes[i]
-		widened := widenedOutputStorage(declared, output.Type.(Ptr).Elem)
-		if TypeEqual(widened, declared) {
-			continue
-		}
-		sig.ABI.Return.OutTypes[i] = widened
-		changed = true
-	}
-	if changed {
-		sig.OutputStorage = slices.Clone(sig.ABI.Return.OutTypes)
-	}
+	return sig.AliasPattern != nil
 }
 
 func (c *Compiler) makeCallOutputWriteFlags(count int) []llvm.Value {

@@ -1017,9 +1017,9 @@ The two diagnostics consume effects differently:
   each shared context on first reach and caches it on the specialization. A
   script call site fixes its context from names; inside a callee, each nested
   call derives its context from the enclosing one by the same rule lowering
-  uses to pick a variant, including output-storage widening, so a body is
-  analyzed exactly as it is lowered. Diagnostics are exact per context and
-  deduplicated by location and message: `out = current + 1` written twice is
+  uses to pick a variant, so a body is analyzed exactly as it is lowered.
+  Diagnostics are exact per context and deduplicated by location and
+  message: `out = current + 1` written twice is
   accepted for `x = Twice(x)` and reported for `y = Twice(x)`, because the
   first write is dead there. A body may consequently fail to compile because
   of an unshared call elsewhere; that is the chosen policy for unused-write

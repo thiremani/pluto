@@ -345,12 +345,14 @@ types:
 - Output expressions are staged independently at the call site, so one output
   cannot mutate a destination before a sibling right-hand side reads its
   statement-start value.
-- When a caller destination has a compatible wider ownership or shape
-  representation than the declared output, a private lowering variant uses
-  that output storage so an aliased input can observe its writes. It has a
-  distinct internal symbol; the source specialization and its effect facts
-  remain unchanged. Other representation changes use a separate ABI output
-  adapter initialized to zero and committed only if its write marker is set.
+- When an input shares an output whose declared representation is narrower
+  but compatible (an owned string input with a static string output, a
+  concrete-rank array input with an untyped empty output), the private alias
+  variant gives that output the input's storage so the input observes its
+  writes. It has a distinct internal symbol; the source specialization and
+  its effect facts remain unchanged. Any other representation change between
+  a declared output and its destination uses a separate ABI output adapter
+  initialized to zero and committed only if its write marker is set.
 
 The direct-return seed is always present, even when the function body
 unconditionally overwrites its output. Schematically, with mangled names
@@ -442,38 +444,33 @@ make it part of the current calling convention.
 
 ### 5.2 Private Lowering Variants
 
-Two facts of a call site change the emitted body of a specialization without
-changing its types. Each lowers to a private variant: an internal symbol that
-appends a suffix to the ordinary function mangle and is never exported. The
-suffixes use the same lowercase-marker-plus-count form as `_fN`, `_tN`, and
-the reserved `_cN`, so they parse unambiguously after the argument types.
+One fact of a call site changes the emitted body of a specialization without
+changing its types: which inputs share a binding with which outputs. Such a
+call lowers to a private variant: an internal symbol that appends a suffix to
+the ordinary function mangle and is never exported. The suffix uses the same
+lowercase-marker-plus-count form as `_fN`, `_tN`, and the reserved `_cN`, so
+it parses unambiguously after the argument types.
 
 ```
-_oN_<storage types...>
 _aN_<slot>_<slot>...
 ```
 
-`_oN` is the output-storage variant. It lists the storage type of every
-output slot, in declaration order, when a caller destination holds a
-compatible wider representation than the declared output (an owned `StrH`
-slot receiving a `StrG` output, or a concrete-rank array slot receiving `[]`).
-`_aN` is the alias variant. It carries one entry per parameter, in source
-order: `0` for a parameter that shares no output, `k` for one that shares
-output slot `k - 1`, whose type must match the parameter. When both apply,
-`_oN` precedes `_aN`. A suffix appears only when it carries information: the
-compiler omits `_aN` when no parameter shares an output, omits `_oN` when
-every output slot uses its declared type, and emits the bare specialization
-symbol when both are omitted. An unshared call can still lower to an `_oN`
-variant.
+`_aN` carries one entry per parameter, in source order: `0` for a parameter
+that shares no output, `k` for one that shares output slot `k - 1`. The
+parameter's type must be the output's declared type or a compatible wider
+representation of it (an owned `StrH` input sharing a declared `StrG` output,
+or a concrete-rank array input sharing an untyped `[]` output). Inside the
+variant that output uses the parameter's storage, so the argument types fix
+every shared output's representation. The compiler emits the suffix only when
+at least one parameter shares an output; otherwise the call uses the bare
+specialization symbol. An unshared output keeps its declared representation,
+and the caller converts it into the destination after the call.
 
-Examples: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
-first parameter sharing its first output, which is therefore an `I64`;
-`Pt_4math_p_5Label_f2_I64_StrG_o2_StrH_StrH` is `Label(I64, StrG)` writing
-both of its declared `StrG` outputs into owned string slots. `Demangle`
-renders these as `math.Fold(I64, StrH) [in1->out1]` and
-`math.Label(I64, StrG) -> (StrH, StrH)`.
+Example: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
+first parameter sharing its first output, which is therefore an `I64`.
+`Demangle` renders it as `math.Fold(I64, StrH) [in1->out1]`.
 
-The public specialization symbol is unchanged by either variant. C callers
+The public specialization symbol is unchanged by the variant. C callers
 never see a variant and cannot request one.
 
 ---
@@ -483,9 +480,8 @@ never see a variant and cannot request one.
 ```ebnf
 FunctionSym := 'Pt' ModPath '_p_' Ident '_f' Arity Types
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_f' Arity Types
-VariantSym  := FunctionSym OutputStorage? AliasPattern?    (* internal linkage only *)
-OutputStorage := '_o' Num Types
-AliasPattern  := '_a' Num ('_' Num)*
+VariantSym  := FunctionSym AliasPattern?    (* internal linkage only *)
+AliasPattern := '_a' Num ('_' Num)*
 MethodSym   := 'Pt' ModPath '_p_' Ident '_m_' Ident '_f' Arity Types
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_m_' Ident '_f' Arity Types
 OperatorSym := 'Pt' ModPath '_p_' Ident '_m_op_' Opcode '_' Fixity Types
@@ -542,5 +538,5 @@ Generic    := (Qualified | Ident) '_t' Num Types
 * Numeric path segments preserve source digits; `Num` keeps arities, counts, and length prefixes canonical
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
-* Variant suffixes (`_oN`, `_aN`) name private lowering variants (§5.2); they follow the argument types and never appear on exported symbols
+* The variant suffix (`_aN`) names a private lowering variant (§5.2); it follows the argument types and never appears on exported symbols
 * All symbols always have `_p_` after ModPath; symbols with relpath use `_r_`, and script roots end with `_e`

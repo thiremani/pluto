@@ -275,15 +275,17 @@ res = sum(a, b)
   after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
-Calls specialize binding arguments on their actual storage type. When a
-caller's destination has a compatible wider representation than the declared
-output (for example, an owned string slot receiving a static string, or a
-concrete-rank array slot receiving `[]`), a private lowering variant uses that
-wider output storage. An aliased input and output therefore continue to share
-one slot: assigning `[]` makes a later input read observe the empty array.
-An unrelated input keeps its own type and value. Other representation changes
-use a separate output adapter with a per-output write marker; the caller only
-commits its value when the callee actually writes the output.
+Calls specialize binding arguments on their actual storage type. When an
+input shares an output whose declared representation is narrower but
+compatible (for example, an owned string input with a static string output,
+or a concrete-rank array input with an untyped `[]` output), the private
+alias variant gives that output the input's storage. An aliased input and
+output therefore continue to share one slot: assigning `[]` makes a later
+input read observe the empty array. An unrelated input keeps its own type and
+value. An unshared output keeps its declared representation; the caller
+converts it into the destination through a separate output adapter with a
+per-output write marker, and only commits its value when the callee actually
+writes the output.
 
 ### Call Site
 
