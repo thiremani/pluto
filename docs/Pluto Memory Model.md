@@ -263,16 +263,23 @@ res = sum(a, b)
   observes that slot's current value, including writes from earlier statements
   in the body. This rule applies to both ordinary and ranged calls and is
   independent of whether the implementation passes the value or a pointer.
-- **Outputs**: Write-only inside their template. A body may assign an output
-  any number of times, conditionally or not, and a nested call may target it,
-  but reading it anywhere — a value, a condition, a call argument, a print, or
-  a formatting marker — is a compile error. Intermediate values live in
-  locals. Outputs are independently staged result slots: an existing
-  destination supplies the initial value and a fresh destination starts at
-  its type's zero value, so a body that writes nothing preserves the caller's
-  value. The body may observe that value through an explicitly aliased input;
-  it cannot read the output name itself. The real destinations are committed only
-  after every sibling right-hand side has been evaluated.
+- **Outputs**: Readable once definitely assigned. A body may assign an output
+  any number of times, conditionally or not, and a nested call may target it.
+  It may read an output — as a value, a condition, a call argument, a print,
+  or a formatting marker — only after a statement that assigns it
+  unconditionally with a value that cannot be skipped. A read before that is
+  a compile error: before any assignment, in the same simultaneous
+  assignment, or after only conditional or seed-preserving writes. A later
+  conditional write does not revoke the assignment. Outputs are independently
+  staged result slots: an existing destination supplies the initial value and
+  a fresh destination starts at its type's zero value, so a body that writes
+  nothing preserves the caller's value. The body may observe that value
+  through an explicitly aliased input; it can never read it through the
+  output name. An output the body reads is solved at owned storage (a static
+  string output becomes a heap string, recursively through struct fields) and
+  must have a concrete type, so every read and every nested call it feeds use
+  the representation the caller's shared slot holds. The real destinations
+  are committed only after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
 Calls specialize binding arguments on their actual storage type. When an

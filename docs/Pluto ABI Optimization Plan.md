@@ -29,7 +29,7 @@ Pluto's source-level semantics stay unchanged:
 
 - assignments copy
 - input names are read-only, but can observe writes through a shared output
-- output names are write-only, and results reach the caller at assignment commit
+- output names are readable only once definitely assigned, and results reach the caller at assignment commit
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`

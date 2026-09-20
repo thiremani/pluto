@@ -203,6 +203,103 @@ func getValidTestCases() []cfgTestCase {
 "Answer: -x"`, // x defined before marker
 		},
 		{
+			// An output is readable once definitely assigned, as a value, a
+			// condition, a call argument, a print, or a marker.
+			name: "Output Read After Definite Write",
+			code: `res = overwrite(x)
+    res = x
+    res = res + 1`,
+			input: "x = overwrite(3)\nx",
+		},
+		{
+			name: "Output Read In Condition",
+			code: `res = gated(x)
+    res = x
+    res = res > 5 x * x`,
+			input: "x = gated(3)\nx",
+		},
+		{
+			name: "Output Read As Call Argument",
+			code: `res = id(x)
+    res = x
+
+res = forwarded(x)
+    res = x
+    res = id(res)`,
+			input: "x = forwarded(3)\nx",
+		},
+		{
+			name: "Output Read By Print",
+			code: `res = printed(x)
+    res = x
+    res`,
+			input: "x = printed(3)\nx",
+		},
+		{
+			name: "Output Read By Format Marker After Assignment",
+			code: `res = marked(x)
+    res = x
+    "value -res"`,
+			input: "x = marked(3)\nx",
+		},
+		{
+			name: "Output Read By Dynamic Width",
+			code: `res = widened(x)
+    res = x
+    "-x%(-res)d"`,
+			input: "x = widened(3)\nx",
+		},
+		{
+			name: "Output Feeds Sibling Output",
+			code: `sq, cube = powers(x)
+    sq = x * x
+    cube = sq * x`,
+			input: "p, q = powers(3)\np, q",
+		},
+		{
+			// A later conditional write does not undo the assignment.
+			name: "Output Read After Later Conditional Write",
+			code: `res = refined(x)
+    res = x
+    res = x > 5 x * x
+    res = res + 1`,
+			input: "x = refined(3)\nx",
+		},
+		{
+			// Once assigned, the simultaneous form reads the previous value.
+			name: "Simultaneous Output Read After Assignment",
+			code: `sq, cube = powers(x)
+    sq = 1
+    sq, cube = x * x, sq * x`,
+			input: "a, b = powers(3)\na, b",
+		},
+		{
+			// Empty data with an established element type is readable.
+			name: "Concrete Empty Array Output Read",
+			code: `out, n = shrink(x)
+    out = []
+    n = out
+    out = [x]`,
+			input: "a, b = shrink(1)\na, b",
+		},
+		{
+			// A read string output is solved as owned, so the local copied
+			// from it and the call it feeds use heap storage.
+			name: "Output Read Through Local Into Call",
+			code: `seen = Identity(current)
+    seen = current
+
+out, kept, echo = ReadTwice(current)
+    out = "first"
+    saved = out
+    kept = Identity(saved)
+    out = "second"
+    echo = current`,
+			input: `value = "hello" ⊕ "!"
+value, kept, echo = ReadTwice(value)
+value, kept, echo`,
+		},
+		{
 			// A parameter is in scope for a marker's specifier inside a body.
 			name: "Parameter In Marker Specifier",
 			code: `out = Pad(value, width)
@@ -369,42 +466,33 @@ func getErrorTestCases() []cfgTestCase {
     res = x > 0 x
     res = res + 1`,
 			input:         "x = maybeIncrement(-1)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+			errorContains: `output "res" is read where it may still be unassigned`,
 		},
 		{
-			name: "Output Read After Definite Write",
-			code: `res = overwrite(x)
-    res = x
-    res = res + 1`,
-			input:         "x = overwrite(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
-		},
-		{
-			name: "Output Read In Condition",
-			code: `res = gated(x)
-    res = x
-    res = res > 5 x * x`,
-			input:         "x = gated(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
-		},
-		{
-			name: "Output Read As Call Argument",
-			code: `res = id(x)
-    res = x
+			// A call that may leave its output unwritten does not assign it.
+			name: "Output Read After Skippable Call",
+			code: `res = maybe(x)
+    res = x > 0 x
 
-res = forwarded(x)
-    res = x
-    res = id(res)`,
-			input:         "x = forwarded(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+res = chained(x)
+    res = maybe(x)
+    res = res + 1`,
+			input:         "x = chained(-1)\nx",
+			errorContains: `output "res" is read where it may still be unassigned`,
 		},
 		{
-			name: "Output Read By Print",
-			code: `res = printed(x)
-    res = x
-    res`,
-			input:         "x = printed(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+			// Two seed-preserving calls in a row still leave the caller's seed
+			// in place, so the read after them is rejected.
+			name: "Output Read After Two Seed Preserving Calls",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+res = twice(x)
+    res = maybe(x)
+    res = maybe(x)
+    res = res + 1`,
+			input:         "x = twice(-1)\nx",
+			errorContains: `output "res" is read where it may still be unassigned`,
 		},
 		{
 			// A marker naming an output is a read even before any assignment,
@@ -414,23 +502,26 @@ res = forwarded(x)
     "seed -res"
     res = x`,
 			input:         "x = marked(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+			errorContains: `output "res" is read before it is assigned`,
 		},
 		{
-			name: "Output Read By Dynamic Width",
-			code: `res = widened(x)
-    res = x
-    "-x%(-res)d"`,
-			input:         "x = widened(3)\nx",
-			errorContains: `output "res" is read inside its function; outputs are write-only, use a local`,
+			// Reads in a simultaneous assignment precede its writes.
+			name: "Simultaneous Output Read Before Assignment",
+			code: `sq, cube = powers(x)
+    sq, cube = x * x, sq * x`,
+			input:         "a, b = powers(3)\na, b",
+			errorContains: `output "sq" is read before it is assigned`,
 		},
 		{
-			name: "Sibling Output Read",
-			code: `a, b = cross(x)
-    a = x
-    b = a + 1`,
-			input:         "p, q = cross(3)\np, q",
-			errorContains: `output "a" is read inside its function; outputs are write-only, use a local`,
+			// A caller's destination could still refine an untyped empty
+			// array, so its storage is not fixed when the body reads it.
+			name: "Untyped Empty Array Output Read",
+			code: `out, n = emptied(x)
+    out = []
+    n = x
+    out`,
+			input:         "a, b = emptied(1)\na, b",
+			errorContains: `output "out" is read but its type`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",
@@ -960,7 +1051,7 @@ res = readFirst(x)
     res = x * 2
 `,
 			wantMsgs: []string{
-				`output "res" is read inside its function; outputs are write-only, use a local`,
+				`output "res" is read before it is assigned`,
 			},
 		},
 		{

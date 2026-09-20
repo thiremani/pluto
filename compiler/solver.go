@@ -2703,6 +2703,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 		}
 	}
 
+	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.readOutputs(f.Sig.Name, len(template.Parameters))
 	for i, id := range template.Outputs {
 		outArg, ok := Get(ts.Scopes, id.Value)
 		if !ok {
@@ -2726,6 +2727,11 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 			))
 		}
 		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
+		// A read output is solved at owned storage; the widening rewalks the
+		// body so its reads and the calls they feed follow.
+		if _, isRead := readOutputs[id.Value]; isRead {
+			nextOutArg = ownedStorage(nextOutArg)
+		}
 		ts.recordBindingSlotType(id.Value, nextOutArg)
 		if TypeEqual(oldOutArg, nextOutArg) {
 			continue

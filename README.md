@@ -134,7 +134,7 @@ y = Square(x)
 	y = x * x
 ```
 
-Inputs are read-only — they flow in. Outputs are write-only inside the template — they flow out; use a local for intermediate values. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
+Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
 
 ```python
 out, seen = Fold(current, item)

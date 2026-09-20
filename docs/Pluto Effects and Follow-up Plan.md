@@ -21,9 +21,9 @@ type, and stored type separately, as the corrected code comment already does.
 
 Resolved by a language rule instead of an analysis
 ([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
-[PR #102](https://github.com/thiremani/pluto/pull/102)): declared outputs are
-write-only inside their template, so the reproducer below is rejected at
-`y = y + 1`. The hidden seed and destination-seeded staging slots continue to
+[PR #102](https://github.com/thiremani/pluto/pull/102)): a declared output is
+readable inside its template only after it is definitely assigned, so the
+reproducer below is rejected at `y = y + 1`. The hidden seed and destination-seeded staging slots continue to
 preserve outputs that are not written. A caller can explicitly connect an
 input to an output by reusing the same binding: later statements then observe
 writes through that output, in ordinary and ranged calls alike. Inputs are
@@ -236,7 +236,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the write-only-outputs rule in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
+| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
 | `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |

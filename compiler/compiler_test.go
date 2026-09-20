@@ -475,6 +475,30 @@ other, seen`
 	require.NotContains(t, ir, "@"+mangled+"_a", "destination storage alone selects no private variant")
 }
 
+// A read string output is solved as owned, so a nested call fed from it
+// specializes on the storage the shared caller's slot actually holds.
+func TestReadOutputFeedsNestedCallAtOwnedStorage(t *testing.T) {
+	code := `seen = Identity(current)
+    seen = current
+
+out, kept, echo = ReadTwice(current)
+    out = "first"
+    saved = out
+    kept = Identity(saved)
+    out = "second"
+    echo = current`
+	script := `value = "hello" ⊕ "!"
+value, kept, echo = ReadTwice(value)
+value, kept, echo`
+
+	ir, _ := compileScriptAndCodeIR(t, "read_output_owned", code, script)
+	heap := Mangle(MangleDirPath("read_output_owned", ""), "Identity", []Type{StrH{}})
+	static := Mangle(MangleDirPath("read_output_owned", ""), "Identity", []Type{StrG{}})
+
+	require.Contains(t, ir, "@"+heap+"(", "the local copied from the read output is owned")
+	require.NotContains(t, ir, "@"+static+"(", "no static specialization borrows the output's heap storage")
+}
+
 func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
 	// Both outputs are integers, so writing them can never change the array
 	// input even though it is read after the first output write. Copying it

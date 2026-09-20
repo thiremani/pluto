@@ -92,6 +92,20 @@ out, seen = Tag(current)
     seen = current
     out = "tagged"
 
+sq, cube = Powers(x)
+    sq = x * x
+    cube = sq * x
+
+seen = Identity(current)
+    seen = current
+
+out, kept, echo = ReadTwice(current)
+    out = "first"
+    saved = out
+    kept = Identity(saved)
+    out = "second"
+    echo = current
+
 out, left, right = ResetPair(first, second)
     out = []
     left = first

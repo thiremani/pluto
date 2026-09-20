@@ -854,9 +854,11 @@ Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
 *existing* target whose direct callee output is `MayWrite`, resolved at `=`.
 A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee introduces no implicit seed read. Declared outputs are
-write-only inside their template (the structural CFG rejects every read,
-including formatting markers), so the body cannot read the hidden seed through
+all-`MustWrite` callee introduces no implicit seed read. A declared output is
+readable inside its template only after a statement that definitely assigns
+it (the structural CFG rejects a read before any assignment, including a
+formatting marker, and the typed pass rejects a read after only conditional
+or seed-preserving writes), so the body cannot read the hidden seed through
 an output name. An input explicitly shared with an output can observe the
 staged value and later writes; that dependency is already an explicit argument
 read at the call site. Step 2A

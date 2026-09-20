@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
@@ -194,7 +195,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	defer PopScope(&cfg.Scopes)
 
 	// Outputs are declared up front so that a formatting marker naming one
-	// resolves as a read and is rejected, instead of passing as literal text.
+	// resolves as a read, instead of passing as literal text.
 	for _, param := range fn.Parameters {
 		cfg.declareName(param)
 	}
@@ -202,18 +203,9 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		cfg.declareName(output)
 	}
 
-	parameterNames := make(map[string]struct{}, len(fn.Parameters))
-	for _, parameter := range fn.Parameters {
-		parameterNames[parameter.Value] = struct{}{}
-	}
-
-	outputNames := make(map[string]struct{}, len(fn.Outputs))
-	for _, output := range fn.Outputs {
-		outputNames[output.Value] = struct{}{}
-	}
-
-	body := cfg.validateTemplateBody(fn.Body.Statements, parameterNames, outputNames)
+	body := cfg.validateTemplateBody(fn.Body.Statements, identSet(fn.Parameters), identSet(fn.Outputs))
 	readInputs, assignedOutputs := body.readInputs, body.assignedOutputs
+	cfg.CodeCompiler.outputReads[funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}] = body.readOutputs
 
 	for _, input := range fn.Parameters {
 		if _, wasRead := readInputs[input.Value]; wasRead {
@@ -235,7 +227,16 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 type templateBody struct {
 	statementReads  [][]VarEvent
 	readInputs      map[string]struct{}
+	readOutputs     map[string]struct{}
 	assignedOutputs map[string]struct{}
+}
+
+func identSet(idents []*ast.Identifier) map[string]struct{} {
+	set := make(map[string]struct{}, len(idents))
+	for _, ident := range idents {
+		set[ident.Value] = struct{}{}
+	}
+	return set
 }
 
 // validateTemplateBody runs structural validation over one template body. A
@@ -245,11 +246,12 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 	body := templateBody{
 		statementReads:  make([][]VarEvent, 0, len(statements)),
 		readInputs:      make(map[string]struct{}, len(parameterNames)),
+		readOutputs:     make(map[string]struct{}, len(outputNames)),
 		assignedOutputs: make(map[string]struct{}, len(outputNames)),
 	}
 	for _, stmt := range statements {
 		reads := cfg.collectStatementReads(stmt)
-		targets := cfg.validateStatementStructure(stmt, reads, parameterNames, outputNames)
+		targets := cfg.validateStatementStructure(stmt, reads, parameterNames, outputNames, body.assignedOutputs)
 		if let, ok := stmt.(*ast.LetStatement); ok {
 			cfg.declareTargets(let.Name)
 		}
@@ -258,6 +260,9 @@ func (cfg *CFG) validateTemplateBody(statements []ast.Statement, parameterNames,
 		for _, event := range reads {
 			if _, isParameter := parameterNames[event.Name]; isParameter {
 				body.readInputs[event.Name] = struct{}{}
+			}
+			if _, isOutput := outputNames[event.Name]; isOutput {
+				body.readOutputs[event.Name] = struct{}{}
 			}
 		}
 		for _, target := range targets {
@@ -311,13 +316,15 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 		cfg.declareName(param)
 	}
 
-	cfg.typedForwardPass(template, info, sharedOutputs(template, pattern))
-
-	live := make(map[string]struct{}, len(template.Outputs))
-	for _, output := range template.Outputs {
-		live[output.Value] = struct{}{}
+	outputs := identSet(template.Outputs)
+	readOutputs := cfg.CodeCompiler.readOutputs(template.Token.Literal, len(template.Parameters))
+	for i, output := range template.Outputs {
+		if _, isRead := readOutputs[output.Value]; isRead && !concreteStorage(info.Sig.OutTypes[i]) {
+			cfg.addError(output.Tok(), fmt.Sprintf("output %q is read but its type %s is not concrete", output.Value, info.Sig.OutTypes[i]))
+		}
 	}
-	cfg.backwardPass(live)
+	cfg.typedForwardPass(template, info, outputs, sharedOutputs(template, pattern))
+	cfg.backwardPass(maps.Clone(outputs))
 }
 
 // sharedOutputs maps each input that shares an output in this context to that
@@ -333,16 +340,31 @@ func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]string
 	return shared
 }
 
-func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, shared map[string]string) {
+// typedForwardPass runs the forward dataflow over a body. An output is
+// readable once a statement has definitely assigned it, and a read of a
+// shared input is also a read of its output's latest write.
+func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}, shared map[string]string) {
+	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
 		for _, read := range reads {
+			if _, isOutput := outputs[read.Name]; isOutput {
+				if _, isAssigned := assigned[read.Name]; !isAssigned {
+					cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first or use a local", read.Name))
+				}
+				continue
+			}
 			if output, ok := shared[read.Name]; ok {
 				reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
 			}
 		}
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
+		if let, ok := stmt.(*ast.LetStatement); ok {
+			for _, name := range definiteTargets(let, info.StatementEffects[let]) {
+				assigned[name] = struct{}{}
+			}
+		}
 	}
 }
 
@@ -369,9 +391,9 @@ func (cfg *CFG) processTypedStatement(stmt ast.Statement, reads []VarEvent, effe
 // validateStatementStructure reports template-stable read and write errors and
 // returns named targets for caller-specific bookkeeping. The caller publishes
 // them only after all statement reads have been checked.
-func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters, outputs map[string]struct{}) []*ast.Identifier {
+func (cfg *CFG) validateStatementStructure(stmt ast.Statement, reads []VarEvent, parameters, outputs, assigned map[string]struct{}) []*ast.Identifier {
 	for _, event := range reads {
-		cfg.validateStructuralRead(event, outputs)
+		cfg.validateStructuralRead(event, outputs, assigned)
 	}
 
 	let, ok := stmt.(*ast.LetStatement)
@@ -483,9 +505,14 @@ func (cfg *CFG) backwardPass(live map[string]struct{}) {
 // validateStructuralRead enforces that a declared output is write-only inside
 // its template. A body may observe output writes through an explicitly passed
 // input that shares the output's binding, but never through the output name.
-func (cfg *CFG) validateStructuralRead(event VarEvent, outputs map[string]struct{}) {
+// An output is readable once an earlier statement has assigned it; a
+// statement's reads precede its own writes. The typed pass narrows this per
+// specialization to writes that definitely assign.
+func (cfg *CFG) validateStructuralRead(event VarEvent, outputs, assigned map[string]struct{}) {
 	if _, isOutput := outputs[event.Name]; isOutput {
-		cfg.addError(event.Token, fmt.Sprintf("output %q is read inside its function; outputs are write-only, use a local", event.Name))
+		if _, isAssigned := assigned[event.Name]; !isAssigned {
+			cfg.addError(event.Token, fmt.Sprintf("output %q is read before it is assigned", event.Name))
+		}
 		return
 	}
 	if !cfg.isDefined(event.Name) {
