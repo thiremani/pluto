@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/pir"
@@ -207,7 +206,7 @@ func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTy
 	if !ok {
 		panic(fmt.Sprintf("internal: settled specialization %s has no template", mangled))
 	}
-	for _, compileError := range walk.contextErrors(template, callee, pattern) {
+	for _, compileError := range walk.contextErrors(template, callee, pattern, variant) {
 		diagnostic := cfgDiagnosticKeyFor(compileError)
 		if _, seen := walk.reported[diagnostic]; seen {
 			continue
@@ -216,50 +215,35 @@ func (walk *cfgWalk) visitCallee(callerMangled string, site cfgCallSite, paramTy
 		walk.errors = append(walk.errors, compileError)
 	}
 
-	nested := make(map[string]string, len(pattern))
-	for i, slot := range pattern {
-		if slot > 0 {
-			nested[template.Parameters[i].Value] = template.Outputs[slot-1].Value
-		}
-	}
-	walk.visitSites(mangled, template.Body.Statements, nested)
+	walk.visitSites(mangled, template.Body.Statements, sharedOutputs(template, pattern))
 }
 
 // sitePattern derives a call's alias pattern the way lowering will: one name
 // per parameter position for plain identifier arguments, and the destinations
 // by their source names.
 func (walk *cfgWalk) sitePattern(callerMangled string, site cfgCallSite, paramTypes, outTypes []Type, enclosing map[string]string) []int {
-	if site.dests == nil {
-		return nil
-	}
-
 	argNames := make([]string, len(paramTypes))
 	position := 0
 	for _, argument := range site.call.Arguments {
-		width := len(walk.compiler.ExprCache[key(callerMangled, argument)].OutTypes)
-		if ident, ok := argument.(*ast.Identifier); ok && width == 1 && position < len(argNames) {
+		if ident, ok := argument.(*ast.Identifier); ok {
 			argNames[position] = ident.Value
+			position++
+			continue
 		}
-		position += width
+		position += len(walk.compiler.ExprCache[key(callerMangled, argument)].OutTypes)
 	}
-
-	dests := make([]string, len(site.dests))
-	for j, dest := range site.dests {
-		dests[j] = dest.Value
-	}
-	return aliasPattern(argNames, dests, paramTypes, outTypes, enclosing)
+	return aliasPattern(argNames, identNames(site.dests), paramTypes, outTypes, enclosing)
 }
 
 // contextErrors returns the callee's diagnostics in one alias context,
 // analyzing a shared context on first reach and caching it on the
-// specialization; the unshared context was analyzed at settlement.
-func (walk *cfgWalk) contextErrors(template *ast.FuncStatement, callee *FuncInfo, pattern []int) []*token.CompileError {
+// specialization under its variant symbol; the unshared context was
+// analyzed at settlement.
+func (walk *cfgWalk) contextErrors(template *ast.FuncStatement, callee *FuncInfo, pattern []int, variant string) []*token.CompileError {
 	if pattern == nil {
 		return callee.CFGResult.Errors
 	}
-
-	patternKey := aliasPatternKey(pattern)
-	if cached, ok := callee.CFGResult.shared[patternKey]; ok {
+	if cached, ok := callee.CFGResult.shared[variant]; ok {
 		return cached
 	}
 
@@ -268,8 +252,8 @@ func (walk *cfgWalk) contextErrors(template *ast.FuncStatement, callee *FuncInfo
 	if callee.CFGResult.shared == nil {
 		callee.CFGResult.shared = make(map[string][]*token.CompileError)
 	}
-	callee.CFGResult.shared[patternKey] = slices.Clone(cfg.Errors)
-	return callee.CFGResult.shared[patternKey]
+	callee.CFGResult.shared[variant] = cfg.Errors
+	return cfg.Errors
 }
 
 func cfgDiagnosticKeyFor(compileError *token.CompileError) cfgDiagnosticKey {

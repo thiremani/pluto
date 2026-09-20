@@ -305,10 +305,6 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
-	for _, param := range template.Parameters {
-		cfg.declareName(param)
-	}
-
 	cfg.typedForwardPass(template, info, sharedOutputs(template, pattern))
 
 	live := make(map[string]struct{}, len(template.Outputs))
@@ -319,27 +315,26 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 }
 
 // sharedOutputs maps each input that shares an output in this context to that
-// output, so a read of the input is also a read of the output's latest write.
-func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]*ast.Identifier {
-	shared := make(map[string]*ast.Identifier, len(pattern))
+// output's name, so a read of the input is also a read of the output's latest
+// write, and a nested call forwards the sharing.
+func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]string {
+	shared := make(map[string]string, len(pattern))
 	for i, slot := range pattern {
 		if slot > 0 {
-			shared[template.Parameters[i].Value] = template.Outputs[slot-1]
+			shared[template.Parameters[i].Value] = template.Outputs[slot-1].Value
 		}
 	}
 	return shared
 }
 
-func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, shared map[string]*ast.Identifier) {
+func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, shared map[string]string) {
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
 		for _, read := range reads {
-			output, ok := shared[read.Name]
-			if !ok || !cfg.isDefined(output.Value) {
-				continue
+			if output, ok := shared[read.Name]; ok {
+				reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
 			}
-			reads = append(reads, VarEvent{Name: output.Value, Kind: Read, Token: read.Token})
 		}
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 	}

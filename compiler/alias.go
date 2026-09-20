@@ -1,23 +1,12 @@
 package compiler
 
-import (
-	"strconv"
-	"strings"
-)
-
 // sharableOutput reports whether an input of paramType can share an output
 // declared as outType: the input's storage must be the declared type or a
 // compatible wider representation of it (an owned string for a static
 // output, a concrete-rank array for an untyped empty one). The shared output
 // then uses the input's storage, so a write lands where the next read looks.
 func sharableOutput(paramType, outType Type) bool {
-	if TypeEqual(paramType, outType) {
-		return true
-	}
-	if !bindingSlotCompatible(paramType, outType) {
-		return false
-	}
-	return TypeEqual(mergeBindingSlotType(paramType, outType), paramType)
+	return bindingSlotCompatible(paramType, outType) && TypeEqual(mergeBindingSlotType(paramType, outType), paramType)
 }
 
 // aliasPattern decides, per callee parameter, the one-based caller destination
@@ -53,14 +42,4 @@ func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type, enclosi
 	}
 
 	return pattern
-}
-
-// aliasPatternKey identifies one alias context; the empty key is the
-// unshared context in which no parameter shares a destination.
-func aliasPatternKey(pattern []int) string {
-	parts := make([]string, len(pattern))
-	for i, slot := range pattern {
-		parts[i] = strconv.Itoa(slot)
-	}
-	return strings.Join(parts, "_")
 }

@@ -76,12 +76,6 @@ type callArg struct {
 	Name    string
 	Symbol  *Symbol
 	Lowered *Symbol
-	// AliasOutput is the one-based caller destination this argument shares a
-	// binding with: 0 means none, N means output N-1. It is decided at compile
-	// time from the call's names, so it selects a lowering variant rather than
-	// travelling as an argument. One-based keeps the zero value correct for
-	// arguments that alias nothing.
-	AliasOutput int
 }
 
 // callSignature is one call site's view of a specialization. Mangled is the
@@ -339,18 +333,12 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
-// setCallArgAliases records on each argument which caller destination it
-// shares a binding with, and derives the call's alias pattern from them
-// through the rule the CFG also uses. A direct scalar param then reads the
-// output's current value inside the variant; an indirect param receives that
-// output's staged pointer instead of its own. A shared output takes its
-// input's storage, so the variant writes the representation the input reads
-// and the caller's staged slot passes through without an adapter.
-func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []*ast.Identifier) {
-	if dest == nil {
-		return
-	}
-
+// setCallAliasPattern derives which arguments share a caller destination,
+// through the rule the CFG also uses, and gives each shared output its
+// input's storage. A direct scalar param then reads the output's current
+// value inside the variant; an indirect param receives that output's staged
+// pointer, which passes through to the destination without an adapter.
+func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest []*ast.Identifier) {
 	argNames := make([]string, len(args))
 	for i, arg := range args {
 		argNames[i] = arg.Name
@@ -360,14 +348,12 @@ func (c *Compiler) setCallArgAliases(sig *callSignature, args []callArg, dest []
 		dests[i] = c.destinationBase(output.Value)
 	}
 
-	pattern := aliasPattern(argNames, dests, sig.ParamTypes, sig.ABI.Return.OutTypes, c.enclosingAliases())
-	for i, slot := range pattern {
-		args[i].AliasOutput = slot
+	sig.AliasPattern = aliasPattern(argNames, dests, sig.ParamTypes, sig.ABI.Return.OutTypes, c.enclosingAliases())
+	for i, slot := range sig.AliasPattern {
 		if slot > 0 {
 			sig.ABI.Return.OutTypes[slot-1] = sig.ParamTypes[i]
 		}
 	}
-	sig.AliasPattern = pattern
 }
 
 // enclosingAliases maps each input of the body being lowered to the output it
@@ -3084,7 +3070,7 @@ func (c *Compiler) freeCallArgTemps(callArgs []callArg) {
 
 func (c *Compiler) prepareCall(sig *callSignature, ce *ast.CallExpression, dest []*ast.Identifier) preparedCall {
 	callArgs := c.compileCallArgs(sig, ce)
-	c.setCallArgAliases(sig, callArgs, dest)
+	c.setCallAliasPattern(sig, callArgs, dest)
 	c.lowerCallArgs(sig.FuncName, callArgs, sig)
 	fn, funcType, retStruct := c.getOrCompileCallFunction(sig)
 	return preparedCall{
@@ -3338,8 +3324,8 @@ func (c *Compiler) callArgs(
 	}
 	for i, arg := range call.Args {
 		argVal := arg.Lowered.Val
-		if sig.ABI.Params[i].Mode == ABIParamIndirect && arg.AliasOutput > 0 && arg.AliasOutput <= len(outputs) {
-			argVal = outputs[arg.AliasOutput-1].Val
+		if sig.ABI.Params[i].Mode == ABIParamIndirect && i < len(sig.AliasPattern) && sig.AliasPattern[i] > 0 {
+			argVal = outputs[sig.AliasPattern[i]-1].Val
 		}
 		llvmArgs = append(llvmArgs, argVal)
 	}
