@@ -276,9 +276,9 @@ res = sum(a, b)
   nothing preserves the caller's value. The body may observe that value
   through an explicitly aliased input; it can never read it through the
   output name. An output the body reads is solved at owned storage (a static
-  string output becomes a heap string, recursively through struct fields) and
-  must have a concrete type, so every read and every nested call it feeds use
-  the representation the caller's shared slot holds. The real destinations
+  string output becomes a heap string) and must have a concrete type, so
+  every read and every nested call it feeds use the representation the
+  caller's shared slot holds. The real destinations
   are committed only after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
@@ -286,7 +286,8 @@ Calls specialize binding arguments on their actual storage type. When an
 input shares an output whose declared representation is narrower but
 compatible (for example, an owned string input with a static string output,
 or a concrete-rank array input with an untyped `[]` output), the private
-alias variant gives that output the input's storage. An aliased input and
+alias variant gives that output the input's storage. A struct input shares an
+output only at its exact type. An aliased input and
 output therefore continue to share one slot: assigning `[]` makes a later
 input read observe the empty array. An unrelated input keeps its own type and
 value. An unshared output keeps its declared representation; the caller

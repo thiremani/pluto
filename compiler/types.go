@@ -690,26 +690,6 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	return CanRefineType(oldType, newType)
 }
 
-// ownedStorage is the widest storage a shared caller could give a value of
-// type t: a static string becomes owned, recursively through struct fields.
-// An output its body reads is solved at this storage, so its reads and the
-// nested calls they feed see the representation lowering stores.
-func ownedStorage(t Type) Type {
-	switch tt := t.(type) {
-	case StrG:
-		return StrH{}
-	case Struct:
-		owned := tt
-		owned.Fields = make([]StructField, len(tt.Fields))
-		for i, field := range tt.Fields {
-			owned.Fields[i] = StructField{Name: field.Name, Type: ownedStorage(field.Type)}
-		}
-		return owned
-	default:
-		return t
-	}
-}
-
 // concreteStorage reports whether t fixes its storage in every calling
 // context: an untyped empty array, a column without an element type, or an
 // unresolved leaf could still be refined by a caller's destination.
@@ -722,13 +702,6 @@ func concreteStorage(t Type) bool {
 	case Table:
 		for _, column := range tt.Columns {
 			if column.ElemType == nil || !concreteStorage(column.ElemType) {
-				return false
-			}
-		}
-		return true
-	case Struct:
-		for _, field := range tt.Fields {
-			if !concreteStorage(field.Type) {
 				return false
 			}
 		}

@@ -502,9 +502,6 @@ func (cfg *CFG) backwardPass(live map[string]struct{}) {
 	}
 }
 
-// validateStructuralRead enforces that a declared output is write-only inside
-// its template. A body may observe output writes through an explicitly passed
-// input that shares the output's binding, but never through the output name.
 // An output is readable once an earlier statement has assigned it; a
 // statement's reads precede its own writes. The typed pass narrows this per
 // specialization to writes that definitely assign.

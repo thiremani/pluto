@@ -459,7 +459,8 @@ _aN_<slot>_<slot>...
 that shares no output, `k` for one that shares output slot `k - 1`. The
 parameter's type must be the output's declared type or a compatible wider
 representation of it (an owned `StrH` input sharing a declared `StrG` output,
-or a concrete-rank array input sharing an untyped `[]` output). Inside the
+or a concrete-rank array input sharing an untyped `[]` output); a struct
+input shares only at its exact type. Inside the
 variant that output uses the parameter's storage, so the argument types fix
 every shared output's representation. The compiler emits the suffix only when
 at least one parameter shares an output; otherwise the call uses the bare

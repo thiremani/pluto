@@ -499,6 +499,17 @@ value, kept, echo`
 	require.NotContains(t, ir, "@"+static+"(", "no static specialization borrows the output's heap storage")
 }
 
+// Sharing widens an output only into a representation a store converts.
+func TestSharableOutputWidensOnlyConvertedRepresentations(t *testing.T) {
+	static := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrG{}}}}
+	owned := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrH{}}}}
+
+	require.True(t, sharableOutput(StrH{}, StrG{}), "an owned string input widens a static output")
+	require.False(t, sharableOutput(StrG{}, StrH{}), "a static input cannot share an owned output")
+	require.True(t, sharableOutput(static, static), "a struct shares at its exact type")
+	require.False(t, sharableOutput(owned, static), "nothing converts a struct's fields, so a struct never widens one")
+}
+
 func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
 	// Both outputs are integers, so writing them can never change the array
 	// input even though it is read after the first output write. Copying it

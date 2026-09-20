@@ -2727,10 +2727,11 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 			))
 		}
 		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
-		// A read output is solved at owned storage; the widening rewalks the
-		// body so its reads and the calls they feed follow.
-		if _, isRead := readOutputs[id.Value]; isRead {
-			nextOutArg = ownedStorage(nextOutArg)
+		// A read static-string output is solved as owned, the one widening
+		// a shared caller can give it that a store converts; the rewalk then
+		// retypes its reads and the calls they feed to match.
+		if _, isRead := readOutputs[id.Value]; isRead && IsStrG(nextOutArg) {
+			nextOutArg = StrH{}
 		}
 		ts.recordBindingSlotType(id.Value, nextOutArg)
 		if TypeEqual(oldOutArg, nextOutArg) {
