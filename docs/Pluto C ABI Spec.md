@@ -460,13 +460,18 @@ slot receiving a `StrG` output, or a concrete-rank array slot receiving `[]`).
 `_aN` is the alias variant. It carries one entry per parameter, in source
 order: `0` for a parameter that shares no output, `k` for one that shares
 output slot `k - 1`, whose type must match the parameter. When both apply,
-`_oN` precedes `_aN`.
+`_oN` precedes `_aN`. A suffix appears only when it carries information: the
+compiler omits `_aN` when no parameter shares an output, omits `_oN` when
+every output slot uses its declared type, and emits the bare specialization
+symbol when both are omitted. An unshared call can still lower to an `_oN`
+variant.
 
 Examples: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
-first parameter sharing its first output; `..._o2_StrH_StrH` is the same
-function writing both outputs into owned string slots. `Demangle` renders
-these as `math.Fold(I64, StrH) [in1->out1]` and
-`math.Fold(I64, StrH) -> (StrH, StrH)`.
+first parameter sharing its first output, which is therefore an `I64`;
+`Pt_4math_p_5Label_f2_I64_StrG_o2_StrH_StrH` is `Label(I64, StrG)` writing
+both of its declared `StrG` outputs into owned string slots. `Demangle`
+renders these as `math.Fold(I64, StrH) [in1->out1]` and
+`math.Label(I64, StrG) -> (StrH, StrH)`.
 
 The public specialization symbol is unchanged by either variant. C callers
 never see a variant and cannot request one.
