@@ -305,6 +305,12 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
+	// Parameters must be in scope: the shared marker collector treats an
+	// unknown main marker as literal text and rejects unknown specifier names.
+	for _, param := range template.Parameters {
+		cfg.declareName(param)
+	}
+
 	cfg.typedForwardPass(template, info, sharedOutputs(template, pattern))
 
 	live := make(map[string]struct{}, len(template.Outputs))

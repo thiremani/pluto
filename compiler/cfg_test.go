@@ -138,6 +138,16 @@ value, seen = Wrap(value)
 value, seen`,
 		},
 		{
+			// A format marker naming the shared input reads the output's first
+			// write, so the second write does not overwrite an unused value.
+			name: "Marker Read Of Shared Input Between Output Writes",
+			code: `out = Show(current)
+    out = 1
+    "-current"
+    out = 2`,
+			input: "x = 5\nx = Show(x)\nx",
+		},
+		{
 			name: "Repeated Empty Array Write Through Widening Wrapper",
 			code: `out, seen = ResetEmpty(current)
     out = []
@@ -191,6 +201,15 @@ func getValidTestCases() []cfgTestCase {
 			name: "FormatMarker After Def",
 			input: `x = 42
 "Answer: -x"`, // x defined before marker
+		},
+		{
+			// A parameter is in scope for a marker's specifier inside a body.
+			name: "Parameter In Marker Specifier",
+			code: `out = Pad(value, width)
+    local = value
+    out = value
+    "-local%(-width)d"`,
+			input: "y = Pad(7, 4)\ny",
 		},
 		{
 			name: "Marker Following Unresolved Marker",
