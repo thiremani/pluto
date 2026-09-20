@@ -340,25 +340,18 @@ func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]string
 	return shared
 }
 
-// typedForwardPass runs the forward dataflow over a body. An output is
-// readable once a statement has definitely assigned it, and a read of a
-// shared input is also a read of its output's latest write.
+// typedForwardPass runs the forward dataflow over a body. Per statement, in
+// order: an explicit read of an output needs an earlier definite assignment;
+// a read of a shared input also reads its output's latest write, which may
+// be the caller's seed; the statement's events run; its definite targets
+// become assigned for the statements after it.
 func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}, shared map[string]string) {
 	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
-		for _, read := range reads {
-			if _, isOutput := outputs[read.Name]; isOutput {
-				if _, isAssigned := assigned[read.Name]; !isAssigned {
-					cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first or use a local", read.Name))
-				}
-				continue
-			}
-			if output, ok := shared[read.Name]; ok {
-				reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
-			}
-		}
+		cfg.rejectUnassignedOutputReads(reads, outputs, assigned)
+		reads = withSharedOutputReads(reads, shared)
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 		if let, ok := stmt.(*ast.LetStatement); ok {
 			for _, name := range definiteTargets(let, info.StatementEffects[let]) {
@@ -366,6 +359,28 @@ func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, ou
 			}
 		}
 	}
+}
+
+func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned map[string]struct{}) {
+	for _, read := range reads {
+		if _, isOutput := outputs[read.Name]; !isOutput {
+			continue
+		}
+		if _, isAssigned := assigned[read.Name]; !isAssigned {
+			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first or use a local", read.Name))
+		}
+	}
+}
+
+// withSharedOutputReads adds, for each read of a shared input, a read of the
+// output it shares at the same location.
+func withSharedOutputReads(reads []VarEvent, shared map[string]string) []VarEvent {
+	for _, read := range reads {
+		if output, ok := shared[read.Name]; ok {
+			reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
+		}
+	}
+	return reads
 }
 
 func (cfg *CFG) typedScriptForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, statementReads [][]VarEvent) {
