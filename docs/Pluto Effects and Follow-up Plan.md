@@ -52,7 +52,11 @@ A shared output takes its input's storage inside the private alias variant,
 preserving sharing without changing unrelated input types. These cases are
 covered by `tests/alias_input`.
 
-The original analysis plan is kept below for the record.
+The original analysis plan is kept below as the specification for the planned
+follow-up, seed-readable outputs
+([issue #105](https://github.com/thiremani/pluto/issues/105)): a body may read
+an output before assigning it and observes the destination's previous value,
+with output types still inferred from inputs and the body.
 
 ### Confirmed failure
 
