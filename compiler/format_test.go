@@ -250,6 +250,41 @@ func TestFormatCountRejectsCodeConstant(t *testing.T) {
 	}
 }
 
+func TestFormatCountRejectsInputParameter(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+	}{
+		{name: "plain", script: "value = 10\nvalue = Count(value)\nvalue"},
+		{name: "range", script: "value = Count(1:3)\nvalue"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			code := mustParseCode(t, `out = Count(current)
+    "count-current%n"
+    out = current`)
+			cc := NewCodeCompiler(ctx, "format_input_parameter", "", code)
+			if errs := cc.Compile(); len(errs) != 0 {
+				t.Fatalf("unexpected code compile errors: %v", errs)
+			}
+
+			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tt.script), cc)
+			linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
+			errs := sc.Compile()
+			if len(errs) != 1 {
+				t.Fatalf("expected one compile error, got %d: %v", len(errs), errs)
+			}
+			if got, want := errs[0].Msg, `cannot write to input parameter "current"`; got != want {
+				t.Fatalf("compile error = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestValidFormatString(t *testing.T) {
 	tests := []struct {
 		name         string
