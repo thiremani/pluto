@@ -257,6 +257,16 @@ res = forwarded(x)
 			input: "p, q = powers(3)\np, q",
 		},
 		{
+			// The repair the diagnostic names: the previous value arrives as
+			// an input and initializes the output, for either call shape.
+			name: "Output Initialized From Input Before Conditional Write",
+			code: `res = maybeIncrement(current, x)
+    res = current
+    res = x > 0 x
+    res = res + 1`,
+			input: "a = 5\na = maybeIncrement(a, -1)\nb = maybeIncrement(5, 3)\na, b",
+		},
+		{
 			// A later conditional write does not undo the assignment.
 			name: "Output Read After Later Conditional Write",
 			code: `res = refined(x)

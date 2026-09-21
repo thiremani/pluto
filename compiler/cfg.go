@@ -346,28 +346,30 @@ func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]string
 // be the caller's seed; the statement's events run; its definite targets
 // become assigned for the statements after it.
 func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}, shared map[string]string) {
-	assigned := make(map[string]struct{}, len(outputs))
+	definitelyAssigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
-		cfg.rejectUnassignedOutputReads(reads, outputs, assigned)
+		cfg.rejectUnassignedOutputReads(reads, outputs, definitelyAssigned)
+
 		reads = withSharedOutputReads(reads, shared)
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
+
 		if let, ok := stmt.(*ast.LetStatement); ok {
 			for _, name := range definiteTargets(let, info.StatementEffects[let]) {
-				assigned[name] = struct{}{}
+				definitelyAssigned[name] = struct{}{}
 			}
 		}
 	}
 }
 
-func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned map[string]struct{}) {
+func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, definitelyAssigned map[string]struct{}) {
 	for _, read := range reads {
 		if _, isOutput := outputs[read.Name]; !isOutput {
 			continue
 		}
-		if _, isAssigned := assigned[read.Name]; !isAssigned {
-			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first or use a local", read.Name))
+		if _, ok := definitelyAssigned[read.Name]; !ok {
+			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it", read.Name))
 		}
 	}
 }
