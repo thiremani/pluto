@@ -352,7 +352,11 @@ func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, ou
 		reads := cfg.collectStatementReads(stmt)
 		cfg.rejectUnassignedOutputReads(reads, outputs, definitelyAssigned)
 
-		reads = withSharedOutputReads(reads, shared)
+		for _, read := range reads {
+			if output, ok := shared[read.Name]; ok {
+				reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
+			}
+		}
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 
 		if let, ok := stmt.(*ast.LetStatement); ok {
@@ -372,17 +376,6 @@ func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, definitel
 			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it", read.Name))
 		}
 	}
-}
-
-// withSharedOutputReads adds, for each read of a shared input, a read of the
-// output it shares at the same location.
-func withSharedOutputReads(reads []VarEvent, shared map[string]string) []VarEvent {
-	for _, read := range reads {
-		if output, ok := shared[read.Name]; ok {
-			reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
-		}
-	}
-	return reads
 }
 
 func (cfg *CFG) typedScriptForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, statementReads [][]VarEvent) {
