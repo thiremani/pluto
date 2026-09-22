@@ -311,8 +311,8 @@ connects an input to a call's staged output. The template reads the staged
 value through its declared input `a`, and may read `res` itself once it has
 assigned it. Every specialization must pass liveness analysis with its inputs
 and outputs treated as unshared; caller sharing cannot make an otherwise
-rejected body acceptable. So `res = a + b` written twice is a dead write for
-every caller, while `res = res + b` after `res = a + b` reads the first write
+rejected body acceptable. So `res = a + b` written twice is reported as a dead
+write for every caller, while `res = res + b` after `res = a + b` reads the first write
 by name.
 
 ```python
