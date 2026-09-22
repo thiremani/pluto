@@ -73,17 +73,20 @@ func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 	require.Equal(t, 2, deadStores)
 }
 
-func TestInputAliasOutputWriteLiveness(t *testing.T) {
+// A body must be valid on its own: sharing an input with an output at a call
+// only adds reads, so it never makes a dead write live. The body says which
+// value it reads by naming the output.
+func TestOutputWriteLivenessIgnoresSharing(t *testing.T) {
 	tests := []cfgTestCase{
 		{
-			name: "Repeated Output Write",
+			name: "Repeated Output Write Shared",
 			code: `out = BumpTwice(current, item)
     out = current + item
     out = current + item`,
-			input: "value = 10\nvalue = BumpTwice(value, 5)\nvalue",
+			input:         "value = 10\nvalue = BumpTwice(value, 5)\nvalue",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
 		},
 		{
-			// The same body called without sharing: the first write is dead.
 			name: "Repeated Output Write Unshared",
 			code: `out = BumpTwice(current, item)
     out = current + item
@@ -92,7 +95,6 @@ func TestInputAliasOutputWriteLiveness(t *testing.T) {
 			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
 		},
 		{
-			// Sharing reaches a nested call through the wrapper's own alias.
 			name: "Repeated Output Write Through Wrapper",
 			code: `out = BumpTwice(current, item)
     out = current + item
@@ -100,17 +102,7 @@ func TestInputAliasOutputWriteLiveness(t *testing.T) {
 
 out = Bump(current, item)
     out = BumpTwice(current, item)`,
-			input: "value = 10\nvalue = Bump(value, 5)\nvalue",
-		},
-		{
-			name: "Repeated Output Write Through Unshared Wrapper",
-			code: `out = BumpTwice(current, item)
-    out = current + item
-    out = current + item
-
-out = Bump(current, item)
-    out = BumpTwice(current, item)`,
-			input:         "value = 10\nother = Bump(value, 5)\nother",
+			input:         "value = 10\nvalue = Bump(value, 5)\nvalue",
 			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
 		},
 		{
@@ -123,12 +115,26 @@ out = Bump(current, item)
 			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
 		},
 		{
-			// The wrapper's destination widens its output to a heap string, and
-			// the nested call shares that storage, as lowering does.
-			name: "Repeated Output Write Through Widening Wrapper",
+			// The second write reads the first through the output name, so
+			// the body is valid for every call shape.
+			name: "Second Write Reads Output",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = out + item`,
+			input: "value = 10\nvalue = BumpTwice(value, 5)\nother = BumpTwice(value, 5)\nvalue, other",
+		},
+		{
+			name: "Second Write Reads Output And Input",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + out`,
+			input: "value = 10\nvalue = BumpTwice(10, value)\nvalue",
+		},
+		{
+			name: "Output Read Between Writes Through Nested Call",
 			code: `out, seen = Reset(current)
-    out = "first"
-    seen = current
+    out = current
+    seen = out
     out = "second"
 
 out, seen = Wrap(current)
@@ -138,25 +144,12 @@ value, seen = Wrap(value)
 value, seen`,
 		},
 		{
-			// A format marker naming the shared input reads the output's first
-			// write, so the second write does not overwrite an unused value.
-			name: "Marker Read Of Shared Input Between Output Writes",
+			name: "Marker Read Of Output Between Writes",
 			code: `out = Show(current)
-    out = 1
-    "-current"
+    out = current
+    "-out"
     out = 2`,
 			input: "x = 5\nx = Show(x)\nx",
-		},
-		{
-			name: "Repeated Empty Array Write Through Widening Wrapper",
-			code: `out, seen = ResetEmpty(current)
-    out = []
-    seen = current
-    out = []
-
-out, seen = WrapEmpty(current)
-    out, seen = ResetEmpty(current)`,
-			input: "value = [1 2]\nvalue, seen = WrapEmpty(value)\nvalue, seen",
 		},
 	}
 
@@ -907,7 +900,7 @@ func TestSpecializationReadsSeedBeforeWrite(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "seededSpecialization", "", code)
 	cfg := NewCFG(cc)
 
-	cfg.AnalyzeSpecialization(template, info, nil)
+	cfg.AnalyzeSpecialization(template, info)
 
 	require.Empty(t, cfg.Errors)
 }
@@ -936,7 +929,7 @@ func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
 	cc := NewCodeCompiler(ctx, "printedSpecialization", "", code)
 	cfg := NewCFG(cc)
 
-	cfg.AnalyzeSpecialization(template, info, nil)
+	cfg.AnalyzeSpecialization(template, info)
 
 	require.Empty(t, cfg.Errors)
 }
@@ -980,7 +973,7 @@ func TestCFGRejectsMissingStatementEffects(t *testing.T) {
 	cfg := NewCFG(cc)
 
 	require.PanicsWithValue(t, `internal: missing CFG effects for statement "res = x"`, func() {
-		cfg.AnalyzeSpecialization(template, info, nil)
+		cfg.AnalyzeSpecialization(template, info)
 	})
 }
 

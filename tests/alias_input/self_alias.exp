@@ -29,7 +29,7 @@ StagedString: helloabc helloabc hello
 ResetArray: [
 ] [1 2] [
 ]
-WidenedWrapper: second first
+WidenedWrapper: second firstfirst
 UnsharedWidenedBefore: keep
 UnsharedWidened: tagged hello! hello!
 UnsharedResetBefore: [9]

@@ -300,11 +300,12 @@ func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent 
 	return cfg.validateTemplateBody(statements, nil, nil).statementReads
 }
 
-// AnalyzeSpecialization runs only typed dataflow, in one alias context:
-// pattern names, per parameter, the one-based output that parameter shares at
-// the call being analyzed, and nil is the unshared context. Structural
-// diagnostics were already produced once from the function template.
-func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo, pattern []int) {
+// AnalyzeSpecialization runs only typed dataflow over one type
+// specialization, with every input treated as its own value: a call that
+// shares an input with an output only adds reads, so a body valid here is
+// valid in every call. Structural diagnostics were already produced once
+// from the function template.
+func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 	PushScope(&cfg.Scopes, FuncScope)
@@ -323,40 +324,20 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 			cfg.addError(output.Tok(), fmt.Sprintf("output %q is read but its type %s is not concrete", output.Value, info.Sig.OutTypes[i]))
 		}
 	}
-	cfg.typedForwardPass(template, info, outputs, sharedOutputs(template, pattern))
+	cfg.typedForwardPass(template, info, outputs)
 	cfg.backwardPass(maps.Clone(outputs))
-}
-
-// sharedOutputs maps each input that shares an output in this context to that
-// output's name, so a read of the input is also a read of the output's latest
-// write, and a nested call forwards the sharing.
-func sharedOutputs(template *ast.FuncStatement, pattern []int) map[string]string {
-	shared := make(map[string]string, len(pattern))
-	for i, slot := range pattern {
-		if slot > 0 {
-			shared[template.Parameters[i].Value] = template.Outputs[slot-1].Value
-		}
-	}
-	return shared
 }
 
 // typedForwardPass runs the forward dataflow over a body. Per statement, in
 // order: an explicit read of an output needs an earlier definite assignment;
-// a read of a shared input also reads its output's latest write, which may
-// be the caller's seed; the statement's events run; its definite targets
-// become assigned for the statements after it.
-func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}, shared map[string]string) {
+// the statement's events run; its definite targets become assigned for the
+// statements after it.
+func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}) {
 	definitelyAssigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 	for _, stmt := range template.Body.Statements {
 		reads := cfg.collectStatementReads(stmt)
 		cfg.rejectUnassignedOutputReads(reads, outputs, definitelyAssigned)
-
-		for _, read := range reads {
-			if output, ok := shared[read.Name]; ok {
-				reads = append(reads, VarEvent{Name: output, Kind: Read, Token: read.Token})
-			}
-		}
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 
 		if let, ok := stmt.(*ast.LetStatement); ok {

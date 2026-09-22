@@ -307,8 +307,12 @@ res = sum(res, 5)
 ```
 
 Reusing a variable as both an argument and a destination is how a caller
-connects an input to a call's staged output. The template itself reads through
-its declared inputs; `res = res + 1` inside `sum` would be rejected.
+connects an input to a call's staged output. The template reads the staged
+value through its declared input `a`, and may read `res` itself once it has
+assigned it. Sharing never changes which of a body's writes are used: a body
+must be valid with every input taken as its own value, so `res = a + b`
+written twice is a dead write for every caller, while `res = res + b` after
+`res = a + b` reads the first write by name.
 
 ```python
 out, before = FoldBefore(current, item)
