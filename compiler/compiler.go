@@ -140,10 +140,7 @@ type Compiler struct {
 	Errors          []*token.CompileError
 	paramAliasStack []map[string][]*paramAlias
 	outputSlotTypes map[string]Type
-	// condTempDest maps a synthetic conditional destination to the source
-	// destination it stands in for, so call-site aliasing sees through it.
-	condTempDest map[string]string
-	stmtCtxStack []stmtCtx
+	stmtCtxStack    []stmtCtx
 }
 
 type stmtCtx struct {
@@ -151,6 +148,7 @@ type stmtCtx struct {
 	boundsStack       []boundsGuardFrame      // Nested bounds guards active within this statement
 	loopBoundsStack   []loopBoundsFrame       // Loop bounds mode stack active within this statement
 	arrayLitCellDepth int                     // Nested array-literal cell compilation frames active within this statement
+	condTempDest      map[string]string       // Synthetic conditional destination -> the source destination it stands in for
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -187,7 +185,6 @@ func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compil
 		FuncNameMangled: "",
 		Errors:          []*token.CompileError{},
 		paramAliasStack: []map[string][]*paramAlias{},
-		condTempDest:    make(map[string]string),
 		stmtCtxStack:    []stmtCtx{},
 	}
 }
@@ -259,12 +256,24 @@ func (c *Compiler) paramAliasFor(name string, sym *Symbol) (*paramAlias, bool) {
 	return nil, false
 }
 
+// bindSyntheticDestination records, for the statement being lowered, that a
+// synthetic conditional destination stands in for a source destination, so
+// call-site aliasing sees through it.
+func (c *Compiler) bindSyntheticDestination(temp, dest string) {
+	ctx := c.currentStmtCtx()
+	if ctx.condTempDest == nil {
+		ctx.condTempDest = make(map[string]string)
+	}
+	ctx.condTempDest[temp] = dest
+}
+
 // destinationBase resolves a synthetic conditional destination to the source
 // destination it commits into, following stage temps through commit temps.
 func (c *Compiler) destinationBase(name string) string {
+	synthetic := c.currentStmtCtx().condTempDest
 	for {
-		base, synthetic := c.condTempDest[name]
-		if !synthetic {
+		base, ok := synthetic[name]
+		if !ok {
 			return name
 		}
 		name = base
