@@ -139,3 +139,9 @@ pw, pwCube = Powers(pw)
 readTwice = "hello" ⊕ "!"
 readTwice, readKept, readEcho = ReadTwice(readTwice)
 "ReadTwice:", readTwice, readKept, readEcho
+
+# Both arguments share the destination; each iteration doubles the running
+# value plus the item through the nested call.
+pair = 10
+pair = SharedPair(pair, pair)
+"SharedPair:", pair
