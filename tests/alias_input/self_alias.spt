@@ -140,8 +140,8 @@ readTwice = "hello" ⊕ "!"
 readTwice, readKept, readEcho = ReadTwice(readTwice)
 "ReadTwice:", readTwice, readKept, readEcho
 
-# Both arguments share the destination; each iteration doubles the running
-# value plus the item through the nested call.
+# Both arguments share the destination; each iteration triples the running
+# value plus the item through the nested call, and before keeps the seed.
 pair = 10
-pair = SharedPair(pair, pair)
-"SharedPair:", pair
+pair, before = SharedPair(pair, pair)
+"SharedPair:", pair, before

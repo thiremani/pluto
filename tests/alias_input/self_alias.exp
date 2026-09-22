@@ -37,4 +37,4 @@ UnsharedReset: [] [1 2] [1 2]
 Powers: 9 27
 PowersShared: 9 81
 ReadTwice: second first second
-SharedPair: 48
+SharedPair: 105 10

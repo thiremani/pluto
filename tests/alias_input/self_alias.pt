@@ -106,13 +106,14 @@ out, kept, echo = ReadTwice(current)
     echo = current
 
 # Two inputs may share one output. Ranged staging inside the body rebinds
-# both names to the same staged slot, and the nested call must still see
-# both as shared: its second write reads the first through b.
+# both names to the same pointer-backed staged slot, and the nested call must
+# still see both as shared: its second write reads the first through a and b.
 out = AddBoth(a, b, item)
     out = a + item
-    out = out + b
+    out = out + a + b
 
-out = SharedPair(a, b)
+out, before = SharedPair(a, b)
+    before = b
     out = AddBoth(a, b, (1:3) + 0)
 
 out, left, right = ResetPair(first, second)
