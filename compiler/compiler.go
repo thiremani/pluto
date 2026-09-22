@@ -333,9 +333,9 @@ func (c *Compiler) resolveCallSignature(funcName string, ce *ast.CallExpression,
 	}, true
 }
 
-// setCallAliasPattern derives which arguments share a caller destination,
-// through the rule the CFG also uses, and gives each shared output its
-// input's storage. A direct scalar param then reads the output's current
+// setCallAliasPattern derives which arguments share a caller destination
+// and gives each shared output its input's storage. A direct scalar param
+// then reads the output's current
 // value inside the variant; an indirect param receives that output's staged
 // pointer, which passes through to the destination without an adapter.
 func (c *Compiler) setCallAliasPattern(sig *callSignature, args []callArg, dest []*ast.Identifier) {
