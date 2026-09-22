@@ -148,3 +148,6 @@ pair, before = SharedPair(pair, pair)
 nextRange = 1:3
 nextRange = NextRange(nextRange)
 "NextRange:", nextRange
+condCount = 10
+condCount, condCountSeen, condTag = CondCount(condCount)
+"CondCount:", condCount, condCountSeen, condTag

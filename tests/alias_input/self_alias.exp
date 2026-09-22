@@ -39,3 +39,4 @@ PowersShared: 9 81
 ReadTwice: second first second
 SharedPair: 105 10
 NextRange: 2:3
+CondCount: 11 11 lr

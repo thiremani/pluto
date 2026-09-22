@@ -109,16 +109,15 @@ func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]stru
 		return
 	}
 
+	// A multi-valued argument fills several parameter positions, so the
+	// parameter an identifier binds to is found by expanded position.
 	abi := classifyFuncABI(paramTypes, fnInfo.Sig.OutTypes)
-	for i, arg := range ce.Arguments {
-		if abi.Params[i].Mode != ABIParamIndirect {
-			continue
+	position := 0
+	for _, arg := range ce.Arguments {
+		if ident, ok := arg.(*ast.Identifier); ok && abi.Params[position].Mode == ABIParamIndirect {
+			out[ident.Value] = struct{}{}
 		}
-		ident, ok := arg.(*ast.Identifier)
-		if !ok {
-			continue
-		}
-		out[ident.Value] = struct{}{}
+		position += len(c.ExprCache[key(c.FuncNameMangled, arg)].OutTypes)
 	}
 }
 

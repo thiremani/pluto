@@ -121,6 +121,21 @@ out, before = SharedPair(a, b)
 out = NextRange(i)
     out = i:(i+1)
 
+# A conditional call promotes its indirect arguments before branching. The
+# scalar after a two-valued argument binds a later parameter and must keep
+# its live alias.
+left, right = Tags(n)
+    left = "l"
+    right = n > 0 "r"
+
+out, tag = Count(left, right, n)
+    out = n + 1
+    tag = left ⊕ right
+
+out, seen, tag = CondCount(current)
+    out, tag = 1 > 0 Count(Tags(current), current)
+    seen = current
+
 out, left, right = ResetPair(first, second)
     out = []
     left = first
