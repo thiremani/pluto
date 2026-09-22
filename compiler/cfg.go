@@ -360,9 +360,7 @@ func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, ou
 		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
 
 		if let, ok := stmt.(*ast.LetStatement); ok {
-			for _, name := range definiteTargets(let, info.StatementEffects[let]) {
-				definitelyAssigned[name] = struct{}{}
-			}
+			maps.Copy(definitelyAssigned, definiteTargets(let, info.StatementEffects[let]))
 		}
 	}
 }
