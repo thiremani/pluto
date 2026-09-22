@@ -14,7 +14,9 @@ type CodeCompiler struct {
 	globalBindings map[string]token.Token
 	funcTemplates  map[funcKey]*ast.FuncStatement
 	// outputReads names the outputs each template reads in its own body,
-	// recorded by the structural CFG pass for the solver.
+	// recorded by the structural CFG pass. The solver solves such an output
+	// at owned storage, so every read and every nested call it feeds see
+	// the representation lowering stores.
 	outputReads map[funcKey]map[string]struct{}
 }
 
@@ -78,13 +80,6 @@ func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 		}
 	}
 	return errs
-}
-
-// readOutputs names the outputs a template reads in its body. The solver
-// solves such an output at owned storage, so every read and every nested call
-// it feeds see the representation lowering stores.
-func (cc *CodeCompiler) readOutputs(name string, arity int) map[string]struct{} {
-	return cc.outputReads[funcKey{name: name, arity: arity}]
 }
 
 func (cc *CodeCompiler) lookupFuncTemplate(name string, arity int) (*ast.FuncStatement, bool) {

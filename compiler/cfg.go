@@ -318,7 +318,7 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	}
 
 	outputs := identSet(template.Outputs)
-	readOutputs := cfg.CodeCompiler.readOutputs(template.Token.Literal, len(template.Parameters))
+	readOutputs := cfg.CodeCompiler.outputReads[funcKey{name: template.Token.Literal, arity: len(template.Parameters)}]
 	for i, output := range template.Outputs {
 		if _, isRead := readOutputs[output.Value]; isRead && !concreteStorage(info.Sig.OutTypes[i]) {
 			cfg.addError(output.Tok(), fmt.Sprintf("output %q is read but its type %s is not concrete", output.Value, info.Sig.OutTypes[i]))
