@@ -82,8 +82,7 @@ out = BumpTwice(current, item)
 
 out, seen = Reset(current)
     out = "first"
-    seen = out ⊕ current
-    out = "second"
+    seen = current
 
 out, seen = Wrap(current)
     out, seen = Reset(current)

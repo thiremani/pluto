@@ -73,9 +73,9 @@ func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 	require.Equal(t, 2, deadStores)
 }
 
-// A body must be valid on its own: sharing an input with an output at a call
-// only adds reads, so it never makes a dead write live. The body says which
-// value it reads by naming the output.
+// Every specialization must pass liveness with its inputs and outputs
+// treated as unshared; sharing at a call cannot make an otherwise rejected
+// body acceptable. A body that builds on its own write names the output.
 func TestOutputWriteLivenessIgnoresSharing(t *testing.T) {
 	tests := []cfgTestCase{
 		{
