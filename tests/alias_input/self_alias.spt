@@ -145,3 +145,6 @@ readTwice, readKept, readEcho = ReadTwice(readTwice)
 pair = 10
 pair, before = SharedPair(pair, pair)
 "SharedPair:", pair, before
+nextRange = 1:3
+nextRange = NextRange(nextRange)
+"NextRange:", nextRange

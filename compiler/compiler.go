@@ -101,11 +101,11 @@ type preparedCall struct {
 }
 
 // paramAliasKey identifies one binding of a parameter name to a symbol whose
-// caller binding is shared with an output. Keying on the symbol keeps alias
-// behavior off a same-name binding introduced later in the scope tree, while
-// a lowering that rebinds the parameter on purpose, such as ranged staging,
-// registers the new symbol under the same name. Several names may bind one
-// symbol when a call passes the same binding twice.
+// caller binding is shared with an output. A Symbol is a lowering-time
+// descriptor, so keying on it keeps the alias off a later binding of the same
+// name, such as the scalar iterator of a shared range parameter, while ranged
+// staging registers its staged symbol under the same name on purpose. Several
+// names may bind one symbol when a call passes the same binding twice.
 type paramAliasKey struct {
 	name string
 	base *Symbol
