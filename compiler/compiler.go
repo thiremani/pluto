@@ -3223,10 +3223,14 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// Indirect-return callees write through their output pointers. Always point
 	// them at independent, destination-seeded slots so a call in one RHS cannot
 	// mutate a real destination before sibling RHS expressions have read the
-	// statement-start values. The outer assignment owns the eventual commit and
-	// cleanup.
-	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
-	c.compileIndirectCallIntoStagedOutputs(sig, ce, dest, outputs)
+	// statement-start values. Seeding after the arguments, as a direct return
+	// does, lets a shared input see an argument's %n write. The outer
+	// assignment owns the eventual commit and cleanup.
+	var outputs []*Symbol
+	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
+		outputs = c.makeSeededTempOutputs(dest, info.OutTypes)
+		c.callIntoStagedOutputs(sig, call, outputs)
+	})
 	return c.loadOutputValues(outputs, "call_final")
 }
 
@@ -3269,19 +3273,23 @@ func (c *Compiler) compileIndirectCallIntoStagedOutputs(
 	staged []*Symbol,
 ) {
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
-		adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
-		outputs := callAdapterOutputs(adapters)
-		c.runCallWithBoundsElse(func() {
-			writeFlags := c.makeCallOutputWriteFlags(len(outputs))
-			c.builder.CreateCall(
-				call.FuncType,
-				call.Function,
-				c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
-				"",
-			)
-			c.commitCallOutputAdapters(staged, adapters, writeFlags)
-		}, func() { c.cleanupSkippedCallOutputAdapters(adapters) })
+		c.callIntoStagedOutputs(sig, call, staged)
 	})
+}
+
+func (c *Compiler) callIntoStagedOutputs(sig *callSignature, call preparedCall, staged []*Symbol) {
+	adapters := c.makeCallOutputAdapters(staged, sig.ABI.Return.OutTypes)
+	outputs := callAdapterOutputs(adapters)
+	c.runCallWithBoundsElse(func() {
+		writeFlags := c.makeCallOutputWriteFlags(len(outputs))
+		c.builder.CreateCall(
+			call.FuncType,
+			call.Function,
+			c.callArgs(sig, call, call.RetStruct, outputs, writeFlags, nil),
+			"",
+		)
+		c.commitCallOutputAdapters(staged, adapters, writeFlags)
+	}, func() { c.cleanupSkippedCallOutputAdapters(adapters) })
 }
 
 // loweredName is the symbol of the private variant this call site lowers to,

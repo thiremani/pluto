@@ -140,3 +140,8 @@ out, left, right = ResetPair(first, second)
     out = []
     left = first
     right = second
+
+# The label argument's %n writes the shared destination before the call.
+out, tag = Label(current, label)
+    out = current + 0
+    tag = label
