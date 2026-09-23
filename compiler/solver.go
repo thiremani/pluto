@@ -149,6 +149,9 @@ type TypeSolver struct {
 	storageRevision    uint64          // increments when a previously observed binding slot widens
 	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
 
+	// A statement's value call -> the statement's names from the call's first output on.
+	callDests map[*ast.CallExpression][]*ast.Identifier
+
 	recLimit recursionLimit
 }
 
@@ -163,6 +166,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
+		callDests:          make(map[*ast.CallExpression][]*ast.Identifier),
 		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
@@ -955,6 +959,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
+		if ce, ok := expr.(*ast.CallExpression); ok {
+			ts.callDests[ce] = stmt.Name[min(len(types), len(stmt.Name)):]
+		}
 		exprTypes := ts.TypeExpression(expr, true)
 		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
@@ -2421,16 +2428,19 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
 	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
 	_, builtin := Builtins[ce.Function.Value]
+	shared := ts.sharedDestinations(ce, outerTypesPerArg)
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
 		if ident, ok := ce.Arguments[argIndex].(*ast.Identifier); ok && !builtin {
-			// Calls receive the binding's actual slot, including ownership
-			// widening learned from later writes. Other expressions retain
-			// their flow type (an empty value can still reset another array).
+			// A concrete flow type differs from its binding's slot only in
+			// ownership, which lowering must see. An untyped value keeps its
+			// flow type unless it shares one of this call's destinations,
+			// whose input then carries every value the call writes back.
 			body := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
-			if slotType, exists := body.Vars[ident.Value]; exists {
+			slotType, exists := body.Vars[ident.Value]
+			if exists && (concreteStorage(outerTypes[0]) || slices.Contains(shared, ident.Value)) {
 				outerTypes = []Type{slotType}
 			}
 		}
@@ -2458,6 +2468,25 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 	}
 	return
+}
+
+// sharedDestinations names the destinations a statement's value call assigns,
+// the only bindings its arguments can share. Lowering passes the call the
+// statement's names from its first output on and binds one per callee output.
+func (ts *TypeSolver) sharedDestinations(ce *ast.CallExpression, outerTypesPerArg [][]Type) []string {
+	dests, ok := ts.callDests[ce]
+	if !ok {
+		return nil
+	}
+	arity := 0
+	for _, types := range outerTypesPerArg {
+		arity += len(types)
+	}
+	template, ok := ts.ScriptCompiler.Compiler.CodeCompiler.lookupFuncTemplate(ce.Function.Value, arity)
+	if !ok {
+		return nil
+	}
+	return identNames(dests[:min(len(dests), len(template.Outputs))])
 }
 
 func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string) (Array, bool) {

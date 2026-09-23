@@ -1,0 +1,15 @@
+# A string a later write widens to heap storage reaches the call as heap
+# storage, so its result stays valid after that storage is replaced.
+s = "a"
+kept = Keep(s)
+s = s ⊕ "b"
+s = s ⊕ "c"
+"kept:", kept, "s:", s
+# An accumulator that starts as [] and shares the call's destination
+# carries every element across the range, also after a multi-valued argument.
+acc = []
+acc = Append(acc, 1:4)
+"acc:", acc
+f = []
+total, f = Fold(-Pair(1), f, 1:4)
+"prefix:", total, f
