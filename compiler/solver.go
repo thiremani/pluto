@@ -2432,17 +2432,8 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if binding, ok := ts.yieldedBinding(ce.Arguments[argIndex]); ok {
-			// A concrete flow type differs from its binding's slot only in
-			// ownership, which lowering must see. An untyped value keeps its
-			// flow type unless it shares one of this call's destinations,
-			// whose input then carries every value the call writes back.
-			body := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
-			slotType, exists := body.Vars[binding.Value]
-			shares := ce.Arguments[argIndex] == ast.Expression(binding) && slices.Contains(shared, binding.Value)
-			if exists && (concreteStorage(outerTypes[0]) || shares) {
-				outerTypes = []Type{slotType}
-			}
+		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0], shared); ok {
+			outerTypes = []Type{slotType}
 		}
 
 		if loopInside {
@@ -2468,6 +2459,28 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 	}
 	return
+}
+
+// argumentStorage returns the storage type a call argument must be
+// specialized on when it differs from the argument's own type.
+func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type, shared []string) (Type, bool) {
+	// A fresh value's type is its storage.
+	binding, ok := ts.yieldedBinding(arg)
+	if !ok {
+		return nil, false
+	}
+	// Parameters and code constants are already typed by their storage.
+	slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
+	if !exists {
+		return nil, false
+	}
+	// A concrete type differs from its storage only in ownership.
+	if concreteStorage(own) {
+		return slot, true
+	}
+	// An untyped value keeps its own type unless the call writes back into it.
+	_, plain := arg.(*ast.Identifier)
+	return slot, plain && slices.Contains(shared, binding.Value)
 }
 
 // yieldedBinding returns the binding whose stored value expr passes on: the
