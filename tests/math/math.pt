@@ -21,9 +21,8 @@ quo, rem = Div(dividend, divisor)
     rem = dividend % divisor
 
 mod, res = IsDiv(x, y)
-    remainder = x % y
-    mod, res = remainder, "no"
-    res = remainder == 0 "yes"
+    mod, res = x % y, "no"
+    res = mod == 0 "yes"
 
 x, y = F(i)
     x, y = 2 + i, 3 + i
