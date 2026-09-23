@@ -5,6 +5,7 @@ kept = Keep(s)
 s = s ⊕ "b"
 s = s ⊕ "c"
 "kept:", kept, "s:", s
+
 # A comparison in value position passes on its left operand's stored value,
 # through every link of a chain.
 c = "a"
@@ -12,6 +13,7 @@ yielded = Keep(c > "" < "zz")
 c = c ⊕ "b"
 c = c ⊕ "c"
 "yielded:", yielded, "c:", c
+
 # An accumulator that starts as [] and shares the call's destination
 # carries every element across the range, also after a multi-valued argument.
 acc = []
