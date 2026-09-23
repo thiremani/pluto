@@ -688,6 +688,25 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 	return CanRefineType(oldType, newType)
 }
 
+// heapWhereStatic reports whether a value of type held owns heap strings
+// where param declares static ones, fieldwise and elementwise.
+func heapWhereStatic(held, param Type) bool {
+	switch p := param.(type) {
+	case StrG:
+		return IsStrH(held)
+	case Struct:
+		h := held.(Struct)
+		for i, field := range p.Fields {
+			if heapWhereStatic(h.Fields[i].Type, field.Type) {
+				return true
+			}
+		}
+	case Array:
+		return heapWhereStatic(held.(Array).ElemType, p.ElemType)
+	}
+	return false
+}
+
 // concreteStorage reports whether t fixes its storage in every calling
 // context: an untyped empty array, a column without an element type, or an
 // unresolved leaf could still be refined by a caller's destination.

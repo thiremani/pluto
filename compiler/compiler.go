@@ -3074,6 +3074,16 @@ func (c *Compiler) lowerCallArgs(funcName string, args []callArg, sig *callSigna
 		}
 		args[i].Lowered = sym
 	}
+	// A specialization may hand an input back without copying, so a heap value
+	// passed where it expects a static string would be freed under the result.
+	for i, arg := range args {
+		if sig.ABI.Params[i].Mode != ABIParamIndirect {
+			continue
+		}
+		if held := arg.Lowered.Type.(Ptr).Elem; heapWhereStatic(held, sig.ParamTypes[i]) {
+			panic(fmt.Sprintf("internal: %s argument %d holds %s where the specialization expects %s", funcName, i, held.Mangle(), sig.ParamTypes[i].Mangle()))
+		}
+	}
 }
 
 func (c *Compiler) freeCallArgTemps(callArgs []callArg) {

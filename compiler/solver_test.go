@@ -721,6 +721,31 @@ out, before = Fold(current, item)
 	}
 }
 
+func TestHeapWhereStatic(t *testing.T) {
+	heapPerson := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrH{}}, {Name: "age", Type: I64}}}
+	staticPerson := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrG{}}, {Name: "age", Type: I64}}}
+
+	for _, tt := range []struct {
+		name  string
+		held  Type
+		param Type
+		want  bool
+	}{
+		{"heap string into static", StrH{}, StrG{}, true},
+		{"static string into heap", StrG{}, StrH{}, false},
+		{"matching strings", StrH{}, StrH{}, false},
+		{"heap field into static field", heapPerson, staticPerson, true},
+		{"static field into heap field", staticPerson, heapPerson, false},
+		{"heap elements into static elements", Array{ElemType: StrH{}, Rank: 1}, Array{ElemType: StrG{}, Rank: 1}, true},
+		{"concrete array into untyped", Array{ElemType: I64, Rank: 1}, Array{ElemType: Empty{}, Rank: 1}, false},
+		{"scalar", I64, I64, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, heapWhereStatic(tt.held, tt.param))
+		})
+	}
+}
+
 func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	headerOnly := Table{Columns: []TableColumn{
 		{Name: "Name", ElemType: Empty{}},
