@@ -2427,20 +2427,20 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 // Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
 	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
-	_, builtin := Builtins[ce.Function.Value]
 	shared := ts.sharedDestinations(ce, outerTypesPerArg)
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if ident, ok := ce.Arguments[argIndex].(*ast.Identifier); ok && !builtin {
+		if binding, ok := ts.yieldedBinding(ce.Arguments[argIndex]); ok {
 			// A concrete flow type differs from its binding's slot only in
 			// ownership, which lowering must see. An untyped value keeps its
 			// flow type unless it shares one of this call's destinations,
 			// whose input then carries every value the call writes back.
 			body := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
-			slotType, exists := body.Vars[ident.Value]
-			if exists && (concreteStorage(outerTypes[0]) || slices.Contains(shared, ident.Value)) {
+			slotType, exists := body.Vars[binding.Value]
+			shares := ce.Arguments[argIndex] == ast.Expression(binding) && slices.Contains(shared, binding.Value)
+			if exists && (concreteStorage(outerTypes[0]) || shares) {
 				outerTypes = []Type{slotType}
 			}
 		}
@@ -2468,6 +2468,25 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 	}
 	return
+}
+
+// yieldedBinding returns the binding whose stored value expr passes on: the
+// identifier itself, or the left operand of a scalar comparison in value
+// position, which yields its LHS.
+func (ts *TypeSolver) yieldedBinding(expr ast.Expression) (*ast.Identifier, bool) {
+	for {
+		switch e := expr.(type) {
+		case *ast.Identifier:
+			return e, true
+		case *ast.InfixExpression:
+			if !ts.ExprCache[key(ts.FuncNameMangled, e)].HasCondScalar() {
+				return nil, false
+			}
+			expr = e.Left
+		default:
+			return nil, false
+		}
+	}
 }
 
 // sharedDestinations names the destinations a statement's value call assigns,
