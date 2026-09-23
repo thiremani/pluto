@@ -206,6 +206,7 @@ func verifyCompiledModules(t *testing.T, moduleName, codeSrc, scriptSrc string) 
 // the input to the compatible sibling, producing valid IR for each kind.
 func TestAliasVariantSkipsIncompatibleOutputs(t *testing.T) {
 	const sharedSecond = "s = 1\nr, s = Mixed(s, 0:4)\nr, s"
+	mangled := Mangle(MangleDirPath("alias_mismatch", ""), "Mixed", []Type{I64, Range{Iter: I64}})
 
 	cases := []struct{ name, code, script string }{
 		{"float first", "other, sum = Mixed(a, x)\n    other = x * 0.5\n    sum = a + x", sharedSecond},
@@ -214,7 +215,8 @@ func TestAliasVariantSkipsIncompatibleOutputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifyCompiledModules(t, "alias_mismatch", tc.code, tc.script)
+			ir, _ := compileScriptAndCodeIR(t, "alias_mismatch", tc.code, tc.script)
+			require.Contains(t, ir, "@"+mangled+"_a2_2_0(", "the input must share the second output")
 		})
 	}
 }

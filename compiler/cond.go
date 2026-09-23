@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -278,24 +279,28 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 	}
 }
 
-// aliasCondDests maps existing destination names to conditional temp slots so
-// RHS reads during IF-branch assignment see the latest temp writes.
+// aliasCondDests maps existing destination names, and the inputs sharing them
+// (see stagedBindings), to conditional temp slots so RHS reads during IF-branch
+// assignment see the latest temp writes. All bindings are gathered before any
+// is replaced, since stagedBindings finds inputs by their current bindings.
 func (c *Compiler) aliasCondDests(slots []OutputSlot) map[string]*Symbol {
-	aliases := make(map[string]*Symbol, len(slots))
-
+	bindings := make(map[string]*Symbol, len(slots))
 	for _, s := range slots {
-		oldSym, exists := Get(c.Scopes, s.dest.Value)
-		if !exists {
+		if _, exists := Get(c.Scopes, s.dest.Value); !exists {
 			continue
 		}
 		tempSym, ok := Get(c.Scopes, s.temp.Value)
 		if !ok {
 			continue
 		}
-		aliases[s.dest.Value] = oldSym
-		SetExisting(c.Scopes, s.dest.Value, tempSym)
+		maps.Copy(bindings, c.stagedBindings(s.dest.Value, tempSym))
 	}
 
+	aliases := make(map[string]*Symbol, len(bindings))
+	for _, name := range slices.Sorted(maps.Keys(bindings)) {
+		aliases[name], _ = Get(c.Scopes, name)
+		SetExisting(c.Scopes, name, bindings[name])
+	}
 	return aliases
 }
 

@@ -251,12 +251,29 @@ func TestFormatCountRejectsCodeConstant(t *testing.T) {
 }
 
 func TestFormatCountRejectsInputParameter(t *testing.T) {
+	const count = `out = Count(current)
+    "count-current%n"
+    out = current`
+	// A caller-driven ranged call stages its destination and rebinds the input
+	// that shares it, which must stay read-only, also under a condition.
+	const step = `out, tag = Step(current, label, item)
+    out = current + item
+    tag = label
+
+`
+	const nestedRange = step + `out, tag = Count(current)
+    out, tag = Step(current, "count-current%n", (1:3) + 0)`
+	const gatedNestedRange = step + `out, tag = Count(current)
+    out, tag = 1 > 0 Step(current, "count-current%n", (1:3) + 0)`
 	tests := []struct {
 		name   string
+		code   string
 		script string
 	}{
-		{name: "plain", script: "value = 10\nvalue = Count(value)\nvalue"},
-		{name: "range", script: "value = Count(1:3)\nvalue"},
+		{name: "plain", code: count, script: "value = 10\nvalue = Count(value)\nvalue"},
+		{name: "range", code: count, script: "value = Count(1:3)\nvalue"},
+		{name: "shared nested range", code: nestedRange, script: "value = 10\nvalue, tag = Count(value)\nvalue, tag"},
+		{name: "shared gated nested range", code: gatedNestedRange, script: "value = 10\nvalue, tag = Count(value)\nvalue, tag"},
 	}
 
 	for _, tt := range tests {
@@ -264,9 +281,7 @@ func TestFormatCountRejectsInputParameter(t *testing.T) {
 			ctx := llvm.NewContext()
 			defer ctx.Dispose()
 
-			code := mustParseCode(t, `out = Count(current)
-    "count-current%n"
-    out = current`)
+			code := mustParseCode(t, tt.code)
 			cc := NewCodeCompiler(ctx, "format_input_parameter", "", code)
 			if errs := cc.Compile(); len(errs) != 0 {
 				t.Fatalf("unexpected code compile errors: %v", errs)

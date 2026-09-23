@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -150,6 +151,7 @@ type stmtCtx struct {
 	loopBoundsStack   []loopBoundsFrame       // Loop bounds mode stack active within this statement
 	arrayLitCellDepth int                     // Nested array-literal cell compilation frames active within this statement
 	condTempDest      map[string]string       // Synthetic conditional destination -> the source destination it stands in for
+	stagedSlots       map[llvm.Value]struct{} // Slots standing in for destinations; a loop over the statement may write them
 }
 
 func NewCompiler(ctx llvm.Context, mangledPath string, cc *CodeCompiler) *Compiler {
@@ -274,6 +276,35 @@ func (c *Compiler) destinationBase(name string) string {
 		}
 		name = base
 	}
+}
+
+// stagedBindings returns the bindings that make dest resolve to staged, a slot
+// standing in for it while a statement or a ranged expression is lowered:
+// dest itself, and each input sharing its binding as a view of staged that
+// keeps the input's permissions and alias, so the input stays read-only and
+// nested calls keep sharing. A loop may write staged on every iteration, so it
+// is recorded for the affine fast path to skip.
+func (c *Compiler) stagedBindings(dest string, staged *Symbol) map[string]*Symbol {
+	ctx := c.currentStmtCtx()
+	if ctx.stagedSlots == nil {
+		ctx.stagedSlots = make(map[llvm.Value]struct{})
+	}
+	ctx.stagedSlots[staged.Val] = struct{}{}
+
+	bindings := map[string]*Symbol{dest: staged}
+	base := c.destinationBase(dest)
+	for name, output := range c.enclosingAliases() {
+		if output != base {
+			continue
+		}
+		input, _ := Get(c.Scopes, name)
+		view := GetCopy(staged)
+		view.FuncArg = input.FuncArg
+		view.ReadOnly = input.ReadOnly
+		c.bindParamAlias(name, view, output)
+		bindings[name] = view
+	}
+	return bindings
 }
 
 func (c *Compiler) resolvedDestTypes(dest []*ast.Identifier, outTypes []Type) []Type {
@@ -2354,16 +2385,14 @@ func (c *Compiler) cleanupSkippedCallOutputAdapters(adapters []callOutputAdapter
 	}
 }
 
-// bindRangedTempOutputs makes each destination name resolve to its staged slot
-// while that one ranged expression is compiled. Conditional lowering can make
-// the real destination and a synthetic conditional write name alias the same
-// slot, so bind every visible name for that slot as well. An input that
-// shares the destination is rebound to the staged slot too and keeps its
-// alias, so a nested call inside the loop still selects the sharing variant.
-// This preserves loop-carried self-reference without exposing staged values to
-// sibling right-hand sides in a simultaneous assignment. The caller pops its
-// BlockScope before compiling the next expression.
+// bindRangedTempOutputs makes each destination, every input sharing it (see
+// stagedBindings) and every name bound to the same slot resolve to its staged
+// slot while one ranged expression compiles, so loop-carried reads see it and
+// sibling right-hand sides do not. Bindings are gathered before any is
+// replaced, since stagedBindings finds inputs by their current bindings. The
+// caller pops its BlockScope before compiling the next expression.
 func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symbol) {
+	bindings := make(map[string]*Symbol)
 	for i := 0; i < len(dest) && i < len(outputs); i++ {
 		// A blank binds nothing and nothing can read it back, so it has no
 		// self-reference to preserve — binding it would only expose `_` as a
@@ -2371,43 +2400,42 @@ func (c *Compiler) bindRangedTempOutputs(dest []*ast.Identifier, outputs []*Symb
 		if isDiscard(dest[i]) {
 			continue
 		}
+		for _, name := range c.sameSlotNames(dest[i].Value) {
+			bindings[name] = outputs[i]
+		}
+		maps.Copy(bindings, c.stagedBindings(dest[i].Value, outputs[i]))
+	}
+	for _, name := range slices.Sorted(maps.Keys(bindings)) {
+		Put(c.Scopes, name, bindings[name])
+	}
+}
 
-		names := []string{dest[i].Value}
-		aliased := make(map[string]string)
-		if current, ok := Get(c.Scopes, dest[i].Value); ok && current.Type.Kind() == PtrKind {
-			base := c.destinationBase(dest[i].Value)
-			seen := make(map[string]struct{})
-			for scopeIdx := len(c.Scopes) - 1; scopeIdx >= 0; scopeIdx-- {
-				scope := c.Scopes[scopeIdx]
-				for _, name := range scope.BindingOrder {
-					sym := scope.Elems[name]
-					if _, visited := seen[name]; visited {
-						continue
-					}
-					seen[name] = struct{}{}
-					if output, ok := c.paramAliasFor(name, sym); ok && output == base {
-						names = append(names, name)
-						aliased[name] = output
-						continue
-					}
-					if sym.Type.Kind() == PtrKind && sym.Val == current.Val {
-						names = append(names, name)
-					}
-				}
-				if scope.ScopeKind == FuncScope {
-					break
-				}
+// sameSlotNames lists the visible names bound to the pointer slot that dest is
+// bound to. Conditional lowering binds the real destination and a synthetic
+// conditional write name to the same slot.
+func (c *Compiler) sameSlotNames(dest string) []string {
+	current, ok := Get(c.Scopes, dest)
+	if !ok || current.Type.Kind() != PtrKind {
+		return nil
+	}
+	var names []string
+	seen := make(map[string]struct{})
+	for scopeIdx := len(c.Scopes) - 1; scopeIdx >= 0; scopeIdx-- {
+		scope := c.Scopes[scopeIdx]
+		for _, name := range scope.BindingOrder {
+			if _, visited := seen[name]; visited {
+				continue
+			}
+			seen[name] = struct{}{}
+			if sym := scope.Elems[name]; sym.Type.Kind() == PtrKind && sym.Val == current.Val {
+				names = append(names, name)
 			}
 		}
-		for _, name := range names {
-			Put(c.Scopes, name, outputs[i])
-			// The rebound input keeps its alias, so a nested call inside the
-			// loop still selects the sharing variant.
-			if output, ok := aliased[name]; ok {
-				c.bindParamAlias(name, outputs[i], output)
-			}
+		if scope.ScopeKind == FuncScope {
+			break
 		}
 	}
+	return names
 }
 
 // Destination-aware prefix compilation,
