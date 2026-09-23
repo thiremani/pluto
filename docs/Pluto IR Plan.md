@@ -290,8 +290,9 @@ same destination-seeded staging slot. The input name is read-only, but each
 read observes earlier output writes to that slot. Reads within one assignment
 still precede its writes. The real `a` changes only at the outer assignment's
 commit, so sibling RHS expressions continue to read the pre-commit binding.
-`tests/alias_input` pins both statement orders for ordinary and ranged calls,
-with direct scalars, static and heap strings, and arrays: starting at 10,
+`tests/alias_input` pins both statement orders for ordinary and ranged calls
+with direct scalars, and for ranged calls with heap strings and arrays:
+starting at 10,
 `out = current + item` before `seen = current` yields `15 15` for item 5;
 reversing those body statements yields `15 10`. Step 4's call lowering must
 preserve this distinction between internal sharing and external commit.

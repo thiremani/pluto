@@ -33,8 +33,8 @@ Pluto's source-level semantics stay unchanged:
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`
-input can be passed by value provided alias metadata redirects each read to
-its shared output when required. A single `I64` output can be returned in a
+input can be passed by value provided the call site's alias pattern (the
+private `_aN` variant) redirects each read to its shared output when required. A single `I64` output can be returned in a
 register while still behaving like a Pluto output.
 
 ## 3. Architecture

@@ -411,8 +411,9 @@ and aliasing is lowered as private variants instead. A direct-return
 function's native signature is therefore its source parameters followed by
 the seed; an indirect-return function keeps its leading result carrier
 followed by the source parameters, with no seed. The prototype of a
-range-bearing function such as `Acc` changes, and for a direct return its
-seed moves one position earlier. Functions without a `Range` or `ArrayRange`
+range-bearing function with direct scalar parameters, such as `Acc`, changes:
+for a direct return, its seed moves earlier by one position per direct scalar
+(`I64`/`F64`) parameter, one for `Acc`. Functions without a `Range` or `ArrayRange`
 parameter are unchanged.
 
 An eligible immediate bare `array[range]` call argument may therefore select

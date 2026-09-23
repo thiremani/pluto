@@ -19,8 +19,9 @@ This document describes Pluto's semantic model and compares it with other major 
 6. **Driver Identity Determines Looping:** Repeated use of one Range binding
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
-7. **Function Arguments by Value:** Scalar parameters are passed by value;
-   outputs write into caller destination slots.
+7. **Read-Only Function Arguments:** Inputs are read-only. An input the caller
+   also passes as a destination observes that output's writes; scalars still
+   travel by value at the ABI level. Outputs write into caller destination slots.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -32,7 +33,7 @@ This document describes Pluto's semantic model and compares it with other major 
 |---------|-------|--------|------|-----|-------|-----|
 | **Assignment (`a=b`)** | **Copy** | Reference | Move / Copy | Copy | Reference | Copy |
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
-| **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
+| **Function Args** | **Read-only binding** (scalars lowered by value) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
 | **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
 | **Range Usage** | **Copyable descriptor; operations iterate** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
@@ -269,7 +270,9 @@ res = sum(a, b)
   or a formatting marker — only after a statement that assigns it
   unconditionally with a value that cannot be skipped. A read before that is
   a compile error: before any assignment, in the same simultaneous
-  assignment, or after only conditional or seed-preserving writes. A later
+  assignment, or after only conditional or seed-preserving writes. A `%n`
+  marker naming an output counts as such a read, although it writes the
+  output; modeling it as a write is tracked in #109. A later
   conditional write does not revoke the assignment. Outputs are independently
   staged result slots: an existing destination supplies the initial value and
   a fresh destination starts at its type's zero value, so a body that writes
@@ -282,7 +285,12 @@ res = sum(a, b)
   are committed only after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
-Calls specialize binding arguments on their actual storage type. When an
+A call specializes a binding argument on the value's own type, with the
+ownership of the binding's storage: a static string that a later write widens
+to heap storage is passed as a heap string. An untyped `[]` or header-only
+table takes the storage's element types only when the argument shares one of
+the call's own destinations; a call that runs in a loop rewriting such a
+binding still sees its type from before the loop (#106). When an
 input shares an output whose declared representation is narrower but
 compatible (for example, an owned string input with a static string output,
 or a concrete-rank array input with an untyped `[]` output), the private
