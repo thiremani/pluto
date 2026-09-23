@@ -2461,23 +2461,26 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-// argumentStorage returns the storage type a call argument must be
-// specialized on when it differs from the argument's own type.
+// argumentStorage returns the binding storage type to specialize a call
+// argument on, and false when the argument keeps its own type.
 func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type, shared []string) (Type, bool) {
-	// A fresh value's type is its storage.
+	// An argument that does not pass on a binding's value keeps its own type.
 	binding, ok := ts.yieldedBinding(arg)
 	if !ok {
 		return nil, false
 	}
+
 	// Parameters and code constants are already typed by their storage.
 	slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
 	if !exists {
 		return nil, false
 	}
-	// A concrete type differs from its storage only in ownership.
+
+	// A concrete type can differ from its storage only in ownership.
 	if concreteStorage(own) {
 		return slot, true
 	}
+
 	// An untyped value keeps its own type unless the call writes back into it.
 	_, plain := arg.(*ast.Identifier)
 	return slot, plain && slices.Contains(shared, binding.Value)
