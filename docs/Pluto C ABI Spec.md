@@ -470,7 +470,7 @@ and the caller converts it into the destination after the call.
 
 Example: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
 first parameter sharing its first output, which is therefore an `I64`.
-`Demangle` renders it as `math.Fold(I64, StrH) [in1->out1]`.
+`Demangle` renders it as `math.Fold(I64 -> 1, StrH)`.
 
 The public specialization symbol is unchanged by the variant. C callers
 never see a variant and cannot request one.

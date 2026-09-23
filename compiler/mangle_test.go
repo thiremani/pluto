@@ -831,8 +831,8 @@ func TestMangleVariantRoundTrip(t *testing.T) {
 		expected string
 	}{
 		{name: "public specialization", mangled: base, expected: "math.Fold(I64, StrH)"},
-		{name: "alias variant", pattern: []int{1, 0}, mangled: base + "_a2_1_0", expected: "math.Fold(I64, StrH) [in1->out1]"},
-		{name: "swapped alias variant", pattern: []int{2, 1}, mangled: base + "_a2_2_1", expected: "math.Fold(I64, StrH) [in1->out2, in2->out1]"},
+		{name: "alias variant", pattern: []int{1, 0}, mangled: base + "_a2_1_0", expected: "math.Fold(I64 -> 1, StrH)"},
+		{name: "swapped alias variant", pattern: []int{2, 1}, mangled: base + "_a2_2_1", expected: "math.Fold(I64 -> 2, StrH -> 1)"},
 	}
 
 	for _, tt := range tests {

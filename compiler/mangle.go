@@ -91,28 +91,22 @@ func (d *Demangled) String() string {
 
 	if d.Kind == SymbolFunc {
 		result.WriteString("(")
-		result.WriteString(strings.Join(d.ArgTypes, ", "))
+		result.WriteString(strings.Join(d.argDisplay(), ", "))
 		result.WriteString(")")
-	}
-	if aliases := d.aliasDisplay(); aliases != "" {
-		result.WriteString(" [")
-		result.WriteString(aliases)
-		result.WriteString("]")
 	}
 	return result.String()
 }
 
-// aliasDisplay renders the non-zero alias pattern entries as in<i>->out<k>,
-// both one-based, in parameter order.
-func (d *Demangled) aliasDisplay() string {
-	var parts []string
+// argDisplay renders the argument types. In an alias variant, a parameter
+// that shares an output shows that output's one-based index: I64 -> 1.
+func (d *Demangled) argDisplay() []string {
+	args := append([]string(nil), d.ArgTypes...)
 	for i, slot := range d.AliasPattern {
-		if slot == 0 {
-			continue
+		if slot > 0 && i < len(args) {
+			args[i] = fmt.Sprintf("%s -> %d", args[i], slot)
 		}
-		parts = append(parts, fmt.Sprintf("in%d->out%d", i+1, slot))
 	}
-	return strings.Join(parts, ", ")
+	return args
 }
 
 // Mangle generates C ABI-compliant function name per Pluto C ABI Spec.
