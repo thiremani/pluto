@@ -129,10 +129,11 @@ func sharableOutput(paramType, outType Type) bool {
 // aliasPattern decides, per callee parameter, the one-based caller destination
 // whose binding the argument shares, or 0; nil when no parameter shares one.
 // argNames holds one entry per parameter, empty for an argument that is not a
-// plain identifier; dests names the destinations of the call's outputs in
-// order; outTypes are the declared output types. enclosing maps a caller-body
-// input to the caller output it already shares, so a nested call forwards that
-// sharing. A parameter shares at most one destination, the first that matches.
+// plain identifier. dests contains output destination names in order, with
+// synthetic staging names already resolved to the bindings they represent.
+// outTypes are the declared output types. enclosing maps a caller-body input to
+// the caller output it already shares, so a nested call forwards that sharing.
+// A parameter shares at most one destination, the first that matches.
 func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type, enclosing map[string]string) []int {
 	var pattern []int
 	for i, name := range argNames {
