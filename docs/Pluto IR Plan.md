@@ -855,18 +855,27 @@ Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
 *existing* target whose direct callee output is `MayWrite`, resolved at `=`.
 A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee introduces no implicit seed read. A declared output is
-readable inside its template only after a statement that definitely assigns
-it (the structural CFG rejects a read before any assignment, including a
-formatting marker, and the typed pass rejects a read after only conditional
-or seed-preserving writes), so the body cannot read the hidden seed through
-an output name. An input explicitly shared with an output can observe the
-staged value and later writes; that dependency is already an explicit argument
-read at the call site. Step 2A
+all-`MustWrite` callee introduces no boundary read. Step 2A
 records boundary resolution as a `ReadsSeed` fact on the call site — the CFG
 is untouched in 2A — and Step 2B converts the fact into an ordinary CFG read
 event, so a `MustWrite` classification cannot let backward liveness kill the
 prior value.
+
+The callee body can read the seed too (#105): a declared output holds its seed
+until a statement assigns it, and the body may read it before that as a value,
+a condition, a call argument, a print or a formatting marker. Whether it may
+is a separate per-output fact, `BodySeedEffects`, independent of the write
+effect: `y = x > 0 x` followed by `y = y + 1` is `MustWrite` and reads its
+seed, while a conditional writer can leave preservation entirely to the
+caller. A call records it as `CalleeReadsSeed` at each existing named target
+whose callee output may read its seed, for direct and indirect returns alike,
+and CFG turns it into a read event beside `ReadsSeed`. A fresh target seeds
+the callee with zero and a nested or targetless call has no destination, so
+neither records a read. Only `ReadsSeed` stays out of definite assignment:
+counting a seed-reading write there too would downgrade an always-writing
+accumulator to `MayWrite`. An input explicitly shared with an output can
+observe the staged value and later writes; that dependency is already an
+explicit argument read at the call site.
 
 The validity-carrying result comes from a **private direct-call variant**
 behind the stable seeded entry point (§1). The clone **keeps the seed
@@ -906,6 +915,17 @@ domain weakens the call to `MayWrite`. A range created *inside* the body still
 weakens only the outputs its statements drive — a possibly empty local range
 makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
 `res` — while unrelated outputs keep their effects.
+
+**Folding a body into a seed summary.** `BodySeedEffects` folds the same
+statements in order, using the reads the structural pass recorded for each:
+an output becomes `MaySeedRead` when a statement reads it — by name, in a
+formatting marker, or as a `CalleeReadsSeed` target — before an earlier
+statement definitely assigned it, that is, wrote it `MustWrite` without
+`ReadsSeed`. A statement's reads precede its writes, and a read is permanent:
+a seed copied into a local stays read even if the output is overwritten
+later. A definite overwrite before any read leaves `NoSeedRead`; a conditional
+one does not. Reading another output's seed counts for that output, so a
+cross-output read keeps the other destination live.
 
 **Finite specialization closure.** SCC settlement assumes discovery has already
 produced a finite graph. It cannot catch
@@ -947,17 +967,22 @@ them **callee-first** in reverse topological order — this is what lets a
 component assume every callee outside it has already published. Within one
 component:
 
-1. Seed every member's outputs with a provisional `MustWrite` working vector. A
+1. Seed every member's outputs with provisional working vectors, `MustWrite`
+   for writes and `NoSeedRead` for seed reads. A
    recursive call reads that provisional value — which is why `Uncomputed`
    cannot be a lattice element, as there would be nothing to read.
 2. Iterate the component, recomputing outputs from rebuilt statement effects
    and callees' current values. Callees outside the component contribute their
    published summaries.
-3. Weaken monotonically, `MustWrite → MayWrite` only. The working vector
-   **persists across body walks** within the component; it is not cleared with
-   `FuncInfo.Vars`.
-4. Stop when nothing changes — at most one weakening per slot.
-5. Publish one coherent snapshot for the whole component at once.
+3. Move monotonically: writes weaken `MustWrite → MayWrite` only, and seed
+   reads grow `NoSeedRead → MaySeedRead` only. Either change requeues the
+   member's callers in the component, because a callee that weakens to
+   `MayWrite` can leave its caller's output unassigned at a later read, and a
+   callee that starts reading its seed reads its caller's output. The working
+   vectors **persist across body walks** within the component; they are not
+   cleared with `FuncInfo.Vars`.
+4. Stop when nothing changes — at most one weakening and one growth per slot.
+5. Publish one coherent snapshot of both facts for the whole component at once.
 
 An `Invalid` output blocks publication for its entire component; provisional
 values are never read outside it.
@@ -986,14 +1011,19 @@ cached on `FuncInfo` and replayed when a later script reuses a settled body.
 pass is structural only: explicit use-before-definition, illegal input/global
 writes, unused inputs, syntactically unassigned outputs, formatting structure,
 and discard behavior. It collects all reads before declaring a statement's
-destinations, so a fresh `x = x + 1` cannot define its own RHS. An unknown main
-format marker remains literal text; malformed specifiers and missing dynamic
-width/precision variables on a resolved marker remain structural errors.
+destinations, so a fresh `x = x + 1` cannot define its own RHS. Declared
+outputs hold their seeds, so they are in scope from the start: reading one
+before any assignment is valid, and a marker naming one is a read. An unknown
+main format marker remains literal text; malformed specifiers and missing
+dynamic width/precision variables on a resolved marker remain structural
+errors. The pass records each template statement's reads; effect settlement
+folds them into seed summaries and specialization dataflow replays them.
 
 After a stable specialization batch reaches its effect SCC fixed point, each
 node runs effect-sensitive CFG dataflow exactly once and caches its diagnostics.
-For a let, event order is condition reads, RHS reads, `ReadsSeed` destination
-reads, then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
+For a let, event order is condition reads, RHS reads, `ReadsSeed` and
+`CalleeReadsSeed` destination reads, then sparse `StatementEffect.Writes`
+mapped by `TargetIndex`; all reads
 therefore observe the simultaneous assignment's pre-commit snapshot. Print
 arguments contribute ordinary reads even though prints have no statement
 effect entry. An unreachable template gets structural and parser checks only:
@@ -1010,9 +1040,10 @@ The two diagnostics consume effects differently:
 - *Forward (write-after-write).* Reporting that a write overwrites an unused
   value requires **both** writes to be `MustWrite`. This cures the former
   conditional-write false positive that forced tests to interleave reads merely
-  to silence it. A prior seed overwritten by a proven-`MustWrite` call output
-  without being read is instead a true positive: remove the seed or read it
-  explicitly when its value is semantically required.
+  to silence it. A prior value overwritten by a proven-`MustWrite` call
+  output whose body never reads its seed is instead a true positive: remove
+  the prior write or read it explicitly when its value is semantically
+  required.
 - *Shared inputs.* A body is analyzed once per type specialization at
   settlement, with every input treated as its own value, and every script
   that reaches the specialization replays its diagnostics. Sharing an input
@@ -1020,8 +1051,8 @@ The two diagnostics consume effects differently:
   invalid, and a body must be valid without it: `out = current + 1` written
   twice is reported for `x = Twice(x)` as well as for `y = Twice(x)`, because
   the body never reads `out`. A body that means to build on its own write
-  says so by naming the output, `out = out + 1`, which is readable once
-  definitely assigned. Diagnostics are deduplicated by location and message,
+  says so by naming the output, `out = out + 1`, which reads the first write.
+  Diagnostics are deduplicated by location and message,
   and unused-write errors are errors rather than warnings throughout.
 
 After a script solve succeeds, CFG first treats the script as a zero-input,
@@ -1202,6 +1233,13 @@ both); suite output is unchanged.
   outputs and individual slots cannot migrate separately. Callee output effect
   and argument yield are therefore router axes, recorded in the capability
   matrix (rows 6, 6b, 6c).
+- **Seed operands for migrated calls.** An all-`MustWrite` callee may still
+  read its seed (`MaySeedRead`, #105), so a migrated call's plan carries the
+  target's current value, or the zero value for a fresh target, as an
+  explicit seed operand read before the statement's writes. When every output
+  is `MustWrite` and `NoSeedRead`, nothing reads the seed, and the plan can
+  skip the copy of a heap destination that legacy staging
+  (`makeSeededTempOutputs`) makes today.
 - The private validity-carrying direct-call variant (§15), so an unwritten
   direct-return result can suppress Step 6's print invocation instead of
   printing its seed.
@@ -1480,6 +1518,10 @@ immediate deletion at the last consumer.
   callee) leaves the target `MayWrite` and records no `ReadsSeed`;
   callee-internal non-writing at an existing target resolves to the seed as
   `MustYield` with a recorded `ReadsSeed`
+- a body that reads an output's seed, directly or through a nested call, keeps
+  its write effect and records `CalleeReadsSeed` at an existing target but not
+  at a fresh one; a definite overwrite before the read removes the dependency,
+  a conditional one does not, and a copy into a local keeps it
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures;
   cached specialization CFG diagnostics replay on reuse

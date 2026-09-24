@@ -29,7 +29,7 @@ Pluto's source-level semantics stay unchanged:
 
 - assignments copy
 - input names are read-only, but can observe writes through a shared output
-- output names are readable only once definitely assigned, and results reach the caller at assignment commit
+- output names start at their destination's value and are readable throughout, and results reach the caller at assignment commit
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`
@@ -101,13 +101,15 @@ Direct lowering for scalar numeric inputs and single scalar outputs.
   selectors, which changes range-bearing prototypes (ABI 2.1) and leaves
   every other function's signature as it was
 
-`MustWrite`/`MayWrite` has limited utility at the public boundary and must not
-decide whether the seed parameter exists. Adding one conditional output write
-to a function body—or making a reachable output-producing callee conditional—
+`MustWrite`/`MayWrite` and seed reads have limited utility at the public
+boundary and must not decide whether the seed parameter exists. Adding one
+conditional output write or one read of an output before it is assigned to a
+function body—or making a reachable output-producing callee conditional—
 could otherwise change the C prototype without changing the type-based mangled
 name. Previously compiled C callers would then invoke the same symbol with the
-wrong argument list. Write-effect information may still eliminate seed use
-inside Pluto code; a seedless fast path needs a distinctly named private clone
+wrong argument list. Effect information may still eliminate seed use inside
+Pluto code, since a body that always writes an output and never reads its seed
+does not need one; a seedless fast path needs a distinctly named private clone
 behind the stable public entry point.
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.

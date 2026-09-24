@@ -264,25 +264,25 @@ res = sum(a, b)
   observes that slot's current value, including writes from earlier statements
   in the body. This rule applies to both ordinary and ranged calls and is
   independent of whether the implementation passes the value or a pointer.
-- **Outputs**: Readable once definitely assigned. A body may assign an output
-  any number of times, conditionally or not, and a nested call may target it.
-  It may read an output — as a value, a condition, a call argument, a print,
-  or a formatting marker — only after a statement that assigns it
-  unconditionally with a value that cannot be skipped. A read before that is
-  a compile error: before any assignment, in the same simultaneous
-  assignment, or after only conditional or seed-preserving writes. A `%n`
-  marker naming an output counts as such a read, although it writes the
-  output; modeling it as a write is tracked in #109. A later
-  conditional write does not revoke the assignment. Outputs are independently
-  staged result slots: an existing destination supplies the initial value and
-  a fresh destination starts at its type's zero value, so a body that writes
-  nothing preserves the caller's value. The body may observe that value
-  through an explicitly aliased input; it can never read it through the
-  output name. An output the body reads is solved at owned storage (a static
+- **Outputs**: Independently staged result slots that start with a value:
+  an existing destination supplies its current value and a fresh destination
+  starts at its type's zero value. A body may assign an output any number of
+  times, conditionally or not, and a nested call may target it. It may read
+  an output anywhere — as a value, a condition, a call argument, a print, or
+  a formatting marker — and a read before an assignment observes the value
+  the output holds so far. A body that writes nothing therefore preserves the
+  caller's value, and `res = x > 0 x` followed by `res = res + 1` adds one to
+  an existing `res` when `x` is not positive (20 becomes 21), exactly as the
+  same two statements do in a script. A `%n` marker naming an output counts as a read, although
+  it writes the output; modeling it as a write is tracked in #109. Output
+  types come from the inputs and the body's assignments, never from the
+  destination: a body in which only the output itself could type it, such as
+  `res = res + x` alone, is rejected because its output type cannot be
+  inferred. An output the body reads is solved at owned storage (a static
   string output becomes a heap string) and must have a concrete type, so
   every read and every nested call it feeds use the representation the
-  caller's shared slot holds. The real destinations
-  are committed only after every sibling right-hand side has been evaluated.
+  caller's destination holds. The real destinations are committed only after
+  every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
 A call specializes a binding argument on the value's own type, with the
@@ -316,11 +316,11 @@ res = sum(res, 5)
 
 Reusing a variable as both an argument and a destination is how a caller
 connects an input to a call's staged output. The template reads the staged
-value through its declared input `a`, and may read `res` itself once it has
-assigned it. Every specialization must pass liveness analysis with its inputs
-and outputs treated as unshared; caller sharing cannot make an otherwise
-rejected body acceptable. So `res = a + b` written twice is reported as a dead
-write for every caller, while `res = res + b` after `res = a + b` reads the first write
+value through its declared input `a`, and may read `res` itself. Every
+specialization must pass liveness analysis with its inputs and outputs
+treated as unshared; caller sharing cannot make an otherwise rejected body
+acceptable. So `res = a + b` written twice is reported as a dead write for
+every caller, while `res = res + b` after `res = a + b` reads the first write
 by name.
 
 ```python
@@ -357,6 +357,16 @@ The sharing is internal to each call. For
 `seen` observes the call's updated slot, while the sibling right-hand side
 reads the caller's binding before the assignment commits.
 
+A call whose body may read an output before assigning it reads that output's
+destination, so the caller's earlier write stays live. If
+`res = MaybeIncrement(x)` holds the conditional update above, `a = 20`
+followed by `a = MaybeIncrement(-1)` gives `a` 21 with no read of the 20 in
+between. A body that assigns the output unconditionally, with a value that
+cannot be skipped, before reading it never observes the destination, so an
+earlier write that nothing else reads is reported as unused. A fresh destination supplies a zero, and a call nested
+inside a larger expression has no destination at all, so its outputs start at
+zero.
+
 With a range, the same reuse is an accumulation: `sum = Acc(sum, 1:5)` runs
 the body once per yield, and each iteration continues from the previous
 iteration's output. The body's statement order still applies within each
@@ -364,6 +374,19 @@ iteration. Starting from 10, `FoldBefore(value, 1:3)` produces `13 11` and
 `FoldAfter(value, 1:3)` produces `13 13` when their first output targets
 `value`. An empty range leaves an existing destination unchanged and a fresh
 destination at its zero value.
+
+The running value can also stay in the output itself: each iteration's output
+starts at the previous iteration's result, and the first at the destination's
+value.
+
+```python
+y = AccRange(r)
+    y = r > 5 r
+    y = y + r
+```
+
+`total = AccRange(0:3)` adds 0, 1 and 2 to an existing `total` and gives a
+fresh `total` 3.
 
 ### Range Parameters
 

@@ -1,9 +1,9 @@
 # Pluto Effects and Follow-up Plan
 
 Recorded 2026-09-05. Implementation baseline: Pluto `840b147` (PR #101).
-This is a follow-up work plan, not a claim that the work below is implemented.
-The immediate priority is correct incoming-output seed dependencies alongside
-`MustWrite`/`MayWrite`, before expanding PIR call support.
+This is a follow-up work plan. Section 1, seed dependency analysis, has since
+been implemented (#105); the other sections are not claims that their work is
+implemented.
 
 ## Current PR disposition
 
@@ -17,13 +17,19 @@ new slice; they do not require expanding #101. One nonblocking PR-description
 phrase remains: Review Round 4 should name RHS semantic type, merged target
 type, and stored type separately, as the corrected code comment already does.
 
-## 1. Next compiler PR: seed dependency analysis
+## 1. Seed dependency analysis
 
-Resolved by a language rule instead of an analysis
-([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
-[PR #102](https://github.com/thiremani/pluto/pull/102)): a declared output is
-readable inside its template only after it is definitely assigned, so the
-reproducer below is rejected at `y = y + 1`. The hidden seed and destination-seeded staging slots continue to
+Resolved by seed-readable outputs
+([issue #105](https://github.com/thiremani/pluto/issues/105)): a declared
+output starts as its destination's previous value, or zero for a fresh
+destination, and its template may read it before assigning it, so the
+reproducer below compiles and prints 21. The analysis follows the plan kept
+below. [PR #104](https://github.com/thiremani/pluto/pull/104), superseding the
+closed [PR #102](https://github.com/thiremani/pluto/pull/102), had first
+resolved the reproducer with a language rule instead, rejecting any read of an
+output before it was definitely assigned; #105 turns those rejected programs
+into accepted ones and changes the meaning of no program #104 accepted. The
+hidden seed and destination-seeded staging slots continue to
 preserve outputs that are not written. A caller can explicitly connect an
 input to an output by reusing the same binding: later statements then observe
 writes through that output, in ordinary and ranged calls alike. Inputs are
@@ -52,13 +58,14 @@ A shared output takes its input's storage inside the private alias variant,
 preserving sharing without changing unrelated input types. These cases are
 covered by `tests/alias_input`.
 
-The original analysis plan is kept below as the specification for the planned
-follow-up, seed-readable outputs
-([issue #105](https://github.com/thiremani/pluto/issues/105)): a body may read
+The original analysis plan is kept below; #105 implements it. A body may read
 an output before assigning it and observes the destination's previous value,
-with output types still inferred from inputs and the body.
+with output types still inferred from inputs and the body: a body in which
+only the output itself could type it, such as `y = y + 1` alone, is rejected
+because its output type cannot be inferred. The per-output summary is
+`BodySeedEffects`; call sites record it as `StatementEffect.CalleeReadsSeed`.
 
-### Confirmed failure
+### Confirmed failure (fixed by #105)
 
 ```pluto
 # seed.pt
@@ -72,16 +79,16 @@ a fresh destination produces 1. The last statement always writes, but its
 value may depend on the incoming output seed.
 
 ```pluto
-# seed.spt: should compile and print 21
+# seed.spt: compiles and prints 21
 a = 20
 a = MaybeIncrement(-1)
 a
 ```
 
-The baseline incorrectly rejects the second assignment as overwriting an
-unused value. Inserting `a` as a print before the call makes it compile and
-print 20, then 21. This demonstrates an analysis defect under current semantics,
-independent of any preference about whether seeded outputs should exist.
+The baseline rejected the second assignment as overwriting an unused value;
+inserting `a` as a print before the call made it compile and print 20, then
+21. That was an analysis defect, independent of any preference about whether
+seeded outputs should exist. The seed-read summary now keeps the 20 live.
 
 ### Keep three facts separate
 
@@ -106,7 +113,8 @@ Current entry points to inspect:
 - `compiler/compiler.go` and call/conditional lowering: seed setup, staged
   outputs, alias handling, and direct versus indirect returns.
 - [PIR plan, section 15](./Pluto%20IR%20Plan.md): its assertion that an
-  all-`MustWrite` callee reads no seed needs correction in the implementation PR.
+  all-`MustWrite` callee reads no seed now covers only boundary resolution;
+  the section describes the callee's own seed reads.
 
 Do not merely broaden the existing `StatementEffect.ReadsSeed` list. The
 current body fold interprets entries there as boundary-only preservation and
@@ -127,27 +135,29 @@ discipline. Unknown analysis must not silently mean no seed reads.
 
 ### Acceptance criteria
 
-- [ ] The reproducer compiles without a redundant print and produces 21; the
+All met by #105; `tests/seed` holds the end-to-end cases.
+
+- [x] The reproducer compiles without a redundant print and produces 21; the
   fresh-target variant produces 1.
-- [ ] Unconditional seed-dependent writes remain `MustWrite`, with the old
+- [x] Unconditional seed-dependent writes remain `MustWrite`, with the old
   destination live where needed.
-- [ ] A definite overwrite before any read removes the incoming-seed dependency;
+- [x] A definite overwrite before any read removes the incoming-seed dependency;
   a conditional overwrite does not. Copying the seed to a local first preserves
   the dependency even if the output is subsequently overwritten.
-- [ ] A seed read only in a condition or printed string still counts when the
+- [x] A seed read only in a condition or printed string still counts when the
   output is later unconditionally overwritten. Seed reads are not limited to
   dependencies of the returned value.
-- [ ] Nested calls, recursive summaries, multiple outputs, cross-output seed
+- [x] Nested calls, recursive summaries, multiple outputs, cross-output seed
   reads, and zero/one/many-iteration cases are covered.
-- [ ] Fresh targets, discards, incompatible-storage zero seeds, caller argument
+- [x] Fresh targets, discards, incompatible-storage zero seeds, caller argument
   failure, and caller-side retention keep their existing distinct behavior.
-- [ ] CFG and PIR consume settled solver facts rather than independently
+- [x] CFG and PIR consume settled solver facts rather than independently
   rediscovering dependencies. Existing unused-write diagnostics still work.
-- [ ] Direct and indirect calls preserve staging and alias-input regressions.
+- [x] Direct and indirect calls preserve staging and alias-input regressions.
   Public symbols and prototypes do not change with body effects; every public
   direct scalar return retains its existing hidden seed parameter.
-- [ ] Cold and warm caches agree on summaries, diagnostics, and output.
-- [ ] Effect tests, CFG regression tests, ABI/IR checks, race tests, and relevant
+- [x] Cold and warm caches agree on summaries, diagnostics, and output.
+- [x] Effect tests, CFG regression tests, ABI/IR checks, race tests, and relevant
   leak checks pass. Run the full leak suite before submitting the compiler PR.
 
 ## 2. Formatting: model `%n` as an explicit write operand
@@ -240,7 +250,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
+| Seed/effect correctness | Section 1; resolved by seed-readable outputs ([#105](https://github.com/thiremani/pluto/issues/105)) after the interim definite-assignment rule of [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
 | `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |

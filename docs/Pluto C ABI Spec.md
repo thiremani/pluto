@@ -333,12 +333,19 @@ types:
 - `I64` and `F64` parameters are passed directly. Ranges, internal
   `ArrayRange` descriptors, and other values are passed indirectly.
 - A function with exactly one `I64` or `F64` output returns that scalar
-  directly and receives one hidden seed value. The seed preserves the caller's
-  staged value when the callee does not write its output, including a failed
-  conditional assignment or an empty `Range`/internal `ArrayRange`.
+  directly and receives one hidden seed value. The seed is the output's
+  starting value, which the body may read before assigning it, and it
+  preserves the caller's staged value when the callee does not write its
+  output, including a failed conditional assignment or an empty
+  `Range`/internal `ArrayRange`.
 - All other output lists use an indirect `void` return. Argument zero points
   to a carrier whose first `N` fields are output pointers and whose next `N`
   fields are pointers to `i1` write markers.
+- Each output pointer addresses an initialized value that the callee owns
+  while it runs: the output's starting value, which the body may read, and
+  which the callee releases when it writes the output. A caller passes its
+  own copy of the destination's current value, or the output type's zero
+  value for a fresh destination.
 - The caller initializes every write marker to false. A callee sets the marker
   only when that output is actually written. This lets an empty range or
   skipped conditional preserve an existing caller destination.
@@ -364,11 +371,11 @@ int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
 int64_t Pt_Acc_I64_Range(int64_t a, const PtRangeI64 *range, int64_t seed);
 ```
 
-A C caller passes the destination's current value to request Pluto's keep-old
-semantics, or the output type's zero value for a fresh destination. The seed is
-`noundef` and must still be supplied to a function such as `Square` that does
-not inspect it. Whether the body must write or may skip a write never changes
-the public signature or mangled name. In particular, adding a conditional
+A C caller passes the destination's current value, which the body may read and
+which a skipped write keeps, or the output type's zero value for a fresh
+destination. The seed is `noundef` and must still be supplied to a function
+such as `Square` that never reads it. Whether the body must write, may skip a
+write, or reads its seed never changes the public signature or mangled name. In particular, adding a conditional
 assignment—or changing a reachable output-producing callee from must-write to
 may-write—cannot alter the prototype of an existing symbol. A future seedless
 internal fast path must therefore use a distinct private symbol behind this
