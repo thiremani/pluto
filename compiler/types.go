@@ -249,12 +249,17 @@ func (f Func) Key() Type {
 }
 
 func (f Func) AllTypesInferred() bool {
+	return f.ParamTypesInferred() && f.OutputTypesInferred()
+}
+
+// ParamTypesInferred reports whether all function parameters are fully resolved.
+func (f Func) ParamTypesInferred() bool {
 	for _, p := range f.Params {
 		if !IsFullyResolvedType(p) {
 			return false
 		}
 	}
-	return f.OutputTypesInferred()
+	return true
 }
 
 // OutputTypesInferred reports whether all function outputs are fully resolved.
@@ -286,8 +291,11 @@ type FuncInfo struct {
 	// BodyOutputEffects summarizes the typed scalar body before a call-owned
 	// Range or ArrayRange domain determines whether that body executes.
 	BodyOutputEffects []WriteEffect
-	CFGResult         *SpecializationCFGResult
-	Settled           bool
+	// BodySeedEffects records, per output, whether that body may read the
+	// output's incoming value. It is published with BodyOutputEffects.
+	BodySeedEffects []SeedEffect
+	CFGResult       *SpecializationCFGResult
+	Settled         bool
 }
 
 func (f *FuncInfo) AllTypesInferred() bool {

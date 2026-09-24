@@ -128,9 +128,9 @@ resetSource = [1 2]
 resetTarget, resetLeft, resetRight = ResetPair(resetSource, resetSource)
 "UnsharedReset:", resetTarget, resetLeft, resetRight
 
-# An output is readable once definitely assigned: a sibling output can build
-# on it, and a shared input observes the write. A read string output is solved
-# as owned, so the nested call sees the storage the shared caller holds.
+# An output assigned earlier in the body can be read: a sibling output can
+# build on it, and a shared input observes the write. A read string output is
+# solved as owned, so the nested call sees the storage the shared caller holds.
 sq, cube = Powers(3)
 "Powers:", sq, cube
 pw = 3

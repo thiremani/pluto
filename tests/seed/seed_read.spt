@@ -1,0 +1,201 @@
+seeded = 20
+seeded = MaybeIncrement(-1)
+"Seeded: -seeded"
+
+written = 20
+written = MaybeIncrement(5)
+"Written: -written"
+
+fresh = MaybeIncrement(-1)
+"Fresh: -fresh"
+
+chained = 20
+chained = Chained(-1)
+freshChained = Chained(-1)
+"Chained: -chained -freshChained"
+
+twice = 20
+twice = Twice(-1)
+"Twice: -twice"
+
+nested = 20
+nested = Outer(-1)
+"Nested: -nested"
+
+reset = ResetThenIncrement(-1)
+"Reset: -reset"
+
+copied = 20
+copied = CopyThenReplace(5)
+"Copied: -copied"
+
+gated = 20
+gated = Gate(3)
+negative = -20
+negative = Gate(3)
+freshGate = Gate(3)
+"Gate: -gated -negative -freshGate"
+
+fallback = 20
+fallback = Fallback(3)
+negativeFallback = -20
+negativeFallback = Fallback(3)
+"Fallback: -fallback -negativeFallback"
+
+marked = 20
+marked = Marked(5)
+"Marked: -marked"
+
+freshMarked = Marked(5)
+"FreshMarked: -freshMarked"
+
+first = 20
+first = ReadFirst(3)
+"ReadFirst: -first"
+
+p = 2
+p, q = Powers(3)
+"Powers: -p -q"
+
+freshP, freshQ = Powers(3)
+"FreshPowers: -freshP -freshQ"
+
+crossA = 20
+crossA, crossB = Cross(-1)
+"Cross: -crossA -crossB"
+
+# A discarded output has no destination to seed it, so it starts at zero.
+_, discarded = Cross(-1)
+"Discard: -discarded"
+
+zero = 20
+zero = AccRange(0:0)
+one = 20
+one = AccRange(0:1)
+many = 20
+many = AccRange(0:3)
+manyFresh = AccRange(0:3)
+"AccRange: -zero -one -many -manyFresh"
+
+# The caller runs the loop here; each call is seeded by the previous one.
+i = 0:3
+looped = 20
+looped = AccRange(i + 0)
+"Looped: -looped"
+
+tag = "hi"
+tag = MaybeTag(-1, "x")
+tagWritten = "hi"
+tagWritten = MaybeTag(1, "x")
+freshTag = MaybeTag(-1, "x")
+heapTag = "he" ⊕ "ap"
+heapTag = MaybeTag(-1, "x")
+"Tag: -tag -tagWritten <-freshTag> -heapTag"
+
+stamp = "go"
+stamp = Stamp(0:3)
+emptyStamp = "go"
+emptyStamp = Stamp(0:0)
+freshStamp = Stamp(0:3)
+"Stamp: -stamp -emptyStamp <-freshStamp>"
+
+static = "hi"
+static = ReadStatic(0)
+"Static: -static"
+
+heap = "never" ⊕ "read"
+heap = ReadStatic(1)
+"Heap: -heap"
+
+forwarded = "hi"
+forwarded = ForwardStatic(0)
+"ForwardedStatic: -forwarded"
+
+forwardedHeap = "never" ⊕ "read"
+forwardedHeap = ForwardStatic(1)
+"ForwardedHeap: -forwardedHeap"
+
+shared = 5
+shared = MaybeIncrementFrom(shared, 3)
+negativeShared = -5
+negativeShared = MaybeIncrementFrom(negativeShared, 3)
+unshared = 20
+unshared = MaybeIncrementFrom(-1, 3)
+"Shared: -shared -negativeShared -unshared"
+
+recursive = 20
+recursive = A(-1)
+recursiveWritten = A(2)
+"Recursive: -recursive -recursiveWritten"
+
+# A statement condition gates the call and its seeded destination together.
+condCall = 20
+condCall = 1 > 0 MaybeIncrement(-1)
+skipped = 20
+skipped = 0 > 1 MaybeIncrement(-1)
+"CondCall: -condCall -skipped"
+
+# A call inside a larger expression has no destination, so its seed is zero.
+plus = 20
+"PlusBefore: -plus"
+plus = MaybeIncrement(-1) + 100
+"Plus: -plus"
+
+# A failed argument skips the call, so the destination keeps its value.
+arr = [1]
+failedArg = 20
+failedArg = MaybeIncrement(arr[5])
+"FailedArg: -failedArg"
+
+# Checks on a read wait for the statement that types the output.
+lower = 5
+lower = LowerOrOne(10)
+higher = 50
+higher = LowerOrOne(10)
+"LowerOrOne: -lower -higher"
+
+firstOf = [7 8]
+firstOf = FirstOf([1 2])
+"FirstOf: -firstOf"
+
+itemAt = [7 8 9]
+itemAt = ItemAt([1 2], 0)
+"ItemAt: -itemAt"
+
+below = 4
+below = SumBelow(1)
+"SumBelow: -below"
+
+older = bo
+older = AgeOf(ada)
+older.name, older.age
+
+selfIndex = 1
+selfIndex = SelfIndex([10 20 30])
+freshIndex = SelfIndex([10 20 30])
+"SelfIndex: -selfIndex -freshIndex"
+
+selfRange = 3
+selfRange = SelfRange(10)
+freshRange = SelfRange(10)
+"SelfRange: -selfRange -freshRange"
+
+rangeFrom = 1
+rangeFrom = RangeFrom([10 20 30], 2)
+"RangeFrom: -rangeFrom"
+
+column = 5
+column = Column(7)
+"Column: -column"
+
+cellSeed = 2.5
+cellSeed, cellFirst = FirstCell(3.5)
+"FirstCell: -cellSeed -cellFirst"
+
+stackSeed = 2.5
+stackSeed, stackRow = StackedCell(3.5)
+"StackedCell: -stackSeed -stackRow"
+
+independent = 2.5
+independent, independentSeed = IndependentColumn(3.5)
+"IndependentColumn: -independent -independentSeed"

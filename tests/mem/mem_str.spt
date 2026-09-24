@@ -91,8 +91,7 @@ staticCallSeed = maybeStatic(1)
 "CallStaticSeedWrite: -staticCallSeed"
 
 # Refinement adapters are ABI-zero-seeded inside the callee. An unwritten StrG
-# output preserves its established StrH destination, while an explicit sibling
-# copy of that ABI value commits the empty StrG value safely.
+# output preserves its established StrH destination.
 sharedStaticLeft = "shared" ⊕ "_left"
 sharedStaticRight = "shared" ⊕ "_right"
 "CallStaticShareBefore: < -sharedStaticLeft > < -sharedStaticRight >"
@@ -100,6 +99,15 @@ sharedStaticLeft, sharedStaticRight = shareStaticOutput(0)
 "CallStaticShareSkipped: < -sharedStaticLeft > < -sharedStaticRight >"
 sharedStaticLeft, sharedStaticRight = shareStaticOutput(1)
 "CallStaticShareWritten: < -sharedStaticLeft > < -sharedStaticRight >"
+
+# A skipped write leaves s at its destination's value, which t then copies.
+seedStaticLeft = "shared" ⊕ "_left"
+seedStaticRight = "shared" ⊕ "_right"
+"CallSeedShareBefore: < -seedStaticLeft > < -seedStaticRight >"
+seedStaticLeft, seedStaticRight = shareSeedOutput(0)
+"CallSeedShareSkipped: < -seedStaticLeft > < -seedStaticRight >"
+seedStaticLeft, seedStaticRight = shareSeedOutput(1)
+"CallSeedShareWritten: < -seedStaticLeft > < -seedStaticRight >"
 
 # Array element copy infers StrH for the binding; later static stores should work
 arrSlot = ["slot" "array"]

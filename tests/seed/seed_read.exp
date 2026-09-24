@@ -1,0 +1,58 @@
+Seeded: 21
+Written: 6
+Fresh: 1
+Chained: 21 1
+Twice: 21
+Nested: 21
+Reset: 1
+Copied: 25
+Gate: 3 -20 0
+Fallback: 3 0
+seed 20
+Marked: 5
+seed 0
+FreshMarked: 5
+21
+ReadFirst: 6
+Powers: 9 6
+FreshPowers: 9 0
+Cross: -1 21
+Discard: 1
+AccRange: 20 20 23 3
+Looped: 23
+Tag: hi! x! <!> heap!
+Stamp: go... go <...>
+seen <hi>
+Static: hi
+seen <neverread>
+Heap: yes
+seen <hi>
+ForwardedStatic: hi
+seen <neverread>
+ForwardedHeap: yes
+Shared: 4 -4 21
+Recursive: 21 4
+CondCall: 21 20
+PlusBefore: 20
+Plus: 101
+FailedArg: 20
+5
+LowerOrOne: 1 10
+7
+FirstOf: [1 2]
+8
+ItemAt: [1 2]
+SumBelow: 7
+50
+Ada 36
+SelfIndex: 20 10
+SelfRange: 12 0
+20
+30
+RangeFrom: 2
+5
+[6]
+Column: 7
+FirstCell: 3.5 2.5
+StackedCell: 3.5 1
+IndependentColumn: 3.5 2.5

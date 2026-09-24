@@ -6,3 +6,7 @@ nums
 words
 outerNums
 outerWords
+
+bumped = 20
+bumped = OuterBump(-1)
+bumped

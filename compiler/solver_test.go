@@ -77,6 +77,7 @@ x, y`
 	isEvenFunc := newFunc(call.Function.Value, args, template)
 	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
 	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
+	require.Equal(t, []SeedEffect{SeedUncomputed, SeedUncomputed}, isEvenFunc.BodySeedEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
 	ts.Converging = false
@@ -112,6 +113,8 @@ x, y`
 	require.True(t, isOddFunc.Settled)
 	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isEvenFunc.BodyOutputEffects)
 	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isOddFunc.BodyOutputEffects)
+	require.Equal(t, []SeedEffect{NoSeedRead, NoSeedRead}, isEvenFunc.BodySeedEffects)
+	require.Equal(t, []SeedEffect{NoSeedRead, NoSeedRead}, isOddFunc.BodySeedEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -197,6 +200,494 @@ y`
 
 	if !strings.Contains(ts.Errors[0].Msg, "Function f is not converging. Check for cyclic recursion and that each function has a base case") {
 		t.Errorf("Expected cyclic recursion error, but got: %s", ts.Errors[0].Msg)
+	}
+}
+
+// An output read before anything types it has only its own seed to be typed
+// from, so nothing in the body fixes its type.
+func TestUntypedOutputReadCannotInferType(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "untypedOutputRead", "", mustParseCode(t, `out = Acc(item)
+    out = out + item`))
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "x = Acc(1)\nx"), cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Equal(t, `cannot infer type of output "out" of Acc: it is read before any assignment gives it a type`, ts.Errors[0].Msg)
+	require.Equal(t, 2, ts.Errors[0].Token.Line)
+	require.Equal(t, 11, ts.Errors[0].Token.Column)
+}
+
+// A pass that cannot converge blames the first function unresolved on its
+// own, not one that is unresolved only through an argument of unknown type,
+// and names that function's untyped output read only when it has one.
+func TestNonConvergenceBlamesTheCause(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		script string
+		msg    string
+		line   int
+	}{
+		{
+			// F reads its output before H, which has no base case, types it.
+			name: "callee without a base case",
+			code: `y = H(n)
+    y = H(n - 1)
+
+y = F(n)
+    t = y
+    t
+    y = H(n)`,
+			script: "a = F(1)\na",
+			msg:    "Function H is not converging",
+			line:   1,
+		},
+		{
+			// F is unresolved only through the argument H leaves unknown.
+			name: "callee given an argument of unknown type",
+			code: `y = H(n)
+    y = H(n - 1)
+
+y = F(v)
+    t = y
+    t
+    y = v
+
+z = G(n)
+    w = H(n)
+    z = F(w)`,
+			script: "a = G(1)\na",
+			msg:    "Function H is not converging",
+			line:   1,
+		},
+		{
+			// G's output types itself through F, which only passes it on.
+			name: "output typed only through itself",
+			code: `y = F(v)
+    t = y
+    t
+    y = v
+
+z = G(n)
+    n
+    z = F(z)`,
+			script: "a = G(1)\na",
+			msg:    `cannot infer type of output "z" of G: it is read before any assignment gives it a type`,
+			line:   8,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, "nonConvergenceBlame", "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Contains(t, ts.Errors[0].Msg, tc.msg)
+			require.Equal(t, tc.line, ts.Errors[0].Token.Line)
+		})
+	}
+}
+
+// A later assignment types an output read before it: the rewalk starts with
+// the output typed, so the read, its marker and the fallback resolve.
+func TestLaterAssignmentTypesEarlierOutputRead(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "laterTypedOutputRead", "", mustParseCode(t, `out = Clamp(x)
+    "was -out"
+    out = out < x || x`))
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), "y = Clamp(5)\ny")
+
+	mangled := Mangle(cc.Compiler.MangledPath, "Clamp", []Type{I64})
+	require.Equal(t, []Type{I64}, cc.Compiler.FuncCache[mangled].Sig.OutTypes)
+
+	template, ok := cc.lookupFuncTemplate("Clamp", 1)
+	require.True(t, ok)
+	marker := template.Body.Statements[0].(*ast.PrintStatement).Expression.Arguments[0]
+	require.Equal(t, []Type{StrH{}}, ts.ExprCache[key(mangled, marker)].OutTypes)
+	fallback := template.Body.Statements[1].(*ast.LetStatement).Value[0]
+	require.Equal(t, []CondMode{CondOr}, ts.ExprCache[key(mangled, fallback)].CompareModes)
+}
+
+// A check whose operand still awaits its type waits for the pass that types
+// it: an output read before the assignment that types it, however deep the
+// read sits, or a recursive call's result.
+func TestAwaitingOperandsDeferTheirChecks(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		script string
+	}{
+		{
+			name: "comparison under a typed call before fallback",
+			code: `y = One(x)
+    x
+    y = 1
+
+out = SeedCall(x)
+    out = One(out < x) || x`,
+			script: "a = 5\na = SeedCall(10)\na",
+		},
+		{
+			name: "comparison under a typed call before gate",
+			code: `y = One(x)
+    x
+    y = 1
+
+out = SeedCall(x)
+    out = One(out < x) && x || 0`,
+			script: "a = 5\na = SeedCall(10)\na",
+		},
+		{
+			name: "array access",
+			code: `y = ReadSeed(x)
+    y[0]
+    y = x`,
+			script: "a = [7 8]\na = ReadSeed([1 2])\na",
+		},
+		{
+			// The untyped target still has its index typed for range handling.
+			name: "computed index of an untyped target",
+			code: `y = ReadSeedAt(x, i)
+    y[i + 1]
+    y = x`,
+			script: "a = [7 8 9]\na = ReadSeedAt([1 2], 0)\na",
+		},
+		{
+			name: "index",
+			code: `y = PickAt(arr)
+    v = arr[y]
+    v
+    y = 1`,
+			script: "a = 1\na = PickAt([10 20])\na",
+		},
+		{
+			name: "range bound",
+			code: `out = Span(n)
+    k = 0:out
+    s = 0
+    s = s + k
+    out = s + n`,
+			script: "a = 4\na = Span(1)\na",
+		},
+		{
+			name: "field access",
+			code: `p = Person
+  : name age
+    "Ada" 36
+
+o = Aged(q)
+    o.age
+    o = q`,
+			script: "a = p\na = Aged(p)\na",
+		},
+		{
+			name: "array cell",
+			code: `y = Paired(x)
+    pair = [y x]
+    pair
+    y = x`,
+			script: "a = 3\na = Paired(9)\na",
+		},
+		{
+			name: "recursive result",
+			code: `y = F(x)
+    y = [x]
+    y = x > 0 [F(x - 1)[0] + 1]`,
+			script: "a = F(3)\na",
+		},
+		{
+			name: "range index with an untyped start",
+			code: `y = RangeIndex(arr, x)
+    arr[y:3]
+    y = x`,
+			script: "a = 1\na = RangeIndex([10 20 30], 2)\na",
+		},
+		{
+			name: "range index with an untyped step",
+			code: `y = RangeStep(arr, x)
+    arr[0:3:y]
+    y = x`,
+			script: "a = 1\na = RangeStep([10 20 30], 2)\na",
+		},
+		{
+			name: "range driver with an untyped start",
+			code: `y = RangeDriver(x)
+    k = y:4
+    s = 0
+    s = s + k
+    s
+    y = x`,
+			script: "a = 1\na = RangeDriver(7)\na",
+		},
+		{
+			// A cell awaiting its type leaves the column's element type
+			// unresolved, and each use of the column waits for it.
+			name: "table column with an untyped cell",
+			code: `y = Column(x)
+    tab = [
+        :a
+        y
+    ]
+    tab.a[0]
+    tab.a + 1
+    -tab.a
+    tab.a > 5
+    tab.a ⊕ [1]
+    [tab.a[0] 9]
+    [tab.a]
+    f = tab.a[0] > 5 || 0
+    f
+    g = x > 0 && tab.a || [0]
+    g
+    h = x > 0 && [0] || tab.a
+    h
+    y = x`,
+			script: "a = 5\na = Column(7)\na",
+		},
+		{
+			name: "table column argument",
+			code: `v = FirstOf(arr)
+    v = arr[0]
+
+y = ColumnArg(x)
+    tab = [
+        :a
+        y
+    ]
+    FirstOf(tab.a)
+    y = x`,
+			script: "a = 8\na = ColumnArg(7)\na",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, "awaitingOperands", "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			solveScriptTypes(t, ctx, cc, t.Name(), tc.script)
+		})
+	}
+}
+
+// A cell still awaiting its type keeps pending what it contributes to: its
+// column in a table, the single element type of an array. The other cells
+// alone would settle an integer type that the pending float cell later
+// promotes, and a dependent output would keep the stale type. A table's other
+// columns stay typed and can type the output themselves.
+func TestPendingCellsKeepAggregatesPending(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		script   string
+		outTypes []Type
+	}{
+		{
+			name: "table pending cell before integer cell",
+			code: `y, z = F(x)
+    tab = [
+        :a
+        y
+        1
+    ]
+    z = tab.a[0]
+    y = x`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "table integer cell before pending cell",
+			code: `y, z = F(x)
+    tab = [
+        :a
+        1
+        y
+    ]
+    z = tab.a[0]
+    y = x`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "table with an unaffected integer column",
+			code: `y, z, w = F(x)
+    tab = [
+        :a b
+        y 1
+        2 3
+    ]
+    z = tab.a[1]
+    w = tab.b[0]
+    y = x`,
+			script:   "p, q, r = F(3.5)\np, q, r",
+			outTypes: []Type{F64, F64, I64},
+		},
+		{
+			// Only the independent column can type the output.
+			name: "independent table column",
+			code: `y, z = F(x)
+    tab = [
+        :a b
+        y x
+    ]
+    z = tab.a[0]
+    y = tab.b[0]`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "promoted pending column beside an independent column",
+			code: `y, z = F(x)
+    tab = [
+        :a b
+        y x
+        1 x
+    ]
+    z = tab.a[1]
+    y = tab.b[0]`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "pending column stacked with an integer array",
+			code: `y, z = F(x)
+    tab = [
+        :a
+        y
+    ]
+    m = [tab.a [1]]
+    z = m[1][0]
+    y = x`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "inline literal",
+			code: `y, z = F(x)
+    v = [y 1]
+    z = v[1]
+    y = x`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+		{
+			name: "pending array stacked with an integer array",
+			code: `y, z = F(x)
+    m = [[y] [1]]
+    z = m[1][0]
+    y = x`,
+			script:   "p, q = F(3.5)\np, q",
+			outTypes: []Type{F64, F64},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, "pendingCells", "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			solveScriptTypes(t, ctx, cc, t.Name(), tc.script)
+
+			f := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "F", []Type{F64})]
+			require.Equal(t, tc.outTypes, f.Sig.OutTypes)
+		})
+	}
+}
+
+// Waiting does not drop a check: the pass that types the operand reports what
+// is still wrong with it.
+func TestAwaitingOperandChecksRunOnceTyped(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		script string
+		err    string
+	}{
+		{
+			name: "fallback left that cannot fail",
+			code: `y = One(x)
+    x
+    y = 1
+
+out = NeverFails(x)
+    out = One(out + x) || x`,
+			script: "a = NeverFails(1)\na",
+			err:    "logical OR in value position requires a conditional left operand",
+		},
+		{
+			name: "access of a scalar output",
+			code: `y = Scalar(x)
+    y[0]
+    y = x`,
+			script: "a = Scalar(1)\na",
+			err:    "array access target is not an array",
+		},
+		{
+			name: "string range bound",
+			code: `s = Words(t)
+    k = 0:s
+    k
+    s = t`,
+			script: "a = Words(\"x\")\na",
+			err:    "range bounds should be Integer",
+		},
+		{
+			name: "string range start of an index",
+			code: `s = Words(arr, t)
+    arr[s:3]
+    s = t`,
+			script: "a = Words([1 2 3], \"x\")\na",
+			err:    "range bounds should be Integer",
+		},
+		{
+			name: "arithmetic on a string column",
+			code: `s = Column(t)
+    tab = [
+        :a
+        s
+    ]
+    tab.a + 1
+    s = t`,
+			script: "a = Column(\"x\")\na",
+			err:    "unsupported operator",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, "awaitingChecks", "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.NotEmpty(t, ts.Errors)
+			require.Contains(t, ts.Errors[0].Msg, tc.err)
+		})
 	}
 }
 

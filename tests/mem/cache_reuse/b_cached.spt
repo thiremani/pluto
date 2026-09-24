@@ -2,3 +2,7 @@ outerNums = OuterReset(0)
 outerWords = OuterResetStrings(0)
 outerNums
 outerWords
+
+outerBumped = 20
+outerBumped = OuterBump(-1)
+outerBumped

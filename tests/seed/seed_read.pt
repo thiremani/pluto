@@ -1,0 +1,182 @@
+# An output starts as its destination's previous value, or zero for a fresh
+# destination, and the body may read it before assigning it.
+
+# An existing destination keeps its value when the condition fails.
+y = MaybeIncrement(x)
+    y = x > 0 x
+    y = y + 1
+
+y = Maybe(x)
+    y = x > 0 x
+
+# A call that may skip its write leaves the seed for the next statement.
+y = Chained(x)
+    y = Maybe(x)
+    y = y + 1
+
+y = Twice(x)
+    y = Maybe(x)
+    y = Maybe(x)
+    y = y + 1
+
+# The nested call reads the wrapper's own seed.
+y = Outer(x)
+    y = MaybeIncrement(x)
+
+# The nested call reads the reset value, never the caller's.
+y = ResetThenIncrement(x)
+    y = 0
+    y = MaybeIncrement(x)
+
+# A seed copied to a local stays read after the output is overwritten.
+y = CopyThenReplace(x)
+    saved = y
+    y = x
+    y = y + saved
+
+y = ReadFirst(x)
+    tmp = y + 1
+    tmp
+    y = x * 2
+
+# Seed reads only in a condition, a fallback's condition or a marker.
+y = Gate(x)
+    y = y > 0 x
+
+y = Fallback(x)
+    y = y > 0 && x || 0
+
+y = Marked(x)
+    "seed -y"
+    y = x
+
+# Reads in a simultaneous assignment precede its writes.
+sq, cube = Powers(x)
+    sq, cube = x * x, sq * x
+
+# One output's seed computes another.
+a, b = Cross(x)
+    a = x > 0 x
+    b = a + 1
+    a = x
+
+# The seed starts the first iteration; each later one continues from the last.
+y = AccRange(r)
+    y = r > 5 r
+    y = y + r
+
+# Indirect outputs read their destination-seeded staging slots.
+s = MaybeTag(n, t)
+    s = n > 0 t
+    s = s ⊕ "!"
+
+s = Stamp(r)
+    s = r > 5 "big"
+    s = s ⊕ "."
+
+# A read static-string output is solved as a heap string, so a static and a
+# heap destination both seed it with their own values.
+s = ReadStatic(n)
+    "seen <-s>"
+    s = n > 0 "yes"
+
+# A wrapper forwards its own seed to that callee.
+s = ForwardStatic(n)
+    s = ReadStatic(n)
+
+# An input may share the destination the output is seeded from.
+res = MaybeIncrementFrom(curr, x)
+    res = curr > 0 x
+    res = res + 1
+
+# A reads its seed only through B, in one recursive component.
+y = A(n)
+    y = B(n)
+
+y = B(n)
+    y = n == 0 1
+    y = n > 0 A(n - 1)
+    y = y + 1
+
+# A check on a read of the output waits for the statement that types it,
+# however deep the read sits.
+y = One(x)
+    x
+    y = 1
+
+out = LowerOrOne(x)
+    out = One(out < x) || x
+
+y = FirstOf(x)
+    y[0]
+    y = x
+
+y = ItemAt(x, i)
+    y[i + 1]
+    y = x
+
+out = SumBelow(n)
+    k = 0:out
+    s = 0
+    s = s + k
+    out = s + n
+
+ada = Person
+  : name age
+    "Ada" 36
+
+bo = Person
+  : name age
+    "Bo" 50
+
+o = AgeOf(q)
+    o.age
+    o = q
+
+# The only assignment that types the output also reads it: the index keeps the
+# array's element type, and the range its start's type.
+y = SelfIndex(arr)
+    y = arr[y]
+
+y = SelfRange(x)
+    k = 0:y
+    y = k + x
+
+# A range or table built from the output before it is typed waits as well.
+y = RangeFrom(arr, x)
+    arr[y:3]
+    y = x
+
+y = Column(x)
+    tab = [
+        :a
+        y
+    ]
+    tab.a[0]
+    tab.a + 1
+    y = x
+
+# A pending cell keeps what it contributes to pending, a table column or an
+# array's element type, so the float it promotes an integer column to reaches
+# the output that depends on the column. Other table columns stay typed.
+y, z = FirstCell(x)
+    tab = [
+        :a
+        y
+        1
+    ]
+    z = tab.a[0]
+    y = x
+
+y, z = StackedCell(x)
+    m = [[y] [1]]
+    z = m[1][0]
+    y = x
+
+y, z = IndependentColumn(x)
+    tab = [
+        :a b
+        y x
+    ]
+    z = tab.a[0]
+    y = tab.b[0]

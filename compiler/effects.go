@@ -60,6 +60,32 @@ func (effect YieldEffect) String() string {
 	}
 }
 
+// SeedEffect describes whether a body may read one output's incoming value
+// before a statement definitely assigns it. It is independent of WriteEffect:
+// an unconditional update can read its seed, and a conditional write can
+// leave preservation entirely to the caller. Uncomputed is a publication
+// state, not a lattice member.
+type SeedEffect uint8
+
+const (
+	SeedUncomputed SeedEffect = iota
+	NoSeedRead
+	MaySeedRead
+)
+
+func (effect SeedEffect) String() string {
+	switch effect {
+	case SeedUncomputed:
+		return "Uncomputed"
+	case NoSeedRead:
+		return "NoSeedRead"
+	case MaySeedRead:
+		return "MaySeedRead"
+	default:
+		return fmt.Sprintf("SeedEffect(%d)", effect)
+	}
+}
+
 // TargetWriteEffect is one entry in a sparse, position-preserving target
 // vector. Discard targets have no entry; TargetIndex keeps later entries tied
 // to their original LHS slots.
@@ -70,10 +96,13 @@ type TargetWriteEffect struct {
 
 // StatementEffect contains the target facts derived for one assignment.
 // ReadsSeed holds LHS indices whose existing value is consumed by a direct
-// MayWrite callee output at the assignment boundary.
+// MayWrite callee output at the assignment boundary; such a write preserves
+// a value rather than producing one. CalleeReadsSeed holds LHS indices whose
+// existing value the callee body may itself read, whatever it writes.
 type StatementEffect struct {
-	Writes    []TargetWriteEffect
-	ReadsSeed []int
+	Writes          []TargetWriteEffect
+	ReadsSeed       []int
+	CalleeReadsSeed []int
 }
 
 func validPublishedEffects(effects []WriteEffect, count int) bool {
@@ -117,14 +146,22 @@ func classifyWriteEffect(yield YieldEffect, maySkip bool) WriteEffect {
 	return MustWrite
 }
 
+// bodyEffects pairs the write and seed facts of one specialization's outputs:
+// the published summary of a settled callee, or the provisional working
+// values of a component still being settled.
+type bodyEffects struct {
+	writes []WriteEffect
+	seeds  []SeedEffect
+}
+
 type effectAnalyzer struct {
 	compiler        *Compiler
 	funcNameMangled string
 	graph           *specializationCallGraph
-	working         [][]WriteEffect
+	working         []bodyEffects
 }
 
-func newEffectAnalyzer(compiler *Compiler, mangled string, graph *specializationCallGraph, working [][]WriteEffect) *effectAnalyzer {
+func newEffectAnalyzer(compiler *Compiler, mangled string, graph *specializationCallGraph, working []bodyEffects) *effectAnalyzer {
 	return &effectAnalyzer{
 		compiler:        compiler,
 		funcNameMangled: mangled,
@@ -263,7 +300,7 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 		invocation = joinYield(invocation, MayYield)
 	}
 
-	callee := analyzer.callBodyOutputEffects(expr)
+	callee := analyzer.callBodyEffects(expr).writes
 	if len(callee) != len(info.OutTypes) {
 		panic(fmt.Sprintf("internal: call %s has %d output effects for %d typed outputs", expr.Function.Value, len(callee), len(info.OutTypes)))
 	}
@@ -284,12 +321,12 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	return info.YieldEffects
 }
 
-func (analyzer *effectAnalyzer) callBodyOutputEffects(expr *ast.CallExpression) []WriteEffect {
+func (analyzer *effectAnalyzer) callBodyEffects(expr *ast.CallExpression) bodyEffects {
 	info := analyzer.exprInfo(expr)
 	mangled := Mangle(analyzer.compiler.MangledPath, expr.Function.Value, info.CallParamTypes)
 	f := analyzer.compiler.FuncCache[mangled]
 	if f.Settled {
-		return f.BodyOutputEffects
+		return bodyEffects{writes: f.BodyOutputEffects, seeds: f.BodySeedEffects}
 	}
 
 	if analyzer.graph == nil {
@@ -367,13 +404,15 @@ func (analyzer *effectAnalyzer) seedResolvedYield(expr ast.Expression, slot int,
 		return YieldUncomputed, false
 	}
 
-	// Direct-return eligibility depends only on output types. Check it before
-	// resolving callee effects because indirect calls cannot consume a seed.
+	// Only a direct return resolves a skipped write to its seed, and that
+	// depends only on output types, so check it before resolving callee
+	// effects. calleeReadsSeed covers a body reading its seed, for direct and
+	// indirect returns alike.
 	if _, direct := directScalarABIReturnType(analyzer.exprInfo(call).OutTypes); !direct {
 		return YieldUncomputed, false
 	}
 
-	callee := analyzer.callBodyOutputEffects(call)
+	callee := analyzer.callBodyEffects(call).writes
 	needsSeed := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
 	if !needsSeed {
 		return YieldUncomputed, false
@@ -398,6 +437,26 @@ func (analyzer *effectAnalyzer) callOwnsPossiblyEmptyDomain(call *ast.CallExpres
 	}
 
 	return false
+}
+
+// calleeReadsSeed reports whether a statement's value call may read the
+// incoming value of one output slot, which lowering seeds from the slot's
+// destination for direct and indirect returns alike. Unknown analysis must
+// not mean the seed goes unread.
+func (analyzer *effectAnalyzer) calleeReadsSeed(expr ast.Expression, slot int) bool {
+	call, ok := expr.(*ast.CallExpression)
+	if !ok {
+		return false
+	}
+
+	switch seed := analyzer.callBodyEffects(call).seeds[slot]; seed {
+	case MaySeedRead:
+		return true
+	case NoSeedRead:
+		return false
+	default:
+		panic(fmt.Sprintf("internal: call %s has unpublished seed effect %s", call.Function.Value, seed))
+	}
 }
 
 func (analyzer *effectAnalyzer) deriveStatements(statements []ast.Statement, initiallyDefined map[string]struct{}) map[*ast.LetStatement]StatementEffect {
@@ -455,6 +514,10 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 				result.ReadsSeed = append(result.ReadsSeed, index)
 				yield = seededYield
 			}
+			// A fresh destination seeds its callee with zero, so nothing is read.
+			if targetExists && analyzer.calleeReadsSeed(expr, slot) {
+				result.CalleeReadsSeed = append(result.CalleeReadsSeed, index)
+			}
 			result.Writes = append(result.Writes, TargetWriteEffect{
 				TargetIndex: index,
 				Effect:      classifyWriteEffect(yield, maySkip),
@@ -486,8 +549,13 @@ func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
 		return false
 	}
 
+	return validSeedTargets(stmt, effect.ReadsSeed) && validSeedTargets(stmt, effect.CalleeReadsSeed)
+}
+
+// validSeedTargets requires ascending, unique, named LHS indices.
+func validSeedTargets(stmt *ast.LetStatement, targets []int) bool {
 	lastTarget := -1
-	for _, targetIndex := range effect.ReadsSeed {
+	for _, targetIndex := range targets {
 		if targetIndex <= lastTarget || targetIndex >= len(stmt.Name) {
 			return false
 		}
@@ -501,38 +569,48 @@ func validStatementEffect(stmt *ast.LetStatement, effect StatementEffect) bool {
 	return true
 }
 
-func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.LetStatement]StatementEffect) []WriteEffect {
-	effects := make([]WriteEffect, len(template.Outputs))
-
-	for i := range effects {
-		effects[i] = MayWrite
+// deriveBodyEffects folds a body's statements in order, with the reads the
+// structural pass recorded, into each output's facts. An output is MustWrite
+// once a statement definitely assigns it; before that it holds its seed, which
+// a read by name or by a seed-reading callee makes MaySeedRead. Reads precede
+// writes within a statement. Missing or malformed statement facts invalidate
+// every write effect.
+func deriveBodyEffects(template *ast.FuncStatement, reads [][]VarEvent, statements map[*ast.LetStatement]StatementEffect) bodyEffects {
+	body := bodyEffects{
+		writes: slices.Repeat([]WriteEffect{MayWrite}, len(template.Outputs)),
+		seeds:  slices.Repeat([]SeedEffect{NoSeedRead}, len(template.Outputs)),
 	}
 
-	outputIndex := make(map[string]int, len(template.Outputs))
-
-	for i, output := range template.Outputs {
-		outputIndex[output.Value] = i
-	}
-
-	for _, statement := range template.Body.Statements {
-		stmt, ok := statement.(*ast.LetStatement)
-		if !ok {
-			continue
+	for i, statement := range template.Body.Statements {
+		read := make(map[string]struct{}, len(reads[i]))
+		for _, event := range reads[i] {
+			read[event.Name] = struct{}{}
 		}
 
-		statementEffect, exists := statements[stmt]
-		if !exists || !validStatementEffect(stmt, statementEffect) {
-			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
+		var assigned map[string]struct{}
+		if stmt, ok := statement.(*ast.LetStatement); ok {
+			effect, exists := statements[stmt]
+			if !exists || !validStatementEffect(stmt, effect) {
+				body.writes = slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
+				return body
+			}
+			for _, targetIndex := range effect.CalleeReadsSeed {
+				read[stmt.Name[targetIndex].Value] = struct{}{}
+			}
+			assigned = definiteTargets(stmt, effect)
 		}
 
-		for name := range definiteTargets(stmt, statementEffect) {
-			if index, isOutput := outputIndex[name]; isOutput {
-				effects[index] = MustWrite
+		for index, output := range template.Outputs {
+			if _, isRead := read[output.Value]; isRead && body.writes[index] == MayWrite {
+				body.seeds[index] = MaySeedRead
+			}
+			if _, isAssigned := assigned[output.Value]; isAssigned {
+				body.writes[index] = MustWrite
 			}
 		}
 	}
 
-	return effects
+	return body
 }
 
 // definiteTargets is the set of targets a statement leaves holding its own
@@ -764,23 +842,30 @@ func (state *tarjanState) visit(id specializationNodeID) {
 }
 
 // deriveEffectNode refreshes one specialization and reports whether any output
-// weakened from MustWrite to MayWrite.
-func (ts *TypeSolver) deriveEffectNode(graph *specializationCallGraph, working [][]WriteEffect, id specializationNodeID) bool {
+// weakened from MustWrite to MayWrite or grew from NoSeedRead to MaySeedRead.
+// Either change can create a seed read in a caller, so both requeue callers.
+func (ts *TypeSolver) deriveEffectNode(graph *specializationCallGraph, working []bodyEffects, id specializationNodeID) bool {
 	node := &graph.nodes[id]
 	walked := ts.walkedFuncs[node.mangled]
+	compiler := ts.ScriptCompiler.Compiler
 	initial := functionInitialBindings(walked.template)
-	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, node.mangled, graph, working)
+	analyzer := newEffectAnalyzer(compiler, node.mangled, graph, working)
 	statements := analyzer.deriveStatements(walked.template.Body.Statements, initial)
-	derived := deriveBodyOutputEffects(walked.template, statements)
+	reads := compiler.CodeCompiler.templateBodies[templateKey(walked.template)].statementReads
+	derived := deriveBodyEffects(walked.template, reads, statements)
 
-	if !validPublishedEffects(derived, len(walked.info.Sig.OutTypes)) {
+	if !validPublishedEffects(derived.writes, len(walked.info.Sig.OutTypes)) {
 		panic(fmt.Sprintf("internal: invalid effects for specialization %s", node.mangled))
 	}
 
 	changed := false
-	for outputIndex, effect := range derived {
-		if working[id][outputIndex] == MustWrite && effect == MayWrite {
-			working[id][outputIndex] = MayWrite
+	for outputIndex := range derived.writes {
+		if working[id].writes[outputIndex] == MustWrite && derived.writes[outputIndex] == MayWrite {
+			working[id].writes[outputIndex] = MayWrite
+			changed = true
+		}
+		if working[id].seeds[outputIndex] == NoSeedRead && derived.seeds[outputIndex] == MaySeedRead {
+			working[id].seeds[outputIndex] = MaySeedRead
 			changed = true
 		}
 	}
@@ -804,9 +889,10 @@ func enqueueRecursiveEffectCallers(graph *specializationCallGraph, id specializa
 	return pending
 }
 
-// settleEffectComponent weakens one SCC to a fixed point and publishes all
-// members only after their shared worklist drains.
-func (ts *TypeSolver) settleEffectComponent(graph *specializationCallGraph, working [][]WriteEffect, component []specializationNodeID, queued []bool) {
+// settleEffectComponent drives one SCC to a fixed point and publishes all
+// members' write and seed facts together, only after their shared worklist
+// drains.
+func (ts *TypeSolver) settleEffectComponent(graph *specializationCallGraph, working []bodyEffects, component []specializationNodeID, queued []bool) {
 	pending := slices.Clone(component)
 
 	for _, id := range pending {
@@ -822,17 +908,23 @@ func (ts *TypeSolver) settleEffectComponent(graph *specializationCallGraph, work
 	}
 
 	for _, id := range component {
-		node := &graph.nodes[id]
-		ts.walkedFuncs[node.mangled].info.BodyOutputEffects = slices.Clone(working[id])
+		info := ts.walkedFuncs[graph.nodes[id].mangled].info
+		info.BodyOutputEffects = slices.Clone(working[id].writes)
+		info.BodySeedEffects = slices.Clone(working[id].seeds)
 	}
 }
 
+// settleEffects starts every output at the optimistic end of both lattices:
+// writes only weaken and seed reads only grow.
 func (ts *TypeSolver) settleEffects(graph *specializationCallGraph) {
-	working := make([][]WriteEffect, len(graph.nodes))
+	working := make([]bodyEffects, len(graph.nodes))
 
 	for id := range graph.nodes {
-		walked := ts.walkedFuncs[graph.nodes[id].mangled]
-		working[id] = slices.Repeat([]WriteEffect{MustWrite}, len(walked.info.Sig.OutTypes))
+		outputs := len(ts.walkedFuncs[graph.nodes[id].mangled].info.Sig.OutTypes)
+		working[id] = bodyEffects{
+			writes: slices.Repeat([]WriteEffect{MustWrite}, outputs),
+			seeds:  slices.Repeat([]SeedEffect{NoSeedRead}, outputs),
+		}
 	}
 
 	components := graph.calleeFirstComponents()
@@ -843,11 +935,16 @@ func (ts *TypeSolver) settleEffects(graph *specializationCallGraph) {
 	}
 }
 
+// functionInitialBindings are the names bound before a body runs: the inputs,
+// and the outputs holding their seeds.
 func functionInitialBindings(template *ast.FuncStatement) map[string]struct{} {
-	defined := make(map[string]struct{}, len(template.Parameters))
+	defined := make(map[string]struct{}, len(template.Parameters)+len(template.Outputs))
 
 	for _, parameter := range template.Parameters {
 		defined[parameter.Value] = struct{}{}
+	}
+	for _, output := range template.Outputs {
+		defined[output.Value] = struct{}{}
 	}
 
 	return defined

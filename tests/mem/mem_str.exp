@@ -30,6 +30,9 @@ CallStaticSeedWrite: static changed
 CallStaticShareBefore: < shared_left > < shared_right >
 CallStaticShareSkipped: < shared_left > < shared_right >
 CallStaticShareWritten: < shared static > < shared static >
+CallSeedShareBefore: < shared_left > < shared_right >
+CallSeedShareSkipped: < shared_left > < shared_left >
+CallSeedShareWritten: < shared static > < shared static >
 slot
 plain
 ["slot" "array"]

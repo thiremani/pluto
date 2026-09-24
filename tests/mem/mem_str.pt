@@ -21,6 +21,12 @@ s, t = shareStaticOutput(flag)
     s = flag > 0 shared
     t = flag > 0 shared
 
+# Copy an output that may still hold its seed into a second output. Reading s
+# solves it as a heap string, so a heap destination seeds it with its value.
+s, t = shareSeedOutput(flag)
+    s = flag > 0 "shared static"
+    t = s
+
 # Mixed indirect outputs exercise one widened string slot and one exact scalar slot.
 s, n = getStaticPair(x)
     s = x > -1 "pair static"

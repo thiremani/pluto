@@ -13,16 +13,21 @@ type CodeCompiler struct {
 	Code           *ast.Code
 	globalBindings map[string]token.Token
 	funcTemplates  map[funcKey]*ast.FuncStatement
-	// outputReads names the outputs each template reads in its own body,
-	// recorded by the structural CFG pass. The solver solves such an output
-	// at owned storage, so every read and every nested call it feeds see
-	// the representation lowering stores.
-	outputReads map[funcKey]map[string]struct{}
+	// templateBodies holds what the structural CFG pass found in each
+	// template body. The solver solves an output the body reads at owned
+	// storage, so every read and every nested call it feeds see the
+	// representation lowering stores; effect settlement and specialization
+	// dataflow replay the per-statement reads.
+	templateBodies map[funcKey]templateBody
 }
 
 type funcKey struct {
 	name  string
 	arity int
+}
+
+func templateKey(template *ast.FuncStatement) funcKey {
+	return funcKey{name: template.Token.Literal, arity: len(template.Parameters)}
 }
 
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
@@ -52,7 +57,7 @@ func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 	var errs []*token.CompileError
 	cc.globalBindings = make(map[string]token.Token)
 	cc.funcTemplates = make(map[funcKey]*ast.FuncStatement)
-	cc.outputReads = make(map[funcKey]map[string]struct{})
+	cc.templateBodies = make(map[funcKey]templateBody)
 
 	for _, stmt := range cc.Code.Statements {
 		switch s := stmt.(type) {
@@ -63,7 +68,7 @@ func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 				}
 			}
 		case *ast.FuncStatement:
-			key := funcKey{name: s.Token.Literal, arity: len(s.Parameters)}
+			key := templateKey(s)
 			previous, exists := cc.funcTemplates[key]
 			if !exists {
 				cc.funcTemplates[key] = s

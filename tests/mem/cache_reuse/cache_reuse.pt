@@ -13,3 +13,11 @@ res = OuterReset(k)
 
 res = OuterResetStrings(k)
     res = ResetStrings(k)
+
+# The caller's previous value is live only through the settled seed summary.
+res = MaybeBump(k)
+    res = k > 0 k
+    res = res + 1
+
+res = OuterBump(k)
+    res = MaybeBump(k)

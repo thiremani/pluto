@@ -196,7 +196,7 @@ func getValidTestCases() []cfgTestCase {
 "Answer: -x"`, // x defined before marker
 		},
 		{
-			// An output is readable once definitely assigned, as a value, a
+			// A read after an assignment observes that write, as a value, a
 			// condition, a call argument, a print, or a marker.
 			name: "Output Read After Definite Write",
 			code: `res = overwrite(x)
@@ -250,8 +250,8 @@ res = forwarded(x)
 			input: "p, q = powers(3)\np, q",
 		},
 		{
-			// The repair the diagnostic names: the previous value arrives as
-			// an input and initializes the output, for either call shape.
+			// The previous value can also arrive as an explicit input that
+			// initializes the output, for either call shape.
 			name: "Output Initialized From Input Before Conditional Write",
 			code: `res = maybeIncrement(current, x)
     res = current
@@ -269,7 +269,7 @@ res = forwarded(x)
 			input: "x = refined(3)\nx",
 		},
 		{
-			// Once assigned, the simultaneous form reads the previous value.
+			// The simultaneous form reads the value from before the statement.
 			name: "Simultaneous Output Read After Assignment",
 			code: `sq, cube = powers(x)
     sq = 1
@@ -327,6 +327,70 @@ value, kept, echo`,
 			code: `res = maybeWrite(x)
     res = x > 0 42`,
 			input: "x = 7\nx = maybeWrite(-1)\nx",
+		},
+		{
+			// The callee always writes, but its value depends on the incoming
+			// seed, so the prior value is read rather than overwritten.
+			name: "Seed Dependent Call Reads Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1`,
+			input: "x = 20\nx = maybeIncrement(-1)\nx",
+		},
+		{
+			// The dependency composes through a wrapper whose only statement
+			// forwards the output to a seed-reading callee.
+			name: "Nested Seed Dependent Call Reads Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = outer(x)
+    res = maybeIncrement(x)`,
+			input: "x = 20\nx = outer(-1)\nx",
+		},
+		{
+			// Inside a body, the inner call reads the reset value, which keeps
+			// that unconditional write live.
+			name: "Reset Before Seed Dependent Call Inside Body",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = resetThenIncrement(x)
+    res = 0
+    res = maybeIncrement(x)`,
+			input: "x = resetThenIncrement(-1)\nx",
+		},
+		{
+			// An indirect output reads its destination-seeded staging slot.
+			name: "Indirect Seed Dependent Call Reads Prior Value",
+			code: `s = maybeTag(n, t)
+    s = n > 0 t
+    s = s ⊕ "!"`,
+			input: "w = \"hi\"\nw = maybeTag(-1, \"x\")\nw",
+		},
+		{
+			// A seed read only in a condition or a marker still counts, even
+			// when the output is then written unconditionally.
+			name: "Condition And Marker Seed Reads Keep Prior Values",
+			code: `res = fallback(x)
+    res = res > 0 && x || 0
+
+res = marked(x)
+    "seed -res"
+    res = x`,
+			input: "a = 20\na = fallback(3)\nb = 20\nb = marked(3)\na, b",
+		},
+		{
+			// Reading one output's seed to compute another keeps the prior
+			// value of the read output's destination live.
+			name: "Cross Output Seed Read Keeps Prior Value",
+			code: `a, b = cross(x)
+    a = x > 0 x
+    b = a + 1
+    a = x`,
+			input: "p = 20\np, q = cross(-1)\np, q",
 		},
 		{
 			// A condition below the value root still leaves the whole RHS able
@@ -462,58 +526,57 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `undefined identifier: x`,
 		},
 		{
-			// The seed-dependent body from the effects plan is rejected at the
-			// read, not silently resolved at the caller.
-			name: "Output Read After Conditional Write",
+			// A definite overwrite before the read removes the seed dependency,
+			// so the prior value really is unused.
+			name: "Overwrite Before Seed Read Still Overwrites Prior Value",
+			code: `res = overwrite(x)
+    res = x
+    res = res + 1`,
+			input:         "x = 7\nx = overwrite(3)\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// The nested read observes the reset, never the caller's value.
+			name: "Reset Before Nested Seed Read Overwrites Prior Value",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1
+
+res = resetThenIncrement(x)
+    res = 0
+    res = maybeIncrement(x)`,
+			input:         "x = 7\nx = resetThenIncrement(-1)\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
+		},
+		{
+			// A fresh destination seeds the callee with zero; the callee's read
+			// does not make the result used.
+			name: "Fresh Seed Dependent Result Is Unused",
 			code: `res = maybeIncrement(x)
     res = x > 0 x
     res = res + 1`,
-			input:         "x = maybeIncrement(-1)\nx",
-			errorContains: `output "res" is read where it may still be unassigned`,
+			input:         "x = maybeIncrement(-1)",
+			errorContains: `value assigned to "x" is never used`,
 		},
 		{
-			// A call that may leave its output unwritten does not assign it.
-			name: "Output Read After Skippable Call",
-			code: `res = maybe(x)
+			// A call inside a larger expression has no destination, so it
+			// seeds its callee with zero and the prior value goes unread.
+			name: "Nested Call Does Not Read Destination",
+			code: `res = maybeIncrement(x)
     res = x > 0 x
-
-res = chained(x)
-    res = maybe(x)
     res = res + 1`,
-			input:         "x = chained(-1)\nx",
-			errorContains: `output "res" is read where it may still be unassigned`,
+			input:         "x = 7\nx = maybeIncrement(-1) + 1\nx",
+			errorContains: `unconditional assignment to "x" overwrites a previous value that was never used`,
 		},
 		{
-			// Two seed-preserving calls in a row still leave the caller's seed
-			// in place, so the read after them is rejected.
-			name: "Output Read After Two Seed Preserving Calls",
-			code: `res = maybe(x)
-    res = x > 0 x
-
-res = twice(x)
-    res = maybe(x)
-    res = maybe(x)
-    res = res + 1`,
-			input:         "x = twice(-1)\nx",
-			errorContains: `output "res" is read where it may still be unassigned`,
-		},
-		{
-			// A marker naming an output is a read even before any assignment,
-			// where it would otherwise pass as literal text.
-			name: "Output Read By Format Marker",
-			code: `res = marked(x)
-    "seed -res"
-    res = x`,
-			input:         "x = marked(3)\nx",
-			errorContains: `output "res" is read before it is assigned`,
-		},
-		{
-			// Reads in a simultaneous assignment precede its writes.
-			name: "Simultaneous Output Read Before Assignment",
-			code: `sq, cube = powers(x)
-    sq, cube = x * x, sq * x`,
-			input:         "a, b = powers(3)\na, b",
-			errorContains: `output "sq" is read before it is assigned`,
+			// Reading an output before assigning it is valid; the local that
+			// holds the read is still unused.
+			name: "Read Output Before Write",
+			code: `res = readFirst(x)
+    tmp = res + 1
+    res = x * 2`,
+			input:         "x = readFirst(3)\nx",
+			errorContains: `value assigned to "tmp" is never used`,
 		},
 		{
 			// A caller's destination could still refine an untyped empty
@@ -747,6 +810,19 @@ res = onlyOut(x)
 	assert.Empty(t, errs)
 }
 
+// An output holds its seed before the body assigns it, so reading it first is
+// structurally valid, unlike a local's fresh self-read below.
+func TestStructuralOutputSeedReadAccepted(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "readFirst", "", mustParseCode(t, `res = readFirst(x)
+    tmp = res + 1
+    tmp
+    res = x * 2`))
+	assert.Empty(t, cc.Compile())
+}
+
 func TestValidateFuncFreshSelfReadIsUndefined(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -898,6 +974,40 @@ func TestSpecializationReadsSeedBeforeWrite(t *testing.T) {
 		},
 	}
 	cc := NewCodeCompiler(ctx, "seededSpecialization", "", code)
+	require.Empty(t, cc.Compile())
+	cfg := NewCFG(cc)
+
+	cfg.AnalyzeSpecialization(template, info)
+
+	require.Empty(t, cfg.Errors)
+}
+
+// An output holds its seed from the start, so a call can read it at its
+// destination before any statement assigns it.
+func TestSpecializationSeedReadsOfUnassignedOutput(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	code := mustParseCode(t, `res = Seeded(x)
+    res = Preserve(x)
+    res = Update(x)`)
+	template := code.Statements[0].(*ast.FuncStatement)
+	first := template.Body.Statements[0].(*ast.LetStatement)
+	second := template.Body.Statements[1].(*ast.LetStatement)
+	info := &FuncInfo{
+		StatementEffects: map[*ast.LetStatement]StatementEffect{
+			first: {
+				Writes:    []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+				ReadsSeed: []int{0},
+			},
+			second: {
+				Writes:          []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
+				CalleeReadsSeed: []int{0},
+			},
+		},
+	}
+	cc := NewCodeCompiler(ctx, "unassignedSeedRead", "", code)
+	require.Empty(t, cc.Compile())
 	cfg := NewCFG(cc)
 
 	cfg.AnalyzeSpecialization(template, info)
@@ -927,6 +1037,7 @@ func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
 		},
 	}
 	cc := NewCodeCompiler(ctx, "printedSpecialization", "", code)
+	require.Empty(t, cc.Compile())
 	cfg := NewCFG(cc)
 
 	cfg.AnalyzeSpecialization(template, info)
@@ -970,6 +1081,7 @@ func TestCFGRejectsMissingStatementEffects(t *testing.T) {
 	template := code.Statements[0].(*ast.FuncStatement)
 	info := &FuncInfo{StatementEffects: make(map[*ast.LetStatement]StatementEffect)}
 	cc := NewCodeCompiler(ctx, "missingEffects", "", code)
+	require.Empty(t, cc.Compile())
 	cfg := NewCFG(cc)
 
 	require.PanicsWithValue(t, `internal: missing CFG effects for statement "res = x"`, func() {
@@ -1044,17 +1156,6 @@ res = badWrite(x)
 `,
 			wantMsgs: []string{
 				`cannot write to input parameter "x"`,
-			},
-		},
-		{
-			name: "ReadOutputBeforeWrite",
-			code: `
-res = readFirst(x)
-    tmp = res + 1
-    res = x * 2
-`,
-			wantMsgs: []string{
-				`output "res" is read before it is assigned`,
 			},
 		},
 		{

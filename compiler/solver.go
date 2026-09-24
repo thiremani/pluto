@@ -152,6 +152,9 @@ type TypeSolver struct {
 	// A statement's value call -> the statement's names from the call's first output on.
 	callDests map[*ast.CallExpression][]*ast.Identifier
 
+	// Each function's first read, this pass, of an output nothing has typed yet.
+	untypedOutputReads map[*ast.FuncStatement]*token.CompileError
+
 	recLimit recursionLimit
 }
 
@@ -167,6 +170,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
 		callDests:          make(map[*ast.CallExpression][]*ast.Identifier),
+		untypedOutputReads: make(map[*ast.FuncStatement]*token.CompileError),
 		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
@@ -866,8 +870,34 @@ func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
 	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
 }
 
+// expressionCanFail gates the diagnostics that need an operand able to fail.
+// A node whose type a later pass can still settle counts as able to fail: it
+// may yet become a comparison, and the settling pass judges it fully typed.
 func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
-	return treeCanFail(expr, ts.conditionPropagates)
+	return treeCanFail(expr, ts.nodeMayFail)
+}
+
+func (ts *TypeSolver) nodeMayFail(expr ast.Expression) bool {
+	if ts.conditionPropagates(expr) {
+		return true
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && slices.ContainsFunc(info.OutTypes, ts.awaitingType)
+}
+
+// awaitingType reports whether a check of an operand typed t must wait: in a
+// function body a type with an unresolved part, whole or inside a range,
+// array or table, can still be settled by a later pass, as for an output read
+// before the assignment that types it or a recursive call's result. A type
+// that never resolves fails convergence instead.
+func (ts *TypeSolver) awaitingType(t Type) bool {
+	return !IsFullyResolvedType(t) && ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled
+}
+
+// pendingOperand reports whether an operator has no type to check for an
+// operand yet: it is unresolved, or awaiting part of its type.
+func (ts *TypeSolver) pendingOperand(t Type) bool {
+	return t.Kind() == UnresolvedKind || ts.awaitingType(t)
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
@@ -1232,18 +1262,29 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 		return ts.cacheTableLiteralType(al, colTypes)
 	}
 
+	pending := make([]bool, numCols)
 	for _, row := range al.Rows {
 		for col, cell := range row {
 			cellType, ok := ts.typeCell(cell, al.Tok())
-			if ok {
-				if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
-					ts.Errors = append(ts.Errors, &token.CompileError{
-						Token: cell.Tok(),
-						Msg:   "table rows require statically sized cells",
-					})
-				}
-				colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
+			if !ok {
+				pending[col] = true
+				continue
 			}
+			if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cell.Tok(),
+					Msg:   "table rows require statically sized cells",
+				})
+			}
+			colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
+		}
+	}
+	// Columns are typed independently: a cell awaiting its type keeps only its
+	// own column pending, since the column's other cells alone could settle a
+	// type that cell still changes.
+	for col := range colTypes {
+		if pending[col] {
+			colTypes[col] = Unresolved{}
 		}
 	}
 	return ts.cacheTableLiteralType(al, colTypes)
@@ -1423,10 +1464,12 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		})
 		return types
 	default:
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftTypes[0].String()),
-		})
+		if !ts.awaitingType(leftTypes[0]) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: expr.Tok(),
+				Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftTypes[0].String()),
+			})
+		}
 		return types
 	}
 }
@@ -1464,6 +1507,11 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 		return Unresolved{}, false
 	}
 	cellType := tps[0]
+	// A cell awaiting any part of its type keeps its literal pending: merging
+	// the other cells alone could settle a type this cell still changes.
+	if ts.awaitingType(cellType) {
+		return Unresolved{}, false
+	}
 	if cellType.Kind() == UnresolvedKind {
 		if len(ts.Errors) == errorsBefore {
 			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
@@ -1558,8 +1606,10 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	}
 	ts.rejectRangeDependentBound("start", r.Start, r.Tok())
 	ts.rejectRangeDependentBound("stop", r.Stop, r.Tok())
+	// A bound still awaiting its type postpones these checks to a later pass.
+	awaiting := ts.awaitingType(startT[0]) || ts.awaitingType(stopT[0])
 	// must be integers
-	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
+	if !awaiting && (startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind) {
 		ce := &token.CompileError{
 			Token: r.Tok(),
 			Msg:   fmt.Sprintf("range bounds should be Integer. start type: %s, stop type: %s", startT[0], stopT[0]),
@@ -1567,7 +1617,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 		ts.Errors = append(ts.Errors, ce)
 	}
 	// must match
-	if !EqualTypes(startT, stopT) {
+	if !awaiting && !EqualTypes(startT, stopT) {
 		ce := &token.CompileError{
 			Token: r.Tok(),
 			Msg:   fmt.Sprintf("range start and stop must have same type. start Type: %s, stop Type: %s", startT[0], stopT[0]),
@@ -1585,14 +1635,15 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			ts.Errors = append(ts.Errors, ce)
 		}
 		ts.rejectRangeDependentBound("step", r.Step, r.Tok())
-		if stepT[0].Kind() != IntKind {
+		awaiting = awaiting || ts.awaitingType(stepT[0])
+		if !awaiting && stepT[0].Kind() != IntKind {
 			ce := &token.CompileError{
 				Token: r.Tok(),
 				Msg:   fmt.Sprintf("range bounds should be Integer. got step type: %s", stepT[0]),
 			}
 			ts.Errors = append(ts.Errors, ce)
 		}
-		if !EqualTypes(startT, stepT) {
+		if !awaiting && !EqualTypes(startT, stepT) {
 			ce := &token.CompileError{
 				Token: r.Tok(),
 				Msg:   fmt.Sprintf("range start and step must have same type. start Type: %s, step Type: %s", startT[0], stepT[0]),
@@ -1615,8 +1666,15 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
+	errorsBefore := len(ts.Errors)
 	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
-	if !ok {
+	if !ok || ts.awaitingType(arrType) {
+		// A target still awaiting its type, or its element type, reports
+		// nothing, and range handling visits the index of every error-free
+		// access.
+		if len(ts.Errors) == errorsBefore {
+			ts.TypeExpression(ax.Range, true)
+		}
 		return info.OutTypes
 	}
 	if !hasConcreteArrayElemType(arrType.ElemType) {
@@ -1640,7 +1698,13 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 		return info.OutTypes
 	}
 
+	// The result type does not depend on the index's, so an index still
+	// awaiting its type only postpones the checks below.
 	idxType := idxTypes[0]
+	if ts.awaitingType(idxType) {
+		info.OutTypes = []Type{resultType}
+		return info.OutTypes
+	}
 	if idxType.Kind() != IntKind && idxType.Kind() != RangeKind {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
@@ -1769,11 +1833,16 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 	var ok bool
 	t, ok = ts.GetIdentifier(ident.Value)
 	if !ok {
-		cerr := &token.CompileError{
-			Token: ident.Token,
-			Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
+		// An output holds its seed before the body assigns it, but has no
+		// type until an assignment or an earlier pass gives it one.
+		if walked, isOutput := ts.walkedOutputOwner(ident.Value); isOutput {
+			ts.noteUntypedOutputRead(ident, walked.template)
+		} else {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: ident.Token,
+				Msg:   fmt.Sprintf("undefined identifier: %s", ident.Value),
+			})
 		}
-		ts.Errors = append(ts.Errors, cerr)
 		t = Unresolved{}
 		ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1}
 		return
@@ -1781,6 +1850,26 @@ func (ts *TypeSolver) TypeIdentifier(ident *ast.Identifier) (t Type) {
 
 	ts.ExprCache[key(ts.FuncNameMangled, ident)] = &ExprInfo{OutTypes: []Type{t}, ExprLen: 1, HasRanges: t.Kind() == RangeKind}
 	return
+}
+
+// walkedOutputOwner returns the specialization being walked when name is one
+// of its outputs.
+func (ts *TypeSolver) walkedOutputOwner(name string) (walkedSpecialization, bool) {
+	walked, ok := ts.walkedFuncs[ts.FuncNameMangled]
+	return walked, ok && slices.Contains(identNames(walked.template.Outputs), name)
+}
+
+// noteUntypedOutputRead keeps each function's first untyped output read of
+// the pass. A later pass sees the output typed if any assignment types it; if
+// none does, the read explains why the function did not converge.
+func (ts *TypeSolver) noteUntypedOutputRead(output *ast.Identifier, template *ast.FuncStatement) {
+	if _, noted := ts.untypedOutputReads[template]; noted {
+		return
+	}
+	ts.untypedOutputReads[template] = &token.CompileError{
+		Token: output.Token,
+		Msg:   fmt.Sprintf("cannot infer type of output %q of %s: it is read before any assignment gives it a type", output.Value, template.Token.Literal),
+	}
 }
 
 // typeInfixArrayMask validates that element-wise comparison is supported
@@ -1816,7 +1905,7 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		rightType = ptr.Elem
 	}
 
-	if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
+	if ts.pendingOperand(leftType) || ts.pendingOperand(rightType) {
 		return Unresolved{}, CondNone
 	}
 
@@ -1855,9 +1944,9 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 	}
 
 	switch {
-	case leftType.Kind() == UnresolvedKind:
+	case ts.pendingOperand(leftType):
 		return rightType
-	case rightType.Kind() == UnresolvedKind:
+	case ts.pendingOperand(rightType):
 		return leftType
 	case leftType.Kind() == StrKind && rightType.Kind() == StrKind:
 		return mergeStringFlavor(leftType, rightType)
@@ -2231,7 +2320,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 			opType = ptr.Elem
 		}
 
-		if opType.Kind() == UnresolvedKind {
+		if ts.pendingOperand(opType) {
 			types = append(types, Unresolved{})
 			continue
 		}
@@ -2536,10 +2625,12 @@ func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, 
 
 	arrType, ok := arrayTypes[0].(Array)
 	if !ok {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("%s target is not an array", context),
-		})
+		if !ts.awaitingType(arrayTypes[0]) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("%s target is not an array", context),
+			})
+		}
 		return Array{}, false
 	}
 	return arrType, true
@@ -2576,6 +2667,7 @@ func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInf
 		Vars:              make(map[string]Type),
 		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
 		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
+		BodySeedEffects:   slices.Repeat([]SeedEffect{SeedUncomputed}, len(template.Outputs)),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2610,7 +2702,9 @@ func (ts *TypeSolver) InferFuncTypes(ce *ast.CallExpression, bodyArgs []Type, ma
 	// Inside a function - unresolved args are allowed (resolved in later passes)
 	if ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled {
 		ts.TypeFunc(mangled, template)
-		if ts.firstUnresolved == nil && !f.AllTypesInferred() {
+		// A callee with an argument of unknown type is not the cause of its
+		// own unresolved outputs; blame goes to where that type went missing.
+		if ts.firstUnresolved == nil && f.Sig.ParamTypesInferred() && !f.OutputTypesInferred() {
 			ts.firstUnresolved = template
 		}
 		return f
@@ -2639,6 +2733,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	for {
 		ts.Converging = false
 		ts.firstUnresolved = nil
+		clear(ts.untypedOutputReads)
 		clear(ts.walkedFuncs)
 		ts.TypeFunc(mangled, template)
 
@@ -2660,16 +2755,26 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 		}
 
 		if !ts.Converging {
-			blamed := template
-			if ts.firstUnresolved != nil {
-				blamed = ts.firstUnresolved
-			}
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: blamed.Token,
-				Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", blamed.Token.Literal),
-			})
+			ts.Errors = append(ts.Errors, ts.nonConvergenceError(template))
 			return f.Sig.OutTypes
 		}
+	}
+}
+
+// nonConvergenceError explains a pass that changed nothing yet left types
+// unresolved. It blames the first function unresolved on its own, else the
+// root, naming that function's read of an output nothing typed if it has one.
+func (ts *TypeSolver) nonConvergenceError(root *ast.FuncStatement) *token.CompileError {
+	blamed := root
+	if ts.firstUnresolved != nil {
+		blamed = ts.firstUnresolved
+	}
+	if read, noted := ts.untypedOutputReads[blamed]; noted {
+		return read
+	}
+	return &token.CompileError{
+		Token: blamed.Token,
+		Msg:   fmt.Sprintf("Function %s is not converging. Check for cyclic recursion and that each function has a base case", blamed.Token.Literal),
 	}
 }
 
@@ -2767,7 +2872,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 		}
 	}
 
-	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.outputReads[funcKey{name: f.Sig.Name, arity: len(template.Parameters)}]
+	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.templateBodies[templateKey(template)].readOutputs
 	for i, id := range template.Outputs {
 		outArg, ok := Get(ts.Scopes, id.Value)
 		if !ok {
