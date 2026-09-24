@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -109,16 +110,15 @@ func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]stru
 		return
 	}
 
+	// A multi-valued argument fills several parameter positions, so the
+	// parameter an identifier binds to is found by expanded position.
 	abi := classifyFuncABI(paramTypes, fnInfo.Sig.OutTypes)
-	for i, arg := range ce.Arguments {
-		if abi.Params[i].Mode != ABIParamIndirect {
-			continue
+	position := 0
+	for _, arg := range ce.Arguments {
+		if ident, ok := arg.(*ast.Identifier); ok && abi.Params[position].Mode == ABIParamIndirect {
+			out[ident.Value] = struct{}{}
 		}
-		ident, ok := arg.(*ast.Identifier)
-		if !ok {
-			continue
-		}
-		out[ident.Value] = struct{}{}
+		position += len(c.ExprCache[key(c.FuncNameMangled, arg)].OutTypes)
 	}
 }
 
@@ -222,6 +222,7 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
 		Put(c.Scopes, tempName, tempSym)
+		c.bindSyntheticDestination(tempName, ident.Value)
 		slots[i] = OutputSlot{dest: ident, temp: tempIdent, outType: outTypes[i]}
 	}
 	return slots
@@ -278,24 +279,28 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 	}
 }
 
-// aliasCondDests maps existing destination names to conditional temp slots so
-// RHS reads during IF-branch assignment see the latest temp writes.
+// aliasCondDests maps existing destination names, and the inputs sharing them
+// (see stagedBindings), to conditional temp slots so RHS reads during IF-branch
+// assignment see the latest temp writes. All bindings are gathered before any
+// is replaced, since stagedBindings finds inputs by their current bindings.
 func (c *Compiler) aliasCondDests(slots []OutputSlot) map[string]*Symbol {
-	aliases := make(map[string]*Symbol, len(slots))
-
+	bindings := make(map[string]*Symbol, len(slots))
 	for _, s := range slots {
-		oldSym, exists := Get(c.Scopes, s.dest.Value)
-		if !exists {
+		if _, exists := Get(c.Scopes, s.dest.Value); !exists {
 			continue
 		}
 		tempSym, ok := Get(c.Scopes, s.temp.Value)
 		if !ok {
 			continue
 		}
-		aliases[s.dest.Value] = oldSym
-		SetExisting(c.Scopes, s.dest.Value, tempSym)
+		maps.Copy(bindings, c.stagedBindings(s.dest.Value, tempSym))
 	}
 
+	aliases := make(map[string]*Symbol, len(bindings))
+	for _, name := range slices.Sorted(maps.Keys(bindings)) {
+		aliases[name], _ = Get(c.Scopes, name)
+		SetExisting(c.Scopes, name, bindings[name])
+	}
 	return aliases
 }
 
@@ -362,6 +367,7 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 			stageTempSym.WriteFlag = commitSym.WriteFlag
 		}
 		Put(c.Scopes, tempName, stageTempSym)
+		c.bindSyntheticDestination(tempName, cs.dest.Value)
 		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
 	}
 	return stage

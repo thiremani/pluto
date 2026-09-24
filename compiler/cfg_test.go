@@ -73,6 +73,93 @@ func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 	require.Equal(t, 2, deadStores)
 }
 
+// Every specialization must pass liveness with its inputs and outputs
+// treated as unshared; sharing at a call cannot make an otherwise rejected
+// body acceptable. A body that builds on its own write names the output.
+func TestOutputWriteLivenessIgnoresSharing(t *testing.T) {
+	tests := []cfgTestCase{
+		{
+			name: "Repeated Output Write Shared",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item`,
+			input:         "value = 10\nvalue = BumpTwice(value, 5)\nvalue",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
+			name: "Repeated Output Write Unshared",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item`,
+			input:         "value = 10\nother = BumpTwice(value, 5)\nother",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
+			name: "Repeated Output Write Through Wrapper",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + item
+
+out = Bump(current, item)
+    out = BumpTwice(current, item)`,
+			input:         "value = 10\nvalue = Bump(value, 5)\nvalue",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
+			name: "Incompatible Input Output Storage",
+			code: `out = Replaced(current)
+    out = "first"
+    current
+    out = "second"`,
+			input:         "value = Replaced(1)\nvalue",
+			errorContains: `unconditional assignment to "out" overwrites a previous value that was never used`,
+		},
+		{
+			// The second write reads the first through the output name, so
+			// the body is valid for every call shape.
+			name: "Second Write Reads Output",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = out + item`,
+			input: "value = 10\nvalue = BumpTwice(value, 5)\nother = BumpTwice(value, 5)\nvalue, other",
+		},
+		{
+			name: "Second Write Reads Output And Input",
+			code: `out = BumpTwice(current, item)
+    out = current + item
+    out = current + out`,
+			input: "value = 10\nvalue = BumpTwice(10, value)\nvalue",
+		},
+		{
+			name: "Output Read Between Writes Through Nested Call",
+			code: `out, seen = Reset(current)
+    out = current
+    seen = out
+    out = "second"
+
+out, seen = Wrap(current)
+    out, seen = Reset(current)`,
+			input: `value = "hello" ⊕ "!"
+value, seen = Wrap(value)
+value, seen`,
+		},
+		{
+			name: "Marker Read Of Output Between Writes",
+			code: `out = Show(current)
+    out = current
+    "-out"
+    out = 2`,
+			input: "x = 5\nx = Show(x)\nx",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runCFGTest(t, tt, tt.errorContains != "")
+		})
+	}
+}
+
 func getValidTestCases() []cfgTestCase {
 	return []cfgTestCase{
 		{
@@ -109,6 +196,122 @@ func getValidTestCases() []cfgTestCase {
 "Answer: -x"`, // x defined before marker
 		},
 		{
+			// An output is readable once definitely assigned, as a value, a
+			// condition, a call argument, a print, or a marker.
+			name: "Output Read After Definite Write",
+			code: `res = overwrite(x)
+    res = x
+    res = res + 1`,
+			input: "x = overwrite(3)\nx",
+		},
+		{
+			name: "Output Read In Condition",
+			code: `res = gated(x)
+    res = x
+    res = res > 5 x * x`,
+			input: "x = gated(3)\nx",
+		},
+		{
+			name: "Output Read As Call Argument",
+			code: `res = id(x)
+    res = x
+
+res = forwarded(x)
+    res = x
+    res = id(res)`,
+			input: "x = forwarded(3)\nx",
+		},
+		{
+			name: "Output Read By Print",
+			code: `res = printed(x)
+    res = x
+    res`,
+			input: "x = printed(3)\nx",
+		},
+		{
+			name: "Output Read By Format Marker After Assignment",
+			code: `res = marked(x)
+    res = x
+    "value -res"`,
+			input: "x = marked(3)\nx",
+		},
+		{
+			name: "Output Read By Dynamic Width",
+			code: `res = widened(x)
+    res = x
+    "-x%(-res)d"`,
+			input: "x = widened(3)\nx",
+		},
+		{
+			name: "Output Feeds Sibling Output",
+			code: `sq, cube = powers(x)
+    sq = x * x
+    cube = sq * x`,
+			input: "p, q = powers(3)\np, q",
+		},
+		{
+			// The repair the diagnostic names: the previous value arrives as
+			// an input and initializes the output, for either call shape.
+			name: "Output Initialized From Input Before Conditional Write",
+			code: `res = maybeIncrement(current, x)
+    res = current
+    res = x > 0 x
+    res = res + 1`,
+			input: "a = 5\na = maybeIncrement(a, -1)\nb = maybeIncrement(5, 3)\na, b",
+		},
+		{
+			// A later conditional write does not undo the assignment.
+			name: "Output Read After Later Conditional Write",
+			code: `res = refined(x)
+    res = x
+    res = x > 5 x * x
+    res = res + 1`,
+			input: "x = refined(3)\nx",
+		},
+		{
+			// Once assigned, the simultaneous form reads the previous value.
+			name: "Simultaneous Output Read After Assignment",
+			code: `sq, cube = powers(x)
+    sq = 1
+    sq, cube = x * x, sq * x`,
+			input: "a, b = powers(3)\na, b",
+		},
+		{
+			// Empty data with an established element type is readable.
+			name: "Concrete Empty Array Output Read",
+			code: `out, n = shrink(x)
+    out = []
+    n = out
+    out = [x]`,
+			input: "a, b = shrink(1)\na, b",
+		},
+		{
+			// A read string output is solved as owned, so the local copied
+			// from it and the call it feeds use heap storage.
+			name: "Output Read Through Local Into Call",
+			code: `seen = Identity(current)
+    seen = current
+
+out, kept, echo = ReadTwice(current)
+    out = "first"
+    saved = out
+    kept = Identity(saved)
+    out = "second"
+    echo = current`,
+			input: `value = "hello" ⊕ "!"
+value, kept, echo = ReadTwice(value)
+value, kept, echo`,
+		},
+		{
+			// A parameter is in scope for a marker's specifier inside a body.
+			name: "Parameter In Marker Specifier",
+			code: `out = Pad(value, width)
+    local = value
+    out = value
+    "-local%(-width)d"`,
+			input: "y = Pad(7, 4)\ny",
+		},
+		{
 			name: "Marker Following Unresolved Marker",
 			input: `width = 5
 "-missing%(-width)d"`,
@@ -141,6 +344,28 @@ func getValidTestCases() []cfgTestCase {
 			// b is fresh, so nothing behind the unconditional sibling is dead.
 			name:  "Failable Value Protects Only Its Own Destination",
 			input: "x = 7\na = 10\na, b = x < 5, 30\na, b",
+		},
+		{
+			// Writing an output twice never reads it, and a call may target it.
+			name: "Output Rewritten And Targeted By Nested Call",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+res = refine(x)
+    res = x
+    res = x > 5 x * x
+    res = maybe(x)`,
+			input: "x = refine(3)\nx",
+		},
+		{
+			// Intermediate values live in locals; the caller may still reuse a
+			// variable as both argument and destination.
+			name: "Local Accumulator Feeds Output",
+			code: `res = accumulate(a, x)
+    total = a + x
+    total = total * 2
+    res = total`,
+			input: "x = 7\nx = accumulate(x, 3)\nx",
 		},
 	}
 }
@@ -235,6 +460,71 @@ func getErrorTestCases() []cfgTestCase {
 			name:          "Print Use Before Def",
 			input:         `"x is", x`,
 			errorContains: `undefined identifier: x`,
+		},
+		{
+			// The seed-dependent body from the effects plan is rejected at the
+			// read, not silently resolved at the caller.
+			name: "Output Read After Conditional Write",
+			code: `res = maybeIncrement(x)
+    res = x > 0 x
+    res = res + 1`,
+			input:         "x = maybeIncrement(-1)\nx",
+			errorContains: `output "res" is read where it may still be unassigned`,
+		},
+		{
+			// A call that may leave its output unwritten does not assign it.
+			name: "Output Read After Skippable Call",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+res = chained(x)
+    res = maybe(x)
+    res = res + 1`,
+			input:         "x = chained(-1)\nx",
+			errorContains: `output "res" is read where it may still be unassigned`,
+		},
+		{
+			// Two seed-preserving calls in a row still leave the caller's seed
+			// in place, so the read after them is rejected.
+			name: "Output Read After Two Seed Preserving Calls",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+res = twice(x)
+    res = maybe(x)
+    res = maybe(x)
+    res = res + 1`,
+			input:         "x = twice(-1)\nx",
+			errorContains: `output "res" is read where it may still be unassigned`,
+		},
+		{
+			// A marker naming an output is a read even before any assignment,
+			// where it would otherwise pass as literal text.
+			name: "Output Read By Format Marker",
+			code: `res = marked(x)
+    "seed -res"
+    res = x`,
+			input:         "x = marked(3)\nx",
+			errorContains: `output "res" is read before it is assigned`,
+		},
+		{
+			// Reads in a simultaneous assignment precede its writes.
+			name: "Simultaneous Output Read Before Assignment",
+			code: `sq, cube = powers(x)
+    sq, cube = x * x, sq * x`,
+			input:         "a, b = powers(3)\na, b",
+			errorContains: `output "sq" is read before it is assigned`,
+		},
+		{
+			// A caller's destination could still refine an untyped empty
+			// array, so its storage is not fixed when the body reads it.
+			name: "Untyped Empty Array Output Read",
+			code: `out, n = emptied(x)
+    out = []
+    n = x
+    out`,
+			input:         "a, b = emptied(1)\na, b",
+			errorContains: `output "out" is read but its type`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",
@@ -352,7 +642,7 @@ func BenchmarkCollectStringReadsManyMarkers(b *testing.B) {
 	require.Empty(b, cc.Compile())
 
 	cfg := NewCFG(cc)
-	Put(cfg.Scopes, "x", VarEvent{Name: "x", Kind: Write})
+	Put(cfg.Scopes, "x", struct{}{})
 	value := strings.Repeat("-x ", 10000)
 	tok := token.Token{FileName: b.Name(), Line: 1, Column: 1}
 
@@ -536,7 +826,7 @@ res = discardBinding(x)
 	template := codeAST.Statements[0].(*ast.FuncStatement)
 	discard := template.Body.Statements[0].(*ast.LetStatement)
 	cfg := NewCFG(cc)
-	cfg.publishTargets(discard.Name)
+	cfg.declareTargets(discard.Name)
 	_, exists := Get(cfg.Scopes, "_")
 	assert.False(t, exists)
 }
@@ -764,7 +1054,7 @@ res = readFirst(x)
     res = x * 2
 `,
 			wantMsgs: []string{
-				`variable "res" has not been defined`, // or your specific "use before definition" text
+				`output "res" is read before it is assigned`,
 			},
 		},
 		{

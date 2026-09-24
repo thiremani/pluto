@@ -1,0 +1,14 @@
+# The loop shrinks the array it indexes, so a bounds check hoisted before the
+# loop must not cover later iterations: their out-of-bounds reads skip.
+
+a = [10 20 30 40 50 60 70 80]
+a, seen = ShrinkShared(a)
+"Shared:", a, seen
+
+b = [10 20 30 40 50 60 70 80]
+c, cs = ShrinkShared(b)
+"Unshared:", c, cs
+
+d = [10 20 30 40 50 60 70 80]
+d = Shrink(d, d[(0:8) + 0])
+"Script:", d

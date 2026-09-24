@@ -19,8 +19,9 @@ This document describes Pluto's semantic model and compares it with other major 
 6. **Driver Identity Determines Looping:** Repeated use of one Range binding
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
-7. **Function Arguments by Value:** Scalar parameters are passed by value;
-   outputs write into caller destination slots.
+7. **Read-Only Function Arguments:** Inputs are read-only. An input the caller
+   also passes as a destination observes that output's writes; scalars still
+   travel by value at the ABI level. Outputs write into caller destination slots.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -32,7 +33,7 @@ This document describes Pluto's semantic model and compares it with other major 
 |---------|-------|--------|------|-----|-------|-----|
 | **Assignment (`a=b`)** | **Copy** | Reference | Move / Copy | Copy | Reference | Copy |
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
-| **Function Args** | **Value** (Scalars) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
+| **Function Args** | **Read-only binding** (scalars lowered by value) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
 | **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
 | **Range Usage** | **Copyable descriptor; operations iterate** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
@@ -257,31 +258,112 @@ res = sum(a, b)
     res = a + b
 ```
 
-- **Parameters**: Input values (passed by value for scalars)
-- **Outputs**: Independently staged result slots. An existing destination
-  supplies the initial value, while a fresh destination starts at its type's
-  zero value. The real destinations are committed only after every sibling
-  right-hand side has been evaluated.
+- **Parameters**: Read-only bindings. A template cannot assign through an
+  input name, but an input may share a result slot with an output when the
+  caller uses the same binding as argument and destination. Each input read
+  observes that slot's current value, including writes from earlier statements
+  in the body. This rule applies to both ordinary and ranged calls and is
+  independent of whether the implementation passes the value or a pointer.
+- **Outputs**: Readable once definitely assigned. A body may assign an output
+  any number of times, conditionally or not, and a nested call may target it.
+  It may read an output — as a value, a condition, a call argument, a print,
+  or a formatting marker — only after a statement that assigns it
+  unconditionally with a value that cannot be skipped. A read before that is
+  a compile error: before any assignment, in the same simultaneous
+  assignment, or after only conditional or seed-preserving writes. A `%n`
+  marker naming an output counts as such a read, although it writes the
+  output; modeling it as a write is tracked in #109. A later
+  conditional write does not revoke the assignment. Outputs are independently
+  staged result slots: an existing destination supplies the initial value and
+  a fresh destination starts at its type's zero value, so a body that writes
+  nothing preserves the caller's value. The body may observe that value
+  through an explicitly aliased input; it can never read it through the
+  output name. An output the body reads is solved at owned storage (a static
+  string output becomes a heap string) and must have a concrete type, so
+  every read and every nested call it feeds use the representation the
+  caller's shared slot holds. The real destinations
+  are committed only after every sibling right-hand side has been evaluated.
 - **No name overlap**: Parameters and outputs must have distinct names
 
-When a caller destination and a function's declared output use different
-representations of a compatible value (for example, owned versus static
-strings, or an empty array type versus a concrete-rank array), the callee sees
-the zero value of its declared representation. A per-output write marker tells
-the caller whether to commit that adapted value. If the function does not
-write the output, the caller's staged value is preserved. This avoids treating
-one ownership or shape representation as if it were another.
+A call specializes a binding argument on the value's own type, with the
+ownership of the binding's storage: a static string that a later write widens
+to heap storage is passed as a heap string. An untyped `[]` or header-only
+table takes the storage's element types only when the argument shares one of
+the call's own destinations; a call that runs in a loop rewriting such a
+binding still sees its type from before the loop (#106). When an
+input shares an output whose declared representation is narrower but
+compatible (for example, an owned string input with a static string output,
+or a concrete-rank array input with an untyped `[]` output), the private
+alias variant gives that output the input's storage. A struct input shares an
+output only at its exact type. An aliased input and
+output therefore continue to share one slot: assigning `[]` makes a later
+input read observe the empty array. An unrelated input keeps its own type and
+value. An unshared output keeps its declared representation; the caller
+converts it into the destination through a separate output adapter with a
+per-output write marker, and only commits its value when the callee actually
+writes the output.
 
 ### Call Site
 
 ```python
 res = sum(res, 5)
-# - Parameter 'a' receives value of 'res'
+# - Parameter 'a' shares the call's staged result slot for 'res'
 # - Parameter 'b' receives 5
 # - Staged output 'res' starts with the caller destination's existing value
 # - Body executes: res = a + b
 # - Result commits back to the caller's res after sibling RHS evaluation
 ```
+
+Reusing a variable as both an argument and a destination is how a caller
+connects an input to a call's staged output. The template reads the staged
+value through its declared input `a`, and may read `res` itself once it has
+assigned it. Every specialization must pass liveness analysis with its inputs
+and outputs treated as unshared; caller sharing cannot make an otherwise
+rejected body acceptable. So `res = a + b` written twice is reported as a dead
+write for every caller, while `res = res + b` after `res = a + b` reads the first write
+by name.
+
+```python
+out, before = FoldBefore(current, item)
+    before = current
+    out = current + item
+
+out, after = FoldAfter(current, item)
+    out = current + item
+    after = current
+```
+
+Starting with `value = 10`, `value, seen = FoldBefore(value, 5)` produces
+`15 10`, while `value, seen = FoldAfter(value, 5)` produces `15 15`. Assigning
+the first output to a different binding leaves `current` unchanged, so
+`other, seen = FoldAfter(value, 5)` instead produces `15 10`.
+
+Reads within one assignment precede its writes, inside a body as much as at
+the call site. `out, before = current + item, current` therefore gives
+`before` the value from before that statement even when `current` shares
+`out`; the sharing becomes visible only to later statements. Keeping an old
+value across a write is an explicit assignment that creates an independent
+value, such as `saved = current` before `out = current + item`; the copy it
+may cost sits at that assignment, not inside the call.
+
+Use a simultaneous assignment when swapping through shared inputs. In
+`a, b = Swap(x, y)`, the body `a = y` followed by `b = x` makes
+`p, q = Swap(p, q)` produce `2 2` from `p, q = 1, 2`: the second statement
+reads the value just written through `a`. The body `a, b = y, x` instead
+produces `2 1`, because both reads happen before either write.
+
+The sharing is internal to each call. For
+`value, seen, old = FoldAfter(value, 5), value`, the result is `15 15 10`:
+`seen` observes the call's updated slot, while the sibling right-hand side
+reads the caller's binding before the assignment commits.
+
+With a range, the same reuse is an accumulation: `sum = Acc(sum, 1:5)` runs
+the body once per yield, and each iteration continues from the previous
+iteration's output. The body's statement order still applies within each
+iteration. Starting from 10, `FoldBefore(value, 1:3)` produces `13 11` and
+`FoldAfter(value, 1:3)` produces `13 13` when their first output targets
+`value`. An empty range leaves an existing destination unchanged and a fresh
+destination at its zero value.
 
 ### Range Parameters
 

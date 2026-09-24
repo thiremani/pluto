@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -145,6 +146,11 @@ type TypeSolver struct {
 	PendingAssignments map[pendingAssignment]struct{}
 	walkedFuncs        map[string]walkedSpecialization // specializations walked in the current pass
 	firstUnresolved    *ast.FuncStatement
+	storageRevision    uint64          // increments when a previously observed binding slot widens
+	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
+
+	// A statement's value call -> the statement's names from the call's first output on.
+	callDests map[*ast.CallExpression][]*ast.Identifier
 
 	recLimit recursionLimit
 }
@@ -160,6 +166,7 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
+		callDests:          make(map[*ast.CallExpression][]*ast.Identifier),
 		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
@@ -171,6 +178,20 @@ func (ts *TypeSolver) recordBindingSlotType(name string, typ Type) {
 	f := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled]
 	if f == nil {
 		panic(fmt.Sprintf("internal: missing cached body %s while recording variable %s", ts.FuncNameMangled, name))
+	}
+	previous, exists := f.Vars[name]
+	if !exists {
+		previous, exists = ts.previousSlotTypes[name]
+	}
+	if exists {
+		// Rewalks retain storage learned from later statements. Publishing it
+		// only after the declaration keeps name resolution in source order.
+		if bindingSlotCompatible(typ, previous) {
+			typ = mergeBindingSlotType(typ, previous)
+		}
+		if !TypeEqual(previous, typ) {
+			ts.storageRevision++
+		}
 	}
 	f.Vars[name] = typ
 }
@@ -714,10 +735,26 @@ func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
 func (ts *TypeSolver) Solve() {
 	program := ts.ScriptCompiler.Program
 	oldErrs := len(ts.Errors)
-	for _, stmt := range program.Statements {
-		ts.TypeStatement(stmt)
-		if len(ts.Errors) > oldErrs {
-			return
+	initialScope := ts.Scopes[0]
+
+	// A later assignment can widen the storage read by an earlier call.
+	// Rebuild source-order facts until those call signatures match the slots.
+	for {
+		ts.Scopes[0] = Scope[Type]{
+			Elems:        maps.Clone(initialScope.Elems),
+			BindingOrder: slices.Clone(initialScope.BindingOrder),
+			ScopeKind:    initialScope.ScopeKind,
+		}
+		revision := ts.storageRevision
+
+		for _, stmt := range program.Statements {
+			ts.TypeStatement(stmt)
+			if len(ts.Errors) > oldErrs {
+				return
+			}
+		}
+		if revision == ts.storageRevision {
+			break
 		}
 	}
 
@@ -922,6 +959,9 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
+		if ce, ok := expr.(*ast.CallExpression); ok {
+			ts.callDests[ce] = stmt.Name[min(len(types), len(stmt.Name)):]
+		}
 		exprTypes := ts.TypeExpression(expr, true)
 		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
@@ -2387,10 +2427,15 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 // Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
 	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
+	shared := ts.sharedDestinations(ce, outerTypesPerArg)
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
+		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0], shared); ok {
+			outerTypes = []Type{slotType}
+		}
+
 		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
 				args = append(args, arrayRangeType)
@@ -2414,6 +2459,69 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 		}
 	}
 	return
+}
+
+// argumentStorage returns the binding storage type to specialize a call
+// argument on, and false when the argument keeps its own type.
+func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type, shared []string) (Type, bool) {
+	// An argument that does not pass on a binding's value keeps its own type.
+	binding, ok := ts.yieldedBinding(arg)
+	if !ok {
+		return nil, false
+	}
+
+	// Parameters and code constants are already typed by their storage.
+	slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
+	if !exists {
+		return nil, false
+	}
+
+	// A concrete type can differ from its storage only in ownership.
+	if concreteStorage(own) {
+		return slot, true
+	}
+
+	// An untyped value keeps its own type unless the call writes back into it.
+	_, plain := arg.(*ast.Identifier)
+	return slot, plain && slices.Contains(shared, binding.Value)
+}
+
+// yieldedBinding returns the binding whose stored value expr passes on: the
+// identifier itself, or the left operand of a scalar comparison in value
+// position, which yields its LHS.
+func (ts *TypeSolver) yieldedBinding(expr ast.Expression) (*ast.Identifier, bool) {
+	for {
+		switch e := expr.(type) {
+		case *ast.Identifier:
+			return e, true
+		case *ast.InfixExpression:
+			if !ts.ExprCache[key(ts.FuncNameMangled, e)].HasCondScalar() {
+				return nil, false
+			}
+			expr = e.Left
+		default:
+			return nil, false
+		}
+	}
+}
+
+// sharedDestinations names the destinations a statement's value call assigns,
+// the only bindings its arguments can share. Lowering passes the call the
+// statement's names from its first output on and binds one per callee output.
+func (ts *TypeSolver) sharedDestinations(ce *ast.CallExpression, outerTypesPerArg [][]Type) []string {
+	dests, ok := ts.callDests[ce]
+	if !ok {
+		return nil
+	}
+	arity := 0
+	for _, types := range outerTypesPerArg {
+		arity += len(types)
+	}
+	template, ok := ts.ScriptCompiler.Compiler.CodeCompiler.lookupFuncTemplate(ce.Function.Value, arity)
+	if !ok {
+		return nil
+	}
+	return identNames(dests[:min(len(dests), len(template.Outputs))])
 }
 
 func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string) (Array, bool) {
@@ -2610,7 +2718,12 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		info:      f,
 		template:  template,
 	}
-	clear(f.Vars)
+	revision := ts.storageRevision
+	previousSlots := ts.previousSlotTypes
+	ts.previousSlotTypes = f.Vars
+	f.Vars = make(map[string]Type)
+	defer func() { ts.previousSlotTypes = previousSlots }()
+
 	previousCycleStart := ts.recLimit.push(specializationFrame{
 		mangled:  mangled,
 		template: template,
@@ -2623,6 +2736,10 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 	defer func() { ts.FuncNameMangled = savedFuncNameMangled }()
 
 	ts.TypeBlock(template, f)
+	if revision != ts.storageRevision {
+		ts.Converging = true
+	}
+
 	return f.OutputTypesInferred()
 }
 
@@ -2650,6 +2767,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 		}
 	}
 
+	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.outputReads[funcKey{name: f.Sig.Name, arity: len(template.Parameters)}]
 	for i, id := range template.Outputs {
 		outArg, ok := Get(ts.Scopes, id.Value)
 		if !ok {
@@ -2673,6 +2791,12 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 			))
 		}
 		nextOutArg := mergeBindingSlotType(oldOutArg, outArg)
+		// A read static-string output is solved as owned, the one widening
+		// a shared caller can give it that a store converts; the rewalk then
+		// retypes its reads and the calls they feed to match.
+		if _, isRead := readOutputs[id.Value]; isRead && IsStrG(nextOutArg) {
+			nextOutArg = StrH{}
+		}
 		ts.recordBindingSlotType(id.Value, nextOutArg)
 		if TypeEqual(oldOutArg, nextOutArg) {
 			continue

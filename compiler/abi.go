@@ -15,10 +15,9 @@ const (
 )
 
 type ABIParam struct {
-	Source    Type
-	Lowered   Type
-	Mode      ABIParamMode
-	AliasSlot int
+	Source  Type
+	Lowered Type
+	Mode    ABIParamMode
 }
 
 type ABIReturn struct {
@@ -29,12 +28,12 @@ type ABIReturn struct {
 
 // FuncABI captures the lowered function boundary for one mangled variant.
 // Direct scalar returns carry a hidden destination seed so a skipped write
-// preserves the caller's value. Range-bearing variants may additionally need
-// hidden alias state for loop-carried accumulation.
+// preserves the caller's value. Whether an input shares a caller binding with
+// an output is a compile-time property of each call site, lowered as a private
+// variant of the function; it never appears in the native signature.
 type FuncABI struct {
-	Params         []ABIParam
-	Return         ABIReturn
-	HasRangeParams bool
+	Params []ABIParam
+	Return ABIReturn
 }
 
 func isDirectScalarABIType(t Type) bool {
@@ -46,18 +45,6 @@ func isDirectScalarABIType(t Type) bool {
 	default:
 		return false
 	}
-}
-
-// aliasableOutput reports whether an output can back a parameter's alias slot.
-// The hidden selector picks an output by position and the callee then reads that
-// storage as the parameter's own type, so the two must lower identically. There
-// is no numeric conversion anywhere on this path, and a pointer selected across
-// mismatched types would be loaded as the wrong type.
-func aliasableOutput(paramType, outputType Type) bool {
-	if ptr, ok := outputType.(Ptr); ok {
-		outputType = ptr.Elem
-	}
-	return TypeEqual(paramType, outputType)
 }
 
 func directScalarABIReturnType(outTypes []Type) (Type, bool) {
@@ -79,28 +66,15 @@ func classifyFuncABI(paramTypes []Type, outTypes []Type) FuncABI {
 		},
 	}
 
-	for _, paramType := range paramTypes {
-		if isRangeDriverType(paramType) {
-			abi.HasRangeParams = true
-			break
-		}
-	}
-
-	aliasSlot := 0
 	for i, paramType := range paramTypes {
 		paramABI := ABIParam{
-			Source:    paramType,
-			Lowered:   Ptr{Elem: paramType},
-			Mode:      ABIParamIndirect,
-			AliasSlot: -1,
+			Source:  paramType,
+			Lowered: Ptr{Elem: paramType},
+			Mode:    ABIParamIndirect,
 		}
 		if isDirectScalarABIType(paramType) {
 			paramABI.Mode = ABIParamDirect
 			paramABI.Lowered = paramType
-			if abi.HasRangeParams {
-				paramABI.AliasSlot = aliasSlot
-				aliasSlot++
-			}
 		}
 		abi.Params[i] = paramABI
 	}
@@ -120,16 +94,6 @@ func (abi FuncABI) UsesIndirectReturn() bool {
 	return abi.Return.Mode == ABIReturnIndirect
 }
 
-func (abi FuncABI) NumAliasSlots() int {
-	count := 0
-	for _, param := range abi.Params {
-		if param.AliasSlot >= 0 {
-			count++
-		}
-	}
-	return count
-}
-
 func (abi FuncABI) sourceParamBaseIndex() int {
 	if abi.UsesIndirectReturn() {
 		return 1
@@ -141,21 +105,59 @@ func (abi FuncABI) SourceFunctionParamIndex(paramIndex int) int {
 	return abi.sourceParamBaseIndex() + paramIndex
 }
 
-func (abi FuncABI) AliasParamBaseIndex() int {
-	return abi.sourceParamBaseIndex() + len(abi.Params)
-}
-
-func (abi FuncABI) AliasFunctionParamIndex(paramIndex int) int {
-	slot := abi.Params[paramIndex].AliasSlot
-	if slot < 0 {
-		return -1
-	}
-	return abi.AliasParamBaseIndex() + slot
-}
-
 func (abi FuncABI) DirectReturnSeedParamIndex() int {
 	if abi.Return.Mode != ABIReturnDirect {
 		return -1
 	}
-	return abi.AliasParamBaseIndex() + abi.NumAliasSlots()
+	return abi.sourceParamBaseIndex() + len(abi.Params)
+}
+
+// sharableOutput reports whether an input of paramType can share an output
+// declared as outType: the input's storage must be the declared type or a
+// compatible wider representation that a store converts (an owned string for
+// a static output, a concrete-rank array for an untyped empty one, a schema
+// for a header-only table). A struct shares only at its exact type, since
+// nothing converts its fields. The shared output then uses the input's
+// storage, so a write lands where the next read looks.
+func sharableOutput(paramType, outType Type) bool {
+	if _, isStruct := outType.(Struct); isStruct {
+		return TypeEqual(paramType, outType)
+	}
+	return bindingSlotCompatible(paramType, outType) && TypeEqual(mergeBindingSlotType(paramType, outType), paramType)
+}
+
+// aliasPattern decides, per callee parameter, the one-based caller destination
+// whose binding the argument shares, or 0; nil when no parameter shares one.
+// argNames holds one entry per parameter, empty for an argument that is not a
+// plain identifier. dests contains output destination names in order, with
+// synthetic staging names already resolved to the bindings they represent.
+// outTypes are the declared output types. enclosing maps a caller-body input to
+// the caller output it already shares, so a nested call forwards that sharing.
+// A parameter shares at most one destination, the first that matches.
+func aliasPattern(argNames, dests []string, paramTypes, outTypes []Type, enclosing map[string]string) []int {
+	var pattern []int
+	for i, name := range argNames {
+		if name == "" {
+			continue
+		}
+
+		for j, dest := range dests {
+			if j >= len(outTypes) {
+				break
+			}
+			if !sharableOutput(paramTypes[i], outTypes[j]) {
+				continue
+			}
+			if dest != name && enclosing[name] != dest {
+				continue
+			}
+			if pattern == nil {
+				pattern = make([]int, len(argNames))
+			}
+			pattern[i] = j + 1
+			break
+		}
+	}
+
+	return pattern
 }

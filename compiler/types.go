@@ -267,8 +267,10 @@ func (f Func) OutputTypesInferred() bool {
 	return true
 }
 
-// SpecializationCFGResult is the immutable dataflow result and persistent
-// direct-call reachability for one settled function specialization.
+// SpecializationCFGResult is the dataflow result and persistent direct-call
+// reachability for one settled function specialization. Errors is the
+// specialization's diagnostics, produced once at settlement and replayed by
+// every script that reaches it.
 type SpecializationCFGResult struct {
 	DirectCallees []string
 	Errors        []*token.CompileError
@@ -684,6 +686,46 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 		return true
 	}
 	return CanRefineType(oldType, newType)
+}
+
+// heapWhereStatic reports whether a value of type held owns heap strings
+// where param declares static ones, fieldwise and elementwise.
+func heapWhereStatic(held, param Type) bool {
+	switch p := param.(type) {
+	case StrG:
+		return IsStrH(held)
+	case Struct:
+		h := held.(Struct)
+		for i, field := range p.Fields {
+			if heapWhereStatic(h.Fields[i].Type, field.Type) {
+				return true
+			}
+		}
+	case Array:
+		return heapWhereStatic(held.(Array).ElemType, p.ElemType)
+	}
+	return false
+}
+
+// concreteStorage reports whether t fixes its storage in every calling
+// context: an untyped empty array, a column without an element type, or an
+// unresolved leaf could still be refined by a caller's destination.
+func concreteStorage(t Type) bool {
+	switch tt := t.(type) {
+	case Empty, Unresolved:
+		return false
+	case Array:
+		return tt.Rank > 0 && tt.ElemType != nil && concreteStorage(tt.ElemType)
+	case Table:
+		for _, column := range tt.Columns {
+			if column.ElemType == nil || !concreteStorage(column.ElemType) {
+				return false
+			}
+		}
+		return true
+	default:
+		return IsFullyResolvedType(t)
+	}
 }
 
 // mergeBindingSlotType joins compatible observations without narrowing storage.

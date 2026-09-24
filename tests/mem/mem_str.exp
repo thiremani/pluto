@@ -28,7 +28,7 @@ keep_heap
 CallStaticSeedKeep: keep_heap
 CallStaticSeedWrite: static changed
 CallStaticShareBefore: < shared_left > < shared_right >
-CallStaticShareSkipped: < shared_left > <  >
+CallStaticShareSkipped: < shared_left > < shared_right >
 CallStaticShareWritten: < shared static > < shared static >
 slot
 plain

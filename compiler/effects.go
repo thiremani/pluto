@@ -525,18 +525,27 @@ func deriveBodyOutputEffects(template *ast.FuncStatement, statements map[*ast.Le
 			return slices.Repeat([]WriteEffect{WriteInvalid}, len(template.Outputs))
 		}
 
-		for _, write := range statementEffect.Writes {
-			if write.Effect != MustWrite || slices.Contains(statementEffect.ReadsSeed, write.TargetIndex) {
-				continue
-			}
-			index, isOutput := outputIndex[stmt.Name[write.TargetIndex].Value]
-			if isOutput {
+		for name := range definiteTargets(stmt, statementEffect) {
+			if index, isOutput := outputIndex[name]; isOutput {
 				effects[index] = MustWrite
 			}
 		}
 	}
 
 	return effects
+}
+
+// definiteTargets is the set of targets a statement leaves holding its own
+// value on every path: unconditional writes that do not merely preserve the
+// target's seed.
+func definiteTargets(stmt *ast.LetStatement, effect StatementEffect) map[string]struct{} {
+	targets := make(map[string]struct{}, len(effect.Writes))
+	for _, write := range effect.Writes {
+		if write.Effect == MustWrite && !slices.Contains(effect.ReadsSeed, write.TargetIndex) {
+			targets[stmt.Name[write.TargetIndex].Value] = struct{}{}
+		}
+	}
+	return targets
 }
 
 type specializationNodeID int

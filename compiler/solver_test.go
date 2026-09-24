@@ -643,6 +643,109 @@ a = a ⊕ "d"`
 	require.True(t, IsStrH(secondInfo.OutTypes[0]), "concat expression should remain StrH")
 }
 
+func TestCallArgumentsUseSettledBindingSlotTypes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		seed   string
+		append string
+		item   string
+		want   Type
+	}{
+		{"string scalar", `"hello"`, "item", `"abc"`, StrH{}},
+		{"array range", "[]", "[item]", "1:3", Array{ElemType: I64, Rank: 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			code := mustParseCode(t, fmt.Sprintf(`out, before = Fold(current, item)
+    out = current ⊕ %s
+    before = current
+`, tt.append))
+			cc := NewCodeCompiler(ctx, t.Name(), "", code)
+			require.Empty(t, cc.Compile())
+			source := fmt.Sprintf("value = %s\nvalue, before = Fold(value, %s)\nvalue, before", tt.seed, tt.item)
+
+			for _, run := range []string{"Cold", "Warm"} {
+				ts := solveScriptTypes(t, ctx, cc, t.Name()+run, source)
+				stmt := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
+				call := stmt.Value[0].(*ast.CallExpression)
+				info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+				root := ts.ScriptCompiler.Script.Root
+				require.True(t, TypeEqual(tt.want, root.Vars["value"]))
+				require.True(t, TypeEqual(tt.want, info.CallParamTypes[0]), "call must specialize on the storage used by lowering")
+				require.True(t, TypeEqual(tt.want, info.ScalarCallParamTypes[0]))
+				require.True(t, TypeEqual(tt.want, info.OutTypes[1]), "copying the input must retain its ownership type")
+				argInfo := ts.ExprCache[key(ts.FuncNameMangled, call.Arguments[0])]
+				seed := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement).Value[0]
+				seedInfo := ts.ExprCache[key(ts.FuncNameMangled, seed)]
+				require.True(t, TypeEqual(seedInfo.OutTypes[0], argInfo.OutTypes[0]), "argument expressions retain their flow type")
+				callee := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Fold", info.CallParamTypes)]
+				require.NotNil(t, callee)
+				require.True(t, callee.Settled)
+			}
+		})
+	}
+}
+
+func TestLocalSlotRefinementRemanglesNestedCalls(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	code := mustParseCode(t, `out, before = Wrapper(item)
+    current = "hello"
+    current, previous = Fold(current, item)
+    out = current
+    before = previous
+
+out, before = Fold(current, item)
+    out = current ⊕ "-item"
+    before = current
+`)
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+	wrapperKey := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
+	foldKey := Mangle(cc.Compiler.MangledPath, "Fold", []Type{StrH{}, I64})
+	wrapperTemplate := code.Statements[0].(*ast.FuncStatement)
+	call := wrapperTemplate.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+
+	for _, run := range []string{"Cold", "Warm"} {
+		ts := solveScriptTypes(t, ctx, cc, t.Name()+run, "value, before = Wrapper(2)\nvalue, before")
+		wrapper := cc.Compiler.FuncCache[wrapperKey]
+		require.NotNil(t, wrapper)
+		require.True(t, wrapper.Settled)
+		require.True(t, IsStrH(wrapper.Vars["current"]))
+		require.True(t, IsStrH(wrapper.Sig.OutTypes[1]))
+		require.Equal(t, []string{foldKey}, wrapper.CFGResult.DirectCallees)
+		info := ts.ExprCache[key(wrapperKey, call)]
+		require.True(t, IsStrH(info.CallParamTypes[0]))
+		require.True(t, IsStrH(info.OutTypes[1]))
+	}
+}
+
+func TestHeapWhereStatic(t *testing.T) {
+	heapPerson := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrH{}}, {Name: "age", Type: I64}}}
+	staticPerson := Struct{Name: "Person", Fields: []StructField{{Name: "name", Type: StrG{}}, {Name: "age", Type: I64}}}
+
+	for _, tt := range []struct {
+		name  string
+		held  Type
+		param Type
+		want  bool
+	}{
+		{"heap string into static", StrH{}, StrG{}, true},
+		{"static string into heap", StrG{}, StrH{}, false},
+		{"matching strings", StrH{}, StrH{}, false},
+		{"heap field into static field", heapPerson, staticPerson, true},
+		{"static field into heap field", staticPerson, heapPerson, false},
+		{"heap elements into static elements", Array{ElemType: StrH{}, Rank: 1}, Array{ElemType: StrG{}, Rank: 1}, true},
+		{"concrete array into untyped", Array{ElemType: I64, Rank: 1}, Array{ElemType: Empty{}, Rank: 1}, false},
+		{"scalar", I64, I64, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, heapWhereStatic(tt.held, tt.param))
+		})
+	}
+}
+
 func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	headerOnly := Table{Columns: []TableColumn{
 		{Name: "Name", ElemType: Empty{}},
