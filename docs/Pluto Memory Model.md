@@ -264,6 +264,9 @@ res = sum(a, b)
   observes that slot's current value, including writes from earlier statements
   in the body. This rule applies to both ordinary and ranged calls and is
   independent of whether the implementation passes the value or a pointer.
+  Only a call whose outputs are the statement's destinations can share: a call
+  nested in a larger expression, as in `c = F(c) + 0`, writes fresh result
+  slots that start at zero, so neither its inputs nor a skipped write see `c`.
 - **Outputs**: Readable once definitely assigned. A body may assign an output
   any number of times, conditionally or not, and a nested call may target it.
   It may read an output — as a value, a condition, a call argument, a print,
