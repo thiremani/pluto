@@ -462,8 +462,8 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `undefined identifier: x`,
 		},
 		{
-			// The seed-dependent body from the effects plan is rejected at the
-			// read, not silently resolved at the caller.
+			// A body that would compute with its incoming value is rejected at
+			// the read, not silently resolved at the caller.
 			name: "Output Read After Conditional Write",
 			code: `res = maybeIncrement(x)
     res = x > 0 x

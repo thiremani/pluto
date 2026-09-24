@@ -2,8 +2,8 @@
 
 Recorded 2026-09-05. Implementation baseline: Pluto `840b147` (PR #101).
 This is a follow-up work plan, not a claim that the work below is implemented.
-The immediate priority is correct incoming-output seed dependencies alongside
-`MustWrite`/`MayWrite`, before expanding PIR call support.
+Its first priority, incoming-output seed dependencies, has since been resolved
+by a language rule instead of an analysis (section 1).
 
 ## Current PR disposition
 
@@ -17,13 +17,13 @@ new slice; they do not require expanding #101. One nonblocking PR-description
 phrase remains: Review Round 4 should name RHS semantic type, merged target
 type, and stored type separately, as the corrected code comment already does.
 
-## 1. Next compiler PR: seed dependency analysis
+## 1. Seed dependencies: resolved by the output-read rule
 
 Resolved by a language rule instead of an analysis
 ([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
 [PR #102](https://github.com/thiremani/pluto/pull/102)): a declared output is
-readable inside its template only after it is definitely assigned, so the
-reproducer below is rejected at `y = y + 1`. The hidden seed and destination-seeded staging slots continue to
+readable inside its template only after it is definitely assigned, so a body
+that writes `y = x > 0 x` and then `y = y + 1` is rejected at the read. The hidden seed and destination-seeded staging slots continue to
 preserve outputs that are not written. A caller can explicitly connect an
 input to an output by reusing the same binding: later statements then observe
 writes through that output, in ordinary and ranged calls alike. Inputs are
@@ -201,8 +201,8 @@ The 2026-09-05 review read the supplied research PDF, three-foundations PDF, and
 Markdown assessment. Recommendations in those documents were assessed as
 proposals; they did not authorize implementing every suggestion.
 
-Native probes built from `840b147` confirmed seed dependence and its false
-diagnostic, `%n` parameter mutation, and the collector result above. A Python
+Native probes built from `840b147` confirmed seed dependence, which then made a
+caller diagnostic wrong (#104 has since rejected such bodies), `%n` parameter mutation, and the collector result above. A Python
 probe against bench `019007ab` confirmed that its mismatch reporter returns
 normally. Numeric guards, output paths, and struct-field limits were inspected
 in source. No destructive output-collision probe was run. Local website review
