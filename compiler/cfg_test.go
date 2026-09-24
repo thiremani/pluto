@@ -820,7 +820,7 @@ func TestStructuralOutputSeedReadAccepted(t *testing.T) {
     tmp = res + 1
     tmp
     res = x * 2`))
-	assert.Empty(t, cc.Compile())
+	require.Empty(t, cc.Compile())
 }
 
 func TestValidateFuncFreshSelfReadIsUndefined(t *testing.T) {
