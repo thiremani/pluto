@@ -7,12 +7,17 @@ s = s ⊕ "c"
 "kept:", kept, "s:", s
 
 # A comparison in value position passes on its left operand's stored value,
-# through every link of a chain.
+# through every link of a chain. When a link fails, the call is skipped: a
+# fresh destination stays empty and an existing one keeps its value.
 c = "a"
 yielded = Keep(c > "" < "zz")
+first = Keep(c > "dd" < "zz")
+second = "old"
+second = Keep(c > "" < "a")
 c = c ⊕ "b"
 c = c ⊕ "c"
 "yielded:", yielded, "c:", c
+"failed: < -first > -second"
 
 # An accumulator that starts as [] and shares the call's destination
 # carries every element across the range, also after a multi-valued argument.
