@@ -886,7 +886,7 @@ func (ts *TypeSolver) nodeMayFail(expr ast.Expression) bool {
 // recursive call's result, which a later pass types. A type that never
 // resolves fails convergence instead.
 func (ts *TypeSolver) awaitingType(t Type) bool {
-	return !IsFullyResolvedType(t) && ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled
+	return ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled && !IsFullyResolvedType(t)
 }
 
 // pendingOperand reports whether an operator has no type to check for an
