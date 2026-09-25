@@ -2088,7 +2088,8 @@ func (c *Compiler) freeTemporary(expr ast.Expression, syms []*Symbol) {
 // valid where the free dominates the extraction's branch arms: a free inside
 // one arm of a runtime branch (a collector's cell push, a per-iteration
 // release) must use freeTemporary, or the compile-time mark would poison the
-// other arm.
+// other arm, unless the branch restores the pre-branch marks for that arm, as
+// branchCond and prepareSpineLeaf do.
 func (c *Compiler) freeConsumedTemporary(expr ast.Expression, syms []*Symbol) {
 	c.freeTemporary(expr, syms)
 	c.markFreedFrameValues(expr, syms)

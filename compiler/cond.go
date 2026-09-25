@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -888,10 +889,99 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, onTrue func()) {
 }
 
 func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
-	c.withCondBranch(cond, "cond", onTrue, func() {
+	before := c.branchBorrowedMarks(temps)
+	var afterTrue borrowedMarks
+	c.withCondBranch(cond, "cond", func() {
+		onTrue()
+		afterTrue = c.branchBorrowedMarks(temps)
+	}, func() {
+		// A value the true arm released is still live on this arm.
+		before.restore()
 		c.cleanupCondExprElse(temps)
 		onFalse()
+		afterTrue.add()
 	})
+}
+
+// borrowedMarks records the compile-time Borrowed marks of the values a
+// conditional branch's arms may release.
+type borrowedMarks map[*Symbol]bool
+
+// branchBorrowedMarks snapshots the marks of temps and of the current condLHS
+// frame, which freeConsumedTemporary sets when it releases a value.
+func (c *Compiler) branchBorrowedMarks(temps []condTemp) borrowedMarks {
+	marks := borrowedMarks{}
+	for _, tmp := range temps {
+		for _, sym := range tmp.syms {
+			marks[sym] = sym.Borrowed
+		}
+	}
+	for _, syms := range c.currentCondLHSFrame() {
+		for _, sym := range syms {
+			marks[sym] = sym.Borrowed
+		}
+	}
+	return marks
+}
+
+func (m borrowedMarks) restore() {
+	for sym, borrowed := range m {
+		sym.Borrowed = borrowed
+	}
+}
+
+// add keeps every mark either arm set, so code after the branch sees a value
+// released on both arms as released.
+func (m borrowedMarks) add() {
+	for sym, borrowed := range m {
+		sym.Borrowed = sym.Borrowed || borrowed
+	}
+}
+
+// consumed reports whether the true arm released sym: live before the branch,
+// marked after it.
+func consumed(sym *Symbol, before, afterTrue borrowedMarks) bool {
+	return afterTrue[sym] && !before[sym]
+}
+
+// releaseConsumed frees, on a false arm whose code after the branch still
+// cleans up, exactly what the true arm consumed. Values the true arm left
+// alone stay for that later cleanup, on both arms. Retained operands and
+// logical results are tracked in temps; comparison masks only in the frame.
+func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedMarks) {
+	for _, tmp := range temps {
+		var released []*Symbol
+		for _, sym := range tmp.syms {
+			if consumed(sym, before, afterTrue) {
+				released = append(released, sym)
+			}
+		}
+		c.freeTemporary(tmp.expr, released)
+	}
+
+	frame := c.requireCondLHSFrame()
+	for _, exprKey := range sortedFrameKeys(frame) {
+		exprInfo := c.ExprCache[exprKey]
+		if exprInfo == nil {
+			continue
+		}
+		for i := range exprInfo.CompareModes {
+			if exprInfo.IsMask(i) && consumed(frame[exprKey][i], before, afterTrue) {
+				c.freeSymbolValue(frame[exprKey][i], "")
+			}
+		}
+	}
+}
+
+// sortedFrameKeys orders a condLHS frame's keys by source position, so the code
+// emitted per key is deterministic.
+func sortedFrameKeys(frame map[ExprKey][]*Symbol) []ExprKey {
+	return slices.SortedFunc(maps.Keys(frame), compareSourcePosition)
+}
+
+func compareSourcePosition(a, b ExprKey) int {
+	at, bt := a.Expr.Tok(), b.Expr.Tok()
+	return cmp.Or(cmp.Compare(at.Line, bt.Line), cmp.Compare(at.Column, bt.Column))
 }
 
 // splitCondRanges collects merged ranges and boolean guard expressions from
@@ -1299,19 +1389,25 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
 
+	before := c.branchBorrowedMarks(temps)
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	syms := c.compileExpression(expr, nil)
 	for i, outType := range info.OutTypes {
 		coerced := c.coerceSymbolForType(syms[i], outType, fmt.Sprintf("spine_leaf_val_%d", i))
 		c.createStore(coerced.Val, slots[i], coerced.Type)
 	}
+	afterTrue := c.branchBorrowedMarks(temps)
 	c.builder.CreateBr(contBlock)
 
+	// The leaf never ran on this arm, so what it consumed is still live here.
 	c.builder.SetInsertPointAtEnd(elseBlock)
+	before.restore()
+	c.releaseConsumed(temps, before, afterTrue)
 	for i, outType := range info.OutTypes {
 		zero := c.makeZeroValue(outType)
 		c.createStore(zero.Val, slots[i], outType)
 	}
+	afterTrue.add()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
