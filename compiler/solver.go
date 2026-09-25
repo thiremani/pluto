@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/token"
@@ -1607,9 +1608,8 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	ts.rejectRangeDependentBound("stop", r.Stop, r.Tok())
 	bounds := []Type{startT[0], stopT[0]}
 	// optional step
-	var stepT []Type
 	if r.Step != nil {
-		stepT = ts.TypeExpression(r.Step, false)
+		stepT := ts.TypeExpression(r.Step, false)
 		if len(stepT) != 1 {
 			ce := &token.CompileError{
 				Token: r.Tok(),
@@ -1622,7 +1622,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	}
 	// A bound still awaiting its type postpones these checks to a later pass.
 	if !slices.ContainsFunc(bounds, ts.awaitingType) {
-		ts.checkRangeBoundTypes(r.Tok(), startT, stopT, stepT)
+		ts.checkRangeBoundTypes(r.Tok(), bounds)
 	}
 	if !isRoot {
 		types := []Type{Int{Width: 64}}
@@ -1635,42 +1635,34 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	return types
 }
 
-// checkRangeBoundTypes requires integer bounds of one type; stepT is nil for a
-// range without a step.
-func (ts *TypeSolver) checkRangeBoundTypes(tok token.Token, startT, stopT, stepT []Type) {
-	// must be integers
-	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
-		ce := &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("range bounds should be Integer. start type: %s, stop type: %s", startT[0], stopT[0]),
-		}
-		ts.Errors = append(ts.Errors, ce)
+// rangeBoundNames names a range literal's bounds in source order.
+var rangeBoundNames = [...]string{"start", "stop", "step"}
+
+// checkRangeBoundTypes requires integer bounds that all have the start's type.
+// It reports the first rule broken, once, with every bound's type.
+func (ts *TypeSolver) checkRangeBoundTypes(tok token.Token, bounds []Type) {
+	allInt, sameType := true, true
+	for _, bound := range bounds {
+		allInt = allInt && bound.Kind() == IntKind
+		sameType = sameType && TypeEqual(bound, bounds[0])
 	}
-	// must match
-	if !EqualTypes(startT, stopT) {
-		ce := &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("range start and stop must have same type. start Type: %s, stop Type: %s", startT[0], stopT[0]),
-		}
-		ts.Errors = append(ts.Errors, ce)
-	}
-	if stepT == nil {
+	var rule string
+	switch {
+	case !allInt:
+		rule = "range bounds should be Integer"
+	case !sameType:
+		rule = "range bounds must have the same type"
+	default:
 		return
 	}
-	if stepT[0].Kind() != IntKind {
-		ce := &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("range bounds should be Integer. got step type: %s", stepT[0]),
-		}
-		ts.Errors = append(ts.Errors, ce)
+	boundTypes := make([]string, len(bounds))
+	for i, bound := range bounds {
+		boundTypes[i] = fmt.Sprintf("%s type: %s", rangeBoundNames[i], bound)
 	}
-	if !EqualTypes(startT, stepT) {
-		ce := &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("range start and step must have same type. start Type: %s, step Type: %s", startT[0], stepT[0]),
-		}
-		ts.Errors = append(ts.Errors, ce)
-	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   rule + ". " + strings.Join(boundTypes, ", "),
+	})
 }
 
 func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ bool) []Type {

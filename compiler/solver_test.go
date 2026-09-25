@@ -877,6 +877,38 @@ j = 0:5:i`,
 	}
 }
 
+// TestRangeBoundTypes: a range reports the first rule its bounds break, once,
+// naming every bound's type.
+func TestRangeBoundTypes(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"FloatStop", "x = 0:2.5\nx", "range bounds should be Integer. start type: I64, stop type: F64"},
+		{"FloatStep", "x = 0:6:2.5\nx", "range bounds should be Integer. start type: I64, stop type: I64, step type: F64"},
+		{"NarrowStop", "x = 0:n\nx", "range bounds must have the same type. start type: I64, stop type: I32"},
+		{"NarrowStep", "x = 0:6:n\nx", "range bounds must have the same type. start type: I64, stop type: I64, step type: I32"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			// No literal is narrower than I64, so a seeded binding supplies one.
+			Put(ts.Scopes, "n", Type(Int{Width: 32}))
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, tc.want, ts.Errors[0].Msg)
+		})
+	}
+}
+
 func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
@@ -2307,7 +2339,7 @@ func TestRecursiveResultChecksRunOnceTyped(t *testing.T) {
     k = 0:6:prior
     y = y + k`,
 			script: "v = R(3)\nv",
-			want:   "range bounds should be Integer. got step type: F64",
+			want:   "range bounds should be Integer. start type: I64, stop type: I64, step type: F64",
 		},
 		{
 			name: "FieldAccess",
