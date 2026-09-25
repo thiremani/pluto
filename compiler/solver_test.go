@@ -885,6 +885,7 @@ func TestRangeBoundTypes(t *testing.T) {
 		script string
 		want   string
 	}{
+		{"FloatStart", "x = 1.5:3\nx", "range bounds should be Integer. start type: F64, stop type: I64"},
 		{"FloatStop", "x = 0:2.5\nx", "range bounds should be Integer. start type: I64, stop type: F64"},
 		{"FloatStep", "x = 0:6:2.5\nx", "range bounds should be Integer. start type: I64, stop type: I64, step type: F64"},
 		{"NarrowStop", "x = 0:n\nx", "range bounds must have the same type. start type: I64, stop type: I32"},

@@ -1641,10 +1641,11 @@ var rangeBoundNames = [...]string{"start", "stop", "step"}
 // checkRangeBoundTypes requires integer bounds that all have the start's type.
 // It reports the first rule broken, once, with every bound's type.
 func (ts *TypeSolver) checkRangeBoundTypes(tok token.Token, bounds []Type) {
-	allInt, sameType := true, true
-	for _, bound := range bounds {
+	start := bounds[0]
+	allInt, sameType := start.Kind() == IntKind, true
+	for _, bound := range bounds[1:] {
 		allInt = allInt && bound.Kind() == IntKind
-		sameType = sameType && TypeEqual(bound, bounds[0])
+		sameType = sameType && TypeEqual(bound, start)
 	}
 	var rule string
 	switch {
