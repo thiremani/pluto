@@ -2181,7 +2181,7 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 		c.pushBoundsGuard("infix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileCondOperands(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, func() {
 			left := c.compileExpression(leftRew, nil)
 			right := c.compileExpression(rightRew, nil)
 
@@ -2539,7 +2539,7 @@ func (c *Compiler) compilePrefixRanges(expr *ast.PrefixExpression, info *ExprInf
 		c.pushBoundsGuard("prefix_iter_bounds_guard")
 		defer c.popBoundsGuard()
 
-		c.compileCondOperands(prepared, llvm.Value{}, func() {
+		c.compileCondOperands(prepared, func() {
 			ops := c.compileExpression(rightRew, nil)
 
 			for i := 0; i < len(ops); i++ {
@@ -3209,7 +3209,7 @@ func (c *Compiler) compileDirectCallWithRanges(sig *callSignature, info *ExprInf
 	c.bindRangedTempOutputs(dest, outputs)
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 		c.pushBoundsGuard("call_iter_bounds_guard")
-		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+		c.compileCondExprValue(rewCall, func() {
 			c.compileDirectCallIntoOutput(sig, rewCall, dest, outputs[0])
 		})
 		c.popBoundsGuard()
@@ -3232,7 +3232,7 @@ func (c *Compiler) compileIndirectCallWithRanges(sig *callSignature, info *ExprI
 		c.pushBoundsGuard("call_iter_bounds_guard")
 		// Inside loop, ranges are shadowed as scalars. If call arguments contain
 		// conditional expressions, execute the call only when they hold.
-		c.compileCondExprValue(rewCall, llvm.Value{}, func() {
+		c.compileCondExprValue(rewCall, func() {
 			c.compileIndirectCallIntoStagedOutputs(sig, rewCall, dest, outputs)
 		})
 		c.popBoundsGuard()
@@ -3628,7 +3628,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 		withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.CallExpression), info.Ranges, nil, nil, func(rewCall *ast.CallExpression) {
 			// Per-iteration gate: a failing conditional skips that
 			// iteration's line, so `i > 2` prints only admitted elements.
-			c.compileCondOperands(rewCall, llvm.Value{}, func() {
+			c.compileCondOperands(rewCall, func() {
 				c.printAllExpressions(rewCall.Arguments)
 			})
 		})
@@ -3638,7 +3638,7 @@ func (c *Compiler) compilePrintStatement(ps *ast.PrintStatement) {
 	// LoopInside=true or no ranges: direct print, gated on every conditional
 	// argument yielding — a failed condition prints nothing (the target-less
 	// case of propagation).
-	c.compileCondOperands(ce, llvm.Value{}, func() {
+	c.compileCondOperands(ce, func() {
 		c.printAllExpressions(ce.Arguments)
 	})
 }

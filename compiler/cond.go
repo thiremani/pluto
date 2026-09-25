@@ -389,7 +389,7 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) 
 			return
 		}
 		if c.hasCondExprInTree(expr) {
-			c.compileCondExprValue(expr, llvm.Value{}, compileStageAssign)
+			c.compileCondExprValue(expr, compileStageAssign)
 			return
 		}
 
@@ -864,21 +864,20 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // compileCondExprValue gates value-position cond expressions on the ANDed
 // per-slot conditions: comparisons compose as AND, and value-position ||/&&
 // contribute their yield flags after resolving through logical slots.
-func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+func (c *Compiler) compileCondExprValue(expr ast.Expression, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
 	conds, temps := c.extractSlotConds(expr, nil)
-	cond := c.andConds(baseCond, c.foldSlotConds(conds), "base_and")
-	c.branchCond(cond, temps, onTrue, func() {})
+	c.branchCond(c.foldSlotConds(conds), temps, onTrue, func() {})
 }
 
 // compileCondOperands leaves expr itself to the caller.
-func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+func (c *Compiler) compileCondOperands(expr ast.Expression, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	cond := baseCond
+	var cond llvm.Value
 	var temps []condTemp
 	for _, child := range ast.ExprChildren(expr) {
 		var childConds []llvm.Value
@@ -1114,11 +1113,10 @@ func (c *Compiler) compileCondRangedIteration(
 }
 
 // compileCondExprStatement handles let statements that have conditional
-// expressions (comparisons) embedded in their value expressions.
-// Each value expression is processed independently: its conditions are
-// ANDed with statement conditions and branched on separately, so
-// p, q = a > 2, d < 10 evaluates each condition independently rather
-// than ANDing them all-or-nothing.
+// expressions (comparisons) embedded in their value expressions. The
+// statement condition gates every value; within the gate, each value
+// branches on its own conditions, so p, q = a > 2, d < 10 evaluates each
+// condition independently rather than ANDing them all-or-nothing.
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
 	slots := c.createConditionalTempOutputs(stmt)
 
@@ -1151,9 +1149,13 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		if c.perSlotCommittable(expr, info) {
 			c.compilePerSlotAssign(expr, info, exprSlots, stmtCond)
 		} else {
-			c.compileCondExprValue(expr, stmtCond, func() {
-				c.compileCondAssignments(exprSlots, []ast.Expression{expr})
-			})
+			// The gate branches around the value, so a failed gate evaluates
+			// none of it, not even the conditions inside it.
+			c.withCondBranch(stmtCond, "stmt_cond", func() {
+				c.compileCondExprValue(expr, func() {
+					c.compileCondAssignments(exprSlots, []ast.Expression{expr})
+				})
+			}, nil)
 		}
 
 		targetIdx += numOutputs

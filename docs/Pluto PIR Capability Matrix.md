@@ -409,8 +409,6 @@ Cleanup candidates, independent of PIR:
   unreachable: the solver diverts every range-driver condition to
   `compileCondRangedStatement` before `compileConditions` runs, and rejects
   non-failable conditions outright.
-- `compileCondOperands`'s `baseCond` parameter is always `llvm.Value{}` at all
-  five call sites.
 - `branchCond`'s `onFalse` parameter receives an empty closure at both call
   sites.
 - `compileCondOperands` and `compileCondExprValue` compute the same thing for
