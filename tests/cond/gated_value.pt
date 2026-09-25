@@ -1,0 +1,18 @@
+# A failed gate skips its value, including the conditions inside it.
+y = Loud(x)
+    "called -x"
+    y = x
+
+y = Probe(n)
+    y = 0
+    y = n > 0 Loud(n) > 2
+
+# Recursion guarded by a gate whose value compares the recursive result.
+y = Lower(x, n)
+    y = x
+    y = n > 0 Lower(x, n - 1) > 2
+
+# The gate guards the division in its value.
+y = Ratio(x, d)
+    y = 5
+    y = d != 0 (x ÷ d) < 1

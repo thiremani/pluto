@@ -1,0 +1,16 @@
+# A statement moves the bindings it may address into memory before it
+# branches, so a path that skips the %n or the call keeps their values.
+out = Fmt(k)
+    m = 7
+    "abc-m%n", k > 5
+    out = m
+
+y = Twice(v)
+    y = v ⊕ v
+
+y = First(v)
+    y = v[0]
+
+y = SI(t, j)
+    y = t
+    y = j > 100 "big"

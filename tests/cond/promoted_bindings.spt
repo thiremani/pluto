@@ -1,0 +1,43 @@
+# A skipped %n leaves its target unchanged.
+m1 = 7
+k = 3
+"abc-m1%n", k > 5
+m1
+
+m2 = 7
+z = k > 5 "ab-m2%n"
+"z:-z m2:-m2"
+
+f = Fmt(3)
+f
+
+# A ranged print writes its %n on every iteration.
+m3 = 7
+i = 0:3
+"ab-m3%n", i + 0
+m3
+
+# A skipped call leaves the arguments it would address unchanged.
+a1 = [1 2 3]
+Twice(a1), k > 5
+a1
+
+a2 = [4 5 6]
+"v", k > 5 && First(a2)
+a2
+
+s1 = "ab" ⊕ "cd"
+Twice(s1), k > 5
+s1
+
+a3 = [7 8 9]
+g = 0
+g = k > 5 && First(a3) > 0 1
+g, a3
+
+# A ranged call doesn't free an outer binding it passes on.
+s2 = "ab" ⊕ "cd"
+j = 0:3
+r = ""
+r = SI(s2, j + 0)
+r, s2
