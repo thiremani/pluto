@@ -831,6 +831,7 @@ func (c *Compiler) addRet() {
 }
 
 func (c *Compiler) compileStatement(stmt ast.Statement) {
+	c.promoteStatementBindings(stmt)
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
 		c.compileLetStatement(s)
@@ -839,6 +840,46 @@ func (c *Compiler) compileStatement(stmt ast.Statement) {
 	default:
 		panic(fmt.Sprintf("Cannot handle statement type %T", s))
 	}
+}
+
+// promoteStatementBindings moves the bindings a statement may address into
+// memory before it branches or loops: variables its %n markers write, and
+// identifiers it passes to indirect parameters. Their current values are then
+// stored on every path, and a loop's scope can't hold its own copy. Targets
+// that %n can't write are left for formatting to reject.
+func (c *Compiler) promoteStatementBindings(stmt ast.Statement) {
+	exprs := statementExpressions(stmt)
+	names := make(map[string]struct{})
+	for _, expr := range exprs {
+		c.collectPromotableCallArgIdentifiers(expr, names)
+	}
+	for _, lit := range appendStringLiterals(nil, exprs) {
+		for _, name := range countMarkerTargets(lit.Token.Literal, c.isDefined) {
+			sym, source := c.lookupNamedSymbol(name)
+			if source == symbolLocal && TypeEqual(sym.Type, I64) && !sym.ReadOnly {
+				names[name] = struct{}{}
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		c.promoteExistingSym(name)
+	}
+}
+
+func (c *Compiler) isDefined(name string) bool {
+	_, source := c.lookupNamedSymbol(name)
+	return source != symbolMissing
+}
+
+func appendStringLiterals(lits []*ast.StringLiteral, exprs []ast.Expression) []*ast.StringLiteral {
+	for _, expr := range exprs {
+		if lit, ok := expr.(*ast.StringLiteral); ok {
+			lits = append(lits, lit)
+			continue
+		}
+		lits = appendStringLiterals(lits, ast.ExprChildren(expr))
+	}
+	return lits
 }
 
 func (c *Compiler) makeZeroValue(symType Type) *Symbol {

@@ -948,12 +948,17 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 	return
 }
 
-// formatMarkerIdentifiers returns the identifiers read by resolved markers in
-// source order, separating main-marker identifiers from dynamic
-// width/precision identifiers. A main marker formats its value whatever the
-// type, while a specifier operand is consumed as a number, so only specifier
-// identifiers can turn a named Range into an iteration driver.
-func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
+// formatMarker is one marker a string literal's formatting resolves, with its
+// specifier when it has one.
+type formatMarker struct {
+	main string
+	spec parsedSpecifier
+}
+
+// scanFormatMarkers reads a string's markers as formatString does: escapes
+// and markers naming an unknown identifier are literal text.
+func scanFormatMarkers(value string, isDefined func(string) bool) []formatMarker {
+	var markers []formatMarker
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -968,21 +973,44 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, 
 		if !isDefined(mainID) {
 			continue
 		}
-		mains = append(mains, mainID)
-
 		if end >= len(runes) || runes[end] != '%' {
+			markers = append(markers, formatMarker{main: mainID})
 			i = end - 1
 			continue
 		}
 		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
-		for _, specID := range spec.ids {
+		markers = append(markers, formatMarker{main: mainID, spec: spec})
+		i = spec.end - 1
+	}
+	return markers
+}
+
+// formatMarkerIdentifiers returns the identifiers read by resolved markers in
+// source order, separating main-marker identifiers from dynamic
+// width/precision identifiers. A main marker formats its value whatever the
+// type, while a specifier operand is consumed as a number, so only specifier
+// identifiers can turn a named Range into an iteration driver.
+func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
+	for _, marker := range scanFormatMarkers(value, isDefined) {
+		mains = append(mains, marker.main)
+		for _, specID := range marker.spec.ids {
 			if isDefined(specID.name) {
 				specs = append(specs, specID.name)
 			}
 		}
-		i = spec.end - 1
 	}
 	return mains, specs
+}
+
+// countMarkerTargets returns the names a string's %n markers write.
+func countMarkerTargets(value string, isDefined func(string) bool) []string {
+	var targets []string
+	for _, marker := range scanFormatMarkers(value, isDefined) {
+		if strings.HasSuffix(marker.spec.text, "n") {
+			targets = append(targets, marker.main)
+		}
+	}
+	return targets
 }
 
 // hasValidMarkers checks if a format string contains a resolved marker.

@@ -85,9 +85,9 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 }
 
 // collectPromotableCallArgIdentifiers walks an expression and records bare
-// identifier call arguments that lower indirectly. Those identifiers may be
-// promoted to memory by lowerCallArgs, so conditional lowering pre-promotes
-// only that subset before branching.
+// identifier call arguments that lower indirectly. lowerCallArgs would promote
+// those identifiers to memory where the call runs, so compileStatement
+// promotes them before the statement branches.
 func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	if ce, ok := expr.(*ast.CallExpression); ok {
 		c.addPromotableArgs(ce, out)
@@ -119,20 +119,6 @@ func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]stru
 			out[ident.Value] = struct{}{}
 		}
 		position += len(c.ExprCache[key(c.FuncNameMangled, arg)].OutTypes)
-	}
-}
-
-// prePromoteConditionalCallArgs promotes local identifiers that are used as
-// indirect call arguments so branch codegen does not introduce path-dependent
-// promotions.
-func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
-	argNames := make(map[string]struct{})
-	for _, expr := range exprs {
-		c.collectPromotableCallArgIdentifiers(expr, argNames)
-	}
-
-	for name := range argNames {
-		c.promoteExistingSym(name)
 	}
 }
 
@@ -457,12 +443,6 @@ func (c *Compiler) commitCondRangedStages(commit, stage []OutputSlot) {
 // 3. ELSE branch: no-op (seed values already represent the else result)
 // 4. Merge: commit temp slot values to real destinations once
 func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
-	// compileArgs may promote identifier call args by creating an alloca in entry
-	// and storing the current value at the call site. If promotion happens only in
-	// the IF block, the false path would skip that store and later loads can read
-	// uninitialized memory. Pre-promote here so storage is initialized on all paths.
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	slots := c.createConditionalTempOutputs(stmt)
 
 	ifBlock, contBlock := c.createIfCont(cond, "if", "continue")
@@ -1030,8 +1010,6 @@ func (c *Compiler) finishStatementArrayCollectors(collectors []*statementArrayCo
 // literals accumulate across admitted iterations; all other outputs use normal
 // conditional iteration (last value wins).
 func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	assignExprs := []ast.Expression{}
 	assignDests := []*ast.Identifier{}
 	assignOutTypes := []Type{}
@@ -1142,8 +1120,6 @@ func (c *Compiler) compileCondRangedIteration(
 // p, q = a > 2, d < 10 evaluates each condition independently rather
 // than ANDing them all-or-nothing.
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	slots := c.createConditionalTempOutputs(stmt)
 
 	targetIdx := 0
