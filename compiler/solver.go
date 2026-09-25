@@ -866,8 +866,33 @@ func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
 	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
 }
 
+// expressionCanFail gates the diagnostics that need an operand able to fail.
+// A node whose type a later pass can still settle counts as able to fail: it
+// may yet become a comparison, and the settling pass judges it fully typed.
 func (ts *TypeSolver) expressionCanFail(expr ast.Expression) bool {
-	return treeCanFail(expr, ts.conditionPropagates)
+	return treeCanFail(expr, ts.nodeMayFail)
+}
+
+func (ts *TypeSolver) nodeMayFail(expr ast.Expression) bool {
+	if ts.conditionPropagates(expr) {
+		return true
+	}
+	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
+	return info != nil && slices.ContainsFunc(info.OutTypes, ts.awaitingType)
+}
+
+// awaitingType reports whether a check of an operand typed t must wait. In a
+// function body, a type unresolved in whole or in part can come from a
+// recursive call's result, which a later pass types. A type that never
+// resolves fails convergence instead.
+func (ts *TypeSolver) awaitingType(t Type) bool {
+	return !IsFullyResolvedType(t) && ts.FuncNameMangled != ts.ScriptCompiler.ScriptMangled
+}
+
+// pendingOperand reports whether an operator has no type to check for an
+// operand yet: it is unresolved, or awaiting part of its type.
+func (ts *TypeSolver) pendingOperand(t Type) bool {
+	return t.Kind() == UnresolvedKind || ts.awaitingType(t)
 }
 
 func (ts *TypeSolver) validateStatementCondition(expr ast.Expression, condTypes []Type) {
@@ -1232,18 +1257,33 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 		return ts.cacheTableLiteralType(al, colTypes)
 	}
 
+	pending := make([]bool, numCols)
 	for _, row := range al.Rows {
 		for col, cell := range row {
+			errorsBefore := len(ts.Errors)
 			cellType, ok := ts.typeCell(cell, al.Tok())
-			if ok {
-				if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
-					ts.Errors = append(ts.Errors, &token.CompileError{
-						Token: cell.Tok(),
-						Msg:   "table rows require statically sized cells",
-					})
+			if !ok {
+				// A cell that reported an error is only skipped.
+				if len(ts.Errors) == errorsBefore {
+					pending[col] = true
 				}
-				colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
+				continue
 			}
+			if ts.ExprCache[key(ts.FuncNameMangled, cell)].HasRanges {
+				ts.Errors = append(ts.Errors, &token.CompileError{
+					Token: cell.Tok(),
+					Msg:   "table rows require statically sized cells",
+				})
+			}
+			colTypes[col] = ts.mergeColType(colTypes[col], cellType, col, al.Tok())
+		}
+	}
+	// Columns are typed independently: a cell awaiting its type keeps only its
+	// own column pending, since the column's other cells alone could settle a
+	// type that cell still changes.
+	for col := range colTypes {
+		if pending[col] {
+			colTypes[col] = Unresolved{}
 		}
 	}
 	return ts.cacheTableLiteralType(al, colTypes)
@@ -1423,10 +1463,12 @@ func (ts *TypeSolver) TypeDotExpression(expr *ast.DotExpression) []Type {
 		})
 		return types
 	default:
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Tok(),
-			Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftTypes[0].String()),
-		})
+		if !ts.awaitingType(leftTypes[0]) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: expr.Tok(),
+				Msg:   fmt.Sprintf("field access expects a struct or table value, got %s", leftTypes[0].String()),
+			})
+		}
 		return types
 	}
 }
@@ -1464,6 +1506,11 @@ func (ts *TypeSolver) typeCell(expr ast.Expression, tok token.Token) (Type, bool
 		return Unresolved{}, false
 	}
 	cellType := tps[0]
+	// A cell awaiting any part of its type keeps its literal pending: merging
+	// the other cells alone could settle a type this cell still changes.
+	if ts.awaitingType(cellType) {
+		return Unresolved{}, false
+	}
 	if cellType.Kind() == UnresolvedKind {
 		if len(ts.Errors) == errorsBefore {
 			ts.Errors = append(ts.Errors, &token.CompileError{Token: tok, Msg: "bracket literal cell type could not be resolved"})
@@ -1558,8 +1605,10 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 	}
 	ts.rejectRangeDependentBound("start", r.Start, r.Tok())
 	ts.rejectRangeDependentBound("stop", r.Stop, r.Tok())
+	// A bound still awaiting its type postpones these checks to a later pass.
+	awaiting := ts.awaitingType(startT[0]) || ts.awaitingType(stopT[0])
 	// must be integers
-	if startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind {
+	if !awaiting && (startT[0].Kind() != IntKind || stopT[0].Kind() != IntKind) {
 		ce := &token.CompileError{
 			Token: r.Tok(),
 			Msg:   fmt.Sprintf("range bounds should be Integer. start type: %s, stop type: %s", startT[0], stopT[0]),
@@ -1567,7 +1616,7 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 		ts.Errors = append(ts.Errors, ce)
 	}
 	// must match
-	if !EqualTypes(startT, stopT) {
+	if !awaiting && !EqualTypes(startT, stopT) {
 		ce := &token.CompileError{
 			Token: r.Tok(),
 			Msg:   fmt.Sprintf("range start and stop must have same type. start Type: %s, stop Type: %s", startT[0], stopT[0]),
@@ -1585,14 +1634,15 @@ func (ts *TypeSolver) TypeRangeExpression(r *ast.RangeLiteral, isRoot bool) []Ty
 			ts.Errors = append(ts.Errors, ce)
 		}
 		ts.rejectRangeDependentBound("step", r.Step, r.Tok())
-		if stepT[0].Kind() != IntKind {
+		awaiting = awaiting || ts.awaitingType(stepT[0])
+		if !awaiting && stepT[0].Kind() != IntKind {
 			ce := &token.CompileError{
 				Token: r.Tok(),
 				Msg:   fmt.Sprintf("range bounds should be Integer. got step type: %s", stepT[0]),
 			}
 			ts.Errors = append(ts.Errors, ce)
 		}
-		if !EqualTypes(startT, stepT) {
+		if !awaiting && !EqualTypes(startT, stepT) {
 			ce := &token.CompileError{
 				Token: r.Tok(),
 				Msg:   fmt.Sprintf("range start and step must have same type. start Type: %s, step Type: %s", startT[0], stepT[0]),
@@ -1615,8 +1665,14 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
+	errorsBefore := len(ts.Errors)
 	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
-	if !ok {
+	if !ok || ts.awaitingType(arrType) {
+		// A target still awaiting its type reports nothing, and range
+		// handling visits the index of every error-free access.
+		if len(ts.Errors) == errorsBefore {
+			ts.TypeExpression(ax.Range, true)
+		}
 		return info.OutTypes
 	}
 	if !hasConcreteArrayElemType(arrType.ElemType) {
@@ -1640,7 +1696,13 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 		return info.OutTypes
 	}
 
+	// The result type does not depend on the index's, so an index still
+	// awaiting its type only postpones the checks below.
 	idxType := idxTypes[0]
+	if ts.awaitingType(idxType) {
+		info.OutTypes = []Type{resultType}
+		return info.OutTypes
+	}
 	if idxType.Kind() != IntKind && idxType.Kind() != RangeKind {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: ax.Tok(),
@@ -1816,7 +1878,7 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 		rightType = ptr.Elem
 	}
 
-	if leftType.Kind() == UnresolvedKind || rightType.Kind() == UnresolvedKind {
+	if ts.pendingOperand(leftType) || ts.pendingOperand(rightType) {
 		return Unresolved{}, CondNone
 	}
 
@@ -1855,9 +1917,9 @@ func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Tok
 	}
 
 	switch {
-	case leftType.Kind() == UnresolvedKind:
+	case ts.pendingOperand(leftType):
 		return rightType
-	case rightType.Kind() == UnresolvedKind:
+	case ts.pendingOperand(rightType):
 		return leftType
 	case leftType.Kind() == StrKind && rightType.Kind() == StrKind:
 		return mergeStringFlavor(leftType, rightType)
@@ -2231,7 +2293,7 @@ func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []
 			opType = ptr.Elem
 		}
 
-		if opType.Kind() == UnresolvedKind {
+		if ts.pendingOperand(opType) {
 			types = append(types, Unresolved{})
 			continue
 		}
@@ -2536,10 +2598,12 @@ func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, 
 
 	arrType, ok := arrayTypes[0].(Array)
 	if !ok {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("%s target is not an array", context),
-		})
+		if !ts.awaitingType(arrayTypes[0]) {
+			ts.Errors = append(ts.Errors, &token.CompileError{
+				Token: tok,
+				Msg:   fmt.Sprintf("%s target is not an array", context),
+			})
+		}
 		return Array{}, false
 	}
 	return arrType, true

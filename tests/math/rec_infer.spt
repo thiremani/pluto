@@ -1,0 +1,51 @@
+t = Tally(3)
+t
+
+hops = [2 0 1]
+h = Hop(hops, 3)
+h
+
+c = Count(3)
+c
+
+k = Keep(ada, 2)
+k.age
+
+down = Down(3)
+down
+
+tri = Tri(3)
+tri
+
+skip = Skip(3)
+skip
+
+clamp = Clamp(5, 2)
+clamp
+
+gate = Gate(5, 2)
+gate
+
+half, first = Mixed(2)
+half, first
+
+pick = Pick(2, 7)
+pick
+
+bump = Bump(2, 5)
+bump
+
+bumpRight = BumpRight(2, 5)
+bumpRight
+
+flip = Flip(2, 5)
+flip
+
+pad = Pad(2, 5)
+pad
+
+padRight = PadRight(2, 5)
+padRight
+
+columnAt = ColumnAt(2, 5)
+columnAt
