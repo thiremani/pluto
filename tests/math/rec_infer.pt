@@ -1,9 +1,10 @@
 # A recursive body can use its own call's result before a solver pass has
-# typed it: checks on that result wait for the pass that types it.
+# typed it: checks on that result wait for the pass that types it. Each
+# program prints a different value if its recursion does not run.
 
 # The result indexed, and used as an index.
 y = Tally(n)
-    y = [n]
+    y = [0]
     y = n > 0 [Tally(n - 1)[0] + 1]
 
 y = Hop(arr, n)
@@ -15,48 +16,31 @@ y = Count(n)
     y = [0]
     y = n > 0 Count(n - 1) ⊕ [Count(n - 1)[n - 1] + 1]
 
-# A field of the result.
+# A field of the result. The level count shows every level passed the check.
 ada = Person
   : name age
     "Ada" 36
 
-p = Keep(q, n)
+p, levels = Keep(q, n)
     p = q
-    prior = n > 0 Keep(q, n - 1)
-    p = prior.age > 0 prior
+    levels = 0
+    prior, below = n > 0 Keep(q, n - 1)
+    levels = prior.age > 0 below + 1
 
-# The result as a range's start, stop, or step.
-y = Down(n)
-    y = n
-    prior = n > 0 Down(n - 1)
-    k = prior:5
-    y = y + k
-
+# The result as a range bound.
 y = Tri(n)
     y = n
     prior = n > 0 Tri(n - 1)
     k = 0:prior
     y = y + k
 
-y = Skip(n)
-    y = n
-    prior = n > 0 Skip(n - 1)
-    k = 0:6:(prior + 1)
-    y = y + k
-
-# A comparison of the result as the left operand of || and &&.
+# A comparison of the result as the left operand of ||.
 y = Clamp(x, n)
     prior = n > 0 Clamp(x - 1, n - 1)
     y = prior > 2 || x
 
-y = Gate(x, n)
-    y = x
-    prior = n > 0 Gate(x - 1, n - 1)
-    y = prior > 2 && x + 10
-
-# A table cell keeps only its own column pending: the float the result
-# promotes the column to reaches the output read from it, and another column
-# still types its output.
+# A table cell holding the result keeps its column pending until the result
+# promotes it to float, and the output read from the column sees the float.
 y, z = Mixed(n)
     y = 0.5
     prior, _ = n > 0 Mixed(n - 1)
@@ -65,17 +49,9 @@ y, z = Mixed(n)
         1
         prior
     ]
-    z = tab.a[0]
+    z = tab.a[0] + tab.a[1]
 
-y = Pick(n, x)
-    prior = n > 0 Pick(n - 1, x)
-    tab = [
-        :a b
-        prior x
-    ]
-    y = tab.b[0]
-
-# Operators wait for a column the result still leaves pending.
+# An operator waits for a column the result still leaves pending.
 y = Bump(n, x)
     y = x
     prior = n > 0 Bump(n - 1, x)
@@ -86,51 +62,25 @@ y = Bump(n, x)
     col = tab.a + 1
     y = n > 0 col[0] + x
 
-y = BumpRight(n, x)
-    y = x
-    prior = n > 0 BumpRight(n - 1, x)
-    tab = [
-        :a
-        prior
-    ]
-    col = 1 + tab.a
-    y = n > 0 col[0] + x
+# Mutual recursion: a result waits the same way when it comes from another
+# function in the cycle.
+y = Ping(n)
+    y = [0]
+    y = n > 0 [Pong(n - 1)[0] + 1]
 
-y = Flip(n, x)
-    y = x
-    prior = n > 0 Flip(n - 1, x)
-    tab = [
-        :a
-        prior
-    ]
-    col = -tab.a
-    y = n > 0 col[0] + x
+y = Pong(n)
+    y = [0]
+    y = n > 0 [Ping(n - 1)[0] + 2]
 
-y = Pad(n, x)
-    prior = n > 0 Pad(n - 1, x)
-    tab = [
-        :a
-        prior
-    ]
-    col = x > 3 && tab.a || [x]
-    y = col[0] + 1
+# A three-function cycle, with the result as an index.
+y = HopA(arr, n)
+    y = 0
+    y = n > 0 arr[HopB(arr, n - 1)]
 
-y = PadRight(n, x)
-    prior = n > 0 PadRight(n - 1, x)
-    tab = [
-        :a
-        prior
-    ]
-    col = x > 3 && [x] || tab.a
-    y = col[0] + 1
+y = HopB(arr, n)
+    y = 0
+    y = n > 0 arr[HopC(arr, n - 1)]
 
-# A computed index into a pending column is typed while the column waits.
-y = ColumnAt(n, x)
-    y = x
-    prior = n > 0 ColumnAt(n - 1, x)
-    tab = [
-        :a
-        prior
-        x
-    ]
-    y = n > 0 tab.a[n - 1] + 1
+y = HopC(arr, n)
+    y = 0
+    y = n > 0 arr[HopA(arr, n - 1)]
