@@ -2591,16 +2591,14 @@ func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, 
 	}
 
 	arrType, ok := arrayTypes[0].(Array)
-	if !ok {
-		if !ts.awaitingType(arrayTypes[0]) {
-			ts.Errors = append(ts.Errors, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("%s target is not an array", context),
-			})
-		}
-		return Array{}, false
+	if ok || ts.awaitingType(arrayTypes[0]) {
+		return arrType, ok
 	}
-	return arrType, true
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("%s target is not an array", context),
+	})
+	return Array{}, false
 }
 
 // lookupCallTemplate finds the function template and generates its mangled name.
