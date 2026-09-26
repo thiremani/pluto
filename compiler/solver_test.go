@@ -2419,19 +2419,36 @@ func TestFailedTableCellReportsOnce(t *testing.T) {
 	require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
 }
 
-// An access whose target already failed types nothing further, so its index
-// adds no error of its own.
-func TestFailedArrayTargetSkipsIndex(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
+// An access types its index even when its target fails, so the index reports
+// its own errors and its conditions count for || and &&.
+func TestFailedArrayTargetStillTypesIndex(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		want   []string
+	}{
+		{"NotAnArray", "x = 5[zz]\nx", []string{"array access target is not an array", "undefined identifier: zz"}},
+		{"EmptyArray", "x = [][zz]\nx", []string{"undefined identifier: zz", "cannot index an empty array without an element type"}},
+		{"ConditionInIndex", "x = 5[2 > 1] || 0\nx", []string{"array access target is not an array"}},
+	}
 
-	cc := NewCodeCompiler(ctx, "failedArrayTarget", "", ast.NewCode())
-	require.Empty(t, cc.Compile())
-	ts := NewTypeSolver(NewScriptCompiler(ctx, "failedArrayTarget", mustParseScript(t, "x = 5[zz]\nx"), cc))
-	ts.Solve()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
 
-	require.Len(t, ts.Errors, 1)
-	require.Equal(t, "array access target is not an array", ts.Errors[0].Msg)
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			ts.Solve()
+
+			var msgs []string
+			for _, err := range ts.Errors {
+				msgs = append(msgs, err.Msg)
+			}
+			require.Equal(t, tc.want, msgs)
+		})
+	}
 }
 
 // A settled specialization must carry its variable types across scripts (#71).

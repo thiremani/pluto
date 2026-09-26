@@ -1670,14 +1670,13 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 	info := &ExprInfo{OutTypes: []Type{Unresolved{}}, ExprLen: 1}
 	ts.ExprCache[key(ts.FuncNameMangled, ax)] = info
 
-	errorsBefore := len(ts.Errors)
 	arrType, ok := ts.expectSingleArray(ax.Array, ax.Tok(), "array access")
+	// The index is typed before any return, because range handling and the
+	// ||, && and condition checks visit every child. Preserve its Range type
+	// long enough to validate the driver; the enclosing range rewrite later
+	// shadows it with a scalar index.
+	idxTypes := ts.TypeExpression(ax.Range, true)
 	if !ok || ts.awaitingType(arrType) {
-		// A target still awaiting its type reports nothing, and range
-		// handling visits the index of every error-free access.
-		if len(ts.Errors) == errorsBefore {
-			ts.TypeExpression(ax.Range, true)
-		}
 		return info.OutTypes
 	}
 	if !hasConcreteArrayElemType(arrType.ElemType) {
@@ -1688,10 +1687,6 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 		return info.OutTypes
 	}
 	resultType := arrayIndexResultType(arrType)
-
-	// Preserve the Range type long enough to validate the driver. The enclosing
-	// range rewrite later shadows it with a scalar index.
-	idxTypes := ts.TypeExpression(ax.Range, true)
 	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
 	if len(idxTypes) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
