@@ -2467,10 +2467,6 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 
 	arrInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Array)]
 	idxInfo := ts.ExprCache[key(ts.FuncNameMangled, ax.Range)]
-	// An invalid array source can stop before its index is typed.
-	if idxInfo == nil {
-		return ArrayRange{}, nil, false
-	}
 	if arrInfo.HasRanges || len(arrInfo.OutTypes) != 1 || len(idxInfo.OutTypes) != 1 {
 		return ArrayRange{}, nil, false
 	}
