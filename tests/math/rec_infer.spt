@@ -1,0 +1,30 @@
+t = Tally(3)
+t
+
+hops = [2 0 1]
+h = Hop(hops, 4)
+h
+
+c = Count(3)
+c
+
+k, levels = Keep(ada, 2)
+k.age, levels
+
+tri = Tri(3)
+tri
+
+clamp = Clamp(5, 2)
+clamp
+
+half, sum = Mixed(2)
+half, sum
+
+bump = Bump(2, 5)
+bump
+
+ping = Ping(3)
+ping
+
+hopA = HopA(hops, 4)
+hopA

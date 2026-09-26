@@ -2,8 +2,8 @@
 
 Recorded 2026-09-05. Implementation baseline: Pluto `840b147` (PR #101).
 This is a follow-up work plan, not a claim that the work below is implemented.
-The immediate priority is correct incoming-output seed dependencies alongside
-`MustWrite`/`MayWrite`, before expanding PIR call support.
+Its first priority, incoming-output seed dependencies, has since been resolved
+by a language rule instead of an analysis (section 1).
 
 ## Current PR disposition
 
@@ -17,13 +17,13 @@ new slice; they do not require expanding #101. One nonblocking PR-description
 phrase remains: Review Round 4 should name RHS semantic type, merged target
 type, and stored type separately, as the corrected code comment already does.
 
-## 1. Next compiler PR: seed dependency analysis
+## 1. Seed dependencies: resolved by the output-read rule
 
 Resolved by a language rule instead of an analysis
 ([PR #104](https://github.com/thiremani/pluto/pull/104), superseding the closed
 [PR #102](https://github.com/thiremani/pluto/pull/102)): a declared output is
-readable inside its template only after it is definitely assigned, so the
-reproducer below is rejected at `y = y + 1`. The hidden seed and destination-seeded staging slots continue to
+readable inside its template only after it is definitely assigned, so a body
+that writes `y = x > 0 x` and then `y = y + 1` is rejected at the read. The hidden seed and destination-seeded staging slots continue to
 preserve outputs that are not written. A caller can explicitly connect an
 input to an output by reusing the same binding: later statements then observe
 writes through that output, in ordinary and ranged calls alike. Inputs are
@@ -52,103 +52,12 @@ A shared output takes its input's storage inside the private alias variant,
 preserving sharing without changing unrelated input types. These cases are
 covered by `tests/alias_input`.
 
-The original analysis plan is kept below as the specification for the planned
-follow-up, seed-readable outputs
-([issue #105](https://github.com/thiremani/pluto/issues/105)): a body may read
-an output before assigning it and observes the destination's previous value,
-with output types still inferred from inputs and the body.
-
-### Confirmed failure
-
-```pluto
-# seed.pt
-y = MaybeIncrement(x)
-    y = x > 0 x
-    y = y + 1
-```
-
-An existing destination seeded with 20 produces 21 for `MaybeIncrement(-1)`;
-a fresh destination produces 1. The last statement always writes, but its
-value may depend on the incoming output seed.
-
-```pluto
-# seed.spt: should compile and print 21
-a = 20
-a = MaybeIncrement(-1)
-a
-```
-
-The baseline incorrectly rejects the second assignment as overwriting an
-unused value. Inserting `a` as a print before the call makes it compile and
-print 20, then 21. This demonstrates an analysis defect under current semantics,
-independent of any preference about whether seeded outputs should exist.
-
-### Keep three facts separate
-
-| Fact | Question | Main consumer |
-| --- | --- | --- |
-| Callee body write effect | Does this output receive a write whenever this scalar body executes? | Yield/write propagation and call routing |
-| Callee seed-read dependency | Can executing this body read a particular output's incoming value before it is definitely replaced? | Caller dependencies, liveness, future scheduling |
-| Caller boundary resolution | Does this assignment use its existing destination to resolve a non-writing result? | Keep-old semantics and call-site CFG reads |
-
-`MustWrite` and seed dependence are independent. An unconditional overwrite
-may need no old value; an unconditional computed update can need it. A
-conditionally writing body can either inspect its seed or leave preservation
-entirely to the caller. `MayWrite` also includes never writing: it is not a
-read/write access-mode declaration or a guarantee of initialization.
-
-Current entry points to inspect:
-
-- `compiler/effects.go`: `StatementEffect`, `seedResolvedYield`,
-  `deriveBodyOutputEffects`, and specialization/SCC publication.
-- `compiler/cfg.go`: `typedStatementEvents`, which places implicit destination
-  reads before write events.
-- `compiler/compiler.go` and call/conditional lowering: seed setup, staged
-  outputs, alias handling, and direct versus indirect returns.
-- [PIR plan, section 15](./Pluto%20IR%20Plan.md): its assertion that an
-  all-`MustWrite` callee reads no seed needs correction in the implementation PR.
-
-Do not merely broaden the existing `StatementEffect.ReadsSeed` list. The
-current body fold interprets entries there as boundary-only preservation and
-does not count those apparent writes as real body writes. Reusing that meaning
-for genuine seed-dependent computation would incorrectly downgrade an
-always-writing accumulator. Retain raw body-write facts and boundary-resolution
-facts separately; CFG may consume their combined relevant destination reads.
-
-The concrete field names are an implementation choice. Start with conservative
-per-incoming-output seed-read summaries; do not require a full result-dependency
-matrix unless a consumer needs it. Include dependencies used to compute another
-output, not just self-updates. Compose these dependencies for indirect outputs
-too; only direct-result boundary resolution belongs behind a direct-ABI check.
-Propagate summaries through calls and recursive components: either write-effect
-weakening or seed-read growth must requeue affected callers. Publish and cache
-the facts together, preserving the existing uncomputed/invalid/settled
-discipline. Unknown analysis must not silently mean no seed reads.
-
-### Acceptance criteria
-
-- [ ] The reproducer compiles without a redundant print and produces 21; the
-  fresh-target variant produces 1.
-- [ ] Unconditional seed-dependent writes remain `MustWrite`, with the old
-  destination live where needed.
-- [ ] A definite overwrite before any read removes the incoming-seed dependency;
-  a conditional overwrite does not. Copying the seed to a local first preserves
-  the dependency even if the output is subsequently overwritten.
-- [ ] A seed read only in a condition or printed string still counts when the
-  output is later unconditionally overwritten. Seed reads are not limited to
-  dependencies of the returned value.
-- [ ] Nested calls, recursive summaries, multiple outputs, cross-output seed
-  reads, and zero/one/many-iteration cases are covered.
-- [ ] Fresh targets, discards, incompatible-storage zero seeds, caller argument
-  failure, and caller-side retention keep their existing distinct behavior.
-- [ ] CFG and PIR consume settled solver facts rather than independently
-  rediscovering dependencies. Existing unused-write diagnostics still work.
-- [ ] Direct and indirect calls preserve staging and alias-input regressions.
-  Public symbols and prototypes do not change with body effects; every public
-  direct scalar return retains its existing hidden seed parameter.
-- [ ] Cold and warm caches agree on summaries, diagnostics, and output.
-- [ ] Effect tests, CFG regression tests, ABI/IR checks, race tests, and relevant
-  leak checks pass. Run the full leak suite before submitting the compiler PR.
+Seed-readable outputs, which would let a body read an output before assigning
+it, are not planned ([issue #105](https://github.com/thiremani/pluto/issues/105)):
+a function that needs its destination's previous value takes it as an input,
+and the caller shares the destination with it.
+[Issue #123](https://github.com/thiremani/pluto/issues/123) proposes going
+further and requiring every output to be definitely assigned.
 
 ## 2. Formatting: model `%n` as an explicit write operand
 
@@ -292,8 +201,8 @@ The 2026-09-05 review read the supplied research PDF, three-foundations PDF, and
 Markdown assessment. Recommendations in those documents were assessed as
 proposals; they did not authorize implementing every suggestion.
 
-Native probes built from `840b147` confirmed seed dependence and its false
-diagnostic, `%n` parameter mutation, and the collector result above. A Python
+Native probes built from `840b147` confirmed seed dependence, which then made a
+caller diagnostic wrong (#104 has since rejected such bodies), `%n` parameter mutation, and the collector result above. A Python
 probe against bench `019007ab` confirmed that its mismatch reporter returns
 normally. Numeric guards, output paths, and struct-field limits were inspected
 in source. No destructive output-collision probe was run. Local website review
