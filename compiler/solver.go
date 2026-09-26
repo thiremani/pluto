@@ -862,9 +862,7 @@ func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool 
 // out-of-bounds read, must not be folded in.
 func (ts *TypeSolver) conditionPropagates(expr ast.Expression) bool {
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	// An invalid composite can stop typing before all descendants are cached;
-	// logical validation still walks that partial tree to report diagnostics.
-	return info != nil && (info.HasCondScalar() || info.HasCondAnd())
+	return info.HasCondScalar() || info.HasCondAnd()
 }
 
 // expressionCanFail gates the diagnostics that need an operand able to fail.
@@ -879,7 +877,7 @@ func (ts *TypeSolver) nodeMayFail(expr ast.Expression) bool {
 		return true
 	}
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	return info != nil && slices.ContainsFunc(info.OutTypes, ts.awaitingType)
+	return slices.ContainsFunc(info.OutTypes, ts.awaitingType)
 }
 
 // awaitingType reports whether a check of an operand typed t must wait. In a
