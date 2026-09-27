@@ -275,9 +275,7 @@ res = sum(a, b)
   or a formatting marker — only after a statement that assigns it
   unconditionally with a value that cannot be skipped. A read before that is
   a compile error: before any assignment, in the same simultaneous
-  assignment, or after only conditional or seed-preserving writes. A `%n`
-  marker naming an output counts as such a read, although it writes the
-  output; modeling it as a write is tracked in #109. A later
+  assignment, or after only conditional or seed-preserving writes. A later
   conditional write does not revoke the assignment. Outputs are independently
   staged result slots: an existing destination supplies the initial value and
   a fresh destination starts at its type's zero value, so a body that writes

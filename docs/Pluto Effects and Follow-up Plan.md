@@ -59,52 +59,15 @@ and the caller shares the destination with it.
 [Issue #123](https://github.com/thiremani/pluto/issues/123) proposes going
 further and requiring every output to be definitely assigned.
 
-## 2. Formatting: model `%n` as an explicit write operand
+## 2. Formatting: `%n` removed
 
-Retaining `%n` with a real write contract is a viable proposed direction. Its
-destination is an effectful operand even though it appears inside formatting
-syntax. This plan does not choose new source syntax or silently remove `%n`.
-
-The recorded baseline `840b147` accepts a function that receives `x = 99`,
-evaluates `"hello-x%n"`, and then returns `x`; it prints `hello` and returns 5.
-At that baseline, `formatSpecialValue` checks the type and code globals but
-does not reject read-only parameters.
-
-The live-reference update now rejects `%n` writes to input and iterator
-parameters through `Symbol.ReadOnly`, with ordinary and ranged rejection
-covered by `TestFormatCountRejectsInputParameter`. The former
-`TestPromotedAliasTypeGap` no longer mutates an input; its output-position
-coverage remains in `TestAliasedInputReadsOutputInVariant`. The `acc_fmt`
-fixture now writes a local count. CFG marker handling still records reads,
-so the formatting write effects below remain unimplemented.
-
-Remaining work if `%n` is retained:
-
-- Resolve and validate the destination as a writable location through the
-  normal rules, including unsupported targets. Retain the implemented input
-  and constant rejection; `Symbol.FuncArg` alone also covers writable outputs.
-- Record its write separately from reads of other markers and dynamic widths
-  or precisions. `%n` does not inherently read the destination's previous value.
-- Describe whether execution reaches the write and whether it initializes the
-  whole destination. Gating, failures before the marker, and runtime formatting
-  errors must not be treated as an unconditional write by assumption.
-- Specify when the write becomes visible relative to other operands, nested
-  formatting, and the enclosing assignment commit. Preserve defined behavior
-  or make a timing change explicit; reject conflicting combinations until their
-  ordering is supported. A write summary alone does not settle snapshot rules.
-- Model formatting effects on print statements and nested expressions too;
-  assignment-only `StatementEffect.Writes` cannot represent all these sites.
-- Set an output's runtime write marker when `%n` actually writes it. Exercise
-  both print and allocated-string formatting: `sprintf_alloc` currently invokes
-  `vsnprintf` twice, so sizing and output passes need an explicit effect contract.
-- Do not let an unmodeled formatting write enter an ordinary PIR `eval` as if it
-  were effect-free. Keep unsupported cases legacy or reject them explicitly.
-- Extend the existing rejection tests with writable locals/outputs, old-value
-  liveness, repeated markers, sequencing, skipped execution, aliases, and
-  failure paths.
-
-An explicit formatter/count output is another possible surface design. Choose
-that separately if it makes programs clearer; correctness does not require it.
+Resolved by removing `%n` ([#109](https://github.com/thiremani/pluto/issues/109))
+instead of modeling it as a write. It was the only way to write a variable
+from inside an expression, so formatting now has no write effects to track:
+a print or a formatted string only reads. `%p` stays as a read-only debugging
+aid that prints a string's or an array's storage
+([#131](https://github.com/thiremani/pluto/issues/131)). If counting formatted
+bytes becomes a real need, design it as an explicit count output.
 
 ## 3. C ABI: access contracts and trust
 
@@ -140,9 +103,8 @@ corruption, pointer retention, or global effects. Untrusted native code requires
 an isolation boundary if enforcement rather than contractual trust is needed.
 
 Emit LLVM memory/alias attributes only when their stronger contracts hold.
-They license optimizations; they do not install runtime enforcement. `%n` is a
-known, compiler-parsed operation, so it can have an exact wrapper contract even
-before general foreign bindings exist. See [the current C ABI specification](./Pluto%20C%20ABI%20Spec.md)
+They license optimizations; they do not install runtime enforcement. See
+[the current C ABI specification](./Pluto%20C%20ABI%20Spec.md)
 and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 ## 4. Remaining work order
@@ -150,7 +112,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 | Work | Completion criterion / existing reference |
 | --- | --- |
 | Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
-| `%n` effect contract | Section 2; separate bounded change with formatting semantics updated |
+| `%n` effect contract | Done: `%n` removed (section 2, #109) |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
 | Benchmark correctness | In the sibling `bench` repo, validate every measured output, fail the run on mismatch, and prevent normal snapshot publication after failure |
@@ -184,7 +146,7 @@ in `tour/functions/`, and simple data in `tour/structs.mdx` and
   definitions accept integer, float, and string literals; label broader field
   support as intended design until implemented.
 - [ ] Use the read-only-input/explicit-output contract instead of claiming all
-  functions are pure; functions can print, and `%n` requires the fix above.
+  functions are pure; functions can print.
 - [ ] Distinguish independent value semantics from COW, eager copies, and
   ownership transfer. Correct present-tense COW/locking claims in the memory
   document; label concurrency as future work.

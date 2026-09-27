@@ -1,4 +1,4 @@
 res = AccFmt(a, x)
     count = a
-    "count-count%n chars"
+    "count: -count"
     res = count + x

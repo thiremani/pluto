@@ -520,7 +520,6 @@ Notes:
 
 - On Windows the produced binary is `pluto.exe`.
 - The MSYS2 package name is unversioned; the environment helper verifies that its `llvm-config` major matches [`.llvm-version`](.llvm-version).
-- The runtime enables `%n` on UCRT to match POSIX `printf` behavior.
 
 </details>
 

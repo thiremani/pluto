@@ -12,7 +12,7 @@ import (
 
 func formatSpecifierEnd(ch rune) bool {
 	switch ch {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A', 'c', 's', 'q', 'p', 'n', '%':
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A', 'c', 's', 'q', 'p', '%':
 		return true
 	}
 	return false
@@ -116,13 +116,13 @@ func validateSpecifierModifiers(tok token.Token, value, flags, length string, ha
 		}
 	}
 
-	if length != "" && !strings.ContainsRune("diuoxXn", conversion) {
+	if length != "" && !strings.ContainsRune("diuoxX", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Length modifier %q is not supported for %%%c", length, conversion))
 	}
-	if hasWidth && strings.ContainsRune("n%", conversion) {
+	if hasWidth && conversion == '%' {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Width is not supported for %%%c", conversion))
 	}
-	if hasPrecision && strings.ContainsRune("cpn%", conversion) {
+	if hasPrecision && strings.ContainsRune("cp%", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Precision is not supported for %%%c", conversion))
 	}
 	return nil
@@ -298,6 +298,10 @@ func (p *specifierParser) parseConversion() *token.CompileError {
 		return formatSpecifierError(p.tok, p.value, "Escape sequences cannot be used as format syntax")
 	}
 	conversion := p.runes[p.index]
+	if conversion == 'n' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "%n is not supported: formatting cannot write to a variable")
+	}
 	if !formatSpecifierEnd(conversion) {
 		p.index++
 		return formatSpecifierError(p.tok, p.value, fmt.Sprintf("Unexpected %q in format specifier %q", conversion, p.spec.String()))
@@ -685,25 +689,6 @@ func (c *Compiler) storageAddress(sym *Symbol) (llvm.Value, bool) {
 func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, spec parsedSpecifier, specRune rune, byteLimit *llvm.Value, result *formattedMarker) (bool, *token.CompileError) {
 	mainType := mainSym.Type
 	switch specRune {
-	case 'n':
-		if !TypeEqual(mainType, I64) {
-			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
-		}
-		if _, source := c.lookupNamedSymbol(mainID); source == symbolCode {
-			return true, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("cannot write to constant %q", mainID),
-			}
-		}
-		if mainSym.ReadOnly {
-			return true, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("cannot write to input parameter %q", mainID),
-			}
-		}
-		s := c.promoteToMemory(mainID)
-		result.args = append(result.args, s.Val)
-		return true, nil
 	case 'q':
 		if mainType.Kind() != StrKind {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
@@ -899,7 +884,6 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 //	%d   -> %lld
 //	%*d  -> %*lld
 //	%-08d -> %-08lld
-//	%n   -> %lln
 func upgradeIntSpec(spec string) string {
 	if len(spec) < 2 || spec[0] != '%' {
 		return spec
@@ -907,7 +891,7 @@ func upgradeIntSpec(spec string) string {
 
 	conv := spec[len(spec)-1]
 	switch conv {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'n':
+	case 'd', 'i', 'u', 'o', 'x', 'X':
 		// eligible for upgrade
 	default:
 		return spec
@@ -961,17 +945,12 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 	return
 }
 
-// formatMarker is one marker a string literal's formatting resolves, with its
-// specifier when it has one.
-type formatMarker struct {
-	main string
-	spec parsedSpecifier
-}
-
-// scanFormatMarkers reads a string's markers as formatString does: escapes
-// and markers naming an unknown identifier are literal text.
-func scanFormatMarkers(value string, isDefined func(string) bool) []formatMarker {
-	var markers []formatMarker
+// formatMarkerIdentifiers returns the identifiers read by resolved markers in
+// source order, separating main-marker identifiers from dynamic
+// width/precision identifiers. A main marker formats its value whatever the
+// type, while a specifier operand is consumed as a number, so only specifier
+// identifiers can turn a named Range into an iteration driver.
+func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -986,44 +965,21 @@ func scanFormatMarkers(value string, isDefined func(string) bool) []formatMarker
 		if !isDefined(mainID) {
 			continue
 		}
+		mains = append(mains, mainID)
+
 		if end >= len(runes) || runes[end] != '%' {
-			markers = append(markers, formatMarker{main: mainID})
 			i = end - 1
 			continue
 		}
 		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
-		markers = append(markers, formatMarker{main: mainID, spec: spec})
-		i = spec.end - 1
-	}
-	return markers
-}
-
-// formatMarkerIdentifiers returns the identifiers read by resolved markers in
-// source order, separating main-marker identifiers from dynamic
-// width/precision identifiers. A main marker formats its value whatever the
-// type, while a specifier operand is consumed as a number, so only specifier
-// identifiers can turn a named Range into an iteration driver.
-func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
-	for _, marker := range scanFormatMarkers(value, isDefined) {
-		mains = append(mains, marker.main)
-		for _, specID := range marker.spec.ids {
+		for _, specID := range spec.ids {
 			if isDefined(specID.name) {
 				specs = append(specs, specID.name)
 			}
 		}
+		i = spec.end - 1
 	}
 	return mains, specs
-}
-
-// countMarkerTargets returns the names a string's %n markers write.
-func countMarkerTargets(value string, isDefined func(string) bool) []string {
-	var targets []string
-	for _, marker := range scanFormatMarkers(value, isDefined) {
-		if strings.HasSuffix(marker.spec.text, "n") {
-			targets = append(targets, marker.main)
-		}
-	}
-	return targets
 }
 
 // hasValidMarkers checks if a format string contains a resolved marker.
