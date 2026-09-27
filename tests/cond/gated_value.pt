@@ -16,3 +16,14 @@ y = Lower(x, n)
 y = Ratio(x, d)
     y = 5
     y = d != 0 (x ÷ d) < 1
+
+# With the gate holding, the value takes either branch of its ||.
+y = Pick(a, b, n)
+    y = 5
+    y = n > 0 (n > 1 && a || b)[0]
+
+# A copy made inside a holding gate is freed when a later condition in the
+# same value fails.
+y = CopyThenFail(a, b, n)
+    y = 5
+    y = n > 0 (n > 1 && a || b)[0] + (n > 3)
