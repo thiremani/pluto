@@ -842,44 +842,17 @@ func (c *Compiler) compileStatement(stmt ast.Statement) {
 	}
 }
 
-// promoteStatementBindings moves the bindings a statement may address into
-// memory before it branches or loops: variables its %n markers write, and
-// identifiers it passes to indirect parameters. Their current values are then
-// stored on every path, and a loop's scope can't hold its own copy. Targets
-// that %n can't write are left for formatting to reject.
+// promoteStatementBindings moves the identifiers a statement passes to indirect
+// parameters into memory before it branches or loops. Their current values are
+// then stored on every path, and a loop's scope can't hold its own copy.
 func (c *Compiler) promoteStatementBindings(stmt ast.Statement) {
-	exprs := statementExpressions(stmt)
 	names := make(map[string]struct{})
-	for _, expr := range exprs {
+	for _, expr := range statementExpressions(stmt) {
 		c.collectPromotableCallArgIdentifiers(expr, names)
-	}
-	for _, lit := range appendStringLiterals(nil, exprs) {
-		for _, name := range countMarkerTargets(lit.Token.Literal, c.isDefined) {
-			sym, source := c.lookupNamedSymbol(name)
-			if source == symbolLocal && TypeEqual(sym.Type, I64) && !sym.ReadOnly {
-				names[name] = struct{}{}
-			}
-		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(names)) {
 		c.promoteExistingSym(name)
 	}
-}
-
-func (c *Compiler) isDefined(name string) bool {
-	_, source := c.lookupNamedSymbol(name)
-	return source != symbolMissing
-}
-
-func appendStringLiterals(lits []*ast.StringLiteral, exprs []ast.Expression) []*ast.StringLiteral {
-	for _, expr := range exprs {
-		if lit, ok := expr.(*ast.StringLiteral); ok {
-			lits = append(lits, lit)
-			continue
-		}
-		lits = appendStringLiterals(lits, ast.ExprChildren(expr))
-	}
-	return lits
 }
 
 func (c *Compiler) makeZeroValue(symType Type) *Symbol {
@@ -3275,9 +3248,9 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 	// Indirect-return callees write through their output pointers. Always point
 	// them at independent, destination-seeded slots so a call in one RHS cannot
 	// mutate a real destination before sibling RHS expressions have read the
-	// statement-start values. Seeding after the arguments, as a direct return
-	// does, lets a shared input see an argument's %n write. The outer
-	// assignment owns the eventual commit and cleanup.
+	// statement-start values. They are seeded after the arguments, as a direct
+	// return's seed is. The outer assignment owns the eventual commit and
+	// cleanup.
 	var outputs []*Symbol
 	c.withPreparedCall(sig, ce, dest, func(call preparedCall) {
 		outputs = c.makeSeededTempOutputs(dest, info.OutTypes)

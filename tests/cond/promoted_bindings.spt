@@ -1,23 +1,5 @@
-# A skipped %n leaves its target unchanged.
-m1 = 7
-k = 3
-"abc-m1%n", k > 5
-m1
-
-m2 = 7
-z = k > 5 "ab-m2%n"
-"z:-z m2:-m2"
-
-f = Fmt(3)
-f
-
-# A ranged print writes its %n on every iteration.
-m3 = 7
-i = 0:3
-"ab-m3%n", i + 0
-m3
-
 # A skipped call leaves the arguments it would address unchanged.
+k = 3
 a1 = [1 2 3]
 Twice(a1), k > 5
 a1

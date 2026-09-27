@@ -144,9 +144,10 @@ Supported conversions are:
 | `c` | `I64` character value |
 | `s` | string-compatible output |
 | `q` | quoted `Str` |
-| `p` | pointer |
-| `n` | writable `I64` byte-count target |
+| `p` | address of a `Str`'s characters or an array's element buffer |
 | `%` | default-formatted value followed by `%` |
+
+C's `%n` is not supported: formatting never writes to a variable.
 
 ## Array element formatting
 
@@ -198,11 +199,19 @@ Flags are conversion-specific:
 | `Str` `x`, `X` | `-`, `#`, space |
 | floating-point conversions | `-`, `+`, space, `#`, `0` |
 | `c`, `s`, `q`, `p` | `-` |
-| `n`, `%` | none |
+| `%` | none |
 
-Width is not supported for `n` or `%`. Pointer output uses lowercase
+Width is not supported for `%`. Pointer output uses lowercase
 alternate-form hexadecimal, including an `0x` prefix for nonzero addresses.
-Precision is not supported for `c`, `p`, `n`, or `%`. Following `printf`,
+`%p` prints where a value's own data lives: a string's characters, or an
+array's element buffer. An array that has never held an element has no buffer
+yet and prints `0`. Other types have no storage of their own and are rejected.
+It is a debugging aid, not a stable identity: addresses change between runs
+and allocators reuse freed memory, so compare only values that are alive at
+the same time. Two such values print the same nonzero address only when they
+share storage, as a static string and its copy do, or an input and the output
+a call shares with it.
+Precision is not supported for `c`, `p`, or `%`. Following `printf`,
 precision on `%s`, `%q`, and string `%x`/`%X` limits the original string in
 bytes, not Unicode code points, and can split a multi-byte character. For example,
 `πx` has bytes `cf 80 78`, so `%.1s` emits only `cf`, while `%.2s` emits `π`.
