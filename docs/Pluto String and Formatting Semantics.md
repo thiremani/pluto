@@ -144,7 +144,7 @@ Supported conversions are:
 | `c` | `I64` character value |
 | `s` | string-compatible output |
 | `q` | quoted `Str` |
-| `p` | pointer |
+| `p` | address of a `Str`'s characters or an array's element buffer |
 | `n` | writable `I64` byte-count target |
 | `%` | default-formatted value followed by `%` |
 
@@ -202,6 +202,13 @@ Flags are conversion-specific:
 
 Width is not supported for `n` or `%`. Pointer output uses lowercase
 alternate-form hexadecimal, including an `0x` prefix for nonzero addresses.
+`%p` prints where a value's own data lives: a string's characters, or an
+array's element buffer. An array that has never held an element has no buffer
+yet and prints `0`. Other types have no storage of their own and are rejected. It is a debugging aid, not
+a stable identity: addresses change between runs and allocators reuse freed
+memory, so compare only values that are alive at the same time. Two such values
+print the same address only when they share storage, as a static string and its
+copy do, or an input and the output a call shares with it.
 Precision is not supported for `c`, `p`, `n`, or `%`. Following `printf`,
 precision on `%s`, `%q`, and string `%x`/`%X` limits the original string in
 bytes, not Unicode code points, and can split a multi-byte character. For example,

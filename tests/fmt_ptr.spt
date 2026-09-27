@@ -11,12 +11,36 @@ y = 0
 z = x * y
 "y is -y%d. z = x * y and z is -z%d"
 x + y, x - y
-"Check the pointer op with vars x, y. The result is -x%p -y%p"
+
+# %p prints where a value's own data lives. Two values alive at the same time
+# share an address only when they share storage.
+static = "hello"
+shared = static
+"A static string is shared: -static%p -shared%p"
+
+heap = "ab" ⊕ "cd"
+heapCopy = heap
+"A heap string is copied: -heap%p -heapCopy%p"
+
+ints = [1 2 3]
+intsCopy = ints
+"An array is copied: -ints%p -intsCopy%p"
+
+floats = [1.5 2.5]
+words = ["x" "y"]
+grid = [
+    1 2
+    3 4
+]
+"Element buffers: -floats%p -words%p -grid%p"
+
+empty = []
+"An empty array has no buffer: -empty%p"
 
 pointerWidth = 24
-"Pointer width: |-x%24p|"
-"Pointer left: |-x%-24p|"
-"Pointer dynamic: |-x%(-pointerWidth)p|"
+"Pointer width: |-static%24p|"
+"Pointer left: |-static%-24p|"
+"Pointer dynamic: |-static%(-pointerWidth)p|"
 
 "x is - x. This checks a space between marker (-) and variable does not print var value"
 "%"

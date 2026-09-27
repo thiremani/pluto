@@ -145,3 +145,8 @@ out, left, right = ResetPair(first, second)
 out, tag = Label(current, label)
     out = current + 0
     tag = label
+
+# The body sees the storage its caller shares with it.
+out = Bang(current)
+    out = current ⊕ "!"
+    "storage: -current%p -out%p"

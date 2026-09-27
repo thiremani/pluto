@@ -669,6 +669,19 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 	return true
 }
 
+// storageAddress returns where a value's own data lives: a string's characters
+// or an array's element buffer. Other values have no storage of their own.
+func (c *Compiler) storageAddress(sym *Symbol) (llvm.Value, bool) {
+	switch sym.Type.Kind() {
+	case StrKind:
+		return sym.Val, true
+	case ArrayKind:
+		return c.ArrayData(sym, sym.Type.(Array).ElemType), true
+	default:
+		return llvm.Value{}, false
+	}
+}
+
 func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, spec parsedSpecifier, specRune rune, byteLimit *llvm.Value, result *formattedMarker) (bool, *token.CompileError) {
 	mainType := mainSym.Type
 	switch specRune {
@@ -725,12 +738,12 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 	case 's':
 		return c.formatAsString(mainSym, result), nil
 	case 'p':
-		// Normalize pointer output as lowercase alternate-form hex while preserving width.
-		rawSym, _ := c.getRawSymbol(mainID)
-		if rawSym.Type.Kind() != PtrKind {
-			return true, formatSpecifierTypeError(tok, specRune, mainID, rawSym.Type)
+		storage, ok := c.storageAddress(mainSym)
+		if !ok {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
 		}
-		ptrAsInt := c.builder.CreatePtrToInt(rawSym.Val, c.Context.Int64Type(), "ptr_as_i64")
+		// Normalize pointer output as lowercase alternate-form hex while preserving width.
+		ptrAsInt := c.builder.CreatePtrToInt(storage, c.Context.Int64Type(), "ptr_as_i64")
 		result.text = "%#" + result.text[1:len(result.text)-1] + "llx"
 		result.args = append(result.args, ptrAsInt)
 		return true, nil

@@ -41,3 +41,6 @@ SharedPair: 105 10
 NextRange: 2:3
 CondCount: 11 11 lr
 Label: 2 ab
+re:storage: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
+re:storage: (0x[0-9a-f]+) \1
+Bang: abcd! abcd!

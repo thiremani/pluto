@@ -194,6 +194,15 @@ width = 3.5
 			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: x. Variable type: I64",
 		},
 		{
+			name: "PointerOnTable",
+			input: `t = [
+  : Name Score
+    "Ada" 10
+]
+"Value: -t%p"`,
+			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: t. Variable type: Table[Name:Str Score:I64]",
+		},
+		{
 			name: "CountOnNonInteger",
 			input: `s = "hello"
 "Value: -s%n"`,
@@ -458,6 +467,37 @@ y = 3.2
 			input: `x = 5
 "x = -x%n"`,
 			expectOutput: "x = %lln",
+		},
+		{
+			name: "PointerOnString",
+			input: `s = "a" ⊕ "b"
+"Value: -s%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "ptrtoint",
+		},
+		{
+			name: "PointerOnArray",
+			input: `a = [1 2]
+"Value: -a%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "call ptr @arr_i64_data",
+		},
+		{
+			name: "PointerOnRank2Array",
+			input: `grid = [
+    1 2
+    3 4
+]
+"Value: -grid%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "call ptr @arr_i64_data",
+		},
+		{
+			name: "PointerOnEmptyArray",
+			input: `e = []
+"Value: -e%p"`,
+			expectOutput: "Value: %#llx",
+			rejectIR:     "_data",
 		},
 		{
 			name:         "VarNotDefined",
