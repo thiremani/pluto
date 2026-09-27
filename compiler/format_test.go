@@ -510,8 +510,8 @@ width = 10
 			expectIR:     "call ptr @str_quote_prefix",
 		},
 		{
-			// An array read keeps the precision from folding to a constant, which
-			// would hide a 32-bit truncation; 2^32 would not survive one.
+			// The precision is read from an array so the compiler can't fold it: with a
+			// constant, a 32-bit truncation leaves no instruction for rejectIR to find.
 			name: "QuotedSpecifierDynamicPrecision",
 			input: `s = "hello"
 precision = [4294967296][0]

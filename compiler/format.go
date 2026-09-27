@@ -727,7 +727,9 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 		if !ok {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
 		}
-		// Normalize pointer output as lowercase alternate-form hex while preserving width.
+		// C's %p text differs by platform: Microsoft's runtime prints uppercase
+		// digits without 0x. Print the address as lowercase hex instead, where the
+		// # flag adds the 0x inside the field width.
 		ptrAsInt := c.builder.CreatePtrToInt(storage, c.Context.Int64Type(), "ptr_as_i64")
 		result.text = "%#" + result.text[1:len(result.text)-1] + "llx"
 		result.args = append(result.args, ptrAsInt)
