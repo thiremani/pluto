@@ -41,3 +41,8 @@ y = NestedOr(a, n)
 
 y = NestedAnd(a, n)
     y = Echo((n > 1 && a)[0] + (n > 3)) || 9
+
+# A copy an earlier operand made stays for the whole value's cleanup when a
+# later call is skipped; the call's false arm frees only what the call used.
+y = HeldSibling(a, m, n)
+    y = ((m > 0 && a || a) + Echo((a > 1)[0] + (n > 3))) || [0]

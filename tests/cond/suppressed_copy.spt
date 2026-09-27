@@ -36,3 +36,12 @@ e2 = NestedMask([1 2 3], 5)
 f2 = NestedOr([1 2 3], 5)
 h2 = NestedAnd([1 2 3], 5)
 e2, f2, h2
+
+# Both branches of the earlier operand, with the later call skipped or run.
+g = [0]
+g = HeldSibling([1 2 3], i % 2, i % 6)
+g1 = HeldSibling([1 2 3], 1, 2)
+g2 = HeldSibling([1 2 3], 0, 2)
+g3 = HeldSibling([1 2 3], 1, 5)
+g4 = HeldSibling([1 2 3], 0, 5)
+g, g1, g2, g3, g4
