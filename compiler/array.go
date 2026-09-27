@@ -438,7 +438,7 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 	defer c.popBoundsGuard()
 
 	c.withArrayLiteralCellMode(func() {
-		c.compileCondExprValue(cell, llvm.Value{}, func() {
+		c.compileCondExprValue(cell, func() {
 			errorsBefore := len(c.Errors)
 			vals := c.compileExpression(cell, nil)
 			if len(vals) == 0 {
@@ -1124,7 +1124,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
-		c.compileCondOperands(rew, llvm.Value{}, func() {
+		c.compileCondOperands(rew, func() {
 			arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 			// Source operands are temporary for each loop iteration in this path.
 			defer c.freeTemporary(rew.Array, []*Symbol{arraySym})

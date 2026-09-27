@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
@@ -90,21 +91,22 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	return reads
 }
 
-func (cfg *CFG) collectStatementReads(stmt ast.Statement) []VarEvent {
-	var expressions []ast.Expression
+// statementExpressions returns the expressions a statement evaluates: an
+// assignment's conditions and values, or a print's items.
+func statementExpressions(stmt ast.Statement) []ast.Expression {
 	switch s := stmt.(type) {
 	case *ast.LetStatement:
-		expressions = make([]ast.Expression, 0, len(s.Condition)+len(s.Value))
-		expressions = append(expressions, s.Condition...)
-		expressions = append(expressions, s.Value...)
+		return slices.Concat(s.Condition, s.Value)
 	case *ast.PrintStatement:
-		expressions = s.Expression.Arguments
+		return s.Expression.Arguments
 	default:
 		return nil
 	}
+}
 
+func (cfg *CFG) collectStatementReads(stmt ast.Statement) []VarEvent {
 	var reads []VarEvent
-	for _, expr := range expressions {
+	for _, expr := range statementExpressions(stmt) {
 		reads = append(reads, cfg.collectReads(expr)...)
 	}
 

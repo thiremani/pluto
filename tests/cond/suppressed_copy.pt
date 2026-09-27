@@ -1,0 +1,43 @@
+# A print or call that a failing argument suppresses still frees the copy a
+# value-position || made for another argument.
+y = ShowIf(a, n, k)
+    (n > 1 && a || a)[0], k > 5
+    y = n
+
+y = Two(p, q)
+    y = p + q
+
+y = CallIf(a, n, k)
+    y = 7
+    y = Two((n > 1 && a || a)[0], k > 5)
+
+# A condition that fails later in the same value leaves the copy to the
+# false arm as well: an || or && copy, or a comparison mask.
+y = OrPlus(a, n)
+    y = 7
+    y = (n > 1 && a || a)[0] + (n > 3)
+
+y = AndPlus(a, n)
+    y = 7
+    y = (n > 1 && a)[0] + (n > 3)
+
+y = MaskPlus(a, n)
+    y = 7
+    y = (a > 1)[0] + (n > 3)
+
+y = CellPlus(a, n)
+    y = [(n > 1 && a || a)[0] + (n > 3)]
+
+# A call whose own argument condition fails is skipped, and still frees the
+# copy or mask that condition's extraction made.
+y = Echo(x)
+    y = x
+
+y = NestedMask(a, n)
+    y = Echo((a > 1)[0] + (n > 3)) || 9
+
+y = NestedOr(a, n)
+    y = Echo((n > 1 && a || a)[0] + (n > 3)) || 9
+
+y = NestedAnd(a, n)
+    y = Echo((n > 1 && a)[0] + (n > 3)) || 9

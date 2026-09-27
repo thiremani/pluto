@@ -1,0 +1,38 @@
+i = 0:100
+v = 0
+v = ShowIf([1 2 3], i - i, 3)
+w = 0
+w = CallIf([1 2 3], i - i, 3)
+v, w
+
+# Suppressed and running invocations alternate.
+j = 0:4
+x = 0
+x = ShowIf([1 2 3], j - j, j % 2 * 4 + 3)
+y = 0
+y = CallIf([1 2 3], j - j, j % 2 * 4 + 3)
+x, y
+
+o = 0
+o = OrPlus([1 2 3], i % 6)
+p = 0
+p = AndPlus([1 2 3], i % 6)
+q = 0
+q = MaskPlus([1 2 3], i % 6)
+c = [0]
+c = CellPlus([1 2 3], i % 6)
+o, p, q, c
+
+e = 0
+e = NestedMask([1 2 3], i % 6)
+f = 0
+f = NestedOr([1 2 3], i % 6)
+h = 0
+h = NestedAnd([1 2 3], i % 6)
+e, f, h
+
+# When the nested call's condition holds, the call runs.
+e2 = NestedMask([1 2 3], 5)
+f2 = NestedOr([1 2 3], 5)
+h2 = NestedAnd([1 2 3], 5)
+e2, f2, h2
