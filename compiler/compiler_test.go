@@ -75,7 +75,7 @@ hotel = "h" ⊕ "8"
 	}
 }
 
-func TestUnmovedMaskCleanupIsInSourceOrder(t *testing.T) {
+func TestUnmovedMasksAreFreedLastFirst(t *testing.T) {
 	code := `y = TwoMasks(a, b, n)
     y = 7
     y = (a > 1)[0] + (b > 2)[0] + (n > 3)`
@@ -91,11 +91,11 @@ r`
 	}
 	falseArm := strings.Index(body, "\ncond_else:")
 	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
-	first := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
-	second := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new7)")
-	require.NotEqual(t, -1, first)
-	require.NotEqual(t, -1, second)
-	require.Less(t, first, second, "the failed condition frees its masks in source order")
+	aMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
+	bMask := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new7)")
+	require.NotEqual(t, -1, aMask)
+	require.NotEqual(t, -1, bMask)
+	require.Less(t, bMask, aMask, "the failed condition frees its masks last first, as scopes free bindings")
 	for range 10 {
 		got, _ := compileScriptAndCodeIR(t, "mask_cleanup_order", code, script)
 		require.Equal(t, want, got)

@@ -960,7 +960,7 @@ func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedM
 	}
 
 	frame := c.requireCondLHSFrame()
-	for _, exprKey := range sortedFrameKeys(frame) {
+	for _, exprKey := range releaseOrder(frame) {
 		exprInfo := c.ExprCache[exprKey]
 		if exprInfo == nil {
 			continue
@@ -973,10 +973,12 @@ func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedM
 	}
 }
 
-// sortedFrameKeys orders a condLHS frame's keys by source position, so the code
-// emitted per key is deterministic.
-func sortedFrameKeys(frame map[ExprKey][]*Symbol) []ExprKey {
-	return slices.SortedFunc(maps.Keys(frame), compareSourcePosition)
+// releaseOrder orders a condLHS frame's keys for release: last in source order
+// first, as scopes release their bindings, so the emitted code is deterministic.
+func releaseOrder(frame map[ExprKey][]*Symbol) []ExprKey {
+	keys := slices.SortedFunc(maps.Keys(frame), compareSourcePosition)
+	slices.Reverse(keys)
+	return keys
 }
 
 func compareSourcePosition(a, b ExprKey) int {
@@ -1526,12 +1528,12 @@ func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
 	return keys
 }
 
-// freeUnmovedMasksSince frees, in source order, array masks stashed in the
-// condLHS frame since the snapshot (nil means all) that were not moved into a
-// result slot, marking them borrowed so outer cleanups skip them.
+// freeUnmovedMasksSince frees, last first in source order, array masks stashed
+// in the condLHS frame since the snapshot (nil means all) that were not moved
+// into a result slot, marking them borrowed so outer cleanups skip them.
 func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
 	frame := c.requireCondLHSFrame()
-	for _, exprKey := range sortedFrameKeys(frame) {
+	for _, exprKey := range releaseOrder(frame) {
 		if _, ok := before[exprKey]; ok {
 			continue
 		}
