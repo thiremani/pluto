@@ -877,6 +877,39 @@ j = 0:5:i`,
 	}
 }
 
+// TestRangeBoundTypes: a range reports the first rule its bounds break, once,
+// naming every bound's type.
+func TestRangeBoundTypes(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"FloatStart", "x = 1.5:3\nx", "range bounds should be Integer. start type: F64, stop type: I64"},
+		{"FloatStop", "x = 0:2.5\nx", "range bounds should be Integer. start type: I64, stop type: F64"},
+		{"FloatStep", "x = 0:6:2.5\nx", "range bounds should be Integer. start type: I64, stop type: I64, step type: F64"},
+		{"NarrowStop", "x = 0:n\nx", "range bounds must have the same type. start type: I64, stop type: I32"},
+		{"NarrowStep", "x = 0:6:n\nx", "range bounds must have the same type. start type: I64, stop type: I64, step type: I32"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			// No literal is narrower than I64, so a seeded binding supplies one.
+			Put(ts.Scopes, "n", Type(Int{Width: 32}))
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, tc.want, ts.Errors[0].Msg)
+		})
+	}
+}
+
 func TestArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayComparisonValue", "", ast.NewCode())
@@ -2030,6 +2063,392 @@ y = bad(x)
 	require.Len(t, ts.Errors, 1)
 	require.Contains(t, ts.Errors[0].Msg, "Function bad is not converging")
 	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the root's")
+}
+
+// A recursive body can use its own call's result before a solver pass has
+// typed it: checks on that result wait for the pass that types it (#122).
+func TestRecursiveResultTypesOnLaterPass(t *testing.T) {
+	cases := []struct {
+		name   string
+		code   string
+		script string
+		want   map[string]Type
+	}{
+		{
+			name: "IndexedResult",
+			code: `y = Tally(n)
+    y = [n]
+    y = n > 0 [Tally(n - 1)[0] + 1]`,
+			script: "t = Tally(3)\nt",
+			want:   map[string]Type{"t": Array{ElemType: I64, Rank: 1}},
+		},
+		{
+			// The index is typed even while the target waits: range
+			// handling reads the type of every node in the index.
+			name: "IndexIntoWaitingResult",
+			code: `y = Count(n)
+    y = [0]
+    y = n > 0 Count(n - 1) ⊕ [Count(n - 1)[n - 1] + 1]`,
+			script: "c = Count(3)\nc",
+			want:   map[string]Type{"c": Array{ElemType: I64, Rank: 1}},
+		},
+		{
+			name: "ResultAsIndex",
+			code: `y = Hop(arr, n)
+    y = 0
+    y = n > 0 arr[Hop(arr, n - 1)]`,
+			script: "hops = [2 0 1]\nh = Hop(hops, 3)\nh",
+			want:   map[string]Type{"h": I64},
+		},
+		{
+			name: "ResultField",
+			code: `ada = Person
+  : name age
+    "Ada" 36
+
+p = Keep(q, n)
+    p = q
+    prior = n > 0 Keep(q, n - 1)
+    p = prior.age > 0 prior`,
+			script: "k = Keep(ada, 2)\nage = k.age\nage",
+			want:   map[string]Type{"age": I64},
+		},
+		{
+			name: "RangeStart",
+			code: `y = Down(n)
+    y = n
+    prior = n > 0 Down(n - 1)
+    k = prior:5
+    y = y + k`,
+			script: "v = Down(3)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "RangeStop",
+			code: `y = Tri(n)
+    y = n
+    prior = n > 0 Tri(n - 1)
+    k = 0:prior
+    y = y + k`,
+			script: "v = Tri(3)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "RangeStep",
+			code: `y = Skip(n)
+    y = n
+    prior = n > 0 Skip(n - 1)
+    k = 0:6:(prior + 1)
+    y = y + k`,
+			script: "v = Skip(3)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "OrLeftOperand",
+			code: `y = Clamp(x, n)
+    prior = n > 0 Clamp(x - 1, n - 1)
+    y = prior > 2 || x`,
+			script: "v = Clamp(5, 2)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "AndLeftOperand",
+			code: `y = Gate(x, n)
+    y = x
+    prior = n > 0 Gate(x - 1, n - 1)
+    y = prior > 2 && x + 10`,
+			script: "v = Gate(5, 2)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			// Skipping the pending cell would type the column I64 first,
+			// and the float the result promotes it to could not follow.
+			name: "PendingCellKeepsItsColumn",
+			code: `y, z = Mixed(n)
+    y = 0.5
+    prior, _ = n > 0 Mixed(n - 1)
+    tab = [
+        :a
+        1
+        prior
+    ]
+    z = tab.a[0]`,
+			script: "half, first = Mixed(2)\nhalf, first",
+			want:   map[string]Type{"half": F64, "first": F64},
+		},
+		{
+			name: "OtherColumnStaysTyped",
+			code: `y = Pick(n, x)
+    prior = n > 0 Pick(n - 1, x)
+    tab = [
+        :a b
+        prior x
+    ]
+    y = tab.b[0]`,
+			script: "v = Pick(2, 7)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "InfixOperandWaits",
+			code: `y = Bump(n, x)
+    y = x
+    prior = n > 0 Bump(n - 1, x)
+    tab = [
+        :a
+        prior
+    ]
+    col = tab.a + 1
+    y = n > 0 col[0] + x`,
+			script: "v = Bump(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "InfixRightOperandWaits",
+			code: `y = BumpRight(n, x)
+    y = x
+    prior = n > 0 BumpRight(n - 1, x)
+    tab = [
+        :a
+        prior
+    ]
+    col = 1 + tab.a
+    y = n > 0 col[0] + x`,
+			script: "v = BumpRight(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "PrefixOperandWaits",
+			code: `y = Flip(n, x)
+    y = x
+    prior = n > 0 Flip(n - 1, x)
+    tab = [
+        :a
+        prior
+    ]
+    col = -tab.a
+    y = n > 0 col[0] + x`,
+			script: "v = Flip(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "OrOperandWaits",
+			code: `y = Pad(n, x)
+    prior = n > 0 Pad(n - 1, x)
+    tab = [
+        :a
+        prior
+    ]
+    col = x > 3 && tab.a || [x]
+    y = col[0] + 1`,
+			script: "v = Pad(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			name: "OrRightOperandWaits",
+			code: `y = PadRight(n, x)
+    prior = n > 0 PadRight(n - 1, x)
+    tab = [
+        :a
+        prior
+    ]
+    col = x > 3 && [x] || tab.a
+    y = col[0] + 1`,
+			script: "v = PadRight(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+		{
+			// A pending column is a partly typed array: indexing it still
+			// types the index.
+			name: "IndexIntoPendingColumn",
+			code: `y = ColumnAt(n, x)
+    y = x
+    prior = n > 0 ColumnAt(n - 1, x)
+    tab = [
+        :a
+        prior
+        x
+    ]
+    y = n > 0 tab.a[n - 1] + 1`,
+			script: "v = ColumnAt(2, 5)\nv",
+			want:   map[string]Type{"v": I64},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			ts := solveScriptTypes(t, ctx, cc, tc.name, tc.script)
+
+			for name, want := range tc.want {
+				got, ok := ts.GetIdentifier(name)
+				require.True(t, ok, name)
+				require.Equal(t, want, got, name)
+			}
+		})
+	}
+}
+
+// A check on a non-converging callee's result waits instead of failing, so
+// the error blames the callee rather than the caller's use of its result.
+func TestNonConvergingCalleeIsBlamedThroughCheckedUse(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "test", "", mustParseCode(t, `y = m(x)
+    y = bad(x)[0]
+
+y = bad(x)
+    y = bad(x - 1)`))
+	require.Empty(t, cc.Compile())
+
+	ts := NewTypeSolver(NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "x = 6\ny = m(x)\ny"), cc))
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Contains(t, ts.Errors[0].Msg, "Function bad is not converging")
+	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the index in m")
+}
+
+// A check that waited for a recursive result still runs once the result is
+// typed, and names the type it settled on.
+func TestRecursiveResultChecksRunOnceTyped(t *testing.T) {
+	cases := []struct {
+		name   string
+		code   string
+		script string
+		want   string
+	}{
+		{
+			name: "RangeBound",
+			code: `y = R(n)
+    y = 0.5
+    prior = n > 0 R(n - 1)
+    k = 0:prior
+    y = y + k`,
+			script: "v = R(3)\nv",
+			want:   "range bounds should be Integer. start type: I64, stop type: F64",
+		},
+		{
+			name: "RangeStep",
+			code: `y = R(n)
+    y = 0.5
+    prior = n > 0 R(n - 1)
+    k = 0:6:prior
+    y = y + k`,
+			script: "v = R(3)\nv",
+			want:   "range bounds should be Integer. start type: I64, stop type: I64, step type: F64",
+		},
+		{
+			name: "FieldAccess",
+			code: `y = R(n)
+    y = n
+    prior = n > 0 R(n - 1)
+    y = prior.age`,
+			script: "v = R(3)\nv",
+			want:   "field access expects a struct or table value, got I64",
+		},
+		{
+			name: "ArrayTarget",
+			code: `y = R(n)
+    y = n
+    prior = n > 0 R(n - 1)
+    y = prior[0]`,
+			script: "v = R(3)\nv",
+			want:   "array access target is not an array",
+		},
+		{
+			name: "ArrayIndex",
+			code: `y = R(arr, n)
+    y = 0.5
+    prior = n > 0 R(arr, n - 1)
+    y = arr[prior]`,
+			script: "v = R([1.5 2.5], 3)\nv",
+			want:   "array index expects an integer or range, got F64",
+		},
+		{
+			name: "OrLeftOperand",
+			code: `y = R(n)
+    prior = n > 0 R(n - 1)
+    y = prior || n`,
+			script: "v = R(3)\nv",
+			want:   "logical OR in value position requires a conditional left operand",
+		},
+		{
+			name: "AndLeftOperand",
+			code: `y = R(n)
+    y = n
+    prior = n > 0 R(n - 1)
+    y = prior && n`,
+			script: "v = R(3)\nv",
+			want:   "logical AND in value position requires a conditional left operand",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", mustParseCode(t, tc.code))
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			ts.Solve()
+
+			require.NotEmpty(t, ts.Errors)
+			require.Equal(t, tc.want, ts.Errors[0].Msg)
+		})
+	}
+}
+
+// A table cell that reports an error is skipped rather than leaving its
+// column pending, so an access in the same statement adds no second error.
+func TestFailedTableCellReportsOnce(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, "failedTableCell", "", ast.NewCode())
+	require.Empty(t, cc.Compile())
+	ts := NewTypeSolver(NewScriptCompiler(ctx, "failedTableCell", mustParseScript(t, "x = [\n  :a\n  missing\n  1\n].a[0]\nx"), cc))
+	ts.Solve()
+
+	require.Len(t, ts.Errors, 1)
+	require.Equal(t, "undefined identifier: missing", ts.Errors[0].Msg)
+}
+
+// An access types its index even when its target fails, so the index reports
+// its own errors and its conditions count for || and &&.
+func TestFailedArrayTargetStillTypesIndex(t *testing.T) {
+	cases := []struct {
+		name   string
+		script string
+		want   []string
+	}{
+		{"NotAnArray", "x = 5[zz]\nx", []string{"array access target is not an array", "undefined identifier: zz"}},
+		{"EmptyArray", "x = [][zz]\nx", []string{"undefined identifier: zz", "cannot index an empty array without an element type"}},
+		{"ConditionInIndex", "x = 5[2 > 1] || 0\nx", []string{"array access target is not an array"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			ts := NewTypeSolver(NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc))
+			ts.Solve()
+
+			var msgs []string
+			for _, err := range ts.Errors {
+				msgs = append(msgs, err.Msg)
+			}
+			require.Equal(t, tc.want, msgs)
+		})
+	}
 }
 
 // A settled specialization must carry its variable types across scripts (#71).
