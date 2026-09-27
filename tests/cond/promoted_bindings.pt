@@ -1,10 +1,5 @@
-# A statement moves the bindings it may address into memory before it
-# branches, so a path that skips the %n or the call keeps their values.
-out = Fmt(k)
-    m = 7
-    "abc-m%n", k > 5
-    out = m
-
+# A statement moves the variables it passes to calls by pointer into memory
+# before it branches, so a path that skips the call keeps their values.
 y = Twice(v)
     y = v ⊕ v
 

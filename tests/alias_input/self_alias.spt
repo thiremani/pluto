@@ -154,6 +154,7 @@ condCount = 10
 condCount, condCountSeen, condTag = CondCount(condCount)
 "CondCount:", condCount, condCountSeen, condTag
 
-labeled = 10
-labeled, labelTag = Label(labeled, "ab-labeled%n")
-"Label:", labeled, labelTag
+bangSource = "ab" ⊕ "cd"
+bangCopy = Bang(bangSource)
+bangSource = Bang(bangSource)
+"Bang:", bangCopy, bangSource

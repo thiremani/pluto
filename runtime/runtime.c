@@ -275,12 +275,3 @@ char *sprintf_alloc(const char *fmt, ...) {
 
     return buf;
 }
-
-/* Enable %n in printf on Windows UCRT (disabled by default for security).
-   This matches POSIX behavior relied upon by tests like fmt_ptr. */
-#ifdef _WIN32
-__declspec(dllimport) int _set_printf_count_output(int);
-__attribute__((constructor)) static void pluto_enable_printf_n(void) {
-    _set_printf_count_output(1);
-}
-#endif

@@ -28,7 +28,6 @@ func TestValidateSpecifierModifiers(t *testing.T) {
 		{name: "StringHexSpaceFlagSyntax", flags: "# ", conversion: 'x'},
 		{name: "FloatFlags", flags: "-+ #0", conversion: 'A'},
 		{name: "QuotedWidth", flags: "-", hasWidth: true, conversion: 'q'},
-		{name: "CountLength", length: "ll", conversion: 'n'},
 		{name: "RepeatedFlag", flags: "--", conversion: 'd'},
 		{name: "SignedAlternateForm", flags: "#", conversion: 'd', expectError: `Format flag '#' is not supported for %d`},
 		{name: "UnsignedSign", flags: "+", conversion: 'u', expectError: `Format flag '+' is not supported for %u`},
@@ -194,10 +193,19 @@ width = 3.5
 			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: x. Variable type: I64",
 		},
 		{
-			name: "CountOnNonInteger",
-			input: `s = "hello"
-"Value: -s%n"`,
-			expectError: "Format specifier end 'n' is not correct for variable type. Variable identifier: s. Variable type: Str",
+			name: "PointerOnTable",
+			input: `t = [
+  : Name Score
+    "Ada" 10
+]
+"Value: -t%p"`,
+			expectError: "Format specifier end 'p' is not correct for variable type. Variable identifier: t. Variable type: Table[Name:Str Score:I64]",
+		},
+		{
+			name: "CountIsNotSupported",
+			input: `x = 5
+"Value: -x%n"`,
+			expectError: "%n is not supported: formatting cannot write to a variable",
 		},
 	}
 
@@ -225,76 +233,6 @@ width = 3.5
 			}
 			if !strings.Contains(errs[0].Error(), tc.expectError) {
 				t.Errorf("Expected error message to contain %q, but got %q", tc.expectError, errs[0].Error())
-			}
-		})
-	}
-}
-
-func TestFormatCountRejectsCodeConstant(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "format_code_constant", "", mustParseCode(t, `answer = 42`))
-	if errs := cc.Compile(); len(errs) != 0 {
-		t.Fatalf("unexpected code compile errors: %v", errs)
-	}
-
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, `"count-answer%n"`), cc)
-	linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
-	errs := sc.Compile()
-	if len(errs) != 1 {
-		t.Fatalf("expected one compile error, got %d: %v", len(errs), errs)
-	}
-	if got, want := errs[0].Msg, `cannot write to constant "answer"`; got != want {
-		t.Fatalf("compile error = %q, want %q", got, want)
-	}
-}
-
-func TestFormatCountRejectsInputParameter(t *testing.T) {
-	const count = `out = Count(current)
-    "count-current%n"
-    out = current`
-	// A caller-driven ranged call stages its destination and rebinds the input
-	// that shares it, which must stay read-only, also under a condition.
-	const step = `out, tag = Step(current, label, item)
-    out = current + item
-    tag = label
-
-`
-	const nestedRange = step + `out, tag = Count(current)
-    out, tag = Step(current, "count-current%n", (1:3) + 0)`
-	const gatedNestedRange = step + `out, tag = Count(current)
-    out, tag = 1 > 0 Step(current, "count-current%n", (1:3) + 0)`
-	tests := []struct {
-		name   string
-		code   string
-		script string
-	}{
-		{name: "plain", code: count, script: "value = 10\nvalue = Count(value)\nvalue"},
-		{name: "range", code: count, script: "value = Count(1:3)\nvalue"},
-		{name: "shared nested range", code: nestedRange, script: "value = 10\nvalue, tag = Count(value)\nvalue, tag"},
-		{name: "shared gated nested range", code: gatedNestedRange, script: "value = 10\nvalue, tag = Count(value)\nvalue, tag"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := llvm.NewContext()
-			defer ctx.Dispose()
-
-			code := mustParseCode(t, tt.code)
-			cc := NewCodeCompiler(ctx, "format_input_parameter", "", code)
-			if errs := cc.Compile(); len(errs) != 0 {
-				t.Fatalf("unexpected code compile errors: %v", errs)
-			}
-
-			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, tt.script), cc)
-			linkCodeModuleForTest(t, ctx, sc.Compiler.Module, cc.Compiler.Module)
-			errs := sc.Compile()
-			if len(errs) != 1 {
-				t.Fatalf("expected one compile error, got %d: %v", len(errs), errs)
-			}
-			if got, want := errs[0].Msg, `cannot write to input parameter "current"`; got != want {
-				t.Fatalf("compile error = %q, want %q", got, want)
 			}
 		})
 	}
@@ -454,10 +392,40 @@ y = 3.2
 			expectOutput: "x = %lld-y%%f",
 		},
 		{
-			name: "CountPointer",
-			input: `x = 5
-"x = -x%n"`,
-			expectOutput: "x = %lln",
+			name:         "LiteralCountText",
+			input:        `"100%n text"`,
+			expectOutput: "100%%n text",
+		},
+		{
+			name: "PointerOnString",
+			input: `s = "a" ⊕ "b"
+"Value: -s%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "ptrtoint",
+		},
+		{
+			name: "PointerOnArray",
+			input: `a = [1 2]
+"Value: -a%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "call ptr @arr_i64_data",
+		},
+		{
+			name: "PointerOnRank2Array",
+			input: `grid = [
+    1 2
+    3 4
+]
+"Value: -grid%p"`,
+			expectOutput: "Value: %#llx",
+			expectIR:     "call ptr @arr_i64_data",
+		},
+		{
+			name: "PointerOnEmptyArray",
+			input: `e = []
+"Value: -e%p"`,
+			expectOutput: "Value: %#llx",
+			rejectIR:     "_data",
 		},
 		{
 			name:         "VarNotDefined",
@@ -542,10 +510,11 @@ width = 10
 			expectIR:     "call ptr @str_quote_prefix",
 		},
 		{
+			// The precision is read from an array so the compiler can't fold it: with a
+			// constant, a 32-bit truncation leaves no instruction for rejectIR to find.
 			name: "QuotedSpecifierDynamicPrecision",
 			input: `s = "hello"
-precision = 0
-"xx-precision%n"
+precision = [4294967296][0]
 "Value: -s%.(-precision)q"`,
 			expectOutput: "Value: %s",
 			expectIR:     "call ptr @str_quote_prefix",
