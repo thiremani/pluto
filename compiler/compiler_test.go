@@ -75,6 +75,33 @@ hotel = "h" ⊕ "8"
 	}
 }
 
+func TestUnmovedMaskCleanupIsInSourceOrder(t *testing.T) {
+	code := `y = TwoMasks(a, b, n)
+    y = 7
+    y = (a > 1)[0] + (b > 2)[0] + (n > 3)`
+	script := `r = TwoMasks([1 2 3], [4 5 6], 2)
+r`
+
+	want, _ := compileScriptAndCodeIR(t, "mask_cleanup_order", code, script)
+	var body string
+	for _, fn := range strings.Split(want, "\ndefine ") {
+		if strings.Contains(strings.SplitN(fn, "\n", 2)[0], "TwoMasks") {
+			body = fn
+		}
+	}
+	falseArm := strings.Index(body, "\ncond_else:")
+	require.NotEqual(t, -1, falseArm, "expected the failed condition's cleanup block")
+	first := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new)")
+	second := strings.Index(body[falseArm:], "call void @arr_i64_free(ptr %arr_new7)")
+	require.NotEqual(t, -1, first)
+	require.NotEqual(t, -1, second)
+	require.Less(t, first, second, "the failed condition frees its masks in source order")
+	for range 10 {
+		got, _ := compileScriptAndCodeIR(t, "mask_cleanup_order", code, script)
+		require.Equal(t, want, got)
+	}
+}
+
 func TestStatementAndShortCircuits(t *testing.T) {
 	script := `den = 1:3
 out = den < 0 && (10 ÷ den) > 1 7

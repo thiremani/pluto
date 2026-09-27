@@ -1526,11 +1526,12 @@ func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
 	return keys
 }
 
-// freeUnmovedMasksSince frees array masks stashed in the condLHS frame since
-// the snapshot (nil means all) that were not moved into a result slot, marking
-// them borrowed so outer cleanups skip them.
+// freeUnmovedMasksSince frees, in source order, array masks stashed in the
+// condLHS frame since the snapshot (nil means all) that were not moved into a
+// result slot, marking them borrowed so outer cleanups skip them.
 func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
-	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
+	frame := c.requireCondLHSFrame()
+	for _, exprKey := range sortedFrameKeys(frame) {
 		if _, ok := before[exprKey]; ok {
 			continue
 		}
@@ -1538,6 +1539,7 @@ func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
 		if exprInfo == nil {
 			continue
 		}
+		lhsSyms := frame[exprKey]
 		for i := range exprInfo.CompareModes {
 			if !exprInfo.IsMask(i) || lhsSyms[i].Borrowed {
 				continue
