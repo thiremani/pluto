@@ -976,14 +976,13 @@ func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedM
 // releaseOrder orders a condLHS frame's keys for release: last in source order
 // first, as scopes release their bindings, so the emitted code is deterministic.
 func releaseOrder(frame map[ExprKey][]*Symbol) []ExprKey {
-	keys := slices.SortedFunc(maps.Keys(frame), compareSourcePosition)
-	slices.Reverse(keys)
-	return keys
+	return slices.SortedFunc(maps.Keys(frame), laterSourceFirst)
 }
 
-func compareSourcePosition(a, b ExprKey) int {
+// laterSourceFirst orders a before b when a comes later in the source.
+func laterSourceFirst(a, b ExprKey) int {
 	at, bt := a.Expr.Tok(), b.Expr.Tok()
-	return cmp.Or(cmp.Compare(at.Line, bt.Line), cmp.Compare(at.Column, bt.Column))
+	return cmp.Or(cmp.Compare(bt.Line, at.Line), cmp.Compare(bt.Column, at.Column))
 }
 
 // splitCondRanges collects merged ranges and boolean guard expressions from
