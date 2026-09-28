@@ -95,6 +95,62 @@ exit:
 	}
 }
 
+func TestAnnotateScalarUnrollLoopsPreservesMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		property string
+		want     int
+	}{
+		{"peeled", `!{!"llvm.loop.peeled.count", i32 1}`, 1},
+		{"unroll disabled", `!{!"llvm.loop.unroll.disable"}`, 0},
+		{"unroll and jam", `!{!"llvm.loop.unroll_and_jam.disable"}`, 0},
+		{"nonforced disabled", `!{!"llvm.loop.disable_nonforced"}`, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mod := parseTestIR(t, `
+define i64 @fib_like(i64 %n) {
+entry:
+  br label %loop
+
+loop:
+  %a = phi i64 [ 0, %entry ], [ %b, %loop ]
+  %b = phi i64 [ 1, %entry ], [ %sum, %loop ]
+  %i = phi i64 [ %n, %entry ], [ %dec, %loop ]
+  %dec = add i64 %i, -1
+  %sum = add i64 %a, %b
+  %done = icmp eq i64 %dec, 0
+  br i1 %done, label %exit, label %loop, !llvm.loop !0
+
+exit:
+  ret i64 %b
+}
+
+!0 = distinct !{!0, !1}
+!1 = `+tt.property)
+			before := mod.String()
+			if got := annotateScalarUnrollLoops(mod); got != tt.want {
+				t.Fatalf("annotateScalarUnrollLoops() = %d, want %d", got, tt.want)
+			}
+			if err := llvm.VerifyModule(mod, llvm.ReturnStatusAction); err != nil {
+				t.Fatalf("invalid loop metadata after annotation: %v", err)
+			}
+			after := mod.String()
+			if !strings.Contains(after, tt.property) {
+				t.Fatalf("existing metadata was lost:\n%s", after)
+			}
+			if tt.want == 0 && after != before {
+				t.Fatalf("existing unroll policy was changed:\n%s", after)
+			}
+			if tt.want == 1 && !strings.Contains(after, `!{!"llvm.loop.unroll.count", i32 4}`) {
+				t.Fatalf("peeled loop did not receive an unroll count:\n%s", after)
+			}
+			if got := annotateScalarUnrollLoops(mod); got != 0 {
+				t.Fatalf("second annotation added %d duplicate hints", got)
+			}
+		})
+	}
+}
+
 func TestAnnotateScalarUnrollLoopsSkipsCallHeavyLoops(t *testing.T) {
 	mod := parseTestIR(t, `
 declare void @side_effect()
@@ -337,7 +393,7 @@ res
 		t.Fatalf("run O3 pipeline: %v", err)
 	}
 	loopMDKind := scriptModule.Context().MDKindID("llvm.loop")
-	// Loops the O3 run already marked must contribute no add chains; that
+	// Loops the O3 run already marked for unrolling contribute no add chains; that
 	// makes any post-unroll chain growth attributable to the loops annotated
 	// below rather than to pre-existing loop metadata.
 	if got := maxChainedAddsInMarkedLatch(scriptModule); got != 0 {
@@ -349,7 +405,7 @@ res
 	preUnrollChain := 0
 	for fn := scriptModule.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		for _, loop := range scalarUnrollCandidates(fn) {
-			if !loop.term.Metadata(loopMDKind).IsNil() {
+			if llvmLoopHasUnrollDirective(loop.term.Metadata(loopMDKind)) {
 				continue
 			}
 			candidates++
@@ -386,7 +442,7 @@ res
 }
 
 // maxChainedAddsInMarkedLatch returns, across all loop latches that carry
-// llvm.loop metadata, the largest number of add instructions that consume
+// unroll metadata, the largest number of add instructions that consume
 // another add from the same block. An unrolled scalar recurrence leaves its
 // replicated adds chained together inside the marked latch, so this grows
 // when the annotated loop is actually unrolled.
@@ -396,7 +452,7 @@ func maxChainedAddsInMarkedLatch(module llvm.Module) int {
 	for fn := module.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		for bb := fn.FirstBasicBlock(); !bb.IsNil(); bb = llvm.NextBasicBlock(bb) {
 			term := bb.LastInstruction()
-			if term.IsNil() || term.Metadata(loopMDKind).IsNil() {
+			if term.IsNil() || !llvmLoopHasUnrollDirective(term.Metadata(loopMDKind)) {
 				continue
 			}
 			if chained := chainedAddsInBlock(bb); chained > best {

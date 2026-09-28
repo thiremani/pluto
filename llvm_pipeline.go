@@ -152,10 +152,11 @@ func annotateScalarUnrollLoops(module llvm.Module) int {
 	for fn := module.FirstFunction(); !fn.IsNil(); fn = llvm.NextFunction(fn) {
 		loops := scalarUnrollCandidates(fn)
 		for _, loop := range loops {
-			if !loop.term.Metadata(loopMDKind).IsNil() {
+			metadata := loop.term.Metadata(loopMDKind)
+			if llvmLoopHasUnrollDirective(metadata) {
 				continue
 			}
-			loop.term.SetMetadata(loopMDKind, llvmUnrollCountMetadata(ctx, llvmScalarUnrollCount))
+			loop.term.SetMetadata(loopMDKind, llvmUnrollCountMetadata(ctx, metadata, llvmScalarUnrollCount))
 			annotated++
 		}
 	}
@@ -450,14 +451,43 @@ func valueUsesVectorType(v llvm.Value) bool {
 	return false
 }
 
-func llvmUnrollCountMetadata(ctx llvm.Context, count int) llvm.Metadata {
+func llvmLoopHasUnrollDirective(loopID llvm.Value) bool {
+	for i, property := range llvmMetadataOperands(loopID) {
+		if i == 0 {
+			continue
+		}
+		operands := llvmMetadataOperands(property)
+		if len(operands) == 0 {
+			continue
+		}
+		name := llvmMetadataString(operands[0])
+		if strings.HasPrefix(name, "llvm.loop.unroll.") ||
+			strings.HasPrefix(name, "llvm.loop.unroll_and_jam.") ||
+			name == "llvm.loop.disable_nonforced" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func llvmUnrollCountMetadata(ctx llvm.Context, previous llvm.Value, count int) llvm.Metadata {
 	temp := ctx.TemporaryMDNode(nil)
+	properties := []llvm.Metadata{temp}
+	for i, property := range llvmMetadataOperands(previous) {
+		if i > 0 {
+			properties = append(properties, llvmValueAsMetadata(property))
+		}
+	}
+
 	countMD := llvm.ConstInt(ctx.Int32Type(), uint64(count), false).ConstantAsMetadata()
 	countNode := ctx.MDNode([]llvm.Metadata{
 		ctx.MDString("llvm.loop.unroll.count"),
 		countMD,
 	})
-	loopID := ctx.MDNode([]llvm.Metadata{temp, countNode})
+	loopID := ctx.MDNode(append(properties, countNode))
+	// The C API replacement also disposes the temporary node.
 	temp.ReplaceAllUsesWith(loopID)
+
 	return loopID
 }
