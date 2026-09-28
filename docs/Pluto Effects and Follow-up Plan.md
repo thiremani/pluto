@@ -63,8 +63,10 @@ function keeps an old value only by taking it as an input: `out = prev` first,
 and the caller passes its destination. Sharing is decided only at the call
 site, since a header never names a parameter after an output. Inputs keep
 their values for the whole invocation, which reverses the live references
-described above: sharing becomes a copy optimization that cannot change a
-result, `FoldStr` gives `ab a`, and `FoldAfter` gives `15 10` when shared.
+described above: within one invocation, sharing becomes a copy optimization
+that cannot change a result, so `FoldStr` gives `ab a` and `FoldAfter` gives
+`15 10` when shared. A ranged call still accumulates through a shared
+destination.
 An output's first write copied unchanged from an input may be overwritten
 unread, so one body serves scalar and array arguments. Zero iterations still
 mean no assignment. ABI 3.0 removes the seed and the write markers from

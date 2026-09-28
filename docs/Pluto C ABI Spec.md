@@ -411,10 +411,12 @@ indirect input the caller passes the matching staged output pointer itself.
 Each read therefore observes the selected output's current value, and both
 forms carry output values into subsequent range iterations. The caller's real
 destinations remain unchanged until the surrounding assignment commits.
-#123 (decided) makes inputs stable for the whole invocation, so a variant
-will no longer change what the body reads: it may only let a shared input and
-output use one slot where no read can tell, and carry a shared destination
-into the next iteration of a callee-owned loop.
+#123 (decided) makes inputs stable within each scalar invocation, so a
+variant will no longer change what the body reads during one invocation: it
+may only let a shared input and output use one slot where no read can tell.
+Across the iterations of a callee-owned loop it still rebinds a shared input
+to the destination's current value, which is how `sum = Acc(sum, 1:5)`
+accumulates.
 
 A native caller cannot request a variant. Passing the same address for a
 pointer input and an output shares them only within the called body's own
@@ -466,8 +468,11 @@ make it part of the current calling convention.
 
 One fact of a call site changes the emitted body of a specialization without
 changing its types: which inputs share a binding with which outputs. After
-#123 a variant must produce the bare specialization's results, so sharing
-only saves copies and carries a destination between iterations. Such a
+#123 a variant must produce what repeated scalar invocations of the bare
+specialization produce, with each iteration's shared argument rebound to the
+destination's current value. With `out = a + i`, `sum = Acc(sum, 1:5)` from
+0 gives 10, while an unshared `Acc(0, 1:5)` gives 4. Within one scalar
+invocation, sharing only saves copies. Such a
 call lowers to a private variant: an internal symbol that appends a suffix to
 the ordinary function mangle and is never exported. The suffix uses the same
 lowercase-marker-plus-count form as `_fN`, `_tN`, and the reserved `_cN`, so

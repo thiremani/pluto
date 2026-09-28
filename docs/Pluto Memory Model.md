@@ -393,10 +393,12 @@ from 10, `FoldBefore(value, 1:3)` and `FoldAfter(value, 1:3)` both produce
 `13 11` when their first output targets `value`. An empty range leaves an
 existing destination unchanged and a fresh destination at its zero value.
 
-Sharing a binding between an argument and a destination is only a copy
-optimization. The compiler may give the input and the output one slot where
-no read can tell the difference: in `a = Maybe(a, -1)`, the body reads `prev`
-only in its first write to `out`, so `out = prev` needs no copy.
+Within one invocation, sharing a binding between an argument and a
+destination is only a copy optimization; across a ranged call's iterations,
+it is what makes each iteration read the previous result. The compiler may
+give the input and the output one slot where no read can tell the
+difference: in `a = Maybe(a, -1)`, the body reads `prev` only in its first
+write to `out`, so `out = prev` needs no copy.
 
 **Status (#123, decided 2026-09-28; not yet implemented).** Master still
 differs in three ways:
