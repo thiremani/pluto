@@ -180,6 +180,49 @@ func TestGenBinaryReplacesItsExecutable(t *testing.T) {
 	require.Empty(t, leftovers)
 }
 
+func TestLinkDirPattern(t *testing.T) {
+	long := strings.Repeat("a", 251)
+	euros := strings.Repeat("€", 30)
+	tests := []struct {
+		name string
+		bin  string
+		want string
+	}{
+		{"Short", "main", ".main.*"},
+		{"Dotted", "pt.mod", ".pt.mod.*"},
+		{"NearNameLimit", long, "." + long[:64] + ".*"},
+		{"CutAtCharacterBoundary", euros, "." + strings.Repeat("€", 21) + ".*"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, linkDirPattern(tt.bin))
+		})
+	}
+}
+
+// TestGenBinaryBuildsNearLimitName builds a script whose name fills the
+// 255-byte filename limit, which leaves no room in the executable's own name
+// for the link directory's dots and random part.
+func TestGenBinaryBuildsNearLimitName(t *testing.T) {
+	if runtime.GOOS == OS_WINDOWS {
+		t.Skip("the full path exceeds Windows's default 260-character limit")
+	}
+	script := strings.Repeat("a", 251)
+	p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
+		MOD_FILE:            "module github.com/thiremani/pluto/output_path_test\n",
+		"lib.pt":            "y = Twice(x)\n    y = x * 2\n",
+		script + SPT_SUFFIX: "Twice(4)\n",
+	})
+
+	require.NoError(t, buildScript(t, p, cc, codeLL, script, rtObjs))
+	out, err := exec.Command(filepath.Join(p.Cwd, script)).Output()
+	require.NoError(t, err)
+	require.Equal(t, "8", strings.TrimSpace(string(out)))
+	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, linkDirPattern(script)))
+	require.NoError(t, err)
+	require.Empty(t, leftovers)
+}
+
 // fakePartialLinker stands in for clang: it writes part of an executable to
 // its -o path, then fails as a crashed link would.
 const fakePartialLinker = `#!/bin/sh

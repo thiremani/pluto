@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/compiler"
@@ -467,8 +468,17 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 // linkDirPattern names the directory a link writes into: the hidden
 // executable name plus the random part os.MkdirTemp puts in place of the *,
 // as in .main.2873647823. MkdirTemp creates it exclusively, so it is never an
-// existing directory.
+// existing directory. The name is cut to 64 bytes at a character boundary,
+// leaving room for the dots and random part when it nears the filename limit.
 func linkDirPattern(bin string) string {
+	const maxPrefix = 64
+	if len(bin) > maxPrefix {
+		cut := maxPrefix
+		for !utf8.RuneStart(bin[cut]) {
+			cut--
+		}
+		bin = bin[:cut]
+	}
 	return "." + bin + ".*"
 }
 
