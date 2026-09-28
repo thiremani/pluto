@@ -2,6 +2,9 @@ package main
 
 import (
 	"bufio"
+	"debug/elf"
+	"debug/macho"
+	"debug/pe"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +15,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/compiler"
@@ -413,11 +417,24 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 	if runtime.GOOS == OS_WINDOWS {
 		binFile = binFile + EXE_SUFFIX
 	}
+	if err := checkBinaryDestination(binFile); err != nil {
+		return err
+	}
 
 	if err := p.emitObject(scriptModule, objFile); err != nil {
 		fmt.Printf("object emission failed: %v\n", err)
 		return err
 	}
+
+	// Link into a fresh directory beside the destination, then rename the
+	// result into place: a failed link leaves no partial file, and a rebuild
+	// replaces the previous executable in one step.
+	linkDir, err := os.MkdirTemp(p.Cwd, linkDirPattern(bin))
+	if err != nil {
+		return fmt.Errorf("create link directory: %w", err)
+	}
+	defer os.RemoveAll(linkDir)
+	linkedFile := filepath.Join(linkDir, filepath.Base(binFile))
 
 	linkArgs := []string{}
 
@@ -434,7 +451,7 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 	}
 	linkArgs = append(linkArgs, objFile)
 	linkArgs = append(linkArgs, rtObjs...)
-	linkArgs = append(linkArgs, "-o", binFile)
+	linkArgs = append(linkArgs, "-o", linkedFile)
 	// libm is only needed/available on ELF-based systems
 	if runtime.GOOS != OS_WINDOWS {
 		linkArgs = append(linkArgs, "-lm")
@@ -445,7 +462,85 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 		return err
 	}
 
-	return nil
+	return os.Rename(linkedFile, binFile)
+}
+
+// linkDirPattern names the directory a link writes into: the hidden
+// executable name plus the random part os.MkdirTemp puts in place of the *,
+// as in .main.2873647823. MkdirTemp creates it exclusively, so it is never an
+// existing directory. The name is cut to 64 bytes at a character boundary,
+// leaving room for the dots and random part when it nears the filename limit.
+func linkDirPattern(bin string) string {
+	const maxPrefix = 64
+	if len(bin) > maxPrefix {
+		cut := maxPrefix
+		for !utf8.RuneStart(bin[cut]) {
+			cut--
+		}
+		bin = bin[:cut]
+	}
+	return "." + bin + ".*"
+}
+
+// checkBinaryDestination refuses to link over anything but a native
+// executable. Script names may contain dots, so pt.mod.spt and lib.pt.spt
+// would otherwise write pt.mod and lib.pt. A project input is never a native
+// executable, while an executable there is what an earlier build left.
+func checkBinaryDestination(binFile string) error {
+	info, err := os.Lstat(binFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode().IsRegular() && isNativeExecutable(binFile) {
+		return nil
+	}
+	return fmt.Errorf("refusing to replace %s: it exists and is not an executable", binFile)
+}
+
+// isNativeExecutable reports whether path holds an ELF, Mach-O or PE
+// executable, never a shared library. ELF gives position-independent
+// executables and shared libraries the same type, ET_DYN, so only the PIE
+// dynamic flag tells them apart. A PE DLL is an executable image too; only its
+// DLL flag excludes it. A COFF object parses as PE but has no optional header.
+func isNativeExecutable(path string) bool {
+	if f, err := elf.Open(path); err == nil {
+		defer f.Close()
+		return f.Type == elf.ET_EXEC || (f.Type == elf.ET_DYN && isPositionIndependentExecutable(f))
+	}
+	if f, err := macho.Open(path); err == nil {
+		defer f.Close()
+		return f.Type == macho.TypeExec
+	}
+	if f, err := macho.OpenFat(path); err == nil {
+		defer f.Close()
+		return f.Arches[0].Type == macho.TypeExec
+	}
+	if f, err := pe.Open(path); err == nil {
+		defer f.Close()
+		return f.OptionalHeader != nil &&
+			f.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE != 0 &&
+			f.Characteristics&pe.IMAGE_FILE_DLL == 0
+	}
+	return false
+}
+
+// isPositionIndependentExecutable reads DT_FLAGS_1 through the section table,
+// so a PIE stripped of its section headers, which keeps the flag only in its
+// dynamic segment, is refused. Pluto's own executables keep their sections.
+func isPositionIndependentExecutable(f *elf.File) bool {
+	flags, err := f.DynValue(elf.DT_FLAGS_1)
+	if err != nil {
+		return false
+	}
+	for _, flag := range flags {
+		if elf.DynFlag1(flag)&elf.DF_1_PIE != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pluto) ScanPlutoFiles(specificScript string) ([]string, []string) {
