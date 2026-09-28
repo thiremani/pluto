@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"debug/elf"
+	"debug/pe"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,6 +79,12 @@ func TestCheckBinaryDestination(t *testing.T) {
 		"other.spt": "Twice(1)\n",
 	})
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0755))
+	writeELF(t, filepath.Join(dir, "elf_exec"), elf.ET_EXEC, 0)
+	writeELF(t, filepath.Join(dir, "elf_pie"), elf.ET_DYN, elf.DF_1_PIE)
+	writeELF(t, filepath.Join(dir, "libsample.so"), elf.ET_DYN, 0)
+	writePE(t, filepath.Join(dir, "app.exe"), pe.IMAGE_FILE_EXECUTABLE_IMAGE)
+	writePE(t, filepath.Join(dir, "sample.dll"), pe.IMAGE_FILE_EXECUTABLE_IMAGE|pe.IMAGE_FILE_DLL)
+	writeCOFFObject(t, filepath.Join(dir, "object"), pe.IMAGE_FILE_EXECUTABLE_IMAGE)
 
 	tests := []struct {
 		name    string
@@ -83,10 +93,16 @@ func TestCheckBinaryDestination(t *testing.T) {
 	}{
 		{"Missing", filepath.Join(dir, "missing"), true},
 		{"Executable", os.Args[0], true},
+		{"ELFExecutable", filepath.Join(dir, "elf_exec"), true},
+		{"ELFPositionIndependentExecutable", filepath.Join(dir, "elf_pie"), true},
+		{"PEExecutable", filepath.Join(dir, "app.exe"), true},
 		{"ModFile", filepath.Join(dir, MOD_FILE), false},
 		{"CodeFile", filepath.Join(dir, "lib.pt"), false},
 		{"ScriptFile", filepath.Join(dir, "other.spt"), false},
 		{"Directory", filepath.Join(dir, "sub"), false},
+		{"ELFSharedLibrary", filepath.Join(dir, "libsample.so"), false},
+		{"PEDLL", filepath.Join(dir, "sample.dll"), false},
+		{"COFFObject", filepath.Join(dir, "object"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -178,4 +194,78 @@ func buildScript(t *testing.T, p *Pluto, cc *compiler.CodeCompiler, codeLL, scri
 	require.NoError(t, err)
 	defer module.Dispose()
 	return p.GenBinary(module, script, rtObjs)
+}
+
+// writeELF writes a minimal little-endian ELF64 image of type typ whose only
+// sections are a dynamic section holding DT_FLAGS_1 = flags1 and the section
+// name table, so tests can classify shared objects without an ELF linker.
+func writeELF(t *testing.T, path string, typ elf.Type, flags1 elf.DynFlag1) {
+	t.Helper()
+	const (
+		dynamicOff = 64
+		namesOff   = dynamicOff + 2*16
+		sectionOff = 128
+	)
+	names := "\x00.dynamic\x00.shstrtab\x00"
+	header := elf.Header64{
+		Type:      uint16(typ),
+		Machine:   uint16(elf.EM_X86_64),
+		Version:   uint32(elf.EV_CURRENT),
+		Shoff:     sectionOff,
+		Ehsize:    64,
+		Shentsize: 64,
+		Shnum:     3,
+		Shstrndx:  2,
+	}
+	copy(header.Ident[:], elf.ELFMAG)
+	header.Ident[elf.EI_CLASS] = byte(elf.ELFCLASS64)
+	header.Ident[elf.EI_DATA] = byte(elf.ELFDATA2LSB)
+	header.Ident[elf.EI_VERSION] = byte(elf.EV_CURRENT)
+	dynamic := []elf.Dyn64{{Tag: int64(elf.DT_FLAGS_1), Val: uint64(flags1)}, {Tag: int64(elf.DT_NULL)}}
+	sections := []elf.Section64{
+		{},
+		{Name: 1, Type: uint32(elf.SHT_DYNAMIC), Off: dynamicOff, Size: 2 * 16, Addralign: 8, Entsize: 16},
+		{Name: 10, Type: uint32(elf.SHT_STRTAB), Off: namesOff, Size: uint64(len(names)), Addralign: 1},
+	}
+
+	var image bytes.Buffer
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, header))
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, dynamic))
+	image.WriteString(names)
+	image.Write(make([]byte, sectionOff-image.Len()))
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, sections))
+	require.NoError(t, os.WriteFile(path, image.Bytes(), 0755))
+}
+
+// writePE writes a minimal PE32+ image with the given file characteristics.
+func writePE(t *testing.T, path string, characteristics uint16) {
+	t.Helper()
+	const signatureOff = 64
+	dosHeader := make([]byte, signatureOff)
+	copy(dosHeader, "MZ")
+	binary.LittleEndian.PutUint32(dosHeader[0x3c:], signatureOff)
+	optional := pe.OptionalHeader64{Magic: 0x20b, NumberOfRvaAndSizes: 16}
+	header := pe.FileHeader{
+		Machine:              pe.IMAGE_FILE_MACHINE_AMD64,
+		SizeOfOptionalHeader: uint16(binary.Size(optional)),
+		Characteristics:      characteristics,
+	}
+
+	var image bytes.Buffer
+	image.Write(dosHeader)
+	image.WriteString("PE\x00\x00")
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, header))
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, optional))
+	require.NoError(t, os.WriteFile(path, image.Bytes(), 0755))
+}
+
+// writeCOFFObject writes a bare COFF file header, which debug/pe parses like a
+// PE image that has neither an MS-DOS header nor an optional header.
+func writeCOFFObject(t *testing.T, path string, characteristics uint16) {
+	t.Helper()
+	header := pe.FileHeader{Machine: pe.IMAGE_FILE_MACHINE_AMD64, Characteristics: characteristics}
+	var image bytes.Buffer
+	require.NoError(t, binary.Write(&image, binary.LittleEndian, header))
+	image.Write(make([]byte, 96))
+	require.NoError(t, os.WriteFile(path, image.Bytes(), 0644))
 }

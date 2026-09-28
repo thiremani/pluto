@@ -486,11 +486,14 @@ func checkBinaryDestination(binFile string) error {
 }
 
 // isNativeExecutable reports whether path holds an ELF, Mach-O or PE
-// executable. A position-independent ELF executable has type ET_DYN.
+// executable, never a shared library. ELF gives position-independent
+// executables and shared libraries the same type, ET_DYN, so only the PIE
+// dynamic flag tells them apart. A PE DLL is an executable image too; only its
+// DLL flag excludes it. A COFF object parses as PE but has no optional header.
 func isNativeExecutable(path string) bool {
 	if f, err := elf.Open(path); err == nil {
 		defer f.Close()
-		return f.Type == elf.ET_EXEC || f.Type == elf.ET_DYN
+		return f.Type == elf.ET_EXEC || (f.Type == elf.ET_DYN && isPositionIndependentExecutable(f))
 	}
 	if f, err := macho.Open(path); err == nil {
 		defer f.Close()
@@ -502,7 +505,22 @@ func isNativeExecutable(path string) bool {
 	}
 	if f, err := pe.Open(path); err == nil {
 		defer f.Close()
-		return f.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE != 0
+		return f.OptionalHeader != nil &&
+			f.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE != 0 &&
+			f.Characteristics&pe.IMAGE_FILE_DLL == 0
+	}
+	return false
+}
+
+func isPositionIndependentExecutable(f *elf.File) bool {
+	flags, err := f.DynValue(elf.DT_FLAGS_1)
+	if err != nil {
+		return false
+	}
+	for _, flag := range flags {
+		if elf.DynFlag1(flag)&elf.DF_1_PIE != 0 {
+			return true
+		}
 	}
 	return false
 }
