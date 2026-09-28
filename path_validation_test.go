@@ -180,6 +180,48 @@ func TestGenBinaryReplacesItsExecutable(t *testing.T) {
 	require.Empty(t, leftovers)
 }
 
+// fakePartialLinker stands in for clang: it writes part of an executable to
+// its -o path, then fails as a crashed link would.
+const fakePartialLinker = `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-o" ]; then
+		printf partial > "$2"
+	fi
+	shift
+done
+exit 1
+`
+
+// TestGenBinaryKeepsExecutableWhenLinkFails puts a linker that writes before
+// failing first on PATH: the previous executable must survive, which a link
+// straight to the destination would break.
+func TestGenBinaryKeepsExecutableWhenLinkFails(t *testing.T) {
+	if runtime.GOOS == OS_WINDOWS {
+		t.Skip("the fake linker is a shell script")
+	}
+	p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
+		MOD_FILE:   "module github.com/thiremani/pluto/output_path_test\n",
+		"lib.pt":   "y = Twice(x)\n    y = x * 2\n",
+		"main.spt": "Twice(3)\n",
+	})
+	require.NoError(t, buildScript(t, p, cc, codeLL, "main", rtObjs))
+	mainBin := filepath.Join(p.Cwd, "main")
+	built, err := os.ReadFile(mainBin)
+	require.NoError(t, err)
+
+	fakeDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fakeDir, CC), []byte(fakePartialLinker), 0755))
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	require.Error(t, buildScript(t, p, cc, codeLL, "main", rtObjs))
+
+	after, err := os.ReadFile(mainBin)
+	require.NoError(t, err)
+	require.Equal(t, built, after)
+	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, LINK_DIR_PATTERN))
+	require.NoError(t, err)
+	require.Empty(t, leftovers)
+}
+
 // compileTestProject writes files into a new project, prepares the runtime in
 // a temporary cache and compiles the project's code files.
 func compileTestProject(t *testing.T, files map[string]string) (*Pluto, *compiler.CodeCompiler, string, []string) {
