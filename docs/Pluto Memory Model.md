@@ -301,12 +301,25 @@ out = Maybe(prev, x)
     out = x > 0 x
 ```
 
-`a = Maybe(a, -1)` keeps `a`. An output's first write may copy an input
-unchanged, as `out = prev` does, and then be overwritten without being read:
-the dead-store check exempts that one write. The same body therefore serves
-a scalar `x`, where `x > 0` can fail, and an array `x`, where the mask always
-writes. Recursion written with complementary gates becomes a default
-followed by an override: `y = n`, then `y = n > 1 Fib(n - 1) + Fib(n - 2)`.
+`a = Maybe(a, -1)` keeps `a`. Recursion written with complementary gates
+becomes a default followed by an override: `y = n`, then
+`y = n > 1 Fib(n - 1) + Fib(n - 2)`.
+
+An output's first write may copy an input unchanged, as `out = prev` does,
+and then be overwritten without being read: the dead-store check exempts
+that one write. One body can then serve arguments whose override can skip and
+arguments whose override always writes:
+
+```python
+out = Pos(prev, x)
+    out = prev
+    out = x > 0
+```
+
+For a scalar `x`, the value-position comparison `x > 0` yields `x` or fails,
+so `out` keeps `prev`; for an array `x`, it yields a mask and always writes.
+A statement gate such as `Maybe`'s `out = x > 0 x` serves only a scalar `x`,
+since a statement condition must be a scalar.
 
 A call therefore either runs and writes every output, or does not run: when
 an argument fails (`m = Double(arr[5])` keeps `m`), when the statement's
