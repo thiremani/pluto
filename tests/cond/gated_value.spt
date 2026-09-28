@@ -26,3 +26,32 @@ a = [1 2 3]
 t = 5
 t = n > 0 (n > 1 && a || a)[0]
 t
+
+# With the gate holding, the value's own condition decides.
+"ratio holds:", Ratio(1, 2), Ratio(7, 2)
+
+d = 2
+s = d != 0 (x ÷ d) < 1
+x = 1
+s2 = 5
+s2 = d != 0 (x ÷ d) < 1
+s, s2
+
+# With the gate holding, the value takes either branch of its ||.
+b = [4 5 6]
+n = 1
+t1 = 5
+t1 = n > 0 (n > 1 && a || b)[0]
+n = 2
+t2 = 5
+t2 = n > 0 (n > 1 && a || b)[0]
+"pick holds:", t1, t2, Pick(a, b, 1), Pick(a, b, 2)
+
+# A copy made inside a holding gate is freed when a later condition in the
+# same value fails, in a function and at script level.
+i = 0:100
+c = 5
+c = CopyThenFail(a, b, i % 6)
+h = 5
+h = (i % 6) > 0 ((i % 6) > 1 && a || b)[0] + ((i % 6) > 3)
+"copy then fail:", c, h, CopyThenFail(a, b, 2), CopyThenFail(a, b, 5)

@@ -960,7 +960,7 @@ func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedM
 	}
 
 	frame := c.requireCondLHSFrame()
-	for _, exprKey := range sortedFrameKeys(frame) {
+	for _, exprKey := range releaseOrder(frame) {
 		exprInfo := c.ExprCache[exprKey]
 		if exprInfo == nil {
 			continue
@@ -973,15 +973,16 @@ func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedM
 	}
 }
 
-// sortedFrameKeys orders a condLHS frame's keys by source position, so the code
-// emitted per key is deterministic.
-func sortedFrameKeys(frame map[ExprKey][]*Symbol) []ExprKey {
-	return slices.SortedFunc(maps.Keys(frame), compareSourcePosition)
+// releaseOrder orders a condLHS frame's keys for release: last in source order
+// first, as scopes release their bindings, so the emitted code is deterministic.
+func releaseOrder(frame map[ExprKey][]*Symbol) []ExprKey {
+	return slices.SortedFunc(maps.Keys(frame), laterSourceFirst)
 }
 
-func compareSourcePosition(a, b ExprKey) int {
+// laterSourceFirst orders a before b when a comes later in the source.
+func laterSourceFirst(a, b ExprKey) int {
 	at, bt := a.Expr.Tok(), b.Expr.Tok()
-	return cmp.Or(cmp.Compare(at.Line, bt.Line), cmp.Compare(at.Column, bt.Column))
+	return cmp.Or(cmp.Compare(bt.Line, at.Line), cmp.Compare(bt.Column, at.Column))
 }
 
 // splitCondRanges collects merged ranges and boolean guard expressions from
@@ -1526,11 +1527,12 @@ func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
 	return keys
 }
 
-// freeUnmovedMasksSince frees array masks stashed in the condLHS frame since
-// the snapshot (nil means all) that were not moved into a result slot, marking
-// them borrowed so outer cleanups skip them.
+// freeUnmovedMasksSince frees, last first in source order, array masks stashed
+// in the condLHS frame since the snapshot (nil means all) that were not moved
+// into a result slot, marking them borrowed so outer cleanups skip them.
 func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
-	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
+	frame := c.requireCondLHSFrame()
+	for _, exprKey := range releaseOrder(frame) {
 		if _, ok := before[exprKey]; ok {
 			continue
 		}
@@ -1538,6 +1540,7 @@ func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
 		if exprInfo == nil {
 			continue
 		}
+		lhsSyms := frame[exprKey]
 		for i := range exprInfo.CompareModes {
 			if !exprInfo.IsMask(i) || lhsSyms[i].Borrowed {
 				continue
