@@ -512,6 +512,9 @@ func isNativeExecutable(path string) bool {
 	return false
 }
 
+// isPositionIndependentExecutable reads DT_FLAGS_1 through the section table,
+// so a PIE stripped of its section headers, which keeps the flag only in its
+// dynamic segment, is refused. Pluto's own executables keep their sections.
 func isPositionIndependentExecutable(f *elf.File) bool {
 	flags, err := f.DynValue(elf.DT_FLAGS_1)
 	if err != nil {
