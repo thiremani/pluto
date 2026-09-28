@@ -50,10 +50,11 @@ classifier: a body-only edit must never change the C prototype of a
 type-mangled symbol. Today every exported direct `I64`/`F64` return keeps a
 hidden seed parameter. #123 (decided) requires every body that runs to write
 every output, so ABI 3.0 removes the seed and the write markers from every
-function without a `Range` or `ArrayRange` parameter. That removal follows
-the parameter types, so the prototype still never depends on the body. A
-range-bearing function keeps a way to report an empty domain until Step 7
-chooses one (§16).
+function without a `Range` or `ArrayRange` parameter. That removal depends
+only on whether a parameter is a range, and the complete prototype only on the
+solved parameter and output types, so a prototype still never depends on the
+body. A range-bearing function keeps a way to report an empty domain until
+Step 7 chooses one (§16).
 
 ## 2. Deliberate Abstraction Level
 

@@ -383,11 +383,13 @@ pointers. `Square` becomes `int64_t Pt_Square_I64(int64_t x)`.
 `ConditionalSquare` must start from a default: with an input `prev` and
 `res = prev` first, it becomes
 `int64_t Pt_ConditionalSquare_I64_I64(int64_t prev, int64_t x)`, and a caller
-that keeps an old value passes it as that ordinary argument. The prototype
-still follows the parameter types alone, never the body. A range-bearing function such as `Acc` must still report that no
-iteration ran, since zero iterations mean no assignment; it keeps its seed
-until PIR Step 7 chooses between one "did execute" bit and a caller-side
-emptiness check.
+that keeps an old value passes it as that ordinary argument. Whether a
+function keeps the seed and the write markers depends only on whether it has
+a range parameter; its complete prototype depends on its solved parameter and
+output types, never on its body. A range-bearing function such as `Acc` must
+still report that no iteration ran, since zero iterations mean no assignment;
+it keeps its seed until PIR Step 7 chooses between one "did execute" bit and a
+caller-side emptiness check.
 
 Conceptually, a two-output indirect call uses:
 
