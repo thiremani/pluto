@@ -1,0 +1,37 @@
+out = Keep(v)
+    out = v
+
+out = Tag(v)
+    out = v ⊕ ["s"]
+
+out = Append(v, item)
+    out = v ⊕ [item]
+
+out = Reset(v)
+    v
+    out = []
+
+out = Scores(t)
+    out = t.Score ⊕ ["x"]
+
+out, tags = Build(n)
+    acc = []
+    tags = Tag(acc)
+    acc = [n]
+    out = acc
+
+# Its local shares a name with a caller's destination, which must not change
+# how the body types its own calls.
+out = Work(n)
+    w = []
+    Append(w, n)
+    w = [9.5]
+    out = w
+
+a, b = Pair(n)
+    a = n
+    b = n + 1
+
+first, out = Fold(x, y, current, item)
+    first = x + y
+    out = current ⊕ [item]

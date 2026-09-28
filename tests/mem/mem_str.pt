@@ -15,10 +15,11 @@ s = getStaticAt(x)
 s = maybeStatic(flag)
     s = flag > 0 "static changed"
 
-# Propagate one conditionally written static output into another output.
+# Write one conditionally chosen static value into two outputs.
 s, t = shareStaticOutput(flag)
-    s = flag > 0 "shared static"
-    t = s
+    shared = flag > 0 "shared static"
+    s = flag > 0 shared
+    t = flag > 0 shared
 
 # Mixed indirect outputs exercise one widened string slot and one exact scalar slot.
 s, n = getStaticPair(x)

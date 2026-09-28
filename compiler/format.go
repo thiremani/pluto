@@ -12,7 +12,7 @@ import (
 
 func formatSpecifierEnd(ch rune) bool {
 	switch ch {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A', 'c', 's', 'q', 'p', 'n', '%':
+	case 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G', 'a', 'A', 'c', 's', 'q', 'p', '%':
 		return true
 	}
 	return false
@@ -116,13 +116,13 @@ func validateSpecifierModifiers(tok token.Token, value, flags, length string, ha
 		}
 	}
 
-	if length != "" && !strings.ContainsRune("diuoxXn", conversion) {
+	if length != "" && !strings.ContainsRune("diuoxX", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Length modifier %q is not supported for %%%c", length, conversion))
 	}
-	if hasWidth && strings.ContainsRune("n%", conversion) {
+	if hasWidth && conversion == '%' {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Width is not supported for %%%c", conversion))
 	}
-	if hasPrecision && strings.ContainsRune("cpn%", conversion) {
+	if hasPrecision && strings.ContainsRune("cp%", conversion) {
 		return formatSpecifierError(tok, value, fmt.Sprintf("Precision is not supported for %%%c", conversion))
 	}
 	return nil
@@ -298,6 +298,10 @@ func (p *specifierParser) parseConversion() *token.CompileError {
 		return formatSpecifierError(p.tok, p.value, "Escape sequences cannot be used as format syntax")
 	}
 	conversion := p.runes[p.index]
+	if conversion == 'n' {
+		p.index++
+		return formatSpecifierError(p.tok, p.value, "%n is not supported: formatting cannot write to a variable")
+	}
 	if !formatSpecifierEnd(conversion) {
 		p.index++
 		return formatSpecifierError(p.tok, p.value, fmt.Sprintf("Unexpected %q in format specifier %q", conversion, p.spec.String()))
@@ -669,22 +673,22 @@ func (c *Compiler) formatAsString(mainSym *Symbol, result *formattedMarker) bool
 	return true
 }
 
+// storageAddress returns where a value's own data lives: a string's characters
+// or an array's element buffer. Other values have no storage of their own.
+func (c *Compiler) storageAddress(sym *Symbol) (llvm.Value, bool) {
+	switch sym.Type.Kind() {
+	case StrKind:
+		return sym.Val, true
+	case ArrayKind:
+		return c.ArrayData(sym, sym.Type.(Array).ElemType), true
+	default:
+		return llvm.Value{}, false
+	}
+}
+
 func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *Symbol, spec parsedSpecifier, specRune rune, byteLimit *llvm.Value, result *formattedMarker) (bool, *token.CompileError) {
 	mainType := mainSym.Type
 	switch specRune {
-	case 'n':
-		if !TypeEqual(mainType, I64) {
-			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
-		}
-		if _, source := c.lookupNamedSymbol(mainID); source == symbolCode {
-			return true, &token.CompileError{
-				Token: tok,
-				Msg:   fmt.Sprintf("cannot write to constant %q", mainID),
-			}
-		}
-		s := c.promoteToMemory(mainID)
-		result.args = append(result.args, s.Val)
-		return true, nil
 	case 'q':
 		if mainType.Kind() != StrKind {
 			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
@@ -719,12 +723,14 @@ func (c *Compiler) formatSpecialValue(tok token.Token, mainID string, mainSym *S
 	case 's':
 		return c.formatAsString(mainSym, result), nil
 	case 'p':
-		// Normalize pointer output as lowercase alternate-form hex while preserving width.
-		rawSym, _ := c.getRawSymbol(mainID)
-		if rawSym.Type.Kind() != PtrKind {
-			return true, formatSpecifierTypeError(tok, specRune, mainID, rawSym.Type)
+		storage, ok := c.storageAddress(mainSym)
+		if !ok {
+			return true, formatSpecifierTypeError(tok, specRune, mainID, mainType)
 		}
-		ptrAsInt := c.builder.CreatePtrToInt(rawSym.Val, c.Context.Int64Type(), "ptr_as_i64")
+		// C's %p text differs by platform: Microsoft's runtime prints uppercase
+		// digits without 0x. Print the address as lowercase hex instead, where the
+		// # flag adds the 0x inside the field width.
+		ptrAsInt := c.builder.CreatePtrToInt(storage, c.Context.Int64Type(), "ptr_as_i64")
 		result.text = "%#" + result.text[1:len(result.text)-1] + "llx"
 		result.args = append(result.args, ptrAsInt)
 		return true, nil
@@ -880,7 +886,6 @@ func (c *Compiler) formatString(tok token.Token, value string) (string, []llvm.V
 //	%d   -> %lld
 //	%*d  -> %*lld
 //	%-08d -> %-08lld
-//	%n   -> %lln
 func upgradeIntSpec(spec string) string {
 	if len(spec) < 2 || spec[0] != '%' {
 		return spec
@@ -888,7 +893,7 @@ func upgradeIntSpec(spec string) string {
 
 	conv := spec[len(spec)-1]
 	switch conv {
-	case 'd', 'i', 'u', 'o', 'x', 'X', 'n':
+	case 'd', 'i', 'u', 'o', 'x', 'X':
 		// eligible for upgrade
 	default:
 		return spec

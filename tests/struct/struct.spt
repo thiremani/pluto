@@ -8,4 +8,9 @@ copiedName
 "-p"
 p
 p, 99
-"x=-p y=99"
+"x=-p\ny=99"
+
+# A struct read through its output keeps its constant fields static; the
+# caller must not free them.
+copied, copiedTag = Copy(p)
+copied.name, copiedTag

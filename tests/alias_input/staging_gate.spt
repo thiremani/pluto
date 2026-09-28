@@ -1,0 +1,30 @@
+# A shared input observes each iteration's staged write, as the inlined
+# statement does, for scalars, strings and arrays alike.
+i = 10
+i = GateInt(i)
+s = "x"
+s = GateStr(s)
+a = [9]
+a = GateArr(a)
+"Shared:", i, s, a
+si = 10
+si = (1:4) > 0 si + 1
+ss = "x"
+ss = (1:4) > 0 ss ⊕ "."
+sa = [9]
+sa = (1:4) > 0 sa ⊕ sa
+"Inlined:", si, ss, sa
+
+j = 10
+j, js = GateSibInt(j)
+t = "x"
+t, ts = GateSibStr(t)
+"Sibling:", j, js, t, ts
+
+u = GateInt(10)
+v, vs = GateSibStr("x")
+"Unshared:", u, v, vs
+
+g = 10
+g, gs = GatedFold(g)
+"Gated:", g, gs

@@ -15,6 +15,7 @@ type ArrayInfo struct {
 	SetName    string
 	GetName    string
 	LenName    string
+	DataName   string
 	StrName    string
 	FormatName string
 	PushName   string
@@ -35,6 +36,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		SetName:    ARR_I64_SET,
 		GetName:    ARR_I64_GET,
 		LenName:    ARR_I64_LEN,
+		DataName:   ARR_I64_DATA,
 		StrName:    ARR_I64_STR,
 		FormatName: ARR_I64_FORMAT,
 		PushName:   ARR_I64_PUSH,
@@ -46,6 +48,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		SetName:    ARR_F64_SET,
 		GetName:    ARR_F64_GET,
 		LenName:    ARR_F64_LEN,
+		DataName:   ARR_F64_DATA,
 		StrName:    ARR_F64_STR,
 		FormatName: ARR_F64_FORMAT,
 		PushName:   ARR_F64_PUSH,
@@ -57,6 +60,7 @@ var ArrayInfos = map[Kind]ArrayInfo{
 		SetName:    ARR_STR_SET,
 		GetName:    ARR_STR_GET,
 		LenName:    ARR_STR_LEN,
+		DataName:   ARR_STR_DATA,
 		StrName:    ARR_STR_STR,
 		FormatName: ARR_STR_FORMAT,
 		PushName:   ARR_STR_PUSH,
@@ -243,6 +247,19 @@ func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
 	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
 	fnTy, fn := c.GetCFunc(info.LenName)
 	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "len")
+}
+
+// ArrayData returns the address of an array's element buffer, which is null
+// until the array holds an element.
+func (c *Compiler) ArrayData(arr *Symbol, elem Type) llvm.Value {
+	if !hasConcreteArrayElemType(elem) {
+		return llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
+	}
+	info := ArrayInfos[elem.Kind()]
+	arrayType := arr.Type.(Array)
+	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
+	fnTy, fn := c.GetCFunc(info.DataName)
+	return c.builder.CreateCall(fnTy, fn, []llvm.Value{cast}, "array_elements")
 }
 
 func (c *Compiler) ArrayGet(arr *Symbol, elem Type, idx llvm.Value) llvm.Value {
@@ -438,7 +455,7 @@ func (c *Compiler) compileArrayLiteralCell(cell ast.Expression, elemType Type, c
 	defer c.popBoundsGuard()
 
 	c.withArrayLiteralCellMode(func() {
-		c.compileCondExprValue(cell, llvm.Value{}, func() {
+		c.compileCondExprValue(cell, func() {
 			errorsBefore := len(c.Errors)
 			vals := c.compileExpression(cell, nil)
 			if len(vals) == 0 {
@@ -1124,7 +1141,7 @@ func (c *Compiler) compileArrayRangeRanges(info *ExprInfo, dest []*ast.Identifie
 	output := outputs[0]
 
 	withCollectorPreparedLoopNest(c, info.Rewrite.(*ast.ArrayRangeExpression), info.Ranges, nil, nil, func(rew *ast.ArrayRangeExpression) {
-		c.compileCondOperands(rew, llvm.Value{}, func() {
+		c.compileCondOperands(rew, func() {
 			arraySym, idxSym, arrType := c.compileArrayRangeOperands(rew)
 			// Source operands are temporary for each loop iteration in this path.
 			defer c.freeTemporary(rew.Array, []*Symbol{arraySym})

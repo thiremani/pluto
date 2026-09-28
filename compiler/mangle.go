@@ -14,6 +14,7 @@ const (
 	R   = "r"  // Relpath end marker (for constants with relpath)
 	F   = "f"  // Function arity marker
 	T   = "t"  // Generic type params marker
+	A   = "a"  // Alias variant marker: per-parameter output slot pattern
 	M   = "m"  // Method separator
 	OP  = "op" // Operator prefix
 	N   = "n"  // Numeric segment prefix
@@ -58,6 +59,10 @@ type Demangled struct {
 	Kind     SymbolKind // Type of symbol
 	Arity    int        // Number of arguments (for functions)
 	ArgTypes []string   // Argument type names (for functions)
+	// AliasPattern holds, per parameter, the one-based output slot the
+	// parameter shares at the call site, 0 for none; nil when no parameter
+	// aliases. Present only on private alias variants.
+	AliasPattern []int
 }
 
 // FullPath returns the complete path (ModPath + RelPath).
@@ -86,10 +91,22 @@ func (d *Demangled) String() string {
 
 	if d.Kind == SymbolFunc {
 		result.WriteString("(")
-		result.WriteString(strings.Join(d.ArgTypes, ", "))
+		result.WriteString(strings.Join(d.argDisplay(), ", "))
 		result.WriteString(")")
 	}
 	return result.String()
+}
+
+// argDisplay renders the argument types. In an alias variant, a parameter
+// that shares an output shows that output's one-based index: I64 -> 1.
+func (d *Demangled) argDisplay() []string {
+	args := append([]string(nil), d.ArgTypes...)
+	for i, slot := range d.AliasPattern {
+		if slot > 0 && i < len(args) {
+			args[i] = fmt.Sprintf("%s -> %d", args[i], slot)
+		}
+	}
+	return args
 }
 
 // Mangle generates C ABI-compliant function name per Pluto C ABI Spec.
@@ -99,6 +116,21 @@ func Mangle(mangledPath, funcName string, args []Type) string {
 	parts := []string{mangledPath, MangleIdent(funcName), F + strconv.Itoa(len(args))}
 	for _, arg := range args {
 		parts = append(parts, arg.Mangle())
+	}
+	return strings.Join(parts, SEP)
+}
+
+// MangleVariant names a private lowering variant of a function specialization
+// per Pluto C ABI Spec §5.2. The alias suffix _aN_<slot>... carries one entry
+// per parameter, 0 for a parameter sharing no output and k for one sharing
+// output k-1. A nil pattern returns the public specialization symbol.
+func MangleVariant(mangled string, aliasPattern []int) string {
+	parts := []string{mangled}
+	if aliasPattern != nil {
+		parts = append(parts, A+strconv.Itoa(len(aliasPattern)))
+		for _, slot := range aliasPattern {
+			parts = append(parts, strconv.Itoa(slot))
+		}
 	}
 	return strings.Join(parts, SEP)
 }
@@ -390,14 +422,35 @@ func demangleFunc(result *Demangled, rest string) {
 
 	// Parse argument types
 	for strings.HasPrefix(rest, SEP) {
-		rest = rest[len(SEP):]
-		typeName, remaining := demangleType(rest)
+		typeName, remaining := demangleType(rest[len(SEP):])
 		if typeName == "" {
 			break
 		}
 		result.ArgTypes = append(result.ArgTypes, typeName)
 		rest = remaining
 	}
+
+	demangleVariant(result, rest)
+}
+
+// demangleVariant parses the optional private-variant suffix that follows a
+// function's argument types: _aN and N slots.
+func demangleVariant(result *Demangled, rest string) {
+	after, ok := strings.CutPrefix(rest, SEP+A)
+	if !ok || !startsWithDigit(after) {
+		return
+	}
+	count, remaining := parseArity(after)
+	result.AliasPattern = []int{}
+	for i := 0; i < count && strings.HasPrefix(remaining, SEP) && startsWithDigit(remaining[len(SEP):]); i++ {
+		slot, next := parseArity(remaining[len(SEP):])
+		result.AliasPattern = append(result.AliasPattern, slot)
+		remaining = next
+	}
+}
+
+func startsWithDigit(s string) bool {
+	return len(s) > 0 && s[0] >= '0' && s[0] <= '9'
 }
 
 // parseArity parses arity digits from s.

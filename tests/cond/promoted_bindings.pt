@@ -1,0 +1,11 @@
+# A statement moves the variables it passes to calls by pointer into memory
+# before it branches, so a path that skips the call keeps their values.
+y = Twice(v)
+    y = v ⊕ v
+
+y = First(v)
+    y = v[0]
+
+y = SI(t, j)
+    y = t
+    y = j > 100 "big"

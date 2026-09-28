@@ -498,6 +498,11 @@ func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol,
 	if !ok {
 		return nil, nil, false
 	}
+	// A staged slot can change length inside the loop, so a bound checked
+	// once before it does not hold for every iteration.
+	if _, staged := c.currentStmtCtx().stagedSlots[raw.Val]; staged {
+		return nil, nil, false
+	}
 	arraySym := c.derefIfPointer(raw, ident.Value+"_affine_arr")
 	arrType, ok := arraySym.Type.(Array)
 	if !ok || arrType.ElemType == nil {

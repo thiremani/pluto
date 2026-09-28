@@ -1,7 +1,9 @@
 package compiler
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -84,9 +86,9 @@ func (c *Compiler) compileConditions(stmt *ast.LetStatement) (cond llvm.Value, h
 }
 
 // collectPromotableCallArgIdentifiers walks an expression and records bare
-// identifier call arguments that lower indirectly. Those identifiers may be
-// promoted to memory by lowerCallArgs, so conditional lowering pre-promotes
-// only that subset before branching.
+// identifier call arguments that lower indirectly. lowerCallArgs would promote
+// those identifiers to memory where the call runs, so compileStatement
+// promotes them before the statement branches.
 func (c *Compiler) collectPromotableCallArgIdentifiers(expr ast.Expression, out map[string]struct{}) {
 	if ce, ok := expr.(*ast.CallExpression); ok {
 		c.addPromotableArgs(ce, out)
@@ -109,30 +111,15 @@ func (c *Compiler) addPromotableArgs(ce *ast.CallExpression, out map[string]stru
 		return
 	}
 
+	// A multi-valued argument fills several parameter positions, so the
+	// parameter an identifier binds to is found by expanded position.
 	abi := classifyFuncABI(paramTypes, fnInfo.Sig.OutTypes)
-	for i, arg := range ce.Arguments {
-		if abi.Params[i].Mode != ABIParamIndirect {
-			continue
+	position := 0
+	for _, arg := range ce.Arguments {
+		if ident, ok := arg.(*ast.Identifier); ok && abi.Params[position].Mode == ABIParamIndirect {
+			out[ident.Value] = struct{}{}
 		}
-		ident, ok := arg.(*ast.Identifier)
-		if !ok {
-			continue
-		}
-		out[ident.Value] = struct{}{}
-	}
-}
-
-// prePromoteConditionalCallArgs promotes local identifiers that are used as
-// indirect call arguments so branch codegen does not introduce path-dependent
-// promotions.
-func (c *Compiler) prePromoteConditionalCallArgs(exprs []ast.Expression) {
-	argNames := make(map[string]struct{})
-	for _, expr := range exprs {
-		c.collectPromotableCallArgIdentifiers(expr, argNames)
-	}
-
-	for name := range argNames {
-		c.promoteExistingSym(name)
+		position += len(c.ExprCache[key(c.FuncNameMangled, arg)].OutTypes)
 	}
 }
 
@@ -222,6 +209,7 @@ func (c *Compiler) createConditionalTempOutputsFor(dest []*ast.Identifier, outTy
 		// Temporary conditional outputs are borrowed so scope cleanup does not free
 		// values that are transferred to real destinations in the merge block.
 		Put(c.Scopes, tempName, tempSym)
+		c.bindSyntheticDestination(tempName, ident.Value)
 		slots[i] = OutputSlot{dest: ident, temp: tempIdent, outType: outTypes[i]}
 	}
 	return slots
@@ -278,24 +266,28 @@ func (c *Compiler) commitConditionalOutputs(slots []OutputSlot) {
 	}
 }
 
-// aliasCondDests maps existing destination names to conditional temp slots so
-// RHS reads during IF-branch assignment see the latest temp writes.
+// aliasCondDests maps existing destination names, and the inputs sharing them
+// (see stagedBindings), to conditional temp slots so RHS reads during IF-branch
+// assignment see the latest temp writes. All bindings are gathered before any
+// is replaced, since stagedBindings finds inputs by their current bindings.
 func (c *Compiler) aliasCondDests(slots []OutputSlot) map[string]*Symbol {
-	aliases := make(map[string]*Symbol, len(slots))
-
+	bindings := make(map[string]*Symbol, len(slots))
 	for _, s := range slots {
-		oldSym, exists := Get(c.Scopes, s.dest.Value)
-		if !exists {
+		if _, exists := Get(c.Scopes, s.dest.Value); !exists {
 			continue
 		}
 		tempSym, ok := Get(c.Scopes, s.temp.Value)
 		if !ok {
 			continue
 		}
-		aliases[s.dest.Value] = oldSym
-		SetExisting(c.Scopes, s.dest.Value, tempSym)
+		maps.Copy(bindings, c.stagedBindings(s.dest.Value, tempSym))
 	}
 
+	aliases := make(map[string]*Symbol, len(bindings))
+	for _, name := range slices.Sorted(maps.Keys(bindings)) {
+		aliases[name], _ = Get(c.Scopes, name)
+		SetExisting(c.Scopes, name, bindings[name])
+	}
 	return aliases
 }
 
@@ -362,6 +354,7 @@ func (c *Compiler) createStageTempOutputsFor(commit []OutputSlot) []OutputSlot {
 			stageTempSym.WriteFlag = commitSym.WriteFlag
 		}
 		Put(c.Scopes, tempName, stageTempSym)
+		c.bindSyntheticDestination(tempName, cs.dest.Value)
 		stage[i] = OutputSlot{dest: cs.dest, temp: tempIdent, outType: outType}
 	}
 	return stage
@@ -397,7 +390,7 @@ func (c *Compiler) stageCondRangedExpr(expr ast.Expression, stage []OutputSlot) 
 			return
 		}
 		if c.hasCondExprInTree(expr) {
-			c.compileCondExprValue(expr, llvm.Value{}, compileStageAssign)
+			c.compileCondExprValue(expr, compileStageAssign)
 			return
 		}
 
@@ -451,12 +444,6 @@ func (c *Compiler) commitCondRangedStages(commit, stage []OutputSlot) {
 // 3. ELSE branch: no-op (seed values already represent the else result)
 // 4. Merge: commit temp slot values to real destinations once
 func (c *Compiler) compileCondStatement(stmt *ast.LetStatement, cond llvm.Value) {
-	// compileArgs may promote identifier call args by creating an alloca in entry
-	// and storing the current value at the call site. If promotion happens only in
-	// the IF block, the false path would skip that store and later loads can read
-	// uninitialized memory. Pre-promote here so storage is initialized on all paths.
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	slots := c.createConditionalTempOutputs(stmt)
 
 	ifBlock, contBlock := c.createIfCont(cond, "if", "continue")
@@ -878,21 +865,20 @@ func (c *Compiler) cleanupCondExprElse(temps []condTemp) {
 // compileCondExprValue gates value-position cond expressions on the ANDed
 // per-slot conditions: comparisons compose as AND, and value-position ||/&&
 // contribute their yield flags after resolving through logical slots.
-func (c *Compiler) compileCondExprValue(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+func (c *Compiler) compileCondExprValue(expr ast.Expression, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
 	conds, temps := c.extractSlotConds(expr, nil)
-	cond := c.andConds(baseCond, c.foldSlotConds(conds), "base_and")
-	c.branchCond(cond, temps, onTrue, func() {})
+	c.branchCond(c.foldSlotConds(conds), temps, onTrue, func() {})
 }
 
 // compileCondOperands leaves expr itself to the caller.
-func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value, onTrue func()) {
+func (c *Compiler) compileCondOperands(expr ast.Expression, onTrue func()) {
 	c.pushCondLHSFrame()
 	defer c.popCondLHSFrame()
 
-	cond := baseCond
+	var cond llvm.Value
 	var temps []condTemp
 	for _, child := range ast.ExprChildren(expr) {
 		var childConds []llvm.Value
@@ -903,10 +889,100 @@ func (c *Compiler) compileCondOperands(expr ast.Expression, baseCond llvm.Value,
 }
 
 func (c *Compiler) branchCond(cond llvm.Value, temps []condTemp, onTrue func(), onFalse func()) {
-	c.withCondBranch(cond, "cond", onTrue, func() {
+	before := c.branchBorrowedMarks(temps)
+	var afterTrue borrowedMarks
+	c.withCondBranch(cond, "cond", func() {
+		onTrue()
+		afterTrue = c.branchBorrowedMarks(temps)
+	}, func() {
+		// A value the true arm released is still live on this arm.
+		before.restore()
 		c.cleanupCondExprElse(temps)
 		onFalse()
+		afterTrue.add()
 	})
+}
+
+// borrowedMarks records the compile-time Borrowed marks of the values a
+// conditional branch's arms may release.
+type borrowedMarks map[*Symbol]bool
+
+// branchBorrowedMarks snapshots the marks of temps and of the current condLHS
+// frame, which freeConsumedTemporary sets when it releases a value.
+func (c *Compiler) branchBorrowedMarks(temps []condTemp) borrowedMarks {
+	marks := borrowedMarks{}
+	for _, tmp := range temps {
+		for _, sym := range tmp.syms {
+			marks[sym] = sym.Borrowed
+		}
+	}
+	for _, syms := range c.currentCondLHSFrame() {
+		for _, sym := range syms {
+			marks[sym] = sym.Borrowed
+		}
+	}
+	return marks
+}
+
+func (m borrowedMarks) restore() {
+	for sym, borrowed := range m {
+		sym.Borrowed = borrowed
+	}
+}
+
+// add keeps every mark either arm set, so code after the branch sees a value
+// released on both arms as released.
+func (m borrowedMarks) add() {
+	for sym, borrowed := range m {
+		sym.Borrowed = sym.Borrowed || borrowed
+	}
+}
+
+// consumed reports whether the true arm released sym: live before the branch,
+// marked after it.
+func consumed(sym *Symbol, before, afterTrue borrowedMarks) bool {
+	return afterTrue[sym] && !before[sym]
+}
+
+// releaseConsumed frees, on a false arm whose code after the branch still
+// cleans up, exactly what the true arm consumed. Values the true arm left
+// alone stay for that later cleanup, on both arms. Retained operands and
+// logical results are tracked in temps; comparison masks only in the frame.
+func (c *Compiler) releaseConsumed(temps []condTemp, before, afterTrue borrowedMarks) {
+	for _, tmp := range temps {
+		var released []*Symbol
+		for _, sym := range tmp.syms {
+			if consumed(sym, before, afterTrue) {
+				released = append(released, sym)
+			}
+		}
+		c.freeTemporary(tmp.expr, released)
+	}
+
+	frame := c.requireCondLHSFrame()
+	for _, exprKey := range releaseOrder(frame) {
+		exprInfo := c.ExprCache[exprKey]
+		if exprInfo == nil {
+			continue
+		}
+		for i := range exprInfo.CompareModes {
+			if exprInfo.IsMask(i) && consumed(frame[exprKey][i], before, afterTrue) {
+				c.freeSymbolValue(frame[exprKey][i], "")
+			}
+		}
+	}
+}
+
+// releaseOrder orders a condLHS frame's keys for release: last in source order
+// first, as scopes release their bindings, so the emitted code is deterministic.
+func releaseOrder(frame map[ExprKey][]*Symbol) []ExprKey {
+	return slices.SortedFunc(maps.Keys(frame), laterSourceFirst)
+}
+
+// laterSourceFirst orders a before b when a comes later in the source.
+func laterSourceFirst(a, b ExprKey) int {
+	at, bt := a.Expr.Tok(), b.Expr.Tok()
+	return cmp.Or(cmp.Compare(bt.Line, at.Line), cmp.Compare(bt.Column, at.Column))
 }
 
 // splitCondRanges collects merged ranges and boolean guard expressions from
@@ -1024,8 +1100,6 @@ func (c *Compiler) finishStatementArrayCollectors(collectors []*statementArrayCo
 // literals accumulate across admitted iterations; all other outputs use normal
 // conditional iteration (last value wins).
 func (c *Compiler) compileCondRangedStatement(stmt *ast.LetStatement, condRanges []*RangeInfo, condExprs []ast.Expression) {
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	assignExprs := []ast.Expression{}
 	assignDests := []*ast.Identifier{}
 	assignOutTypes := []Type{}
@@ -1130,14 +1204,11 @@ func (c *Compiler) compileCondRangedIteration(
 }
 
 // compileCondExprStatement handles let statements that have conditional
-// expressions (comparisons) embedded in their value expressions.
-// Each value expression is processed independently: its conditions are
-// ANDed with statement conditions and branched on separately, so
-// p, q = a > 2, d < 10 evaluates each condition independently rather
-// than ANDing them all-or-nothing.
+// expressions (comparisons) embedded in their value expressions. The
+// statement condition gates every value; within the gate, each value
+// branches on its own conditions, so p, q = a > 2, d < 10 evaluates each
+// condition independently rather than ANDing them all-or-nothing.
 func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llvm.Value) {
-	c.prePromoteConditionalCallArgs(stmt.Value)
-
 	slots := c.createConditionalTempOutputs(stmt)
 
 	targetIdx := 0
@@ -1169,9 +1240,13 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 		if c.perSlotCommittable(expr, info) {
 			c.compilePerSlotAssign(expr, info, exprSlots, stmtCond)
 		} else {
-			c.compileCondExprValue(expr, stmtCond, func() {
-				c.compileCondAssignments(exprSlots, []ast.Expression{expr})
-			})
+			// The gate branches around the value, so a failed gate evaluates
+			// none of it, not even the conditions inside it.
+			c.withCondBranch(stmtCond, "stmt_cond", func() {
+				c.compileCondExprValue(expr, func() {
+					c.compileCondAssignments(exprSlots, []ast.Expression{expr})
+				})
+			}, nil)
 		}
 
 		targetIdx += numOutputs
@@ -1315,19 +1390,25 @@ func (c *Compiler) prepareSpineLeaf(expr ast.Expression, info *ExprInfo, temps [
 	guardPtr := c.pushBoundsGuard("leaf_bounds_guard")
 	ifBlock, elseBlock, contBlock := c.createIfElseCont(leafCond, "spine_leaf_if", "spine_leaf_else", "spine_leaf_cont")
 
+	before := c.branchBorrowedMarks(temps)
 	c.builder.SetInsertPointAtEnd(ifBlock)
 	syms := c.compileExpression(expr, nil)
 	for i, outType := range info.OutTypes {
 		coerced := c.coerceSymbolForType(syms[i], outType, fmt.Sprintf("spine_leaf_val_%d", i))
 		c.createStore(coerced.Val, slots[i], coerced.Type)
 	}
+	afterTrue := c.branchBorrowedMarks(temps)
 	c.builder.CreateBr(contBlock)
 
+	// The leaf never ran on this arm, so what it consumed is still live here.
 	c.builder.SetInsertPointAtEnd(elseBlock)
+	before.restore()
+	c.releaseConsumed(temps, before, afterTrue)
 	for i, outType := range info.OutTypes {
 		zero := c.makeZeroValue(outType)
 		c.createStore(zero.Val, slots[i], outType)
 	}
+	afterTrue.add()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(contBlock)
@@ -1446,11 +1527,12 @@ func (c *Compiler) frameMaskKeys() map[ExprKey]struct{} {
 	return keys
 }
 
-// freeUnmovedMasksSince frees array masks stashed in the condLHS frame since
-// the snapshot (nil means all) that were not moved into a result slot, marking
-// them borrowed so outer cleanups skip them.
+// freeUnmovedMasksSince frees, last first in source order, array masks stashed
+// in the condLHS frame since the snapshot (nil means all) that were not moved
+// into a result slot, marking them borrowed so outer cleanups skip them.
 func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
-	for exprKey, lhsSyms := range c.requireCondLHSFrame() {
+	frame := c.requireCondLHSFrame()
+	for _, exprKey := range releaseOrder(frame) {
 		if _, ok := before[exprKey]; ok {
 			continue
 		}
@@ -1458,6 +1540,7 @@ func (c *Compiler) freeUnmovedMasksSince(before map[ExprKey]struct{}) {
 		if exprInfo == nil {
 			continue
 		}
+		lhsSyms := frame[exprKey]
 		for i := range exprInfo.CompareModes {
 			if !exprInfo.IsMask(i) || lhsSyms[i].Borrowed {
 				continue

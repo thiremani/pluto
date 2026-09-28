@@ -1,6 +1,6 @@
 # Pluto C ABI & Name Mangling Specification
 
-**Version:** 2.0 | **Status:** Draft | **Target:** C11 / C++17
+**Version:** 2.1 | **Status:** Draft | **Target:** C11 / C++17
 
 ## 1. Overview
 
@@ -284,8 +284,7 @@ typedef struct {
 
 The descriptor occupies the ordinary source-parameter position. An indirect
 result carrier, when present, comes first; all source parameters follow in
-source order; hidden alias selectors follow them; and a hidden direct-return
-seed is last.
+source order; and a hidden direct-return seed is last.
 
 ---
 
@@ -346,9 +345,14 @@ types:
 - Output expressions are staged independently at the call site, so one output
   cannot mutate a destination before a sibling right-hand side reads its
   statement-start value.
-- When a compatible caller destination has a different ownership or shape
-  representation from the declared output, the ABI slot starts at the declared
-  type's zero value. The caller commits it only if its write marker is set.
+- When an input shares an output whose declared representation is narrower
+  but compatible (an owned string input with a static string output, a
+  concrete-rank array input with an untyped empty output), the private alias
+  variant gives that output the input's storage so the input observes its
+  writes. It has a distinct internal symbol; the source specialization and
+  its effect facts remain unchanged. Any other representation change between
+  a declared output and its destination uses a separate ABI output adapter
+  initialized to zero and committed only if its write marker is set.
 
 The direct-return seed is always present, even when the function body
 unconditionally overwrites its output. Schematically, with mangled names
@@ -357,12 +361,7 @@ abbreviated:
 ```c
 int64_t Pt_Square_I64(int64_t x, int64_t seed);
 int64_t Pt_ConditionalSquare_I64(int64_t x, int64_t seed);
-int64_t Pt_Acc_I64_Range(
-    int64_t a,
-    const PtRangeI64 *range,
-    int32_t a_output_alias,
-    int64_t seed
-);
+int64_t Pt_Acc_I64_Range(int64_t a, const PtRangeI64 *range, int64_t seed);
 ```
 
 A C caller passes the destination's current value to request Pluto's keep-old
@@ -388,14 +387,34 @@ struct Results {
 void Pt_example(Results *results, I64 direct_arg, Other *indirect_arg);
 ```
 
-Range-bearing variants may also receive hidden alias selectors for direct
-scalar parameters that refer to an output destination. These preserve
-loop-carried accumulation without changing the source signature or mangled
-specialization identity. They do change the native C signature.
-For compatible indirect parameters, the caller instead passes the matching
-staged output pointer itself, so the callee observes the same loop-carried
-value without another hidden parameter.
-Hidden ABI fields and parameters are not part of name mangling.
+A call whose argument and destination are the same binding shares the input
+with that output. This is a compile-time fact of the call site, so it never
+appears in the exported signature. The compiler lowers such a call to a
+private alias variant of the specialization (§5.2). Inside the variant a
+direct scalar input reads the output's current value, and for a compatible
+indirect input the caller passes the matching staged output pointer itself.
+Each read therefore observes the selected output's current value, and both
+forms carry output values into subsequent range iterations. The caller's real
+destinations remain unchanged until the surrounding assignment commits.
+
+A native caller cannot request a variant. Passing the same address for a
+pointer input and an output shares them only within the called body's own
+statements: a nested Pluto call inside that body stages its outputs and
+commits them afterwards, so it does not extend the sharing. A register scalar
+is always a plain value. Sharing across nested calls is guaranteed for Pluto
+callers, whose call sites select the variants statically.
+
+**Changes in 2.1.** Version 2.0 gave range-bearing variants a hidden `i32`
+alias selector per direct scalar parameter, placed after the source parameters
+and, for direct returns, before the seed. Version 2.1 removes those selectors,
+and aliasing is lowered as private variants instead. A direct-return
+function's native signature is therefore its source parameters followed by
+the seed; an indirect-return function keeps its leading result carrier
+followed by the source parameters, with no seed. The prototype of a
+range-bearing function with direct scalar parameters, such as `Acc`, changes:
+for a direct return, its seed moves earlier by one position per direct scalar
+(`I64`/`F64`) parameter, one for `Acc`. Functions without a `Range` or `ArrayRange`
+parameter are unchanged.
 
 An eligible immediate bare `array[range]` call argument may therefore select
 an `ArrayRange` specialization and run its loop inside the callee. This
@@ -424,6 +443,38 @@ collector for an item type `T` will be passed as `PtArrayT *` in the final
 native parameter position; this statement reserves the position but does not
 make it part of the current calling convention.
 
+### 5.2 Private Lowering Variants
+
+One fact of a call site changes the emitted body of a specialization without
+changing its types: which inputs share a binding with which outputs. Such a
+call lowers to a private variant: an internal symbol that appends a suffix to
+the ordinary function mangle and is never exported. The suffix uses the same
+lowercase-marker-plus-count form as `_fN`, `_tN`, and the reserved `_cN`, so
+it parses unambiguously after the argument types.
+
+```
+_aN_<slot>_<slot>...
+```
+
+`_aN` carries one entry per parameter, in source order: `0` for a parameter
+that shares no output, `k` for one that shares output slot `k - 1`. The
+parameter's type must be the output's declared type or a compatible wider
+representation of it (an owned `StrH` input sharing a declared `StrG` output,
+or a concrete-rank array input sharing an untyped `[]` output); a struct
+input shares only at its exact type. Inside the
+variant that output uses the parameter's storage, so the argument types fix
+every shared output's representation. The compiler emits the suffix only when
+at least one parameter shares an output; otherwise the call uses the bare
+specialization symbol. An unshared output keeps its declared representation,
+and the caller converts it into the destination after the call.
+
+Example: `Pt_4math_p_4Fold_f2_I64_StrH_a2_1_0` is `Fold(I64, StrH)` with its
+first parameter sharing its first output, which is therefore an `I64`.
+`Demangle` renders it as `math.Fold(I64 -> 1, StrH)`.
+
+The public specialization symbol is unchanged by the variant. C callers
+never see a variant and cannot request one.
+
 ---
 
 ## 6. Grammar
@@ -431,6 +482,8 @@ make it part of the current calling convention.
 ```ebnf
 FunctionSym := 'Pt' ModPath '_p_' Ident '_f' Arity Types
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_f' Arity Types
+VariantSym  := FunctionSym AliasPattern?    (* internal linkage only *)
+AliasPattern := '_a' Num ('_' Num)*
 MethodSym   := 'Pt' ModPath '_p_' Ident '_m_' Ident '_f' Arity Types
             |  'Pt' ModPath '_p_' RelPath '_r_' Ident '_m_' Ident '_f' Arity Types
 OperatorSym := 'Pt' ModPath '_p_' Ident '_m_op_' Opcode '_' Fixity Types
@@ -487,4 +540,5 @@ Generic    := (Qualified | Ident) '_t' Num Types
 * Numeric path segments preserve source digits; `Num` keeps arities, counts, and length prefixes canonical
 * Operators: Fixity implies arity (in=2, pre/suf=1, cirN=N); Types listed left-to-right
 * Generics (`_tN`) only in type arguments, not as top-level linkable symbols
+* The variant suffix (`_aN`) names a private lowering variant (§5.2); it follows the argument types and never appears on exported symbols
 * All symbols always have `_p_` after ModPath; symbols with relpath use `_r_`, and script roots end with `_e`

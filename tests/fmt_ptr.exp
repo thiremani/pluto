@@ -1,11 +1,10 @@
-four. Wrote four characters to x
-x is now 4 and a pointer on the stack automatically dereferenced for use
-write char. y should now be 10 and allocated on the stack
-y is 10. z = x * y and z is 40
-14 -6
-re:Check the pointer op with vars x, y\. The result is 0x[0-9a-f]+ 0x[0-9a-f]+
+re:A static string is shared: (0x[0-9a-f]+) \1
+re:A heap string is copied: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
+re:An array is copied: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
+re:Element buffers: 0x[0-9a-f]+ 0x[0-9a-f]+ 0x[0-9a-f]+
+An empty array has no buffer: 0
 re:Pointer width: \| +0x[0-9a-f]+\|
 re:Pointer left: \|0x[0-9a-f]+ +\|
 re:Pointer dynamic: \| +0x[0-9a-f]+\|
-x is - x. This checks a space between marker (-) and variable does not print var value
+static is - static. This checks a space between marker (-) and variable does not print var value
 %

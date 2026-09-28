@@ -103,6 +103,12 @@ func (sc *ScriptCompiler) compileStatements() {
 	}
 }
 
+// replaySpecializationCFG reports the settled dataflow diagnostics of every
+// specialization the script reaches, root-first and depth-first in source
+// order, deduplicated by location and message. A body is analyzed once per
+// type specialization at settlement, independent of its callers: sharing an
+// input with an output only adds reads, so it can never make a body invalid,
+// and a body must be valid without it.
 func replaySpecializationCFG(compiler *Compiler, roots []string, errors []*token.CompileError) []*token.CompileError {
 	visited := make(map[string]struct{})
 	reported := make(map[cfgDiagnosticKey]struct{}, len(errors))

@@ -1,0 +1,49 @@
+# A call made while a binding holds [] specializes on [], not on an element
+# type that a later or sibling assignment gives the binding.
+
+x = []
+kept = Keep(x)
+"kept:", kept
+kept = [5.5]
+"kept:", kept
+x = [1 2]
+"x:", x
+
+e = []
+tags = Tag(e)
+"tags:", tags
+e = [1.5]
+"e:", e
+
+prices = []
+first = Append(prices, 12345678)
+"first:", first
+prices = [9.5]
+"prices:", prices
+
+t = [
+  : Name Score
+]
+n = Scores(t)
+"n:", n
+t = [
+  : Name Score
+    "Ada" 10
+]
+"t:", t
+
+built, btags = Build(3)
+"built:", built, btags
+
+y = []
+o, y = Append(y, 12345678), [9.5]
+"o:", o, "y:", y
+
+w = Work(12345678)
+"w:", w
+
+r = []
+r = Reset(Append(r, 12345678))
+"r:", r
+r = [9.5]
+"r:", r

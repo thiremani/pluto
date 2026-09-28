@@ -1,0 +1,25 @@
+# A skipped call leaves the arguments it would address unchanged.
+k = 3
+a1 = [1 2 3]
+Twice(a1), k > 5
+a1
+
+a2 = [4 5 6]
+"v", k > 5 && First(a2)
+a2
+
+s1 = "ab" ⊕ "cd"
+Twice(s1), k > 5
+s1
+
+a3 = [7 8 9]
+g = 0
+g = k > 5 && First(a3) > 0 1
+g, a3
+
+# A ranged call doesn't free an outer binding it passes on.
+s2 = "ab" ⊕ "cd"
+j = 0:3
+r = ""
+r = SI(s2, j + 0)
+r, s2

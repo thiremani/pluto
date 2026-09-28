@@ -28,6 +28,7 @@ const (
 	ARR_I64_SET    = "arr_i64_set"
 	ARR_I64_GET    = "arr_i64_get"
 	ARR_I64_LEN    = "arr_i64_len"
+	ARR_I64_DATA   = "arr_i64_data"
 	ARR_I64_STR    = "arr_i64_str"
 	ARR_I64_FORMAT = "arr_i64_format"
 	ARR_I64_PUSH   = "arr_i64_push"
@@ -40,6 +41,7 @@ const (
 	ARR_F64_SET    = "arr_f64_set"
 	ARR_F64_GET    = "arr_f64_get"
 	ARR_F64_LEN    = "arr_f64_len"
+	ARR_F64_DATA   = "arr_f64_data"
 	ARR_F64_STR    = "arr_f64_str"
 	ARR_F64_FORMAT = "arr_f64_format"
 	ARR_F64_PUSH   = "arr_f64_push"
@@ -54,6 +56,7 @@ const (
 	ARR_STR_GET      = "arr_str_get"
 	ARR_STR_BORROW   = "arr_str_borrow"
 	ARR_STR_LEN      = "arr_str_len"
+	ARR_STR_DATA     = "arr_str_data"
 	ARR_STR_STR      = "arr_str_str"
 	ARR_STR_FORMAT   = "arr_str_format"
 	ARR_STR_PUSH     = "arr_str_push"
@@ -115,6 +118,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64"), i64}, false)
 	case ARR_I64_LEN:
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
+	case ARR_I64_DATA:
+		return llvm.FunctionType(llvm.PointerType(i64, 0), []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayI64")}, false)
 	case ARR_I64_FORMAT:
@@ -139,6 +144,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(f64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64"), i64}, false)
 	case ARR_F64_LEN:
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
+	case ARR_F64_DATA:
+		return llvm.FunctionType(llvm.PointerType(f64, 0), []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayF64")}, false)
 	case ARR_F64_FORMAT:
@@ -165,6 +172,8 @@ func (c *Compiler) GetFnType(name string) llvm.Type {
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr"), i64}, false)
 	case ARR_STR_LEN:
 		return llvm.FunctionType(i64, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
+	case ARR_STR_DATA:
+		return llvm.FunctionType(llvm.PointerType(charPtr, 0), []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_STR:
 		return llvm.FunctionType(charPtr, []llvm.Type{c.NamedOpaquePtr("PtArrayStr")}, false)
 	case ARR_STR_FORMAT:
