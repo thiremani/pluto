@@ -175,7 +175,7 @@ func TestGenBinaryReplacesItsExecutable(t *testing.T) {
 	after, err := os.ReadFile(mainBin)
 	require.NoError(t, err)
 	require.Equal(t, built, after)
-	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, LINK_DIR_PATTERN))
+	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, linkDirPattern("main")))
 	require.NoError(t, err)
 	require.Empty(t, leftovers)
 }
@@ -217,7 +217,7 @@ func TestGenBinaryKeepsExecutableWhenLinkFails(t *testing.T) {
 	after, err := os.ReadFile(mainBin)
 	require.NoError(t, err)
 	require.Equal(t, built, after)
-	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, LINK_DIR_PATTERN))
+	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, linkDirPattern("main")))
 	require.NoError(t, err)
 	require.Empty(t, leftovers)
 }

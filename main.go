@@ -36,9 +36,6 @@ const (
 	CODE_DIR    = "code"
 	RUNTIME_DIR = "runtime"
 
-	// Per-link directory beside the executable; MkdirTemp replaces the *.
-	LINK_DIR_PATTERN = ".pluto-link-*"
-
 	MOD_FILE = "pt.mod"
 
 	// Platform
@@ -431,7 +428,7 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 	// Link into a fresh directory beside the destination, then rename the
 	// result into place: a failed link leaves no partial file, and a rebuild
 	// replaces the previous executable in one step.
-	linkDir, err := os.MkdirTemp(p.Cwd, LINK_DIR_PATTERN)
+	linkDir, err := os.MkdirTemp(p.Cwd, linkDirPattern(bin))
 	if err != nil {
 		return fmt.Errorf("create link directory: %w", err)
 	}
@@ -465,6 +462,14 @@ func (p *Pluto) GenBinary(scriptModule llvm.Module, bin string, rtObjs []string)
 	}
 
 	return os.Rename(linkedFile, binFile)
+}
+
+// linkDirPattern names the directory a link writes into: the hidden
+// executable name plus the random part os.MkdirTemp puts in place of the *,
+// as in .main.2873647823. MkdirTemp creates it exclusively, so it is never an
+// existing directory.
+func linkDirPattern(bin string) string {
+	return "." + bin + ".*"
 }
 
 // checkBinaryDestination refuses to link over anything but a native
