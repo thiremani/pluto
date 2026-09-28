@@ -118,7 +118,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 | --- | --- |
 | Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103). Definite outputs, stable inputs and ABI 3.0 are decided in [#123](https://github.com/thiremani/pluto/issues/123) and land before PIR Step 4's call slice |
 | `%n` effect contract | Done: `%n` removed (section 2, #109) |
-| Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
+| Output path protection | Done ([#80](https://github.com/thiremani/pluto/issues/80)): a script's executable replaces only a missing path or a native executable, never `pt.mod`, a source file, a directory or a symlink, and links through a fresh directory renamed into place |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
 | Benchmark correctness | In the sibling `bench` repo, validate every measured output, fail the run on mismatch, and prevent normal snapshot publication after failure |
 | Independent PIR construction | Build plans from backend-independent binding facts without prior LLVM emission; extract shared storage-state transitions rather than maintain competing state authorities |
