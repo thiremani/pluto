@@ -28,13 +28,18 @@ After Phase 1, `fib_tail` is no longer a strong argument for a Pluto-level tail-
 Pluto's source-level semantics stay unchanged:
 
 - assignments copy
-- input names are read-only, but can observe writes through a shared output
-- output names are readable only once definitely assigned, and results reach the caller at assignment commit
+- input names are read-only and keep their values for the whole call; today
+  they can observe writes through a shared output, which #123 (decided)
+  removes
+- every body that runs writes every output (#123, decided); output names are
+  readable only once definitely assigned, and results reach the caller at
+  assignment commit
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`
 input can be passed by value provided the call site's alias pattern (the
-private `_aN` variant) redirects each read to its shared output when required. A single `I64` output can be returned in a
+private `_aN` variant) redirects each read to its shared output when required;
+after #123 no read needs redirecting. A single `I64` output can be returned in a
 register while still behaving like a Pluto output.
 
 ## 3. Architecture
@@ -109,6 +114,14 @@ name. Previously compiled C callers would then invoke the same symbol with the
 wrong argument list. Write-effect information may still eliminate seed use
 inside Pluto code; a seedless fast path needs a distinctly named private clone
 behind the stable public entry point.
+
+#123 (decided) removes the seed by a rule that respects this: every body that
+runs writes every output, so ABI 3.0 drops the seed and the write markers from
+every function without a `Range` or `ArrayRange` parameter. The decision
+follows the parameter types, not the body's write effects, and a function that
+keeps an old value takes it as an ordinary input. Range-bearing functions keep
+their seed until PIR Step 7 chooses how an empty callee-owned domain is
+reported (see the C ABI Spec §5).
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 

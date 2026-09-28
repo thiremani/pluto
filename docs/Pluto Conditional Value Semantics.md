@@ -125,8 +125,10 @@ the expression until something resolves it:
 An unresolved failure that reaches an **invocation boundary** merges lanes
 there: a failed call argument suppresses that call's complete output tuple,
 and a failed print argument suppresses the complete print invocation and its
-newline (see "Print invocation atomicity" under Status). Outputs of a call
-that did run resolve independently per flattened output slot.
+newline (see "Print invocation atomicity" under Status). A call that did run
+writes every output (#123, decided and not yet implemented), so a failure
+inside a callee never reaches its caller. Until then, each output of a call
+that ran resolves independently per flattened output slot.
 
 ```pluto
 y > 2          # yields y when y > 2, else fails    (the value is the left operand)
@@ -422,12 +424,12 @@ shape — unresolved meaning no closer resolver claimed it first: in
   failed one. Ordinary calls are currently lazy in exactly the way print
   is, and PIR Step 6 is the behavior change for both. The
   out-of-bounds case changes too: today it materializes a zero and prints. A
-  suppressed invocation still releases its owned temporaries. One limit of
-  **today's internal ABI**, not a language rule: an unwritten direct-return
-  argument currently resolves to its seed and always yields, because the
-  result carries no validity bit; the migration adds a private
-  validity-carrying direct-call variant whose bit joins the invocation's
-  all-arguments-yielded condition.
+  suppressed invocation still releases its owned temporaries. Today an
+  unwritten direct-return argument resolves to its seed, which is zero in a
+  print, and always yields, because the result carries no validity bit.
+  #123 (decided) removes the case instead of adding a bit: a body that runs
+  writes every output, so a print argument that is a call either yields or
+  failed before the call ran.
 - **Checked-access fallback (decided, not yet implemented):** the nearest
   resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
   `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the

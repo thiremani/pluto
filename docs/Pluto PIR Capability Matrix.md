@@ -35,6 +35,14 @@ combination migratable. A fallback that resolves every failure leaves the
 argument `MustYield` and outside this rule, though the router may still defer
 it until its node is supported.
 
+**After #123 (decided; lands before Step 4's call slice).** A body that runs
+writes every output, so every non-ranged callee is all-`MustWrite`, and
+any-`MayWrite` remains only where a possibly empty callee-owned domain can
+leave the outputs unwritten (Step 7). The split rows 5c, 6, 6b, 8b, 35d and
+36d then cut over in Step 4 whenever their arguments are `MustYield`, and
+print row 29b needs no validity variant. The rows below still record the
+split as the Step 1 inventory found it.
+
 RHS flags compose: one RHS can be conditional, checked, ranged, collector, and
 a call at once (`tests/math/func.spt` carries all six across its statements).
 Only reachable combinations are listed; rectangles are collapsed where routing,
@@ -232,7 +240,7 @@ two together rather than treating any single row as a deletion trigger.
 
 - **7d** — print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print. *Missing:* regressions when implemented, incl. a heap-valued print fallback. *Helpers:* condLHS spine
 - **29** — `compilePrintStatement` direct arm. *Tests:* `helloworld`, `str`, `1.2-report`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
-- **29b** — non-ranged direct call argument in print; an unwritten result must suppress the invocation, needing `{value, didWrite}` to feed the all-arguments-yielded condition. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* conditional direct-return argument (Step 4 prereq)
+- **29b** — non-ranged direct call argument in print. Today an unwritten result prints its seed; after #123 a call that runs writes every output, so no `{value, didWrite}` variant is needed. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
 - **29c** — non-ranged indirect call argument in print. *Missing:* **uncovered**: multi-output and heap call results printed directly
 - **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* side-effecting or owned-heap sibling of a failed conditional (add with Step 6). *Helpers:* `compileCondOperands`
 - **31** — no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline. *Tests:* `array/oob_print`. *Missing:* a suppressed invocation whose arguments own heap temporaries (add with Step 6). *Helpers:* §5
@@ -366,10 +374,10 @@ to a **gated print** (`arr[oob] val1, val2`) — scheduled syntax that
 does not parse today (`PrintStatement` has no gate field) and lands in its
 own required PR before Step 6, with semantics-doc entry and capability rows.
 
-An unwritten direct-return argument cannot yet suppress the invocation, since
-a direct `I64`/`F64` result carries no validity bit; the Step 4
-`{value, didWrite}` variant feeds its bit into the invocation's
-all-arguments-yielded condition (plan §15).
+An unwritten direct-return argument cannot suppress the invocation today,
+since a direct `I64`/`F64` result carries no validity bit, so it prints its
+seed. #123 (decided) removes the case instead of adding a
+`{value, didWrite}` variant: a call that runs writes every output (plan §15).
 
 ## 6. Correction to the plan's deletion order
 

@@ -374,6 +374,21 @@ may-write—cannot alter the prototype of an existing symbol. A future seedless
 internal fast path must therefore use a distinct private symbol behind this
 stable boundary.
 
+**Planned: ABI 3.0 (#123, decided).** Every body that runs will write every
+output, so no function needs its destination's old value as an implicit
+input. ABI 3.0 removes the hidden seed and the write markers from every
+function without a `Range` or `ArrayRange` parameter: a direct return takes
+only its source parameters, and the indirect carrier holds only output
+pointers. `Square` becomes `int64_t Pt_Square_I64(int64_t x)`.
+`ConditionalSquare` must start from a default: with an input `prev` and
+`res = prev` first, it becomes
+`int64_t Pt_ConditionalSquare_I64_I64(int64_t prev, int64_t x)`, and a caller
+that keeps an old value passes it as that ordinary argument. The prototype
+still follows the parameter types alone, never the body. A range-bearing function such as `Acc` must still report that no
+iteration ran, since zero iterations mean no assignment; it keeps its seed
+until PIR Step 7 chooses between one "did execute" bit and a caller-side
+emptiness check.
+
 Conceptually, a two-output indirect call uses:
 
 ```c
@@ -396,6 +411,10 @@ indirect input the caller passes the matching staged output pointer itself.
 Each read therefore observes the selected output's current value, and both
 forms carry output values into subsequent range iterations. The caller's real
 destinations remain unchanged until the surrounding assignment commits.
+#123 (decided) makes inputs stable for the whole invocation, so a variant
+will no longer change what the body reads: it may only let a shared input and
+output use one slot where no read can tell, and carry a shared destination
+into the next iteration of a callee-owned loop.
 
 A native caller cannot request a variant. Passing the same address for a
 pointer input and an output shares them only within the called body's own
@@ -446,7 +465,9 @@ make it part of the current calling convention.
 ### 5.2 Private Lowering Variants
 
 One fact of a call site changes the emitted body of a specialization without
-changing its types: which inputs share a binding with which outputs. Such a
+changing its types: which inputs share a binding with which outputs. After
+#123 a variant must produce the bare specialization's results, so sharing
+only saves copies and carries a destination between iterations. Such a
 call lowers to a private variant: an internal symbol that appends a suffix to
 the ordinary function mangle and is never exported. The suffix uses the same
 lowercase-marker-plus-count form as `_fN`, `_tN`, and the reserved `_cN`, so

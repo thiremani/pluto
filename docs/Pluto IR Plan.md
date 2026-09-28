@@ -46,10 +46,14 @@ PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
 
 **ABI note.** Per-slot effects are an internal analysis, never a public ABI
-classifier. Every exported direct `I64`/`F64` return keeps its hidden seed
-parameter: a body-only edit must never change the C prototype of a
-type-mangled symbol. A seedless variant requires a distinctly named private
-clone behind the stable entry point.
+classifier: a body-only edit must never change the C prototype of a
+type-mangled symbol. Today every exported direct `I64`/`F64` return keeps a
+hidden seed parameter. #123 (decided) requires every body that runs to write
+every output, so ABI 3.0 removes the seed and the write markers from every
+function without a `Range` or `ArrayRange` parameter. That removal follows
+the parameter types, so the prototype still never depends on the body. A
+range-bearing function keeps a way to report an empty domain until Step 7
+chooses one (§16).
 
 ## 2. Deliberate Abstraction Level
 
@@ -285,17 +289,17 @@ For owned heap values this may lower to an ownership swap without deep copies.
 If one owned source feeds multiple targets, at most one consumer takes it; the
 others require a derived copy.
 
-At a call boundary, `a = F(a)` connects the callee input and output to the
-same destination-seeded staging slot. The input name is read-only, but each
-read observes earlier output writes to that slot. Reads within one assignment
-still precede its writes. The real `a` changes only at the outer assignment's
+At a call boundary, `a = F(a)` passes `a`'s value as an input that stays
+stable for the whole invocation (#123, decided): the output starts unassigned
+in its own staging slot, and the lowering may place both in one slot only
+where no read can tell. The real `a` changes only at the outer assignment's
 commit, so sibling RHS expressions continue to read the pre-commit binding.
-`tests/alias_input` pins both statement orders for ordinary and ranged calls
-with direct scalars, and for ranged calls with heap strings and arrays:
-starting at 10,
-`out = current + item` before `seen = current` yields `15 15` for item 5;
-reversing those body statements yields `15 10`. Step 4's call lowering must
-preserve this distinction between internal sharing and external commit.
+Today the shared input is a live reference instead: `tests/alias_input` pins
+both statement orders for ordinary and ranged calls with direct scalars, and
+for ranged calls with heap strings and arrays. Starting at 10,
+`out = current + item` before `seen = current` yields `15 15` for item 5, and
+reversing those body statements yields `15 10`; under #123 both orders yield
+`15 10`. Step 4's call lowering must preserve the external commit.
 
 ## 7. Loop-Carried State
 
@@ -492,9 +496,9 @@ This is what prevents an OOB in `a = arr[i]` from suppressing `b = i + 1`.
 Checked accesses have one canonical representation — `eval` with an explicit
 `[on-oob=...]` scope — regardless of which legacy path produced them. A
 **caller-side** failure — a failed invocation or argument — is atomic: the
-call's whole output tuple keeps its old values. A call that actually ran may
-omit individual outputs independently (callee-internal non-writing, §15);
-per-slot divergence otherwise exists only where slots carry independent
+call's whole output tuple keeps its old values. A call that actually ran
+writes every output (#123, decided; today it may omit outputs independently,
+§15), so per-slot divergence exists only where slots carry independent
 conditions.
 
 ## 10. Collectors
@@ -820,72 +824,55 @@ from the solved mode and type rather than from the syntactic operator.
 
 Calls are where the two effects interact. A failure evaluating the invocation
 or its arguments suppresses the **whole tuple** — the call-merge rule — so
-every slot of that call becomes `MayYield` together. But the callee's own
-output slots keep **independent** `WriteEffect`s: one conditional output does
-not make its siblings conditional. A slot is `MustWrite` exactly when its
-outcome is `MustYield` and no enclosing gate, empty domain, or resolver policy
-weakens it.
+every slot of that call becomes `MayYield` together.
 
-**Direct-return calls carry no validity bit today.** An indirect output has a
-runtime write flag, but a direct `I64`/`F64` result is a single value seeded
-from the destination (`compileCallInner`), so a callee that wrote nothing
-returns the seed and the caller cannot tell "skipped" from "yielded the seed".
+**Definite outputs (#123, decided; not yet implemented).** Every body that
+runs writes every output: each specialization's body summary (below) must
+have every slot `MustWrite`. Otherwise the definition is rejected, once per
+set of argument types that skips, with a call that reaches them; a caller
+whose output comes from that call is not reported again. Callee-internal
+non-writing therefore disappears, and the transfer rule reduces to
+`rawYield[i] = invocationYield`. A caller-side failure, such as the failed
+argument in `Id(arr[oob])`, makes every slot skip: the commit is skipped and
+the target stays `MayWrite`. Otherwise every slot yields. The one way left for
+an invoked call to leave its outputs unwritten is an empty callee-owned
+domain, a `Range` or `ArrayRange` parameter that runs zero iterations, which
+means no assignment. Until Step 7 chooses between one "did execute" bit and
+a caller-side emptiness check, that case keeps the seed resolution below.
 
-Two failure sources must not be conflated:
-
-- **Caller-side failure** — the invocation or an argument failed, as in
-  `Id(arr[oob])`. The call never meaningfully ran, the call-merge rule applies,
-  and the whole tuple is `MayYield` regardless of return mode.
-- **Callee-internal non-writing** — the callee ran but did not write this
-  output. A per-output fact, not a tuple fact.
-
-The transfer rule keeps the two failure sources separate — conceptually
-`rawYield[i] = invocationYield && didWrite[i]`. A caller-side failure makes
-`invocationYield` false: every slot skips, the commit is skipped, and the
-target stays `MayWrite`. `x = Id(arr[oob])` with an all-`MustWrite` `Id` is
-`MayWrite` — a caller-side failure is **never** converted into a seeded
-`MustYield`. Only after a successful invocation does seed resolution apply,
-as a **contextual resolver at the assignment boundary** for a direct
-`MayWrite` output resolved at an existing target: the seed *is* the keep-old
-outcome, so the consumer of the seeded result sees `MustYield` for the
-callee-internal component. Print and every other failure-propagating context
-consume the raw, validity-carrying result and see the skip.
+**Today.** Master still lets a body skip a write, so the callee's output slots
+keep independent `WriteEffect`s, and two failure sources must not be
+conflated: a **caller-side failure** is a tuple fact, and **callee-internal
+non-writing**, where the callee ran but did not write an output, is a
+per-output fact. The transfer rule is conceptually
+`rawYield[i] = invocationYield && didWrite[i]`, but a direct `I64`/`F64`
+result carries no validity bit: it is seeded from the destination
+(`compileCallInner`), so a callee that wrote nothing returns the seed. After a
+successful invocation, seed resolution applies as a **contextual resolver at
+the assignment boundary** for a direct `MayWrite` output resolved at an
+existing target: the seed *is* the keep-old outcome, so the consumer sees
+`MustYield`. A caller-side failure is **never** converted into a seeded
+`MustYield`. A nested or targetless call is seeded with zero, so it reads an
+unwritten output as zero.
 
 Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
-*existing* target whose direct callee output is `MayWrite`, resolved at `=`.
-A fresh destination, a discard, a nested or targetless call, or an
-all-`MustWrite` callee introduces no implicit seed read. A declared output is
-readable inside its template only after a statement that definitely assigns
-it (the structural CFG rejects a read before any assignment, including a
-formatting marker, and the typed pass rejects a read after only conditional
-or seed-preserving writes), so the body cannot read the hidden seed through
-an output name. An input explicitly shared with an output can observe the
-staged value and later writes; that dependency is already an explicit argument
-read at the call site. Step 2A
-records boundary resolution as a `ReadsSeed` fact on the call site — the CFG
-is untouched in 2A — and Step 2B converts the fact into an ordinary CFG read
-event, so a `MustWrite` classification cannot let backward liveness kill the
-prior value.
+*existing* target whose direct callee output is `MayWrite` (today) or whose
+call owns a possibly empty domain, resolved at `=`. A fresh destination, a
+discard, a nested or targetless call, or an all-`MustWrite` callee introduces
+no implicit seed read. A declared output is readable inside its template only
+after a statement that definitely assigns it (the structural CFG rejects a
+read before any assignment, including a formatting marker, and the typed pass
+rejects a read after only conditional or seed-preserving writes), so the body
+cannot read the hidden seed through an output name. Step 2A records boundary
+resolution as a `ReadsSeed` fact on the call site — the CFG is untouched in
+2A — and Step 2B converts the fact into an ordinary CFG read event, so a
+`MustWrite` classification cannot let backward liveness kill the prior value.
 
-The validity-carrying result comes from a **private direct-call variant**
-behind the stable seeded entry point (§1). The clone **keeps the seed
-parameter** — the seed is a real input, serving as the initial loop-carried
-state of a ranged body and as the self-reference value — and returns
-`{value, didWrite}` (aggregate or out-flag; an internal ABI detail the
-lowerer owns), where `value` equals the seed whenever `didWrite` is false.
-The public seeded symbol keeps its exact prototype and delegates: it calls
-the clone and returns `value`, which preserves today's
-`didWrite ? value : seed` behavior by construction, including recursive and
-output-self-referential bodies, whose internal calls may target the clone
-directly. The builder selects the variant for every consumer that needs
-failure propagation — Step 6's print invocation, where the raw bit joins the
-aggregate all-arguments-yielded condition, and any future failure-propagating
-context — while plain assignments keep the cheaper seeded entry. For a callee whose body is driven by a function-owned
-`Range`/`ArrayRange` domain, `didWrite` is the OR of the per-iteration writes.
-The variant lands in Step 4; letting print treat a resolved seed as always
-yielded was rejected, since an unwritten output would then print stale data
-instead of suppressing the invocation.
+An earlier revision of this plan added a private `{value, didWrite}`
+direct-call variant in Step 4, so that print and other failure-propagating
+contexts could see a skipped direct return. #123 removes the skipped write
+instead, so the variant is not built.
 
 ### Convergence and publication
 
@@ -896,7 +883,10 @@ statement order: the output starts `MayWrite` (nothing has written it), a
 slot leaves it unchanged — a later conditional write cannot un-guarantee an
 earlier unconditional one. A boundary `MustWrite` obtained by reading the
 destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
-an earlier value does not prove that the body wrote one. The published
+an earlier value does not prove that the body wrote one. #123's rule is
+checked on this summary: a slot still `MayWrite` at the end of the body is
+the definition-site error, and for that check a callee output the callee's
+own error already covers counts as `MustWrite`. The published
 `BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
 `ArrayRange` parameter controls whether
 the scalar body executes, not what the body does when it executes. Each call
@@ -1012,12 +1002,17 @@ The two diagnostics consume effects differently:
   conditional-write false positive that forced tests to interleave reads merely
   to silence it. A prior seed overwritten by a proven-`MustWrite` call output
   without being read is instead a true positive: remove the seed or read it
-  explicitly when its value is semantically required.
+  explicitly when its value is semantically required. #123 (decided) exempts
+  one write from both diagnostics: an output's first write when it copies an
+  input unchanged, the `out = prev` default. The same body then serves an
+  argument type whose override always writes, such as an array mask, and one
+  whose override can skip.
 - *Shared inputs.* A body is analyzed once per type specialization at
   settlement, with every input treated as its own value, and every script
   that reaches the specialization replays its diagnostics. Sharing an input
-  with an output at a call only adds reads, so it can never make a body
-  invalid, and a body must be valid without it: `out = current + 1` written
+  with an output at a call only adds reads today, and none once #123 makes
+  inputs stable, so it can never make a body invalid, and a body must be
+  valid without it: `out = current + 1` written
   twice is reported for `x = Twice(x)` as well as for `y = Twice(x)`, because
   the body never reads `out`. A body that means to build on its own write
   says so by naming the output, `out = out + 1`, which is readable once
@@ -1079,7 +1074,8 @@ Pluto has no users yet, so migration optimizes for the clean end state:
    feeds the general assignment path. Axes: gate (none/scalar/ranged); RHS
    capabilities as **composable flags** (conditional, checked, ranged,
    collector, call — one RHS can be several at once); callee output effect for
-   call rows (all-`MustWrite` versus any-`MayWrite`); value kind
+   call rows (all-`MustWrite` versus any-`MayWrite`, which after #123 only a
+   possibly empty callee-owned domain produces); value kind
    (scalar/heap/multi-output/self-referential/descriptor/struct/table); target
    kind (local/output/discard); statement form.
    Each range domain also carries a role: descriptor value, RHS-local, shared
@@ -1191,20 +1187,19 @@ both); suite output is unchanged.
   `person.name` and `%t0#1.name` goldens of §17 land here.
 - The ownership elaboration pass (§8), with generic cleanup lowering and
   the consuming-operand promotion; its copy-loud goldens are listed in §17.
-- **Calls split by callee effect and argument yield.** A call that looks
-  ordinary can still have independently `MayWrite` outputs, which needs
-  per-output keep-old handling — a Step 6 capability — and an argument whose
-  conditional or checked failure remains unresolved makes the invocation
-  `MayYield`, which needs Step 6's strict argument evaluation (§3). So Step 4
-  migrates calls whose outputs are **all** `MustWrite` **and** whose arguments
-  are all `MustYield`; any other call defers **as a whole** to Step 6, because
-  argument evaluation, tuple failure, and ownership are shared across its
-  outputs and individual slots cannot migrate separately. Callee output effect
-  and argument yield are therefore router axes, recorded in the capability
-  matrix (rows 6, 6b, 6c).
-- The private validity-carrying direct-call variant (§15), so an unwritten
-  direct-return result can suppress Step 6's print invocation instead of
-  printing its seed.
+- **Calls split by argument yield.** #123 (decided) lands before this slice:
+  every body that runs writes every output, and ABI 3.0 removes the seed and
+  the write markers from functions without a range parameter, so every
+  non-ranged callee is all-`MustWrite`. An argument whose conditional or
+  checked failure remains unresolved still makes the invocation `MayYield`,
+  which needs Step 6's strict argument evaluation (§3). So Step 4 migrates
+  calls whose arguments are all `MustYield`; any other call defers **as a
+  whole** to Step 6, because argument evaluation, tuple failure, and
+  ownership are shared across its outputs and individual slots cannot migrate
+  separately. Argument yield is therefore a router axis, recorded in the
+  capability matrix (rows 6, 6b, 6c). The earlier plan also split on callee
+  output effect and built a `{value, didWrite}` variant for print; #123
+  removes both for every call without a callee-owned domain.
 
 **First slice landed — heap values and ownership elaboration.** The router
 admits heap value kinds (both string flavours, arrays, tables) and struct
@@ -1246,9 +1241,9 @@ against the receiver's effective schema, as identifier reads already do,
 once `compileDotExpression` types the column by that schema as well; calls and multi-output outcomes
 with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
 `output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
-needs an outcome-referencing operand; the `unique` annotation and consuming
-promotion, which have no in-place consumer before Step 7's carried append;
-and the validity-carrying direct-call variant.
+needs an outcome-referencing operand; and the `unique` annotation and
+consuming promotion, which have no in-place consumer before Step 7's carried
+append.
 
 ### Step 5: Checked accesses and OOB scope (~1-2 weeks)
 
@@ -1287,13 +1282,14 @@ and the validity-carrying direct-call variant.
 - `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval`.
-- Calls with any `MayWrite` output, deferred from Step 4, with per-output
-  keep-old handling; and calls with an argument whose conditional or checked
-  failure remains unresolved (matrix row 6c), which gain strict source-order
-  argument evaluation (§3) with the `F(sideEffect(), failingArg)` and
-  `F(failingArg, sideEffect())` regressions.
-- All non-ranged prints lower as `PrintPlan`s (§3), including a conditional
-  direct-return call argument, which needs the Step 4 validity variant.
+- Calls with an argument whose conditional or checked failure remains
+  unresolved (matrix row 6c), which gain strict source-order argument
+  evaluation (§3) with the `F(sideEffect(), failingArg)` and
+  `F(failingArg, sideEffect())` regressions. After #123 no non-ranged call
+  defers here for its callee's write effects.
+- All non-ranged prints lower as `PrintPlan`s (§3), including call
+  arguments: a call that runs writes every output, so a call argument fails
+  only through its own arguments or invocation.
   The conditional suppression outcome is retained, but sibling evaluation
   becomes eager and the OOB materialized zero becomes invocation suppression
   (§3, §9). Update `tests/array/oob_print.exp` in the same PR, with
@@ -1310,6 +1306,13 @@ and the validity-carrying direct-call variant.
   versus `skip` scopes become explicit.
 - Extend ownership elaboration to carries. Loop emission (`withLoopNest`,
   `createLoopCore`) stays as generic mechanics driven by `domain` regions.
+- Callee-owned domains under #123. Zero iterations mean no assignment,
+  wherever the loop is placed: choose how a callee-owned loop reports an empty
+  domain, one "did execute" bit or a caller-side emptiness check, and drop the
+  range-parameter seed with the last `ReadsSeed` facts. When the call shares
+  its destination, each iteration's input reads the previous iteration's
+  result and stays stable within the iteration; a callee-owned loop carries
+  that value, or the loop runs caller-side.
 - Carried appends use the consuming promotion (§7): one seed copy, then n
   in-place appends. The amortized bound also needs a growth-capable runtime
   buffer, scheduled with this step.
@@ -1477,9 +1480,14 @@ immediate deletion at the last consumer.
 - multi-output expressions keep independent per-slot effects, and an argument
   failure suppresses a call's whole tuple
 - a caller-side call failure (`x = Id(arr[oob])` with an all-`MustWrite`
-  callee) leaves the target `MayWrite` and records no `ReadsSeed`;
-  callee-internal non-writing at an existing target resolves to the seed as
-  `MustYield` with a recorded `ReadsSeed`
+  callee) leaves the target `MayWrite` and records no `ReadsSeed`; a possibly
+  empty callee-owned domain at an existing target resolves to the seed as
+  `MustYield` with a recorded `ReadsSeed` until Step 7 replaces the seed
+- #123: a body that can leave an output unwritten is rejected at the
+  definition once per set of argument types, not again at its callers; an
+  output's first write copied unchanged from an input may be overwritten
+  unread, so `out = prev` then `out = x > 0` is accepted for scalar and array
+  `x`
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures;
   cached specialization CFG diagnostics replay on reuse
@@ -1530,8 +1538,6 @@ immediate deletion at the last consumer.
 - a ranged print emits one emission group per fully-yielded point; OOB
   iterations emit nothing
 - a suppressed invocation still releases its owned temporaries (leak-checked)
-- an unwritten direct-return argument suppresses the invocation via the
-  `{value, didWrite}` variant
 - ordinary calls evaluate arguments strictly too: `F(sideEffect(), failingArg)`
   runs the side effect and `F(failingArg, sideEffect())` still evaluates the
   argument after the failed one, while the output tuple keeps its old values

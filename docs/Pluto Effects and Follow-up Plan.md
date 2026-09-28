@@ -56,8 +56,21 @@ Seed-readable outputs, which would let a body read an output before assigning
 it, are not planned ([issue #105](https://github.com/thiremani/pluto/issues/105)):
 a function that needs its destination's previous value takes it as an input,
 and the caller shares the destination with it.
-[Issue #123](https://github.com/thiremani/pluto/issues/123) proposes going
-further and requiring every output to be definitely assigned.
+
+**Decided 2026-09-28 ([issue #123](https://github.com/thiremani/pluto/issues/123);
+not yet implemented).** Every body that runs writes every output, so a
+function keeps an old value only by taking it as an input: `out = prev` first,
+and the caller passes its destination. Sharing is decided only at the call
+site, since a header never names a parameter after an output. Inputs keep
+their values for the whole invocation, which reverses the live references
+described above: sharing becomes a copy optimization that cannot change a
+result, `FoldStr` gives `ab a`, and `FoldAfter` gives `15 10` when shared.
+An output's first write copied unchanged from an input may be overwritten
+unread, so one body serves scalar and array arguments. Zero iterations still
+mean no assignment. ABI 3.0 removes the seed and the write markers from
+functions without a range parameter. The Memory Model's "Parameters and
+Outputs" and "Call Site" state the rules and what master still does
+differently.
 
 ## 2. Formatting: `%n` removed
 
@@ -111,7 +124,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
+| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103). Definite outputs, stable inputs and ABI 3.0 are decided in [#123](https://github.com/thiremani/pluto/issues/123) and land before PIR Step 4's call slice |
 | `%n` effect contract | Done: `%n` removed (section 2, #109) |
 | Output path protection | [Issue #80](https://github.com/thiremani/pluto/issues/80): compilation cannot overwrite source/configuration through name collisions or unsafe path resolution |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
