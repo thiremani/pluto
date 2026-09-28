@@ -124,60 +124,78 @@ func TestCheckBinaryDestinationRefusesSymlink(t *testing.T) {
 	require.ErrorContains(t, checkBinaryDestination(link), "refusing to replace")
 }
 
-// TestGenBinaryProtectsProjectFiles covers #80: script names may contain
-// dots, so pt.mod.spt and lib.pt.spt name existing project files as their
+// TestGenBinaryRefusesProjectFiles covers #80: script names may contain dots,
+// so on Unix pt.mod.spt and lib.pt.spt name existing project files as their
 // executables.
-func TestGenBinaryProtectsProjectFiles(t *testing.T) {
-	projectDir := t.TempDir()
-	t.Setenv("PTCACHE", filepath.Join(t.TempDir(), "cache"))
+func TestGenBinaryRefusesProjectFiles(t *testing.T) {
+	if runtime.GOOS == OS_WINDOWS {
+		t.Skip("Windows appends .exe, so these scripts write pt.mod.exe and lib.pt.exe")
+	}
 	sources := map[string]string{
 		MOD_FILE:     "module github.com/thiremani/pluto/output_path_test\n",
 		"lib.pt":     "y = Twice(x)\n    y = x * 2\n",
 		"pt.mod.spt": "Twice(1)\n",
 		"lib.pt.spt": "Twice(2)\n",
-		"main.spt":   "Twice(3)\n",
 	}
-	writeProjectFiles(t, projectDir, sources)
-
-	p := New(projectDir, cliOptions{})
-	defer p.Ctx.Dispose()
-	rtObjs, err := prepareRuntime(p.PtCache, p.Config)
-	require.NoError(t, err)
-	codeFiles, _ := p.ScanPlutoFiles("")
-	cc, codeLL, err := p.CompileCode(codeFiles)
-	require.NoError(t, err)
+	p, cc, codeLL, rtObjs := compileTestProject(t, sources)
 
 	for _, script := range []string{"pt.mod", "lib.pt"} {
 		require.ErrorContains(t, buildScript(t, p, cc, codeLL, script, rtObjs), "refusing to replace")
 	}
 	for name, contents := range sources {
-		got, err := os.ReadFile(filepath.Join(projectDir, name))
+		got, err := os.ReadFile(filepath.Join(p.Cwd, name))
 		require.NoError(t, err)
 		require.Equal(t, contents, string(got), name)
 	}
+}
 
-	// A rebuild replaces the executable that the first build left.
-	mainBin := filepath.Join(projectDir, "main")
+// TestGenBinaryReplacesItsExecutable checks that a rebuild replaces the
+// executable an earlier build left, and that a failed link keeps it.
+func TestGenBinaryReplacesItsExecutable(t *testing.T) {
+	p, cc, codeLL, rtObjs := compileTestProject(t, map[string]string{
+		MOD_FILE:   "module github.com/thiremani/pluto/output_path_test\n",
+		"lib.pt":   "y = Twice(x)\n    y = x * 2\n",
+		"main.spt": "Twice(3)\n",
+	})
+	mainBin := filepath.Join(p.Cwd, "main")
 	if runtime.GOOS == OS_WINDOWS {
 		mainBin += EXE_SUFFIX
 	}
+
 	require.NoError(t, buildScript(t, p, cc, codeLL, "main", rtObjs))
 	require.NoError(t, buildScript(t, p, cc, codeLL, "main", rtObjs))
 	out, err := exec.Command(mainBin).Output()
 	require.NoError(t, err)
 	require.Equal(t, "6", strings.TrimSpace(string(out)))
 
-	// A failed link keeps the previous executable and leaves no link directory.
 	built, err := os.ReadFile(mainBin)
 	require.NoError(t, err)
-	missingRuntime := []string{filepath.Join(projectDir, "missing.o")}
+	missingRuntime := []string{filepath.Join(p.Cwd, "missing.o")}
 	require.Error(t, buildScript(t, p, cc, codeLL, "main", missingRuntime))
 	after, err := os.ReadFile(mainBin)
 	require.NoError(t, err)
 	require.Equal(t, built, after)
-	leftovers, err := filepath.Glob(filepath.Join(projectDir, LINK_DIR_PATTERN))
+	leftovers, err := filepath.Glob(filepath.Join(p.Cwd, LINK_DIR_PATTERN))
 	require.NoError(t, err)
 	require.Empty(t, leftovers)
+}
+
+// compileTestProject writes files into a new project, prepares the runtime in
+// a temporary cache and compiles the project's code files.
+func compileTestProject(t *testing.T, files map[string]string) (*Pluto, *compiler.CodeCompiler, string, []string) {
+	t.Helper()
+	projectDir := t.TempDir()
+	t.Setenv("PTCACHE", filepath.Join(t.TempDir(), "cache"))
+	writeProjectFiles(t, projectDir, files)
+
+	p := New(projectDir, cliOptions{})
+	t.Cleanup(p.Ctx.Dispose)
+	rtObjs, err := prepareRuntime(p.PtCache, p.Config)
+	require.NoError(t, err)
+	codeFiles, _ := p.ScanPlutoFiles("")
+	cc, codeLL, err := p.CompileCode(codeFiles)
+	require.NoError(t, err)
+	return p, cc, codeLL, rtObjs
 }
 
 func writeProjectFiles(t *testing.T, dir string, files map[string]string) {
