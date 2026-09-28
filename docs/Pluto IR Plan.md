@@ -220,7 +220,7 @@ PIR calls LHS locations **targets**:
 | Target | Meaning |
 | --- | --- |
 | `local(name)` | Ordinary local binding |
-| `output(name)` | Function output binding; a commit on an indirect output also updates its runtime write flag (direct scalar outputs have none) |
+| `output(name)` | Function output binding. Under the current ABI, a commit on an indirect output also updates its runtime write flag (direct scalar outputs have none); ABI 3.0 removes the flags from functions without a range parameter (§1) |
 | `discard` | A `_` slot: one independent sink per slot, never bound; see below |
 
 Field, index, column, and cell targets are future extensions (§18).
