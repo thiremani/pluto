@@ -115,13 +115,9 @@ wrong argument list. Write-effect information may still eliminate seed use
 inside Pluto code; a seedless fast path needs a distinctly named private clone
 behind the stable public entry point.
 
-#123 (decided) removes the seed by a rule that respects this: every body that
-runs writes every output, so ABI 3.0 drops the seed and the write markers from
-every function without a `Range` or `ArrayRange` parameter. The decision
-follows the parameter types, not the body's write effects, and a function that
-keeps an old value takes it as an ordinary input. Range-bearing functions keep
-their seed until PIR Step 7 chooses how an empty callee-owned domain is
-reported (see the C ABI Spec §5).
+#123 (decided) keeps that rule while removing the seed: whether a function
+keeps it depends on whether it has a range parameter, never on its write
+effects. The C ABI Spec §5.3 describes ABI 3.0.
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 

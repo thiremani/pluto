@@ -58,21 +58,11 @@ a function that needs its destination's previous value takes it as an input,
 and the caller shares the destination with it.
 
 **Decided 2026-09-28 ([issue #123](https://github.com/thiremani/pluto/issues/123);
-not yet implemented).** Every body that runs writes every output, so a
-function keeps an old value only by taking it as an input: `out = prev` first,
-and the caller passes its destination. Sharing is decided only at the call
-site, since a header never names a parameter after an output. Inputs keep
-their values for the whole invocation, which reverses the live references
-described above: within one invocation, sharing becomes a copy optimization
-that cannot change a result, so `FoldStr` gives `ab a` and `FoldAfter` gives
-`15 10` when shared. A ranged call still accumulates through a shared
-destination.
-An output's first write copied unchanged from an input may be overwritten
-unread, so one body serves scalar and array arguments. Zero iterations still
-mean no assignment. ABI 3.0 removes the seed and the write markers from
-functions without a range parameter. The Memory Model's "Parameters and
-Outputs" and "Call Site" state the rules and what master still does
-differently.
+not yet implemented).** Every body that runs writes every output, sharing is
+decided only at the call site, and inputs keep their values within an
+invocation, which reverses the live references described above. The Memory
+Model's "Parameters and Outputs" and "Call Site" state the rules and what
+master still does differently, and the C ABI Spec §5.3 describes ABI 3.0.
 
 ## 2. Formatting: `%n` removed
 

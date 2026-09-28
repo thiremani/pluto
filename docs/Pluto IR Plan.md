@@ -295,12 +295,9 @@ stable for the whole invocation (#123, decided): the output starts unassigned
 in its own staging slot, and the lowering may place both in one slot only
 where no read can tell. The real `a` changes only at the outer assignment's
 commit, so sibling RHS expressions continue to read the pre-commit binding.
-Today the shared input is a live reference instead: `tests/alias_input` pins
-both statement orders for ordinary and ranged calls with direct scalars, and
-for ranged calls with heap strings and arrays. Starting at 10,
-`out = current + item` before `seen = current` yields `15 15` for item 5, and
-reversing those body statements yields `15 10`; under #123 both orders yield
-`15 10`. Step 4's call lowering must preserve the external commit.
+Today the shared input is a live reference instead, pinned by
+`tests/alias_input`; the Memory Model's "Call Site" gives both results. Step
+4's call lowering must preserve the external commit.
 
 ## 7. Loop-Carried State
 
