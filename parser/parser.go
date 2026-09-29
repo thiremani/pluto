@@ -1299,24 +1299,32 @@ func (p *StmtParser) skipPostfixes() {
 	}
 }
 
-// skipGroup moves curToken from an opening '(' or '[' to its closer. A group
-// left open stops at its line's last token, or before a closer of the other
-// kind such as the ']' of the literal around it.
+// skipGroup moves curToken from an opening '(' or '[' to its closer. A closer
+// ends the innermost open group of its kind and any group left open inside
+// it. A group left open stops at its line's last token, or before a closer
+// that no open group expects, such as the ']' of the literal around it.
 func (p *StmtParser) skipGroup() {
-	closer := token.RPAREN
+	closers := []token.TokenType{token.RPAREN}
 	if p.curTokenIs(token.LBRACK) {
-		closer = token.RBRACK
+		closers[0] = token.RBRACK
 	}
-	for depth := 1; depth > 0 && !p.stmtEnded(); p.nextToken() {
+	for len(closers) > 0 && !p.stmtEnded() {
 		switch p.peekToken.Type {
-		case token.LPAREN, token.LBRACK:
-			depth++
+		case token.LPAREN:
+			closers = append(closers, token.RPAREN)
+		case token.LBRACK:
+			closers = append(closers, token.RBRACK)
 		case token.RPAREN, token.RBRACK:
-			if depth == 1 && !p.peekTokenIs(closer) {
+			open := len(closers) - 1
+			for open >= 0 && closers[open] != p.peekToken.Type {
+				open--
+			}
+			if open < 0 {
 				return
 			}
-			depth--
+			closers = closers[:open]
 		}
+		p.nextToken()
 	}
 }
 

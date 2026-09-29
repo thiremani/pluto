@@ -1545,6 +1545,7 @@ func TestMalformedElementTypeErrors(t *testing.T) {
 		{"t = [ : Score(0,0) ]", []string{"a column's type is written as a zero value: Score(0)"}},
 		{"t = [ : Score(0 ]", []string{"a column's type is written as a zero value: Score(0)"}},
 		{"t = [ : Score(foo[]()) ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score(a[0) ]", []string{"a column's type is written as a zero value: Score(0)"}},
 		{`t = [ : Name("") Scores([]0.0) ]`, []string{"a column's type is written as a zero value: Scores(0)"}},
 		{`t = [ : Name ("") Score(0) ]`, []string{"a column type attaches to its name: Name(0)"}},
 		{"t = [ : Name Score(2) ]", []string{
@@ -1560,6 +1561,29 @@ func TestMalformedElementTypeErrors(t *testing.T) {
 			for i, msg := range tt.errorMsgs {
 				require.Contains(t, errs[i], msg)
 			}
+		})
+	}
+}
+
+// Skipping a malformed sample or column type stops before a closer that no
+// open group expects, so the literal around it closes and the statements after
+// it parse on their own.
+func TestMalformedElementTypeKeepsNextStatement(t *testing.T) {
+	for _, tt := range []struct {
+		input    string
+		errorMsg string
+	}{
+		{"t = [ : Score(foo( ]", "a column's type is written as a zero value: Score(0)"},
+		{"x = [[]F32(foo( ]", "the sample after [] is a zero value or a variable name"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestMalformedElementTypeKeepsNextStatement", tt.input+"\nafter = 7\nafter"))
+			program := sp.Parse()
+			errs := sp.Errors()
+			require.Len(t, errs, 1, "errors: %v", errs)
+			require.Contains(t, errs[0], tt.errorMsg)
+			require.Len(t, program.Statements, 3)
+			require.Equal(t, "after = 7", program.Statements[1].String())
 		})
 	}
 }
