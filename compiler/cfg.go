@@ -90,10 +90,8 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 		reads = append(reads, cfg.collectReads(child)...)
 	}
 	if lit, ok := expr.(*ast.ArrayLiteral); ok {
-		for _, sample := range lit.Samples {
-			if name, isName := sample.(*ast.Identifier); isName {
-				reads = append(reads, VarEvent{Name: name.Value, Kind: Read, Token: name.Tok(), TypeOnly: true})
-			}
+		if name, isName := lit.Sample.(*ast.Identifier); isName {
+			reads = append(reads, VarEvent{Name: name.Value, Kind: Read, Token: name.Tok(), TypeOnly: true})
 		}
 	}
 

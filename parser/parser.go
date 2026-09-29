@@ -1207,12 +1207,12 @@ func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
 	switch {
 	case len(arr.Headers) == 0 && len(arr.Rows) == 0:
 		p.parseArraySample(arr)
-	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && (len(arr.Samples) == 0 || slices.Contains(arr.Samples, nil)):
+	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && (len(arr.ColumnTypes) == 0 || slices.Contains(arr.ColumnTypes, nil)):
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   `a table without rows needs a type on every column, as in Name("") Score(0)`,
 		})
-	case len(arr.Rows) > 0 && len(arr.Samples) > 0:
+	case len(arr.Rows) > 0 && len(arr.ColumnTypes) > 0:
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   "column types are only written on a table without rows",
@@ -1263,7 +1263,7 @@ func (p *StmtParser) parseArraySample(arr *ast.ArrayLiteral) {
 		})
 		return
 	}
-	arr.Samples = []ast.Expression{sample}
+	arr.Sample = sample
 }
 
 // isZeroSample reports whether expr is the zero value that names an element
@@ -1292,7 +1292,7 @@ func (p *StmtParser) skipArrayFormatting() {
 // parseHeader parses column headers after ':'. A table without data rows
 // types each column with a zero value attached to its name: Name("") Score(0).
 func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
-	var samples []ast.Expression
+	var columnTypes []ast.Expression
 	typed := false
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
 		if p.skipLineContinuation() {
@@ -1304,12 +1304,12 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 			p.validateIdentifier(header)
 			arr.Headers = append(arr.Headers, header.Literal)
 			p.nextToken()
-			sample, ok := p.parseColumnType(header)
+			columnType, ok := p.parseColumnType(header)
 			if !ok {
 				return false
 			}
-			samples = append(samples, sample)
-			typed = typed || sample != nil
+			columnTypes = append(columnTypes, columnType)
+			typed = typed || columnType != nil
 			continue
 		}
 
@@ -1322,7 +1322,7 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 	}
 	p.errorOnBlanks() // headers cannot be blank
 	if typed {
-		arr.Samples = samples
+		arr.ColumnTypes = columnTypes
 	}
 	return true
 }

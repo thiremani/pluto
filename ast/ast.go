@@ -255,10 +255,12 @@ type ArrayLiteral struct {
 	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
-	// Samples give an empty literal its element types: one after an array's
-	// brackets (`[]0`), one per column header in a table (`Score(0)`). They
-	// are typed, never evaluated.
-	Samples []Expression
+	// Sample follows an empty array's brackets (`[]0`, `[]plane`) and gives
+	// its element type; it is typed, never evaluated.
+	Sample Expression
+	// ColumnTypes holds the zero value written on each header of a table
+	// without rows (`Score(0)`), in header order.
+	ColumnTypes []Expression
 }
 
 func (al *ArrayLiteral) expressionNode()  {}
@@ -271,7 +273,9 @@ func (al *ArrayLiteral) String() string {
 			writeArrayRow(&out, al.Rows[0])
 		}
 		out.WriteString("]")
-		writeArrayRow(&out, al.Samples)
+		if al.Sample != nil {
+			out.WriteString(al.Sample.String())
+		}
 		return out.String()
 	}
 
@@ -283,9 +287,9 @@ func (al *ArrayLiteral) String() string {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
-			if j < len(al.Samples) {
+			if j < len(al.ColumnTypes) {
 				out.WriteString("(")
-				writeArrayRow(&out, al.Samples[j:j+1])
+				writeArrayRow(&out, al.ColumnTypes[j:j+1])
 				out.WriteString(")")
 			}
 		}
@@ -301,8 +305,8 @@ func (al *ArrayLiteral) String() string {
 		out.WriteString("\n")
 	}
 	out.WriteString("]")
-	if len(al.Headers) == 0 {
-		writeArrayRow(&out, al.Samples)
+	if al.Sample != nil {
+		out.WriteString(al.Sample.String())
 	}
 	return out.String()
 }
@@ -599,12 +603,13 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			return expr
 		}
 		return &ArrayLiteral{
-			Token:   e.Token,
-			Block:   e.Block,
-			Headers: append([]string(nil), e.Headers...),
-			Rows:    rows,
-			Indices: maps.Clone(e.Indices),
-			Samples: e.Samples,
+			Token:       e.Token,
+			Block:       e.Block,
+			Headers:     append([]string(nil), e.Headers...),
+			Rows:        rows,
+			Indices:     maps.Clone(e.Indices),
+			Sample:      e.Sample,
+			ColumnTypes: e.ColumnTypes,
 		}
 	case *StructLiteral:
 		row, changed := rewriteExprSlice(e.Row, rewrite)

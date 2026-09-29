@@ -1182,8 +1182,7 @@ func TestArrayLiterals(t *testing.T) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
 				require.False(t, arr.Block)
-				require.Len(t, arr.Samples, 1)
-				require.True(t, testIntegerLiteral(t, arr.Samples[0], 0))
+				require.True(t, testIntegerLiteral(t, arr.Sample, 0))
 				require.Equal(t, "[]0", arr.String())
 			},
 		},
@@ -1191,7 +1190,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:  "empty float array",
 			input: "[]0.0",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
-				require.IsType(t, &ast.FloatLiteral{}, arr.Samples[0])
+				require.IsType(t, &ast.FloatLiteral{}, arr.Sample)
 				require.Equal(t, "[]0.0", arr.String())
 			},
 		},
@@ -1199,7 +1198,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:  "empty string array",
 			input: `[]""`,
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
-				require.IsType(t, &ast.StringLiteral{}, arr.Samples[0])
+				require.IsType(t, &ast.StringLiteral{}, arr.Sample)
 				require.Equal(t, `[]""`, arr.String())
 			},
 		},
@@ -1207,7 +1206,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:  "empty array typed by a variable",
 			input: "[]plane",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
-				require.True(t, testIdentifier(t, arr.Samples[0], "plane"))
+				require.True(t, testIdentifier(t, arr.Sample, "plane"))
 				require.Equal(t, "[]plane", arr.String())
 			},
 		},
@@ -1217,7 +1216,7 @@ func TestArrayLiterals(t *testing.T) {
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Empty(t, arr.Rows)
-				require.True(t, testIntegerLiteral(t, arr.Samples[0], 0))
+				require.True(t, testIntegerLiteral(t, arr.Sample, 0))
 				require.Equal(t, "[\n]0", arr.String())
 			},
 		},
@@ -1227,9 +1226,10 @@ func TestArrayLiterals(t *testing.T) {
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Equal(t, []string{"Name", "Score"}, arr.Headers)
 				require.Empty(t, arr.Rows)
-				require.Len(t, arr.Samples, 2)
-				require.IsType(t, &ast.StringLiteral{}, arr.Samples[0])
-				require.True(t, testIntegerLiteral(t, arr.Samples[1], 0))
+				require.Nil(t, arr.Sample)
+				require.Len(t, arr.ColumnTypes, 2)
+				require.IsType(t, &ast.StringLiteral{}, arr.ColumnTypes[0])
+				require.True(t, testIntegerLiteral(t, arr.ColumnTypes[1], 0))
 				require.Equal(t, "[\n  : Name(\"\") Score(0)\n]", arr.String())
 			},
 		},

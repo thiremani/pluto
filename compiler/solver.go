@@ -1088,7 +1088,7 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 // typeEmptyArrayLiteral types an empty array by its sample, which stands for
 // one element: an array sample adds its rank to the literal's layout axes.
 func (ts *TypeSolver) typeEmptyArrayLiteral(al *ast.ArrayLiteral) []Type {
-	sample := al.Samples[0]
+	sample := al.Sample
 	sampleType := ts.TypeExpression(sample, false)[0]
 	if ts.pendingOperand(sampleType) {
 		return ts.cacheInvalidBracketLiteral(al)
@@ -1248,8 +1248,8 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 
 	colTypes := ts.initColTypes(numCols)
 	if len(al.Rows) == 0 {
-		for col, sample := range al.Samples {
-			colTypes[col] = ts.mergeColType(colTypes[col], ts.TypeExpression(sample, false)[0], col, sample.Tok())
+		for col, columnType := range al.ColumnTypes {
+			colTypes[col] = ts.mergeColType(colTypes[col], ts.TypeExpression(columnType, false)[0], col, columnType.Tok())
 		}
 		return ts.cacheTableLiteralType(al, colTypes)
 	}
