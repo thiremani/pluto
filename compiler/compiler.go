@@ -978,40 +978,6 @@ func (c *Compiler) coerceSymbolForType(sym *Symbol, target Type, loadName string
 		}
 	}
 
-	targetArray, targetIsArray := target.(Array)
-	sourceArray, sourceIsArray := derefed.Type.(Array)
-	if targetIsArray && sourceIsArray && sourceArray.ElemType.Kind() == EmptyKind && sourceArray.Rank == targetArray.Rank {
-		return &Symbol{
-			Val:      derefed.Val,
-			Type:     targetArray,
-			FuncArg:  derefed.FuncArg,
-			Borrowed: derefed.Borrowed,
-			ReadOnly: derefed.ReadOnly,
-		}
-	}
-	if targetIsArray && sourceIsArray && sourceArray.Rank == 1 && sourceArray.ElemType.Kind() == EmptyKind {
-		zero := c.makeZeroValue(targetArray)
-		return &Symbol{
-			Val:      zero.Val,
-			Type:     targetArray,
-			FuncArg:  derefed.FuncArg,
-			Borrowed: derefed.Borrowed,
-			ReadOnly: derefed.ReadOnly,
-		}
-	}
-
-	targetTable, targetIsTable := target.(Table)
-	sourceTable, sourceIsTable := derefed.Type.(Table)
-	if targetIsTable && sourceIsTable && isHeaderOnlyTableType(sourceTable) && CanRefineType(sourceTable, targetTable) {
-		return &Symbol{
-			Val:      derefed.Val,
-			Type:     targetTable,
-			FuncArg:  derefed.FuncArg,
-			Borrowed: derefed.Borrowed,
-			ReadOnly: derefed.ReadOnly,
-		}
-	}
-
 	return derefed
 }
 
@@ -1038,22 +1004,6 @@ func (c *Compiler) storeSymbolToSlot(dst *Symbol, src *Symbol, target Type, load
 	}
 
 	source := c.derefIfPointer(src, loadName)
-	targetArray, targetIsArray := target.(Array)
-	sourceArray, sourceIsArray := source.Type.(Array)
-	if targetIsArray && sourceIsArray && sourceArray.Rank == 1 && sourceArray.ElemType.Kind() == EmptyKind && targetArray.Rank > 1 {
-		currentValue := c.createLoad(dst.Val, targetArray, "array_reset_shape")
-		current := &Symbol{Val: currentValue, Type: targetArray}
-		dimensions := c.arrayDimensions(current)
-		dimensions[0] = c.ConstI64(0)
-		source = &Symbol{
-			Val:      c.createArrayValue(llvm.Value{}, dimensions, targetArray),
-			Type:     targetArray,
-			FuncArg:  source.FuncArg,
-			Borrowed: source.Borrowed,
-			ReadOnly: source.ReadOnly,
-		}
-	}
-
 	coerced := c.coerceSymbolForType(source, target, "")
 	c.createStore(coerced.Val, dst.Val, coerced.Type)
 	c.markOutputSlotWritten(dst, src.WriteFlag)
@@ -1103,14 +1053,10 @@ func (c *Compiler) freeValue(val llvm.Value, typ Type) {
 	case StrG:
 		// Static strings live forever, no free needed
 	case Array:
-		if hasConcreteArrayElemType(t.ElemType) {
-			c.freeArray(c.arrayDataValue(val, t), t.ElemType)
-		}
+		c.freeArray(c.arrayDataValue(val, t), t.ElemType)
 	case Table:
 		for i, column := range t.Columns {
-			if hasConcreteArrayElemType(column.ElemType) {
-				c.freeArray(c.tableColumnValue(val, i), column.ElemType)
-			}
+			c.freeArray(c.tableColumnValue(val, i), column.ElemType)
 		}
 	case ArrayRange:
 		// Call-only ArrayRange descriptors own a temporary backing array when
@@ -1126,9 +1072,7 @@ func typeNeedsCleanup(typ Type) bool {
 		return typeNeedsCleanup(t.Elem)
 	case StrH:
 		return true
-	case Array:
-		return hasConcreteArrayElemType(t.ElemType)
-	case Table:
+	case Array, Table:
 		return true
 	case ArrayRange:
 		return true
@@ -1835,10 +1779,7 @@ func (c *Compiler) compileDotExpression(expr *ast.DotExpression) []*Symbol {
 				}
 			}
 
-			columnValue := c.tableColumnValue(leftSym.Val, i)
-			if hasConcreteArrayElemType(column.ElemType) {
-				columnValue = c.copyArray(columnValue, column.ElemType)
-			}
+			columnValue := c.copyArray(c.tableColumnValue(leftSym.Val, i), column.ElemType)
 			c.freeConsumedTemporary(expr.Left, []*Symbol{leftSym})
 
 			return []*Symbol{{
@@ -3515,9 +3456,6 @@ func (c *Compiler) deepCopyIfNeeded(sym *Symbol) *Symbol {
 	case ArrayKind:
 		arrayType := sym.Type.(Array)
 		if arrayType.ElemType != nil {
-			if !hasConcreteArrayElemType(arrayType.ElemType) {
-				return sym
-			}
 			return &Symbol{
 				Val:      c.copyArrayValue(sym.Val, arrayType),
 				Type:     sym.Type,
@@ -3723,11 +3661,6 @@ func (c *Compiler) appendPrintSymbol(s *Symbol, expr ast.Expression, formatStr *
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)
 	case ArrayKind:
-		arrType := s.Type.(Array)
-		if arrType.Rank == 1 && !hasConcreteArrayElemType(arrType.ElemType) {
-			*args = append(*args, c.constCString("[]"))
-			return
-		}
 		strPtr := c.arrayStrArg(s)
 		*args = append(*args, strPtr)
 		*toFree = append(*toFree, strPtr)

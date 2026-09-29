@@ -89,6 +89,12 @@ nested empty concat: ["xxa"]
 empty add: []
 empty comparison: []
 refined empty add: [1]
+empty scalar mask: []
+empty cube: [
+]
+filled cube: [
+    [1 2] [3 4]
+]
 empty table: [
   : Name Score
 ]

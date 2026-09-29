@@ -102,8 +102,9 @@ staged = "hello" ⊕ ""
 staged, stagedSeen, old = ConcatAfter(staged, "abc"), staged
 "StagedString:", staged, stagedSeen, old
 
-# An untyped empty output resets the actual shared slot. The output's storage
-# must follow its aliased second input, without changing the unrelated rank.
+# An empty output built from the second input resets the actual shared slot.
+# The output's storage must follow its aliased second input, without changing
+# the unrelated rank.
 flat = [1 2]
 matrix = [[3 4]]
 matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
@@ -116,7 +117,7 @@ wrapped, wrappedSeen = Wrap(wrapped)
 "WidenedWrapper:", wrapped, wrappedSeen
 
 # Without sharing, a static output is converted into the owned destination
-# after the call, and an untyped empty output resets the typed destination.
+# after the call, and an empty output resets the destination.
 wideOther = "keep" ⊕ ""
 wideSource = "hello" ⊕ "!"
 "UnsharedWidenedBefore:", wideOther

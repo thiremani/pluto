@@ -7,26 +7,30 @@ out = Tag(v)
 out = Append(v, item)
     out = v ⊕ [item]
 
+out = Inspect(arr, i)
+    arr
+    out = i
+
 out = Reset(v)
     v
-    out = []
+    out = [v[0:0]]
 
 out = Scores(t)
     out = t.Score ⊕ ["x"]
 
-out, tags = Build(n)
-    acc = []
-    tags = Tag(acc)
+# A sample names the element type a parameter gives the body.
+out, before = Build(n)
+    acc = []n
+    before = Keep(acc)
     acc = [n]
     out = acc
 
 # Its local shares a name with a caller's destination, which must not change
 # how the body types its own calls.
 out = Work(n)
-    w = []
+    w = []0.0
     Append(w, n)
-    w = [9.5]
-    out = w
+    out = [n]
 
 a, b = Pair(n)
     a = n

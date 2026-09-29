@@ -280,7 +280,7 @@ res = forwarded(x)
 			// Empty data with an established element type is readable.
 			name: "Concrete Empty Array Output Read",
 			code: `out, n = shrink(x)
-    out = []
+    out = []0
     n = out
     out = [x]`,
 			input: "a, b = shrink(1)\na, b",
@@ -514,17 +514,6 @@ res = twice(x)
     sq, cube = x * x, sq * x`,
 			input:         "a, b = powers(3)\na, b",
 			errorContains: `output "sq" is read before it is assigned`,
-		},
-		{
-			// A caller's destination could still refine an untyped empty
-			// array, so its storage is not fixed when the body reads it.
-			name: "Untyped Empty Array Output Read",
-			code: `out, n = emptied(x)
-    out = []
-    n = x
-    out`,
-			input:         "a, b = emptied(1)\na, b",
-			errorContains: `output "out" is read but its type`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",

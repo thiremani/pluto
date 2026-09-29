@@ -18,14 +18,43 @@ dimension lengths beside that buffer; rows are not separately allocated.
 
 ## Literal inference
 
-- `[]` is a rank-1 `[Empty]` value.
-- An empty block is a rank-2 `[Empty]` value with shape `[0 0]`.
+- An empty array states its element type; see [Empty arrays](#empty-arrays).
 - `[1 2 3]` is a rank-1 `[I64]` value.
 - A one-row inline literal contributes one array axis.
 - Two or more unescaped logical rows imply block layout.
 - A block literal contributes row and column axes even when it contains only
   one row. A newline immediately after `[` explicitly selects that layout.
 - Equal-shaped array-valued cells stack recursively into higher ranks.
+
+### Empty arrays
+
+An empty array states its element type with a zero value written directly
+after its brackets. It has no cells, so no later line needs to supply the type:
+
+| Literal | Type |
+|---|---|
+| `[]0` | `[I64]` |
+| `[]0.0` | `[F64]` |
+| `[]""` | `[Str]` |
+| `[]x` | an array whose elements have `x`'s type |
+
+A variable sample such as `x` is never evaluated: only its type counts, and
+its dimensions are ignored. Other literal samples (`[]5`, `[]2.3`, `[].0`), a
+detached sample (`[] 0`), and bare `[]` are errors.
+
+The sample stands for one element, so rank follows the layout rule. An empty
+block with a suffix is a rank-2 value with shape `[0 0]`, and an array sample
+adds its rank:
+
+```pluto
+m = [
+]0              # [[I64]], shape [0 0]
+cube = []m      # rank 3, shape [0 0 0]
+row = [[]0]     # one empty row: shape [1 0], not an empty matrix
+```
+
+A zero-row matrix keeps no column count: concatenation takes the other
+operand's inner shape.
 
 A long rank-1 literal remains inline by escaping its physical newline:
 
@@ -125,13 +154,20 @@ scores = [
 ]
 ```
 
-Named columns are arrays, so `scores.Score` is `[10 12]`. A header may have no
-data rows; the resulting table retains its header when printed, while each
-projected column is an `[Empty]` array that prints as `[]`. Header-only tables
-have `Empty` column types and can be passed to functions; a concrete table with
-the same column names can later establish their leaf types. Assigning a
-header-only table to an established table with the same columns clears its rows
-without changing those established types.
+Named columns are arrays, so `scores.Score` is `[10 12]`. A table without data
+rows states its column types with a second `:` row of zero values, one per
+column:
+
+```pluto
+scores = [
+  : Name Score
+  : ""   0
+]
+```
+
+It prints with its header, and each projected column is an empty array of its
+type. Assigning it to an established table with the same columns clears that
+table's rows. A header row without a sample row or data rows is an error.
 
 ## Indexing and operations
 
@@ -177,8 +213,7 @@ it remains deferred until PIR represents those scopes directly.
 Array-scalar operations preserve shape. Array-array element-wise operations
 require equal rank and zip every dimension to the shorter corresponding
 dimension, without padding. For example, shapes `[2 3]` and `[3 2]` produce
-shape `[2 2]`. An operation on two untyped empty arrays yields another untyped
-empty array. Concatenation joins the outer dimension and requires equal inner
+shape `[2 2]`. Concatenation joins the outer dimension and requires equal inner
 dimensions when both operands are nonempty. An empty operand contributes no
 cells and imposes no inner-shape constraint; concatenation uses the nonempty
 operand's inner shape. Literal-construction mismatches are compile errors;
@@ -187,21 +222,25 @@ proceeding.
 
 ### Type stability
 
-An expression's concrete type comes only from that expression and its operands;
-an assignment target, parent, or sibling cannot change it. `Unresolved` is a
-temporary solver placeholder. `Empty` is fully resolved and means that an
-array has no concrete leaf-type evidence, not merely that its runtime length is
-zero.
+Types flow forward only. A binding's type is fixed by the right-hand side of
+its first assignment, and an expression's type comes only from that expression
+and its operands: a later assignment, an assignment target, a parent, or a
+sibling cannot change it. `Unresolved` is a temporary solver placeholder while
+a recursive call's result is inferred.
 
 With `arr = [1]`, the distinctions are:
 
-- `[]` has type `[Empty]` and value `[]`.
-- `([] + []) ⊕ ["x"]` has type `[Str]` and value `["x"]`; the inner `+`
-  remains `[Empty]` and is never evaluated on strings.
+- `[]0` has type `[I64]` and value `[]`.
+- `([]0 + []0) ⊕ [1.5]` has type `[F64]` and value `[1.5]`; the inner `+`
+  keeps `[I64]`.
 - `[arr[5]]` has type `[I64]` and value `[0]`; a fixed-layout literal preserves
   its cell and zero-fills an out-of-bounds read.
 - `arr[0] > 5 [arr[0]]` has type `[I64]` and value `[]`; the false statement
   gate filters the value without erasing its leaf type.
 
-Assigning `[]` to an established concrete array similarly empties the value
-without changing that binding's leaf type or rank.
+Assigning an empty array of the binding's type empties its value. Any other
+element type or rank is an error: `e = []0` followed by `e = [1.5]` is
+rejected, as `e = [1]` followed by `e = [1.5]` is.
+
+An empty array prints as `[]` (or an empty block), without its element type,
+so a printed empty array does not read back as source.

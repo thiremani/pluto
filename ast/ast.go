@@ -255,6 +255,10 @@ type ArrayLiteral struct {
 	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
+	// Samples give an empty literal its element types: one after an array's
+	// brackets (`[]0`), one per column in a table's second ':' row. They are
+	// typed, never evaluated.
+	Samples []Expression
 }
 
 func (al *ArrayLiteral) expressionNode()  {}
@@ -267,6 +271,7 @@ func (al *ArrayLiteral) String() string {
 			writeArrayRow(&out, al.Rows[0])
 		}
 		out.WriteString("]")
+		writeArrayRow(&out, al.Samples)
 		return out.String()
 	}
 
@@ -278,6 +283,10 @@ func (al *ArrayLiteral) String() string {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
+		}
+		if len(al.Samples) > 0 {
+			out.WriteString("\n  : ")
+			writeArrayRow(&out, al.Samples)
 		}
 	}
 
@@ -291,6 +300,9 @@ func (al *ArrayLiteral) String() string {
 		out.WriteString("\n")
 	}
 	out.WriteString("]")
+	if len(al.Headers) == 0 {
+		writeArrayRow(&out, al.Samples)
+	}
 	return out.String()
 }
 
@@ -591,6 +603,7 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			Headers: append([]string(nil), e.Headers...),
 			Rows:    rows,
 			Indices: maps.Clone(e.Indices),
+			Samples: e.Samples,
 		}
 	case *StructLiteral:
 		row, changed := rewriteExprSlice(e.Row, rewrite)

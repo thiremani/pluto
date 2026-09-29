@@ -509,7 +509,7 @@ func TestPlanGoldenArrays(t *testing.T) {
 arr2 = arr1
 arr1, arr2
 arr2 = [4 5 6]
-arr1 = []
+arr1 = []0
 arr1, arr2`)
 	require.Equal(t, []string{"assign arr1", "assign arr2", "assign arr2", "assign arr1"}, planLabels(plans))
 	require.Equal(t, `statement assign arr1
@@ -541,13 +541,13 @@ arr1, arr2`)
         drop arr2 [old]
 `, plans[2].Render(true))
 	require.Equal(t, `statement assign arr1
-    source "arr1 = []"
+    source "arr1 = []0"
 
     execute
-        %t0 = eval [Empty] [] [unmanaged]
+        %t0 = eval [I64] []0 [owned]
 
     commit
-        [I64] arr1 <- %t0 [copy]
+        [I64] arr1 <- %t0 [move]
         drop arr1 [old]
 `, plans[3].Render(true))
 }
@@ -663,55 +663,6 @@ copy, other, text`)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
 }
 
-// Plan §8: the same widening through an empty-array reset. The read of arr
-// keeps its semantic [Empty] type — that is what lets it later reset a
-// [F64] binding — while its ownership follows the materialized [I64] array
-// backing it, so other is declared empty yet holds and releases heap state.
-func TestPlanGoldenEffectiveStorageArray(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	plans := compileScriptPlans(t, ctx, "planEffectiveArray", "", `arr = []
-other = arr
-arr = [1 2]
-floats = [1.5]
-arr, floats
-floats = other
-copy = other
-other = []
-copy, other, floats`)
-	require.Equal(t, []string{"assign arr", "assign other", "assign arr", "assign floats", "assign floats", "assign copy", "assign other"}, planLabels(plans))
-	require.Equal(t, `statement assign other
-    source "other = arr"
-
-    execute
-        %t0 = eval [Empty] arr [borrowed=arr]
-
-    commit
-        [Empty] other <- %t0 [copy]
-`, plans[1].Render(true))
-	require.Equal(t, `statement assign floats
-    source "floats = other"
-
-    execute
-        %t0 = eval [Empty] other [borrowed=other]
-
-    commit
-        [F64] floats <- %t0 [copy]
-        drop floats [old]
-`, plans[4].Render(true))
-	require.Equal(t, `statement assign other
-    source "other = []"
-
-    execute
-        %t0 = eval [Empty] [] [unmanaged]
-
-    commit
-        [Empty] other <- %t0
-        drop other [old]
-`, plans[6].Render(true))
-}
-
 // Plan §12: a multiline string literal is one eval operand on one line, its
 // control characters escaped; the source line is quoted the same way.
 func TestPlanGoldenMultilineString(t *testing.T) {
@@ -730,15 +681,13 @@ func TestPlanGoldenMultilineString(t *testing.T) {
 `, plans[0].Render(false))
 }
 
-// Plan §16 Step 4: a column read of a widened binding stays legacy. taken is
-// declared header-only from its flow-typed read but holds the concrete
-// schema it copied, and the column's lowered value follows that schema, so
-// the plan could not annotate it truthfully.
-func TestPlanRouterRejectsWidenedReceiver(t *testing.T) {
+// Plan §16 Step 4: a column read off a copy of a typed empty table plans like
+// one off the full table, since the copy's read type is its storage.
+func TestPlanGoldenTypedEmptyTableReceiver(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planWidenedReceiver", "", `scores =
+	plans := compileScriptPlans(t, ctx, "planTypedEmptyReceiver", "", `scores =
 [
   : Name Value
     "Ada" 10
@@ -746,11 +695,21 @@ func TestPlanRouterRejectsWidenedReceiver(t *testing.T) {
 headerOnly =
 [
   : Name Value
+  : ""   0
 ]
 taken = headerOnly
 headerOnly = scores
 col = taken.Value
 direct = scores.Value
 col, direct, taken, headerOnly`)
-	require.Equal(t, []string{"assign taken", "assign headerOnly", "assign direct"}, planLabels(plans))
+	require.Equal(t, []string{"assign taken", "assign headerOnly", "assign col", "assign direct"}, planLabels(plans))
+	require.Equal(t, `statement assign col
+    source "col = taken.Value"
+
+    execute
+        %t0 = eval [I64] taken.Value [owned]
+
+    commit
+        [I64] col <- %t0 [move]
+`, plans[2].Render(true))
 }

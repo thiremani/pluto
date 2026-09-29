@@ -347,10 +347,10 @@ right-hand side has been evaluated.
 
 A call specializes a binding argument on the value's own type, with the
 ownership of the binding's storage: a static string that a later write widens
-to heap storage is passed as a heap string. An untyped `[]` or header-only
-table takes the storage's element types only when the argument shares one of
-the call's own destinations; a call that runs in a loop rewriting such a
-binding still sees its type from before the loop (#106). An output keeps its
+to heap storage is passed as a heap string. A binding's element type is
+fixed by its first assignment (an empty array states it, as in `[]0`), so a
+call that runs again in a loop sees the same type on every iteration. An
+output keeps its
 declared representation; the caller converts it into the destination through
 a separate output adapter when their representations differ.
 

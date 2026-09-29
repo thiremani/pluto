@@ -239,9 +239,6 @@ func (c *Compiler) ArraySetOwnForType(elem Type, vec llvm.Value, idx llvm.Value,
 }
 
 func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
-	if !hasConcreteArrayElemType(elem) {
-		return c.ConstI64(0)
-	}
 	info := ArrayInfos[elem.Kind()]
 	arrayType := arr.Type.(Array)
 	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
@@ -252,9 +249,6 @@ func (c *Compiler) ArrayLen(arr *Symbol, elem Type) llvm.Value {
 // ArrayData returns the address of an array's element buffer, which is null
 // until the array holds an element.
 func (c *Compiler) ArrayData(arr *Symbol, elem Type) llvm.Value {
-	if !hasConcreteArrayElemType(elem) {
-		return llvm.ConstPointerNull(llvm.PointerType(c.Context.Int8Type(), 0))
-	}
 	info := ArrayInfos[elem.Kind()]
 	arrayType := arr.Type.(Array)
 	cast := c.ArrayBitCast(c.arrayDataValue(arr.Val, arrayType), info, "arrp")
@@ -317,6 +311,10 @@ func (c *Compiler) compileArray(
 	gateRanges []*RangeInfo,
 	condExprs []ast.Expression,
 ) *Symbol {
+	if len(lit.Rows) == 0 {
+		// An empty literal's value does not depend on the statement's ranges.
+		return c.compileScalarArray(lit, info, nil, nil)
+	}
 	ranges := mergeUses(gateRanges, info.CollectRanges)
 	if !arrayLiteralHasArrayCells(lit, arrayType) {
 		return c.compileScalarArray(lit, info, ranges, condExprs)
@@ -371,7 +369,7 @@ func (c *Compiler) compileFixedArrayLiteral(lit *ast.ArrayLiteral, arrayType Arr
 	for _, row := range lit.Rows {
 		cellCount += len(row)
 	}
-	if cellCount == 0 || !hasConcreteArrayElemType(arrayType.ElemType) {
+	if cellCount == 0 {
 		return &Symbol{Type: arrayType, Val: c.createArrayValue(llvm.Value{}, dimensions, arrayType)}
 	}
 
@@ -733,10 +731,6 @@ func (c *Compiler) compileArrayArrayInfix(op string, left *Symbol, right *Symbol
 	// its minimum without implicit padding or invented data.
 	loopLen, dimensions := c.arrayPairShape(left, right)
 	arrayType := Array{ElemType: resElem, Rank: leftArrType.Rank}
-	if leftElem.Kind() == EmptyKind || rightElem.Kind() == EmptyKind {
-		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
-	}
-
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		// compileInfix reads values and produces a new result
@@ -780,13 +774,6 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 			dimensions = append(dimensions, c.builder.CreateSelect(useRightShape, rightDims[i], leftDims[i], "concat_inner_dimension"))
 		}
 	}
-	if !hasConcreteArrayElemType(resElem) {
-		if arrayType.Rank == 1 {
-			return c.makeZeroValue(arrayType)
-		}
-		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
-	}
-
 	// Get lengths of both arrays
 	leftLen := c.ArrayLen(left, leftElem)
 	rightLen := c.ArrayLen(right, rightElem)
@@ -798,14 +785,10 @@ func (c *Compiler) compileArrayConcat(left *Symbol, right *Symbol, leftElem Type
 	resVec := c.CreateArrayForType(resElem, totalLen)
 
 	// Copy left array elements
-	if hasConcreteArrayElemType(leftElem) {
-		c.CopyArrayInto(resVec, left, leftElem, resElem, llvm.Value{}, false)
-	}
+	c.CopyArrayInto(resVec, left, leftElem, resElem, llvm.Value{}, false)
 
 	// Copy right array elements with offset
-	if hasConcreteArrayElemType(rightElem) {
-		c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
-	}
+	c.CopyArrayInto(resVec, right, rightElem, resElem, leftLen, true)
 
 	return c.arrayValueSymbol(resVec, arrayType, dimensions)
 }
@@ -878,12 +861,6 @@ func (c *Compiler) maskStore(resElem Type, resVec llvm.Value, iter llvm.Value, l
 func (c *Compiler) compileArrayArrayMask(op string, left *Symbol, right *Symbol, resElem Type) *Symbol {
 	loopLen, dimensions := c.arrayPairShape(left, right)
 	arrayType := Array{ElemType: resElem, Rank: left.Type.(Array).Rank}
-	leftElem := left.Type.(Array).ElemType
-	rightElem := right.Type.(Array).ElemType
-	if leftElem.Kind() == EmptyKind || rightElem.Kind() == EmptyKind {
-		return c.arrayValueSymbol(llvm.Value{}, arrayType, dimensions)
-	}
-
 	resVec := c.CreateArrayForType(resElem, loopLen)
 	c.forEachArrayPair(left, right, loopLen, dimensions, func(iter llvm.Value, leftSym *Symbol, rightSym *Symbol) {
 		lhs, cond := c.compareScalars(op, leftSym, rightSym)

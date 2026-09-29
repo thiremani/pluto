@@ -1246,8 +1246,7 @@ values from ordinary expressions — string literals, concatenations, inline
 array literals, struct field and table column reads (`DotExpression`) — into
 local and discard targets. The builder annotates every outcome slot
 (`unmanaged` by type, `borrowed` for a binding read, `owned` otherwise) —
-a slot keeps the solver's semantic type — an empty reset reads as
-`[Empty]` and may still reset a `[F64]` binding — while its ownership
+a slot keeps the solver's semantic type while its ownership
 follows the binding's **effective storage**, the type of the value held
 now: after `text = "old"` the read solves as a static string while the
 binding stores a materialized heap copy, and a heap value moved, copied, or
@@ -1266,18 +1265,18 @@ relation; the lowerer implements the recorded transfers and releases and
 decides nothing; a plan lowered wrongly is the leak-checked suite's to
 catch, the runtime backstop §8 names. The transitive case —
 transfer a widened binding into another, then read and replace the second —
-is pinned end to end in `tests/mem/mem.spt` for strings and for an
-empty-array reset. Heap swaps show two transfers and zero copies, a duplicate
+is pinned end to end in `tests/mem/mem.spt` for strings. Heap swaps show two transfers and zero copies, a duplicate
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
 **Remaining in Step 4:** block-layout literals (rank-2 arrays, tables —
 rows 2c and 36) once an eval-operand spelling exists; field and column
-reads of a widened binding (a header-only table holding a concrete schema),
-whose lowered value follows the effective schema rather than the solved
-type and so stay legacy — the follow-up resolves the column's ownership
-against the receiver's effective schema, as identifier reads already do,
-once `compileDotExpression` types the column by that schema as well; calls and multi-output outcomes
+reads of a widened binding (a struct whose string fields widened to heap
+storage), whose lowered value follows the effective storage rather than the
+solved type and so stay legacy — the follow-up resolves the field's
+ownership against the receiver's effective storage, as identifier reads
+already do, once `compileDotExpression` types the field by that storage as
+well; calls and multi-output outcomes
 with their per-slot ownership (rows 5c, 6, 6b, 8b, 35d, 36d); function
 `output` targets (rows 14, 14i); the `%t0#1.name` renderer golden, which
 needs an outcome-referencing operand; and the `unique` annotation and

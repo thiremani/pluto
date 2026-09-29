@@ -87,6 +87,12 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	for _, child := range children {
 		reads = append(reads, cfg.collectReads(child)...)
 	}
+	// A sample is never evaluated, but naming a binding for its type uses it.
+	if lit, ok := expr.(*ast.ArrayLiteral); ok {
+		for _, sample := range lit.Samples {
+			reads = append(reads, cfg.collectReads(sample)...)
+		}
+	}
 
 	return reads
 }
@@ -320,12 +326,6 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	}
 
 	outputs := identSet(template.Outputs)
-	readOutputs := cfg.CodeCompiler.outputReads[funcKey{name: template.Token.Literal, arity: len(template.Parameters)}]
-	for i, output := range template.Outputs {
-		if _, isRead := readOutputs[output.Value]; isRead && !concreteStorage(info.Sig.OutTypes[i]) {
-			cfg.addError(output.Tok(), fmt.Sprintf("output %q is read but its type %s is not concrete", output.Value, info.Sig.OutTypes[i]))
-		}
-	}
 	cfg.typedForwardPass(template, info, outputs)
 	cfg.backwardPass(maps.Clone(outputs))
 }

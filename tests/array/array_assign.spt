@@ -33,7 +33,7 @@ arr5 = arr5 + [3 4]
 arr5 = [10 11]
 "Reassigned multi element: -arr5"
 
-# Test 6: Empty array (if type can be inferred)
+# Test 6: Empty array
 arr6 = [1 2 3]
-arr6 = arr6 + []
+arr6 = arr6 + []0
 "Array plus empty: -arr6"

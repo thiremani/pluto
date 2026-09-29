@@ -1,5 +1,5 @@
 res = RefineArray(k)
-    res = []
+    res = []0
     res = k > 0 GrowArray(k)
 
 res = GrowArray(k)

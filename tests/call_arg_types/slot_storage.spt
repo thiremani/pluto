@@ -19,11 +19,11 @@ c = c ⊕ "c"
 "yielded:", yielded, "c:", c
 "failed: < -first > -second"
 
-# An accumulator that starts as [] and shares the call's destination
+# An accumulator that starts empty and shares the call's destination
 # carries every element across the range, also after a multi-valued argument.
-acc = []
+acc = []0
 acc = Append(acc, 1:4)
 "acc:", acc
-f = []
+f = []0
 total, f = Fold(-Pair(1), f, 1:4)
 "prefix:", total, f

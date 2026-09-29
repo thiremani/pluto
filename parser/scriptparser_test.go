@@ -1176,13 +1176,128 @@ func TestArrayLiterals(t *testing.T) {
 		checkResult func(t *testing.T, arr *ast.ArrayLiteral)
 	}{
 		{
-			name:  "empty array",
-			input: "[]",
+			name:  "empty integer array",
+			input: "[]0",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
 				require.False(t, arr.Block)
+				require.Len(t, arr.Samples, 1)
+				require.True(t, testIntegerLiteral(t, arr.Samples[0], 0))
+				require.Equal(t, "[]0", arr.String())
 			},
+		},
+		{
+			name:  "empty float array",
+			input: "[]0.0",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.IsType(t, &ast.FloatLiteral{}, arr.Samples[0])
+				require.Equal(t, "[]0.0", arr.String())
+			},
+		},
+		{
+			name:  "empty string array",
+			input: `[]""`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.IsType(t, &ast.StringLiteral{}, arr.Samples[0])
+				require.Equal(t, `[]""`, arr.String())
+			},
+		},
+		{
+			name:  "empty array typed by a variable",
+			input: "[]plane",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, testIdentifier(t, arr.Samples[0], "plane"))
+				require.Equal(t, "[]plane", arr.String())
+			},
+		},
+		{
+			name:  "empty block array",
+			input: "[\n]0",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Empty(t, arr.Rows)
+				require.True(t, testIntegerLiteral(t, arr.Samples[0], 0))
+				require.Equal(t, "[\n]0", arr.String())
+			},
+		},
+		{
+			name:  "table with column samples",
+			input: "[\n  : Name Score\n  : \"\" 0\n]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Equal(t, []string{"Name", "Score"}, arr.Headers)
+				require.Empty(t, arr.Rows)
+				require.Len(t, arr.Samples, 2)
+				require.IsType(t, &ast.StringLiteral{}, arr.Samples[0])
+				require.True(t, testIntegerLiteral(t, arr.Samples[1], 0))
+				require.Equal(t, "[\n  : Name Score\n  : \"\" 0\n]", arr.String())
+			},
+		},
+		{
+			name:        "untyped empty array",
+			input:       "[]",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "detached sample",
+			input:       "[] 0",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "untyped empty block",
+			input:       "[\n]",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "nonzero integer sample",
+			input:       "[]5",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "nonzero float sample",
+			input:       "[]2.3",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "float sample without leading zero",
+			input:       "[].0",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "call as sample",
+			input:       "[]F32(0.0)",
+			expectError: true,
+			errorMsg:    "the sample after [] is a zero value or a variable name",
+		},
+		{
+			name:        "header-only table without column samples",
+			input:       "[\n  : Name Score\n]",
+			expectError: true,
+			errorMsg:    "a table with no rows needs its column types",
+		},
+		{
+			name:        "column sample count",
+			input:       "[\n  : Name Score\n  : \"\"\n]",
+			expectError: true,
+			errorMsg:    "column sample row has 1 values for 2 columns",
+		},
+		{
+			name:        "nonzero column sample",
+			input:       "[\n  : Name Score\n  : \"\" 1\n]",
+			expectError: true,
+			errorMsg:    "a table's column types are written as zero values",
+		},
+		{
+			name:        "column samples with data rows",
+			input:       "[\n  : Name Score\n  : \"\" 0\n    \"Ada\" 10\n]",
+			expectError: true,
+			errorMsg:    "a table with a column sample row cannot have data rows",
 		},
 		{
 			name: "simple matrix without headers",

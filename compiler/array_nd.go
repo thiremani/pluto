@@ -34,18 +34,12 @@ func (c *Compiler) compileFixedStackedArray(lit *ast.ArrayLiteral, arrayType Arr
 		dimensions = append(dimensions, c.ConstI64(dimension))
 	}
 	dimensions = append(dimensions, childDims...)
-	if !hasConcreteArrayElemType(arrayType.ElemType) {
-		return &Symbol{Type: arrayType, Val: c.createArrayValue(llvm.Value{}, dimensions, arrayType)}
-	}
 
 	childLen := c.ArrayLen(childSymbols[0], childType.ElemType)
 	totalLen := c.builder.CreateMul(c.ConstI64(uint64(len(childSymbols))), childLen, "stacked_array_len")
 	data := c.CreateArrayForType(arrayType.ElemType, totalLen)
 	for i, child := range childSymbols {
 		childElemType := child.Type.(Array).ElemType
-		if !hasConcreteArrayElemType(childElemType) {
-			continue
-		}
 		offset := llvm.Value{}
 		applyOffset := i > 0
 		if applyOffset {
@@ -97,13 +91,8 @@ func (c *Compiler) newStackedArrayAccumulator(arrayType Array) *stackedArrayAccu
 		c.createStore(c.ConstI64(0), childDimSlots[i], I64)
 	}
 
-	var array *ArrayAccumulator
-	if hasConcreteArrayElemType(arrayType.ElemType) {
-		array = c.NewArrayAccumulator(Array{ElemType: arrayType.ElemType, Rank: 1})
-	}
-
 	return &stackedArrayAccumulator{
-		array:         array,
+		array:         c.NewArrayAccumulator(Array{ElemType: arrayType.ElemType, Rank: 1}),
 		arrayType:     arrayType,
 		outerLenSlot:  outerLenSlot,
 		childDimSlots: childDimSlots,
@@ -125,11 +114,7 @@ func (c *Compiler) stackedArrayAccumulatorResult(acc *stackedArrayAccumulator) *
 		dimensions = append(dimensions, c.createLoad(slot, I64, "stacked_array_dimension"))
 	}
 
-	data := llvm.Value{}
-	if acc.array != nil {
-		data = acc.array.Vec
-	}
-	return &Symbol{Type: acc.arrayType, Val: c.createArrayValue(data, dimensions, acc.arrayType)}
+	return &Symbol{Type: acc.arrayType, Val: c.createArrayValue(acc.array.Vec, dimensions, acc.arrayType)}
 }
 
 func (c *Compiler) appendStackedArrayChild(
@@ -149,13 +134,11 @@ func (c *Compiler) appendStackedArrayChild(
 		c.createStore(c.builder.CreateSelect(firstChild, dimension, stored, "stacked_array_dimension_value"), acc.childDimSlots[i], I64)
 	}
 
-	if acc.array != nil && hasConcreteArrayElemType(childType.ElemType) {
-		length := c.ArrayLen(childSymbol, childType.ElemType)
-		c.createLoop(c.rangeZeroToN(length), func(iter llvm.Value) {
-			value := c.ArrayGetBorrowed(childSymbol, childType.ElemType, iter)
-			c.pushAccumCellValue(acc.array, &Symbol{Val: value, Type: childType.ElemType}, false, acc.array.ElemType)
-		})
-	}
+	length := c.ArrayLen(childSymbol, childType.ElemType)
+	c.createLoop(c.rangeZeroToN(length), func(iter llvm.Value) {
+		value := c.ArrayGetBorrowed(childSymbol, childType.ElemType, iter)
+		c.pushAccumCellValue(acc.array, &Symbol{Val: value, Type: childType.ElemType}, false, acc.array.ElemType)
+	})
 
 	c.createStore(c.builder.CreateAdd(outerLen, c.ConstI64(1), "stacked_array_outer_len_next"), acc.outerLenSlot, I64)
 	c.freeTemporary(child, []*Symbol{childSymbol})
@@ -266,11 +249,7 @@ func (c *Compiler) arrayNDStrArg(s *Symbol) llvm.Value {
 		c.builder.CreateStore(dimension, slot)
 	}
 
-	runtimeKind := runtimeElementKinds[IntKind]
-	if hasConcreteArrayElemType(arrayType.ElemType) {
-		runtimeKind = runtimeElementKinds[arrayType.ElemType.Kind()]
-	}
-	kind := llvm.ConstInt(c.Context.Int32Type(), runtimeKind, false)
+	kind := llvm.ConstInt(c.Context.Int32Type(), runtimeElementKinds[arrayType.ElemType.Kind()], false)
 	fnType, fn := c.GetCFunc(ARRAY_ND_STR)
 	return c.builder.CreateCall(fnType, fn, []llvm.Value{
 		c.arrayDataValue(s.Val, arrayType),

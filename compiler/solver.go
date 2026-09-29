@@ -150,9 +150,6 @@ type TypeSolver struct {
 	storageRevision    uint64          // increments when a previously observed binding slot widens
 	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
 
-	// A statement's value call -> the statement's names from the call's first output on.
-	callDests map[*ast.CallExpression][]*ast.Identifier
-
 	recLimit recursionLimit
 }
 
@@ -167,7 +164,6 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
-		callDests:          make(map[*ast.CallExpression][]*ast.Identifier),
 		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
@@ -220,14 +216,6 @@ func (ts *TypeSolver) concatArrayTypes(leftArr, rightArr Array, tok token.Token)
 
 	leftElemType := leftArr.ElemType
 	rightElemType := rightArr.ElemType
-
-	if leftElemType.Kind() == EmptyKind {
-		return Array{ElemType: rightElemType, Rank: leftArr.Rank}
-	}
-
-	if rightElemType.Kind() == EmptyKind {
-		return Array{ElemType: leftElemType, Rank: leftArr.Rank}
-	}
 
 	if leftElemType.Kind() == UnresolvedKind {
 		return Array{ElemType: rightElemType, Rank: leftArr.Rank}
@@ -983,9 +971,6 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
-		if ce, ok := expr.(*ast.CallExpression); ok {
-			ts.callDests[ce] = stmt.Name[min(len(types), len(stmt.Name)):]
-		}
 		exprTypes := ts.TypeExpression(expr, true)
 		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
@@ -1056,8 +1041,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 // row and column axes; nested array-valued cells contribute their own axes.
 func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 	if len(al.Headers) == 0 && len(al.Rows) == 0 {
-		shape := arrayLiteralLayoutShape(al)
-		return ts.cacheArrayLiteralType(al, Array{ElemType: Empty{}, Rank: len(shape)}, shape)
+		return ts.typeEmptyArrayLiteral(al)
 	}
 
 	if len(al.Headers) > 0 {
@@ -1099,6 +1083,33 @@ func (ts *TypeSolver) TypeArrayExpression(al *ast.ArrayLiteral) []Type {
 		return ts.typeStackedArrayLiteral(al, cellTypes)
 	}
 	return ts.typeScalarBracketLiteral(al, cellTypes)
+}
+
+// typeEmptyArrayLiteral types an empty array by its sample, which stands for
+// one element: an array sample adds its rank to the literal's layout axes.
+func (ts *TypeSolver) typeEmptyArrayLiteral(al *ast.ArrayLiteral) []Type {
+	sample := al.Samples[0]
+	sampleType := ts.TypeExpression(sample, false)[0]
+	if ts.pendingOperand(sampleType) {
+		return ts.cacheInvalidBracketLiteral(al)
+	}
+
+	shape := arrayLiteralLayoutShape(al)
+	if arr, ok := sampleType.(Array); ok {
+		shape = append(shape, make([]uint64, arr.Rank)...)
+		return ts.cacheArrayLiteralType(al, Array{ElemType: arr.ElemType, Rank: len(shape)}, shape)
+	}
+	if sampleType.Kind() == StrKind {
+		sampleType = StrH{}
+	}
+	if !allowedCollectionElement(sampleType) {
+		ts.Errors = append(ts.Errors, &token.CompileError{
+			Token: sample.Tok(),
+			Msg:   fmt.Sprintf("an array cannot hold %s", sampleType),
+		})
+		return ts.cacheInvalidBracketLiteral(al)
+	}
+	return ts.cacheArrayLiteralType(al, Array{ElemType: sampleType, Rank: len(shape)}, shape)
 }
 
 func (ts *TypeSolver) cacheArrayLiteralType(al *ast.ArrayLiteral, arr Array, shape []uint64) []Type {
@@ -1202,7 +1213,7 @@ func (ts *TypeSolver) typeStackedArrayLiteral(al *ast.ArrayLiteral, cellTypes []
 			continue
 		}
 
-		elemType = ts.mergeArrayLeafType(elemType, childType.ElemType, al.Tok())
+		elemType = ts.mergeColType(elemType, childType.ElemType, 0, al.Tok())
 		shape := ts.ExprCache[key(ts.FuncNameMangled, children[i])].ArrayShape
 		if shape == nil {
 			shapeKnown = false
@@ -1229,19 +1240,6 @@ func (ts *TypeSolver) typeStackedArrayLiteral(al *ast.ArrayLiteral, cellTypes []
 	return ts.cacheArrayLiteralType(al, Array{ElemType: elemType, Rank: first.Rank + len(layoutShape)}, shape)
 }
 
-func (ts *TypeSolver) mergeArrayLeafType(current, next Type, tok token.Token) Type {
-	if next.Kind() == EmptyKind {
-		if current.Kind() == UnresolvedKind {
-			return next
-		}
-		return current
-	}
-	if current.Kind() == EmptyKind {
-		current = Unresolved{}
-	}
-	return ts.mergeColType(current, next, 0, tok)
-}
-
 func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 	numCols := ts.arrayNumCols(al)
 	if !ts.validateBracketLiteralShape(al, numCols) {
@@ -1250,8 +1248,8 @@ func (ts *TypeSolver) typeTableLiteral(al *ast.ArrayLiteral) []Type {
 
 	colTypes := ts.initColTypes(numCols)
 	if len(al.Rows) == 0 {
-		for i := range colTypes {
-			colTypes[i] = Empty{}
+		for col, sample := range al.Samples {
+			colTypes[col] = ts.mergeColType(colTypes[col], ts.TypeExpression(sample, false)[0], col, sample.Tok())
 		}
 		return ts.cacheTableLiteralType(al, colTypes)
 	}
@@ -1677,13 +1675,6 @@ func (ts *TypeSolver) TypeArrayRangeExpression(ax *ast.ArrayRangeExpression, _ b
 	if !ok || ts.awaitingType(arrType) {
 		return info.OutTypes
 	}
-	if !hasConcreteArrayElemType(arrType.ElemType) {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: ax.Tok(),
-			Msg:   "cannot index an empty array without an element type",
-		})
-		return info.OutTypes
-	}
 	resultType := arrayIndexResultType(arrType)
 	info.HasRanges = ts.ExprCache[key(ts.FuncNameMangled, ax.Array)].HasRanges || ts.ExprCache[key(ts.FuncNameMangled, ax.Range)].HasRanges
 	if len(idxTypes) != 1 {
@@ -1853,15 +1844,6 @@ func (ts *TypeSolver) typeInfixArrayMask(leftType, rightType Type, op string, to
 	}
 	if rightType.Kind() == ArrayKind {
 		cmpRight = rightType.(Array).ElemType
-	}
-	if cmpLeft.Kind() == EmptyKind && cmpRight.Kind() == EmptyKind {
-		return
-	}
-	if cmpLeft.Kind() == EmptyKind {
-		cmpLeft = cmpRight
-	}
-	if cmpRight.Kind() == EmptyKind {
-		cmpRight = cmpLeft
 	}
 	ts.TypeInfixOp(cmpLeft, cmpRight, op, tok)
 }
@@ -2168,33 +2150,12 @@ func (ts *TypeSolver) typeArrayArrayInfix(leftArr, rightArr Array, op string, to
 	return Array{ElemType: resultElem, Rank: leftArr.Rank}
 }
 
-// resolveArrayElemTypes handles empty/unresolved element types and type inference for array operations.
+// resolveArrayElemTypes handles unresolved element types and type inference for array operations.
 func (ts *TypeSolver) resolveArrayElemTypes(leftElem, rightElem Type, op string, tok token.Token) Type {
-	leftEmpty := leftElem.Kind() == EmptyKind
-	rightEmpty := rightElem.Kind() == EmptyKind
-
-	if leftEmpty && rightEmpty {
-		return Empty{}
-	}
-
-	if leftEmpty {
-		if rightElem.Kind() == UnresolvedKind {
-			return rightElem
-		}
-		return ts.TypeInfixOp(rightElem, rightElem, op, tok)
-	}
-	if rightEmpty {
-		if leftElem.Kind() == UnresolvedKind {
-			return leftElem
-		}
-		return ts.TypeInfixOp(leftElem, leftElem, op, tok)
-	}
-
 	leftUnresolved := leftElem.Kind() == UnresolvedKind
 	rightUnresolved := rightElem.Kind() == UnresolvedKind
 
-	// Element-wise operations need an element type. Concatenation is handled
-	// before this function and may preserve an untyped empty result.
+	// Element-wise operations need an element type.
 	if leftUnresolved && rightUnresolved {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: tok,
@@ -2483,12 +2444,11 @@ func (ts *TypeSolver) callScopedArrayRangeType(expr ast.Expression) (ArrayRange,
 // Uses the shared TypeExprsForIter for the core logic.
 func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args []Type, innerArgs []Type, loopInside bool) {
 	outerTypesPerArg, loopInside, _ := ts.TypeExprsForIter(ce.Arguments, isRoot)
-	shared := ts.sharedDestinations(ce, outerTypesPerArg)
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0], shared); ok {
+		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0]); ok {
 			outerTypes = []Type{slotType}
 		}
 
@@ -2519,7 +2479,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 
 // argumentStorage returns the binding storage type to specialize a call
 // argument on, and false when the argument keeps its own type.
-func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type, shared []string) (Type, bool) {
+func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type) (Type, bool) {
 	// An argument that does not pass on a binding's value keeps its own type.
 	binding, ok := ts.yieldedBinding(arg)
 	if !ok {
@@ -2532,14 +2492,8 @@ func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type, shared []str
 		return nil, false
 	}
 
-	// A concrete type can differ from its storage only in ownership.
-	if concreteStorage(own) {
-		return slot, true
-	}
-
-	// An untyped value keeps its own type unless the call writes back into it.
-	_, plain := arg.(*ast.Identifier)
-	return slot, plain && slices.Contains(shared, binding.Value)
+	// A resolved type can differ from its storage only in ownership.
+	return slot, IsFullyResolvedType(own)
 }
 
 // yieldedBinding returns the binding whose stored value expr passes on: the
@@ -2559,25 +2513,6 @@ func (ts *TypeSolver) yieldedBinding(expr ast.Expression) (*ast.Identifier, bool
 			return nil, false
 		}
 	}
-}
-
-// sharedDestinations names the destinations a statement's value call assigns,
-// the only bindings its arguments can share. Lowering passes the call the
-// statement's names from its first output on and binds one per callee output.
-func (ts *TypeSolver) sharedDestinations(ce *ast.CallExpression, outerTypesPerArg [][]Type) []string {
-	dests, ok := ts.callDests[ce]
-	if !ok {
-		return nil
-	}
-	arity := 0
-	for _, types := range outerTypesPerArg {
-		arity += len(types)
-	}
-	template, ok := ts.ScriptCompiler.Compiler.CodeCompiler.lookupFuncTemplate(ce.Function.Value, arity)
-	if !ok {
-		return nil
-	}
-	return identNames(dests[:min(len(dests), len(template.Outputs))])
 }
 
 func (ts *TypeSolver) expectSingleArray(source ast.Expression, tok token.Token, context string) (Array, bool) {

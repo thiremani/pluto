@@ -99,19 +99,18 @@ copied
 copied = "static"
 copied
 
-# The same widening through an empty-array reset; the taken empty array keeps
-# its empty type, so it still resets a differently typed binding.
-emptyFirst = []
+# Copies and resets of empty arrays release their storage like any others.
+emptyFirst = []0
 takenEmpty = emptyFirst
 emptyFirst = [1 2]
 floats = [1.5]
 floats
-floats = takenEmpty
+floats = []0.0
 copiedEmpty = takenEmpty
-takenEmpty = []
+takenEmpty = []0
 copiedEmpty, takenEmpty, emptyFirst, floats
 
-# A column read of a widened header-only table.
+# A column read of a copied typed empty table.
 scoresW =
 [
   : Name Value
@@ -120,6 +119,7 @@ scoresW =
 headerOnly =
 [
   : Name Value
+  : ""   0
 ]
 takenTable = headerOnly
 headerOnly = scoresW

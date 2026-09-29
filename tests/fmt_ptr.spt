@@ -20,7 +20,7 @@ grid = [
 ]
 "Element buffers: -floats%p -words%p -grid%p"
 
-empty = []
+empty = []0
 "An empty array has no buffer: -empty%p"
 
 pointerWidth = 24
