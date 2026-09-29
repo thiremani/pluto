@@ -936,7 +936,9 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplit
 // It handles infix/postfix operators and can stop before an attached prefix
 // operator when the current split mode says the left side is complete. Array
 // rows use this to split `[a -b]`; let statements use the same spacing check to
-// split `cond -value` at the condition/value boundary.
+// split `cond -value` at the condition/value boundary. An operator that fails
+// reports its error and returns nil, which ends the expression along with any
+// call, index or field access attached after it.
 //
 // Parameters:
 //   - precedence: minimum binding power - stops when next operator has lower precedence
@@ -948,7 +950,7 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplit
 //   - `a -b` (space before, not after `-`) → split before `-b` when allowed
 //   - `a-b` (no space before `-`) → subtraction (infix, normal precedence)
 func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixSplitMode, left ast.Expression) ast.Expression {
-	for {
+	for left != nil {
 		var consumed bool
 		left, consumed = p.tryPostfix(left)
 		if consumed {
@@ -976,6 +978,9 @@ func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixS
 		// Process as infix operator
 		p.nextToken()
 		left = infix(left)
+	}
+	if left == nil {
+		p.skipPostfixes()
 	}
 	return left
 }

@@ -106,6 +106,42 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}
 }
 
+func TestOperatorAfterFailedOperand(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expErrors []string
+	}{
+		{"call after empty index", "x = foo[]()", []string{
+			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
+		}},
+		{"chain after empty index", "x = foo[](1)[2]", []string{
+			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
+		}},
+		{"field after empty index", "x = a[].b", []string{
+			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
+		}},
+		{"infix after empty index", "x = a[] + 1", []string{
+			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
+		}},
+		{"call after empty range stop", "x = 1:]()", []string{
+			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
+			"TestOperatorAfterFailedOperand:1:7:expected expression after ':' for range stop",
+		}},
+		{"call argument", "x = f(a[]())", []string{
+			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestOperatorAfterFailedOperand", tt.input))
+			require.NotPanics(t, func() { sp.Parse() }, "input %q", tt.input)
+			require.Equal(t, tt.expErrors, sp.Errors(), "input %q", tt.input)
+		})
+	}
+}
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		name   string
