@@ -71,6 +71,41 @@ func TestInvalidAssignment(t *testing.T) {
 	}
 }
 
+func TestUnparsedAssignmentTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		expErrors []string
+	}{
+		{"spaced dot", "a .= 2", []string{
+			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got . instead",
+			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for . found",
+		}},
+		{"operator run", "a @= 2", []string{
+			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got OPERATOR instead",
+			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for @ found",
+		}},
+		{"closing paren", "a ) = 2", []string{
+			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got ) instead",
+			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for ) found",
+		}},
+		{"only target", "@ = 2", []string{
+			"TestUnparsedAssignmentTarget:1:1:no prefix parse function for @ found",
+		}},
+		{"second target", "a, @ = 2, 3", []string{
+			"TestUnparsedAssignmentTarget:1:4:no prefix parse function for @ found",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestUnparsedAssignmentTarget", tt.input))
+			require.NotPanics(t, func() { sp.Parse() }, "input %q", tt.input)
+			require.Equal(t, tt.expErrors, sp.Errors(), "input %q", tt.input)
+		})
+	}
+}
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -144,12 +144,16 @@ iteration; the current lowering runs that loop caller-side. Distinct drivers,
 as in `F(i, j)`, still form their normal cartesian domain. These choices do not
 change the results visible to source code.
 
-Function outputs are staged independently before the call. If an empty driver
-or skipped condition means an output is not written, its staged value is
-preserved. At representation boundaries, such as a static string result being
-assigned into an owned-string destination, the callee receives its declared
-zero value and the caller commits the adapted result only when the callee
-actually writes it.
+Function outputs are staged independently before the call. A body that runs
+writes every output (#123, decided and not yet implemented), so a destination
+keeps its value only when no invocation is admitted: the driver is empty, an
+argument fails at every point, or the statement's gate is false. Zero
+iterations always mean no assignment, wherever the loop is placed. Today a
+skipped condition inside the body can also leave an output unwritten, and its
+staged value is preserved. At
+representation boundaries, such as a static string result being assigned
+into an owned-string destination, the callee receives its declared zero value
+and the caller commits the adapted result only when the callee writes it.
 
 Examples:
 

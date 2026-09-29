@@ -374,6 +374,9 @@ may-write—cannot alter the prototype of an existing symbol. A future seedless
 internal fast path must therefore use a distinct private symbol behind this
 stable boundary.
 
+The planned ABI 3.0 (§5.3) removes the seed and the write markers from every
+function without a `Range` or `ArrayRange` parameter.
+
 Conceptually, a two-output indirect call uses:
 
 ```c
@@ -473,7 +476,36 @@ first parameter sharing its first output, which is therefore an `I64`.
 `Demangle` renders it as `math.Fold(I64 -> 1, StrH)`.
 
 The public specialization symbol is unchanged by the variant. C callers
-never see a variant and cannot request one.
+never see a variant and cannot request one. Under the planned ABI 3.0, a
+variant can no longer change what a body reads within one invocation (§5.3).
+
+### 5.3 Planned: ABI 3.0 (#123)
+
+Decided in #123 and not yet implemented. Every body that runs will write every
+output, so no function needs its destination's old value as an implicit
+input. ABI 3.0 removes the hidden seed and the write markers from every
+function without a `Range` or `ArrayRange` parameter: a direct return takes
+only its source parameters, and the indirect carrier holds only output
+pointers. `Square` becomes `int64_t Pt_Square_I64(int64_t x)`.
+`ConditionalSquare` must start from a default: with an input `prev` and
+`res = prev` first, it becomes
+`int64_t Pt_ConditionalSquare_I64_I64(int64_t prev, int64_t x)`, and a caller
+that keeps an old value passes it as that ordinary argument.
+
+Whether a function keeps the seed and the write markers depends only on
+whether it has a range parameter; its complete prototype depends on its
+solved parameter and output types, never on its body. A range-bearing
+function such as `Acc` must still report that no iteration ran, since zero
+iterations mean no assignment; it keeps its seed until PIR Step 7 chooses
+between one "did execute" bit and a caller-side emptiness check.
+
+Inputs become stable within each scalar invocation, so within one invocation
+a private variant (§5.2) may only let a shared input and output use one slot
+where no read can tell. Across iterations, a variant must produce what
+repeated scalar invocations of the bare specialization produce, with each
+iteration's shared argument rebound to the destination's current value. With
+`out = a + i`, `sum = Acc(sum, 1:5)` from 0 gives 10, while an unshared
+`Acc(0, 1:5)` gives 4.
 
 ---
 
