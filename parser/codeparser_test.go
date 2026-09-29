@@ -239,6 +239,19 @@ invalid = f(x, x)
 	require.Contains(t, p.Errors()[0], "duplicate identifier: x in this statement")
 }
 
+func TestUnparsedAssignmentTargetInBody(t *testing.T) {
+	input := `y = F(x)
+    y = x
+    y .= 2
+`
+	p := NewCodeParser(lexer.New("TestUnparsedAssignmentTargetInBody", input))
+	require.NotPanics(t, func() { p.Parse() })
+	require.Equal(t, []string{
+		"TestUnparsedAssignmentTargetInBody:3:5:expected next token to be =, got . instead",
+		"TestUnparsedAssignmentTargetInBody:3:7:no prefix parse function for . found",
+	}, p.Errors())
+}
+
 func TestFuncStatementParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)
     y = 1

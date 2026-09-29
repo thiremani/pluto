@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -435,6 +436,10 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	}
 
 	if !p.expectPeek(token.ASSIGN) {
+		return nil
+	}
+	// A target that failed to parse is nil and has already reported its error.
+	if slices.Contains(expList, nil) {
 		return nil
 	}
 
