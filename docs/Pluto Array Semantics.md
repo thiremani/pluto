@@ -155,19 +155,18 @@ scores = [
 ```
 
 Named columns are arrays, so `scores.Score` is `[10 12]`. A table without data
-rows states its column types with a second `:` row of zero values, one per
-column:
+rows types each column with a zero value attached to its name:
 
 ```pluto
 scores = [
-  : Name Score
-  : ""   0
+  : Name("") Score(0)
 ]
 ```
 
 It prints with its header, and each projected column is an empty array of its
 type. Assigning it to an established table with the same columns clears that
-table's rows. A header row without a sample row or data rows is an error.
+table's rows. A header without data rows needs a type on every column, and
+column types are only written on a table without rows.
 
 ## Indexing and operations
 

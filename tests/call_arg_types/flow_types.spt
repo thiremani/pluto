@@ -22,8 +22,7 @@ prices = [9.5]
 "prices:", prices
 
 t = [
-  : Name Score
-  : ""   ""
+  : Name("") Score("")
 ]
 n = Scores(t)
 "n:", n

@@ -1222,15 +1222,15 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
-			name:  "table with column samples",
-			input: "[\n  : Name Score\n  : \"\" 0\n]",
+			name:  "table with column types",
+			input: "[\n  : Name(\"\") Score(0)\n]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Equal(t, []string{"Name", "Score"}, arr.Headers)
 				require.Empty(t, arr.Rows)
 				require.Len(t, arr.Samples, 2)
 				require.IsType(t, &ast.StringLiteral{}, arr.Samples[0])
 				require.True(t, testIntegerLiteral(t, arr.Samples[1], 0))
-				require.Equal(t, "[\n  : Name Score\n  : \"\" 0\n]", arr.String())
+				require.Equal(t, "[\n  : Name(\"\") Score(0)\n]", arr.String())
 			},
 		},
 		{
@@ -1276,28 +1276,40 @@ func TestArrayLiterals(t *testing.T) {
 			errorMsg:    "the sample after [] is a zero value or a variable name",
 		},
 		{
-			name:        "header-only table without column samples",
+			name:        "header-only table without column types",
 			input:       "[\n  : Name Score\n]",
 			expectError: true,
-			errorMsg:    "a table with no rows needs its column types",
+			errorMsg:    "a table without rows needs a type on every column",
 		},
 		{
-			name:        "column sample count",
-			input:       "[\n  : Name Score\n  : \"\"\n]",
+			name:        "missing column type",
+			input:       "[\n  : Name(\"\") Score\n]",
 			expectError: true,
-			errorMsg:    "column sample row has 1 values for 2 columns",
+			errorMsg:    "a table without rows needs a type on every column",
 		},
 		{
-			name:        "nonzero column sample",
-			input:       "[\n  : Name Score\n  : \"\" 1\n]",
+			name:        "nonzero column type",
+			input:       "[\n  : Name(\"\") Score(1)\n]",
 			expectError: true,
-			errorMsg:    "a table's column types are written as zero values",
+			errorMsg:    "a column's type is written as a zero value: Score(0)",
 		},
 		{
-			name:        "column samples with data rows",
-			input:       "[\n  : Name Score\n  : \"\" 0\n    \"Ada\" 10\n]",
+			name:        "array-valued column type",
+			input:       "[\n  : Name(\"\") Scores([]0.0)\n]",
 			expectError: true,
-			errorMsg:    "a table with a column sample row cannot have data rows",
+			errorMsg:    "a column's type is written as a zero value: Scores(0)",
+		},
+		{
+			name:        "detached column type",
+			input:       "[\n  : Name (\"\") Score(0)\n]",
+			expectError: true,
+			errorMsg:    "a column type attaches to its name: Name(0)",
+		},
+		{
+			name:        "column types with data rows",
+			input:       "[\n  : Name(\"\") Score(0)\n    \"Ada\" 10\n]",
+			expectError: true,
+			errorMsg:    "column types are only written on a table without rows",
 		},
 		{
 			name: "simple matrix without headers",

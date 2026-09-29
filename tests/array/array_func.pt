@@ -40,6 +40,5 @@ res = KeepRangedArray(i)
 # A typed empty table can conditionally reset an established table.
 res = ResetTable(x)
     res = x > -1 [
-      : Name Score
-      : ""   0
+      : Name("") Score(0)
     ]

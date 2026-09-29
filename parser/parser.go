@@ -1165,7 +1165,6 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 		if !p.parseHeader(arr) {
 			return nil
 		}
-		p.parseColumnSamples(arr)
 	}
 
 	// Parse rows
@@ -1201,22 +1200,22 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 }
 
 // typeEmptyLiteral requires a literal without rows to state its element
-// types: an array through the sample after its brackets, a table through its
-// column sample row. The literal stays whole either way, so parsing continues
-// past a reported error.
+// types: an array through the sample after its brackets, a table through a
+// type on every column header. The literal stays whole either way, so parsing
+// continues past a reported error.
 func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
 	switch {
 	case len(arr.Headers) == 0 && len(arr.Rows) == 0:
 		p.parseArraySample(arr)
-	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && len(arr.Samples) == 0:
+	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && (len(arr.Samples) == 0 || slices.Contains(arr.Samples, nil)):
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
-			Msg:   "a table with no rows needs its column types: add a ':' row of zero values under the headers",
+			Msg:   `a table without rows needs a type on every column, as in Name("") Score(0)`,
 		})
 	case len(arr.Rows) > 0 && len(arr.Samples) > 0:
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
-			Msg:   "a table with a column sample row cannot have data rows",
+			Msg:   "column types are only written on a table without rows",
 		})
 	}
 }
@@ -1267,35 +1266,6 @@ func (p *StmtParser) parseArraySample(arr *ast.ArrayLiteral) {
 	arr.Samples = []ast.Expression{sample}
 }
 
-// parseColumnSamples parses the second ':' row of a table without data rows,
-// whose zero values give the column types.
-func (p *StmtParser) parseColumnSamples(arr *ast.ArrayLiteral) {
-	p.skipArrayFormatting()
-	if !p.curTokenIs(token.COLON) {
-		return
-	}
-
-	colonTok := p.curToken
-	p.nextToken() // consume ':'
-	arr.Samples = p.parseRow()
-	for _, sample := range arr.Samples {
-		if isZeroSample(sample) {
-			continue
-		}
-		p.errors = append(p.errors, &token.CompileError{
-			Token: sample.Tok(),
-			Msg:   `a table's column types are written as zero values: 0, 0.0 or ""`,
-		})
-		return
-	}
-	if len(arr.Samples) != len(arr.Headers) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: colonTok,
-			Msg:   fmt.Sprintf("column sample row has %d values for %d columns", len(arr.Samples), len(arr.Headers)),
-		})
-	}
-}
-
 // isZeroSample reports whether expr is the zero value that names an element
 // type: 0, 0.0 or "".
 func isZeroSample(expr ast.Expression) bool {
@@ -1319,17 +1289,27 @@ func (p *StmtParser) skipArrayFormatting() {
 	}
 }
 
-// parseHeader parses column headers after ':'
+// parseHeader parses column headers after ':'. A table without data rows
+// types each column with a zero value attached to its name: Name("") Score(0).
 func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
+	var samples []ast.Expression
+	typed := false
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
 		if p.skipLineContinuation() {
 			continue
 		}
 
 		if p.curTokenIs(token.IDENT) {
-			p.validateIdentifier(p.curToken)
-			arr.Headers = append(arr.Headers, p.curToken.Literal)
+			header := p.curToken
+			p.validateIdentifier(header)
+			arr.Headers = append(arr.Headers, header.Literal)
 			p.nextToken()
+			sample, ok := p.parseColumnType(header)
+			if !ok {
+				return false
+			}
+			samples = append(samples, sample)
+			typed = typed || sample != nil
 			continue
 		}
 
@@ -1341,7 +1321,49 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 		return false
 	}
 	p.errorOnBlanks() // headers cannot be blank
+	if typed {
+		arr.Samples = samples
+	}
 	return true
+}
+
+// parseColumnType parses the zero value in parentheses attached to a column
+// header, returning nil when the header has none.
+func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) {
+	if !p.curTokenIs(token.LPAREN) {
+		return nil, true
+	}
+	name := header.Literal
+	if p.curToken.HadSpace {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   fmt.Sprintf("a column type attaches to its name: %s(0), %s(0.0) or %s(\"\")", name, name, name),
+		})
+		return nil, false
+	}
+
+	p.nextToken() // consume '('
+	var sample ast.Expression
+	switch p.curToken.Type {
+	case token.INT:
+		sample = p.parseIntegerLiteral()
+	case token.FLOAT:
+		sample = p.parseFloatLiteral()
+	case token.STRING:
+		sample = p.parseStringLiteral()
+	}
+	if sample == nil || !isZeroSample(sample) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   fmt.Sprintf("a column's type is written as a zero value: %s(0), %s(0.0) or %s(\"\")", name, name, name),
+		})
+		return nil, false
+	}
+	if !p.expectPeek(token.RPAREN) {
+		return nil, false
+	}
+	p.nextToken() // consume ')'
+	return sample, true
 }
 
 // parseRow parses a single data row and returns it

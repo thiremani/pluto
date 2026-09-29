@@ -256,8 +256,8 @@ type ArrayLiteral struct {
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
 	// Samples give an empty literal its element types: one after an array's
-	// brackets (`[]0`), one per column in a table's second ':' row. They are
-	// typed, never evaluated.
+	// brackets (`[]0`), one per column header in a table (`Score(0)`). They
+	// are typed, never evaluated.
 	Samples []Expression
 }
 
@@ -283,10 +283,11 @@ func (al *ArrayLiteral) String() string {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
-		}
-		if len(al.Samples) > 0 {
-			out.WriteString("\n  : ")
-			writeArrayRow(&out, al.Samples)
+			if j < len(al.Samples) {
+				out.WriteString("(")
+				writeArrayRow(&out, al.Samples[j:j+1])
+				out.WriteString(")")
+			}
 		}
 	}
 

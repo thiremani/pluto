@@ -694,8 +694,7 @@ func TestPlanGoldenTypedEmptyTableReceiver(t *testing.T) {
 ]
 headerOnly =
 [
-  : Name Value
-  : ""   0
+  : Name("") Value(0)
 ]
 taken = headerOnly
 headerOnly = scores

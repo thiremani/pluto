@@ -147,8 +147,7 @@ cube = cube ⊕ [[[1 2] [3 4]]]
 
 emptyTable =
 [
-  : Name Score
-  : ""   0
+  : Name("") Score(0)
 ]
 "empty table: -emptyTable"
 emptyScoreColumn = emptyTable.Score
@@ -159,8 +158,7 @@ typedEmptyScores = emptyTable.Score ⊕ [7 8]
 "typed empty scores: -typedEmptyScores"
 
 refinedEmptyTable = [
-  : Name Score
-  : ""   0
+  : Name("") Score(0)
 ]
 "initial empty table: -refinedEmptyTable"
 refinedEmptyTable = [
@@ -169,8 +167,7 @@ refinedEmptyTable = [
 ]
 "refined empty table: -refinedEmptyTable"
 refinedEmptyTable = [
-  : Name Score
-  : ""   0
+  : Name("") Score(0)
 ]
 "reset empty table: -refinedEmptyTable"
 

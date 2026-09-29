@@ -546,8 +546,7 @@ cube = []matrix
 item = 2.5
 items = []item
 table = [
-  : Name Score
-  : ""   0
+  : Name("") Score(0)
 ]
 ints, floats, strings, cube, items, table`)
 	cc := NewCodeCompiler(ctx, "typedEmpties", "", ast.NewCode())
@@ -2737,8 +2736,7 @@ func TestFunctionOutputTypedEmptyTableMatchesStorage(t *testing.T) {
 	code := mustParseCode(t, `res = ResetTable(k)
     "-k"
     res = [
-      : Name Score
-      : ""   0
+      : Name("") Score(0)
     ]
 `)
 	ctx := llvm.NewContext()
