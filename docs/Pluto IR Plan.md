@@ -1001,7 +1001,9 @@ agree with this summary; a disagreement is an ICE rather than a diagnostic.
 
 This partly reverses Step 2B, which moved dead-store and write-after-write
 checks to specializations, and the per-specialization diagnostic cache and
-replay go with it. The rest of this section describes the current design.
+replay go with it. Whether a script's dead-store and write-after-write checks
+join this pass or keep the effect-sensitive dataflow described below is still
+open. The rest of this section describes the current design.
 
 `.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
 pass is structural only: explicit use-before-definition, illegal input/global
