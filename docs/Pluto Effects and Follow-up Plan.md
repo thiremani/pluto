@@ -56,8 +56,14 @@ Seed-readable outputs, which would let a body read an output before assigning
 it, are not planned ([issue #105](https://github.com/thiremani/pluto/issues/105)):
 a function that needs its destination's previous value takes it as an input,
 and the caller shares the destination with it.
-[Issue #123](https://github.com/thiremani/pluto/issues/123) proposes going
-further and requiring every output to be definitely assigned.
+
+**Decided 2026-09-28 ([issue #123](https://github.com/thiremani/pluto/issues/123);
+not yet implemented).** Every body that runs writes every output, sharing is
+decided only at the call site, and inputs keep their values within an
+invocation, which reverses the live references described above. Flow checks
+run once per template, the same for every argument type. The Memory
+Model's "Parameters and Outputs" and "Call Site" state the rules and what
+master still does differently, and the C ABI Spec §5.3 describes ABI 3.0.
 
 ## 2. Formatting: `%n` removed
 
@@ -111,7 +117,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103) |
+| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103). Definite outputs, stable inputs and ABI 3.0 are decided in [#123](https://github.com/thiremani/pluto/issues/123) and land before PIR Step 4's call slice |
 | `%n` effect contract | Done: `%n` removed (section 2, #109) |
 | Output path protection | Done ([#80](https://github.com/thiremani/pluto/issues/80)): a script's executable replaces only a missing path or a native executable, never `pt.mod`, a source file, a directory or a symlink, and links through a fresh directory renamed into place |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |
