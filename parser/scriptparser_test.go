@@ -96,6 +96,7 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 			"TestUnparsedAssignmentTarget:1:4:no prefix parse function for @ found",
 		}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sp := NewScriptParser(lexer.New("TestUnparsedAssignmentTarget", tt.input))
