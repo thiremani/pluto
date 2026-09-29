@@ -965,6 +965,8 @@ generated rewrite nodes may add entries across walks. Issue #71's
 compile-order-dependent wrong output came from reusing some body facts while
 discarding others. Specialization CFG success or diagnostics are likewise
 cached on `FuncInfo` and replayed when a later script reuses a settled body.
+Under #123, flow checks run once per template (CFG consumption, below), so
+settlement no longer requires a CFG result and nothing is replayed.
 
 ### CFG consumption
 
@@ -1450,7 +1452,9 @@ generic plan lowerer, the existing reusable primitives, and no duplicated
 statement classification or specialized conditional orchestration. Surviving
 reorganized rather than deleted: loop and guard emission, generic storage
 across branches and iterations, the expression compiler for `eval` regions, the
-CFG pass (restructured around settled-specialization effects), and the runtime.
+CFG pass (one flow pass per template under #123, whose text-only write
+classification deliberately stays separate from the solver's effects, §15),
+and the runtime.
 
 Per-step deletions are targets, not guarantees — each lands only when its step
 proves the plan replaces it. The estimated steps total roughly 14-22 focused
@@ -1522,8 +1526,7 @@ immediate deletion at the last consumer.
   another template's output counts the same; and `y = Helper(x)` then
   `out = y + 1`, where `Helper` returns a scalar, is a definite write
 - summaries are rebuilt per specialization walk and published only on
-  `Settled`; transitive effects reach a fixed point across recursive closures;
-  cached specialization CFG diagnostics replay on reuse
+  `Settled`; transitive effects reach a fixed point across recursive closures
 
 ### Loop-carried tests
 
