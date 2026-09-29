@@ -17,6 +17,11 @@ g = 0
 g = k > 5 && First(a3) > 0 1
 g, a3
 
+# A failed gate skips a discarded call and leaves its argument unchanged.
+a4 = [1 2 3]
+_ = k > 5 Twice(a4)
+a4
+
 # A ranged call doesn't free an outer binding it passes on.
 s2 = "ab" ⊕ "cd"
 j = 0:3
