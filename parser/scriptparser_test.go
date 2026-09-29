@@ -1434,15 +1434,21 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name:        "invalid header token",
-			input:       "[: 123 Product]",
+			input:       "[\n  : 123 Product\n]",
 			expectError: true,
 			errorMsg:    "expected identifier for column header",
 		},
 		{
 			name:        "header marker without columns",
-			input:       "[:\n]",
+			input:       "[\n  :\n]",
 			expectError: true,
 			errorMsg:    "expected at least one column header after ':'",
+		},
+		{
+			name:        "header on the bracket's line",
+			input:       "[ : Name(\"\") Score(0) ]",
+			expectError: true,
+			errorMsg:    "a table's header goes on its own line after '['",
 		},
 		{
 			name: "line continuation with unary operators",
@@ -1539,16 +1545,16 @@ func TestMalformedElementTypeErrors(t *testing.T) {
 		{"x = []F32(0.0", []string{"the sample after [] is a zero value or a variable name"}},
 		{"x = []y[0]", []string{"the sample after [] is a zero value or a variable name"}},
 		{"x = []p.x", []string{"the sample after [] is a zero value or a variable name"}},
-		{"t = [ : Score(2) ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score() ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score((0)) ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score(0,0) ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score(0 ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score(foo[]()) ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [ : Score(a[0) ]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{`t = [ : Name("") Scores([]0.0) ]`, []string{"a column's type is written as a zero value: Scores(0)"}},
-		{`t = [ : Name ("") Score(0) ]`, []string{"a column type attaches to its name: Name(0)"}},
-		{"t = [ : Name Score(2) ]", []string{
+		{"t = [\n  : Score(2)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score()\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score((0))\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score(0,0)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score(0\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score(foo[]())\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Score(a[0)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [\n  : Name(\"\") Scores([]0.0)\n]", []string{"a column's type is written as a zero value: Scores(0)"}},
+		{"t = [\n  : Name (\"\") Score(0)\n]", []string{"a column type attaches to its name: Name(0)"}},
+		{"t = [\n  : Name Score(2)\n]", []string{
 			"a column's type is written as a zero value: Score(0)",
 			"a table without rows needs a type on every column",
 		}},
@@ -1573,7 +1579,7 @@ func TestMalformedElementTypeKeepsNextStatement(t *testing.T) {
 		input    string
 		errorMsg string
 	}{
-		{"t = [ : Score(foo( ]", "a column's type is written as a zero value: Score(0)"},
+		{"t = [\n  : Score(foo(\n]", "a column's type is written as a zero value: Score(0)"},
 		{"x = [[]F32(foo( ]", "the sample after [] is a zero value or a variable name"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
