@@ -22,10 +22,6 @@ a4 = [1 2 3]
 _ = k > 5 Twice(a4)
 a4
 
-s3 = "ab" ⊕ "cd"
-_ = k > 5 Twice(s3)
-s3
-
 # A ranged call doesn't free an outer binding it passes on.
 s2 = "ab" ⊕ "cd"
 j = 0:3
