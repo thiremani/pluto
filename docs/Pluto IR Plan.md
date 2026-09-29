@@ -39,8 +39,10 @@ Pluto source
 Responsibilities stay decoupled: the solver owns types, ranges, output shapes,
 and effects; the CFG owns cross-statement dataflow legality; PIR owns how an
 already-valid statement executes; LLVM owns SSA, storage, optimization, and
-ABI. The CFG never reads PIR — both consume the solver's effect summary
-independently (§15).
+ABI. The CFG never reads PIR. Today both consume the solver's effect summary
+independently (§15). Under #123 the CFG checks function templates with its
+own conservative classification of the source instead, and whether script
+checks follow is still open (§15, CFG consumption).
 
 PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
@@ -758,7 +760,9 @@ relevant PIR excerpt.
 
 ## 15. Solver Effects
 
-Effects are solver-side facts consumed independently by the CFG and by PIR.
+Effects are solver-side facts consumed independently by the CFG and by PIR
+(under #123 the CFG's function checks use their own classification instead;
+see CFG consumption, below).
 They are **per LHS slot**, not per statement, because a mixed assignment can
 skip one target while another always writes: `a, b = arr[i], i + 1` is
 `[]WriteEffect{MayWrite, MustWrite}`. The target-effect vector stays aligned to
