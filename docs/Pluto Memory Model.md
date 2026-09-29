@@ -267,31 +267,35 @@ res = sum(a, b)
   caller shared a binding. This holds for ordinary and ranged calls, whether
   the implementation passes a value or a pointer.
 - **Outputs**: Every body that runs assigns every output, on every path, with
-  a value that cannot be skipped. A value that can fail (a condition, a
-  value-position comparison, a checked access) never counts. Complementary
-  conditions such as `n <= 1` and `n > 1` are not recognized either; for
-  floats they need not cover every case, since both fail for a NaN. A write
-  under a range counts only when the range
-  cannot be empty. The check uses each specialization's settled write
-  effects, so it can depend on argument types: `out = x > 0` always writes
-  for an array argument, where the comparison is a mask, and may skip for a
-  scalar.
+  a value that cannot be skipped. The function's text decides this, the same
+  for every argument type and whether or not anything calls the function. A
+  write may be skipped under a statement gate, in a statement driven by a
+  range that may be empty, or when its value can fail: a value-position
+  comparison, `&&`, a checked access, a `||` whose last alternative can fail,
+  or a call with such an argument. A comparison counts even where an array
+  argument would make it a mask that always writes. Complementary conditions
+  such as `n <= 1` and `n > 1` are not recognized either; for floats they need
+  not cover every case, since both fail for a NaN. A range with literal
+  bounds that is not empty always runs.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
   call argument, a print, or a formatting marker) only after it is
-  definitely assigned. A read before that is a compile error: before any
-  assignment, or in the same simultaneous assignment. A later conditional
-  write does not revoke the assignment. An output the body reads is solved
-  at owned storage (a static string output becomes a heap string) and must
-  have a concrete type.
+  definitely assigned, judged from the text as above. A read before that is a
+  compile error: before any assignment, or in the same simultaneous
+  assignment. A later conditional write does not revoke the assignment. An
+  output the body reads is solved at owned storage (a static string output
+  becomes a heap string) and must have a concrete type.
 - **No name overlap**: Parameters and outputs must have distinct names.
   Sharing is decided only at the call site: a header never names a parameter
   after an output, so `out = Maybe(out, x)` is not a valid definition.
 
 A body that can leave an output unwritten is rejected at the function
-definition, once for each set of argument types that skips it. The error
-names those types and a call that reaches them. A caller whose output comes
-from a call counts that call as writing, so the error is not repeated up the
-chain.
+definition. A call whose arguments cannot fail counts as writing every
+output, since its callee is checked the same way. The one case the text
+cannot decide is a range that reaches the body through a call: after
+`r = Wrap(n)`, where `Wrap` returns its input unchanged, whether
+`out = r * 2` loops depends on whether `n` is a range. The type solver
+decides that per specialization and reports it at the definition, so a
+function nothing calls is not checked for it.
 
 A function that keeps an old value takes it as an input and starts from it:
 
@@ -305,10 +309,8 @@ out = Maybe(prev, x)
 becomes a default followed by an override: `y = n`, then
 `y = n > 1 Fib(n - 1) + Fib(n - 2)`.
 
-An output's first write may copy an input unchanged, as `out = prev` does,
-and then be overwritten without being read: the dead-store check exempts
-that one write. One body can then serve arguments whose override can skip and
-arguments whose override always writes:
+Because a comparison counts as possibly skipping for every argument type,
+one body serves them all:
 
 ```python
 out = Pos(prev, x)
@@ -317,9 +319,10 @@ out = Pos(prev, x)
 ```
 
 For a scalar `x`, the value-position comparison `x > 0` yields `x` or fails,
-so `out` keeps `prev`; for an array `x`, it yields a mask and always writes.
-A statement gate such as `Maybe`'s `out = x > 0 x` serves only a scalar `x`,
-since a statement condition must be a scalar.
+so `out` keeps `prev`. For an array `x`, it yields a mask and always writes,
+so the default is never read: the compiler drops it in that specialization
+and reports nothing. A statement gate such as `Maybe`'s `out = x > 0 x`
+serves only a scalar `x`, since a statement condition must be a scalar.
 
 A call therefore either runs and writes every output, or does not run: when
 an argument fails (`m = Double(arr[5])` keeps `m`), when the statement's
@@ -352,11 +355,11 @@ res = sum(res, 5)
 Reusing a variable as both an argument and a destination passes its value in
 and receives the result back; it does not connect the input to the output
 inside the call. The template reads that value through its declared input
-`a`, and may read `res` itself once it has assigned it. Every specialization
-must pass liveness analysis with its inputs and outputs treated as unshared,
-which is also how it runs. So `res = a + b` written twice is reported as a
-dead write for every caller, while `res = res + b` after `res = a + b` reads
-the first write by name.
+`a`, and may read `res` itself once it has assigned it. Liveness is checked
+once per template, with its inputs and outputs treated as unshared, which is
+also how a call runs. So `res = a + b` written twice is reported as a dead
+write for every caller, while `res = res + b` after `res = a + b` reads the
+first write by name.
 
 ```python
 out, before = FoldBefore(current, item)
@@ -411,8 +414,10 @@ differs in three ways:
   `p, q = Swap(p, q)` with the sequential body gives `2 2`,
   `value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
   `FoldAfter(value, 1:3)` gives `13 13`.
-- The dead-store check does not exempt `out = prev`, so `out = prev`
-  followed by `out = x > 0` is rejected for an array `x`.
+- Flow checks run per specialization, so their result can depend on the
+  argument types: `out = prev` followed by `out = x > 0` is rejected as a
+  dead store for an array `x`. A function nothing calls gets only structural
+  checks.
 
 The #123 implementation removes these differences, migrates the fixtures
 (`tests/alias_input` among them), and updates the README.

@@ -825,18 +825,18 @@ or its arguments suppresses the **whole tuple** — the call-merge rule — so
 every slot of that call becomes `MayYield` together.
 
 **Definite outputs (#123, decided; not yet implemented).** Every body that
-runs writes every output: each specialization's body summary (below) must
-have every slot `MustWrite`. Otherwise the definition is rejected, once per
-set of argument types that skips, with a call that reaches them; a caller
-whose output comes from that call is not reported again. Callee-internal
-non-writing therefore disappears, and the transfer rule reduces to
-`rawYield[i] = invocationYield`. A caller-side failure, such as the failed
-argument in `Id(arr[oob])`, makes every slot skip: the commit is skipped and
-the target stays `MayWrite`. Otherwise every slot yields. The one way left for
-an invoked call to leave its outputs unwritten is an empty callee-owned
-domain, a `Range` or `ArrayRange` parameter that runs zero iterations, which
-means no assignment. Until Step 7 chooses between one "did execute" bit and
-a caller-side emptiness check, that case keeps the seed resolution below.
+runs writes every output. The template-level flow check (CFG consumption,
+below) decides this from the function's text, the same for every argument
+type; only a range that reaches the body through a call is checked per
+specialization. Callee-internal non-writing therefore disappears, and the
+transfer rule reduces to `rawYield[i] = invocationYield`. A caller-side
+failure, such as the failed argument in `Id(arr[oob])`, makes every slot skip:
+the commit is skipped and the target stays `MayWrite`. Otherwise every slot
+yields. The one way left for an invoked call to leave its outputs unwritten is
+an empty callee-owned domain, a `Range` or `ArrayRange` parameter that runs
+zero iterations, which means no assignment. Until Step 7 chooses between one
+"did execute" bit and a caller-side emptiness check, that case keeps the seed
+resolution below.
 
 **Today.** Master still lets a body skip a write, so the callee's output slots
 keep independent `WriteEffect`s, and two failure sources must not be
@@ -881,10 +881,10 @@ statement order: the output starts `MayWrite` (nothing has written it), a
 slot leaves it unchanged — a later conditional write cannot un-guarantee an
 earlier unconditional one. A boundary `MustWrite` obtained by reading the
 destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
-an earlier value does not prove that the body wrote one. #123's rule is
-checked on this summary: a slot still `MayWrite` at the end of the body is
-the definition-site error, and for that check a callee output the callee's
-own error already covers counts as `MustWrite`. The published
+an earlier value does not prove that the body wrote one. Under #123 this
+precise summary no longer decides whether a template is valid; it stays an
+execution fact for routing, ownership and optimization, and decides only a
+statement whose range arrives through a call. The published
 `BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
 `ArrayRange` parameter controls whether
 the scalar body executes, not what the body does when it executes. Each call
@@ -970,6 +970,24 @@ cached on `FuncInfo` and replayed when a later script reuses a settled body.
 
 ### CFG consumption
 
+**Decided (#123; not yet implemented): flow checks per template.** Output
+initialization, reads before definite assignment, dead stores and
+write-after-write move to one pass per template, which runs whether or not
+anything calls it. The pass classifies writes from the text alone and
+conservatively: a statement gate, a range that may be empty, or a value that
+can fail (a value-position comparison, `&&`, a checked access, a `||` whose
+last alternative can fail, a call with such an argument) makes a write
+possibly skipped, even where a specialization's types would make it always
+write, as an array mask does. This classification stays separate from the
+solver's effects, which remain precise per specialization for routing,
+ownership and optimization; a specialization may drop a default its precise
+effects prove dead without reporting it. The type solver checks one case per
+specialization: a statement whose range arrives through a call, as in
+`r = Wrap(n)` then `out = r * 2`. This partly reverses Step 2B, which moved
+dead-store and write-after-write checks to specializations, and the
+per-specialization diagnostic cache and replay go with it. The rest of this
+section describes the current design.
+
 `.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
 pass is structural only: explicit use-before-definition, illegal input/global
 writes, unused inputs, syntactically unassigned outputs, formatting structure,
@@ -1000,11 +1018,9 @@ The two diagnostics consume effects differently:
   conditional-write false positive that forced tests to interleave reads merely
   to silence it. A prior seed overwritten by a proven-`MustWrite` call output
   without being read is instead a true positive: remove the seed or read it
-  explicitly when its value is semantically required. #123 (decided) exempts
-  one write from both diagnostics: an output's first write when it copies an
-  input unchanged, the `out = prev` default. The same body then serves an
-  argument type whose override always writes, such as an array mask, and one
-  whose override can skip.
+  explicitly when its value is semantically required. Under #123's
+  template-level check, an `out = prev` default before a comparison override
+  is live for every argument type, so it needs no exemption.
 - *Shared inputs.* A body is analyzed once per type specialization at
   settlement, with every input treated as its own value, and every script
   that reaches the specialization replays its diagnostics. Sharing an input
@@ -1136,7 +1152,8 @@ Two PRs, implementing §15.
   `ReadsSeed` facts become ordinary pre-write CFG reads; templates keep only
   structural checks; each specialization caches immutable diagnostics and
   complete direct-call keys; scripts replay the reachable closure once; and
-  the duplicated syntactic effect classifiers are deleted.
+  the duplicated syntactic effect classifiers are deleted. #123 moves these
+  diagnostics back to one conservative pass per template (§15).
 
 Step 2 fixes the conditional-write false positive without depending on PIR.
 The Step 2B regression and leak suites pass, so PIR implementation can resume.
@@ -1481,11 +1498,12 @@ immediate deletion at the last consumer.
   callee) leaves the target `MayWrite` and records no `ReadsSeed`; a possibly
   empty callee-owned domain at an existing target resolves to the seed as
   `MustYield` with a recorded `ReadsSeed` until Step 7 replaces the seed
-- #123: a body that can leave an output unwritten is rejected at the
-  definition once per set of argument types, not again at its callers; an
-  output's first write copied unchanged from an input may be overwritten
-  unread, so `out = prev` then `out = x > 0` is accepted for scalar and array
-  `x`
+- #123: flow checks run once per template, including one nothing calls: a
+  body that can leave an output unwritten is rejected at the definition;
+  `out = x > 0` alone is rejected for every argument type; `out = prev` then
+  `out = x > 0` is accepted for scalar and array `x`, and the array
+  specialization drops the dead default without a diagnostic; a range that
+  reaches the body through a call is checked per specialization
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures;
   cached specialization CFG diagnostics replay on reuse
