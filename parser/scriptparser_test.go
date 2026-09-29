@@ -1490,6 +1490,44 @@ func TestArrayLiterals(t *testing.T) {
 	}
 }
 
+// A malformed sample or column type is reported once and skipped whole, so the
+// rest of the statement adds no errors of its own.
+func TestMalformedElementTypeErrors(t *testing.T) {
+	for _, tt := range []struct {
+		input     string
+		errorMsgs []string
+	}{
+		{"x = []5", []string{"written as a zero value: []0"}},
+		{"x = [](0)", []string{"an empty array needs its element type"}},
+		{"x = []F32(0.0)", []string{"the sample after [] is a zero value or a variable name"}},
+		{"x = []F32(0.0", []string{"the sample after [] is a zero value or a variable name"}},
+		{"x = []y[0]", []string{"the sample after [] is a zero value or a variable name"}},
+		{"x = []p.x", []string{"the sample after [] is a zero value or a variable name"}},
+		{"t = [ : Score(2) ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score() ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score((0)) ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score(0,0) ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score(0 ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{"t = [ : Score(foo[]()) ]", []string{"a column's type is written as a zero value: Score(0)"}},
+		{`t = [ : Name("") Scores([]0.0) ]`, []string{"a column's type is written as a zero value: Scores(0)"}},
+		{`t = [ : Name ("") Score(0) ]`, []string{"a column type attaches to its name: Name(0)"}},
+		{"t = [ : Name Score(2) ]", []string{
+			"a column's type is written as a zero value: Score(0)",
+			"a table without rows needs a type on every column",
+		}},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestMalformedElementTypeErrors", tt.input))
+			sp.Parse()
+			errs := sp.Errors()
+			require.Len(t, errs, len(tt.errorMsgs), "errors: %v", errs)
+			for i, msg := range tt.errorMsgs {
+				require.Contains(t, errs[i], msg)
+			}
+		})
+	}
+}
+
 func TestArrayRangeExpression(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -1152,6 +1152,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	p.skipArrayFormatting()
 
 	// Parse headers if present
+	untyped := false
 	if p.curTokenIs(token.COLON) {
 		headerToken := p.curToken
 		p.nextToken() // consume ':'
@@ -1162,7 +1163,8 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 			})
 			return nil
 		}
-		if !p.parseHeader(arr) {
+		var ok bool
+		if untyped, ok = p.parseHeader(arr); !ok {
 			return nil
 		}
 	}
@@ -1191,7 +1193,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	if len(arr.Headers) == 0 && len(arr.Rows) > 1 {
 		arr.Block = true
 	}
-	p.typeEmptyLiteral(arr)
+	p.typeEmptyLiteral(arr, untyped)
 	// Do not consume the closing ']' (or an empty array's sample) here. Align
 	// with grouped-expression behavior and leave curToken at the literal's
 	// last token; callers (statement parsing) will advance past newline/EOF as
@@ -1201,13 +1203,14 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 
 // typeEmptyLiteral requires a literal without rows to state its element
 // types: an array through the sample after its brackets, a table through a
-// type on every column header. The literal stays whole either way, so parsing
-// continues past a reported error.
-func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
+// type on every column header. untyped reports a header written without one.
+// The literal stays whole either way, so parsing continues past a reported
+// error.
+func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral, untyped bool) {
 	switch {
 	case len(arr.Headers) == 0 && len(arr.Rows) == 0:
 		p.parseArraySample(arr)
-	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && (len(arr.ColumnTypes) == 0 || slices.Contains(arr.ColumnTypes, nil)):
+	case len(arr.Rows) == 0 && untyped:
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   `a table without rows needs a type on every column, as in Name("") Score(0)`,
@@ -1221,63 +1224,94 @@ func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
 }
 
 // parseArraySample reads the zero value or variable attached to an empty
-// array's closing bracket, leaving curToken at it.
+// array's closing bracket, leaving curToken at it. A malformed sample is
+// reported once and skipped along with any call, index or field access
+// attached to it.
 func (p *StmtParser) parseArraySample(arr *ast.ArrayLiteral) {
 	if p.peekToken.HadSpace || !slices.Contains([]token.TokenType{token.INT, token.FLOAT, token.STRING, token.IDENT}, p.peekToken.Type) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   `an empty array needs its element type: write []0, []0.0 or []""`,
 		})
+		p.skipPostfixes()
 		return
 	}
 
 	p.nextToken()
-	var sample ast.Expression
-	switch p.curToken.Type {
-	case token.IDENT:
+	sample := zeroSample(p.curToken)
+	if p.curTokenIs(token.IDENT) {
 		sample = p.parseIdentifier()
 		p.errorOnBlanks()
-	case token.INT:
-		sample = p.parseIntegerLiteral()
-	case token.FLOAT:
-		sample = p.parseFloatLiteral()
-	case token.STRING:
-		sample = p.parseStringLiteral()
 	}
-	if sample == nil {
-		return
-	}
-
-	if _, isName := sample.(*ast.Identifier); !isName && !isZeroSample(sample) {
+	switch {
+	case sample == nil:
 		p.errors = append(p.errors, &token.CompileError{
-			Token: sample.Tok(),
+			Token: p.curToken,
 			Msg:   `an empty array's element type is written as a zero value: []0, []0.0 or []""`,
 		})
-		return
-	}
-	key := p.peekToken.TokenTypeWithOp()
-	if !p.peekToken.HadSpace && (key == token.SYM_LBRACK || key == token.SYM_LPAREN || key == token.SYM_PERIOD) {
+	case p.peekAttachedPostfix():
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.peekToken,
 			Msg:   "the sample after [] is a zero value or a variable name",
 		})
-		return
+	default:
+		arr.Sample = sample
 	}
-	arr.Sample = sample
+	p.skipPostfixes()
 }
 
-// isZeroSample reports whether expr is the zero value that names an element
-// type: 0, 0.0 or "".
-func isZeroSample(expr ast.Expression) bool {
-	switch e := expr.(type) {
-	case *ast.IntegerLiteral:
-		return e.Token.Literal == "0"
-	case *ast.FloatLiteral:
-		return e.Token.Literal == "0.0"
-	case *ast.StringLiteral:
-		return e.Token.Literal == ""
+// zeroSample returns the literal for a token holding the zero value that names
+// an element type (0, 0.0 or ""), or nil for any other token.
+func zeroSample(tok token.Token) ast.Expression {
+	switch {
+	case tok.Type == token.INT && tok.Literal == "0":
+		return &ast.IntegerLiteral{Token: tok}
+	case tok.Type == token.FLOAT && tok.Literal == "0.0":
+		return &ast.FloatLiteral{Token: tok}
+	case tok.Type == token.STRING && tok.Literal == "":
+		return &ast.StringLiteral{Token: tok}
 	default:
-		return false
+		return nil
+	}
+}
+
+// peekAttachedPostfix reports whether a call, index or field access is
+// attached to curToken.
+func (p *StmtParser) peekAttachedPostfix() bool {
+	return !p.peekToken.HadSpace && (p.peekTokenIs(token.LPAREN) || p.peekTokenIs(token.LBRACK) || p.peekTokenIs(token.PERIOD))
+}
+
+// skipPostfixes moves curToken past the calls, indexes and field accesses
+// attached to it.
+func (p *StmtParser) skipPostfixes() {
+	for p.peekAttachedPostfix() {
+		p.nextToken()
+		if !p.curTokenIs(token.PERIOD) {
+			p.skipGroup()
+		} else if p.peekTokenIs(token.IDENT) {
+			p.nextToken() // the field name
+		}
+	}
+}
+
+// skipGroup moves curToken from an opening '(' or '[' to its closer. A group
+// left open stops at its line's last token, or before a closer of the other
+// kind such as the ']' of the literal around it.
+func (p *StmtParser) skipGroup() {
+	closer := token.RPAREN
+	if p.curTokenIs(token.LBRACK) {
+		closer = token.RBRACK
+	}
+	for depth := 1; depth > 0 && !p.stmtEnded(); p.nextToken() {
+		switch p.peekToken.Type {
+		case token.LPAREN, token.LBRACK:
+			depth++
+		case token.RPAREN, token.RBRACK:
+			if depth == 1 && !p.peekTokenIs(closer) {
+				return
+			}
+			depth--
+		}
 	}
 }
 
@@ -1291,7 +1325,8 @@ func (p *StmtParser) skipArrayFormatting() {
 
 // parseHeader parses column headers after ':'. A table without data rows
 // types each column with a zero value attached to its name: Name("") Score(0).
-func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
+// untyped reports a header written without a type.
+func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) (untyped, ok bool) {
 	var columnTypes []ast.Expression
 	typed := false
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
@@ -1304,12 +1339,10 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 			p.validateIdentifier(header)
 			arr.Headers = append(arr.Headers, header.Literal)
 			p.nextToken()
-			columnType, ok := p.parseColumnType(header)
-			if !ok {
-				return false
-			}
+			columnType, written := p.parseColumnType(header)
 			columnTypes = append(columnTypes, columnType)
 			typed = typed || columnType != nil
+			untyped = untyped || !written
 			continue
 		}
 
@@ -1318,52 +1351,42 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 			Token: p.curToken,
 			Msg:   fmt.Sprintf("expected identifier for column header, got %s", p.curToken.Type),
 		})
-		return false
+		return false, false
 	}
 	p.errorOnBlanks() // headers cannot be blank
 	if typed {
 		arr.ColumnTypes = columnTypes
 	}
-	return true
+	return untyped, true
 }
 
-// parseColumnType parses the zero value in parentheses attached to a column
-// header, returning nil when the header has none.
-func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) {
+// parseColumnType reads the zero value in parentheses attached to a column
+// header. written reports whether the header has parentheses: a malformed type
+// is reported once and skipped through its ')', so it counts as written but
+// returns nil.
+func (p *StmtParser) parseColumnType(header token.Token) (columnType ast.Expression, written bool) {
 	if !p.curTokenIs(token.LPAREN) {
-		return nil, true
+		return nil, false
 	}
 	name := header.Literal
-	if p.curToken.HadSpace {
+	sample := zeroSample(p.peekToken)
+	switch {
+	case p.curToken.HadSpace:
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   fmt.Sprintf("a column type attaches to its name: %s(0), %s(0.0) or %s(\"\")", name, name, name),
 		})
-		return nil, false
-	}
-
-	p.nextToken() // consume '('
-	var sample ast.Expression
-	switch p.curToken.Type {
-	case token.INT:
-		sample = p.parseIntegerLiteral()
-	case token.FLOAT:
-		sample = p.parseFloatLiteral()
-	case token.STRING:
-		sample = p.parseStringLiteral()
-	}
-	if sample == nil || !isZeroSample(sample) {
+	case sample == nil || p.peekNextToken().Type != token.RPAREN:
 		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
+			Token: p.peekToken,
 			Msg:   fmt.Sprintf("a column's type is written as a zero value: %s(0), %s(0.0) or %s(\"\")", name, name, name),
 		})
-		return nil, false
+	default:
+		columnType = sample
 	}
-	if !p.expectPeek(token.RPAREN) {
-		return nil, false
-	}
-	p.nextToken() // consume ')'
-	return sample, true
+	p.skipGroup()
+	p.nextToken() // step past the group
+	return columnType, true
 }
 
 // parseRow parses a single data row and returns it
