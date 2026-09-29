@@ -286,6 +286,15 @@ res = forwarded(x)
 			input: "a, b = shrink(1)\na, b",
 		},
 		{
+			// A sample needs the output's type, not a value, so a conditional
+			// assignment before it is enough.
+			name: "Output Named As Sample Before Definite Assignment",
+			code: `out, xs = sampled(n)
+    out = n > 0 1
+    xs = []out`,
+			input: "a, b = sampled(1)\na, b",
+		},
+		{
 			// A read string output is solved as owned, so the local copied
 			// from it and the call it feeds use heap storage.
 			name: "Output Read Through Local Into Call",
