@@ -290,12 +290,7 @@ res = sum(a, b)
 
 A body that can leave an output unwritten is rejected at the function
 definition. A call whose arguments cannot fail counts as writing every
-output, since its callee is checked the same way. The one case the text
-cannot decide is a range that reaches the body through a call: after
-`r = Wrap(n)`, where `Wrap` returns its input unchanged, whether
-`out = r * 2` loops depends on whether `n` is a range. The type solver
-decides that per specialization and reports it at the definition, so a
-function nothing calls is not checked for it.
+output, since its callee is checked the same way.
 
 A function that keeps an old value takes it as an input and starts from it:
 
@@ -323,6 +318,24 @@ so `out` keeps `prev`. For an array `x`, it yields a mask and always writes,
 so the default is never read: the compiler drops it in that specialization
 and reports nothing. A statement gate such as `Maybe`'s `out = x > 0 x`
 serves only a scalar `x`, since a statement condition must be a scalar.
+
+The text also decides which values are ranges. A parameter never holds one,
+since a range argument runs the function once per element: `Wrap(1:5)`,
+where `Wrap` returns its input, gives `4`. Whether a function returns a
+range follows from its text, as with `MakeRange` below, and a range that
+arrives through a call counts as possibly empty, so `F` needs its default:
+
+```python
+r = MakeRange(n)
+    r = 0:n
+
+out = F(prev, n)
+    r = MakeRange(n)
+    out = prev
+    out = r * 2
+```
+
+`F(y, 0)` keeps `y`. Without the default, `F` is rejected.
 
 A call therefore either runs and writes every output, or does not run: when
 an argument fails (`m = Double(arr[5])` keeps `m`), when the statement's

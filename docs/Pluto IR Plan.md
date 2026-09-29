@@ -827,8 +827,7 @@ every slot of that call becomes `MayYield` together.
 **Definite outputs (#123, decided; not yet implemented).** Every body that
 runs writes every output. The template-level flow check (CFG consumption,
 below) decides this from the function's text, the same for every argument
-type; only a range that reaches the body through a call is checked per
-specialization. Callee-internal non-writing therefore disappears, and the
+type. Callee-internal non-writing therefore disappears, and the
 transfer rule reduces to `rawYield[i] = invocationYield`. A caller-side
 failure, such as the failed argument in `Id(arr[oob])`, makes every slot skip:
 the commit is skipped and the target stays `MayWrite`. Otherwise every slot
@@ -883,8 +882,7 @@ earlier unconditional one. A boundary `MustWrite` obtained by reading the
 destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
 an earlier value does not prove that the body wrote one. Under #123 this
 precise summary no longer decides whether a template is valid; it stays an
-execution fact for routing, ownership and optimization, and decides only a
-statement whose range arrives through a call. The published
+execution fact for routing, ownership and optimization. The published
 `BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
 `ArrayRange` parameter controls whether
 the scalar body executes, not what the body does when it executes. Each call
@@ -981,12 +979,27 @@ possibly skipped, even where a specialization's types would make it always
 write, as an array mask does. This classification stays separate from the
 solver's effects, which remain precise per specialization for routing,
 ownership and optimization; a specialization may drop a default its precise
-effects prove dead without reporting it. The type solver checks one case per
-specialization: a statement whose range arrives through a call, as in
-`r = Wrap(n)` then `out = r * 2`. This partly reverses Step 2B, which moved
-dead-store and write-after-write checks to specializations, and the
-per-specialization diagnostic cache and replay go with it. The rest of this
-section describes the current design.
+effects prove dead without reporting it.
+
+The pass also reads from the text which values are ranges, and so which
+statements a range drives. A parameter never holds a range, since a range
+argument drives the whole body, and struct fields, constants and array
+elements cannot hold one (`[r]` collects `r`'s values). A value is therefore
+a range only when it is a range literal, a binding whose assigned value is a
+range (`x = r`, not `x = r * 2`), or a call output that its template assigns
+a range. Before checking any body, the pass computes that last fact for
+every template output, iterating to a fixed point across templates that
+call each other: an output assigned `t` after `t = MakeRange(n)` is a range
+as well. A range that arrives through a call counts as possibly empty.
+Every check then uses the same classification, and none waits for a type:
+after `r = MakeRange(n)`, `out = r * 2` does not kill an earlier
+`out = prev`, does not definitely assign `out`, and so cannot by itself make
+a later read of `out` valid. A settled specialization's range types must
+agree with this summary; a disagreement is an ICE rather than a diagnostic.
+
+This partly reverses Step 2B, which moved dead-store and write-after-write
+checks to specializations, and the per-specialization diagnostic cache and
+replay go with it. The rest of this section describes the current design.
 
 `.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
 pass is structural only: explicit use-before-definition, illegal input/global
@@ -1502,8 +1515,12 @@ immediate deletion at the last consumer.
   body that can leave an output unwritten is rejected at the definition;
   `out = x > 0` alone is rejected for every argument type; `out = prev` then
   `out = x > 0` is accepted for scalar and array `x`, and the array
-  specialization drops the dead default without a diagnostic; a range that
-  reaches the body through a call is checked per specialization
+  specialization drops the dead default without a diagnostic; after
+  `r = MakeRange(n)`, `out = prev` then `out = r * 2` is accepted and
+  `F(y, 0)` keeps `y`, while without the default both the body and a read
+  of `out` after `out = r * 2` are rejected; a range passed on through
+  another template's output counts the same; and `y = Helper(x)` then
+  `out = y + 1`, where `Helper` returns a scalar, is a definite write
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures;
   cached specialization CFG diagnostics replay on reuse
