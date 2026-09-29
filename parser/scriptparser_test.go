@@ -1451,6 +1451,12 @@ func TestArrayLiterals(t *testing.T) {
 			errorMsg:    "a table's header goes on its own line after '['",
 		},
 		{
+			name:        "row at the bracket line's indentation",
+			input:       "[1 2\n3 4]",
+			expectError: true,
+			errorMsg:    "expected ']' to close array literal",
+		},
+		{
 			name: "line continuation with unary operators",
 			input: `[a -b \
     -c d]`,
@@ -1481,7 +1487,7 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name:  "second logical row implies block",
-			input: "[1 2\n3 4]",
+			input: "[1 2\n 3 4]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2)
@@ -1588,6 +1594,27 @@ func TestMalformedElementTypeKeepsNextStatement(t *testing.T) {
 			errs := sp.Errors()
 			require.Len(t, errs, 1, "errors: %v", errs)
 			require.Contains(t, errs[0], tt.errorMsg)
+			require.Len(t, program.Statements, 3)
+			require.Equal(t, "after = 7", program.Statements[1].String())
+		})
+	}
+}
+
+// An unclosed literal ends before the first later line that is not indented
+// past the line holding its '[', so the statements there parse on their own.
+func TestUnclosedArrayLiteralKeepsNextStatement(t *testing.T) {
+	for _, input := range []string{
+		"x = [",
+		"x = [1 2",
+		"m = [\n    1 2",
+		"t = [\n  : Name(\"\") Score(0)",
+	} {
+		t.Run(input, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestUnclosedArrayLiteralKeepsNextStatement", input+"\nafter = 7\nafter"))
+			program := sp.Parse()
+			errs := sp.Errors()
+			require.Len(t, errs, 1, "errors: %v", errs)
+			require.Contains(t, errs[0], "expected ']' to close array literal")
 			require.Len(t, program.Statements, 3)
 			require.Equal(t, "after = 7", program.Statements[1].String())
 		})

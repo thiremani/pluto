@@ -107,6 +107,8 @@ type StmtParser struct {
 	// right-side condition must start the value there too.
 	splitMode prefixSplitMode
 
+	indent int // indentation level of curToken's line
+
 	blankIdents []token.Token // tracks blank identifiers during parsing
 }
 
@@ -174,6 +176,12 @@ func New(l *lexer.Lexer) *StmtParser {
 func (p *StmtParser) nextToken() {
 	// always advance current token
 	p.curToken = p.peekToken
+	switch p.curToken.Type {
+	case token.INDENT:
+		p.indent++
+	case token.DEINDENT:
+		p.indent--
+	}
 
 	// get new peek token from queue or lexer
 	if len(p.savedTokens) > 0 {
@@ -1145,20 +1153,14 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 		Rows:    [][]ast.Expression{},
 		Indices: make(map[string][]int),
 	}
+	level := p.indent
 
 	p.nextToken() // consume the '[' token
 	arr.Block = p.curTokenIs(token.NEWLINE)
 
-	for p.curTokenIs(token.NEWLINE) {
-		p.nextToken()
-	}
-
-	// Skip any whitespace/indentation after opening bracket
-	p.skipArrayFormatting()
-
 	// Parse headers if present
 	untyped := false
-	if p.curTokenIs(token.COLON) {
+	if p.skipLiteralBreaks(level) && p.curTokenIs(token.COLON) {
 		headerToken := p.curToken
 		if !arr.Block {
 			p.errors = append(p.errors, &token.CompileError{
@@ -1181,9 +1183,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	}
 
 	// Parse rows
-	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) {
-		p.skipArrayFormatting()
-
+	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && p.skipLiteralBreaks(level) {
 		if p.curTokenIs(token.RBRACK) {
 			break
 		}
@@ -1197,7 +1197,7 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	if !p.curTokenIs(token.RBRACK) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
-			Msg:   "expected ']' to close array literal",
+			Msg:   "expected ']' to close array literal; lines that continue it are indented past its first line",
 		})
 		return nil
 	}
@@ -1210,6 +1210,29 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	// last token; callers (statement parsing) will advance past newline/EOF as
 	// appropriate.
 	return arr
+}
+
+// skipLiteralBreaks moves curToken past the line breaks and indentation inside
+// an array literal whose '[' sits on a line at indentation level. It returns
+// false, before moving onto the next line, when that line is not indented past
+// level and does not start with the closing ']': the literal was left open,
+// and the line belongs to what follows it.
+func (p *StmtParser) skipLiteralBreaks(level int) bool {
+	for p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.INDENT) || p.curTokenIs(token.DEINDENT) {
+		switch p.peekToken.Type {
+		case token.NEWLINE, token.INDENT:
+		case token.DEINDENT:
+			if p.indent <= level {
+				return false
+			}
+		default:
+			if p.indent <= level && !p.peekTokenIs(token.RBRACK) {
+				return false
+			}
+		}
+		p.nextToken()
+	}
+	return true
 }
 
 // typeEmptyLiteral requires a literal without rows to state its element

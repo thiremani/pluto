@@ -266,6 +266,8 @@ it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Use `\` to continue a long inline array across physical
 lines without starting block layout. Array-valued cells stack recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
+Every line after a literal's first is indented past the line holding its `[`,
+except a line that starts with the closing `]`.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The header goes on its own line after `[`.

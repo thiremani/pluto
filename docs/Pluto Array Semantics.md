@@ -70,6 +70,11 @@ matrix = [1 2
           3 4]
 ```
 
+Every line after a literal's first is indented past the line holding its `[`,
+except a line that starts with the closing `]`. A literal left open therefore
+ends at the first line that returns to that indentation: the missing `]` is
+reported there, and that line parses as the next statement.
+
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
 
