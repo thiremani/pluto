@@ -988,11 +988,14 @@ statements a range drives. A parameter never holds a range, since a range
 argument drives the whole body, and struct fields, constants and array
 elements cannot hold one (`[r]` collects `r`'s values). A value is therefore
 a range only when it is a range literal, a binding whose assigned value is a
-range (`x = r`, not `x = r * 2`), or a call output that its template assigns
-a range. Before checking any body, the pass computes that last fact for
-every template output, iterating to a fixed point across templates that
-call each other: an output assigned `t` after `t = MakeRange(n)` is a range
-as well. A range that arrives through a call counts as possibly empty.
+range (`x = r`, not `x = r * 2`), a `||` or value-position `&&` that yields
+a range (`MakeRange(n > 0) || MakeRange(3)` forwards whichever alternative
+succeeds, and `c > 0 && MakeRange(3)` its right operand), or a call output
+that its template assigns a range. Before checking any body, the pass
+computes that last fact for every template output, iterating to a fixed
+point across templates that call each other: an output assigned `t` after
+`t = MakeRange(n)` is a range as well. A range that arrives through a call
+counts as possibly empty.
 Every check then uses the same classification, and none waits for a type:
 after `r = MakeRange(n)`, `out = r * 2` does not kill an earlier
 `out = prev`, does not definitely assign `out`, and so cannot by itself make
@@ -1525,7 +1528,9 @@ immediate deletion at the last consumer.
   `r = MakeRange(n)`, `out = prev` then `out = r * 2` is accepted and
   `F(y, 0)` keeps `y`, while without the default both the body and a read
   of `out` after `out = r * 2` are rejected; a range passed on through
-  another template's output counts the same; and `y = Helper(x)` then
+  another template's output, or forwarded by `||` or value-position `&&` as
+  in `r = MakeRange(n > 0) || MakeRange(3)`, counts the same; and
+  `y = Helper(x)` then
   `out = y + 1`, where `Helper` returns a scalar, is a definite write
 - summaries are rebuilt per specialization walk and published only on
   `Settled`; transitive effects reach a fixed point across recursive closures
