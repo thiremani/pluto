@@ -19,13 +19,11 @@ const (
 	ConditionalWrite           // A write that is part of a conditional
 )
 
-// VarEvent records a single read or write of Name. A TypeOnly read names the
-// binding for its type, as an array sample does, without reading its value.
+// VarEvent records a single read or write of Name.
 type VarEvent struct {
-	Name     string
-	Kind     EventType
-	Token    token.Token
-	TypeOnly bool
+	Name  string
+	Kind  EventType
+	Token token.Token
 }
 
 // StmtNode wraps a single AST statement plus its read/write events.
@@ -89,9 +87,11 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	for _, child := range children {
 		reads = append(reads, cfg.collectReads(child)...)
 	}
+	// A sample is typed but never evaluated, so it is not a child; it still
+	// names its variable, as a read does.
 	if lit, ok := expr.(*ast.ArrayLiteral); ok {
 		if name, isName := lit.Sample.(*ast.Identifier); isName {
-			reads = append(reads, VarEvent{Name: name.Value, Kind: Read, Token: name.Tok(), TypeOnly: true})
+			reads = append(reads, VarEvent{Name: name.Value, Kind: Read, Token: name.Tok()})
 		}
 	}
 
@@ -351,7 +351,7 @@ func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, ou
 
 func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, definitelyAssigned map[string]struct{}) {
 	for _, read := range reads {
-		if _, isOutput := outputs[read.Name]; !isOutput || read.TypeOnly {
+		if _, isOutput := outputs[read.Name]; !isOutput {
 			continue
 		}
 		if _, ok := definitelyAssigned[read.Name]; !ok {

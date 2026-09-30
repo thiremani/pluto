@@ -278,12 +278,12 @@ res = sum(a, b)
   not cover every case, since both fail for a NaN. A range with literal
   bounds that is not empty always runs.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
-  call argument, a print, or a formatting marker) only after it is
-  definitely assigned, judged from the text as above. A read before that is a
-  compile error: before any assignment, or in the same simultaneous
-  assignment. A later conditional write does not revoke the assignment. An
-  output the body reads is solved at owned storage (a static string output
-  becomes a heap string) and must have a concrete type.
+  call argument, a print, a formatting marker, or an empty array's sample)
+  only after it is definitely assigned, judged from the text as above. A read
+  before that is a compile error: before any assignment, or in the same
+  simultaneous assignment. A later conditional write does not revoke the
+  assignment. An output the body reads is solved at owned storage (a static
+  string output becomes a heap string) and must have a concrete type.
 - **No name overlap**: Parameters and outputs must have distinct names.
   Sharing is decided only at the call site: a header never names a parameter
   after an output, so `out = Maybe(out, x)` is not a valid definition.

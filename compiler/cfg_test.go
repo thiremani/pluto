@@ -286,11 +286,10 @@ res = forwarded(x)
 			input: "a, b = shrink(1)\na, b",
 		},
 		{
-			// A sample needs the output's type, not a value, so a conditional
-			// assignment before it is enough.
-			name: "Output Named As Sample Before Definite Assignment",
+			// A sample reads its output, so a definite assignment comes first.
+			name: "Output Named As Sample After Definite Assignment",
 			code: `out, xs = sampled(n)
-    out = n > 0 1
+    out = n
     xs = []out`,
 			input: "a, b = sampled(1)\na, b",
 		},
@@ -515,6 +514,16 @@ res = twice(x)
     res = x`,
 			input:         "x = marked(3)\nx",
 			errorContains: `output "res" is read before it is assigned`,
+		},
+		{
+			// A sample names its output for the type alone, but it is still a
+			// read, so a conditional assignment before it is not enough.
+			name: "Output Named As Sample Before Definite Assignment",
+			code: `out, xs = sampled(n)
+    out = n > 0 1
+    xs = []out`,
+			input:         "a, b = sampled(1)\na, b",
+			errorContains: `output "out" is read where it may still be unassigned`,
 		},
 		{
 			// Reads in a simultaneous assignment precede its writes.
