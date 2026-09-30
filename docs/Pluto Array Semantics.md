@@ -21,7 +21,7 @@ dimension lengths beside that buffer; rows are not separately allocated.
 - An empty array states its element type; see [Empty arrays](#empty-arrays).
 - `[1 2 3]` is a rank-1 `[I64]` value.
 - A one-row inline literal contributes one array axis.
-- Two or more unescaped logical rows imply block layout.
+- Two or more rows imply block layout.
 - A block literal contributes row and column axes even when it contains only
   one row. A newline immediately after `[` explicitly selects that layout.
 - Equal-shaped array-valued cells stack recursively into higher ranks.
@@ -56,14 +56,9 @@ row = [[]0]     # one empty row: shape [1 0], not an empty matrix
 A zero-row matrix keeps no column count: concatenation takes the other
 operand's inner shape.
 
-A long rank-1 literal remains inline by escaping its physical newline:
-
-```pluto
-values = [1 2 3 4 5 \
-          6 7 8 9 10]
-```
-
-Without the `\`, a second logical row selects block layout:
+A rank-1 literal stays on one line, however long; an editor can wrap it for
+display. Pluto has no line continuation character, so a row ends with its
+line, and a second row selects block layout:
 
 ```pluto
 matrix = [1 2
@@ -72,7 +67,7 @@ matrix = [1 2
 
 Lines inside an open bracket have no indentation of their own. A line
 continues the bracket when it is indented past the line where the bracket
-opened, starts with a closing bracket, or follows a `\`. Any other line closes
+opened or starts with a closing bracket. Any other line closes
 each bracket it cannot continue: the bracket is reported as never closed, and
 the line parses as the next statement. A statement may also break after its
 `=`: the next line continues it at any indentation.
@@ -147,8 +142,9 @@ than flattened when used as cells.
 
 Multiple scalar rows with homogeneous but different column types infer an
 unnamed table. A header always produces a table and must contain at least one
-column name. The header goes on its own line after `[`. Headerless literals
-start directly with their first data row.
+column name. The header goes on its own line after `[`, and like each data
+row it fits on that one line. Headerless literals start directly with their
+first data row.
 
 The preferred layout outdents the `:` marker so the first header and first
 value begin in the same column. Spacing within header and data rows is

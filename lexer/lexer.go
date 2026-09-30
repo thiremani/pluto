@@ -18,7 +18,7 @@ type Lexer struct {
 	lineOffset   int   // line number
 	column       int   // column number in the line
 	onNewline    bool  // at beginning of new line
-	joinNext     bool  // a '\' or '=' ended a line: later lines join it until a token arrives
+	joinNext     bool  // a line ended in '=': later lines join it until a token arrives
 	indentStack  []int // indentation level stack
 	toDeindent   int   // number of deindent tokens to be emitted before we continue with current token
 
@@ -44,9 +44,10 @@ const (
 )
 
 const (
-	INDENT_ERR       = "indentation error"
-	INDENT_TAB_ERR   = "indent using tabs not allowed"
-	NEVER_CLOSED_ERR = "is never closed; its later lines are indented past this line"
+	INDENT_ERR          = "indentation error"
+	INDENT_TAB_ERR      = "indent using tabs not allowed"
+	NEVER_CLOSED_ERR    = "is never closed; its later lines are indented past this line"
+	NO_CONTINUATION_ERR = "Pluto has no line continuation, so write the row, header or expression on one line"
 )
 
 func New(fileName, input string) *Lexer {
@@ -78,10 +79,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	// A line whose last token is '=' or '\' joins the next, whatever spaces or
-	// comment follow it: the parser tests for a line break token the same way.
+	// A line whose last token is '=' joins the next, whatever spaces or comment
+	// follow it.
 	if tok.Type != token.NEWLINE {
-		l.joinNext = tok.Type == token.ASSIGN || tok.Type == token.BACKSLASH
+		l.joinNext = tok.Type == token.ASSIGN
 	}
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
@@ -205,7 +206,11 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
 		l.onNewline = !l.joinNext
 	case '\\':
-		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
+		tok = l.createToken(token.ILLEGAL, `\`, hadSpace)
+		err = &token.CompileError{
+			Token: tok,
+			Msg:   `Illegal character '\': ` + NO_CONTINUATION_ERR,
+		}
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
@@ -465,7 +470,7 @@ func (l *Lexer) newLine() {
 }
 
 // lineIndent returns the indentation column of the physical line being read,
-// however that line began: after a '\', after '=', or inside a string.
+// however that line began: after '=' or inside a string.
 func (l *Lexer) lineIndent() int {
 	column := 1
 	for i := l.lineStart; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {
@@ -839,7 +844,7 @@ func IsOperator(ch rune) bool {
 		// For ASCII, explicitly list allowed operator characters.
 		switch ch {
 		// Exclude '=' because it's used for assignment or comparisons.
-		case '+', '-', '*', '/', '%', '!', '&', '|', '^', '~', '?', '@', '$', '\\':
+		case '+', '-', '*', '/', '%', '!', '&', '|', '^', '~', '?', '@', '$':
 			return true
 		default:
 			return false

@@ -579,10 +579,6 @@ func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
 	seen := make(map[string]struct{})
 
 	for !p.curTokenIs(token.NEWLINE) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
-		if p.skipLineContinuation() {
-			continue
-		}
-
 		if !p.curTokenIs(token.IDENT) {
 			p.errors = append(p.errors, &token.CompileError{
 				Token: p.curToken,
@@ -1300,10 +1296,6 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 	var columnTypes []ast.Expression
 	typed := false
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
-		if p.skipLineContinuation() {
-			continue
-		}
-
 		if p.curTokenIs(token.IDENT) {
 			header := p.curToken
 			p.validateIdentifier(header)
@@ -1377,10 +1369,6 @@ func (p *StmtParser) parseRow() []ast.Expression {
 
 	// Parse elements in this row until newline or ']'
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
-		if p.skipLineContinuation() {
-			continue
-		}
-
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
 		if expr != nil {
 			row = append(row, expr)
@@ -1686,21 +1674,6 @@ func (p *StmtParser) validateIdentifier(tok token.Token) {
 			Msg:   "identifier cannot end with '_'",
 		})
 	}
-}
-
-// skipLineContinuation consumes a backslash that ends a line, with the line
-// breaks of any blank or comment lines after it, and reports whether it found
-// one. The lexer gives continued lines no indentation tokens.
-func (p *StmtParser) skipLineContinuation() bool {
-	if !p.curTokenIs(token.BACKSLASH) || !p.peekTokenIs(token.NEWLINE) {
-		return false
-	}
-	p.nextToken()
-	for p.peekTokenIs(token.NEWLINE) {
-		p.nextToken()
-	}
-	p.nextToken()
-	return true
 }
 
 // errorOnBlanks converts tracked blank identifiers to errors and clears the list.

@@ -576,8 +576,8 @@ func TestReadOperator(t *testing.T) {
 		{"++", "++"},
 		// Mixed operators.
 		{"+-*/", "+-*/"},
-		// Operators with additional allowed punctuation (including colon and dollar and backslash).
-		{"@$\\", "@$\\"},
+		// Operators with additional allowed punctuation; a backslash is not one.
+		{"@$\\", "@$"},
 		// Operator followed by a letter should stop reading at the first non-operator.
 		{"++abc", "++"},
 		// Non-ASCII operator characters are allowed if they fall into allowed Unicode categories.
@@ -898,45 +898,17 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a backslash line continues at any indentation", func(t *testing.T) {
-		checkInput(t, "x = [1 \\\n2]", []Test{
+	t.Run("a backslash is an illegal character", func(t *testing.T) {
+		checkInput(t, "x = [1 \\\n    2]", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.LBRACK, "[", "", 1, 5},
 			{token.INT, "1", "", 1, 6},
-			{token.BACKSLASH, "\\", "", 1, 8},
+			{token.ILLEGAL, "\\", "1:8:Illegal character '\\': " + NO_CONTINUATION_ERR, 1, 8},
 			{token.NEWLINE, "\n", "", 1, 9},
-			{token.INT, "2", "", 2, 1},
-			{token.RBRACK, "]", "", 2, 2},
-			{token.EOF, "", "", 2, 3},
-		})
-	})
-
-	t.Run("a backslash continues the line past a comment", func(t *testing.T) {
-		checkInput(t, "x = [1 \\ # note\n2]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.BACKSLASH, "\\", "", 1, 8},
-			{token.NEWLINE, "\n", "", 1, 16},
-			{token.INT, "2", "", 2, 1},
-			{token.RBRACK, "]", "", 2, 2},
-			{token.EOF, "", "", 2, 3},
-		})
-	})
-
-	t.Run("a backslash continues the line past trailing spaces", func(t *testing.T) {
-		checkInput(t, "x = [1 \\  \n2]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.BACKSLASH, "\\", "", 1, 8},
-			{token.NEWLINE, "\n", "", 1, 11},
-			{token.INT, "2", "", 2, 1},
-			{token.RBRACK, "]", "", 2, 2},
-			{token.EOF, "", "", 2, 3},
+			{token.INT, "2", "", 2, 5},
+			{token.RBRACK, "]", "", 2, 6},
+			{token.EOF, "", "", 2, 7},
 		})
 	})
 
@@ -971,28 +943,6 @@ func TestBracketLayout(t *testing.T) {
 			{token.NEWLINE, "\n", "", 5, 2},
 			{token.IDENT, "z", "", 6, 5},
 			{token.EOF, "", "", 6, 6},
-		})
-	})
-
-	t.Run("a bracket after a backslash takes its own line's indentation", func(t *testing.T) {
-		checkInput(t, "f\n    out = n + \\\n[1\n 2]\n    z", []Test{
-			{token.IDENT, "f", "", 1, 1},
-			{token.NEWLINE, "\n", "", 1, 2},
-			{token.INDENT, "o", "", 2, 5},
-			{token.IDENT, "out", "", 2, 5},
-			{token.ASSIGN, "=", "", 2, 9},
-			{token.IDENT, "n", "", 2, 11},
-			{token.OPERATOR, "+", "", 2, 13},
-			{token.BACKSLASH, "\\", "", 2, 15},
-			{token.NEWLINE, "\n", "", 2, 16},
-			{token.LBRACK, "[", "", 3, 1},
-			{token.INT, "1", "", 3, 2},
-			{token.NEWLINE, "\n", "", 3, 3},
-			{token.INT, "2", "", 4, 2},
-			{token.RBRACK, "]", "", 4, 3},
-			{token.NEWLINE, "\n", "", 4, 4},
-			{token.IDENT, "z", "", 5, 5},
-			{token.EOF, "", "", 5, 6},
 		})
 	})
 
@@ -1064,17 +1014,16 @@ func TestBracketLayout(t *testing.T) {
 	})
 }
 
-func TestLineContinuation(t *testing.T) {
-	// A trailing backslash continues the line for every ending style, with
-	// an identical token stream, positions included.
+func TestLineBreakInsideBrackets(t *testing.T) {
+	// A line break inside brackets gives the same token stream for every
+	// ending style, positions included.
 	expected := []Test{
 		{token.IDENT, "arr", "", 1, 1},
 		{token.ASSIGN, "=", "", 1, 5},
 		{token.LBRACK, "[", "", 1, 7},
 		{token.FLOAT, "1.1", "", 1, 8},
 		{token.FLOAT, "2.3", "", 1, 12},
-		{token.BACKSLASH, "\\", "", 1, 16},
-		{token.NEWLINE, "\n", "", 1, 17},
+		{token.NEWLINE, "\n", "", 1, 15},
 		{token.INT, "4", "", 2, 5},
 		{token.FLOAT, "2.1", "", 2, 7},
 		{token.RBRACK, "]", "", 2, 10},
@@ -1092,7 +1041,7 @@ func TestLineContinuation(t *testing.T) {
 	}
 	for _, tc := range endings {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "arr = [1.1 2.3 \\" + tc.ending + "    4 2.1]" + tc.ending + "arr"
+			src := "arr = [1.1 2.3" + tc.ending + "    4 2.1]" + tc.ending + "arr"
 			checkInput(t, src, expected)
 		})
 	}

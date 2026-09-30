@@ -263,7 +263,6 @@ func TestBracketLayoutInBody(t *testing.T) {
 		{"literal continued on an indented line", "    y = [1 2\n         3 4]\n"},
 		{"closing line left of its bracket", "    y = [\n        x\n]\n"},
 		{"bracket on the line after =", "    y =\n[\n  x\n]\n"},
-		{"bracket on a line after a backslash", "    y = [x \\\n[1\n 2]]\n"},
 		{"bracket on a multi-line string's last line", "    y = f(\"a\nb\", [1\n 2])\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -277,12 +276,13 @@ func TestBracketLayoutInBody(t *testing.T) {
 	}
 }
 
-func TestStructHeaderContinuationAcrossBlankLines(t *testing.T) {
-	input := "p = Person\n  : name \\\n\n    # note\n    age\n    \"Ada\" 36\n"
-	p := NewCodeParser(lexer.New("TestStructHeaderContinuationAcrossBlankLines", input))
-	code := p.Parse()
-	require.Empty(t, p.Errors())
-	require.Len(t, code.Statements, 1)
+// A struct header goes on one line: a backslash in it is an illegal character.
+func TestStructHeaderBackslashIsIllegal(t *testing.T) {
+	input := "p = Person\n  : name \\\n    age\n    \"Ada\" 36\n"
+	p := NewCodeParser(lexer.New("TestStructHeaderBackslashIsIllegal", input))
+	p.Parse()
+	require.NotEmpty(t, p.Errors())
+	require.Equal(t, "TestStructHeaderBackslashIsIllegal:2:10:Illegal character '\\': "+lexer.NO_CONTINUATION_ERR, p.Errors()[0])
 }
 
 func TestUnclosedLiteralInBody(t *testing.T) {

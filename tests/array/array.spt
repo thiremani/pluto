@@ -28,9 +28,8 @@ arr2 = [1 2 3 4]
 arr2
 "arr2 is -arr2"
 
-# line continuation keeps an inline literal rank 1
-arr3 = [1.1 2.3 \
-    4 2.1]
+# an integer cell widens to float beside float cells
+arr3 = [1.1 2.3 4 2.1]
 arr3
 "arr3 is -arr3"
 
