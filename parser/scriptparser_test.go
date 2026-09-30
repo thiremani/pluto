@@ -1545,9 +1545,10 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 	}
 }
 
-// A backslash continues a table header or a row across blank and comment
-// lines, the same way in both.
-func TestLineContinuationAcrossBlankLines(t *testing.T) {
+// A backslash continues a table header or a row at any indentation, past
+// spaces or a comment after it and across blank and comment lines, the same
+// way in both.
+func TestLineContinuation(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		input  string
@@ -1555,10 +1556,13 @@ func TestLineContinuationAcrossBlankLines(t *testing.T) {
 	}{
 		{"header after a blank line", "t = [\n  : A(0) \\\n\n    B(0)\n]", "t = [\n  : A(0) B(0)\n]"},
 		{"header after a comment line", "t = [\n  : A(0) \\\n    # note\n    B(0)\n]", "t = [\n  : A(0) B(0)\n]"},
+		{"header after a comment on the backslash line", "t = [\n  : A(0) \\ # note\nB(0)\n]", "t = [\n  : A(0) B(0)\n]"},
 		{"row after a blank and a comment line", "x = [1 2 \\\n\n    # note\n    3 4]", "x = [1 2 3 4]"},
+		{"row after a comment on the backslash line", "x = [1 2 \\ # note\n3 4]", "x = [1 2 3 4]"},
+		{"row after trailing spaces on the backslash line", "x = [1 2 \\  \n3 4]", "x = [1 2 3 4]"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestLineContinuationAcrossBlankLines", tt.input))
+			sp := NewScriptParser(lexer.New("TestLineContinuation", tt.input))
 			program := sp.Parse()
 			require.Empty(t, sp.Errors())
 			require.Len(t, program.Statements, 1)

@@ -78,8 +78,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	if tok.Type != token.NEWLINE && tok.Type != token.BACKSLASH {
-		l.joinNext = tok.Type == token.ASSIGN
+	// A line whose last token is '=' or '\' joins the next, whatever spaces or
+	// comment follow it: the parser tests for a line break token the same way.
+	if tok.Type != token.NEWLINE {
+		l.joinNext = tok.Type == token.ASSIGN || tok.Type == token.BACKSLASH
 	}
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
@@ -204,7 +206,6 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 		l.onNewline = !l.joinNext
 	case '\\':
 		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
-		l.joinNext = l.peekRune() == '\n'
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()

@@ -912,6 +912,34 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a backslash continues the line past a comment", func(t *testing.T) {
+		checkInput(t, "x = [1 \\ # note\n2]", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.BACKSLASH, "\\", "", 1, 8},
+			{token.NEWLINE, "\n", "", 1, 16},
+			{token.INT, "2", "", 2, 1},
+			{token.RBRACK, "]", "", 2, 2},
+			{token.EOF, "", "", 2, 3},
+		})
+	})
+
+	t.Run("a backslash continues the line past trailing spaces", func(t *testing.T) {
+		checkInput(t, "x = [1 \\  \n2]", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.BACKSLASH, "\\", "", 1, 8},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INT, "2", "", 2, 1},
+			{token.RBRACK, "]", "", 2, 2},
+			{token.EOF, "", "", 2, 3},
+		})
+	})
+
 	t.Run("a line ending in = continues on the next line", func(t *testing.T) {
 		checkInput(t, "x =\n    [1 2]\ny", []Test{
 			{token.IDENT, "x", "", 1, 1},
