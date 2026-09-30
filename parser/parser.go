@@ -1153,6 +1153,12 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	// Parse headers if present
 	if p.curTokenIs(token.COLON) {
 		headerToken := p.curToken
+		if !arr.Block {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: headerToken,
+				Msg:   "a table's header goes on its own line after '['",
+			})
+		}
 		p.nextToken() // consume ':'
 		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
 			p.errors = append(p.errors, &token.CompileError{

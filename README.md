@@ -271,7 +271,8 @@ the line where its bracket opened, unless it starts with a closing bracket or
 follows a `\`.
 
 A header row produces a columnar table, with named columns projected as arrays
-such as `scores.Score`. The shown hanging `:` is the preferred layout because
+such as `scores.Score`. The header goes on its own line after `[`.
+The shown hanging `:` is the preferred layout because
 the first header aligns with the first value; spacing within header and data
 rows is otherwise non-semantic.
 

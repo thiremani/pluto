@@ -1412,15 +1412,21 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name:        "invalid header token",
-			input:       "[: 123 Product]",
+			input:       "[\n  : 123 Product\n]",
 			expectError: true,
 			errorMsg:    "expected identifier for column header",
 		},
 		{
 			name:        "header marker without columns",
-			input:       "[:\n]",
+			input:       "[\n  :\n]",
 			expectError: true,
 			errorMsg:    "expected at least one column header after ':'",
+		},
+		{
+			name:        "header on the bracket's line",
+			input:       "[ : Name(\"\") Score(0) ]",
+			expectError: true,
+			errorMsg:    "a table's header goes on its own line after '['",
 		},
 		{
 			name: "line continuation with unary operators",
