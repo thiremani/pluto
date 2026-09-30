@@ -1286,6 +1286,11 @@ func TestArrayLiterals(t *testing.T) {
 			input:       "[\n  : Name(\"\") Score\n]",
 			expectError: true,
 			errorMsg:    "a table without rows needs a type on every column",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Len(t, arr.ColumnTypes, 2)
+				require.Nil(t, arr.ColumnTypes[1])
+				require.Equal(t, "[\n  : Name(\"\") Score\n]", arr.String())
+			},
 		},
 		{
 			name:        "nonzero column type",
@@ -1367,6 +1372,8 @@ func TestArrayLiterals(t *testing.T) {
 				require.True(t, testStringLiteral(t, arr.Rows[1][0], "Tuesday"))
 				require.True(t, testStringLiteral(t, arr.Rows[1][1], "Laptop"))
 				require.True(t, testIntegerLiteral(t, arr.Rows[1][2], 300))
+
+				require.Equal(t, "[\n  : Day Product Price\n    \"Monday\" \"Phone\" 200\n    \"Tuesday\" \"Laptop\" 300\n]", arr.String())
 			},
 		},
 		{
@@ -1472,10 +1479,12 @@ func TestArrayLiterals(t *testing.T) {
 			if tt.expectError {
 				require.NotEmpty(t, sp.Errors(), "expected parser errors for input %q", tt.input)
 				require.Contains(t, sp.Errors()[0], tt.errorMsg, "error message mismatch")
-				return
+				if tt.checkResult == nil {
+					return
+				}
+			} else {
+				require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
 			}
-
-			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
 
 			stmt := requireOnlyPrintStmt(t, program)
 			require.Len(t, stmt.Expression.Arguments, 1, "expected one expression in print statement")
