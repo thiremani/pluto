@@ -266,6 +266,9 @@ it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Use `\` to continue a long inline array across physical
 lines without starting block layout. Array-valued cells stack recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
+Lines inside brackets have no indentation of their own: each is indented past
+the line where its bracket opened, unless it starts with a closing bracket or
+follows a `\`.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The shown hanging `:` is the preferred layout because

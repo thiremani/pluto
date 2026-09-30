@@ -34,6 +34,11 @@ arr3 = [1.1 2.3 \
 arr3
 "arr3 is -arr3"
 
+# a row continued on an indented line keeps the next statement separate
+arr4 = [1 2
+        3 4]
+"arr4 is -arr4"
+
 oneRowMatrix = [
     1 2 3
 ]

@@ -70,6 +70,13 @@ matrix = [1 2
           3 4]
 ```
 
+Lines inside an open bracket have no indentation of their own. A line
+continues the bracket when it is indented past the line where the bracket
+opened, starts with a closing bracket, or follows a `\`. Any other line closes
+each bracket it cannot continue: the bracket is reported as never closed, and
+the line parses as the next statement. A statement may also break after its
+`=`: the next line continues it at any indentation.
+
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
 

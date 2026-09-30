@@ -252,6 +252,42 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	}, p.Errors())
 }
 
+// A literal inside a function body keeps the body's block structure, however
+// its lines are indented.
+func TestBracketLayoutInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{"closing line across dedents", "    y = [\n      [\n        x\n    ]]\n"},
+		{"literal continued on an indented line", "    y = [1 2\n         3 4]\n"},
+		{"closing line left of its bracket", "    y = [\n        x\n]\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestBracketLayoutInBody", input))
+			code := p.Parse()
+			require.Empty(t, p.Errors())
+			require.Len(t, code.Statements, 2)
+			require.Len(t, code.Statements[0].(*ast.FuncStatement).Body.Statements, 2)
+		})
+	}
+}
+
+func TestUnclosedLiteralInBody(t *testing.T) {
+	input := `y = F(x)
+    y = [x
+    y = y
+z = G(x)
+    z = x
+`
+	p := NewCodeParser(lexer.New("TestUnclosedLiteralInBody", input))
+	p.Parse()
+	require.Equal(t, []string{
+		"TestUnclosedLiteralInBody:2:9:'[' is never closed; its later lines are indented past this line",
+	}, p.Errors())
+}
+
 func TestFuncStatementParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)
     y = 1

@@ -1402,7 +1402,13 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "missing closing bracket",
 			input:       "[1 2 3",
 			expectError: true,
-			errorMsg:    "expected ']' to close array literal",
+			errorMsg:    "'[' is never closed",
+		},
+		{
+			name:        "row at the bracket line's indentation",
+			input:       "[1 2\n3 4]",
+			expectError: true,
+			errorMsg:    "'[' is never closed",
 		},
 		{
 			name:        "invalid header token",
@@ -1447,7 +1453,7 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name:  "second logical row implies block",
-			input: "[1 2\n3 4]",
+			input: "[1 2\n 3 4]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2)
@@ -1494,6 +1500,40 @@ func TestArrayLiterals(t *testing.T) {
 			if tt.checkResult != nil {
 				tt.checkResult(t, arr)
 			}
+		})
+	}
+}
+
+// Lines inside brackets have no indentation of their own, and a line that
+// cannot continue a bracket closes it, so the statements after a literal keep
+// their structure.
+func TestBracketLayoutKeepsStatements(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		input     string
+		expErrors []string
+	}{
+		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
+		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
+		{"right side on the line after =", "x =\n    [1 2]", nil},
+		{"unclosed nested literals", "x = [\n  [1 2", []string{
+			"TestBracketLayoutKeepsStatements:2:3:'[' is never closed; its later lines are indented past this line",
+			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
+		}},
+		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{
+			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
+		}},
+		{"unclosed call", "x = f(1", []string{
+			"TestBracketLayoutKeepsStatements:1:6:'(' is never closed; its later lines are indented past this line",
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestBracketLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
+			program := sp.Parse()
+			require.Equal(t, tt.expErrors, sp.Errors())
+			require.Len(t, program.Statements, 3)
+			require.Equal(t, "after = 7", program.Statements[1].String())
+			require.Equal(t, "after", program.Statements[2].String())
 		})
 	}
 }
