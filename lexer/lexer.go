@@ -10,22 +10,21 @@ import (
 )
 
 type Lexer struct {
-	FileName      string
-	input         []rune
-	position      int   // current position in input (points to current rune)
-	readPosition  int   // current reading position in input (after current rune)
-	curr          rune  // current rune under examination
-	lineOffset    int   // line number
-	column        int   // column number in the line
-	onNewline     bool  // at beginning of new line
-	continuedLine bool  // preceding backslash suppresses indentation on the next physical line
-	indentStack   []int // indentation level stack
-	toDeindent    int   // number of deindent tokens to be emitted before we continue with current token
+	FileName     string
+	input        []rune
+	position     int   // current position in input (points to current rune)
+	readPosition int   // current reading position in input (after current rune)
+	curr         rune  // current rune under examination
+	lineOffset   int   // line number
+	column       int   // column number in the line
+	onNewline    bool  // at beginning of new line
+	joinNext     bool  // a '\' or '=' ended a line: later lines join it until a token arrives
+	indentStack  []int // indentation level stack
+	toDeindent   int   // number of deindent tokens to be emitted before we continue with current token
 
-	lineStart int             // raw index where the physical line being read starts
-	brackets  []openBracket   // brackets still open, innermost last
-	pending   []lexed         // implicit closers and the token they precede
-	lastType  token.TokenType // type of the last token returned
+	lineStart int           // raw index where the physical line being read starts
+	brackets  []openBracket // brackets still open, innermost last
+	pending   []lexed       // implicit closers and the token they precede
 }
 
 // openBracket is a '(' or '[' waiting for its closer, with the indentation of
@@ -79,7 +78,9 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	l.lastType = tok.Type
+	if tok.Type != token.NEWLINE && tok.Type != token.BACKSLASH {
+		l.joinNext = tok.Type == token.ASSIGN
+	}
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
 		l.brackets = append(l.brackets, openBracket{opener: tok, indent: l.lineIndent()})
@@ -200,12 +201,10 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		// A line ending in '=' continues on the next line, as after '\'.
-		l.onNewline = !l.continuedLine && l.lastType != token.ASSIGN
-		l.continuedLine = false
+		l.onNewline = !l.joinNext
 	case '\\':
 		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
-		l.continuedLine = l.peekRune() == '\n'
+		l.joinNext = l.peekRune() == '\n'
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()

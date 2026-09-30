@@ -1005,6 +1005,23 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a continuation after = lasts through blank and comment lines", func(t *testing.T) {
+		checkInput(t, "x =\n    # note\n\n    [1 2]\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.NEWLINE, "\n", "", 1, 4},
+			{token.NEWLINE, "\n", "", 2, 11},
+			{token.NEWLINE, "\n", "", 3, 1},
+			{token.LBRACK, "[", "", 4, 5},
+			{token.INT, "1", "", 4, 6},
+			{token.INT, "2", "", 4, 8},
+			{token.RBRACK, "]", "", 4, 9},
+			{token.NEWLINE, "\n", "", 4, 10},
+			{token.IDENT, "y", "", 5, 1},
+			{token.EOF, "", "", 5, 2},
+		})
+	})
+
 	t.Run("blank and comment lines inside brackets", func(t *testing.T) {
 		checkInput(t, "x = [\n\n    # note\n    1\n]", []Test{
 			{token.IDENT, "x", "", 1, 1},

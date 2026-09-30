@@ -1522,6 +1522,7 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
 		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
 		{"right side on the line after =", "x =\n    [1 2]", nil},
+		{"right side after a comment line", "x =\n    # explanation\n    [1 2]", nil},
 		{"unclosed nested literals", "x = [\n  [1 2", []string{
 			"TestBracketLayoutKeepsStatements:2:3:'[' is never closed; its later lines are indented past this line",
 			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
