@@ -686,6 +686,10 @@ root2`
 			{token.IDENT, "pass", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 9},
 			{token.ILLEGAL, "p", "3:3:" + INDENT_ERR + ". At char: p", 3, 3},
+			{token.IDENT, "print", "", 3, 3},
+			{token.LPAREN, "(", "", 3, 8},
+			{token.RPAREN, ")", "", 3, 9},
+			{token.EOF, "", "", 3, 10},
 		}
 		checkInput(t, src, expected)
 	})
@@ -787,6 +791,8 @@ print()`
 			{token.IDENT, "bar", "", 4, 5},
 			{token.NEWLINE, "\n", "", 4, 8},
 			{token.ILLEGAL, "b", "5:3:" + INDENT_ERR + ". At char: b", 5, 3},
+			{token.IDENT, "baz", "", 5, 3},
+			{token.EOF, "", "", 5, 6},
 		}
 		checkInput(t, src, expected)
 	})

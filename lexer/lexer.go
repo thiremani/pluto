@@ -322,6 +322,8 @@ func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
 	indent, err := l.indentLevel()
 
 	if err != nil {
+		// Report the line once; its tokens then read at the current level.
+		l.onNewline = false
 		return l.createToken(token.ILLEGAL, string(l.curr), false), err
 	}
 
