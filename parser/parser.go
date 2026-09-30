@@ -199,7 +199,6 @@ func (p *StmtParser) peekNextToken() token.Token {
 	nextTok, err := p.l.NextToken()
 	if err != nil {
 		p.errors = append(p.errors, err)
-		return token.Token{Type: token.ILLEGAL}
 	}
 	p.savedTokens = append(p.savedTokens, nextTok)
 	return nextTok

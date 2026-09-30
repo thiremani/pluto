@@ -106,6 +106,14 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}
 }
 
+// A token that the lexer reports an error with stays in the stream when the
+// parser reads it through its second token of lookahead.
+func TestLookaheadKeepsTokenWithLexerError(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestLookaheadKeepsTokenWithLexerError", `x = [a -"\q"]`))
+	sp.Parse()
+	require.Equal(t, []string{`TestLookaheadKeepsTokenWithLexerError:1:9:unsupported escape sequence \q`}, sp.Errors())
+}
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		name   string
