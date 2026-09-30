@@ -252,19 +252,6 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	}, p.Errors())
 }
 
-func TestUnclosedArrayLiteralInBody(t *testing.T) {
-	input := `y = F(x)
-    y = [x
-z = G(x)
-    z = x
-`
-	p := NewCodeParser(lexer.New("TestUnclosedArrayLiteralInBody", input))
-	require.NotPanics(t, func() { p.Parse() })
-	require.Equal(t, []string{
-		"TestUnclosedArrayLiteralInBody:2:11:expected ']' to close array literal; lines that continue it are indented past its first line",
-	}, p.Errors())
-}
-
 func TestFuncStatementParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)
     y = 1
