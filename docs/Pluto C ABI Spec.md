@@ -346,10 +346,9 @@ types:
   cannot mutate a destination before a sibling right-hand side reads its
   statement-start value.
 - When an input shares an output whose declared representation is narrower
-  but compatible (an owned string input with a static string output, a
-  concrete-rank array input with an untyped empty output), the private alias
-  variant gives that output the input's storage so the input observes its
-  writes. It has a distinct internal symbol; the source specialization and
+  but compatible (an owned string input with a static string output), the
+  private alias variant gives that output the input's storage so the input
+  observes its writes. It has a distinct internal symbol; the source specialization and
   its effect facts remain unchanged. Any other representation change between
   a declared output and its destination uses a separate ABI output adapter
   initialized to zero and committed only if its write marker is set.
@@ -462,9 +461,8 @@ _aN_<slot>_<slot>...
 `_aN` carries one entry per parameter, in source order: `0` for a parameter
 that shares no output, `k` for one that shares output slot `k - 1`. The
 parameter's type must be the output's declared type or a compatible wider
-representation of it (an owned `StrH` input sharing a declared `StrG` output,
-or a concrete-rank array input sharing an untyped `[]` output); a struct
-input shares only at its exact type. Inside the
+representation of it (an owned `StrH` input sharing a declared `StrG`
+output); a struct input shares only at its exact type. Inside the
 variant that output uses the parameter's storage, so the argument types fix
 every shared output's representation. The compiler emits the suffix only when
 at least one parameter shares an output; otherwise the call uses the bare

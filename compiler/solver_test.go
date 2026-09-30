@@ -339,19 +339,31 @@ func TestCollectionTypeErrors(t *testing.T) {
 			expectError: "bracket literal row 2 has 1 cells, expected 2",
 		},
 		{
-			name:        "IndexEmptyArray",
-			script:      "empty = []\nempty[0]",
-			expectError: "cannot index an empty array without an element type",
-		},
-		{
 			name:        "ArrayTypeStaysLockedAfterEmptyReset",
-			script:      "arr = [1]\narr = []\narr = [1.5]",
+			script:      "arr = [1]\narr = []0\narr = [1.5]",
 			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [F64]. Identifier "arr"`,
 		},
 		{
+			name:        "SampleArrayCannotHoldTable",
+			script:      "t = [\n  : Name\n    \"Ada\"\n]\nt\nx = []t",
+			expectError: "an array cannot hold Table",
+		},
+		{
+			name:        "UndefinedSample",
+			script:      "x = []y",
+			expectError: "undefined identifier: y",
+		},
+		{
+			// A copy of a typed empty keeps its element type, so it cannot
+			// reset a binding of another type.
+			name:        "TypedEmptyCopyKeepsItsType",
+			script:      "arr = []0\nother = arr\nfloats = [1.5]\nfloats\nfloats = other",
+			expectError: `cannot reassign type to identifier. Old Type: [F64]. New Type: [I64]. Identifier "floats"`,
+		},
+		{
 			name:        "Rank2EmptyIsNotRank1Reset",
-			script:      "arr = [1]\narr = [[]]",
-			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [[Empty]]. Identifier "arr"`,
+			script:      "arr = [1]\narr = [[]0]",
+			expectError: `cannot reassign type to identifier. Old Type: [I64]. New Type: [[I64]]. Identifier "arr"`,
 		},
 		{
 			name:        "StackRankMismatch",
@@ -485,10 +497,10 @@ func TestArrayExpressionsPreserveOwnTypes(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	program := mustParseScript(t, `empty = ([] + []) ⊕ ["x"]
+	program := mustParseScript(t, `empty = ([]0 + []0) ⊕ [1.5]
 mixed = [1] + [2.5]
 locked = [1]
-locked = []`)
+locked = []0`)
 	cc := NewCodeCompiler(ctx, "arrayOperandTypes", "", ast.NewCode())
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
@@ -500,8 +512,8 @@ locked = []`)
 	emptyInner := emptyOuter.Left.(*ast.InfixExpression)
 	emptyInnerType := ts.ExprCache[key(ts.FuncNameMangled, emptyInner)].OutTypes[0].(Array)
 	emptyOuterType := ts.ExprCache[key(ts.FuncNameMangled, emptyOuter)].OutTypes[0].(Array)
-	require.Equal(t, EmptyKind, emptyInnerType.ElemType.Kind())
-	require.Equal(t, StrKind, emptyOuterType.ElemType.Kind())
+	require.Equal(t, IntKind, emptyInnerType.ElemType.Kind())
+	require.Equal(t, FloatKind, emptyOuterType.ElemType.Kind())
 
 	mixedStmt := program.Statements[1].(*ast.LetStatement)
 	mixed := mixedStmt.Value[0].(*ast.InfixExpression)
@@ -515,8 +527,46 @@ locked = []`)
 	resetStmt := program.Statements[3].(*ast.LetStatement)
 	resetType := ts.ExprCache[key(ts.FuncNameMangled, resetStmt.Value[0])].OutTypes[0].(Array)
 	bindingType := sc.Script.Root.Vars["locked"].(Array)
-	require.Equal(t, EmptyKind, resetType.ElemType.Kind())
+	require.Equal(t, IntKind, resetType.ElemType.Kind())
 	require.Equal(t, IntKind, bindingType.ElemType.Kind())
+}
+
+// An empty literal takes its element type from its sample, and an array
+// sample adds its rank to the literal's layout axes.
+func TestTypedEmptyLiteralTypes(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	program := mustParseScript(t, `ints = []0
+floats = []0.0
+strings = []""
+matrix = [
+]0
+cube = []matrix
+item = 2.5
+items = []item
+table = [
+  : Name("") Score(0)
+]
+ints, floats, strings, cube, items, table`)
+	cc := NewCodeCompiler(ctx, "typedEmpties", "", ast.NewCode())
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Empty(t, ts.Errors)
+
+	for name, want := range map[string]Type{
+		"ints":    Array{ElemType: I64, Rank: 1},
+		"floats":  Array{ElemType: F64, Rank: 1},
+		"strings": Array{ElemType: StrH{}, Rank: 1},
+		"matrix":  Array{ElemType: I64, Rank: 2},
+		"cube":    Array{ElemType: I64, Rank: 3},
+		"items":   Array{ElemType: F64, Rank: 1},
+		"table":   Table{Columns: []TableColumn{{Name: "Name", ElemType: StrH{}}, {Name: "Score", ElemType: I64}}},
+	} {
+		got := sc.Script.Root.Vars[name]
+		require.True(t, TypeEqual(want, got), "%s: got %s, want %s", name, got, want)
+	}
 }
 
 func TestArrayConcatTypeErrors(t *testing.T) {
@@ -652,7 +702,7 @@ func TestCallArgumentsUseSettledBindingSlotTypes(t *testing.T) {
 		want   Type
 	}{
 		{"string scalar", `"hello"`, "item", `"abc"`, StrH{}},
-		{"array range", "[]", "[item]", "1:3", Array{ElemType: I64, Rank: 1}},
+		{"array range", "[]0", "[item]", "1:3", Array{ElemType: I64, Rank: 1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := llvm.NewContext()
@@ -737,7 +787,6 @@ func TestHeapWhereStatic(t *testing.T) {
 		{"heap field into static field", heapPerson, staticPerson, true},
 		{"static field into heap field", staticPerson, heapPerson, false},
 		{"heap elements into static elements", Array{ElemType: StrH{}, Rank: 1}, Array{ElemType: StrG{}, Rank: 1}, true},
-		{"concrete array into untyped", Array{ElemType: I64, Rank: 1}, Array{ElemType: Empty{}, Rank: 1}, false},
 		{"scalar", I64, I64, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -747,14 +796,6 @@ func TestHeapWhereStatic(t *testing.T) {
 }
 
 func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
-	headerOnly := Table{Columns: []TableColumn{
-		{Name: "Name", ElemType: Empty{}},
-		{Name: "Score", ElemType: Empty{}},
-	}}
-	concreteTable := Table{Columns: []TableColumn{
-		{Name: "Name", ElemType: StrH{}},
-		{Name: "Score", ElemType: I64},
-	}}
 	heapStruct := Struct{Name: "Person", Fields: []StructField{
 		{Name: "name", Type: StrH{}},
 		{Name: "age", Type: I64},
@@ -772,10 +813,6 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 	}{
 		{"string widens", StrG{}, StrH{}, StrH{}},
 		{"string never narrows", StrH{}, StrG{}, StrH{}},
-		{"empty array refines", Array{ElemType: Empty{}, Rank: 1}, Array{ElemType: I64, Rank: 1}, Array{ElemType: I64, Rank: 1}},
-		{"empty array resets", Array{ElemType: I64, Rank: 2}, Array{ElemType: Empty{}, Rank: 1}, Array{ElemType: I64, Rank: 2}},
-		{"header table refines", headerOnly, concreteTable, concreteTable},
-		{"header table resets", concreteTable, headerOnly, concreteTable},
 		{"struct field never narrows", heapStruct, staticStruct, heapStruct},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2428,7 +2465,6 @@ func TestFailedArrayTargetStillTypesIndex(t *testing.T) {
 		want   []string
 	}{
 		{"NotAnArray", "x = 5[zz]\nx", []string{"array access target is not an array", "undefined identifier: zz"}},
-		{"EmptyArray", "x = [][zz]\nx", []string{"undefined identifier: zz", "cannot index an empty array without an element type"}},
 		{"ConditionInIndex", "x = 5[2 > 1] || 0\nx", []string{"array access target is not an array"}},
 	}
 
@@ -2457,7 +2493,7 @@ func TestWarmFuncCacheReusesVars(t *testing.T) {
     i = 0:2
     "-i"
     a = [10 20 30]
-    a = k > 0 []
+    a = k > 0 []0
     res = a ⊕ [7]
 
 res = OuterReset(k)
@@ -2610,7 +2646,7 @@ func TestOutputTypesRefineMonotonically(t *testing.T) {
 		grow string
 		want Type
 	}{
-		{"array", "[]", "⊕ [1]", Array{ElemType: I64, Rank: 1}},
+		{"array", "[]0", "⊕ [1]", Array{ElemType: I64, Rank: 1}},
 		{"string", `"lit"`, `⊕ "x"`, StrH{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2696,18 +2732,11 @@ res = Consume(x)
 	require.True(t, TypeEqual(StrH{}, callInfo.ScalarCallParamTypes[0]), "final scalar-call metadata must use the output slot's StrH storage type")
 }
 
-func TestFunctionOutputTableJoinMatchesStorage(t *testing.T) {
-	code := mustParseCode(t, `res = RefineTable(k)
+func TestFunctionOutputTypedEmptyTableMatchesStorage(t *testing.T) {
+	code := mustParseCode(t, `res = ResetTable(k)
     "-k"
     res = [
-      : Name Score
-        "Ada" 10
-    ]
-
-res = ResetTable(k)
-    "-k"
-    res = [
-      : Name Score
+      : Name("") Score(0)
     ]
 `)
 	ctx := llvm.NewContext()
@@ -2717,29 +2746,12 @@ res = ResetTable(k)
 
 	sc := NewScriptCompiler(ctx, t.Name(), &ast.Program{}, cc)
 	ts := NewTypeSolver(sc)
-	headerOnly := Table{Columns: []TableColumn{
-		{Name: "Name", ElemType: Empty{}},
-		{Name: "Score", ElemType: Empty{}},
-	}}
 	concrete := Table{Columns: []TableColumn{
 		{Name: "Name", ElemType: StrH{}},
 		{Name: "Score", ElemType: I64},
 	}}
 
-	refineTemplate := code.Statements[0].(*ast.FuncStatement)
-	refineMangled := Mangle(cc.Compiler.MangledPath, "RefineTable", []Type{I64})
-	refine := &FuncInfo{
-		Sig:  Func{Name: "RefineTable", Params: []Type{I64}, OutTypes: []Type{headerOnly}},
-		Vars: make(map[string]Type),
-	}
-	cc.Compiler.FuncCache[refineMangled] = refine
-	require.True(t, ts.TypeFunc(refineMangled, refineTemplate))
-	require.Empty(t, ts.Errors)
-	require.True(t, TypeEqual(concrete, refine.Sig.OutTypes[0]))
-	require.True(t, TypeEqual(concrete, refine.Vars["res"]))
-
-	clear(ts.walkedFuncs)
-	resetTemplate := code.Statements[1].(*ast.FuncStatement)
+	resetTemplate := code.Statements[0].(*ast.FuncStatement)
 	resetMangled := Mangle(cc.Compiler.MangledPath, "ResetTable", []Type{I64})
 	reset := &FuncInfo{
 		Sig:  Func{Name: "ResetTable", Params: []Type{I64}, OutTypes: []Type{concrete}},
@@ -2749,7 +2761,7 @@ res = ResetTable(k)
 	ts.Converging = false
 	require.True(t, ts.TypeFunc(resetMangled, resetTemplate))
 	require.Empty(t, ts.Errors)
-	require.False(t, ts.Converging, "a header-only reset must not narrow or count as output progress")
+	require.False(t, ts.Converging, "a typed empty table must not narrow or count as output progress")
 	require.True(t, TypeEqual(concrete, reset.Sig.OutTypes[0]))
 	require.True(t, TypeEqual(concrete, reset.Vars["res"]))
 }

@@ -280,10 +280,18 @@ res = forwarded(x)
 			// Empty data with an established element type is readable.
 			name: "Concrete Empty Array Output Read",
 			code: `out, n = shrink(x)
-    out = []
+    out = []0
     n = out
     out = [x]`,
 			input: "a, b = shrink(1)\na, b",
+		},
+		{
+			// A sample reads its output, so a definite assignment comes first.
+			name: "Output Named As Sample After Definite Assignment",
+			code: `out, xs = sampled(n)
+    out = n
+    xs = []out`,
+			input: "a, b = sampled(1)\na, b",
 		},
 		{
 			// A read string output is solved as owned, so the local copied
@@ -508,23 +516,22 @@ res = twice(x)
 			errorContains: `output "res" is read before it is assigned`,
 		},
 		{
+			// A sample names its output for the type alone, but it is still a
+			// read, so a conditional assignment before it is not enough.
+			name: "Output Named As Sample Before Definite Assignment",
+			code: `out, xs = sampled(n)
+    out = n > 0 1
+    xs = []out`,
+			input:         "a, b = sampled(1)\na, b",
+			errorContains: `output "out" is read where it may still be unassigned`,
+		},
+		{
 			// Reads in a simultaneous assignment precede its writes.
 			name: "Simultaneous Output Read Before Assignment",
 			code: `sq, cube = powers(x)
     sq, cube = x * x, sq * x`,
 			input:         "a, b = powers(3)\na, b",
 			errorContains: `output "sq" is read before it is assigned`,
-		},
-		{
-			// A caller's destination could still refine an untyped empty
-			// array, so its storage is not fixed when the body reads it.
-			name: "Untyped Empty Array Output Read",
-			code: `out, n = emptied(x)
-    out = []
-    n = x
-    out`,
-			input:         "a, b = emptied(1)\na, b",
-			errorContains: `output "out" is read but its type`,
 		},
 		{
 			name: "Unresolved Dynamic Specifier",

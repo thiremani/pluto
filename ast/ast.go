@@ -255,6 +255,13 @@ type ArrayLiteral struct {
 	Headers []string         // column names; empty for arrays and unnamed tables
 	Rows    [][]Expression   // row data
 	Indices map[string][]int // named row indices like "books": [2,3]
+	// Sample follows an empty array's brackets (`[]0`, `[]plane`) and gives
+	// its element type; it is typed, never evaluated.
+	Sample Expression
+	// ColumnTypes holds the zero value written on each header of a table
+	// without rows (`Score(0)`), in header order; nil marks a header
+	// written without one.
+	ColumnTypes []Expression
 }
 
 func (al *ArrayLiteral) expressionNode()  {}
@@ -267,6 +274,9 @@ func (al *ArrayLiteral) String() string {
 			writeArrayRow(&out, al.Rows[0])
 		}
 		out.WriteString("]")
+		if al.Sample != nil {
+			out.WriteString(al.Sample.String())
+		}
 		return out.String()
 	}
 
@@ -278,6 +288,11 @@ func (al *ArrayLiteral) String() string {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
+			if j < len(al.ColumnTypes) && al.ColumnTypes[j] != nil {
+				out.WriteString("(")
+				out.WriteString(al.ColumnTypes[j].String())
+				out.WriteString(")")
+			}
 		}
 	}
 
@@ -291,6 +306,9 @@ func (al *ArrayLiteral) String() string {
 		out.WriteString("\n")
 	}
 	out.WriteString("]")
+	if al.Sample != nil {
+		out.WriteString(al.Sample.String())
+	}
 	return out.String()
 }
 
@@ -586,11 +604,13 @@ func RewriteExpr(expr Expression, rewrite func(Expression) Expression) Expressio
 			return expr
 		}
 		return &ArrayLiteral{
-			Token:   e.Token,
-			Block:   e.Block,
-			Headers: append([]string(nil), e.Headers...),
-			Rows:    rows,
-			Indices: maps.Clone(e.Indices),
+			Token:       e.Token,
+			Block:       e.Block,
+			Headers:     append([]string(nil), e.Headers...),
+			Rows:        rows,
+			Indices:     maps.Clone(e.Indices),
+			Sample:      e.Sample,
+			ColumnTypes: e.ColumnTypes,
 		}
 	case *StructLiteral:
 		row, changed := rewriteExprSlice(e.Row, rewrite)

@@ -87,6 +87,13 @@ func (cfg *CFG) collectReads(expr ast.Expression) []VarEvent {
 	for _, child := range children {
 		reads = append(reads, cfg.collectReads(child)...)
 	}
+	// A sample is typed but never evaluated, so it is not a child; it still
+	// names its variable, as a read does.
+	if lit, ok := expr.(*ast.ArrayLiteral); ok {
+		if name, isName := lit.Sample.(*ast.Identifier); isName {
+			reads = append(reads, VarEvent{Name: name.Value, Kind: Read, Token: name.Tok()})
+		}
+	}
 
 	return reads
 }
@@ -320,12 +327,6 @@ func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInf
 	}
 
 	outputs := identSet(template.Outputs)
-	readOutputs := cfg.CodeCompiler.outputReads[funcKey{name: template.Token.Literal, arity: len(template.Parameters)}]
-	for i, output := range template.Outputs {
-		if _, isRead := readOutputs[output.Value]; isRead && !concreteStorage(info.Sig.OutTypes[i]) {
-			cfg.addError(output.Tok(), fmt.Sprintf("output %q is read but its type %s is not concrete", output.Value, info.Sig.OutTypes[i]))
-		}
-	}
 	cfg.typedForwardPass(template, info, outputs)
 	cfg.backwardPass(maps.Clone(outputs))
 }

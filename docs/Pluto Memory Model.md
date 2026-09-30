@@ -278,12 +278,12 @@ res = sum(a, b)
   not cover every case, since both fail for a NaN. A range with literal
   bounds that is not empty always runs.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
-  call argument, a print, or a formatting marker) only after it is
-  definitely assigned, judged from the text as above. A read before that is a
-  compile error: before any assignment, or in the same simultaneous
-  assignment. A later conditional write does not revoke the assignment. An
-  output the body reads is solved at owned storage (a static string output
-  becomes a heap string) and must have a concrete type.
+  call argument, a print, a formatting marker, or an empty array's sample)
+  only after it is definitely assigned, judged from the text as above. A read
+  before that is a compile error: before any assignment, or in the same
+  simultaneous assignment. A later conditional write does not revoke the
+  assignment. An output the body reads is solved at owned storage (a static
+  string output becomes a heap string) and must have a concrete type.
 - **No name overlap**: Parameters and outputs must have distinct names.
   Sharing is decided only at the call site: a header never names a parameter
   after an output, so `out = Maybe(out, x)` is not a valid definition.
@@ -347,10 +347,10 @@ right-hand side has been evaluated.
 
 A call specializes a binding argument on the value's own type, with the
 ownership of the binding's storage: a static string that a later write widens
-to heap storage is passed as a heap string. An untyped `[]` or header-only
-table takes the storage's element types only when the argument shares one of
-the call's own destinations; a call that runs in a loop rewriting such a
-binding still sees its type from before the loop (#106). An output keeps its
+to heap storage is passed as a heap string. A binding's element type is
+fixed by its first assignment (an empty array states it, as in `[]0`), so a
+call that runs again in a loop sees the same type on every iteration. An
+output keeps its
 declared representation; the caller converts it into the destination through
 a separate output adapter when their representations differ.
 

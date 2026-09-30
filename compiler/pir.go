@@ -103,8 +103,8 @@ func (c *Compiler) widenedRead(ident *ast.Identifier) bool {
 	return !TypeEqual(storedType(sym), solved)
 }
 
-// planSlot keeps the solver's type as the slot type — an empty reset reads
-// as [Empty] whatever backs it — and takes ownership from effective storage.
+// planSlot keeps the solver's type as the slot type and takes ownership from
+// effective storage.
 func (c *Compiler) planSlot(expr ast.Expression, t Type) pir.Slot {
 	ident, isIdent := expr.(*ast.Identifier)
 	storage := t

@@ -115,9 +115,8 @@ func (abi FuncABI) DirectReturnSeedParamIndex() int {
 // sharableOutput reports whether an input of paramType can share an output
 // declared as outType: the input's storage must be the declared type or a
 // compatible wider representation that a store converts (an owned string for
-// a static output, a concrete-rank array for an untyped empty one, a schema
-// for a header-only table). A struct shares only at its exact type, since
-// nothing converts its fields. The shared output then uses the input's
+// a static output). A struct shares only at its exact type, since nothing
+// converts its fields. The shared output then uses the input's
 // storage, so a write lands where the next read looks.
 func sharableOutput(paramType, outType Type) bool {
 	if _, isStruct := outType.(Struct); isStruct {

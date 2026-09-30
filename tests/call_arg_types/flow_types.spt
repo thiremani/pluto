@@ -1,48 +1,61 @@
-# A call made while a binding holds [] specializes on [], not on an element
-# type that a later or sibling assignment gives the binding.
+# A typed empty initializer fixes a binding's element type, so a call made
+# while the binding is still empty specializes on that type.
 
-x = []
+x = []0
 kept = Keep(x)
 "kept:", kept
-kept = [5.5]
+kept = [5]
 "kept:", kept
 x = [1 2]
 "x:", x
 
-e = []
+e = []""
 tags = Tag(e)
 "tags:", tags
-e = [1.5]
+e = ["a"]
 "e:", e
 
-prices = []
+prices = []0.0
 first = Append(prices, 12345678)
 "first:", first
 prices = [9.5]
 "prices:", prices
 
 t = [
-  : Name Score
+  : Name("") Score("")
 ]
 n = Scores(t)
 "n:", n
 t = [
   : Name Score
-    "Ada" 10
+    "Ada" "ten"
 ]
 "t:", t
 
-built, btags = Build(3)
-"built:", built, btags
+# A call that runs again in a loop reads the binding's current value.
+p = []0
+p = Append(Keep(p), (1:4) + 0)
+"p:", p
 
-y = []
+g = []0
+g, gk = (0:3) >= 0 Append(g, 1), Keep(g)
+"g:", g, gk
+
+h = []0
+h = Inspect(h, (0:3) + 0) >= 0 Append(h, 1)
+"h:", h
+
+built, before = Build(3)
+"built:", built, before
+
+y = []0.0
 o, y = Append(y, 12345678), [9.5]
 "o:", o, "y:", y
 
 w = Work(12345678)
 "w:", w
 
-r = []
+r = []0.0
 r = Reset(Append(r, 12345678))
 "r:", r
 r = [9.5]

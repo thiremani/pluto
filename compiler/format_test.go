@@ -422,10 +422,10 @@ y = 3.2
 		},
 		{
 			name: "PointerOnEmptyArray",
-			input: `e = []
+			input: `e = []0
 "Value: -e%p"`,
 			expectOutput: "Value: %#llx",
-			rejectIR:     "_data",
+			expectIR:     "@arr_i64_data",
 		},
 		{
 			name:         "VarNotDefined",

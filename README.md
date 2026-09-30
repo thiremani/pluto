@@ -272,12 +272,12 @@ such as `scores.Score`. The shown hanging `:` is the preferred layout because
 the first header aligns with the first value; spacing within header and data
 rows is otherwise non-semantic.
 
-The empty literal `[]` has type `[Empty]`: it prints as `[]`, can be passed to
-functions, and acts as the empty operand when concatenated with a concrete
-array. The concatenation result takes the concrete element type without
-retyping the empty expression. Once a variable has a concrete array type,
-assigning `[]` empties its value but preserves that element type. Operations
-such as indexing or arithmetic still require a concrete element type.
+An empty array states its element type with a zero value after its brackets:
+`[]0`, `[]0.0` or `[]""`, or `[]x` for the type of a variable `x`. It prints as
+`[]`, can be passed to functions, and concatenates with arrays of its element
+type. Assigning it to a variable of that type empties the variable's value; a
+variable's type is fixed by its first assignment, so no later line supplies a
+missing element type.
 
 **Current implementation limit:** the compiler temporarily rejects array
 ranks above 64 with a positioned diagnostic

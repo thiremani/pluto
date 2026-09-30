@@ -1167,6 +1167,20 @@ func TestLetStatementDuplicateIdentifiers(t *testing.T) {
 	}
 }
 
+// An element type after a literal with cells is read with the literal and
+// reported once; the assignment on the next line is kept.
+func TestElementTypeAfterCellsKeepsNextStatement(t *testing.T) {
+	sp := NewScriptParser(lexer.New(t.Name(), "x = [1 2]0\ny = 3"))
+	program := sp.Parse()
+
+	require.Equal(t, []string{
+		t.Name() + ":1:10:an element type is only written on an empty array; cells give a literal its type, as in [1.0 2 3]",
+	}, sp.Errors())
+	require.Len(t, program.Statements, 2)
+	require.Equal(t, "x = [1 2]", program.Statements[0].String())
+	require.Equal(t, "y = 3", program.Statements[1].String())
+}
+
 func TestArrayLiterals(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1176,12 +1190,183 @@ func TestArrayLiterals(t *testing.T) {
 		checkResult func(t *testing.T, arr *ast.ArrayLiteral)
 	}{
 		{
-			name:  "empty array",
-			input: "[]",
+			name:  "empty integer array",
+			input: "[]0",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.Empty(t, arr.Rows, "expected no rows")
 				require.False(t, arr.Block)
+				require.True(t, testIntegerLiteral(t, arr.Sample, 0))
+				require.Equal(t, "[]0", arr.String())
+			},
+		},
+		{
+			name:  "empty float array",
+			input: "[]0.0",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.IsType(t, &ast.FloatLiteral{}, arr.Sample)
+				require.Equal(t, "[]0.0", arr.String())
+			},
+		},
+		{
+			name:  "empty string array",
+			input: `[]""`,
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.IsType(t, &ast.StringLiteral{}, arr.Sample)
+				require.Equal(t, `[]""`, arr.String())
+			},
+		},
+		{
+			name:  "empty array typed by a variable",
+			input: "[]plane",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, testIdentifier(t, arr.Sample, "plane"))
+				require.Equal(t, "[]plane", arr.String())
+			},
+		},
+		{
+			name:  "empty block array",
+			input: "[\n]0",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.True(t, arr.Block)
+				require.Empty(t, arr.Rows)
+				require.True(t, testIntegerLiteral(t, arr.Sample, 0))
+				require.Equal(t, "[\n]0", arr.String())
+			},
+		},
+		{
+			name:  "table with column types",
+			input: "[\n  : Name(\"\") Score(0)\n]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Equal(t, []string{"Name", "Score"}, arr.Headers)
+				require.Empty(t, arr.Rows)
+				require.Nil(t, arr.Sample)
+				require.Len(t, arr.ColumnTypes, 2)
+				require.IsType(t, &ast.StringLiteral{}, arr.ColumnTypes[0])
+				require.True(t, testIntegerLiteral(t, arr.ColumnTypes[1], 0))
+				require.Equal(t, "[\n  : Name(\"\") Score(0)\n]", arr.String())
+			},
+		},
+		{
+			name:        "untyped empty array",
+			input:       "[]",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "detached sample",
+			input:       "[] 0",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "untyped empty block",
+			input:       "[\n]",
+			expectError: true,
+			errorMsg:    "an empty array needs its element type",
+		},
+		{
+			name:        "nonzero integer sample",
+			input:       "[]5",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "nonzero float sample",
+			input:       "[]2.3",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "float sample without leading zero",
+			input:       "[].0",
+			expectError: true,
+			errorMsg:    "written as a zero value",
+		},
+		{
+			name:        "call as sample",
+			input:       "[]F32(0.0)",
+			expectError: true,
+			errorMsg:    "the sample after [] is a zero value or a variable name",
+		},
+		{
+			name:        "header-only table without column types",
+			input:       "[\n  : Name Score\n]",
+			expectError: true,
+			errorMsg:    "a table without rows needs a type on every column",
+		},
+		{
+			name:        "missing column type",
+			input:       "[\n  : Name(\"\") Score\n]",
+			expectError: true,
+			errorMsg:    "a table without rows needs a type on every column",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Len(t, arr.ColumnTypes, 2)
+				require.Nil(t, arr.ColumnTypes[1])
+				require.Equal(t, "[\n  : Name(\"\") Score\n]", arr.String())
+			},
+		},
+		{
+			name:        "nonzero column type",
+			input:       "[\n  : Name(\"\") Score(1)\n]",
+			expectError: true,
+			errorMsg:    "a column's type is written as a zero value: Score(0)",
+		},
+		{
+			name:        "array-valued column type",
+			input:       "[\n  : Name(\"\") Scores([]0.0)\n]",
+			expectError: true,
+			errorMsg:    "a column's type is written as a zero value: Scores(0)",
+		},
+		{
+			name:        "detached column type",
+			input:       "[\n  : Name (\"\") Score(0)\n]",
+			expectError: true,
+			errorMsg:    "a column type attaches to its name: Name(0)",
+		},
+		{
+			name:        "column types with data rows",
+			input:       "[\n  : Name(\"\") Score(0)\n    \"Ada\" 10\n]",
+			expectError: true,
+			errorMsg:    "column types are only written on a table without rows",
+		},
+		{
+			name:        "element type after cells",
+			input:       "[1 2 3]0.0",
+			expectError: true,
+			errorMsg:    "1:8:an element type is only written on an empty array; cells give a literal its type, as in [1.0 2 3]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Nil(t, arr.Sample)
+				require.Equal(t, "[1 2 3]", arr.String())
+			},
+		},
+		{
+			name:        "element type after a block",
+			input:       "[\n    1 2\n]0",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+		},
+		{
+			name:        "element type after a table",
+			input:       "[\n  : Name Score\n    \"Ada\" 10\n]0",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+		},
+		{
+			name:        "element type after a table without rows",
+			input:       "[\n  : Name(\"\") Score(0)\n]0",
+			expectError: true,
+			errorMsg:    "3:2:an element type is only written on an empty array",
+		},
+		{
+			// The attached value belongs to the inner literal, not the row.
+			name:        "element type after a cell",
+			input:       "[[1 2]0]",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Len(t, arr.Rows, 1)
+				require.Len(t, arr.Rows[0], 1)
 			},
 		},
 		{
@@ -1240,6 +1425,8 @@ func TestArrayLiterals(t *testing.T) {
 				require.True(t, testStringLiteral(t, arr.Rows[1][0], "Tuesday"))
 				require.True(t, testStringLiteral(t, arr.Rows[1][1], "Laptop"))
 				require.True(t, testIntegerLiteral(t, arr.Rows[1][2], 300))
+
+				require.Equal(t, "[\n  : Day Product Price\n    \"Monday\" \"Phone\" 200\n    \"Tuesday\" \"Laptop\" 300\n]", arr.String())
 			},
 		},
 		{
@@ -1345,10 +1532,12 @@ func TestArrayLiterals(t *testing.T) {
 			if tt.expectError {
 				require.NotEmpty(t, sp.Errors(), "expected parser errors for input %q", tt.input)
 				require.Contains(t, sp.Errors()[0], tt.errorMsg, "error message mismatch")
-				return
+				if tt.checkResult == nil {
+					return
+				}
+			} else {
+				require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
 			}
-
-			require.Empty(t, sp.Errors(), "unexpected parse errors for input %q: %v", tt.input, sp.Errors())
 
 			stmt := requireOnlyPrintStmt(t, program)
 			require.Len(t, stmt.Expression.Arguments, 1, "expected one expression in print statement")

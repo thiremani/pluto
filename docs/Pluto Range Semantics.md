@@ -533,7 +533,7 @@ arrays through concatenation:
 
 ```pluto
 m = 0:3
-acc = []
+acc = []0
 acc = acc ⊕ [m]
 ```
 

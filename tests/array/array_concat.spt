@@ -19,7 +19,7 @@ res4 = mixedFloat ⊕ mixedInt
 "Float⊕Int concat: -res4"
 
 # Empty array concatenation
-empty = []
+empty = []0
 res5 = empty ⊕ arr1
 "Empty⊕Int: -res5"
 

@@ -14,7 +14,6 @@ type Kind int
 
 const (
 	UnresolvedKind Kind = iota
-	EmptyKind
 	IntKind
 	UintKind
 	FloatKind
@@ -53,7 +52,6 @@ var PrimitiveTypeNames = []string{
 	"U64", "U32", "U16", "U8",
 	"F64", "F32",
 	"StrG", "StrH", // StrG = global/static (.rodata), StrH = heap
-	"Empty",
 	"X", // Unresolved placeholder
 }
 
@@ -88,16 +86,6 @@ func (u Unresolved) Kind() Kind     { return UnresolvedKind }
 func (u Unresolved) String() string { return "?" } // human-friendly
 func (u Unresolved) Mangle() string { return "X" } // placeholder for unresolved
 func (u Unresolved) Key() Type      { return u }
-
-// Empty is the leaf type of a zero-cardinality collection whose concrete
-// element type has not been established. Unlike Unresolved, it is valid and
-// fully resolved.
-type Empty struct{}
-
-func (e Empty) Kind() Kind     { return EmptyKind }
-func (e Empty) String() string { return "Empty" }
-func (e Empty) Mangle() string { return "Empty" }
-func (e Empty) Key() Type      { return e }
 
 // Int represents an integer type with a given bit width.
 type Int struct {
@@ -304,7 +292,7 @@ func IsFullyResolvedType(t Type) bool {
 	switch tt := t.(type) {
 	case Unresolved:
 		return false
-	case Empty, Int, Float, StrG, StrH:
+	case Int, Float, StrG, StrH:
 		return true
 	case Ptr:
 		return IsFullyResolvedType(tt.Elem)
@@ -364,10 +352,6 @@ func (a Array) Key() Type {
 	return Array{ElemType: a.ElemType.Key(), Rank: a.Rank}
 }
 
-func hasConcreteArrayElemType(elem Type) bool {
-	return elem != nil && elem.Kind() != EmptyKind && elem.Kind() != UnresolvedKind
-}
-
 func arrayIndexResultType(array Array) Type {
 	if array.Rank > 1 {
 		return Array{ElemType: array.ElemType, Rank: array.Rank - 1}
@@ -423,18 +407,6 @@ func (t Table) Key() Type {
 		columns[i] = TableColumn{Name: column.Name, ElemType: column.ElemType.Key()}
 	}
 	return Table{Columns: columns}
-}
-
-// isHeaderOnlyTableType reports whether a solver-produced table has only Empty
-// column types, as produced by a header-only literal. Solver-produced tables
-// always have at least one column and non-nil column types.
-func isHeaderOnlyTableType(table Table) bool {
-	for _, column := range table.Columns {
-		if column.ElemType.Kind() != EmptyKind {
-			return false
-		}
-	}
-	return true
 }
 
 // ArrayRange is an internal, call-scoped view of an array selection. It keeps
@@ -609,11 +581,11 @@ func TypeEqual(a, b Type) bool {
 }
 
 // CanRefineType reports whether an inference or binding slot can accept newType.
-// Unresolved components and Empty leaf slots may accept concrete types; this
-// relation does not retag already-solved expression nodes.
+// Unresolved components may accept concrete types; this relation does not
+// retag already-solved expression nodes.
 func CanRefineType(oldType, newType Type) bool {
-	// Slots without concrete leaf evidence can accept any type.
-	if oldType.Kind() == UnresolvedKind || oldType.Kind() == EmptyKind {
+	// Slots still awaiting their type can accept any type.
+	if oldType.Kind() == UnresolvedKind {
 		return true
 	}
 
@@ -668,23 +640,6 @@ func bindingSlotCompatible(oldType, newType Type) bool {
 		}
 		return true
 	}
-	oldArray, oldIsArray := oldType.(Array)
-	newArray, newIsArray := newType.(Array)
-	if oldIsArray && newIsArray {
-		// Empty arrays retain an established leaf type. Rank-1 [] is also the
-		// shape-polymorphic reset spelling for an established higher-rank array.
-		if newArray.ElemType.Kind() == EmptyKind {
-			return newArray.Rank == 1 || oldArray.Rank == newArray.Rank
-		}
-		if oldArray.ElemType.Kind() == EmptyKind {
-			return oldArray.Rank == newArray.Rank
-		}
-	}
-	newTable, newIsTable := newType.(Table)
-	oldTable, oldIsTable := oldType.(Table)
-	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
-		return true
-	}
 	return CanRefineType(oldType, newType)
 }
 
@@ -707,27 +662,6 @@ func heapWhereStatic(held, param Type) bool {
 	return false
 }
 
-// concreteStorage reports whether t fixes its storage in every calling
-// context: an untyped empty array, a column without an element type, or an
-// unresolved leaf could still be refined by a caller's destination.
-func concreteStorage(t Type) bool {
-	switch tt := t.(type) {
-	case Empty, Unresolved:
-		return false
-	case Array:
-		return tt.Rank > 0 && tt.ElemType != nil && concreteStorage(tt.ElemType)
-	case Table:
-		for _, column := range tt.Columns {
-			if column.ElemType == nil || !concreteStorage(column.ElemType) {
-				return false
-			}
-		}
-		return true
-	default:
-		return IsFullyResolvedType(t)
-	}
-}
-
 // mergeBindingSlotType joins compatible observations without narrowing storage.
 func mergeBindingSlotType(oldType, newType Type) Type {
 	if oldType.Kind() == StrKind && newType.Kind() == StrKind {
@@ -745,21 +679,6 @@ func mergeBindingSlotType(oldType, newType Type) Type {
 			}
 		}
 		return merged
-	}
-	oldArray, oldIsArray := oldType.(Array)
-	newArray, newIsArray := newType.(Array)
-	if oldIsArray && newIsArray {
-		if newArray.ElemType.Kind() == EmptyKind {
-			return oldType
-		}
-		if oldArray.ElemType.Kind() == EmptyKind {
-			return newType
-		}
-	}
-	newTable, newIsTable := newType.(Table)
-	oldTable, oldIsTable := oldType.(Table)
-	if oldIsTable && newIsTable && isHeaderOnlyTableType(newTable) && CanRefineType(newTable, oldTable) {
-		return oldType
 	}
 	return newType
 }
@@ -811,8 +730,6 @@ func typeComparer(k Kind) func(a, b Type) bool {
 	switch k {
 	case UnresolvedKind:
 		return eqUnresolved
-	case EmptyKind:
-		return eqEmpty
 	case IntKind:
 		return eqInt
 	case FloatKind:
@@ -839,7 +756,6 @@ func typeComparer(k Kind) func(a, b Type) bool {
 }
 
 func eqUnresolved(a, b Type) bool { return true }
-func eqEmpty(a, b Type) bool      { return true }
 
 func eqInt(a, b Type) bool {
 	ai := a.(Int)
