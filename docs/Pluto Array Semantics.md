@@ -42,6 +42,10 @@ A variable sample such as `x` is never evaluated: only its type counts, and
 its dimensions are ignored. Other literal samples (`[]5`, `[]2.3`, `[].0`), a
 detached sample (`[] 0`), and bare `[]` are errors.
 
+Only an empty array takes a sample: a literal with cells takes its element
+type from them, so `[1 2 3]0.0` is an error. Integer cells widen to float
+beside a float cell, so `[1.0 2 3]` is `[F64]`.
+
 The sample stands for one element, so rank follows the layout rule. An empty
 block with a suffix is a rank-2 value with shape `[0 0]`, and an array sample
 adds its rank:

@@ -1191,23 +1191,27 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	if len(arr.Headers) == 0 && len(arr.Rows) > 1 {
 		arr.Block = true
 	}
-	p.typeEmptyLiteral(arr)
-	// Do not consume the closing ']' (or an empty array's sample) here. Align
+	p.parseStatedTypes(arr)
+	// Do not consume the closing ']' (or the sample after it) here. Align
 	// with grouped-expression behavior and leave curToken at the literal's
 	// last token; callers (statement parsing) will advance past newline/EOF as
 	// appropriate.
 	return arr
 }
 
-// typeEmptyLiteral requires a literal without rows to state its element
-// types: an array through the sample after its brackets, a table through a
-// type on every column header. The literal stays whole either way, so parsing
-// continues past a reported error.
-func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
-	switch {
-	case len(arr.Headers) == 0 && len(arr.Rows) == 0:
+// parseStatedTypes reads the sample after a literal's brackets and checks the
+// element types the literal states. Only a literal without cells states them:
+// an empty array with its sample, a table without rows with a type on every
+// column header. Any other literal takes its types from its cells. The literal
+// stays whole either way, so parsing continues past a reported error.
+func (p *StmtParser) parseStatedTypes(arr *ast.ArrayLiteral) {
+	if len(arr.Headers) == 0 && len(arr.Rows) == 0 {
 		p.parseArraySample(arr)
-	case len(arr.Headers) > 0 && len(arr.Rows) == 0 && (len(arr.ColumnTypes) == 0 || slices.Contains(arr.ColumnTypes, nil)):
+		return
+	}
+	p.rejectSample(arr)
+	switch {
+	case len(arr.Rows) == 0 && (len(arr.ColumnTypes) == 0 || slices.Contains(arr.ColumnTypes, nil)):
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   `a table without rows needs a type on every column, as in Name("") Score(0)`,
@@ -1220,10 +1224,30 @@ func (p *StmtParser) typeEmptyLiteral(arr *ast.ArrayLiteral) {
 	}
 }
 
+// rejectSample reads a sample attached to the closing bracket of a literal
+// with a header or cells, and reports it.
+func (p *StmtParser) rejectSample(arr *ast.ArrayLiteral) {
+	if !p.sampleFollows() {
+		return
+	}
+	p.nextToken()
+	msg := "an element type is only written on an empty array"
+	if len(arr.Rows) > 0 {
+		msg += "; cells give a literal its type, as in [1.0 2 3]"
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: msg})
+}
+
+// sampleFollows reports whether a number, string or name is attached to the
+// closing bracket at curToken, where an empty array's sample goes.
+func (p *StmtParser) sampleFollows() bool {
+	return !p.peekToken.HadSpace && slices.Contains([]token.TokenType{token.INT, token.FLOAT, token.STRING, token.IDENT}, p.peekToken.Type)
+}
+
 // parseArraySample reads the zero value or variable attached to an empty
 // array's closing bracket, leaving curToken at it.
 func (p *StmtParser) parseArraySample(arr *ast.ArrayLiteral) {
-	if p.peekToken.HadSpace || !slices.Contains([]token.TokenType{token.INT, token.FLOAT, token.STRING, token.IDENT}, p.peekToken.Type) {
+	if !p.sampleFollows() {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: arr.Token,
 			Msg:   `an empty array needs its element type: write []0, []0.0 or []""`,

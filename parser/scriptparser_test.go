@@ -1317,6 +1317,45 @@ func TestArrayLiterals(t *testing.T) {
 			errorMsg:    "column types are only written on a table without rows",
 		},
 		{
+			name:        "element type after cells",
+			input:       "[1 2 3]0.0",
+			expectError: true,
+			errorMsg:    "1:8:an element type is only written on an empty array; cells give a literal its type, as in [1.0 2 3]",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Nil(t, arr.Sample)
+				require.Equal(t, "[1 2 3]", arr.String())
+			},
+		},
+		{
+			name:        "element type after a block",
+			input:       "[\n    1 2\n]0",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+		},
+		{
+			name:        "element type after a table",
+			input:       "[\n  : Name Score\n    \"Ada\" 10\n]0",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+		},
+		{
+			name:        "element type after a table without rows",
+			input:       "[\n  : Name(\"\") Score(0)\n]0",
+			expectError: true,
+			errorMsg:    "3:2:an element type is only written on an empty array",
+		},
+		{
+			// The attached value belongs to the inner literal, not the row.
+			name:        "element type after a cell",
+			input:       "[[1 2]0]",
+			expectError: true,
+			errorMsg:    "an element type is only written on an empty array",
+			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
+				require.Len(t, arr.Rows, 1)
+				require.Len(t, arr.Rows[0], 1)
+			},
+		},
+		{
 			name: "simple matrix without headers",
 			input: `[
     1 2 3
