@@ -263,16 +263,16 @@ scores = [
 Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
 where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
-`[[1 2] [3 4]]`. An inline array stays on one line, however long: Pluto has no
-line continuation character, so a second line starts a new row. Array-valued
-cells stack recursively while storage remains flat and row-major. Ragged
-literals are compile errors.
+`[[1 2] [3 4]]`. Pluto has no line continuation character: a line break
+between cells starts a new row, so an inline array keeps its cells on one line,
+however long. Array-valued cells stack recursively while storage remains flat
+and row-major. Ragged literals are compile errors.
 Lines inside brackets have no indentation of their own: each is indented past
 the line where its bracket opened, unless it starts with a closing bracket.
 
 A header row produces a columnar table, with named columns projected as arrays
-such as `scores.Score`. The header goes on its own line after `[`, and like
-each data row fits on that one line.
+such as `scores.Score`. The header goes on its own line after `[`, with all
+its column names on that line.
 The shown hanging `:` is the preferred layout because
 the first header aligns with the first value; spacing within header and data
 rows is otherwise non-semantic.

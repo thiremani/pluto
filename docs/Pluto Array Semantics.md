@@ -56,9 +56,11 @@ row = [[]0]     # one empty row: shape [1 0], not an empty matrix
 A zero-row matrix keeps no column count: concatenation takes the other
 operand's inner shape.
 
-A rank-1 literal stays on one line, however long; an editor can wrap it for
-display. Pluto has no line continuation character, so a row ends with its
-line, and a second row selects block layout:
+Pluto has no line continuation character, so a line break between two cells
+ends the row: a rank-1 literal keeps its cells on one line, however long, and
+an editor can wrap it for display. A line break inside a cell, in a nested
+literal or a multi-line string, belongs to that cell. A second row selects
+block layout:
 
 ```pluto
 matrix = [1 2
@@ -142,9 +144,9 @@ than flattened when used as cells.
 
 Multiple scalar rows with homogeneous but different column types infer an
 unnamed table. A header always produces a table and must contain at least one
-column name. The header goes on its own line after `[`, and like each data
-row it fits on that one line. Headerless literals start directly with their
-first data row.
+column name. The header goes on its own line after `[`, with all its column
+names on that line. Headerless literals start directly with their first data
+row.
 
 The preferred layout outdents the `:` marker so the first header and first
 value begin in the same column. Spacing within header and data rows is
