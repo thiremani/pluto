@@ -22,10 +22,10 @@ type Lexer struct {
 	indentStack   []int // indentation level stack
 	toDeindent    int   // number of deindent tokens to be emitted before we continue with current token
 
-	lineIndent int             // column where the current line's first token starts
-	brackets   []openBracket   // brackets still open, innermost last
-	pending    []lexed         // implicit closers and the token they precede
-	lastType   token.TokenType // type of the last token returned
+	lineStart int             // raw index where the physical line being read starts
+	brackets  []openBracket   // brackets still open, innermost last
+	pending   []lexed         // implicit closers and the token they precede
+	lastType  token.TokenType // type of the last token returned
 }
 
 // openBracket is a '(' or '[' waiting for its closer, with the indentation of
@@ -82,7 +82,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	l.lastType = tok.Type
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
-		l.brackets = append(l.brackets, openBracket{opener: tok, indent: l.lineIndent})
+		l.brackets = append(l.brackets, openBracket{opener: tok, indent: l.lineIndent()})
 	case token.RPAREN, token.RBRACK:
 		l.closeBracket(tok.Type)
 	case token.NEWLINE:
@@ -344,7 +344,6 @@ func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
 func (l *Lexer) bracketLine() (token.Token, *token.CompileError) {
 	l.onNewline = false
 	err := l.skipNewlineSpaces()
-	l.lineIndent = l.column
 	if err != nil {
 		return l.createToken(token.ILLEGAL, string(l.curr), false), err
 	}
@@ -394,7 +393,6 @@ func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 
 func (l *Lexer) indentLevel() (bool, *token.CompileError) {
 	err := l.skipNewlineSpaces()
-	l.lineIndent = l.column
 	if err != nil {
 		l.onNewline = false
 		return false, err
@@ -463,6 +461,17 @@ func (l *Lexer) skipWhitespace() bool {
 func (l *Lexer) newLine() {
 	l.lineOffset++
 	l.column = 0
+	l.lineStart = l.readPosition
+}
+
+// lineIndent returns the indentation column of the physical line being read,
+// however that line began: after a '\', after '=', or inside a string.
+func (l *Lexer) lineIndent() int {
+	column := 1
+	for i := l.lineStart; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {
+		column++
+	}
+	return column
 }
 
 // LogicalRune returns the logical rune at raw index i and the raw index
