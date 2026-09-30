@@ -106,42 +106,6 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}
 }
 
-func TestOperatorAfterFailedOperand(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		expErrors []string
-	}{
-		{"call after empty index", "x = foo[]()", []string{
-			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
-		}},
-		{"chain after empty index", "x = foo[](1)[2]", []string{
-			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
-		}},
-		{"field after empty index", "x = a[].b", []string{
-			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
-		}},
-		{"infix after empty index", "x = a[] + 1", []string{
-			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
-		}},
-		{"call after empty range stop", "x = 1:]()", []string{
-			"TestOperatorAfterFailedOperand:1:7:no prefix parse function for ] found",
-			"TestOperatorAfterFailedOperand:1:7:expected expression after ':' for range stop",
-		}},
-		{"call argument", "x = f(a[]())", []string{
-			"TestOperatorAfterFailedOperand:1:9:no prefix parse function for ] found",
-		}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestOperatorAfterFailedOperand", tt.input))
-			require.NotPanics(t, func() { sp.Parse() }, "input %q", tt.input)
-			require.Equal(t, tt.expErrors, sp.Errors(), "input %q", tt.input)
-		})
-	}
-}
-
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1434,21 +1398,15 @@ func TestArrayLiterals(t *testing.T) {
 		},
 		{
 			name:        "invalid header token",
-			input:       "[\n  : 123 Product\n]",
+			input:       "[: 123 Product]",
 			expectError: true,
 			errorMsg:    "expected identifier for column header",
 		},
 		{
 			name:        "header marker without columns",
-			input:       "[\n  :\n]",
+			input:       "[:\n]",
 			expectError: true,
 			errorMsg:    "expected at least one column header after ':'",
-		},
-		{
-			name:        "header on the bracket's line",
-			input:       "[ : Name(\"\") Score(0) ]",
-			expectError: true,
-			errorMsg:    "a table's header goes on its own line after '['",
 		},
 		{
 			name: "line continuation with unary operators",
@@ -1528,68 +1486,6 @@ func TestArrayLiterals(t *testing.T) {
 			if tt.checkResult != nil {
 				tt.checkResult(t, arr)
 			}
-		})
-	}
-}
-
-// A malformed sample or column type is reported once and skipped whole, so the
-// rest of the statement adds no errors of its own.
-func TestMalformedElementTypeErrors(t *testing.T) {
-	for _, tt := range []struct {
-		input     string
-		errorMsgs []string
-	}{
-		{"x = []5", []string{"written as a zero value: []0"}},
-		{"x = [](0)", []string{"an empty array needs its element type"}},
-		{"x = []F32(0.0)", []string{"the sample after [] is a zero value or a variable name"}},
-		{"x = []F32(0.0", []string{"the sample after [] is a zero value or a variable name"}},
-		{"x = []y[0]", []string{"the sample after [] is a zero value or a variable name"}},
-		{"x = []p.x", []string{"the sample after [] is a zero value or a variable name"}},
-		{"t = [\n  : Score(2)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score()\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score((0))\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score(0,0)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score(0\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score(foo[]())\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Score(a[0)\n]", []string{"a column's type is written as a zero value: Score(0)"}},
-		{"t = [\n  : Name(\"\") Scores([]0.0)\n]", []string{"a column's type is written as a zero value: Scores(0)"}},
-		{"t = [\n  : Name (\"\") Score(0)\n]", []string{"a column type attaches to its name: Name(0)"}},
-		{"t = [\n  : Name Score(2)\n]", []string{
-			"a column's type is written as a zero value: Score(0)",
-			"a table without rows needs a type on every column",
-		}},
-	} {
-		t.Run(tt.input, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestMalformedElementTypeErrors", tt.input))
-			sp.Parse()
-			errs := sp.Errors()
-			require.Len(t, errs, len(tt.errorMsgs), "errors: %v", errs)
-			for i, msg := range tt.errorMsgs {
-				require.Contains(t, errs[i], msg)
-			}
-		})
-	}
-}
-
-// Skipping a malformed sample or column type stops before a closer that no
-// open group expects, so the literal around it closes and the statements after
-// it parse on their own.
-func TestMalformedElementTypeKeepsNextStatement(t *testing.T) {
-	for _, tt := range []struct {
-		input    string
-		errorMsg string
-	}{
-		{"t = [\n  : Score(foo(\n]", "a column's type is written as a zero value: Score(0)"},
-		{"x = [[]F32(foo( ]", "the sample after [] is a zero value or a variable name"},
-	} {
-		t.Run(tt.input, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestMalformedElementTypeKeepsNextStatement", tt.input+"\nafter = 7\nafter"))
-			program := sp.Parse()
-			errs := sp.Errors()
-			require.Len(t, errs, 1, "errors: %v", errs)
-			require.Contains(t, errs[0], tt.errorMsg)
-			require.Len(t, program.Statements, 3)
-			require.Equal(t, "after = 7", program.Statements[1].String())
 		})
 	}
 }

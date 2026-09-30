@@ -140,8 +140,7 @@ than flattened when used as cells.
 
 Multiple scalar rows with homogeneous but different column types infer an
 unnamed table. A header always produces a table and must contain at least one
-column name. The header goes on its own line after `[`. Headerless literals
-start directly with their first data row.
+column name. Headerless literals start directly with their first data row.
 
 The preferred layout outdents the `:` marker so the first header and first
 value begin in the same column. Spacing within header and data rows is
