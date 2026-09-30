@@ -277,6 +277,14 @@ func TestBracketLayoutInBody(t *testing.T) {
 	}
 }
 
+func TestStructHeaderContinuationAcrossBlankLines(t *testing.T) {
+	input := "p = Person\n  : name \\\n\n    # note\n    age\n    \"Ada\" 36\n"
+	p := NewCodeParser(lexer.New("TestStructHeaderContinuationAcrossBlankLines", input))
+	code := p.Parse()
+	require.Empty(t, p.Errors())
+	require.Len(t, code.Statements, 1)
+}
+
 func TestUnclosedLiteralInBody(t *testing.T) {
 	input := `y = F(x)
     y = [x

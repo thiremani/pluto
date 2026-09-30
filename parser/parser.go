@@ -1378,7 +1378,6 @@ func (p *StmtParser) parseRow() []ast.Expression {
 	// Parse elements in this row until newline or ']'
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
 		if p.skipLineContinuation() {
-			p.skipArrayFormatting() // skip indentation on continued line
 			continue
 		}
 
@@ -1689,14 +1688,19 @@ func (p *StmtParser) validateIdentifier(tok token.Token) {
 	}
 }
 
-// skipLineContinuation consumes a backslash-newline pair and returns true if one was found.
+// skipLineContinuation consumes a backslash that ends a line, with the line
+// breaks of any blank or comment lines after it, and reports whether it found
+// one. The lexer gives continued lines no indentation tokens.
 func (p *StmtParser) skipLineContinuation() bool {
-	if p.curTokenIs(token.BACKSLASH) && p.peekTokenIs(token.NEWLINE) {
-		p.nextToken()
-		p.nextToken()
-		return true
+	if !p.curTokenIs(token.BACKSLASH) || !p.peekTokenIs(token.NEWLINE) {
+		return false
 	}
-	return false
+	p.nextToken()
+	for p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+	p.nextToken()
+	return true
 }
 
 // errorOnBlanks converts tracked blank identifiers to errors and clears the list.

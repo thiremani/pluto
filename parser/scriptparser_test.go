@@ -1545,6 +1545,28 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 	}
 }
 
+// A backslash continues a table header or a row across blank and comment
+// lines, the same way in both.
+func TestLineContinuationAcrossBlankLines(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		input  string
+		expect string
+	}{
+		{"header after a blank line", "t = [\n  : A(0) \\\n\n    B(0)\n]", "t = [\n  : A(0) B(0)\n]"},
+		{"header after a comment line", "t = [\n  : A(0) \\\n    # note\n    B(0)\n]", "t = [\n  : A(0) B(0)\n]"},
+		{"row after a blank and a comment line", "x = [1 2 \\\n\n    # note\n    3 4]", "x = [1 2 3 4]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestLineContinuationAcrossBlankLines", tt.input))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+			require.Len(t, program.Statements, 1)
+			require.Equal(t, tt.expect, program.Statements[0].String())
+		})
+	}
+}
+
 func TestArrayRangeExpression(t *testing.T) {
 	tests := []struct {
 		name  string
