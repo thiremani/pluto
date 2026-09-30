@@ -1167,6 +1167,20 @@ func TestLetStatementDuplicateIdentifiers(t *testing.T) {
 	}
 }
 
+// An element type after a literal with cells is read with the literal and
+// reported once; the assignment on the next line is kept.
+func TestElementTypeAfterCellsKeepsNextStatement(t *testing.T) {
+	sp := NewScriptParser(lexer.New(t.Name(), "x = [1 2]0\ny = 3"))
+	program := sp.Parse()
+
+	require.Equal(t, []string{
+		t.Name() + ":1:10:an element type is only written on an empty array; cells give a literal its type, as in [1.0 2 3]",
+	}, sp.Errors())
+	require.Len(t, program.Statements, 2)
+	require.Equal(t, "x = [1 2]", program.Statements[0].String())
+	require.Equal(t, "y = 3", program.Statements[1].String())
+}
+
 func TestArrayLiterals(t *testing.T) {
 	tests := []struct {
 		name        string
