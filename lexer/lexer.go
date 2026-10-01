@@ -361,33 +361,33 @@ func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
 	return l.createToken(token.DEINDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
 }
 
+// skipNewlineSpaces moves past blank and comment lines, and the indentation of
+// the next line, to that line's first token. A tab in that indentation is an
+// error, reported after the first run of tabs; blank and comment lines are not
+// checked.
 func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
+	prevTab := false
 	for {
-		for l.curr == ' ' {
+		tab := l.curr == '\t'
+		switch l.curr {
+		case ' ', '\t':
 			l.readRune()
-		}
-
-		if l.curr == '#' {
-			l.skipComment()
-		}
-
-		for l.curr == '\t' {
-			l.readRune()
-			err = &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-				Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
+			if tab && (err == nil || prevTab) {
+				err = &token.CompileError{
+					Token: l.createToken(token.ILLEGAL, string(l.curr), false),
+					Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
+				}
 			}
+		case '#':
+			l.skipComment()
+		case '\n':
+			err = nil
+			l.readRune()
+		default:
+			return err
 		}
-
-		if l.curr != '\n' {
-			break
-		}
-
-		err = nil
-		l.readRune()
+		prevTab = tab
 	}
-
-	return
 }
 
 func (l *Lexer) indentLevel() (bool, *token.CompileError) {

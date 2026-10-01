@@ -222,6 +222,26 @@ func TestTabErr(t *testing.T) {
 	}
 
 	checkInput(t, input, tests)
+
+	// Comment and blank lines are not checked. A tab followed by spaces is
+	// reported once, and the line's tokens start at its content.
+	input = "x = 1\n\t# note\n\t \ny = 2\n\t  z"
+
+	tests = []Test{
+		{token.IDENT, "x", "", 1, 1},
+		{token.ASSIGN, "=", "", 1, 3},
+		{token.INT, "1", "", 1, 5},
+		{token.NEWLINE, "\n", "", 1, 6},
+		{token.IDENT, "y", "", 4, 1},
+		{token.ASSIGN, "=", "", 4, 3},
+		{token.INT, "2", "", 4, 5},
+		{token.NEWLINE, "\n", "", 4, 6},
+		{token.ILLEGAL, "z", "5:2:" + INDENT_TAB_ERR + ". At char:  ", 5, 4},
+		{token.IDENT, "z", "", 5, 4},
+		{token.EOF, "", "", 5, 5},
+	}
+
+	checkInput(t, input, tests)
 }
 
 func TestEof(t *testing.T) {
