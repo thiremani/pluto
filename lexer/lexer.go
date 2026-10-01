@@ -49,7 +49,7 @@ const (
 	INDENT_ERR          = "indentation error"
 	INDENT_TAB_ERR      = "indent using tabs not allowed"
 	NEVER_CLOSED_ERR    = "is never closed; its later lines are indented past this line"
-	NO_CONTINUATION_ERR = "Pluto has no line continuation, so write the row, header or expression on one line"
+	NO_CONTINUATION_ERR = "backslash line continuation is not supported; inside parentheses an expression can span lines"
 )
 
 func New(fileName, input string) *Lexer {
