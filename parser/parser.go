@@ -212,12 +212,14 @@ func (p *StmtParser) peekNextToken() token.Token {
 // with an implicit multiplication operator '⋅' token. This way, an input like "5var" is
 // treated as "5 ⋅ var" with higher precedence than regular multiplication.
 func (p *StmtParser) handleImplicitMult() {
-	// Check: number followed immediately by identifier
+	// Check: number followed immediately by identifier, on the same line with
+	// nothing between them; a line break read as a space separates them.
 	isNumber := p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT
 	isIdentNext := p.peekToken.Type == token.IDENT
-	noSpace := p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column
+	attached := !p.peekToken.HadSpace && p.curToken.Line == p.peekToken.Line &&
+		p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column
 
-	if !isNumber || !isIdentNext || !noSpace {
+	if !isNumber || !isIdentNext || !attached {
 		return
 	}
 

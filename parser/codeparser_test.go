@@ -284,6 +284,17 @@ func TestStructHeaderBackslashIsIllegal(t *testing.T) {
 	require.Equal(t, "TestStructHeaderBackslashIsIllegal:2:10:Illegal character '\\': "+lexer.NO_CONTINUATION_ERR, p.Errors()[0])
 }
 
+// A function's parameters can span lines inside its parentheses.
+func TestParametersAcrossLines(t *testing.T) {
+	p := NewCodeParser(lexer.New("TestParametersAcrossLines", "out = F(a,\n    b)\n    out = a + b\n"))
+	code := p.Parse()
+	require.Empty(t, p.Errors())
+	require.Len(t, code.Statements, 1)
+	fn, ok := code.Statements[0].(*ast.FuncStatement)
+	require.True(t, ok)
+	require.Len(t, fn.Parameters, 2)
+}
+
 func TestUnclosedLiteralInBody(t *testing.T) {
 	input := `y = F(x)
     y = [x

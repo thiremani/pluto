@@ -269,10 +269,13 @@ however long. Array-valued cells stack recursively while storage remains flat
 and row-major. Ragged literals are compile errors.
 Lines inside brackets have no indentation of their own: each is indented past
 the line where its bracket opened, unless it starts with a closing bracket.
+Inside parentheses a line break reads as a space, so a call or a grouped
+expression can span lines; inside square brackets it ends a row.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The header goes on its own line after `[`, with all
-its column names on that line.
+its column names on that logical line; a column type's parentheses may span
+physical lines.
 The shown hanging `:` is the preferred layout because
 the first header aligns with the first value; spacing within header and data
 rows is otherwise non-semantic.

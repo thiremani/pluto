@@ -21,6 +21,7 @@ type Lexer struct {
 
 	contexts []context // indented blocks, then open brackets; innermost last
 	pending  []lexed   // layout tokens decided at a line break, in order
+	spaced   bool      // a line break read as a space precedes the next token
 }
 
 // context is an indented block, or an open '(' or '[' with the indentation of
@@ -96,13 +97,19 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 }
 
 // lineBreak lays out the line after a line break; it is the one place that
-// reads indentation. It moves past blank and comment lines to the next line,
-// closes each bracket that line cannot continue, and queues the break, then
-// that line's own layout tokens.
+// reads indentation. It moves past blank and comment lines to the next line
+// and closes each bracket that line cannot continue. The innermost context
+// left then gives the break its meaning: inside parentheses it reads as a
+// space, inside square brackets it ends a row, and in a block it ends a
+// statement. The next line's own layout tokens follow.
 func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 	indentErr := l.skipNewlineSpaces()
 	l.closeBrackets(br, l.column, l.curr)
-	l.pending = append(l.pending, lexed{br, err})
+	if l.inBracket() && l.contexts[len(l.contexts)-1].opener.Type == token.LPAREN {
+		l.spaced = true
+	} else {
+		l.pending = append(l.pending, lexed{br, err})
+	}
 	l.startLine(indentErr)
 }
 
@@ -201,7 +208,8 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	var tok token.Token
 	var err *token.CompileError
 
-	hadSpace := l.skipWhitespace()
+	hadSpace := l.skipWhitespace() || l.spaced
+	l.spaced = false
 
 	if l.curr == '#' {
 		l.skipComment()

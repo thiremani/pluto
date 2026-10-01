@@ -75,6 +75,17 @@ the line parses as the next statement. An assignment's value starts on the
 same line as its `=`, so a multi-line literal opens its bracket there:
 `m = [`, not `m =` followed by `[` on the next line.
 
+The innermost open bracket decides what a line break that continues it means.
+Inside parentheses it reads as a space, so a call, a grouped expression or a
+cell in parentheses can span lines. Inside square brackets it ends a row, also
+when those brackets sit inside a call. An index bracket, as in `data[i]`,
+keeps its expression on one line.
+
+```pluto
+m = [1 (2 +
+    3) 4]          # one row: [1 5 4]
+```
+
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
 
@@ -146,8 +157,8 @@ than flattened when used as cells.
 Multiple scalar rows with homogeneous but different column types infer an
 unnamed table. A header always produces a table and must contain at least one
 column name. The header goes on its own line after `[`, with all its column
-names on that line. Headerless literals start directly with their first data
-row.
+names on that logical line; a column type's parentheses may span physical
+lines. Headerless literals start directly with their first data row.
 
 The preferred layout outdents the `:` marker so the first header and first
 value begin in the same column. Spacing within header and data rows is

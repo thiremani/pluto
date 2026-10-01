@@ -955,6 +955,51 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a line break inside parentheses reads as a space", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    2)\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.INT, "2", "", 2, 5},
+			{token.RPAREN, ")", "", 2, 6},
+			{token.NEWLINE, "\n", "", 2, 7},
+			{token.IDENT, "y", "", 3, 1},
+			{token.EOF, "", "", 3, 2},
+		})
+	})
+
+	t.Run("rows inside parentheses keep their line breaks", func(t *testing.T) {
+		checkInput(t, "f([\n  1\n])", []Test{
+			{token.IDENT, "f", "", 1, 1},
+			{token.LPAREN, "(", "", 1, 2},
+			{token.LBRACK, "[", "", 1, 3},
+			{token.NEWLINE, "\n", "", 1, 4},
+			{token.INT, "1", "", 2, 3},
+			{token.NEWLINE, "\n", "", 2, 4},
+			{token.RBRACK, "]", "", 3, 1},
+			{token.RPAREN, ")", "", 3, 2},
+			{token.EOF, "", "", 3, 3},
+		})
+	})
+
+	t.Run("a line that leaves parentheses closes them and ends the statement", func(t *testing.T) {
+		checkInput(t, "x = f(\na = 7", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 7},
+			{token.NEWLINE, "\n", "", 1, 7},
+			{token.IDENT, "a", "", 2, 1},
+			{token.ASSIGN, "=", "", 2, 3},
+			{token.INT, "7", "", 2, 5},
+			{token.EOF, "", "", 2, 6},
+		})
+	})
+
 	t.Run("a closer also drops a bracket left open inside its own", func(t *testing.T) {
 		checkInput(t, "x = [(1]\ny", []Test{
 			{token.IDENT, "x", "", 1, 1},
