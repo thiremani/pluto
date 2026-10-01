@@ -71,8 +71,9 @@ Lines inside an open bracket have no indentation of their own. A line
 continues the bracket when it is indented past the line where the bracket
 opened or starts with a closing bracket. Any other line closes
 each bracket it cannot continue: the bracket is reported as never closed, and
-the line parses as the next statement. A statement may also break after its
-`=`: the next line continues it at any indentation.
+the line parses as the next statement. An assignment's value starts on the
+same line as its `=`, so a multi-line literal opens its bracket there:
+`m = [`, not `m =` followed by `[` on the next line.
 
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.

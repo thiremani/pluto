@@ -18,7 +18,6 @@ type Lexer struct {
 	lineOffset   int   // line number
 	column       int   // column number in the line
 	onNewline    bool  // at beginning of new line
-	joinNext     bool  // a line ended in '=': later lines join it until a token arrives
 	indentStack  []int // indentation level stack
 	toDeindent   int   // number of deindent tokens to be emitted before we continue with current token
 
@@ -79,11 +78,6 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	// A line whose last token is '=' joins the next, whatever spaces or comment
-	// follow it.
-	if tok.Type != token.NEWLINE {
-		l.joinNext = tok.Type == token.ASSIGN
-	}
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
 		l.brackets = append(l.brackets, openBracket{opener: tok, indent: l.lineIndent()})
@@ -204,7 +198,7 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		l.onNewline = !l.joinNext
+		l.onNewline = true
 	case '\\':
 		tok = l.createToken(token.ILLEGAL, `\`, hadSpace)
 		err = &token.CompileError{
@@ -470,7 +464,7 @@ func (l *Lexer) newLine() {
 }
 
 // lineIndent returns the indentation column of the physical line being read,
-// however that line began: after '=' or inside a string.
+// including one that began inside a multi-line string.
 func (l *Lexer) lineIndent() int {
 	column := 1
 	for i := l.lineStart; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {

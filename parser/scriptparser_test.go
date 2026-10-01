@@ -1520,8 +1520,6 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 	}{
 		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
 		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
-		{"right side on the line after =", "x =\n    [1 2]", nil},
-		{"right side after a comment line", "x =\n    # explanation\n    [1 2]", nil},
 		{"unclosed nested literals", "x = [\n  [1 2", []string{
 			"TestBracketLayoutKeepsStatements:2:3:'[' is never closed; its later lines are indented past this line",
 			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
@@ -1542,6 +1540,40 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 			require.Equal(t, "after", program.Statements[2].String())
 		})
 	}
+}
+
+// An assignment's value starts on the same line as its '=', even when a
+// comment follows the '=' or the value is a bracket. The statement after it
+// still parses.
+func TestValueStartsOnAssignmentLine(t *testing.T) {
+	const msg = "TestValueStartsOnAssignmentLine:1:3:an assignment's value starts on the same line as its '='"
+	for _, tt := range []struct {
+		name  string
+		input string
+	}{
+		{"value on an indented line", "x =\n    1"},
+		{"value on an unindented line", "x =\n1"},
+		{"comment after =", "x = # note\n    1"},
+		{"bracket on the next line", "m =\n[\n    1 2\n]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", tt.input+"\nafter = 7"))
+			program := sp.Parse()
+			require.NotEmpty(t, sp.Errors())
+			require.Equal(t, msg, sp.Errors()[0])
+			found := false
+			for _, stmt := range program.Statements {
+				if let, ok := stmt.(*ast.LetStatement); ok && let != nil && let.Name[0].Value == "after" {
+					found = true
+				}
+			}
+			require.True(t, found, "the statement after the assignment still parses")
+		})
+	}
+
+	sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", "x ="))
+	sp.Parse()
+	require.Equal(t, []string{msg}, sp.Errors())
 }
 
 // Pluto has no line continuation: a backslash is an illegal character in a

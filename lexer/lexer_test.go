@@ -912,40 +912,6 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a line ending in = continues on the next line", func(t *testing.T) {
-		checkInput(t, "x =\n    [1 2]\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.NEWLINE, "\n", "", 1, 4},
-			{token.LBRACK, "[", "", 2, 5},
-			{token.INT, "1", "", 2, 6},
-			{token.INT, "2", "", 2, 8},
-			{token.RBRACK, "]", "", 2, 9},
-			{token.NEWLINE, "\n", "", 2, 10},
-			{token.IDENT, "y", "", 3, 1},
-			{token.EOF, "", "", 3, 2},
-		})
-	})
-
-	t.Run("a bracket after = takes its own line's indentation", func(t *testing.T) {
-		checkInput(t, "f\n    out =\n[\n  n\n]\n    z", []Test{
-			{token.IDENT, "f", "", 1, 1},
-			{token.NEWLINE, "\n", "", 1, 2},
-			{token.INDENT, "o", "", 2, 5},
-			{token.IDENT, "out", "", 2, 5},
-			{token.ASSIGN, "=", "", 2, 9},
-			{token.NEWLINE, "\n", "", 2, 10},
-			{token.LBRACK, "[", "", 3, 1},
-			{token.NEWLINE, "\n", "", 3, 2},
-			{token.IDENT, "n", "", 4, 3},
-			{token.NEWLINE, "\n", "", 4, 4},
-			{token.RBRACK, "]", "", 5, 1},
-			{token.NEWLINE, "\n", "", 5, 2},
-			{token.IDENT, "z", "", 6, 5},
-			{token.EOF, "", "", 6, 6},
-		})
-	})
-
 	t.Run("a bracket after a multi-line string takes its own line's indentation", func(t *testing.T) {
 		checkInput(t, "f\n    s = g(\"a\nb\", [1\n 2])\n    z", []Test{
 			{token.IDENT, "f", "", 1, 1},
@@ -980,23 +946,6 @@ func TestBracketLayout(t *testing.T) {
 			{token.NEWLINE, "\n", "", 1, 9},
 			{token.IDENT, "y", "", 2, 1},
 			{token.EOF, "", "", 2, 2},
-		})
-	})
-
-	t.Run("a continuation after = lasts through blank and comment lines", func(t *testing.T) {
-		checkInput(t, "x =\n    # note\n\n    [1 2]\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.NEWLINE, "\n", "", 1, 4},
-			{token.NEWLINE, "\n", "", 2, 11},
-			{token.NEWLINE, "\n", "", 3, 1},
-			{token.LBRACK, "[", "", 4, 5},
-			{token.INT, "1", "", 4, 6},
-			{token.INT, "2", "", 4, 8},
-			{token.RBRACK, "]", "", 4, 9},
-			{token.NEWLINE, "\n", "", 4, 10},
-			{token.IDENT, "y", "", 5, 1},
-			{token.EOF, "", "", 5, 2},
 		})
 	})
 

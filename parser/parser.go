@@ -791,9 +791,13 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	}
 
 	p.nextToken()
-	// Allow line breaks/indentation between '=' and the first RHS expression
-	// so multi-line constructs (arrays, grouped expressions) work naturally.
-	p.skipArrayFormatting()
+	if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.EOF) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: stmt.Token,
+			Msg:   "an assignment's value starts on the same line as its '='",
+		})
+		return nil
+	}
 	expList := p.parseExpList(prefixSplitAfterCondition)
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement

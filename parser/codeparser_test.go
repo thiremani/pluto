@@ -262,7 +262,6 @@ func TestBracketLayoutInBody(t *testing.T) {
 		{"closing line across dedents", "    y = [\n      [\n        x\n    ]]\n"},
 		{"literal continued on an indented line", "    y = [1 2\n         3 4]\n"},
 		{"closing line left of its bracket", "    y = [\n        x\n]\n"},
-		{"bracket on the line after =", "    y =\n[\n  x\n]\n"},
 		{"bracket on a multi-line string's last line", "    y = f(\"a\nb\", [1\n 2])\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
