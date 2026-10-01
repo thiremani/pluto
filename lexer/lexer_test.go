@@ -242,6 +242,24 @@ func TestTabErr(t *testing.T) {
 	}
 
 	checkInput(t, input, tests)
+
+	// Nor is a comment or blank last line that ends the input without a line
+	// break.
+	for _, tc := range []struct {
+		input     string
+		eofColumn int
+	}{
+		{"x = 1\n\t# note", 8},
+		{"x = 1\n\t ", 3},
+	} {
+		checkInput(t, tc.input, []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.EOF, "", "", 2, tc.eofColumn},
+		})
+	}
 }
 
 func TestEof(t *testing.T) {

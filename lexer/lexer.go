@@ -332,7 +332,7 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 // skipNewlineSpaces moves past blank and comment lines, and the indentation of
 // the next line, to that line's first token. A tab in that indentation is an
 // error, reported after the first run of tabs; blank and comment lines are not
-// checked.
+// checked, also when one ends the input without a line break.
 func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 	prevTab := false
 	for {
@@ -352,6 +352,9 @@ func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 			err = nil
 			l.readRune()
 		default:
+			if l.atEOF() {
+				return nil
+			}
 			return err
 		}
 		prevTab = tab
