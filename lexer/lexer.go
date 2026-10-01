@@ -12,25 +12,27 @@ import (
 type Lexer struct {
 	FileName     string
 	input        []rune
-	position     int   // current position in input (points to current rune)
-	readPosition int   // current reading position in input (after current rune)
-	curr         rune  // current rune under examination
-	lineOffset   int   // line number
-	column       int   // column number in the line
-	onNewline    bool  // at beginning of new line
-	indentStack  []int // indentation level stack
-	toDeindent   int   // number of deindent tokens to be emitted before we continue with current token
+	position     int  // current position in input (points to current rune)
+	readPosition int  // current reading position in input (after current rune)
+	curr         rune // current rune under examination
+	lineOffset   int  // line number
+	column       int  // column number in the line
+	lineStart    int  // raw index where the physical line being read starts
 
-	lineStart int           // raw index where the physical line being read starts
-	brackets  []openBracket // brackets still open, innermost last
-	pending   []lexed       // implicit closers and the token they precede
+	contexts []context // indented blocks, then open brackets; innermost last
+	pending  []lexed   // layout tokens decided at a line break, in order
 }
 
-// openBracket is a '(' or '[' waiting for its closer, with the indentation of
-// the line it opened on.
-type openBracket struct {
-	opener token.Token
+// context is an indented block, or an open '(' or '[' with the indentation of
+// the line it opened on. A bracket never holds a block: lines inside brackets
+// get no indentation tokens, so every bracket sits above every block.
+type context struct {
+	opener token.Token // the bracket; a block has none
 	indent int
+}
+
+func (c context) isBracket() bool {
+	return c.opener.Type == token.LPAREN || c.opener.Type == token.LBRACK
 }
 
 type lexed struct {
@@ -50,8 +52,9 @@ const (
 )
 
 func New(fileName, input string) *Lexer {
-	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, onNewline: true}
+	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1}
 	l.readRune()
+	l.startLine(l.skipNewlineSpaces())
 	return l
 }
 
@@ -66,10 +69,8 @@ func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace 
 	}
 }
 
-// NextToken returns the next token. A line inside open brackets continues
-// them, so it emits no indentation tokens. A bracket that a line break or the
-// end of input cannot continue gets an implicit closer before that token, with
-// an error at its opener.
+// NextToken returns the next token. Layout tokens, decided at each line
+// break, come first.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	if len(l.pending) > 0 {
 		next := l.pending[0]
@@ -80,49 +81,95 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	tok, err := l.lex()
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
-		l.brackets = append(l.brackets, openBracket{opener: tok, indent: l.lineIndent()})
+		l.contexts = append(l.contexts, context{opener: tok, indent: l.lineIndent()})
 	case token.RPAREN, token.RBRACK:
 		l.closeBracket(tok.Type)
 	case token.NEWLINE:
-		if l.onNewline {
-			return l.closeLeftOpen(tok, err)
-		}
+		l.lineBreak(tok, err)
+		return l.NextToken()
 	case token.EOF:
-		return l.closeLeftOpen(tok, err)
+		l.closeBrackets(tok, 0, 0)
+		l.pending = append(l.pending, lexed{tok, err})
+		return l.NextToken()
 	}
 	return tok, err
 }
 
-// closeLeftOpen gives an implicit closer, before tok, to each bracket that
-// cannot continue past it: every open bracket at the end of input, and after
-// a line break each bracket whose line the next line is not indented past,
-// unless that line starts with a closer.
-func (l *Lexer) closeLeftOpen(tok token.Token, err *token.CompileError) (token.Token, *token.CompileError) {
-	if len(l.brackets) == 0 {
-		return tok, err
-	}
-	column, first := 0, rune(0)
-	if tok.Type == token.NEWLINE {
-		column, first = l.nextLineStart()
-	}
-	for len(l.brackets) > 0 {
-		open := l.brackets[len(l.brackets)-1]
+// lineBreak lays out the line after a line break; it is the one place that
+// reads indentation. It moves past blank and comment lines to the next line,
+// closes each bracket that line cannot continue, and queues the break, then
+// that line's own layout tokens.
+func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
+	indentErr := l.skipNewlineSpaces()
+	l.closeBrackets(br, l.column, l.curr)
+	l.pending = append(l.pending, lexed{br, err})
+	l.startLine(indentErr)
+}
+
+// closeBrackets gives an implicit closer, before at, to each open bracket
+// that a line starting with first at column cannot continue: one whose line
+// it is not indented past, unless it starts with a closer. At the end of
+// input, where first is 0, every bracket closes.
+func (l *Lexer) closeBrackets(at token.Token, column int, first rune) {
+	for l.inBracket() {
+		open := l.contexts[len(l.contexts)-1]
 		if first == ')' || first == ']' || (first != 0 && column > open.indent) {
-			break
+			return
 		}
-		l.brackets = l.brackets[:len(l.brackets)-1]
-		l.pending = append(l.pending, implicitCloser(open, tok))
+		l.contexts = l.contexts[:len(l.contexts)-1]
+		l.pending = append(l.pending, implicitCloser(open, at))
 	}
-	if len(l.pending) == 0 {
-		return tok, err
+}
+
+// startLine queues the layout tokens of the line about to be read. A line
+// inside brackets has none. Otherwise its indentation opens a block, dedents
+// to an enclosing one, or stays in the current one; a tab in it, or a level
+// no block has, is reported once and the line reads at the current level.
+func (l *Lexer) startLine(indentErr *token.CompileError) {
+	if indentErr != nil {
+		l.pending = append(l.pending, lexed{l.createToken(token.ILLEGAL, string(l.curr), false), indentErr})
+		return
 	}
-	l.pending = append(l.pending, lexed{tok, err})
-	return l.NextToken()
+	if l.inBracket() || l.curr == eof || l.curr == 0 {
+		return
+	}
+
+	top := len(l.contexts) - 1
+	if l.column == 1 {
+		l.dedentTo(0)
+		return
+	}
+	if top < 0 || l.column > l.contexts[top].indent {
+		l.contexts = append(l.contexts, context{indent: l.column})
+		l.pending = append(l.pending, lexed{l.createToken(token.INDENT, string(l.curr), false), nil})
+		return
+	}
+	for i := top; i >= 0 && l.column <= l.contexts[i].indent; i-- {
+		if l.column == l.contexts[i].indent {
+			l.dedentTo(i + 1)
+			return
+		}
+	}
+	bad := l.createToken(token.ILLEGAL, string(l.curr), false)
+	l.pending = append(l.pending, lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_ERR + ". At char: " + string(l.curr)}})
+}
+
+// dedentTo leaves every block above the first n contexts, with a DEINDENT
+// for each.
+func (l *Lexer) dedentTo(n int) {
+	for len(l.contexts) > n {
+		l.contexts = l.contexts[:len(l.contexts)-1]
+		l.pending = append(l.pending, lexed{l.createToken(token.DEINDENT, string(l.curr), false), nil})
+	}
+}
+
+func (l *Lexer) inBracket() bool {
+	return len(l.contexts) > 0 && l.contexts[len(l.contexts)-1].isBracket()
 }
 
 // implicitCloser closes open at the position of at, reporting at the opener
 // that it was never closed.
-func implicitCloser(open openBracket, at token.Token) lexed {
+func implicitCloser(open context, at token.Token) lexed {
 	closer := at
 	closer.Type, closer.Literal, closer.HadSpace = token.RBRACK, token.SYM_RBRACK, false
 	if open.opener.Type == token.LPAREN {
@@ -142,53 +189,18 @@ func (l *Lexer) closeBracket(closer token.TokenType) {
 	if closer == token.RBRACK {
 		opener = token.LBRACK
 	}
-	for i := len(l.brackets) - 1; i >= 0; i-- {
-		if l.brackets[i].opener.Type == opener {
-			l.brackets = l.brackets[:i]
+	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
+		if l.contexts[i].opener.Type == opener {
+			l.contexts = l.contexts[:i]
 			return
 		}
 	}
-}
-
-// nextLineStart returns the column and first rune of the next line holding a
-// token, skipping blank and comment lines, without consuming input. The rune
-// is 0 at the end of input.
-func (l *Lexer) nextLineStart() (int, rune) {
-	r, next, column := l.curr, l.readPosition, l.column
-	for {
-		if r == '#' {
-			for r != '\n' && r != 0 {
-				r, next, column = l.runeAfter(next, column)
-			}
-		}
-		switch r {
-		case ' ', '\t':
-		case '\n':
-			column = 0
-		default:
-			return column, r
-		}
-		r, next, column = l.runeAfter(next, column)
-	}
-}
-
-// runeAfter reads the logical rune at raw index next, as readRune would,
-// without consuming it.
-func (l *Lexer) runeAfter(next, column int) (rune, int, int) {
-	if next >= len(l.input) {
-		return 0, next, column + 1
-	}
-	r, after := LogicalRune(l.input, next)
-	return r, after, column + 1
 }
 
 func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	var tok token.Token
 	var err *token.CompileError
 
-	if l.onNewline {
-		return l.indentToken()
-	}
 	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
@@ -198,7 +210,6 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	switch l.curr {
 	case '\n':
 		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		l.onNewline = true
 	case '\\':
 		tok = l.createToken(token.ILLEGAL, `\`, hadSpace)
 		err = &token.CompileError{
@@ -310,57 +321,6 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	return tok, err
 }
 
-func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
-	if l.toDeindent > 0 {
-		return l.deindentToken()
-	}
-	if len(l.brackets) > 0 {
-		return l.bracketLine()
-	}
-
-	indent, err := l.indentLevel()
-
-	if err != nil {
-		// Report the line once; its tokens then read at the current level.
-		l.onNewline = false
-		return l.createToken(token.ILLEGAL, string(l.curr), false), err
-	}
-
-	if l.toDeindent > 0 {
-		return l.deindentToken()
-	}
-
-	l.onNewline = false
-	if indent {
-		return l.createToken(token.INDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
-	}
-
-	return l.lex()
-}
-
-// bracketLine starts a line inside open brackets. The line continues them
-// (closeLeftOpen closed those it cannot), so it neither indents nor dedents.
-func (l *Lexer) bracketLine() (token.Token, *token.CompileError) {
-	l.onNewline = false
-	err := l.skipNewlineSpaces()
-	if err != nil {
-		return l.createToken(token.ILLEGAL, string(l.curr), false), err
-	}
-	return l.lex()
-}
-
-func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
-	l.toDeindent--
-	if len(l.indentStack) > 0 {
-		l.indentStack = l.indentStack[:len(l.indentStack)-1]
-	}
-	if l.toDeindent == 0 {
-		l.onNewline = false
-	}
-
-	return l.createToken(token.DEINDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
-}
-
 // skipNewlineSpaces moves past blank and comment lines, and the indentation of
 // the next line, to that line's first token. A tab in that indentation is an
 // error, reported after the first run of tabs; blank and comment lines are not
@@ -387,55 +347,6 @@ func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
 			return err
 		}
 		prevTab = tab
-	}
-}
-
-func (l *Lexer) indentLevel() (bool, *token.CompileError) {
-	err := l.skipNewlineSpaces()
-	if err != nil {
-		l.onNewline = false
-		return false, err
-	}
-
-	if l.curr == eof || l.curr == 0 {
-		l.onNewline = false
-		return false, nil
-	}
-
-	if l.column == 1 {
-		l.toDeindent = len(l.indentStack)
-		return false, nil
-	}
-
-	if len(l.indentStack) == 0 {
-		l.indentStack = append(l.indentStack, l.column)
-		return true, nil
-	}
-
-	if l.column > l.indentStack[len(l.indentStack)-1] {
-		// new indentation level
-		l.indentStack = append(l.indentStack, l.column)
-		return true, nil
-	}
-
-	for i := len(l.indentStack) - 1; i >= 0; i-- {
-		level := l.indentStack[i]
-		if l.column == level {
-			// found matching level -> dedent to it
-			l.toDeindent = len(l.indentStack) - 1 - i
-			return false, nil
-		} else if l.column > level {
-			return false, &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-				Msg:   INDENT_ERR + ". At char: " + string(l.curr),
-			}
-		}
-	}
-
-	// column in > 1 but does not match any level in the indentStack
-	return false, &token.CompileError{
-		Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-		Msg:   INDENT_ERR + ". At char: " + string(l.curr),
 	}
 }
 
