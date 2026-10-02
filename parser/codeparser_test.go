@@ -305,7 +305,7 @@ z = G(x)
 	p := NewCodeParser(lexer.New("TestUnclosedLiteralInBody", input))
 	p.Parse()
 	require.Equal(t, []string{
-		"TestUnclosedLiteralInBody:2:9:'[' is never closed; its later lines are indented past this line",
+		"TestUnclosedLiteralInBody:2:9:'[' " + lexer.NEVER_CLOSED_ERR,
 	}, p.Errors())
 }
 

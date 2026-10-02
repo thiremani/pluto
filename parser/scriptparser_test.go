@@ -1402,13 +1402,13 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "missing closing bracket",
 			input:       "[1 2 3",
 			expectError: true,
-			errorMsg:    "'[' is never closed",
+			errorMsg:    "'[' " + lexer.NEVER_CLOSED_ERR,
 		},
 		{
 			name:        "row at the bracket line's indentation",
 			input:       "[1 2\n3 4]",
 			expectError: true,
-			errorMsg:    "'[' is never closed",
+			errorMsg:    "'[' " + lexer.NEVER_CLOSED_ERR,
 		},
 		{
 			name:        "invalid header token",
@@ -1521,14 +1521,14 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
 		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
 		{"unclosed nested literals", "x = [\n  [1 2", []string{
-			"TestBracketLayoutKeepsStatements:2:3:'[' is never closed; its later lines are indented past this line",
-			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
+			"TestBracketLayoutKeepsStatements:2:3:'[' " + lexer.NEVER_CLOSED_ERR,
+			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.NEVER_CLOSED_ERR,
 		}},
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{
-			"TestBracketLayoutKeepsStatements:1:5:'[' is never closed; its later lines are indented past this line",
+			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.NEVER_CLOSED_ERR,
 		}},
 		{"unclosed call", "x = f(1", []string{
-			"TestBracketLayoutKeepsStatements:1:6:'(' is never closed; its later lines are indented past this line",
+			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.NEVER_CLOSED_ERR,
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1634,7 +1634,7 @@ func TestLineBreakLeavingParentheses(t *testing.T) {
 	sp := NewScriptParser(lexer.New("TestLineBreakLeavingParentheses", "x = f(\na = 7"))
 	program := sp.Parse()
 	require.Equal(t, []string{
-		"TestLineBreakLeavingParentheses:1:6:'(' is never closed; its later lines are indented past this line",
+		"TestLineBreakLeavingParentheses:1:6:'(' " + lexer.NEVER_CLOSED_ERR,
 	}, sp.Errors())
 	require.Len(t, program.Statements, 2)
 	require.Equal(t, "a = 7", program.Statements[1].String())
