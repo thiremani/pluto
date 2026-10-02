@@ -21,6 +21,7 @@ type Lexer struct {
 	contexts []context // indented blocks, then open brackets; innermost last
 	pending  []lexed   // tokens decided but not yet returned, in order
 	head     int       // index in pending of the next token to return
+	open     [2]int    // open parentheses and square brackets, by bracketSlot
 }
 
 // context is an indented block, or an open '(' or '[' with the indentation of
@@ -105,6 +106,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	case token.LPAREN, token.LBRACK:
 		indent, _, _ := l.indentation()
 		l.contexts = append(l.contexts, context{opener: tok, indent: indent})
+		l.open[bracketSlot(tok.Type)]++
 	case token.RPAREN, token.RBRACK:
 		l.closeBracket(tok)
 		l.pending = append(l.pending, lexed{tok, err})
@@ -210,6 +212,7 @@ func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
 	for len(l.contexts) > n && l.inBracket() {
 		open := l.contexts[len(l.contexts)-1]
 		l.contexts = l.contexts[:len(l.contexts)-1]
+		l.open[bracketSlot(open.opener.Type)]--
 		closer := at
 		closer.Type, closer.Literal = open.closer()
 		closer.HadSpace = false
@@ -222,16 +225,29 @@ func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
 
 // closeBracket closes the innermost open bracket that closer closes. Each
 // bracket still open inside it gets an implicit closer first, so every
-// opener has a closer. A closer that no open bracket expects closes nothing;
-// the parser reports it.
+// opener has a closer. A closer that no open bracket expects closes nothing,
+// without searching; the parser reports it.
 func (l *Lexer) closeBracket(closer token.Token) {
+	slot := bracketSlot(closer.Type)
+	if l.open[slot] == 0 {
+		return
+	}
 	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
 		if expected, _ := l.contexts[i].closer(); expected == closer.Type {
 			l.closeImplicitly(i+1, closer, NEVER_CLOSED_ERR)
 			l.contexts = l.contexts[:i]
+			l.open[slot]--
 			return
 		}
 	}
+}
+
+// bracketSlot indexes Lexer.open by the kind of a bracket or its closer.
+func bracketSlot(t token.TokenType) int {
+	if t == token.LPAREN || t == token.RPAREN {
+		return 0
+	}
+	return 1
 }
 
 func (l *Lexer) lex() (token.Token, *token.CompileError) {

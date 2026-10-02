@@ -1116,6 +1116,20 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a closer that no open bracket expects closes nothing", func(t *testing.T) {
+		checkInput(t, "x = (1]\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LPAREN, "(", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.RBRACK, "]", "", 1, 7},
+			{token.RPAREN, ")", "1:5:'(' " + INDENT_PAST_ERR, 1, 8},
+			{token.NEWLINE, "\n", "", 1, 8},
+			{token.IDENT, "y", "", 2, 1},
+			{token.EOF, "", "", 2, 2},
+		})
+	})
+
 	t.Run("blank and comment lines inside brackets", func(t *testing.T) {
 		checkInput(t, "x = [\n\n    # note\n    1\n]", []Test{
 			{token.IDENT, "x", "", 1, 1},
@@ -1128,6 +1142,32 @@ func TestBracketLayout(t *testing.T) {
 			{token.EOF, "", "", 5, 2},
 		})
 	})
+}
+
+// The open counts that let a stray closer close nothing without searching
+// match the brackets on the context stack after every token.
+func TestOpenCountsMatchBrackets(t *testing.T) {
+	for _, input := range []string{
+		"x = [(1]]\ny",
+		"x = f([1 2)\ny",
+		"x = f(1,\n    [2 3\n)\ny",
+		"f\n    x = [1\n  2]\n    y = (1 ]\n",
+		"x = ((1\n",
+		"x = [\n  [1 2\n]",
+	} {
+		l := New("", input)
+		for tok, _ := l.NextToken(); tok.Type != token.EOF; tok, _ = l.NextToken() {
+			var brackets [2]int
+			for _, c := range l.contexts {
+				if c.isBracket() {
+					brackets[bracketSlot(c.opener.Type)]++
+				}
+			}
+			if l.open != brackets {
+				t.Fatalf("%q: after %q at %d:%d open counts are %v, brackets %v", input, tok.Literal, tok.Line, tok.Column, l.open, brackets)
+			}
+		}
+	}
 }
 
 func TestLineBreakInsideBrackets(t *testing.T) {
