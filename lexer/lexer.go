@@ -62,7 +62,7 @@ const (
 	INDENT_TAB_ERR      = "indent using tabs not allowed"
 	NEVER_CLOSED_ERR    = "is never closed"
 	INDENT_PAST_ERR     = NEVER_CLOSED_ERR + "; lines that continue it must be indented past this line"
-	NO_CONTINUATION_ERR = "backslash line continuation is not supported; inside parentheses an expression can span lines"
+	NO_CONTINUATION_ERR = "backslash line continuation is not supported; a row or header must stay on one line, and an expression can span lines inside parentheses"
 )
 
 func New(fileName, input string) *Lexer {
