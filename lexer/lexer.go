@@ -423,11 +423,6 @@ func (l *Lexer) skipWhitespace() bool {
 	return hadSpace
 }
 
-func (l *Lexer) newLine() {
-	l.lineOffset++
-	l.column = 0
-}
-
 // LogicalRune returns the logical rune at raw index i and the raw index
 // just past it: a CRLF pair is one logical '\n' spanning two raw runes,
 // a lone CR is '\n'. All raw-source walkers share this primitive.
@@ -448,7 +443,8 @@ func LogicalRune(raw []rune, i int) (rune, int) {
 // here, at the single point of consumption.
 func (l *Lexer) readRune() {
 	if l.curr == '\n' {
-		l.newLine()
+		l.lineOffset++
+		l.column = 0
 	}
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
