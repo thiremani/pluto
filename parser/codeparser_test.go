@@ -296,7 +296,8 @@ func TestParametersAcrossLines(t *testing.T) {
 }
 
 // A closer that matches an enclosing bracket closes the literal left open
-// inside it, so the rest of the body and the next function parse.
+// inside it, which is then the only error: the rest of the body and the
+// next function report none.
 func TestCloserOfEnclosingBracketInBody(t *testing.T) {
 	input := `y = F(x)
     y = f([x 1)
