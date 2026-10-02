@@ -1070,17 +1070,49 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a closer also drops a bracket left open inside its own", func(t *testing.T) {
+	t.Run("a closer first closes the brackets left open inside its own", func(t *testing.T) {
 		checkInput(t, "x = [(1]\ny", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.LBRACK, "[", "", 1, 5},
 			{token.LPAREN, "(", "", 1, 6},
 			{token.INT, "1", "", 1, 7},
+			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 8},
 			{token.RBRACK, "]", "", 1, 8},
 			{token.NEWLINE, "\n", "", 1, 9},
 			{token.IDENT, "y", "", 2, 1},
 			{token.EOF, "", "", 2, 2},
+		})
+		checkInput(t, "x = f([1 2)\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.LBRACK, "[", "", 1, 7},
+			{token.INT, "1", "", 1, 8},
+			{token.INT, "2", "", 1, 10},
+			{token.RBRACK, "]", "1:7:'[' " + NEVER_CLOSED_ERR, 1, 11},
+			{token.RPAREN, ")", "", 1, 11},
+			{token.NEWLINE, "\n", "", 1, 12},
+			{token.IDENT, "y", "", 2, 1},
+			{token.EOF, "", "", 2, 2},
+		})
+		checkInput(t, "x = f(1,\n    [2 3\n)\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.INT, "2", "", 2, 6},
+			{token.INT, "3", "", 2, 8},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.RBRACK, "]", "2:5:'[' " + NEVER_CLOSED_ERR, 3, 1},
+			{token.RPAREN, ")", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
+			{token.IDENT, "y", "", 4, 1},
+			{token.EOF, "", "", 4, 2},
 		})
 	})
 

@@ -1530,6 +1530,12 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 		{"unclosed call", "x = f(1", []string{
 			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.INDENT_PAST_ERR,
 		}},
+		{"closer of an enclosing call", "x = f([1 2)", []string{
+			"TestBracketLayoutKeepsStatements:1:7:'[' " + lexer.NEVER_CLOSED_ERR,
+		}},
+		{"closer of an enclosing call on a later line", "x = f(1,\n    [2 3\n)", []string{
+			"TestBracketLayoutKeepsStatements:2:5:'[' " + lexer.NEVER_CLOSED_ERR,
+		}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{
 			"TestBracketLayoutKeepsStatements:3:8:NUL character is not allowed in source",
 		}},

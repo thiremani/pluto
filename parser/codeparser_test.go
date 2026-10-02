@@ -295,6 +295,22 @@ func TestParametersAcrossLines(t *testing.T) {
 	require.Len(t, fn.Parameters, 2)
 }
 
+// A closer that matches an enclosing bracket closes the literal left open
+// inside it, so the rest of the body and the next function parse.
+func TestCloserOfEnclosingBracketInBody(t *testing.T) {
+	input := `y = F(x)
+    y = f([x 1)
+    y = y
+z = G(x)
+    z = x
+`
+	p := NewCodeParser(lexer.New("TestCloserOfEnclosingBracketInBody", input))
+	p.Parse()
+	require.Equal(t, []string{
+		"TestCloserOfEnclosingBracketInBody:2:11:'[' " + lexer.NEVER_CLOSED_ERR,
+	}, p.Errors())
+}
+
 func TestUnclosedLiteralInBody(t *testing.T) {
 	input := `y = F(x)
     y = [x

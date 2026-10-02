@@ -104,7 +104,9 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		indent, _, _ := l.indentation()
 		l.contexts = append(l.contexts, context{opener: tok, indent: indent})
 	case token.RPAREN, token.RBRACK:
-		l.closeBracket(tok.Type)
+		l.closeBracket(tok)
+		l.pending = append(l.pending, lexed{tok, err})
+		return l.NextToken()
 	case token.NEWLINE:
 		l.lineBreak(tok, err)
 		return l.NextToken()
@@ -216,12 +218,14 @@ func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
 	}
 }
 
-// closeBracket pops the innermost open bracket that closer closes, with any
-// bracket left open inside it. A closer that no open bracket expects changes
-// nothing; the parser reports it.
-func (l *Lexer) closeBracket(closer token.TokenType) {
+// closeBracket closes the innermost open bracket that closer closes. Each
+// bracket still open inside it gets an implicit closer first, so every
+// opener has a closer. A closer that no open bracket expects closes nothing;
+// the parser reports it.
+func (l *Lexer) closeBracket(closer token.Token) {
 	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
-		if expected, _ := l.contexts[i].closer(); expected == closer {
+		if expected, _ := l.contexts[i].closer(); expected == closer.Type {
+			l.closeImplicitly(i+1, closer, NEVER_CLOSED_ERR)
 			l.contexts = l.contexts[:i]
 			return
 		}
