@@ -17,11 +17,9 @@ type Lexer struct {
 	curr         rune // current rune under examination
 	lineOffset   int  // line number
 	column       int  // column number in the line
-	lineStart    int  // raw index where the physical line being read starts
 
 	contexts []context // indented blocks, then open brackets; innermost last
 	pending  []lexed   // layout tokens decided at a line break, in order
-	spaced   bool      // a line break read as a space precedes the next token
 }
 
 // context is an indented block, or an open '(' or '[' with the indentation of
@@ -55,18 +53,24 @@ const (
 func New(fileName, input string) *Lexer {
 	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1}
 	l.readRune()
-	l.startLine(l.skipNewlineSpaces())
+	l.startLine(l.nextLine())
 	return l
 }
 
 func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace bool) token.Token {
+	tok := l.tokenAt(tokenType, literal, l.column)
+	tok.HadSpace = hadSpace
+	return tok
+}
+
+// tokenAt makes a token at column on the line being read.
+func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) token.Token {
 	return token.Token{
 		FileName: l.FileName,
 		Type:     tokenType,
 		Literal:  literal,
 		Line:     l.lineOffset,
-		Column:   l.column,
-		HadSpace: hadSpace,
+		Column:   column,
 	}
 }
 
@@ -82,7 +86,8 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	tok, err := l.lex()
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
-		l.contexts = append(l.contexts, context{opener: tok, indent: l.lineIndent()})
+		indent, _, _ := l.indentation()
+		l.contexts = append(l.contexts, context{opener: tok, indent: indent})
 	case token.RPAREN, token.RBRACK:
 		l.closeBracket(tok.Type)
 	case token.NEWLINE:
@@ -97,20 +102,18 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 }
 
 // lineBreak lays out the line after a line break; it is the one place that
-// reads indentation. It moves past blank and comment lines to the next line
+// decides layout. It moves past blank and comment lines to the next line
 // and closes each bracket that line cannot continue. The innermost context
 // left then gives the break its meaning: inside parentheses it reads as a
-// space, inside square brackets it ends a row, and in a block it ends a
-// statement. The next line's own layout tokens follow.
+// space and makes no token, inside square brackets it ends a row, and in a
+// block it ends a statement. The next line's own layout tokens follow.
 func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
-	indentErr := l.skipNewlineSpaces()
-	l.closeBrackets(br, l.column, l.curr)
-	if l.inBracket() && l.contexts[len(l.contexts)-1].opener.Type == token.LPAREN {
-		l.spaced = true
-	} else {
+	column, first, tab := l.nextLine()
+	l.closeBrackets(br, column, first)
+	if !l.inBracket() || l.contexts[len(l.contexts)-1].opener.Type != token.LPAREN {
 		l.pending = append(l.pending, lexed{br, err})
 	}
-	l.startLine(indentErr)
+	l.startLine(column, first, tab)
 }
 
 // closeBrackets gives an implicit closer, before at, to each open bracket
@@ -128,45 +131,50 @@ func (l *Lexer) closeBrackets(at token.Token, column int, first rune) {
 	}
 }
 
-// startLine queues the layout tokens of the line about to be read. A line
-// inside brackets has none. Otherwise its indentation opens a block, dedents
-// to an enclosing one, or stays in the current one; a tab in it, or a level
-// no block has, is reported once and the line reads at the current level.
-func (l *Lexer) startLine(indentErr *token.CompileError) {
-	if indentErr != nil {
-		l.pending = append(l.pending, lexed{l.createToken(token.ILLEGAL, string(l.curr), false), indentErr})
+// startLine queues the layout tokens of the line about to be read, whose
+// content starts with first at column. A tab in its indentation is reported
+// at the tab, and the line reads at the current level. A line inside
+// brackets has no layout tokens. Otherwise its indentation opens a block,
+// dedents to an enclosing one, or stays in the current one; a level no block
+// has is reported once.
+func (l *Lexer) startLine(column int, first rune, tab int) {
+	if tab > 0 {
+		bad := l.tokenAt(token.ILLEGAL, "\t", tab)
+		l.pending = append(l.pending, lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
 		return
 	}
-	if l.inBracket() || l.curr == eof || l.curr == 0 {
+	if l.inBracket() || first == 0 {
 		return
 	}
 
+	at := l.tokenAt(token.INDENT, string(first), column)
 	top := len(l.contexts) - 1
-	if l.column == 1 {
-		l.dedentTo(0)
+	if column == 1 {
+		l.dedentTo(0, at)
 		return
 	}
-	if top < 0 || l.column > l.contexts[top].indent {
-		l.contexts = append(l.contexts, context{indent: l.column})
-		l.pending = append(l.pending, lexed{l.createToken(token.INDENT, string(l.curr), false), nil})
+	if top < 0 || column > l.contexts[top].indent {
+		l.contexts = append(l.contexts, context{indent: column})
+		l.pending = append(l.pending, lexed{at, nil})
 		return
 	}
-	for i := top; i >= 0 && l.column <= l.contexts[i].indent; i-- {
-		if l.column == l.contexts[i].indent {
-			l.dedentTo(i + 1)
+	for i := top; i >= 0 && column <= l.contexts[i].indent; i-- {
+		if column == l.contexts[i].indent {
+			l.dedentTo(i+1, at)
 			return
 		}
 	}
-	bad := l.createToken(token.ILLEGAL, string(l.curr), false)
-	l.pending = append(l.pending, lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_ERR + ". At char: " + string(l.curr)}})
+	at.Type = token.ILLEGAL
+	l.pending = append(l.pending, lexed{at, &token.CompileError{Token: at, Msg: INDENT_ERR + ". At char: " + string(first)}})
 }
 
 // dedentTo leaves every block above the first n contexts, with a DEINDENT
-// for each.
-func (l *Lexer) dedentTo(n int) {
+// at the position of at for each.
+func (l *Lexer) dedentTo(n int, at token.Token) {
+	at.Type = token.DEINDENT
 	for len(l.contexts) > n {
 		l.contexts = l.contexts[:len(l.contexts)-1]
-		l.pending = append(l.pending, lexed{l.createToken(token.DEINDENT, string(l.curr), false), nil})
+		l.pending = append(l.pending, lexed{at, nil})
 	}
 }
 
@@ -208,8 +216,7 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	var tok token.Token
 	var err *token.CompileError
 
-	hadSpace := l.skipWhitespace() || l.spaced
-	l.spaced = false
+	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
 		l.skipComment()
@@ -329,36 +336,43 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	return tok, err
 }
 
-// skipNewlineSpaces moves past blank and comment lines, and the indentation of
-// the next line, to that line's first token. A tab in that indentation is an
-// error, reported after the first run of tabs; blank and comment lines are not
-// checked, also when one ends the input without a line break.
-func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
-	prevTab := false
+// nextLine moves past blank and comment lines to the start of the next line
+// with a token and returns that line's indentation, which it leaves unread.
+// Tabs on blank and comment lines are not checked.
+func (l *Lexer) nextLine() (column int, first rune, tab int) {
 	for {
-		tab := l.curr == '\t'
-		switch l.curr {
-		case ' ', '\t':
-			l.readRune()
-			if tab && (err == nil || prevTab) {
-				err = &token.CompileError{
-					Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-					Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
-				}
-			}
-		case '#':
-			l.skipComment()
-		case '\n':
-			err = nil
-			l.readRune()
-		default:
-			if l.atEOF() {
-				return nil
-			}
-			return err
+		column, first, tab = l.indentation()
+		if first != '\n' && first != '#' {
+			return column, first, tab
 		}
-		prevTab = tab
+		l.skipComment()
+		if l.curr != '\n' {
+			return column, 0, 0
+		}
+		l.readRune()
 	}
+}
+
+// indentation scans the leading spaces and tabs of the line being read
+// without consuming them. It returns the column where the line's content
+// starts, the rune there, and the column of the line's first tab, or 0 for
+// none. At the end of input the rune and the tab are 0.
+func (l *Lexer) indentation() (column int, first rune, tab int) {
+	// Within a line, position and column advance together, so the line
+	// starts column-1 runes before position.
+	i := l.position - l.column + 1
+	column = 1
+	for ; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {
+		if l.input[i] == '\t' && tab == 0 {
+			tab = column
+		}
+		column++
+	}
+	if i >= len(l.input) {
+		return column, 0, 0
+	}
+	first, _ = LogicalRune(l.input, i)
+	return column, first, tab
 }
 
 func (l *Lexer) skipComment() {
@@ -370,8 +384,11 @@ func (l *Lexer) skipComment() {
 	}
 }
 
+// skipWhitespace moves past spaces and tabs and reports whether the next
+// token is apart from the previous one; a line break before it counts as
+// space.
 func (l *Lexer) skipWhitespace() bool {
-	hadSpace := false
+	hadSpace := l.column == 1
 	for l.curr == ' ' || l.curr == '\t' {
 		hadSpace = true
 		l.readRune()
@@ -382,17 +399,6 @@ func (l *Lexer) skipWhitespace() bool {
 func (l *Lexer) newLine() {
 	l.lineOffset++
 	l.column = 0
-	l.lineStart = l.readPosition
-}
-
-// lineIndent returns the indentation column of the physical line being read,
-// including one that began inside a multi-line string.
-func (l *Lexer) lineIndent() int {
-	column := 1
-	for i := l.lineStart; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {
-		column++
-	}
-	return column
 }
 
 // LogicalRune returns the logical rune at raw index i and the raw index
