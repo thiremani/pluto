@@ -180,11 +180,7 @@ func (p *StmtParser) nextToken() {
 		p.peekToken = p.savedTokens[0]
 		p.savedTokens = p.savedTokens[1:]
 	} else {
-		var err *token.CompileError
-		p.peekToken, err = p.l.NextToken()
-		if err != nil {
-			p.errors = append(p.errors, err)
-		}
+		p.peekToken = p.lexToken()
 	}
 
 	p.handleImplicitMult()
@@ -196,12 +192,19 @@ func (p *StmtParser) peekNextToken() token.Token {
 	if len(p.savedTokens) > 0 {
 		return p.savedTokens[0]
 	}
-	nextTok, err := p.l.NextToken()
+	nextTok := p.lexToken()
+	p.savedTokens = append(p.savedTokens, nextTok)
+	return nextTok
+}
+
+// lexToken reads the next token from the lexer and records the error the
+// lexer reports with it, if any.
+func (p *StmtParser) lexToken() token.Token {
+	tok, err := p.l.NextToken()
 	if err != nil {
 		p.errors = append(p.errors, err)
 	}
-	p.savedTokens = append(p.savedTokens, nextTok)
-	return nextTok
+	return tok
 }
 
 // Handle implicit multiplication:
