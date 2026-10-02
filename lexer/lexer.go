@@ -19,7 +19,8 @@ type Lexer struct {
 	column       int  // column number in the line
 
 	contexts []context // indented blocks, then open brackets; innermost last
-	pending  []lexed   // layout tokens decided at a line break, in order
+	pending  []lexed   // tokens decided but not yet returned, in order
+	head     int       // index in pending of the next token to return
 }
 
 // context is an indented block, or an open '(' or '[' with the indentation of
@@ -92,11 +93,12 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 // NextToken returns the next token. Layout tokens, decided at each line
 // break, come first.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
-	if len(l.pending) > 0 {
-		next := l.pending[0]
-		l.pending = append(l.pending[:0], l.pending[1:]...)
+	if l.head < len(l.pending) {
+		next := l.pending[l.head]
+		l.head++
 		return next.tok, next.err
 	}
+	l.pending, l.head = l.pending[:0], 0
 
 	tok, err := l.lex()
 	switch tok.Type {
