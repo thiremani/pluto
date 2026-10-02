@@ -938,6 +938,34 @@ func TestBracketLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a NUL character does not end the input", func(t *testing.T) {
+		checkInput(t, "x = [1\n  # a\x00b\n  2]", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.NEWLINE, "\n", "", 1, 7},
+			{token.ILLEGAL, "\x00", "2:6:NUL character is not allowed in source", 2, 6},
+			{token.IDENT, "b", "", 2, 7},
+			{token.NEWLINE, "\n", "", 2, 8},
+			{token.INT, "2", "", 3, 3},
+			{token.RBRACK, "]", "", 3, 4},
+			{token.EOF, "", "", 3, 5},
+		})
+		checkInput(t, "x = [1\n  \x00\n  2]", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.NEWLINE, "\n", "", 1, 7},
+			{token.ILLEGAL, "\x00", "2:3:NUL character is not allowed in source", 2, 3},
+			{token.NEWLINE, "\n", "", 2, 4},
+			{token.INT, "2", "", 3, 3},
+			{token.RBRACK, "]", "", 3, 4},
+			{token.EOF, "", "", 3, 5},
+		})
+	})
+
 	t.Run("a backslash is an illegal character", func(t *testing.T) {
 		checkInput(t, "x = [1 \\\n    2]", []Test{
 			{token.IDENT, "x", "", 1, 1},

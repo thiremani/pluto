@@ -108,7 +108,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		l.lineBreak(tok, err)
 		return l.NextToken()
 	case token.EOF:
-		l.closeBrackets(tok, 0, 0)
+		l.closeBrackets(tok, 0, eof)
 		l.pending = append(l.pending, lexed{tok, err})
 		return l.NextToken()
 	}
@@ -133,11 +133,11 @@ func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 // closeBrackets gives an implicit closer, before at, to each open bracket
 // that a line starting with first at column cannot continue: one whose line
 // it is not indented past, unless it starts with a closer. At the end of
-// input, where first is 0, every bracket closes.
+// input, where first is eof, every bracket closes.
 func (l *Lexer) closeBrackets(at token.Token, column int, first rune) {
 	for l.inBracket() {
 		open := l.contexts[len(l.contexts)-1]
-		if first == ')' || first == ']' || (first != 0 && column > open.indent) {
+		if first == ')' || first == ']' || (first != eof && column > open.indent) {
 			return
 		}
 		l.contexts = l.contexts[:len(l.contexts)-1]
@@ -157,7 +157,7 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		l.pending = append(l.pending, lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
 		return
 	}
-	if l.inBracket() || first == 0 {
+	if l.inBracket() || first == eof {
 		return
 	}
 
@@ -346,7 +346,9 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 
 // nextLine moves past blank and comment lines to the start of the next line
 // with a token and returns that line's indentation, which it leaves unread.
-// Tabs on blank and comment lines are not checked.
+// Tabs on blank and comment lines are not checked. A comment that a NUL
+// character ends leaves the rest of its line to the lexer, so that line is
+// one with a token.
 func (l *Lexer) nextLine() (column int, first rune, tab int) {
 	for {
 		column, first, tab = l.indentation()
@@ -354,8 +356,11 @@ func (l *Lexer) nextLine() (column int, first rune, tab int) {
 			return column, first, tab
 		}
 		l.skipComment()
+		if l.atEOF() {
+			return column, eof, 0
+		}
 		if l.curr != '\n' {
-			return column, 0, 0
+			return column, first, tab
 		}
 		l.readRune()
 	}
@@ -364,7 +369,7 @@ func (l *Lexer) nextLine() (column int, first rune, tab int) {
 // indentation scans the leading spaces and tabs of the line being read
 // without consuming them. It returns the column where the line's content
 // starts, the rune there, and the column of the line's first tab, or 0 for
-// none. At the end of input the rune and the tab are 0.
+// none. At the end of input the rune is eof and the tab 0.
 func (l *Lexer) indentation() (column int, first rune, tab int) {
 	// Within a line, position and column advance together, so the line
 	// starts column-1 runes before position.
@@ -377,12 +382,14 @@ func (l *Lexer) indentation() (column int, first rune, tab int) {
 		column++
 	}
 	if i >= len(l.input) {
-		return column, 0, 0
+		return column, eof, 0
 	}
 	first, _ = LogicalRune(l.input, i)
 	return column, first, tab
 }
 
+// skipComment moves to the end of the line. A NUL character ends the comment
+// early, so the lexer reports it.
 func (l *Lexer) skipComment() {
 	for l.curr != '\n' {
 		if l.curr == eof || l.curr == 0 {

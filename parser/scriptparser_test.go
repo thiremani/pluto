@@ -1530,6 +1530,9 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 		{"unclosed call", "x = f(1", []string{
 			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.NEVER_CLOSED_ERR,
 		}},
+		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{
+			"TestBracketLayoutKeepsStatements:3:8:NUL character is not allowed in source",
+		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sp := NewScriptParser(lexer.New("TestBracketLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
