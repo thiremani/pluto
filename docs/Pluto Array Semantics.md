@@ -69,17 +69,18 @@ matrix = [1 2
 
 Lines inside an open bracket have no indentation of their own. A line
 continues the bracket when it is indented past the line where the bracket
-opened or starts with a closing bracket. Any other line closes
-each bracket it cannot continue: the bracket is reported as never closed, and
-the line parses as the next statement. An assignment's value starts on the
-same line as its `=`, so a multi-line literal opens its bracket there:
-`m = [`, not `m =` followed by `[` on the next line.
+opened or starts with a closing bracket. Any other line closes each bracket
+it cannot continue: the bracket is reported as never closed, and the line is
+read inside the innermost bracket still open, or as the next statement when
+none is. An assignment's value starts on the same line as its `=`, so a
+multi-line literal opens its bracket there: `m = [`, not `m =` followed by
+`[` on the next line.
 
 The innermost open bracket decides what a line break that continues it means.
 Inside parentheses it reads as a space, so a call, a grouped expression or a
 cell in parentheses can span lines. Inside square brackets it ends a row, also
-when those brackets sit inside a call. An index bracket, as in `data[i]`,
-keeps its expression on one line.
+when those brackets sit inside a call. Directly inside an index bracket, as in
+`data[i]`, a line break is an error.
 
 ```pluto
 m = [1 (2 +
