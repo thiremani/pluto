@@ -205,21 +205,16 @@ func (p *StmtParser) peekNextToken() token.Token {
 }
 
 // Handle implicit multiplication:
-// If the current token is an INT or FLOAT and the following token is an IDENT,
-// and there is no whitespace between them (i.e., the current token's ending column
-// equals the next token's starting column), then we assume an implicit multiplication.
+// If the current token is an INT or FLOAT and the following token is an IDENT
+// with no space or line break before it (HadSpace counts both), then we assume
+// an implicit multiplication.
 // In this case, we save the IDENT token in 'savedToken', and substitute the next token
 // with an implicit multiplication operator '⋅' token. This way, an input like "5var" is
 // treated as "5 ⋅ var" with higher precedence than regular multiplication.
 func (p *StmtParser) handleImplicitMult() {
-	// Check: number followed immediately by identifier, on the same line with
-	// nothing between them; a line break read as a space separates them.
 	isNumber := p.curToken.Type == token.INT || p.curToken.Type == token.FLOAT
 	isIdentNext := p.peekToken.Type == token.IDENT
-	attached := !p.peekToken.HadSpace && p.curToken.Line == p.peekToken.Line &&
-		p.curToken.Column+utf8.RuneCountInString(p.curToken.Literal) == p.peekToken.Column
-
-	if !isNumber || !isIdentNext || !attached {
+	if !isNumber || !isIdentNext || p.peekToken.HadSpace {
 		return
 	}
 
