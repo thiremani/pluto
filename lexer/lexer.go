@@ -34,6 +34,20 @@ func (c context) isBracket() bool {
 	return c.opener.Type == token.LPAREN || c.opener.Type == token.LBRACK
 }
 
+// joinsLines reports whether a line break that continues c reads as a space,
+// as it does inside parentheses; inside square brackets it ends a row.
+func (c context) joinsLines() bool {
+	return c.opener.Type == token.LPAREN
+}
+
+// closer returns the type and literal of the token that closes bracket c.
+func (c context) closer() (token.TokenType, string) {
+	if c.opener.Type == token.LPAREN {
+		return token.RPAREN, token.SYM_RPAREN
+	}
+	return token.RBRACK, token.SYM_RBRACK
+}
+
 type lexed struct {
 	tok token.Token
 	err *token.CompileError
@@ -110,7 +124,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 	column, first, tab := l.nextLine()
 	l.closeBrackets(br, column, first)
-	if !l.inBracket() || l.contexts[len(l.contexts)-1].opener.Type != token.LPAREN {
+	if !l.inBracket() || !l.contexts[len(l.contexts)-1].joinsLines() {
 		l.pending = append(l.pending, lexed{br, err})
 	}
 	l.startLine(column, first, tab)
@@ -186,10 +200,8 @@ func (l *Lexer) inBracket() bool {
 // that it was never closed.
 func implicitCloser(open context, at token.Token) lexed {
 	closer := at
-	closer.Type, closer.Literal, closer.HadSpace = token.RBRACK, token.SYM_RBRACK, false
-	if open.opener.Type == token.LPAREN {
-		closer.Type, closer.Literal = token.RPAREN, token.SYM_RPAREN
-	}
+	closer.Type, closer.Literal = open.closer()
+	closer.HadSpace = false
 	return lexed{closer, &token.CompileError{
 		Token: open.opener,
 		Msg:   "'" + open.opener.Literal + "' " + NEVER_CLOSED_ERR,
@@ -200,12 +212,8 @@ func implicitCloser(open context, at token.Token) lexed {
 // bracket left open inside it. A closer that no open bracket expects changes
 // nothing; the parser reports it.
 func (l *Lexer) closeBracket(closer token.TokenType) {
-	opener := token.LPAREN
-	if closer == token.RBRACK {
-		opener = token.LBRACK
-	}
 	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
-		if l.contexts[i].opener.Type == opener {
+		if expected, _ := l.contexts[i].closer(); expected == closer {
 			l.contexts = l.contexts[:i]
 			return
 		}
