@@ -94,7 +94,7 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	if len(l.pending) > 0 {
 		next := l.pending[0]
-		l.pending = l.pending[1:]
+		l.pending = append(l.pending[:0], l.pending[1:]...)
 		return next.tok, next.err
 	}
 
