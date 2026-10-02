@@ -305,7 +305,7 @@ z = G(x)
 	p := NewCodeParser(lexer.New("TestUnclosedLiteralInBody", input))
 	p.Parse()
 	require.Equal(t, []string{
-		"TestUnclosedLiteralInBody:2:9:'[' " + lexer.NEVER_CLOSED_ERR,
+		"TestUnclosedLiteralInBody:2:9:'[' " + lexer.INDENT_PAST_ERR,
 	}, p.Errors())
 }
 

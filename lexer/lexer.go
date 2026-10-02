@@ -60,7 +60,8 @@ const (
 const (
 	INDENT_ERR          = "indentation error"
 	INDENT_TAB_ERR      = "indent using tabs not allowed"
-	NEVER_CLOSED_ERR    = "is never closed; its later lines are indented past this line"
+	NEVER_CLOSED_ERR    = "is never closed"
+	INDENT_PAST_ERR     = NEVER_CLOSED_ERR + "; lines that continue it must be indented past this line"
 	NO_CONTINUATION_ERR = "backslash line continuation is not supported; inside parentheses an expression can span lines"
 )
 
@@ -108,7 +109,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 		l.lineBreak(tok, err)
 		return l.NextToken()
 	case token.EOF:
-		l.closeBrackets(tok, 0, eof)
+		l.closeImplicitly(0, tok, NEVER_CLOSED_ERR)
 		l.pending = append(l.pending, lexed{tok, err})
 		return l.NextToken()
 	}
@@ -117,32 +118,35 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 
 // lineBreak lays out the line after a line break; it is the one place that
 // decides layout. It moves past blank and comment lines to the next line
-// and closes each bracket that line cannot continue. The innermost context
-// left then gives the break its meaning: inside parentheses it reads as a
-// space and makes no token, inside square brackets it ends a row, and in a
-// block it ends a statement. The next line's own layout tokens follow.
+// and closes each bracket that line cannot continue; at the end of input
+// the EOF token closes them. The innermost context left then gives the
+// break its meaning: inside parentheses it reads as a space and makes no
+// token, inside square brackets it ends a row, and in a block it ends a
+// statement. The next line's own layout tokens follow.
 func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 	column, first, tab := l.nextLine()
-	l.closeBrackets(br, column, first)
+	if first != eof {
+		l.closeImplicitly(l.continued(column, first), br, INDENT_PAST_ERR)
+	}
 	if !l.inBracket() || !l.contexts[len(l.contexts)-1].joinsLines() {
 		l.pending = append(l.pending, lexed{br, err})
 	}
 	l.startLine(column, first, tab)
 }
 
-// closeBrackets gives an implicit closer, before at, to each open bracket
-// that a line starting with first at column cannot continue: one whose line
-// it is not indented past, unless it starts with a closer. At the end of
-// input, where first is eof, every bracket closes.
-func (l *Lexer) closeBrackets(at token.Token, column int, first rune) {
-	for l.inBracket() {
-		open := l.contexts[len(l.contexts)-1]
-		if first == ')' || first == ']' || (first != eof && column > open.indent) {
-			return
-		}
-		l.contexts = l.contexts[:len(l.contexts)-1]
-		l.pending = append(l.pending, implicitCloser(open, at))
+// continued returns how many contexts, counted from the outermost, a line
+// starting with first at column keeps open: all of them when it starts with
+// a closer, and otherwise all but the innermost brackets whose line it is
+// not indented past.
+func (l *Lexer) continued(column int, first rune) int {
+	n := len(l.contexts)
+	if first == ')' || first == ']' {
+		return n
 	}
+	for n > 0 && l.contexts[n-1].isBracket() && column <= l.contexts[n-1].indent {
+		n--
+	}
+	return n
 }
 
 // startLine queues the layout tokens of the line about to be read, whose
@@ -196,16 +200,20 @@ func (l *Lexer) inBracket() bool {
 	return len(l.contexts) > 0 && l.contexts[len(l.contexts)-1].isBracket()
 }
 
-// implicitCloser closes open at the position of at, reporting at the opener
-// that it was never closed.
-func implicitCloser(open context, at token.Token) lexed {
-	closer := at
-	closer.Type, closer.Literal = open.closer()
-	closer.HadSpace = false
-	return lexed{closer, &token.CompileError{
-		Token: open.opener,
-		Msg:   "'" + open.opener.Literal + "' " + NEVER_CLOSED_ERR,
-	}}
+// closeImplicitly gives each bracket above the first n contexts an implicit
+// closer at the position of at, and reports msg at its opener.
+func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
+	for len(l.contexts) > n && l.inBracket() {
+		open := l.contexts[len(l.contexts)-1]
+		l.contexts = l.contexts[:len(l.contexts)-1]
+		closer := at
+		closer.Type, closer.Literal = open.closer()
+		closer.HadSpace = false
+		l.pending = append(l.pending, lexed{closer, &token.CompileError{
+			Token: open.opener,
+			Msg:   "'" + open.opener.Literal + "' " + msg,
+		}})
+	}
 }
 
 // closeBracket pops the innermost open bracket that closer closes, with any

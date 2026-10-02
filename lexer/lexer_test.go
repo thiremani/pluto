@@ -900,7 +900,7 @@ func TestBracketLayout(t *testing.T) {
 			{token.LBRACK, "[", "", 1, 5},
 			{token.INT, "1", "", 1, 6},
 			{token.INT, "2", "", 1, 8},
-			{token.RBRACK, "]", "1:5:'[' " + NEVER_CLOSED_ERR, 1, 9},
+			{token.RBRACK, "]", "1:5:'[' " + INDENT_PAST_ERR, 1, 9},
 			{token.NEWLINE, "\n", "", 1, 9},
 			{token.IDENT, "y", "", 2, 1},
 			{token.EOF, "", "", 2, 2},
@@ -916,7 +916,7 @@ func TestBracketLayout(t *testing.T) {
 			{token.LBRACK, "[", "", 2, 5},
 			{token.INT, "1", "", 2, 6},
 			{token.INT, "2", "", 2, 8},
-			{token.RBRACK, "]", "2:5:'[' " + NEVER_CLOSED_ERR, 2, 9},
+			{token.RBRACK, "]", "2:5:'[' " + INDENT_PAST_ERR, 2, 9},
 			{token.NEWLINE, "\n", "", 2, 9},
 			{token.INT, "3", "", 3, 3},
 			{token.INT, "4", "", 3, 5},
@@ -935,6 +935,15 @@ func TestBracketLayout(t *testing.T) {
 			{token.INT, "1", "", 1, 7},
 			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 8},
 			{token.EOF, "", "", 1, 8},
+		})
+		checkInput(t, "x = [1\n", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.INT, "1", "", 1, 6},
+			{token.NEWLINE, "\n", "", 1, 7},
+			{token.RBRACK, "]", "1:5:'[' " + NEVER_CLOSED_ERR, 2, 1},
+			{token.EOF, "", "", 2, 1},
 		})
 	})
 
@@ -1052,7 +1061,7 @@ func TestBracketLayout(t *testing.T) {
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.IDENT, "f", "", 1, 5},
 			{token.LPAREN, "(", "", 1, 6},
-			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 7},
+			{token.RPAREN, ")", "1:6:'(' " + INDENT_PAST_ERR, 1, 7},
 			{token.NEWLINE, "\n", "", 1, 7},
 			{token.IDENT, "a", "", 2, 1},
 			{token.ASSIGN, "=", "", 2, 3},

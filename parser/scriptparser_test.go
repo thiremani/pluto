@@ -1408,7 +1408,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "row at the bracket line's indentation",
 			input:       "[1 2\n3 4]",
 			expectError: true,
-			errorMsg:    "'[' " + lexer.NEVER_CLOSED_ERR,
+			errorMsg:    "'[' " + lexer.INDENT_PAST_ERR,
 		},
 		{
 			name:        "invalid header token",
@@ -1521,14 +1521,14 @@ func TestBracketLayoutKeepsStatements(t *testing.T) {
 		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
 		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
 		{"unclosed nested literals", "x = [\n  [1 2", []string{
-			"TestBracketLayoutKeepsStatements:2:3:'[' " + lexer.NEVER_CLOSED_ERR,
-			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.NEVER_CLOSED_ERR,
+			"TestBracketLayoutKeepsStatements:2:3:'[' " + lexer.INDENT_PAST_ERR,
+			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.INDENT_PAST_ERR,
 		}},
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{
-			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.NEVER_CLOSED_ERR,
+			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.INDENT_PAST_ERR,
 		}},
 		{"unclosed call", "x = f(1", []string{
-			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.NEVER_CLOSED_ERR,
+			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.INDENT_PAST_ERR,
 		}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{
 			"TestBracketLayoutKeepsStatements:3:8:NUL character is not allowed in source",
@@ -1637,7 +1637,7 @@ func TestLineBreakLeavingParentheses(t *testing.T) {
 	sp := NewScriptParser(lexer.New("TestLineBreakLeavingParentheses", "x = f(\na = 7"))
 	program := sp.Parse()
 	require.Equal(t, []string{
-		"TestLineBreakLeavingParentheses:1:6:'(' " + lexer.NEVER_CLOSED_ERR,
+		"TestLineBreakLeavingParentheses:1:6:'(' " + lexer.INDENT_PAST_ERR,
 	}, sp.Errors())
 	require.Len(t, program.Statements, 2)
 	require.Equal(t, "a = 7", program.Statements[1].String())
