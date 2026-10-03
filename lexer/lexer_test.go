@@ -41,9 +41,13 @@ func checkInput(t *testing.T, input string, tests []Test) {
 				i, tt.expectedColumn, tok.Column)
 		}
 
-		if err != nil && err.Error() != tt.expectedError {
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tt.expectedError {
 			t.Fatalf("tests[%d] - error wrong. expected=%q, got=%q",
-				i, tt.expectedError, err)
+				i, tt.expectedError, got)
 		}
 	}
 }
