@@ -1235,8 +1235,8 @@ func TestOpenCountsMatchBrackets(t *testing.T) {
 					brackets[bracketSlot(c.opener.Type)]++
 				}
 			}
-			if l.open != brackets {
-				t.Fatalf("%q: after %q at %d:%d open counts are %v, brackets %v", input, tok.Literal, tok.Line, tok.Column, l.open, brackets)
+			if l.openBrackets() != brackets {
+				t.Fatalf("%q: after %q at %d:%d open counts are %v, brackets %v", input, tok.Literal, tok.Line, tok.Column, l.openBrackets(), brackets)
 			}
 		}
 	}

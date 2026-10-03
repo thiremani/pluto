@@ -19,9 +19,7 @@ type Lexer struct {
 	column       int  // column number in the line
 
 	contexts []context // indented blocks, then open brackets; innermost last
-	pending  []lexed   // tokens decided but not yet returned, in order
-	head     int       // index in pending of the next token to return
-	open     [2]int    // open parentheses and square brackets, by bracketSlot
+	pending  queue     // tokens decided but not yet returned
 }
 
 // context is an indented block, or an open '(' or '[' with the indentation of
@@ -30,6 +28,7 @@ type Lexer struct {
 type context struct {
 	opener token.Token // the bracket; a block has none
 	indent int
+	open   [2]int // brackets open by bracketSlot, this one included
 }
 
 func (c context) isBracket() bool {
@@ -53,6 +52,28 @@ func (c context) closer() (token.TokenType, string) {
 type lexed struct {
 	tok token.Token
 	err *token.CompileError
+}
+
+// queue holds tokens in the order they are decided. Once drained it reuses
+// its buffer, so neither push nor pop copies the tokens waiting in it.
+type queue struct {
+	items []lexed
+	head  int
+}
+
+func (q *queue) push(t lexed) {
+	q.items = append(q.items, t)
+}
+
+// pop returns the next token, valid until the next push, or nil when the
+// queue is drained.
+func (q *queue) pop() *lexed {
+	if q.head == len(q.items) {
+		q.items, q.head = q.items[:0], 0
+		return nil
+	}
+	q.head++
+	return &q.items[q.head-1]
 }
 
 const (
@@ -95,29 +116,27 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 // NextToken returns the next token. Layout tokens, decided at each line
 // break, come first.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
-	if l.head < len(l.pending) {
-		next := l.pending[l.head]
-		l.head++
+	if next := l.pending.pop(); next != nil {
 		return next.tok, next.err
 	}
-	l.pending, l.head = l.pending[:0], 0
 
 	tok, err := l.lex()
 	switch tok.Type {
 	case token.LPAREN, token.LBRACK:
 		indent, _, _ := l.indentation()
-		l.contexts = append(l.contexts, context{opener: tok, indent: indent})
-		l.open[bracketSlot(tok.Type)]++
+		c := context{opener: tok, indent: indent, open: l.openBrackets()}
+		c.open[bracketSlot(tok.Type)]++
+		l.contexts = append(l.contexts, c)
 	case token.RPAREN, token.RBRACK:
 		l.closeBracket(tok)
-		l.pending = append(l.pending, lexed{tok, err})
+		l.pending.push(lexed{tok, err})
 		return l.NextToken()
 	case token.NEWLINE:
 		l.lineBreak(tok, err)
 		return l.NextToken()
 	case token.EOF:
 		l.closeImplicitly(0, tok, NEVER_CLOSED_ERR)
-		l.pending = append(l.pending, lexed{tok, err})
+		l.pending.push(lexed{tok, err})
 		return l.NextToken()
 	}
 	return tok, err
@@ -136,7 +155,7 @@ func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 		l.closeImplicitly(l.continued(column, first), br, INDENT_PAST_ERR)
 	}
 	if !l.inBracket() || !l.contexts[len(l.contexts)-1].joinsLines() {
-		l.pending = append(l.pending, lexed{br, err})
+		l.pending.push(lexed{br, err})
 	}
 	l.startLine(column, first, tab)
 }
@@ -165,7 +184,7 @@ func (l *Lexer) continued(column int, first rune) int {
 func (l *Lexer) startLine(column int, first rune, tab int) {
 	if tab > 0 {
 		bad := l.tokenAt(token.ILLEGAL, "\t", tab)
-		l.pending = append(l.pending, lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
+		l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
 		return
 	}
 	if l.inBracket() || first == eof {
@@ -192,7 +211,7 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 			err = &token.CompileError{Token: at, Msg: INDENT_WIDTH_ERR}
 		}
 		l.contexts = append(l.contexts, context{indent: level})
-		l.pending = append(l.pending, lexed{at, err})
+		l.pending.push(lexed{at, err})
 		return
 	}
 	for i := top; i >= 0 && level <= l.contexts[i].indent; i-- {
@@ -202,7 +221,7 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		}
 	}
 	at.Type = token.ILLEGAL
-	l.pending = append(l.pending, lexed{at, &token.CompileError{Token: at, Msg: INDENT_ERR + ". At char: " + string(first)}})
+	l.pending.push(lexed{at, &token.CompileError{Token: at, Msg: INDENT_ERR + ". At char: " + string(first)}})
 }
 
 // dedentTo leaves every block above the first n contexts, with a DEINDENT
@@ -211,7 +230,7 @@ func (l *Lexer) dedentTo(n int, at token.Token) {
 	at.Type = token.DEINDENT
 	for len(l.contexts) > n {
 		l.contexts = l.contexts[:len(l.contexts)-1]
-		l.pending = append(l.pending, lexed{at, nil})
+		l.pending.push(lexed{at, nil})
 	}
 }
 
@@ -225,11 +244,10 @@ func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
 	for len(l.contexts) > n && l.inBracket() {
 		open := l.contexts[len(l.contexts)-1]
 		l.contexts = l.contexts[:len(l.contexts)-1]
-		l.open[bracketSlot(open.opener.Type)]--
 		closer := at
 		closer.Type, closer.Literal = open.closer()
 		closer.HadSpace = false
-		l.pending = append(l.pending, lexed{closer, &token.CompileError{
+		l.pending.push(lexed{closer, &token.CompileError{
 			Token: open.opener,
 			Msg:   "'" + open.opener.Literal + "' " + msg,
 		}})
@@ -241,21 +259,28 @@ func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
 // opener has a closer. A closer that no open bracket expects closes nothing,
 // without searching; the parser reports it.
 func (l *Lexer) closeBracket(closer token.Token) {
-	slot := bracketSlot(closer.Type)
-	if l.open[slot] == 0 {
+	if l.openBrackets()[bracketSlot(closer.Type)] == 0 {
 		return
 	}
 	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
 		if expected, _ := l.contexts[i].closer(); expected == closer.Type {
 			l.closeImplicitly(i+1, closer, NEVER_CLOSED_ERR)
 			l.contexts = l.contexts[:i]
-			l.open[slot]--
 			return
 		}
 	}
 }
 
-// bracketSlot indexes Lexer.open by the kind of a bracket or its closer.
+// openBrackets counts the open brackets by bracketSlot. A block opens only
+// when no bracket is open, so its counts are zero.
+func (l *Lexer) openBrackets() [2]int {
+	if len(l.contexts) == 0 {
+		return [2]int{}
+	}
+	return l.contexts[len(l.contexts)-1].open
+}
+
+// bracketSlot indexes context.open by the kind of a bracket or its closer.
 func bracketSlot(t token.TokenType) int {
 	if t == token.LPAREN || t == token.RPAREN {
 		return 0
