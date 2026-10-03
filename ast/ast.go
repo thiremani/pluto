@@ -259,7 +259,8 @@ type ArrayLiteral struct {
 	// its element type; it is typed, never evaluated.
 	Sample Expression
 	// ColumnTypes holds the zero value written on each header of a table
-	// without rows (`Score(0)`), in header order.
+	// without rows (`Score(0)`), in header order; nil marks a header
+	// written without one.
 	ColumnTypes []Expression
 }
 
@@ -287,9 +288,9 @@ func (al *ArrayLiteral) String() string {
 				out.WriteString(" ")
 			}
 			out.WriteString(header)
-			if j < len(al.ColumnTypes) {
+			if j < len(al.ColumnTypes) && al.ColumnTypes[j] != nil {
 				out.WriteString("(")
-				writeArrayRow(&out, al.ColumnTypes[j:j+1])
+				out.WriteString(al.ColumnTypes[j].String())
 				out.WriteString(")")
 			}
 		}
