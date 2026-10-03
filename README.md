@@ -104,6 +104,17 @@ string literal produces a newline in the string's value -- the `\r` escape
 denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
+Indentation is significant. A block, such as a template's body, is indented
+4 spaces past the line that opens it; tabs are not allowed. A struct's `:`
+header goes 2 spaces in, so its field names line up with the values 4 spaces
+in. Lines inside brackets keep no indentation of their own (see Arrays below).
+
+```python
+p = Person
+  : name age
+    "Ada" 36
+```
+
 A directory is the unit of compilation:
 
 ```text
@@ -131,7 +142,7 @@ Think of a template as a **black box**: data flows in through inputs, gets trans
 ```python
 # y is the output (writable), x is the input (read-only)
 y = Square(x)
-	y = x * x
+    y = x * x
 ```
 
 Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.

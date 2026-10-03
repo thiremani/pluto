@@ -62,6 +62,7 @@ const (
 const (
 	INDENT_ERR          = "indentation error"
 	INDENT_TAB_ERR      = "indent using tabs not allowed"
+	INDENT_WIDTH_ERR    = "indent each block by 4 spaces; a header's ':' by 2"
 	NEVER_CLOSED_ERR    = "is never closed"
 	INDENT_PAST_ERR     = NEVER_CLOSED_ERR + "; lines that continue it must be indented past this line"
 	NO_CONTINUATION_ERR = "backslash line continuation is not supported; a row or header must stay on one line, and an expression can span lines inside parentheses"
@@ -157,10 +158,10 @@ func (l *Lexer) continued(column int, first rune) int {
 
 // startLine queues the layout tokens of the line about to be read, whose
 // content starts with first at column. A tab in its indentation is reported
-// at the tab, and the line reads at the current level. A line inside
-// brackets has no layout tokens. Otherwise its indentation opens a block,
-// dedents to an enclosing one, or stays in the current one; a level no block
-// has is reported once.
+// at the tab and the line stays at the current level. Outside brackets the
+// line opens a block 4 spaces deeper (another depth is reported, and the
+// block opens anyway), returns to an enclosing block (a level none has is
+// reported), or stays. A header's ':' hangs 2 spaces left of its block.
 func (l *Lexer) startLine(column int, first rune, tab int) {
 	if tab > 0 {
 		bad := l.tokenAt(token.ILLEGAL, "\t", tab)
@@ -171,19 +172,31 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		return
 	}
 
+	level := column
+	if first == ':' {
+		level += 2
+	}
 	at := l.tokenAt(token.INDENT, string(first), column)
-	top := len(l.contexts) - 1
-	if column == 1 {
+	if level == 1 {
 		l.dedentTo(0, at)
 		return
 	}
-	if top < 0 || column > l.contexts[top].indent {
-		l.contexts = append(l.contexts, context{indent: column})
-		l.pending = append(l.pending, lexed{at, nil})
+	top := len(l.contexts) - 1
+	base := 1
+	if top >= 0 {
+		base = l.contexts[top].indent
+	}
+	if level > base {
+		var err *token.CompileError
+		if level != base+4 {
+			err = &token.CompileError{Token: at, Msg: INDENT_WIDTH_ERR}
+		}
+		l.contexts = append(l.contexts, context{indent: level})
+		l.pending = append(l.pending, lexed{at, err})
 		return
 	}
-	for i := top; i >= 0 && column <= l.contexts[i].indent; i-- {
-		if column == l.contexts[i].indent {
+	for i := top; i >= 0 && level <= l.contexts[i].indent; i-- {
+		if level == l.contexts[i].indent {
 			l.dedentTo(i+1, at)
 			return
 		}

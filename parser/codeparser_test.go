@@ -524,11 +524,11 @@ func TestStructDefErrors(t *testing.T) {
 			errMsg: "expected a space after ':' in struct field header",
 		},
 		{
-			name: "struct row requires nested indent",
+			name: "struct row at the header's colon",
 			input: `p = Person
   : name age
   "Tejas" 35`,
-			errMsg: "struct value row must be indented beneath its field header",
+			errMsg: "struct value row must align with the first field header",
 		},
 		{
 			name: "struct row must align with header",
