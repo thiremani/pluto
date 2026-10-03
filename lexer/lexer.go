@@ -18,35 +18,9 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
-	contexts []context // indented blocks, then open brackets; innermost last
-	pending  queue     // tokens decided but not yet returned
-}
-
-// context is an indented block, or an open '(' or '[' with the indentation of
-// the line it opened on. A bracket never holds a block: lines inside brackets
-// get no indentation tokens, so every bracket sits above every block.
-type context struct {
-	opener token.Token // the bracket; a block has none
-	indent int
-	open   [2]int // brackets open by bracketSlot, this one included
-}
-
-func (c context) isBracket() bool {
-	return c.opener.Type == token.LPAREN || c.opener.Type == token.LBRACK
-}
-
-// joinsLines reports whether a line break that continues c reads as a space,
-// as it does inside parentheses; inside square brackets it ends a row.
-func (c context) joinsLines() bool {
-	return c.opener.Type == token.LPAREN
-}
-
-// closer returns the type and literal of the token that closes bracket c.
-func (c context) closer() (token.TokenType, string) {
-	if c.opener.Type == token.LPAREN {
-		return token.RPAREN, token.SYM_RPAREN
-	}
-	return token.RBRACK, token.SYM_RBRACK
+	blocks  []int           // columns of the open indented blocks; innermost last
+	pending queue           // tokens decided but not yet returned
+	last    token.TokenType // the last token lexed; a line ending in a comma continues
 }
 
 type lexed struct {
@@ -84,8 +58,6 @@ const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
 	INDENT_WIDTH_ERR = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
-	NEVER_CLOSED_ERR = "is never closed"
-	INDENT_PAST_ERR  = NEVER_CLOSED_ERR + "; lines that continue it must be indented past this line"
 )
 
 func New(fileName, input string) *Lexer {
@@ -120,73 +92,56 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	switch tok.Type {
-	case token.LPAREN, token.LBRACK:
-		indent, _, _ := l.indentation()
-		c := context{opener: tok, indent: indent, open: l.openBrackets()}
-		c.open[bracketSlot(tok.Type)]++
-		l.contexts = append(l.contexts, c)
-	case token.RPAREN, token.RBRACK:
-		l.closeBracket(tok)
-		l.pending.push(lexed{tok, err})
-		return l.NextToken()
-	case token.NEWLINE:
+	if tok.Type == token.NEWLINE {
 		l.lineBreak(tok, err)
 		return l.NextToken()
-	case token.EOF:
-		l.closeImplicitly(0, tok, NEVER_CLOSED_ERR)
-		l.pending.push(lexed{tok, err})
-		return l.NextToken()
 	}
+	l.last = tok.Type
 	return tok, err
 }
 
 // lineBreak lays out the line after a line break; it is the one place that
-// decides layout. It moves past blank and comment lines to the next line
-// and closes each bracket that line cannot continue; at the end of input
-// the EOF token closes them. The innermost context left then gives the
-// break its meaning: inside parentheses it reads as a space and makes no
-// token, inside square brackets it ends a row, and in a block it ends a
-// statement. The next line's own layout tokens follow.
+// decides layout. It moves past blank and comment lines to the next line. A
+// line ending in a comma continues onto that line when it is indented past
+// the current block, and the break reads as a space. Otherwise the break ends
+// a statement or a row, and the next line's own layout tokens follow.
 func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
 	column, first, tab := l.nextLine()
-	if first != eof {
-		l.closeImplicitly(l.continued(column, first), br, INDENT_PAST_ERR)
+	if l.last == token.COMMA && first != eof && column > l.level() {
+		l.tabErr(tab)
+		return
 	}
-	if !l.inBracket() || !l.contexts[len(l.contexts)-1].joinsLines() {
-		l.pending.push(lexed{br, err})
-	}
+	l.pending.push(lexed{br, err})
 	l.startLine(column, first, tab)
 }
 
-// continued returns how many contexts, counted from the outermost, a line
-// starting with first at column keeps open: all of them when it starts with
-// a closer, and otherwise all but the innermost brackets whose line it is
-// not indented past.
-func (l *Lexer) continued(column int, first rune) int {
-	n := len(l.contexts)
-	if first == ')' || first == ']' {
-		return n
+// level returns the column of the innermost open block, or 1 outside blocks.
+func (l *Lexer) level() int {
+	if len(l.blocks) == 0 {
+		return 1
 	}
-	for n > 0 && l.contexts[n-1].isBracket() && column <= l.contexts[n-1].indent {
-		n--
+	return l.blocks[len(l.blocks)-1]
+}
+
+// tabErr reports a line's first indentation tab, at column tab, if it has
+// one.
+func (l *Lexer) tabErr(tab int) bool {
+	if tab == 0 {
+		return false
 	}
-	return n
+	bad := l.tokenAt(token.ILLEGAL, "\t", tab)
+	l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
+	return true
 }
 
 // startLine queues the layout tokens of the line about to be read, whose
 // content starts with first at column. A tab in its indentation is reported
-// at the tab and the line stays at the current level. Outside brackets the
-// line opens a block 4 spaces deeper (another depth is reported, and the
-// block opens anyway), returns to an enclosing block (a level none has is
-// reported), or stays. A header's ':' hangs 2 spaces left of its block.
+// and the line stays at the current level. Otherwise the line opens a block
+// 4 spaces deeper (another depth is reported, and the block opens anyway),
+// returns to an enclosing block (a level none has is reported), or stays. A
+// header's ':' hangs 2 spaces left of its block.
 func (l *Lexer) startLine(column int, first rune, tab int) {
-	if tab > 0 {
-		bad := l.tokenAt(token.ILLEGAL, "\t", tab)
-		l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
-		return
-	}
-	if l.inBracket() || first == eof {
+	if l.tabErr(tab) || first == eof {
 		return
 	}
 
@@ -199,22 +154,17 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		l.dedentTo(0, at)
 		return
 	}
-	top := len(l.contexts) - 1
-	base := 1
-	if top >= 0 {
-		base = l.contexts[top].indent
-	}
-	if level > base {
+	if base := l.level(); level > base {
 		var err *token.CompileError
 		if level != base+4 {
 			err = &token.CompileError{Token: at, Msg: INDENT_WIDTH_ERR}
 		}
-		l.contexts = append(l.contexts, context{indent: level})
+		l.blocks = append(l.blocks, level)
 		l.pending.push(lexed{at, err})
 		return
 	}
-	for i := top; i >= 0 && level <= l.contexts[i].indent; i-- {
-		if level == l.contexts[i].indent {
+	for i := len(l.blocks) - 1; i >= 0 && level <= l.blocks[i]; i-- {
+		if level == l.blocks[i] {
 			l.dedentTo(i+1, at)
 			return
 		}
@@ -223,68 +173,14 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 	l.pending.push(lexed{at, &token.CompileError{Token: at, Msg: INDENT_ERR + ". At char: " + string(first)}})
 }
 
-// dedentTo leaves every block above the first n contexts, with a DEINDENT
-// at the position of at for each.
+// dedentTo leaves every block above the first n, with a DEINDENT at the
+// position of at for each.
 func (l *Lexer) dedentTo(n int, at token.Token) {
 	at.Type = token.DEINDENT
-	for len(l.contexts) > n {
-		l.contexts = l.contexts[:len(l.contexts)-1]
+	for len(l.blocks) > n {
+		l.blocks = l.blocks[:len(l.blocks)-1]
 		l.pending.push(lexed{at, nil})
 	}
-}
-
-func (l *Lexer) inBracket() bool {
-	return len(l.contexts) > 0 && l.contexts[len(l.contexts)-1].isBracket()
-}
-
-// closeImplicitly gives each bracket above the first n contexts an implicit
-// closer at the position of at, and reports msg at its opener.
-func (l *Lexer) closeImplicitly(n int, at token.Token, msg string) {
-	for len(l.contexts) > n && l.inBracket() {
-		open := l.contexts[len(l.contexts)-1]
-		l.contexts = l.contexts[:len(l.contexts)-1]
-		closer := at
-		closer.Type, closer.Literal = open.closer()
-		closer.HadSpace = false
-		l.pending.push(lexed{closer, &token.CompileError{
-			Token: open.opener,
-			Msg:   "'" + open.opener.Literal + "' " + msg,
-		}})
-	}
-}
-
-// closeBracket closes the innermost open bracket that closer closes. Each
-// bracket still open inside it gets an implicit closer first, so every
-// opener has a closer. A closer that no open bracket expects closes nothing,
-// without searching; the parser reports it.
-func (l *Lexer) closeBracket(closer token.Token) {
-	if l.openBrackets()[bracketSlot(closer.Type)] == 0 {
-		return
-	}
-	for i := len(l.contexts) - 1; i >= 0 && l.contexts[i].isBracket(); i-- {
-		if expected, _ := l.contexts[i].closer(); expected == closer.Type {
-			l.closeImplicitly(i+1, closer, NEVER_CLOSED_ERR)
-			l.contexts = l.contexts[:i]
-			return
-		}
-	}
-}
-
-// openBrackets counts the open brackets by bracketSlot. A block opens only
-// when no bracket is open, so its counts are zero.
-func (l *Lexer) openBrackets() [2]int {
-	if len(l.contexts) == 0 {
-		return [2]int{}
-	}
-	return l.contexts[len(l.contexts)-1].open
-}
-
-// bracketSlot indexes context.open by the kind of a bracket or its closer.
-func bracketSlot(t token.TokenType) int {
-	if t == token.LPAREN || t == token.RPAREN {
-		return 0
-	}
-	return 1
 }
 
 func (l *Lexer) lex() (token.Token, *token.CompileError) {

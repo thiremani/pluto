@@ -320,17 +320,17 @@ func TestCollectionTypeErrors(t *testing.T) {
 	}{
 		{
 			name:        "DuplicateTableHeader",
-			script:      "table = [\n    :Name Name\n    \"Ada\" \"A\"\n]",
+			script:      "table = [\n  : Name Name\n    \"Ada\" \"A\"\n]",
 			expectError: `duplicate table column "Name"`,
 		},
 		{
 			name:        "RaggedTableRow",
-			script:      "table = [\n    :Name Score\n    \"Ada\"\n]",
+			script:      "table = [\n  : Name Score\n    \"Ada\"\n]",
 			expectError: "bracket literal row 1 has 1 cells, expected 2",
 		},
 		{
 			name:        "RangedTableCell",
-			script:      "i = 0:3\ntable = [\n    :Value\n    i\n]",
+			script:      "i = 0:3\ntable = [\n  : Value\n    i\n]",
 			expectError: "table rows require statically sized cells",
 		},
 		{
@@ -2205,7 +2205,7 @@ p = Keep(q, n)
     y = 0.5
     prior, _ = n > 0 Mixed(n - 1)
     tab = [
-        :a
+      : a
         1
         prior
     ]
@@ -2218,7 +2218,7 @@ p = Keep(q, n)
 			code: `y = Pick(n, x)
     prior = n > 0 Pick(n - 1, x)
     tab = [
-        :a b
+      : a b
         prior x
     ]
     y = tab.b[0]`,
@@ -2231,7 +2231,7 @@ p = Keep(q, n)
     y = x
     prior = n > 0 Bump(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = tab.a + 1
@@ -2245,7 +2245,7 @@ p = Keep(q, n)
     y = x
     prior = n > 0 BumpRight(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = 1 + tab.a
@@ -2259,7 +2259,7 @@ p = Keep(q, n)
     y = x
     prior = n > 0 Flip(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = -tab.a
@@ -2272,7 +2272,7 @@ p = Keep(q, n)
 			code: `y = Pad(n, x)
     prior = n > 0 Pad(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = x > 3 && tab.a || [x]
@@ -2285,7 +2285,7 @@ p = Keep(q, n)
 			code: `y = PadRight(n, x)
     prior = n > 0 PadRight(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = x > 3 && [x] || tab.a
@@ -2301,7 +2301,7 @@ p = Keep(q, n)
     y = x
     prior = n > 0 ColumnAt(n - 1, x)
     tab = [
-        :a
+      : a
         prior
         x
     ]
@@ -2449,7 +2449,7 @@ func TestFailedTableCellReportsOnce(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "failedTableCell", "", ast.NewCode())
 	require.Empty(t, cc.Compile())
-	ts := NewTypeSolver(NewScriptCompiler(ctx, "failedTableCell", mustParseScript(t, "x = [\n  :a\n  missing\n  1\n].a[0]\nx"), cc))
+	ts := NewTypeSolver(NewScriptCompiler(ctx, "failedTableCell", mustParseScript(t, "x = [\n  : a\n    missing\n    1\n].a[0]\nx"), cc))
 	ts.Solve()
 
 	require.Len(t, ts.Errors, 1)

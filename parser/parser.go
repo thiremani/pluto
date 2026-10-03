@@ -935,7 +935,7 @@ func (p *StmtParser) parseExpression(precedence float64, splitPrefix prefixSplit
 //   - `a -b` (space before, not after `-`) → split before `-b` when allowed
 //   - `a-b` (no space before `-`) → subtraction (infix, normal precedence)
 func (p *StmtParser) parseExpressionTail(precedence float64, splitPrefix prefixSplitMode, left ast.Expression) ast.Expression {
-	for {
+	for left != nil {
 		var consumed bool
 		left, consumed = p.tryPostfix(left)
 		if consumed {
@@ -1120,6 +1120,15 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 	return &ast.StringLiteral{Token: p.curToken}
 }
 
+// Layout errors: brackets take no part in layout, so a line break inside
+// them is legal only where these rules allow it.
+const (
+	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
+	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
+	blockCloseErr  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
+	parenBreakErr  = "inside parentheses, break a line only after a comma and indent the next line"
+)
+
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	arr := &ast.ArrayLiteral{
 		Token:   p.curToken, // the '[' token
@@ -1130,59 +1139,14 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 
 	p.nextToken() // consume the '[' token
 	arr.Block = p.curTokenIs(token.NEWLINE)
-
-	for p.curTokenIs(token.NEWLINE) {
-		p.nextToken()
+	var ok bool
+	if arr.Block {
+		ok = p.parseBlockLiteral(arr)
+	} else {
+		ok = p.parseInlineLiteral(arr)
 	}
-
-	// Skip any whitespace/indentation after opening bracket
-	p.skipArrayFormatting()
-
-	// Parse headers if present
-	if p.curTokenIs(token.COLON) {
-		headerToken := p.curToken
-		if !arr.Block {
-			p.errors = append(p.errors, &token.CompileError{
-				Token: headerToken,
-				Msg:   "a table's header goes on its own line after '['",
-			})
-		}
-		p.nextToken() // consume ':'
-		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
-			p.errors = append(p.errors, &token.CompileError{
-				Token: headerToken,
-				Msg:   "expected at least one column header after ':'",
-			})
-			return nil
-		}
-		if !p.parseHeader(arr) {
-			return nil
-		}
-	}
-
-	// Parse rows
-	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) {
-		p.skipArrayFormatting()
-
-		if p.curTokenIs(token.RBRACK) {
-			break
-		}
-
-		row := p.parseRow()
-		if len(row) > 0 {
-			arr.Rows = append(arr.Rows, row)
-		}
-	}
-
-	if !p.curTokenIs(token.RBRACK) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
-			Msg:   "expected ']' to close array literal",
-		})
+	if !ok {
 		return nil
-	}
-	if len(arr.Headers) == 0 && len(arr.Rows) > 1 {
-		arr.Block = true
 	}
 	p.typeEmptyLiteral(arr)
 	// Do not consume the closing ']' (or an empty array's sample) here. Align
@@ -1190,6 +1154,123 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	// last token; callers (statement parsing) will advance past newline/EOF as
 	// appropriate.
 	return arr
+}
+
+// parseInlineLiteral reads the cells of a literal that stays on the line of
+// its '[', leaving curToken at its ']'.
+func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
+	if p.curTokenIs(token.COLON) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: p.curToken,
+			Msg:   "a table's header goes on its own line after '['",
+		})
+		return false
+	}
+	if row := p.parseRow(); len(row) > 0 {
+		arr.Rows = append(arr.Rows, row)
+	}
+	if p.curTokenIs(token.RBRACK) {
+		return true
+	}
+	if !p.curTokenIs(token.NEWLINE) {
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: "expected ']' to close array literal"})
+		return false
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: inlineArrayErr})
+	p.skipContinuation()
+	return false
+}
+
+// parseBlockLiteral reads a literal whose '[' ends its line: an optional
+// header and the rows, as a block 4 spaces in, then the ']' on its own line.
+// It leaves curToken at the ']'.
+func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
+	p.nextToken() // consume the line break after '['
+	if p.curTokenIs(token.RBRACK) {
+		return true
+	}
+	if !p.curTokenIs(token.INDENT) {
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockRowsErr})
+		return false
+	}
+	p.nextToken() // consume INDENT
+
+	if p.curTokenIs(token.COLON) {
+		headerToken := p.curToken
+		p.nextToken() // consume ':'
+		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
+			p.errors = append(p.errors, &token.CompileError{
+				Token: headerToken,
+				Msg:   "expected at least one column header after ':'",
+			})
+			return false
+		}
+		if !p.parseHeader(arr) {
+			return false
+		}
+	}
+
+	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
+		if p.curTokenIs(token.NEWLINE) {
+			p.nextToken()
+			continue
+		}
+		if !p.curTokenIs(token.RBRACK) {
+			if row := p.parseRow(); len(row) > 0 {
+				arr.Rows = append(arr.Rows, row)
+			}
+		}
+		if p.curTokenIs(token.RBRACK) {
+			// The rows' block still ends at the next line; stop at its
+			// DEINDENT so the next statement parses on its own.
+			p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockCloseErr})
+			if p.peekTokenIs(token.NEWLINE) {
+				p.nextToken()
+			}
+			if p.peekTokenIs(token.DEINDENT) {
+				p.nextToken()
+			}
+			return false
+		}
+	}
+	if p.curTokenIs(token.DEINDENT) && p.peekTokenIs(token.RBRACK) {
+		p.nextToken() // leave the rows' block
+		return true
+	}
+	missing := p.curToken
+	if p.curTokenIs(token.DEINDENT) {
+		missing = p.peekToken // the literal ends at its DEINDENT
+	}
+	p.errors = append(p.errors, &token.CompileError{
+		Token: missing,
+		Msg:   "expected ']' to close array literal",
+	})
+	return false
+}
+
+// skipContinuation moves past the lines indented under the current line,
+// to the DEINDENT that ends them, after a construct failed at the line's
+// break: those lines belong to it, and the statement after them parses on
+// its own.
+func (p *StmtParser) skipContinuation() {
+	if p.peekTokenIs(token.NEWLINE) {
+		p.nextToken()
+	}
+	if !p.peekTokenIs(token.INDENT) {
+		return
+	}
+	for depth := 0; !p.peekTokenIs(token.EOF); {
+		p.nextToken()
+		switch p.curToken.Type {
+		case token.INDENT:
+			depth++
+		case token.DEINDENT:
+			depth--
+			if depth == 0 {
+				return
+			}
+		}
+	}
 }
 
 // typeEmptyLiteral requires a literal without rows to state its element
@@ -1271,14 +1352,6 @@ func isZeroSample(expr ast.Expression) bool {
 		return e.Token.Literal == ""
 	default:
 		return false
-	}
-}
-
-func (p *StmtParser) skipArrayFormatting() {
-	for p.curTokenIs(token.NEWLINE) ||
-		p.curTokenIs(token.INDENT) ||
-		p.curTokenIs(token.DEINDENT) {
-		p.nextToken()
 	}
 }
 
@@ -1457,16 +1530,37 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 // operators — `cond && value`, `cond && value || fallback` — not a
 // parenthesized (cond value) form.
 func (p *StmtParser) parseGroupedExpression() ast.Expression {
+	if p.parenBreak() {
+		return nil
+	}
 	p.nextToken()
 
 	exp := p.parseExpression(LOWEST, prefixSplitNone)
 	if exp == nil {
 		return nil
 	}
-	if !p.expectPeek(token.RPAREN) {
+	if p.parenBreak() || !p.expectPeek(token.RPAREN) {
 		return nil
 	}
 	return exp
+}
+
+// parenBreak reports a line break at peekToken inside parentheses, where a
+// line breaks only after a comma, before an indented line. The lines that
+// continue the parentheses, up to a ')' that starts a line, belong to them.
+func (p *StmtParser) parenBreak() bool {
+	if !p.peekTokenIs(token.NEWLINE) {
+		return false
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: parenBreakErr})
+	p.skipContinuation()
+	if p.peekTokenIs(token.RPAREN) {
+		p.nextToken()
+		if p.peekTokenIs(token.NEWLINE) {
+			p.nextToken()
+		}
+	}
+	return true
 }
 
 // assumes current token is token.NEWLINE
@@ -1551,13 +1645,13 @@ func (p *StmtParser) parseFunctionParameters() []*ast.Identifier {
 		return []*ast.Identifier{}
 	}
 
-	if !p.expectPeek(token.IDENT) {
+	if p.parenBreak() || !p.expectPeek(token.IDENT) {
 		return nil
 	}
 
 	identifiers := p.parseIdentifiers()
 
-	if !p.expectPeek(token.RPAREN) {
+	if p.parenBreak() || !p.expectPeek(token.RPAREN) {
 		return nil
 	}
 
@@ -1571,6 +1665,9 @@ func (p *StmtParser) parseCallExpression(f ast.Expression) ast.Expression {
 	}
 
 	ce.Arguments = p.parseCallArguments()
+	if ce.Arguments == nil {
+		return nil
+	}
 	return ce
 }
 
@@ -1614,17 +1711,23 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 		p.nextToken()
 		return args
 	}
+	if p.parenBreak() {
+		return nil
+	}
 
 	p.nextToken()
 	args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
+		if p.parenBreak() {
+			return nil
+		}
 		p.nextToken()
 		args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 
-	if !p.expectPeek(token.RPAREN) {
+	if p.parenBreak() || !p.expectPeek(token.RPAREN) {
 		return nil
 	}
 

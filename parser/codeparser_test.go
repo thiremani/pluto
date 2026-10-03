@@ -254,19 +254,19 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 
 // A literal inside a function body keeps the body's block structure, however
 // its lines are indented.
-func TestBracketLayoutInBody(t *testing.T) {
+func TestLayoutInBody(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		body string
 	}{
-		{"closing line across dedents", "    y = [\n      [\n        x\n    ]]\n"},
-		{"literal continued on an indented line", "    y = [1 2\n         3 4]\n"},
-		{"closing line left of its bracket", "    y = [\n        x\n]\n"},
-		{"bracket on a multi-line string's last line", "    y = f(\"a\nb\", [1\n 2])\n"},
+		{"nested block literals", "    y = [\n        [\n            x\n        ]\n    ]\n"},
+		{"block literal", "    y = [\n        1 2\n        3 4\n    ]\n"},
+		{"call continued after a comma", "    y = f(x,\n        1)\n"},
+		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
-			p := NewCodeParser(lexer.New("TestBracketLayoutInBody", input))
+			p := NewCodeParser(lexer.New("TestLayoutInBody", input))
 			code := p.Parse()
 			require.Empty(t, p.Errors())
 			require.Len(t, code.Statements, 2)
@@ -295,35 +295,25 @@ func TestParametersAcrossLines(t *testing.T) {
 	require.Len(t, fn.Parameters, 2)
 }
 
-// A closer that matches an enclosing bracket closes the literal left open
-// inside it, which is then the only error: the rest of the body and the
-// next function report none.
-func TestCloserOfEnclosingBracketInBody(t *testing.T) {
-	input := `y = F(x)
-    y = f([x 1)
-    y = y
-z = G(x)
-    z = x
-`
-	p := NewCodeParser(lexer.New("TestCloserOfEnclosingBracketInBody", input))
-	p.Parse()
-	require.Equal(t, []string{
-		"TestCloserOfEnclosingBracketInBody:2:11:'[' " + lexer.NEVER_CLOSED_ERR,
-	}, p.Errors())
-}
-
-func TestUnclosedLiteralInBody(t *testing.T) {
-	input := `y = F(x)
-    y = [x
-    y = y
-z = G(x)
-    z = x
-`
-	p := NewCodeParser(lexer.New("TestUnclosedLiteralInBody", input))
-	p.Parse()
-	require.Equal(t, []string{
-		"TestUnclosedLiteralInBody:2:9:'[' " + lexer.INDENT_PAST_ERR,
-	}, p.Errors())
+// A literal laid out against the rules is the only error in its function:
+// the rest of the body and the next function report none.
+func TestLayoutErrorsInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		err  string
+	}{
+		{"inline literal across lines", "    y = [x\n        1]\n", "3:11:" + inlineArrayErr},
+		{"block literal closed on its last row", "    y = [\n        x]\n", "4:10:" + blockCloseErr},
+		{"unclosed block literal", "    y = [\n        x\n", "5:5:expected ']' to close array literal"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n    y = x\n" + tt.line + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestLayoutErrorsInBody", input))
+			p.Parse()
+			require.Equal(t, []string{"TestLayoutErrorsInBody:" + tt.err}, p.Errors())
+		})
+	}
 }
 
 func TestFuncStatementParsing(t *testing.T) {

@@ -104,12 +104,13 @@ string literal produces a newline in the string's value -- the `\r` escape
 denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
-Indentation is significant. A block, such as a template's body, is indented
-4 spaces past the line that opens it, and tabs are not allowed in
-indentation. A struct's header is written `: name ...` with its `:` 2 spaces
-in and one space after it, so its field names line up with the values 4
-spaces in. The rule is for blocks: lines inside brackets, such as array rows
-and call arguments, keep no indentation of their own (see Arrays below).
+Indentation is significant. A block, such as a template's body or the rows of
+an array literal, is indented 4 spaces past the line that opens it, and tabs
+are not allowed in indentation. A struct's or table's header is written
+`: name ...` with its `:` 2 spaces in and one space after it, so its names
+line up with the values 4 spaces in. Brackets take no part in layout: a line
+that ends in a comma continues on the next line when that line is indented
+further, so a call's arguments can span lines (see Arrays below).
 
 ```python
 p = Person
@@ -276,22 +277,19 @@ scores = [
 Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
 where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
-`[[1 2] [3 4]]`. Pluto has no line continuation character: a line break
-between cells starts a new row, so an inline array keeps its cells on one line,
-however long. Array-valued cells stack recursively while storage remains flat
-and row-major. Ragged literals are compile errors.
-Lines inside brackets have no indentation of their own: each is indented past
-the line where its bracket opened, unless it starts with a closing bracket.
-Inside parentheses a line break reads as a space, so a call or a grouped
-expression can span lines; inside square brackets it ends a row.
+`[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
+keeps its cells on one line, however long, and a literal that spans lines is a
+block, with `[` ending its line, its rows indented 4 spaces, and `]` on its own
+line back at the `[` line's indentation. Array-valued cells stack recursively
+while storage remains flat and row-major. Ragged literals are compile errors.
+Inside parentheses a line breaks only after a comma, so a call's arguments can
+span lines; a grouped expression stays on one line, as does an index.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The header goes on its own line after `[`, with all
-its column names on that logical line; a column type's parentheses may span
-physical lines.
-The shown hanging `:` is the preferred layout because
-the first header aligns with the first value; spacing within header and data
-rows is otherwise non-semantic.
+its column names on that line. Its `:` hangs 2 spaces left of the rows, with one
+space after it, so the first header aligns with the first value; spacing within
+header and data rows is otherwise non-semantic.
 
 An empty array states its element type with a zero value after its brackets:
 `[]0`, `[]0.0` or `[]""`, or `[]x` for the type of a variable `x`. It prints as

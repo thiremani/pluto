@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/thiremani/pluto/token"
@@ -910,181 +911,46 @@ print()`
 	})
 }
 
-func TestBracketLayout(t *testing.T) {
-	t.Run("lines inside brackets keep no indentation", func(t *testing.T) {
-		checkInput(t, "m = [1 2\n    3 4]\ny", []Test{
+// Brackets take no part in layout: a literal that spans lines is an indented
+// block, and only a line ending in a comma continues onto the next line.
+func TestLineLayout(t *testing.T) {
+	t.Run("a block literal's rows are an indented block", func(t *testing.T) {
+		checkInput(t, "m = [\n    1 2\n    3 4\n]\ny", []Test{
 			{token.IDENT, "m", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.INT, "2", "", 1, 8},
-			{token.NEWLINE, "\n", "", 1, 9},
-			{token.INT, "3", "", 2, 5},
-			{token.INT, "4", "", 2, 7},
-			{token.RBRACK, "]", "", 2, 8},
-			{token.NEWLINE, "\n", "", 2, 9},
-			{token.IDENT, "y", "", 3, 1},
-			{token.EOF, "", "", 3, 2},
-		})
-	})
-
-	t.Run("a closing line may dedent across levels", func(t *testing.T) {
-		checkInput(t, "x = [\n  [\n    1 2\n]]\nx", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
 			{token.NEWLINE, "\n", "", 1, 6},
-			{token.LBRACK, "[", "", 2, 3},
-			{token.NEWLINE, "\n", "", 2, 4},
-			{token.INT, "1", "", 3, 5},
-			{token.INT, "2", "", 3, 7},
+			{token.INDENT, "1", "", 2, 5},
+			{token.INT, "1", "", 2, 5},
+			{token.INT, "2", "", 2, 7},
+			{token.NEWLINE, "\n", "", 2, 8},
+			{token.INT, "3", "", 3, 5},
+			{token.INT, "4", "", 3, 7},
 			{token.NEWLINE, "\n", "", 3, 8},
+			{token.DEINDENT, "]", "", 4, 1},
 			{token.RBRACK, "]", "", 4, 1},
-			{token.RBRACK, "]", "", 4, 2},
-			{token.NEWLINE, "\n", "", 4, 3},
-			{token.IDENT, "x", "", 5, 1},
+			{token.NEWLINE, "\n", "", 4, 2},
+			{token.IDENT, "y", "", 5, 1},
 			{token.EOF, "", "", 5, 2},
 		})
 	})
 
-	t.Run("a closing line left of its bracket keeps the block", func(t *testing.T) {
-		checkInput(t, "f\n    y = [\n        1\n]\n    z", []Test{
-			{token.IDENT, "f", "", 1, 1},
-			{token.NEWLINE, "\n", "", 1, 2},
-			{token.INDENT, "y", "", 2, 5},
-			{token.IDENT, "y", "", 2, 5},
-			{token.ASSIGN, "=", "", 2, 7},
-			{token.LBRACK, "[", "", 2, 9},
-			{token.NEWLINE, "\n", "", 2, 10},
-			{token.INT, "1", "", 3, 9},
-			{token.NEWLINE, "\n", "", 3, 10},
-			{token.RBRACK, "]", "", 4, 1},
-			{token.NEWLINE, "\n", "", 4, 2},
-			{token.IDENT, "z", "", 5, 5},
-			{token.EOF, "", "", 5, 6},
-		})
-	})
-
-	t.Run("a line not indented past the bracket closes it", func(t *testing.T) {
-		checkInput(t, "x = [1 2\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.INT, "2", "", 1, 8},
-			{token.RBRACK, "]", "1:5:'[' " + INDENT_PAST_ERR, 1, 9},
-			{token.NEWLINE, "\n", "", 1, 9},
-			{token.IDENT, "y", "", 2, 1},
-			{token.EOF, "", "", 2, 2},
-		})
-	})
-
-	t.Run("only the brackets the line cannot continue close", func(t *testing.T) {
-		checkInput(t, "x = [\n    [1 2\n  3 4\n]", []Test{
-			{token.IDENT, "x", "", 1, 1},
+	t.Run("blank and comment lines inside a block literal", func(t *testing.T) {
+		checkInput(t, "m = [\n\n    # c\n    1\n]", []Test{
+			{token.IDENT, "m", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.LBRACK, "[", "", 1, 5},
 			{token.NEWLINE, "\n", "", 1, 6},
-			{token.LBRACK, "[", "", 2, 5},
-			{token.INT, "1", "", 2, 6},
-			{token.INT, "2", "", 2, 8},
-			{token.RBRACK, "]", "2:5:'[' " + INDENT_PAST_ERR, 2, 9},
-			{token.NEWLINE, "\n", "", 2, 9},
-			{token.INT, "3", "", 3, 3},
-			{token.INT, "4", "", 3, 5},
-			{token.NEWLINE, "\n", "", 3, 6},
-			{token.RBRACK, "]", "", 4, 1},
-			{token.EOF, "", "", 4, 2},
+			{token.INDENT, "1", "", 4, 5},
+			{token.INT, "1", "", 4, 5},
+			{token.NEWLINE, "\n", "", 4, 6},
+			{token.DEINDENT, "]", "", 5, 1},
+			{token.RBRACK, "]", "", 5, 1},
+			{token.EOF, "", "", 5, 2},
 		})
 	})
 
-	t.Run("the end of input closes open brackets", func(t *testing.T) {
-		checkInput(t, "x = f(1", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.INT, "1", "", 1, 7},
-			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 8},
-			{token.EOF, "", "", 1, 8},
-		})
-		checkInput(t, "x = [1\n", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.NEWLINE, "\n", "", 1, 7},
-			{token.RBRACK, "]", "1:5:'[' " + NEVER_CLOSED_ERR, 2, 1},
-			{token.EOF, "", "", 2, 1},
-		})
-	})
-
-	t.Run("a NUL character does not end the input", func(t *testing.T) {
-		checkInput(t, "x = [1\n  # a\x00b\n  2]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.NEWLINE, "\n", "", 1, 7},
-			{token.ILLEGAL, "\x00", "2:6:NUL character is not allowed in source", 2, 6},
-			{token.IDENT, "b", "", 2, 7},
-			{token.NEWLINE, "\n", "", 2, 8},
-			{token.INT, "2", "", 3, 3},
-			{token.RBRACK, "]", "", 3, 4},
-			{token.EOF, "", "", 3, 5},
-		})
-		checkInput(t, "x = [1\n  \x00\n  2]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.NEWLINE, "\n", "", 1, 7},
-			{token.ILLEGAL, "\x00", "2:3:NUL character is not allowed in source", 2, 3},
-			{token.NEWLINE, "\n", "", 2, 4},
-			{token.INT, "2", "", 3, 3},
-			{token.RBRACK, "]", "", 3, 4},
-			{token.EOF, "", "", 3, 5},
-		})
-	})
-
-	t.Run("a backslash is an illegal character", func(t *testing.T) {
-		checkInput(t, "x = [1 \\\n    2]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.ILLEGAL, "\\", "1:8:Illegal character '\\'", 1, 8},
-			{token.NEWLINE, "\n", "", 1, 9},
-			{token.INT, "2", "", 2, 5},
-			{token.RBRACK, "]", "", 2, 6},
-			{token.EOF, "", "", 2, 7},
-		})
-	})
-
-	t.Run("a bracket after a multi-line string takes its own line's indentation", func(t *testing.T) {
-		checkInput(t, "f\n    s = g(\"a\nb\", [1\n 2])\n    z", []Test{
-			{token.IDENT, "f", "", 1, 1},
-			{token.NEWLINE, "\n", "", 1, 2},
-			{token.INDENT, "s", "", 2, 5},
-			{token.IDENT, "s", "", 2, 5},
-			{token.ASSIGN, "=", "", 2, 7},
-			{token.IDENT, "g", "", 2, 9},
-			{token.LPAREN, "(", "", 2, 10},
-			{token.STRING, "a\nb", "", 2, 11},
-			{token.COMMA, ",", "", 3, 3},
-			{token.LBRACK, "[", "", 3, 5},
-			{token.INT, "1", "", 3, 6},
-			{token.NEWLINE, "\n", "", 3, 7},
-			{token.INT, "2", "", 4, 2},
-			{token.RBRACK, "]", "", 4, 3},
-			{token.RPAREN, ")", "", 4, 4},
-			{token.NEWLINE, "\n", "", 4, 5},
-			{token.IDENT, "z", "", 5, 5},
-			{token.EOF, "", "", 5, 6},
-		})
-	})
-
-	t.Run("a line break inside parentheses reads as a space", func(t *testing.T) {
+	t.Run("a line ending in a comma continues", func(t *testing.T) {
 		checkInput(t, "x = f(1,\n    2)\ny", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
@@ -1097,6 +963,52 @@ func TestBracketLayout(t *testing.T) {
 			{token.NEWLINE, "\n", "", 2, 7},
 			{token.IDENT, "y", "", 3, 1},
 			{token.EOF, "", "", 3, 2},
+		})
+	})
+
+	t.Run("a comma before a line not indented past its block ends the statement", func(t *testing.T) {
+		checkInput(t, "x = f(1,\ny = 2", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.NEWLINE, "\n", "", 1, 9},
+			{token.IDENT, "y", "", 2, 1},
+			{token.ASSIGN, "=", "", 2, 3},
+			{token.INT, "2", "", 2, 5},
+			{token.EOF, "", "", 2, 6},
+		})
+	})
+
+	t.Run("a bracket does not join lines", func(t *testing.T) {
+		checkInput(t, "x = f(1\n    2)", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.NEWLINE, "\n", "", 1, 8},
+			{token.INDENT, "2", "", 2, 5},
+			{token.INT, "2", "", 2, 5},
+			{token.RPAREN, ")", "", 2, 6},
+			{token.EOF, "", "", 2, 7},
+		})
+	})
+
+	t.Run("a tab in a continued line's indentation is reported", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n\t2)", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.ILLEGAL, "\t", "2:1:" + INDENT_TAB_ERR, 2, 1},
+			{token.INT, "2", "", 2, 2},
+			{token.RPAREN, ")", "", 2, 3},
+			{token.EOF, "", "", 2, 4},
 		})
 	})
 
@@ -1113,151 +1025,68 @@ func TestBracketLayout(t *testing.T) {
 		}
 	})
 
-	t.Run("rows inside parentheses keep their line breaks", func(t *testing.T) {
-		checkInput(t, "f([\n  1\n])", []Test{
-			{token.IDENT, "f", "", 1, 1},
-			{token.LPAREN, "(", "", 1, 2},
-			{token.LBRACK, "[", "", 1, 3},
-			{token.NEWLINE, "\n", "", 1, 4},
-			{token.INT, "1", "", 2, 3},
-			{token.NEWLINE, "\n", "", 2, 4},
-			{token.RBRACK, "]", "", 3, 1},
-			{token.RPAREN, ")", "", 3, 2},
-			{token.EOF, "", "", 3, 3},
+	t.Run("a NUL character does not end the input", func(t *testing.T) {
+		checkInput(t, "x = 1\n# a\x00b\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.ILLEGAL, "\x00", "2:4:NUL character is not allowed in source", 2, 4},
+			{token.IDENT, "b", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.IDENT, "y", "", 3, 1},
+			{token.EOF, "", "", 3, 2},
+		})
+		checkInput(t, "x = 1\n\x00\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.ILLEGAL, "\x00", "2:1:NUL character is not allowed in source", 2, 1},
+			{token.NEWLINE, "\n", "", 2, 2},
+			{token.IDENT, "y", "", 3, 1},
+			{token.EOF, "", "", 3, 2},
 		})
 	})
 
-	t.Run("a line that leaves parentheses closes them and ends the statement", func(t *testing.T) {
-		checkInput(t, "x = f(\na = 7", []Test{
+	t.Run("a backslash is an illegal character", func(t *testing.T) {
+		checkInput(t, "x = 1 \\\ny", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.RPAREN, ")", "1:6:'(' " + INDENT_PAST_ERR, 1, 7},
-			{token.NEWLINE, "\n", "", 1, 7},
-			{token.IDENT, "a", "", 2, 1},
-			{token.ASSIGN, "=", "", 2, 3},
-			{token.INT, "7", "", 2, 5},
-			{token.EOF, "", "", 2, 6},
-		})
-	})
-
-	t.Run("a closer first closes the brackets left open inside its own", func(t *testing.T) {
-		checkInput(t, "x = [(1]\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.INT, "1", "", 1, 7},
-			{token.RPAREN, ")", "1:6:'(' " + NEVER_CLOSED_ERR, 1, 8},
-			{token.RBRACK, "]", "", 1, 8},
-			{token.NEWLINE, "\n", "", 1, 9},
-			{token.IDENT, "y", "", 2, 1},
-			{token.EOF, "", "", 2, 2},
-		})
-		checkInput(t, "x = f([1 2)\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.LBRACK, "[", "", 1, 7},
-			{token.INT, "1", "", 1, 8},
-			{token.INT, "2", "", 1, 10},
-			{token.RBRACK, "]", "1:7:'[' " + NEVER_CLOSED_ERR, 1, 11},
-			{token.RPAREN, ")", "", 1, 11},
-			{token.NEWLINE, "\n", "", 1, 12},
-			{token.IDENT, "y", "", 2, 1},
-			{token.EOF, "", "", 2, 2},
-		})
-		checkInput(t, "x = f(1,\n    [2 3\n)\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.INT, "1", "", 1, 7},
-			{token.COMMA, ",", "", 1, 8},
-			{token.LBRACK, "[", "", 2, 5},
-			{token.INT, "2", "", 2, 6},
-			{token.INT, "3", "", 2, 8},
-			{token.NEWLINE, "\n", "", 2, 9},
-			{token.RBRACK, "]", "2:5:'[' " + NEVER_CLOSED_ERR, 3, 1},
-			{token.RPAREN, ")", "", 3, 1},
-			{token.NEWLINE, "\n", "", 3, 2},
-			{token.IDENT, "y", "", 4, 1},
-			{token.EOF, "", "", 4, 2},
-		})
-	})
-
-	t.Run("a closer that no open bracket expects closes nothing", func(t *testing.T) {
-		checkInput(t, "x = (1]\ny", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LPAREN, "(", "", 1, 5},
-			{token.INT, "1", "", 1, 6},
-			{token.RBRACK, "]", "", 1, 7},
-			{token.RPAREN, ")", "1:5:'(' " + INDENT_PAST_ERR, 1, 8},
+			{token.INT, "1", "", 1, 5},
+			{token.ILLEGAL, "\\", "1:7:Illegal character '\\'", 1, 7},
 			{token.NEWLINE, "\n", "", 1, 8},
 			{token.IDENT, "y", "", 2, 1},
 			{token.EOF, "", "", 2, 2},
 		})
 	})
-
-	t.Run("blank and comment lines inside brackets", func(t *testing.T) {
-		checkInput(t, "x = [\n\n    # note\n    1\n]", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.LBRACK, "[", "", 1, 5},
-			{token.NEWLINE, "\n", "", 1, 6},
-			{token.INT, "1", "", 4, 5},
-			{token.NEWLINE, "\n", "", 4, 6},
-			{token.RBRACK, "]", "", 5, 1},
-			{token.EOF, "", "", 5, 2},
-		})
-	})
 }
 
-// The open counts that let a stray closer close nothing without searching
-// match the brackets on the context stack after every token.
-func TestOpenCountsMatchBrackets(t *testing.T) {
-	for _, input := range []string{
-		"x = [(1]]\ny",
-		"x = f([1 2)\ny",
-		"x = f(1,\n    [2 3\n)\ny",
-		"f\n    x = [1\n  2]\n    y = (1 ]\n",
-		"x = ((1\n",
-		"x = [\n  [1 2\n]",
-	} {
-		l := New("", input)
-		for tok, _ := l.NextToken(); tok.Type != token.EOF; tok, _ = l.NextToken() {
-			var brackets [2]int
-			for _, c := range l.contexts {
-				if c.isBracket() {
-					brackets[bracketSlot(c.opener.Type)]++
-				}
-			}
-			if l.openBrackets() != brackets {
-				t.Fatalf("%q: after %q at %d:%d open counts are %v, brackets %v", input, tok.Literal, tok.Line, tok.Column, l.openBrackets(), brackets)
-			}
-		}
-	}
-}
-
-func TestLineBreakInsideBrackets(t *testing.T) {
-	// A line break inside brackets gives the same token stream for every
-	// ending style, positions included.
+func TestLineLayoutEndings(t *testing.T) {
+	// A block literal and a continued line give the same token stream for
+	// every ending style, positions included.
 	expected := []Test{
 		{token.IDENT, "arr", "", 1, 1},
 		{token.ASSIGN, "=", "", 1, 5},
 		{token.LBRACK, "[", "", 1, 7},
-		{token.FLOAT, "1.1", "", 1, 8},
-		{token.FLOAT, "2.3", "", 1, 12},
-		{token.NEWLINE, "\n", "", 1, 15},
-		{token.INT, "4", "", 2, 5},
-		{token.FLOAT, "2.1", "", 2, 7},
-		{token.RBRACK, "]", "", 2, 10},
-		{token.NEWLINE, "\n", "", 2, 11},
-		{token.IDENT, "arr", "", 3, 1},
-		{token.EOF, "", "", 3, 4},
+		{token.NEWLINE, "\n", "", 1, 8},
+		{token.INDENT, "1", "", 2, 5},
+		{token.FLOAT, "1.1", "", 2, 5},
+		{token.FLOAT, "2.3", "", 2, 9},
+		{token.NEWLINE, "\n", "", 2, 12},
+		{token.INT, "4", "", 3, 5},
+		{token.FLOAT, "2.1", "", 3, 7},
+		{token.NEWLINE, "\n", "", 3, 10},
+		{token.DEINDENT, "]", "", 4, 1},
+		{token.RBRACK, "]", "", 4, 1},
+		{token.NEWLINE, "\n", "", 4, 2},
+		{token.IDENT, "f", "", 5, 1},
+		{token.LPAREN, "(", "", 5, 2},
+		{token.INT, "1", "", 5, 3},
+		{token.COMMA, ",", "", 5, 4},
+		{token.INT, "2", "", 6, 3},
+		{token.RPAREN, ")", "", 6, 4},
+		{token.EOF, "", "", 6, 5},
 	}
 	endings := []struct {
 		name   string
@@ -1269,7 +1098,7 @@ func TestLineBreakInsideBrackets(t *testing.T) {
 	}
 	for _, tc := range endings {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "arr = [1.1 2.3" + tc.ending + "    4 2.1]" + tc.ending + "arr"
+			src := strings.Join([]string{"arr = [", "    1.1 2.3", "    4 2.1", "]", "f(1,", "  2)"}, tc.ending)
 			checkInput(t, src, expected)
 		})
 	}

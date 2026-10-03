@@ -1402,13 +1402,19 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "missing closing bracket",
 			input:       "[1 2 3",
 			expectError: true,
-			errorMsg:    "'[' " + lexer.NEVER_CLOSED_ERR,
+			errorMsg:    "expected ']' to close array literal",
 		},
 		{
-			name:        "row at the bracket line's indentation",
+			name:        "inline literal across lines",
 			input:       "[1 2\n3 4]",
 			expectError: true,
-			errorMsg:    "'[' " + lexer.INDENT_PAST_ERR,
+			errorMsg:    inlineArrayErr,
+		},
+		{
+			name:        "block literal rows not indented",
+			input:       "[\n1 2\n]",
+			expectError: true,
+			errorMsg:    blockRowsErr,
 		},
 		{
 			name:        "invalid header token",
@@ -1457,8 +1463,8 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
-			name:  "second logical row implies block",
-			input: "[1 2\n 3 4]",
+			name:  "block literal",
+			input: "[\n    1 2\n    3 4\n]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2)
@@ -1509,39 +1515,30 @@ func TestArrayLiterals(t *testing.T) {
 	}
 }
 
-// Lines inside brackets have no indentation of their own, and a line that
-// cannot continue a bracket closes it, so the statements after a literal keep
-// their structure.
-func TestBracketLayoutKeepsStatements(t *testing.T) {
+// A literal or a parenthesized list laid out against the rules is one error,
+// and the statements after it keep their structure.
+func TestLayoutKeepsStatements(t *testing.T) {
+	const name = "TestLayoutKeepsStatements:"
 	for _, tt := range []struct {
 		name      string
 		input     string
 		expErrors []string
 	}{
-		{"closing line across dedents", "x = [\n  [\n    1 2\n]]", nil},
-		{"literal continued on an indented line", "m = [1 2\n    3 4]", nil},
-		{"unclosed nested literals", "x = [\n  [1 2", []string{
-			"TestBracketLayoutKeepsStatements:2:3:'[' " + lexer.INDENT_PAST_ERR,
-			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.INDENT_PAST_ERR,
-		}},
-		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{
-			"TestBracketLayoutKeepsStatements:1:5:'[' " + lexer.INDENT_PAST_ERR,
-		}},
-		{"unclosed call", "x = f(1", []string{
-			"TestBracketLayoutKeepsStatements:1:6:'(' " + lexer.INDENT_PAST_ERR,
-		}},
-		{"closer of an enclosing call", "x = f([1 2)", []string{
-			"TestBracketLayoutKeepsStatements:1:7:'[' " + lexer.NEVER_CLOSED_ERR,
-		}},
-		{"closer of an enclosing call on a later line", "x = f(1,\n    [2 3\n)", []string{
-			"TestBracketLayoutKeepsStatements:2:5:'[' " + lexer.NEVER_CLOSED_ERR,
-		}},
-		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{
-			"TestBracketLayoutKeepsStatements:3:8:NUL character is not allowed in source",
-		}},
+		{"nested block literals", "x = [\n    [\n        1 2\n    ]\n]", nil},
+		{"block literal", "m = [\n    1 2\n    3 4\n]", nil},
+		{"unclosed block literal", "x = [\n    1 2", []string{name + "3:1:expected ']' to close array literal"}},
+		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:expected ']' to close array literal"}},
+		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
+		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
+		{"block literal closed at its rows' indentation", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
+		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
+		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + parenBreakErr}},
+		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + parenBreakErr}},
+		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + parenBreakErr}},
+		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestBracketLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
+			sp := NewScriptParser(lexer.New("TestLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
 			program := sp.Parse()
 			require.Equal(t, tt.expErrors, sp.Errors())
 			require.Len(t, program.Statements, 3)
@@ -1585,26 +1582,21 @@ func TestValueStartsOnAssignmentLine(t *testing.T) {
 	require.Equal(t, []string{msg}, sp.Errors())
 }
 
-// Inside parentheses a line break reads as a space, so a call or a grouped
-// expression parses as it would on one line. Square brackets inside them keep
-// their rows, and a cell in parentheses can span lines.
-func TestLineBreakInsideParentheses(t *testing.T) {
+// A line ending in a comma continues on the next line when that line is
+// indented, so a call or a function's arguments can span lines.
+func TestLineBreakAfterComma(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		input  string
 		expect []string
 	}{
-		{"arguments on the next line", "x = f(\n    x, y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
-		{"closing parenthesis on its own line", "x = f(\n    x, y, z\n)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
-		{"one argument per line", "x = f(\n    x,\n    y,\n    z\n)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
-		{"grouped expression", "x = (1 +\n    2)", []string{"x = (1 + 2)"}},
-		{"signed operand on the next line", "y = (a\n    -b)", []string{"y = (a - b)"}},
-		{"array rows inside a call", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
-		{"parentheses inside an array cell", "m = [\n    (1 +\n        2) 3\n    4 5\n]", []string{"m = [\n    (1 + 2) 3\n    4 5\n]"}},
-		{"typed table header across lines", "t = [\n    : A(\n        0) B(0)\n]", []string{"t = [\n  : A(0) B(0)\n]"}},
+		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
+		{"parentheses in a block literal's row", "m = [\n    (1 + 2) 3\n    4 5\n]", []string{"m = [\n    (1 + 2) 3\n    4 5\n]"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestLineBreakInsideParentheses", tt.input))
+			sp := NewScriptParser(lexer.New("TestLineBreakAfterComma", tt.input))
 			program := sp.Parse()
 			require.Empty(t, sp.Errors())
 			var got []string
@@ -1616,42 +1608,12 @@ func TestLineBreakInsideParentheses(t *testing.T) {
 	}
 }
 
-// A line break inside parentheses keeps tokens apart, as a space does: a
-// number and a name on separate lines are not an implicit product, as in
-// `(2 x)`, and a name and a '(' are not a call, as in `(f (x))`.
-func TestLineBreakKeepsTokensApart(t *testing.T) {
-	for _, tt := range []struct {
-		name     string
-		input    string
-		firstErr string
-	}{
-		{"no implicit product", "v = (2\n      x)", "TestLineBreakKeepsTokensApart:1:6:expected next token to be ), got IDENT instead"},
-		{"no call", "y = (f\n    (x))", "TestLineBreakKeepsTokensApart:1:6:expected next token to be ), got ( instead"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestLineBreakKeepsTokensApart", tt.input))
-			sp.Parse()
-			require.NotEmpty(t, sp.Errors())
-			require.Equal(t, tt.firstErr, sp.Errors()[0])
-		})
-	}
-}
-
-// A line that leaves an open parenthesis closes it, so the statement on that
-// line still parses; an index bracket keeps its line breaks.
-func TestLineBreakLeavingParentheses(t *testing.T) {
-	sp := NewScriptParser(lexer.New("TestLineBreakLeavingParentheses", "x = f(\na = 7"))
-	program := sp.Parse()
-	require.Equal(t, []string{
-		"TestLineBreakLeavingParentheses:1:6:'(' " + lexer.INDENT_PAST_ERR,
-	}, sp.Errors())
-	require.Len(t, program.Statements, 2)
-	require.Equal(t, "a = 7", program.Statements[1].String())
-
-	sp = NewScriptParser(lexer.New("TestLineBreakLeavingParentheses", "value = data[\n    i]"))
+// An index bracket keeps its expression on its line.
+func TestIndexStaysOnOneLine(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
 	sp.Parse()
 	require.NotEmpty(t, sp.Errors())
-	require.Equal(t, "TestLineBreakLeavingParentheses:1:14:no prefix parse function for \n found", sp.Errors()[0])
+	require.Equal(t, "TestIndexStaysOnOneLine:1:14:no prefix parse function for \n found", sp.Errors()[0])
 }
 
 // Pluto has no line continuation: a backslash is an illegal character in a
