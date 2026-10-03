@@ -92,8 +92,7 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
-	if tok.Type == token.NEWLINE {
-		l.lineBreak(tok, err)
+	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
 	}
 	l.last = tok.Type
@@ -103,16 +102,17 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 // lineBreak lays out the line after a line break; it is the one place that
 // decides layout. It moves past blank and comment lines to the next line. A
 // line ending in a comma continues onto that line when it is indented past
-// the current block, and the break reads as a space. Otherwise the break ends
-// a statement or a row, and the next line's own layout tokens follow.
-func (l *Lexer) lineBreak(br token.Token, err *token.CompileError) {
+// the current block: the break reads as a space and lineBreak reports false.
+// Otherwise the break ends a statement or a row, and the next line's own
+// layout tokens are queued to follow it.
+func (l *Lexer) lineBreak() bool {
 	column, first, tab := l.nextLine()
 	if l.last == token.COMMA && first != eof && column > l.level() {
 		l.tabErr(tab)
-		return
+		return false
 	}
-	l.pending.push(lexed{br, err})
 	l.startLine(column, first, tab)
+	return true
 }
 
 // level returns the column of the innermost open block, or 1 outside blocks.
@@ -149,12 +149,12 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 	if first == ':' {
 		level += 2
 	}
-	at := l.tokenAt(token.INDENT, string(first), column)
 	if level == 1 {
-		l.dedentTo(0, at)
+		l.dedentTo(0, column, first)
 		return
 	}
 	if base := l.level(); level > base {
+		at := l.tokenAt(token.INDENT, string(first), column)
 		var err *token.CompileError
 		if level != base+4 {
 			err = &token.CompileError{Token: at, Msg: INDENT_WIDTH_ERR}
@@ -165,18 +165,22 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 	}
 	for i := len(l.blocks) - 1; i >= 0 && level <= l.blocks[i]; i-- {
 		if level == l.blocks[i] {
-			l.dedentTo(i+1, at)
+			l.dedentTo(i+1, column, first)
 			return
 		}
 	}
-	at.Type = token.ILLEGAL
-	l.pending.push(lexed{at, &token.CompileError{Token: at, Msg: INDENT_ERR + ". At char: " + string(first)}})
+	bad := l.tokenAt(token.ILLEGAL, string(first), column)
+	l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_ERR + ". At char: " + string(first)}})
 }
 
-// dedentTo leaves every block above the first n, with a DEINDENT at the
-// position of at for each.
-func (l *Lexer) dedentTo(n int, at token.Token) {
-	at.Type = token.DEINDENT
+// dedentTo leaves every block above the first n, with a DEINDENT for each at
+// the line's first token, first at column. A line that leaves no block makes
+// no token.
+func (l *Lexer) dedentTo(n, column int, first rune) {
+	if len(l.blocks) <= n {
+		return
+	}
+	at := l.tokenAt(token.DEINDENT, string(first), column)
 	for len(l.blocks) > n {
 		l.blocks = l.blocks[:len(l.blocks)-1]
 		l.pending.push(lexed{at, nil})
