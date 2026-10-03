@@ -1608,6 +1608,16 @@ func TestLineBreakAfterComma(t *testing.T) {
 	}
 }
 
+// A failed operand ends its expression: no operator or call applies to what
+// failed, so these report errors instead of crashing the parser.
+func TestFailedOperandEndsExpression(t *testing.T) {
+	for _, input := range []string{"x = foo[]()", "a=0:3:=:", "3.5:(,(1\ny10:3"} {
+		sp := NewScriptParser(lexer.New("TestFailedOperandEndsExpression", input))
+		require.NotPanics(t, func() { sp.Parse() }, input)
+		require.NotEmpty(t, sp.Errors(), input)
+	}
+}
+
 // An index bracket keeps its expression on its line.
 func TestIndexStaysOnOneLine(t *testing.T) {
 	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
