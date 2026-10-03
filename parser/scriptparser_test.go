@@ -1671,7 +1671,7 @@ func TestBackslashIsIllegal(t *testing.T) {
 			sp := NewScriptParser(lexer.New("TestBackslashIsIllegal", tt.input))
 			sp.Parse()
 			require.NotEmpty(t, sp.Errors())
-			require.Equal(t, "TestBackslashIsIllegal:"+tt.pos+":Illegal character '\\': "+lexer.NO_CONTINUATION_ERR, sp.Errors()[0])
+			require.Equal(t, "TestBackslashIsIllegal:"+tt.pos+":Illegal character '\\'", sp.Errors()[0])
 		})
 	}
 }

@@ -281,7 +281,7 @@ func TestStructHeaderBackslashIsIllegal(t *testing.T) {
 	p := NewCodeParser(lexer.New("TestStructHeaderBackslashIsIllegal", input))
 	p.Parse()
 	require.NotEmpty(t, p.Errors())
-	require.Equal(t, "TestStructHeaderBackslashIsIllegal:2:10:Illegal character '\\': "+lexer.NO_CONTINUATION_ERR, p.Errors()[0])
+	require.Equal(t, "TestStructHeaderBackslashIsIllegal:2:10:Illegal character '\\'", p.Errors()[0])
 }
 
 // A function's parameters can span lines inside its parentheses.

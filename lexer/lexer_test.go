@@ -1053,7 +1053,7 @@ func TestBracketLayout(t *testing.T) {
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.LBRACK, "[", "", 1, 5},
 			{token.INT, "1", "", 1, 6},
-			{token.ILLEGAL, "\\", "1:8:Illegal character '\\': " + NO_CONTINUATION_ERR, 1, 8},
+			{token.ILLEGAL, "\\", "1:8:Illegal character '\\'", 1, 8},
 			{token.NEWLINE, "\n", "", 1, 9},
 			{token.INT, "2", "", 2, 5},
 			{token.RBRACK, "]", "", 2, 6},
