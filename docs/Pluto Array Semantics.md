@@ -21,7 +21,7 @@ dimension lengths beside that buffer; rows are not separately allocated.
 - An empty array states its element type; see [Empty arrays](#empty-arrays).
 - `[1 2 3]` is a rank-1 `[I64]` value.
 - A one-row inline literal contributes one array axis.
-- Two or more unescaped logical rows imply block layout.
+- Two or more rows imply block layout.
 - A block literal contributes row and column axes even when it contains only
   one row. A newline immediately after `[` explicitly selects that layout.
 - Equal-shaped array-valued cells stack recursively into higher ranks.
@@ -60,19 +60,36 @@ row = [[]0]     # one empty row: shape [1 0], not an empty matrix
 A zero-row matrix keeps no column count: concatenation takes the other
 operand's inner shape.
 
-A long rank-1 literal remains inline by escaping its physical newline:
+Pluto has no line continuation character, and brackets take no part in
+layout. An inline literal keeps its cells on one line, however long; an editor
+can wrap it for display. A literal that spans lines is a block: its `[` ends
+its line, its rows form a block indented 4 spaces past that line, and its `]`
+goes on its own line, back at the `[` line's indentation. A nested block
+literal follows the same rule inside its cell, and a multi-line string belongs
+to its cell:
 
 ```pluto
-values = [1 2 3 4 5 \
-          6 7 8 9 10]
+matrix = [
+    1 2
+    3 4
+]
 ```
 
-Without the `\`, a second logical row selects block layout:
+An inline literal with a line break in it, a `]` on the last row's line, or
+rows that are not indented are errors. An assignment's value starts on the
+same line as its `=`, so a multi-line literal opens its bracket there:
+`m = [`, not `m =` followed by `[` on the next line.
+
+Inside parentheses a line breaks only after a comma, and the next line is
+indented past the statement's line, so a call's arguments can span lines:
 
 ```pluto
-matrix = [1 2
-          3 4]
+total = Sum(first,
+    second, third)
 ```
+
+A grouped expression, such as `(a + b)`, and an index, such as `data[i]`, stay
+on one line.
 
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
@@ -144,11 +161,13 @@ than flattened when used as cells.
 
 Multiple scalar rows with homogeneous but different column types infer an
 unnamed table. A header always produces a table and must contain at least one
-column name. Headerless literals start directly with their first data row.
+column name. The header goes on its own line after `[`, with all its column
+names on that line. Headerless literals start directly with their first data
+row.
 
-The preferred layout outdents the `:` marker so the first header and first
-value begin in the same column. Spacing within header and data rows is
-otherwise non-semantic:
+The header's `:` hangs 2 spaces left of the rows, with one space after it, so
+the first header and first value begin in the same column. Spacing within
+header and data rows is otherwise non-semantic:
 
 ```pluto
 scores = [

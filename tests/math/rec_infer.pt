@@ -45,7 +45,7 @@ y, z = Mixed(n)
     y = 0.5
     prior, _ = n > 0 Mixed(n - 1)
     tab = [
-        :a
+      : a
         1
         prior
     ]
@@ -56,7 +56,7 @@ y = Bump(n, x)
     y = x
     prior = n > 0 Bump(n - 1, x)
     tab = [
-        :a
+      : a
         prior
     ]
     col = tab.a + 1

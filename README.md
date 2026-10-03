@@ -104,6 +104,20 @@ string literal produces a newline in the string's value -- the `\r` escape
 denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
+Indentation is significant. A block, such as a template's body or the rows of
+an array literal, is indented 4 spaces past the line that opens it, and tabs
+are not allowed in indentation. A struct's or table's header is written
+`: name ...` with its `:` 2 spaces in and one space after it, so its names
+line up with the values 4 spaces in. Brackets take no part in layout: a line
+that ends in a comma continues on the next line when that line is indented
+further, so a call's arguments can span lines (see Arrays below).
+
+```python
+p = Person
+  : name age
+    "Ada" 36
+```
+
 A directory is the unit of compilation:
 
 ```text
@@ -131,7 +145,7 @@ Think of a template as a **black box**: data flows in through inputs, gets trans
 ```python
 # y is the output (writable), x is the input (read-only)
 y = Square(x)
-	y = x * x
+    y = x * x
 ```
 
 Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
@@ -263,14 +277,19 @@ scores = [
 Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
 where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
-`[[1 2] [3 4]]`. Use `\` to continue a long inline array across physical
-lines without starting block layout. Array-valued cells stack recursively
+`[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
+keeps its cells on one line, however long, and a literal that spans lines is a
+block, with `[` ending its line, its rows indented 4 spaces, and `]` on its own
+line back at the `[` line's indentation. Array-valued cells stack recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
+Inside parentheses a line breaks only after a comma, so a call's arguments can
+span lines; a grouped expression stays on one line, as does an index.
 
 A header row produces a columnar table, with named columns projected as arrays
-such as `scores.Score`. The shown hanging `:` is the preferred layout because
-the first header aligns with the first value; spacing within header and data
-rows is otherwise non-semantic.
+such as `scores.Score`. The header goes on its own line after `[`, with all
+its column names on that line. Its `:` hangs 2 spaces left of the rows, with one
+space after it, so the first header aligns with the first value; spacing within
+header and data rows is otherwise non-semantic.
 
 An empty array states its element type with a zero value after its brackets:
 `[]0`, `[]0.0` or `[]""`, or `[]x` for the type of a variable `x`. It prints as

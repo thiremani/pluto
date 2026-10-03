@@ -106,6 +106,14 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}
 }
 
+// A token that the lexer reports an error with stays in the stream when the
+// parser reads it through its second token of lookahead.
+func TestLookaheadKeepsTokenWithLexerError(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestLookaheadKeepsTokenWithLexerError", `x = [a -"\q"]`))
+	sp.Parse()
+	require.Equal(t, []string{`TestLookaheadKeepsTokenWithLexerError:1:9:unsupported escape sequence \q`}, sp.Errors())
+}
+
 func TestMultiAssign(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1457,25 +1465,42 @@ func TestArrayLiterals(t *testing.T) {
 			errorMsg:    "expected ']' to close array literal",
 		},
 		{
+			name:        "inline literal across lines",
+			input:       "[1 2\n3 4]",
+			expectError: true,
+			errorMsg:    inlineArrayErr,
+		},
+		{
+			name:        "block literal rows not indented",
+			input:       "[\n1 2\n]",
+			expectError: true,
+			errorMsg:    blockRowsErr,
+		},
+		{
 			name:        "invalid header token",
-			input:       "[: 123 Product]",
+			input:       "[\n  : 123 Product\n]",
 			expectError: true,
 			errorMsg:    "expected identifier for column header",
 		},
 		{
 			name:        "header marker without columns",
-			input:       "[:\n]",
+			input:       "[\n  :\n]",
 			expectError: true,
 			errorMsg:    "expected at least one column header after ':'",
 		},
 		{
-			name: "line continuation with unary operators",
-			input: `[a -b \
-    -c d]`,
+			name:        "header on the bracket's line",
+			input:       "[ : Name(\"\") Score(0) ]",
+			expectError: true,
+			errorMsg:    "a table's header goes on its own line after '['",
+		},
+		{
+			name:  "unary operators start cells",
+			input: "[a -b -c d]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.False(t, arr.Block)
-				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
+				require.Len(t, arr.Rows, 1, "expected 1 row")
 				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
 
 				// Check that we have: a, (-b), (-c), d
@@ -1498,8 +1523,8 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
-			name:  "second logical row implies block",
-			input: "[1 2\n3 4]",
+			name:  "block literal",
+			input: "[\n    1 2\n    3 4\n]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2)
@@ -1548,6 +1573,139 @@ func TestArrayLiterals(t *testing.T) {
 			if tt.checkResult != nil {
 				tt.checkResult(t, arr)
 			}
+		})
+	}
+}
+
+// A literal or a parenthesized list laid out against the rules is one error,
+// and the statements after it keep their structure.
+func TestLayoutKeepsStatements(t *testing.T) {
+	const name = "TestLayoutKeepsStatements:"
+	for _, tt := range []struct {
+		name      string
+		input     string
+		expErrors []string
+	}{
+		{"nested block literals", "x = [\n    [\n        1 2\n    ]\n]", nil},
+		{"block literal", "m = [\n    1 2\n    3 4\n]", nil},
+		{"unclosed block literal", "x = [\n    1 2", []string{name + "3:1:expected ']' to close array literal"}},
+		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:expected ']' to close array literal"}},
+		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
+		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
+		{"block literal closed at its rows' indentation", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
+		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
+		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + parenBreakErr}},
+		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + parenBreakErr}},
+		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + parenBreakErr}},
+		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
+			program := sp.Parse()
+			require.Equal(t, tt.expErrors, sp.Errors())
+			require.Len(t, program.Statements, 3)
+			require.Equal(t, "after = 7", program.Statements[1].String())
+			require.Equal(t, "after", program.Statements[2].String())
+		})
+	}
+}
+
+// An assignment's value starts on the same line as its '=', even when a
+// comment follows the '=' or the value is a bracket. The statement after it
+// still parses.
+func TestValueStartsOnAssignmentLine(t *testing.T) {
+	const msg = "TestValueStartsOnAssignmentLine:1:3:an assignment's value starts on the same line as its '='"
+	for _, tt := range []struct {
+		name  string
+		input string
+	}{
+		{"value on an indented line", "x =\n    1"},
+		{"value on an unindented line", "x =\n1"},
+		{"comment after =", "x = # note\n    1"},
+		{"bracket on the next line", "m =\n[\n    1 2\n]"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", tt.input+"\nafter = 7"))
+			program := sp.Parse()
+			require.NotEmpty(t, sp.Errors())
+			require.Equal(t, msg, sp.Errors()[0])
+			found := false
+			for _, stmt := range program.Statements {
+				if let, ok := stmt.(*ast.LetStatement); ok && let != nil && let.Name[0].Value == "after" {
+					found = true
+				}
+			}
+			require.True(t, found, "the statement after the assignment still parses")
+		})
+	}
+
+	sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", "x ="))
+	sp.Parse()
+	require.Equal(t, []string{msg}, sp.Errors())
+}
+
+// A line ending in a comma continues on the next line when that line is
+// indented, so a call or a function's arguments can span lines.
+func TestLineBreakAfterComma(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		input  string
+		expect []string
+	}{
+		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
+		{"parentheses in a block literal's row", "m = [\n    (1 + 2) 3\n    4 5\n]", []string{"m = [\n    (1 + 2) 3\n    4 5\n]"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestLineBreakAfterComma", tt.input))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+			var got []string
+			for _, stmt := range program.Statements {
+				got = append(got, stmt.String())
+			}
+			require.Equal(t, tt.expect, got)
+		})
+	}
+}
+
+// A failed operand ends its expression: no operator or call applies to what
+// failed, so these report errors instead of crashing the parser.
+func TestFailedOperandEndsExpression(t *testing.T) {
+	for _, input := range []string{"x = foo[]()", "a=0:3:=:", "3.5:(,(1\ny10:3"} {
+		sp := NewScriptParser(lexer.New("TestFailedOperandEndsExpression", input))
+		require.NotPanics(t, func() { sp.Parse() }, input)
+		require.NotEmpty(t, sp.Errors(), input)
+	}
+}
+
+// An index bracket keeps its expression on its line.
+func TestIndexStaysOnOneLine(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
+	sp.Parse()
+	require.NotEmpty(t, sp.Errors())
+	require.Equal(t, "TestIndexStaysOnOneLine:1:14:no prefix parse function for \n found", sp.Errors()[0])
+}
+
+// Pluto has no line continuation: a backslash is an illegal character in a
+// row, a table header or an expression, and the first error says so. The
+// errors after it are the usual recovery after an illegal character.
+func TestBackslashIsIllegal(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		pos   string
+	}{
+		{"row", "x = [1 2 \\\n    3 4]", "1:10"},
+		{"table header", "t = [\n  : A(0) \\\n    B(0)\n]", "2:10"},
+		{"expression", "x = 1 + \\\n2", "1:9"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestBackslashIsIllegal", tt.input))
+			sp.Parse()
+			require.NotEmpty(t, sp.Errors())
+			require.Equal(t, "TestBackslashIsIllegal:"+tt.pos+":Illegal character '\\'", sp.Errors()[0])
 		})
 	}
 }

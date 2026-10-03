@@ -54,7 +54,6 @@ const (
 
 	// Other tokens.
 	NEWLINE
-	BACKSLASH
 	INDENT
 	DEINDENT
 )
@@ -117,12 +116,11 @@ const (
 	SYM_RBRACK = "]"
 	SYM_RBRACE = "}"
 
-	SYM_DQUOTE    = "\""
-	SYM_SQUOTE    = "'"
-	SYM_ACCENT    = "`"
-	SYM_BACKSLASH = "\\"
-	SYM_NEWLINE   = "\n"
-	SYM_TAB       = "\t"
+	SYM_DQUOTE  = "\""
+	SYM_SQUOTE  = "'"
+	SYM_ACCENT  = "`"
+	SYM_NEWLINE = "\n"
+	SYM_TAB     = "\t"
 
 	SYM_COMMENT = "#"
 )

@@ -252,6 +252,70 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	}, p.Errors())
 }
 
+// A literal inside a function body keeps the body's block structure, however
+// its lines are indented.
+func TestLayoutInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{"nested block literals", "    y = [\n        [\n            x\n        ]\n    ]\n"},
+		{"block literal", "    y = [\n        1 2\n        3 4\n    ]\n"},
+		{"call continued after a comma", "    y = f(x,\n        1)\n"},
+		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestLayoutInBody", input))
+			code := p.Parse()
+			require.Empty(t, p.Errors())
+			require.Len(t, code.Statements, 2)
+			require.Len(t, code.Statements[0].(*ast.FuncStatement).Body.Statements, 2)
+		})
+	}
+}
+
+// A struct header goes on one line: a backslash in it is an illegal character.
+func TestStructHeaderBackslashIsIllegal(t *testing.T) {
+	input := "p = Person\n  : name \\\n    age\n    \"Ada\" 36\n"
+	p := NewCodeParser(lexer.New("TestStructHeaderBackslashIsIllegal", input))
+	p.Parse()
+	require.NotEmpty(t, p.Errors())
+	require.Equal(t, "TestStructHeaderBackslashIsIllegal:2:10:Illegal character '\\'", p.Errors()[0])
+}
+
+// A function's parameters can span lines inside its parentheses.
+func TestParametersAcrossLines(t *testing.T) {
+	p := NewCodeParser(lexer.New("TestParametersAcrossLines", "out = F(a,\n    b)\n    out = a + b\n"))
+	code := p.Parse()
+	require.Empty(t, p.Errors())
+	require.Len(t, code.Statements, 1)
+	fn, ok := code.Statements[0].(*ast.FuncStatement)
+	require.True(t, ok)
+	require.Len(t, fn.Parameters, 2)
+}
+
+// A literal laid out against the rules is the only error in its function:
+// the rest of the body and the next function report none.
+func TestLayoutErrorsInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		err  string
+	}{
+		{"inline literal across lines", "    y = [x\n        1]\n", "3:11:" + inlineArrayErr},
+		{"block literal closed on its last row", "    y = [\n        x]\n", "4:10:" + blockCloseErr},
+		{"unclosed block literal", "    y = [\n        x\n", "5:5:expected ']' to close array literal"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n    y = x\n" + tt.line + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestLayoutErrorsInBody", input))
+			p.Parse()
+			require.Equal(t, []string{"TestLayoutErrorsInBody:" + tt.err}, p.Errors())
+		})
+	}
+}
+
 func TestFuncStatementParsing(t *testing.T) {
 	input := `y, quo = pow(x, n)
     y = 1
@@ -450,11 +514,18 @@ func TestStructDefErrors(t *testing.T) {
 			errMsg: "expected a space after ':' in struct field header",
 		},
 		{
-			name: "struct row requires nested indent",
+			name: "struct header with two spaces after the colon",
+			input: `p = Person
+  :  name age
+     "Tejas" 35`,
+			errMsg: lexer.INDENT_WIDTH_ERR,
+		},
+		{
+			name: "struct row at the header's colon",
 			input: `p = Person
   : name age
   "Tejas" 35`,
-			errMsg: "struct value row must be indented beneath its field header",
+			errMsg: "struct value row must align with the first field header",
 		},
 		{
 			name: "struct row must align with header",

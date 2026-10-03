@@ -566,8 +566,7 @@ func TestPlanGoldenStructAndTable(t *testing.T) {
 `, `n = p.name
 a = p.age
 s2 = p
-scores =
-[
+scores = [
   : Name Score
     "Ada" 10
 ]
@@ -687,13 +686,11 @@ func TestPlanGoldenTypedEmptyTableReceiver(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	plans := compileScriptPlans(t, ctx, "planTypedEmptyReceiver", "", `scores =
-[
+	plans := compileScriptPlans(t, ctx, "planTypedEmptyReceiver", "", `scores = [
   : Name Value
     "Ada" 10
 ]
-headerOnly =
-[
+headerOnly = [
   : Name("") Value(0)
 ]
 taken = headerOnly

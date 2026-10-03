@@ -15,6 +15,10 @@ quoted arr is ["hello" "hello world" "" "say \"hi\"" "slash\\" "line\nbreak" "ta
 arr2 is [1 2 3 4]
 [1.1 2.3 4 2.1]
 arr3 is [1.1 2.3 4 2.1]
+arr4 is [
+    1 2
+    3 4
+]
 one-row matrix: [
     1 2 3
 ]
