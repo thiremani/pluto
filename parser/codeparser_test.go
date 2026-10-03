@@ -524,6 +524,13 @@ func TestStructDefErrors(t *testing.T) {
 			errMsg: "expected a space after ':' in struct field header",
 		},
 		{
+			name: "struct header with two spaces after the colon",
+			input: `p = Person
+  :  name age
+     "Tejas" 35`,
+			errMsg: lexer.INDENT_WIDTH_ERR,
+		},
+		{
 			name: "struct row at the header's colon",
 			input: `p = Person
   : name age

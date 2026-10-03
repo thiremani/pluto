@@ -105,9 +105,11 @@ denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
 Indentation is significant. A block, such as a template's body, is indented
-4 spaces past the line that opens it; tabs are not allowed. A struct's `:`
-header goes 2 spaces in, so its field names line up with the values 4 spaces
-in. Lines inside brackets keep no indentation of their own (see Arrays below).
+4 spaces past the line that opens it, and tabs are not allowed in
+indentation. A struct's header is written `: name ...` with its `:` 2 spaces
+in and one space after it, so its field names line up with the values 4
+spaces in. The rule is for blocks: lines inside brackets, such as array rows
+and call arguments, keep no indentation of their own (see Arrays below).
 
 ```python
 p = Person

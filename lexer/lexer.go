@@ -62,7 +62,7 @@ const (
 const (
 	INDENT_ERR          = "indentation error"
 	INDENT_TAB_ERR      = "indent using tabs not allowed"
-	INDENT_WIDTH_ERR    = "indent each block by 4 spaces; a header's ':' by 2"
+	INDENT_WIDTH_ERR    = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
 	NEVER_CLOSED_ERR    = "is never closed"
 	INDENT_PAST_ERR     = NEVER_CLOSED_ERR + "; lines that continue it must be indented past this line"
 	NO_CONTINUATION_ERR = "backslash line continuation is not supported; a row or header must stay on one line, and an expression can span lines inside parentheses"
