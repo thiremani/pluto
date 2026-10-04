@@ -125,7 +125,7 @@ func (l *Lexer) lineBreak() bool {
 	opener := l.opener()
 	l.readRune()
 	column, first, tab := l.nextLine()
-	if l.last == token.COMMA && first != eof && column > l.level() {
+	if l.last == token.COMMA && first != eof && column > l.level(len(l.blocks)) {
 		l.tabErr(tab)
 		return false
 	}
@@ -133,13 +133,9 @@ func (l *Lexer) lineBreak() bool {
 	return true
 }
 
-// level returns the column of the innermost open block, or 1 outside blocks.
-func (l *Lexer) level() int {
-	return l.levelOf(len(l.blocks))
-}
-
-// levelOf returns the column of the innermost of the first n blocks.
-func (l *Lexer) levelOf(n int) int {
+// level returns the column of the innermost of the first n blocks, or 1
+// when n is 0, outside every block.
+func (l *Lexer) level(n int) int {
 	if n == 0 {
 		return 1
 	}
@@ -151,7 +147,7 @@ func (l *Lexer) levelOf(n int) int {
 // however that line began, and any other block from the block it is in.
 func (l *Lexer) opener() int {
 	if l.last != token.LBRACK {
-		return l.level()
+		return l.level(len(l.blocks))
 	}
 	column, _, _ := l.indentation()
 	return column
@@ -259,10 +255,10 @@ func (l *Lexer) land(opener, level, column int, first rune) {
 		n--
 		back = l.blocks[n].base
 	}
-	// back lies right of levelOf(n) only when it comes from a literal's '['
+	// back lies right of level(n) only when it comes from a literal's '['
 	// line indented past its block, such as a continued line or one that
 	// begins inside a multi-line string.
-	if level == back || level == l.levelOf(n) {
+	if level == back || level == l.level(n) {
 		l.dedentTo(n, column, first)
 		return
 	}
