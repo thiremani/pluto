@@ -923,8 +923,8 @@ print()`
 	})
 }
 
-// Brackets take no part in layout: a literal that spans lines is an indented
-// block, and only a line ending in a comma continues onto the next line.
+// Brackets don't join lines: a literal that spans lines is an indented block,
+// and only a line ending in a comma continues onto the next line.
 func TestLineLayout(t *testing.T) {
 	t.Run("a block literal's rows are an indented block", func(t *testing.T) {
 		checkInput(t, "m = [\n    1 2\n    3 4\n]\ny", []Test{

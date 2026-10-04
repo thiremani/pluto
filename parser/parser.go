@@ -1139,8 +1139,8 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 	return &ast.StringLiteral{Token: p.curToken}
 }
 
-// Layout errors: brackets take no part in layout, so a line break inside
-// them is legal only where these rules allow it.
+// Layout errors: brackets don't join lines, so a line break inside them is
+// legal only where these rules allow it.
 const (
 	blockIndent    = "    " // the indentation a block adds to the line that opens it
 	blockIndentErr = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"

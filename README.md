@@ -108,8 +108,8 @@ Indentation is significant. A block, such as a template's body or the rows of
 an array literal, is indented 4 spaces past the line that opens it, and tabs
 are not allowed in indentation. A struct's or table's header is written
 `: name ...` with its `:` 2 spaces in and one space after it, so its names
-line up with the values 4 spaces in. Brackets take no part in layout: a line
-that ends in a comma continues on the next line when that line is indented
+line up with the values 4 spaces in. Brackets don't join lines: a line that
+ends in a comma continues on the next line when that line is indented
 further, so a call's arguments can span lines (see Arrays below).
 
 ```python

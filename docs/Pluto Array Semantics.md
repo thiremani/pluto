@@ -60,8 +60,8 @@ row = [[]0]     # one empty row: shape [1 0], not an empty matrix
 A zero-row matrix keeps no column count: concatenation takes the other
 operand's inner shape.
 
-Pluto has no line continuation character, and brackets take no part in
-layout. An inline literal keeps its cells on one line, however long; an editor
+Pluto has no line continuation character, and brackets don't join lines. An
+inline literal keeps its cells on one line, however long; an editor
 can wrap it for display. A literal that spans lines is a block: its `[` ends
 its line, its rows form a block indented 4 spaces past that line, and its `]`
 goes on its own line, back at the `[` line's indentation. A nested block
