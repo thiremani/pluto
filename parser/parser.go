@@ -1242,15 +1242,8 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 			}
 		}
 		if p.curTokenIs(token.RBRACK) {
-			// The rows' block still ends at the next line; stop at its
-			// DEINDENT so the next statement parses on its own.
 			p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockCloseErr})
-			if p.peekTokenIs(token.NEWLINE) {
-				p.nextToken()
-			}
-			if p.peekTokenIs(token.DEINDENT) {
-				p.nextToken()
-			}
+			p.leaveBlock()
 			return false
 		}
 		p.nextToken() // past the end of the line
@@ -1291,23 +1284,9 @@ func (p *StmtParser) checkHeaderColon(colon token.Token) {
 	}
 }
 
-// skipContinuation moves past the lines indented under the current line,
-// to the DEINDENT that ends them, after a construct failed at the line's
-// break: those lines belong to it, and the statement after them parses on
+// skipLine moves past the rest of a failed line to its end, past the lines
+// indented under it too, so the next statement or row starts on a line of
 // its own.
-func (p *StmtParser) skipContinuation() {
-	if p.peekTokenIs(token.NEWLINE) {
-		p.nextToken()
-	}
-	if p.peekTokenIs(token.INDENT) {
-		p.nextToken()
-		p.skipBlock()
-	}
-}
-
-// skipLine moves past the rest of a failed statement's line to the end of
-// it, past the lines indented under it too, so the next statement starts on
-// a line of its own.
 func (p *StmtParser) skipLine() {
 	for !p.atLineEnd() {
 		p.nextToken()
@@ -1681,7 +1660,7 @@ func (p *StmtParser) parenBreak() bool {
 		return false
 	}
 	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: lineBreakErr})
-	p.skipContinuation()
+	p.skipLine()
 	if p.peekTokenIs(token.RPAREN) {
 		p.nextToken()
 		if p.peekTokenIs(token.NEWLINE) {

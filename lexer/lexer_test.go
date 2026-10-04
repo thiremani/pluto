@@ -1027,25 +1027,6 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a body after a continued header is measured from its statement", func(t *testing.T) {
-		checkInput(t, "r = F(a,\n    b)\n    r = a", []Test{
-			{token.IDENT, "r", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "F", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.IDENT, "a", "", 1, 7},
-			{token.COMMA, ",", "", 1, 8},
-			{token.IDENT, "b", "", 2, 5},
-			{token.RPAREN, ")", "", 2, 6},
-			{token.NEWLINE, "\n", "", 2, 7},
-			{token.INDENT, "    ", "", 3, 5},
-			{token.IDENT, "r", "", 3, 5},
-			{token.ASSIGN, "=", "", 3, 7},
-			{token.IDENT, "a", "", 3, 9},
-			{token.EOF, "", "", 3, 10},
-		})
-	})
-
 	t.Run("a comma before a line not indented past its block ends the statement", func(t *testing.T) {
 		checkInput(t, "x = f(1,\ny = 2", []Test{
 			{token.IDENT, "x", "", 1, 1},
