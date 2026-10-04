@@ -688,14 +688,9 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		return nil
 	}
 
+	colon := p.curToken
 	p.nextToken()
-	if p.curTokenIs(token.IDENT) && !p.curToken.HadSpace {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
-			Msg:   "expected a space after ':' in struct field header",
-		})
-		return nil
-	}
+	p.checkHeaderColon(colon)
 	headers, ok := p.parseStructHeaders()
 	if !ok {
 		return nil
@@ -1136,6 +1131,7 @@ const (
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
 	blockCloseErr  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
 	parenBreakErr  = "inside parentheses, break a line only after a comma and indent the next line"
+	headerColonErr = "a header's ':' has one space after it, so its names line up with the values"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
@@ -1263,7 +1259,16 @@ func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
 		})
 		return false
 	}
+	p.checkHeaderColon(colon)
 	return p.parseHeader(arr)
+}
+
+// checkHeaderColon reports a header whose first name, the current token, is
+// not one space after its ':'.
+func (p *StmtParser) checkHeaderColon(colon token.Token) {
+	if p.curTokenIs(token.IDENT) && p.curToken.Column != colon.Column+2 {
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: headerColonErr})
+	}
 }
 
 // skipContinuation moves past the lines indented under the current line,

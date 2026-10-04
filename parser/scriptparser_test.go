@@ -1600,6 +1600,8 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + parenBreakErr}},
 		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
 		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
+		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:4:" + headerColonErr}},
+		{"table header with two spaces after its ':'", "t = [\n  :  a b\n    1 2\n]", []string{name + "2:6:" + headerColonErr}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

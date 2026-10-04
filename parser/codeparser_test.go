@@ -510,7 +510,7 @@ func TestStructDefErrors(t *testing.T) {
 			input: `p = Person
   :name age
     "Tejas" 35`,
-			errMsg: "expected a space after ':' in struct field header",
+			errMsg: headerColonErr,
 		},
 		{
 			name: "struct header with two spaces after the colon",
