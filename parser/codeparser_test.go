@@ -510,14 +510,19 @@ func TestStructDefErrors(t *testing.T) {
 			input: `p = Person
   :name age
     "Tejas" 35`,
-			errMsg: headerColonErr,
+			errMsg: lexer.HEADER_COLON_ERR,
 		},
 		{
 			name: "struct header with two spaces after the colon",
 			input: `p = Person
   :  name age
      "Tejas" 35`,
-			errMsg: headerColonErr,
+			errMsg: lexer.HEADER_COLON_ERR,
+		},
+		{
+			name:   "struct header with a tab after the colon",
+			input:  "p = Person\n  :\tname age\n    \"Tejas\" 35",
+			errMsg: lexer.HEADER_COLON_ERR,
 		},
 		{
 			name: "struct row at the header's colon",

@@ -64,9 +64,10 @@ const (
 )
 
 const (
-	INDENT_ERR      = "indentation error"
-	INDENT_TAB_ERR  = "indent using tabs not allowed"
-	BLOCK_CLOSE_ERR = "a block literal's ']' goes on its own line, back at the indentation of its '['"
+	INDENT_ERR       = "indentation error"
+	INDENT_TAB_ERR   = "indent using tabs not allowed"
+	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
+	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
 func New(fileName, input string) *Lexer {
@@ -168,6 +169,21 @@ func (l *Lexer) closes(opener int) (int, bool) {
 	return 0, false
 }
 
+// headerColonErr reports a header line, its ':' at column, whose first name
+// is not one space after the ':'. A header without names is the parser's to
+// report.
+func (l *Lexer) headerColonErr(column int) *token.CompileError {
+	i := l.position + column // the rune after the ':'
+	j := i
+	for j < len(l.input) && (l.input[j] == ' ' || l.input[j] == '\t') {
+		j++
+	}
+	if j == len(l.input) || l.input[j] == '\n' || l.input[j] == '\r' || j == i+1 && l.input[i] == ' ' {
+		return nil
+	}
+	return &token.CompileError{Token: l.tokenAt(token.COLON, ":", column), Msg: HEADER_COLON_ERR}
+}
+
 // tabErr reports a line's first indentation tab, at column tab, if it has
 // one.
 func (l *Lexer) tabErr(tab int) bool {
@@ -194,6 +210,7 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	switch first {
 	case ':': // a header hangs 2 spaces left of its block
 		level += 2
+		l.lineErr = l.headerColonErr(column)
 	case ']': // a literal's ']' returns to the line of its '['
 		if back, ok := l.closes(opener); ok && level != back {
 			l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}

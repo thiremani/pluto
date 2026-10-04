@@ -706,9 +706,7 @@ func (p *StmtParser) parseStructBody(value *ast.StructLiteral) bool {
 		return false
 	}
 
-	colon := p.curToken
 	p.nextToken()
-	p.checkHeaderColon(colon)
 	headers, ok := p.parseStructHeaders()
 	if !ok {
 		return false
@@ -1151,7 +1149,6 @@ const (
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "break a line only after a comma, and indent the next line"
-	headerColonErr = "a header's ':' has one space after it, so its names line up with the values"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
@@ -1272,16 +1269,7 @@ func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
 		})
 		return false
 	}
-	p.checkHeaderColon(colon)
 	return p.parseHeader(arr)
-}
-
-// checkHeaderColon reports a header whose first name, the current token, is
-// not one space after its ':'.
-func (p *StmtParser) checkHeaderColon(colon token.Token) {
-	if p.curTokenIs(token.IDENT) && p.curToken.Column != colon.Column+2 {
-		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: headerColonErr})
-	}
 }
 
 // skipLine moves past the rest of a failed line to its end, past the lines

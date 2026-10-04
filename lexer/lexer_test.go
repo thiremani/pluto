@@ -797,7 +797,7 @@ root2`
 			{token.IDENT, "Person", "", 1, 5},
 			{token.NEWLINE, "\n", "", 1, 11},
 			{token.INDENT, "    ", "", 2, 3},
-			{token.COLON, ":", "", 2, 3},
+			{token.COLON, ":", "2:3:" + HEADER_COLON_ERR, 2, 3},
 			{token.IDENT, "name", "", 2, 6},
 			{token.IDENT, "age", "", 2, 11},
 			{token.NEWLINE, "\n", "", 2, 14},
@@ -805,6 +805,18 @@ root2`
 			{token.STRING, "Ada", "", 3, 6},
 			{token.INT, "36", "", 3, 12},
 			{token.EOF, "", "", 3, 14},
+		})
+		checkInput(t, "p = Person\n  :\tname\n    1", []Test{
+			{token.IDENT, "p", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "Person", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INDENT, "    ", "", 2, 3},
+			{token.COLON, ":", "2:3:" + HEADER_COLON_ERR, 2, 3},
+			{token.IDENT, "name", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INT, "1", "", 3, 5},
+			{token.EOF, "", "", 3, 6},
 		})
 		checkInput(t, "p = Person\n    : name", []Test{
 			{token.IDENT, "p", "", 1, 1},

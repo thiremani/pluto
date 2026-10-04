@@ -1619,8 +1619,9 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"line that starts with a comma after a broken call", "x = f(1 +\n, 2)", []string{name + "1:10:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"line that starts with a comma after a broken value", "x = 1 +\n, 2", []string{name + "1:8:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"table header that fails", "t = [\n  : a 1 )\n    1 2\n]", []string{name + "2:7:expected identifier for column header, got INT"}},
-		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:4:" + headerColonErr}},
-		{"table header with two spaces after its ':'", "t = [\n  :  a b\n    1 2\n]", []string{name + "2:6:" + headerColonErr}},
+		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
+		{"table header with two spaces after its ':'", "t = [\n  :  a b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
+		{"table header with a tab after its ':'", "t = [\n  :\ta b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
