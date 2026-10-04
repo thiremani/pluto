@@ -1149,7 +1149,7 @@ const (
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
-	blockCloseErr  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
+	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "break a line only after a comma, and indent the next line"
 	headerColonErr = "a header's ':' has one space after it, so its names line up with the values"
 )

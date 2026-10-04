@@ -571,14 +571,13 @@ func TestBlockDepth(t *testing.T) {
 	}
 }
 
-// A block literal's ']' left of the line of its '[' ends the function body,
-// as its indentation says; the literal's error says where the ']' goes.
+// A block literal's ']' left of the line of its '[' is reported and closes
+// the literal, so the function body goes on.
 func TestBlockCloseLeftOfItsLine(t *testing.T) {
 	input := "res = F(x)\n    m = [\n        1 2\n]\n    res = x\ny = G(x)\n    y = x"
 	cp := NewCodeParser(lexer.New("TestBlockCloseLeftOfItsLine", input))
 	cp.Parse()
-	require.NotEmpty(t, cp.Errors())
-	require.Equal(t, "TestBlockCloseLeftOfItsLine:4:1:"+blockCloseErr, cp.Errors()[0])
+	require.Equal(t, []string{"TestBlockCloseLeftOfItsLine:4:1:" + blockCloseErr}, cp.Errors())
 }
 
 // A function's body is indented 4 spaces past its statement, also when the

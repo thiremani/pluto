@@ -18,15 +18,18 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
-	blocks  []block         // the open indented blocks; innermost last
-	pending queue           // tokens decided but not yet returned
-	last    token.TokenType // the last token lexed; a line ending in a comma continues
+	blocks  []block             // the open indented blocks; innermost last
+	pending queue               // tokens decided but not yet returned
+	lineErr *token.CompileError // an error about the first token of the line about to be read
+	last    token.TokenType     // the last token lexed; a line ending in a comma continues
 }
 
 // block is an indented block. Its lines start at level, and base is the
 // indentation of the line that opened it, where the line after it returns.
+// A literal's rows are a block that a ']' line closes, back at base.
 type block struct {
 	level, base int
+	rows        bool
 }
 
 type lexed struct {
@@ -61,8 +64,9 @@ const (
 )
 
 const (
-	INDENT_ERR     = "indentation error"
-	INDENT_TAB_ERR = "indent using tabs not allowed"
+	INDENT_ERR      = "indentation error"
+	INDENT_TAB_ERR  = "indent using tabs not allowed"
+	BLOCK_CLOSE_ERR = "a block literal's ']' goes on its own line, back at the indentation of its '['"
 )
 
 func New(fileName, input string) *Lexer {
@@ -98,6 +102,9 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	}
 
 	tok, err := l.lex()
+	if l.lineErr != nil {
+		err, l.lineErr = l.lineErr, nil
+	}
 	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
 	}
@@ -147,6 +154,20 @@ func (l *Lexer) opener() int {
 	return column
 }
 
+// closes returns the indentation a ']' that starts a line returns to when it
+// closes a block literal: the line of the '[' before it, for an empty
+// literal, or the line that opened the innermost block, when that block is a
+// literal's rows.
+func (l *Lexer) closes(opener int) (int, bool) {
+	if l.last == token.LBRACK {
+		return opener, true
+	}
+	if n := len(l.blocks); n > 0 && l.blocks[n-1].rows {
+		return l.blocks[n-1].base, true
+	}
+	return 0, false
+}
+
 // tabErr reports a line's first indentation tab, at column tab, if it has
 // one.
 func (l *Lexer) tabErr(tab int) bool {
@@ -170,12 +191,18 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	}
 
 	level := column
-	if first == ':' { // a header hangs 2 spaces left of its block
+	switch first {
+	case ':': // a header hangs 2 spaces left of its block
 		level += 2
+	case ']': // a literal's ']' returns to the line of its '['
+		if back, ok := l.closes(opener); ok && level != back {
+			l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+			level = back
+		}
 	}
 	if level > opener {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-opener), column)
-		l.blocks = append(l.blocks, block{level, opener})
+		l.blocks = append(l.blocks, block{level, opener, l.last == token.LBRACK})
 		l.pending.push(lexed{at, nil})
 		return
 	}
