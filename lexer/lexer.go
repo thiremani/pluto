@@ -176,19 +176,19 @@ func (l *Lexer) closes(opener, column int) bool {
 		msg = BLOCK_CLOSE_ERR
 	}
 	l.dedentTo(keep, column, ']')
-	l.queueFirst(token.RBRACK, token.SYM_RBRACK, msg)
+	l.pending.push(lexed{l.lexRune(token.RBRACK), msg})
 	return true
 }
 
-// queueFirst reads the ':' or ']' that starts the line, which the layout
-// rules judge, and queues it after the line's layout tokens with msg, the
-// error about it, if any. It reads that one character itself, bypassing lex,
-// so a check lex gains on either character has to be made here too.
-func (l *Lexer) queueFirst(typ token.TokenType, literal, msg string) {
+// lexRune lexes the rune that starts the line's content, a ':' or ']' that
+// the layout rules judge, as a token of type typ, the way lex would. It reads
+// that rune itself, bypassing lex, so a check lex gains on either character
+// has to be made here too.
+func (l *Lexer) lexRune(typ token.TokenType) token.Token {
 	hadSpace := l.skipWhitespace()
-	tok := l.createToken(typ, literal, hadSpace)
+	tok := l.createToken(typ, string(l.curr), hadSpace)
 	l.readRune()
-	l.pending.push(lexed{tok, msg})
+	return tok
 }
 
 // headerColonErr returns the error about a header line, its ':' at column,
@@ -231,7 +231,7 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	case ':': // a header hangs 2 spaces left of its block
 		msg := l.headerColonErr(column)
 		l.land(opener, column+2, column, first)
-		l.queueFirst(token.COLON, token.SYM_COLON, msg)
+		l.pending.push(lexed{l.lexRune(token.COLON), msg})
 	case ']': // a literal's ']' returns to the line of its '['
 		if !l.closes(opener, column) {
 			l.land(opener, column, column, first)
