@@ -1612,6 +1612,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
 		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
 		{"unclosed block literal on a continued line", "x = f(a,\n    [\n        1", []string{name + "4:1:" + blockCloseErr}},
+		{"block literal argument after a multi-line string", "x = f(\"a\n    b\", [\n        2 3\n    ])", nil},
 		{"line that starts with a comma after a broken call", "x = f(1 +\n, 2)", []string{name + "1:10:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"line that starts with a comma after a broken value", "x = 1 +\n, 2", []string{name + "1:8:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"table header that fails", "t = [\n  : a 1 )\n    1 2\n]", []string{name + "2:7:expected identifier for column header, got INT"}},

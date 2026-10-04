@@ -19,7 +19,6 @@ type Lexer struct {
 	column       int  // column number in the line
 
 	blocks  []block         // the open indented blocks; innermost last
-	line    int             // the indentation of the line being read
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token lexed; a line ending in a comma continues
 }
@@ -69,7 +68,8 @@ const (
 func New(fileName, input string) *Lexer {
 	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1}
 	l.readRune()
-	l.startLine(l.nextLine())
+	column, first, tab := l.nextLine()
+	l.startLine(1, column, first, tab)
 	return l
 }
 
@@ -105,20 +105,21 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	return tok, err
 }
 
-// lineBreak lays out the line after a line break; it is the one place that
-// decides layout. It moves past blank and comment lines to the next line. A
-// line ending in a comma continues onto that line when it is indented past
-// the current block: the break reads as a space and lineBreak reports false.
-// Otherwise the break ends a statement or a row, and the next line's own
-// layout tokens are queued to follow it.
+// lineBreak reads past a line break and lays out the line after it; it is
+// the one place that decides layout. It moves past blank and comment lines
+// to the next line. A line ending in a comma continues onto that line when
+// it is indented past the current block: the break reads as a space and
+// lineBreak reports false. Otherwise the break ends a statement or a row, and
+// the next line's own layout tokens are queued to follow it.
 func (l *Lexer) lineBreak() bool {
+	opener := l.opener()
+	l.readRune()
 	column, first, tab := l.nextLine()
 	if l.last == token.COMMA && first != eof && column > l.level() {
 		l.tabErr(tab)
-		l.line = column
 		return false
 	}
-	l.startLine(column, first, tab)
+	l.startLine(opener, column, first, tab)
 	return true
 }
 
@@ -136,13 +137,14 @@ func (l *Lexer) levelOf(n int) int {
 }
 
 // opener returns the indentation that a block opened at this line break is
-// measured from: a literal's rows from the line of the '[' that ends it, any
-// other block from the block it is in.
+// measured from: a literal's rows from the line of the '[' that ends it,
+// however that line began, and any other block from the block it is in.
 func (l *Lexer) opener() int {
-	if l.last == token.LBRACK {
-		return l.line
+	if l.last != token.LBRACK {
+		return l.level()
 	}
-	return l.level()
+	column, _, _ := l.indentation()
+	return column
 }
 
 // tabErr reports a line's first indentation tab, at column tab, if it has
@@ -157,24 +159,20 @@ func (l *Lexer) tabErr(tab int) bool {
 }
 
 // startLine queues the layout tokens of the line about to be read, whose
-// content starts with first at column. A tab in its indentation is reported
-// and the line stays at the current level. A line indented past its opener
-// opens a block, whose INDENT spells out how far. Any other line returns to
-// the line that opened the outermost block it leaves, or to the block around
-// that; a line that does neither is reported. A header's ':' hangs 2 spaces
-// left of its block.
-func (l *Lexer) startLine(column int, first rune, tab int) {
+// content starts with first at column; a block opened here is measured from
+// opener. A tab in the line's indentation is reported and the line stays at
+// the current level. A line indented past opener opens a block, whose INDENT
+// spells out how far. Any other line returns to the line that opened the
+// outermost block it leaves, or to the block around that, or is reported.
+func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	if l.tabErr(tab) || first == eof {
-		l.line = l.level()
 		return
 	}
 
 	level := column
-	if first == ':' {
+	if first == ':' { // a header hangs 2 spaces left of its block
 		level += 2
 	}
-	opener := l.opener()
-	l.line = level
 	if level > opener {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-opener), column)
 		l.blocks = append(l.blocks, block{level, opener})
@@ -220,7 +218,8 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 
 	switch l.curr {
 	case '\n':
-		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
+		// lineBreak reads past the line break, once it has measured the line.
+		return l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace), nil
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
