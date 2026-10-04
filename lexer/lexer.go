@@ -406,14 +406,18 @@ func (l *Lexer) lex() (token.Token, *token.CompileError) {
 func (l *Lexer) nextLine() (column int, first rune, tab int) {
 	for {
 		column, first, tab = l.indentation()
-		if first != '\n' && first != '#' {
+		switch first {
+		case '\n': // a blank line
+			l.skipWhitespace()
+		case '#': // a comment line
+			l.skipComment()
+		default:
 			return column, first, tab
 		}
-		l.skipComment()
-		if l.atEOF() {
+		if l.atEOF() { // the input ended on a comment
 			return column, eof, 0
 		}
-		if l.curr != '\n' {
+		if l.curr != '\n' { // a NUL ended a comment, so the line has a token
 			return column, first, tab
 		}
 		l.readRune()
