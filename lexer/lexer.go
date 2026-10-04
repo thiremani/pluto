@@ -155,33 +155,27 @@ func (l *Lexer) opener() int {
 	return column
 }
 
-// closes lays out a line that starts with ']' while a block literal is open,
-// and reports false when none is. The ']' returns to the line of a literal's
-// '[', innermost first: the line just before it, for an empty literal, or
-// the line that opened a literal's rows. It closes that literal's rows and
-// every block inside them, never a block around the literal. A ']' anywhere
-// else is reported and taken as closing the innermost literal.
-func (l *Lexer) closes(opener, level, column int) bool {
-	inner := len(l.blocks) - 1 // the innermost literal's rows
-	for inner >= 0 && !l.blocks[inner].rows {
-		inner--
-	}
-	keep := inner // the blocks kept when the ']' closes the innermost literal
-	if l.last == token.LBRACK {
-		keep = len(l.blocks)
-		if level == opener {
-			return true
+// closes lays out a line that starts with ']' at column while a block
+// literal is open, and reports false when none is. The ']' closes the
+// innermost literal, the one whose '[' ended the line before or whose rows
+// are innermost, with every block inside its rows, never one around it. It
+// belongs at the indentation of that literal's '[' line and is reported
+// anywhere else.
+func (l *Lexer) closes(opener, column int) bool {
+	keep, back := len(l.blocks), opener // an empty literal has no block to close
+	if l.last != token.LBRACK {
+		keep--
+		for keep >= 0 && !l.blocks[keep].rows {
+			keep--
 		}
-	} else if inner < 0 {
-		return false
-	}
-	for m := inner; m >= 0; m-- {
-		if l.blocks[m].rows && level == l.blocks[m].base {
-			l.dedentTo(m, column, ']')
-			return true
+		if keep < 0 {
+			return false
 		}
+		back = l.blocks[keep].base
 	}
-	l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+	if column != back {
+		l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+	}
 	l.dedentTo(keep, column, ']')
 	return true
 }
@@ -229,7 +223,7 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 		level += 2
 		l.lineErr = l.headerColonErr(column)
 	case ']': // a literal's ']' returns to the line of its '['
-		if l.closes(opener, level, column) {
+		if l.closes(opener, column) {
 			return
 		}
 	}
