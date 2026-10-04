@@ -55,9 +55,8 @@ const (
 )
 
 const (
-	INDENT_ERR       = "indentation error"
-	INDENT_TAB_ERR   = "indent using tabs not allowed"
-	INDENT_WIDTH_ERR = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
+	INDENT_ERR     = "indentation error"
+	INDENT_TAB_ERR = "indent using tabs not allowed"
 )
 
 func New(fileName, input string) *Lexer {
@@ -136,10 +135,10 @@ func (l *Lexer) tabErr(tab int) bool {
 
 // startLine queues the layout tokens of the line about to be read, whose
 // content starts with first at column. A tab in its indentation is reported
-// and the line stays at the current level. Otherwise the line opens a block
-// 4 spaces deeper (another depth is reported, and the block opens anyway),
-// returns to an enclosing block (a level none has is reported), or stays. A
-// header's ':' hangs 2 spaces left of its block.
+// and the line stays at the current level. Otherwise the line opens a block,
+// whose INDENT spells out how much deeper it is, returns to an enclosing
+// block (a level none has is reported), or stays. A header's ':' hangs 2
+// spaces left of its block.
 func (l *Lexer) startLine(column int, first rune, tab int) {
 	if l.tabErr(tab) || first == eof {
 		return
@@ -154,13 +153,9 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		return
 	}
 	if base := l.level(); level > base {
-		at := l.tokenAt(token.INDENT, string(first), column)
-		var err *token.CompileError
-		if level != base+4 {
-			err = &token.CompileError{Token: at, Msg: INDENT_WIDTH_ERR}
-		}
+		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-base), column)
 		l.blocks = append(l.blocks, level)
-		l.pending.push(lexed{at, err})
+		l.pending.push(lexed{at, nil})
 		return
 	}
 	for i := len(l.blocks) - 1; i >= 0 && level <= l.blocks[i]; i-- {

@@ -417,6 +417,9 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 }
 
 func (p *StmtParser) parseStatement() ast.Statement {
+	if p.skipIndented() {
+		return nil
+	}
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone)
@@ -461,6 +464,9 @@ func (p *StmtParser) parseStatement() ast.Statement {
 }
 
 func (p *StmtParser) parseCodeStatement() ast.Statement {
+	if p.skipIndented() {
+		return nil
+	}
 	// Every statement in code mode starts with identifiers
 	if !p.curTokenIs(token.IDENT) {
 		p.curError(token.IDENT)
@@ -678,6 +684,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	if !p.peekTokenIs(token.INDENT) {
 		return stmt
 	}
+	p.checkBlockIndent(p.peekToken)
 	p.nextToken() // consume INDENT
 	p.nextToken() // move to first token in the struct body
 	if !p.parseStructBody(stmt.Value) {
@@ -1136,6 +1143,9 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 // Layout errors: brackets take no part in layout, so a line break inside
 // them is legal only where these rules allow it.
 const (
+	blockIndent    = "    " // the indentation a block adds to the line that opens it
+	blockIndentErr = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
+	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
 	blockCloseErr  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
@@ -1209,6 +1219,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: blockRowsErr})
 		return false
 	}
+	p.checkBlockIndent(p.peekToken)
 	p.nextToken() // the line break after '['
 	p.nextToken() // the rows' INDENT
 
@@ -1217,7 +1228,9 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		p.skipLine()
 	}
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
-		if !p.curTokenIs(token.RBRACK) {
+		if p.skipIndented() {
+			ok = false
+		} else if !p.curTokenIs(token.RBRACK) {
 			row, rowOK := p.parseRow()
 			if len(row) > 0 {
 				arr.Rows = append(arr.Rows, row)
@@ -1305,6 +1318,25 @@ func (p *StmtParser) skipLine() {
 		p.nextToken()
 		p.skipBlock()
 	}
+}
+
+// checkBlockIndent reports a block that its INDENT says is not indented 4
+// spaces past the line that opens it.
+func (p *StmtParser) checkBlockIndent(indent token.Token) {
+	if indent.Literal != blockIndent {
+		p.errors = append(p.errors, &token.CompileError{Token: indent, Msg: blockIndentErr})
+	}
+}
+
+// skipIndented reports a line indented past its block where no block opens,
+// and moves past it and the lines under it to the DEINDENT that ends them.
+func (p *StmtParser) skipIndented() bool {
+	if !p.curTokenIs(token.INDENT) {
+		return false
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: strayIndentErr})
+	p.skipBlock()
+	return true
 }
 
 // skipBlock moves from the current INDENT to the DEINDENT that ends its
@@ -1657,7 +1689,9 @@ func (p *StmtParser) parenBreak() bool {
 
 // assumes current token is token.NEWLINE
 func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
-	if !p.peekTokenIs(token.INDENT) {
+	if p.peekTokenIs(token.INDENT) {
+		p.checkBlockIndent(p.peekToken)
+	} else {
 		p.peekError(token.INDENT)
 	}
 	p.nextToken()

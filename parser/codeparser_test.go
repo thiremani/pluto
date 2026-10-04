@@ -517,7 +517,7 @@ func TestStructDefErrors(t *testing.T) {
 			input: `p = Person
   :  name age
      "Tejas" 35`,
-			errMsg: lexer.INDENT_WIDTH_ERR,
+			errMsg: headerColonErr,
 		},
 		{
 			name: "struct row at the header's colon",
@@ -548,6 +548,25 @@ func TestStructDefErrors(t *testing.T) {
 				}
 			}
 			require.True(t, found, "expected error %q, got %v", tt.errMsg, cp.Errors())
+		})
+	}
+}
+
+// The parser checks a block's depth where it opens one: a function's body, a
+// struct definition and a block literal's rows. A line indented past its
+// block where none opens is unexpected.
+func TestBlockDepth(t *testing.T) {
+	for _, tt := range []struct{ name, input, err string }{
+		{"function body", "y = F(x)\n  y = x\nz = G(x)\n    z = x", "2:3:" + blockIndentErr},
+		{"struct definition", "p = Person\n    : name\n      \"Ada\"\nq = 1", "2:5:" + blockIndentErr},
+		{"block literal's rows", "y = F(x)\n    m = [\n          1 2\n    ]\n    y = m\nz = G(x)\n    z = x", "3:11:" + blockIndentErr},
+		{"line in a body", "y = F(x)\n    y = x\n        w = 1\nz = G(x)\n    z = x", "3:9:" + strayIndentErr},
+		{"declaration", "c = 5\n    d = 6\nz = 7", "2:5:" + strayIndentErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New("TestBlockDepth", tt.input))
+			cp.Parse()
+			require.Equal(t, []string{"TestBlockDepth:" + tt.err}, cp.Errors())
 		})
 	}
 }
