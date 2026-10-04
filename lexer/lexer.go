@@ -155,18 +155,35 @@ func (l *Lexer) opener() int {
 	return column
 }
 
-// closes returns the indentation a ']' that starts a line returns to when it
-// closes a block literal: the line of the '[' before it, for an empty
-// literal, or the line that opened the innermost block, when that block is a
-// literal's rows.
-func (l *Lexer) closes(opener int) (int, bool) {
+// closes lays out a line that starts with ']' while a block literal is open,
+// and reports false when none is. The ']' returns to the line of a literal's
+// '[', innermost first: the line just before it, for an empty literal, or
+// the line that opened a literal's rows. It closes that literal's rows and
+// every block inside them, never a block around the literal. A ']' anywhere
+// else is reported and taken as closing the innermost literal.
+func (l *Lexer) closes(opener, level, column int) bool {
+	inner := len(l.blocks) - 1 // the innermost literal's rows
+	for inner >= 0 && !l.blocks[inner].rows {
+		inner--
+	}
+	keep := inner // the blocks kept when the ']' closes the innermost literal
 	if l.last == token.LBRACK {
-		return opener, true
+		keep = len(l.blocks)
+		if level == opener {
+			return true
+		}
+	} else if inner < 0 {
+		return false
 	}
-	if n := len(l.blocks); n > 0 && l.blocks[n-1].rows {
-		return l.blocks[n-1].base, true
+	for m := inner; m >= 0; m-- {
+		if l.blocks[m].rows && level == l.blocks[m].base {
+			l.dedentTo(m, column, ']')
+			return true
+		}
 	}
-	return 0, false
+	l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+	l.dedentTo(keep, column, ']')
+	return true
 }
 
 // headerColonErr reports a header line, its ':' at column, whose first name
@@ -212,9 +229,8 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 		level += 2
 		l.lineErr = l.headerColonErr(column)
 	case ']': // a literal's ']' returns to the line of its '['
-		if back, ok := l.closes(opener); ok && level != back {
-			l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
-			level = back
+		if l.closes(opener, level, column) {
+			return
 		}
 	}
 	if level > opener {

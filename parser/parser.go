@@ -1228,7 +1228,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
 		if p.skipIndented() {
 			ok = false
-		} else if !p.curTokenIs(token.RBRACK) {
+		} else {
 			row, rowOK := p.parseRow()
 			if len(row) > 0 {
 				arr.Rows = append(arr.Rows, row)
