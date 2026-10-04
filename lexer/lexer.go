@@ -196,14 +196,16 @@ func (l *Lexer) queueFirst(typ token.TokenType, literal, msg string) {
 // names is the parser's to report.
 func (l *Lexer) headerColonErr(column int) string {
 	i := l.position + column // the rune after the ':'
-	j := i
+	j := i                   // the rune after the blanks that follow it
 	for j < len(l.input) && (l.input[j] == ' ' || l.input[j] == '\t') {
 		j++
 	}
-	if j == len(l.input) || l.input[j] == '\n' || l.input[j] == '\r' || l.input[j] == '#' || j == i+1 && l.input[i] == ' ' {
-		return ""
+	named := j < len(l.input) && !strings.ContainsRune("\r\n#", l.input[j])
+	oneSpace := j == i+1 && l.input[i] == ' '
+	if named && !oneSpace {
+		return HEADER_COLON_ERR
 	}
-	return HEADER_COLON_ERR
+	return ""
 }
 
 // tabErr reports a line's first indentation tab, at column tab, if it has
