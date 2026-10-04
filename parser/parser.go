@@ -721,11 +721,8 @@ func (p *StmtParser) parseStructBody(value *ast.StructLiteral) bool {
 	}
 
 	p.nextToken()
-	if p.curToken.Column != headers[0].Column {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
-			Msg:   "struct value row must align with the first field header",
-		})
+	if p.skipIndented() {
+		p.nextToken() // past the DEINDENT that ends the stray lines
 		return false
 	}
 	row, ok := p.parseStructRowConstants()

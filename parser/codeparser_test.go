@@ -482,80 +482,66 @@ answer = 42`
 }
 
 func TestStructDefErrors(t *testing.T) {
+	const name = "TestStructDefErrors:"
 	tests := []struct {
-		name   string
-		input  string
-		errMsg string
+		name      string
+		input     string
+		expErrors []string
 	}{
 		{
 			name: "duplicate struct field header",
 			input: `p = Person
   : name age age
     "Tejas" 35 184.5`,
-			errMsg: "duplicate struct field header: age",
+			expErrors: []string{name + "2:14:duplicate struct field header: age"},
 		},
 		{
 			name: "multiple lhs bindings not allowed",
 			input: `p, q = Person
   : name age
     "Tejas" 35`,
-			errMsg: "struct definition must bind exactly one constant name",
+			expErrors: []string{name + "1:6:struct definition must bind exactly one constant name"},
 		},
 		{
 			name: "comma-separated struct row not allowed",
 			input: `p = Person
   : name age
     "Tejas", 35`,
-			errMsg: "struct value row values must be separated by spaces, not commas",
+			expErrors: []string{name + "3:12:struct value row values must be separated by spaces, not commas"},
 		},
 		{
 			name: "struct header requires space after colon",
 			input: `p = Person
   :name age
     "Tejas" 35`,
-			errMsg: lexer.HEADER_COLON_ERR,
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
 		},
 		{
 			name: "struct header with two spaces after the colon",
 			input: `p = Person
   :  name age
-     "Tejas" 35`,
-			errMsg: lexer.HEADER_COLON_ERR,
+    "Tejas" 35`,
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
 		},
 		{
-			name:   "struct header with a tab after the colon",
-			input:  "p = Person\n  :\tname age\n    \"Tejas\" 35",
-			errMsg: lexer.HEADER_COLON_ERR,
+			name:      "struct header with a tab after the colon",
+			input:     "p = Person\n  :\tname age\n    \"Tejas\" 35",
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
 		},
 		{
 			name: "struct row at the header's colon",
 			input: `p = Person
   : name age
   "Tejas" 35`,
-			errMsg: "struct value row must align with the first field header",
-		},
-		{
-			name: "struct row must align with header",
-			input: `p = Person
-  : name age
-      "Tejas" 35`,
-			errMsg: "struct value row must align with the first field header",
+			expErrors: []string{name + "3:3:" + lexer.INDENT_ERR + ". At char: \"", name + "3:3:struct value row must contain constants only, got ILLEGAL"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cp := NewCodeParser(lexer.New("TestStructDefErrors", tt.input))
-			_ = cp.Parse()
-			require.NotEmpty(t, cp.Errors())
-			found := false
-			for _, err := range cp.Errors() {
-				if strings.Contains(err, tt.errMsg) {
-					found = true
-					break
-				}
-			}
-			require.True(t, found, "expected error %q, got %v", tt.errMsg, cp.Errors())
+			cp.Parse()
+			require.Equal(t, tt.expErrors, cp.Errors())
 		})
 	}
 }
@@ -616,6 +602,8 @@ func TestStructDefFailureLeavesItsBody(t *testing.T) {
 		{"short row", "  : name age\n    \"Tejas\"", "1:5:struct value row has 1 values, expected 2"},
 		{"two rows", "  : name age\n    \"Tejas\" 35\n    \"Ada\" 36", "4:5:struct definition supports exactly one value row"},
 		{"no header", "    \"Tejas\" 35", "2:5:struct definition must start with ':' field header row"},
+		{"no row", "  : name age", "3:1:struct definition requires one data row"},
+		{"row indented past its block", "  : name age\n      \"Tejas\" 35", "3:7:" + strayIndentErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cp := NewCodeParser(lexer.New("TestStructDefFailureLeavesItsBody", "p = Person\n"+tt.body+"\nq = 1"))
