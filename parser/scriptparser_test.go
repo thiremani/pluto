@@ -79,15 +79,12 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}{
 		{"spaced dot", "a .= 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got . instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for . found",
 		}},
 		{"operator run", "a @= 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got OPERATOR instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for @ found",
 		}},
 		{"closing paren", "a ) = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got ) instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for ) found",
 		}},
 		{"only target", "@ = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:no prefix parse function for @ found",
@@ -522,7 +519,7 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 		expErr    string
 	}{
 		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers"},
-		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 1, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers"},
 	}
 
 	for _, tt := range tests {
@@ -1603,9 +1600,13 @@ func TestLayoutKeepsStatements(t *testing.T) {
 			sp := NewScriptParser(lexer.New("TestLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
 			program := sp.Parse()
 			require.Equal(t, tt.expErrors, sp.Errors())
-			require.Len(t, program.Statements, 3)
-			require.Equal(t, "after = 7", program.Statements[1].String())
-			require.Equal(t, "after", program.Statements[2].String())
+			stmts := program.Statements
+			require.GreaterOrEqual(t, len(stmts), 2)
+			for _, stmt := range stmts {
+				require.NotNil(t, stmt) // a statement that failed leaves no node
+			}
+			require.Equal(t, "after = 7", stmts[len(stmts)-2].String())
+			require.Equal(t, "after", stmts[len(stmts)-1].String())
 		})
 	}
 }
@@ -1678,6 +1679,71 @@ func TestFailedOperandEndsExpression(t *testing.T) {
 		require.NotPanics(t, func() { sp.Parse() }, input)
 		require.NotEmpty(t, sp.Errors(), input)
 	}
+}
+
+// A part that fails fails what holds it, up to its statement, which leaves no
+// node; the statement after it parses.
+func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
+	for _, input := range []string{
+		"x = 1 < 2 && f(] y",
+		"x = f(], 2)",
+		"x = 1 + )",
+		"x = -)",
+		"x = a.b(1)",
+		"x = a. + 1",
+		"x = [1 ) 2]",
+		"x = [\n    1 )\n]",
+		"y = a > 0 )",
+		")",
+	} {
+		sp := NewScriptParser(lexer.New("TestFailedPartFailsWhatHoldsIt", input+"\nafter = 3"))
+		var program *ast.Program
+		require.NotPanics(t, func() { program = sp.Parse() }, input)
+		require.NotEmpty(t, sp.Errors(), input)
+		requireWholeStatements(t, program.Statements)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), input)
+	}
+}
+
+// A statement's conditions are judged by its own errors, so a conditional
+// statement after an error still parses.
+func TestConditionAfterError(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestConditionAfterError", "x = )\ny = a > 0 1"))
+	program := sp.Parse()
+	require.Equal(t, []string{"TestConditionAfterError:1:5:no prefix parse function for ) found"}, sp.Errors())
+	require.Equal(t, []string{"y = (a > 0) 1"}, statementStrings(program.Statements))
+}
+
+// requireWholeStatements fails on a statement that is a typed nil or holds a
+// nil expression anywhere.
+func requireWholeStatements(t *testing.T, stmts []ast.Statement) {
+	t.Helper()
+	for _, stmt := range stmts {
+		require.NotNil(t, stmt)
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			requireWholeExpressions(t, s.Value...)
+			requireWholeExpressions(t, s.Condition...)
+		case *ast.PrintStatement:
+			requireWholeExpressions(t, s.Expression)
+		}
+	}
+}
+
+func requireWholeExpressions(t *testing.T, exprs ...ast.Expression) {
+	t.Helper()
+	for _, expr := range exprs {
+		require.NotNil(t, expr)
+		requireWholeExpressions(t, ast.ExprChildren(expr)...)
+	}
+}
+
+func statementStrings(stmts []ast.Statement) []string {
+	strs := make([]string, len(stmts))
+	for i, stmt := range stmts {
+		strs[i] = stmt.String()
+	}
+	return strs
 }
 
 // An index bracket keeps its expression on its line.

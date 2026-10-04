@@ -25,6 +25,7 @@ func (cp *CodeParser) Parse() *ast.Code {
 	for !cp.p.curTokenIs(token.EOF) {
 		stmt := cp.p.parseCodeStatement()
 		if stmt == nil {
+			cp.p.skipLine()
 			cp.p.nextToken()
 			continue
 		}

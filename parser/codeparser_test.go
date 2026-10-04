@@ -248,7 +248,6 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	require.NotPanics(t, func() { p.Parse() })
 	require.Equal(t, []string{
 		"TestUnparsedAssignmentTargetInBody:3:5:expected next token to be =, got . instead",
-		"TestUnparsedAssignmentTargetInBody:3:7:no prefix parse function for . found",
 	}, p.Errors())
 }
 

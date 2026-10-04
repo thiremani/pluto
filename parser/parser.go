@@ -405,9 +405,10 @@ func (p *StmtParser) ParseProgram() *ast.Program {
 	program := &ast.Program{}
 	program.Statements = []ast.Statement{}
 	for !p.curTokenIs(token.EOF) {
-		stmt := p.parseStatement()
-		if stmt != nil {
+		if stmt := p.parseStatement(); stmt != nil {
 			program.Statements = append(program.Statements, stmt)
+		} else {
+			p.skipLine()
 		}
 		p.nextToken()
 	}
@@ -419,6 +420,11 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
 	expList := p.parseExpList(prefixSplitNone)
+	// An expression that failed to parse is nil and has already reported its
+	// error.
+	if slices.Contains(expList, nil) {
+		return nil
+	}
 
 	if p.stmtEnded() {
 		p.nextToken()
@@ -437,10 +443,6 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
 	}
-	// A target that failed to parse is nil and has already reported its error.
-	if slices.Contains(expList, nil) {
-		return nil
-	}
 
 	// It's an assignment - LHS blanks are valid (discard pattern)
 	p.blankIdents = nil
@@ -452,7 +454,10 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	}
 
 	p.checkNoDuplicates(identList)
-	return p.parseLetStatement(identList)
+	if stmt := p.parseLetStatement(identList); stmt != nil {
+		return stmt
+	}
+	return nil
 }
 
 func (p *StmtParser) parseCodeStatement() ast.Statement {
@@ -756,6 +761,7 @@ func flattenCondAnd(exp ast.Expression) []ast.Expression {
 }
 
 func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
+	before := len(p.errors)
 	for _, exp := range expList {
 		if p.isCondition(exp) {
 			continue
@@ -767,7 +773,7 @@ func (p *StmtParser) conditionsOk(expList []ast.Expression) bool {
 		}
 		p.errors = append(p.errors, ce)
 	}
-	return len(p.errors) == 0
+	return len(p.errors) == before
 }
 
 func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStatement {
@@ -819,6 +825,9 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	p.nextToken()
 	stmt.Value = p.parseExpList(prefixSplitNone)
 	p.errorOnBlanks()
+	if slices.Contains(stmt.Value, nil) {
+		return nil
+	}
 
 	if p.stmtEnded() {
 		p.nextToken()
@@ -1166,11 +1175,12 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 		})
 		return false
 	}
-	if row := p.parseRow(); len(row) > 0 {
+	row, ok := p.parseRow()
+	if len(row) > 0 {
 		arr.Rows = append(arr.Rows, row)
 	}
 	if p.curTokenIs(token.RBRACK) {
-		return true
+		return ok
 	}
 	if !p.curTokenIs(token.NEWLINE) {
 		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: "expected ']' to close array literal"})
@@ -1210,13 +1220,16 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		}
 	}
 
+	ok := true
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
 		if p.curTokenIs(token.NEWLINE) {
 			p.nextToken()
 			continue
 		}
 		if !p.curTokenIs(token.RBRACK) {
-			if row := p.parseRow(); len(row) > 0 {
+			row, rowOK := p.parseRow()
+			ok = ok && rowOK
+			if len(row) > 0 {
 				arr.Rows = append(arr.Rows, row)
 			}
 		}
@@ -1235,7 +1248,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	}
 	if p.curTokenIs(token.DEINDENT) && p.peekTokenIs(token.RBRACK) {
 		p.nextToken() // leave the rows' block
-		return true
+		return ok
 	}
 	missing := p.curToken
 	if p.curTokenIs(token.DEINDENT) {
@@ -1256,21 +1269,44 @@ func (p *StmtParser) skipContinuation() {
 	if p.peekTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
-	if !p.peekTokenIs(token.INDENT) {
-		return
+	if p.peekTokenIs(token.INDENT) {
+		p.nextToken()
+		p.skipBlock()
 	}
-	for depth := 0; !p.peekTokenIs(token.EOF); {
+}
+
+// skipLine moves past the rest of a failed statement's line to the end of
+// it, past the lines indented under it too, so the next statement starts on
+// a line of its own.
+func (p *StmtParser) skipLine() {
+	for !p.atLineEnd() {
+		p.nextToken()
+	}
+	if p.curTokenIs(token.NEWLINE) && p.peekTokenIs(token.INDENT) {
+		p.nextToken()
+		p.skipBlock()
+	}
+}
+
+// skipBlock moves from the current INDENT to the DEINDENT that ends its
+// block.
+func (p *StmtParser) skipBlock() {
+	for depth := 1; depth > 0 && !p.peekTokenIs(token.EOF); {
 		p.nextToken()
 		switch p.curToken.Type {
 		case token.INDENT:
 			depth++
 		case token.DEINDENT:
 			depth--
-			if depth == 0 {
-				return
-			}
 		}
 	}
+}
+
+// atLineEnd reports whether the parser is at the end of a line: its line
+// break, the DEINDENT that ends the lines indented under it, or the end of
+// the input.
+func (p *StmtParser) atLineEnd() bool {
+	return p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.DEINDENT) || p.curTokenIs(token.EOF)
 }
 
 // parseStatedTypes reads the sample after a literal's brackets and checks the
@@ -1453,21 +1489,20 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 }
 
 // parseRow parses a single data row and returns it
-func (p *StmtParser) parseRow() []ast.Expression {
+// parseRow parses a row's cells up to the end of its line or a ']'. A cell
+// that fails leaves the row failed, and the row reads on to its end.
+func (p *StmtParser) parseRow() ([]ast.Expression, bool) {
 	row := []ast.Expression{}
-
-	// Parse elements in this row until newline or ']'
+	ok := true
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
+		ok = ok && expr != nil
 		if expr != nil {
 			row = append(row, expr)
 		}
-
-		// Advance to next token for the next element
 		p.nextToken()
 	}
-
-	return row
+	return row, ok
 }
 
 // parseRangeLiteral is called when we encounter a ':' in an infix position.
@@ -1518,7 +1553,9 @@ func (p *StmtParser) parsePrefixExpression() ast.Expression {
 	p.nextToken()
 
 	expression.Right = p.parseExpression(PREFIX, prefixSplitNone)
-
+	if expression.Right == nil {
+		return nil
+	}
 	return expression
 }
 
@@ -1545,7 +1582,9 @@ func (p *StmtParser) parseInfixExpression(left ast.Expression) ast.Expression {
 
 	p.nextToken()
 	expression.Right = p.parseExpression(rbp, mode)
-
+	if expression.Right == nil {
+		return nil
+	}
 	return expression
 }
 
@@ -1598,9 +1637,10 @@ func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 	block.Statements = []ast.Statement{}
 
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
-		stmt := p.parseStatement()
-		if stmt != nil {
+		if stmt := p.parseStatement(); stmt != nil {
 			block.Statements = append(block.Statements, stmt)
+		} else {
+			p.skipLine()
 		}
 		p.nextToken()
 	}
@@ -1698,7 +1738,7 @@ func (p *StmtParser) parseCallExpression(f ast.Expression) ast.Expression {
 func (p *StmtParser) parseCallPostfix(base ast.Expression) ast.Expression {
 	if _, ok := base.(*ast.Identifier); !ok {
 		p.errors = append(p.errors, &token.CompileError{Token: base.Tok(), Msg: "function calls must target identifiers"})
-		return base
+		return nil
 	}
 	return p.parseCallExpression(base)
 }
@@ -1710,14 +1750,14 @@ func (p *StmtParser) parseArrayRangePostfix(array ast.Expression) ast.Expression
 func (p *StmtParser) parseDotPostfix(base ast.Expression) ast.Expression {
 	dotTok := p.curToken
 	if !p.expectPeek(token.IDENT) {
-		return base
+		return nil
 	}
 	if p.curToken.HadSpace {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   "no whitespace allowed after '.' in field access",
 		})
-		return base
+		return nil
 	}
 	p.validateIdentifier(p.curToken)
 	p.errorOnBlanks()
@@ -1751,7 +1791,7 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 		args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 
-	if p.parenBreak() || !p.expectPeek(token.RPAREN) {
+	if p.parenBreak() || !p.expectPeek(token.RPAREN) || slices.Contains(args, nil) {
 		return nil
 	}
 
