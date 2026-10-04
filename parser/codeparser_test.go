@@ -552,6 +552,22 @@ func TestStructDefErrors(t *testing.T) {
 	}
 }
 
+// A struct definition that fails inside its body leaves the whole body, so
+// the declaration after it parses on its own.
+func TestStructDefFailureLeavesItsBody(t *testing.T) {
+	for _, tt := range []struct{ name, body, err string }{
+		{"short row", "  : name age\n    \"Tejas\"", "1:5:struct value row has 1 values, expected 2"},
+		{"two rows", "  : name age\n    \"Tejas\" 35\n    \"Ada\" 36", "4:5:struct definition supports exactly one value row"},
+		{"no header", "    \"Tejas\" 35", "2:5:struct definition must start with ':' field header row"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New("TestStructDefFailureLeavesItsBody", "p = Person\n"+tt.body+"\nq = 1"))
+			cp.Parse()
+			require.Equal(t, []string{"TestStructDefFailureLeavesItsBody:" + tt.err}, cp.Errors())
+		})
+	}
+}
+
 func TestStructDefRepeat(t *testing.T) {
 	input := `p = Person
   : name age

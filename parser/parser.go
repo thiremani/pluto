@@ -680,12 +680,22 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	}
 	p.nextToken() // consume INDENT
 	p.nextToken() // move to first token in the struct body
+	if !p.parseStructBody(stmt.Value) {
+		p.leaveBlock()
+		return nil
+	}
+	return stmt
+}
+
+// parseStructBody reads a struct definition's header and value row into
+// value. Its block's DEINDENT stays current for CodeParser to consume.
+func (p *StmtParser) parseStructBody(value *ast.StructLiteral) bool {
 	if !p.curTokenIs(token.COLON) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   "struct definition must start with ':' field header row",
 		})
-		return nil
+		return false
 	}
 
 	colon := p.curToken
@@ -693,7 +703,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 	p.checkHeaderColon(colon)
 	headers, ok := p.parseStructHeaders()
 	if !ok {
-		return nil
+		return false
 	}
 
 	if !p.curTokenIs(token.NEWLINE) {
@@ -701,7 +711,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 			Token: p.curToken,
 			Msg:   "expected NEWLINE after struct field headers",
 		})
-		return nil
+		return false
 	}
 
 	p.nextToken()
@@ -710,37 +720,36 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 			Token: p.curToken,
 			Msg:   "struct value row must align with the first field header",
 		})
-		return nil
+		return false
 	}
 	row, ok := p.parseStructRowConstants()
 	if !ok {
-		return nil
+		return false
 	}
 
 	if len(row) != len(headers) {
 		p.errors = append(p.errors, &token.CompileError{
-			Token: typeTok,
+			Token: value.Token,
 			Msg:   fmt.Sprintf("struct value row has %d values, expected %d", len(row), len(headers)),
 		})
-		return nil
+		return false
 	}
 
 	if p.curTokenIs(token.NEWLINE) {
 		p.nextToken()
 	}
 
-	// The struct body's DEINDENT stays current for CodeParser to consume.
 	if !p.curTokenIs(token.EOF) && !p.curTokenIs(token.DEINDENT) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   "struct definition supports exactly one value row",
 		})
-		return nil
+		return false
 	}
 
-	stmt.Value.Headers = headers
-	stmt.Value.Row = row
-	return stmt
+	value.Headers = headers
+	value.Row = row
+	return true
 }
 
 // flattenCondAnd returns a condition's top-level && conjuncts, left to right.
@@ -1301,12 +1310,21 @@ func (p *StmtParser) skipLine() {
 // skipBlock moves from the current INDENT to the DEINDENT that ends its
 // block.
 func (p *StmtParser) skipBlock() {
-	for depth := 1; depth > 0 && !p.peekTokenIs(token.EOF); {
-		p.nextToken()
+	p.nextToken()
+	p.leaveBlock()
+}
+
+// leaveBlock moves to the DEINDENT that ends the block the parser is in, so
+// a construct that fails inside its block takes all of the block's lines.
+func (p *StmtParser) leaveBlock() {
+	for depth := 0; !p.curTokenIs(token.EOF); p.nextToken() {
 		switch p.curToken.Type {
 		case token.INDENT:
 			depth++
 		case token.DEINDENT:
+			if depth == 0 {
+				return
+			}
 			depth--
 		}
 	}
