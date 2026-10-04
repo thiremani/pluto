@@ -195,7 +195,7 @@ func (l *Lexer) headerColonErr(column int) *token.CompileError {
 	for j < len(l.input) && (l.input[j] == ' ' || l.input[j] == '\t') {
 		j++
 	}
-	if j == len(l.input) || l.input[j] == '\n' || l.input[j] == '\r' || j == i+1 && l.input[i] == ' ' {
+	if j == len(l.input) || l.input[j] == '\n' || l.input[j] == '\r' || l.input[j] == '#' || j == i+1 && l.input[i] == ' ' {
 		return nil
 	}
 	return &token.CompileError{Token: l.tokenAt(token.COLON, ":", column), Msg: HEADER_COLON_ERR}

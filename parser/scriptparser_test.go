@@ -1618,6 +1618,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"empty block literal's ']' left of its continued '[' line", "x = f(1,\n    [\n]0)", []string{name + "3:1:" + blockCloseErr}},
 		{"block literal's ']' between its '[' line and its rows", "m = [\n    1 2\n  ]", []string{name + "3:3:" + blockCloseErr}},
 		{"inner literal closed on its last row", "x = [\n    [\n        1 2]\n]", []string{name + "3:12:" + blockCloseErr}},
+		{"table header with only a comment", "t = [\n  :# note\n    1 2\n]", []string{name + "2:3:expected at least one column header after ':'"}},
 		{"line that starts with a comma after a broken call", "x = f(1 +\n, 2)", []string{name + "1:10:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"line that starts with a comma after a broken value", "x = 1 +\n, 2", []string{name + "1:8:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
 		{"table header that fails", "t = [\n  : a 1 )\n    1 2\n]", []string{name + "2:7:expected identifier for column header, got INT"}},
