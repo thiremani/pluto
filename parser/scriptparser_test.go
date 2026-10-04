@@ -1611,6 +1611,10 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + lineBreakErr}},
 		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
 		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
+		{"unclosed block literal on a continued line", "x = f(a,\n    [\n        1", []string{name + "4:1:" + blockCloseErr}},
+		{"line that starts with a comma after a broken call", "x = f(1 +\n, 2)", []string{name + "1:10:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
+		{"line that starts with a comma after a broken value", "x = 1 +\n, 2", []string{name + "1:8:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
+		{"table header that fails", "t = [\n  : a 1 )\n    1 2\n]", []string{name + "2:7:expected identifier for column header, got INT"}},
 		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:4:" + headerColonErr}},
 		{"table header with two spaces after its ':'", "t = [\n  :  a b\n    1 2\n]", []string{name + "2:6:" + headerColonErr}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
@@ -1714,26 +1718,28 @@ func TestFailedOperandEndsExpression(t *testing.T) {
 }
 
 // A part that fails fails what holds it, up to its statement, which leaves no
-// node; the statement after it parses.
+// node and reports no more errors; the statement after it parses.
 func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
-	for _, input := range []string{
-		"x = 1 < 2 && f(] y",
-		"x = f(], 2)",
-		"x = 1 + )",
-		"x = -)",
-		"x = a.b(1)",
-		"x = a. + 1",
-		"x = [1 ) 2]",
-		"x = [\n    1 )\n]",
-		"y = a > 0 )",
-		")",
+	const noPrefix = "no prefix parse function for "
+	for _, tt := range []struct{ input, err string }{
+		{"x = 1 < 2 && f(] y", "1:16:" + noPrefix + "] found"},
+		{"x = f(], 2)", "1:7:" + noPrefix + "] found"},
+		{"x = 1 + )", "1:9:" + noPrefix + ") found"},
+		{"x = -)", "1:6:" + noPrefix + ") found"},
+		{"x = a.b(1)", "1:6:function calls must target identifiers"},
+		{"x = a. + 1", "1:6:expected next token to be IDENT, got OPERATOR instead"},
+		{"x = [1 ) 2]", "1:8:" + noPrefix + ") found"},
+		{"x = [\n    1 )\n]", "2:7:" + noPrefix + ") found"},
+		{"m = [\n    1 2\n      3 4\n]", "3:7:" + strayIndentErr},
+		{"y = a > 0 )", "1:11:" + noPrefix + ") found"},
+		{")", "1:1:" + noPrefix + ") found"},
 	} {
-		sp := NewScriptParser(lexer.New("TestFailedPartFailsWhatHoldsIt", input+"\nafter = 3"))
+		sp := NewScriptParser(lexer.New("TestFailedPartFailsWhatHoldsIt", tt.input+"\nafter = 3"))
 		var program *ast.Program
-		require.NotPanics(t, func() { program = sp.Parse() }, input)
-		require.NotEmpty(t, sp.Errors(), input)
+		require.NotPanics(t, func() { program = sp.Parse() }, tt.input)
+		require.Equal(t, []string{"TestFailedPartFailsWhatHoldsIt:" + tt.err}, sp.Errors(), tt.input)
 		requireWholeStatements(t, program.Statements)
-		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), input)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
 	}
 }
 

@@ -268,6 +268,31 @@ func TestTabErr(t *testing.T) {
 	}
 }
 
+// A line with a tab in its indentation stays at the current level, so the
+// rows of a '[' that ends it are measured from that level.
+func TestTabLineStaysAtLevel(t *testing.T) {
+	checkInput(t, "f(a,\n        b)\n\tm = [\n    1\n]", []Test{
+		{token.IDENT, "f", "", 1, 1},
+		{token.LPAREN, "(", "", 1, 2},
+		{token.IDENT, "a", "", 1, 3},
+		{token.COMMA, ",", "", 1, 4},
+		{token.IDENT, "b", "", 2, 9},
+		{token.RPAREN, ")", "", 2, 10},
+		{token.NEWLINE, "\n", "", 2, 11},
+		{token.ILLEGAL, "\t", "3:1:" + INDENT_TAB_ERR, 3, 1},
+		{token.IDENT, "m", "", 3, 2},
+		{token.ASSIGN, "=", "", 3, 4},
+		{token.LBRACK, "[", "", 3, 6},
+		{token.NEWLINE, "\n", "", 3, 7},
+		{token.INDENT, "    ", "", 4, 5},
+		{token.INT, "1", "", 4, 5},
+		{token.NEWLINE, "\n", "", 4, 6},
+		{token.DEINDENT, "]", "", 5, 1},
+		{token.RBRACK, "]", "", 5, 1},
+		{token.EOF, "", "", 5, 2},
+	})
+}
+
 func TestEof(t *testing.T) {
 	input := ``
 

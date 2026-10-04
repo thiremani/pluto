@@ -594,6 +594,14 @@ func TestBodyAfterContinuedHeader(t *testing.T) {
 	}
 }
 
+// A declaration that fails takes the rest of its line, so the next one parses
+// on its own.
+func TestDeclarationFailsWholeLine(t *testing.T) {
+	cp := NewCodeParser(lexer.New("TestDeclarationFailsWholeLine", "a .= 2\nb = 3"))
+	cp.Parse()
+	require.Equal(t, []string{"TestDeclarationFailsWholeLine:1:1:expected next token to be =, got . instead"}, cp.Errors())
+}
+
 // A struct definition that fails inside its body leaves the whole body, so
 // the declaration after it parses on its own.
 func TestStructDefFailureLeavesItsBody(t *testing.T) {

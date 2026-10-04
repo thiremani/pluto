@@ -1858,7 +1858,7 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 		args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 
-	if p.atLineEnd() || slices.Contains(args, nil) || p.parenBreak() || !p.expectPeek(token.RPAREN) {
+	if slices.Contains(args, nil) || p.parenBreak() || !p.expectPeek(token.RPAREN) {
 		return nil
 	}
 
