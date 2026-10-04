@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/token"
 )
 
 // requireOnlyLetStmt asserts the program has exactly one LetStatement and returns it.
@@ -1594,6 +1595,11 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + parenBreakErr}},
 		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + parenBreakErr}},
 		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + parenBreakErr}},
+		{"call broken in a block literal's row", "x = [\n    f(1", []string{name + "2:8:" + parenBreakErr, name + "3:1:expected ']' to close array literal"}},
+		{"call broken in a row, with its line continued", "x = [\n    f(1\n        2)\n    3 4\n]", []string{name + "2:8:" + parenBreakErr}},
+		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + parenBreakErr}},
+		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
+		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
 		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1712,6 +1718,45 @@ func TestConditionAfterError(t *testing.T) {
 	program := sp.Parse()
 	require.Equal(t, []string{"TestConditionAfterError:1:5:no prefix parse function for ) found"}, sp.Errors())
 	require.Equal(t, []string{"y = (a > 0) 1"}, statementStrings(program.Statements))
+}
+
+// FuzzParse checks the parser's failure contract on any input: no panic, no
+// statement that holds a failed part, and a statement after the input that
+// parses whatever the input's errors.
+func FuzzParse(f *testing.F) {
+	for _, seed := range []string{
+		"x = 1 < 2 && f(] y",
+		"x = [\n    f(1",
+		"x = [1 f(2",
+		"x = f(1,\n    [\n        2 3\n    ])",
+		"x = (1 +\n    2)",
+		"t = [\n  : a b\n    1 2\n]",
+		"y = F(x)\n    m = [\n        1 2\n]",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		if !lexesSentinel(src) {
+			t.Skip("an open string runs on past the input")
+		}
+		program := NewScriptParser(lexer.New("FuzzParse", src+"\nsentinel = 7")).Parse()
+		requireWholeStatements(t, program.Statements)
+		require.NotEmpty(t, program.Statements)
+		require.Equal(t, "sentinel = 7", program.Statements[len(program.Statements)-1].String())
+		NewCodeParser(lexer.New("FuzzParse", src)).Parse()
+	})
+}
+
+// lexesSentinel reports whether the line FuzzParse appends to src lexes as
+// tokens of its own, rather than inside a string that src leaves open.
+func lexesSentinel(src string) bool {
+	var lits []string
+	l := lexer.New("FuzzParse", src+"\nsentinel = 7")
+	for tok, _ := l.NextToken(); tok.Type != token.EOF; tok, _ = l.NextToken() {
+		lits = append(lits, tok.Literal)
+	}
+	n := len(lits)
+	return n >= 3 && lits[n-3] == "sentinel" && lits[n-2] == "=" && lits[n-1] == "7"
 }
 
 // requireWholeStatements fails on a statement that is a typed nil or holds a

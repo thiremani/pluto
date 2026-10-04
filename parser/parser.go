@@ -883,7 +883,7 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 
 func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode) []ast.Expression {
 	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
-	for p.peekTokenIs(token.COMMA) {
+	for !p.atLineEnd() && p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.nextToken()
 		expList = append(expList, p.parseExpression(LOWEST, splitPrefix))
@@ -1179,15 +1179,16 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 	if len(row) > 0 {
 		arr.Rows = append(arr.Rows, row)
 	}
-	if p.curTokenIs(token.RBRACK) {
+	switch {
+	case p.curTokenIs(token.RBRACK):
 		return ok
-	}
-	if !p.curTokenIs(token.NEWLINE) {
+	case !ok:
+		// The cell that failed has reported the error.
+	case p.curTokenIs(token.NEWLINE):
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: inlineArrayErr})
+	default:
 		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: "expected ']' to close array literal"})
-		return false
 	}
-	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: inlineArrayErr})
-	p.skipContinuation()
 	return false
 }
 
@@ -1195,42 +1196,30 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 // header and the rows, as a block 4 spaces in, then the ']' on its own line.
 // It leaves curToken at the ']'.
 func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
-	p.nextToken() // consume the line break after '['
-	if p.curTokenIs(token.RBRACK) {
+	if p.peekTokenIs(token.RBRACK) {
+		p.nextToken()
 		return true
 	}
-	if !p.curTokenIs(token.INDENT) {
-		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockRowsErr})
+	if !p.peekTokenIs(token.INDENT) {
+		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: blockRowsErr})
 		return false
 	}
-	p.nextToken() // consume INDENT
+	p.nextToken() // the line break after '['
+	p.nextToken() // the rows' INDENT
 
-	if p.curTokenIs(token.COLON) {
-		headerToken := p.curToken
-		p.nextToken() // consume ':'
-		if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.RBRACK) || p.curTokenIs(token.EOF) {
-			p.errors = append(p.errors, &token.CompileError{
-				Token: headerToken,
-				Msg:   "expected at least one column header after ':'",
-			})
-			return false
-		}
-		if !p.parseHeader(arr) {
-			return false
-		}
+	ok := !p.curTokenIs(token.COLON) || p.parseTableHeader(arr)
+	if !ok {
+		p.skipLine()
 	}
-
-	ok := true
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
-		if p.curTokenIs(token.NEWLINE) {
-			p.nextToken()
-			continue
-		}
 		if !p.curTokenIs(token.RBRACK) {
 			row, rowOK := p.parseRow()
-			ok = ok && rowOK
 			if len(row) > 0 {
 				arr.Rows = append(arr.Rows, row)
+			}
+			if !rowOK {
+				ok = false
+				p.skipLine()
 			}
 		}
 		if p.curTokenIs(token.RBRACK) {
@@ -1245,6 +1234,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 			}
 			return false
 		}
+		p.nextToken() // past the end of the line
 	}
 	if p.curTokenIs(token.DEINDENT) && p.peekTokenIs(token.RBRACK) {
 		p.nextToken() // leave the rows' block
@@ -1259,6 +1249,21 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		Msg:   "expected ']' to close array literal",
 	})
 	return false
+}
+
+// parseTableHeader reads a table's header line, from its ':' to the end of
+// the line.
+func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
+	colon := p.curToken
+	p.nextToken() // consume ':'
+	if p.atLineEnd() || p.curTokenIs(token.RBRACK) {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: colon,
+			Msg:   "expected at least one column header after ':'",
+		})
+		return false
+	}
+	return p.parseHeader(arr)
 }
 
 // skipContinuation moves past the lines indented under the current line,
@@ -1488,19 +1493,20 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 	return sample, true
 }
 
-// parseRow parses a single data row and returns it
-// parseRow parses a row's cells up to the end of its line or a ']'. A cell
-// that fails leaves the row failed, and the row reads on to its end.
+// parseRow parses a row's cells up to a ']' or the end of its line, where it
+// stops. A cell that fails leaves the row failed, and the row reads on.
 func (p *StmtParser) parseRow() ([]ast.Expression, bool) {
 	row := []ast.Expression{}
 	ok := true
-	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
+	for !p.curTokenIs(token.RBRACK) && !p.atLineEnd() {
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
 		ok = ok && expr != nil
 		if expr != nil {
 			row = append(row, expr)
 		}
-		p.nextToken()
+		if !p.atLineEnd() {
+			p.nextToken()
+		}
 	}
 	return row, ok
 }
@@ -1782,7 +1788,7 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 	p.nextToken()
 	args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 
-	for p.peekTokenIs(token.COMMA) {
+	for !p.atLineEnd() && p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		if p.parenBreak() {
 			return nil
@@ -1791,7 +1797,7 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 		args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 	}
 
-	if p.parenBreak() || !p.expectPeek(token.RPAREN) || slices.Contains(args, nil) {
+	if p.atLineEnd() || slices.Contains(args, nil) || p.parenBreak() || !p.expectPeek(token.RPAREN) {
 		return nil
 	}
 
