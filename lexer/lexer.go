@@ -244,6 +244,9 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 		n--
 		back = l.blocks[n].base
 	}
+	// back lies right of levelOf(n) only when it comes from a literal's '['
+	// line indented past its block, such as a continued line or one that
+	// begins inside a multi-line string.
 	if level == back || level == l.levelOf(n) {
 		l.dedentTo(n, column, first)
 		return
