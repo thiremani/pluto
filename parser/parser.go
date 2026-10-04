@@ -131,6 +131,7 @@ func New(l *lexer.Lexer) *StmtParser {
 	p.registerPrefix(token.SYM_FTHRT, p.parsePrefixExpression)
 	p.registerPrefix(token.SYM_LPAREN, p.parseGroupedExpression)
 	p.registerPrefix(token.SYM_LBRACK, p.parseArrayLiteral)
+	p.registerPrefix(token.SYM_NEWLINE, p.parseLineBreak)
 
 	p.infixParseFns = make(map[string]infixParseFn)
 	p.registerInfix(token.SYM_COLON, p.parseRangeLiteral)
@@ -1149,7 +1150,7 @@ const (
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the line of its '['"
 	blockCloseErr  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
-	parenBreakErr  = "inside parentheses, break a line only after a comma and indent the next line"
+	lineBreakErr   = "break a line only after a comma, and indent the next line"
 	headerColonErr = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -1669,6 +1670,12 @@ func (p *StmtParser) parseGroupedExpression() ast.Expression {
 	return exp
 }
 
+// parseLineBreak reports a line that ends where an operand starts.
+func (p *StmtParser) parseLineBreak() ast.Expression {
+	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: lineBreakErr})
+	return nil
+}
+
 // parenBreak reports a line break at peekToken inside parentheses, where a
 // line breaks only after a comma, before an indented line. The lines that
 // continue the parentheses, up to a ')' that starts a line, belong to them.
@@ -1676,7 +1683,7 @@ func (p *StmtParser) parenBreak() bool {
 	if !p.peekTokenIs(token.NEWLINE) {
 		return false
 	}
-	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: parenBreakErr})
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: lineBreakErr})
 	p.skipContinuation()
 	if p.peekTokenIs(token.RPAREN) {
 		p.nextToken()

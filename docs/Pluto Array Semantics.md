@@ -80,8 +80,9 @@ rows that are not indented are errors. An assignment's value starts on the
 same line as its `=`, so a multi-line literal opens its bracket there:
 `m = [`, not `m =` followed by `[` on the next line.
 
-Inside parentheses a line breaks only after a comma, and the next line is
-indented past the statement's line, so a call's arguments can span lines:
+A line breaks only after a comma, and the next line is indented past the
+statement's line, so a call's arguments can span lines, as can the names and
+values of an assignment or a print statement:
 
 ```pluto
 total = Sum(first,

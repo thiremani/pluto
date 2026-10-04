@@ -1595,14 +1595,20 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
 		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
 		{"block literal closed at its rows' indentation", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
-		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
-		{"call broken before a 2-space continuation", "x = f(x\n  y,\n  z)", []string{name + "1:8:" + parenBreakErr}},
-		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + parenBreakErr}},
-		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + parenBreakErr}},
-		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + parenBreakErr}},
-		{"call broken in a block literal's row", "x = [\n    f(1", []string{name + "2:8:" + parenBreakErr, name + "3:1:expected ']' to close array literal"}},
-		{"call broken in a row, with its line continued", "x = [\n    f(1\n        2)\n    3 4\n]", []string{name + "2:8:" + parenBreakErr}},
-		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + parenBreakErr}},
+		{"unclosed call", "x = f(1", []string{name + "1:8:" + lineBreakErr}},
+		{"call broken before a 2-space continuation", "x = f(x\n  y,\n  z)", []string{name + "1:8:" + lineBreakErr}},
+		{"grouped expression broken after an operator", "x = (1 +\n    2)", []string{name + "1:9:" + lineBreakErr}},
+		{"grouped expression broken after an operator, 5 spaces in", "x = (1 +\n     2)", []string{name + "1:9:" + lineBreakErr}},
+		{"operator at the end of a line", "x = 1 +\n    2", []string{name + "1:8:" + lineBreakErr}},
+		{"operator before an unindented line", "x = 1 +", []string{name + "1:8:" + lineBreakErr}},
+		{"prefix operator at the end of a line", "x = -\n    2", []string{name + "1:6:" + lineBreakErr}},
+		{"operator at the end of a block literal's row", "m = [\n    1 +\n        2\n]", []string{name + "2:8:" + lineBreakErr}},
+		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + lineBreakErr}},
+		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + lineBreakErr}},
+		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + lineBreakErr}},
+		{"call broken in a block literal's row", "x = [\n    f(1", []string{name + "2:8:" + lineBreakErr, name + "3:1:expected ']' to close array literal"}},
+		{"call broken in a row, with its line continued", "x = [\n    f(1\n        2)\n    3 4\n]", []string{name + "2:8:" + lineBreakErr}},
+		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + lineBreakErr}},
 		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
 		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
 		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:4:" + headerColonErr}},
@@ -1815,8 +1821,7 @@ func statementStrings(stmts []ast.Statement) []string {
 func TestIndexStaysOnOneLine(t *testing.T) {
 	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
 	sp.Parse()
-	require.NotEmpty(t, sp.Errors())
-	require.Equal(t, "TestIndexStaysOnOneLine:1:14:no prefix parse function for \n found", sp.Errors()[0])
+	require.Equal(t, []string{"TestIndexStaysOnOneLine:1:14:" + lineBreakErr}, sp.Errors())
 }
 
 // Pluto has no line continuation: a backslash is an illegal character in a

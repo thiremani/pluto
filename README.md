@@ -283,8 +283,9 @@ block, with `[` ending its line, its rows indented 4 spaces past that line, and
 `]` on its own line back at its indentation, also when the line continues a
 call's arguments. Array-valued cells stack recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
-Inside parentheses a line breaks only after a comma, so a call's arguments can
-span lines; a grouped expression stays on one line, as does an index.
+A line breaks only after a comma, before a line indented past its block, so a
+call's arguments or an assignment's names and values can span lines; an
+expression otherwise stays on one line, as do grouped expressions and indexes.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The header goes on its own line after `[`, with all
