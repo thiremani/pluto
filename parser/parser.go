@@ -1263,10 +1263,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	if p.curTokenIs(token.DEINDENT) {
 		missing = p.peekToken // the literal ends at its DEINDENT
 	}
-	p.errors = append(p.errors, &token.CompileError{
-		Token: missing,
-		Msg:   "expected ']' to close array literal",
-	})
+	p.errors = append(p.errors, &token.CompileError{Token: missing, Msg: blockCloseErr})
 	return false
 }
 

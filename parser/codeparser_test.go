@@ -304,7 +304,7 @@ func TestLayoutErrorsInBody(t *testing.T) {
 	}{
 		{"inline literal across lines", "    y = [x\n        1]\n", "3:11:" + inlineArrayErr},
 		{"block literal closed on its last row", "    y = [\n        x]\n", "4:10:" + blockCloseErr},
-		{"unclosed block literal", "    y = [\n        x\n", "5:5:expected ']' to close array literal"},
+		{"unclosed block literal", "    y = [\n        x\n", "5:5:" + blockCloseErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n    y = x\n" + tt.line + "    y = y\nz = G(x)\n    z = x\n"
@@ -569,6 +569,16 @@ func TestBlockDepth(t *testing.T) {
 			require.Equal(t, []string{"TestBlockDepth:" + tt.err}, cp.Errors())
 		})
 	}
+}
+
+// A block literal's ']' left of the line of its '[' ends the function body,
+// as its indentation says; the literal's error says where the ']' goes.
+func TestBlockCloseLeftOfItsLine(t *testing.T) {
+	input := "res = F(x)\n    m = [\n        1 2\n]\n    res = x\ny = G(x)\n    y = x"
+	cp := NewCodeParser(lexer.New("TestBlockCloseLeftOfItsLine", input))
+	cp.Parse()
+	require.NotEmpty(t, cp.Errors())
+	require.Equal(t, "TestBlockCloseLeftOfItsLine:4:1:"+blockCloseErr, cp.Errors()[0])
 }
 
 // A function's body is indented 4 spaces past its statement, also when the
