@@ -571,6 +571,19 @@ func TestBlockDepth(t *testing.T) {
 	}
 }
 
+// A function's body is indented 4 spaces past its statement, also when the
+// parameters continue on a line of their own.
+func TestBodyAfterContinuedHeader(t *testing.T) {
+	for _, input := range []string{
+		"r = F(a,\n    b)\n    r = a + b",
+		"r = F(a,\n        b)\n    r = a + b",
+	} {
+		cp := NewCodeParser(lexer.New("TestBodyAfterContinuedHeader", input))
+		require.NotNil(t, cp.Parse(), input)
+		require.Empty(t, cp.Errors(), input)
+	}
+}
+
 // A struct definition that fails inside its body leaves the whole body, so
 // the declaration after it parses on its own.
 func TestStructDefFailureLeavesItsBody(t *testing.T) {

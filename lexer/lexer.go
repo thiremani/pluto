@@ -18,9 +18,16 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
-	blocks  []int           // columns of the open indented blocks; innermost last
+	blocks  []block         // the open indented blocks; innermost last
+	line    int             // the indentation of the line being read
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token lexed; a line ending in a comma continues
+}
+
+// block is an indented block. Its lines start at level, and base is the
+// indentation of the line that opened it, where the line after it returns.
+type block struct {
+	level, base int
 }
 
 type lexed struct {
@@ -108,6 +115,7 @@ func (l *Lexer) lineBreak() bool {
 	column, first, tab := l.nextLine()
 	if l.last == token.COMMA && first != eof && column > l.level() {
 		l.tabErr(tab)
+		l.line = column
 		return false
 	}
 	l.startLine(column, first, tab)
@@ -116,10 +124,25 @@ func (l *Lexer) lineBreak() bool {
 
 // level returns the column of the innermost open block, or 1 outside blocks.
 func (l *Lexer) level() int {
-	if len(l.blocks) == 0 {
+	return l.levelOf(len(l.blocks))
+}
+
+// levelOf returns the column of the innermost of the first n blocks.
+func (l *Lexer) levelOf(n int) int {
+	if n == 0 {
 		return 1
 	}
-	return l.blocks[len(l.blocks)-1]
+	return l.blocks[n-1].level
+}
+
+// opener returns the indentation that a block opened at this line break is
+// measured from: a literal's rows from the line of the '[' that ends it, any
+// other block from the block it is in.
+func (l *Lexer) opener() int {
+	if l.last == token.LBRACK {
+		return l.line
+	}
+	return l.level()
 }
 
 // tabErr reports a line's first indentation tab, at column tab, if it has
@@ -135,12 +158,14 @@ func (l *Lexer) tabErr(tab int) bool {
 
 // startLine queues the layout tokens of the line about to be read, whose
 // content starts with first at column. A tab in its indentation is reported
-// and the line stays at the current level. Otherwise the line opens a block,
-// whose INDENT spells out how much deeper it is, returns to an enclosing
-// block (a level none has is reported), or stays. A header's ':' hangs 2
-// spaces left of its block.
+// and the line stays at the current level. A line indented past its opener
+// opens a block, whose INDENT spells out how far. Any other line returns to
+// the line that opened the outermost block it leaves, or to the block around
+// that; a line that does neither is reported. A header's ':' hangs 2 spaces
+// left of its block.
 func (l *Lexer) startLine(column int, first rune, tab int) {
 	if l.tabErr(tab) || first == eof {
+		l.line = l.level()
 		return
 	}
 
@@ -148,21 +173,22 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 	if first == ':' {
 		level += 2
 	}
-	if level == 1 {
-		l.dedentTo(0, column, first)
-		return
-	}
-	if base := l.level(); level > base {
-		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-base), column)
-		l.blocks = append(l.blocks, level)
+	opener := l.opener()
+	l.line = level
+	if level > opener {
+		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-opener), column)
+		l.blocks = append(l.blocks, block{level, opener})
 		l.pending.push(lexed{at, nil})
 		return
 	}
-	for i := len(l.blocks) - 1; i >= 0 && level <= l.blocks[i]; i-- {
-		if level == l.blocks[i] {
-			l.dedentTo(i+1, column, first)
-			return
-		}
+	n, back := len(l.blocks), opener
+	for n > 0 && level < l.blocks[n-1].level {
+		n--
+		back = l.blocks[n].base
+	}
+	if level == back || level == l.levelOf(n) {
+		l.dedentTo(n, column, first)
+		return
 	}
 	bad := l.tokenAt(token.ILLEGAL, string(first), column)
 	l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_ERR + ". At char: " + string(first)}})

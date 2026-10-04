@@ -88,8 +88,21 @@ total = Sum(first,
     second, third)
 ```
 
-A grouped expression, such as `(a + b)`, and an index, such as `data[i]`, stay
-on one line.
+A block literal can be an argument on a continued line. Its rows are
+measured from the line of its `[`, and its `]` returns to that line:
+
+```pluto
+product = Mul(left,
+    [
+        1 2
+        3 4
+    ])
+```
+
+A continued line opens no block of its own, so a template's body after
+parameters that span lines is indented 4 spaces past the template's first
+line. A grouped expression, such as `(a + b)`, and an index, such as
+`data[i]`, stay on one line.
 
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
