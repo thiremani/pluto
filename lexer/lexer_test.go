@@ -1220,6 +1220,33 @@ func TestLastIsLastReturned(t *testing.T) {
 	}
 }
 
+// An error queued at a line break is about the token returned with it: a
+// tab in indentation, an indentation error, a misplaced ']' or a header's
+// spacing.
+func TestQueuedErrorIsAboutItsToken(t *testing.T) {
+	for _, input := range []string{
+		"x = 1\n\ty = 2",
+		"a\n    b\n  c",
+		"m = [\n    1 2\n  ]",
+		"t = [\n  :a b\n    1 2\n]",
+	} {
+		l := New("TestQueuedErrorIsAboutItsToken", input)
+		errs := 0
+		for tok, err := l.NextToken(); tok.Type != token.EOF; tok, err = l.NextToken() {
+			if err == nil {
+				continue
+			}
+			errs++
+			if err.Token != tok {
+				t.Fatalf("%q: the error is about %+v, not the token %+v", input, err.Token, tok)
+			}
+		}
+		if errs != 1 {
+			t.Fatalf("%q: %d errors, want 1", input, errs)
+		}
+	}
+}
+
 func TestNewlineNormalization(t *testing.T) {
 	// Each ending style terminates exactly one line; CRLF is one newline.
 	src := "a\rb\r\nc\nd"

@@ -31,9 +31,11 @@ type block struct {
 	rows        bool
 }
 
+// lexed is a token decided ahead of its turn, with the message of the error
+// about it, if any.
 type lexed struct {
 	tok token.Token
-	err *token.CompileError
+	msg string
 }
 
 // queue holds tokens in the order they are decided. Once drained it reuses
@@ -99,7 +101,10 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	if next := l.pending.pop(); next != nil {
 		l.last = next.tok.Type
-		return next.tok, next.err
+		if next.msg == "" {
+			return next.tok, nil
+		}
+		return next.tok, &token.CompileError{Token: next.tok, Msg: next.msg}
 	}
 
 	tok, err := l.lex()
@@ -170,39 +175,39 @@ func (l *Lexer) closes(opener, column int) bool {
 		}
 		back = l.blocks[keep].base
 	}
-	var err *token.CompileError
+	var msg string
 	if column != back {
-		err = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+		msg = BLOCK_CLOSE_ERR
 	}
 	l.dedentTo(keep, column, ']')
-	l.queueFirst(token.RBRACK, token.SYM_RBRACK, err)
+	l.queueFirst(token.RBRACK, token.SYM_RBRACK, msg)
 	return true
 }
 
 // queueFirst reads the ':' or ']' that starts the line, which the layout
-// rules judge, and queues it after the line's layout tokens with err about
-// it. It reads that one character itself, bypassing lex, so a check lex
-// gains on either character has to be made here too.
-func (l *Lexer) queueFirst(typ token.TokenType, literal string, err *token.CompileError) {
+// rules judge, and queues it after the line's layout tokens with msg, the
+// error about it, if any. It reads that one character itself, bypassing lex,
+// so a check lex gains on either character has to be made here too.
+func (l *Lexer) queueFirst(typ token.TokenType, literal, msg string) {
 	hadSpace := l.skipWhitespace()
 	tok := l.createToken(typ, literal, hadSpace)
 	l.readRune()
-	l.pending.push(lexed{tok, err})
+	l.pending.push(lexed{tok, msg})
 }
 
-// headerColonErr reports a header line, its ':' at column, whose first name
-// is not one space after the ':'. A header without names is the parser's to
-// report.
-func (l *Lexer) headerColonErr(column int) *token.CompileError {
+// headerColonErr returns the error about a header line, its ':' at column,
+// whose first name is not one space after the ':', or "". A header without
+// names is the parser's to report.
+func (l *Lexer) headerColonErr(column int) string {
 	i := l.position + column // the rune after the ':'
 	j := i
 	for j < len(l.input) && (l.input[j] == ' ' || l.input[j] == '\t') {
 		j++
 	}
 	if j == len(l.input) || l.input[j] == '\n' || l.input[j] == '\r' || l.input[j] == '#' || j == i+1 && l.input[i] == ' ' {
-		return nil
+		return ""
 	}
-	return &token.CompileError{Token: l.tokenAt(token.COLON, ":", column), Msg: HEADER_COLON_ERR}
+	return HEADER_COLON_ERR
 }
 
 // tabErr reports a line's first indentation tab, at column tab, if it has
@@ -211,8 +216,7 @@ func (l *Lexer) tabErr(tab int) bool {
 	if tab == 0 {
 		return false
 	}
-	bad := l.tokenAt(token.ILLEGAL, "\t", tab)
-	l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_TAB_ERR}})
+	l.pending.push(lexed{l.tokenAt(token.ILLEGAL, "\t", tab), INDENT_TAB_ERR})
 	return true
 }
 
@@ -227,9 +231,9 @@ func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	}
 	switch first {
 	case ':': // a header hangs 2 spaces left of its block
-		err := l.headerColonErr(column)
+		msg := l.headerColonErr(column)
 		l.land(opener, column+2, column, first)
-		l.queueFirst(token.COLON, token.SYM_COLON, err)
+		l.queueFirst(token.COLON, token.SYM_COLON, msg)
 	case ']': // a literal's ']' returns to the line of its '['
 		if !l.closes(opener, column) {
 			l.land(opener, column, column, first)
@@ -247,7 +251,7 @@ func (l *Lexer) land(opener, level, column int, first rune) {
 	if level > opener {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-opener), column)
 		l.blocks = append(l.blocks, block{level, opener, l.last == token.LBRACK})
-		l.pending.push(lexed{at, nil})
+		l.pending.push(lexed{tok: at})
 		return
 	}
 	n, back := len(l.blocks), opener
@@ -262,8 +266,7 @@ func (l *Lexer) land(opener, level, column int, first rune) {
 		l.dedentTo(n, column, first)
 		return
 	}
-	bad := l.tokenAt(token.ILLEGAL, string(first), column)
-	l.pending.push(lexed{bad, &token.CompileError{Token: bad, Msg: INDENT_ERR + ". At char: " + string(first)}})
+	l.pending.push(lexed{l.tokenAt(token.ILLEGAL, string(first), column), INDENT_ERR + ". At char: " + string(first)})
 }
 
 // dedentTo leaves every block above the first n, with a DEINDENT for each at
@@ -276,7 +279,7 @@ func (l *Lexer) dedentTo(n, column int, first rune) {
 	at := l.tokenAt(token.DEINDENT, string(first), column)
 	for len(l.blocks) > n {
 		l.blocks = l.blocks[:len(l.blocks)-1]
-		l.pending.push(lexed{at, nil})
+		l.pending.push(lexed{tok: at})
 	}
 }
 
