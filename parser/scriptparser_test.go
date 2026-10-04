@@ -1593,6 +1593,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"line indented past its block", "x = 1\n    y = 2", []string{name + "2:5:" + strayIndentErr}},
 		{"line indented 2 spaces past its block", "x = 1\n  y = 2", []string{name + "2:3:" + strayIndentErr}},
 		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
+		{"block literal's ']' after a stray line's unclosed literal", "x = [\n    1\n        [\n            2\n]", []string{name + "3:9:" + strayIndentErr, name + "5:1:" + blockCloseErr, name + "6:1:" + blockCloseErr}},
 		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
 		{"block literal closed at its rows' indentation", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
 		{"unclosed call", "x = f(1", []string{name + "1:8:" + lineBreakErr}},
