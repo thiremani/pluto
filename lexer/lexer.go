@@ -18,10 +18,9 @@ type Lexer struct {
 	lineOffset   int  // line number
 	column       int  // column number in the line
 
-	blocks  []block             // the open indented blocks; innermost last
-	pending queue               // tokens decided but not yet returned
-	lineErr *token.CompileError // an error about the first token of the line about to be read
-	last    token.TokenType     // the last token lexed; a line ending in a comma continues
+	blocks  []block         // the open indented blocks; innermost last
+	pending queue           // tokens decided but not yet returned
+	last    token.TokenType // the last token returned; a line ending in a comma continues
 }
 
 // block is an indented block. Its lines start at level, and base is the
@@ -99,13 +98,11 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 // break, come first.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	if next := l.pending.pop(); next != nil {
+		l.last = next.tok.Type
 		return next.tok, next.err
 	}
 
 	tok, err := l.lex()
-	if l.lineErr != nil {
-		err, l.lineErr = l.lineErr, nil
-	}
 	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
 	}
@@ -173,11 +170,24 @@ func (l *Lexer) closes(opener, column int) bool {
 		}
 		back = l.blocks[keep].base
 	}
+	var err *token.CompileError
 	if column != back {
-		l.lineErr = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
+		err = &token.CompileError{Token: l.tokenAt(token.RBRACK, "]", column), Msg: BLOCK_CLOSE_ERR}
 	}
 	l.dedentTo(keep, column, ']')
+	l.queueFirst(token.RBRACK, token.SYM_RBRACK, err)
 	return true
+}
+
+// queueFirst reads the ':' or ']' that starts the line, which the layout
+// rules judge, and queues it after the line's layout tokens with err about
+// it. It reads that one character itself, bypassing lex, so a check lex
+// gains on either character has to be made here too.
+func (l *Lexer) queueFirst(typ token.TokenType, literal string, err *token.CompileError) {
+	hadSpace := l.skipWhitespace()
+	tok := l.createToken(typ, literal, hadSpace)
+	l.readRune()
+	l.pending.push(lexed{tok, err})
 }
 
 // headerColonErr reports a header line, its ':' at column, whose first name
@@ -209,24 +219,31 @@ func (l *Lexer) tabErr(tab int) bool {
 // startLine queues the layout tokens of the line about to be read, whose
 // content starts with first at column; a block opened here is measured from
 // opener. A tab in the line's indentation is reported and the line stays at
-// the current level. A line indented past opener opens a block, whose INDENT
-// spells out how far. Any other line returns to the line that opened the
-// outermost block it leaves, or to the block around that, or is reported.
+// the current level. A header's ':' and a literal's ']' follow, with any
+// error about them.
 func (l *Lexer) startLine(opener, column int, first rune, tab int) {
 	if l.tabErr(tab) || first == eof {
 		return
 	}
-
-	level := column
 	switch first {
 	case ':': // a header hangs 2 spaces left of its block
-		level += 2
-		l.lineErr = l.headerColonErr(column)
+		err := l.headerColonErr(column)
+		l.land(opener, column+2, column, first)
+		l.queueFirst(token.COLON, token.SYM_COLON, err)
 	case ']': // a literal's ']' returns to the line of its '['
-		if l.closes(opener, column) {
-			return
+		if !l.closes(opener, column) {
+			l.land(opener, column, column, first)
 		}
+	default:
+		l.land(opener, column, column, first)
 	}
+}
+
+// land lays out a line whose content starts with first at column, as a line
+// at level. A line indented past opener opens a block, whose INDENT spells
+// out how far. Any other line returns to the line that opened the outermost
+// block it leaves, or to the block around that, or is reported.
+func (l *Lexer) land(opener, level, column int, first rune) {
 	if level > opener {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-opener), column)
 		l.blocks = append(l.blocks, block{level, opener, l.last == token.LBRACK})

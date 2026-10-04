@@ -1205,6 +1205,21 @@ func TestLineLayoutEndings(t *testing.T) {
 	}
 }
 
+// last is the last token returned, whether lexed or queued at a line break,
+// as a header's ':' and a literal's ']' are.
+func TestLastIsLastReturned(t *testing.T) {
+	l := New("TestLastIsLastReturned", "t = [\n  : a\n    1\n]\ny")
+	for {
+		tok, _ := l.NextToken()
+		if l.last != tok.Type {
+			t.Fatalf("after %q at %d:%d, last = %q", tok.Literal, tok.Line, tok.Column, l.last)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+	}
+}
+
 func TestNewlineNormalization(t *testing.T) {
 	// Each ending style terminates exactly one line; CRLF is one newline.
 	src := "a\rb\r\nc\nd"
