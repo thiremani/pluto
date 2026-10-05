@@ -1652,6 +1652,7 @@ func TestBlockLiteralPrintsItsLayout(t *testing.T) {
 		"t = [\n    [\n      : a b\n        1 2\n    ]\n]",
 		"m = [\n    \"a\nb\" 1\n]",
 		"m = [\n    \"a\\\"\nb\" 1\n]",
+		"m = [\n    f(\"a\nb\", [\n        1 2\n    ])\n]",
 	} {
 		sp := NewScriptParser(lexer.New("TestBlockLiteralPrintsItsLayout", input))
 		program := sp.Parse()
