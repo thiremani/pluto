@@ -1612,10 +1612,6 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + lineBreakErr}},
 		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
 		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
-		{"unclosed block literal on a continued line", "x = f(a,\n    [\n        1", []string{name + "4:1:" + blockCloseErr}},
-		{"block literal argument after a multi-line string", "x = f(\"a\n    b\", [\n        2 3\n    ])", nil},
-		{"block literal's ']' left of its continued '[' line", "x = f(1,\n    [\n        2 3\n])", []string{name + "4:1:" + blockCloseErr}},
-		{"empty block literal's ']' left of its continued '[' line", "x = f(1,\n    [\n]0)", []string{name + "3:1:" + blockCloseErr}},
 		{"block literal's ']' between its '[' line and its rows", "m = [\n    1 2\n  ]", []string{name + "3:3:" + blockCloseErr}},
 		{"inner literal's ']' at the outer literal's column", "x = [\n    [\n        1 2\n]\n]", []string{name + "4:1:" + blockCloseErr}},
 		{"empty inner literal's ']' at the outer literal's column", "x = [\n    [\n]0\n]", []string{name + "3:1:" + blockCloseErr}},
@@ -1708,9 +1704,8 @@ func TestLineBreakAfterComma(t *testing.T) {
 		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
 		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
 		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
-		{"block literal argument on a continued line", "x = f(1,\n    [\n        2 3\n    ])", []string{"x = f(1, [\n    2 3\n])"}},
-		{"block literals on continued lines", "x = f(a,\n    [\n        1 2\n    ],\n    [\n        3 4\n    ])", []string{"x = f(a, [\n    1 2\n], [\n    3 4\n])"}},
-		{"empty block literal on a continued line", "x = f(a,\n    [\n    ]0)", []string{"x = f(a, [\n]0)"}},
+		{"block literal argument on a continued line", "x = f(1,\n    [\n    2 3\n])", []string{"x = f(1, [\n    2 3\n])"}},
+		{"successive block literal arguments", "x = f([\n    1 2\n], [\n    3 4\n])", []string{"x = f([\n    1 2\n], [\n    3 4\n])"}},
 		{"parentheses in a block literal's row", "m = [\n    (1 + 2) 3\n    4 5\n]", []string{"m = [\n    (1 + 2) 3\n    4 5\n]"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1724,16 +1719,6 @@ func TestLineBreakAfterComma(t *testing.T) {
 			require.Equal(t, tt.expect, got)
 		})
 	}
-}
-
-// A block literal's rows are indented past the line of its '[', also when that
-// line continues a call's arguments.
-func TestRowsPastContinuedBracketLine(t *testing.T) {
-	sp := NewScriptParser(lexer.New("TestRowsPastContinuedBracketLine", "x = f(1,\n    [\n    2 3\n])\nafter = 7"))
-	program := sp.Parse()
-	require.NotEmpty(t, sp.Errors())
-	require.Equal(t, "TestRowsPastContinuedBracketLine:3:5:"+blockRowsErr, sp.Errors()[0])
-	require.Equal(t, "after = 7", program.Statements[len(program.Statements)-1].String())
 }
 
 // A failed operand ends its expression: no operator or call applies to what

@@ -978,8 +978,8 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a block literal's rows are measured from the line of its '['", func(t *testing.T) {
-		checkInput(t, "x = f(1,\n    [\n        2\n    ])", []Test{
+	t.Run("a block literal on a continued line hangs from its statement", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n    2\n])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.IDENT, "f", "", 1, 5},
@@ -988,55 +988,38 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "    ", "", 3, 9},
-			{token.INT, "2", "", 3, 9},
-			{token.NEWLINE, "\n", "", 3, 10},
-			{token.DEINDENT, "]", "", 4, 5},
-			{token.RBRACK, "]", "", 4, 5},
-			{token.RPAREN, ")", "", 4, 6},
-			{token.EOF, "", "", 4, 7},
-		})
-	})
-
-	t.Run("a block literal's rows are measured from the line of its '[' after a string", func(t *testing.T) {
-		checkInput(t, "x = f(\"a\n    b\", [\n        2\n    ])", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.STRING, "a\n    b", "", 1, 7},
-			{token.COMMA, ",", "", 2, 7},
-			{token.LBRACK, "[", "", 2, 9},
-			{token.NEWLINE, "\n", "", 2, 10},
-			{token.INDENT, "    ", "", 3, 9},
-			{token.INT, "2", "", 3, 9},
-			{token.NEWLINE, "\n", "", 3, 10},
-			{token.DEINDENT, "]", "", 4, 5},
-			{token.RBRACK, "]", "", 4, 5},
-			{token.RPAREN, ")", "", 4, 6},
-			{token.EOF, "", "", 4, 7},
-		})
-	})
-
-	t.Run("a block literal's ']' returns to the line of its '['", func(t *testing.T) {
-		checkInput(t, "x = f(1,\n    [\n        2\n])", []Test{
-			{token.IDENT, "x", "", 1, 1},
-			{token.ASSIGN, "=", "", 1, 3},
-			{token.IDENT, "f", "", 1, 5},
-			{token.LPAREN, "(", "", 1, 6},
-			{token.INT, "1", "", 1, 7},
-			{token.COMMA, ",", "", 1, 8},
-			{token.LBRACK, "[", "", 2, 5},
-			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "    ", "", 3, 9},
-			{token.INT, "2", "", 3, 9},
-			{token.NEWLINE, "\n", "", 3, 10},
+			{token.INDENT, "    ", "", 3, 5},
+			{token.INT, "2", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
 			{token.DEINDENT, "]", "", 4, 1},
-			{token.RBRACK, "]", "4:1:" + BLOCK_CLOSE_ERR, 4, 1},
+			{token.RBRACK, "]", "", 4, 1},
 			{token.RPAREN, ")", "", 4, 2},
 			{token.EOF, "", "", 4, 3},
 		})
-		checkInput(t, "x = f(1,\n    [\n])", []Test{
+	})
+
+	t.Run("a multi-line string's text does not move a block literal's rows", func(t *testing.T) {
+		checkInput(t, "x = f(\"a\n   b\", [\n    2\n])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.STRING, "a\n   b", "", 1, 7},
+			{token.COMMA, ",", "", 2, 6},
+			{token.LBRACK, "[", "", 2, 8},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INDENT, "    ", "", 3, 5},
+			{token.INT, "2", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
+			{token.DEINDENT, "]", "", 4, 1},
+			{token.RBRACK, "]", "", 4, 1},
+			{token.RPAREN, ")", "", 4, 2},
+			{token.EOF, "", "", 4, 3},
+		})
+	})
+
+	t.Run("a block literal's ']' returns to its statement, not to a continued '[' line", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n    2\n    ])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.IDENT, "f", "", 1, 5},
@@ -1045,25 +1028,26 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.RBRACK, "]", "3:1:" + BLOCK_CLOSE_ERR, 3, 1},
-			{token.RPAREN, ")", "", 3, 2},
-			{token.EOF, "", "", 3, 3},
+			{token.INDENT, "    ", "", 3, 5},
+			{token.INT, "2", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
+			{token.DEINDENT, "]", "", 4, 5},
+			{token.RBRACK, "]", "4:5:" + BLOCK_CLOSE_ERR, 4, 5},
+			{token.RPAREN, ")", "", 4, 6},
+			{token.EOF, "", "", 4, 7},
 		})
-	})
-
-	t.Run("a line left of a continued '[' line and right of its block is reported", func(t *testing.T) {
-		checkInput(t, "x = f(1,\n        [\n    2", []Test{
+		checkInput(t, "x = f(1,\n    [\n    ])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.IDENT, "f", "", 1, 5},
 			{token.LPAREN, "(", "", 1, 6},
 			{token.INT, "1", "", 1, 7},
 			{token.COMMA, ",", "", 1, 8},
-			{token.LBRACK, "[", "", 2, 9},
-			{token.NEWLINE, "\n", "", 2, 10},
-			{token.ILLEGAL, "2", "3:5:" + INDENT_ERR + ". At char: 2", 3, 5},
-			{token.INT, "2", "", 3, 5},
-			{token.EOF, "", "", 3, 6},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.RBRACK, "]", "3:5:" + BLOCK_CLOSE_ERR, 3, 5},
+			{token.RPAREN, ")", "", 3, 6},
+			{token.EOF, "", "", 3, 7},
 		})
 	})
 

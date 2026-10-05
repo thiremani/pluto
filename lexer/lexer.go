@@ -23,13 +23,13 @@ type Lexer struct {
 	last    token.TokenType // the last token returned; a line ending in a comma continues
 }
 
-// block is an indented block. Its lines start at level, and base is what it
-// hangs from (see Lexer.base), where the line after it returns. The INDENT
-// that opens it spells out level - base, which the parser requires to be 4.
-// A literal's rows are a block that a ']' line closes, back at base.
+// block is an indented block. Its lines start at level, and the INDENT that
+// opens it spells out how far that is past the block around it, which the
+// parser requires to be 4 spaces. A literal's rows are a block that a ']'
+// line closes, back at the level of the block around it.
 type block struct {
-	level, base int
-	rows        bool
+	level int
+	rows  bool
 }
 
 // lexed is a token decided ahead of its turn, with the message of the error
@@ -68,7 +68,7 @@ const (
 const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
-	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, back at the indentation of its '['"
+	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, back at the indentation of the statement or row holding its '['"
 	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -76,7 +76,7 @@ func New(fileName, input string) *Lexer {
 	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1}
 	l.readRune()
 	column, first, tab := l.nextLine()
-	l.startLine(1, column, first, tab)
+	l.startLine(column, first, tab)
 	return l
 }
 
@@ -123,14 +123,13 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 // lineBreak reports false. Otherwise the break ends a statement or a row, and
 // the next line's own layout tokens are queued to follow it.
 func (l *Lexer) lineBreak() bool {
-	base := l.base()
 	l.readRune()
 	column, first, tab := l.nextLine()
 	if l.last == token.COMMA && first != eof && column > l.level(len(l.blocks)) {
 		l.tabErr(tab)
 		return false
 	}
-	l.startLine(base, column, first, tab)
+	l.startLine(column, first, tab)
 	return true
 }
 
@@ -143,27 +142,14 @@ func (l *Lexer) level(n int) int {
 	return l.blocks[n-1].level
 }
 
-// base returns what a block opened at this line break hangs from, kept as
-// its base. A literal's rows hang from the line of their '[' as it starts
-// in the source, which differs from the block's level on a continued line
-// or one that begins inside a multi-line string; any other block hangs from
-// the current block's level, whatever lines its statement spans.
-func (l *Lexer) base() int {
-	if l.last != token.LBRACK {
-		return l.level(len(l.blocks))
-	}
-	column, _, _ := l.indentation()
-	return column
-}
-
 // closes lays out a line that starts with ']' at column while a block
 // literal is open, and reports false when none is. The ']' closes the
 // innermost literal, the one whose '[' ended the line before or whose rows
 // are innermost, with every block inside its rows, never one around it. It
-// belongs at the indentation of that literal's '[' line and is reported
+// belongs at the level of the block its '[' line is in and is reported
 // anywhere else.
-func (l *Lexer) closes(base, column int) bool {
-	keep, back := len(l.blocks), base // an empty literal has no block to close
+func (l *Lexer) closes(column int) bool {
+	keep := len(l.blocks) // an empty literal has no block to close
 	if l.last != token.LBRACK {
 		keep--
 		for keep >= 0 && !l.blocks[keep].rows {
@@ -172,10 +158,9 @@ func (l *Lexer) closes(base, column int) bool {
 		if keep < 0 {
 			return false
 		}
-		back = l.blocks[keep].base
 	}
 	var msg string
-	if column != back {
+	if column != l.level(keep) {
 		msg = BLOCK_CLOSE_ERR
 	}
 	l.dedentTo(keep, column, ']')
@@ -223,48 +208,43 @@ func (l *Lexer) tabErr(tab int) bool {
 }
 
 // startLine queues the layout tokens of the line about to be read, whose
-// content starts with first at column; a block opened here hangs from base.
-// A tab in the line's indentation is reported and the line stays at
-// the current level. A header's ':' and a literal's ']' follow, with any
-// error about them.
-func (l *Lexer) startLine(base, column int, first rune, tab int) {
+// content starts with first at column. A tab in the line's indentation is
+// reported and the line stays at the current level. A header's ':' and a
+// literal's ']' follow, with any error about them.
+func (l *Lexer) startLine(column int, first rune, tab int) {
 	if l.tabErr(tab) || first == eof {
 		return
 	}
 	switch first {
 	case ':': // a header hangs 2 spaces left of its block
 		msg := l.headerColonErr(column)
-		l.land(base, column+2, column, first)
+		l.land(column+2, column, first)
 		l.queueLexed(msg)
 	case ']': // a literal's ']' returns to the line of its '['
-		if !l.closes(base, column) {
-			l.land(base, column, column, first)
+		if !l.closes(column) {
+			l.land(column, column, first)
 		}
 	default:
-		l.land(base, column, column, first)
+		l.land(column, column, first)
 	}
 }
 
 // land lays out a line whose content starts with first at column, as a line
-// at level. A line indented past base opens a block, whose INDENT spells
-// out how far. Any other line returns to the base of the outermost block it
-// leaves, or to the level of the block around that, or is reported.
-func (l *Lexer) land(base, level, column int, first rune) {
-	if level > base {
-		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-base), column)
-		l.blocks = append(l.blocks, block{level, base, l.last == token.LBRACK})
+// at level. A line indented past the current block opens a block, whose
+// INDENT spells out how far. Any other line returns to the level of a block
+// it is in, or is reported.
+func (l *Lexer) land(level, column int, first rune) {
+	if around := l.level(len(l.blocks)); level > around {
+		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
+		l.blocks = append(l.blocks, block{level, l.last == token.LBRACK})
 		l.pending.push(lexed{tok: at})
 		return
 	}
-	n, back := len(l.blocks), base
+	n := len(l.blocks)
 	for n > 0 && level < l.blocks[n-1].level {
 		n--
-		back = l.blocks[n].base
 	}
-	// back lies right of level(n) only when it comes from a literal's '['
-	// line indented past its block, such as a continued line or one that
-	// begins inside a multi-line string.
-	if level == back || level == l.level(n) {
+	if level == l.level(n) {
 		l.dedentTo(n, column, first)
 		return
 	}

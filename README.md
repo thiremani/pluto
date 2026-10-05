@@ -279,9 +279,10 @@ where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
 keeps its cells on one line, however long, and a literal that spans lines is a
-block, with `[` ending its line, its rows indented 4 spaces past that line, and
-`]` on its own line back at its indentation, also when the line continues a
-call's arguments. Array-valued cells stack recursively
+block, with `[` ending its line, its rows indented 4 spaces past the statement
+or row that holds the `[`, and `]` on its own line back at that line's
+indentation, however many lines the statement spans. Array-valued cells stack
+recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
 A line breaks only after a comma, before a line indented past its block, so a
 call's arguments or an assignment's names and values can span lines; an

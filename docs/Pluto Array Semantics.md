@@ -63,10 +63,10 @@ operand's inner shape.
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal keeps its cells on one line, however long; an editor
 can wrap it for display. A literal that spans lines is a block: its `[` ends
-its line, its rows form a block indented 4 spaces past that line, and its `]`
-goes on its own line, back at the `[` line's indentation. A nested block
-literal follows the same rule inside its cell, and a multi-line string belongs
-to its cell:
+its line, its rows form a block indented 4 spaces past the statement or row
+that holds the `[`, and its `]` goes on its own line, back at that statement's
+or row's indentation. A nested block literal follows the same rule inside its
+cell, and a multi-line string belongs to its cell:
 
 ```pluto
 matrix = [
@@ -89,15 +89,18 @@ total = Sum(first,
     second, third)
 ```
 
-A block literal can be an argument on a continued line. Its rows are
-measured from the line of its `[`, and its `]` returns to that line:
+A block literal argument hangs from its statement too, however many lines the
+call spans: its rows are indented 4 spaces past the statement's line and its
+`]` returns to that line. A `]` can open the next literal on its own line:
 
 ```pluto
-product = Mul(left,
-    [
-        1 2
-        3 4
-    ])
+product = Mul([
+    1 2
+    3 4
+], [
+    5 6
+    7 8
+])
 ```
 
 A continued line opens no block of its own, so a template's body after

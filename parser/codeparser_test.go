@@ -262,8 +262,7 @@ func TestLayoutInBody(t *testing.T) {
 		{"block literal", "    y = [\n        1 2\n        3 4\n    ]\n"},
 		{"call continued after a comma", "    y = f(x,\n        1)\n"},
 		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
-		{"block literal after a multi-line string", "    y = f(\"a\nb\", [\n    2 3\n])\n"},
-		{"empty block literal after a multi-line string", "    y = f(\"a\nb\", [\n]0)\n"},
+		{"block literal after a multi-line string", "    y = f(\"a\nb\", [\n        2 3\n    ])\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
@@ -307,7 +306,6 @@ func TestLayoutErrorsInBody(t *testing.T) {
 		{"inline literal across lines", "    y = [x\n        1]\n", "3:11:" + inlineArrayErr},
 		{"block literal closed on its last row", "    y = [\n        x]\n", "4:10:" + blockCloseErr},
 		{"unclosed block literal", "    y = [\n        x\n", "5:5:" + blockCloseErr},
-		{"stray row after a multi-line string", "    y = f(\"a\nb\", [\n    2\n        3\n])\n", "6:9:" + strayIndentErr},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n    y = x\n" + tt.line + "    y = y\nz = G(x)\n    z = x\n"
