@@ -263,6 +263,7 @@ func TestLayoutInBody(t *testing.T) {
 		{"call continued after a comma", "    y = f(x,\n        1)\n"},
 		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
 		{"block literal after a multi-line string", "    y = f(\"a\nb\", [\n        2 3\n    ])\n"},
+		{"table header one column left of its statement", "    y = [\n   : a b\n     1 2\n    ]\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
