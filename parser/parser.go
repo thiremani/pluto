@@ -1148,7 +1148,8 @@ const (
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented 4 spaces past the statement or row holding its '['"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
-	lineBreakErr   = "break a line only after a comma, and indent the next line"
+	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma, onto an indented line"
+	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
@@ -1639,13 +1640,17 @@ func (p *StmtParser) parseLineBreak() ast.Expression {
 }
 
 // parenBreak reports a line break at peekToken inside parentheses, where a
-// line breaks only after a comma, before an indented line, and skips the
-// failed line.
+// line continues only after a comma, onto an indented line, and skips the
+// failed line. After '(' or ',' a value is missing; after a value, the ')'.
 func (p *StmtParser) parenBreak() bool {
 	if !p.peekTokenIs(token.NEWLINE) {
 		return false
 	}
-	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: lineBreakErr})
+	msg := parenBreakErr
+	if p.curTokenIs(token.LPAREN) || p.curTokenIs(token.COMMA) {
+		msg = lineBreakErr
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: msg})
 	p.skipLine()
 	return true
 }
