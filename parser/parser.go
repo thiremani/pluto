@@ -1191,6 +1191,13 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 	}
 	switch {
 	case p.curTokenIs(token.RBRACK):
+		for _, cell := range row {
+			if inner, isArray := cell.(*ast.ArrayLiteral); isArray && inner.Block {
+				// A block literal in a cell makes this literal span lines.
+				p.errors = append(p.errors, &token.CompileError{Token: arr.Token, Msg: inlineArrayErr})
+				break
+			}
+		}
 		return ok
 	case !ok:
 		// The cell that failed has reported the error.

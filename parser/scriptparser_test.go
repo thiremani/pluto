@@ -1590,6 +1590,8 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:" + blockCloseErr}},
 		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
 		{"inline literal across lines, 5 spaces in", "x = [1 2\n     3 4]", []string{name + "1:9:" + inlineArrayErr}},
+		{"inline literal holding a block literal", "m = [[\n    1 2\n]]", []string{name + "1:5:" + inlineArrayErr}},
+		{"inline literal holding a block literal after a cell", "m = [1 [\n    2 3\n]]", []string{name + "1:5:" + inlineArrayErr}},
 		{"line indented past its block", "x = 1\n    y = 2", []string{name + "2:5:" + strayIndentErr}},
 		{"line indented 2 spaces past its block", "x = 1\n  y = 2", []string{name + "2:3:" + strayIndentErr}},
 		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
