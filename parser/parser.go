@@ -1270,8 +1270,9 @@ func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
 }
 
 // skipLine moves past the rest of a failed line to its end, past the lines
-// indented under it too, so the next statement or row starts on a line of
-// its own.
+// indented under it and the lines that start with a closer, which no
+// statement or row can start with, so the next statement or row starts on a
+// line of its own.
 func (p *StmtParser) skipLine() {
 	for !p.atLineEnd() {
 		p.nextToken()
@@ -1279,6 +1280,10 @@ func (p *StmtParser) skipLine() {
 	if p.curTokenIs(token.NEWLINE) && p.peekTokenIs(token.INDENT) {
 		p.nextToken()
 		p.skipBlock()
+	}
+	if p.peekTokenIs(token.RPAREN) || p.peekTokenIs(token.RBRACK) {
+		p.nextToken()
+		p.skipLine()
 	}
 }
 
@@ -1638,20 +1643,14 @@ func (p *StmtParser) parseLineBreak() ast.Expression {
 }
 
 // parenBreak reports a line break at peekToken inside parentheses, where a
-// line breaks only after a comma, before an indented line. The lines that
-// continue the parentheses, up to a ')' that starts a line, belong to them.
+// line breaks only after a comma, before an indented line, and skips the
+// failed line.
 func (p *StmtParser) parenBreak() bool {
 	if !p.peekTokenIs(token.NEWLINE) {
 		return false
 	}
 	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: lineBreakErr})
 	p.skipLine()
-	if p.peekTokenIs(token.RPAREN) {
-		p.nextToken()
-		if p.peekTokenIs(token.NEWLINE) {
-			p.nextToken()
-		}
-	}
 	return true
 }
 
