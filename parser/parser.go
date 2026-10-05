@@ -1146,7 +1146,8 @@ const (
 	blockIndentErr = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
-	blockRowsErr   = "a block literal's rows are indented 4 spaces past the statement or row holding its '['"
+	blockRowsErr   = "a block literal's rows are indented past the statement or row holding its '['"
+	headerHangErr  = "a table's header ':' hangs 2 spaces left of its rows, not left of the statement or row holding its '['"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma, onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
@@ -1205,8 +1206,8 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 }
 
 // parseBlockLiteral reads a literal whose '[' ends its line: an optional
-// header and the rows, as a block 4 spaces in, then the ']' on its own line.
-// It leaves curToken at the ']'.
+// header and the rows, as a block at any depth past the line of its '[',
+// then the ']' on its own line. It leaves curToken at the ']'.
 func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	if p.peekTokenIs(token.RBRACK) {
 		p.nextToken()
@@ -1216,9 +1217,12 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: blockRowsErr})
 		return false
 	}
-	p.checkBlockIndent(p.peekToken)
+	indent := p.peekToken
 	p.nextToken() // the line break after '['
 	p.nextToken() // the rows' INDENT
+	if p.curTokenIs(token.COLON) && len(indent.Literal) < 2 {
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: headerHangErr})
+	}
 
 	ok := !p.curTokenIs(token.COLON) || p.parseTableHeader(arr)
 	if !ok {

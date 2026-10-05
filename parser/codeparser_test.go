@@ -564,14 +564,15 @@ func TestStructDefErrors(t *testing.T) {
 	}
 }
 
-// The parser checks a block's depth where it opens one: a function's body, a
-// struct definition and a block literal's rows. A line indented past its
-// block where none opens is unexpected.
+// The parser checks a block's depth where it opens one: a function's body and
+// a struct definition are 4 spaces in, and a table's header is not left of the
+// statement holding its '['. A line indented past its block where none opens
+// is unexpected.
 func TestBlockDepth(t *testing.T) {
 	for _, tt := range []struct{ name, input, err string }{
 		{"function body", "y = F(x)\n  y = x\nz = G(x)\n    z = x", "2:3:" + blockIndentErr},
 		{"struct definition", "p = Person\n    : name\n      \"Ada\"\nq = 1", "2:5:" + blockIndentErr},
-		{"block literal's rows", "y = F(x)\n    m = [\n          1 2\n    ]\n    y = m\nz = G(x)\n    z = x", "3:11:" + blockIndentErr},
+		{"table header left of its statement", "y = F(x)\n    t = [\n   : a b\n     1 2\n    ]\n    y = t\nz = G(x)\n    z = x", "3:4:" + headerHangErr},
 		{"line in a body", "y = F(x)\n    y = x\n        w = 1\nz = G(x)\n    z = x", "3:9:" + strayIndentErr},
 		{"declaration", "c = 5\n    d = 6\nz = 7", "2:5:" + strayIndentErr},
 	} {

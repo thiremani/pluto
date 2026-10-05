@@ -104,11 +104,12 @@ string literal produces a newline in the string's value -- the `\r` escape
 denotes a literal carriage return -- so runtime behavior does not depend on
 how git checks out line endings.
 
-Indentation is significant. A block, such as a template's body or the rows of
-an array literal, is indented 4 spaces past the line that opens it, and tabs
-are not allowed in indentation. A struct's or table's header is written
-`: name ...` with its `:` 2 spaces in and one space after it, so its names
-line up with the values 4 spaces in. Brackets don't join lines: a line that
+Indentation is significant. A block, such as a template's body or a struct
+definition, is indented 4 spaces past the line that opens it, while the rows
+of an array literal line up at any depth past it. Tabs are not allowed in
+indentation. A struct's or table's header is written `: name ...`, its `:` 2
+spaces left of the values and one space after it, so its names line up with
+the values. Brackets don't join lines: a line that
 ends in a comma continues on the next line when that line is indented
 further, so a call's arguments can span lines (see Arrays below).
 
@@ -279,9 +280,9 @@ where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
 has one row, however long, and a literal whose `[` ends its
-line is a block, with its rows indented 4 spaces past the statement
-or row that holds the `[`, and `]` on its own line back at that line's
-indentation, however many lines the statement spans. Array-valued cells stack
+line is a block, with its rows lined up at any depth past the statement
+or row that holds the `[`, and `]` on its own line, not left of that
+statement or row, however many lines the statement spans. Array-valued cells stack
 recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
 A line breaks only after a comma, before a line indented past its block, so a

@@ -63,9 +63,9 @@ operand's inner shape.
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal has one row, however long; an editor
 can wrap it for display. A literal whose `[` ends its line is a block: its
-rows form a block indented 4 spaces past the statement or row
-that holds the `[`, and its `]` goes on its own line, back at that statement's
-or row's indentation. A nested block literal follows the same rule inside its
+rows line up with each other, at any depth past the statement or row that
+holds the `[`, and its `]` goes on its own line, not left of that statement or
+row. A nested block literal follows the same rule inside its
 cell, and a multi-line string belongs to its cell:
 
 ```pluto
@@ -77,8 +77,9 @@ matrix = [
 
 A line break between an inline literal's cells or before its `]` is an error,
 but a cell can itself hold a block literal, a multi-line string or a call
-continued after a comma. A block literal's `]` on its last row's line and
-rows that are not indented are errors too. An assignment's value starts on the
+continued after a comma. A block literal's `]` on its last row's line, and
+rows that are not indented past the statement or do not line up, are errors
+too. An assignment's value starts on the
 same line as its `=`, so a multi-line literal opens its bracket there:
 `m = [`, not `m =` followed by `[` on the next line.
 
@@ -91,9 +92,18 @@ total = Sum(first,
     second, third)
 ```
 
-A block literal argument hangs from its statement too, however many lines the
-call spans: its rows are indented 4 spaces past the statement's line and its
-`]` returns to that line. A `]` can open the next literal on its own line:
+A block literal argument follows the same rule, however many lines the call
+spans, so its rows can line up under the arguments:
+
+```pluto
+total = Combine(first,
+    [
+        1 2
+        3 4
+    ], second)
+```
+
+A `]` can open the next literal on its own line:
 
 ```pluto
 product = Mul([
@@ -201,8 +211,9 @@ names on that line. Headerless literals start directly with their first data
 row.
 
 The header's `:` hangs 2 spaces left of the rows, with one space after it, so
-the first header and first value begin in the same column. Spacing within
-header and data rows is otherwise non-semantic:
+the first header and first value begin in the same column. The `:` is not left
+of the statement that holds the `[`, so a table's rows are at least 2 spaces
+in. Spacing within header and data rows is otherwise non-semantic:
 
 ```pluto
 scores = [

@@ -25,9 +25,9 @@ type Lexer struct {
 
 // block is an indented block. Its lines start at level, and the INDENT that
 // opens it spells out how far that is past the block around it, which the
-// parser requires to be 4 spaces. A block that opens after a line ending in
-// '[' holds that literal's rows, and only such a block closes at a ']' line,
-// back at the level of the block around it.
+// parser requires to be 4 spaces for a body or a struct definition. A block
+// that opens after a line ending in '[' holds that literal's rows, at any
+// depth, and only such a block closes at a ']' line.
 type block struct {
 	level     int
 	holdsRows bool
@@ -69,7 +69,7 @@ const (
 const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
-	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, back at the indentation of the statement or row holding its '['"
+	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, not left of the statement or row holding its '['"
 	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -152,8 +152,8 @@ func (l *Lexer) level(n int) int {
 // literal is open, and reports false when none is. The ']' closes the
 // innermost literal, the one whose '[' ended the line before or whose rows
 // are innermost, with every block inside its rows, never one around it. It
-// belongs at the level of the block its '[' line is in and is reported
-// anywhere else.
+// may sit anywhere not left of the block its '[' line is in, and is reported
+// left of it.
 func (l *Lexer) closes(column int) bool {
 	keep := len(l.blocks) // an empty literal has no block to close
 	if l.last != token.LBRACK {
@@ -166,7 +166,7 @@ func (l *Lexer) closes(column int) bool {
 		}
 	}
 	var msg string
-	if column != l.level(keep) {
+	if column < l.level(keep) {
 		msg = BLOCK_CLOSE_ERR
 	}
 	l.dedentTo(keep, column, ']')

@@ -1037,8 +1037,8 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
-	t.Run("a block literal's ']' returns to its statement, not to a continued '[' line", func(t *testing.T) {
-		checkInput(t, "x = f(1,\n    [\n    2\n    ])", []Test{
+	t.Run("a block literal's ']' may sit anywhere not left of its statement", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n        2\n    ])", []Test{
 			{token.IDENT, "x", "", 1, 1},
 			{token.ASSIGN, "=", "", 1, 3},
 			{token.IDENT, "f", "", 1, 5},
@@ -1047,11 +1047,11 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.INDENT, "    ", "", 3, 5},
-			{token.INT, "2", "", 3, 5},
-			{token.NEWLINE, "\n", "", 3, 6},
+			{token.INDENT, "        ", "", 3, 9},
+			{token.INT, "2", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 10},
 			{token.DEINDENT, "]", "", 4, 5},
-			{token.RBRACK, "]", "4:5:" + BLOCK_CLOSE_ERR, 4, 5},
+			{token.RBRACK, "]", "", 4, 5},
 			{token.RPAREN, ")", "", 4, 6},
 			{token.NEWLINE, "\n", "", 4, 7},
 			{token.EOF, "", "", 4, 7},
@@ -1065,7 +1065,7 @@ func TestLineLayout(t *testing.T) {
 			{token.COMMA, ",", "", 1, 8},
 			{token.LBRACK, "[", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
-			{token.RBRACK, "]", "3:5:" + BLOCK_CLOSE_ERR, 3, 5},
+			{token.RBRACK, "]", "", 3, 5},
 			{token.RPAREN, ")", "", 3, 6},
 			{token.NEWLINE, "\n", "", 3, 7},
 			{token.EOF, "", "", 3, 7},
@@ -1239,7 +1239,7 @@ func TestQueuedErrorIsAboutItsToken(t *testing.T) {
 	for _, input := range []string{
 		"x = 1\n\ty = 2",
 		"a\n    b\n  c",
-		"m = [\n    1 2\n  ]",
+		"y = F(x)\n    m = [\n        1 2\n  ]",
 		"t = [\n  :a b\n    1 2\n]",
 	} {
 		l := New("TestQueuedErrorIsAboutItsToken", input)
