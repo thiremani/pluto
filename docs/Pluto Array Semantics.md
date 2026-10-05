@@ -156,6 +156,20 @@ rows = [
 Use `[[1 2] [3 4]]`, or the equivalent multiline scalar matrix above, for
 shape `[2 2]`.
 
+An inline literal can hold a block literal as a cell. Only the inner `[` ends
+its line, so the outer literal is inline and adds one axis; the line breaks
+belong to the block literal:
+
+```pluto
+m = [[
+    1 2
+]]              # shape [1 1 2]
+```
+
+A block nested in a block adds two axes for each block, so the same row
+written as nested blocks has shape `[1 1 1 2]`, and the inline `[[1 2]]` has
+shape `[1 2]`.
+
 Arrays are rectangular. Every scalar row must have the same number of cells,
 and every stacked child must have the same shape. Pluto reports a shape error;
 it never inserts default values for omitted cells. For example, this is invalid:
