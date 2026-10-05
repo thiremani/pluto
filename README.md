@@ -278,15 +278,16 @@ Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
 where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
-keeps its cells on one line, however long, and a literal whose `[` ends its
+has one row, however long, and a literal whose `[` ends its
 line is a block, with its rows indented 4 spaces past the statement
 or row that holds the `[`, and `]` on its own line back at that line's
 indentation, however many lines the statement spans. Array-valued cells stack
 recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
 A line breaks only after a comma, before a line indented past its block, so a
-call's arguments or an assignment's names and values can span lines; an
-expression otherwise stays on one line, as do grouped expressions and indexes.
+call's arguments or an assignment's names and values can span lines; any
+other line break in an expression, a grouped expression or an index included,
+is an error unless it is inside a block literal or a multi-line string.
 
 A header row produces a columnar table, with named columns projected as arrays
 such as `scores.Score`. The header goes on its own line after `[`, with all

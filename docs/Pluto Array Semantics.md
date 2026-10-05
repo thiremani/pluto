@@ -61,7 +61,7 @@ A zero-row matrix keeps no column count: concatenation takes the other
 operand's inner shape.
 
 Pluto has no line continuation character, and brackets don't join lines. An
-inline literal keeps its cells on one line, however long; an editor
+inline literal has one row, however long; an editor
 can wrap it for display. A literal whose `[` ends its line is a block: its
 rows form a block indented 4 spaces past the statement or row
 that holds the `[`, and its `]` goes on its own line, back at that statement's
@@ -75,8 +75,10 @@ matrix = [
 ]
 ```
 
-An inline literal with a line break in it, a `]` on the last row's line, or
-rows that are not indented are errors. An assignment's value starts on the
+A line break between an inline literal's cells or before its `]` is an error,
+but a cell can itself hold a block literal, a multi-line string or a call
+continued after a comma. A block literal's `]` on its last row's line and
+rows that are not indented are errors too. An assignment's value starts on the
 same line as its `=`, so a multi-line literal opens its bracket there:
 `m = [`, not `m =` followed by `[` on the next line.
 
@@ -106,7 +108,9 @@ product = Mul([
 A continued line opens no block of its own, so a template's body after
 parameters that span lines is indented 4 spaces past the template's first
 line. A grouped expression, such as `(a + b)`, and an index, such as
-`data[i]`, stay on one line.
+`data[i]`, break no line of their own: `(a +` followed by `b)` is an error,
+but either can hold a block literal, a multi-line string or a call continued
+after a comma.
 
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
