@@ -586,7 +586,11 @@ func (p *StmtParser) parseConstant() ast.Expression {
 	return nil
 }
 
+// parseStructHeaders reads a struct definition's header line, from its ':'
+// to the end of the line.
 func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
+	colon := p.curToken
+	p.nextToken() // consume ':'
 	headerToks := []token.Token{}
 	seen := make(map[string]struct{})
 
@@ -616,7 +620,7 @@ func (p *StmtParser) parseStructHeaders() ([]token.Token, bool) {
 
 	if len(headerToks) == 0 {
 		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
+			Token: colon,
 			Msg:   "struct definition must include at least one field header",
 		})
 		return nil, false
@@ -706,7 +710,6 @@ func (p *StmtParser) parseStructBody(value *ast.StructLiteral) bool {
 		return false
 	}
 
-	p.nextToken()
 	headers, ok := p.parseStructHeaders()
 	if !ok {
 		return false

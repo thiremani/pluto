@@ -527,6 +527,26 @@ func TestStructDefErrors(t *testing.T) {
 			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
 		},
 		{
+			name:      "struct header without names",
+			input:     "p = Person\n  :\n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header with only spaces after the colon",
+			input:     "p = Person\n  :   \n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header with only a comment",
+			input:     "p = Person\n  : # note\n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header without names at the end of the input",
+			input:     "p = Person\n  :",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
 			name: "struct row at the header's colon",
 			input: `p = Person
   : name age
