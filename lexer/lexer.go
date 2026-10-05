@@ -25,11 +25,12 @@ type Lexer struct {
 
 // block is an indented block. Its lines start at level, and the INDENT that
 // opens it spells out how far that is past the block around it, which the
-// parser requires to be 4 spaces. A literal's rows are a block that a ']'
-// line closes, back at the level of the block around it.
+// parser requires to be 4 spaces. A block that opens after a line ending in
+// '[' holds that literal's rows, and only such a block closes at a ']' line,
+// back at the level of the block around it.
 type block struct {
-	level int
-	rows  bool
+	level     int
+	holdsRows bool
 }
 
 // lexed is a token decided ahead of its turn, with the message of the error
@@ -157,7 +158,7 @@ func (l *Lexer) closes(column int) bool {
 	keep := len(l.blocks) // an empty literal has no block to close
 	if l.last != token.LBRACK {
 		keep--
-		for keep >= 0 && !l.blocks[keep].rows {
+		for keep >= 0 && !l.blocks[keep].holdsRows {
 			keep--
 		}
 		if keep < 0 {
