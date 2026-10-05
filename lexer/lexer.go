@@ -20,7 +20,7 @@ type Lexer struct {
 
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
-	last    token.TokenType // the last token returned; a line ending in a comma continues
+	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma continues
 }
 
 // block is an indented block. Its lines start at level, and the INDENT that
@@ -73,7 +73,7 @@ const (
 )
 
 func New(fileName, input string) *Lexer {
-	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1}
+	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, last: token.NEWLINE}
 	l.readRune()
 	column, first, tab := l.nextLine()
 	l.startLine(column, first, tab)
@@ -98,7 +98,8 @@ func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) t
 }
 
 // NextToken returns the next token. Layout tokens, decided at each line
-// break, come first.
+// break, come first. The end of the input ends its last line as a line break
+// does.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	if next := l.pending.pop(); next != nil {
 		l.last = next.tok.Type
@@ -111,6 +112,10 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	tok, err := l.lex()
 	if tok.Type == token.NEWLINE && !l.lineBreak() {
 		return l.NextToken()
+	}
+	if tok.Type == token.EOF && l.last != token.NEWLINE && l.last != token.EOF {
+		l.pending.push(lexed{tok: tok})
+		tok = l.tokenAt(token.NEWLINE, token.SYM_NEWLINE, tok.Column)
 	}
 	l.last = tok.Type
 	return tok, err

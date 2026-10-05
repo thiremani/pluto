@@ -1194,10 +1194,8 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 		return ok
 	case !ok:
 		// The cell that failed has reported the error.
-	case p.curTokenIs(token.NEWLINE):
-		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: inlineArrayErr})
 	default:
-		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: "expected ']' to close array literal"})
+		p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: inlineArrayErr})
 	}
 	return false
 }

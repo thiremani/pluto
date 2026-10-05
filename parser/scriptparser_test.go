@@ -1460,7 +1460,7 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "missing closing bracket",
 			input:       "[1 2 3",
 			expectError: true,
-			errorMsg:    "expected ']' to close array literal",
+			errorMsg:    inlineArrayErr,
 		},
 		{
 			name:        "inline literal across lines",
@@ -1763,6 +1763,22 @@ func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
 		require.Equal(t, []string{"TestFailedPartFailsWhatHoldsIt:" + tt.err}, sp.Errors(), tt.input)
 		requireWholeStatements(t, program.Statements)
 		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+}
+
+// The end of the input ends its last line as a line break does, so a line
+// cut short there gets the error it gets before a newline.
+func TestLastLineEndsAtEndOfInput(t *testing.T) {
+	const name = "TestLastLineEndsAtEndOfInput:"
+	for _, tt := range []struct{ input, err string }{
+		{"x = f(a,", "1:9:" + lineBreakErr},
+		{"x = 1 +", "1:8:" + lineBreakErr},
+		{"x = f(1", "1:8:" + lineBreakErr},
+		{"x = [", "1:6:" + blockRowsErr},
+	} {
+		sp := NewScriptParser(lexer.New("TestLastLineEndsAtEndOfInput", tt.input))
+		sp.Parse()
+		require.Equal(t, []string{name + tt.err}, sp.Errors(), tt.input)
 	}
 }
 

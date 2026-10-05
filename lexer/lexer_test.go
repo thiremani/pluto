@@ -202,6 +202,7 @@ func TestTabErr(t *testing.T) {
 		{token.IDENT, "b", "", 3, 5},
 		{token.ASSIGN, "=", "", 3, 7},
 		{token.INT, "6", "", 3, 9},
+		{token.NEWLINE, "\n", "", 3, 10},
 		{token.EOF, "", "", 3, 10},
 	}
 
@@ -244,6 +245,7 @@ func TestTabErr(t *testing.T) {
 		{token.NEWLINE, "\n", "", 4, 6},
 		{token.ILLEGAL, "\t", "5:1:" + INDENT_TAB_ERR, 5, 1},
 		{token.IDENT, "z", "", 5, 4},
+		{token.NEWLINE, "\n", "", 5, 5},
 		{token.EOF, "", "", 5, 5},
 	}
 
@@ -578,7 +580,7 @@ func TestNumberSeparatorBoundaries(t *testing.T) {
 		{"1''2", "1", token.ILLEGAL, "'"},
 		{"0b10''01", "0b10", token.ILLEGAL, "'"},
 		{"1'2'", "1'2", token.ILLEGAL, "'"},
-		{"0b'1011", "0b'1011", token.EOF, ""},
+		{"0b'1011", "0b'1011", token.NEWLINE, "\n"},
 		{"0b''1011", "0b", token.ILLEGAL, "'"},
 	}
 
@@ -713,6 +715,7 @@ root2`
 			{token.NEWLINE, "\n", "", 4, 11},
 			{token.DEINDENT, "r", "", 5, 1},
 			{token.IDENT, "root2", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 6},
 			{token.EOF, "", "", 5, 6},
 		}
 		checkInput(t, src, expected)
@@ -733,6 +736,7 @@ root2`
 			{token.IDENT, "print", "", 3, 3},
 			{token.LPAREN, "(", "", 3, 8},
 			{token.RPAREN, ")", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 10},
 			{token.EOF, "", "", 3, 10},
 		}
 		checkInput(t, src, expected)
@@ -759,6 +763,7 @@ root2`
 			{token.NEWLINE, "\n", "", 2, 4},
 			{token.INDENT, "    ", "", 3, 7},
 			{token.IDENT, "b", "", 3, 7},
+			{token.NEWLINE, "\n", "", 3, 8},
 			{token.EOF, "", "", 3, 8},
 		})
 		checkInput(t, "f\n    a\n          b", []Test{
@@ -769,6 +774,7 @@ root2`
 			{token.NEWLINE, "\n", "", 2, 6},
 			{token.INDENT, "      ", "", 3, 11},
 			{token.IDENT, "b", "", 3, 11},
+			{token.NEWLINE, "\n", "", 3, 12},
 			{token.EOF, "", "", 3, 12},
 		})
 	})
@@ -789,6 +795,7 @@ root2`
 			{token.NEWLINE, "\n", "", 3, 13},
 			{token.DEINDENT, "q", "", 4, 1},
 			{token.IDENT, "q", "", 4, 1},
+			{token.NEWLINE, "\n", "", 4, 2},
 			{token.EOF, "", "", 4, 2},
 		})
 		checkInput(t, "p = Person\n  :  name age\n     \"Ada\" 36", []Test{
@@ -804,6 +811,7 @@ root2`
 			{token.INDENT, " ", "", 3, 6},
 			{token.STRING, "Ada", "", 3, 6},
 			{token.INT, "36", "", 3, 12},
+			{token.NEWLINE, "\n", "", 3, 14},
 			{token.EOF, "", "", 3, 14},
 		})
 		checkInput(t, "p = Person\n  :\tname\n    1", []Test{
@@ -816,6 +824,7 @@ root2`
 			{token.IDENT, "name", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 9},
 			{token.INT, "1", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
 			{token.EOF, "", "", 3, 6},
 		})
 		checkInput(t, "p = Person\n    : name", []Test{
@@ -826,6 +835,7 @@ root2`
 			{token.INDENT, "      ", "", 2, 5},
 			{token.COLON, ":", "", 2, 5},
 			{token.IDENT, "name", "", 2, 7},
+			{token.NEWLINE, "\n", "", 2, 11},
 			{token.EOF, "", "", 2, 11},
 		})
 	})
@@ -854,6 +864,7 @@ print()`
 			{token.IDENT, "print", "", 4, 1},
 			{token.LPAREN, "(", "", 4, 6},
 			{token.RPAREN, ")", "", 4, 7},
+			{token.NEWLINE, "\n", "", 4, 8},
 			{token.EOF, "", "", 4, 8},
 		}
 		checkInput(t, src, expected)
@@ -876,6 +887,7 @@ print()`
 			{token.IDENT, "print", "", 5, 1},
 			{token.LPAREN, "(", "", 5, 6},
 			{token.RPAREN, ")", "", 5, 7},
+			{token.NEWLINE, "\n", "", 5, 8},
 			{token.EOF, "", "", 5, 8},
 		}
 		checkInput(t, src, expected)
@@ -891,6 +903,7 @@ print()`
 			{token.NEWLINE, "\n", "", 1, 5},
 			{token.INDENT, "    ", "", 3, 5},
 			{token.IDENT, "pass", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 9},
 			{token.EOF, "", "", 3, 9},
 		}
 		checkInput(t, src, expected)
@@ -917,6 +930,7 @@ print()`
 			{token.NEWLINE, "\n", "", 4, 8},
 			{token.ILLEGAL, "b", "5:3:" + INDENT_ERR + ". At char: b", 5, 3},
 			{token.IDENT, "baz", "", 5, 3},
+			{token.NEWLINE, "\n", "", 5, 6},
 			{token.EOF, "", "", 5, 6},
 		}
 		checkInput(t, src, expected)
@@ -943,6 +957,7 @@ func TestLineLayout(t *testing.T) {
 			{token.RBRACK, "]", "", 4, 1},
 			{token.NEWLINE, "\n", "", 4, 2},
 			{token.IDENT, "y", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 2},
 			{token.EOF, "", "", 5, 2},
 		})
 	})
@@ -958,6 +973,7 @@ func TestLineLayout(t *testing.T) {
 			{token.NEWLINE, "\n", "", 4, 6},
 			{token.DEINDENT, "]", "", 5, 1},
 			{token.RBRACK, "]", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 2},
 			{token.EOF, "", "", 5, 2},
 		})
 	})
@@ -974,6 +990,7 @@ func TestLineLayout(t *testing.T) {
 			{token.RPAREN, ")", "", 2, 6},
 			{token.NEWLINE, "\n", "", 2, 7},
 			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
 			{token.EOF, "", "", 3, 2},
 		})
 	})
@@ -994,6 +1011,7 @@ func TestLineLayout(t *testing.T) {
 			{token.DEINDENT, "]", "", 4, 1},
 			{token.RBRACK, "]", "", 4, 1},
 			{token.RPAREN, ")", "", 4, 2},
+			{token.NEWLINE, "\n", "", 4, 3},
 			{token.EOF, "", "", 4, 3},
 		})
 	})
@@ -1014,6 +1032,7 @@ func TestLineLayout(t *testing.T) {
 			{token.DEINDENT, "]", "", 4, 1},
 			{token.RBRACK, "]", "", 4, 1},
 			{token.RPAREN, ")", "", 4, 2},
+			{token.NEWLINE, "\n", "", 4, 3},
 			{token.EOF, "", "", 4, 3},
 		})
 	})
@@ -1034,6 +1053,7 @@ func TestLineLayout(t *testing.T) {
 			{token.DEINDENT, "]", "", 4, 5},
 			{token.RBRACK, "]", "4:5:" + BLOCK_CLOSE_ERR, 4, 5},
 			{token.RPAREN, ")", "", 4, 6},
+			{token.NEWLINE, "\n", "", 4, 7},
 			{token.EOF, "", "", 4, 7},
 		})
 		checkInput(t, "x = f(1,\n    [\n    ])", []Test{
@@ -1047,6 +1067,7 @@ func TestLineLayout(t *testing.T) {
 			{token.NEWLINE, "\n", "", 2, 6},
 			{token.RBRACK, "]", "3:5:" + BLOCK_CLOSE_ERR, 3, 5},
 			{token.RPAREN, ")", "", 3, 6},
+			{token.NEWLINE, "\n", "", 3, 7},
 			{token.EOF, "", "", 3, 7},
 		})
 	})
@@ -1063,6 +1084,7 @@ func TestLineLayout(t *testing.T) {
 			{token.IDENT, "y", "", 2, 1},
 			{token.ASSIGN, "=", "", 2, 3},
 			{token.INT, "2", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
 			{token.EOF, "", "", 2, 6},
 		})
 	})
@@ -1078,6 +1100,7 @@ func TestLineLayout(t *testing.T) {
 			{token.INDENT, "    ", "", 2, 5},
 			{token.INT, "2", "", 2, 5},
 			{token.RPAREN, ")", "", 2, 6},
+			{token.NEWLINE, "\n", "", 2, 7},
 			{token.EOF, "", "", 2, 7},
 		})
 	})
@@ -1093,6 +1116,7 @@ func TestLineLayout(t *testing.T) {
 			{token.ILLEGAL, "\t", "2:1:" + INDENT_TAB_ERR, 2, 1},
 			{token.INT, "2", "", 2, 2},
 			{token.RPAREN, ")", "", 2, 3},
+			{token.NEWLINE, "\n", "", 2, 4},
 			{token.EOF, "", "", 2, 4},
 		})
 	})
@@ -1120,6 +1144,7 @@ func TestLineLayout(t *testing.T) {
 			{token.IDENT, "b", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 6},
 			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
 			{token.EOF, "", "", 3, 2},
 		})
 		checkInput(t, "x = 1\n\x00\ny", []Test{
@@ -1130,6 +1155,7 @@ func TestLineLayout(t *testing.T) {
 			{token.ILLEGAL, "\x00", "2:1:NUL character is not allowed in source", 2, 1},
 			{token.NEWLINE, "\n", "", 2, 2},
 			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
 			{token.EOF, "", "", 3, 2},
 		})
 	})
@@ -1142,6 +1168,7 @@ func TestLineLayout(t *testing.T) {
 			{token.ILLEGAL, "\\", "1:7:Illegal character '\\'", 1, 7},
 			{token.NEWLINE, "\n", "", 1, 8},
 			{token.IDENT, "y", "", 2, 1},
+			{token.NEWLINE, "\n", "", 2, 2},
 			{token.EOF, "", "", 2, 2},
 		})
 	})
@@ -1171,6 +1198,7 @@ func TestLineLayoutEndings(t *testing.T) {
 		{token.COMMA, ",", "", 5, 4},
 		{token.INT, "2", "", 6, 3},
 		{token.RPAREN, ")", "", 6, 4},
+		{token.NEWLINE, "\n", "", 6, 5},
 		{token.EOF, "", "", 6, 5},
 	}
 	endings := []struct {
@@ -1254,6 +1282,7 @@ func TestNewlineNormalization(t *testing.T) {
 		{token.IDENT, "c", "", 3, 1},
 		{token.NEWLINE, "\n", "", 3, 2},
 		{token.IDENT, "d", "", 4, 1},
+		{token.NEWLINE, "\n", "", 4, 2},
 		{token.EOF, "", "", 4, 2},
 	}
 	checkInput(t, src, expected)
@@ -1272,6 +1301,7 @@ func TestNewlineNormalization(t *testing.T) {
 			{token.IDENT, "a", "", 1, 1},
 			{token.NEWLINE, "\n", "", 1, 2},
 			{token.IDENT, "b", "", tt.wantLine, 1},
+			{token.NEWLINE, "\n", "", tt.wantLine, 2},
 			{token.EOF, "", "", tt.wantLine, 2},
 		}
 		checkInput(t, tt.src, adjExpected)
@@ -1297,6 +1327,7 @@ func TestMultilineString(t *testing.T) {
 				{token.STRING, tc.literal, "", 1, 1},
 				{token.NEWLINE, "\n", "", 2, 3},
 				{token.IDENT, "c", "", 3, 1},
+				{token.NEWLINE, "\n", "", 3, 2},
 				{token.EOF, "", "", 3, 2},
 			}
 			checkInput(t, src, expected)
@@ -1326,6 +1357,7 @@ func TestMultilineStringInvalidEscape(t *testing.T) {
 				{token.STRING, tc.literal, "1:1:unsupported escape sequence \\\n", 1, 1},
 				{token.NEWLINE, "\n", "", 2, 3},
 				{token.IDENT, "c", "", 3, 1},
+				{token.NEWLINE, "\n", "", 3, 2},
 				{token.EOF, "", "", 3, 2},
 			}
 			checkInput(t, src, expected)
