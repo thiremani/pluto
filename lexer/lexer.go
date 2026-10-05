@@ -223,22 +223,22 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 	switch first {
 	case ':': // a header hangs 2 spaces left of its block
 		msg := l.headerColonErr(column)
-		l.land(column+2, column, first)
+		l.placeLine(column+2, column, first)
 		l.queueLexed(msg)
 	case ']': // a literal's ']' returns to the line of its '['
 		if !l.closes(column) {
-			l.land(column, column, first)
+			l.placeLine(column, column, first)
 		}
 	default:
-		l.land(column, column, first)
+		l.placeLine(column, column, first)
 	}
 }
 
-// land lays out a line whose content starts with first at column, as a line
-// at level. A line indented past the current block opens a block, whose
-// INDENT spells out how far. Any other line returns to the level of a block
-// it is in, or is reported.
-func (l *Lexer) land(level, column int, first rune) {
+// placeLine places a line whose content starts with first at column, at
+// level among the open blocks. A line deeper than the innermost block opens a
+// block, whose INDENT spells out how far; a line at an open block's level
+// returns to it; any other line is reported.
+func (l *Lexer) placeLine(level, column int, first rune) {
 	if around := l.level(len(l.blocks)); level > around {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
 		l.blocks = append(l.blocks, block{level, l.last == token.LBRACK})
