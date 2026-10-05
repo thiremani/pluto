@@ -211,9 +211,8 @@ names on that line. Headerless literals start directly with their first data
 row.
 
 The header's `:` hangs 2 spaces left of the rows, with one space after it, so
-the first header and first value begin in the same column. The `:` is not left
-of the statement that holds the `[`, so a table's rows are at least 2 spaces
-in. Spacing within header and data rows is otherwise non-semantic:
+the first header and first value begin in the same column. Spacing within
+header and data rows is otherwise non-semantic:
 
 ```pluto
 scores = [
