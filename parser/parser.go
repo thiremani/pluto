@@ -1272,16 +1272,18 @@ func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
 // statement or row can start with, so the next statement or row starts on a
 // line of its own.
 func (p *StmtParser) skipLine() {
-	for !p.atLineEnd() {
+	for {
+		for !p.atLineEnd() {
+			p.nextToken()
+		}
+		if p.curTokenIs(token.NEWLINE) && p.peekTokenIs(token.INDENT) {
+			p.nextToken()
+			p.skipBlock()
+		}
+		if !p.peekTokenIs(token.RPAREN) && !p.peekTokenIs(token.RBRACK) {
+			return
+		}
 		p.nextToken()
-	}
-	if p.curTokenIs(token.NEWLINE) && p.peekTokenIs(token.INDENT) {
-		p.nextToken()
-		p.skipBlock()
-	}
-	if p.peekTokenIs(token.RPAREN) || p.peekTokenIs(token.RBRACK) {
-		p.nextToken()
-		p.skipLine()
 	}
 }
 
