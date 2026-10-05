@@ -1590,8 +1590,6 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:" + blockCloseErr}},
 		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
 		{"inline literal across lines, 5 spaces in", "x = [1 2\n     3 4]", []string{name + "1:9:" + inlineArrayErr}},
-		{"inline literal holding a block literal", "m = [[\n    1 2\n]]", []string{name + "1:5:" + inlineArrayErr}},
-		{"inline literal holding a block literal after a cell", "m = [1 [\n    2 3\n]]", []string{name + "1:5:" + inlineArrayErr}},
 		{"line indented past its block", "x = 1\n    y = 2", []string{name + "2:5:" + strayIndentErr}},
 		{"line indented 2 spaces past its block", "x = 1\n  y = 2", []string{name + "2:3:" + strayIndentErr}},
 		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
@@ -1643,8 +1641,9 @@ func TestLayoutKeepsStatements(t *testing.T) {
 }
 
 // A block literal prints in its own layout, so a literal nested in a row,
-// directly or inside a call, prints at that row's indentation, and a
-// multi-line string in a row keeps its text.
+// directly or inside a call, prints at that row's indentation, a multi-line
+// string in a row keeps its text, and an inline literal prints the block
+// literals it holds as written.
 func TestBlockLiteralPrintsItsLayout(t *testing.T) {
 	for _, input := range []string{
 		"m = [\n    [\n        1 2\n    ]\n]",
@@ -1653,6 +1652,7 @@ func TestBlockLiteralPrintsItsLayout(t *testing.T) {
 		"m = [\n    \"a\nb\" 1\n]",
 		"m = [\n    \"a\\\"\nb\" 1\n]",
 		"m = [\n    f(\"a\nb\", [\n        1 2\n    ])\n]",
+		"m = [[\n    1 2\n] [\n    3 4\n]]",
 	} {
 		sp := NewScriptParser(lexer.New("TestBlockLiteralPrintsItsLayout", input))
 		program := sp.Parse()

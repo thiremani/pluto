@@ -278,8 +278,8 @@ Inline literals such as `[1 2 3]` contribute one array axis. A block literal,
 where `[` is followed by a newline, contributes row and column axes even when
 it contains one row. Thus the matrix above is equivalent to
 `[[1 2] [3 4]]`. Pluto has no line continuation character: an inline array
-keeps its cells on one line, however long, and a literal that spans lines is a
-block, with `[` ending its line, its rows indented 4 spaces past the statement
+keeps its cells on one line, however long, and a literal whose `[` ends its
+line is a block, with its rows indented 4 spaces past the statement
 or row that holds the `[`, and `]` on its own line back at that line's
 indentation, however many lines the statement spans. Array-valued cells stack
 recursively

@@ -62,8 +62,8 @@ operand's inner shape.
 
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal keeps its cells on one line, however long; an editor
-can wrap it for display. A literal that spans lines is a block: its `[` ends
-its line, its rows form a block indented 4 spaces past the statement or row
+can wrap it for display. A literal whose `[` ends its line is a block: its
+rows form a block indented 4 spaces past the statement or row
 that holds the `[`, and its `]` goes on its own line, back at that statement's
 or row's indentation. A nested block literal follows the same rule inside its
 cell, and a multi-line string belongs to its cell:
@@ -75,9 +75,8 @@ matrix = [
 ]
 ```
 
-An inline literal with a line break in it, a block literal among its cells
-included, a `]` on the last row's line, or rows that are not indented are
-errors. An assignment's value starts on the
+An inline literal with a line break in it, a `]` on the last row's line, or
+rows that are not indented are errors. An assignment's value starts on the
 same line as its `=`, so a multi-line literal opens its bracket there:
 `m = [`, not `m =` followed by `[` on the next line.
 
@@ -159,6 +158,20 @@ rows = [
 
 Use `[[1 2] [3 4]]`, or the equivalent multiline scalar matrix above, for
 shape `[2 2]`.
+
+An inline literal can hold a block literal as a cell. Only the inner `[` ends
+its line, so the outer literal is inline and adds one axis; the line breaks
+belong to the block literal:
+
+```pluto
+m = [[
+    1 2
+]]              # shape [1 1 2]
+```
+
+A block nested in a block adds two axes for each block, so the same row
+written as nested blocks has shape `[1 1 1 2]`, and the inline `[[1 2]]` has
+shape `[1 2]`.
 
 Arrays are rectangular. Every scalar row must have the same number of cells,
 and every stacked child must have the same shape. Pluto reports a shape error;
