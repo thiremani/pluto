@@ -1247,6 +1247,18 @@ func TestQueuedErrorIsAboutItsToken(t *testing.T) {
 	}
 }
 
+// A token carries one error, so a lex error on a ']' or ':' that starts a
+// line, whose layout error comes with it, is an internal error, not dropped.
+func TestQueueLexedPanicsOnLexError(t *testing.T) {
+	l := New("TestQueueLexedPanicsOnLexError", "{")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("queueLexed dropped lex's error")
+		}
+	}()
+	l.queueLexed("")
+}
+
 func TestNewlineNormalization(t *testing.T) {
 	// Each ending style terminates exactly one line; CRLF is one newline.
 	src := "a\rb\r\nc\nd"
