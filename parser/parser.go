@@ -1548,11 +1548,8 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 	p.nextToken() // Consume the ':'
 
 	rl.Stop = p.parseExpression(precedence, prefixSplitNone)
+	// A failed stop or step has reported its own error.
 	if rl.Stop == nil {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: p.curToken,
-			Msg:   "expected expression after ':' for range stop",
-		})
 		return nil
 	}
 
@@ -1561,10 +1558,6 @@ func (p *StmtParser) parseRangeLiteral(left ast.Expression) ast.Expression {
 		p.nextToken()
 		rl.Step = p.parseExpression(precedence, prefixSplitNone)
 		if rl.Step == nil {
-			p.errors = append(p.errors, &token.CompileError{
-				Token: p.curToken,
-				Msg:   "expected expression after second ':' for range step",
-			})
 			return nil
 		}
 	}

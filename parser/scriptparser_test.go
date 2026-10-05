@@ -1747,6 +1747,8 @@ func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
 		{"x = f(], 2)", "1:7:" + noPrefix + "] found"},
 		{"x = 1 + )", "1:9:" + noPrefix + ") found"},
 		{"x = -)", "1:6:" + noPrefix + ") found"},
+		{"x = 0:)", "1:7:" + noPrefix + ") found"},
+		{"x = 0:3:)", "1:9:" + noPrefix + ") found"},
 		{"x = a.b(1)", "1:6:function calls must target identifiers"},
 		{"x = a. + 1", "1:6:expected next token to be IDENT, got OPERATOR instead"},
 		{"x = [1 ) 2]", "1:8:" + noPrefix + ") found"},
