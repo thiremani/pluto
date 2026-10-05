@@ -1143,7 +1143,7 @@ func (p *StmtParser) parseStringLiteral() ast.Expression {
 // legal only where these rules allow it.
 const (
 	blockIndent    = "    " // the indentation a block adds to the line that opens it
-	blockIndentErr = "indent each block by 4 spaces; a header's ':' by 2, with one space after it"
+	blockIndentErr = "indent a body or a struct definition by 4 spaces, and a struct's header ':' by 2, with one space after it"
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented past the statement or row holding its '['"
@@ -1206,8 +1206,8 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 }
 
 // parseBlockLiteral reads a literal whose '[' ends its line: an optional
-// header and the rows, as a block at any depth past the line of its '[',
-// then the ']' on its own line. It leaves curToken at the ']'.
+// header and the rows, as a block at any depth past the statement or row
+// holding its '[', then the ']' on its own line. It leaves curToken at the ']'.
 func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	if p.peekTokenIs(token.RBRACK) {
 		p.nextToken()

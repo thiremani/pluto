@@ -226,7 +226,7 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 		msg := l.headerColonErr(column)
 		l.placeLine(column+2, column, first)
 		l.queueLexed(msg)
-	case ']': // a literal's ']' returns to the line of its '['
+	case ']': // a ']' line closes the innermost literal
 		if !l.closes(column) {
 			l.placeLine(column, column, first)
 		}
