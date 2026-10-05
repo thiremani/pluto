@@ -1644,6 +1644,25 @@ func TestLayoutKeepsStatements(t *testing.T) {
 	}
 }
 
+// A block literal prints in its own layout, so a literal nested in a row,
+// directly or inside a call, prints at that row's indentation, and a
+// multi-line string in a row keeps its text.
+func TestBlockLiteralPrintsItsLayout(t *testing.T) {
+	for _, input := range []string{
+		"m = [\n    [\n        1 2\n    ]\n]",
+		"m = [\n    f([\n        1 2\n    ])\n]",
+		"t = [\n    [\n      : a b\n        1 2\n    ]\n]",
+		"m = [\n    \"a\nb\" 1\n]",
+		"m = [\n    \"a\\\"\nb\" 1\n]",
+	} {
+		sp := NewScriptParser(lexer.New("TestBlockLiteralPrintsItsLayout", input))
+		program := sp.Parse()
+		require.Empty(t, sp.Errors(), input)
+		require.Len(t, program.Statements, 1, input)
+		require.Equal(t, input, program.Statements[0].String())
+	}
+}
+
 // An assignment's value starts on the same line as its '=', even when a
 // comment follows the '=' or the value is a bracket. The statement after it
 // still parses.
