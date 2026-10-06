@@ -1613,6 +1613,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
 		{"block literal's ']' after a stray line's unclosed literal", "x = [\n    1\n        [\n            2\n]", []string{name + "3:9:" + strayIndentErr, name + "5:1:" + blockCloseErr, name + "6:1:" + blockCloseErr}},
 		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
+		{"table closed on its header's line", "t = [\n  : a b]", []string{name + "2:8:" + blockCloseErr}},
 		{"block literal's ']' at its rows' column", "m = [\n    1 2\n    ]", nil},
 		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
 		{"call broken before a 2-space continuation", "x = f(x\n  y,\n  z)", []string{name + "1:8:" + parenBreakErr}},
@@ -1760,6 +1761,7 @@ func TestLastLineEndsAtEndOfInput(t *testing.T) {
 		{"x = 1 +", "1:8:" + lineBreakErr},
 		{"x = f(1", "1:8:" + parenBreakErr},
 		{"x = [", "1:6:" + blockRowsErr},
+		{"x = [\n    1 2", "2:8:" + blockCloseErr},
 	} {
 		sp := NewScriptParser(lexer.New("TestLastLineEndsAtEndOfInput", tt.input))
 		sp.Parse()
