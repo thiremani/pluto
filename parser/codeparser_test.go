@@ -31,6 +31,11 @@ func TestParseConstStatement(t *testing.T) {
 			nil,
 			[]string{"duplicate identifier: a in this statement"},
 		},
+		{
+			"a = 5 6",
+			nil,
+			[]string{"1:7:" + stmtEndErr},
+		},
 	}
 
 	for _, tt := range tests {

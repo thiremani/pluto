@@ -863,6 +863,15 @@ func TestInvalidConditionError(t *testing.T) {
 	}
 }
 
+// A token after a statement's value fails the statement where the token
+// stands; the statement after it parses.
+func TestTokenAfterValue(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestTokenAfterValue", "x = a > 0 5 6\nafter = 3"))
+	program := sp.Parse()
+	require.Equal(t, []string{"TestTokenAfterValue:1:13:" + stmtEndErr}, sp.Errors())
+	require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements))
+}
+
 func TestNestedGuardCondition(t *testing.T) {
 	const input = "res = (a > 3) < (b < 5) (c + d)"
 	t.Run("nested guard condition", func(t *testing.T) {

@@ -536,12 +536,7 @@ func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstSta
 	p.nextToken()
 	stmt.Value = p.parseConstants()
 	if !p.stmtEnded() {
-		msg := fmt.Sprintf("Expected %q or %q to end the statement", token.NEWLINE, token.EOF)
-		ce := &token.CompileError{
-			Token: p.curToken,
-			Msg:   msg,
-		}
-		p.errors = append(p.errors, ce)
+		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: stmtEndErr})
 		return nil
 	}
 	p.nextToken()
@@ -840,12 +835,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 		return stmt
 	}
 
-	msg := fmt.Sprintf("Expected either NEWLINE or EOF token. Instead got %+v", p.peekToken)
-	ce := &token.CompileError{
-		Token: p.curToken,
-		Msg:   msg,
-	}
-	p.errors = append(p.errors, ce)
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: stmtEndErr})
 	return nil
 }
 
@@ -1146,6 +1136,7 @@ const (
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma, onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
+	stmtEndErr     = "expected ',' or the end of the line after a value"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
