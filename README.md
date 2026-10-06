@@ -111,7 +111,8 @@ indentation. A struct's or table's header is written `: name ...`, its `:` 2
 spaces left of the values and one space after it, so its names line up with
 the values. Brackets don't join lines: a line that
 ends in a comma or `=` continues on the next line when that line is indented
-further, so a call's arguments can span lines (see Arrays below).
+further, so a call's arguments can span lines; the arguments that start
+continued lines line up with each other (see Arrays below).
 
 ```python
 p = Person
@@ -286,7 +287,8 @@ lines the statement spans. Array-valued cells stack
 recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
 A line breaks only after a comma or `=`, before a line indented past its block,
-so a call's arguments or an assignment's names and values can span lines; any
+so a call's arguments or an assignment's names and values can span lines, each
+list's continued items lined up with each other; any
 other line break in an expression, a grouped expression or an index included,
 is an error unless it is inside a block literal or a multi-line string.
 

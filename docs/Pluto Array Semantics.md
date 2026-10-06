@@ -91,6 +91,11 @@ total = Sum(first,
     second, third)
 ```
 
+Within one list, the items that start continued lines line up with each other,
+at any depth past the statement's line, under the first argument or not. A
+nested call lines up its own arguments, and a value continued after `=` has
+nothing to line up with.
+
 A block literal argument follows the same rule, however many lines the call
 spans: its rows and `]` go by the line holding its `[`, so they line up under
 the arguments:

@@ -553,8 +553,10 @@ func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstSta
 func (p *StmtParser) parseConstants() []ast.Expression {
 	values := []ast.Expression{}
 	values = append(values, p.parseConstant())
+	continued := 0
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
+		p.lineUp(&continued)
 		if !p.peekToken.IsConstant() {
 			msg := fmt.Sprintf("%q is not a constant", p.curToken.Literal)
 			ce := &token.CompileError{
@@ -877,8 +879,10 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 
 func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode) []ast.Expression {
 	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
+	continued := 0
 	for !p.atLineEnd() && p.peekTokenIs(token.COMMA) {
 		p.nextToken()
+		p.lineUp(&continued)
 		p.nextToken()
 		expList = append(expList, p.parseExpression(LOWEST, splitPrefix))
 	}
@@ -1136,6 +1140,7 @@ const (
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
 	stmtEndErr     = "expected ',' or the end of the line after a value"
 	codeValueErr   = "in a code file, '=' is followed by constants, a function's name and parameters, or a struct's type"
+	lineUpErr      = "a continued line lines up with the first continued line of its list"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
@@ -1632,6 +1637,21 @@ func (p *StmtParser) parenBreak() bool {
 	return true
 }
 
+// lineUp reports the list item after the comma at curToken when it starts a
+// continued line out of line with the list's first such item, whose column
+// continued holds, 0 until there is one. Each list lines up its own items, so
+// a nested call's arguments line up apart from the call around them.
+func (p *StmtParser) lineUp(continued *int) {
+	item := p.peekToken
+	switch {
+	case item.Line == p.curToken.Line:
+	case *continued == 0:
+		*continued = item.Column
+	case item.Column != *continued:
+		p.errors = append(p.errors, &token.CompileError{Token: item, Msg: lineUpErr})
+	}
+}
+
 // assumes current token is token.NEWLINE
 func (p *StmtParser) parseBlockStatement() *ast.BlockStatement {
 	if p.peekTokenIs(token.INDENT) {
@@ -1697,8 +1717,10 @@ func (p *StmtParser) parseIdentifiers() []*ast.Identifier {
 	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	identifiers = append(identifiers, ident)
 
+	continued := 0
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
+		p.lineUp(&continued)
 		if !p.expectPeek(token.IDENT) {
 			return nil
 		}
@@ -1790,8 +1812,10 @@ func (p *StmtParser) parseCallArguments() []ast.Expression {
 	p.nextToken()
 	args = append(args, p.parseExpression(LOWEST, prefixSplitNone))
 
+	continued := 0
 	for !p.atLineEnd() && p.peekTokenIs(token.COMMA) {
 		p.nextToken()
+		p.lineUp(&continued)
 		if p.parenBreak() {
 			return nil
 		}

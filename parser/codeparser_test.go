@@ -618,6 +618,17 @@ func TestCodeValueErrors(t *testing.T) {
 	}
 }
 
+// The items of a template's parameters or a constant list that start
+// continued lines line up, as in any other list.
+func TestCodeListsLineUp(t *testing.T) {
+	const name = "TestCodeListsLineUp:"
+	for _, input := range []string{"y = F(a,\n    b,\n      c)\n    y = a", "c, d, e = 1,\n    2,\n      3"} {
+		cp := NewCodeParser(lexer.New("TestCodeListsLineUp", input))
+		cp.Parse()
+		require.Equal(t, []string{name + "3:7:" + lineUpErr}, cp.Errors(), input)
+	}
+}
+
 func TestDeclarationFailsWholeLine(t *testing.T) {
 	cp := NewCodeParser(lexer.New("TestDeclarationFailsWholeLine", "a .= 2\nb = 3"))
 	cp.Parse()
