@@ -1266,8 +1266,9 @@ func (p *StmtParser) skipLine() {
 			p.nextToken()
 		}
 		if p.curTokenIs(token.NEWLINE) && p.peekTokenIs(token.INDENT) {
-			p.nextToken()
-			p.skipBlock()
+			p.nextToken() // the INDENT
+			p.nextToken() // into its block
+			p.leaveBlock()
 		}
 		if !p.peekTokenIs(token.RPAREN) && !p.peekTokenIs(token.RBRACK) {
 			return
@@ -1291,15 +1292,9 @@ func (p *StmtParser) skipIndented() bool {
 		return false
 	}
 	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: strayIndentErr})
-	p.skipBlock()
-	return true
-}
-
-// skipBlock moves from the current INDENT to the DEINDENT that ends its
-// block.
-func (p *StmtParser) skipBlock() {
-	p.nextToken()
+	p.nextToken() // into the block
 	p.leaveBlock()
+	return true
 }
 
 // leaveBlock moves to the DEINDENT that ends the block the parser is in, so
