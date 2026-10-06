@@ -1204,7 +1204,7 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 
 	// A header's line ends like a row's: the rows loop reads what is left of
 	// it, so a ']' left there is reported as on any row's line.
-	ok := !p.curTokenIs(token.COLON) || p.parseTableHeader(arr)
+	ok := !p.curTokenIs(token.COLON) || p.parseHeader(arr)
 	if !ok {
 		p.skipLine()
 	}
@@ -1230,21 +1230,6 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	}
 	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockCloseErr})
 	return false
-}
-
-// parseTableHeader reads a table's header line, from its ':' to the end of
-// the line.
-func (p *StmtParser) parseTableHeader(arr *ast.ArrayLiteral) bool {
-	colon := p.curToken
-	p.nextToken() // consume ':'
-	if p.atLineEnd() || p.curTokenIs(token.RBRACK) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: colon,
-			Msg:   "expected at least one column header after ':'",
-		})
-		return false
-	}
-	return p.parseHeader(arr)
 }
 
 // skipLine moves past the rest of a failed line to its end, past the lines
@@ -1417,9 +1402,13 @@ func isZeroSample(expr ast.Expression) bool {
 	}
 }
 
-// parseHeader parses column headers after ':'. A table without data rows
-// types each column with a zero value attached to its name: Name("") Score(0).
+// parseHeader reads a table's header line, from its ':' to the end of the
+// line. A table without data rows types each column with a zero value
+// attached to its name: Name("") Score(0).
 func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
+	colon := p.curToken
+	p.nextToken() // consume ':'
+
 	var columnTypes []ast.Expression
 	typed := false
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
@@ -1441,6 +1430,14 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: p.curToken,
 			Msg:   fmt.Sprintf("expected identifier for column header, got %s", p.curToken.Type),
+		})
+		return false
+	}
+
+	if len(arr.Headers) == 0 {
+		p.errors = append(p.errors, &token.CompileError{
+			Token: colon,
+			Msg:   "expected at least one column header after ':'",
 		})
 		return false
 	}
