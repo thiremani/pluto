@@ -1646,10 +1646,12 @@ func (p *StmtParser) parenBreak() bool {
 // starts a continued line out of line with the list's first such item, whose
 // column continued holds, 0 until there is one. Each list lines up its own
 // items, so a nested call's arguments line up apart from the call around them.
+// An ILLEGAL token, such as the tab the lexer reports in a line's indentation,
+// is not the item and is not checked.
 func (p *StmtParser) lineUp(continued *int) {
 	item := p.peekToken
 	switch {
-	case item.Line == p.curToken.Line:
+	case item.Line == p.curToken.Line, item.Type == token.ILLEGAL:
 	case *continued == 0:
 		*continued = item.Column
 	case item.Column != *continued:

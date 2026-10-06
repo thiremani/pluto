@@ -1627,6 +1627,8 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"printed value out of line", "a,\n    b,\n      c", []string{name + "3:7:" + lineUpErr}},
 		{"values continued after '=' line up", "x, y, z =\n    1,\n    2,\n    3", nil},
 		{"values continued after '=' out of line", "x, y =\n    1,\n      2", []string{name + "3:7:" + lineUpErr}},
+		{"first continued value indented with a tab", "x, y =\n\t    1,\n     2", []string{name + "2:1:" + lexer.INDENT_TAB_ERR}},
+		{"later continued argument indented with a tab", "x = f(a,\n     b,\n\t    c)", []string{name + "3:1:" + lexer.INDENT_TAB_ERR}},
 		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
 		{"call broken before a 2-space continuation", "x = f(x\n  y,\n  z)", []string{name + "1:8:" + parenBreakErr}},
 		{"grouped expression broken after an operator", "x = (1 +\n    2)", []string{name + "1:9:" + lineBreakErr}},
