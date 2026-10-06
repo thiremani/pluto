@@ -63,9 +63,9 @@ operand's inner shape.
 Pluto has no line continuation character, and brackets don't join lines. An
 inline literal has one row, however long; an editor
 can wrap it for display. A literal whose `[` ends its line is a block: its
-rows line up with each other, at any depth past the statement or row that
-holds the `[`, and its `]` goes on its own line, not left of that statement or
-row. A nested block literal follows the same rule inside its
+rows line up with each other, at any depth past the line that holds the `[`,
+and its `]` goes on its own line, at that line's column. A nested block
+literal follows the same rule inside its
 cell, and a multi-line string belongs to its cell:
 
 ```pluto
@@ -77,9 +77,9 @@ matrix = [
 
 A line break between an inline literal's cells or before its `]` is an error,
 but a cell can itself hold a block literal, a multi-line string or a call
-continued after a comma. A block literal's `]` on its last row's line, and
-rows that are not indented past the statement or do not line up, are errors
-too.
+continued after a comma. A block literal's `]` on its last row's line or at
+another column, and rows that are not indented past the line holding its `[`
+or do not line up, are errors too.
 
 A line breaks only after a comma or `=`, and the next line is indented past
 the statement's line, so a call's arguments can span lines, as can the names
@@ -91,7 +91,8 @@ total = Sum(first,
 ```
 
 A block literal argument follows the same rule, however many lines the call
-spans, so its rows can line up under the arguments:
+spans: its rows and `]` go by the line holding its `[`, so they line up under
+the arguments:
 
 ```pluto
 total = Combine(first,

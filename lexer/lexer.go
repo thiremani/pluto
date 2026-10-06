@@ -21,16 +21,19 @@ type Lexer struct {
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
+	line    int             // the column of the line being read, measured at its line break
 }
 
 // block is an indented block. Its lines start at level, and the INDENT that
 // opens it spells out how far that is past the block around it, which the
 // parser requires to be 4 spaces for a body or a struct definition. A block
 // that opens after a line ending in '[' holds that literal's rows, at any
-// depth, and only such a block closes at a ']' line.
+// depth past base, the column of the line holding the '[', and only such a
+// block closes, at a ']' line at base.
 type block struct {
 	level     int
 	holdsRows bool
+	base      int
 }
 
 // lexed is a token decided ahead of its turn, with the message of the error
@@ -69,7 +72,8 @@ const (
 const (
 	INDENT_ERR       = "indentation error"
 	INDENT_TAB_ERR   = "indent using tabs not allowed"
-	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, not left of the statement or row holding its '['"
+	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, at the column of the line holding its '['"
+	BLOCK_ROWS_ERR   = "a block literal's rows are indented past the line holding its '['"
 	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
@@ -78,6 +82,7 @@ func New(fileName, input string) *Lexer {
 	l.readRune()
 	column, first, tab := l.nextLine()
 	l.startLine(column, first, tab)
+	l.line = column
 	return l
 }
 
@@ -131,12 +136,14 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 func (l *Lexer) lineBreak() bool {
 	l.readRune()
 	column, first, tab := l.nextLine()
-	if (l.last == token.COMMA || l.last == token.ASSIGN) && first != eof && column > l.level(len(l.blocks)) {
+	continued := (l.last == token.COMMA || l.last == token.ASSIGN) && first != eof && column > l.level(len(l.blocks))
+	if continued {
 		l.tabErr(tab)
-		return false
+	} else {
+		l.startLine(column, first, tab)
 	}
-	l.startLine(column, first, tab)
-	return true
+	l.line = column
+	return !continued
 }
 
 // level returns the column of the innermost of the first n blocks, or 1
@@ -152,10 +159,11 @@ func (l *Lexer) level(n int) int {
 // literal is open, and reports false when none is. The ']' closes the
 // innermost literal, the one whose '[' ended the line before or whose rows
 // are innermost, with every block inside its rows, never one around it. It
-// may sit anywhere not left of the block its '[' line is in, and is reported
-// left of it.
+// goes at the column of the line holding the '[', and is reported anywhere
+// else.
 func (l *Lexer) closes(column int) bool {
 	keep := len(l.blocks) // an empty literal has no block to close
+	base := l.line        // and its '[' ended the line before
 	if l.last != token.LBRACK {
 		keep--
 		for keep >= 0 && !l.blocks[keep].holdsRows {
@@ -164,9 +172,10 @@ func (l *Lexer) closes(column int) bool {
 		if keep < 0 {
 			return false
 		}
+		base = l.blocks[keep].base
 	}
 	var msg string
-	if column < l.level(keep) {
+	if column != base {
 		msg = BLOCK_CLOSE_ERR
 	}
 	l.dedentTo(keep, column, ']')
@@ -242,8 +251,13 @@ func (l *Lexer) startLine(column int, first rune, tab int) {
 func (l *Lexer) placeLine(level, column int, first rune) {
 	if around := l.level(len(l.blocks)); level > around {
 		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
-		l.blocks = append(l.blocks, block{level, l.last == token.LBRACK})
-		l.pending.push(lexed{tok: at})
+		rows := l.last == token.LBRACK
+		var msg string
+		if rows && level <= l.line {
+			msg = BLOCK_ROWS_ERR
+		}
+		l.blocks = append(l.blocks, block{level, rows, l.line})
+		l.pending.push(lexed{at, msg})
 		return
 	}
 	n := len(l.blocks)

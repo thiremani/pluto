@@ -1130,7 +1130,7 @@ const (
 	blockIndentErr = "indent a body or a struct definition by 4 spaces, and a struct's header ':' by 2, with one space after it"
 	strayIndentErr = "unexpected indentation: the line before it opens no block"
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
-	blockRowsErr   = "a block literal's rows are indented past the statement or row holding its '['"
+	blockRowsErr   = lexer.BLOCK_ROWS_ERR
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma or '=', onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
