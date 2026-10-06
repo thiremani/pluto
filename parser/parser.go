@@ -786,13 +786,6 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	}
 
 	p.nextToken()
-	if p.curTokenIs(token.NEWLINE) {
-		p.errors = append(p.errors, &token.CompileError{
-			Token: stmt.Token,
-			Msg:   "an assignment's value starts on the same line as its '='",
-		})
-		return nil
-	}
 	expList := p.parseExpList(prefixSplitAfterCondition)
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
@@ -1134,7 +1127,7 @@ const (
 	inlineArrayErr = "an inline array stays on one line; to span lines, end the line with '[' and indent its rows"
 	blockRowsErr   = "a block literal's rows are indented past the statement or row holding its '['"
 	blockCloseErr  = lexer.BLOCK_CLOSE_ERR
-	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma, onto an indented line"
+	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma or '=', onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
 	stmtEndErr     = "expected ',' or the end of the line after a value"
 )

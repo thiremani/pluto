@@ -79,13 +79,11 @@ A line break between an inline literal's cells or before its `]` is an error,
 but a cell can itself hold a block literal, a multi-line string or a call
 continued after a comma. A block literal's `]` on its last row's line, and
 rows that are not indented past the statement or do not line up, are errors
-too. An assignment's value starts on the
-same line as its `=`, so a multi-line literal opens its bracket there:
-`m = [`, not `m =` followed by `[` on the next line.
+too.
 
-A line breaks only after a comma, and the next line is indented past the
-statement's line, so a call's arguments can span lines, as can the names and
-values of an assignment or a print statement:
+A line breaks only after a comma or `=`, and the next line is indented past
+the statement's line, so a call's arguments can span lines, as can the names
+and values of an assignment or a print statement:
 
 ```pluto
 total = Sum(first,

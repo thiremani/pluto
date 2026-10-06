@@ -285,8 +285,8 @@ or row that holds the `[`, and `]` on its own line, not left of that
 statement or row, however many lines the statement spans. Array-valued cells stack
 recursively
 while storage remains flat and row-major. Ragged literals are compile errors.
-A line breaks only after a comma, before a line indented past its block, so a
-call's arguments or an assignment's names and values can span lines; any
+A line breaks only after a comma or `=`, before a line indented past its block,
+so a call's arguments or an assignment's names and values can span lines; any
 other line break in an expression, a grouped expression or an index included,
 is an error unless it is inside a block literal or a multi-line string.
 

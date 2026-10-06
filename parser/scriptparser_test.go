@@ -1621,6 +1621,7 @@ func TestLayoutKeepsStatements(t *testing.T) {
 		{"grouped expression closed on the next line after an operator", "x = (1 +\n)", []string{name + "1:9:" + lineBreakErr}},
 		{"operator at the end of a line", "x = 1 +\n    2", []string{name + "1:8:" + lineBreakErr}},
 		{"operator before an unindented line", "x = 1 +", []string{name + "1:8:" + lineBreakErr}},
+		{"bracket on the unindented line after '='", "m =\n[\n    1 2\n]", []string{name + "1:4:" + lineBreakErr}},
 		{"prefix operator at the end of a line", "x = -\n    2", []string{name + "1:6:" + lineBreakErr}},
 		{"operator at the end of a block literal's row", "m = [\n    1 +\n        2\n]", []string{name + "2:8:" + lineBreakErr}},
 		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + lineBreakErr}},
@@ -1682,42 +1683,8 @@ func TestBlockLiteralPrintsItsLayout(t *testing.T) {
 	}
 }
 
-// An assignment's value starts on the same line as its '=', even when a
-// comment follows the '=' or the value is a bracket. The statement after it
-// still parses.
-func TestValueStartsOnAssignmentLine(t *testing.T) {
-	const msg = "TestValueStartsOnAssignmentLine:1:3:an assignment's value starts on the same line as its '='"
-	for _, tt := range []struct {
-		name  string
-		input string
-	}{
-		{"value on an indented line", "x =\n    1"},
-		{"value on an unindented line", "x =\n1"},
-		{"comment after =", "x = # note\n    1"},
-		{"bracket on the next line", "m =\n[\n    1 2\n]"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", tt.input+"\nafter = 7"))
-			program := sp.Parse()
-			require.NotEmpty(t, sp.Errors())
-			require.Equal(t, msg, sp.Errors()[0])
-			found := false
-			for _, stmt := range program.Statements {
-				if let, ok := stmt.(*ast.LetStatement); ok && let != nil && let.Name[0].Value == "after" {
-					found = true
-				}
-			}
-			require.True(t, found, "the statement after the assignment still parses")
-		})
-	}
-
-	sp := NewScriptParser(lexer.New("TestValueStartsOnAssignmentLine", "x ="))
-	sp.Parse()
-	require.Equal(t, []string{msg}, sp.Errors())
-}
-
-// A line ending in a comma continues on the next line when that line is
-// indented, so a call or a function's arguments can span lines.
+// A line ending in a comma or '=' continues on the next line when that line
+// is indented, so a call or a function's arguments, or a value, can span lines.
 func TestLineBreakAfterComma(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -1725,6 +1692,7 @@ func TestLineBreakAfterComma(t *testing.T) {
 		expect []string
 	}{
 		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"value after '='", "x =\n    1\na = x * x", []string{"x = 1", "a = (x * x)"}},
 		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
 		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
 		{"block literal argument on a continued line", "x = f(1,\n    [\n    2 3\n])", []string{"x = f(1, [\n    2 3\n])"}},

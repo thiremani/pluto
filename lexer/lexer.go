@@ -20,7 +20,7 @@ type Lexer struct {
 
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
-	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma continues
+	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
 }
 
 // block is an indented block. Its lines start at level, and the INDENT that
@@ -124,14 +124,14 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 
 // lineBreak reads past a line break and lays out the line after it; it is
 // the one place that decides layout. It moves past blank and comment lines
-// to the next line. A line ending in a comma continues onto that line when
-// it is indented past the current block: the break reads as a space and
+// to the next line. A line ending in a comma or '=' continues onto that line
+// when it is indented past the current block: the break reads as a space and
 // lineBreak reports false. Otherwise the break ends a statement or a row, and
 // the next line's own layout tokens are queued to follow it.
 func (l *Lexer) lineBreak() bool {
 	l.readRune()
 	column, first, tab := l.nextLine()
-	if l.last == token.COMMA && first != eof && column > l.level(len(l.blocks)) {
+	if (l.last == token.COMMA || l.last == token.ASSIGN) && first != eof && column > l.level(len(l.blocks)) {
 		l.tabErr(tab)
 		return false
 	}
