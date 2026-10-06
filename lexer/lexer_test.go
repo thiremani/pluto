@@ -1028,6 +1028,37 @@ func TestLineLayout(t *testing.T) {
 		})
 	})
 
+	t.Run("a continued line out of line is reported on its first token", func(t *testing.T) {
+		checkInput(t, "x = f(a,\n    b,\n        c)", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.IDENT, "a", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.IDENT, "b", "", 2, 5},
+			{token.COMMA, ",", "", 2, 6},
+			{token.IDENT, "c", "3:9:" + CONTINUED_LINE_ERR, 3, 9},
+			{token.RPAREN, ")", "", 3, 10},
+			{token.NEWLINE, "\n", "", 3, 11},
+			{token.EOF, "", "", 3, 11},
+		})
+	})
+
+	t.Run("a continued line's first token keeps its own error", func(t *testing.T) {
+		checkInput(t, "x = a,\n    b,\n        \"c", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "a", "", 1, 5},
+			{token.COMMA, ",", "", 1, 6},
+			{token.IDENT, "b", "", 2, 5},
+			{token.COMMA, ",", "", 2, 6},
+			{token.STRING, "c", "3:9:unterminated string literal", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 11},
+			{token.EOF, "", "", 3, 11},
+		})
+	})
+
 	t.Run("a block literal's rows and ']' are reported away from the line holding its '['", func(t *testing.T) {
 		checkInput(t, "x = f(1,\n    [\n    2\n])", []Test{
 			{token.IDENT, "x", "", 1, 1},
