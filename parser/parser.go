@@ -1175,10 +1175,7 @@ func (p *StmtParser) parseInlineLiteral(arr *ast.ArrayLiteral) bool {
 		})
 		return false
 	}
-	row, ok := p.parseRow()
-	if len(row) > 0 {
-		arr.Rows = append(arr.Rows, row)
-	}
+	ok := p.parseRow(arr)
 	switch {
 	case p.curTokenIs(token.RBRACK):
 		return ok
@@ -1205,39 +1202,33 @@ func (p *StmtParser) parseBlockLiteral(arr *ast.ArrayLiteral) bool {
 	p.nextToken() // the line break after '['
 	p.nextToken() // the rows' INDENT
 
+	// A header's line ends like a row's: the rows loop reads what is left of
+	// it, so a ']' left there is reported as on any row's line.
 	ok := !p.curTokenIs(token.COLON) || p.parseTableHeader(arr)
 	if !ok {
 		p.skipLine()
 	}
+
 	for !p.curTokenIs(token.DEINDENT) && !p.curTokenIs(token.EOF) {
-		if p.skipIndented() {
+		switch {
+		case p.skipIndented():
 			ok = false
-		} else {
-			row, rowOK := p.parseRow()
-			if len(row) > 0 {
-				arr.Rows = append(arr.Rows, row)
-			}
-			if !rowOK {
-				ok = false
-				p.skipLine()
-			}
-		}
-		if p.curTokenIs(token.RBRACK) {
+		case !p.parseRow(arr):
+			ok = false
+			p.skipLine()
+		case p.curTokenIs(token.RBRACK):
 			p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockCloseErr})
 			p.leaveBlock()
 			return false
 		}
 		p.nextToken() // past the end of the line
 	}
+
 	if p.curTokenIs(token.DEINDENT) && p.peekTokenIs(token.RBRACK) {
 		p.nextToken() // leave the rows' block
 		return ok
 	}
-	missing := p.curToken
-	if p.curTokenIs(token.DEINDENT) {
-		missing = p.peekToken // the literal ends at its DEINDENT
-	}
-	p.errors = append(p.errors, &token.CompileError{Token: missing, Msg: blockCloseErr})
+	p.errors = append(p.errors, &token.CompileError{Token: p.curToken, Msg: blockCloseErr})
 	return false
 }
 
@@ -1500,10 +1491,12 @@ func (p *StmtParser) parseColumnType(header token.Token) (ast.Expression, bool) 
 }
 
 // parseRow parses a row's cells up to a ']' or the end of its line, where it
-// stops. A cell that fails leaves the row failed, and the row reads on.
-func (p *StmtParser) parseRow() ([]ast.Expression, bool) {
+// stops, and adds the row to arr unless it is empty. A cell that fails leaves
+// the row failed, and the row reads on.
+func (p *StmtParser) parseRow(arr *ast.ArrayLiteral) bool {
 	row := []ast.Expression{}
 	ok := true
+
 	for !p.curTokenIs(token.RBRACK) && !p.atLineEnd() {
 		expr := p.parseExpression(LOWEST, prefixSplitAlways)
 		ok = ok && expr != nil
@@ -1514,7 +1507,12 @@ func (p *StmtParser) parseRow() ([]ast.Expression, bool) {
 			p.nextToken()
 		}
 	}
-	return row, ok
+
+	if len(row) > 0 {
+		arr.Rows = append(arr.Rows, row)
+	}
+
+	return ok
 }
 
 // parseRangeLiteral is called when we encounter a ':' in an infix position.
