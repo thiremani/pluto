@@ -1411,6 +1411,7 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 
 	var columnTypes []ast.Expression
 	typed := false
+
 	for !p.curTokenIs(token.RBRACK) && !p.curTokenIs(token.EOF) && !p.curTokenIs(token.NEWLINE) {
 		if p.curTokenIs(token.IDENT) {
 			header := p.curToken
@@ -1445,6 +1446,7 @@ func (p *StmtParser) parseHeader(arr *ast.ArrayLiteral) bool {
 	if typed {
 		arr.ColumnTypes = columnTypes
 	}
+
 	return true
 }
 
