@@ -423,7 +423,7 @@ func (p *StmtParser) parseStatement() ast.Statement {
 	}
 	firstToken := p.curToken
 	p.blankIdents = nil // reset for new statement
-	expList := p.parseExpList(prefixSplitNone)
+	expList := p.parseExpList(prefixSplitNone, 0)
 	// An expression that failed to parse is nil and has already reported its
 	// error.
 	if slices.Contains(expList, nil) {
@@ -538,8 +538,10 @@ func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstSta
 	}
 
 	// assume constant assignments
+	continued := 0
+	p.lineUp(&continued)
 	p.nextToken()
-	stmt.Value = p.parseConstants()
+	stmt.Value = p.parseConstants(continued)
 	if !p.stmtEnded() {
 		p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: stmtEndErr})
 		return nil
@@ -549,11 +551,11 @@ func (p *StmtParser) parseConstStatement(idents []*ast.Identifier) *ast.ConstSta
 }
 
 // parseConstants expects first token to be a constant
-// it parses the rest by assuming comma separated values
-func (p *StmtParser) parseConstants() []ast.Expression {
+// it parses the rest by assuming comma separated values; continued is the
+// column of the first constant when it starts a continued line, or 0
+func (p *StmtParser) parseConstants(continued int) []ast.Expression {
 	values := []ast.Expression{}
 	values = append(values, p.parseConstant())
-	continued := 0
 	for p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.lineUp(&continued)
@@ -792,8 +794,10 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 		Condition: []ast.Expression{},
 	}
 
+	continued := 0
+	p.lineUp(&continued)
 	p.nextToken()
-	expList := p.parseExpList(prefixSplitAfterCondition)
+	expList := p.parseExpList(prefixSplitAfterCondition, continued)
 	p.errorOnBlanks()
 	// If parsing the RHS produced any nil expressions, abort this let-statement
 	// to avoid panics downstream; errors are already recorded.
@@ -824,7 +828,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	stmt.Condition = flattenCondAnd(expList[0])
 
 	p.nextToken()
-	stmt.Value = p.parseExpList(prefixSplitNone)
+	stmt.Value = p.parseExpList(prefixSplitNone, 0)
 	p.errorOnBlanks()
 	if slices.Contains(stmt.Value, nil) {
 		return nil
@@ -877,9 +881,10 @@ func (p *StmtParser) toIdentList(expList []ast.Expression) ([]*ast.Identifier, *
 	return identifiers, ce
 }
 
-func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode) []ast.Expression {
+// parseExpList parses a comma-separated list; continued is the column of its
+// first item when that item starts a continued line, as after '=', or 0.
+func (p *StmtParser) parseExpList(splitPrefix prefixSplitMode, continued int) []ast.Expression {
 	expList := []ast.Expression{p.parseExpression(LOWEST, splitPrefix)}
-	continued := 0
 	for !p.atLineEnd() && p.peekTokenIs(token.COMMA) {
 		p.nextToken()
 		p.lineUp(&continued)
@@ -1637,10 +1642,10 @@ func (p *StmtParser) parenBreak() bool {
 	return true
 }
 
-// lineUp reports the list item after the comma at curToken when it starts a
-// continued line out of line with the list's first such item, whose column
-// continued holds, 0 until there is one. Each list lines up its own items, so
-// a nested call's arguments line up apart from the call around them.
+// lineUp reports the list item after the comma or '=' at curToken when it
+// starts a continued line out of line with the list's first such item, whose
+// column continued holds, 0 until there is one. Each list lines up its own
+// items, so a nested call's arguments line up apart from the call around them.
 func (p *StmtParser) lineUp(continued *int) {
 	item := p.peekToken
 	switch {
