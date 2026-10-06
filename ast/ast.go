@@ -298,8 +298,10 @@ func (al *ArrayLiteral) String() string {
 
 	// Print rows
 	for _, row := range al.Rows {
+		var line bytes.Buffer
+		writeArrayRow(&line, row)
 		out.WriteString("\n    ")
-		writeArrayRow(&out, row)
+		out.WriteString(indentLayout(line.String(), "    "))
 	}
 
 	if al.Block || len(al.Headers) > 0 || len(al.Rows) > 0 {
@@ -308,6 +310,28 @@ func (al *ArrayLiteral) String() string {
 	out.WriteString("]")
 	if al.Sample != nil {
 		out.WriteString(al.Sample.String())
+	}
+	return out.String()
+}
+
+// indentLayout indents each line of a block literal's row after its first by
+// indent, the row's own, so a literal nested in the row keeps its layout. A
+// line break inside a string literal is the string's text and stays as it is.
+func indentLayout(s, indent string) string {
+	var out strings.Builder
+	quoted, escaped := false, false
+	for _, r := range s {
+		out.WriteRune(r)
+		switch {
+		case escaped:
+			escaped = false
+		case quoted && r == '\\':
+			escaped = true
+		case r == '"':
+			quoted = !quoted
+		case r == '\n' && !quoted:
+			out.WriteString(indent)
+		}
 	}
 	return out.String()
 }

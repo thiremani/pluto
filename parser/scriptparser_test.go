@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thiremani/pluto/ast"
 	"github.com/thiremani/pluto/lexer"
+	"github.com/thiremani/pluto/token"
 )
 
 // requireOnlyLetStmt asserts the program has exactly one LetStatement and returns it.
@@ -79,15 +80,12 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 	}{
 		{"spaced dot", "a .= 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got . instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for . found",
 		}},
 		{"operator run", "a @= 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got OPERATOR instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for @ found",
 		}},
 		{"closing paren", "a ) = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:expected next token to be =, got ) instead",
-			"TestUnparsedAssignmentTarget:1:3:no prefix parse function for ) found",
 		}},
 		{"only target", "@ = 2", []string{
 			"TestUnparsedAssignmentTarget:1:1:no prefix parse function for @ found",
@@ -104,6 +102,14 @@ func TestUnparsedAssignmentTarget(t *testing.T) {
 			require.Equal(t, tt.expErrors, sp.Errors(), "input %q", tt.input)
 		})
 	}
+}
+
+// A token that the lexer reports an error with stays in the stream when the
+// parser reads it through its second token of lookahead.
+func TestLookaheadKeepsTokenWithLexerError(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestLookaheadKeepsTokenWithLexerError", `x = [a -"\q"]`))
+	sp.Parse()
+	require.Equal(t, []string{`TestLookaheadKeepsTokenWithLexerError:1:9:unsupported escape sequence \q`}, sp.Errors())
 }
 
 func TestMultiAssign(t *testing.T) {
@@ -514,7 +520,7 @@ func TestImplicitMultParsingSpaces(t *testing.T) {
 		expErr    string
 	}{
 		{"implicit mult with space", "x = 5 a", 1, "TestImplicitMultParsingSpaces:1:5:Expression \"5\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers"},
-		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 2, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers TestImplicitMultParsingSpaces:1:15:expected next token to be =, got IDENT instead"},
+		{"implicit mult with space poly", "y = 1 + 2 x + 3 x^2", 1, "TestImplicitMultParsingSpaces:1:7:Expression \"(1 + 2)\" is not a condition. Statement conditions must be comparisons or bare range/array-selection drivers"},
 	}
 
 	for _, tt := range tests {
@@ -855,6 +861,15 @@ func TestInvalidConditionError(t *testing.T) {
 			require.Containsf(t, errs[0], tt.expError, "input %q: error mismatch", tt.input)
 		})
 	}
+}
+
+// A token after a statement's value fails the statement where the token
+// stands; the statement after it parses.
+func TestTokenAfterValue(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestTokenAfterValue", "x = a > 0 5 6\nafter = 3"))
+	program := sp.Parse()
+	require.Equal(t, []string{"TestTokenAfterValue:1:13:" + stmtEndErr}, sp.Errors())
+	require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements))
 }
 
 func TestNestedGuardCondition(t *testing.T) {
@@ -1454,28 +1469,45 @@ func TestArrayLiterals(t *testing.T) {
 			name:        "missing closing bracket",
 			input:       "[1 2 3",
 			expectError: true,
-			errorMsg:    "expected ']' to close array literal",
+			errorMsg:    inlineArrayErr,
+		},
+		{
+			name:        "inline literal across lines",
+			input:       "[1 2\n3 4]",
+			expectError: true,
+			errorMsg:    inlineArrayErr,
+		},
+		{
+			name:        "block literal rows not indented",
+			input:       "[\n1 2\n]",
+			expectError: true,
+			errorMsg:    blockRowsErr,
 		},
 		{
 			name:        "invalid header token",
-			input:       "[: 123 Product]",
+			input:       "[\n  : 123 Product\n]",
 			expectError: true,
 			errorMsg:    "expected identifier for column header",
 		},
 		{
 			name:        "header marker without columns",
-			input:       "[:\n]",
+			input:       "[\n  :\n]",
 			expectError: true,
 			errorMsg:    "expected at least one column header after ':'",
 		},
 		{
-			name: "line continuation with unary operators",
-			input: `[a -b \
-    -c d]`,
+			name:        "header on the bracket's line",
+			input:       "[ : Name(\"\") Score(0) ]",
+			expectError: true,
+			errorMsg:    "a table's header goes on its own line after '['",
+		},
+		{
+			name:  "unary operators start cells",
+			input: "[a -b -c d]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.Empty(t, arr.Headers, "expected no headers")
 				require.False(t, arr.Block)
-				require.Len(t, arr.Rows, 1, "expected 1 row (line continuation should merge)")
+				require.Len(t, arr.Rows, 1, "expected 1 row")
 				require.Len(t, arr.Rows[0], 4, "expected 4 elements: a, -b, -c, d")
 
 				// Check that we have: a, (-b), (-c), d
@@ -1498,8 +1530,8 @@ func TestArrayLiterals(t *testing.T) {
 			},
 		},
 		{
-			name:  "second logical row implies block",
-			input: "[1 2\n3 4]",
+			name:  "block literal",
+			input: "[\n    1 2\n    3 4\n]",
 			checkResult: func(t *testing.T, arr *ast.ArrayLiteral) {
 				require.True(t, arr.Block)
 				require.Len(t, arr.Rows, 2)
@@ -1550,6 +1582,292 @@ func TestArrayLiterals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A literal or a parenthesized list laid out against the rules is one error,
+// and the statements after it keep their structure.
+func TestLayoutKeepsStatements(t *testing.T) {
+	const name = "TestLayoutKeepsStatements:"
+	for _, tt := range []struct {
+		name      string
+		input     string
+		expErrors []string
+	}{
+		{"nested block literals", "x = [\n    [\n        1 2\n    ]\n]", nil},
+		{"block literal", "m = [\n    1 2\n    3 4\n]", nil},
+		{"rows at any depth past the statement", "m = [\n  1 2\n  3 4\n]", nil},
+		{"rows under a '[' on a continued line", "x = f(1,\n    [\n        2 3\n    ])", nil},
+		{"rows of a '[' in the middle of its line", "x = f(1, [\n        2 3\n], a,\n    b)", nil},
+		{"']' aligned under a '[' in the middle of its line", "x = f(1, [\n               2 3\n           ],\n           a,\n           b)", []string{name + "3:12:" + blockCloseErr}},
+		{"empty literal's ']' on a continued line", "x = f(1,\n    [\n    ]0)", nil},
+		{"empty literal's ']' indented", "x = [\n        ]0", []string{name + "2:9:" + blockCloseErr}},
+		{"table header at its statement's column", "t = [\n: a b\n  1 2\n]", nil},
+		{"row left of the first row", "m = [\n        1 2\n    3 4\n]", []string{name + "3:5:" + lexer.INDENT_ERR + ". At char: 3"}},
+		{"unclosed block literal", "x = [\n    1 2", []string{name + "3:1:" + blockCloseErr}},
+		{"unclosed block table", "t = [\n  : Name(\"\") Score(0)", []string{name + "3:1:" + blockCloseErr}},
+		{"inline literal across lines", "x = [1 2\n    3 4]", []string{name + "1:9:" + inlineArrayErr}},
+		{"inline literal across lines, 5 spaces in", "x = [1 2\n     3 4]", []string{name + "1:9:" + inlineArrayErr}},
+		{"inline literal closed on the next line", "x = [1 2\n]", []string{name + "1:9:" + inlineArrayErr}},
+		{"inline literal across lines, closed after them", "x = [1 2\n    3 4\n]", []string{name + "1:9:" + inlineArrayErr}},
+		{"line indented past its block", "x = 1\n    y = 2", []string{name + "2:5:" + strayIndentErr}},
+		{"line indented 2 spaces past its block", "x = 1\n  y = 2", []string{name + "2:3:" + strayIndentErr}},
+		{"']' line indented where no literal is open", "x = 1\n    ]", []string{name + "2:5:" + strayIndentErr}},
+		{"row indented past its rows", "m = [\n    1 2\n      3 4\n]", []string{name + "3:7:" + strayIndentErr}},
+		{"block literal's ']' after a stray line's unclosed literal", "x = [\n    1\n        [\n            2\n]", []string{name + "3:9:" + strayIndentErr, name + "5:1:" + blockCloseErr, name + "6:1:" + blockCloseErr}},
+		{"block literal closed on its last row", "m = [\n    1 2\n    3 4]", []string{name + "3:8:" + blockCloseErr}},
+		{"table closed on its header's line", "t = [\n  : a b]", []string{name + "2:8:" + blockCloseErr}},
+		{"block literal's ']' at its rows' column", "m = [\n    1 2\n    ]", []string{name + "3:5:" + blockCloseErr}},
+		{"rows at the column of the line holding '['", "x = f(1,\n    [\n    2 3\n    ])", []string{name + "3:5:" + blockRowsErr}},
+		{"nested call's continued arguments", "x = f(a,\n    g(b,\n        c),\n    d)", nil},
+		{"call continued after '='", "x =\n    f(a,\n        b)", nil},
+		{"calls joined by an operator", "x = f(a,\n    b) + g(c,\n        d)", nil},
+		{"arguments after a block literal argument line up", "x = f(a,\n    [\n        1 2\n    ],\n    c)", nil},
+		{"argument out of line", "x = f(1,\n    2,\n      3)", []string{name + "3:7:" + lineUpErr}},
+		{"argument out of line after a block literal argument", "x = f(a,\n    [\n        1 2\n    ],\n        c)", []string{name + "5:9:" + lineUpErr}},
+		{"printed value out of line", "a,\n    b,\n      c", []string{name + "3:7:" + lineUpErr}},
+		{"values continued after '=' line up", "x, y, z =\n    1,\n    2,\n    3", nil},
+		{"values continued after '=' out of line", "x, y =\n    1,\n      2", []string{name + "3:7:" + lineUpErr}},
+		{"first continued value indented with a tab", "x, y =\n\t    1,\n     2", []string{name + "2:1:" + lexer.INDENT_TAB_ERR}},
+		{"later continued argument indented with a tab", "x = f(a,\n     b,\n\t    c)", []string{name + "3:1:" + lexer.INDENT_TAB_ERR}},
+		{"unclosed call", "x = f(1", []string{name + "1:8:" + parenBreakErr}},
+		{"call broken before a 2-space continuation", "x = f(x\n  y,\n  z)", []string{name + "1:8:" + parenBreakErr}},
+		{"grouped expression broken after an operator", "x = (1 +\n    2)", []string{name + "1:9:" + lineBreakErr}},
+		{"grouped expression broken after an operator, 5 spaces in", "x = (1 +\n     2)", []string{name + "1:9:" + lineBreakErr}},
+		{"grouped expression closed on the next line after an operator", "x = (1 +\n)", []string{name + "1:9:" + lineBreakErr}},
+		{"operator at the end of a line", "x = 1 +\n    2", []string{name + "1:8:" + lineBreakErr}},
+		{"operator before an unindented line", "x = 1 +", []string{name + "1:8:" + lineBreakErr}},
+		{"bracket on the unindented line after '='", "m =\n[\n    1 2\n]", []string{name + "1:4:" + lineBreakErr}},
+		{"prefix operator at the end of a line", "x = -\n    2", []string{name + "1:6:" + lineBreakErr}},
+		{"operator at the end of a block literal's row", "m = [\n    1 +\n        2\n]", []string{name + "2:8:" + lineBreakErr}},
+		{"first argument on the next line", "x = f(\n    x, y)", []string{name + "1:7:" + lineBreakErr}},
+		{"closing parenthesis on its own line", "x = f(x,\n    y\n)", []string{name + "2:6:" + parenBreakErr}},
+		{"inline literals closed on two lines", "x = [[1 2\n]\n]", []string{name + "1:10:" + inlineArrayErr}},
+		{"grouped expression across lines", "x = (1\n    + 2)", []string{name + "1:7:" + parenBreakErr}},
+		{"call broken in a block literal's row", "x = [\n    f(1", []string{name + "2:8:" + parenBreakErr, name + "3:1:" + blockCloseErr}},
+		{"call broken in a row, with its line continued", "x = [\n    f(1\n        2)\n    3 4\n]", []string{name + "2:8:" + parenBreakErr}},
+		{"call broken in an inline literal", "x = [1 f(2", []string{name + "1:11:" + parenBreakErr}},
+		{"block literal before an unindented line", "x = [", []string{name + "2:1:" + blockRowsErr}},
+		{"block literal argument before an unindented line", "x = f([", []string{name + "2:1:" + blockRowsErr}},
+		{"block literal's ']' between its statement and its rows", "m = [\n    1 2\n  ]", []string{name + "3:3:" + blockCloseErr}},
+		{"inner literal's ']' at the outer literal's column", "x = [\n    [\n        1 2\n]\n]", []string{name + "4:1:" + blockCloseErr}},
+		{"empty inner literal's ']' at the outer literal's column", "x = [\n    [\n]0\n]", []string{name + "3:1:" + blockCloseErr}},
+		{"inner literal closed on its last row", "x = [\n    [\n        1 2]\n]", []string{name + "3:12:" + blockCloseErr, name + "4:1:" + blockCloseErr, name + "5:1:" + blockCloseErr}},
+		{"table header with only a comment", "t = [\n  :# note\n    1 2\n]", []string{name + "2:3:expected at least one column header after ':'"}},
+		{"line that starts with a comma after a broken call", "x = f(1 +\n, 2)", []string{name + "1:10:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
+		{"line that starts with a comma after a broken value", "x = 1 +\n, 2", []string{name + "1:8:" + lineBreakErr, name + "2:1:no prefix parse function for , found"}},
+		{"table header that fails", "t = [\n  : a 1 )\n    1 2\n]", []string{name + "2:7:expected identifier for column header, got INT"}},
+		{"table header without a space after its ':'", "t = [\n  :a b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
+		{"table header with two spaces after its ':'", "t = [\n  :  a b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
+		{"table header with a tab after its ':'", "t = [\n  :\ta b\n    1 2\n]", []string{name + "2:3:" + lexer.HEADER_COLON_ERR}},
+		{"NUL in a comment inside a literal", "x = [\n    1 2\n    # a\x00b\n    3 4\n]", []string{name + "3:8:NUL character is not allowed in source"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestLayoutKeepsStatements", tt.input+"\nafter = 7\nafter"))
+			program := sp.Parse()
+			require.Equal(t, tt.expErrors, sp.Errors())
+			stmts := program.Statements
+			require.GreaterOrEqual(t, len(stmts), 2)
+			for _, stmt := range stmts {
+				require.NotNil(t, stmt) // a statement that failed leaves no node
+			}
+			require.Equal(t, "after = 7", stmts[len(stmts)-2].String())
+			require.Equal(t, "after", stmts[len(stmts)-1].String())
+		})
+	}
+}
+
+// A block literal prints in its own layout, so a literal nested in a row,
+// directly or inside a call, prints at that row's indentation, a multi-line
+// string in a row keeps its text, and an inline literal prints the block
+// literals it holds as written.
+func TestBlockLiteralPrintsItsLayout(t *testing.T) {
+	for _, input := range []string{
+		"m = [\n    [\n        1 2\n    ]\n]",
+		"m = [\n    f([\n        1 2\n    ])\n]",
+		"t = [\n    [\n      : a b\n        1 2\n    ]\n]",
+		"m = [\n    \"a\nb\" 1\n]",
+		"m = [\n    \"a\\\"\nb\" 1\n]",
+		"m = [\n    f(\"a\nb\", [\n        1 2\n    ])\n]",
+		"m = [[\n    1 2\n] [\n    3 4\n]]",
+	} {
+		sp := NewScriptParser(lexer.New("TestBlockLiteralPrintsItsLayout", input))
+		program := sp.Parse()
+		require.Empty(t, sp.Errors(), input)
+		require.Len(t, program.Statements, 1, input)
+		require.Equal(t, input, program.Statements[0].String())
+	}
+}
+
+// A line ending in a comma or '=' continues on the next line when that line
+// is indented, so a call or a function's arguments, or a value, can span lines.
+func TestLineBreakAfterComma(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		input  string
+		expect []string
+	}{
+		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"value after '='", "x =\n    1\na = x * x", []string{"x = 1", "a = (x * x)"}},
+		{"comment after '='", "x = # note\n    1", []string{"x = 1"}},
+		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
+		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
+		{"block literal argument on a continued line", "x = f(1,\n    [\n        2 3\n    ])", []string{"x = f(1, [\n    2 3\n])"}},
+		{"successive block literal arguments", "x = f([\n    1 2\n], [\n    3 4\n])", []string{"x = f([\n    1 2\n], [\n    3 4\n])"}},
+		{"parentheses in a block literal's row", "m = [\n    (1 + 2) 3\n    4 5\n]", []string{"m = [\n    (1 + 2) 3\n    4 5\n]"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewScriptParser(lexer.New("TestLineBreakAfterComma", tt.input))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors())
+			var got []string
+			for _, stmt := range program.Statements {
+				got = append(got, stmt.String())
+			}
+			require.Equal(t, tt.expect, got)
+		})
+	}
+}
+
+// A failed operand ends its expression: no operator or call applies to what
+// failed, so these report errors instead of crashing the parser.
+func TestFailedOperandEndsExpression(t *testing.T) {
+	for _, input := range []string{"x = foo[]()", "a=0:3:=:", "3.5:(,(1\ny10:3"} {
+		sp := NewScriptParser(lexer.New("TestFailedOperandEndsExpression", input))
+		require.NotPanics(t, func() { sp.Parse() }, input)
+		require.NotEmpty(t, sp.Errors(), input)
+	}
+}
+
+// A part that fails fails what holds it, up to its statement, which leaves no
+// node and reports no more errors; the statement after it parses.
+func TestFailedPartFailsWhatHoldsIt(t *testing.T) {
+	const noPrefix = "no prefix parse function for "
+	for _, tt := range []struct{ input, err string }{
+		{"x = 1 < 2 && f(] y", "1:16:" + noPrefix + "] found"},
+		{"x = f(], 2)", "1:7:" + noPrefix + "] found"},
+		{"x = 1 + )", "1:9:" + noPrefix + ") found"},
+		{"x = -)", "1:6:" + noPrefix + ") found"},
+		{"x = 0:)", "1:7:" + noPrefix + ") found"},
+		{"x = 0:3:)", "1:9:" + noPrefix + ") found"},
+		{"x = a.b(1)", "1:6:function calls must target identifiers"},
+		{"x = a. + 1", "1:6:expected next token to be IDENT, got OPERATOR instead"},
+		{"x = [1 ) 2]", "1:8:" + noPrefix + ") found"},
+		{"x = [\n    1 )\n]", "2:7:" + noPrefix + ") found"},
+		{"m = [\n    1 2\n      3 4\n]", "3:7:" + strayIndentErr},
+		{"y = a > 0 )", "1:11:" + noPrefix + ") found"},
+		{")", "1:1:" + noPrefix + ") found"},
+	} {
+		sp := NewScriptParser(lexer.New("TestFailedPartFailsWhatHoldsIt", tt.input+"\nafter = 3"))
+		var program *ast.Program
+		require.NotPanics(t, func() { program = sp.Parse() }, tt.input)
+		require.Equal(t, []string{"TestFailedPartFailsWhatHoldsIt:" + tt.err}, sp.Errors(), tt.input)
+		requireWholeStatements(t, program.Statements)
+		require.Equal(t, []string{"after = 3"}, statementStrings(program.Statements), tt.input)
+	}
+}
+
+// The end of the input ends its last line as a line break does, so a line
+// cut short there gets the error it gets before a newline.
+func TestLastLineEndsAtEndOfInput(t *testing.T) {
+	const name = "TestLastLineEndsAtEndOfInput:"
+	for _, tt := range []struct{ input, err string }{
+		{"x = f(a,", "1:9:" + lineBreakErr},
+		{"x = 1 +", "1:8:" + lineBreakErr},
+		{"x = f(1", "1:8:" + parenBreakErr},
+		{"x = [", "1:6:" + blockRowsErr},
+		{"x = [\n    1 2", "2:8:" + blockCloseErr},
+	} {
+		sp := NewScriptParser(lexer.New("TestLastLineEndsAtEndOfInput", tt.input))
+		sp.Parse()
+		require.Equal(t, []string{name + tt.err}, sp.Errors(), tt.input)
+	}
+}
+
+// A statement's conditions are judged by its own errors, so a conditional
+// statement after an error still parses.
+func TestConditionAfterError(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestConditionAfterError", "x = )\ny = a > 0 1"))
+	program := sp.Parse()
+	require.Equal(t, []string{"TestConditionAfterError:1:5:no prefix parse function for ) found"}, sp.Errors())
+	require.Equal(t, []string{"y = (a > 0) 1"}, statementStrings(program.Statements))
+}
+
+// FuzzParse checks the parser's failure contract on any input: no panic, no
+// statement that holds a failed part, and a statement after the input that
+// parses whatever the input's errors.
+func FuzzParse(f *testing.F) {
+	for _, seed := range []string{
+		"x = 1 < 2 && f(] y",
+		"x = [\n    f(1",
+		"x = [1 f(2",
+		"x = f(1,\n    [\n        2 3\n    ])",
+		"x = (1 +\n    2)",
+		"t = [\n  : a b\n    1 2\n]",
+		"y = F(x)\n    m = [\n        1 2\n]",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		if !lexesSentinel(src) {
+			t.Skip("an open string runs on past the input")
+		}
+		program := NewScriptParser(lexer.New("FuzzParse", src+"\nsentinel = 7")).Parse()
+		requireWholeStatements(t, program.Statements)
+		require.NotEmpty(t, program.Statements)
+		require.Equal(t, "sentinel = 7", program.Statements[len(program.Statements)-1].String())
+		NewCodeParser(lexer.New("FuzzParse", src)).Parse()
+	})
+}
+
+// lexesSentinel reports whether the line FuzzParse appends to src lexes as
+// tokens of its own, rather than inside a string that src leaves open.
+func lexesSentinel(src string) bool {
+	var lits []string
+	l := lexer.New("FuzzParse", src+"\nsentinel = 7")
+	for tok, _ := l.NextToken(); tok.Type != token.EOF; tok, _ = l.NextToken() {
+		lits = append(lits, tok.Literal)
+	}
+	n := len(lits)
+	return n >= 3 && lits[n-3] == "sentinel" && lits[n-2] == "=" && lits[n-1] == "7"
+}
+
+// requireWholeStatements fails on a statement that is a typed nil or holds a
+// nil expression anywhere.
+func requireWholeStatements(t *testing.T, stmts []ast.Statement) {
+	t.Helper()
+	for _, stmt := range stmts {
+		require.NotNil(t, stmt)
+		switch s := stmt.(type) {
+		case *ast.LetStatement:
+			requireWholeExpressions(t, s.Value...)
+			requireWholeExpressions(t, s.Condition...)
+		case *ast.PrintStatement:
+			requireWholeExpressions(t, s.Expression)
+		}
+	}
+}
+
+func requireWholeExpressions(t *testing.T, exprs ...ast.Expression) {
+	t.Helper()
+	for _, expr := range exprs {
+		require.NotNil(t, expr)
+		requireWholeExpressions(t, ast.ExprChildren(expr)...)
+	}
+}
+
+func statementStrings(stmts []ast.Statement) []string {
+	strs := make([]string, len(stmts))
+	for i, stmt := range stmts {
+		strs[i] = stmt.String()
+	}
+	return strs
+}
+
+// An index bracket keeps its expression on its line.
+func TestIndexStaysOnOneLine(t *testing.T) {
+	sp := NewScriptParser(lexer.New("TestIndexStaysOnOneLine", "value = data[\n    i]"))
+	sp.Parse()
+	require.Equal(t, []string{"TestIndexStaysOnOneLine:1:14:" + lineBreakErr}, sp.Errors())
 }
 
 func TestArrayRangeExpression(t *testing.T) {

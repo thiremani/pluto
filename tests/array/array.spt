@@ -28,19 +28,24 @@ arr2 = [1 2 3 4]
 arr2
 "arr2 is -arr2"
 
-# line continuation keeps an inline literal rank 1
-arr3 = [1.1 2.3 \
-    4 2.1]
+# an integer cell widens to float beside float cells
+arr3 = [1.1 2.3 4 2.1]
 arr3
 "arr3 is -arr3"
+
+# a block literal's rows are an indented block; the next statement stays separate
+arr4 = [
+    1 2
+    3 4
+]
+"arr4 is -arr4"
 
 oneRowMatrix = [
     1 2 3
 ]
 "one-row matrix: -oneRowMatrix"
 
-matrix =
-[
+matrix = [
     1 2.5
     3 4
 ]
@@ -98,8 +103,7 @@ stringMatrixRow = stringMatrix[0]
 "string matrix: -stringMatrix"
 "string matrix row: -stringMatrixRow"
 
-scores =
-[
+scores = [
   : Name Score
     "Ada" 10
     "Lin" 12
@@ -108,8 +112,7 @@ scores =
 scoreColumn = scores.Score
 "table scores: -scoreColumn"
 savedScores = scores
-scores =
-[
+scores = [
   : Name Score
     "Mae" 20
 ]
@@ -145,8 +148,7 @@ cube = []plane
 cube = cube ⊕ [[[1 2] [3 4]]]
 "filled cube: -cube"
 
-emptyTable =
-[
+emptyTable = [
   : Name("") Score(0)
 ]
 "empty table: -emptyTable"
@@ -171,8 +173,7 @@ refinedEmptyTable = [
 ]
 "reset empty table: -refinedEmptyTable"
 
-inferredTable =
-[
+inferredTable = [
     1 "a"
     2 "b"
 ]

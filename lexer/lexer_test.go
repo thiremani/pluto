@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/thiremani/pluto/token"
@@ -41,9 +42,13 @@ func checkInput(t *testing.T, input string, tests []Test) {
 				i, tt.expectedColumn, tok.Column)
 		}
 
-		if err != nil && err.Error() != tt.expectedError {
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tt.expectedError {
 			t.Fatalf("tests[%d] - error wrong. expected=%q, got=%q",
-				i, tt.expectedError, err)
+				i, tt.expectedError, got)
 		}
 	}
 }
@@ -76,7 +81,7 @@ func TestNextToken(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 6},
 		{token.INT, "5", "", 1, 8},
 		{token.NEWLINE, "\n", "", 1, 9},
-		{token.INDENT, "t", "", 4, 5},
+		{token.INDENT, "    ", "", 4, 5},
 		{token.IDENT, "ten", "", 4, 5},
 		{token.ASSIGN, "=", "", 4, 9},
 		{token.INT, "10", "", 4, 11},
@@ -90,7 +95,7 @@ func TestNextToken(t *testing.T) {
 		{token.IDENT, "y", "", 7, 18},
 		{token.RPAREN, ")", "", 7, 19},
 		{token.NEWLINE, "\n", "", 7, 20},
-		{token.INDENT, "r", "", 8, 9},
+		{token.INDENT, "    ", "", 8, 9},
 		{token.IDENT, "res", "", 8, 9},
 		{token.ASSIGN, "=", "", 8, 13},
 		{token.IDENT, "x", "", 8, 15},
@@ -124,7 +129,7 @@ func TestNextToken(t *testing.T) {
 		{token.ASSIGN, "=", "", 16, 7},
 		{token.INT, "10", "", 16, 9},
 		{token.NEWLINE, "\n", "", 16, 11},
-		{token.INDENT, "b", "", 17, 9},
+		{token.INDENT, "    ", "", 17, 9},
 		{token.IDENT, "b", "", 17, 9},
 		{token.GTR, ">", "", 17, 11},
 		{token.INT, "2", "", 17, 13},
@@ -136,7 +141,7 @@ func TestNextToken(t *testing.T) {
 		{token.EQL, "==", "", 19, 4},
 		{token.INT, "10", "", 19, 7},
 		{token.NEWLINE, "\n", "", 19, 9},
-		{token.INDENT, "1", "", 20, 5},
+		{token.INDENT, "    ", "", 20, 5},
 		{token.INT, "10", "", 20, 5},
 		{token.NEQ, "!=", "", 20, 8},
 		{token.INT, "9", "", 20, 11},
@@ -158,7 +163,7 @@ func TestIndentErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 7},
 		{token.INT, "4", "", 1, 9},
 		{token.NEWLINE, "\n", "", 1, 10},
-		{token.INDENT, "b", "", 2, 5},
+		{token.INDENT, "    ", "", 2, 5},
 		{token.IDENT, "bulb", "", 2, 5},
 		{token.ASSIGN, "=", "", 2, 10},
 		{token.INT, "5", "", 2, 12},
@@ -178,7 +183,8 @@ func TestTabErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 6},
 		{token.INT, "5", "", 1, 8},
 		{token.NEWLINE, "\n", "", 1, 9},
-		{token.ILLEGAL, "b", "2:6:" + INDENT_TAB_ERR + ". At char: b", 2, 6},
+		{token.ILLEGAL, "\t", "2:5:" + INDENT_TAB_ERR, 2, 5},
+		{token.IDENT, "bb", "", 2, 6},
 	}
 
 	checkInput(t, input, tests)
@@ -192,10 +198,11 @@ func TestTabErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 3},
 		{token.INT, "5", "", 1, 5},
 		{token.NEWLINE, "\n", "", 1, 6},
-		{token.INDENT, "b", "", 3, 5},
+		{token.INDENT, "    ", "", 3, 5},
 		{token.IDENT, "b", "", 3, 5},
 		{token.ASSIGN, "=", "", 3, 7},
 		{token.INT, "6", "", 3, 9},
+		{token.NEWLINE, "\n", "", 3, 10},
 		{token.EOF, "", "", 3, 10},
 	}
 
@@ -210,18 +217,57 @@ func TestTabErr(t *testing.T) {
 		{token.ASSIGN, "=", "", 1, 5},
 		{token.INT, "123", "", 1, 7},
 		{token.NEWLINE, "\n", "", 1, 10},
-		{token.ILLEGAL, "m", "2:2:" + INDENT_TAB_ERR + ". At char: m", 2, 2},
+		{token.ILLEGAL, "\t", "2:1:" + INDENT_TAB_ERR, 2, 1},
 		{token.IDENT, "m", "", 2, 2},
 		{token.ASSIGN, "=", "", 2, 4},
 		{token.IDENT, "n", "", 2, 6},
 		{token.NEWLINE, "\n", "", 2, 7},
-		{token.ILLEGAL, "q", "3:3:" + INDENT_TAB_ERR + ". At char: q", 3, 3},
+		{token.ILLEGAL, "\t", "3:1:" + INDENT_TAB_ERR, 3, 1},
 		{token.IDENT, "q", "", 3, 3},
 		{token.ASSIGN, "=", "", 3, 5},
 		{token.IDENT, "r", "", 3, 7},
 	}
 
 	checkInput(t, input, tests)
+
+	// Comment and blank lines are not checked. A line is reported once, at
+	// its first tab, and its tokens start at its content.
+	input = "x = 1\n\t# note\n\t \ny = 2\n\t  z"
+
+	tests = []Test{
+		{token.IDENT, "x", "", 1, 1},
+		{token.ASSIGN, "=", "", 1, 3},
+		{token.INT, "1", "", 1, 5},
+		{token.NEWLINE, "\n", "", 1, 6},
+		{token.IDENT, "y", "", 4, 1},
+		{token.ASSIGN, "=", "", 4, 3},
+		{token.INT, "2", "", 4, 5},
+		{token.NEWLINE, "\n", "", 4, 6},
+		{token.ILLEGAL, "\t", "5:1:" + INDENT_TAB_ERR, 5, 1},
+		{token.IDENT, "z", "", 5, 4},
+		{token.NEWLINE, "\n", "", 5, 5},
+		{token.EOF, "", "", 5, 5},
+	}
+
+	checkInput(t, input, tests)
+
+	// Nor is a comment or blank last line that ends the input without a line
+	// break.
+	for _, tc := range []struct {
+		input     string
+		eofColumn int
+	}{
+		{"x = 1\n\t# note", 8},
+		{"x = 1\n\t ", 3},
+	} {
+		checkInput(t, tc.input, []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.EOF, "", "", 2, tc.eofColumn},
+		})
+	}
 }
 
 func TestEof(t *testing.T) {
@@ -247,6 +293,18 @@ func TestEof(t *testing.T) {
 	input = `#`
 	tests = []Test{
 		{token.EOF, "", "", 1, 2},
+	}
+	checkInput(t, input, tests)
+
+	// Reading past the end returns the end again, at the same position.
+	input = `x = "a`
+	tests = []Test{
+		{token.IDENT, "x", "", 1, 1},
+		{token.ASSIGN, "=", "", 1, 3},
+		{token.STRING, "a", "1:5:unterminated string literal", 1, 5},
+		{token.NEWLINE, "\n", "", 1, 7},
+		{token.EOF, "", "", 1, 7},
+		{token.EOF, "", "", 1, 7},
 	}
 	checkInput(t, input, tests)
 }
@@ -534,7 +592,7 @@ func TestNumberSeparatorBoundaries(t *testing.T) {
 		{"1''2", "1", token.ILLEGAL, "'"},
 		{"0b10''01", "0b10", token.ILLEGAL, "'"},
 		{"1'2'", "1'2", token.ILLEGAL, "'"},
-		{"0b'1011", "0b'1011", token.EOF, ""},
+		{"0b'1011", "0b'1011", token.NEWLINE, "\n"},
 		{"0b''1011", "0b", token.ILLEGAL, "'"},
 	}
 
@@ -576,8 +634,8 @@ func TestReadOperator(t *testing.T) {
 		{"++", "++"},
 		// Mixed operators.
 		{"+-*/", "+-*/"},
-		// Operators with additional allowed punctuation (including colon and dollar and backslash).
-		{"@$\\", "@$\\"},
+		// Operators with additional allowed punctuation; a backslash is not one.
+		{"@$\\", "@$"},
 		// Operator followed by a letter should stop reading at the first non-operator.
 		{"++abc", "++"},
 		// Non-ASCII operator characters are allowed if they fall into allowed Unicode categories.
@@ -658,10 +716,10 @@ root2`
 		expected := []Test{
 			{token.IDENT, "root", "", 1, 1},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.INDENT, "c", "", 2, 5},
+			{token.INDENT, "    ", "", 2, 5},
 			{token.IDENT, "child1", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 11},
-			{token.INDENT, "l", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.IDENT, "leaf", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 13},
 			{token.DEINDENT, "c", "", 4, 5},
@@ -669,6 +727,7 @@ root2`
 			{token.NEWLINE, "\n", "", 4, 11},
 			{token.DEINDENT, "r", "", 5, 1},
 			{token.IDENT, "root2", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 6},
 			{token.EOF, "", "", 5, 6},
 		}
 		checkInput(t, src, expected)
@@ -682,10 +741,15 @@ root2`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.INDENT, "p", "", 2, 5},
+			{token.INDENT, "    ", "", 2, 5},
 			{token.IDENT, "pass", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 9},
 			{token.ILLEGAL, "p", "3:3:" + INDENT_ERR + ". At char: p", 3, 3},
+			{token.IDENT, "print", "", 3, 3},
+			{token.LPAREN, "(", "", 3, 8},
+			{token.RPAREN, ")", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 10},
+			{token.EOF, "", "", 3, 10},
 		}
 		checkInput(t, src, expected)
 	})
@@ -696,9 +760,96 @@ root2`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.ILLEGAL, "p", "2:3:" + INDENT_TAB_ERR + ". At char: p", 2, 3},
+			{token.ILLEGAL, "\t", "2:1:" + INDENT_TAB_ERR, 2, 1},
+			{token.IDENT, "pass", "", 2, 3},
 		}
 		checkInput(t, src, expected)
+	})
+
+	t.Run("an INDENT spells out how far its block is indented", func(t *testing.T) {
+		checkInput(t, "f\n  a\n      b", []Test{
+			{token.IDENT, "f", "", 1, 1},
+			{token.NEWLINE, "\n", "", 1, 2},
+			{token.INDENT, "  ", "", 2, 3},
+			{token.IDENT, "a", "", 2, 3},
+			{token.NEWLINE, "\n", "", 2, 4},
+			{token.INDENT, "    ", "", 3, 7},
+			{token.IDENT, "b", "", 3, 7},
+			{token.NEWLINE, "\n", "", 3, 8},
+			{token.EOF, "", "", 3, 8},
+		})
+		checkInput(t, "f\n    a\n          b", []Test{
+			{token.IDENT, "f", "", 1, 1},
+			{token.NEWLINE, "\n", "", 1, 2},
+			{token.INDENT, "    ", "", 2, 5},
+			{token.IDENT, "a", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.INDENT, "      ", "", 3, 11},
+			{token.IDENT, "b", "", 3, 11},
+			{token.NEWLINE, "\n", "", 3, 12},
+			{token.EOF, "", "", 3, 12},
+		})
+	})
+
+	t.Run("a header's colon hangs 2 spaces left of its block", func(t *testing.T) {
+		checkInput(t, "p = Person\n  : name age\n    \"Ada\" 36\nq", []Test{
+			{token.IDENT, "p", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "Person", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INDENT, "    ", "", 2, 3},
+			{token.COLON, ":", "", 2, 3},
+			{token.IDENT, "name", "", 2, 5},
+			{token.IDENT, "age", "", 2, 10},
+			{token.NEWLINE, "\n", "", 2, 13},
+			{token.STRING, "Ada", "", 3, 5},
+			{token.INT, "36", "", 3, 11},
+			{token.NEWLINE, "\n", "", 3, 13},
+			{token.DEINDENT, "q", "", 4, 1},
+			{token.IDENT, "q", "", 4, 1},
+			{token.NEWLINE, "\n", "", 4, 2},
+			{token.EOF, "", "", 4, 2},
+		})
+		checkInput(t, "p = Person\n  :  name age\n     \"Ada\" 36", []Test{
+			{token.IDENT, "p", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "Person", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INDENT, "    ", "", 2, 3},
+			{token.COLON, ":", "2:3:" + HEADER_COLON_ERR, 2, 3},
+			{token.IDENT, "name", "", 2, 6},
+			{token.IDENT, "age", "", 2, 11},
+			{token.NEWLINE, "\n", "", 2, 14},
+			{token.INDENT, " ", "", 3, 6},
+			{token.STRING, "Ada", "", 3, 6},
+			{token.INT, "36", "", 3, 12},
+			{token.NEWLINE, "\n", "", 3, 14},
+			{token.EOF, "", "", 3, 14},
+		})
+		checkInput(t, "p = Person\n  :\tname\n    1", []Test{
+			{token.IDENT, "p", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "Person", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INDENT, "    ", "", 2, 3},
+			{token.COLON, ":", "2:3:" + HEADER_COLON_ERR, 2, 3},
+			{token.IDENT, "name", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INT, "1", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
+			{token.EOF, "", "", 3, 6},
+		})
+		checkInput(t, "p = Person\n    : name", []Test{
+			{token.IDENT, "p", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "Person", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 11},
+			{token.INDENT, "      ", "", 2, 5},
+			{token.COLON, ":", "", 2, 5},
+			{token.IDENT, "name", "", 2, 7},
+			{token.NEWLINE, "\n", "", 2, 11},
+			{token.EOF, "", "", 2, 11},
+		})
 	})
 
 	t.Run("multiple dedents", func(t *testing.T) {
@@ -713,11 +864,11 @@ print()`
 			{token.LPAREN, "(", "", 1, 6},
 			{token.RPAREN, ")", "", 1, 7},
 			{token.NEWLINE, "\n", "", 1, 8},
-			{token.INDENT, "i", "", 2, 5},
+			{token.INDENT, "    ", "", 2, 5},
 			{token.IDENT, "if", "", 2, 5},
 			{token.IDENT, "b", "", 2, 8},
 			{token.NEWLINE, "\n", "", 2, 9},
-			{token.INDENT, "p", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.IDENT, "pass", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 13},
 			{token.DEINDENT, "p", "", 4, 1},
@@ -725,6 +876,7 @@ print()`
 			{token.IDENT, "print", "", 4, 1},
 			{token.LPAREN, "(", "", 4, 6},
 			{token.RPAREN, ")", "", 4, 7},
+			{token.NEWLINE, "\n", "", 4, 8},
 			{token.EOF, "", "", 4, 8},
 		}
 		checkInput(t, src, expected)
@@ -740,13 +892,14 @@ print()`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.INDENT, "p", "", 3, 5},
+			{token.INDENT, "    ", "", 3, 5},
 			{token.IDENT, "pass", "", 3, 5},
 			{token.NEWLINE, "\n", "", 3, 9},
 			{token.DEINDENT, "p", "", 5, 1},
 			{token.IDENT, "print", "", 5, 1},
 			{token.LPAREN, "(", "", 5, 6},
 			{token.RPAREN, ")", "", 5, 7},
+			{token.NEWLINE, "\n", "", 5, 8},
 			{token.EOF, "", "", 5, 8},
 		}
 		checkInput(t, src, expected)
@@ -760,8 +913,9 @@ print()`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.INDENT, "p", "", 3, 5},
+			{token.INDENT, "    ", "", 3, 5},
 			{token.IDENT, "pass", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 9},
 			{token.EOF, "", "", 3, 9},
 		}
 		checkInput(t, src, expected)
@@ -777,38 +931,308 @@ print()`
 			{token.IDENT, "if", "", 1, 1},
 			{token.IDENT, "x", "", 1, 4},
 			{token.NEWLINE, "\n", "", 1, 5},
-			{token.INDENT, "p", "", 2, 5},
+			{token.INDENT, "    ", "", 2, 5},
 			{token.IDENT, "pass", "", 2, 5},
 			{token.NEWLINE, "\n", "", 2, 9},
-			{token.INDENT, "f", "", 3, 9},
+			{token.INDENT, "    ", "", 3, 9},
 			{token.IDENT, "foo", "", 3, 9},
 			{token.NEWLINE, "\n", "", 3, 12},
 			{token.DEINDENT, "b", "", 4, 5},
 			{token.IDENT, "bar", "", 4, 5},
 			{token.NEWLINE, "\n", "", 4, 8},
 			{token.ILLEGAL, "b", "5:3:" + INDENT_ERR + ". At char: b", 5, 3},
+			{token.IDENT, "baz", "", 5, 3},
+			{token.NEWLINE, "\n", "", 5, 6},
+			{token.EOF, "", "", 5, 6},
 		}
 		checkInput(t, src, expected)
 	})
 }
 
-func TestLineContinuation(t *testing.T) {
-	// A trailing backslash continues the line for every ending style, with
-	// an identical token stream, positions included.
+// Brackets don't join lines: a literal that spans lines is an indented block,
+// and only a line ending in a comma or '=' continues onto the next line.
+func TestLineLayout(t *testing.T) {
+	t.Run("a block literal's rows are an indented block", func(t *testing.T) {
+		checkInput(t, "m = [\n    1 2\n    3 4\n]\ny", []Test{
+			{token.IDENT, "m", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.INDENT, "    ", "", 2, 5},
+			{token.INT, "1", "", 2, 5},
+			{token.INT, "2", "", 2, 7},
+			{token.NEWLINE, "\n", "", 2, 8},
+			{token.INT, "3", "", 3, 5},
+			{token.INT, "4", "", 3, 7},
+			{token.NEWLINE, "\n", "", 3, 8},
+			{token.DEINDENT, "]", "", 4, 1},
+			{token.RBRACK, "]", "", 4, 1},
+			{token.NEWLINE, "\n", "", 4, 2},
+			{token.IDENT, "y", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 2},
+			{token.EOF, "", "", 5, 2},
+		})
+	})
+
+	t.Run("blank and comment lines inside a block literal", func(t *testing.T) {
+		checkInput(t, "m = [\n\n    # c\n    1\n]", []Test{
+			{token.IDENT, "m", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.LBRACK, "[", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.INDENT, "    ", "", 4, 5},
+			{token.INT, "1", "", 4, 5},
+			{token.NEWLINE, "\n", "", 4, 6},
+			{token.DEINDENT, "]", "", 5, 1},
+			{token.RBRACK, "]", "", 5, 1},
+			{token.NEWLINE, "\n", "", 5, 2},
+			{token.EOF, "", "", 5, 2},
+		})
+	})
+
+	t.Run("a line ending in a comma continues", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    2)\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.INT, "2", "", 2, 5},
+			{token.RPAREN, ")", "", 2, 6},
+			{token.NEWLINE, "\n", "", 2, 7},
+			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
+			{token.EOF, "", "", 3, 2},
+		})
+	})
+
+	t.Run("a block literal on a continued line hangs from that line", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n        2\n    ])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.INDENT, "        ", "", 3, 9},
+			{token.INT, "2", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 10},
+			{token.DEINDENT, "]", "", 4, 5},
+			{token.RBRACK, "]", "", 4, 5},
+			{token.RPAREN, ")", "", 4, 6},
+			{token.NEWLINE, "\n", "", 4, 7},
+			{token.EOF, "", "", 4, 7},
+		})
+	})
+
+	t.Run("a block literal's rows and ']' are reported away from the line holding its '['", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n    2\n])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.INDENT, "    ", "3:5:" + BLOCK_ROWS_ERR, 3, 5},
+			{token.INT, "2", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
+			{token.DEINDENT, "]", "", 4, 1},
+			{token.RBRACK, "]", "4:1:" + BLOCK_CLOSE_ERR, 4, 1},
+			{token.RPAREN, ")", "", 4, 2},
+			{token.NEWLINE, "\n", "", 4, 3},
+			{token.EOF, "", "", 4, 3},
+		})
+	})
+
+	t.Run("a multi-line string's text does not move a block literal's rows", func(t *testing.T) {
+		checkInput(t, "x = f(\"a\n   b\", [\n    2\n])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.STRING, "a\n   b", "", 1, 7},
+			{token.COMMA, ",", "", 2, 6},
+			{token.LBRACK, "[", "", 2, 8},
+			{token.NEWLINE, "\n", "", 2, 9},
+			{token.INDENT, "    ", "", 3, 5},
+			{token.INT, "2", "", 3, 5},
+			{token.NEWLINE, "\n", "", 3, 6},
+			{token.DEINDENT, "]", "", 4, 1},
+			{token.RBRACK, "]", "", 4, 1},
+			{token.RPAREN, ")", "", 4, 2},
+			{token.NEWLINE, "\n", "", 4, 3},
+			{token.EOF, "", "", 4, 3},
+		})
+	})
+
+	t.Run("a block literal's ']' may sit anywhere not left of its statement", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n    [\n        2\n    ])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.INDENT, "        ", "", 3, 9},
+			{token.INT, "2", "", 3, 9},
+			{token.NEWLINE, "\n", "", 3, 10},
+			{token.DEINDENT, "]", "", 4, 5},
+			{token.RBRACK, "]", "", 4, 5},
+			{token.RPAREN, ")", "", 4, 6},
+			{token.NEWLINE, "\n", "", 4, 7},
+			{token.EOF, "", "", 4, 7},
+		})
+		checkInput(t, "x = f(1,\n    [\n    ])", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.LBRACK, "[", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.RBRACK, "]", "", 3, 5},
+			{token.RPAREN, ")", "", 3, 6},
+			{token.NEWLINE, "\n", "", 3, 7},
+			{token.EOF, "", "", 3, 7},
+		})
+	})
+
+	t.Run("a comma before a line not indented past its block ends the statement", func(t *testing.T) {
+		checkInput(t, "x = f(1,\ny = 2", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.NEWLINE, "\n", "", 1, 9},
+			{token.IDENT, "y", "", 2, 1},
+			{token.ASSIGN, "=", "", 2, 3},
+			{token.INT, "2", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.EOF, "", "", 2, 6},
+		})
+	})
+
+	t.Run("a bracket does not join lines", func(t *testing.T) {
+		checkInput(t, "x = f(1\n    2)", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.NEWLINE, "\n", "", 1, 8},
+			{token.INDENT, "    ", "", 2, 5},
+			{token.INT, "2", "", 2, 5},
+			{token.RPAREN, ")", "", 2, 6},
+			{token.NEWLINE, "\n", "", 2, 7},
+			{token.EOF, "", "", 2, 7},
+		})
+	})
+
+	t.Run("a tab in a continued line's indentation is reported", func(t *testing.T) {
+		checkInput(t, "x = f(1,\n\t2)", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.IDENT, "f", "", 1, 5},
+			{token.LPAREN, "(", "", 1, 6},
+			{token.INT, "1", "", 1, 7},
+			{token.COMMA, ",", "", 1, 8},
+			{token.ILLEGAL, "\t", "2:1:" + INDENT_TAB_ERR, 2, 1},
+			{token.INT, "2", "", 2, 2},
+			{token.RPAREN, ")", "", 2, 3},
+			{token.NEWLINE, "\n", "", 2, 4},
+			{token.EOF, "", "", 2, 4},
+		})
+	})
+
+	t.Run("a line break keeps tokens apart without indentation", func(t *testing.T) {
+		l := New("", "f(a -\n)")
+		var closer token.Token
+		for tok, _ := l.NextToken(); tok.Type != token.EOF; tok, _ = l.NextToken() {
+			if tok.Type == token.RPAREN {
+				closer = tok
+			}
+		}
+		if closer.Line != 2 || !closer.HadSpace {
+			t.Fatalf("closer %+v should start line 2 apart from '-'", closer)
+		}
+	})
+
+	t.Run("a NUL character does not end the input", func(t *testing.T) {
+		checkInput(t, "x = 1\n# a\x00b\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.ILLEGAL, "\x00", "2:4:NUL character is not allowed in source", 2, 4},
+			{token.IDENT, "b", "", 2, 5},
+			{token.NEWLINE, "\n", "", 2, 6},
+			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
+			{token.EOF, "", "", 3, 2},
+		})
+		checkInput(t, "x = 1\n\x00\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.NEWLINE, "\n", "", 1, 6},
+			{token.ILLEGAL, "\x00", "2:1:NUL character is not allowed in source", 2, 1},
+			{token.NEWLINE, "\n", "", 2, 2},
+			{token.IDENT, "y", "", 3, 1},
+			{token.NEWLINE, "\n", "", 3, 2},
+			{token.EOF, "", "", 3, 2},
+		})
+	})
+
+	t.Run("a backslash is an illegal character", func(t *testing.T) {
+		checkInput(t, "x = 1 \\\ny", []Test{
+			{token.IDENT, "x", "", 1, 1},
+			{token.ASSIGN, "=", "", 1, 3},
+			{token.INT, "1", "", 1, 5},
+			{token.ILLEGAL, "\\", "1:7:Illegal character '\\'", 1, 7},
+			{token.NEWLINE, "\n", "", 1, 8},
+			{token.IDENT, "y", "", 2, 1},
+			{token.NEWLINE, "\n", "", 2, 2},
+			{token.EOF, "", "", 2, 2},
+		})
+	})
+}
+
+func TestLineLayoutEndings(t *testing.T) {
+	// A block literal and a continued line give the same token stream for
+	// every ending style, positions included.
 	expected := []Test{
 		{token.IDENT, "arr", "", 1, 1},
 		{token.ASSIGN, "=", "", 1, 5},
 		{token.LBRACK, "[", "", 1, 7},
-		{token.FLOAT, "1.1", "", 1, 8},
-		{token.FLOAT, "2.3", "", 1, 12},
-		{token.BACKSLASH, "\\", "", 1, 16},
-		{token.NEWLINE, "\n", "", 1, 17},
-		{token.INT, "4", "", 2, 5},
-		{token.FLOAT, "2.1", "", 2, 7},
-		{token.RBRACK, "]", "", 2, 10},
-		{token.NEWLINE, "\n", "", 2, 11},
-		{token.IDENT, "arr", "", 3, 1},
-		{token.EOF, "", "", 3, 4},
+		{token.NEWLINE, "\n", "", 1, 8},
+		{token.INDENT, "    ", "", 2, 5},
+		{token.FLOAT, "1.1", "", 2, 5},
+		{token.FLOAT, "2.3", "", 2, 9},
+		{token.NEWLINE, "\n", "", 2, 12},
+		{token.INT, "4", "", 3, 5},
+		{token.FLOAT, "2.1", "", 3, 7},
+		{token.NEWLINE, "\n", "", 3, 10},
+		{token.DEINDENT, "]", "", 4, 1},
+		{token.RBRACK, "]", "", 4, 1},
+		{token.NEWLINE, "\n", "", 4, 2},
+		{token.IDENT, "f", "", 5, 1},
+		{token.LPAREN, "(", "", 5, 2},
+		{token.INT, "1", "", 5, 3},
+		{token.COMMA, ",", "", 5, 4},
+		{token.INT, "2", "", 6, 3},
+		{token.RPAREN, ")", "", 6, 4},
+		{token.NEWLINE, "\n", "", 6, 5},
+		{token.EOF, "", "", 6, 5},
 	}
 	endings := []struct {
 		name   string
@@ -820,10 +1244,64 @@ func TestLineContinuation(t *testing.T) {
 	}
 	for _, tc := range endings {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "arr = [1.1 2.3 \\" + tc.ending + "    4 2.1]" + tc.ending + "arr"
+			src := strings.Join([]string{"arr = [", "    1.1 2.3", "    4 2.1", "]", "f(1,", "  2)"}, tc.ending)
 			checkInput(t, src, expected)
 		})
 	}
+}
+
+// last is the last token returned, whether lexed or queued at a line break,
+// as a header's ':' and a literal's ']' are.
+func TestLastIsLastReturned(t *testing.T) {
+	l := New("TestLastIsLastReturned", "t = [\n  : a\n    1\n]\ny")
+	for {
+		tok, _ := l.NextToken()
+		if l.last != tok.Type {
+			t.Fatalf("after %q at %d:%d, last = %q", tok.Literal, tok.Line, tok.Column, l.last)
+		}
+		if tok.Type == token.EOF {
+			break
+		}
+	}
+}
+
+// An error queued at a line break is about the token returned with it: a
+// tab in indentation, an indentation error, a misplaced ']' or a header's
+// spacing.
+func TestQueuedErrorIsAboutItsToken(t *testing.T) {
+	for _, input := range []string{
+		"x = 1\n\ty = 2",
+		"a\n    b\n  c",
+		"y = F(x)\n    m = [\n        1 2\n  ]",
+		"t = [\n  :a b\n    1 2\n]",
+	} {
+		l := New("TestQueuedErrorIsAboutItsToken", input)
+		errs := 0
+		for tok, err := l.NextToken(); tok.Type != token.EOF; tok, err = l.NextToken() {
+			if err == nil {
+				continue
+			}
+			errs++
+			if err.Token != tok {
+				t.Fatalf("%q: the error is about %+v, not the token %+v", input, err.Token, tok)
+			}
+		}
+		if errs != 1 {
+			t.Fatalf("%q: %d errors, want 1", input, errs)
+		}
+	}
+}
+
+// A token carries one error, so a lex error on a ']' or ':' that starts a
+// line, whose layout error comes with it, is an internal error, not dropped.
+func TestQueueLexedPanicsOnLexError(t *testing.T) {
+	l := New("TestQueueLexedPanicsOnLexError", "{")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("queueLexed dropped lex's error")
+		}
+	}()
+	l.queueLexed("")
 }
 
 func TestNewlineNormalization(t *testing.T) {
@@ -837,6 +1315,7 @@ func TestNewlineNormalization(t *testing.T) {
 		{token.IDENT, "c", "", 3, 1},
 		{token.NEWLINE, "\n", "", 3, 2},
 		{token.IDENT, "d", "", 4, 1},
+		{token.NEWLINE, "\n", "", 4, 2},
 		{token.EOF, "", "", 4, 2},
 	}
 	checkInput(t, src, expected)
@@ -855,6 +1334,7 @@ func TestNewlineNormalization(t *testing.T) {
 			{token.IDENT, "a", "", 1, 1},
 			{token.NEWLINE, "\n", "", 1, 2},
 			{token.IDENT, "b", "", tt.wantLine, 1},
+			{token.NEWLINE, "\n", "", tt.wantLine, 2},
 			{token.EOF, "", "", tt.wantLine, 2},
 		}
 		checkInput(t, tt.src, adjExpected)
@@ -880,6 +1360,7 @@ func TestMultilineString(t *testing.T) {
 				{token.STRING, tc.literal, "", 1, 1},
 				{token.NEWLINE, "\n", "", 2, 3},
 				{token.IDENT, "c", "", 3, 1},
+				{token.NEWLINE, "\n", "", 3, 2},
 				{token.EOF, "", "", 3, 2},
 			}
 			checkInput(t, src, expected)
@@ -909,6 +1390,7 @@ func TestMultilineStringInvalidEscape(t *testing.T) {
 				{token.STRING, tc.literal, "1:1:unsupported escape sequence \\\n", 1, 1},
 				{token.NEWLINE, "\n", "", 2, 3},
 				{token.IDENT, "c", "", 3, 1},
+				{token.NEWLINE, "\n", "", 3, 2},
 				{token.EOF, "", "", 3, 2},
 			}
 			checkInput(t, src, expected)

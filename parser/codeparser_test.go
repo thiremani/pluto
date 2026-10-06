@@ -27,9 +27,19 @@ func TestParseConstStatement(t *testing.T) {
 			nil,
 		},
 		{
+			"a, b =\n    5,\n    10",
+			[]string{"a", "b"},
+			nil,
+		},
+		{
 			"a, a = 1, 2",
 			nil,
 			[]string{"duplicate identifier: a in this statement"},
+		},
+		{
+			"a = 5 6",
+			nil,
+			[]string{"1:7:" + stmtEndErr},
 		},
 	}
 
@@ -51,6 +61,7 @@ func TestParseConstStatement(t *testing.T) {
 
 		stmt := code.Statements[0].(*ast.ConstStatement)
 		require.Len(t, stmt.Name, len(tt.expected))
+		require.Len(t, stmt.Value, len(tt.expected))
 		for i, ident := range stmt.Name {
 			require.Equal(t, tt.expected[i], ident.Value)
 		}
@@ -248,8 +259,64 @@ func TestUnparsedAssignmentTargetInBody(t *testing.T) {
 	require.NotPanics(t, func() { p.Parse() })
 	require.Equal(t, []string{
 		"TestUnparsedAssignmentTargetInBody:3:5:expected next token to be =, got . instead",
-		"TestUnparsedAssignmentTargetInBody:3:7:no prefix parse function for . found",
 	}, p.Errors())
+}
+
+// A literal inside a function body keeps the body's block structure, however
+// its lines are indented.
+func TestLayoutInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{"nested block literals", "    y = [\n        [\n            x\n        ]\n    ]\n"},
+		{"block literal", "    y = [\n        1 2\n        3 4\n    ]\n"},
+		{"call continued after a comma", "    y = f(x,\n        1)\n"},
+		{"comma after a multi-line string", "    y = f(\"a\nb\",\n        [1 2])\n"},
+		{"block literal after a multi-line string", "    y = f(\"a\nb\", [\n        2 3\n    ])\n"},
+		{"table header one column left of its statement", "    y = [\n   : a b\n     1 2\n    ]\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n" + tt.body + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestLayoutInBody", input))
+			code := p.Parse()
+			require.Empty(t, p.Errors())
+			require.Len(t, code.Statements, 2)
+			require.Len(t, code.Statements[0].(*ast.FuncStatement).Body.Statements, 2)
+		})
+	}
+}
+
+// A function's parameters can span lines inside its parentheses.
+func TestParametersAcrossLines(t *testing.T) {
+	p := NewCodeParser(lexer.New("TestParametersAcrossLines", "out = F(a,\n    b)\n    out = a + b\n"))
+	code := p.Parse()
+	require.Empty(t, p.Errors())
+	require.Len(t, code.Statements, 1)
+	fn, ok := code.Statements[0].(*ast.FuncStatement)
+	require.True(t, ok)
+	require.Len(t, fn.Parameters, 2)
+}
+
+// A literal laid out against the rules is the only error in its function:
+// the rest of the body and the next function report none.
+func TestLayoutErrorsInBody(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		err  string
+	}{
+		{"inline literal across lines", "    y = [x\n        1]\n", "3:11:" + inlineArrayErr},
+		{"block literal closed on its last row", "    y = [\n        x]\n", "4:10:" + blockCloseErr},
+		{"unclosed block literal", "    y = [\n        x\n", "5:5:" + blockCloseErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "y = F(x)\n    y = x\n" + tt.line + "    y = y\nz = G(x)\n    z = x\n"
+			p := NewCodeParser(lexer.New("TestLayoutErrorsInBody", input))
+			p.Parse()
+			require.Equal(t, []string{"TestLayoutErrorsInBody:" + tt.err}, p.Errors())
+		})
+	}
 }
 
 func TestFuncStatementParsing(t *testing.T) {
@@ -416,68 +483,178 @@ answer = 42`
 }
 
 func TestStructDefErrors(t *testing.T) {
+	const name = "TestStructDefErrors:"
 	tests := []struct {
-		name   string
-		input  string
-		errMsg string
+		name      string
+		input     string
+		expErrors []string
 	}{
 		{
 			name: "duplicate struct field header",
 			input: `p = Person
   : name age age
     "Tejas" 35 184.5`,
-			errMsg: "duplicate struct field header: age",
+			expErrors: []string{name + "2:14:duplicate struct field header: age"},
 		},
 		{
 			name: "multiple lhs bindings not allowed",
 			input: `p, q = Person
   : name age
     "Tejas" 35`,
-			errMsg: "struct definition must bind exactly one constant name",
+			expErrors: []string{name + "1:6:struct definition must bind exactly one constant name"},
 		},
 		{
 			name: "comma-separated struct row not allowed",
 			input: `p = Person
   : name age
     "Tejas", 35`,
-			errMsg: "struct value row values must be separated by spaces, not commas",
+			expErrors: []string{name + "3:12:struct value row values must be separated by spaces, not commas"},
 		},
 		{
 			name: "struct header requires space after colon",
 			input: `p = Person
   :name age
     "Tejas" 35`,
-			errMsg: "expected a space after ':' in struct field header",
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
 		},
 		{
-			name: "struct row requires nested indent",
+			name: "struct header with two spaces after the colon",
+			input: `p = Person
+  :  name age
+    "Tejas" 35`,
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
+		},
+		{
+			name:      "struct header with a tab after the colon",
+			input:     "p = Person\n  :\tname age\n    \"Tejas\" 35",
+			expErrors: []string{name + "2:3:" + lexer.HEADER_COLON_ERR},
+		},
+		{
+			name:      "struct header without names",
+			input:     "p = Person\n  :\n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header with only spaces after the colon",
+			input:     "p = Person\n  :   \n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header with only a comment",
+			input:     "p = Person\n  : # note\n    \"Tejas\"",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name:      "struct header without names at the end of the input",
+			input:     "p = Person\n  :",
+			expErrors: []string{name + "2:3:struct definition must include at least one field header"},
+		},
+		{
+			name: "struct row at the header's colon",
 			input: `p = Person
   : name age
   "Tejas" 35`,
-			errMsg: "struct value row must be indented beneath its field header",
-		},
-		{
-			name: "struct row must align with header",
-			input: `p = Person
-  : name age
-      "Tejas" 35`,
-			errMsg: "struct value row must align with the first field header",
+			expErrors: []string{name + "3:3:" + lexer.INDENT_ERR + ". At char: \"", name + "3:3:struct value row must contain constants only, got ILLEGAL"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cp := NewCodeParser(lexer.New("TestStructDefErrors", tt.input))
-			_ = cp.Parse()
-			require.NotEmpty(t, cp.Errors())
-			found := false
-			for _, err := range cp.Errors() {
-				if strings.Contains(err, tt.errMsg) {
-					found = true
-					break
-				}
-			}
-			require.True(t, found, "expected error %q, got %v", tt.errMsg, cp.Errors())
+			cp.Parse()
+			require.Equal(t, tt.expErrors, cp.Errors())
+		})
+	}
+}
+
+// The parser checks a block's depth where it opens one: a function's body and
+// a struct definition are 4 spaces in. A line indented past its block where
+// none opens is unexpected.
+func TestBlockDepth(t *testing.T) {
+	for _, tt := range []struct{ name, input, err string }{
+		{"function body", "y = F(x)\n  y = x\nz = G(x)\n    z = x", "2:3:" + blockIndentErr},
+		{"struct definition", "p = Person\n    : name\n      \"Ada\"\nq = 1", "2:5:" + blockIndentErr},
+		{"line in a body", "y = F(x)\n    y = x\n        w = 1\nz = G(x)\n    z = x", "3:9:" + strayIndentErr},
+		{"declaration", "c = 5\n    d = 6\nz = 7", "2:5:" + strayIndentErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New("TestBlockDepth", tt.input))
+			cp.Parse()
+			require.Equal(t, []string{"TestBlockDepth:" + tt.err}, cp.Errors())
+		})
+	}
+}
+
+// A block literal's ']' left of the line of its '[' is reported and closes
+// the literal, so the function body goes on.
+func TestBlockCloseLeftOfItsLine(t *testing.T) {
+	input := "res = F(x)\n    m = [\n        1 2\n]\n    res = x\ny = G(x)\n    y = x"
+	cp := NewCodeParser(lexer.New("TestBlockCloseLeftOfItsLine", input))
+	cp.Parse()
+	require.Equal(t, []string{"TestBlockCloseLeftOfItsLine:4:1:" + blockCloseErr}, cp.Errors())
+}
+
+// A function's body is indented 4 spaces past its statement, also when the
+// parameters continue on a line of their own.
+func TestBodyAfterContinuedHeader(t *testing.T) {
+	for _, input := range []string{
+		"r = F(a,\n    b)\n    r = a + b",
+		"r = F(a,\n        b)\n    r = a + b",
+	} {
+		cp := NewCodeParser(lexer.New("TestBodyAfterContinuedHeader", input))
+		require.NotNil(t, cp.Parse(), input)
+		require.Empty(t, cp.Errors(), input)
+	}
+}
+
+// A declaration that fails takes the rest of its line, so the next one parses
+// on its own.
+// After '=', a code file takes constants, a function's name and parameters,
+// or a struct's type; any other token fails the declaration where it stands.
+func TestCodeValueErrors(t *testing.T) {
+	const name = "TestCodeValueErrors:"
+	for _, tt := range []struct{ input, err string }{
+		{"c = -5", "1:5:" + codeValueErr},
+		{"c = foo bar", "1:9:" + codeValueErr},
+		{"c =", "1:4:" + lineBreakErr},
+	} {
+		cp := NewCodeParser(lexer.New("TestCodeValueErrors", tt.input+"\nd = 2"))
+		cp.Parse()
+		require.Equal(t, []string{name + tt.err}, cp.Errors(), tt.input)
+	}
+}
+
+// The items of a template's parameters or a constant list that start
+// continued lines line up, as in any other list, also after '='.
+func TestCodeListsLineUp(t *testing.T) {
+	const name = "TestCodeListsLineUp:"
+	for _, input := range []string{"y = F(a,\n    b,\n      c)\n    y = a", "c, d, e = 1,\n    2,\n      3", "c, d =\n    1,\n      2"} {
+		cp := NewCodeParser(lexer.New("TestCodeListsLineUp", input))
+		cp.Parse()
+		require.Equal(t, []string{name + "3:7:" + lineUpErr}, cp.Errors(), input)
+	}
+}
+
+func TestDeclarationFailsWholeLine(t *testing.T) {
+	cp := NewCodeParser(lexer.New("TestDeclarationFailsWholeLine", "a .= 2\nb = 3"))
+	cp.Parse()
+	require.Equal(t, []string{"TestDeclarationFailsWholeLine:1:1:expected next token to be =, got . instead"}, cp.Errors())
+}
+
+// A struct definition that fails inside its body leaves the whole body, so
+// the declaration after it parses on its own.
+func TestStructDefFailureLeavesItsBody(t *testing.T) {
+	for _, tt := range []struct{ name, body, err string }{
+		{"short row", "  : name age\n    \"Tejas\"", "1:5:struct value row has 1 values, expected 2"},
+		{"two rows", "  : name age\n    \"Tejas\" 35\n    \"Ada\" 36", "4:5:struct definition supports exactly one value row"},
+		{"no header", "    \"Tejas\" 35", "2:5:struct definition must start with ':' field header row"},
+		{"no row", "  : name age", "3:1:struct definition requires one data row"},
+		{"row indented past its block", "  : name age\n      \"Tejas\" 35", "3:7:" + strayIndentErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := NewCodeParser(lexer.New("TestStructDefFailureLeavesItsBody", "p = Person\n"+tt.body+"\nq = 1"))
+			cp.Parse()
+			require.Equal(t, []string{"TestStructDefFailureLeavesItsBody:" + tt.err}, cp.Errors())
 		})
 	}
 }

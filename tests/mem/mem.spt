@@ -111,13 +111,11 @@ takenEmpty = []0
 copiedEmpty, takenEmpty, emptyFirst, floats
 
 # A column read of a copied typed empty table.
-scoresW =
-[
+scoresW = [
   : Name Value
     "Ada" 10
 ]
-headerOnly =
-[
+headerOnly = [
   : Name("") Value(0)
 ]
 takenTable = headerOnly

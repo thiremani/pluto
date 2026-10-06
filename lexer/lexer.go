@@ -10,17 +10,59 @@ import (
 )
 
 type Lexer struct {
-	FileName      string
-	input         []rune
-	position      int   // current position in input (points to current rune)
-	readPosition  int   // current reading position in input (after current rune)
-	curr          rune  // current rune under examination
-	lineOffset    int   // line number
-	column        int   // column number in the line
-	onNewline     bool  // at beginning of new line
-	continuedLine bool  // preceding backslash suppresses indentation on the next physical line
-	indentStack   []int // indentation level stack
-	toDeindent    int   // number of deindent tokens to be emitted before we continue with current token
+	FileName     string
+	input        []rune
+	position     int  // current position in input (points to current rune)
+	readPosition int  // current reading position in input (after current rune)
+	curr         rune // current rune under examination
+	lineOffset   int  // line number
+	column       int  // column number in the line
+
+	blocks  []block         // the open indented blocks; innermost last
+	pending queue           // tokens decided but not yet returned
+	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
+	line    int             // the column of the line being read; while lineBreak lays out the next line, the one that ended
+}
+
+// block is an indented block. Its lines start at level, and the INDENT that
+// opens it spells out how far that is past the block around it, which the
+// parser requires to be 4 spaces for a body or a struct definition. A block
+// that opens after a line ending in '[' holds that literal's rows, at any
+// depth past base, the column of the line holding the '[', and only such a
+// block closes, at a ']' line at base.
+type block struct {
+	level     int
+	holdsRows bool
+	base      int
+}
+
+// lexed is a token decided ahead of its turn, with the message of the error
+// about it, if any.
+type lexed struct {
+	tok token.Token
+	msg string
+}
+
+// queue holds tokens in the order they are decided. Once drained it reuses
+// its buffer, so neither push nor pop copies the tokens waiting in it.
+type queue struct {
+	items []lexed
+	head  int
+}
+
+func (q *queue) push(t lexed) {
+	q.items = append(q.items, t)
+}
+
+// pop returns the next token, valid until the next push, or nil when the
+// queue is drained.
+func (q *queue) pop() *lexed {
+	if q.head == len(q.items) {
+		q.items, q.head = q.items[:0], 0
+		return nil
+	}
+	q.head++
+	return &q.items[q.head-1]
 }
 
 const (
@@ -28,34 +70,225 @@ const (
 )
 
 const (
-	INDENT_ERR     = "indentation error"
-	INDENT_TAB_ERR = "indent using tabs not allowed"
+	INDENT_ERR       = "indentation error"
+	INDENT_TAB_ERR   = "indent using tabs not allowed"
+	BLOCK_CLOSE_ERR  = "a block literal's ']' goes on its own line, at the column of the line holding its '['"
+	BLOCK_ROWS_ERR   = "a block literal's rows are indented past the line holding its '['"
+	HEADER_COLON_ERR = "a header's ':' has one space after it, so its names line up with the values"
 )
 
 func New(fileName, input string) *Lexer {
-	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, onNewline: true}
+	l := &Lexer{FileName: fileName, input: []rune(input), lineOffset: 1, last: token.NEWLINE}
 	l.readRune()
+	column, first, tab := l.nextLine()
+	l.startLine(column, first, tab)
+	l.line = column
 	return l
 }
 
 func (l *Lexer) createToken(tokenType token.TokenType, literal string, hadSpace bool) token.Token {
+	tok := l.tokenAt(tokenType, literal, l.column)
+	tok.HadSpace = hadSpace
+	return tok
+}
+
+// tokenAt makes a token at column on the line being read.
+func (l *Lexer) tokenAt(tokenType token.TokenType, literal string, column int) token.Token {
 	return token.Token{
 		FileName: l.FileName,
 		Type:     tokenType,
 		Literal:  literal,
 		Line:     l.lineOffset,
-		Column:   l.column,
-		HadSpace: hadSpace,
+		Column:   column,
 	}
 }
 
+// NextToken returns the next token. Layout tokens, decided at each line
+// break, come first. The end of the input ends its last line as a line break
+// does.
 func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
+	if next := l.pending.pop(); next != nil {
+		l.last = next.tok.Type
+		if next.msg == "" {
+			return next.tok, nil
+		}
+		return next.tok, &token.CompileError{Token: next.tok, Msg: next.msg}
+	}
+
+	tok, err := l.lex()
+	if tok.Type == token.NEWLINE && !l.lineBreak() {
+		return l.NextToken()
+	}
+	if tok.Type == token.EOF && l.last != token.NEWLINE && l.last != token.EOF {
+		l.pending.push(lexed{tok: tok})
+		tok = l.tokenAt(token.NEWLINE, token.SYM_NEWLINE, tok.Column)
+	}
+	l.last = tok.Type
+	return tok, err
+}
+
+// lineBreak reads past a line break and lays out the line after it; it is
+// the one place that decides layout. It moves past blank and comment lines
+// to the next line. A line ending in a comma or '=' continues onto that line
+// when it is indented past the current block: the break reads as a space and
+// lineBreak reports false. Otherwise the break ends a statement or a row, and
+// the next line's own layout tokens are queued to follow it.
+func (l *Lexer) lineBreak() bool {
+	l.readRune()
+	column, first, tab := l.nextLine()
+	continued := (l.last == token.COMMA || l.last == token.ASSIGN) && first != eof && column > l.level(len(l.blocks))
+	if continued {
+		l.tabErr(tab)
+	} else {
+		l.startLine(column, first, tab)
+	}
+	l.line = column
+	return !continued
+}
+
+// level returns the column of the innermost of the first n blocks, or 1
+// when n is 0, outside every block.
+func (l *Lexer) level(n int) int {
+	if n == 0 {
+		return 1
+	}
+	return l.blocks[n-1].level
+}
+
+// closes lays out a line that starts with ']' at column while a block
+// literal is open, and reports false when none is. The ']' closes the
+// innermost literal, the one whose '[' ended the line before or whose rows
+// are innermost, with every block inside its rows, never one around it. It
+// goes at the column of the line holding the '[', and is reported anywhere
+// else.
+func (l *Lexer) closes(column int) bool {
+	keep := len(l.blocks) // an empty literal has no block to close
+	base := l.line        // and its '[' ended the line before
+	if l.last != token.LBRACK {
+		keep--
+		for keep >= 0 && !l.blocks[keep].holdsRows {
+			keep--
+		}
+		if keep < 0 {
+			return false
+		}
+		base = l.blocks[keep].base
+	}
+	var msg string
+	if column != base {
+		msg = BLOCK_CLOSE_ERR
+	}
+	l.dedentTo(keep, column, ']')
+	l.queueLexed(msg)
+	return true
+}
+
+// queueLexed lexes the token that starts the line, a ':' or ']' that the
+// layout rules judge, and queues it after the line's layout tokens with msg,
+// the error about it. A token carries one error, and lex reports none about
+// either character, so one from lex here would be a lexer bug.
+func (l *Lexer) queueLexed(msg string) {
+	tok, err := l.lex()
+	if err != nil {
+		panic("internal: lex reported an error on the ']' or ':' that starts a line")
+	}
+	l.pending.push(lexed{tok, msg})
+}
+
+// headerColonErr returns the error about a header line, its ':' at column,
+// whose first name is not one space after the ':', or "". A header without
+// names is the parser's to report.
+func (l *Lexer) headerColonErr(column int) string {
+	i := l.position + column // the rune after the ':'
+	j := i                   // the rune after the blanks that follow it
+	for j < len(l.input) && (l.input[j] == ' ' || l.input[j] == '\t') {
+		j++
+	}
+	named := j < len(l.input) && !strings.ContainsRune("\r\n#", l.input[j])
+	oneSpace := j == i+1 && l.input[i] == ' '
+	if named && !oneSpace {
+		return HEADER_COLON_ERR
+	}
+	return ""
+}
+
+// tabErr reports a line's first indentation tab, at column tab, if it has
+// one.
+func (l *Lexer) tabErr(tab int) bool {
+	if tab == 0 {
+		return false
+	}
+	l.pending.push(lexed{l.tokenAt(token.ILLEGAL, "\t", tab), INDENT_TAB_ERR})
+	return true
+}
+
+// startLine queues the layout tokens of the line about to be read, whose
+// content starts with first at column. A tab in the line's indentation is
+// reported and the line stays at the current level. A header's ':' and a
+// literal's ']' follow, with any error about them.
+func (l *Lexer) startLine(column int, first rune, tab int) {
+	if l.tabErr(tab) || first == eof {
+		return
+	}
+	switch first {
+	case ':': // a header hangs 2 spaces left of its block
+		msg := l.headerColonErr(column)
+		l.placeLine(column+2, column, first)
+		l.queueLexed(msg)
+	case ']': // a ']' line closes the innermost literal
+		if !l.closes(column) {
+			l.placeLine(column, column, first)
+		}
+	default:
+		l.placeLine(column, column, first)
+	}
+}
+
+// placeLine places a line whose content starts with first at column, at
+// level among the open blocks. A line deeper than the innermost block opens a
+// block, whose INDENT spells out how far; a line at an open block's level
+// returns to it; any other line is reported.
+func (l *Lexer) placeLine(level, column int, first rune) {
+	if around := l.level(len(l.blocks)); level > around {
+		at := l.tokenAt(token.INDENT, strings.Repeat(" ", level-around), column)
+		rows := l.last == token.LBRACK
+		var msg string
+		if rows && level <= l.line {
+			msg = BLOCK_ROWS_ERR
+		}
+		l.blocks = append(l.blocks, block{level, rows, l.line})
+		l.pending.push(lexed{at, msg})
+		return
+	}
+	n := len(l.blocks)
+	for n > 0 && level < l.blocks[n-1].level {
+		n--
+	}
+	if level == l.level(n) {
+		l.dedentTo(n, column, first)
+		return
+	}
+	l.pending.push(lexed{l.tokenAt(token.ILLEGAL, string(first), column), INDENT_ERR + ". At char: " + string(first)})
+}
+
+// dedentTo leaves every block above the first n, with a DEINDENT for each at
+// the line's first token, first at column. A line that leaves no block makes
+// no token.
+func (l *Lexer) dedentTo(n, column int, first rune) {
+	if len(l.blocks) <= n {
+		return
+	}
+	at := l.tokenAt(token.DEINDENT, string(first), column)
+	for len(l.blocks) > n {
+		l.blocks = l.blocks[:len(l.blocks)-1]
+		l.pending.push(lexed{tok: at})
+	}
+}
+
+func (l *Lexer) lex() (token.Token, *token.CompileError) {
 	var tok token.Token
 	var err *token.CompileError
 
-	if l.onNewline {
-		return l.indentToken()
-	}
 	hadSpace := l.skipWhitespace()
 
 	if l.curr == '#' {
@@ -64,12 +297,8 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 
 	switch l.curr {
 	case '\n':
-		tok = l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace)
-		l.onNewline = !l.continuedLine
-		l.continuedLine = false
-	case '\\':
-		tok = l.createToken(token.BACKSLASH, token.SYM_BACKSLASH, hadSpace)
-		l.continuedLine = l.peekRune() == '\n'
+		// lineBreak reads past the line break, once it has measured the line.
+		return l.createToken(token.NEWLINE, token.SYM_NEWLINE, hadSpace), nil
 	case '"':
 		tok = l.createToken(token.STRING, token.SYM_DQUOTE, hadSpace)
 		l.readRune()
@@ -175,119 +404,56 @@ func (l *Lexer) NextToken() (token.Token, *token.CompileError) {
 	return tok, err
 }
 
-func (l *Lexer) indentToken() (token.Token, *token.CompileError) {
-	if l.toDeindent > 0 {
-		return l.deindentToken()
-	}
-
-	indent, err := l.indentLevel()
-
-	if err != nil {
-		return l.createToken(token.ILLEGAL, string(l.curr), false), err
-	}
-
-	if l.toDeindent > 0 {
-		return l.deindentToken()
-	}
-
-	l.onNewline = false
-	if indent {
-		return l.createToken(token.INDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
-	}
-
-	return l.NextToken()
-}
-
-func (l *Lexer) deindentToken() (token.Token, *token.CompileError) {
-	l.toDeindent--
-	if len(l.indentStack) > 0 {
-		l.indentStack = l.indentStack[:len(l.indentStack)-1]
-	}
-	if l.toDeindent == 0 {
-		l.onNewline = false
-	}
-
-	return l.createToken(token.DEINDENT, string(l.curr), false), nil // hadSpace does not matter for indentation tokens
-}
-
-func (l *Lexer) skipNewlineSpaces() (err *token.CompileError) {
+// nextLine moves past blank and comment lines to the start of the next line
+// with a token and returns that line's indentation, which it leaves unread.
+// Tabs on blank and comment lines are not checked. A comment that a NUL
+// character ends leaves the rest of its line to the lexer, so that line is
+// one with a token.
+func (l *Lexer) nextLine() (column int, first rune, tab int) {
 	for {
-		for l.curr == ' ' {
-			l.readRune()
-		}
-
-		if l.curr == '#' {
+		column, first, tab = l.indentation()
+		switch first {
+		case '\n': // a blank line
+			l.skipWhitespace()
+		case '#': // a comment line
 			l.skipComment()
+		default:
+			return column, first, tab
 		}
-
-		for l.curr == '\t' {
-			l.readRune()
-			err = &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-				Msg:   INDENT_TAB_ERR + ". At char: " + string(l.curr),
-			}
+		if l.atEOF() { // the input ended on a comment
+			return column, eof, 0
 		}
-
-		if l.curr != '\n' {
-			break
+		if l.curr != '\n' { // a NUL ended a comment, so the line has a token
+			return column, first, tab
 		}
-
-		err = nil
 		l.readRune()
 	}
-
-	return
 }
 
-func (l *Lexer) indentLevel() (bool, *token.CompileError) {
-	err := l.skipNewlineSpaces()
-	if err != nil {
-		l.onNewline = false
-		return false, err
-	}
-
-	if l.curr == eof || l.curr == 0 {
-		l.onNewline = false
-		return false, nil
-	}
-
-	if l.column == 1 {
-		l.toDeindent = len(l.indentStack)
-		return false, nil
-	}
-
-	if len(l.indentStack) == 0 {
-		l.indentStack = append(l.indentStack, l.column)
-		return true, nil
-	}
-
-	if l.column > l.indentStack[len(l.indentStack)-1] {
-		// new indentation level
-		l.indentStack = append(l.indentStack, l.column)
-		return true, nil
-	}
-
-	for i := len(l.indentStack) - 1; i >= 0; i-- {
-		level := l.indentStack[i]
-		if l.column == level {
-			// found matching level -> dedent to it
-			l.toDeindent = len(l.indentStack) - 1 - i
-			return false, nil
-		} else if l.column > level {
-			return false, &token.CompileError{
-				Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-				Msg:   INDENT_ERR + ". At char: " + string(l.curr),
-			}
+// indentation scans the leading spaces and tabs of the line being read
+// without consuming them. It returns the column where the line's content
+// starts, the rune there, and the column of the line's first tab, or 0 for
+// none. At the end of input the rune is eof and the tab 0.
+func (l *Lexer) indentation() (column int, first rune, tab int) {
+	// Within a line, position and column advance together, so the line
+	// starts column-1 runes before position.
+	i := l.position - l.column + 1
+	column = 1
+	for ; i < len(l.input) && (l.input[i] == ' ' || l.input[i] == '\t'); i++ {
+		if l.input[i] == '\t' && tab == 0 {
+			tab = column
 		}
+		column++
 	}
-
-	// column in > 1 but does not match any level in the indentStack
-	return false, &token.CompileError{
-		Token: l.createToken(token.ILLEGAL, string(l.curr), false),
-		Msg:   INDENT_ERR + ". At char: " + string(l.curr),
+	if i >= len(l.input) {
+		return column, eof, 0
 	}
+	first, _ = LogicalRune(l.input, i)
+	return column, first, tab
 }
 
+// skipComment moves to the end of the line. A NUL character ends the comment
+// early, so the lexer reports it.
 func (l *Lexer) skipComment() {
 	for l.curr != '\n' {
 		if l.curr == eof || l.curr == 0 {
@@ -297,18 +463,16 @@ func (l *Lexer) skipComment() {
 	}
 }
 
+// skipWhitespace moves past spaces and tabs and reports whether the next
+// token is apart from the previous one; a line break before it counts as
+// space.
 func (l *Lexer) skipWhitespace() bool {
-	hadSpace := false
+	hadSpace := l.column == 1
 	for l.curr == ' ' || l.curr == '\t' {
 		hadSpace = true
 		l.readRune()
 	}
 	return hadSpace
-}
-
-func (l *Lexer) newLine() {
-	l.lineOffset++
-	l.column = 0
 }
 
 // LogicalRune returns the logical rune at raw index i and the raw index
@@ -331,7 +495,11 @@ func LogicalRune(raw []rune, i int) (rune, int) {
 // here, at the single point of consumption.
 func (l *Lexer) readRune() {
 	if l.curr == '\n' {
-		l.newLine()
+		l.lineOffset++
+		l.column = 0
+	}
+	if l.readPosition > len(l.input) {
+		return // already at the end of the input
 	}
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
@@ -676,7 +844,7 @@ func IsOperator(ch rune) bool {
 		// For ASCII, explicitly list allowed operator characters.
 		switch ch {
 		// Exclude '=' because it's used for assignment or comparisons.
-		case '+', '-', '*', '/', '%', '!', '&', '|', '^', '~', '?', '@', '$', '\\':
+		case '+', '-', '*', '/', '%', '!', '&', '|', '^', '~', '?', '@', '$':
 			return true
 		default:
 			return false
