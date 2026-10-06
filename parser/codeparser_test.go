@@ -27,6 +27,11 @@ func TestParseConstStatement(t *testing.T) {
 			nil,
 		},
 		{
+			"a, b =\n    5,\n    10",
+			[]string{"a", "b"},
+			nil,
+		},
+		{
 			"a, a = 1, 2",
 			nil,
 			[]string{"duplicate identifier: a in this statement"},
@@ -56,6 +61,7 @@ func TestParseConstStatement(t *testing.T) {
 
 		stmt := code.Statements[0].(*ast.ConstStatement)
 		require.Len(t, stmt.Name, len(tt.expected))
+		require.Len(t, stmt.Value, len(tt.expected))
 		for i, ident := range stmt.Name {
 			require.Equal(t, tt.expected[i], ident.Value)
 		}
