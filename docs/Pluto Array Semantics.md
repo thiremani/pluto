@@ -64,9 +64,10 @@ Pluto has no line continuation character, and brackets don't join lines. An
 inline literal has one row, however long; an editor
 can wrap it for display. A literal whose `[` ends its line is a block: its
 rows line up with each other, at any depth past the line that holds the `[`,
-and its `]` goes on its own line, at that line's column. A nested block
-literal follows the same rule inside its
-cell, and a multi-line string belongs to its cell:
+and its `]` goes on its own line, at that line's column. A line break inside a
+multi-line string starts no line of its own, so after such a string the line
+holding the `[` is the one the string began on. A nested block literal follows
+the same rule inside its cell, and a multi-line string belongs to its cell:
 
 ```pluto
 matrix = [
@@ -90,6 +91,9 @@ assignment or a print statement:
 total = Sum(first,
     second, third)
 ```
+
+A nested call's arguments continue in that same column, while each row of a
+block literal lines up continued lines of its own.
 
 A block literal argument follows the same rule, however many lines the call
 spans: its rows and `]` go by the line holding its `[`, so they line up under
