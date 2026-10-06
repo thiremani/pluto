@@ -603,6 +603,21 @@ func TestBodyAfterContinuedHeader(t *testing.T) {
 
 // A declaration that fails takes the rest of its line, so the next one parses
 // on its own.
+// After '=', a code file takes constants, a function's name and parameters,
+// or a struct's type; any other token fails the declaration where it stands.
+func TestCodeValueErrors(t *testing.T) {
+	const name = "TestCodeValueErrors:"
+	for _, tt := range []struct{ input, err string }{
+		{"c = -5", "1:5:" + codeValueErr},
+		{"c = foo bar", "1:9:" + codeValueErr},
+		{"c =", "1:4:" + lineBreakErr},
+	} {
+		cp := NewCodeParser(lexer.New("TestCodeValueErrors", tt.input+"\nd = 2"))
+		cp.Parse()
+		require.Equal(t, []string{name + tt.err}, cp.Errors(), tt.input)
+	}
+}
+
 func TestDeclarationFailsWholeLine(t *testing.T) {
 	cp := NewCodeParser(lexer.New("TestDeclarationFailsWholeLine", "a .= 2\nb = 3"))
 	cp.Parse()

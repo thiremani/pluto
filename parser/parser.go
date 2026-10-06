@@ -499,8 +499,14 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 		if stmt := p.parseFuncOrStructStatement(assignTok, idents); stmt != nil {
 			return stmt
 		}
+		return nil
 	}
 	// TODO operator definitions
+	msg := codeValueErr
+	if p.peekTokenIs(token.NEWLINE) {
+		msg = lineBreakErr
+	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: msg})
 	return nil
 }
 
@@ -521,7 +527,9 @@ func (p *StmtParser) parseFuncOrStructStatement(assignTok token.Token, idents []
 		if s != nil {
 			return s
 		}
+		return nil
 	}
+	p.errors = append(p.errors, &token.CompileError{Token: p.peekToken, Msg: codeValueErr})
 	return nil
 }
 
@@ -1130,6 +1138,7 @@ const (
 	lineBreakErr   = "a value is expected before the line ends; a line continues only after a comma or '=', onto an indented line"
 	parenBreakErr  = "expected ')' before the line ends; inside parentheses, a line continues only after a comma, onto an indented line"
 	stmtEndErr     = "expected ',' or the end of the line after a value"
+	codeValueErr   = "in a code file, '=' is followed by constants, a function's name and parameters, or a struct's type"
 )
 
 func (p *StmtParser) parseArrayLiteral() ast.Expression {
