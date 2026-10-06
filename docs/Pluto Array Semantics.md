@@ -83,17 +83,13 @@ another column, and rows that are not indented past the line holding its `[`
 or do not line up, are errors too.
 
 A line breaks only after a comma or `=`, and the next line is indented past
-the statement's line, lined up with the statement's other continued lines, so
-a call's arguments can span lines, as can the names and values of an
-assignment or a print statement:
+the statement's line, so a call's arguments can span lines, as can the names
+and values of an assignment or a print statement:
 
 ```pluto
 total = Sum(first,
     second, third)
 ```
-
-A nested call's arguments continue in that same column, while each row of a
-block literal lines up continued lines of its own.
 
 A block literal argument follows the same rule, however many lines the call
 spans: its rows and `]` go by the line holding its `[`, so they line up under
