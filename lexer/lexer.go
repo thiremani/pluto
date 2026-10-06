@@ -21,7 +21,7 @@ type Lexer struct {
 	blocks  []block         // the open indented blocks; innermost last
 	pending queue           // tokens decided but not yet returned
 	last    token.TokenType // the last token returned, NEWLINE at the start; a line ending in a comma or '=' continues
-	line    int             // the column of the line being read, measured at its line break
+	line    int             // the column of the line being read; while lineBreak lays out the next line, the one that ended
 }
 
 // block is an indented block. Its lines start at level, and the INDENT that
