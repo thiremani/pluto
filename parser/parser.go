@@ -399,7 +399,7 @@ func (p *StmtParser) noPrefixParseFnError(t token.Token) {
 }
 
 func (p *StmtParser) stmtEnded() bool {
-	return p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF)
+	return p.peekTokenIs(token.NEWLINE)
 }
 
 func (p *StmtParser) ParseProgram() *ast.Program {
@@ -516,7 +516,7 @@ func (p *StmtParser) parseFuncOrStructStatement(assignTok token.Token, idents []
 		return nil
 	}
 
-	if p.peekTokenIs(token.NEWLINE) || p.peekTokenIs(token.EOF) {
+	if p.peekTokenIs(token.NEWLINE) {
 		s := p.parseStructLiteralStatement(assignTok, idents, p.curToken)
 		if s != nil {
 			return s
@@ -680,11 +680,7 @@ func (p *StmtParser) parseStructLiteralStatement(assignTok token.Token, idents [
 		},
 	}
 
-	if p.peekTokenIs(token.EOF) {
-		return stmt
-	}
-
-	// Caller only enters this path when the type name is followed by NEWLINE or EOF.
+	// Caller only enters this path when the type name is followed by NEWLINE.
 	p.nextToken() // consume NEWLINE
 	if !p.peekTokenIs(token.INDENT) {
 		return stmt
@@ -795,7 +791,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	}
 
 	p.nextToken()
-	if p.curTokenIs(token.NEWLINE) || p.curTokenIs(token.EOF) {
+	if p.curTokenIs(token.NEWLINE) {
 		p.errors = append(p.errors, &token.CompileError{
 			Token: stmt.Token,
 			Msg:   "an assignment's value starts on the same line as its '='",
