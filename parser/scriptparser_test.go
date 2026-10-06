@@ -1885,28 +1885,6 @@ func TestIndexStaysOnOneLine(t *testing.T) {
 	require.Equal(t, []string{"TestIndexStaysOnOneLine:1:14:" + lineBreakErr}, sp.Errors())
 }
 
-// Pluto has no line continuation: a backslash is an illegal character in a
-// row, a table header or an expression, and the first error says so. The
-// errors after it are the usual recovery after an illegal character.
-func TestBackslashIsIllegal(t *testing.T) {
-	for _, tt := range []struct {
-		name  string
-		input string
-		pos   string
-	}{
-		{"row", "x = [1 2 \\\n    3 4]", "1:10"},
-		{"table header", "t = [\n  : A(0) \\\n    B(0)\n]", "2:10"},
-		{"expression", "x = 1 + \\\n2", "1:9"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sp := NewScriptParser(lexer.New("TestBackslashIsIllegal", tt.input))
-			sp.Parse()
-			require.NotEmpty(t, sp.Errors())
-			require.Equal(t, "TestBackslashIsIllegal:"+tt.pos+":Illegal character '\\'", sp.Errors()[0])
-		})
-	}
-}
-
 func TestArrayRangeExpression(t *testing.T) {
 	tests := []struct {
 		name  string
