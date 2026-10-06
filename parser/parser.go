@@ -496,10 +496,7 @@ func (p *StmtParser) parseCodeStatement() ast.Statement {
 	if p.peekTokenIs(token.IDENT) {
 		// In code mode, an identifier after '=' starts either a function signature
 		// (`name(...)`) or a nominal struct literal (`TypeName`).
-		if stmt := p.parseFuncOrStructStatement(assignTok, idents); stmt != nil {
-			return stmt
-		}
-		return nil
+		return p.parseFuncOrStructStatement(assignTok, idents)
 	}
 	// TODO operator definitions
 	msg := codeValueErr
