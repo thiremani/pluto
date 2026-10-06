@@ -1161,8 +1161,8 @@ func (p *StmtParser) parseArrayLiteral() ast.Expression {
 	p.parseStatedTypes(arr)
 	// Do not consume the closing ']' (or the sample after it) here. Align
 	// with grouped-expression behavior and leave curToken at the literal's
-	// last token; callers (statement parsing) will advance past newline/EOF as
-	// appropriate.
+	// last token; callers (statement parsing) will advance past the NEWLINE
+	// as appropriate.
 	return arr
 }
 
