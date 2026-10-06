@@ -1693,6 +1693,7 @@ func TestLineBreakAfterComma(t *testing.T) {
 	}{
 		{"arguments after a comma", "x = f(x,\n    y, z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
 		{"value after '='", "x =\n    1\na = x * x", []string{"x = 1", "a = (x * x)"}},
+		{"comment after '='", "x = # note\n    1", []string{"x = 1"}},
 		{"one argument per line", "x = f(x,\n    y,\n    z)\na = x * x", []string{"x = f(x, y, z)", "a = (x * x)"}},
 		{"block literal argument", "x = f([\n    1 2\n    3 4\n])", []string{"x = f([\n    1 2\n    3 4\n])"}},
 		{"block literal argument on a continued line", "x = f(1,\n    [\n    2 3\n])", []string{"x = f(1, [\n    2 3\n])"}},
