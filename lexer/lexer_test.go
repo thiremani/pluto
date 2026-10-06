@@ -295,6 +295,18 @@ func TestEof(t *testing.T) {
 		{token.EOF, "", "", 1, 2},
 	}
 	checkInput(t, input, tests)
+
+	// Reading past the end returns the end again, at the same position.
+	input = `x = "a`
+	tests = []Test{
+		{token.IDENT, "x", "", 1, 1},
+		{token.ASSIGN, "=", "", 1, 3},
+		{token.STRING, "a", "1:5:unterminated string literal", 1, 5},
+		{token.NEWLINE, "\n", "", 1, 7},
+		{token.EOF, "", "", 1, 7},
+		{token.EOF, "", "", 1, 7},
+	}
+	checkInput(t, input, tests)
 }
 
 func TestFloat(t *testing.T) {

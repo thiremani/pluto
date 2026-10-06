@@ -484,6 +484,9 @@ func (l *Lexer) readRune() {
 		l.lineOffset++
 		l.column = 0
 	}
+	if l.readPosition > len(l.input) {
+		return // already at the end of the input
+	}
 	if l.readPosition >= len(l.input) {
 		l.curr = 0
 		l.position = l.readPosition
