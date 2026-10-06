@@ -113,12 +113,13 @@ product = Mul([
 ])
 ```
 
-A continued line opens no block of its own, so a template's body after
-parameters that span lines is indented 4 spaces past the template's first
-line. A grouped expression, such as `(a + b)`, and an index, such as
-`data[i]`, break no line of their own: `(a +` followed by `b)` is an error,
-but either can hold a block literal, a multi-line string or a call continued
-after a comma.
+A continued line opens no block of its own, so a template's body is indented
+4 spaces past the template's first line, even when its header continues after
+its `=` or between its parameters; indenting those continued lines 8 spaces
+keeps them apart from the body. A grouped expression, such as `(a + b)`, and
+an index, such as `data[i]`, break no line of their own: `(a +` followed by
+`b)` is an error, but either can hold a block literal, a multi-line string or
+a call continued after a comma.
 
 A newline immediately after `[` explicitly selects block layout for an empty
 or one-row matrix.
