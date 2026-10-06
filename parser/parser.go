@@ -828,7 +828,7 @@ func (p *StmtParser) parseLetStatement(identList []*ast.Identifier) *ast.LetStat
 	stmt.Condition = flattenCondAnd(expList[0])
 
 	p.nextToken()
-	stmt.Value = p.parseExpList(prefixSplitNone, 0)
+	stmt.Value = p.parseExpList(prefixSplitNone, 0) // a condition's value starts on its line
 	p.errorOnBlanks()
 	if slices.Contains(stmt.Value, nil) {
 		return nil
