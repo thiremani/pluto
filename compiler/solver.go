@@ -2665,24 +2665,15 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 }
 
 // settleSpecializationBatch publishes reusable analysis facts atomically with
-// respect to Settled: every CFG result is staged and installed before any
-// specialization in the batch becomes visible as settled.
+// respect to Settled: every specialization in the batch is checked against
+// its template's text range summary before any becomes visible as settled.
 func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) {
 	ts.settleEffects(graph)
-	staged := make([]*SpecializationCFGResult, len(graph.nodes))
+	cc := ts.ScriptCompiler.Compiler.CodeCompiler
 
-	for id, node := range graph.nodes {
+	for _, node := range graph.nodes {
 		walked := ts.walkedFuncs[node.mangled]
-		cfg := NewCFG(ts.ScriptCompiler.Compiler.CodeCompiler)
-		cfg.AnalyzeSpecialization(walked.template, walked.info)
-		staged[id] = &SpecializationCFGResult{
-			DirectCallees: slices.Clone(node.directCallees),
-			Errors:        slices.Clone(cfg.Errors),
-		}
-	}
-
-	for id, node := range graph.nodes {
-		ts.walkedFuncs[node.mangled].info.CFGResult = staged[id]
+		cc.checkSettledRanges(walked.template, walked.info)
 	}
 
 	for _, node := range graph.nodes {
@@ -2695,10 +2686,6 @@ func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) 
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
 	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if f.Settled {
-		if f.CFGResult == nil {
-			panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", mangled))
-		}
-
 		return true
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {

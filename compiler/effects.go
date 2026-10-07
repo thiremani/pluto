@@ -69,8 +69,8 @@ type TargetWriteEffect struct {
 }
 
 // StatementEffect contains the target facts derived for one assignment.
-// ReadsSeed holds LHS indices whose existing value is consumed by a direct
-// MayWrite callee output at the assignment boundary.
+// ReadsSeed holds LHS indices whose existing value a direct call keeps at the
+// assignment boundary when its call-owned domain may run no iteration.
 type StatementEffect struct {
 	Writes    []TargetWriteEffect
 	ReadsSeed []int
@@ -271,14 +271,11 @@ func (analyzer *effectAnalyzer) deriveCall(expr *ast.CallExpression) []YieldEffe
 	info.YieldEffects = make([]YieldEffect, len(info.OutTypes))
 
 	for i, effect := range callee {
-		switch effect {
-		case MustWrite:
+		if effect == MustWrite {
 			info.YieldEffects[i] = invocation
-		case MayWrite:
-			info.YieldEffects[i] = joinYield(invocation, MayYield)
-		default:
-			info.YieldEffects[i] = YieldInvalid
+			continue
 		}
+		info.YieldEffects[i] = YieldInvalid
 	}
 
 	return info.YieldEffects
@@ -361,21 +358,18 @@ func (analyzer *effectAnalyzer) callInvocationEffect(expr *ast.CallExpression) Y
 	return effect
 }
 
-func (analyzer *effectAnalyzer) seedResolvedYield(expr ast.Expression, slot int, targetExists bool, conditionRanges []*RangeInfo) (YieldEffect, bool) {
+func (analyzer *effectAnalyzer) seedResolvedYield(expr ast.Expression, targetExists bool, conditionRanges []*RangeInfo) (YieldEffect, bool) {
 	call, ok := expr.(*ast.CallExpression)
 	if !ok || !targetExists {
 		return YieldUncomputed, false
 	}
 
-	// Direct-return eligibility depends only on output types. Check it before
-	// resolving callee effects because indirect calls cannot consume a seed.
+	// Every body that runs writes every output, so only a call-owned domain
+	// that may run no iteration leaves a direct return's seed in place.
 	if _, direct := directScalarABIReturnType(analyzer.exprInfo(call).OutTypes); !direct {
 		return YieldUncomputed, false
 	}
-
-	callee := analyzer.callBodyOutputEffects(call)
-	needsSeed := callee[slot] == MayWrite || analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges)
-	if !needsSeed {
+	if !analyzer.callOwnsPossiblyEmptyDomain(call, conditionRanges) {
 		return YieldUncomputed, false
 	}
 
@@ -442,7 +436,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 		yields := analyzer.deriveExpr(expr)
 		maySkip := len(stmt.Condition) > 0 || analyzer.expressionUsesLocalDomain(expr)
 
-		for slot, yield := range yields {
+		for _, yield := range yields {
 			index := targetIndex
 			target := stmt.Name[index]
 			targetIndex++
@@ -451,7 +445,7 @@ func (analyzer *effectAnalyzer) deriveLet(stmt *ast.LetStatement, defined map[st
 			}
 
 			_, targetExists := defined[target.Value]
-			if seededYield, readsSeed := analyzer.seedResolvedYield(expr, slot, targetExists, condRanges); readsSeed {
+			if seededYield, readsSeed := analyzer.seedResolvedYield(expr, targetExists, condRanges); readsSeed {
 				result.ReadsSeed = append(result.ReadsSeed, index)
 				yield = seededYield
 			}
@@ -554,13 +548,11 @@ type specializationNode struct {
 	mangled        string
 	effectCallees  []specializationNodeID
 	effectCallers  []specializationNodeID
-	directCallees  []string
 	componentIndex int
 }
 
-// specializationCallGraph interns the newly walked batch once. Dense effect
-// edges drive SCC settlement, while complete mangled edges persist for CFG
-// diagnostic replay across warm-cache scripts.
+// specializationCallGraph interns the newly walked batch once. Its dense
+// effect edges drive SCC settlement.
 type specializationCallGraph struct {
 	nodes     []specializationNode
 	byMangled map[string]specializationNodeID
@@ -581,12 +573,10 @@ func newSpecializationCallGraph(walked map[string]walkedSpecialization) *special
 	return graph
 }
 
-// collectSpecializationCallEdges returns stable unique lowering and replay
-// targets plus source-order primary effect dependencies. Each direct primary
-// precedes its distinct scalar companion.
-func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, statements []ast.Statement) ([]string, []string) {
-	seen := make(map[string]struct{})
-	var directCallees []string
+// collectSpecializationCallEdges returns a body's source-order primary effect
+// dependencies, checking that each call's specializations exist, a distinct
+// scalar companion included.
+func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, statements []ast.Statement) []string {
 	var effectCallees []string
 
 	for _, call := range collectBodyCalls(statements) {
@@ -598,7 +588,6 @@ func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, st
 		primary := Mangle(compiler.MangledPath, call.Function.Value, info.CallParamTypes)
 		requireSpecializationCallTarget(compiler, callerMangled, primary)
 		effectCallees = append(effectCallees, primary)
-		directCallees = appendUniqueMangled(directCallees, seen, primary)
 
 		if !info.ScalarCallVariantEnsured {
 			continue
@@ -609,19 +598,9 @@ func collectSpecializationCallEdges(compiler *Compiler, callerMangled string, st
 			panic(fmt.Sprintf("internal: call %s in %s marks a non-distinct scalar specialization", call.Function.Value, callerMangled))
 		}
 		requireSpecializationCallTarget(compiler, callerMangled, scalar)
-		directCallees = appendUniqueMangled(directCallees, seen, scalar)
 	}
 
-	return directCallees, effectCallees
-}
-
-func appendUniqueMangled(names []string, seen map[string]struct{}, mangled string) []string {
-	if _, exists := seen[mangled]; exists {
-		return names
-	}
-
-	seen[mangled] = struct{}{}
-	return append(names, mangled)
+	return effectCallees
 }
 
 func requireSpecializationCallTarget(compiler *Compiler, callerMangled, calleeMangled string) {
@@ -634,8 +613,7 @@ func (ts *TypeSolver) addSpecializationGraphEdges(graph *specializationCallGraph
 	caller := &graph.nodes[callerID]
 	walked := ts.walkedFuncs[caller.mangled]
 	compiler := ts.ScriptCompiler.Compiler
-	directCallees, effectCallees := collectSpecializationCallEdges(compiler, caller.mangled, walked.template.Body.Statements)
-	caller.directCallees = directCallees
+	effectCallees := collectSpecializationCallEdges(compiler, caller.mangled, walked.template.Body.Statements)
 
 	for _, callee := range effectCallees {
 		if calleeID, inGraph := graph.byMangled[callee]; inGraph {
@@ -775,6 +753,9 @@ func (ts *TypeSolver) deriveEffectNode(graph *specializationCallGraph, working [
 
 	if !validPublishedEffects(derived, len(walked.info.Sig.OutTypes)) {
 		panic(fmt.Sprintf("internal: invalid effects for specialization %s", node.mangled))
+	}
+	if slices.Contains(derived, MayWrite) {
+		panic(fmt.Sprintf("internal: specialization %s may leave an output unwritten, which its template check rejects", node.mangled))
 	}
 
 	changed := false

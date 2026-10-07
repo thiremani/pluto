@@ -2,3 +2,13 @@ res = UpperTriRowTail(a, n, i)
     j = (i + 1):n
     t = a[i * n + j]
     res = t
+
+# A range that arrives through a call may be empty, so the output starts from
+# prev, and an empty range keeps the caller's value.
+r = MakeRange(n)
+    r = 0:n
+
+out = DoubleLast(prev, n)
+    r = MakeRange(n)
+    out = prev
+    out = r * 2

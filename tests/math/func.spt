@@ -107,3 +107,12 @@ sumRangeTailFalse = SumSquares(m > 1, m < 3)
 "SumSquaresRangeAllFalse: -sumRangeAllFalse"
 "SumSquaresRangeKeepPrev: -sumRangeKeepPrev"
 "SumSquaresRangeTailFalse: -sumRangeTailFalse"
+
+# The comparison counts as possibly skipping for every argument type, so the
+# default before it stays, and a failed scalar comparison keeps it.
+posKeep = Pos(9, -1)
+posWrite = Pos(9, 5)
+posMask = Pos([]0, [1 -2 3])
+"PosKeep: -posKeep"
+"PosWrite: -posWrite"
+"PosMask: -posMask"

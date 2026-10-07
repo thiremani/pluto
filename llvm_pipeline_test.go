@@ -344,7 +344,7 @@ y = Fib(n)
     y = FibAux(n, 0, 1)
 
 y = FibAux(n, a, b)
-    y = n == 0 a
+    y = a
     y = n != 0 FibAux(n - 1, b, a + b)
 `,
 		"main.spt": `

@@ -6,3 +6,8 @@ r1 = UpperTriRowTail(a, n, 1)
 r2 = UpperTriRowTail(a, n, 2)
 
 "UpperTriRows: -r0 -r1 -r2"
+
+kept = 7
+kept = DoubleLast(kept, 0)
+doubled = DoubleLast(0, 3)
+"DoubleLast: -kept -doubled"

@@ -34,16 +34,20 @@ func numberedNames(prefix string, count int) string {
 func TestMutualRecursion(t *testing.T) {
 	codeStr := `# define isEven: returns (x, y) = (is-even?, is-odd?)
 x, y = isEven(n)
-    # recursive step: if n≠0, flip the pair returned by isOdd(n-1)
-    x, y = n != 0 isOdd(n - 1)
+    # recursive step: if n≠0, flip the pair returned by isOdd(n-1); a
+    # skipped step leaves the locals empty, and every output is still written
+    odd, even = n != 0 isOdd(n - 1)
+    x, y = odd, even
     # base case: 0 is even, not odd
     x = n == 1 "no"
     x = n == 0 "yes"
 
 # define isOdd: returns (x, y) = (is-odd?, is-even?)
+# this function infers x only through isEven
 x, y = isOdd(n)
     # recursive step: if n≠0, flip the pair returned by isEven(n-1)
-    x, y = n != 0 isEven(n - 1)
+    even, odd = n != 0 isEven(n - 1)
+    x, y = even, odd
     # base case: 0 is not odd, but even
     y = n == 1 "no"
     y = n == 0 "yes"`
@@ -110,8 +114,8 @@ x, y`
 	require.False(t, ts.Converging)
 	require.True(t, isEvenFunc.Settled)
 	require.True(t, isOddFunc.Settled)
-	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isEvenFunc.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isOddFunc.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MustWrite, MustWrite}, isEvenFunc.BodyOutputEffects)
+	require.Equal(t, []WriteEffect{MustWrite, MustWrite}, isOddFunc.BodyOutputEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -764,7 +768,7 @@ out, before = Fold(current, item)
 		require.True(t, wrapper.Settled)
 		require.True(t, IsStrH(wrapper.Vars["current"]))
 		require.True(t, IsStrH(wrapper.Sig.OutTypes[1]))
-		require.Equal(t, []string{foldKey}, wrapper.CFGResult.DirectCallees)
+		require.Contains(t, cc.Compiler.FuncCache, foldKey)
 		info := ts.ExprCache[key(wrapperKey, call)]
 		require.True(t, IsStrH(info.CallParamTypes[0]))
 		require.True(t, IsStrH(info.OutTypes[1]))
@@ -832,7 +836,7 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 
 func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	code := mustParseCode(t, `res = Bad(k)
-    res = k == 0 1
+    res = 1
     res = k != 0 "later"
 `)
 	ctx := llvm.NewContext()
@@ -1580,7 +1584,7 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	for i := range depth {
 		fmt.Fprintf(&b, "res = F%d(k)\n    a = F%d(k)\n    b = F%d(k + 1)\n    res = a + b\n\n", i, i+1, i+1)
 	}
-	fmt.Fprintf(&b, "res = F%d(k)\n    i = 0:2\n    res = k + i\n", depth)
+	fmt.Fprintf(&b, "res = F%d(k)\n    res = k + (0:2)\n", depth)
 
 	l := lexer.New("TestFuncClosureCode", b.String())
 	cp := parser.NewCodeParser(l)
@@ -1976,13 +1980,8 @@ scaled`)
 	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
 	require.True(t, callInfo.ScalarCallVariantEnsured)
-	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
-	require.Equal(t, []string{primaryMangled, scalarMangled}, directCallees)
-	callInfo.ScalarCallVariantEnsured = false
-	directCallees, _ = collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
-	require.Equal(t, []string{primaryMangled}, directCallees,
-		"a scalar key already present in the shared cache must not create an edge without a call-local ensured fact")
-	callInfo.ScalarCallVariantEnsured = true
+	require.Equal(t, []string{primaryMangled}, collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements),
+		"a scalar companion is checked but is not an effect dependency")
 	require.Contains(t, cc.Compiler.FuncCache, primaryMangled)
 	require.Contains(t, cc.Compiler.FuncCache, scalarMangled)
 	template, ok := cc.lookupFuncTemplate("Scale", 1)
@@ -1991,84 +1990,6 @@ scaled`)
 		specializationDisplay(specializationFrame{mangled: primaryMangled, template: template}),
 		specializationDisplay(specializationFrame{mangled: scalarMangled, template: template}),
 		"diagnostic frames must retain the actual specialization key when body parameter types collapse")
-}
-
-func TestCFGDiagnosticsDoNotFailSolver(t *testing.T) {
-	code := mustParseCode(t, `result = Noisy(x)
-    unused = x
-    result = x
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "specializationCFGDiagnostics", "", code)
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), "value = Noisy(1)\nvalue")
-	mangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
-	info := cc.Compiler.FuncCache[mangled]
-
-	require.Empty(t, ts.Errors, "function CFG diagnostics must not become type-solver failures")
-	require.True(t, info.Settled)
-	require.NotNil(t, info.CFGResult)
-	require.Len(t, info.CFGResult.Errors, 1)
-	require.Contains(t, info.CFGResult.Errors[0].Msg, `"unused"`)
-}
-
-func TestCFGRecordsSettledDirectCallee(t *testing.T) {
-	code := mustParseCode(t, `result = Leaf(x)
-    result = x
-
-result = Wrapper(x)
-    result = Leaf(x)
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "settledCFGEdge", "", code)
-	require.Empty(t, cc.Compile())
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
-	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
-	leaf := cc.Compiler.FuncCache[leafMangled]
-	require.True(t, leaf.Settled)
-	require.NotNil(t, leaf.CFGResult)
-	require.Empty(t, leaf.CFGResult.Errors)
-	require.Empty(t, leaf.CFGResult.DirectCallees)
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
-	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
-	wrapper := cc.Compiler.FuncCache[wrapperMangled]
-
-	require.True(t, wrapper.Settled)
-	require.NotNil(t, wrapper.CFGResult)
-	require.Equal(t, []string{leafMangled}, wrapper.CFGResult.DirectCallees)
-}
-
-func TestSettledSpecializationRequiresCFG(t *testing.T) {
-	code := mustParseCode(t, `result = Leaf(x)
-    result = x
-
-result = Wrapper(x)
-    result = Leaf(x)
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "missingSettledCFG", "", code)
-	require.Empty(t, cc.Compile())
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
-	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
-	cc.Compiler.FuncCache[leafMangled].CFGResult = nil
-
-	program := mustParseScript(t, "value = Wrapper(1)\nvalue")
-	sc := NewScriptCompiler(ctx, t.Name()+"Wrapper", program, cc)
-	ts := NewTypeSolver(sc)
-	require.PanicsWithValue(t,
-		"internal: settled specialization "+leafMangled+" has no CFG result",
-		ts.Solve,
-	)
 }
 
 func TestNonConvergingCalleeIsBlamed(t *testing.T) {
@@ -2209,7 +2130,8 @@ p = Keep(q, n)
         1
         prior
     ]
-    z = tab.a[0]`,
+    t = tab.a[0]
+    z = t`,
 			script: "half, first = Mixed(2)\nhalf, first",
 			want:   map[string]Type{"half": F64, "first": F64},
 		},
@@ -2221,7 +2143,8 @@ p = Keep(q, n)
       : a b
         prior x
     ]
-    y = tab.b[0]`,
+    t = tab.b[0]
+    y = t`,
 			script: "v = Pick(2, 7)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2276,7 +2199,8 @@ p = Keep(q, n)
         prior
     ]
     col = x > 3 && tab.a || [x]
-    y = col[0] + 1`,
+    t = col[0] + 1
+    y = t`,
 			script: "v = Pad(2, 5)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2289,7 +2213,8 @@ p = Keep(q, n)
         prior
     ]
     col = x > 3 && [x] || tab.a
-    y = col[0] + 1`,
+    t = col[0] + 1
+    y = t`,
 			script: "v = PadRight(2, 5)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2336,7 +2261,8 @@ func TestNonConvergingCalleeIsBlamedThroughCheckedUse(t *testing.T) {
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, "test", "", mustParseCode(t, `y = m(x)
-    y = bad(x)[0]
+    t = bad(x)[0]
+    y = t
 
 y = bad(x)
     y = bad(x - 1)`))
@@ -2347,7 +2273,7 @@ y = bad(x)
 
 	require.Len(t, ts.Errors, 1)
 	require.Contains(t, ts.Errors[0].Msg, "Function bad is not converging")
-	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the index in m")
+	require.Equal(t, 5, ts.Errors[0].Token.Line, "must point at bad's definition, not the index in m")
 }
 
 // A check that waited for a recursive result still runs once the result is
@@ -2384,7 +2310,7 @@ func TestRecursiveResultChecksRunOnceTyped(t *testing.T) {
 			code: `y = R(n)
     y = n
     prior = n > 0 R(n - 1)
-    y = prior.age`,
+    y = y + prior.age`,
 			script: "v = R(3)\nv",
 			want:   "field access expects a struct or table value, got I64",
 		},

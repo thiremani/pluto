@@ -255,18 +255,8 @@ func (f Func) OutputTypesInferred() bool {
 	return true
 }
 
-// SpecializationCFGResult is the dataflow result and persistent direct-call
-// reachability for one settled function specialization. Errors is the
-// specialization's diagnostics, produced once at settlement and replayed by
-// every script that reaches it.
-type SpecializationCFGResult struct {
-	DirectCallees []string
-	Errors        []*token.CompileError
-}
-
 // FuncInfo holds the mutable facts for one function specialization. Settled
-// means all reusable type, effect, and CFG facts have been published; a settled
-// function specialization always has a non-nil CFG result.
+// means its reusable type and effect facts have been published.
 type FuncInfo struct {
 	Sig              Func
 	Vars             map[string]Type
@@ -274,7 +264,6 @@ type FuncInfo struct {
 	// BodyOutputEffects summarizes the typed scalar body before a call-owned
 	// Range or ArrayRange domain determines whether that body executes.
 	BodyOutputEffects []WriteEffect
-	CFGResult         *SpecializationCFGResult
 	Settled           bool
 }
 
