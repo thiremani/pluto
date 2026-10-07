@@ -18,10 +18,9 @@ type CodeCompiler struct {
 	// at owned storage, so every read and every nested call it feeds see
 	// the representation lowering stores.
 	outputReads map[funcKey]map[string]struct{}
-	// rangeOutputs and rangeBindings record, per template, which outputs and
-	// which bindings hold a Range descriptor, as the template checks read
-	// them from the text. Settlement checks the solved types agree.
-	rangeOutputs  map[funcKey][]bool
+	// rangeBindings records, per template, which bindings hold a Range
+	// descriptor, as the template checks read them from the text. Settlement
+	// checks the solved types agree.
 	rangeBindings map[funcKey]map[string]struct{}
 }
 

@@ -190,7 +190,7 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 // anything calls it: structural checks, then a classification of each write
 // from the template's text alone, then dataflow checks over those writes.
 func (cfg *CFG) AnalyzeFuncs() {
-	cfg.CodeCompiler.settleRangeOutputs()
+	cfg.CodeCompiler.rangeBindings = make(map[funcKey]map[string]struct{})
 
 	for _, stmt := range cfg.CodeCompiler.Code.Statements {
 		fn, ok := stmt.(*ast.FuncStatement)
@@ -242,14 +242,17 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 }
 
 // classifyTemplateWrites classifies every assignment's writes from the
-// template's text, indexed by statement, and reports the text it cannot
-// classify: a call that names no template, an operator whose sides do not line
-// up, an assignment whose values do not fill its targets, and a name
-// reassigned between a range and a non-range value. The solver rejects each of
-// these in any specialization; the flow checks, which would misread them, do
-// not run over a template that has one.
+// template's text, indexed by statement, and records its range bindings for
+// settlement to check. It reports the text it cannot classify: a call that
+// names no template, an operator whose sides do not line up, an assignment
+// whose values do not fill its targets, and a name reassigned between a range
+// and a non-range value. The solver rejects each of these in any
+// specialization; the flow checks, which would misread them, do not run over a
+// template that has one. It also reports an output that holds a range, which
+// a function cannot return.
 func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	flow := newRangeFlow(cfg.CodeCompiler, fn)
+	outputs := identSet(fn.Outputs)
 	writes := make([][]textWrite, len(fn.Body.Statements))
 	for i, stmt := range fn.Body.Statements {
 		cfg.rejectUnclassifiableExprs(statementExpressions(stmt))
@@ -264,9 +267,12 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 			continue
 		}
 		cfg.rejectRangeKindChanges(flow, let, letWrites)
+		cfg.rejectRangeOutputs(outputs, let, letWrites)
 		flow.record(let, letWrites)
 		writes[i] = letWrites
 	}
+
+	cfg.CodeCompiler.rangeBindings[templateKey(fn)] = flow.bindings
 	return writes
 }
 
@@ -285,8 +291,7 @@ func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
 }
 
 // rejectMisalignedOperands reports an operator whose sides yield counts the
-// solver rejects, or a || of which only one alternative yields a range. An
-// alternative that is itself unresolved matches anything, as in the solver.
+// solver rejects.
 func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
 	cc := cfg.CodeCompiler
 	left, right := cc.valueSlots(infix.Left), cc.valueSlots(infix.Right)
@@ -295,44 +300,7 @@ func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
 		cfg.addError(infix.Token, logicalAndArityMismatch(left, right))
 	case !operandsLineUp(infix, left, right):
 		cfg.addError(infix.Token, operandMismatch(infix.Token.Literal, left, right))
-	case infix.IsLogicalOr() && cc.textResolved(infix.Left) && cc.textResolved(infix.Right):
-		leftRanges, rightRanges := cc.passedRanges(infix.Left), cc.passedRanges(infix.Right)
-		for i := range leftRanges {
-			if leftRanges[i] == rightRanges[i] {
-				continue
-			}
-
-			side := "right"
-			if leftRanges[i] {
-				side = "left"
-			}
-			cfg.addError(infix.Token, fmt.Sprintf("logical OR value operands must have matching output types, but only the %s one yields a range (a range literal or name under || yields its elements)", side))
-			return
-		}
 	}
-}
-
-// textResolved reports whether the solver can resolve expr's values: every
-// call in it names a template and every operator in it lines up. The solver
-// leaves anything else unresolved.
-func (cc *CodeCompiler) textResolved(expr ast.Expression) bool {
-	switch e := expr.(type) {
-	case *ast.CallExpression:
-		if _, found := cc.callTemplate(e); !found {
-			return false
-		}
-	case *ast.InfixExpression:
-		if !operandsLineUp(e, cc.valueSlots(e.Left), cc.valueSlots(e.Right)) {
-			return false
-		}
-	}
-
-	for _, child := range ast.ExprChildren(expr) {
-		if !cc.textResolved(child) {
-			return false
-		}
-	}
-	return true
 }
 
 // operandsLineUp reports whether an operator's sides yield counts the solver
@@ -357,6 +325,18 @@ func (cfg *CFG) rejectRangeKindChanges(flow *rangeFlow, let *ast.LetStatement, w
 			continue
 		}
 		cfg.addError(target.Tok(), fmt.Sprintf("cannot reassign %q from a non-range value to a range", target.Value))
+	}
+}
+
+// rejectRangeOutputs reports an output assigned a range. A function returns a
+// range's bounds instead, and its caller builds the range.
+func (cfg *CFG) rejectRangeOutputs(outputs map[string]struct{}, let *ast.LetStatement, writes []textWrite) {
+	for i, target := range let.Name {
+		if _, isOutput := outputs[target.Value]; !isOutput || !writes[i].holdsRange {
+			continue
+		}
+
+		cfg.addError(target.Tok(), fmt.Sprintf("output %q cannot hold a range; return its bounds and build the range where it is used", target.Value))
 	}
 }
 
@@ -464,9 +444,9 @@ type textWrite struct {
 // rangeFlow reads from a template's text which bindings hold a Range
 // descriptor and which values a range drives, as the solver types them. A
 // parameter never holds a range, since a range argument runs the body once
-// per element; a binding holds one when it is assigned a descriptor; a call's
-// output holds one when its template's output does. assigned keeps whether
-// each assigned name's first assignment gave it a range.
+// per element, and no call yields one, since a function cannot return a
+// range; a binding holds one when it is assigned a descriptor. assigned keeps
+// whether each assigned name's first assignment gave it a range.
 type rangeFlow struct {
 	cc       *CodeCompiler
 	bindings map[string]struct{}
@@ -521,12 +501,14 @@ func textNodeFails(expr ast.Expression) bool {
 }
 
 // slotRanges reports, per target a value fills, whether it receives a Range
-// descriptor.
+// descriptor. A value that fills several targets comes from calls, which
+// yield no range.
 func (rf *rangeFlow) slotRanges(value ast.Expression, gateNames map[string]struct{}) []bool {
-	if rf.cc.valueSlots(value) == 1 {
+	slots := rf.cc.valueSlots(value)
+	if slots == 1 {
 		return []bool{rf.holdsRange(value, gateNames)}
 	}
-	return rf.cc.passedRanges(value)
+	return make([]bool, slots)
 }
 
 // record publishes an assignment's targets once its reads are classified:
@@ -559,18 +541,13 @@ func (rf *rangeFlow) holdsRange(value ast.Expression, gateNames map[string]struc
 		_, iterated := gateNames[v.Value]
 		return isRange && !iterated
 	}
-	return rf.forwardsRange(value)
-}
-
-// forwardsRange reports whether expr passes a Range descriptor on whole.
-func (rf *rangeFlow) forwardsRange(expr ast.Expression) bool {
-	return slices.Contains(rf.cc.passedRanges(expr), true)
+	return false
 }
 
 // drivesValue reports whether a range that may be empty drives an
 // assignment's value: any range the value iterates, apart from a descriptor
-// it assigns or passes on whole. A range the statement's condition names is
-// already driven by the gate, which can skip the write by itself.
+// it assigns. A range the statement's condition names is already driven by
+// the gate, which can skip the write by itself.
 func (rf *rangeFlow) drivesValue(value ast.Expression) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
@@ -579,19 +556,8 @@ func (rf *rangeFlow) drivesValue(value ast.Expression) bool {
 		return false
 	case *ast.CallExpression:
 		return rf.drivesAny(v.Arguments)
-	case *ast.InfixExpression:
-		if v.IsLogicalOr() || v.IsLogicalAnd() {
-			return rf.drivesOperand(v.Left) || rf.drivesOperand(v.Right)
-		}
 	}
 	return rf.drives(value)
-}
-
-func (rf *rangeFlow) drivesOperand(operand ast.Expression) bool {
-	if rf.forwardsRange(operand) {
-		return rf.drivesValue(operand)
-	}
-	return rf.drives(operand)
 }
 
 // drives reports whether expr iterates a range that may be empty. Every range
@@ -608,10 +574,6 @@ func (rf *rangeFlow) drives(expr ast.Expression) bool {
 		return isRange
 	case *ast.StringLiteral:
 		return len(rf.specifierRanges(e)) > 0
-	case *ast.CallExpression:
-		if slices.Contains(rf.cc.callRangeOutputs(e), true) {
-			return true
-		}
 	}
 	return rf.drivesAny(ast.ExprChildren(expr))
 }
@@ -668,50 +630,6 @@ func (rf *rangeFlow) isDefined(name string) bool {
 	return ok || rf.cc.isGlobalBinding(name)
 }
 
-// settleRangeOutputs reads from the text which template outputs hold a Range
-// descriptor, to a fixed point across templates that call one another, and
-// records each template's range bindings for settlement to check.
-func (cc *CodeCompiler) settleRangeOutputs() {
-	var templates []*ast.FuncStatement
-	cc.rangeOutputs = make(map[funcKey][]bool)
-	for _, stmt := range cc.Code.Statements {
-		if fn, ok := stmt.(*ast.FuncStatement); ok {
-			templates = append(templates, fn)
-			cc.rangeOutputs[templateKey(fn)] = make([]bool, len(fn.Outputs))
-		}
-	}
-
-	cc.rangeBindings = make(map[funcKey]map[string]struct{}, len(templates))
-	for changed := true; changed; {
-		changed = false
-		for _, fn := range templates {
-			bindings := cc.templateRangeBindings(fn)
-			outputs := cc.rangeOutputs[templateKey(fn)]
-			for i, output := range fn.Outputs {
-				if _, isRange := bindings[output.Value]; isRange && !outputs[i] {
-					outputs[i] = true
-					changed = true
-				}
-			}
-			cc.rangeBindings[templateKey(fn)] = bindings
-		}
-	}
-}
-
-func (cc *CodeCompiler) templateRangeBindings(fn *ast.FuncStatement) map[string]struct{} {
-	flow := newRangeFlow(cc, fn)
-	for _, stmt := range fn.Body.Statements {
-		let, ok := stmt.(*ast.LetStatement)
-		if !ok {
-			continue
-		}
-		if writes, ok := flow.letWrites(let); ok {
-			flow.record(let, writes)
-		}
-	}
-	return flow.bindings
-}
-
 func templateKey(fn *ast.FuncStatement) funcKey {
 	return funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}
 }
@@ -737,26 +655,6 @@ func (cc *CodeCompiler) valueSlots(value ast.Expression) int {
 	return 1
 }
 
-// passedRanges reports, per value expr yields, whether it passes a Range
-// descriptor on whole: a call's range outputs, or those of the call that a ||
-// or value-position && yields. Any other value passes none, so a range
-// literal or binding under an operator yields its elements, and an operator
-// whose sides do not line up passes none, its value being unresolved.
-func (cc *CodeCompiler) passedRanges(expr ast.Expression) []bool {
-	slots := cc.valueSlots(expr)
-	switch e := expr.(type) {
-	case *ast.CallExpression:
-		if outputs := cc.callRangeOutputs(e); len(outputs) == slots {
-			return outputs
-		}
-	case *ast.InfixExpression:
-		if (e.IsLogicalOr() || e.IsLogicalAnd()) && operandsLineUp(e, cc.valueSlots(e.Left), cc.valueSlots(e.Right)) {
-			return cc.passedRanges(e.Right)
-		}
-	}
-	return make([]bool, slots)
-}
-
 // valueCount counts the values a list of expressions yields, as valueSlots
 // counts each.
 func (cc *CodeCompiler) valueCount(values []ast.Expression) int {
@@ -771,16 +669,6 @@ func (cc *CodeCompiler) valueCount(values []ast.Expression) int {
 // argument counts once for each value it yields.
 func (cc *CodeCompiler) callTemplate(call *ast.CallExpression) (*ast.FuncStatement, bool) {
 	return cc.lookupFuncTemplate(call.Function.Value, cc.valueCount(call.Arguments))
-}
-
-// callRangeOutputs reports which outputs of a call's template hold a Range,
-// or nil when the call names no template.
-func (cc *CodeCompiler) callRangeOutputs(call *ast.CallExpression) []bool {
-	template, ok := cc.callTemplate(call)
-	if !ok {
-		return nil
-	}
-	return cc.rangeOutputs[templateKey(template)]
 }
 
 // checkSettledRanges panics when a settled specialization types a binding as

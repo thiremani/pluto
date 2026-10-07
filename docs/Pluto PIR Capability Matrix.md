@@ -115,7 +115,7 @@ two together rather than treating any single row as a deletion trigger.
 | 7e | none | checked, conditional (fallback), ranged | scalar | local | RHS-local | — | **S (decided; semantics doc)** | 7 |
 | 7f | none | checked, conditional (fallback), collector | scalar | local | collector-local | — | **S (decided; semantics doc)** | 8 |
 | 8 | none | ordinary | Range descriptor | local | — (no domain) | — | R | 3 |
-| 8b | none | call | Range descriptor | local | — (no domain) | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
+| 8b | none | call | Range descriptor | local | — | rejected at the definition: a function cannot return a range (#146) | — | — |
 | 9 | none | ranged | scalar, self-ref | local | RHS-local | — | R | 7 |
 | 10 | none | ranged, checked | scalar | local | RHS-local | — | S | 7, fast path 10 |
 | 11 | none | collector, ranged | scalar, heap | local | collector-local | — | S | 8 |
@@ -177,7 +177,7 @@ two together rather than treating any single row as a deletion trigger.
 - **7e** — ranged checked fallback: the fallback resolves per iteration inside the loop nest. *Missing:* regressions when implemented. *Helpers:* condLHS spine, ranged staging
 - **7f** — collector-cell fallback: in `[arr[oob] \|\| -1]` the `\|\|` resolves before the cell's zero-fill. *Missing:* regressions when implemented. *Helpers:* collector rewrite, condLHS spine
 - **8** — plain value copy; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS. *Tests:* `range_finalize:2-21` (literal, identifier copy, empty, reassign), `compiler/solver_test.go`. *Helpers:* `compileAssignments`
-- **8b** — call lowering + indirect-return ABI, not descriptor copying. *Tests:* `range_finalize:38` (`makeRange`), `mem/gate_heap`. *Missing:* a Range return that starts from a default and is overwritten conditionally, the form #123 requires of a conditional output
+- **8b** — no longer arises: a function cannot return a range (#146), so an output assigned one is rejected at its definition. A function returns the bounds instead (`range_finalize`'s `rangeBounds`, `mem/gate_heap`'s `mkBounds`), and the caller's range literal is row 8. *Tests:* `TestFunctionsCannotReturnRanges`
 - **9** — `compileAssignments` → expression loop nest (passes nil conditions). *Tests:* `math/range_expr`, `math/range.spt`, `range_shadow.spt`, `cond/domain_activation`. *Helpers:* `compileAssignments`, `withCollectorPreparedLoopNest`, `compileCondOperands`
 - **10** — as #9 + `withLoopNestVersioned` affine probe. *Tests:* `array/affine_bounds_stmt`, `math/affine_bounds_expr`. *Helpers:* affine decision helpers
 - **11** — `compileArrayExpression` → `compileArray` → `withCollectorDomain`. *Tests:* `range`, `array/array_capture`, `mem/gate_heap`. *Helpers:* collector rewrite

@@ -12,9 +12,10 @@ z = "keepme"
 z = q > 9 mkTag(q)
 "RangedGateHeapCallNoAdmit: -z"
 
-# A Range returned by a function is an ordinary descriptor: it drives a
-# collector domain and a statement gate like any locally created range.
-fr = mkRange(3)
+# A range built from a function's bounds drives a collector domain and a
+# statement gate like any other range.
+frStart, frStop = mkBounds(3)
+fr = frStart:frStop
 fc = [fr]
 "FnRangeCollector: -fc"
 

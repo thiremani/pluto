@@ -323,20 +323,18 @@ since a statement condition must be a scalar.
 
 The text also decides which values are ranges. A parameter never holds one,
 since a range argument runs the function once per element: `Wrap(1:5)`,
-where `Wrap` returns its input, gives `4`. Whether a function returns a
-range follows from its text, as with `MakeRange` below, and a range that
-arrives through a call counts as possibly empty, so `F` needs its default.
-A statement's condition iterates the ranges it names, so its value reads them
-as elements: in `kept = s > 2 s`, `kept` gets an element of `s`. Under `||`
-and `&&`, only a call passes its range on whole; a range literal or binding
-operand is iterated, so `n > 0 && 0:5` gives an element.
+where `Wrap` returns its input, gives `4`. A function cannot return a range
+either: an output assigned one is rejected, and the function returns the
+bounds for its caller to build the range from (#146). A range bound to a
+name counts as possibly empty, so `F` below needs its default. A statement's
+condition iterates the ranges it names, so its value reads them as elements:
+in `kept = s > 2 s`, `kept` gets an element of `s`. Under `||` and `&&`, a
+range literal or binding operand is iterated, so `n > 0 && 0:5` gives an
+element.
 
 ```python
-r = MakeRange(n)
-    r = 0:n
-
 out = F(prev, n)
-    r = MakeRange(n)
+    r = 0:n
     out = prev
     out = r * 2
 ```

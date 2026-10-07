@@ -34,10 +34,11 @@ existing = emptyRange + 1
 callFinal = useShadow(ascending)
 "CallFinal: -callFinal"
 
-# A Range returned by a function is a descriptor once bound.
-returnedRange = makeRange()
-returnedValues = [returnedRange]
-"ReturnedRange: -returnedValues"
+# A function returns a range's bounds, and the caller builds the range.
+boundsStart, boundsStop = rangeBounds()
+builtRange = boundsStart:boundsStop
+builtValues = [builtRange]
+"BuiltRange: -builtValues"
 
 # A bare Range in a main marker formats the descriptor: the string is one
 # value with no drivers, in interpolation exactly as in assignment.

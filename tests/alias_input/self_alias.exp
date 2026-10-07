@@ -38,7 +38,6 @@ Powers: 9 27
 PowersShared: 9 81
 ReadTwice: second first second
 SharedPair: 105 10
-NextRange: 2:3
 CondCount: 11 11 lr
 re:storage: (0x[0-9a-f]+) (?!\1$)0x[0-9a-f]+
 re:storage: (0x[0-9a-f]+) \1

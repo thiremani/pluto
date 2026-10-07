@@ -118,11 +118,6 @@ out, before = SharedPair(a, b)
     before = b
     out = AddBoth(a, b, (1:3) + 0)
 
-# A shared range parameter is iterated by a scalar bound to the same name;
-# that scalar must not inherit the range's alias.
-out = NextRange(i)
-    out = i:(i+1)
-
 # A conditional call promotes its indirect arguments before branching. The
 # scalar after a two-valued argument binds a later parameter and must keep
 # its live alias.

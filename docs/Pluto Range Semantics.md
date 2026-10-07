@@ -65,9 +65,11 @@ Range is nameable and copyable, but is not yet a fully first-class container
 element. Arrays and tables contain scalar/string elements rather than Range
 descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
 function likewise consumes it as a driver rather than passing inert metadata.
-A function may return a Range descriptor to a binding, but anonymous
-Range-returning expressions are not yet accepted uniformly by every consuming
-context; bind the result before consuming it.
+A function cannot return a Range either: an output assigned one is rejected
+at the function's definition (#146). The function returns the bounds instead,
+and the caller builds the range: `lo, hi = Bounds(n)`, then `r = lo:hi`. If
+the range was assigned conditionally, the rebuild keeps the condition:
+`r = n > 0 lo:hi`.
 
 Range-indexed arrays follow the same rule:
 

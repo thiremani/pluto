@@ -934,25 +934,21 @@ not reported again.
 
 The pass also reads from the text which values are ranges, and so which
 statements a range drives. A parameter never holds a range, since a range
-argument drives the whole body, and struct fields, constants and array
-elements cannot hold one (`[r]` collects `r`'s values). A value holds a range
-when it is a range literal, a binding assigned a descriptor (`x = r`, not
-`x = r * 2`), a call output that its template assigns a range, or a `||` or
-value-position `&&` whose operand is such a call
-(`MakeRange(n > 0) || MakeRange(3)` forwards whichever alternative succeeds,
-and `c > 0 && MakeRange(3)` its right operand). A range literal or binding
-operand of `||` and `&&` is iterated instead (`n > 0 && 0:5` gives an
+argument drives the whole body; no call yields one, since a function cannot
+return a range (an output assigned one is rejected at the definition, #146);
+and struct fields, constants and array elements cannot hold one (`[r]`
+collects `r`'s values). A value holds a range when it is a range literal or a
+binding assigned a descriptor (`x = r`, not `x = r * 2`). A range literal or
+binding operand of `||` and `&&` is iterated (`n > 0 && 0:5` gives an
 element). A statement's condition iterates the ranges it names, so its value
 reads them as elements (`kept = s > 2 s`); a range the condition only
-collects, or does not name, stays a descriptor. Before checking any body, the
-pass computes which template outputs hold a range, iterating to a fixed point
-across templates that call each other: an output assigned `t` after
-`t = MakeRange(n)` is a range as well. A range that arrives through a call
-counts as possibly empty. Every check then uses the same classification, and
-none waits for a type: after `r = MakeRange(n)`, `out = r * 2` does not kill
-an earlier `out = prev`, does not definitely assign `out`, and so cannot by
-itself make a later read of `out` valid. Settlement panics when a
-specialization's Range-typed bindings disagree with this summary.
+collects, or does not name, stays a descriptor. A template's own text
+therefore decides all of this, without looking at another template. Every
+check then uses the same classification, and none waits for a type: after
+`r = 0:n`, `out = r * 2` does not kill an earlier `out = prev`, does not
+definitely assign `out`, and so cannot by itself make a later read of `out`
+valid. Settlement panics when a specialization's Range-typed bindings
+disagree with this summary.
 
 The flow checks run after a template's structural checks: explicit
 use-before-definition, illegal input/global writes, unused inputs,
@@ -1460,16 +1456,13 @@ immediate deletion at the last consumer.
   body that can leave an output unwritten is rejected at the definition;
   `out = x > 0` alone is rejected for every argument type; `out = prev` then
   `out = x > 0` is accepted for scalar and array `x`, with no diagnostic for
-  the array specialization's dead default; after
-  `r = MakeRange(n)`, `out = prev` then `out = r * 2` is accepted and
-  `F(y, 0)` keeps `y`, while without the default both the body and a read
-  of `out` after `out = r * 2` are rejected; a range passed on through
-  another template's output, or forwarded by `||` or value-position `&&` as
-  in `r = MakeRange(n > 0) || MakeRange(3)`, counts the same; and
-  `y = Helper(x)` then
-  `out = y + 1`, where `Helper` returns a scalar, is a definite write; each
-  way a value holds or iterates a range (a gate naming it, a literal or
-  binding under `&&`, a call under `||`) agrees with the solved types; and a
+  the array specialization's dead default; after `r = 0:n`, `out = prev`
+  then `out = r * 2` is accepted and `F(y, 0)` keeps `y`, while without the
+  default both the body and a read of `out` after `out = r * 2` are
+  rejected; `y = Helper(x)` then `out = y + 1`, where `Helper` returns a
+  scalar, is a definite write; each way a value holds or iterates a range (a
+  gate naming it, a literal or binding under `&&`) agrees with the solved
+  types; an output assigned a range is rejected (#146); and a
   call that names no template, an operator whose sides do not line up, an
   assignment whose values do not fill its targets, or a name assigned both a
   range and a non-range value is reported where the solver reports it, with

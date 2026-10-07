@@ -1090,11 +1090,6 @@ func unassignedOutputMessage(name string) string {
 	return fmt.Sprintf("output %q may be left unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it (%s = prev), with each caller passing its destination as that input", name, name)
 }
 
-const makeRangeTemplate = `r = MakeRange(n)
-    r = 0:n
-
-`
-
 // Every body that runs writes every output. The template check reads the
 // text: a statement gate, a value that can fail, or a range that may be empty
 // can skip a write, for every argument type.
@@ -1193,56 +1188,11 @@ x, y = IsOdd(n)
     out = x + (0:3)`,
 		},
 		{
-			// A range that arrives through a call may be empty.
-			name: "RangeFromCall",
-			code: makeRangeTemplate + `out = F(n)
-    r = MakeRange(n)
-    out = r * 2`,
-			unassigned: []string{"out"},
-		},
-		{
-			// A range a call returns runs the function it is passed to once
-			// per element, so it may run it not at all (#143 tracks lowering
-			// this form).
-			name: "RangeFromCallAsArgument",
-			code: makeRangeTemplate + `y = Sq(x)
-    y = x * x
-
-out = F(n)
-    out = Sq(MakeRange(n))`,
-			unassigned: []string{"out"},
-		},
-		{
-			name: "RangeFromCallWithDefault",
-			code: makeRangeTemplate + `out = F(prev, n)
-    r = MakeRange(n)
+			name: "LocalRangeWithDefault",
+			code: `out = F(prev, n)
+    r = 0:n
     out = prev
     out = r * 2`,
-		},
-		{
-			name: "RangeThroughAnotherTemplate",
-			code: makeRangeTemplate + `r = Forward(n)
-    t = MakeRange(n)
-    r = t
-
-out = F(n)
-    r = Forward(n)
-    out = r * 2`,
-			unassigned: []string{"out"},
-		},
-		{
-			name: "RangeForwardedByOr",
-			code: makeRangeTemplate + `out = F(n)
-    r = MakeRange(n > 0) || MakeRange(3)
-    out = r * 2`,
-			unassigned: []string{"out"},
-		},
-		{
-			name: "RangeForwardedByAnd",
-			code: makeRangeTemplate + `out = F(n)
-    r = n > 0 && MakeRange(3)
-    out = r * 2`,
-			unassigned: []string{"out"},
 		},
 		{
 			name: "ScalarCallOutput",
@@ -1272,8 +1222,7 @@ out = F(x)
 			unassigned: []string{"out"},
 		},
 		{
-			// A literal or binding under && is iterated; only a call operand
-			// passes its descriptor on.
+			// A literal or binding under && is iterated.
 			name: "AndIteratesLiteral",
 			code: `out = F(n)
     last = n > 0 && 0:5
@@ -1287,54 +1236,12 @@ out = F(x)
     out = last + 1`,
 		},
 		{
-			// Templates are summarized to a fixed point, so a caller defined
-			// before the template that returns a range still sees it.
-			name: "RangeThroughTemplatesDefinedLater",
-			code: `out = F(n)
-    r = Forward(n)
-    out = r * 2
-
-r = Forward(n)
-    t = MakeRange(n)
-    r = t
-
-` + makeRangeTemplate,
-			unassigned: []string{"out"},
-		},
-		{
-			// A descriptor assigned or passed on whole is not iterated.
-			name: "OutputCopiesRangeDescriptor",
-			code: `out = F(n)
-    stream = 0:n
-    out = stream`,
-		},
-		{
-			name: "OutputFromRangeCall",
-			code: makeRangeTemplate + `out = F(n)
-    out = MakeRange(n)`,
-		},
-		{
-			name: "OutputFromForwardedRange",
-			code: makeRangeTemplate + `out = F(n)
-    out = MakeRange(n > 0) || MakeRange(3)`,
-		},
-		{
 			// A width or precision consumes a range as numbers.
 			name: "SpecifierRangeIterates",
 			code: `out = F(n)
     w = 1:n
     out = "-n%(-w)d"`,
 			unassigned: []string{"out"},
-		},
-		{
-			// A call under || passes on each output whole, so no range
-			// drives the write.
-			name: "OrForwardsMultiOutputCall",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
-
-a, b = F(n)
-    a, b = Two(n > 0) || Two(3)`,
 		},
 		{
 			// A && fills its right operand's targets.
@@ -1464,23 +1371,23 @@ out = Inc(n)
 			// An operator whose sides do not line up yields one value, as the
 			// solver counts it, so the assignment does not line up either.
 			name: "OperandCountMismatch",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
 
 a, b = F(n)
-    a, b = Two(n) * 2`,
+    a, b = Pair(n) * 2`,
 			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
 		},
 		{
 			name: "OrAlternativesCountMismatch",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
 
-r = One(n)
-    r = 0:n
+y = Inc(n)
+    y = n + 1
 
 a, b = F(n)
-    a, b = Two(n > 0) || One(3)`,
+    a, b = Pair(n > 0) || Inc(3)`,
 			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
 		},
 		{
@@ -1505,60 +1412,6 @@ a, b, c = Three(n)
 a, b, c = F(n)
     a, b, c = Pair(n > 0) && Three(n)`,
 			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3", "assignment mismatch: 3 targets but 1 value"},
-		},
-		{
-			// Under ||, a range literal yields its elements, so it cannot back
-			// up a call that returns a range.
-			name: "OrAlternativesDisagreeOnRange",
-			code: makeRangeTemplate + `out = F(n)
-    out = MakeRange(n > 0) || 0:n`,
-			errors: []string{"logical OR value operands must have matching output types, but only the left one yields a range (a range literal or name under || yields its elements)"},
-		},
-		{
-			// The solver leaves an unknown call unresolved, and anything
-			// computed from it, which matches any alternative.
-			name: "UnresolvedAlternativeIsNotCompared",
-			code: makeRangeTemplate + `out = F(n)
-    out = (Missing(n) + 1) || MakeRange(3)`,
-			errors: []string{"undefined function: Missing"},
-		},
-		{
-			name: "MisalignedAlternativeIsNotCompared",
-			code: makeRangeTemplate + `p, q = Pair(n)
-    p, q = n, n + 1
-
-out = F(n)
-    out = (Pair(n) * 2) || MakeRange(3)`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
-		},
-		{
-			// A || whose sides do not line up passes no range, so its caller
-			// is not reported again.
-			name: "CallerOfMisalignedTemplate",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
-
-r = One(n)
-    r = 0:n
-
-r = G(n)
-    r = Two(n > 0) || One(3)
-
-out = F(n)
-    out = G(n) * 2`,
-			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`},
-		},
-		{
-			name: "OrAlternativesDisagreeOnRangeSlotBySlot",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
-
-k, r = Flip(n)
-    k, r = n, 0:n
-
-a, b = F(n)
-    a, b = Flip(n > 0) || Two(3)`,
-			errors: []string{"logical OR value operands must have matching output types, but only the right one yields a range (a range literal or name under || yields its elements)"},
 		},
 		{
 			name: "RangeReassignedNonRange",
@@ -1660,6 +1513,96 @@ y = G(x)
 	require.Equal(t, [][2]int{{2, 19}, {2, 10}, {7, 5}}, positions)
 }
 
+func rangeOutputMessage(name string) string {
+	return fmt.Sprintf("output %q cannot hold a range; return its bounds and build the range where it is used", name)
+}
+
+// A function cannot return a range: it returns the bounds, and its caller
+// builds the range.
+func TestFunctionsCannotReturnRanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		errors []string
+	}{
+		{
+			name: "RangeLiteralOutput",
+			code: `r = MakeRange(n)
+    r = 0:n`,
+			errors: []string{rangeOutputMessage("r")},
+		},
+		{
+			name: "OneOutputOfSeveral",
+			code: `r, k = Two(n)
+    r, k = 0:n, n`,
+			errors: []string{rangeOutputMessage("r")},
+		},
+		{
+			name: "GatedRangeOutput",
+			code: `out = F(n)
+    out = n > 0 0:n`,
+			errors: []string{rangeOutputMessage("out")},
+		},
+		{
+			name: "CopiedRangeOutput",
+			code: `out = F(n)
+    r = 0:n
+    out = r`,
+			errors: []string{rangeOutputMessage("out")},
+		},
+		{
+			name: "IteratedRangeOutput",
+			code: `out = F(prev, n)
+    r = 0:n
+    out = prev
+    out = r * 2`,
+		},
+		{
+			name: "CollectedRangeOutput",
+			code: `out = F(n)
+    out = [0:n]`,
+		},
+		{
+			name: "BoundsOutputs",
+			code: `lo, hi = Bounds(n)
+    lo, hi = 0, n
+
+out = F(n)
+    lo, hi = Bounds(n)
+    r = lo:hi
+    out = [r]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			want := test.errors
+			if want == nil {
+				want = []string{}
+			}
+			require.Equal(t, want, extractErrorMessages(cc.Compile()))
+		})
+	}
+}
+
+func TestRangeOutputIsReportedAtItsAssignment(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `r, k = Two(n)
+    k = n
+    r = 0:n`))
+	errs := cc.Compile()
+
+	require.Len(t, errs, 1)
+	require.Equal(t, 3, errs[0].Token.Line)
+	require.Equal(t, 5, errs[0].Token.Column)
+}
+
 // The template checks read from the text which bindings hold a Range, and
 // settlement checks that the solved types agree, so each way a value holds
 // or iterates a range is pinned here against the solver.
@@ -1747,61 +1690,10 @@ out = F(n)
 			ranges: []string{"stream"},
 		},
 		{
-			name: "AndPassesCall",
-			code: makeRangeTemplate + `out = F(n)
-    kept = n > 0 && MakeRange(3)
-    out = [kept]`,
-			ranges: []string{"kept"},
-		},
-		{
-			name: "OrPassesCalls",
-			code: makeRangeTemplate + `out = F(n)
-    kept = MakeRange(n > 0) || MakeRange(3)
-    out = [kept]`,
-			ranges: []string{"kept"},
-		},
-		{
-			name: "CallOutput",
-			code: makeRangeTemplate + `out = F(n)
-    kept = MakeRange(n)
-    out = [kept]`,
-			ranges: []string{"kept"},
-		},
-		{
-			name: "RangeOutput",
+			// A range in one value of a tuple holds only that target.
+			name: "RangeInOneSlotOfATuple",
 			code: `out = F(n)
-    out = 0:n`,
-			ranges: []string{"out"},
-		},
-		{
-			name: "RangeInOneSlotOfACall",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
-
-out = F(n)
-    kept, k = Two(n)
-    out = [kept] ⊕ [k]`,
-			ranges: []string{"kept"},
-		},
-		{
-			// A value-position && passes on each output of the call it yields.
-			name: "AndPassesMultiOutputCall",
-			code: `r, k = Two(n)
-    r, k = 0:n, n
-
-out = F(n)
-    kept, k = n > 0 && Two(n)
-    out = [kept] ⊕ [k]`,
-			ranges: []string{"kept"},
-		},
-		{
-			// So does a ||, slot by slot.
-			name: "OrPassesMultiOutputCalls",
-			code: `k, r = Flip(n)
-    k, r = n, 0:n
-
-out = F(n)
-    k, kept = Flip(n > 0) || Flip(3)
+    kept, k = 0:n, n
     out = [kept] ⊕ [k]`,
 			ranges: []string{"kept"},
 		},
