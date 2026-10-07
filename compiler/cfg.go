@@ -442,11 +442,13 @@ type textWrite struct {
 }
 
 // rangeFlow reads from a template's text which bindings hold a Range
-// descriptor and which values a range drives, as the solver types them. A
-// parameter never holds a range, since a range argument runs the body once
-// per element, and no call yields one, since a function cannot return a
-// range; a binding holds one when it is assigned a descriptor. assigned keeps
-// whether each assigned name's first assignment gave it a range.
+// descriptor and which values a range drives, as the solver types them. Only
+// a range literal assigned on its own constructs a descriptor: a parameter
+// never holds one, since a range argument runs the body once per element; no
+// call yields one, since a function cannot return a range; and a range name
+// iterates wherever it is used, so a binding assigned from one holds an
+// element. assigned keeps whether each assigned name's first assignment gave
+// it a range.
 type rangeFlow struct {
 	cc       *CodeCompiler
 	bindings map[string]struct{}
@@ -470,12 +472,11 @@ func (rf *rangeFlow) letWrites(let *ast.LetStatement) ([]textWrite, bool) {
 		return nil, false
 	}
 
-	gateNames := rf.gateRanges(let.Condition)
 	gated := len(let.Condition) > 0
 	writes := make([]textWrite, 0, len(let.Name))
 	for _, value := range let.Value {
 		definite := !gated && !rf.maySkip(value)
-		for _, holdsRange := range rf.slotRanges(value, gateNames) {
+		for _, holdsRange := range rf.slotRanges(value) {
 			writes = append(writes, textWrite{definite: definite, holdsRange: holdsRange})
 		}
 	}
@@ -501,14 +502,13 @@ func textNodeFails(expr ast.Expression) bool {
 }
 
 // slotRanges reports, per target a value fills, whether it receives a Range
-// descriptor. A value that fills several targets comes from calls, which
-// yield no range.
-func (rf *rangeFlow) slotRanges(value ast.Expression, gateNames map[string]struct{}) []bool {
-	slots := rf.cc.valueSlots(value)
-	if slots == 1 {
-		return []bool{rf.holdsRange(value, gateNames)}
+// descriptor: only a bare range literal constructs one.
+func (rf *rangeFlow) slotRanges(value ast.Expression) []bool {
+	ranges := make([]bool, rf.cc.valueSlots(value))
+	if _, isLiteral := value.(*ast.RangeLiteral); isLiteral {
+		ranges[0] = true
 	}
-	return make([]bool, slots)
+	return ranges
 }
 
 // record publishes an assignment's targets once its reads are classified:
@@ -529,31 +529,13 @@ func (rf *rangeFlow) record(let *ast.LetStatement, writes []textWrite) {
 	}
 }
 
-// holdsRange reports whether a single-slot value assigns a Range descriptor.
-// The value reads a range that its statement's condition iterates as that
-// range's current element.
-func (rf *rangeFlow) holdsRange(value ast.Expression, gateNames map[string]struct{}) bool {
-	switch v := value.(type) {
-	case *ast.RangeLiteral:
-		return true
-	case *ast.Identifier:
-		_, isRange := rf.bindings[v.Value]
-		_, iterated := gateNames[v.Value]
-		return isRange && !iterated
-	}
-	return false
-}
-
 // drivesValue reports whether a range that may be empty drives an
-// assignment's value: any range the value iterates, apart from a descriptor
-// it assigns. A range the statement's condition names is already driven by
-// the gate, which can skip the write by itself.
+// assignment's value: any range the value iterates, apart from a range
+// literal it assigns whole.
 func (rf *rangeFlow) drivesValue(value ast.Expression) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
 		return rf.drivesAny(ast.ExprChildren(v))
-	case *ast.Identifier:
-		return false
 	case *ast.CallExpression:
 		return rf.drivesAny(v.Arguments)
 	}
@@ -570,10 +552,12 @@ func (rf *rangeFlow) drives(expr ast.Expression) bool {
 	case *ast.RangeLiteral:
 		return !rangeLiteralGuaranteedNonEmpty(e)
 	case *ast.Identifier:
-		_, isRange := rf.bindings[e.Value]
-		return isRange
+		return rf.isRangeBinding(e.Value)
 	case *ast.StringLiteral:
-		return len(rf.specifierRanges(e)) > 0
+		// A marker iterates the range it names, whether it formats the range
+		// or uses it as a width or precision.
+		mains, specs := formatMarkerIdentifiers(e.Token.Literal, rf.isDefined)
+		return slices.ContainsFunc(slices.Concat(mains, specs), rf.isRangeBinding)
 	}
 	return rf.drivesAny(ast.ExprChildren(expr))
 }
@@ -582,47 +566,9 @@ func (rf *rangeFlow) drivesAny(exprs []ast.Expression) bool {
 	return slices.ContainsFunc(exprs, rf.drives)
 }
 
-// gateRanges returns the range bindings that a statement's conditions iterate.
-func (rf *rangeFlow) gateRanges(conditions []ast.Expression) map[string]struct{} {
-	names := make(map[string]struct{})
-	for _, condition := range conditions {
-		rf.collectRangeNames(condition, names)
-	}
-	return names
-}
-
-func (rf *rangeFlow) collectRangeNames(expr ast.Expression, names map[string]struct{}) {
-	switch e := expr.(type) {
-	case *ast.ArrayLiteral:
-		return
-	case *ast.Identifier:
-		if _, isRange := rf.bindings[e.Value]; isRange {
-			names[e.Value] = struct{}{}
-		}
-		return
-	case *ast.StringLiteral:
-		for _, name := range rf.specifierRanges(e) {
-			names[name] = struct{}{}
-		}
-		return
-	}
-
-	for _, child := range ast.ExprChildren(expr) {
-		rf.collectRangeNames(child, names)
-	}
-}
-
-// specifierRanges returns the range bindings a string's width or precision
-// consumes as numbers; a main marker formats a range as its descriptor.
-func (rf *rangeFlow) specifierRanges(lit *ast.StringLiteral) []string {
-	_, specs := formatMarkerIdentifiers(lit.Token.Literal, rf.isDefined)
-	var ranges []string
-	for _, name := range specs {
-		if _, isRange := rf.bindings[name]; isRange {
-			ranges = append(ranges, name)
-		}
-	}
-	return ranges
+func (rf *rangeFlow) isRangeBinding(name string) bool {
+	_, ok := rf.bindings[name]
+	return ok
 }
 
 func (rf *rangeFlow) isDefined(name string) bool {

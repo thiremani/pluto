@@ -4,18 +4,21 @@ This document describes Pluto's semantic model and compares it with other major 
 
 ## The Pluto Model (Summary)
 
-1. **Materialized Assignment is Copy:** assigning a scalar, Range descriptor,
+1. **Materialized Assignment is Copy:** assigning a scalar, range literal,
    array, table, string, or struct creates an independent value.
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
 3. **Range Selections are Streams:** `s = arr[i]` keeps the final selected
    value (an element or owned subarray); `s = [arr[i]]` materializes every
    selected value.
-4. **Ranges are Descriptor Values:** `j = i` copies a Range; consuming it in
-   `x = i + 1`, `arr[i]`, a call, or `[]` drives a loop. Print and main
-   interpolation markers format the descriptor itself.
-5. **Empty-Domain Initialization:** An empty Range descriptor still assigns.
-   An empty ranged computation leaves an existing destination unchanged and a
-   fresh destination at its type's zero value.
+4. **Only a Range Literal Makes a Range:** `i = 0:5` binds a Range
+   descriptor. Every use of the name drives a loop: `j = i` and `x = i + 1`
+   keep the last yield, and `arr[i]`, a call, `[]`, a print, and an
+   interpolation marker run once per yield. A range literal printed on its
+   own shows as written (`0:5`). A function cannot return a Range (#146).
+5. **Empty-Domain Initialization:** A range literal still assigns when it is
+   empty. An empty ranged computation, including `j = i` over an empty `i`,
+   leaves an existing destination unchanged and a fresh destination at its
+   type's zero value.
 6. **Driver Identity Determines Looping:** Repeated use of one Range binding
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
@@ -37,7 +40,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Read-only binding** (scalars lowered by value) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
 | **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
-| **Range Usage** | **Copyable descriptor; operations iterate** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
+| **Range Usage** | **Literal-built descriptor; every use iterates** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
 
@@ -60,16 +63,15 @@ x = (i+1 for i in iter)   # Lazy generator
 a = [1]; b = a; a[0] = 2  # b sees 1 (independent copy)
 
 i = 0:5
-j = i                      # Descriptor copy; no loop
-x = i + 0                  # Loop executes, x = 4 (last yield)
+j = i                      # Loop executes, j = 4 (last yield)
 x = i + 1                  # Loop executes, x = 5 (last value)
 i = 0:10                   # Bind a new reusable Range domain
 y = i + 1                  # Consuming statement runs the loop; y = 10
 ```
 
 **Difference:** Pluto is safer and more predictable. A range literal binds a
-reusable descriptor. A bare assignment copies it; a consuming expression runs
-it as a loop rather than creating a lazy generator.
+reusable descriptor, and every use of its name runs it as a loop rather than
+creating a lazy generator.
 
 ---
 
@@ -167,16 +169,16 @@ an owned subarray:
 
 ```python
 i = 0:5
-j = i          # Same bounds, independent named driver
-x = i + 0      # Loop at statement: x = 4 (last yielded iterator)
+x = i          # Loop at statement: x = 4 (last yielded iterator)
 x = i + 1      # Loop at statement: x = 5 (last scalar value)
 y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-Complete Range expressions construct or copy descriptors. Operations and
-range-indexed array accesses consume descriptors as loop drivers. An
-assignment root keeps the last computation yield; `[]` collects every yield.
+A bare range literal constructs a descriptor. Every use of a range name,
+bare or in an operation or a range-indexed array access, consumes it as a
+loop driver. An assignment root keeps the last computation yield; `[]`
+collects every yield.
 
 ### Driver Identity Determines Loop Structure
 
@@ -195,8 +197,8 @@ product = (i + 1) * (j + 1)
 
 | Mode | Syntax | Behavior |
 |------|--------|----------|
-| **Descriptor Copy** | `j = i` | No loop; j receives the Range value |
-| **Last Value** | `x = i + 0` or `x = arr[i]` | Loop runs, x = last yielded value |
+| **Construct** | `i = 0:5` | No loop; i receives the Range value |
+| **Last Value** | `x = i`, `x = i + 0` or `x = arr[i]` | Loop runs, x = last yielded value |
 | **Accumulate** | `x = x + i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
 
@@ -238,8 +240,8 @@ Pluto sits in a "Sweet Spot" for parallel computing:
 
 1. **Value Semantics (like R/Matlab)** make reasoning about concurrent code easy. "If I have `x`, I own `x`."
 2. **Explicit Collection** makes every allocation and materialization boundary visible.
-3. **Range-Driven Execution (Unique)** separates copyable descriptors from
-   operations that iterate without lazy-generator complexity.
+3. **Range-Driven Execution (Unique)** builds a range only from a literal,
+   and every use of its name iterates without lazy-generator complexity.
 4. **Named Driver Reuse (Unique)** makes user intent explicit — repeated use
    of one range name shares one loop.
 5. **Defined Empty Domains (Unique)** give fresh and existing destinations

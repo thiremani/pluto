@@ -1381,49 +1381,63 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
-func TestBareRangeAssignmentsCopyDescriptors(t *testing.T) {
+// Only a range literal constructs a Range; a range name iterates wherever it
+// is used, so assigning one keeps its final element.
+func TestBareRangeNamesIterate(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "bareRangeCopies", "", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "bareRangeNames", "", ast.NewCode())
 	program := mustParseScript(t, `source = 0:5
-copy = (source)
-last = source + 0
+last = (source)
+sum = source + 0
 outer = 0:2
-gatedCopy = outer < 2 source
-filtered = source > 2 source`)
+gated = outer < 2 source
+filtered = source > 2 source
+marked = "v -source"`)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
-	for _, name := range []string{"source", "copy", "gatedCopy"} {
+	for _, name := range []string{"source", "outer"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, Range{Iter: I64}, typ)
 	}
-	for _, name := range []string{"last", "filtered"} {
+	for _, name := range []string{"last", "sum", "gated", "filtered"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, I64, typ)
 	}
 
-	copyExpr := program.Statements[1].(*ast.LetStatement).Value[0]
-	copyInfo := ts.ExprCache[key(ts.FuncNameMangled, copyExpr)]
-	require.False(t, copyInfo.HasRanges)
-	require.Empty(t, copyInfo.Ranges)
-	require.Nil(t, copyInfo.Rewrite)
+	lastExpr := program.Statements[1].(*ast.LetStatement).Value[0]
+	lastInfo := ts.ExprCache[key(ts.FuncNameMangled, lastExpr)]
+	require.Equal(t, []Type{I64}, lastInfo.OutTypes)
+	require.True(t, lastInfo.HasRanges)
+	require.Len(t, lastInfo.Ranges, 1)
+	require.Equal(t, "source", lastInfo.Ranges[0].Name)
 
-	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
-	gatedCopyInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedCopyExpr)]
-	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
-	require.Len(t, gatedCopyInfo.Ranges, 1)
-	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
+	gatedExpr := program.Statements[4].(*ast.LetStatement).Value[0]
+	gatedInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedExpr)]
+	require.Equal(t, []Type{I64}, gatedInfo.OutTypes)
+	gatedDrivers := make([]string, len(gatedInfo.Ranges))
+	for i, driver := range gatedInfo.Ranges {
+		gatedDrivers[i] = driver.Name
+	}
+	require.ElementsMatch(t, []string{"outer", "source"}, gatedDrivers)
 
 	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
 	filteredInfo := ts.ExprCache[key(ts.FuncNameMangled, filteredExpr)]
 	require.Equal(t, []Type{I64}, filteredInfo.OutTypes)
 	require.Len(t, filteredInfo.Ranges, 1)
 	require.Equal(t, "source", filteredInfo.Ranges[0].Name)
+
+	// A main marker naming a range drives the string.
+	markedExpr := program.Statements[6].(*ast.LetStatement).Value[0]
+	markedInfo := ts.ExprCache[key(ts.FuncNameMangled, markedExpr)]
+	require.True(t, markedInfo.HasRanges)
+	require.Len(t, markedInfo.Ranges, 1)
+	require.Equal(t, "source", markedInfo.Ranges[0].Name)
 }
 
 func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {

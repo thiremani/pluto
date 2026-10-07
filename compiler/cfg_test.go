@@ -1213,12 +1213,19 @@ out = F(x)
     out = last + 1`,
 		},
 		{
-			name: "GateOnAnotherRangeKeepsDescriptor",
+			name: "GateOnAnotherRangeIteratesBoth",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = kept * 2`,
+		},
+		{
+			// A bare range name iterates, and a named range may be empty.
+			name: "BareRangeNameIterates",
+			code: `out = F(n)
+    stream = 0:n
+    out = stream`,
 			unassigned: []string{"out"},
 		},
 		{
@@ -1234,6 +1241,14 @@ out = F(x)
     stream = 0:n
     last = n > 0 && stream
     out = last + 1`,
+		},
+		{
+			// A main marker iterates the range it names, too.
+			name: "MarkerRangeIterates",
+			code: `out = F(n)
+    r = 0:n
+    out = "v -r"`,
+			unassigned: []string{"out"},
 		},
 		{
 			// A width or precision consumes a range as numbers.
@@ -1544,11 +1559,12 @@ func TestFunctionsCannotReturnRanges(t *testing.T) {
 			errors: []string{rangeOutputMessage("out")},
 		},
 		{
-			name: "CopiedRangeOutput",
+			// A range name iterates, so the output receives an element.
+			name: "RangeNameOutputIterates",
 			code: `out = F(n)
     r = 0:n
     out = r`,
-			errors: []string{rangeOutputMessage("out")},
+			errors: []string{unassignedOutputMessage("out")},
 		},
 		{
 			name: "IteratedRangeOutput",
@@ -1589,6 +1605,22 @@ out = F(n)
 	}
 }
 
+// A range literal assigned whole always writes, even an empty one, so
+// overwriting it unread is reported as for any definite write.
+func TestRangeLiteralWriteIsDefinite(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `out = F(n)
+    r = 0:n
+    r = 1:n
+    out = [r]`))
+	require.Equal(t, []string{
+		`unconditional assignment to "r" overwrites a previous value that was never used. It was previously written at line 2:5`,
+		`value assigned to "r" is never used`,
+	}, extractErrorMessages(cc.Compile()))
+}
+
 func TestRangeOutputIsReportedAtItsAssignment(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -1613,12 +1645,14 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 		ranges []string
 	}{
 		{
-			name: "DescriptorCopy",
+			// A range name iterates wherever it is used, so a copy holds an
+			// element.
+			name: "CopyIterates",
 			code: `out = F(n)
     stream = 0:n
     kept = stream
     out = [kept]`,
-			ranges: []string{"kept", "stream"},
+			ranges: []string{"stream"},
 		},
 		{
 			name: "OperationIterates",
@@ -1637,13 +1671,13 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 			ranges: []string{"stream"},
 		},
 		{
-			name: "GateOnAnotherRangeKeepsDescriptor",
+			name: "GateOnAnotherRangeIteratesBoth",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = [kept]`,
-			ranges: []string{"kept", "other", "stream"},
+			ranges: []string{"other", "stream"},
 		},
 		{
 			name: "WholeLiteralUnderGateKeepsDescriptor",
@@ -1654,9 +1688,9 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 			ranges: []string{"kept", "stream"},
 		},
 		{
-			// A range inside a collector in the condition is collected, so
-			// the gate does not iterate it.
-			name: "CollectorInGateKeepsDescriptor",
+			// The collector in the condition settles its own iteration; the
+			// value iterates the range by name.
+			name: "CollectorInGate",
 			code: `n = Size(xs)
     t = xs[0]
     n = t + 2
@@ -1665,7 +1699,7 @@ out = F(n)
     stream = 0:n
     kept = Size([stream]) > 1 stream
     out = [kept]`,
-			ranges: []string{"kept", "stream"},
+			ranges: []string{"stream"},
 		},
 		{
 			name: "SpecifierInGateIterates",
