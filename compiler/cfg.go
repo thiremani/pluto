@@ -556,8 +556,7 @@ func (rf *rangeFlow) drives(expr ast.Expression) bool {
 	case *ast.StringLiteral:
 		// A marker iterates the range it names, whether it formats the range
 		// or uses it as a width or precision.
-		mains, specs := formatMarkerIdentifiers(e.Token.Literal, rf.isDefined)
-		return slices.ContainsFunc(slices.Concat(mains, specs), rf.isRangeBinding)
+		return slices.ContainsFunc(formatMarkerNames(e.Token.Literal, rf.isDefined), rf.isRangeBinding)
 	}
 	return rf.drivesAny(ast.ExprChildren(expr))
 }

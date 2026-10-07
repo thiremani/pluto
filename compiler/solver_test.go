@@ -1440,6 +1440,33 @@ marked = "v -source"`)
 	require.Equal(t, "source", markedInfo.Ranges[0].Name)
 }
 
+// A string's markers drive in the order they appear, a width or precision
+// operand included, so the first range the string names is the outer loop.
+func TestMarkerDriversFollowTextOrder(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "markerOrder", "", ast.NewCode())
+	program := mustParseScript(t, `n = 1
+w = 1:3
+j = 7:9
+s = "|-n%(-w)d| -j"
+t = "-j |-n%(-w)d|"`)
+
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	for i, want := range [][]string{{"w", "j"}, {"j", "w"}} {
+		lit := program.Statements[3+i].(*ast.LetStatement).Value[0]
+		info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
+		drivers := make([]string, len(info.Ranges))
+		for k, driver := range info.Ranges {
+			drivers[k] = driver.Name
+		}
+		require.Equal(t, want, drivers)
+	}
+}
+
 func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
 	ctx := llvm.NewContext()
 	code := ast.NewCode()

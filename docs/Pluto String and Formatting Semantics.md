@@ -67,7 +67,9 @@ A marker naming a `Range` iterates it, like any other use of a range name
 (#146): a main marker formats each yield, and a width or precision marker
 consumes each yield as a number. The string is then a ranged computation:
 assigned, it keeps the final yield; printed, it prints once per yield. An
-explicit numeric conversion such as `-i%d` applies to each yield.
+explicit numeric conversion such as `-i%d` applies to each yield. Several
+ranges nest in the order the string names them, the first outermost, whether
+a marker formats a range or uses it as a width or precision.
 
 ```pluto
 i = 0:3
@@ -77,6 +79,8 @@ s = "item -i"  # "item 2"
 n = 7
 w = 1:3
 "|-n%(-w)d|"   # one line per width: |7| then | 7|
+j = 8:10
+"|-n%(-w)d| -j"  # w is the outer loop: |7| 8, |7| 9, | 7| 8, | 7| 9
 ```
 
 Within a print statement, a marker and another argument naming the same

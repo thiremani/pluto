@@ -618,9 +618,9 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 // ordinary identifier expression.
 func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges []*RangeInfo, rew ast.Expression) {
 	// A range name iterates wherever it is used, in a main marker as much as
-	// in a width or precision operand.
-	mains, specs := formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined)
-	for _, name := range slices.Concat(mains, specs) {
+	// in a width or precision operand, and the drivers nest in the order the
+	// string names them.
+	for _, name := range formatMarkerNames(lit.Token.Literal, ts.isDefined) {
 		typ, ok := ts.GetIdentifier(name)
 		if !ok || typ.Kind() != RangeKind {
 			continue

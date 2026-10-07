@@ -14,6 +14,11 @@ MarkerWidthFinal: |  7|
 MarkerWidthEach: |7|
 MarkerWidthEach: | 7|
 MarkerWidthEach: |  7|
+MarkerOrder: |1| 7
+MarkerOrder: |1| 8
+MarkerOrder: | 1| 7
+MarkerOrder: | 1| 8
+MarkerOrderCollected: ["|1| 7" "|1| 8" "| 1| 7" "| 1| 8"]
 LiteralDescriptor 0:3
 DrivenMarker i=0 0
 DrivenMarker i=1 1

@@ -67,8 +67,9 @@ The bound values are captured when the range is constructed, so later changes
 to the source variables do not mutate the existing range. Functions that need
 those bounds as data should currently receive the scalar values explicitly.
 
-Range is nameable and copyable, but is not yet a fully first-class container
-element. Arrays and tables contain scalar/string elements rather than Range
+A Range can be named but not copied, since assigning a range name iterates
+it, and it is not yet a fully first-class container element. Arrays and
+tables contain scalar/string elements rather than Range
 descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
 function likewise consumes it as a driver rather than passing inert metadata.
 A function cannot return a Range either: an output assigned one is rejected
@@ -464,8 +465,8 @@ x, y = i < 2 [1], j + 0
 The statement condition `i < 2` is shared.
 `x` collects once for each admitted `i`, producing `[1 1]`.
 `y`'s operation uses its own local `j` driver inside that shared gate and ends
-with the final result `1`. A bare `j` in this position would instead copy the
-Range descriptor because only `i` belongs to the active statement domain.
+with the final result `1`. A bare `j` in this position iterates the same way
+and also ends with `1`.
 
 Likewise:
 
