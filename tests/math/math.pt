@@ -7,11 +7,12 @@ greeting = "hello"
 res = Square(x)
     res = x * x
 
-res = ConditionalSquare(x)
+res = ConditionalSquare(prev, x)
+    res = prev
     res = x > 5 x * x
 
-res = ForwardConditionalSquare(x)
-    res = ConditionalSquare(x)
+res = ForwardConditionalSquare(prev, x)
+    res = ConditionalSquare(prev, x)
 
 z = SumSquares(a, b)
     z = Square(a) + Square(b)

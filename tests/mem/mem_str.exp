@@ -25,10 +25,10 @@ reset
 heap from func
 static from func
 keep_heap
-CallStaticSeedKeep: keep_heap
-CallStaticSeedWrite: static changed
+CallStaticPrevKeep: keep_heap
+CallStaticPrevWrite: static changed
 CallStaticShareBefore: < shared_left > < shared_right >
-CallStaticShareSkipped: < shared_left > < shared_right >
+CallStaticShareSkipped: <  > <  >
 CallStaticShareWritten: < shared static > < shared static >
 slot
 plain

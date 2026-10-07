@@ -81,18 +81,18 @@ callReset
 callReset = getStatic()
 callReset
 
-# A StrG-returning conditional callee still sees the established StrH
-# destination seed when its write is skipped.
-staticCallSeed = "keep" ⊕ "_heap"
-staticCallSeed
-staticCallSeed = maybeStatic(0)
-"CallStaticSeedKeep: -staticCallSeed"
-staticCallSeed = maybeStatic(1)
-"CallStaticSeedWrite: -staticCallSeed"
+# A callee that starts from the caller's heap value, passed in as prev, keeps
+# it when its static override is skipped.
+staticCallPrev = "keep" ⊕ "_heap"
+staticCallPrev
+staticCallPrev = maybeStatic(staticCallPrev, 0)
+"CallStaticPrevKeep: -staticCallPrev"
+staticCallPrev = maybeStatic(staticCallPrev, 1)
+"CallStaticPrevWrite: -staticCallPrev"
 
-# Refinement adapters are ABI-zero-seeded inside the callee. An unwritten StrG
-# output preserves its established StrH destination, while an explicit sibling
-# copy of that ABI value commits the empty StrG value safely.
+# Static outputs reach owned destinations through refinement adapters. With the
+# flag off the gated local stays empty, and both outputs commit that empty
+# static value safely.
 sharedStaticLeft = "shared" ⊕ "_left"
 sharedStaticRight = "shared" ⊕ "_right"
 "CallStaticShareBefore: < -sharedStaticLeft > < -sharedStaticRight >"

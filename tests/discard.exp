@@ -9,4 +9,4 @@ GatedBlank: done
 RangedBlank: done
 RangedMultiBlank: done
 CheckedBlank: done
-MayWriteBlank: done
+DefaultBlank: done

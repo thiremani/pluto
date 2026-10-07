@@ -54,6 +54,7 @@ out, seen = NestedArrayDeep(current, item)
     out, seen = ArrayAfter(current, item)
 
 out, seen = ConditionalFold(current, item)
+    out = current
     out = item > 0 current + item
     seen = current
 
@@ -74,6 +75,7 @@ out, seen = NestedArrayTwice(current)
 # A conditional call writes through synthetic destinations that stand in for
 # the outputs; sharing follows them to the real output.
 out, seen = ConditionalNested(current, item)
+    out, seen = current, current
     out, seen = item > 0 FoldAfter(current, item)
 
 out = BumpTwice(current, item)
@@ -126,6 +128,7 @@ out = NextRange(i)
 # its live alias.
 left, right = Tags(n)
     left = "l"
+    right = ""
     right = n > 0 "r"
 
 out, tag = Count(left, right, n)
@@ -133,6 +136,7 @@ out, tag = Count(left, right, n)
     tag = left ⊕ right
 
 out, seen, tag = CondCount(current)
+    out, tag = current, ""
     out, tag = 1 > 0 Count(Tags(current), current)
     seen = current
 
