@@ -80,14 +80,12 @@ x, y`
 	require.True(t, ok)
 	isEvenFunc := newFunc(call.Function.Value, args, template)
 	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
-	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
 	ts.Converging = false
 	ts.firstUnresolved = nil
 	clear(ts.walkedFuncs)
 	require.True(t, ts.TypeFunc(isEvenMangled, template))
-	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddFunc := cc.Compiler.FuncCache[isOddMangled]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
@@ -114,8 +112,6 @@ x, y`
 	require.False(t, ts.Converging)
 	require.True(t, isEvenFunc.Settled)
 	require.True(t, isOddFunc.Settled)
-	require.Equal(t, []WriteEffect{MustWrite, MustWrite}, isEvenFunc.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MustWrite, MustWrite}, isOddFunc.BodyOutputEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -1980,8 +1976,6 @@ scaled`)
 	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
 	require.True(t, callInfo.ScalarCallVariantEnsured)
-	require.Equal(t, []string{primaryMangled}, collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements),
-		"a scalar companion is checked but is not an effect dependency")
 	require.Contains(t, cc.Compiler.FuncCache, primaryMangled)
 	require.Contains(t, cc.Compiler.FuncCache, scalarMangled)
 	template, ok := cc.lookupFuncTemplate("Scale", 1)

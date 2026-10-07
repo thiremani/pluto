@@ -128,11 +128,8 @@ type pendingAssignment struct {
 }
 
 type walkedSpecialization struct {
-	// walkIndex is dense within the current solver pass and becomes the
-	// specialization call graph node ID.
-	walkIndex int
-	info      *FuncInfo
-	template  *ast.FuncStatement
+	info     *FuncInfo
+	template *ast.FuncStatement
 }
 
 type TypeSolver struct {
@@ -2564,9 +2561,7 @@ func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInf
 			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
-		Vars:              make(map[string]Type),
-		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
-		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
+		Vars: make(map[string]Type),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2645,8 +2640,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
-			graph := ts.buildSpecializationCallGraph()
-			ts.settleSpecializationBatch(graph)
+			ts.settleSpecializationBatch()
 			return f.Sig.OutTypes
 		}
 
@@ -2664,20 +2658,17 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	}
 }
 
-// settleSpecializationBatch publishes reusable analysis facts atomically with
-// respect to Settled: every specialization in the batch is checked against
-// its template's text range summary before any becomes visible as settled.
-func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) {
-	ts.settleEffects(graph)
+// settleSpecializationBatch publishes the walked specializations atomically
+// with respect to Settled: each is checked against its template's text range
+// summary before any becomes visible as settled.
+func (ts *TypeSolver) settleSpecializationBatch() {
 	cc := ts.ScriptCompiler.Compiler.CodeCompiler
-
-	for _, node := range graph.nodes {
-		walked := ts.walkedFuncs[node.mangled]
+	for _, walked := range ts.walkedFuncs {
 		cc.checkSettledRanges(walked.template, walked.info)
 	}
 
-	for _, node := range graph.nodes {
-		ts.walkedFuncs[node.mangled].info.Settled = true
+	for _, walked := range ts.walkedFuncs {
+		walked.info.Settled = true
 	}
 }
 
@@ -2692,9 +2683,8 @@ func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = walkedSpecialization{
-		walkIndex: len(ts.walkedFuncs),
-		info:      f,
-		template:  template,
+		info:     f,
+		template: template,
 	}
 	revision := ts.storageRevision
 	previousSlots := ts.previousSlotTypes

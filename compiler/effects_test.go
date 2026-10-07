@@ -197,11 +197,12 @@ always, failed, gated`)
 	require.Empty(t, gatedEffect.ReadsSeed)
 
 	alwaysFunc := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]
-	require.Equal(t, []WriteEffect{MustWrite}, alwaysFunc.BodyOutputEffects)
 	require.True(t, alwaysFunc.Settled)
 }
 
-func TestCallDomainComposesWithBodyOutputEffects(t *testing.T) {
+// A call that runs writes every output, so only its own domain decides
+// whether it writes: an empty range keeps an existing destination.
+func TestCallDomainDecidesCallWrites(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -214,17 +215,6 @@ existing = Increment(0:0)
 empty = Increment(0:0)
 nonempty = Increment(0:2)
 existing, empty, nonempty`)
-
-	mangled := Mangle(cc.Compiler.MangledPath, "Increment", []Type{Range{Iter: I64}})
-	increment := cc.Compiler.FuncCache[mangled]
-
-	require.NotNil(t, increment)
-	require.Equal(t, []WriteEffect{MustWrite}, increment.BodyOutputEffects)
-
-	template, ok := cc.lookupFuncTemplate("Increment", 1)
-	require.True(t, ok)
-	bodyStmt := template.Body.Statements[0].(*ast.LetStatement)
-	requireTargetEffects(t, increment.StatementEffects[bodyStmt], TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
 
 	existing := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
 	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
@@ -274,86 +264,6 @@ existing`)
 	}
 }
 
-func TestCallGraphWalkOrderAndEdgeViews(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = Z(x)
-    y = B(x)
-    C(x)
-    y = y + B(x)
-
-y = B(x)
-    y = C(x)
-
-y = C(x)
-    y = x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = Z(1)
-result`)
-
-	walkOrder := []string{
-		Mangle(cc.Compiler.MangledPath, "Z", []Type{I64}),
-		Mangle(cc.Compiler.MangledPath, "B", []Type{I64}),
-		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
-	}
-
-	graph := ts.buildSpecializationCallGraph()
-
-	for index, name := range walkOrder {
-		id := specializationNodeID(index)
-		require.Equal(t, id, graph.byMangled[name])
-		require.Equal(t, name, graph.nodes[id].mangled)
-	}
-
-	zID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "Z", []Type{I64})]
-	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
-	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
-
-	require.Equal(t, []specializationNodeID{bID, cID}, graph.nodes[zID].effectCallees)
-	require.Equal(t, []specializationNodeID{zID}, graph.nodes[bID].effectCallers)
-	require.Equal(t, []specializationNodeID{cID}, graph.nodes[bID].effectCallees)
-	require.Equal(t, []specializationNodeID{zID, bID}, graph.nodes[cID].effectCallers)
-	require.Equal(t, [][]specializationNodeID{{cID}, {bID}, {zID}}, graph.calleeFirstComponents())
-}
-
-func TestCallGraphExcludesScalarEffectEdge(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "scalarCompanionEdges", "", mustParseCode(t, `result = Gather(arr)
-    i = 0:3
-    result = [Scale(arr[i])]
-
-result = Scale(x)
-    result = x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `arr = [10 20 30]
-result = Gather(arr)
-result`)
-	gatherMangled := Mangle(cc.Compiler.MangledPath, "Gather", []Type{Array{ElemType: I64, Rank: 1}})
-	gatherTemplate, ok := cc.lookupFuncTemplate("Gather", 1)
-	require.True(t, ok)
-	gatherCall := gatherTemplate.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.ArrayLiteral).Rows[0][0].(*ast.CallExpression)
-	callInfo := ts.ExprCache[key(gatherMangled, gatherCall)]
-	require.True(t, callInfo.ScalarCallVariantEnsured)
-
-	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
-	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.ScalarCallParamTypes)
-	require.NotEqual(t, primaryMangled, scalarMangled)
-
-	graph := ts.buildSpecializationCallGraph()
-	gatherID, gatherInBatch := graph.byMangled[gatherMangled]
-	primaryID, primaryInBatch := graph.byMangled[primaryMangled]
-	_, scalarInBatch := graph.byMangled[scalarMangled]
-	require.True(t, gatherInBatch)
-	require.True(t, primaryInBatch)
-	require.True(t, scalarInBatch)
-	require.Equal(t, []specializationNodeID{primaryID}, graph.nodes[gatherID].effectCallees)
-}
-
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -389,7 +299,7 @@ value`)
 	argument := call.Arguments[0]
 	ts.ExprCache[key(ts.FuncNameMangled, argument)].OutTypes = []Type{Unresolved{}}
 
-	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil, nil)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled)
 
 	require.Equal(t, []YieldEffect{YieldInvalid}, analyzer.deriveExpr(call))
 }

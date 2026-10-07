@@ -255,16 +255,14 @@ func (f Func) OutputTypesInferred() bool {
 	return true
 }
 
-// FuncInfo holds the mutable facts for one function specialization. Settled
-// means its reusable type and effect facts have been published.
+// FuncInfo holds the mutable facts for one function specialization or the
+// script root. Settled means a specialization's reusable type facts have been
+// published; StatementEffects are derived for the script root only.
 type FuncInfo struct {
 	Sig              Func
 	Vars             map[string]Type
 	StatementEffects map[*ast.LetStatement]StatementEffect
-	// BodyOutputEffects summarizes the typed scalar body before a call-owned
-	// Range or ArrayRange domain determines whether that body executes.
-	BodyOutputEffects []WriteEffect
-	Settled           bool
+	Settled          bool
 }
 
 func (f *FuncInfo) AllTypesInferred() bool {
