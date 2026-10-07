@@ -22,8 +22,8 @@ This document describes Pluto's semantic model and compares it with other major 
 7. **Read-Only Function Arguments:** Inputs are read-only and keep their
    values for the whole call, even when the caller also passes the argument
    as a destination. Every body that runs writes every output, and results
-   reach the caller's destinations when the assignment commits. Master does
-   not enforce these rules yet (#123); see "Status" under Call Site.
+   reach the caller's destinations when the assignment commits. Stable
+   inputs are not implemented yet (#144); see "Status" under Call Site.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -275,8 +275,9 @@ res = sum(a, b)
   or a call with such an argument. A comparison counts even where an array
   argument would make it a mask that always writes. Complementary conditions
   such as `n <= 1` and `n > 1` are not recognized either; for floats they need
-  not cover every case, since both fail for a NaN. A range with literal
-  bounds that is not empty always runs.
+  not cover every case, since both fail for a NaN. Only a range literal
+  written with constant, nonempty bounds, such as `0:3`, always runs; a range
+  bound to a name or returned by a call may be empty.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
   call argument, a print, a formatting marker, or an empty array's sample)
   only after it is definitely assigned, judged from the text as above. A read
@@ -315,15 +316,20 @@ out = Pos(prev, x)
 
 For a scalar `x`, the value-position comparison `x > 0` yields `x` or fails,
 so `out` keeps `prev`. For an array `x`, it yields a mask and always writes,
-so the default is never read: the compiler drops it in that specialization
-and reports nothing. A statement gate such as `Maybe`'s `out = x > 0 x`
-serves only a scalar `x`, since a statement condition must be a scalar.
+so the default is never read, and the check reports nothing for it; the
+array specialization still copies the default before the mask replaces it.
+A statement gate such as `Maybe`'s `out = x > 0 x` serves only a scalar `x`,
+since a statement condition must be a scalar.
 
 The text also decides which values are ranges. A parameter never holds one,
 since a range argument runs the function once per element: `Wrap(1:5)`,
 where `Wrap` returns its input, gives `4`. Whether a function returns a
 range follows from its text, as with `MakeRange` below, and a range that
-arrives through a call counts as possibly empty, so `F` needs its default:
+arrives through a call counts as possibly empty, so `F` needs its default.
+A statement's condition iterates the ranges it names, so its value reads them
+as elements: in `kept = s > 2 s`, `kept` gets an element of `s`. Under `||`
+and `&&`, only a call passes its range on whole; a range literal or binding
+operand is iterated, so `n > 0 && 0:5` gives an element.
 
 ```python
 r = MakeRange(n)
@@ -416,24 +422,14 @@ give the input and the output one slot where no read can tell the
 difference: in `a = Maybe(a, -1)`, the body reads `prev` only in its first
 write to `out`, so `out = prev` needs no copy.
 
-**Status (#123, decided 2026-09-28; not yet implemented).** Master still
-differs in three ways:
-
-- A body may leave an output unwritten. `x = F()` then keeps `x` through a
-  hidden seed parameter, and a fresh `x` gets 0, while a nested call such as
-  `c = F(c) + 0` reads the unwritten output as zero.
-- A shared input is a live reference: each read observes earlier writes to
-  the shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
-  `p, q = Swap(p, q)` with the sequential body gives `2 2`,
-  `value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
-  `FoldAfter(value, 1:3)` gives `13 13`.
-- Flow checks run per specialization, so their result can depend on the
-  argument types: `out = prev` followed by `out = x > 0` is rejected as a
-  dead store for an array `x`. A function nothing calls gets only structural
-  checks.
-
-The #123 implementation removes these differences, migrates the fixtures
-(`tests/alias_input` among them), and updates the README.
+**Status.** Definite outputs and the per-template checks are implemented
+(#123). Stable inputs are decided and not yet implemented (#144): a shared
+input is still a live reference, so each read observes earlier writes to the
+shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
+`p, q = Swap(p, q)` with the sequential body gives `2 2`,
+`value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
+`FoldAfter(value, 1:3)` gives `13 13`. #144 removes this difference, migrates
+`tests/alias_input`, and updates the README's sharing example.
 
 ### Range Parameters
 

@@ -39,10 +39,10 @@ Pluto source
 Responsibilities stay decoupled: the solver owns types, ranges, output shapes,
 and effects; the CFG owns cross-statement dataflow legality; PIR owns how an
 already-valid statement executes; LLVM owns SSA, storage, optimization, and
-ABI. The CFG never reads PIR. Today both consume the solver's effect summary
-independently (§15). Under #123 the CFG checks function templates with its
-own conservative classification of the source instead, and whether script
-checks follow is still open (§15, CFG consumption).
+ABI. The CFG never reads PIR. The CFG checks function templates with its own
+conservative classification of the source (#123), while the script root's
+checks still consume the solver's statement effects until they move to the
+same classification (§15, CFG consumption).
 
 PIR may refer to solved AST expressions, but LLVM lowering must not reclassify
 their range, conditional, OOB, collector, affine, or commit behavior.
@@ -50,8 +50,8 @@ their range, conditional, OOB, collector, affine, or commit behavior.
 **ABI note.** Per-slot effects are an internal analysis, never a public ABI
 classifier: a body-only edit must never change the C prototype of a
 type-mangled symbol. Today every exported direct `I64`/`F64` return keeps a
-hidden seed parameter. #123 (decided) requires every body that runs to write
-every output, so ABI 3.0 removes the seed and the write markers from every
+hidden seed parameter. #123 requires every body that runs to write every
+output, so ABI 3.0 (#69) removes the seed and the write markers from every
 function without a `Range` or `ArrayRange` parameter. That removal depends
 only on whether a parameter is a range, and the complete prototype only on the
 solved parameter and output types, so a prototype still never depends on the
@@ -293,7 +293,7 @@ If one owned source feeds multiple targets, at most one consumer takes it; the
 others require a derived copy.
 
 At a call boundary, `a = F(a)` passes `a`'s value as an input that stays
-stable for the whole invocation (#123, decided): the output starts unassigned
+stable for the whole invocation (#144, decided): the output starts unassigned
 in its own staging slot, and the lowering may place both in one slot only
 where no read can tell. The real `a` changes only at the outer assignment's
 commit, so sibling RHS expressions continue to read the pre-commit binding.
@@ -497,9 +497,8 @@ Checked accesses have one canonical representation — `eval` with an explicit
 `[on-oob=...]` scope — regardless of which legacy path produced them. A
 **caller-side** failure — a failed invocation or argument — is atomic: the
 call's whole output tuple keeps its old values. A call that actually ran
-writes every output (#123, decided; today it may omit outputs independently,
-§15), so per-slot divergence exists only where slots carry independent
-conditions.
+writes every output (#123), so per-slot divergence exists only where slots
+carry independent conditions.
 
 ## 10. Collectors
 
@@ -760,9 +759,10 @@ relevant PIR excerpt.
 
 ## 15. Solver Effects
 
-Effects are solver-side facts consumed independently by the CFG and by PIR
-(under #123 the CFG's function checks use their own classification instead;
-see CFG consumption, below).
+Effects are solver-side facts derived for the script root, whose CFG checks
+consume them; PIR consumes them as its steps migrate. Function templates use
+the CFG's own classification of their text instead (#123; see CFG
+consumption, below).
 They are **per LHS slot**, not per statement, because a mixed assignment can
 skip one target while another always writes: `a, b = arr[i], i + 1` is
 `[]WriteEffect{MayWrite, MustWrite}`. The target-effect vector stays aligned to
@@ -828,10 +828,9 @@ Calls are where the two effects interact. A failure evaluating the invocation
 or its arguments suppresses the **whole tuple** — the call-merge rule — so
 every slot of that call becomes `MayYield` together.
 
-**Definite outputs (#123, decided; not yet implemented).** Every body that
-runs writes every output. The template-level flow check (CFG consumption,
-below) decides this from the function's text, the same for every argument
-type. Callee-internal non-writing therefore disappears, and the
+**Definite outputs (#123).** Every body that runs writes every output. The
+template-level flow check (CFG consumption, below) decides this from the
+function's text, the same for every argument type. Callee-internal non-writing therefore disappears, and the
 transfer rule reduces to `rawYield[i] = invocationYield`. A caller-side
 failure, such as the failed argument in `Id(arr[oob])`, makes every slot skip:
 the commit is skipped and the target stays `MayWrite`. Otherwise every slot
@@ -841,66 +840,49 @@ zero iterations, which means no assignment. Until Step 7 chooses between one
 "did execute" bit and a caller-side emptiness check, that case keeps the seed
 resolution below.
 
-**Today.** Master still lets a body skip a write, so the callee's output slots
-keep independent `WriteEffect`s, and two failure sources must not be
-conflated: a **caller-side failure** is a tuple fact, and **callee-internal
-non-writing**, where the callee ran but did not write an output, is a
-per-output fact. The transfer rule is conceptually
-`rawYield[i] = invocationYield && didWrite[i]`, but a direct `I64`/`F64`
-result carries no validity bit: it is seeded from the destination
-(`compileCallInner`), so a callee that wrote nothing returns the seed. After a
-successful invocation, seed resolution applies as a **contextual resolver at
-the assignment boundary** for a direct `MayWrite` output resolved at an
-existing target: the seed *is* the keep-old outcome, so the consumer sees
-`MustYield`. A caller-side failure is **never** converted into a seeded
-`MustYield`. A nested or targetless call is seeded with zero, so it reads an
-unwritten output as zero.
+**Seeds until Step 7.** A direct `I64`/`F64` result carries no validity bit:
+it is seeded from the destination (`compileCallInner`), so a call-owned domain
+that runs no iteration returns the seed. After a successful invocation, seed
+resolution applies as a **contextual resolver at the assignment boundary**
+for such a call at an existing target: the seed *is* the keep-old outcome, so
+the consumer sees `MustYield`. A caller-side failure is **never** converted
+into a seeded `MustYield`. A nested or targetless call is seeded with zero.
 
 Boundary resolution implies an **implicit read of the destination seed**, and
 only where the dependency is real: after a successful invocation, at an
-*existing* target whose direct callee output is `MayWrite` (today) or whose
-call owns a possibly empty domain, resolved at `=`. A fresh destination, a
-discard, a nested or targetless call, or an all-`MustWrite` callee introduces
-no implicit seed read. A declared output is readable inside its template only
-after a statement that definitely assigns it (the structural CFG rejects a
-read before any assignment, including a formatting marker, and the typed pass
-rejects a read after only conditional or seed-preserving writes), so the body
-cannot read the hidden seed through an output name. Step 2A records boundary
+*existing* target whose call owns a possibly empty domain, resolved at `=`. A
+fresh destination, a discard, a nested or targetless call, or a call without
+a call-owned domain introduces no implicit seed read. A declared output is
+readable inside its template only after a statement that definitely assigns
+it (the template check rejects an earlier read, including a formatting
+marker), so the body cannot read the hidden seed through an output name. Step 2A records boundary
 resolution as a `ReadsSeed` fact on the call site — the CFG is untouched in
 2A — and Step 2B converts the fact into an ordinary CFG read event, so a
 `MustWrite` classification cannot let backward liveness kill the prior value.
 
 An earlier revision of this plan added a private `{value, didWrite}`
 direct-call variant in Step 4, so that print and other failure-propagating
-contexts could see a skipped direct return. #123 removes the skipped write
+contexts could see a skipped direct return. #123 removed the skipped write
 instead, so the variant is not built.
 
 ### Convergence and publication
 
-**Folding a body into an output summary.** A declared output's body summary is
-the sequential fold of the body's per-slot effects for that output, in
-statement order: the output starts `MayWrite` (nothing has written it), a
-`MustWrite` statement slot sets it to `MustWrite`, and a `MayWrite` statement
-slot leaves it unchanged — a later conditional write cannot un-guarantee an
-earlier unconditional one. A boundary `MustWrite` obtained by reading the
-destination seed (`ReadsSeed`) also leaves the summary unchanged: preserving
-an earlier value does not prove that the body wrote one. Under #123 this
-precise summary no longer decides whether a template is valid; it stays an
-execution fact for routing, ownership and optimization. The published
-`BodyOutputEffects` deliberately stop before a call-owned domain: a `Range` or
-`ArrayRange` parameter controls whether
-the scalar body executes, not what the body does when it executes. Each call
-combines that reusable body summary with its solved domain. A provably
-non-empty literal can therefore preserve `MustWrite`, while an empty or unknown
-domain weakens the call to `MayWrite`. A range created *inside* the body still
-weakens only the outputs its statements drive — a possibly empty local range
-makes those slots `MayWrite`, so `UpperTriRowTail` publishes `MayWrite` for
-`res` — while unrelated outputs keep their effects.
+**No body summary.** Every body that runs writes every output (#123), so a
+call's slots yield exactly when the call is invoked: its arguments' yields,
+joined with `MayYield` when a range that may run no iteration drives it. A
+call-owned `Range` or `ArrayRange` domain controls whether the scalar body
+executes, not what the body does when it executes, so a provably non-empty
+literal keeps the call `MustYield` while an empty or unknown domain weakens it.
+Statement effects therefore need no per-specialization summary and no fixed
+point across recursive calls: the script root derives them in one pass. An
+earlier revision folded each body into a `BodyOutputEffects` summary settled
+callee-first over the call graph's strongly connected components; #123 made
+every summary `MustWrite`, and both are gone.
 
-**Finite specialization closure.** SCC settlement assumes discovery has already
-produced a finite graph. It cannot catch
+**Finite specialization closure.** Settlement assumes discovery has already
+produced a finite set of specializations. It cannot catch
 `f(T) -> f(Array<T>) -> f(Array<Array<T>>) -> ...`: every specialization is a
-new node, so Tarjan never runs. Before Step 2B, discovery caps active
+new one, so discovery never closes. Before Step 2B, discovery caps active
 specialization frames in one **recursive inference region** while attempting to
 allocate a missing candidate. The region starts at the earliest active frame
 whose function template repeats in the candidate path; flat sibling calls and
@@ -921,117 +903,81 @@ transformation. The fuse guarantees controlled compiler failure for unbounded
 specialization discovery, not runtime termination; totality remains a separate
 future analysis.
 
-After discovery closes, effects and CFG share one
-`specializationCallGraph` for each stable newly walked batch. Its dense,
-batch-local primary-call edges drive effect SCC settlement; its separate
-source-ordered mangled direct-call keys include settled callees and distinct
-scalar companions actually ensured for lowering. CFG reuses node enumeration
-and persistent reachability, not Tarjan state, effect worklists, or lattice
-working vectors.
-
-**Fixed point.** Function-body output effects, and only those, need one: a
-recursive callee can refine its outputs after types settle, and
-`TypeScriptFunc` today converges on types alone. Condense the typed
-specialization call graph into its strongly connected components and process
-them **callee-first** in reverse topological order — this is what lets a
-component assume every callee outside it has already published. Within one
-component:
-
-1. Seed every member's outputs with a provisional `MustWrite` working vector. A
-   recursive call reads that provisional value — which is why `Uncomputed`
-   cannot be a lattice element, as there would be nothing to read.
-2. Iterate the component, recomputing outputs from rebuilt statement effects
-   and callees' current values. Callees outside the component contribute their
-   published summaries.
-3. Weaken monotonically, `MustWrite → MayWrite` only. The working vector
-   **persists across body walks** within the component; it is not cleared with
-   `FuncInfo.Vars`.
-4. Stop when nothing changes — at most one weakening per slot.
-5. Publish one coherent snapshot for the whole component at once.
-
-An `Invalid` output blocks publication for its entire component; provisional
-values are never read outside it.
-
 Only reusable function specializations publish, through `FuncInfo.Settled`,
-which requires type convergence, the effect fixed point, complete direct-call
-keys, and a non-nil cached specialization CFG result. Every batch CFG result is
-staged and installed before any member becomes settled; a diagnostic-bearing
-result is complete and settles just like an empty successful result. A script
-root owns its current compilation facts and is consumed immediately after
-solving, so it needs no settled-publication step. Reading an unpublished or
-`Invalid` effect, or a settled specialization with no CFG result, is an ICE,
-never a default.
+which requires type convergence and agreement with the template's text range
+summary (CFG consumption, below); a disagreement is an ICE. A script root owns
+its current compilation facts and is consumed immediately after solving, so it
+needs no settled-publication step.
 
 Snapshot analysis such as `FuncInfo.Vars` is cleared and rebuilt whenever a
 body is walked and becomes reusable only once settled. `ExprCache` is not a
 precedent for append-only analysis: stable AST entries are overwritten while
 generated rewrite nodes may add entries across walks. Issue #71's
 compile-order-dependent wrong output came from reusing some body facts while
-discarding others. Specialization CFG success or diagnostics are likewise
-cached on `FuncInfo` and replayed when a later script reuses a settled body.
-Under #123, flow checks run once per template (CFG consumption, below), so
-settlement no longer requires a CFG result and nothing is replayed.
+discarding others. Flow checks run once per template (CFG consumption, below),
+so nothing about a specialization's diagnostics is cached or replayed.
 
 ### CFG consumption
 
-**Decided (#123; not yet implemented): flow checks per template.** Output
-initialization, reads before definite assignment, dead stores and
-write-after-write move to one pass per template, which runs whether or not
-anything calls it. The pass classifies writes from the text alone and
-conservatively: a statement gate, a range that may be empty, or a value that
-can fail (a value-position comparison, `&&`, a checked access, a `||` whose
-last alternative can fail, a call with such an argument) makes a write
-possibly skipped, even where a specialization's types would make it always
-write, as an array mask does. This classification stays separate from the
-solver's effects, which remain precise per specialization for routing,
-ownership and optimization; a specialization may drop a default its precise
-effects prove dead without reporting it.
+**Flow checks per template (#123).** Output initialization, reads before
+definite assignment, dead stores and write-after-write run in one pass per
+template, which runs whether or not anything calls it. The pass classifies
+writes from the text alone and conservatively: a statement gate, a range that
+may be empty, or a value that can fail (a value-position comparison, `&&`, a
+checked access, a `||` whose last alternative can fail, a call with such an
+argument) makes a write possibly skipped, even where a specialization's types
+would make it always write, as an array mask does. Only a range literal
+written with constant, nonempty bounds always runs; a range bound to a name
+or returned by a call may be empty. A call counts as writing every output,
+since its callee passes the same check, so a caller of a rejected template is
+not reported again.
 
 The pass also reads from the text which values are ranges, and so which
 statements a range drives. A parameter never holds a range, since a range
 argument drives the whole body, and struct fields, constants and array
-elements cannot hold one (`[r]` collects `r`'s values). A value is therefore
-a range only when it is a range literal, a binding whose assigned value is a
-range (`x = r`, not `x = r * 2`), a `||` or value-position `&&` that yields
-a range (`MakeRange(n > 0) || MakeRange(3)` forwards whichever alternative
-succeeds, and `c > 0 && MakeRange(3)` its right operand), or a call output
-that its template assigns a range. Before checking any body, the pass
-computes that last fact for every template output, iterating to a fixed
-point across templates that call each other: an output assigned `t` after
+elements cannot hold one (`[r]` collects `r`'s values). A value holds a range
+when it is a range literal, a binding assigned a descriptor (`x = r`, not
+`x = r * 2`), a call output that its template assigns a range, or a `||` or
+value-position `&&` whose operand is such a call
+(`MakeRange(n > 0) || MakeRange(3)` forwards whichever alternative succeeds,
+and `c > 0 && MakeRange(3)` its right operand). A range literal or binding
+operand of `||` and `&&` is iterated instead (`n > 0 && 0:5` gives an
+element). A statement's condition iterates the ranges it names, so its value
+reads them as elements (`kept = s > 2 s`); a range the condition only
+collects, or does not name, stays a descriptor. Before checking any body, the
+pass computes which template outputs hold a range, iterating to a fixed point
+across templates that call each other: an output assigned `t` after
 `t = MakeRange(n)` is a range as well. A range that arrives through a call
-counts as possibly empty.
-Every check then uses the same classification, and none waits for a type:
-after `r = MakeRange(n)`, `out = r * 2` does not kill an earlier
-`out = prev`, does not definitely assign `out`, and so cannot by itself make
-a later read of `out` valid. A settled specialization's range types must
-agree with this summary; a disagreement is an ICE rather than a diagnostic.
+counts as possibly empty. Every check then uses the same classification, and
+none waits for a type: after `r = MakeRange(n)`, `out = r * 2` does not kill
+an earlier `out = prev`, does not definitely assign `out`, and so cannot by
+itself make a later read of `out` valid. Settlement panics when a
+specialization's Range-typed bindings disagree with this summary.
+
+The pass runs after a template's structural checks, and only when they pass:
+explicit use-before-definition, illegal input/global writes, unused inputs,
+syntactically unassigned outputs, formatting structure, and discard behavior.
+Those collect all reads before declaring a statement's destinations, so a
+fresh `x = x + 1` cannot define its own RHS. An unknown main format marker
+remains literal text; malformed specifiers and missing dynamic width/precision
+variables on a resolved marker remain structural errors. A flow error in any
+template fails the code module before any script compiles.
 
 This partly reverses Step 2B, which moved dead-store and write-after-write
-checks to specializations, and the per-specialization diagnostic cache and
-replay go with it. Whether a script's dead-store and write-after-write checks
-join this pass or keep the effect-sensitive dataflow described below is still
-open. The rest of this section describes the current design.
-
-`.pt` functions run `AnalyzeFuncs` once before any specialization exists. That
-pass is structural only: explicit use-before-definition, illegal input/global
-writes, unused inputs, syntactically unassigned outputs, formatting structure,
-and discard behavior. It collects all reads before declaring a statement's
-destinations, so a fresh `x = x + 1` cannot define its own RHS. An unknown main
-format marker remains literal text; malformed specifiers and missing dynamic
-width/precision variables on a resolved marker remain structural errors.
-
-After a stable specialization batch reaches its effect SCC fixed point, each
-node runs effect-sensitive CFG dataflow exactly once and caches its diagnostics.
-For a let, event order is condition reads, RHS reads, `ReadsSeed` destination
-reads, then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
+checks to specializations; the per-specialization diagnostic cache and replay
+are gone. Scripts move to the same classification in a follow-up (decided
+2026-10-07). Until then, after a script solve succeeds, CFG treats the script
+as a zero-input, zero-output template for structural validation, then runs
+effect-sensitive dataflow over the typed body with a fresh scope. For a let,
+event order is condition reads, RHS reads, `ReadsSeed` destination reads,
+then sparse `StatementEffect.Writes` mapped by `TargetIndex`; all reads
 therefore observe the simultaneous assignment's pre-commit snapshot. Print
 arguments contribute ordinary reads even though prints have no statement
-effect entry. An unreachable template gets structural and parser checks only:
-effects cannot be derived without types. Consequently, a library-only package
-whose templates are never instantiated receives no dead-store or
-write-after-write diagnostics in that build.
+effect entry. Structural diagnostics do not gate that typed pass: its
+already-collected explicit reads are reused so one compile reports all
+independent CFG diagnostics without repeating formatting errors.
 
-The two diagnostics consume effects differently:
+Both passes consume write kinds the same way:
 
 - *Backward (dead store).* A write is dead when its destination is not live
   afterward, and that holds for `MayWrite` as well as `MustWrite`. What
@@ -1045,45 +991,23 @@ The two diagnostics consume effects differently:
   explicitly when its value is semantically required. Under #123's
   template-level check, an `out = prev` default before a comparison override
   is live for every argument type, so it needs no exemption.
-- *Shared inputs.* A body is analyzed once per type specialization at
-  settlement, with every input treated as its own value, and every script
-  that reaches the specialization replays its diagnostics. Sharing an input
-  with an output at a call only adds reads today, and none once #123 makes
-  inputs stable, so it can never make a body invalid, and a body must be
-  valid without it: `out = current + 1` written
-  twice is reported for `x = Twice(x)` as well as for `y = Twice(x)`, because
-  the body never reads `out`. A body that means to build on its own write
-  says so by naming the output, `out = out + 1`, which is readable once
-  definitely assigned. Diagnostics are deduplicated by location and message,
-  and unused-write errors are errors rather than warnings throughout.
-
-After a script solve succeeds, CFG first treats the script as a zero-input,
-zero-output template for structural validation, then runs effect-sensitive
-dataflow over the typed body with a fresh scope. Structural diagnostics do not
-gate that typed pass: its already-collected explicit reads are reused so one
-compile reports all independent CFG diagnostics without repeating formatting
-errors. The compiler then traverses
-the script's complete
-direct-callee keys and each cached `DirectCallees` slice depth-first with a
-visited set. Every specialization remains analyzed and cached independently;
-the script presents their diagnostics as a first-seen, source-stable set union
-keyed by source location and message, so two type variants of one template do
-not print the same defect twice. Warm scripts need no body rewalk, and
-unreachable cached diagnostics never leak. Persistent edges use
-`CallParamTypes` plus a distinct
-`ScalarCallParamTypes` key only when the final source-call `ExprInfo` records
-that the companion was actually ensured; shared-cache membership alone never
-creates reachability.
+- *Shared inputs.* A body is analyzed once per template, with every input
+  treated as its own value. Sharing an input with an output at a call only
+  adds reads today, and none once #144 makes inputs stable, so it can never
+  make a body invalid, and a body must be valid without it:
+  `out = current + 1` written twice is reported for `x = Twice(x)` as well as
+  for `y = Twice(x)`, because the body never reads `out`. A body that means to
+  build on its own write says so by naming the output, `out = out + 1`, which
+  is readable once definitely assigned. Unused-write errors are errors rather
+  than warnings throughout.
 
 Inside a function body, domain ownership decides which statements an empty
 domain can skip. A `Range` or `ArrayRange` **parameter** establishes a
-function-level domain driving the whole body, contributing one shared effect at
-the function boundary rather than making every statement that reads it
-independently conditional. A locally created range owns only the statements it
-drives — `res = a[i * n + j]` under a body-local `j = (i + 1):n` has an
+function-level domain driving the whole body: it decides whether the body runs
+at all, not what a body that runs writes, so the template check never treats
+a parameter as a range. A locally created range owns only the statements it
+drives — `t = a[i * n + j]` under a body-local `j = (i + 1):n` has an
 RHS-local domain, not a function-owned one.
-Structural template CFG deliberately makes neither distinction — typed
-per-specialization effects resolve it when the function becomes reachable.
 
 The CFG pass itself stays: dataflow legality is a different question from
 ownership checking. This fix does not depend on PIR and lands before it.
@@ -1111,9 +1035,9 @@ Pluto has no users yet, so migration optimizes for the clean end state:
    `compileCondExprStatement` handles ranged logical trees; `compileCondStatement`
    feeds the general assignment path. Axes: gate (none/scalar/ranged); RHS
    capabilities as **composable flags** (conditional, checked, ranged,
-   collector, call — one RHS can be several at once); callee output effect for
-   call rows (all-`MustWrite` versus any-`MayWrite`, which after #123 only a
-   possibly empty callee-owned domain produces); value kind
+   collector, call — one RHS can be several at once); for call rows, whether
+   a possibly empty callee-owned domain can leave the outputs unwritten (the
+   only way left after #123); value kind
    (scalar/heap/multi-output/self-referential/descriptor/struct/table); target
    kind (local/output/discard); statement form.
    Each range domain also carries a role: descriptor value, RHS-local, shared
@@ -1176,8 +1100,9 @@ Two PRs, implementing §15.
   `ReadsSeed` facts become ordinary pre-write CFG reads; templates keep only
   structural checks; each specialization caches immutable diagnostics and
   complete direct-call keys; scripts replay the reachable closure once; and
-  the duplicated syntactic effect classifiers are deleted. #123 moves these
-  diagnostics back to one conservative pass per template (§15).
+  the duplicated syntactic effect classifiers are deleted. #123 moved these
+  diagnostics back to one conservative pass per template, and removed the
+  per-specialization caches, the replay and the effect fixed point (§15).
 
 Step 2 fixes the conditional-write false positive without depending on PIR.
 The Step 2B regression and leak suites pass, so PIR implementation can resume.
@@ -1226,8 +1151,8 @@ both); suite output is unchanged.
   `person.name` and `%t0#1.name` goldens of §17 land here.
 - The ownership elaboration pass (§8), with generic cleanup lowering and
   the consuming-operand promotion; its copy-loud goldens are listed in §17.
-- **Calls split by argument yield.** #123 (decided) lands before this slice:
-  every body that runs writes every output, and ABI 3.0 removes the seed and
+- **Calls split by argument yield.** #123 landed before this slice: every
+  body that runs writes every output, and ABI 3.0 (#69) removes the seed and
   the write markers from functions without a range parameter, so every
   non-ranged callee is all-`MustWrite`. An argument whose conditional or
   checked failure remains unresolved still makes the invocation `MayYield`,
@@ -1238,7 +1163,7 @@ both); suite output is unchanged.
   separately. Argument yield is therefore a router axis, recorded in the
   capability matrix (rows 6, 6b, 6c). The earlier plan also split on callee
   output effect and built a `{value, didWrite}` variant for print; #123
-  removes both for every call without a callee-owned domain.
+  removed both for every call without a callee-owned domain.
 
 **First slice landed — heap values and ownership elaboration.** The router
 admits heap value kinds (both string flavours, arrays, tables) and struct
@@ -1460,8 +1385,9 @@ generic plan lowerer, the existing reusable primitives, and no duplicated
 statement classification or specialized conditional orchestration. Surviving
 reorganized rather than deleted: loop and guard emission, generic storage
 across branches and iterations, the expression compiler for `eval` regions, the
-CFG pass (one flow pass per template under #123, whose text-only write
-classification deliberately stays separate from the solver's effects, §15),
+CFG pass (one flow pass per template, scripts included once they move to it,
+whose text-only write classification deliberately stays separate from the
+solver's effects, §15),
 and the runtime.
 
 Per-step deletions are targets, not guarantees — each lands only when its step
@@ -1526,17 +1452,17 @@ immediate deletion at the last consumer.
 - #123: flow checks run once per template, including one nothing calls: a
   body that can leave an output unwritten is rejected at the definition;
   `out = x > 0` alone is rejected for every argument type; `out = prev` then
-  `out = x > 0` is accepted for scalar and array `x`, and the array
-  specialization drops the dead default without a diagnostic; after
+  `out = x > 0` is accepted for scalar and array `x`, with no diagnostic for
+  the array specialization's dead default; after
   `r = MakeRange(n)`, `out = prev` then `out = r * 2` is accepted and
   `F(y, 0)` keeps `y`, while without the default both the body and a read
   of `out` after `out = r * 2` are rejected; a range passed on through
   another template's output, or forwarded by `||` or value-position `&&` as
   in `r = MakeRange(n > 0) || MakeRange(3)`, counts the same; and
   `y = Helper(x)` then
-  `out = y + 1`, where `Helper` returns a scalar, is a definite write
-- summaries are rebuilt per specialization walk and published only on
-  `Settled`; transitive effects reach a fixed point across recursive closures
+  `out = y + 1`, where `Helper` returns a scalar, is a definite write; each
+  way a value holds or iterates a range (a gate naming it, a literal or
+  binding under `&&`, a call under `||`) agrees with the solved types
 
 ### Loop-carried tests
 

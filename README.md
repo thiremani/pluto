@@ -152,6 +152,20 @@ y = Square(x)
 
 Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
 
+Every body that runs assigns every output on every path. A write under a condition, from a value that can fail, or driven by a range that may be empty can be skipped, so it needs a default first. A function keeps an old value only through an input its caller passes:
+
+```python
+y = Fib(n)
+    y = n
+    y = n > 1 Fib(n - 1) + Fib(n - 2)
+
+out = Maybe(prev, x)
+    out = prev
+    out = x > 0 x
+```
+
+`a = Maybe(a, -1)` keeps `a`. A call therefore either writes all of its outputs or does not run at all: when an argument fails, when the statement's condition fails, or when its range is empty.
+
 ```python
 out, seen = Fold(current, item)
     out = current + item
