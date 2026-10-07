@@ -981,7 +981,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	if len(stmt.Name) != len(types) {
 		ce := &token.CompileError{
 			Token: stmt.Token,
-			Msg:   fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d. Stmt %q", len(stmt.Name), len(types), stmt),
+			Msg:   assignmentMismatch(len(stmt.Name), len(types)),
 		}
 		ts.Errors = append(ts.Errors, ce)
 		return
@@ -2543,7 +2543,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	if !ok {
 		cerr := &token.CompileError{
 			Token: ce.Token,
-			Msg:   fmt.Sprintf("undefined function: %s", ce.Function.Value),
+			Msg:   undefinedFunction(ce.Function.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
 		return nil, "", false

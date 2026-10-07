@@ -1327,17 +1327,6 @@ r = Forward(n)
 			unassigned: []string{"out"},
 		},
 		{
-			// When the values do not cover the targets, which the solver
-			// reports, every target gets the statement's weakest class.
-			name: "MismatchedTargetsAllMaySkip",
-			code: `a, b = Pair(x)
-    a, b = x, x
-
-a, b, c = F(arr, x)
-    a, b, c = Pair(x), arr[0], x`,
-			unassigned: []string{"a", "b", "c"},
-		},
-		{
 			// A && fills its right operand's targets.
 			name: "AndTakesRightOperandSlots",
 			code: `a, b = Pair(x)
@@ -1392,6 +1381,173 @@ func TestUnassignedOutputIsReportedAtTheHeader(t *testing.T) {
 	require.Equal(t, unassignedOutputMessage("out"), errs[0].Msg)
 	require.Equal(t, 1, errs[0].Token.Line)
 	require.Equal(t, 1, errs[0].Token.Column)
+}
+
+// The template checks classify each write from the text, so they first report
+// text the classification cannot read, which the solver rejects in any
+// specialization, and check no flow over it.
+func TestUnclassifiableTemplateTextIsReported(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		errors []string
+	}{
+		{
+			// The value that can fail does not mark the targets as possibly
+			// skipped.
+			name: "ValueCountMismatch",
+			code: `a, b = Pair(x)
+    a, b = x, x
+
+a, b, c = F(arr, x)
+    a, b, c = Pair(x), arr[0], x`,
+			errors: []string{"assignment mismatch: 3 targets but 4 values"},
+		},
+		{
+			name: "OneValueForTwoTargets",
+			code: `a, b = F(x)
+    a, b = x`,
+			errors: []string{"assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "UndefinedFunction",
+			code: `y = F(x)
+    y = Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// A call names a template by the number of values its arguments
+			// yield.
+			name: "WrongArgumentCount",
+			code: `a, b = Pair(x)
+    a, b = x, x
+
+y = F(x)
+    y = Pair(x, x)`,
+			errors: []string{"undefined function: Pair"},
+		},
+		{
+			name: "UndefinedFunctionInConditionAndArgument",
+			code: `y = F(x)
+    y = x
+    y = Check(x) > 0 Inc(Next(x))
+
+out = Inc(n)
+    out = n + 1`,
+			errors: []string{"undefined function: Check", "undefined function: Next"},
+		},
+		{
+			name: "UndefinedFunctionInPrint",
+			code: `y = F(x)
+    y = x
+    Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// The solver counts an unknown call as one value and reports both.
+			name: "UndefinedFunctionInTuple",
+			code: `a, b = F(x)
+    a, b = Missing(x)`,
+			errors: []string{"undefined function: Missing", "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "RangeReassignedNonRange",
+			code: `y = G(x)
+    r = 1:3
+    s = [r]
+    r = x
+    y = r + s`,
+			errors: []string{`cannot reassign "r" from a range to a non-range value`},
+		},
+		{
+			name: "NonRangeReassignedRange",
+			code: `y = G(x)
+    r = x
+    s = r + 1
+    r = 1:3
+    y = r + s`,
+			errors: []string{`cannot reassign "r" from a non-range value to a range`},
+		},
+		{
+			// As in the solver, the first assignment fixes the kind.
+			name: "KindFollowsFirstAssignment",
+			code: `y = G(n)
+    r = 0:n
+    r = n
+    r = 1:n
+    y = [r]`,
+			errors: []string{`cannot reassign "r" from a range to a non-range value`},
+		},
+		{
+			// A range the statement's condition iterates reads as an element.
+			name: "GateIteratedRangeReassigned",
+			code: `y = G(n)
+    r = 0:n
+    s = [r]
+    r = r > 1 r
+    y = s`,
+			errors: []string{`cannot reassign "r" from a range to a non-range value`},
+		},
+		{
+			// y's gated write waits until the template's text classifies.
+			name: "NoFlowChecksOverUnclassifiableText",
+			code: `y, z = F(x)
+    y = x > 0 x
+    z = Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			name: "OtherTemplatesStillChecked",
+			code: `y = F(x)
+    y = Missing(x)
+
+out = Maybe(x)
+    out = x > 0 x`,
+			errors: []string{"undefined function: Missing", unassignedOutputMessage("out")},
+		},
+		{
+			// The text is read even when the structure is invalid; the flow
+			// is not.
+			name: "ReportedWithStructuralErrors",
+			code: `y = F(x, unused)
+    y = Missing(x)`,
+			errors: []string{`input parameter "unused" is never read`, "undefined function: Missing"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			require.Equal(t, test.errors, extractErrorMessages(cc.Compile()))
+		})
+	}
+}
+
+// Unclassifiable text is reported where the solver reports it: an assignment
+// at its =, a call at its parenthesis, and a reassignment at its target.
+func TestUnclassifiableTemplateTextPositions(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `a, b = F(x)
+    a, b = Missing(x)
+
+y = G(x)
+    r = 1:3
+    s = [r]
+    r = x
+    y = r + s`))
+	errs := cc.Compile()
+
+	require.Len(t, errs, 3)
+	positions := make([][2]int, len(errs))
+	for i, err := range errs {
+		positions[i] = [2]int{err.Token.Line, err.Token.Column}
+	}
+	require.Equal(t, [][2]int{{2, 19}, {2, 10}, {7, 5}}, positions)
 }
 
 // The template checks read from the text which bindings hold a Range, and

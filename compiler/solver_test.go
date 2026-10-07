@@ -632,6 +632,35 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	}
 }
 
+// A script reports a count mismatch or an unknown call in the words a
+// template's text check uses.
+func TestScriptSharesTemplateTextMessages(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+		err    string
+	}{
+		{name: "AssignmentMismatch", script: "a, b = 1\na", err: "assignment mismatch: 2 targets but 1 value"},
+		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, test.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.NotEmpty(t, ts.Errors)
+			require.Equal(t, test.err, ts.Errors[0].Msg)
+		})
+	}
+}
+
 func TestArrayToScalarAssignmentError(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayToScalar", "", ast.NewCode())

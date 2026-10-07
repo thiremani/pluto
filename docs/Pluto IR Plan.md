@@ -954,14 +954,19 @@ an earlier `out = prev`, does not definitely assign `out`, and so cannot by
 itself make a later read of `out` valid. Settlement panics when a
 specialization's Range-typed bindings disagree with this summary.
 
-The pass runs after a template's structural checks, and only when they pass:
-explicit use-before-definition, illegal input/global writes, unused inputs,
+The flow checks run after a template's structural checks: explicit
+use-before-definition, illegal input/global writes, unused inputs,
 syntactically unassigned outputs, formatting structure, and discard behavior.
 Those collect all reads before declaring a statement's destinations, so a
 fresh `x = x + 1` cannot define its own RHS. An unknown main format marker
 remains literal text; malformed specifiers and missing dynamic width/precision
-variables on a resolved marker remain structural errors. A flow error in any
-template fails the code module before any script compiles.
+variables on a resolved marker remain structural errors. Alongside them, the
+pass reports text it cannot classify, each an error the solver reports in any
+specialization: a call that names no template, an assignment whose values do
+not fill its targets, and a name assigned both a range and a non-range value.
+The flow checks run only when both kinds of check pass, so they never misread
+such a template, and a template nothing calls gets these errors too. An error
+in any template fails the code module before any script compiles.
 
 This partly reverses Step 2B, which moved dead-store and write-after-write
 checks to specializations; the per-specialization diagnostic cache and replay
@@ -1462,7 +1467,10 @@ immediate deletion at the last consumer.
   `y = Helper(x)` then
   `out = y + 1`, where `Helper` returns a scalar, is a definite write; each
   way a value holds or iterates a range (a gate naming it, a literal or
-  binding under `&&`, a call under `||`) agrees with the solved types
+  binding under `&&`, a call under `||`) agrees with the solved types; and a
+  call that names no template, an assignment whose values do not fill its
+  targets, or a name assigned both a range and a non-range value is reported
+  where the solver reports it, with no flow error over that template
 
 ### Loop-carried tests
 

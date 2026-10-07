@@ -187,8 +187,8 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 }
 
 // AnalyzeFuncs validates every function template once, whether or not
-// anything calls it: structural checks, then dataflow checks that classify
-// writes from the template's text alone.
+// anything calls it: structural checks, then a classification of each write
+// from the template's text alone, then dataflow checks over those writes.
 func (cfg *CFG) AnalyzeFuncs() {
 	cfg.CodeCompiler.settleRangeOutputs()
 
@@ -235,22 +235,93 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
 	}
 
+	writes := cfg.classifyTemplateWrites(fn)
 	if len(cfg.Errors) == errorsBefore {
-		cfg.checkTemplateFlow(fn, body.statementReads)
+		cfg.checkTemplateFlow(fn, body.statementReads, writes)
 	}
 }
 
-// checkTemplateFlow runs the dataflow checks once per template, classifying
-// each write from the text: an output is read only after a definite
+// classifyTemplateWrites classifies every assignment's writes from the
+// template's text, indexed by statement, and reports the text it cannot
+// classify: a call that names no template, an assignment whose values do not
+// fill its targets, and a name reassigned between a range and a non-range
+// value. The solver rejects each of these in any specialization; the flow
+// checks, which would misread them, do not run over a template that has one.
+func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
+	flow := newRangeFlow(cfg.CodeCompiler, fn)
+	writes := make([][]textWrite, len(fn.Body.Statements))
+	for i, stmt := range fn.Body.Statements {
+		cfg.rejectUndefinedCalls(statementExpressions(stmt))
+		let, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+
+		letWrites, ok := flow.letWrites(let)
+		if !ok {
+			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.CodeCompiler.valueCount(let.Value)))
+			continue
+		}
+		cfg.rejectRangeKindChanges(flow, let, letWrites)
+		flow.record(let, letWrites)
+		writes[i] = letWrites
+	}
+	return writes
+}
+
+func (cfg *CFG) rejectUndefinedCalls(exprs []ast.Expression) {
+	for _, expr := range exprs {
+		if call, ok := expr.(*ast.CallExpression); ok {
+			if _, found := cfg.CodeCompiler.callTemplate(call); !found {
+				cfg.addError(call.Token, undefinedFunction(call.Function.Value))
+			}
+		}
+		cfg.rejectUndefinedCalls(ast.ExprChildren(expr))
+	}
+}
+
+func (cfg *CFG) rejectRangeKindChanges(flow *rangeFlow, let *ast.LetStatement, writes []textWrite) {
+	for i, target := range let.Name {
+		heldRange, assigned := flow.assigned[target.Value]
+		if !assigned || heldRange == writes[i].holdsRange {
+			continue
+		}
+
+		if heldRange {
+			cfg.addError(target.Tok(), fmt.Sprintf("cannot reassign %q from a range to a non-range value", target.Value))
+			continue
+		}
+		cfg.addError(target.Tok(), fmt.Sprintf("cannot reassign %q from a non-range value to a range", target.Value))
+	}
+}
+
+func undefinedFunction(name string) string {
+	return fmt.Sprintf("undefined function: %s", name)
+}
+
+func assignmentMismatch(targets, values int) string {
+	return fmt.Sprintf("assignment mismatch: %s but %s", countOf(targets, "target"), countOf(values, "value"))
+}
+
+// countOf writes n with its noun, in the plural unless n is one.
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// checkTemplateFlow runs the dataflow checks once per template over the writes
+// classified from its text: an output is read only after a definite
 // assignment and is definitely assigned by the end of the body, and no write
 // is dead or overwrites a definite write that nothing read. It runs only on a
-// structurally valid body, so every output read follows some write.
-func (cfg *CFG) checkTemplateFlow(fn *ast.FuncStatement, statementReads [][]VarEvent) {
+// structurally valid body whose text classifies, so every output read follows
+// some write and every assignment has its writes.
+func (cfg *CFG) checkTemplateFlow(fn *ast.FuncStatement, statementReads [][]VarEvent, writes [][]textWrite) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 
 	outputs := identSet(fn.Outputs)
-	flow := newRangeFlow(cfg.CodeCompiler, fn)
 	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 
@@ -258,9 +329,7 @@ func (cfg *CFG) checkTemplateFlow(fn *ast.FuncStatement, statementReads [][]VarE
 		cfg.rejectUnassignedOutputReads(statementReads[i], outputs, assigned)
 		events := append([]VarEvent(nil), statementReads[i]...)
 		if let, ok := stmt.(*ast.LetStatement); ok {
-			writes := flow.letWrites(let)
-			flow.record(let, writes)
-			events = append(events, textWriteEvents(let, writes)...)
+			events = append(events, textWriteEvents(let, writes[i])...)
 		}
 		cfg.processDataflowEvents(stmt, events, lastWrites)
 
@@ -323,11 +392,13 @@ type textWrite struct {
 // descriptor and which values a range drives, as the solver types them. A
 // parameter never holds a range, since a range argument runs the body once
 // per element; a binding holds one when it is assigned a descriptor; a call's
-// output holds one when its template's output does.
+// output holds one when its template's output does. assigned keeps whether
+// each assigned name's first assignment gave it a range.
 type rangeFlow struct {
 	cc       *CodeCompiler
 	bindings map[string]struct{}
 	defined  map[string]struct{}
+	assigned map[string]bool
 }
 
 func newRangeFlow(cc *CodeCompiler, fn *ast.FuncStatement) *rangeFlow {
@@ -335,39 +406,27 @@ func newRangeFlow(cc *CodeCompiler, fn *ast.FuncStatement) *rangeFlow {
 	for _, output := range fn.Outputs {
 		defined[output.Value] = struct{}{}
 	}
-	return &rangeFlow{cc: cc, bindings: make(map[string]struct{}), defined: defined}
+	return &rangeFlow{cc: cc, bindings: make(map[string]struct{}), defined: defined, assigned: make(map[string]bool)}
 }
 
 // letWrites classifies every target of an assignment, discards included, so
 // the result lines up with its names. Values take targets by their output
-// counts; when the counts do not cover the targets, which the solver reports,
-// every target gets the statement's weakest class.
-func (rf *rangeFlow) letWrites(let *ast.LetStatement) []textWrite {
+// counts; it reports false when those do not fill the targets.
+func (rf *rangeFlow) letWrites(let *ast.LetStatement) ([]textWrite, bool) {
+	if rf.cc.valueCount(let.Value) != len(let.Name) {
+		return nil, false
+	}
+
 	gateNames := rf.gateRanges(let.Condition)
 	gated := len(let.Condition) > 0
-	slots := make([]int, len(let.Value))
-	total := 0
-	for i, value := range let.Value {
-		slots[i] = rf.cc.valueSlots(value)
-		total += slots[i]
-	}
-
 	writes := make([]textWrite, 0, len(let.Name))
-	if total != len(let.Name) {
-		definite := !gated && !slices.ContainsFunc(let.Value, rf.maySkip)
-		for range let.Name {
-			writes = append(writes, textWrite{definite: definite})
-		}
-		return writes
-	}
-
-	for i, value := range let.Value {
+	for _, value := range let.Value {
 		definite := !gated && !rf.maySkip(value)
-		for _, holdsRange := range rf.slotRanges(value, slots[i], gateNames) {
+		for _, holdsRange := range rf.slotRanges(value, rf.cc.valueSlots(value), gateNames) {
 			writes = append(writes, textWrite{definite: definite, holdsRange: holdsRange})
 		}
 	}
-	return writes
+	return writes, true
 }
 
 // maySkip reports whether a value can leave its targets unwritten: it can
@@ -409,6 +468,9 @@ func (rf *rangeFlow) record(let *ast.LetStatement, writes []textWrite) {
 		}
 
 		rf.defined[target.Value] = struct{}{}
+		if _, ok := rf.assigned[target.Value]; !ok {
+			rf.assigned[target.Value] = writes[i].holdsRange
+		}
 		if writes[i].holdsRange {
 			rf.bindings[target.Value] = struct{}{}
 		}
@@ -580,8 +642,12 @@ func (cc *CodeCompiler) settleRangeOutputs() {
 func (cc *CodeCompiler) templateRangeBindings(fn *ast.FuncStatement) map[string]struct{} {
 	flow := newRangeFlow(cc, fn)
 	for _, stmt := range fn.Body.Statements {
-		if let, ok := stmt.(*ast.LetStatement); ok {
-			flow.record(let, flow.letWrites(let))
+		let, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+		if writes, ok := flow.letWrites(let); ok {
+			flow.record(let, writes)
 		}
 	}
 	return flow.bindings
@@ -611,14 +677,20 @@ func (cc *CodeCompiler) valueSlots(value ast.Expression) int {
 	return 1
 }
 
+// valueCount counts the values a list of expressions yields, as valueSlots
+// counts each.
+func (cc *CodeCompiler) valueCount(values []ast.Expression) int {
+	count := 0
+	for _, value := range values {
+		count += cc.valueSlots(value)
+	}
+	return count
+}
+
 // callTemplate finds a call's template by its name and arity, where an
 // argument counts once for each value it yields.
 func (cc *CodeCompiler) callTemplate(call *ast.CallExpression) (*ast.FuncStatement, bool) {
-	arity := 0
-	for _, argument := range call.Arguments {
-		arity += cc.valueSlots(argument)
-	}
-	return cc.lookupFuncTemplate(call.Function.Value, arity)
+	return cc.lookupFuncTemplate(call.Function.Value, cc.valueCount(call.Arguments))
 }
 
 // callRangeOutputs reports which outputs of a call's template hold a Range,
