@@ -1983,7 +1983,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", len(left), len(right)),
+			Msg:   logicalAndArityMismatch(len(left), len(right)),
 		})
 		types := []Type{Unresolved{}}
 		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
@@ -2050,7 +2050,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d. Operator: %q", expr.Left, len(left), expr.Right, len(right), expr.Token.Literal),
+			Msg:   operandMismatch(expr.Token.Literal, len(left), len(right)),
 		}
 		ts.Errors = append(ts.Errors, ce)
 		types = []Type{Unresolved{}}

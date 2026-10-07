@@ -635,6 +635,11 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 // A script reports a count mismatch or an unknown call in the words a
 // template's text check uses.
 func TestScriptSharesTemplateTextMessages(t *testing.T) {
+	const pairs = `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n`
 	tests := []struct {
 		name   string
 		script string
@@ -642,6 +647,8 @@ func TestScriptSharesTemplateTextMessages(t *testing.T) {
 	}{
 		{name: "AssignmentMismatch", script: "a, b = 1\na", err: "assignment mismatch: 2 targets but 1 value"},
 		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
+		{name: "OperandMismatch", script: "a = Pair(1) * 2\na", err: `operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		{name: "AndArityMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: "logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
 	}
 
 	for _, test := range tests {
@@ -649,7 +656,7 @@ func TestScriptSharesTemplateTextMessages(t *testing.T) {
 			ctx := llvm.NewContext()
 			defer ctx.Dispose()
 
-			cc := NewCodeCompiler(ctx, test.name, "", ast.NewCode())
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, pairs))
 			require.Empty(t, cc.Compile())
 			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, test.script), cc)
 			ts := NewTypeSolver(sc)

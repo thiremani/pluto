@@ -1461,6 +1461,106 @@ out = Inc(n)
 			errors: []string{"undefined function: Missing", "assignment mismatch: 2 targets but 1 value"},
 		},
 		{
+			// An operator whose sides do not line up yields one value, as the
+			// solver counts it, so the assignment does not line up either.
+			name: "OperandCountMismatch",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+a, b = F(n)
+    a, b = Two(n) * 2`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "OrAlternativesCountMismatch",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+r = One(n)
+    r = 0:n
+
+a, b = F(n)
+    a, b = Two(n > 0) || One(3)`,
+			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "NestedMismatchCountsOneValue",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+y = F(n)
+    y = (Pair(n) * 2) + 1`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			// A && condition folds onto one value or broadcasts to several,
+			// but two conditions cannot gate three values.
+			name: "AndArityMismatch",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
+a, b, c = F(n)
+    a, b, c = Pair(n > 0) && Three(n)`,
+			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3", "assignment mismatch: 3 targets but 1 value"},
+		},
+		{
+			// Under ||, a range literal yields its elements, so it cannot back
+			// up a call that returns a range.
+			name: "OrAlternativesDisagreeOnRange",
+			code: makeRangeTemplate + `out = F(n)
+    out = MakeRange(n > 0) || 0:n`,
+			errors: []string{"logical OR value operands must have matching output types, but only the left one yields a range (a range literal or name under || yields its elements)"},
+		},
+		{
+			// The solver leaves an unknown call unresolved, and anything
+			// computed from it, which matches any alternative.
+			name: "UnresolvedAlternativeIsNotCompared",
+			code: makeRangeTemplate + `out = F(n)
+    out = (Missing(n) + 1) || MakeRange(3)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			name: "MisalignedAlternativeIsNotCompared",
+			code: makeRangeTemplate + `p, q = Pair(n)
+    p, q = n, n + 1
+
+out = F(n)
+    out = (Pair(n) * 2) || MakeRange(3)`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			// A || whose sides do not line up passes no range, so its caller
+			// is not reported again.
+			name: "CallerOfMisalignedTemplate",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+r = One(n)
+    r = 0:n
+
+r = G(n)
+    r = Two(n > 0) || One(3)
+
+out = F(n)
+    out = G(n) * 2`,
+			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			name: "OrAlternativesDisagreeOnRangeSlotBySlot",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+k, r = Flip(n)
+    k, r = n, 0:n
+
+a, b = F(n)
+    a, b = Flip(n > 0) || Two(3)`,
+			errors: []string{"logical OR value operands must have matching output types, but only the right one yields a range (a range literal or name under || yields its elements)"},
+		},
+		{
 			name: "RangeReassignedNonRange",
 			code: `y = G(x)
     r = 1:3
@@ -1558,28 +1658,6 @@ y = G(x)
 		positions[i] = [2]int{err.Token.Line, err.Token.Column}
 	}
 	require.Equal(t, [][2]int{{2, 19}, {2, 10}, {7, 5}}, positions)
-}
-
-// A || whose alternatives yield different numbers of values gets no ranges
-// from the text, and the solver reports it where a script calls it.
-func TestMismatchedOrAlternativesLeftToSolver(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `r, k = Two(n)
-    r, k = 0:n, n
-
-r = One(n)
-    r = 0:n
-
-a, b = F(n)
-    a, b = Two(n > 0) || One(3)`))
-	require.Empty(t, cc.Compile())
-
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "x, y = F(5)\nx"), cc)
-	messages := extractErrorMessages(sc.Compile())
-	require.NotEmpty(t, messages)
-	require.Contains(t, messages[0], "left expression and right expression have unequal lengths")
 }
 
 // The template checks read from the text which bindings hold a Range, and

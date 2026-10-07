@@ -962,8 +962,10 @@ fresh `x = x + 1` cannot define its own RHS. An unknown main format marker
 remains literal text; malformed specifiers and missing dynamic width/precision
 variables on a resolved marker remain structural errors. Alongside them, the
 pass reports text it cannot classify, each an error the solver reports in any
-specialization: a call that names no template, an assignment whose values do
-not fill its targets, and a name assigned both a range and a non-range value.
+specialization: a call that names no template, an operator whose sides do not
+line up (value counts the solver rejects, or a `||` of which only one
+alternative yields a range), an assignment whose values do not fill its
+targets, and a name assigned both a range and a non-range value.
 The flow checks run only when both kinds of check pass, so they never misread
 such a template, and a template nothing calls gets these errors too. An error
 in any template fails the code module before any script compiles.
@@ -1468,9 +1470,10 @@ immediate deletion at the last consumer.
   `out = y + 1`, where `Helper` returns a scalar, is a definite write; each
   way a value holds or iterates a range (a gate naming it, a literal or
   binding under `&&`, a call under `||`) agrees with the solved types; and a
-  call that names no template, an assignment whose values do not fill its
-  targets, or a name assigned both a range and a non-range value is reported
-  where the solver reports it, with no flow error over that template
+  call that names no template, an operator whose sides do not line up, an
+  assignment whose values do not fill its targets, or a name assigned both a
+  range and a non-range value is reported where the solver reports it, with
+  no flow error over that template
 
 ### Loop-carried tests
 
