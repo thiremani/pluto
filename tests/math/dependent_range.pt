@@ -12,3 +12,16 @@ out = DoubleLast(prev, n)
     r = MakeRange(n)
     out = prev
     out = r * 2
+
+# A call under && or || passes on each of its outputs whole, so a range in one
+# of several outputs stays a range.
+r, k = Two(n)
+    r, k = 0:n, n
+
+out = AndTwo(n)
+    kept, k = n > 0 && Two(n)
+    out = [kept] ⊕ [k]
+
+out = OrTwo(n)
+    kept, k = Two(n > 0) || Two(3)
+    out = [kept] ⊕ [k]

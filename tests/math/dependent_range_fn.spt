@@ -11,3 +11,8 @@ kept = 7
 kept = DoubleLast(kept, 0)
 doubled = DoubleLast(0, 3)
 "DoubleLast: -kept -doubled"
+
+andTwo = AndTwo(3)
+orTwo = OrTwo(2)
+orFallback = OrTwo(-1)
+"MultiOutputRanges: -andTwo -orTwo -orFallback"

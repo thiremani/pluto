@@ -1327,6 +1327,16 @@ r = Forward(n)
 			unassigned: []string{"out"},
 		},
 		{
+			// A call under || passes on each output whole, so no range
+			// drives the write.
+			name: "OrForwardsMultiOutputCall",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+a, b = F(n)
+    a, b = Two(n > 0) || Two(3)`,
+		},
+		{
 			// A && fills its right operand's targets.
 			name: "AndTakesRightOperandSlots",
 			code: `a, b = Pair(x)
@@ -1550,6 +1560,28 @@ y = G(x)
 	require.Equal(t, [][2]int{{2, 19}, {2, 10}, {7, 5}}, positions)
 }
 
+// A || whose alternatives yield different numbers of values gets no ranges
+// from the text, and the solver reports it where a script calls it.
+func TestMismatchedOrAlternativesLeftToSolver(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `r, k = Two(n)
+    r, k = 0:n, n
+
+r = One(n)
+    r = 0:n
+
+a, b = F(n)
+    a, b = Two(n > 0) || One(3)`))
+	require.Empty(t, cc.Compile())
+
+	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "x, y = F(5)\nx"), cc)
+	messages := extractErrorMessages(sc.Compile())
+	require.NotEmpty(t, messages)
+	require.Contains(t, messages[0], "left expression and right expression have unequal lengths")
+}
+
 // The template checks read from the text which bindings hold a Range, and
 // settlement checks that the solved types agree, so each way a value holds
 // or iterates a range is pinned here against the solver.
@@ -1670,6 +1702,28 @@ out = F(n)
 
 out = F(n)
     kept, k = Two(n)
+    out = [kept] ⊕ [k]`,
+			ranges: []string{"kept"},
+		},
+		{
+			// A value-position && passes on each output of the call it yields.
+			name: "AndPassesMultiOutputCall",
+			code: `r, k = Two(n)
+    r, k = 0:n, n
+
+out = F(n)
+    kept, k = n > 0 && Two(n)
+    out = [kept] ⊕ [k]`,
+			ranges: []string{"kept"},
+		},
+		{
+			// So does a ||, slot by slot.
+			name: "OrPassesMultiOutputCalls",
+			code: `k, r = Flip(n)
+    k, r = n, 0:n
+
+out = F(n)
+    k, kept = Flip(n > 0) || Flip(3)
     out = [kept] ⊕ [k]`,
 			ranges: []string{"kept"},
 		},

@@ -448,13 +448,21 @@ func textNodeFails(expr ast.Expression) bool {
 }
 
 // slotRanges reports, per target a value fills, whether it receives a Range
-// descriptor.
+// descriptor. A || or value-position && yields its right operand's values,
+// since the solver requires a ||'s alternatives to match; one whose right
+// operand fills a different number of targets is the solver's error.
 func (rf *rangeFlow) slotRanges(value ast.Expression, slots int, gateNames map[string]struct{}) []bool {
 	if slots == 1 {
 		return []bool{rf.holdsRange(value, gateNames)}
 	}
-	if call, ok := value.(*ast.CallExpression); ok {
-		return rf.cc.callRangeOutputs(call)
+
+	switch v := value.(type) {
+	case *ast.CallExpression:
+		return rf.cc.callRangeOutputs(v)
+	case *ast.InfixExpression:
+		if (v.IsLogicalOr() || v.IsLogicalAnd()) && rf.cc.valueSlots(v.Right) == slots {
+			return rf.slotRanges(v.Right, slots, gateNames)
+		}
 	}
 	return make([]bool, slots)
 }
@@ -493,13 +501,12 @@ func (rf *rangeFlow) holdsRange(value ast.Expression, gateNames map[string]struc
 }
 
 // forwardsRange reports whether expr passes a Range descriptor on whole: a
-// call whose template output holds one, or a || or value-position && that
+// call with an output that holds one, or a || or value-position && that
 // yields such a call. A literal or binding operand of || and && is iterated.
 func (rf *rangeFlow) forwardsRange(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.CallExpression:
-		outputs := rf.cc.callRangeOutputs(e)
-		return len(outputs) == 1 && outputs[0]
+		return slices.Contains(rf.cc.callRangeOutputs(e), true)
 	case *ast.InfixExpression:
 		if e.IsLogicalOr() || e.IsLogicalAnd() {
 			return rf.forwardsRange(e.Right)
