@@ -187,23 +187,42 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 }
 
 // AnalyzeFuncs validates every function template once, whether or not
-// anything calls it: structural checks, then a classification of each write
+// anything calls it: structural checks and a classification of each write
 // from the template's text alone, then dataflow checks over those writes.
+// The dataflow checks wait until every template passes the first two, since a
+// caller reads each call as returning values: a function rejected for holding
+// a range in an output would mislead its callers' checks.
 func (cfg *CFG) AnalyzeFuncs() {
 	cfg.CodeCompiler.rangeBindings = make(map[funcKey]map[string]struct{})
+	errorsBefore := len(cfg.Errors)
 
+	var templates []classifiedTemplate
 	for _, stmt := range cfg.CodeCompiler.Code.Statements {
 		fn, ok := stmt.(*ast.FuncStatement)
 		if !ok {
 			continue
 		}
 
-		cfg.validateFuncTemplate(fn)
+		templates = append(templates, cfg.validateFuncTemplate(fn))
+	}
+	if len(cfg.Errors) > errorsBefore {
+		return
+	}
+
+	for _, template := range templates {
+		cfg.checkTemplateFlow(template.fn, template.statementReads, template.writes)
 	}
 }
 
-func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
-	errorsBefore := len(cfg.Errors)
+// classifiedTemplate keeps what the dataflow checks need from a validated
+// and classified template.
+type classifiedTemplate struct {
+	fn             *ast.FuncStatement
+	statementReads [][]VarEvent
+	writes         [][]textWrite
+}
+
+func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) classifiedTemplate {
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
@@ -236,9 +255,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 	}
 
 	writes := cfg.classifyTemplateWrites(fn)
-	if len(cfg.Errors) == errorsBefore {
-		cfg.checkTemplateFlow(fn, body.statementReads, writes)
-	}
+	return classifiedTemplate{fn: fn, statementReads: body.statementReads, writes: writes}
 }
 
 // classifyTemplateWrites classifies every assignment's writes from the
@@ -246,9 +263,9 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 // settlement to check. It reports the text it cannot classify: a call that
 // names no template, an operator whose sides do not line up, and an
 // assignment whose values do not fill its targets. The solver rejects each of
-// these in any specialization; the flow checks, which would misread them, do
-// not run over a template that has one. It also reports an output that holds
-// a range, which a function cannot return.
+// these in any specialization; the flow checks, which would misread them, wait
+// until no template has one. It also reports an output that holds a range,
+// which a function cannot return.
 func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	flow := newRangeFlow(cfg.CodeCompiler, fn)
 	outputs := identSet(fn.Outputs)

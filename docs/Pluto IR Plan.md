@@ -949,7 +949,7 @@ definitely assign `out`, and so cannot by itself make a later read of `out`
 valid. Settlement panics when a specialization's Range-typed bindings
 disagree with this summary.
 
-The flow checks run after a template's structural checks: explicit
+The flow checks run after every template's structural checks: explicit
 use-before-definition, illegal input/global writes, unused inputs,
 syntactically unassigned outputs, formatting structure, and discard behavior.
 Those collect all reads before declaring a statement's destinations, so a
@@ -959,15 +959,17 @@ variables on a resolved marker remain structural errors. Alongside them, the
 pass reports text it cannot classify, each an error the solver reports in any
 specialization: a call that names no template, an operator whose sides do not
 line up (value counts the solver rejects), and an assignment whose values do
-not fill its targets. The flow checks run only when both kinds of check pass,
-so they never misread such a template, and a template nothing calls gets
-these errors too. A name reassigned between a range and a non-range value is
-left to the solver, like any other change of type. The pass reads each name
-by its latest assignment, so its flow checks follow the text as written and
-the solver reports the retype only once they pass: a body with `r = n`, a
-print of `r`, then `r = 0:n` and `res = r` is reported only for leaving
-`res` possibly unassigned. A template nothing calls is not checked for it.
-An error in any template fails the code module before any script compiles.
+not fill its targets. The flow checks run only once every template passes
+both kinds of check, so they misread neither such a template nor a call to a
+function rejected for holding a range in an output, which its callers read
+as returning values. A template nothing calls gets these errors too. A name
+reassigned between a range and a non-range value is left to the solver,
+like any other change of type. The pass reads each name by its latest
+assignment, so its flow checks follow the text as written and the solver
+reports the retype only once they pass: a body with `r = n`, a print of `r`,
+then `r = 0:n` and `res = r` is reported only for leaving `res` possibly
+unassigned. A template nothing calls is not checked for it. An error in any
+template fails the code module before any script compiles.
 
 This partly reverses Step 2B, which moved dead-store and write-after-write
 checks to specializations; the per-specialization diagnostic cache and replay
@@ -1465,10 +1467,12 @@ immediate deletion at the last consumer.
   rejected; `y = Helper(x)` then `out = y + 1`, where `Helper` returns a
   scalar, is a definite write; each way a value holds or iterates a range (a
   gate naming it, a bare name, a literal or binding under `&&`) agrees with
-  the solved types; an output assigned a range is rejected (#146); a call
-  that names no template, an operator whose sides do not line up, or an
+  the solved types; an output assigned a range is rejected (#146), with no
+  flow error in any template, so none in a caller declared before or after
+  it or calling it through a function that forwards the call; a call that
+  names no template, an operator whose sides do not line up, or an
   assignment whose values do not fill its targets is reported where the
-  solver reports it, with no flow error over that template; and a body that
+  solver reports it, with no flow error in any template; and a body that
   reassigns a name between a range and a non-range value, and passes the
   flow checks as written, gets only the solver's retype error
 

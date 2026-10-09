@@ -1437,13 +1437,18 @@ a, b, c = F(n)
 			errors: []string{"undefined function: Missing"},
 		},
 		{
-			name: "OtherTemplatesStillChecked",
+			// Every template's text is checked, and Maybe's flow error waits
+			// until all of it classifies.
+			name: "FlowChecksWaitForEveryTemplate",
 			code: `y = F(x)
     y = Missing(x)
 
 out = Maybe(x)
-    out = x > 0 x`,
-			errors: []string{"undefined function: Missing", unassignedOutputMessage("out")},
+    out = x > 0 x
+
+z = G(x)
+    z = Gone(x)`,
+			errors: []string{"undefined function: Missing", "undefined function: Gone"},
 		},
 		{
 			// The text is read even when the structure is invalid; the flow
@@ -1543,6 +1548,42 @@ out = F(n)
     lo, hi = Bounds(n)
     r = lo:hi
     out = [r]`,
+		},
+		{
+			// G's checks read the call as a value, which would make its
+			// default a dead store, so they wait for MakeRange's error.
+			name: "CallerAfterRangeOutput",
+			code: `res = MakeRange(n)
+    res = 0:n
+
+out = G(n)
+    out = 0
+    out = MakeRange(n) + 1`,
+			errors: []string{rangeOutputMessage("res")},
+		},
+		{
+			name: "CallerBeforeRangeOutput",
+			code: `out = G(n)
+    out = 0
+    out = MakeRange(n) + 1
+
+res = MakeRange(n)
+    res = 0:n`,
+			errors: []string{rangeOutputMessage("res")},
+		},
+		{
+			// Fwd takes the call's value, so H's call to Fwd misleads it too.
+			name: "CallerThroughForwardingCall",
+			code: `res = MakeRange(n)
+    res = 0:n
+
+v = Fwd(n)
+    v = MakeRange(n)
+
+out = H(n)
+    out = 0
+    out = Fwd(n) + 1`,
+			errors: []string{rangeOutputMessage("res")},
 		},
 	}
 
