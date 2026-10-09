@@ -279,7 +279,7 @@ res = sum(a, b)
   such as `n <= 1` and `n > 1` are not recognized either; for floats they need
   not cover every case, since both fail for a NaN. Only a range literal
   written with constant, nonempty bounds, such as `0:3`, always runs; a range
-  bound to a name or returned by a call may be empty.
+  bound to a name may be empty.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
   call argument, a print, a formatting marker, or an empty array's sample)
   only after it is definitely assigned, judged from the text as above. A read

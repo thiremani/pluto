@@ -928,9 +928,8 @@ checked access, a `||` whose last alternative can fail, a call with such an
 argument) makes a write possibly skipped, even where a specialization's types
 would make it always write, as an array mask does. Only a range literal
 written with constant, nonempty bounds always runs; a range bound to a name
-or returned by a call may be empty. A call counts as writing every output,
-since its callee passes the same check, so a caller of a rejected template is
-not reported again.
+may be empty. A call counts as writing every output, since its callee passes
+the same check, so a caller of a rejected template is not reported again.
 
 The pass also reads from the text which values are ranges, and so which
 statements a range drives. A parameter never holds a range, since a range

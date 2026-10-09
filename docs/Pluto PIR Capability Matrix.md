@@ -283,7 +283,7 @@ clock.
 | 27 | Ranged gate whose value is a heap-returning call — the per-iteration free-before-overwrite path had no test | `tests/mem/gate_heap/` (leak-checked) |
 | 11, 23, 24 | Empty and fully-rejected domains: what a collector and a carry commit | `tests/cond/domain_activation.spt` |
 | 5 | Blank targets: **zero** coverage in the entire corpus before this step | `tests/discard.spt` |
-| 11, 23 | A function-returned `Range` driving a collector domain and a shared statement gate | `tests/mem/gate_heap/` |
+| 11, 23 | A range built from a function's returned bounds, driving a collector domain and a shared statement gate | `tests/mem/gate_heap/` |
 | 30, 31 | Out-of-bounds and failed-conditional print arguments | `tests/array/oob_print.spt` |
 
 Confirmed by these fixtures and now normative in the plan (plan §7, plan §10):
