@@ -893,10 +893,11 @@ func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	require.Equal(t, "test.pt:3:5", err.Token.Location())
 }
 
-// A body that reassigns a name between a range and a non-range value gets the
-// solver's retype error, as for any other type. The per-template pass reads
-// each name by its latest assignment: read as a range, r would leave res
-// possibly unassigned in RangeToNonRange.
+// A body that reassigns a name between a range and a non-range value, and
+// passes the flow checks as written, gets the solver's retype error, as for
+// any other type. The per-template pass reads each name by its latest
+// assignment: read as a range, r would leave res possibly unassigned in
+// RangeToNonRange.
 func TestFunctionRangeRetypeIsReportedBySolver(t *testing.T) {
 	tests := []struct {
 		name     string
