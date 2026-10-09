@@ -244,12 +244,11 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 // classifyTemplateWrites classifies every assignment's writes from the
 // template's text, indexed by statement, and records its range bindings for
 // settlement to check. It reports the text it cannot classify: a call that
-// names no template, an operator whose sides do not line up, an assignment
-// whose values do not fill its targets, and a name reassigned between a range
-// and a non-range value. The solver rejects each of these in any
-// specialization; the flow checks, which would misread them, do not run over a
-// template that has one. It also reports an output that holds a range, which
-// a function cannot return.
+// names no template, an operator whose sides do not line up, and an
+// assignment whose values do not fill its targets. The solver rejects each of
+// these in any specialization; the flow checks, which would misread them, do
+// not run over a template that has one. It also reports an output that holds
+// a range, which a function cannot return.
 func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	flow := newRangeFlow(cfg.CodeCompiler, fn)
 	outputs := identSet(fn.Outputs)
@@ -266,7 +265,6 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.CodeCompiler.valueCount(let.Value)))
 			continue
 		}
-		cfg.rejectRangeKindChanges(flow, let, letWrites)
 		cfg.rejectRangeOutputs(outputs, let, letWrites)
 		flow.record(let, letWrites)
 		writes[i] = letWrites
@@ -311,21 +309,6 @@ func operandsLineUp(infix *ast.InfixExpression, left, right int) bool {
 		return left == right || left == 1 || right == 1
 	}
 	return left == right
-}
-
-func (cfg *CFG) rejectRangeKindChanges(flow *rangeFlow, let *ast.LetStatement, writes []textWrite) {
-	for i, target := range let.Name {
-		heldRange, assigned := flow.assigned[target.Value]
-		if !assigned || heldRange == writes[i].holdsRange {
-			continue
-		}
-
-		if heldRange {
-			cfg.addError(target.Tok(), fmt.Sprintf("cannot reassign %q from a range to a non-range value", target.Value))
-			continue
-		}
-		cfg.addError(target.Tok(), fmt.Sprintf("cannot reassign %q from a non-range value to a range", target.Value))
-	}
 }
 
 // rejectRangeOutputs reports an output assigned a range. A function returns a
@@ -447,13 +430,13 @@ type textWrite struct {
 // never holds one, since a range argument runs the body once per element; no
 // call yields one, since a function cannot return a range; and a range name
 // iterates wherever it is used, so a binding assigned from one holds an
-// element. assigned keeps whether each assigned name's first assignment gave
-// it a range.
+// element. A binding holds a range as its latest assignment left it; a
+// reassignment between a range and a non-range value is the solver's to
+// reject, like any other change of type.
 type rangeFlow struct {
 	cc       *CodeCompiler
 	bindings map[string]struct{}
 	defined  map[string]struct{}
-	assigned map[string]bool
 }
 
 func newRangeFlow(cc *CodeCompiler, fn *ast.FuncStatement) *rangeFlow {
@@ -461,7 +444,7 @@ func newRangeFlow(cc *CodeCompiler, fn *ast.FuncStatement) *rangeFlow {
 	for _, output := range fn.Outputs {
 		defined[output.Value] = struct{}{}
 	}
-	return &rangeFlow{cc: cc, bindings: make(map[string]struct{}), defined: defined, assigned: make(map[string]bool)}
+	return &rangeFlow{cc: cc, bindings: make(map[string]struct{}), defined: defined}
 }
 
 // letWrites classifies every target of an assignment, discards included, so
@@ -512,7 +495,8 @@ func (rf *rangeFlow) slotRanges(value ast.Expression) []bool {
 }
 
 // record publishes an assignment's targets once its reads are classified:
-// they become defined, and those that receive a descriptor hold a range.
+// they become defined, and each holds a range exactly when this assignment
+// gives it a descriptor.
 func (rf *rangeFlow) record(let *ast.LetStatement, writes []textWrite) {
 	for i, target := range let.Name {
 		if isDiscard(target) {
@@ -520,12 +504,11 @@ func (rf *rangeFlow) record(let *ast.LetStatement, writes []textWrite) {
 		}
 
 		rf.defined[target.Value] = struct{}{}
-		if _, ok := rf.assigned[target.Value]; !ok {
-			rf.assigned[target.Value] = writes[i].holdsRange
-		}
 		if writes[i].holdsRange {
 			rf.bindings[target.Value] = struct{}{}
+			continue
 		}
+		delete(rf.bindings, target.Value)
 	}
 }
 

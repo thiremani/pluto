@@ -1429,44 +1429,6 @@ a, b, c = F(n)
 			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3", "assignment mismatch: 3 targets but 1 value"},
 		},
 		{
-			name: "RangeReassignedNonRange",
-			code: `y = G(x)
-    r = 1:3
-    s = [r]
-    r = x
-    y = r + s`,
-			errors: []string{`cannot reassign "r" from a range to a non-range value`},
-		},
-		{
-			name: "NonRangeReassignedRange",
-			code: `y = G(x)
-    r = x
-    s = r + 1
-    r = 1:3
-    y = r + s`,
-			errors: []string{`cannot reassign "r" from a non-range value to a range`},
-		},
-		{
-			// As in the solver, the first assignment fixes the kind.
-			name: "KindFollowsFirstAssignment",
-			code: `y = G(n)
-    r = 0:n
-    r = n
-    r = 1:n
-    y = [r]`,
-			errors: []string{`cannot reassign "r" from a range to a non-range value`},
-		},
-		{
-			// A range the statement's condition iterates reads as an element.
-			name: "GateIteratedRangeReassigned",
-			code: `y = G(n)
-    r = 0:n
-    s = [r]
-    r = r > 1 r
-    y = s`,
-			errors: []string{`cannot reassign "r" from a range to a non-range value`},
-		},
-		{
 			// y's gated write waits until the template's text classifies.
 			name: "NoFlowChecksOverUnclassifiableText",
 			code: `y, z = F(x)
@@ -1505,27 +1467,21 @@ out = Maybe(x)
 }
 
 // Unclassifiable text is reported where the solver reports it: an assignment
-// at its =, a call at its parenthesis, and a reassignment at its target.
+// at its = and a call at its parenthesis.
 func TestUnclassifiableTemplateTextPositions(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `a, b = F(x)
-    a, b = Missing(x)
-
-y = G(x)
-    r = 1:3
-    s = [r]
-    r = x
-    y = r + s`))
+    a, b = Missing(x)`))
 	errs := cc.Compile()
 
-	require.Len(t, errs, 3)
+	require.Len(t, errs, 2)
 	positions := make([][2]int, len(errs))
 	for i, err := range errs {
 		positions[i] = [2]int{err.Token.Line, err.Token.Column}
 	}
-	require.Equal(t, [][2]int{{2, 19}, {2, 10}, {7, 5}}, positions)
+	require.Equal(t, [][2]int{{2, 19}, {2, 10}}, positions)
 }
 
 func rangeOutputMessage(name string) string {

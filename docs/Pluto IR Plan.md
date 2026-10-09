@@ -958,12 +958,14 @@ remains literal text; malformed specifiers and missing dynamic width/precision
 variables on a resolved marker remain structural errors. Alongside them, the
 pass reports text it cannot classify, each an error the solver reports in any
 specialization: a call that names no template, an operator whose sides do not
-line up (value counts the solver rejects, or a `||` of which only one
-alternative yields a range), an assignment whose values do not fill its
-targets, and a name assigned both a range and a non-range value.
-The flow checks run only when both kinds of check pass, so they never misread
-such a template, and a template nothing calls gets these errors too. An error
-in any template fails the code module before any script compiles.
+line up (value counts the solver rejects), and an assignment whose values do
+not fill its targets. The flow checks run only when both kinds of check pass,
+so they never misread such a template, and a template nothing calls gets
+these errors too. A name reassigned between a range and a non-range value is
+left to the solver, like any other change of type: the pass reads each name
+by its latest assignment, so its flow checks follow the text as written, and
+a template nothing calls is not checked for it. An error in any template
+fails the code module before any script compiles.
 
 This partly reverses Step 2B, which moved dead-store and write-after-write
 checks to specializations; the per-specialization diagnostic cache and replay
@@ -1461,11 +1463,12 @@ immediate deletion at the last consumer.
   rejected; `y = Helper(x)` then `out = y + 1`, where `Helper` returns a
   scalar, is a definite write; each way a value holds or iterates a range (a
   gate naming it, a bare name, a literal or binding under `&&`) agrees with
-  the solved types; an output assigned a range is rejected (#146); and a
-  call that names no template, an operator whose sides do not line up, an
-  assignment whose values do not fill its targets, or a name assigned both a
-  range and a non-range value is reported where the solver reports it, with
-  no flow error over that template
+  the solved types; an output assigned a range is rejected (#146); a call
+  that names no template, an operator whose sides do not line up, or an
+  assignment whose values do not fill its targets is reported where the
+  solver reports it, with no flow error over that template; and a body that
+  reassigns a name between a range and a non-range value gets only the
+  solver's retype error
 
 ### Loop-carried tests
 

@@ -893,6 +893,59 @@ func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	require.Equal(t, "test.pt:3:5", err.Token.Location())
 }
 
+// A body that reassigns a name between a range and a non-range value gets the
+// solver's retype error, as for any other type. The per-template pass reads
+// each name by its latest assignment: read as a range, r would leave res
+// possibly unassigned in RangeToNonRange.
+func TestFunctionRangeRetypeIsReportedBySolver(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		msg      string
+		location string
+	}{
+		{
+			name: "RangeToNonRange",
+			code: `res = Retype(n)
+    r = 0:n
+    t = 0
+    t = t + r
+    r = t + 1
+    res = r`,
+			msg:      `cannot reassign type to identifier. Old Type: I64:I64:I64. New Type: I64. Identifier "r"`,
+			location: "test.pt:5:5",
+		},
+		{
+			name: "NonRangeToRange",
+			code: `res = Retype(n)
+    r = n
+    res = r + 1
+    r = 1:n
+    res = res + r`,
+			msg:      `cannot reassign type to identifier. Old Type: I64. New Type: I64:I64:I64. Identifier "r"`,
+			location: "test.pt:4:5",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			require.Empty(t, cc.Compile())
+
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, "value = Retype(4)\nvalue"), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, test.msg, ts.Errors[0].Msg)
+			require.Equal(t, test.location, ts.Errors[0].Token.Location())
+		})
+	}
+}
+
 func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "rangeBoundsDepend", "", ast.NewCode())
