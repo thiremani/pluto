@@ -16,11 +16,10 @@ nothing calls them, so they are not part of a module's contract.
 ## No visibility
 
 Pluto has no public/private rule for functions, operators, constants or
-structs, and no exported/unexported spelling. Encapsulation is the function
-black box: inputs are the only way values enter a function and its outputs
-its only effect, with no shared mutable state, so calling any function, a
-helper included, cannot break another. The usual reason to hide functions,
-protecting shared state and its invariants, does not arise.
+structs, and no exported/unexported spelling. Functions share no mutable
+state, so calling any function, a helper included, cannot break another. The
+usual reason to hide functions, protecting shared state and its invariants,
+does not arise.
 
 Everything a module defines is therefore part of its contract with other
 modules. A module that wants to stop offering something deprecates it and
@@ -34,8 +33,10 @@ ABI already mangles such path segments into every symbol, so:
 
 - Different major versions of one module can be linked into the same
   program, and each dependent moves to a new major when it chooses to.
-- Struct types from different major versions are distinct: a `v1` struct
-  cannot be passed to a `v2` function.
+- Struct types from different major versions are distinct: a `v1` `Person`
+  is not a `v2` `Person`, so the two don't mix where one type is required,
+  such as a variable that already holds one, or an array's elements. A
+  template still accepts either when its body works for it.
 - Minor and patch releases share their major's namespace and replace each
   other, so each must be compatible with the releases before it in that
   major line.
@@ -60,7 +61,7 @@ its changes requires, and a publisher may always choose a higher one. From
 | Remove or rename a function, operator, constant, struct or field | Major |
 | Change a function's number of inputs or outputs | Major |
 | Change a constant's value or type | Major |
-| Change a field's type | Major |
+| Change a field's type, or the order of a struct's fields | Major |
 | Narrow the argument types a function accepts, or change the result type of a call that worked | Major |
 | Change the meaning or order of a function's inputs or outputs | Major |
 | Break documented behavior, or drop a supported platform or compiler version | Major |
@@ -72,13 +73,20 @@ function's input count removes one function and adds another.
 
 Constants promise their exact typed values, so correcting a wrong constant
 is a Major change. Values are compared, not spellings: `1.0` becoming `1e0`
-is no change.
+is no change. A struct constant keeps its value as long as every field it
+had keeps its type and value, so a field added in a Minor release is no
+change either. Fields hold numbers and strings today; if they come to hold
+structs, the same comparison applies to those fields in turn.
 
-A struct may gain a field in a Minor release because struct literals name
-their fields and may leave some out, which then take their zero value. A
-struct's printed form and memory layout are not part of its contract, and
-dependents compile from source. When zero is not a safe value for the new
-field in existing literals, the change breaks behavior and is Major.
+A struct type is defined by its constant that lists the most fields, as in
+`p = Person` with `: name age`. A new field is added there, and every other
+constant of that type takes the field's zero value. A struct may gain a
+field in a Minor release because struct literals name their fields and may
+leave some out. A struct's printed form and memory layout are not part of
+its contract, and dependents compile from source. When zero is not a safe
+value for the new field in existing constants, the change breaks behavior
+and is Major. Reordering a struct's fields is Major too, since a literal
+that lists every field must use the definition's order.
 
 When a module's functions take or return a dependency's structs, changes to
 those structs reach the module's own callers, so a dependency update is
@@ -99,15 +107,19 @@ body decides which types it accepts and what it returns for them, and a
 template exists to work for every type its body supports, so tests are
 representative examples and need not try every type. A Minor or Patch
 release must still not narrow the accepted types or change a result type for
-a call that worked. The checker cannot prove that from declarations, so it
-rests on three things:
+a call that worked. The checker enforces only the rules it can detect from
+declarations; representative tests and the publisher cover the rest:
 
-- Publishing reruns the previous release's tests against the new one, which
-  catches a narrowing or a changed result for the types those tests use.
-- A narrowing that no test catches fails a dependent's build with a type
-  error rather than going unnoticed.
-- A changed result type can go unnoticed, so a publisher who knows of one
-  declares a Major release.
+- Publishing reruns the previous release's tests against the new one. They
+  catch what their assertions, or operations sensitive to type, expose:
+  changing `F(x)` from returning `x` to returning `x + 0.0` makes `F(1)` a
+  float, yet both versions print `1`.
+- A publisher who knows of a narrowing or a changed result type declares a
+  Major release.
+
+A narrowing that escapes both shows up later as a type error in a
+dependent's build: a breaking change the release should have declared, not
+one publishing caught.
 
 A later addition could summarize, from each body, what each input must
 support (operators, indexing, field names, and the functions it is passed
@@ -126,10 +138,12 @@ Publishing a release:
 2. Compares it with the release it updates: `2.4.8` with `2.4.7`, and a
    backported `2.3.5` with `2.3.4`.
 3. Works out the minimum category, the highest any change requires.
-4. Runs the module's tests and the previous release's tests. Any failure
-   stops publishing, whatever the version. A previous test whose expected
-   result changes declares either a break, which needs a Major release, or a
-   bug fix, which the release notes state.
+4. Runs the module's own tests, which must all pass, and the previous
+   release's tests, whose failures must each be explained: by a change the
+   comparison found, such as a function a Major release removes; by a break
+   the publisher declares, which needs a Major release; by a bug fix the
+   release notes state; or by something outside the contract, such as a
+   struct's printed form. An unexplained failure stops publishing.
 5. Requires every function's body to run at least once in the module's own
    tests, with any argument types. This is execution, not reachability:
    `[Double(0:0)]` reaches `Double` but never runs its body.
