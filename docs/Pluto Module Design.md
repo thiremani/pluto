@@ -47,8 +47,11 @@ Releases are numbered `Major.Minor.Patch`, as in
 [SemVer](https://semver.org/). A release's category is the highest any of
 its changes requires, and publishing picks the next version in it: from
 `2.4.7`, that is `2.4.8` for a Patch, `2.5.0` for a Minor and `3.0.0` for a
-Major. The publisher never chooses a number, but may ask for a higher
-category than the changes require, never a lower one.
+Major. Publishing detects the changes declarations show, and the publisher
+declares the rest: a compatible addition the comparison cannot see, such as
+a template that now accepts more argument types, as Minor, and a breaking
+change as Major. The publisher never chooses a number, but may ask for a
+higher category than the changes require, never a lower one.
 
 | Change | Minimum |
 |---|---|
@@ -115,7 +118,9 @@ declarations; representative tests and the publisher cover the rest:
   changing `F(x)` from returning `x` to returning `x + 0.0` makes `F(1)` a
   float, yet both versions print `1`.
 - A publisher who knows of a narrowing or a changed result type declares it
-  as a break, which makes the release Major.
+  as a break, which makes the release Major. A template that now accepts
+  more argument types is declared as a compatible addition, which makes it
+  Minor.
 
 A narrowing that escapes both shows up later as a type error in a
 dependent's build: a breaking change the release should have declared, not
@@ -137,8 +142,10 @@ Publishing a release:
 1. Builds the module's API manifest: the facts listed above.
 2. Compares it with the release it updates: `2.4.8` with `2.4.7`, and a
    backported `2.3.5` with `2.3.4`.
-3. Works out the release's category: the highest that any detected change,
-   or any break the publisher declares, requires.
+3. Works out the release's category: the highest that any detected change
+   or any declared change requires. The publisher declares what the
+   comparison cannot see: a compatible addition, which needs a Minor
+   release, and a break, which needs a Major one.
 4. Runs the module's own tests, which must all pass, and the previous
    release's tests, whose failures must each be explained: by a change the
    comparison found, such as a function a Major release removes; by a break
@@ -147,7 +154,9 @@ Publishing a release:
    struct's printed form. An unexplained failure stops publishing.
 5. Requires every function's body to run at least once in the module's own
    tests, with any argument types. This is execution, not reachability:
-   `[Double(0:0)]` reaches `Double` but never runs its body.
+   `[Double(0:0)]` reaches `Double` but never runs its body. It shows that
+   every function runs, not that every function is needed: one that only
+   its own test calls still passes.
 6. Numbers the release: the next version in that category after the
    release it updates, or in a higher category the publisher asks for. A
    lower category is refused, and a version number is never reused.
@@ -173,10 +182,12 @@ This requires a Major release: 3.0.0.
 
 A Major release may remove or change anything. Nothing is marked as going
 away ahead of time, so compiling never warns about it, and each dependent
-moves to the new major when it chooses to. Release notes list the removals
-and changes the comparison detects, together with the breaking changes the
-publisher declares and any migration steps they need. A module's own
-documentation can give advance notice of what a later major will remove.
+moves to the new major when it chooses to. Release notes are generated
+from the comparison, so a publisher never writes out changed functions,
+constants or fields: they list the removals and changes it detects,
+together with the changes the publisher declares and any migration steps
+they need. A module's own documentation can give advance notice of what a
+later major will remove.
 
 ## While developing
 
@@ -196,8 +207,12 @@ or no test runs, still compiles:
 - Where a release's version is recorded, and how a dependent chooses a
   release within a major line: a lock file, or the minimum version every
   dependent needs.
-- How a publisher declares a break or a bug fix, with any migration note,
-  and asks for a higher category than the changes require.
+- How a publisher declares a compatible addition, a break or a bug fix,
+  with any migration note, and asks for a higher category than the changes
+  require.
+- Backports: how a publisher picks the maintenance line a release updates,
+  with numbering still automatic, and what happens when the computed version
+  already exists, such as a Minor on a line whose next minor is out.
 - How the major version is spelled in the module path, including whether
   `v0` and `v1` carry one.
 - Which functions get a stable C wrapper: a per-function choice for C
