@@ -22,8 +22,8 @@ usual reason to hide functions, protecting shared state and its invariants,
 does not arise.
 
 Everything a module defines is therefore part of its contract with other
-modules. A module that wants to stop offering something deprecates it and
-removes it in the next major release.
+modules. A module that wants to stop offering something removes it in its
+next major release.
 
 ## Namespaces and major versions
 
@@ -57,7 +57,6 @@ its changes requires, and a publisher may always choose a higher one. From
 | Add a function under an existing name with a new number of inputs | Minor |
 | Add a field to a struct | Minor |
 | Accept more argument types, keeping every call that worked | Minor |
-| Deprecate a function, operator, constant or struct, keeping it working | Minor |
 | Remove or rename a function, operator, constant, struct or field | Major |
 | Change a function's number of inputs or outputs | Major |
 | Change a constant's value or type | Major |
@@ -158,11 +157,13 @@ Constant STATUS_OK changed from 0 to 1.
 This requires a Major release: 3.0.0.
 ```
 
-## Deprecation
+## Major releases
 
-A Minor release can mark a function, operator, constant or struct
-deprecated. It keeps working; a caller is told when it uses one, and the
-publishing tool lists what the next Major release may remove.
+A Major release may remove or change anything. Nothing is marked as going
+away ahead of time, so compiling never warns about it. Each dependent moves
+to the new major when it chooses to, and the release notes list everything
+the release removes or changes, taken from the comparison with the release
+before it.
 
 ## While developing
 
@@ -184,7 +185,6 @@ or no test runs, still compiles:
   needs.
 - How the major version is spelled in the module path, including whether
   `v0` and `v1` carry one.
-- How a deprecation is spelled.
 - Which functions get a stable C wrapper: a per-function choice for C
   callers, separate from how Pluto modules call each other.
 - The inferred input requirements described under "What the contract
