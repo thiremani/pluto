@@ -39,3 +39,6 @@ SumSquaresRangeBothTrue: 18
 SumSquaresRangeAllFalse: 0
 SumSquaresRangeKeepPrev: 77
 SumSquaresRangeTailFalse: 8
+PosKeep: 9
+PosWrite: 5
+PosMask: [1 0 3]

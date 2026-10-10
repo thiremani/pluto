@@ -4,26 +4,29 @@ This document describes Pluto's semantic model and compares it with other major 
 
 ## The Pluto Model (Summary)
 
-1. **Materialized Assignment is Copy:** assigning a scalar, Range descriptor,
+1. **Materialized Assignment is Copy:** assigning a scalar, range literal,
    array, table, string, or struct creates an independent value.
 2. **Arrays are Values:** `arr2 = arr1` copies data (COW).
 3. **Range Selections are Streams:** `s = arr[i]` keeps the final selected
    value (an element or owned subarray); `s = [arr[i]]` materializes every
    selected value.
-4. **Ranges are Descriptor Values:** `j = i` copies a Range; consuming it in
-   `x = i + 1`, `arr[i]`, a call, or `[]` drives a loop. Print and main
-   interpolation markers format the descriptor itself.
-5. **Empty-Domain Initialization:** An empty Range descriptor still assigns.
-   An empty ranged computation leaves an existing destination unchanged and a
-   fresh destination at its type's zero value.
+4. **Only a Range Literal Makes a Range:** `i = 0:5` binds a Range
+   descriptor. Every use of the name drives a loop: `j = i` and `x = i + 1`
+   keep the last yield, and `arr[i]`, a call, `[]`, a print, and an
+   interpolation marker run once per yield. A range literal printed on its
+   own shows as written (`0:5`). A function cannot return a Range (#146).
+5. **Empty-Domain Initialization:** A range literal still assigns when it is
+   empty. An empty ranged computation, including `j = i` over an empty `i`,
+   leaves an existing destination unchanged and a fresh destination at its
+   type's zero value.
 6. **Driver Identity Determines Looping:** Repeated use of one Range binding
    shares a loop; distinct bindings form a cartesian domain even when their
    descriptors have equal bounds.
 7. **Read-Only Function Arguments:** Inputs are read-only and keep their
    values for the whole call, even when the caller also passes the argument
    as a destination. Every body that runs writes every output, and results
-   reach the caller's destinations when the assignment commits. Master does
-   not enforce these rules yet (#123); see "Status" under Call Site.
+   reach the caller's destinations when the assignment commits. Stable
+   inputs are not implemented yet (#144); see "Status" under Call Site.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -37,7 +40,7 @@ This document describes Pluto's semantic model and compares it with other major 
 | **Array Assign** | **Copy** (COW) | Reference | Move | Reference (Slice) | Reference | Copy |
 | **Function Args** | **Read-only binding** (scalars lowered by value) | Reference | Move / Borrow | Copy (Slice Ref) | Reference | Copy |
 | **Range selection (`a[range]`)** | **Value stream** (final value or explicit collection) | Copy (List) / View (NumPy) | View (Slice) | View (Slice) | Copy (default) / View (`@view`) | View (Slice) |
-| **Range Usage** | **Copyable descriptor; operations iterate** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
+| **Range Usage** | **Literal-built descriptor; every use iterates** | Reference (Generator) | Reference (Iterator) | N/A | Reference (Iterator) | N/A |
 | **Mutability** | **In-Place Only** | Mutable Objects | Mutable (if `mut`) | Mutable | Mutable | Mutable |
 | **Memory Mgmt** | **Auto (Scope)** | Auto (GC) | Auto (Owner) | Auto (GC) | Auto (GC) | Manual |
 
@@ -60,16 +63,15 @@ x = (i+1 for i in iter)   # Lazy generator
 a = [1]; b = a; a[0] = 2  # b sees 1 (independent copy)
 
 i = 0:5
-j = i                      # Descriptor copy; no loop
-x = i + 0                  # Loop executes, x = 4 (last yield)
+j = i                      # Loop executes, j = 4 (last yield)
 x = i + 1                  # Loop executes, x = 5 (last value)
 i = 0:10                   # Bind a new reusable Range domain
 y = i + 1                  # Consuming statement runs the loop; y = 10
 ```
 
 **Difference:** Pluto is safer and more predictable. A range literal binds a
-reusable descriptor. A bare assignment copies it; a consuming expression runs
-it as a loop rather than creating a lazy generator.
+reusable descriptor, and every use of its name runs it as a loop rather than
+creating a lazy generator.
 
 ---
 
@@ -167,16 +169,16 @@ an owned subarray:
 
 ```python
 i = 0:5
-j = i          # Same bounds, independent named driver
-x = i + 0      # Loop at statement: x = 4 (last yielded iterator)
+x = i          # Loop at statement: x = 4 (last yielded iterator)
 x = i + 1      # Loop at statement: x = 5 (last scalar value)
 y = i * 2      # Loop at statement: y = 8 (last scalar value)
 z = (i + 1) / (i + 2)  # Single loop: z = 5/6 (last value)
 ```
 
-Complete Range expressions construct or copy descriptors. Operations and
-range-indexed array accesses consume descriptors as loop drivers. An
-assignment root keeps the last computation yield; `[]` collects every yield.
+A bare range literal constructs a descriptor. Every use of a range name,
+bare or in an operation or a range-indexed array access, consumes it as a
+loop driver. An assignment root keeps the last computation yield; `[]`
+collects every yield.
 
 ### Driver Identity Determines Loop Structure
 
@@ -195,8 +197,8 @@ product = (i + 1) * (j + 1)
 
 | Mode | Syntax | Behavior |
 |------|--------|----------|
-| **Descriptor Copy** | `j = i` | No loop; j receives the Range value |
-| **Last Value** | `x = i + 0` or `x = arr[i]` | Loop runs, x = last yielded value |
+| **Construct** | `i = 0:5` | No loop; i receives the Range value |
+| **Last Value** | `x = i`, `x = i + 0` or `x = arr[i]` | Loop runs, x = last yielded value |
 | **Accumulate** | `x = x + i` | Loop runs, x accumulates |
 | **Collect** | `arr = [i * 2]` | Loop runs, collects to array |
 
@@ -238,8 +240,8 @@ Pluto sits in a "Sweet Spot" for parallel computing:
 
 1. **Value Semantics (like R/Matlab)** make reasoning about concurrent code easy. "If I have `x`, I own `x`."
 2. **Explicit Collection** makes every allocation and materialization boundary visible.
-3. **Range-Driven Execution (Unique)** separates copyable descriptors from
-   operations that iterate without lazy-generator complexity.
+3. **Range-Driven Execution (Unique)** builds a range only from a literal,
+   and every use of its name iterates without lazy-generator complexity.
 4. **Named Driver Reuse (Unique)** makes user intent explicit — repeated use
    of one range name shares one loop.
 5. **Defined Empty Domains (Unique)** give fresh and existing destinations
@@ -275,8 +277,9 @@ res = sum(a, b)
   or a call with such an argument. A comparison counts even where an array
   argument would make it a mask that always writes. Complementary conditions
   such as `n <= 1` and `n > 1` are not recognized either; for floats they need
-  not cover every case, since both fail for a NaN. A range with literal
-  bounds that is not empty always runs.
+  not cover every case, since both fail for a NaN. Only a range literal
+  written with constant, nonempty bounds, such as `0:3`, always runs; a range
+  bound to a name may be empty.
 - **Reading outputs**: A body may read an output (as a value, a condition, a
   call argument, a print, a formatting marker, or an empty array's sample)
   only after it is definitely assigned, judged from the text as above. A read
@@ -315,22 +318,25 @@ out = Pos(prev, x)
 
 For a scalar `x`, the value-position comparison `x > 0` yields `x` or fails,
 so `out` keeps `prev`. For an array `x`, it yields a mask and always writes,
-so the default is never read: the compiler drops it in that specialization
-and reports nothing. A statement gate such as `Maybe`'s `out = x > 0 x`
-serves only a scalar `x`, since a statement condition must be a scalar.
+so the default is never read, and the check reports nothing for it; the
+array specialization still copies the default before the mask replaces it.
+A statement gate such as `Maybe`'s `out = x > 0 x` serves only a scalar `x`,
+since a statement condition must be a scalar.
 
 The text also decides which values are ranges. A parameter never holds one,
 since a range argument runs the function once per element: `Wrap(1:5)`,
-where `Wrap` returns its input, gives `4`. Whether a function returns a
-range follows from its text, as with `MakeRange` below, and a range that
-arrives through a call counts as possibly empty, so `F` needs its default:
+where `Wrap` returns its input, gives `4`. A function cannot return a range
+either: an output assigned one is rejected, and the function returns the
+bounds for its caller to build the range from (#146). A range bound to a
+name counts as possibly empty, so `F` below needs its default. A statement's
+condition iterates the ranges it names, so its value reads them as elements:
+in `kept = s > 2 s`, `kept` gets an element of `s`. Under `||` and `&&`, a
+range literal or binding operand is iterated, so `n > 0 && 0:5` gives an
+element.
 
 ```python
-r = MakeRange(n)
-    r = 0:n
-
 out = F(prev, n)
-    r = MakeRange(n)
+    r = 0:n
     out = prev
     out = r * 2
 ```
@@ -416,24 +422,14 @@ give the input and the output one slot where no read can tell the
 difference: in `a = Maybe(a, -1)`, the body reads `prev` only in its first
 write to `out`, so `out = prev` needs no copy.
 
-**Status (#123, decided 2026-09-28; not yet implemented).** Master still
-differs in three ways:
-
-- A body may leave an output unwritten. `x = F()` then keeps `x` through a
-  hidden seed parameter, and a fresh `x` gets 0, while a nested call such as
-  `c = F(c) + 0` reads the unwritten output as zero.
-- A shared input is a live reference: each read observes earlier writes to
-  the shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
-  `p, q = Swap(p, q)` with the sequential body gives `2 2`,
-  `value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
-  `FoldAfter(value, 1:3)` gives `13 13`.
-- Flow checks run per specialization, so their result can depend on the
-  argument types: `out = prev` followed by `out = x > 0` is rejected as a
-  dead store for an array `x`. A function nothing calls gets only structural
-  checks.
-
-The #123 implementation removes these differences, migrates the fixtures
-(`tests/alias_input` among them), and updates the README.
+**Status.** Definite outputs and the per-template checks are implemented
+(#123). Stable inputs are decided and not yet implemented (#144): a shared
+input is still a live reference, so each read observes earlier writes to the
+shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
+`p, q = Swap(p, q)` with the sequential body gives `2 2`,
+`value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
+`FoldAfter(value, 1:3)` gives `13 13`. #144 removes this difference, migrates
+`tests/alias_input`, and updates the README's sharing example.
 
 ### Range Parameters
 

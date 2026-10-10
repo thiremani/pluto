@@ -60,9 +60,9 @@ conditionalTable = [
     "Grace" 30
 ]
 "ConditionalTableBefore: -conditionalTable"
-conditionalTable = ResetTable(-1)
+conditionalTable = ResetTable(conditionalTable, -1)
 "ConditionalTableSkipped: -conditionalTable"
-conditionalTable = ResetTable(1)
+conditionalTable = ResetTable(conditionalTable, 1)
 "ConditionalTableWritten: -conditionalTable"
 
 arr1 = []0 ⊕ [0]
@@ -96,7 +96,7 @@ resetMatrix = [
     3 4
 ]
 resetDriver = 0:2
-resetMatrix = ResetArray(resetDriver)
+resetMatrix = ResetArray(resetMatrix, resetDriver)
 "RangedRankReset: -resetMatrix"
 
 keptMatrix = [
@@ -104,7 +104,7 @@ keptMatrix = [
     7 8
 ]
 emptyResetDriver = 0:0
-keptMatrix = ResetArray(emptyResetDriver)
+keptMatrix = ResetArray(keptMatrix, emptyResetDriver)
 "RangedRankResetEmpty: -keptMatrix"
 
 # A statement condition stages a ranged call through a synthetic destination.
@@ -114,7 +114,7 @@ gatedWrittenMatrix = [
     43 44
 ]
 gatedResetDriver = 0:2
-gatedWrittenMatrix = 1 > 0 ResetArray(gatedResetDriver + 0)
+gatedWrittenMatrix = 1 > 0 ResetArray(gatedWrittenMatrix, gatedResetDriver + 0)
 "GatedRangedRankResetWritten: -gatedWrittenMatrix"
 
 # With an empty driver, the staged slot must retain its rank-2 value.
@@ -123,22 +123,23 @@ gatedKeptMatrix = [
     33 34
 ]
 gatedEmptyResetDriver = 0:0
-gatedKeptMatrix = 1 > 0 ResetArray(gatedEmptyResetDriver + 0)
+gatedKeptMatrix = 1 > 0 ResetArray(gatedKeptMatrix, gatedEmptyResetDriver + 0)
 "GatedRangedRankResetEmpty: -gatedKeptMatrix"
 
-# A blocked ranged collector inside a function leaves its caller's output intact.
+# A blocked ranged collector inside a function leaves the caller's value,
+# passed in as prev, intact.
 rangedArrayKept = [4 5]
-rangedArrayKept = KeepRangedArray(0:3)
+rangedArrayKept = KeepRangedArray(rangedArrayKept, 0:3)
 "RangedArrayKept: -rangedArrayKept"
 
 # An ordinary conditional empty return keeps an established matrix destination
-# when the callee leaves its output unwritten.
+# when the callee keeps the value it was passed.
 conditionalResetMatrix = [
     11 12
     13 14
 ]
 "ConditionalRankResetBefore: -conditionalResetMatrix"
-conditionalResetMatrix = ResetArray(-1)
+conditionalResetMatrix = ResetArray(conditionalResetMatrix, -1)
 "ConditionalRankResetSkipped: -conditionalResetMatrix"
 
 rangedConditionalResetMatrix = [
@@ -146,14 +147,14 @@ rangedConditionalResetMatrix = [
     23 24
 ]
 "RangedConditionalRankResetBefore: -rangedConditionalResetMatrix"
-rangedConditionalResetMatrix = ResetArray(-1:0)
+rangedConditionalResetMatrix = ResetArray(rangedConditionalResetMatrix, -1:0)
 "RangedConditionalRankResetSkipped: -rangedConditionalResetMatrix"
 
 zeroWidthMatrix = [[]0 []0]
 "ZeroWidthRankResetBefore: -zeroWidthMatrix"
-zeroWidthMatrix = ResetArray(-1)
+zeroWidthMatrix = ResetArray(zeroWidthMatrix, -1)
 "ZeroWidthRankResetSkipped: -zeroWidthMatrix"
-zeroWidthMatrix = ResetArray(1)
+zeroWidthMatrix = ResetArray(zeroWidthMatrix, 1)
 "ZeroWidthRankResetWritten: -zeroWidthMatrix"
 
 lockedArray = [9]

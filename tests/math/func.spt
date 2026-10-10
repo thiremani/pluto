@@ -9,19 +9,19 @@ arrVal = Square(arr)
 "SquareFloat: -floatVal"
 "SquareArr: -arrVal\n"
 
-# A skipped direct-scalar function output preserves an existing caller
-# destination, while a fresh destination keeps its zero seed.
+# A function keeps an old value through an input: the caller passes its
+# destination, and a fresh destination passes the zero it starts from.
 conditionalSquareKeep = 14
-conditionalSquareKeep = ConditionalSquare(conditionalSquareKeep - 12)
+conditionalSquareKeep = ConditionalSquare(conditionalSquareKeep, conditionalSquareKeep - 12)
 conditionalSquareWrite = 14
-conditionalSquareWrite = ConditionalSquare(conditionalSquareWrite - 7)
-conditionalSquareFresh = ConditionalSquare(2)
+conditionalSquareWrite = ConditionalSquare(conditionalSquareWrite, conditionalSquareWrite - 7)
+conditionalSquareFresh = ConditionalSquare(0, 2)
 conditionalSquareForwarded = 14
-conditionalSquareForwarded = ForwardConditionalSquare(conditionalSquareForwarded - 12)
+conditionalSquareForwarded = ForwardConditionalSquare(conditionalSquareForwarded, conditionalSquareForwarded - 12)
 conditionalSquareFloatKeep = 14.5
-conditionalSquareFloatKeep = ConditionalSquare(conditionalSquareFloatKeep - 12.5)
-conditionalSquareFloatWrite = ConditionalSquare(7.5)
-conditionalSquareFloatFresh = ConditionalSquare(2.0)
+conditionalSquareFloatKeep = ConditionalSquare(conditionalSquareFloatKeep, conditionalSquareFloatKeep - 12.5)
+conditionalSquareFloatWrite = ConditionalSquare(0.0, 7.5)
+conditionalSquareFloatFresh = ConditionalSquare(0.0, 2.0)
 
 "ConditionalSquareKeep: -conditionalSquareKeep"
 "ConditionalSquareWrite: -conditionalSquareWrite"
@@ -107,3 +107,12 @@ sumRangeTailFalse = SumSquares(m > 1, m < 3)
 "SumSquaresRangeAllFalse: -sumRangeAllFalse"
 "SumSquaresRangeKeepPrev: -sumRangeKeepPrev"
 "SumSquaresRangeTailFalse: -sumRangeTailFalse"
+
+# The comparison counts as possibly skipping for every argument type, so the
+# default before it stays, and a failed scalar comparison keeps it.
+posKeep = Pos(9, -1)
+posWrite = Pos(9, 5)
+posMask = Pos([]0, [1 -2 3])
+"PosKeep: -posKeep"
+"PosWrite: -posWrite"
+"PosMask: -posMask"

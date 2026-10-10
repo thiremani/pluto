@@ -29,17 +29,17 @@ Pluto's source-level semantics stay unchanged:
 
 - assignments copy
 - input names are read-only and keep their values for the whole call; today
-  they can observe writes through a shared output, which #123 (decided)
+  they can observe writes through a shared output, which #144 (decided)
   removes
-- every body that runs writes every output (#123, decided); output names are
-  readable only once definitely assigned, and results reach the caller at
-  assignment commit
+- every body that runs writes every output (#123); output names are readable
+  only once definitely assigned, and results reach the caller at assignment
+  commit
 
 These are **language semantics**. How values physically move across a call
 boundary is the **lowered calling convention** — a separate concern. An `I64`
 input can be passed by value provided the call site's alias pattern (the
 private `_aN` variant) redirects each read to its shared output when required;
-after #123 no read needs redirecting. A single `I64` output can be returned in a
+once inputs are stable (#144) no read needs redirecting. A single `I64` output can be returned in a
 register while still behaving like a Pluto output.
 
 ## 3. Architecture
@@ -115,9 +115,10 @@ wrong argument list. Write-effect information may still eliminate seed use
 inside Pluto code; a seedless fast path needs a distinctly named private clone
 behind the stable public entry point.
 
-#123 (decided) keeps that rule while removing the seed: whether a function
-keeps it depends on whether it has a range parameter, never on its write
-effects. The C ABI Spec §5.3 describes ABI 3.0.
+ABI 3.0 (#69) keeps that rule while removing the seed, which #123 left unused
+outside callee-owned domains: whether a function keeps it depends on whether
+it has a range parameter, never on its write effects. The C ABI Spec §5.3
+describes ABI 3.0.
 
 This was the highest-value initial optimization because it benefits all scalar-heavy code, not just specific patterns. It reduces stack traffic, simplifies IR, and materially improved `fib`, `fib_tail`, and `harmonic`.
 

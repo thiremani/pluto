@@ -7,11 +7,12 @@ greeting = "hello"
 res = Square(x)
     res = x * x
 
-res = ConditionalSquare(x)
+res = ConditionalSquare(prev, x)
+    res = prev
     res = x > 5 x * x
 
-res = ForwardConditionalSquare(x)
-    res = ConditionalSquare(x)
+res = ForwardConditionalSquare(prev, x)
+    res = ConditionalSquare(prev, x)
 
 z = SumSquares(a, b)
     z = Square(a) + Square(b)
@@ -29,3 +30,9 @@ x, y = F(i)
 
 a, b = G(i)
     a, b = 2.3 * i, 5.6 * i
+
+# One body serves scalar and array arguments: a scalar comparison can fail
+# and keep prev, while an array comparison is a mask that always writes.
+out = Pos(prev, x)
+    out = prev
+    out = x > 0

@@ -205,7 +205,8 @@ q = 0:3
 elem = q < 2 arr4[q]
 "ScalarElem: -elem"
 
-# A statement driver gates a distinct bare Range descriptor without consuming it.
+# A bare range name under a statement driver iterates too, so the statement
+# runs over both ranges and keeps the final value.
 r = 0:3
 i = 0:5
 cross = r < 4 i

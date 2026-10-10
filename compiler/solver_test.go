@@ -34,16 +34,20 @@ func numberedNames(prefix string, count int) string {
 func TestMutualRecursion(t *testing.T) {
 	codeStr := `# define isEven: returns (x, y) = (is-even?, is-odd?)
 x, y = isEven(n)
-    # recursive step: if n≠0, flip the pair returned by isOdd(n-1)
-    x, y = n != 0 isOdd(n - 1)
+    # recursive step: if n≠0, flip the pair returned by isOdd(n-1); a
+    # skipped step leaves the locals empty, and every output is still written
+    odd, even = n != 0 isOdd(n - 1)
+    x, y = odd, even
     # base case: 0 is even, not odd
     x = n == 1 "no"
     x = n == 0 "yes"
 
 # define isOdd: returns (x, y) = (is-odd?, is-even?)
+# this function infers x only through isEven
 x, y = isOdd(n)
     # recursive step: if n≠0, flip the pair returned by isEven(n-1)
-    x, y = n != 0 isEven(n - 1)
+    even, odd = n != 0 isEven(n - 1)
+    x, y = even, odd
     # base case: 0 is not odd, but even
     y = n == 1 "no"
     y = n == 0 "yes"`
@@ -76,14 +80,12 @@ x, y`
 	require.True(t, ok)
 	isEvenFunc := newFunc(call.Function.Value, args, template)
 	cc.Compiler.FuncCache[isEvenMangled] = isEvenFunc
-	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddMangled := Mangle(cc.Compiler.MangledPath, "isOdd", args)
 
 	ts.Converging = false
 	ts.firstUnresolved = nil
 	clear(ts.walkedFuncs)
 	require.True(t, ts.TypeFunc(isEvenMangled, template))
-	require.Equal(t, []WriteEffect{WriteUncomputed, WriteUncomputed}, isEvenFunc.BodyOutputEffects)
 	isOddFunc := cc.Compiler.FuncCache[isOddMangled]
 	require.NotNil(t, isOddFunc)
 	require.True(t, isEvenFunc.AllTypesInferred())
@@ -110,8 +112,6 @@ x, y`
 	require.False(t, ts.Converging)
 	require.True(t, isEvenFunc.Settled)
 	require.True(t, isOddFunc.Settled)
-	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isEvenFunc.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MayWrite, MayWrite}, isOddFunc.BodyOutputEffects)
 
 	ts.Solve()
 	require.Empty(t, ts.Errors)
@@ -632,6 +632,42 @@ func TestArrayConcatTypeErrors(t *testing.T) {
 	}
 }
 
+// A script reports a count mismatch or an unknown call in the words a
+// template's text check uses.
+func TestScriptSharesTemplateTextMessages(t *testing.T) {
+	const pairs = `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n`
+	tests := []struct {
+		name   string
+		script string
+		err    string
+	}{
+		{name: "AssignmentMismatch", script: "a, b = 1\na", err: "assignment mismatch: 2 targets but 1 value"},
+		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
+		{name: "OperandMismatch", script: "a = Pair(1) * 2\na", err: `operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		{name: "AndArityMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: "logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, pairs))
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, test.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.NotEmpty(t, ts.Errors)
+			require.Equal(t, test.err, ts.Errors[0].Msg)
+		})
+	}
+}
+
 func TestArrayToScalarAssignmentError(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayToScalar", "", ast.NewCode())
@@ -764,7 +800,7 @@ out, before = Fold(current, item)
 		require.True(t, wrapper.Settled)
 		require.True(t, IsStrH(wrapper.Vars["current"]))
 		require.True(t, IsStrH(wrapper.Sig.OutTypes[1]))
-		require.Equal(t, []string{foldKey}, wrapper.CFGResult.DirectCallees)
+		require.Contains(t, cc.Compiler.FuncCache, foldKey)
 		info := ts.ExprCache[key(wrapperKey, call)]
 		require.True(t, IsStrH(info.CallParamTypes[0]))
 		require.True(t, IsStrH(info.OutTypes[1]))
@@ -832,7 +868,7 @@ func TestMergeBindingSlotTypeIsMonotonic(t *testing.T) {
 
 func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	code := mustParseCode(t, `res = Bad(k)
-    res = k == 0 1
+    res = 1
     res = k != 0 "later"
 `)
 	ctx := llvm.NewContext()
@@ -855,6 +891,60 @@ func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 	require.Equal(t, `cannot reassign type to identifier. Old Type: I64. New Type: Str. Identifier "res"`, err.Msg)
 	require.Equal(t, "res", err.Token.Literal)
 	require.Equal(t, "test.pt:3:5", err.Token.Location())
+}
+
+// A body that reassigns a name between a range and a non-range value, and
+// passes the flow checks as written, gets the solver's retype error, as for
+// any other type. The per-template pass reads each name by its latest
+// assignment: read as a range, r would leave res possibly unassigned in
+// RangeToNonRange.
+func TestFunctionRangeRetypeIsReportedBySolver(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		msg      string
+		location string
+	}{
+		{
+			name: "RangeToNonRange",
+			code: `res = Retype(n)
+    r = 0:n
+    t = 0
+    t = t + r
+    r = t + 1
+    res = r`,
+			msg:      `cannot reassign type to identifier. Old Type: I64:I64:I64. New Type: I64. Identifier "r"`,
+			location: "test.pt:5:5",
+		},
+		{
+			name: "NonRangeToRange",
+			code: `res = Retype(n)
+    r = n
+    res = r + 1
+    r = 1:n
+    res = res + r`,
+			msg:      `cannot reassign type to identifier. Old Type: I64. New Type: I64:I64:I64. Identifier "r"`,
+			location: "test.pt:4:5",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			require.Empty(t, cc.Compile())
+
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, "value = Retype(4)\nvalue"), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, test.msg, ts.Errors[0].Msg)
+			require.Equal(t, test.location, ts.Errors[0].Token.Location())
+		})
+	}
 }
 
 func TestRangeBoundsCannotDependOnRangeValues(t *testing.T) {
@@ -1345,49 +1435,90 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
-func TestBareRangeAssignmentsCopyDescriptors(t *testing.T) {
+// Only a range literal constructs a Range; a range name iterates wherever it
+// is used, so assigning one keeps its final element.
+func TestBareRangeNamesIterate(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "bareRangeCopies", "", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "bareRangeNames", "", ast.NewCode())
 	program := mustParseScript(t, `source = 0:5
-copy = (source)
-last = source + 0
+last = (source)
+sum = source + 0
 outer = 0:2
-gatedCopy = outer < 2 source
-filtered = source > 2 source`)
+gated = outer < 2 source
+filtered = source > 2 source
+marked = "v -source"`)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
-	for _, name := range []string{"source", "copy", "gatedCopy"} {
+	for _, name := range []string{"source", "outer"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, Range{Iter: I64}, typ)
 	}
-	for _, name := range []string{"last", "filtered"} {
+	for _, name := range []string{"last", "sum", "gated", "filtered"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, I64, typ)
 	}
 
-	copyExpr := program.Statements[1].(*ast.LetStatement).Value[0]
-	copyInfo := ts.ExprCache[key(ts.FuncNameMangled, copyExpr)]
-	require.False(t, copyInfo.HasRanges)
-	require.Empty(t, copyInfo.Ranges)
-	require.Nil(t, copyInfo.Rewrite)
+	lastExpr := program.Statements[1].(*ast.LetStatement).Value[0]
+	lastInfo := ts.ExprCache[key(ts.FuncNameMangled, lastExpr)]
+	require.Equal(t, []Type{I64}, lastInfo.OutTypes)
+	require.True(t, lastInfo.HasRanges)
+	require.Len(t, lastInfo.Ranges, 1)
+	require.Equal(t, "source", lastInfo.Ranges[0].Name)
 
-	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
-	gatedCopyInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedCopyExpr)]
-	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
-	require.Len(t, gatedCopyInfo.Ranges, 1)
-	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
+	gatedExpr := program.Statements[4].(*ast.LetStatement).Value[0]
+	gatedInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedExpr)]
+	require.Equal(t, []Type{I64}, gatedInfo.OutTypes)
+	gatedDrivers := make([]string, len(gatedInfo.Ranges))
+	for i, driver := range gatedInfo.Ranges {
+		gatedDrivers[i] = driver.Name
+	}
+	require.ElementsMatch(t, []string{"outer", "source"}, gatedDrivers)
 
 	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
 	filteredInfo := ts.ExprCache[key(ts.FuncNameMangled, filteredExpr)]
 	require.Equal(t, []Type{I64}, filteredInfo.OutTypes)
 	require.Len(t, filteredInfo.Ranges, 1)
 	require.Equal(t, "source", filteredInfo.Ranges[0].Name)
+
+	// A main marker naming a range drives the string.
+	markedExpr := program.Statements[6].(*ast.LetStatement).Value[0]
+	markedInfo := ts.ExprCache[key(ts.FuncNameMangled, markedExpr)]
+	require.True(t, markedInfo.HasRanges)
+	require.Len(t, markedInfo.Ranges, 1)
+	require.Equal(t, "source", markedInfo.Ranges[0].Name)
+}
+
+// A string's markers drive in the order they appear, a width or precision
+// operand included, so the first range the string names is the outer loop.
+func TestMarkerDriversFollowTextOrder(t *testing.T) {
+	ctx := llvm.NewContext()
+	cc := NewCodeCompiler(ctx, "markerOrder", "", ast.NewCode())
+	program := mustParseScript(t, `n = 1
+w = 1:3
+j = 7:9
+s = "|-n%(-w)d| -j"
+t = "-j |-n%(-w)d|"`)
+
+	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
+	ts := NewTypeSolver(sc)
+	ts.Solve()
+	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
+
+	for i, want := range [][]string{{"w", "j"}, {"j", "w"}} {
+		lit := program.Statements[3+i].(*ast.LetStatement).Value[0]
+		info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
+		drivers := make([]string, len(info.Ranges))
+		for k, driver := range info.Ranges {
+			drivers[k] = driver.Name
+		}
+		require.Equal(t, want, drivers)
+	}
 }
 
 func TestRangedArrayAccessTypesAsElementStream(t *testing.T) {
@@ -1580,7 +1711,7 @@ func closureLeafWalks(t *testing.T, depth, callSites int) int {
 	for i := range depth {
 		fmt.Fprintf(&b, "res = F%d(k)\n    a = F%d(k)\n    b = F%d(k + 1)\n    res = a + b\n\n", i, i+1, i+1)
 	}
-	fmt.Fprintf(&b, "res = F%d(k)\n    i = 0:2\n    res = k + i\n", depth)
+	fmt.Fprintf(&b, "res = F%d(k)\n    res = k + (0:2)\n", depth)
 
 	l := lexer.New("TestFuncClosureCode", b.String())
 	cp := parser.NewCodeParser(l)
@@ -1976,13 +2107,6 @@ scaled`)
 	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
 	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", []Type{I64})
 	require.True(t, callInfo.ScalarCallVariantEnsured)
-	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
-	require.Equal(t, []string{primaryMangled, scalarMangled}, directCallees)
-	callInfo.ScalarCallVariantEnsured = false
-	directCallees, _ = collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, program.Statements)
-	require.Equal(t, []string{primaryMangled}, directCallees,
-		"a scalar key already present in the shared cache must not create an edge without a call-local ensured fact")
-	callInfo.ScalarCallVariantEnsured = true
 	require.Contains(t, cc.Compiler.FuncCache, primaryMangled)
 	require.Contains(t, cc.Compiler.FuncCache, scalarMangled)
 	template, ok := cc.lookupFuncTemplate("Scale", 1)
@@ -1991,84 +2115,6 @@ scaled`)
 		specializationDisplay(specializationFrame{mangled: primaryMangled, template: template}),
 		specializationDisplay(specializationFrame{mangled: scalarMangled, template: template}),
 		"diagnostic frames must retain the actual specialization key when body parameter types collapse")
-}
-
-func TestCFGDiagnosticsDoNotFailSolver(t *testing.T) {
-	code := mustParseCode(t, `result = Noisy(x)
-    unused = x
-    result = x
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "specializationCFGDiagnostics", "", code)
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), "value = Noisy(1)\nvalue")
-	mangled := Mangle(cc.Compiler.MangledPath, "Noisy", []Type{I64})
-	info := cc.Compiler.FuncCache[mangled]
-
-	require.Empty(t, ts.Errors, "function CFG diagnostics must not become type-solver failures")
-	require.True(t, info.Settled)
-	require.NotNil(t, info.CFGResult)
-	require.Len(t, info.CFGResult.Errors, 1)
-	require.Contains(t, info.CFGResult.Errors[0].Msg, `"unused"`)
-}
-
-func TestCFGRecordsSettledDirectCallee(t *testing.T) {
-	code := mustParseCode(t, `result = Leaf(x)
-    result = x
-
-result = Wrapper(x)
-    result = Leaf(x)
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "settledCFGEdge", "", code)
-	require.Empty(t, cc.Compile())
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
-	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
-	leaf := cc.Compiler.FuncCache[leafMangled]
-	require.True(t, leaf.Settled)
-	require.NotNil(t, leaf.CFGResult)
-	require.Empty(t, leaf.CFGResult.Errors)
-	require.Empty(t, leaf.CFGResult.DirectCallees)
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Wrapper", "value = Wrapper(1)\nvalue")
-	wrapperMangled := Mangle(cc.Compiler.MangledPath, "Wrapper", []Type{I64})
-	wrapper := cc.Compiler.FuncCache[wrapperMangled]
-
-	require.True(t, wrapper.Settled)
-	require.NotNil(t, wrapper.CFGResult)
-	require.Equal(t, []string{leafMangled}, wrapper.CFGResult.DirectCallees)
-}
-
-func TestSettledSpecializationRequiresCFG(t *testing.T) {
-	code := mustParseCode(t, `result = Leaf(x)
-    result = x
-
-result = Wrapper(x)
-    result = Leaf(x)
-`)
-
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-	cc := NewCodeCompiler(ctx, "missingSettledCFG", "", code)
-	require.Empty(t, cc.Compile())
-
-	solveScriptTypes(t, ctx, cc, t.Name()+"Leaf", "value = Leaf(1)\nvalue")
-	leafMangled := Mangle(cc.Compiler.MangledPath, "Leaf", []Type{I64})
-	cc.Compiler.FuncCache[leafMangled].CFGResult = nil
-
-	program := mustParseScript(t, "value = Wrapper(1)\nvalue")
-	sc := NewScriptCompiler(ctx, t.Name()+"Wrapper", program, cc)
-	ts := NewTypeSolver(sc)
-	require.PanicsWithValue(t,
-		"internal: settled specialization "+leafMangled+" has no CFG result",
-		ts.Solve,
-	)
 }
 
 func TestNonConvergingCalleeIsBlamed(t *testing.T) {
@@ -2209,7 +2255,8 @@ p = Keep(q, n)
         1
         prior
     ]
-    z = tab.a[0]`,
+    t = tab.a[0]
+    z = t`,
 			script: "half, first = Mixed(2)\nhalf, first",
 			want:   map[string]Type{"half": F64, "first": F64},
 		},
@@ -2221,7 +2268,8 @@ p = Keep(q, n)
       : a b
         prior x
     ]
-    y = tab.b[0]`,
+    t = tab.b[0]
+    y = t`,
 			script: "v = Pick(2, 7)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2276,7 +2324,8 @@ p = Keep(q, n)
         prior
     ]
     col = x > 3 && tab.a || [x]
-    y = col[0] + 1`,
+    t = col[0] + 1
+    y = t`,
 			script: "v = Pad(2, 5)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2289,7 +2338,8 @@ p = Keep(q, n)
         prior
     ]
     col = x > 3 && [x] || tab.a
-    y = col[0] + 1`,
+    t = col[0] + 1
+    y = t`,
 			script: "v = PadRight(2, 5)\nv",
 			want:   map[string]Type{"v": I64},
 		},
@@ -2336,7 +2386,8 @@ func TestNonConvergingCalleeIsBlamedThroughCheckedUse(t *testing.T) {
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, "test", "", mustParseCode(t, `y = m(x)
-    y = bad(x)[0]
+    t = bad(x)[0]
+    y = t
 
 y = bad(x)
     y = bad(x - 1)`))
@@ -2347,7 +2398,7 @@ y = bad(x)
 
 	require.Len(t, ts.Errors, 1)
 	require.Contains(t, ts.Errors[0].Msg, "Function bad is not converging")
-	require.Equal(t, 4, ts.Errors[0].Token.Line, "must point at bad's definition, not the index in m")
+	require.Equal(t, 5, ts.Errors[0].Token.Line, "must point at bad's definition, not the index in m")
 }
 
 // A check that waited for a recursive result still runs once the result is
@@ -2384,7 +2435,7 @@ func TestRecursiveResultChecksRunOnceTyped(t *testing.T) {
 			code: `y = R(n)
     y = n
     prior = n > 0 R(n - 1)
-    y = prior.age`,
+    y = y + prior.age`,
 			script: "v = R(3)\nv",
 			want:   "field access expects a struct or table value, got I64",
 		},

@@ -63,27 +63,28 @@ width = 5
 "-missing%(-width)d" # -missing%(5)d
 ```
 
-A main marker formats its value whatever the type, so a bare `Range` formats
-its descriptor and contributes no iteration: the string is a single value in
-assignment and in print alike. A Range identifier used for dynamic width or
-precision is consumed as a number, which makes it an iteration driver. An
-explicit numeric conversion such as `-i%d` is a compile error while `i` is an
-undriven Range descriptor — a descriptor is not a number.
+A marker naming a `Range` iterates it, like any other use of a range name
+(#146): a main marker formats each yield, and a width or precision marker
+consumes each yield as a number. The string is then a ranged computation:
+assigned, it keeps the final yield; printed, it prints once per yield. An
+explicit numeric conversion such as `-i%d` applies to each yield. Several
+ranges nest in the order the string names them, the first outermost, whether
+a marker formats a range or uses it as a width or precision.
 
 ```pluto
 i = 0:3
-s = "item -i"  # "item 0:3"
-"item -i"      # prints item 0:3 on one line
+s = "item -i"  # "item 2"
+"item -i"      # prints item 0, item 1 and item 2, one per line
+"v=-i%d"       # prints v=0, v=1 and v=2
 n = 7
 w = 1:3
 "|-n%(-w)d|"   # one line per width: |7| then | 7|
+j = 8:10
+"|-n%(-w)d| -j"  # w is the outer loop: |7| 8, |7| 9, | 7| 8, | 7| 9
 ```
 
-Within a print statement, another argument that consumes the same named `Range`
-makes it a driver for that print loop. During each iteration, the main marker
-reads the current `I64` yield, so an explicit numeric conversion applies to the
-yield. This sibling binding is specific to print arguments; it does not apply
-across sibling values in an assignment.
+Within a print statement, a marker and another argument naming the same
+`Range` share one driver, so the line prints once per yield.
 
 ```pluto
 i = 0:3

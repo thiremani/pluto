@@ -29,16 +29,19 @@ res = ConcatArrays(a, b)
     res = a ⊕ b
 
 # An empty matrix can reset an established matrix destination.
-res = ResetArray(x)
+res = ResetArray(prev, x)
+    res = prev
     res = x > -1 [
     ]0
 
-# A ranged collector can leave an indirect output unwritten.
-res = KeepRangedArray(i)
+# A ranged collector can leave an indirect output at its starting value.
+res = KeepRangedArray(prev, i)
+    res = prev
     res = i < 0 [i]
 
 # A typed empty table can conditionally reset an established table.
-res = ResetTable(x)
+res = ResetTable(prev, x)
+    res = prev
     res = x > -1 [
       : Name("") Score(0)
     ]

@@ -202,6 +202,7 @@ a, b`
 
 func TestRangedArrayOutputMarksIndirectWrite(t *testing.T) {
 	code := `res = LastRow(matrix)
+    res = []0
     i = 0:2
     res = matrix[i]`
 	script := `matrix = [
@@ -545,7 +546,8 @@ func TestRangedCallDoesNotCopyUnrelatedArrayInput(t *testing.T) {
 	// per iteration would make the call quadratic.
 	code := `count, value = Read(data, index)
     count = index
-    value = data[index]`
+    t = data[index]
+    value = t`
 	script := `data = [0:8]
 count, value = Read(data, 0:8)
 count, value`
@@ -1411,7 +1413,8 @@ x`
 
 func TestAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
 	code := `out = pick(arr, i)
-    out = arr[i + 1]
+    t = arr[i + 1]
+    out = t
 `
 	script := `arr = [10 20 30 40 50]
 i = 0:4
@@ -1453,7 +1456,8 @@ x`
 
 func TestNonAffineArrayIndexStmtInFuncUsesCheckedPath(t *testing.T) {
 	code := `out = pick_poly(arr, i)
-    out = arr[i * i - 2i + 3]
+    t = arr[i * i - 2i + 3]
+    out = t
 `
 	script := `arr = [10 20 30 40 50]
 i = 0:2

@@ -4,7 +4,8 @@ y = Twice(v)
     y = v ⊕ v
 
 y = First(v)
-    y = v[0]
+    t = v[0]
+    y = t
 
 y = SI(t, j)
     y = t

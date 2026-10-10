@@ -128,11 +128,8 @@ type pendingAssignment struct {
 }
 
 type walkedSpecialization struct {
-	// walkIndex is dense within the current solver pass and becomes the
-	// specialization call graph node ID.
-	walkIndex int
-	info      *FuncInfo
-	template  *ast.FuncStatement
+	info     *FuncInfo
+	template *ast.FuncStatement
 }
 
 type TypeSolver struct {
@@ -553,18 +550,21 @@ func (ts *TypeSolver) HandleCallRanges(call *ast.CallExpression) (ranges []*Rang
 	return
 }
 
-// collectPrintArgRanges keeps bare Range descriptors out of the ordinary
-// argument pass until sibling drivers are known. Every other argument uses
-// collectExprRanges exactly as it does for an ordinary call. A bare descriptor
-// whose name a sibling binds then joins that driver; any other bare descriptor
-// keeps its original expression and prints as a value.
+// collectPrintArgRanges keeps a bare range literal out of the ordinary
+// argument pass: it constructs a Range, which prints as written. Every other
+// argument, a range name included, uses collectExprRanges exactly as it does
+// for an ordinary call, so the print runs once per yield.
 func (ts *TypeSolver) collectPrintArgRanges(exprs []ast.Expression) (ranges []*RangeInfo, args []ast.Expression, changed bool) {
 	args = append([]ast.Expression(nil), exprs...)
 
 	var ordinaryArgs []ast.Expression
 	var ordinaryIndexes []int
 	for i, arg := range exprs {
-		if ts.bareRangeDescriptorArg(arg) {
+		if _, isLiteral := arg.(*ast.RangeLiteral); isLiteral {
+			info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
+			info.Ranges = nil
+			info.HasRanges = false
+			info.Rewrite = nil
 			continue
 		}
 		ordinaryArgs = append(ordinaryArgs, arg)
@@ -575,37 +575,7 @@ func (ts *TypeSolver) collectPrintArgRanges(exprs []ast.Expression) (ranges []*R
 	for i, argIndex := range ordinaryIndexes {
 		args[argIndex] = rewrites[i]
 	}
-
-	for i, arg := range exprs {
-		if !ts.bareRangeDescriptorArg(arg) {
-			continue
-		}
-		if ident, ok := arg.(*ast.Identifier); ok && rangeDriverNamed(ranges, ident.Value) {
-			argRanges, rew := ts.HandleRanges(arg)
-			args[i] = rew
-			changed = changed || rew != arg
-			ranges = mergeUses(ranges, argRanges)
-			continue
-		}
-		info := ts.ExprCache[key(ts.FuncNameMangled, arg)]
-		info.Ranges = nil
-		info.HasRanges = false
-		info.Rewrite = nil
-	}
 	return ranges, args, changed
-}
-
-// bareRangeDescriptorArg reports whether a print argument is a complete Range
-// descriptor: a range literal or a name bound to a Range.
-func (ts *TypeSolver) bareRangeDescriptorArg(arg ast.Expression) bool {
-	switch a := arg.(type) {
-	case *ast.RangeLiteral:
-		return true
-	case *ast.Identifier:
-		typ, ok := ts.GetIdentifier(a.Value)
-		return ok && typ.Kind() == RangeKind
-	}
-	return false
 }
 
 // isBareRangeExpr reports whether expr is a driver that a function can consume
@@ -625,9 +595,8 @@ func (ts *TypeSolver) isBareRangeExpr(expr ast.Expression) bool {
 }
 
 // HandleIdentifierRanges processes identifier expressions, detecting if they
-// refer to range-typed variables and including them in range tracking. The
-// enclosing context decides whether that occurrence consumes the driver or a
-// complete assignment copies the descriptor.
+// refer to range-typed variables and including them in range tracking. Every
+// use of a range name consumes it as a driver.
 func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*RangeInfo, rew ast.Expression) {
 	typ, ok := ts.GetIdentifier(ident.Value)
 	if ok && typ.Kind() == RangeKind {
@@ -648,11 +617,10 @@ func (ts *TypeSolver) HandleIdentifierRanges(ident *ast.Identifier) (ranges []*R
 // formatting markers so interpolation follows the same driver semantics as an
 // ordinary identifier expression.
 func (ts *TypeSolver) HandleStringLiteralRanges(lit *ast.StringLiteral) (ranges []*RangeInfo, rew ast.Expression) {
-	// A main marker formats its value, so a bare Range there stays a
-	// descriptor. Width and precision operands are consumed as numbers, which
-	// makes a named Range in a specifier an iteration driver.
-	_, specs := formatMarkerIdentifiers(lit.Token.Literal, ts.isDefined)
-	for _, name := range specs {
+	// A range name iterates wherever it is used, in a main marker as much as
+	// in a width or precision operand, and the drivers nest in the order the
+	// string names them.
+	for _, name := range formatMarkerNames(lit.Token.Literal, ts.isDefined) {
 		typ, ok := ts.GetIdentifier(name)
 		if !ok || typ.Kind() != RangeKind {
 			continue
@@ -676,11 +644,11 @@ func rangeDriverNamed(ranges []*RangeInfo, name string) bool {
 	return false
 }
 
-// resolveBareRangeAssignment distinguishes Range descriptor copies from uses of
-// a Range that an enclosing statement condition has already bound as an
-// iterator. `copy = source` and `copy = 0:n` preserve the descriptor; in
-// `filtered = source > 2 source`, the RHS reads the current scalar yield.
-func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type, condRanges []*RangeInfo) {
+// resolveBareRangeAssignment settles a bare Range value at an assignment root.
+// A range literal constructs the descriptor (`r = 0:n`); a range name
+// iterates, so the assignment keeps the final yield (`last = r`), as it would
+// for any operation over `r`.
+func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type) {
 	if len(types) != 1 {
 		return
 	}
@@ -693,12 +661,9 @@ func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Ty
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
 	switch e := expr.(type) {
 	case *ast.Identifier:
-		if !rangeDriverNamed(condRanges, e.Value) {
-			info.Ranges = nil
-			info.HasRanges = false
-			info.Rewrite = nil
-			return
-		}
+		info.Ranges = mergeUses(info.Ranges, []*RangeInfo{{Name: e.Value}})
+		info.HasRanges = true
+		info.Rewrite = e
 		types[0] = rangeType.Iter
 		info.OutTypes[0] = rangeType.Iter
 	case *ast.RangeLiteral:
@@ -972,7 +937,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
-		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
+		ts.resolveBareRangeAssignment(expr, exprTypes)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
@@ -984,7 +949,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	if len(stmt.Name) != len(types) {
 		ce := &token.CompileError{
 			Token: stmt.Token,
-			Msg:   fmt.Sprintf("Statement lhs identifiers are not equal to rhs values!!! lhs identifiers: %d. rhs values: %d. Stmt %q", len(stmt.Name), len(types), stmt),
+			Msg:   assignmentMismatch(len(stmt.Name), len(types)),
 		}
 		ts.Errors = append(ts.Errors, ce)
 		return
@@ -1986,7 +1951,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", len(left), len(right)),
+			Msg:   logicalAndArityMismatch(len(left), len(right)),
 		})
 		types := []Type{Unresolved{}}
 		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
@@ -2053,7 +2018,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	if len(left) != len(right) {
 		ce := &token.CompileError{
 			Token: expr.Token,
-			Msg:   fmt.Sprintf("left expression and right expression have unequal lengths! Left expr: %s, length: %d. Right expr: %s, length: %d. Operator: %q", expr.Left, len(left), expr.Right, len(right), expr.Token.Literal),
+			Msg:   operandMismatch(expr.Token.Literal, len(left), len(right)),
 		}
 		ts.Errors = append(ts.Errors, ce)
 		types = []Type{Unresolved{}}
@@ -2546,7 +2511,7 @@ func (ts *TypeSolver) lookupCallTemplate(ce *ast.CallExpression, args []Type) (*
 	if !ok {
 		cerr := &token.CompileError{
 			Token: ce.Token,
-			Msg:   fmt.Sprintf("undefined function: %s", ce.Function.Value),
+			Msg:   undefinedFunction(ce.Function.Value),
 		}
 		ts.Errors = append(ts.Errors, cerr)
 		return nil, "", false
@@ -2564,9 +2529,7 @@ func newFunc(name string, bodyArgs []Type, template *ast.FuncStatement) *FuncInf
 			Params:   bodyArgs,
 			OutTypes: make([]Type, len(template.Outputs)),
 		},
-		Vars:              make(map[string]Type),
-		StatementEffects:  make(map[*ast.LetStatement]StatementEffect),
-		BodyOutputEffects: slices.Repeat([]WriteEffect{WriteUncomputed}, len(template.Outputs)),
+		Vars: make(map[string]Type),
 	}
 	for i := range f.Sig.OutTypes {
 		f.Sig.OutTypes[i] = Unresolved{}
@@ -2645,8 +2608,7 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 					panic(fmt.Sprintf("internal: cannot settle incomplete specialization %s", mangled))
 				}
 			}
-			graph := ts.buildSpecializationCallGraph()
-			ts.settleSpecializationBatch(graph)
+			ts.settleSpecializationBatch()
 			return f.Sig.OutTypes
 		}
 
@@ -2664,29 +2626,17 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 	}
 }
 
-// settleSpecializationBatch publishes reusable analysis facts atomically with
-// respect to Settled: every CFG result is staged and installed before any
-// specialization in the batch becomes visible as settled.
-func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) {
-	ts.settleEffects(graph)
-	staged := make([]*SpecializationCFGResult, len(graph.nodes))
-
-	for id, node := range graph.nodes {
-		walked := ts.walkedFuncs[node.mangled]
-		cfg := NewCFG(ts.ScriptCompiler.Compiler.CodeCompiler)
-		cfg.AnalyzeSpecialization(walked.template, walked.info)
-		staged[id] = &SpecializationCFGResult{
-			DirectCallees: slices.Clone(node.directCallees),
-			Errors:        slices.Clone(cfg.Errors),
-		}
+// settleSpecializationBatch publishes the walked specializations atomically
+// with respect to Settled: each is checked against its template's text range
+// summary before any becomes visible as settled.
+func (ts *TypeSolver) settleSpecializationBatch() {
+	cc := ts.ScriptCompiler.Compiler.CodeCompiler
+	for _, walked := range ts.walkedFuncs {
+		cc.checkSettledRanges(walked.template, walked.info)
 	}
 
-	for id, node := range graph.nodes {
-		ts.walkedFuncs[node.mangled].info.CFGResult = staged[id]
-	}
-
-	for _, node := range graph.nodes {
-		ts.walkedFuncs[node.mangled].info.Settled = true
+	for _, walked := range ts.walkedFuncs {
+		walked.info.Settled = true
 	}
 }
 
@@ -2695,19 +2645,14 @@ func (ts *TypeSolver) settleSpecializationBatch(graph *specializationCallGraph) 
 func (ts *TypeSolver) TypeFunc(mangled string, template *ast.FuncStatement) bool {
 	f := ts.ScriptCompiler.Compiler.FuncCache[mangled]
 	if f.Settled {
-		if f.CFGResult == nil {
-			panic(fmt.Sprintf("internal: settled specialization %s has no CFG result", mangled))
-		}
-
 		return true
 	}
 	if _, ok := ts.walkedFuncs[mangled]; ok {
 		return f.OutputTypesInferred()
 	}
 	ts.walkedFuncs[mangled] = walkedSpecialization{
-		walkIndex: len(ts.walkedFuncs),
-		info:      f,
-		template:  template,
+		info:     f,
+		template: template,
 	}
 	revision := ts.storageRevision
 	previousSlots := ts.previousSlotTypes

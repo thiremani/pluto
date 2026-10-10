@@ -9,7 +9,14 @@ res = Acc(a, x)
     res = a + x
 
 res = ConditionalAcc(a, x)
+    res = a
     res = x > 0 a + x
+
+# A filter keeps its value through prev. Shared, each iteration starts from the
+# value the last one kept; unshared, each starts from the same prev.
+res = Filter(prev, x)
+    res = prev
+    res = x < 3 x
 
 sum, last = AccPair(a, x)
     sum = a + x

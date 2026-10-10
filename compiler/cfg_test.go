@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,7 +49,9 @@ func TestCFGAnalysis(t *testing.T) {
 	})
 }
 
-func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
+// Flow checks run once per template, from its text, whether or not anything
+// calls it.
+func TestFunctionDataflowRunsOncePerTemplate(t *testing.T) {
 	code := `r = Unreachable(x)
     temporary = x + 1
     temporary = x + 2
@@ -57,10 +62,6 @@ func TestFunctionDataflowWaitsForSpecialization(t *testing.T) {
 
 	cc := NewCodeCompiler(ctx, "unreachableLocalDeadStore", "", mustParseCode(t, code))
 	errs := cc.Compile()
-	require.Empty(t, errs)
-
-	sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "result = Unreachable(1)\nresult"), cc)
-	errs = sc.Compile()
 	require.Len(t, errs, 3)
 	assertHasExpectedError(t, errs, `unconditional assignment to "temporary" overwrites a previous value that was never used`)
 
@@ -329,12 +330,22 @@ value, kept, echo`,
 			input: `"Value: -x%s"`,
 		},
 		{
-			// The callee may skip its write, leaving the destination's previous
-			// value in place, so that previous write is live.
-			name: "Write then Skippable Call Root",
-			code: `res = maybeWrite(x)
+			// The callee keeps the old value through an input, so the call
+			// reads the earlier write.
+			name: "Write then Call Keeping Old Value",
+			code: `res = maybeWrite(prev, x)
+    res = prev
     res = x > 0 42`,
-			input: "x = 7\nx = maybeWrite(-1)\nx",
+			input: "x = 7\nx = maybeWrite(x, -1)\nx",
+		},
+		{
+			// One body serves scalar and array arguments: the comparison counts
+			// as possibly skipping for both, so the default stays live.
+			name: "Default Before Comparison For Scalar And Array",
+			code: `out = Pos(prev, x)
+    out = prev
+    out = x > 0`,
+			input: "s = Pos(9, -1)\nm = Pos([]0, [1 -2 3])\ns, m",
 		},
 		{
 			// A condition below the value root still leaves the whole RHS able
@@ -356,13 +367,14 @@ value, kept, echo`,
 		{
 			// Writing an output twice never reads it, and a call may target it.
 			name: "Output Rewritten And Targeted By Nested Call",
-			code: `res = maybe(x)
+			code: `res = maybe(prev, x)
+    res = prev
     res = x > 0 x
 
 res = refine(x)
     res = x
     res = x > 5 x * x
-    res = maybe(x)`,
+    res = maybe(res, x)`,
 			input: "x = refine(3)\nx",
 		},
 		{
@@ -480,8 +492,9 @@ func getErrorTestCases() []cfgTestCase {
 			errorContains: `output "res" is read where it may still be unassigned`,
 		},
 		{
-			// A call that may leave its output unwritten does not assign it.
-			name: "Output Read After Skippable Call",
+			// A body that can skip its write is rejected at its definition, so
+			// a caller can count on the call writing its output.
+			name: "Skippable Body Rejected At Definition",
 			code: `res = maybe(x)
     res = x > 0 x
 
@@ -489,21 +502,7 @@ res = chained(x)
     res = maybe(x)
     res = res + 1`,
 			input:         "x = chained(-1)\nx",
-			errorContains: `output "res" is read where it may still be unassigned`,
-		},
-		{
-			// Two seed-preserving calls in a row still leave the caller's seed
-			// in place, so the read after them is rejected.
-			name: "Output Read After Two Seed Preserving Calls",
-			code: `res = maybe(x)
-    res = x > 0 x
-
-res = twice(x)
-    res = maybe(x)
-    res = maybe(x)
-    res = res + 1`,
-			input:         "x = twice(-1)\nx",
-			errorContains: `output "res" is read where it may still be unassigned`,
+			errorContains: `output "res" may be left unassigned`,
 		},
 		{
 			// A marker naming an output is a read even before any assignment,
@@ -883,62 +882,15 @@ func TestFormattingReadsRemainStructural(t *testing.T) {
 	}
 }
 
-func TestSpecializationReadsSeedBeforeWrite(t *testing.T) {
+func TestTemplatePrintReadKeepsLocalLive(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	code := mustParseCode(t, `res = Seeded(x)
-    res = x
-    res = Preserve(x)`)
-	template := code.Statements[0].(*ast.FuncStatement)
-	first := template.Body.Statements[0].(*ast.LetStatement)
-	second := template.Body.Statements[1].(*ast.LetStatement)
-	info := &FuncInfo{
-		StatementEffects: map[*ast.LetStatement]StatementEffect{
-			first: {
-				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
-			},
-			second: {
-				Writes:    []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
-				ReadsSeed: []int{0},
-			},
-		},
-	}
-	cc := NewCodeCompiler(ctx, "seededSpecialization", "", code)
-	cfg := NewCFG(cc)
-
-	cfg.AnalyzeSpecialization(template, info)
-
-	require.Empty(t, cfg.Errors)
-}
-
-func TestSpecializationPrintReadKeepsLocalLive(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	code := mustParseCode(t, `res = Printed(x)
+	cc := NewCodeCompiler(ctx, "printedTemplate", "", mustParseCode(t, `res = Printed(x)
     local = x + 1
     local
-    res = x`)
-	template := code.Statements[0].(*ast.FuncStatement)
-	local := template.Body.Statements[0].(*ast.LetStatement)
-	output := template.Body.Statements[2].(*ast.LetStatement)
-	info := &FuncInfo{
-		StatementEffects: map[*ast.LetStatement]StatementEffect{
-			local: {
-				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
-			},
-			output: {
-				Writes: []TargetWriteEffect{{TargetIndex: 0, Effect: MustWrite}},
-			},
-		},
-	}
-	cc := NewCodeCompiler(ctx, "printedSpecialization", "", code)
-	cfg := NewCFG(cc)
-
-	cfg.AnalyzeSpecialization(template, info)
-
-	require.Empty(t, cfg.Errors)
+    res = x`))
+	require.Empty(t, cc.Compile())
 }
 
 func TestTypedEventsUseSparseTargetIndices(t *testing.T) {
@@ -972,15 +924,12 @@ func TestCFGRejectsMissingStatementEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	code := mustParseCode(t, `res = MissingEffects(x)
-    res = x`)
-	template := code.Statements[0].(*ast.FuncStatement)
-	info := &FuncInfo{StatementEffects: make(map[*ast.LetStatement]StatementEffect)}
-	cc := NewCodeCompiler(ctx, "missingEffects", "", code)
+	cc := NewCodeCompiler(ctx, t.Name(), "", ast.NewCode())
+	program := mustParseScript(t, "value = 1\nvalue")
 	cfg := NewCFG(cc)
 
-	require.PanicsWithValue(t, `internal: missing CFG effects for statement "res = x"`, func() {
-		cfg.AnalyzeSpecialization(template, info)
+	require.PanicsWithValue(t, `internal: missing CFG effects for statement "value = 1"`, func() {
+		cfg.AnalyzeScript(program.Statements, make(map[*ast.LetStatement]StatementEffect))
 	})
 }
 
@@ -1135,4 +1084,686 @@ func assertMessageFound(t *testing.T, messages []string, expectedMessage string)
 		}
 	}
 	assert.True(t, found, "expected an error containing %q, got: %v", expectedMessage, messages)
+}
+
+func unassignedOutputMessage(name string) string {
+	return fmt.Sprintf("output %q may be left unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it (%s = prev), with each caller passing its destination as that input", name, name)
+}
+
+// Every body that runs writes every output. The template check reads the
+// text: a statement gate, a value that can fail, or a range that may be empty
+// can skip a write, for every argument type.
+func TestOutputsMustBeDefinitelyAssigned(t *testing.T) {
+	tests := []struct {
+		name       string
+		code       string
+		unassigned []string
+	}{
+		{
+			name: "Gated",
+			code: `out = Maybe(x)
+    out = x > 0 x`,
+			unassigned: []string{"out"},
+		},
+		{
+			// A comparison counts as possibly skipping even where an array
+			// argument would make it a mask.
+			name: "Comparison",
+			code: `out = Less(x, y)
+    out = x < y`,
+			unassigned: []string{"out"},
+		},
+		{
+			name: "CheckedAccess",
+			code: `out = At(arr, i)
+    out = arr[i]`,
+			unassigned: []string{"out"},
+		},
+		{
+			// Complementary conditions are not recognized: for floats, a NaN
+			// fails both.
+			name: "ComplementaryGates",
+			code: `y = Fib(n)
+    y = n <= 1 n
+    y = n > 1 Fib(n - 1) + Fib(n - 2)`,
+			unassigned: []string{"y"},
+		},
+		{
+			name: "DefaultThenOverride",
+			code: `y = Fib(n)
+    y = n
+    y = n > 1 Fib(n - 1) + Fib(n - 2)`,
+		},
+		{
+			name: "PrevThenComparison",
+			code: `out = Pos(prev, x)
+    out = prev
+    out = x > 0`,
+		},
+		{
+			name: "LocalAbsorbsCheckedAccess",
+			code: `out = At(arr, i)
+    t = arr[i]
+    out = t`,
+		},
+		{
+			// A caller counts a call as writing every output, so only the
+			// body that can skip is reported.
+			name: "CallerIsNotReportedAgain",
+			code: `res = maybe(x)
+    res = x > 0 x
+
+out = chained(x)
+    out = maybe(x)
+    out = out + 1`,
+			unassigned: []string{"res"},
+		},
+		{
+			name: "EveryOutputIsChecked",
+			code: `x, y = IsEven(n)
+    x, y = n != 0 IsOdd(n - 1)
+    x = n == 0 "yes"
+
+x, y = IsOdd(n)
+    x, y = "no", "yes"
+    x, y = n != 0 IsEven(n - 1)`,
+			unassigned: []string{"x", "y"},
+		},
+		{
+			name: "LocalRangeMayBeEmpty",
+			code: `out = Tail(n)
+    j = 0:n
+    out = j * 2`,
+			unassigned: []string{"out"},
+		},
+		{
+			name: "InlineRangeMayBeEmpty",
+			code: `out = Shift(n)
+    out = n + (0:n)`,
+			unassigned: []string{"out"},
+		},
+		{
+			name: "NonemptyRangeLiteralAlwaysRuns",
+			code: `out = Last(x)
+    out = x + (0:3)`,
+		},
+		{
+			name: "LocalRangeWithDefault",
+			code: `out = F(prev, n)
+    r = 0:n
+    out = prev
+    out = r * 2`,
+		},
+		{
+			name: "ScalarCallOutput",
+			code: `y = Helper(x)
+    y = x + 1
+
+out = F(x)
+    y = Helper(x)
+    out = y + 1`,
+		},
+		{
+			// A gate that names a range iterates it, so the value reads the
+			// element and the binding holds a scalar.
+			name: "GateIteratesItsRange",
+			code: `out = F(n)
+    stream = 0:n
+    last = stream > 2 stream
+    out = last + 1`,
+		},
+		{
+			name: "GateOnAnotherRangeIteratesBoth",
+			code: `out = F(n)
+    other = 0:3
+    stream = 0:n
+    kept = other > 1 stream
+    out = kept * 2`,
+		},
+		{
+			// A bare range name iterates, and a named range may be empty.
+			name: "BareRangeNameIterates",
+			code: `out = F(n)
+    stream = 0:n
+    out = stream`,
+			unassigned: []string{"out"},
+		},
+		{
+			// A literal or binding under && is iterated.
+			name: "AndIteratesLiteral",
+			code: `out = F(n)
+    last = n > 0 && 0:5
+    out = last + 1`,
+		},
+		{
+			name: "AndIteratesBinding",
+			code: `out = F(n)
+    stream = 0:n
+    last = n > 0 && stream
+    out = last + 1`,
+		},
+		{
+			// A main marker iterates the range it names, too.
+			name: "MarkerRangeIterates",
+			code: `out = F(n)
+    r = 0:n
+    out = "v -r"`,
+			unassigned: []string{"out"},
+		},
+		{
+			// A width or precision consumes a range as numbers.
+			name: "SpecifierRangeIterates",
+			code: `out = F(n)
+    w = 1:n
+    out = "-n%(-w)d"`,
+			unassigned: []string{"out"},
+		},
+		{
+			// A && fills its right operand's targets.
+			name: "AndTakesRightOperandSlots",
+			code: `a, b = Pair(x)
+    a, b = x, x
+
+a, b, c = F(x)
+    a, b, c = x > 0 && Pair(x), x`,
+			unassigned: []string{"a", "b"},
+		},
+		{
+			// A call's arity counts every value its arguments yield, so the
+			// targets line up with Count's outputs and only c can be skipped.
+			name: "TargetsFollowCallOutputs",
+			code: `left, right = Tags(n)
+    left, right = n, n + 1
+
+out, tag = Count(left, right, n)
+    out = n + 1
+    tag = left + right
+
+a, b, c = F(arr, n)
+    a, b, c = Count(Tags(n), n), arr[0]`,
+			unassigned: []string{"c"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			want := make([]string, len(test.unassigned))
+			for i, name := range test.unassigned {
+				want[i] = unassignedOutputMessage(name)
+			}
+
+			require.Equal(t, want, extractErrorMessages(cc.Compile()))
+		})
+	}
+}
+
+func TestUnassignedOutputIsReportedAtTheHeader(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `out = Maybe(x)
+    out = x > 0 x`))
+	errs := cc.Compile()
+
+	require.Len(t, errs, 1)
+	require.Equal(t, unassignedOutputMessage("out"), errs[0].Msg)
+	require.Equal(t, 1, errs[0].Token.Line)
+	require.Equal(t, 1, errs[0].Token.Column)
+}
+
+// The template checks classify each write from the text, so they first report
+// text the classification cannot read, which the solver rejects in any
+// specialization, and check no flow over it.
+func TestUnclassifiableTemplateTextIsReported(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		errors []string
+	}{
+		{
+			// The value that can fail does not mark the targets as possibly
+			// skipped.
+			name: "ValueCountMismatch",
+			code: `a, b = Pair(x)
+    a, b = x, x
+
+a, b, c = F(arr, x)
+    a, b, c = Pair(x), arr[0], x`,
+			errors: []string{"assignment mismatch: 3 targets but 4 values"},
+		},
+		{
+			name: "OneValueForTwoTargets",
+			code: `a, b = F(x)
+    a, b = x`,
+			errors: []string{"assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "UndefinedFunction",
+			code: `y = F(x)
+    y = Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// A call names a template by the number of values its arguments
+			// yield.
+			name: "WrongArgumentCount",
+			code: `a, b = Pair(x)
+    a, b = x, x
+
+y = F(x)
+    y = Pair(x, x)`,
+			errors: []string{"undefined function: Pair"},
+		},
+		{
+			name: "UndefinedFunctionInConditionAndArgument",
+			code: `y = F(x)
+    y = x
+    y = Check(x) > 0 Inc(Next(x))
+
+out = Inc(n)
+    out = n + 1`,
+			errors: []string{"undefined function: Check", "undefined function: Next"},
+		},
+		{
+			name: "UndefinedFunctionInPrint",
+			code: `y = F(x)
+    y = x
+    Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// The solver counts an unknown call as one value and reports both.
+			name: "UndefinedFunctionInTuple",
+			code: `a, b = F(x)
+    a, b = Missing(x)`,
+			errors: []string{"undefined function: Missing", "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			// An operator whose sides do not line up yields one value, as the
+			// solver counts it, so the assignment does not line up either.
+			name: "OperandCountMismatch",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b = F(n)
+    a, b = Pair(n) * 2`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "OrAlternativesCountMismatch",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+y = Inc(n)
+    y = n + 1
+
+a, b = F(n)
+    a, b = Pair(n > 0) || Inc(3)`,
+			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+		},
+		{
+			name: "NestedMismatchCountsOneValue",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+y = F(n)
+    y = (Pair(n) * 2) + 1`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			// A && condition folds onto one value or broadcasts to several,
+			// but two conditions cannot gate three values.
+			name: "AndArityMismatch",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
+a, b, c = F(n)
+    a, b, c = Pair(n > 0) && Three(n)`,
+			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3", "assignment mismatch: 3 targets but 1 value"},
+		},
+		{
+			// y's gated write waits until the template's text classifies.
+			name: "NoFlowChecksOverUnclassifiableText",
+			code: `y, z = F(x)
+    y = x > 0 x
+    z = Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// Every template's text is checked, and Maybe's flow error waits
+			// until all of it classifies.
+			name: "FlowChecksWaitForEveryTemplate",
+			code: `y = F(x)
+    y = Missing(x)
+
+out = Maybe(x)
+    out = x > 0 x
+
+z = G(x)
+    z = Gone(x)`,
+			errors: []string{"undefined function: Missing", "undefined function: Gone"},
+		},
+		{
+			// The text is read even when the structure is invalid; the flow
+			// is not.
+			name: "ReportedWithStructuralErrors",
+			code: `y = F(x, unused)
+    y = Missing(x)`,
+			errors: []string{`input parameter "unused" is never read`, "undefined function: Missing"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			require.Equal(t, test.errors, extractErrorMessages(cc.Compile()))
+		})
+	}
+}
+
+// Unclassifiable text is reported where the solver reports it: an assignment
+// at its = and a call at its parenthesis.
+func TestUnclassifiableTemplateTextPositions(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `a, b = F(x)
+    a, b = Missing(x)`))
+	errs := cc.Compile()
+
+	require.Len(t, errs, 2)
+	positions := make([][2]int, len(errs))
+	for i, err := range errs {
+		positions[i] = [2]int{err.Token.Line, err.Token.Column}
+	}
+	require.Equal(t, [][2]int{{2, 19}, {2, 10}}, positions)
+}
+
+func rangeOutputMessage(name string) string {
+	return fmt.Sprintf("output %q cannot hold a range; return its bounds and build the range where it is used", name)
+}
+
+// A function cannot return a range: it returns the bounds, and its caller
+// builds the range.
+func TestFunctionsCannotReturnRanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		errors []string
+	}{
+		{
+			name: "RangeLiteralOutput",
+			code: `r = MakeRange(n)
+    r = 0:n`,
+			errors: []string{rangeOutputMessage("r")},
+		},
+		{
+			name: "OneOutputOfSeveral",
+			code: `r, k = Two(n)
+    r, k = 0:n, n`,
+			errors: []string{rangeOutputMessage("r")},
+		},
+		{
+			name: "GatedRangeOutput",
+			code: `out = F(n)
+    out = n > 0 0:n`,
+			errors: []string{rangeOutputMessage("out")},
+		},
+		{
+			// A range name iterates, so the output receives an element.
+			name: "RangeNameOutputIterates",
+			code: `out = F(n)
+    r = 0:n
+    out = r`,
+			errors: []string{unassignedOutputMessage("out")},
+		},
+		{
+			name: "IteratedRangeOutput",
+			code: `out = F(prev, n)
+    r = 0:n
+    out = prev
+    out = r * 2`,
+		},
+		{
+			name: "CollectedRangeOutput",
+			code: `out = F(n)
+    out = [0:n]`,
+		},
+		{
+			name: "BoundsOutputs",
+			code: `lo, hi = Bounds(n)
+    lo, hi = 0, n
+
+out = F(n)
+    lo, hi = Bounds(n)
+    r = lo:hi
+    out = [r]`,
+		},
+		{
+			// G's checks read the call as a value, which would make its
+			// default a dead store, so they wait for MakeRange's error.
+			name: "CallerAfterRangeOutput",
+			code: `res = MakeRange(n)
+    res = 0:n
+
+out = G(n)
+    out = 0
+    out = MakeRange(n) + 1`,
+			errors: []string{rangeOutputMessage("res")},
+		},
+		{
+			name: "CallerBeforeRangeOutput",
+			code: `out = G(n)
+    out = 0
+    out = MakeRange(n) + 1
+
+res = MakeRange(n)
+    res = 0:n`,
+			errors: []string{rangeOutputMessage("res")},
+		},
+		{
+			// Fwd takes the call's value, so H's call to Fwd misleads it too.
+			name: "CallerThroughForwardingCall",
+			code: `res = MakeRange(n)
+    res = 0:n
+
+v = Fwd(n)
+    v = MakeRange(n)
+
+out = H(n)
+    out = 0
+    out = Fwd(n) + 1`,
+			errors: []string{rangeOutputMessage("res")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			want := test.errors
+			if want == nil {
+				want = []string{}
+			}
+			require.Equal(t, want, extractErrorMessages(cc.Compile()))
+		})
+	}
+}
+
+// A range literal assigned whole always writes, even an empty one, so
+// overwriting it unread is reported as for any definite write.
+func TestRangeLiteralWriteIsDefinite(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `out = F(n)
+    r = 0:n
+    r = 1:n
+    out = [r]`))
+	require.Equal(t, []string{
+		`unconditional assignment to "r" overwrites a previous value that was never used. It was previously written at line 2:5`,
+		`value assigned to "r" is never used`,
+	}, extractErrorMessages(cc.Compile()))
+}
+
+func TestRangeOutputIsReportedAtItsAssignment(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `r, k = Two(n)
+    k = n
+    r = 0:n`))
+	errs := cc.Compile()
+
+	require.Len(t, errs, 1)
+	require.Equal(t, 3, errs[0].Token.Line)
+	require.Equal(t, 5, errs[0].Token.Column)
+}
+
+// The template checks read from the text which bindings hold a Range, and
+// settlement checks that the solved types agree, so each way a value holds
+// or iterates a range is pinned here against the solver.
+func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
+	tests := []struct {
+		name   string
+		code   string
+		ranges []string
+	}{
+		{
+			// A range name iterates wherever it is used, so a copy holds an
+			// element.
+			name: "CopyIterates",
+			code: `out = F(n)
+    stream = 0:n
+    kept = stream
+    out = [kept]`,
+			ranges: []string{"stream"},
+		},
+		{
+			name: "OperationIterates",
+			code: `out = F(n)
+    stream = 0:n
+    out = n
+    out = stream + 0`,
+			ranges: []string{"stream"},
+		},
+		{
+			name: "GateIteratesItsRange",
+			code: `out = F(n)
+    stream = 0:n
+    out = n
+    out = stream > 2 stream`,
+			ranges: []string{"stream"},
+		},
+		{
+			name: "GateOnAnotherRangeIteratesBoth",
+			code: `out = F(n)
+    other = 0:3
+    stream = 0:n
+    kept = other > 1 stream
+    out = [kept]`,
+			ranges: []string{"other", "stream"},
+		},
+		{
+			name: "WholeLiteralUnderGateKeepsDescriptor",
+			code: `out = F(n)
+    stream = 0:n
+    kept = stream > 1 0:9
+    out = [kept]`,
+			ranges: []string{"kept", "stream"},
+		},
+		{
+			// The collector in the condition settles its own iteration; the
+			// value iterates the range by name.
+			name: "CollectorInGate",
+			code: `n = Size(xs)
+    t = xs[0]
+    n = t + 2
+
+out = F(n)
+    stream = 0:n
+    kept = Size([stream]) > 1 stream
+    out = [kept]`,
+			ranges: []string{"stream"},
+		},
+		{
+			name: "SpecifierInGateIterates",
+			code: `out = F(n)
+    w = 0:n
+    kept = "-n%(-w)d" > "" w
+    out = [kept]`,
+			ranges: []string{"w"},
+		},
+		{
+			name: "AndIteratesLiteral",
+			code: `out = F(n)
+    last = n > 0 && 0:5
+    out = [last]`,
+		},
+		{
+			name: "AndIteratesBinding",
+			code: `out = F(n)
+    stream = 0:n
+    last = n > 0 && stream
+    out = [last]`,
+			ranges: []string{"stream"},
+		},
+		{
+			// A range in one value of a tuple holds only that target.
+			name: "RangeInOneSlotOfATuple",
+			code: `out = F(n)
+    kept, k = 0:n, n
+    out = [kept] ⊕ [k]`,
+			ranges: []string{"kept"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, test.code))
+			require.Empty(t, cc.Compile())
+
+			ranges := slices.Sorted(maps.Keys(cc.rangeBindings[funcKey{name: "F", arity: 1}]))
+			if test.ranges == nil {
+				require.Empty(t, ranges)
+			} else {
+				require.Equal(t, test.ranges, ranges)
+			}
+
+			sc := NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "v = F(5)\nv"), cc)
+			require.Empty(t, sc.Compile())
+		})
+	}
+}
+
+func TestSettledRangeDisagreementIsInternalError(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `out = F(n)
+    stream = 0:n
+    out = [stream]`))
+	require.Empty(t, cc.Compile())
+	delete(cc.rangeBindings[funcKey{name: "F", arity: 1}], "stream")
+
+	ts := NewTypeSolver(NewScriptCompiler(ctx, t.Name(), mustParseScript(t, "v = F(5)\nv"), cc))
+	require.PanicsWithValue(t,
+		fmt.Sprintf("internal: F solves %q as %s, which disagrees with its template's text range summary", "stream", Range{Iter: I64}),
+		ts.Solve,
+	)
 }
