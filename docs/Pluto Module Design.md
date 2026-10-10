@@ -98,7 +98,7 @@ The publishing checker compares what a module's declarations state:
 
 - each function's and operator's name and its number of inputs and outputs
 - each constant's type and value
-- each struct's name and its fields' names and types
+- each struct's name and its ordered field names and types
 - the compiler versions and platforms the module supports
 
 It does not compare the argument types each function accepts. A template's
@@ -160,10 +160,11 @@ This requires a Major release: 3.0.0.
 ## Major releases
 
 A Major release may remove or change anything. Nothing is marked as going
-away ahead of time, so compiling never warns about it. Each dependent moves
-to the new major when it chooses to, and the release notes list everything
-the release removes or changes, taken from the comparison with the release
-before it.
+away ahead of time, so compiling never warns about it, and each dependent
+moves to the new major when it chooses to. Release notes list the removals
+and changes the comparison detects, together with the breaking changes the
+publisher declares and any migration steps they need. A module's own
+documentation can give advance notice of what a later major will remove.
 
 ## While developing
 
