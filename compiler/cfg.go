@@ -210,7 +210,7 @@ func (cfg *CFG) AnalyzeFuncs() {
 	}
 
 	for _, template := range templates {
-		cfg.checkTemplateFlow(template.fn, template.statementReads, template.writes)
+		cfg.checkTemplateFlow(template)
 	}
 }
 
@@ -370,19 +370,19 @@ func countOf(n int, noun string) string {
 // is dead or overwrites a definite write that nothing read. It runs only on a
 // structurally valid body whose text classifies, so every output read follows
 // some write and every assignment has its writes.
-func (cfg *CFG) checkTemplateFlow(fn *ast.FuncStatement, statementReads [][]VarEvent, writes [][]textWrite) {
+func (cfg *CFG) checkTemplateFlow(template classifiedTemplate) {
 	cfg.PushBlock()
 	defer cfg.PopBlock()
 
-	outputs := identSet(fn.Outputs)
+	outputs := identSet(template.fn.Outputs)
 	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 
-	for i, stmt := range fn.Body.Statements {
-		cfg.rejectUnassignedOutputReads(statementReads[i], outputs, assigned)
-		events := append([]VarEvent(nil), statementReads[i]...)
+	for i, stmt := range template.fn.Body.Statements {
+		cfg.rejectUnassignedOutputReads(template.statementReads[i], outputs, assigned)
+		events := append([]VarEvent(nil), template.statementReads[i]...)
 		if let, ok := stmt.(*ast.LetStatement); ok {
-			events = append(events, textWriteEvents(let, writes[i])...)
+			events = append(events, textWriteEvents(let, template.writes[i])...)
 		}
 		cfg.processDataflowEvents(stmt, events, lastWrites)
 
@@ -393,7 +393,7 @@ func (cfg *CFG) checkTemplateFlow(fn *ast.FuncStatement, statementReads [][]VarE
 		}
 	}
 
-	for _, output := range fn.Outputs {
+	for _, output := range template.fn.Outputs {
 		if _, ok := assigned[output.Value]; ok {
 			continue
 		}
