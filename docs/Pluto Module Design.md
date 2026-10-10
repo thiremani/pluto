@@ -45,9 +45,10 @@ ABI already mangles such path segments into every symbol, so:
 
 Releases are numbered `Major.Minor.Patch`, as in
 [SemVer](https://semver.org/). A release's category is the highest any of
-its changes requires, and a publisher may always choose a higher one. From
-`2.4.7`, the next release is `2.4.8` for a Patch, `2.5.0` for a Minor and
-`3.0.0` for a Major.
+its changes requires, and publishing picks the next version in it: from
+`2.4.7`, that is `2.4.8` for a Patch, `2.5.0` for a Minor and `3.0.0` for a
+Major. The publisher never chooses a number, but may ask for a higher
+category than the changes require, never a lower one.
 
 | Change | Minimum |
 |---|---|
@@ -113,8 +114,8 @@ declarations; representative tests and the publisher cover the rest:
   catch what their assertions, or operations sensitive to type, expose:
   changing `F(x)` from returning `x` to returning `x + 0.0` makes `F(1)` a
   float, yet both versions print `1`.
-- A publisher who knows of a narrowing or a changed result type declares a
-  Major release.
+- A publisher who knows of a narrowing or a changed result type declares it
+  as a break, which makes the release Major.
 
 A narrowing that escapes both shows up later as a type error in a
 dependent's build: a breaking change the release should have declared, not
@@ -136,7 +137,8 @@ Publishing a release:
 1. Builds the module's API manifest: the facts listed above.
 2. Compares it with the release it updates: `2.4.8` with `2.4.7`, and a
    backported `2.3.5` with `2.3.4`.
-3. Works out the minimum category, the highest any change requires.
+3. Works out the release's category: the highest that any detected change,
+   or any break the publisher declares, requires.
 4. Runs the module's own tests, which must all pass, and the previous
    release's tests, whose failures must each be explained: by a change the
    comparison found, such as a function a Major release removes; by a break
@@ -146,12 +148,22 @@ Publishing a release:
 5. Requires every function's body to run at least once in the module's own
    tests, with any argument types. This is execution, not reachability:
    `[Double(0:0)]` reaches `Double` but never runs its body.
-6. Rejects a version below the minimum category, or one already published.
+6. Numbers the release: the next version in that category after the
+   release it updates, or in a higher category the publisher asks for. A
+   lower category is refused, and a version number is never reused.
 
-A rejected release says what it found:
+Publishing reports the version it picked and the changes that decided it:
 
 ```text
-Cannot publish 2.5.0.
+Publishing 3.0.0, a Major release.
+
+Constant STATUS_OK changed from 0 to 1.
+```
+
+Asking for a lower category is refused with the same reason:
+
+```text
+Cannot publish a Minor release.
 
 Constant STATUS_OK changed from 0 to 1.
 This requires a Major release: 3.0.0.
@@ -181,9 +193,11 @@ or no test runs, still compiles:
 ## Open questions
 
 - Import syntax, and how code names another module's functions.
-- Where a module declares its version, and how a dependent chooses a release
-  within a major line: a lock file, or the minimum version every dependent
-  needs.
+- Where a release's version is recorded, and how a dependent chooses a
+  release within a major line: a lock file, or the minimum version every
+  dependent needs.
+- How a publisher declares a break or a bug fix, with any migration note,
+  and asks for a higher category than the changes require.
 - How the major version is spelled in the module path, including whether
   `v0` and `v1` carry one.
 - Which functions get a stable C wrapper: a per-function choice for C
