@@ -267,7 +267,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) classifiedTemplate {
 // until no template has one. It also reports an output that holds a range,
 // which a function cannot return.
 func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
-	flow := newRangeFlow(cfg.CodeCompiler, fn)
+	classifier := newWriteClassifier(cfg.CodeCompiler, fn)
 	outputs := identSet(fn.Outputs)
 	writes := make([][]textWrite, len(fn.Body.Statements))
 	for i, stmt := range fn.Body.Statements {
@@ -277,17 +277,17 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 			continue
 		}
 
-		letWrites, ok := flow.letWrites(let)
+		letWrites, ok := classifier.letWrites(let)
 		if !ok {
 			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.CodeCompiler.valueCount(let.Value)))
 			continue
 		}
 		cfg.rejectRangeOutputs(outputs, let, letWrites)
-		flow.record(let, letWrites)
+		classifier.record(let, letWrites)
 		writes[i] = letWrites
 	}
 
-	cfg.CodeCompiler.rangeBindings[templateKey(fn)] = flow.bindings
+	cfg.CodeCompiler.rangeBindings[templateKey(fn)] = classifier.bindings
 	return writes
 }
 
@@ -441,42 +441,42 @@ type textWrite struct {
 	holdsRange bool
 }
 
-// rangeFlow reads from a template's text which bindings hold a Range
-// descriptor and which values a range drives, as the solver types them. Only
-// a range literal assigned on its own constructs a descriptor: a parameter
-// never holds one, since a range argument runs the body once per element; no
-// call yields one, since a function cannot return a range; and a range name
-// iterates wherever it is used, so a binding assigned from one holds an
-// element. A binding holds a range as its latest assignment left it; a
-// reassignment between a range and a non-range value is the solver's to
-// reject, like any other change of type.
-type rangeFlow struct {
+// writeClassifier classifies a template's writes from its text, statement by
+// statement: whether each always happens, and which bindings hold a Range
+// descriptor, as the solver types them. Only a range literal assigned on its
+// own constructs a descriptor: a parameter never holds one, since a range
+// argument runs the body once per element; no call yields one, since a
+// function cannot return a range; and a range name iterates wherever it is
+// used, so a binding assigned from one holds an element. A binding holds a
+// range as its latest assignment left it; a reassignment between a range and
+// a non-range value is the solver's to reject, like any other change of type.
+type writeClassifier struct {
 	cc       *CodeCompiler
 	bindings map[string]struct{}
 	defined  map[string]struct{}
 }
 
-func newRangeFlow(cc *CodeCompiler, fn *ast.FuncStatement) *rangeFlow {
+func newWriteClassifier(cc *CodeCompiler, fn *ast.FuncStatement) *writeClassifier {
 	defined := identSet(fn.Parameters)
 	for _, output := range fn.Outputs {
 		defined[output.Value] = struct{}{}
 	}
-	return &rangeFlow{cc: cc, bindings: make(map[string]struct{}), defined: defined}
+	return &writeClassifier{cc: cc, bindings: make(map[string]struct{}), defined: defined}
 }
 
 // letWrites classifies every target of an assignment, discards included, so
 // the result lines up with its names. Values take targets by their output
 // counts; it reports false when those do not fill the targets.
-func (rf *rangeFlow) letWrites(let *ast.LetStatement) ([]textWrite, bool) {
-	if rf.cc.valueCount(let.Value) != len(let.Name) {
+func (wc *writeClassifier) letWrites(let *ast.LetStatement) ([]textWrite, bool) {
+	if wc.cc.valueCount(let.Value) != len(let.Name) {
 		return nil, false
 	}
 
 	gated := len(let.Condition) > 0
 	writes := make([]textWrite, 0, len(let.Name))
 	for _, value := range let.Value {
-		definite := !gated && !rf.maySkip(value)
-		for _, holdsRange := range rf.slotRanges(value) {
+		definite := !gated && !wc.maySkip(value)
+		for _, holdsRange := range wc.slotRanges(value) {
 			writes = append(writes, textWrite{definite: definite, holdsRange: holdsRange})
 		}
 	}
@@ -487,8 +487,8 @@ func (rf *rangeFlow) letWrites(let *ast.LetStatement) ([]textWrite, bool) {
 // fail (a value-position comparison, &&, a checked access, a || whose last
 // alternative can fail, or a call with such an argument), or a range that may
 // be empty drives it.
-func (rf *rangeFlow) maySkip(value ast.Expression) bool {
-	return treeCanFail(value, textNodeFails) || rf.drivesValue(value)
+func (wc *writeClassifier) maySkip(value ast.Expression) bool {
+	return treeCanFail(value, textNodeFails) || wc.drivesValue(value)
 }
 
 func textNodeFails(expr ast.Expression) bool {
@@ -503,8 +503,8 @@ func textNodeFails(expr ast.Expression) bool {
 
 // slotRanges reports, per target a value fills, whether it receives a Range
 // descriptor: only a bare range literal constructs one.
-func (rf *rangeFlow) slotRanges(value ast.Expression) []bool {
-	ranges := make([]bool, rf.cc.valueSlots(value))
+func (wc *writeClassifier) slotRanges(value ast.Expression) []bool {
+	ranges := make([]bool, wc.cc.valueSlots(value))
 	if _, isLiteral := value.(*ast.RangeLiteral); isLiteral {
 		ranges[0] = true
 	}
@@ -514,65 +514,65 @@ func (rf *rangeFlow) slotRanges(value ast.Expression) []bool {
 // record publishes an assignment's targets once its reads are classified:
 // they become defined, and each holds a range exactly when this assignment
 // gives it a descriptor.
-func (rf *rangeFlow) record(let *ast.LetStatement, writes []textWrite) {
+func (wc *writeClassifier) record(let *ast.LetStatement, writes []textWrite) {
 	for i, target := range let.Name {
 		if isDiscard(target) {
 			continue
 		}
 
-		rf.defined[target.Value] = struct{}{}
+		wc.defined[target.Value] = struct{}{}
 		if writes[i].holdsRange {
-			rf.bindings[target.Value] = struct{}{}
+			wc.bindings[target.Value] = struct{}{}
 			continue
 		}
-		delete(rf.bindings, target.Value)
+		delete(wc.bindings, target.Value)
 	}
 }
 
 // drivesValue reports whether a range that may be empty drives an
 // assignment's value: any range the value iterates, apart from a range
 // literal it assigns whole.
-func (rf *rangeFlow) drivesValue(value ast.Expression) bool {
+func (wc *writeClassifier) drivesValue(value ast.Expression) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
-		return rf.drivesAny(ast.ExprChildren(v))
+		return wc.drivesAny(ast.ExprChildren(v))
 	case *ast.CallExpression:
-		return rf.drivesAny(v.Arguments)
+		return wc.drivesAny(v.Arguments)
 	}
-	return rf.drives(value)
+	return wc.drives(value)
 }
 
 // drives reports whether expr iterates a range that may be empty. Every range
 // in it is iterated, except inside an array literal, which settles its cells
 // itself. Only a range literal with constant, nonempty bounds always runs.
-func (rf *rangeFlow) drives(expr ast.Expression) bool {
+func (wc *writeClassifier) drives(expr ast.Expression) bool {
 	switch e := expr.(type) {
 	case *ast.ArrayLiteral:
 		return false
 	case *ast.RangeLiteral:
 		return !rangeLiteralGuaranteedNonEmpty(e)
 	case *ast.Identifier:
-		return rf.isRangeBinding(e.Value)
+		return wc.isRangeBinding(e.Value)
 	case *ast.StringLiteral:
 		// A marker iterates the range it names, whether it formats the range
 		// or uses it as a width or precision.
-		return slices.ContainsFunc(formatMarkerNames(e.Token.Literal, rf.isDefined), rf.isRangeBinding)
+		return slices.ContainsFunc(formatMarkerNames(e.Token.Literal, wc.isDefined), wc.isRangeBinding)
 	}
-	return rf.drivesAny(ast.ExprChildren(expr))
+	return wc.drivesAny(ast.ExprChildren(expr))
 }
 
-func (rf *rangeFlow) drivesAny(exprs []ast.Expression) bool {
-	return slices.ContainsFunc(exprs, rf.drives)
+func (wc *writeClassifier) drivesAny(exprs []ast.Expression) bool {
+	return slices.ContainsFunc(exprs, wc.drives)
 }
 
-func (rf *rangeFlow) isRangeBinding(name string) bool {
-	_, ok := rf.bindings[name]
+func (wc *writeClassifier) isRangeBinding(name string) bool {
+	_, ok := wc.bindings[name]
 	return ok
 }
 
-func (rf *rangeFlow) isDefined(name string) bool {
-	_, ok := rf.defined[name]
-	return ok || rf.cc.isGlobalBinding(name)
+func (wc *writeClassifier) isDefined(name string) bool {
+	_, ok := wc.defined[name]
+	return ok || wc.cc.isGlobalBinding(name)
 }
 
 func templateKey(fn *ast.FuncStatement) funcKey {
