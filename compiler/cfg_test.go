@@ -1259,6 +1259,27 @@ out = F(x)
 			unassigned: []string{"out"},
 		},
 		{
+			// An input's marker takes the specifier after it: %-d left-aligns
+			// p and reads no range.
+			name: "InputMarkerTakesItsSpecifier",
+			code: `out, all = Show(p)
+    d = 0:p
+    all = [d]
+    out = "-p%-d"`,
+		},
+		{
+			// A name defined further down is plain text, so the -d after it is
+			// a marker for the range d.
+			name: "LaterNameIsText",
+			code: `out, all, later = Late(p)
+    d = 0:p
+    all = [d]
+    out = "-q%-d"
+    q = p + 1
+    later = q`,
+			unassigned: []string{"out"},
+		},
+		{
 			// A && fills its right operand's targets.
 			name: "AndTakesRightOperandSlots",
 			code: `a, b = Pair(x)
