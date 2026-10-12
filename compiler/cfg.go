@@ -474,6 +474,7 @@ func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}
 			writes = append(writes, textWrite{definite: definite, holdsRange: isRange})
 		}
 	}
+
 	return writes, true
 }
 
@@ -544,6 +545,7 @@ func (cfg *CFG) drives(expr ast.Expression, ranges map[string]struct{}) bool {
 				return true
 			}
 		}
+
 		return false
 	}
 	return cfg.drivesAny(ast.ExprChildren(expr), ranges)
@@ -555,6 +557,7 @@ func (cfg *CFG) drivesAny(exprs []ast.Expression, ranges map[string]struct{}) bo
 			return true
 		}
 	}
+
 	return false
 }
 
