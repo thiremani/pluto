@@ -24,13 +24,6 @@ type Script struct {
 	Root *FuncInfo
 }
 
-type cfgDiagnosticKey struct {
-	fileName string
-	line     int
-	column   int
-	message  string
-}
-
 func NewScriptCompiler(ctx llvm.Context, name string, program *ast.Program, cc *CodeCompiler) *ScriptCompiler {
 	compiler := NewCompiler(ctx, cc.Compiler.MangledPath, cc)
 	script := &Script{
@@ -62,8 +55,6 @@ func (sc *ScriptCompiler) Compile() []*token.CompileError {
 
 	cfg := NewCFG(sc.Compiler.CodeCompiler)
 	cfg.AnalyzeScript(sc.Program.Statements, sc.Script.Root.StatementEffects)
-	directCallees, _ := collectSpecializationCallEdges(sc.Compiler, sc.ScriptMangled, sc.Program.Statements)
-	cfg.Errors = replaySpecializationCFG(sc.Compiler, directCallees, cfg.Errors)
 	if len(cfg.Errors) > 0 {
 		return cfg.Errors
 	}
@@ -100,57 +91,5 @@ func (sc *ScriptCompiler) compileStatements() {
 			}
 		}
 		c.compileStatement(stmt)
-	}
-}
-
-// replaySpecializationCFG reports the settled dataflow diagnostics of every
-// specialization the script reaches, root-first and depth-first in source
-// order, deduplicated by location and message. A body is analyzed once per
-// type specialization at settlement, independent of its callers: sharing an
-// input with an output only adds reads, so it can never make a body invalid,
-// and a body must be valid without it.
-func replaySpecializationCFG(compiler *Compiler, roots []string, errors []*token.CompileError) []*token.CompileError {
-	visited := make(map[string]struct{})
-	reported := make(map[cfgDiagnosticKey]struct{}, len(errors))
-	for _, compileError := range errors {
-		reported[cfgDiagnosticKeyFor(compileError)] = struct{}{}
-	}
-
-	for _, mangled := range roots {
-		errors = replaySpecializationCFGNode(compiler, mangled, visited, reported, errors)
-	}
-
-	return errors
-}
-
-func replaySpecializationCFGNode(compiler *Compiler, mangled string, visited map[string]struct{}, reported map[cfgDiagnosticKey]struct{}, errors []*token.CompileError) []*token.CompileError {
-	if _, seen := visited[mangled]; seen {
-		return errors
-	}
-	visited[mangled] = struct{}{}
-
-	info := compiler.FuncCache[mangled]
-	for _, compileError := range info.CFGResult.Errors {
-		key := cfgDiagnosticKeyFor(compileError)
-		if _, seen := reported[key]; seen {
-			continue
-		}
-
-		reported[key] = struct{}{}
-		errors = append(errors, compileError)
-	}
-	for _, callee := range info.CFGResult.DirectCallees {
-		errors = replaySpecializationCFGNode(compiler, callee, visited, reported, errors)
-	}
-
-	return errors
-}
-
-func cfgDiagnosticKeyFor(compileError *token.CompileError) cfgDiagnosticKey {
-	return cfgDiagnosticKey{
-		fileName: compileError.Token.FileName,
-		line:     compileError.Token.Line,
-		column:   compileError.Token.Column,
-		message:  compileError.Msg,
 	}
 }

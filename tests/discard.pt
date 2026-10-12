@@ -5,4 +5,5 @@ tag = mkTag(v)
     tag = "tag-v"
 
 res = maybeStr(k)
+    res = ""
     res = k > 0 "big" ⊕ "value"

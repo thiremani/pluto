@@ -3,4 +3,5 @@
 # observes the replacement even though its expression produces a static string.
 out, echo = RefineEcho(s, x)
     out = "static"
+    echo = ""
     echo = x > -1 s ⊕ "!"

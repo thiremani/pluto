@@ -942,12 +942,12 @@ func (c *Compiler) structFormatArgs(s *Symbol) (fmtStr string, args []llvm.Value
 	return
 }
 
-// formatMarkerIdentifiers returns the identifiers read by resolved markers in
-// source order, separating main-marker identifiers from dynamic
-// width/precision identifiers. A main marker formats its value whatever the
-// type, while a specifier operand is consumed as a number, so only specifier
-// identifiers can turn a named Range into an iteration driver.
-func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, specs []string) {
+// formatMarkerNames returns the identifiers read by resolved markers in the
+// order they appear: each marker's value, then its dynamic width and
+// precision operands. Every one of them iterates a named Range, so this order
+// is the order of the string's drivers.
+func formatMarkerNames(value string, isDefined func(string) bool) []string {
+	var names []string
 	runes := []rune(value)
 	for i := 0; i < len(runes); i++ {
 		if runes[i] == '\\' {
@@ -962,7 +962,7 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, 
 		if !isDefined(mainID) {
 			continue
 		}
-		mains = append(mains, mainID)
+		names = append(names, mainID)
 
 		if end >= len(runes) || runes[end] != '%' {
 			i = end - 1
@@ -971,16 +971,16 @@ func formatMarkerIdentifiers(value string, isDefined func(string) bool) (mains, 
 		spec, _ := parseSpecifierSyntax(token.Token{}, value, runes, end)
 		for _, specID := range spec.ids {
 			if isDefined(specID.name) {
-				specs = append(specs, specID.name)
+				names = append(names, specID.name)
 			}
 		}
 		i = spec.end - 1
 	}
-	return mains, specs
+	return names
 }
 
-// hasValidMarkers checks if a format string contains a resolved marker.
+// hasValidMarkers checks if a format string contains a resolved marker. A
+// resolved marker names its value first, so any name means one resolved.
 func hasValidMarkers(value string, isDefined func(string) bool) bool {
-	mains, _ := formatMarkerIdentifiers(value, isDefined)
-	return len(mains) > 0
+	return len(formatMarkerNames(value, isDefined)) > 0
 }

@@ -17,9 +17,10 @@ u = 0:b:d
 
 [i], [j], [k], [u]
 
-# Bare descriptors print as values on one line; computations over distinct
-# drivers still form a cartesian iteration domain.
+# Range literals print as written, on one line. Range names iterate, bare or
+# in a computation, and distinct names form a cartesian iteration domain.
 p = 0:2
 q = 2:4
-"Descriptors", p, q
+"Descriptors", 0:2, 2:4
+"Names", p, q
 "Cartesian", p + 0, q + 0

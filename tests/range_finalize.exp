@@ -1,23 +1,34 @@
-AscendingCopy: [0 1 2 3 4]
-DescendingCopy: [6 4 2]
-EmptyRangeFresh: []
-EmptyRangeExisting: [0 1] -> []
+AscendingLast: 4 [0 1 2 3 4]
+DescendingLast: 2
+EmptyNameFresh: 0
+EmptyNameExisting: 91
 EmptyComputeFresh: 0
 EmptyComputeExisting: 91
 CallFinal: 20
-ReturnedRange: [2 3 4]
-MarkerFinal: Marker 0:3
-MarkerDescriptor 0:3
+BuiltRange: [2 3 4]
+MarkerFinal: Marker 2
+MarkerEach 0
+MarkerEach 1
+MarkerEach 2
 MarkerWidthFinal: |  7|
 MarkerWidthEach: |7|
 MarkerWidthEach: | 7|
 MarkerWidthEach: |  7|
+MarkerOrder: |1| 7
+MarkerOrder: |1| 8
+MarkerOrder: | 1| 7
+MarkerOrder: | 1| 8
+MarkerOrderCollected: ["|1| 7" "|1| 8" "| 1| 7" "| 1| 8"]
 LiteralDescriptor 0:3
 DrivenMarker i=0 0
 DrivenMarker i=1 1
 DrivenMarker i=2 2
 EmptyDescriptor: 3:3
 SteppedDescriptor: 6:0:-2
+SteppedName: 6
+SteppedName: 4
+SteppedName: 2
+AfterEmptyName
 SimultaneousRange: 2 77
 SimultaneousArray: 30 88
-SimultaneousString: Marker 0:3 old
+SimultaneousString: Marker 2 old

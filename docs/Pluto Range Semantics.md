@@ -2,24 +2,24 @@
 
 ## Core Model
 
-A `Range<T>` is a descriptor value. A range literal constructs one, and a
-complete Range-valued assignment copies it:
+A `Range<T>` is a descriptor value, and a range literal is the only way to
+construct one (#146):
 
 ```pluto
 i = 0:5
-j = i
-k = (i)
+k = (0:5)
 ```
 
-`i`, `j`, and `k` contain equal descriptor values with the same captured
-bounds. Parentheses are transparent. Each binding is nevertheless a distinct
-driver identity: consuming `i` and `j` together forms a cartesian domain,
-while repeated uses of `i` share one loop.
+`i` and `k` hold equal descriptor values with the same captured bounds;
+parentheses are transparent. Each binding is a distinct driver identity:
+consuming `i` and `k` together forms a cartesian domain, while repeated uses
+of `i` share one loop.
 
-Using a Range in an operation creates a ranged computation. `Ranged<T>` is a
-useful description of that expression effect, not a storable source type. An
-operation produces ordered per-iteration values; an individual yield may be a
-scalar or an owned subarray.
+Every use of a range name creates a ranged computation, a bare one included:
+`j = i` iterates `i` and keeps its final yield, exactly as `j = i + 0` does.
+`Ranged<T>` is a useful description of that expression effect, not a storable
+source type. An operation produces ordered per-iteration values; an individual
+yield may be a scalar or an owned subarray.
 
 There are two explicit closing steps for a ranged computation:
 
@@ -27,22 +27,28 @@ There are two explicit closing steps for a ranged computation:
 2. The root expression of an assignment closes any remaining outer iteration
    by taking the final yielded value in iteration order.
 
-A Range descriptor assignment is not a closing step and does not iterate.
-This keeps descriptor copying, collection, and final-value selection separate.
+A range literal assigned on its own is not a closing step and does not
+iterate: it constructs the descriptor.
 
-## Migration From Bare-Range Finalization
+## Migration From Descriptor Copies
 
-Previously, assigning a bare named Range kept its final yield. Code that relied
-on that behavior should use an operation such as `last = i + 0`; for
-`i = 0:5`, `last` becomes `4`, while `copy = i` now copies the descriptor.
+Before #146, assigning a bare named Range (`copy = i`) copied the descriptor,
+and printing a range name or naming it in a main interpolation marker showed
+the descriptor. A range name now iterates wherever it is used, which restores
+the earlier bare-range finalization:
 
-This change can be silent for a fresh destination. A later call, index, or
-collector consumes the copied Range and runs its whole domain, while print and
-interpolation format the descriptor itself. Assigning a Range
-to an existing scalar is instead rejected as a type-changing reassignment.
-Descriptor copies are unconditional writes and participate in the ordinary
-dead-store checks. Range-indexed expressions such as `last = data[i]` are
-unchanged because indexing is already a ranged computation.
+- `copy = i` keeps `i`'s final yield. For a second driver over the same
+  domain, construct another literal (`j = 0:5`), keeping the bounds in names
+  if they can change in between. Assigning a range name to a binding that
+  holds a Range is a type-changing reassignment.
+- Printing a range name prints once per yield, two distinct names print their
+  cartesian product, and an empty range prints nothing. `[i]` lists the values
+  on one line, and a range literal printed on its own shows as written.
+- A main marker naming a range, as in `"v=-i"`, runs once per yield.
+
+These changes are silent where a program still compiles. Range-indexed
+expressions such as `last = data[i]` are unchanged because indexing is already
+a ranged computation.
 
 ## Ranges And Drivers
 
@@ -61,13 +67,16 @@ The bound values are captured when the range is constructed, so later changes
 to the source variables do not mutate the existing range. Functions that need
 those bounds as data should currently receive the scalar values explicitly.
 
-Range is nameable and copyable, but is not yet a fully first-class container
-element. Arrays and tables contain scalar/string elements rather than Range
+A Range can be named but not copied, since assigning a range name iterates
+it, and it is not yet a fully first-class container element. Arrays and
+tables contain scalar/string elements rather than Range
 descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
 function likewise consumes it as a driver rather than passing inert metadata.
-A function may return a Range descriptor to a binding, but anonymous
-Range-returning expressions are not yet accepted uniformly by every consuming
-context; bind the result before consuming it.
+A function cannot return a Range either: an output assigned one is rejected
+at the function's definition (#146). The function returns the bounds instead,
+and the caller builds the range: `lo, hi = Bounds(n)`, then `r = lo:hi`. If
+the range was assigned conditionally, the rebuild keeps the condition:
+`r = n > 0 lo:hi`.
 
 Range-indexed arrays follow the same rule:
 
@@ -85,28 +94,28 @@ surrounding expression, finalized at an assignment root, or materialized by
 final value can itself be an array. This ownership is semantic: copy-on-write
 is permitted, but an escaping view into the source is not.
 
-Assigning an empty Range descriptor still performs a normal write. Consuming
+Assigning an empty range literal still performs a normal write. Consuming
 an empty Range produces no yields: a fresh ranged-computation destination
 retains its type's zero value (an empty array for a subarray result), while an
 existing destination is unchanged. Outside `[]`, an out-of-bounds selection
 point yields nothing, so the last valid selected value wins. Inside `[]`,
 failed cells are zero-filled to preserve collection shape, as described below.
 
-Print is a sink, not an operation: a bare Range argument or main marker
-formats the descriptor as `start:stop` (or `start:stop:step`), exactly as the
-value it is. Computations still drive the print loop, and a bare name bound as
-a driver by a sibling computation prints its per-iteration scalar. A width or
-precision marker consumes its Range operand as a number, so that operand still
-drives; see
+Print is a sink: a bare range literal argument formats its descriptor as
+`start:stop` (or `start:stop:step`), exactly as written. Any other argument
+naming a range, bare or in a computation, drives the print loop, and so does a
+marker naming one, whether it formats the value or uses it as a width or
+precision; see
 [Pluto String and Formatting Semantics](Pluto%20String%20and%20Formatting%20Semantics.md#interpolation-markers)
 for the formatting rules and examples. For ordinary print arguments:
 
 ```pluto
 i = 0:2
 j = 2:4
-i, j            # one line: 0:2 2:4
-i + 0, j + 0    # cartesian: 0 2 / 0 3 / 1 2 / 1 3
-i, Square(i)    # i is driven: 0 0 / 1 1
+0:2, 2:4        # one line: 0:2 2:4
+i, j            # cartesian: 0 2 / 0 3 / 1 2 / 1 3
+i + 0, j + 0    # the same
+i, Square(i)    # one shared loop: 0 0 / 1 1
 ```
 
 Distinct drivers nest in source order, so collecting over two ranges walks
@@ -145,15 +154,13 @@ as in `F(i, j)`, still form their normal cartesian domain. These choices do not
 change the results visible to source code.
 
 Function outputs are staged independently before the call. A body that runs
-writes every output (#123, decided and not yet implemented), so a destination
-keeps its value only when no invocation is admitted: the driver is empty, an
-argument fails at every point, or the statement's gate is false. Zero
-iterations always mean no assignment, wherever the loop is placed. Today a
-skipped condition inside the body can also leave an output unwritten, and its
-staged value is preserved. At
-representation boundaries, such as a static string result being assigned
-into an owned-string destination, the callee receives its declared zero value
-and the caller commits the adapted result only when the callee writes it.
+writes every output (#123), so a destination keeps its value only when no
+invocation is admitted: the driver is empty, an argument fails at every
+point, or the statement's gate is false. Zero iterations always mean no
+assignment, wherever the loop is placed. At representation boundaries, such as
+a static string result being assigned into an owned-string destination, the
+callee receives its declared zero value and the caller commits the adapted
+result once the callee writes it.
 
 Examples:
 
@@ -458,8 +465,8 @@ x, y = i < 2 [1], j + 0
 The statement condition `i < 2` is shared.
 `x` collects once for each admitted `i`, producing `[1 1]`.
 `y`'s operation uses its own local `j` driver inside that shared gate and ends
-with the final result `1`. A bare `j` in this position would instead copy the
-Range descriptor because only `i` belongs to the active statement domain.
+with the final result `1`. A bare `j` in this position iterates the same way
+and also ends with `1`.
 
 Likewise:
 
@@ -481,11 +488,11 @@ the statement condition opens that outer loop first.
 Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
 
-Consequently, `filtered = i > 2 i` keeps the final admitted scalar, while
-`copy = outer > 2 i` copies `i` when only `outer` belongs to the statement
-domain. If the statement domain is empty, it performs no write: an existing
-Range destination stays unchanged and a fresh one keeps the zero Range
-descriptor.
+Consequently, `filtered = i > 2 i` keeps the final admitted scalar, and
+`cross = outer > 2 i` iterates `i` inside each admitted `outer` point and
+keeps the final yield. If the statement domain is empty, it performs no
+write: an existing destination stays unchanged and a fresh one keeps its zero
+value.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
 shared scalar update step, but each RHS has its own local yield outcome. If one

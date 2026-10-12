@@ -39,4 +39,5 @@ a, b = MixK(x)
     b = x + 10
 
 s = Sum3(xs)
-    s = xs[0] + xs[1] + xs[2]
+    t = xs[0] + xs[1] + xs[2]
+    s = t

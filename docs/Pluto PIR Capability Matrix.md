@@ -35,8 +35,7 @@ combination migratable. A fallback that resolves every failure leaves the
 argument `MustYield` and outside this rule, though the router may still defer
 it until its node is supported.
 
-**After #123 (decided; lands before Step 4's call slice).** A body that runs
-writes every output, so every non-ranged callee is all-`MustWrite`, and
+**After #123.** A body that runs writes every output, so every non-ranged callee is all-`MustWrite`, and
 any-`MayWrite` remains only where a possibly empty callee-owned domain can
 leave the outputs unwritten (Step 7). The split rows 5c, 6, 6b, 8b, 35d and
 36d then cut over in Step 4 whenever their arguments are `MustYield`, and
@@ -116,7 +115,7 @@ two together rather than treating any single row as a deletion trigger.
 | 7e | none | checked, conditional (fallback), ranged | scalar | local | RHS-local | — | **S (decided; semantics doc)** | 7 |
 | 7f | none | checked, conditional (fallback), collector | scalar | local | collector-local | — | **S (decided; semantics doc)** | 8 |
 | 8 | none | ordinary | Range descriptor | local | — (no domain) | — | R | 3 |
-| 8b | none | call | Range descriptor | local | — (no domain) | split: all-`MustWrite` outputs and `MustYield` arguments → 4, otherwise → 6 | R | 4, 6 |
+| 8b | none | call | Range descriptor | local | — | rejected at the definition: a function cannot return a range (#146) | — | — |
 | 9 | none | ranged | scalar, self-ref | local | RHS-local | — | R | 7 |
 | 10 | none | ranged, checked | scalar | local | RHS-local | — | S | 7, fast path 10 |
 | 11 | none | collector, ranged | scalar, heap | local | collector-local | — | S | 8 |
@@ -163,7 +162,7 @@ two together rather than treating any single row as a deletion trigger.
 - **4** — `commitAssignments` copy/move marking; **now planned**: `pir.Elaborate` promotes a borrow to transfer when its owner is replaced in the group and copies every later borrow of that owner. *Tests:* `mem/mem.spt:64,78`; goldens `TestPlanGoldenHeapSwap`, `TestPlanGoldenDuplicateSource`, `TestPlanGoldenReplaceAndDiscard`. *Helpers:* `markCopyRequirements`, `freeExprOldValues`, `deepCopyIfNeeded`
 - **5** — per-slot sink: never bound, never typed (`isDiscard`), CFG-exempt. *Tests:* `discard`; the bare Range-descriptor discard is pinned by `TestPlanGoldenRangeDiscard` in `compiler/pir_test.go`
 - **5b** — per-slot sink; a discarded temporary is dropped (`drop`), a discarded named value stays borrowed; **now planned** for ordinary heap expressions: the derived `drop %tN` appears in expanded PIR. *Tests:* `discard`; golden `TestPlanGoldenReplaceAndDiscard`
-- **5c** — discarded call outputs keep their yield/write validity for cleanup, and the whole-call rule holds even when every output is discarded. The Step 1 inventory sent any-`MayWrite` calls to Step 6; after #123 no non-ranged callee may skip a write, so the only deferral left here is a call whose argument can fail, in Step 6. A possibly empty callee-owned domain is a ranged call, handled in Step 7 (row 5f). *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); any-`MayWrite` heap (`maybeStr`, writing and non-writing paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; a discarded call whose argument can fail, such as `_ = mkTag(arr[9])`
+- **5c** — discarded call outputs keep their yield/write validity for cleanup, and the whole-call rule holds even when every output is discarded. The Step 1 inventory sent any-`MayWrite` calls to Step 6; after #123 no non-ranged callee may skip a write, so the only deferral left here is a call whose argument can fail, in Step 6. A possibly empty callee-owned domain is a ranged call, handled in Step 7 (row 5f). *Tests:* `discard`: all-`MustWrite` multi-output, both scalar (`FOuter`) and heap (`twoStr`); a heap callee that starts from a default and overrides it under a gate (`maybeStr`, both paths). *Missing:* all-`MustWrite` direct-scalar (single-output) call; a discarded call whose argument can fail, such as `_ = mkTag(arr[9])`
 - **5d** — a blank needs no seed on the skip path, so `ensureSeededDest` leaves it unbound. *Tests:* `discard` (failed and admitted, scalar and heap element). *Helpers:* `commitAssignmentsPerExpr`
 - **5e** — `commitConditionalOutputs` frees the blank's temp instead of binding it, on both the admitted and skipped paths. *Tests:* `discard`: all-`MustWrite` heap multi-output call (`twoStr`), gate admitting and rejecting. *Missing:* scalar-valued and ordinary-RHS gated blanks; a gated call to a callee that starts from a default, the #123 form of a conditional callee. *Helpers:* `compileCondStatement`
 - **5f** — `bindRangedTempOutputs` skips blanks, so ranged staging leaves no transient binding; the discarded value is released per iteration. *Tests:* `discard`: `_ = mkTag(i)` (single output), `_, _ = twoStr(mkTag(i), "z")` (multi-output). *Missing:* both fixtures are heap-valued, so the all-`MustWrite` scalar ranged call is uncovered, as is a call over a possibly empty range with its outputs discarded. *Helpers:* `compileAssignments`
@@ -177,8 +176,8 @@ two together rather than treating any single row as a deletion trigger.
 - **7c** — comparison- and call-propagated fallback: `arr[oob] > 0 \|\| -1`, `Id(arr[oob]) \|\| -1` — the failure travels through a propagator before the resolver. *Missing:* regressions when implemented. *Helpers:* condLHS spine
 - **7e** — ranged checked fallback: the fallback resolves per iteration inside the loop nest. *Missing:* regressions when implemented. *Helpers:* condLHS spine, ranged staging
 - **7f** — collector-cell fallback: in `[arr[oob] \|\| -1]` the `\|\|` resolves before the cell's zero-fill. *Missing:* regressions when implemented. *Helpers:* collector rewrite, condLHS spine
-- **8** — plain value copy; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS. *Tests:* `range_finalize:2-21` (literal, identifier copy, empty, reassign), `compiler/solver_test.go`. *Helpers:* `compileAssignments`
-- **8b** — call lowering + indirect-return ABI, not descriptor copying. *Tests:* `range_finalize:38` (`makeRange`), `mem/gate_heap`. *Missing:* a Range return that starts from a default and is overwritten conditionally, the form #123 requires of a conditional output
+- **8** — a range literal assigned on its own constructs the descriptor; the solver clears `Ranges`/`HasRanges`, so this is not an active ranged RHS. A bare range name iterates instead (#146), so `j = i` is a ranged RHS (row 9), finalized by `compileAssignedValue`. *Tests:* `range_finalize` (stepped and empty literals), golden `TestPlanGolden` (`r = 0:10:2`), `TestBareRangeNamesIterate`. *Helpers:* `compileAssignments`
+- **8b** — no longer arises: a function cannot return a range (#146), so an output assigned one is rejected at its definition. A function returns the bounds instead (`range_finalize`'s `rangeBounds`, `mem/gate_heap`'s `mkBounds`), and the caller's range literal is row 8. *Tests:* `TestFunctionsCannotReturnRanges`
 - **9** — `compileAssignments` → expression loop nest (passes nil conditions). *Tests:* `math/range_expr`, `math/range.spt`, `range_shadow.spt`, `cond/domain_activation`. *Helpers:* `compileAssignments`, `withCollectorPreparedLoopNest`, `compileCondOperands`
 - **10** — as #9 + `withLoopNestVersioned` affine probe. *Tests:* `array/affine_bounds_stmt`, `math/affine_bounds_expr`. *Helpers:* affine decision helpers
 - **11** — `compileArrayExpression` → `compileArray` → `withCollectorDomain`. *Tests:* `range`, `array/array_capture`, `mem/gate_heap`. *Helpers:* collector rewrite
@@ -187,11 +186,11 @@ two together rather than treating any single row as a deletion trigger.
 - **13** — callee body iterates: `compileCallInner` for direct returns, destination-seeded staged outputs for indirect and multi-output. *Tests:* `math/acc.spt`, `math/acc_desc`, `array/array_range.spt:89-96` (heap via indirect ABI)
 - **14** — ordinary function-body statement; a direct `I64`/`F64` output is an SSA value with **no** runtime write flag. *Tests:* `math/acc.pt`
 - **14i** — ordinary function-body statement; an indirect output has a runtime write flag set on commit. *Tests:* `mem/mem_alias_refine.pt`, `mem/mem.pt`
-- **14a** — gated function-body statement: the output is conditionally written, which is what makes the callee `MayWrite` at its boundary (`IsEven`/`IsOdd` conditionally write their indirect output pair). Under #123 such a body writes a default first, so the gate no longer weakens the boundary. *Tests:* `math/math.pt`, `math/rec.pt`, `mem/mem_cmp_lhs.pt`. *Helpers:* `compileCondStatement`
+- **14a** — gated function-body statement after a default: under #123 a body writes its output first and overrides it under the gate (`IsEven`/`IsOdd` start from their base values), so the gate no longer weakens the boundary. *Tests:* `math/math.pt`, `math/rec.pt`, `mem/mem_cmp_lhs.pt`. *Helpers:* `compileCondStatement`
 - **14c** — a body-local collector domain, i.e. a collector driven by a range created inside the body rather than by a parameter. *Missing:* **uncovered**: `cache_reuse.pt` uses fixed literals, `array_scalar_assign.pt` is parameter-driven (row 14b). *Helpers:* collector rewrite
 - **14b** — body driven by a `Range`/`ArrayRange` **parameter**, whose domain wraps the whole body and may execute zero times — this is what weakens the output to `MayWrite` at the boundary. *Tests:* `array/array_range.pt`
 - **14e** — as 14b with an inner collector: `ArraySetAdd(1:4)` runs a function-owned outer domain around a collector-local `[0:i]`, so full cutover needs collectors. *Tests:* `array/array_scalar_assign.pt` (`ArraySetAdd`), `array/array_func.pt`. *Helpers:* collector rewrite
-- **14d** — a range created **inside** the body drives one statement; the output is still `MayWrite` at the boundary because that local range can be empty — only the blanket function-owned weakening is absent. Under #123 the output needs a default before that statement. *Tests:* `math/dependent_range.pt` (`j = (i + 1):n`)
+- **14d** — a range created **inside** the body drives one statement, which may then run no iteration. Under #123 the output needs a default before that statement, or the statement writes a local first: `UpperTriRowTail` assigns `t = a[i * n + j]` under `j = (i + 1):n`, then `res = t`, and `DoubleLast` starts from `prev` before a range from a call. *Tests:* `math/dependent_range.pt`
 - **15** — `compileCondStatement`. *Tests:* `assign`, `initialize`, `zero_val`, `partial_returns`. *Helpers:* `compileCondStatement`
 - **16** — `compileCondStatement` + `prePromoteConditionalCallArgs`. *Tests:* `cond_copy`, `mem/mem_str.spt`, `math/math.pt`. *Helpers:* staging family
 - **17** — `compileCondStatement` + `aliasCondDests`. *Tests:* `tests/cond/expr_forms`. *Helpers:* `aliasCondDests`
@@ -241,7 +240,7 @@ two together rather than treating any single row as a deletion trigger.
 
 - **7d** — print-position fallback: `arr[oob] \|\| -1, val1` emits `-1 val1` — the fallback resolves before the invocation boundary, letting the whole line print. *Missing:* regressions when implemented, incl. a heap-valued print fallback. *Helpers:* condLHS spine
 - **29** — `compilePrintStatement` direct arm. *Tests:* `helloworld`, `str`, `1.2-report`. *Helpers:* `printAllExpressions`, `compilePrintStatement`
-- **29b** — non-ranged direct call argument in print. Today an unwritten result prints its seed; after #123 a call that runs writes every output, so no `{value, didWrite}` variant is needed. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
+- **29b** — non-ranged direct call argument in print. A call that runs writes every output (#123), so no `{value, didWrite}` variant is needed. *Tests:* `math/print_func.spt:4` (`Square(3)`). *Missing:* a call argument whose own argument fails
 - **29c** — non-ranged indirect call argument in print. *Missing:* **uncovered**: multi-output and heap call results printed directly
 - **30** — `compileCondOperands` ANDs every argument's conditions and gates the one `printAllExpressions` call. *Tests:* `mem/mem_cmp_lhs.spt`, `array/oob_print`. *Missing:* side-effecting or owned-heap sibling of a failed conditional (add with Step 6). *Helpers:* `compileCondOperands`
 - **31** — no active bounds guard: prints the materialized zero today; Step 6 makes an unresolved OOB suppress the complete invocation and newline. *Tests:* `array/oob_print`. *Missing:* a suppressed invocation whose arguments own heap temporaries (add with Step 6). *Helpers:* §5
@@ -284,7 +283,7 @@ clock.
 | 27 | Ranged gate whose value is a heap-returning call — the per-iteration free-before-overwrite path had no test | `tests/mem/gate_heap/` (leak-checked) |
 | 11, 23, 24 | Empty and fully-rejected domains: what a collector and a carry commit | `tests/cond/domain_activation.spt` |
 | 5 | Blank targets: **zero** coverage in the entire corpus before this step | `tests/discard.spt` |
-| 11, 23 | A function-returned `Range` driving a collector domain and a shared statement gate | `tests/mem/gate_heap/` |
+| 11, 23 | A range built from a function's returned bounds, driving a collector domain and a shared statement gate | `tests/mem/gate_heap/` |
 | 30, 31 | Out-of-bounds and failed-conditional print arguments | `tests/array/oob_print.spt` |
 
 Confirmed by these fixtures and now normative in the plan (plan §7, plan §10):
@@ -375,10 +374,10 @@ to a **gated print** (`arr[oob] val1, val2`) — scheduled syntax that
 does not parse today (`PrintStatement` has no gate field) and lands in its
 own required PR before Step 6, with semantics-doc entry and capability rows.
 
-An unwritten direct-return argument cannot suppress the invocation today,
-since a direct `I64`/`F64` result carries no validity bit, so it prints its
-seed. #123 (decided) removes the case instead of adding a
-`{value, didWrite}` variant: a call that runs writes every output (plan §15).
+A direct `I64`/`F64` result carries no validity bit, and none is needed:
+#123 removed the unwritten direct return instead of adding a
+`{value, didWrite}` variant, since a call that runs writes every output
+(plan §15).
 
 ## 6. Correction to the plan's deletion order
 

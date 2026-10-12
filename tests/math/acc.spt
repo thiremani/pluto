@@ -22,6 +22,13 @@ res = 10
 res = ConditionalAcc(res, -2:3)
 res
 
+kept = 0
+kept = Filter(kept, 1:5)
+"FilterShared: -kept"
+
+fresh = Filter(0, 1:5)
+"FilterUnshared: -fresh"
+
 sum = 10
 sum, last = AccPair(sum, 1:4)
 sum, last

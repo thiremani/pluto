@@ -42,11 +42,10 @@ b = a + 2 * 3
 a, b = b, a
 _ = 7
 r = 0:10:2
-s = r
 a, b
-s`)
+r`)
 
-	require.Equal(t, []string{"assign a", "assign b", "assign a, b", "assign _", "assign r", "assign s"}, planLabels(plans))
+	require.Equal(t, []string{"assign a", "assign b", "assign a, b", "assign _", "assign r"}, planLabels(plans))
 
 	require.Equal(t, `statement assign a, b
     source "a, b = b, a"
@@ -89,23 +88,14 @@ s`)
     commit
         r <- %t0
 `, plans[4].Render(false))
-
-	require.Equal(t, `statement assign s
-    source "s = r"
-
-    execute
-        %t0 = eval I64:I64:I64 r
-
-    commit
-        s <- %t0
-`, plans[5].Render(false))
 }
 
 // TestPlanRouterRejections pins the capability boundary: statements with
-// gates, conditional values, checked accesses, ranged RHS, calls, and
-// block-layout literals keep their legacy lowering, while ordinary heap
-// values — both string flavours, concatenations, inline array literals —
-// plan alongside scalars and Range descriptors.
+// gates, conditional values, checked accesses, ranged RHS (a bare range name
+// included, since it iterates), calls, and block-layout literals keep their
+// legacy lowering, while ordinary heap values — both string flavours,
+// concatenations, inline array literals — plan alongside scalars and range
+// literals.
 func TestPlanRouterRejections(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -124,6 +114,7 @@ arr = [1 2]
 z = arr[0]
 q = 0:3
 w = q + 1
+qc = q
 _ = 0:3
 d = Twice(x)
 m = [
@@ -136,7 +127,7 @@ tbl = [
 ]
 rc = [q]
 cc = [x > 2]
-g, y, sg, shc, z, w, d, m, tbl, rc, cc`)
+g, y, sg, shc, z, w, qc, d, m, tbl, rc, cc`)
 
 	require.Equal(t, []string{"assign x", "assign y", "assign s", "assign sg", "assign sh", "assign shc", "assign arr", "assign q", "assign _"}, planLabels(plans))
 }

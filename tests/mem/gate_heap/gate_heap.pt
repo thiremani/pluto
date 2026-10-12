@@ -1,5 +1,5 @@
 tag = mkTag(v)
     tag = "tag-v"
 
-r = mkRange(n)
-    r = 0:n
+start, stop = mkBounds(n)
+    start, stop = 0, n
