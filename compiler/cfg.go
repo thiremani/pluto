@@ -291,7 +291,7 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 
 		letWrites, ok := cfg.classifyWrites(let, ranges)
 		if !ok {
-			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.CodeCompiler.valueCount(let.Value)))
+			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.valueCount(let.Value)))
 			continue
 		}
 		cfg.rejectRangeOutputs(outputs, let, letWrites)
@@ -308,7 +308,7 @@ func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
 	for _, expr := range exprs {
 		switch e := expr.(type) {
 		case *ast.CallExpression:
-			if _, found := cfg.CodeCompiler.callTemplate(e); !found {
+			if _, found := cfg.callTemplate(e); !found {
 				cfg.addError(e.Token, undefinedFunction(e.Function.Value))
 			}
 		case *ast.InfixExpression:
@@ -321,8 +321,7 @@ func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
 // rejectMisalignedOperands reports an operator whose sides yield counts the
 // solver rejects.
 func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
-	cc := cfg.CodeCompiler
-	left, right := cc.valueSlots(infix.Left), cc.valueSlots(infix.Right)
+	left, right := cfg.valueSlots(infix.Left), cfg.valueSlots(infix.Right)
 	switch {
 	case !operandsLineUp(infix, left, right) && infix.IsLogicalAnd():
 		cfg.addError(infix.Token, logicalAndArityMismatch(left, right))
@@ -458,8 +457,7 @@ type textWrite struct {
 // so the result lines up with its names. Values take targets by their output
 // counts; it reports false when those do not fill the targets.
 func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}) ([]textWrite, bool) {
-	cc := cfg.CodeCompiler
-	if cc.valueCount(let.Value) != len(let.Name) {
+	if cfg.valueCount(let.Value) != len(let.Name) {
 		return nil, false
 	}
 
@@ -470,7 +468,7 @@ func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}
 		// Only a range literal assigned whole holds a range, and it fills one
 		// target.
 		_, isRange := value.(*ast.RangeLiteral)
-		for slot := 0; slot < cc.valueSlots(value); slot++ {
+		for slot := 0; slot < cfg.valueSlots(value); slot++ {
 			writes = append(writes, textWrite{definite: definite, holdsRange: isRange})
 		}
 	}
@@ -569,50 +567,38 @@ func templateKey(fn *ast.FuncStatement) funcKey {
 // solver counts a tuple: a call fills its template's outputs, and an operator
 // its right operand's. An operator whose sides do not line up fills one, as
 // the solver counts it after reporting the mismatch.
-func (cc *CodeCompiler) valueSlots(value ast.Expression) int {
+func (cfg *CFG) valueSlots(value ast.Expression) int {
 	switch v := value.(type) {
 	case *ast.CallExpression:
-		if template, ok := cc.callTemplate(v); ok {
+		if template, ok := cfg.callTemplate(v); ok {
 			return len(template.Outputs)
 		}
 	case *ast.InfixExpression:
-		left, right := cc.valueSlots(v.Left), cc.valueSlots(v.Right)
+		left, right := cfg.valueSlots(v.Left), cfg.valueSlots(v.Right)
 		if operandsLineUp(v, left, right) {
 			return right
 		}
 	case *ast.PrefixExpression:
-		return cc.valueSlots(v.Right)
+		return cfg.valueSlots(v.Right)
 	}
 	return 1
 }
 
 // valueCount counts the values a list of expressions yields, as valueSlots
 // counts each.
-func (cc *CodeCompiler) valueCount(values []ast.Expression) int {
+func (cfg *CFG) valueCount(values []ast.Expression) int {
 	count := 0
 	for _, value := range values {
-		count += cc.valueSlots(value)
+		count += cfg.valueSlots(value)
 	}
+
 	return count
 }
 
 // callTemplate finds a call's template by its name and arity, where an
 // argument counts once for each value it yields.
-func (cc *CodeCompiler) callTemplate(call *ast.CallExpression) (*ast.FuncStatement, bool) {
-	return cc.lookupFuncTemplate(call.Function.Value, cc.valueCount(call.Arguments))
-}
-
-// checkSettledRanges panics when a settled specialization types a binding as
-// a Range where its template's text summary does not, or the reverse: the
-// template checks classified the body's writes from that summary.
-func (cc *CodeCompiler) checkSettledRanges(template *ast.FuncStatement, info *FuncInfo) {
-	bindings := cc.rangeBindings[templateKey(template)]
-	for name, typ := range info.Vars {
-		_, textRange := bindings[name]
-		if textRange != (typ.Kind() == RangeKind) {
-			panic(fmt.Sprintf("internal: %s solves %q as %s, which disagrees with its template's text range summary", info.Sig.Name, name, typ))
-		}
-	}
+func (cfg *CFG) callTemplate(call *ast.CallExpression) (*ast.FuncStatement, bool) {
+	return cfg.CodeCompiler.lookupFuncTemplate(call.Function.Value, cfg.valueCount(call.Arguments))
 }
 
 // templateBody is the structural summary of one template body.

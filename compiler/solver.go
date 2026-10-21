@@ -2630,13 +2630,25 @@ func (ts *TypeSolver) TypeScriptFunc(mangled string, template *ast.FuncStatement
 // with respect to Settled: each is checked against its template's text range
 // summary before any becomes visible as settled.
 func (ts *TypeSolver) settleSpecializationBatch() {
-	cc := ts.ScriptCompiler.Compiler.CodeCompiler
+	rangeBindings := ts.ScriptCompiler.Compiler.CodeCompiler.rangeBindings
 	for _, walked := range ts.walkedFuncs {
-		cc.checkSettledRanges(walked.template, walked.info)
+		checkSettledRanges(rangeBindings[templateKey(walked.template)], walked.info)
 	}
 
 	for _, walked := range ts.walkedFuncs {
 		walked.info.Settled = true
+	}
+}
+
+// checkSettledRanges panics when a settled specialization types a binding as
+// a Range where its template's text summary does not, or the reverse: the
+// template checks classified the body's writes from that summary.
+func checkSettledRanges(textRanges map[string]struct{}, info *FuncInfo) {
+	for name, typ := range info.Vars {
+		_, textRange := textRanges[name]
+		if textRange != (typ.Kind() == RangeKind) {
+			panic(fmt.Sprintf("internal: %s solves %q as %s, which disagrees with its template's text range summary", info.Sig.Name, name, typ))
+		}
 	}
 }
 
