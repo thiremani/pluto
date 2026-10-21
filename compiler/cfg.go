@@ -559,10 +559,6 @@ func (cfg *CFG) drivesAny(exprs []ast.Expression, ranges map[string]struct{}) bo
 	return false
 }
 
-func templateKey(fn *ast.FuncStatement) funcKey {
-	return funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}
-}
-
 // valueSlots counts the targets a value fills, read from the text the way the
 // solver counts a tuple: a call fills its template's outputs, and an operator
 // its right operand's. An operator whose sides do not line up fills one, as

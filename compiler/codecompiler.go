@@ -29,6 +29,10 @@ type funcKey struct {
 	arity int
 }
 
+func templateKey(fn *ast.FuncStatement) funcKey {
+	return funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}
+}
+
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
 	mangledPath := MangleDirPath(modName, relPath)
 	cc := &CodeCompiler{
@@ -67,7 +71,7 @@ func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 				}
 			}
 		case *ast.FuncStatement:
-			key := funcKey{name: s.Token.Literal, arity: len(s.Parameters)}
+			key := templateKey(s)
 			previous, exists := cc.funcTemplates[key]
 			if !exists {
 				cc.funcTemplates[key] = s

@@ -2715,7 +2715,7 @@ func (ts *TypeSolver) TypeBlock(template *ast.FuncStatement, f *FuncInfo) {
 		}
 	}
 
-	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.outputReads[funcKey{name: f.Sig.Name, arity: len(template.Parameters)}]
+	readOutputs := ts.ScriptCompiler.Compiler.CodeCompiler.outputReads[templateKey(template)]
 	for i, id := range template.Outputs {
 		outArg, ok := Get(ts.Scopes, id.Value)
 		if !ok {
