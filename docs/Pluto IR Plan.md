@@ -936,12 +936,13 @@ statements a range drives. A parameter never holds a range, since a range
 argument drives the whole body; no call yields one, since a function cannot
 return a range (an output assigned one is rejected at the definition, #146);
 and struct fields, constants and array elements cannot hold one (`[r]`
-collects `r`'s values). Only a range literal assigned on its own constructs
-one: a range name iterates wherever it is used, so `x = r` keeps `r`'s final
-element just as `x = r * 2` iterates `r` (#146), and a range literal operand
-of `||` and `&&` is iterated too (`n > 0 && 0:5` gives an element). A
-binding therefore holds a range exactly when it is assigned a range literal,
-which a template's own text decides without looking at another template. Every
+collects `r`'s values). A value holds a range when it is a range literal or a
+binding assigned a descriptor (`x = r`, not `x = r * 2`). A range literal or
+binding operand of `||` and `&&` is iterated (`n > 0 && 0:5` gives an
+element). A statement's condition iterates the ranges it names, so its value
+reads them as elements (`kept = s > 2 s`); a range the condition only
+collects, or does not name, stays a descriptor (#146). A template's own text
+therefore decides all of this, without looking at another template. Every
 check then uses the same classification, and none waits for a type: after
 `r = 0:n`, `out = r * 2` does not kill an earlier `out = prev`, does not
 definitely assign `out`, and so cannot by itself make a later read of `out`
@@ -966,7 +967,7 @@ reassigned between a range and a non-range value is left to the solver,
 like any other change of type. The pass reads each name by its latest
 assignment, so its flow checks follow the text as written and the solver
 reports the retype only once they pass: a body with `r = n`, a print of `r`,
-then `r = 0:n` and `res = r` is reported only for leaving `res` possibly
+then `r = 0:n` and `res = r + 1` is reported only for leaving `res` possibly
 unassigned. A template nothing calls is not checked for it. An error in any
 template fails the code module before any script compiles.
 
@@ -1465,8 +1466,8 @@ immediate deletion at the last consumer.
   default both the body and a read of `out` after `out = r * 2` are
   rejected; `y = Helper(x)` then `out = y + 1`, where `Helper` returns a
   scalar, is a definite write; each way a value holds or iterates a range (a
-  gate naming it, a bare name, a literal or binding under `&&`) agrees with
-  the solved types; an output assigned a range is rejected (#146), with no
+  copy, a gate naming it, a literal or binding under `&&`) agrees with the
+  solved types; an output assigned a range is rejected (#146), with no
   flow error in any template, so none in a caller declared before or after
   it or calling it through a function that forwards the call; a call that
   names no template, an operator whose sides do not line up, or an
