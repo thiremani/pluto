@@ -10,11 +10,11 @@ This document describes Pluto's semantic model and compares it with other major 
 3. **Range Selections are Streams:** `s = arr[i]` keeps the final selected
    value (an element or owned subarray); `s = [arr[i]]` materializes every
    selected value.
-4. **Ranges are Descriptor Values:** `j = i` copies a Range; consuming it in
-   `x = i + 1`, `arr[i]`, a call, or `[]` drives a loop. Print and main
-   interpolation markers format the descriptor itself. Where the statement
-   already loops over the name, a bare use is that loop's element. A function
-   cannot return a Range (#146).
+4. **Ranges are Descriptor Values:** `j = i` copies a Range when the
+   assignment has no gate; under a gate, or consumed in `x = i + 1`, `arr[i]`,
+   a call, or `[]`, it drives a loop. Print and main interpolation markers
+   format the descriptor itself unless another argument on the line loops
+   over the name. A function cannot return a Range (#146).
 5. **Empty-Domain Initialization:** An empty Range descriptor still assigns.
    An empty ranged computation leaves an existing destination unchanged and a
    fresh destination at its type's zero value.
@@ -328,10 +328,10 @@ since a range argument runs the function once per element: `Wrap(1:5)`,
 where `Wrap` returns its input, gives `4`. A function cannot return a range
 either: an output assigned one is rejected, and the function returns the
 bounds for its caller to build the range from (#146). A range bound to a
-name counts as possibly empty, so `F` below needs its default. A statement's
-condition iterates the ranges it names, so its value reads them as elements:
-in `kept = s > 2 s`, `kept` gets an element of `s`. Under `||` and `&&`, a
-range literal or binding operand is iterated, so `n > 0 && 0:5` gives an
+name counts as possibly empty, so `F` below needs its default. A gate makes
+its values computations, so a bare range in them iterates: in
+`kept = n > 2 s`, `kept` gets an element of `s`. Under `||` and `&&`, a range
+literal or binding operand is iterated too, so `n > 0 && 0:5` gives an
 element.
 
 ```python

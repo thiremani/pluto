@@ -3,7 +3,7 @@
 ## Core Model
 
 A `Range<T>` is a descriptor value. A range literal constructs one, and a
-complete Range-valued assignment copies it:
+complete Range-valued assignment without a gate copies it:
 
 ```pluto
 i = 0:5
@@ -29,8 +29,9 @@ There are two explicit closing steps for a ranged computation:
 
 A Range descriptor assignment is not a closing step and does not iterate.
 This keeps descriptor copying, collection, and final-value selection separate.
-A bare range name behaves like the literal it holds, unless the statement
-already loops over that name: then it is that loop's current element (#146).
+A bare range name behaves like the literal it holds: an assignment without a
+gate copies its descriptor, and under a gate, like any other use, it iterates
+(#146).
 
 ## Migration From Bare-Range Finalization
 
@@ -42,7 +43,8 @@ This change can be silent for a fresh destination. A later call, index, or
 collector consumes the copied Range and runs its whole domain, while print and
 interpolation format the descriptor itself. Assigning a Range
 to an existing scalar is instead rejected as a type-changing reassignment.
-Descriptor copies are unconditional writes and participate in the ordinary
+Descriptor copies happen only without a gate, so they are unconditional
+writes, even of an empty descriptor, and participate in the ordinary
 dead-store checks. Range-indexed expressions such as `last = data[i]` are
 unchanged because indexing is already a ranged computation.
 
@@ -69,9 +71,10 @@ descriptors, so `[i]` consumes `i` and collects its yields. Passing a Range to a
 function likewise consumes it as a driver rather than passing inert metadata.
 A function cannot return a Range either: an output assigned one is rejected
 at the function's definition (#146). The function returns the bounds instead,
-and the caller builds the range: `lo, hi = Bounds(n)`, then `r = lo:hi`. If
-the range was assigned conditionally, the rebuild keeps the condition:
-`r = n > 0 lo:hi`.
+and the caller builds the range: `lo, hi = Bounds(n)`, then `r = lo:hi`. A
+gate makes a range iterate, so a range is chosen conditionally through its
+bounds: `lo, hi = n > 0 a, b`, then `r = lo:hi`. When the condition fails,
+`lo` and `hi` keep their previous values, and `r` is rebuilt from them.
 
 Range-indexed arrays follow the same rule:
 
@@ -460,8 +463,8 @@ x, y = i < 2 [1], j + 0
 The statement condition `i < 2` is shared.
 `x` collects once for each admitted `i`, producing `[1 1]`.
 `y`'s operation uses its own local `j` driver inside that shared gate and ends
-with the final result `1`. A bare `j` in this position would instead copy the
-Range descriptor because only `i` belongs to the active statement domain.
+with the final result `1`. A bare `j` in this position iterates the same way
+and also ends with `1`.
 
 Likewise:
 
@@ -483,11 +486,11 @@ the statement condition opens that outer loop first.
 Inside the RHS, the same name refers to the current scalar iterator value, not
 to a fresh nested loop.
 
-Consequently, `filtered = i > 2 i` keeps the final admitted scalar, while
-`copy = outer > 2 i` copies `i` when only `outer` belongs to the statement
-domain. If the statement domain is empty, it performs no write: an existing
-Range destination stays unchanged and a fresh one keeps the zero Range
-descriptor.
+Consequently, `filtered = i > 2 i` keeps the final admitted scalar, and
+`cross = outer > 2 i` iterates `i` inside each admitted `outer` point and
+keeps the final yield. If the statement domain is empty, it performs no
+write: an existing destination stays unchanged and a fresh one keeps its zero
+value.
 
 For non-collector tuple outputs, one admitted statement iteration is still one
 shared scalar update step, but each RHS has its own local yield outcome. If one
