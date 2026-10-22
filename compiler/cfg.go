@@ -274,11 +274,11 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	cfg.declareTargets(fn.Parameters)
 	cfg.declareTargets(fn.Outputs)
 
-	// ranges holds the bindings whose latest assignment gave them a range.
-	// Only a range literal assigned on its own does: a parameter holds one
-	// element per run, no call returns a range, and a range name iterates
-	// wherever it is used. A change between a range and a non-range value is
-	// the solver's to reject, like any other change of type.
+	// ranges holds the bindings whose latest assignment gave them a range: a
+	// bare range literal, or a bare range name the statement's condition does
+	// not loop over. A parameter holds one element per run, and no call
+	// returns a range. A change between a range and a non-range value is the
+	// solver's to reject, like any other change of type.
 	ranges := make(map[string]struct{})
 	outputs := identSet(fn.Outputs)
 	writes := make([][]textWrite, len(fn.Body.Statements))
@@ -462,12 +462,11 @@ func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}
 	}
 
 	gated := len(let.Condition) > 0
+	looped := cfg.conditionRanges(let.Condition, ranges)
 	writes := make([]textWrite, 0, len(let.Name))
 	for _, value := range let.Value {
 		definite := !gated && !cfg.maySkip(value, ranges)
-		// Only a range literal assigned whole holds a range, and it fills one
-		// target.
-		_, isRange := value.(*ast.RangeLiteral)
+		isRange := assignsRange(value, ranges, looped)
 		for slot := 0; slot < cfg.valueSlots(value); slot++ {
 			writes = append(writes, textWrite{definite: definite, holdsRange: isRange})
 		}
@@ -494,6 +493,58 @@ func textNodeFails(expr ast.Expression) bool {
 	return false
 }
 
+// assignsRange reports whether a value assigns a range, which fills one
+// target: a bare range literal, or a bare range name that the statement's
+// condition does not loop over, whose range it copies. Under a condition that
+// loops over the name, the value is that loop's element.
+func assignsRange(value ast.Expression, ranges, looped map[string]struct{}) bool {
+	switch v := value.(type) {
+	case *ast.RangeLiteral:
+		return true
+	case *ast.Identifier:
+		_, isRange := ranges[v.Value]
+		_, isLooped := looped[v.Value]
+		return isRange && !isLooped
+	}
+	return false
+}
+
+// conditionRanges returns the range bindings a statement's condition loops
+// over: every range name in it, apart from those inside an array literal,
+// which settles its cells itself, and a string's main markers, which format
+// their ranges.
+func (cfg *CFG) conditionRanges(conditions []ast.Expression, ranges map[string]struct{}) map[string]struct{} {
+	looped := make(map[string]struct{})
+	for _, condition := range conditions {
+		cfg.collectLoopedRanges(condition, ranges, looped)
+	}
+	return looped
+}
+
+func (cfg *CFG) collectLoopedRanges(expr ast.Expression, ranges, looped map[string]struct{}) {
+	switch e := expr.(type) {
+	case *ast.ArrayLiteral:
+		return
+	case *ast.Identifier:
+		if _, isRange := ranges[e.Value]; isRange {
+			looped[e.Value] = struct{}{}
+		}
+		return
+	case *ast.StringLiteral:
+		_, specs := formatMarkerIdentifiers(e.Token.Literal, cfg.isDefined)
+		for _, name := range specs {
+			if _, isRange := ranges[name]; isRange {
+				looped[name] = struct{}{}
+			}
+		}
+		return
+	}
+
+	for _, child := range ast.ExprChildren(expr) {
+		cfg.collectLoopedRanges(child, ranges, looped)
+	}
+}
+
 // updateRanges records which of an assignment's targets now hold a range:
 // exactly those it gives one.
 func updateRanges(ranges map[string]struct{}, targets []*ast.Identifier, writes []textWrite) {
@@ -511,12 +562,16 @@ func updateRanges(ranges map[string]struct{}, targets []*ast.Identifier, writes 
 }
 
 // drivesValue reports whether a range that may be empty drives an
-// assignment's value: any range the value iterates, apart from a range
-// literal it assigns whole.
+// assignment's value: any range the value iterates, apart from a range it
+// assigns whole. A bare range name either copies its range or reads the
+// element of a loop its statement's condition runs, and that condition can
+// skip the write by itself.
 func (cfg *CFG) drivesValue(value ast.Expression, ranges map[string]struct{}) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
 		return cfg.drivesAny(ast.ExprChildren(v), ranges)
+	case *ast.Identifier:
+		return false
 	case *ast.CallExpression:
 		return cfg.drivesAny(v.Arguments, ranges)
 	}
@@ -525,7 +580,8 @@ func (cfg *CFG) drivesValue(value ast.Expression, ranges map[string]struct{}) bo
 
 // drives reports whether expr iterates a range that may be empty. Every range
 // in it is iterated, except inside an array literal, which settles its cells
-// itself. Only a range literal with constant, nonempty bounds always runs.
+// itself, and in a string's main marker, which formats its range. Only a
+// range literal with constant, nonempty bounds always runs.
 func (cfg *CFG) drives(expr ast.Expression, ranges map[string]struct{}) bool {
 	switch e := expr.(type) {
 	case *ast.ArrayLiteral:
@@ -536,9 +592,9 @@ func (cfg *CFG) drives(expr ast.Expression, ranges map[string]struct{}) bool {
 		_, isRange := ranges[e.Value]
 		return isRange
 	case *ast.StringLiteral:
-		// A marker iterates the range it names, whether it formats the range
-		// or uses it as a width or precision.
-		for _, name := range formatMarkerNames(e.Token.Literal, cfg.isDefined) {
+		// A width or precision operand consumes a range as numbers.
+		_, specs := formatMarkerIdentifiers(e.Token.Literal, cfg.isDefined)
+		for _, name := range specs {
 			if _, isRange := ranges[name]; isRange {
 				return true
 			}

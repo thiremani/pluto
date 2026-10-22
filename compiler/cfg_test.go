@@ -1213,19 +1213,12 @@ out = F(x)
     out = last + 1`,
 		},
 		{
-			name: "GateOnAnotherRangeIteratesBoth",
+			name: "GateOnAnotherRangeKeepsDescriptor",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = kept * 2`,
-		},
-		{
-			// A bare range name iterates, and a named range may be empty.
-			name: "BareRangeNameIterates",
-			code: `out = F(n)
-    stream = 0:n
-    out = stream`,
 			unassigned: []string{"out"},
 		},
 		{
@@ -1243,12 +1236,12 @@ out = F(x)
     out = last + 1`,
 		},
 		{
-			// A main marker iterates the range it names, too.
-			name: "MarkerRangeIterates",
+			// A main marker formats the range it names, so the write always
+			// happens.
+			name: "MainMarkerFormatsItsRange",
 			code: `out = F(n)
     r = 0:n
     out = "v -r"`,
-			unassigned: []string{"out"},
 		},
 		{
 			// A width or precision consumes a range as numbers.
@@ -1259,25 +1252,23 @@ out = F(x)
 			unassigned: []string{"out"},
 		},
 		{
-			// An input's marker takes the specifier after it: %-d left-aligns
-			// p and reads no range.
+			// An input's marker takes the specifier after it, so w is a width
+			// and iterates.
 			name: "InputMarkerTakesItsSpecifier",
-			code: `out, all = Show(p)
-    d = 0:p
-    all = [d]
-    out = "-p%-d"`,
+			code: `out = Show(p)
+    w = 1:p
+    out = "-p%(-w)d"`,
+			unassigned: []string{"out"},
 		},
 		{
-			// A name defined further down is plain text, so the -d after it is
-			// a marker for the range d.
+			// A name defined further down is plain text, so the -w after it is
+			// a main marker and formats its range.
 			name: "LaterNameIsText",
-			code: `out, all, later = Late(p)
-    d = 0:p
-    all = [d]
-    out = "-q%-d"
+			code: `out, later = Late(p)
+    w = 1:p
+    out = "-q%(-w)d"
     q = p + 1
     later = q`,
-			unassigned: []string{"out"},
 		},
 		{
 			// A && fills its right operand's targets.
@@ -1541,12 +1532,11 @@ func TestFunctionsCannotReturnRanges(t *testing.T) {
 			errors: []string{rangeOutputMessage("out")},
 		},
 		{
-			// A range name iterates, so the output receives an element.
-			name: "RangeNameOutputIterates",
+			name: "CopiedRangeOutput",
 			code: `out = F(n)
     r = 0:n
     out = r`,
-			errors: []string{unassignedOutputMessage("out")},
+			errors: []string{rangeOutputMessage("out")},
 		},
 		{
 			name: "IteratedRangeOutput",
@@ -1639,6 +1629,23 @@ func TestRangeLiteralWriteIsDefinite(t *testing.T) {
 	}, extractErrorMessages(cc.Compile()))
 }
 
+// Copying a range always writes, even an empty one, so overwriting a copy
+// unread is reported as for any definite write.
+func TestRangeCopyWriteIsDefinite(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+
+	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `out = F(n)
+    r = 0:n
+    c = r
+    c = r
+    out = [c]`))
+	require.Equal(t, []string{
+		`unconditional assignment to "c" overwrites a previous value that was never used. It was previously written at line 3:5`,
+		`value assigned to "c" is never used`,
+	}, extractErrorMessages(cc.Compile()))
+}
+
 func TestRangeOutputIsReportedAtItsAssignment(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -1663,14 +1670,12 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 		ranges []string
 	}{
 		{
-			// A range name iterates wherever it is used, so a copy holds an
-			// element.
-			name: "CopyIterates",
+			name: "DescriptorCopy",
 			code: `out = F(n)
     stream = 0:n
     kept = stream
     out = [kept]`,
-			ranges: []string{"stream"},
+			ranges: []string{"kept", "stream"},
 		},
 		{
 			name: "OperationIterates",
@@ -1689,13 +1694,13 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 			ranges: []string{"stream"},
 		},
 		{
-			name: "GateOnAnotherRangeIteratesBoth",
+			name: "GateOnAnotherRangeKeepsDescriptor",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = [kept]`,
-			ranges: []string{"other", "stream"},
+			ranges: []string{"kept", "other", "stream"},
 		},
 		{
 			name: "WholeLiteralUnderGateKeepsDescriptor",
@@ -1706,9 +1711,9 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 			ranges: []string{"kept", "stream"},
 		},
 		{
-			// The collector in the condition settles its own iteration; the
-			// value iterates the range by name.
-			name: "CollectorInGate",
+			// A range inside a collector in the condition is collected, so
+			// the gate does not iterate it.
+			name: "CollectorInGateKeepsDescriptor",
 			code: `n = Size(xs)
     t = xs[0]
     n = t + 2
@@ -1717,7 +1722,7 @@ out = F(n)
     stream = 0:n
     kept = Size([stream]) > 1 stream
     out = [kept]`,
-			ranges: []string{"stream"},
+			ranges: []string{"kept", "stream"},
 		},
 		{
 			name: "SpecifierInGateIterates",

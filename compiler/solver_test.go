@@ -896,7 +896,7 @@ func TestFunctionOutputBindingRejectsIncompatibleReassignment(t *testing.T) {
 // A body that reassigns a name between a range and a non-range value, and
 // passes the flow checks as written, gets the solver's retype error, as for
 // any other type. The per-template pass reads each name by its latest
-// assignment: read as a range, r would leave res possibly unassigned in
+// assignment: read as a range, r would make res a range output in
 // RangeToNonRange.
 func TestFunctionRangeRetypeIsReportedBySolver(t *testing.T) {
 	tests := []struct {
@@ -1435,17 +1435,19 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
-// Only a range literal constructs a Range; a range name iterates wherever it
-// is used, so assigning one keeps its final element.
-func TestBareRangeNamesIterate(t *testing.T) {
+// A bare range name assigned whole copies its range, beside other values and
+// under a condition that does not loop over it; under one that does, it is
+// the loop's element. A main marker formats the range it names.
+func TestBareRangeAssignmentsCopyDescriptors(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "bareRangeNames", "", ast.NewCode())
+	cc := NewCodeCompiler(ctx, "bareRangeCopies", "", ast.NewCode())
 	program := mustParseScript(t, `source = 0:5
-last = (source)
-sum = source + 0
+copy = (source)
+last = source + 0
 outer = 0:2
-gated = outer < 2 source
+gatedCopy = outer < 2 source
 filtered = source > 2 source
+pairCopy, pairSum = source, source + 0
 marked = "v -source"`)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
@@ -1453,32 +1455,28 @@ marked = "v -source"`)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
-	for _, name := range []string{"source", "outer"} {
+	for _, name := range []string{"source", "copy", "gatedCopy", "pairCopy"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, Range{Iter: I64}, typ)
 	}
-	for _, name := range []string{"last", "sum", "gated", "filtered"} {
+	for _, name := range []string{"last", "filtered", "pairSum"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, I64, typ)
 	}
 
-	lastExpr := program.Statements[1].(*ast.LetStatement).Value[0]
-	lastInfo := ts.ExprCache[key(ts.FuncNameMangled, lastExpr)]
-	require.Equal(t, []Type{I64}, lastInfo.OutTypes)
-	require.True(t, lastInfo.HasRanges)
-	require.Len(t, lastInfo.Ranges, 1)
-	require.Equal(t, "source", lastInfo.Ranges[0].Name)
+	copyExpr := program.Statements[1].(*ast.LetStatement).Value[0]
+	copyInfo := ts.ExprCache[key(ts.FuncNameMangled, copyExpr)]
+	require.False(t, copyInfo.HasRanges)
+	require.Empty(t, copyInfo.Ranges)
+	require.Nil(t, copyInfo.Rewrite)
 
-	gatedExpr := program.Statements[4].(*ast.LetStatement).Value[0]
-	gatedInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedExpr)]
-	require.Equal(t, []Type{I64}, gatedInfo.OutTypes)
-	gatedDrivers := make([]string, len(gatedInfo.Ranges))
-	for i, driver := range gatedInfo.Ranges {
-		gatedDrivers[i] = driver.Name
-	}
-	require.ElementsMatch(t, []string{"outer", "source"}, gatedDrivers)
+	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
+	gatedCopyInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedCopyExpr)]
+	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
+	require.Len(t, gatedCopyInfo.Ranges, 1)
+	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
 
 	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
 	filteredInfo := ts.ExprCache[key(ts.FuncNameMangled, filteredExpr)]
@@ -1486,32 +1484,31 @@ marked = "v -source"`)
 	require.Len(t, filteredInfo.Ranges, 1)
 	require.Equal(t, "source", filteredInfo.Ranges[0].Name)
 
-	// A main marker naming a range drives the string.
-	markedExpr := program.Statements[6].(*ast.LetStatement).Value[0]
+	markedExpr := program.Statements[7].(*ast.LetStatement).Value[0]
 	markedInfo := ts.ExprCache[key(ts.FuncNameMangled, markedExpr)]
-	require.True(t, markedInfo.HasRanges)
-	require.Len(t, markedInfo.Ranges, 1)
-	require.Equal(t, "source", markedInfo.Ranges[0].Name)
+	require.False(t, markedInfo.HasRanges)
+	require.Empty(t, markedInfo.Ranges)
 }
 
-// A string's markers drive in the order they appear, a width or precision
-// operand included, so the first range the string names is the outer loop.
-func TestMarkerDriversFollowTextOrder(t *testing.T) {
+// A string's width and precision operands drive in the order they appear,
+// and a main marker formats its range without driving.
+func TestSpecifierDriversFollowTextOrder(t *testing.T) {
 	ctx := llvm.NewContext()
-	cc := NewCodeCompiler(ctx, "markerOrder", "", ast.NewCode())
-	program := mustParseScript(t, `n = 1
+	cc := NewCodeCompiler(ctx, "specifierOrder", "", ast.NewCode())
+	program := mustParseScript(t, `n = 1.5
 w = 1:3
+p = 2:4
 j = 7:9
-s = "|-n%(-w)d| -j"
-t = "-j |-n%(-w)d|"`)
+s = "|-n%(-w).(-p)f| -j"
+t = "-j |-n%(-p).(-w)f|"`)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
-	for i, want := range [][]string{{"w", "j"}, {"j", "w"}} {
-		lit := program.Statements[3+i].(*ast.LetStatement).Value[0]
+	for i, want := range [][]string{{"w", "p"}, {"p", "w"}} {
+		lit := program.Statements[4+i].(*ast.LetStatement).Value[0]
 		info := ts.ExprCache[key(ts.FuncNameMangled, lit)]
 		drivers := make([]string, len(info.Ranges))
 		for k, driver := range info.Ranges {

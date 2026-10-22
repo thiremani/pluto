@@ -17,8 +17,8 @@ u = 0:b:d
 
 [i], [j], [k], [u]
 
-# Range literals print as written, on one line. Range names iterate, bare or
-# in a computation, and distinct names form a cartesian iteration domain.
+# Bare range literals and range names print as written, on one line.
+# Computations over distinct names form a cartesian iteration domain.
 p = 0:2
 q = 2:4
 "Descriptors", 0:2, 2:4
