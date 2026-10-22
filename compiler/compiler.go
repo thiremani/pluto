@@ -1171,7 +1171,7 @@ func (c *Compiler) compileExprAssigns(writeIdents []*ast.Identifier, ownershipId
 	i := 0
 	for _, expr := range exprs {
 		guardPtr := c.pushBoundsGuard("assign_bounds_guard")
-		res := c.compileExpression(expr, writeIdents[i:])
+		res := c.compileAssignedValue(expr, writeIdents[i:])
 		var bit llvm.Value
 		if c.stmtBoundsUsed() {
 			bit = c.createLoad(guardPtr, Int{Width: 1}, "assign_bounds_ok")
@@ -1182,6 +1182,35 @@ func (c *Compiler) compileExprAssigns(writeIdents []*ast.Identifier, ownershipId
 		i += len(res)
 	}
 	return assigns
+}
+
+// compileAssignedValue compiles one assignment value. A bare range that a
+// gate makes a computation iterates and keeps its final element, as an
+// operation over it would; inside a loop that already binds the range, it
+// reads that iteration's element.
+func (c *Compiler) compileAssignedValue(expr ast.Expression, dest []*ast.Identifier) []*Symbol {
+	switch expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
+	default:
+		return c.compileExpression(expr, dest)
+	}
+	info := c.ExprCache[key(c.FuncNameMangled, expr)]
+	if len(c.pendingLoopRanges(info.Ranges)) == 0 {
+		return c.compileExpression(expr, dest)
+	}
+
+	PushScope(&c.Scopes, BlockScope)
+	defer c.popScope()
+
+	outputs := c.makeSeededTempOutputs(dest, info.OutTypes)
+	c.bindRangedTempOutputs(dest, outputs)
+	output := outputs[0]
+	c.withLoopNest(info.Ranges, func() {
+		value := c.compileIdentifier(info.Rewrite.(*ast.Identifier))
+		c.storeRangedOutput(output, value.Val, value.Type)
+	})
+
+	return c.loadOutputValues(outputs, "range_final")
 }
 
 // newExprAssign zips one expression's compiled results with its destination

@@ -673,11 +673,12 @@ func rangeDriverNamed(ranges []*RangeInfo, name string) bool {
 	return false
 }
 
-// resolveBareRangeAssignment distinguishes Range descriptor copies from uses of
-// a Range that an enclosing statement condition has already bound as an
-// iterator. `copy = source` and `copy = 0:n` preserve the descriptor; in
-// `filtered = source > 2 source`, the RHS reads the current scalar yield.
-func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type, condRanges []*RangeInfo) {
+// resolveBareRangeAssignment settles a bare range value at an assignment root.
+// Without a gate, a range literal constructs the descriptor and a range name
+// copies it (`r = 0:n`, `copy = r`). Under a gate the value is a computation
+// like any other: the range iterates and the assignment keeps its final
+// element (`last = n > 0 r`).
+func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Type, gated bool) {
 	if len(types) != 1 {
 		return
 	}
@@ -687,22 +688,22 @@ func (ts *TypeSolver) resolveBareRangeAssignment(expr ast.Expression, types []Ty
 		return
 	}
 
+	switch expr.(type) {
+	case *ast.Identifier, *ast.RangeLiteral:
+	default:
+		return
+	}
+
 	info := ts.ExprCache[key(ts.FuncNameMangled, expr)]
-	switch e := expr.(type) {
-	case *ast.Identifier:
-		if !rangeDriverNamed(condRanges, e.Value) {
-			info.Ranges = nil
-			info.HasRanges = false
-			info.Rewrite = nil
-			return
-		}
-		types[0] = rangeType.Iter
-		info.OutTypes[0] = rangeType.Iter
-	case *ast.RangeLiteral:
+	if !gated {
 		info.Ranges = nil
 		info.HasRanges = false
 		info.Rewrite = nil
+		return
 	}
+	info.HasRanges = true
+	types[0] = rangeType.Iter
+	info.OutTypes[0] = rangeType.Iter
 }
 
 func (ts *TypeSolver) TypeStatement(stmt ast.Statement) {
@@ -969,7 +970,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	exprIdxs := make([]int, 0, len(stmt.Name))
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
-		ts.resolveBareRangeAssignment(expr, exprTypes, condRanges)
+		ts.resolveBareRangeAssignment(expr, exprTypes, len(stmt.Condition) > 0)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])

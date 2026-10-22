@@ -1435,32 +1435,34 @@ res = [idx]`
 	require.IsType(t, &ast.ArrayLiteral{}, info.Rewrite)
 }
 
-// A bare range name assigned whole copies its range, beside other values and
-// under a condition that does not loop over it; under one that does, it is
-// the loop's element. A main marker formats the range it names.
-func TestBareRangeAssignmentsCopyDescriptors(t *testing.T) {
+// A bare range assigned without a gate is the range itself: a name copies it,
+// beside other values too. Under a gate the value is a computation, so the
+// range iterates whether or not the condition names it. A main marker
+// formats the range it names.
+func TestBareRangeAssignmentsCopyOnlyWithoutAGate(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "bareRangeCopies", "", ast.NewCode())
 	program := mustParseScript(t, `source = 0:5
 copy = (source)
 last = source + 0
 outer = 0:2
-gatedCopy = outer < 2 source
+gatedName = outer < 2 source
 filtered = source > 2 source
 pairCopy, pairSum = source, source + 0
-marked = "v -source"`)
+marked = "v -source"
+gatedLiteral = outer < 2 0:3`)
 
 	sc := NewScriptCompiler(ctx, t.Name(), program, cc)
 	ts := NewTypeSolver(sc)
 	ts.Solve()
 	require.Emptyf(t, ts.Errors, "unexpected type errors: %v", ts.Errors)
 
-	for _, name := range []string{"source", "copy", "gatedCopy", "pairCopy"} {
+	for _, name := range []string{"source", "copy", "pairCopy"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, Range{Iter: I64}, typ)
 	}
-	for _, name := range []string{"last", "filtered", "pairSum"} {
+	for _, name := range []string{"last", "gatedName", "filtered", "pairSum", "gatedLiteral"} {
 		typ, ok := ts.GetIdentifier(name)
 		require.Truef(t, ok, "expected %s binding", name)
 		require.Equal(t, I64, typ)
@@ -1472,11 +1474,14 @@ marked = "v -source"`)
 	require.Empty(t, copyInfo.Ranges)
 	require.Nil(t, copyInfo.Rewrite)
 
-	gatedCopyExpr := program.Statements[4].(*ast.LetStatement).Value[0]
-	gatedCopyInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedCopyExpr)]
-	require.Equal(t, []Type{Range{Iter: I64}}, gatedCopyInfo.OutTypes)
-	require.Len(t, gatedCopyInfo.Ranges, 1)
-	require.Equal(t, "outer", gatedCopyInfo.Ranges[0].Name)
+	gatedNameExpr := program.Statements[4].(*ast.LetStatement).Value[0]
+	gatedNameInfo := ts.ExprCache[key(ts.FuncNameMangled, gatedNameExpr)]
+	require.Equal(t, []Type{I64}, gatedNameInfo.OutTypes)
+	gatedDrivers := make([]string, len(gatedNameInfo.Ranges))
+	for i, driver := range gatedNameInfo.Ranges {
+		gatedDrivers[i] = driver.Name
+	}
+	require.ElementsMatch(t, []string{"outer", "source"}, gatedDrivers)
 
 	filteredExpr := program.Statements[5].(*ast.LetStatement).Value[0]
 	filteredInfo := ts.ExprCache[key(ts.FuncNameMangled, filteredExpr)]

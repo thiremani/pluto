@@ -1213,13 +1213,14 @@ out = F(x)
     out = last + 1`,
 		},
 		{
-			name: "GateOnAnotherRangeKeepsDescriptor",
+			// A gate makes its value a computation, so a range the condition
+			// does not name iterates too and kept holds an element.
+			name: "GateIteratesAnotherRange",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = kept * 2`,
-			unassigned: []string{"out"},
 		},
 		{
 			// A literal or binding under && is iterated.
@@ -1526,10 +1527,12 @@ func TestFunctionsCannotReturnRanges(t *testing.T) {
 			errors: []string{rangeOutputMessage("r")},
 		},
 		{
-			name: "GatedRangeOutput",
+			// Under a gate a range literal iterates, so the output receives an
+			// element, and the gate can skip the write.
+			name: "GatedRangeLiteralIterates",
 			code: `out = F(n)
     out = n > 0 0:n`,
-			errors: []string{rangeOutputMessage("out")},
+			errors: []string{unassignedOutputMessage("out")},
 		},
 		{
 			name: "CopiedRangeOutput",
@@ -1694,26 +1697,26 @@ func TestTextRangeSummaryAgreesWithSolver(t *testing.T) {
 			ranges: []string{"stream"},
 		},
 		{
-			name: "GateOnAnotherRangeKeepsDescriptor",
+			name: "GateIteratesAnotherRange",
 			code: `out = F(n)
     other = 0:3
     stream = 0:n
     kept = other > 1 stream
     out = [kept]`,
-			ranges: []string{"kept", "other", "stream"},
+			ranges: []string{"other", "stream"},
 		},
 		{
-			name: "WholeLiteralUnderGateKeepsDescriptor",
+			name: "GatedLiteralIterates",
 			code: `out = F(n)
     stream = 0:n
     kept = stream > 1 0:9
     out = [kept]`,
-			ranges: []string{"kept", "stream"},
+			ranges: []string{"stream"},
 		},
 		{
-			// A range inside a collector in the condition is collected, so
-			// the gate does not iterate it.
-			name: "CollectorInGateKeepsDescriptor",
+			// The condition only collects stream, but the gated value still
+			// iterates it.
+			name: "CollectorInGate",
 			code: `n = Size(xs)
     t = xs[0]
     n = t + 2
@@ -1722,7 +1725,7 @@ out = F(n)
     stream = 0:n
     kept = Size([stream]) > 1 stream
     out = [kept]`,
-			ranges: []string{"kept", "stream"},
+			ranges: []string{"stream"},
 		},
 		{
 			name: "SpecifierInGateIterates",

@@ -275,10 +275,10 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	cfg.declareTargets(fn.Outputs)
 
 	// ranges holds the bindings whose latest assignment gave them a range: a
-	// bare range literal, or a bare range name the statement's condition does
-	// not loop over. A parameter holds one element per run, and no call
-	// returns a range. A change between a range and a non-range value is the
-	// solver's to reject, like any other change of type.
+	// bare range literal or range name assigned without a gate. A parameter
+	// holds one element per run, and no call returns a range. A change between
+	// a range and a non-range value is the solver's to reject, like any other
+	// change of type.
 	ranges := make(map[string]struct{})
 	outputs := identSet(fn.Outputs)
 	writes := make([][]textWrite, len(fn.Body.Statements))
@@ -462,11 +462,10 @@ func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}
 	}
 
 	gated := len(let.Condition) > 0
-	looped := cfg.conditionRanges(let.Condition, ranges)
 	writes := make([]textWrite, 0, len(let.Name))
 	for _, value := range let.Value {
 		definite := !gated && !cfg.maySkip(value, ranges)
-		isRange := assignsRange(value, ranges, looped)
+		isRange := !gated && assignsRange(value, ranges)
 		for slot := 0; slot < cfg.valueSlots(value); slot++ {
 			writes = append(writes, textWrite{definite: definite, holdsRange: isRange})
 		}
@@ -493,56 +492,18 @@ func textNodeFails(expr ast.Expression) bool {
 	return false
 }
 
-// assignsRange reports whether a value assigns a range, which fills one
-// target: a bare range literal, or a bare range name that the statement's
-// condition does not loop over, whose range it copies. Under a condition that
-// loops over the name, the value is that loop's element.
-func assignsRange(value ast.Expression, ranges, looped map[string]struct{}) bool {
+// assignsRange reports whether a value assigned without a gate gives its one
+// target a range: a bare range literal, or a bare range name whose range it
+// copies. Under a gate the value is a computation, so the range iterates.
+func assignsRange(value ast.Expression, ranges map[string]struct{}) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
 		return true
 	case *ast.Identifier:
 		_, isRange := ranges[v.Value]
-		_, isLooped := looped[v.Value]
-		return isRange && !isLooped
+		return isRange
 	}
 	return false
-}
-
-// conditionRanges returns the range bindings a statement's condition loops
-// over: every range name in it, apart from those inside an array literal,
-// which settles its cells itself, and a string's main markers, which format
-// their ranges.
-func (cfg *CFG) conditionRanges(conditions []ast.Expression, ranges map[string]struct{}) map[string]struct{} {
-	looped := make(map[string]struct{})
-	for _, condition := range conditions {
-		cfg.collectLoopedRanges(condition, ranges, looped)
-	}
-	return looped
-}
-
-func (cfg *CFG) collectLoopedRanges(expr ast.Expression, ranges, looped map[string]struct{}) {
-	switch e := expr.(type) {
-	case *ast.ArrayLiteral:
-		return
-	case *ast.Identifier:
-		if _, isRange := ranges[e.Value]; isRange {
-			looped[e.Value] = struct{}{}
-		}
-		return
-	case *ast.StringLiteral:
-		_, specs := formatMarkerIdentifiers(e.Token.Literal, cfg.isDefined)
-		for _, name := range specs {
-			if _, isRange := ranges[name]; isRange {
-				looped[name] = struct{}{}
-			}
-		}
-		return
-	}
-
-	for _, child := range ast.ExprChildren(expr) {
-		cfg.collectLoopedRanges(child, ranges, looped)
-	}
 }
 
 // updateRanges records which of an assignment's targets now hold a range:
@@ -563,9 +524,8 @@ func updateRanges(ranges map[string]struct{}, targets []*ast.Identifier, writes 
 
 // drivesValue reports whether a range that may be empty drives an
 // assignment's value: any range the value iterates, apart from a range it
-// assigns whole. A bare range name either copies its range or reads the
-// element of a loop its statement's condition runs, and that condition can
-// skip the write by itself.
+// assigns whole. A bare range name copies its range without a gate, and a
+// gated write can be skipped anyway.
 func (cfg *CFG) drivesValue(value ast.Expression, ranges map[string]struct{}) bool {
 	switch v := value.(type) {
 	case *ast.RangeLiteral:
