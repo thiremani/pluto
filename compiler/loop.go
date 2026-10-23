@@ -63,13 +63,17 @@ func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
 	return c.rangeAggregateFromSymbol(sym, ri.Name)
 }
 
-// iterOverRangeInfo iterates a single driver, binding its per-iteration scalar value.
+// iterOverRangeInfo iterates a single driver, binding its per-iteration scalar
+// value. A range literal's bounds resolve first, like any operands: a bound
+// that fails to yield leaves the loop with no iterations.
 func (c *Compiler) iterOverRangeInfo(ri *RangeInfo, body func(*Symbol)) {
 	if ri.RangeLit != nil {
-		rangeType := Range{Iter: Int{Width: 64}}
-		rangeVal := c.ToRange(ri.RangeLit, rangeType)
-		c.iterOverRange(rangeType, rangeVal, func(iter llvm.Value, iterType Type) {
-			body(&Symbol{Val: iter, Type: iterType, Borrowed: true})
+		c.compileCondOperands(ri.RangeLit, func() {
+			rangeType := Range{Iter: Int{Width: 64}}
+			rangeVal := c.ToRange(ri.RangeLit, rangeType)
+			c.iterOverRange(rangeType, rangeVal, func(iter llvm.Value, iterType Type) {
+				body(&Symbol{Val: iter, Type: iterType, Borrowed: true})
+			})
 		})
 		return
 	}

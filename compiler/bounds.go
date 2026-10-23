@@ -481,9 +481,15 @@ func collectArrayIndexAccesses(expr ast.Expression, out *[]*ast.ArrayRangeExpres
 	}
 }
 
+// loopRangeValuesByName builds the drivers' ranges ahead of their loops. A
+// range literal whose bounds can fail resolves only where its loop starts, so
+// accesses it indexes keep their per-element checks.
 func (c *Compiler) loopRangeValuesByName(ranges []*RangeInfo) map[string]llvm.Value {
 	bounds := make(map[string]llvm.Value, len(ranges))
 	for _, ri := range ranges {
+		if ri.RangeLit != nil && c.hasCondExprInTree(ri.RangeLit) {
+			continue
+		}
 		bounds[ri.Name] = c.rangeAggregateForRI(ri)
 	}
 	return bounds

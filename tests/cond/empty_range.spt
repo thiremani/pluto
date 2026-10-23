@@ -38,3 +38,33 @@ a, b = 1 > 0 Accum(a, 0:-2), 123
 
 m, n = 1 > 0 Accum(1, 0:-2), 123
 "CondMixedNew: -m -n"
+
+# A range literal's bounds resolve before its loop, like any operands, so a
+# conditional bound works under a gate, in an operation, in a collector and in
+# a call.
+boundN = 3
+boundGated = boundN > 0 0:(boundN > 0 && boundN)
+boundOr = boundN > 0 0:(boundN < 0 || 3)
+boundSum = 0:(boundN > 0 && boundN) + 0
+boundCells = [0:(boundN > 0 && boundN)]
+boundCall = 10
+boundCall = Accum(boundCall, 0:(boundN > 0 && boundN))
+"BoundYields: -boundGated -boundOr -boundSum -boundCells -boundCall"
+
+# A bound that fails to yield leaves the loop with no iterations: existing
+# values stay, and a collector gets no cells.
+failGated = 7
+failGated = boundN > 0 0:(boundN < 0 && boundN)
+failSum = 7
+failSum = 0:(boundN < 0 && boundN) + 0
+failCells = [0:(boundN < 0 && boundN)]
+failCall = 10
+failCall = Accum(failCall, 0:(boundN < 0 && boundN))
+"BoundFails: -failGated -failSum -failCells -failCall"
+
+# Indexing through such a range checks each index as it goes.
+boundArr = [10 20 30 40]
+boundPick = boundArr[0:(boundN > 0 && boundN)]
+failPick = 9
+failPick = boundArr[0:(boundN < 0 && boundN)]
+"BoundPicks: -boundPick -failPick"
