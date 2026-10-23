@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -387,6 +386,14 @@ func (cfg *CFG) checkTemplateFlow(template classifiedTemplate) {
 	defer cfg.PopBlock()
 
 	outputs := identSet(template.fn.Outputs)
+	assigned := cfg.forwardPass(template, outputs)
+	cfg.rejectUnassignedOutputs(template.fn.Outputs, assigned)
+	cfg.backwardPass(outputs)
+}
+
+// forwardPass runs the forward dataflow over a template's statements and
+// returns the outputs it definitely assigns.
+func (cfg *CFG) forwardPass(template classifiedTemplate, outputs map[string]struct{}) map[string]struct{} {
 	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 
@@ -405,15 +412,7 @@ func (cfg *CFG) checkTemplateFlow(template classifiedTemplate) {
 		}
 	}
 
-	for _, output := range template.fn.Outputs {
-		if _, ok := assigned[output.Value]; ok {
-			continue
-		}
-
-		cfg.addError(output.Tok(), fmt.Sprintf("output %q may be left unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it (%s = prev), with each caller passing its destination as that input", output.Value, output.Value))
-	}
-
-	cfg.backwardPass(maps.Clone(outputs))
+	return assigned
 }
 
 func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned map[string]struct{}) {
@@ -424,6 +423,16 @@ func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned 
 		if _, ok := assigned[read.Name]; !ok {
 			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it", read.Name))
 		}
+	}
+}
+
+func (cfg *CFG) rejectUnassignedOutputs(outputs []*ast.Identifier, assigned map[string]struct{}) {
+	for _, output := range outputs {
+		if _, ok := assigned[output.Value]; ok {
+			continue
+		}
+
+		cfg.addError(output.Tok(), fmt.Sprintf("output %q may be left unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it (%s = prev), with each caller passing its destination as that input", output.Value, output.Value))
 	}
 }
 
@@ -807,7 +816,8 @@ func (cfg *CFG) transferWrite(lastWrites map[string]VarEvent, event VarEvent) {
 	lastWrites[event.Name] = event
 }
 
-// backwardPass identifies unused values and dead stores.
+// backwardPass identifies unused values and dead stores. It walks back from
+// live, the names read after the body (a template's outputs), updating it.
 func (cfg *CFG) backwardPass(live map[string]struct{}) {
 	block := cfg.Blocks[len(cfg.Blocks)-1]
 	for i := len(block.Stmts) - 1; i >= 0; i-- {
