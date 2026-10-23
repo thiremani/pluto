@@ -64,6 +64,13 @@ Range `start`/`stop`/`step` fields are not part of the language.
 The bound values are captured when the range is constructed, so later changes
 to the source variables do not mutate the existing range. Functions that need
 those bounds as data should currently receive the scalar values explicitly.
+A range literal that drives a loop is constructed once, before its loop nest
+starts, so its bounds run once: even when an outer range is empty, and even
+when they read a value the loop writes. Every bound must yield: when one
+fails, through a condition or an out-of-bounds read, the range is empty and
+its loop runs no iterations. A failed bound never fails the value around the
+range, so `(0:(n > 0) + 0) || 99` is rejected, like `(0:n + 0) || 99`: its
+left side cannot fail.
 
 Range is nameable and copyable, but is not yet a fully first-class container
 element. Arrays and tables contain scalar/string elements rather than Range
