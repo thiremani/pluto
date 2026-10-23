@@ -1236,6 +1236,13 @@ func TestLogicalAndDiagnostics(t *testing.T) {
 			expectError: "logical AND in value position requires a conditional left operand",
 		},
 		{
+			// A failed bound empties its range rather than failing the value
+			// around it.
+			name:        "RangeBoundCannotFailItsValue",
+			script:      "n = 3\nx = (0:(n > 0) + 0) && 99",
+			expectError: "logical AND in value position requires a conditional left operand",
+		},
+		{
 			// An always-yielding || (a > 0 || a always yields a value) cannot
 			// gate a &&.
 			name:        "UnfailableOrLeftRejected",
@@ -1310,6 +1317,13 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 		{
 			name:        "ValueOrRequiresConditionalLeft",
 			script:      "x = 1 || 2",
+			expectError: "logical OR in value position requires a conditional left operand",
+		},
+		{
+			// A failed bound empties its range rather than failing the value
+			// around it, as for a range built before the statement.
+			name:        "RangeBoundCannotFailItsValue",
+			script:      "n = 3\nx = (0:(n > 0) + 0) || 99",
 			expectError: "logical OR in value position requires a conditional left operand",
 		},
 		{

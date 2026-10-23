@@ -6,3 +6,10 @@ out = HeapSuffix(s)
 
 out = RangeTail(x)
     out = x
+
+# The first range stays in use when the second one's bound fails.
+out = KeepRange(n)
+    r = 0:2
+    r = 0:(n > 0)
+    out = 0
+    out = r + 0

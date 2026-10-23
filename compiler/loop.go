@@ -34,60 +34,55 @@ func (c *Compiler) rangeSymbol(sym *Symbol, name string) *Symbol {
 	panic(fmt.Sprintf("internal: %q is not a Range during lowering (got %s)", name, sym.Type.String()))
 }
 
-func (c *Compiler) rangeAggregateFromSymbol(sym *Symbol, name string) llvm.Value {
-	return c.rangeSymbol(sym, name).Val
+// loopRangeValues builds each driver's range once, ahead of its loop nest. A
+// range literal's bounds resolve there like any operands: when one fails to
+// yield, its range is empty and its loop runs no iterations.
+func (c *Compiler) loopRangeValues(ranges []*RangeInfo) []*Symbol {
+	values := make([]*Symbol, len(ranges))
+	for i, ri := range ranges {
+		if ri.RangeLit != nil {
+			values[i] = c.rangeLiteralValue(ri.RangeLit)
+			continue
+		}
+
+		sym, ok := c.getRawSymbol(ri.Name)
+		if !ok {
+			panic(fmt.Sprintf("internal: range driver %q not found in scope (should have been caught by type solver)", ri.Name))
+		}
+		values[i] = c.rangeSymbol(sym, ri.Name)
+	}
+	return values
 }
 
-func (c *Compiler) iterOverDriverSymbol(sym *Symbol, name string, body func(*Symbol)) {
-	rangeSym := c.rangeSymbol(sym, name)
-	c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
-		body(&Symbol{
-			Val:      iter,
-			Type:     iterType,
-			FuncArg:  rangeSym.FuncArg,
-			Borrowed: true,
-		})
+// rangeLiteralValue builds an iterated range literal's range: empty unless
+// every bound yields, through its conditions and checked accesses alike.
+func (c *Compiler) rangeLiteralValue(lit *ast.RangeLiteral) *Symbol {
+	rangeType := Range{Iter: Int{Width: 64}}
+	empty := c.makeZeroValue(rangeType).Val
+	slot := c.createEntryBlockAlloca(c.mapToLLVMType(rangeType), "range_lit")
+	c.createStore(empty, slot, rangeType)
+
+	c.compileCondOperands(lit, func() {
+		guardPtr := c.pushBoundsGuard("range_bounds_guard")
+		rangeVal := c.ToRange(lit, rangeType)
+		if c.stmtBoundsUsed() {
+			inBounds := c.createLoad(guardPtr, Int{Width: 1}, "range_bounds_ok")
+			rangeVal = c.builder.CreateSelect(inBounds, rangeVal, empty, "range_or_empty")
+		}
+		c.popBoundsGuard()
+		c.createStore(rangeVal, slot, rangeType)
 	})
-}
-
-// rangeAggregateForRI builds the {start,stop,step} aggregate for a driver.
-func (c *Compiler) rangeAggregateForRI(ri *RangeInfo) llvm.Value {
-	if ri.RangeLit != nil {
-		return c.ToRange(ri.RangeLit, Range{Iter: Int{Width: 64}})
-	}
-
-	sym, ok := c.getRawSymbol(ri.Name)
-	if !ok {
-		panic(fmt.Sprintf("internal: range driver %q not found in scope (should have been caught by type solver)", ri.Name))
-	}
-	return c.rangeAggregateFromSymbol(sym, ri.Name)
-}
-
-// iterOverRangeInfo iterates a single driver, binding its per-iteration scalar
-// value. A range literal's bounds resolve first, like any operands: a bound
-// that fails to yield leaves the loop with no iterations.
-func (c *Compiler) iterOverRangeInfo(ri *RangeInfo, body func(*Symbol)) {
-	if ri.RangeLit != nil {
-		c.compileCondOperands(ri.RangeLit, func() {
-			rangeType := Range{Iter: Int{Width: 64}}
-			rangeVal := c.ToRange(ri.RangeLit, rangeType)
-			c.iterOverRange(rangeType, rangeVal, func(iter llvm.Value, iterType Type) {
-				body(&Symbol{Val: iter, Type: iterType, Borrowed: true})
-			})
-		})
-		return
-	}
-
-	sym, ok := c.getRawSymbol(ri.Name)
-	if !ok {
-		panic(fmt.Sprintf("internal: range driver %q not found in scope (should have been caught by type solver)", ri.Name))
-	}
-	c.iterOverDriverSymbol(sym, ri.Name, body)
+	return &Symbol{Val: c.createLoad(slot, rangeType, "range_lit_val"), Type: rangeType}
 }
 
 // Build a nested loop over specs; at each level shadow specs[i].Name with the scalar iter; run body at innermost.
 func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 	ranges = c.pendingLoopRanges(ranges)
+	c.withLoopNestOver(ranges, c.loopRangeValues(ranges), body)
+}
+
+// withLoopNestOver runs a loop nest over driver ranges built ahead of it.
+func (c *Compiler) withLoopNestOver(ranges []*RangeInfo, values []*Symbol, body func()) {
 	if len(ranges) == 0 {
 		body()
 		return
@@ -98,9 +93,10 @@ func (c *Compiler) withLoopNest(ranges []*RangeInfo, body func()) {
 			body()
 			return
 		}
-		c.iterOverRangeInfo(ranges[i], func(iterSym *Symbol) {
+		rangeSym := values[i]
+		c.iterOverRange(rangeSym.Type.(Range), rangeSym.Val, func(iter llvm.Value, iterType Type) {
 			PushScope(&c.Scopes, BlockScope)
-			Put(c.Scopes, ranges[i].Name, iterSym)
+			Put(c.Scopes, ranges[i].Name, &Symbol{Val: iter, Type: iterType, FuncArg: rangeSym.FuncArg, Borrowed: true})
 			rec(i + 1)
 			c.popScope()
 		})
@@ -170,9 +166,10 @@ func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probes []ast.Expre
 		return
 	}
 
-	guard, fastAccess, ok := c.affineVersioningGuard(probes, pending)
+	values := c.loopRangeValues(pending)
+	guard, fastAccess, ok := c.affineVersioningGuard(probes, pending, values)
 	if !ok {
-		c.withLoopNest(ranges, body)
+		c.withLoopNestOver(pending, values, body)
 		return
 	}
 
@@ -180,13 +177,13 @@ func (c *Compiler) withLoopNestVersioned(ranges []*RangeInfo, probes []ast.Expre
 
 	c.builder.SetInsertPointAtEnd(fastBlock)
 	c.pushLoopBoundsMode(loopBoundsModeAffineFast, fastAccess)
-	c.withLoopNest(ranges, body)
+	c.withLoopNestOver(pending, values, body)
 	c.popLoopBoundsMode()
 	c.builder.CreateBr(contBlock)
 
 	c.builder.SetInsertPointAtEnd(checkedBlock)
 	c.pushLoopBoundsMode(loopBoundsModeChecked, nil)
-	c.withLoopNest(ranges, body)
+	c.withLoopNestOver(pending, values, body)
 	c.popLoopBoundsMode()
 	c.builder.CreateBr(contBlock)
 

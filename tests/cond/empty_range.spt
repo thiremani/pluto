@@ -62,9 +62,62 @@ failCall = 10
 failCall = Accum(failCall, 0:(boundN < 0 && boundN))
 "BoundFails: -failGated -failSum -failCells -failCall"
 
-# Indexing through such a range checks each index as it goes.
+# Indexing through such a range reads one element per index it yields.
 boundArr = [10 20 30 40]
 boundPick = boundArr[0:(boundN > 0 && boundN)]
 failPick = 9
 failPick = boundArr[0:(boundN < 0 && boundN)]
 "BoundPicks: -boundPick -failPick"
+
+# The bounds run once, before the loop, so a bound that reads the destination
+# sees its value from before the statement.
+selfBound = 0
+selfBound = 1 > 0 0:(selfBound < 1 && 3)
+"SelfBound: -selfBound"
+
+# A bound runs once whatever its form, also when its range indexes an array or
+# nests inside another range's loop.
+countI = 0:3
+countCmp = 1 > 0 0:(Loud(1) > 0)
+countAnd = 1 > 0 0:(Loud(2) > 0 && 3)
+countPick = boundArr[0:Loud(3)]
+countInner = [countI + 0:Loud(1)]
+"BoundCounts: -countCmp -countAnd -countPick -countInner"
+
+# Every range in a nest is built before the nest starts, so an inner bound runs
+# even when an outer range is empty.
+eagerI = 0:0
+eagerCells = [eagerI + 0:Loud(6)]
+"BoundEager: -eagerCells"
+
+# The value's own conditions run per element, without the bounds.
+countMixed = (boundN > 0 && 1) + 0:(Loud(4) > 0 && 3)
+"BoundMixed: -countMixed"
+
+# A call that runs the loop itself gets the range built the same way.
+calleeCmp = 10
+calleeCmp = Accum(calleeCmp, 0:(Loud(5) > 2))
+calleeFail = 10
+calleeFail = Accum(calleeFail, (Loud(4) > 5):3)
+"BoundCallee: -calleeCmp -calleeFail"
+
+# Every bound must yield before the loop starts, out-of-bounds reads included:
+# the loops run no iterations, so nothing is written or printed.
+oobBounds = [2]
+oobSum = 99
+oobSum = oobBounds[1]:(boundN > 0 && 3) + 0
+oobPick = 99
+oobPick = boundArr[oobBounds[1]:(boundN > 0 && 3)]
+oobCall = 10
+oobCall = Accum(oobCall, oobBounds[1]:3)
+"BoundReads: -oobSum -oobPick -oobCall"
+oobBounds[1]:3 + 0
+
+# A heap value compared in a bound is freed once the bound resolves.
+heapBound = 1 > 0 0:(HeapSuffix("a") > "a" && 3)
+"HeapBound: -heapBound"
+
+# A range assigned whole keeps its old range when a bound fails.
+storedYields = KeepRange(3)
+storedFails = KeepRange(0)
+"BoundStored: -storedYields -storedFails"

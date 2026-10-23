@@ -479,7 +479,17 @@ func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}
 // alternative can fail, or a call with such an argument), or a range that may
 // be empty drives it.
 func (cfg *CFG) maySkip(value ast.Expression, ranges map[string]struct{}) bool {
-	return treeCanFail(value, textNodeFails) || cfg.drivesValue(value, ranges)
+	// A range literal assigned whole keeps the old value when a bound fails.
+	operands := []ast.Expression{value}
+	if lit, ok := value.(*ast.RangeLiteral); ok {
+		operands = ast.ExprChildren(lit)
+	}
+	for _, operand := range operands {
+		if treeCanFail(operand, textNodeFails) {
+			return true
+		}
+	}
+	return cfg.drivesValue(value, ranges)
 }
 
 func textNodeFails(expr ast.Expression) bool {

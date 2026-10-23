@@ -481,20 +481,6 @@ func collectArrayIndexAccesses(expr ast.Expression, out *[]*ast.ArrayRangeExpres
 	}
 }
 
-// loopRangeValuesByName builds the drivers' ranges ahead of their loops. A
-// range literal whose bounds can fail resolves only where its loop starts, so
-// accesses it indexes keep their per-element checks.
-func (c *Compiler) loopRangeValuesByName(ranges []*RangeInfo) map[string]llvm.Value {
-	bounds := make(map[string]llvm.Value, len(ranges))
-	for _, ri := range ranges {
-		if ri.RangeLit != nil && c.hasCondExprInTree(ri.RangeLit) {
-			continue
-		}
-		bounds[ri.Name] = c.rangeAggregateForRI(ri)
-	}
-	return bounds
-}
-
 func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol, Type, bool) {
 	ident, ok := arrayExpr.(*ast.Identifier)
 	if !ok {
@@ -517,7 +503,7 @@ func (c *Compiler) arraySymbolForAffineGuard(arrayExpr ast.Expression) (*Symbol,
 	return arraySym, arrType.ElemType, true
 }
 
-func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*RangeInfo) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {
+func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*RangeInfo, values []*Symbol) (llvm.Value, map[*ast.ArrayRangeExpression]struct{}, bool) {
 	if len(exprs) == 0 || len(ranges) == 0 {
 		return llvm.Value{}, nil, false
 	}
@@ -530,7 +516,10 @@ func (c *Compiler) affineVersioningGuard(exprs []ast.Expression, ranges []*Range
 		return llvm.Value{}, nil, false
 	}
 
-	boundsByName := c.loopRangeValuesByName(ranges)
+	boundsByName := make(map[string]llvm.Value, len(ranges))
+	for i, ri := range ranges {
+		boundsByName[ri.Name] = values[i].Val
+	}
 	fastAccess := make(map[*ast.ArrayRangeExpression]struct{})
 	guard := llvm.Value{}
 	hasGuard := false

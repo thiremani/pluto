@@ -1556,10 +1556,14 @@ func (c *Compiler) compileExpression(expr ast.Expression, dest []*ast.Identifier
 	case *ast.RangeLiteral:
 		info := c.ExprCache[key(c.FuncNameMangled, e)]
 		// A consuming expression can lower this literal inside the loop that
-		// already bound its iterator rewrite. Complete descriptor assignments
-		// clear the rewrite and materialize the Range aggregate below.
-		if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok && len(c.pendingLoopRanges(info.Ranges)) == 0 {
-			return []*Symbol{c.compileIdentifier(rewIdent)}
+		// already bound its iterator rewrite, and a call that runs the loop
+		// itself gets the range built as for any loop. Complete descriptor
+		// assignments clear the rewrite and materialize the Range aggregate below.
+		if rewIdent, ok := info.Rewrite.(*ast.Identifier); ok {
+			if len(c.pendingLoopRanges(info.Ranges)) == 0 {
+				return []*Symbol{c.compileIdentifier(rewIdent)}
+			}
+			return []*Symbol{c.rangeLiteralValue(e)}
 		}
 		res = c.compileRangeExpression(e)
 		return

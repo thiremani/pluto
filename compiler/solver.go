@@ -821,10 +821,11 @@ func (ts *TypeSolver) isRangeDriverCond(expr ast.Expression, condTypes []Type) b
 
 // treeCanFail reports whether a value-position expression can propagate a
 // failed yield to its parent, asking nodeFails to classify each node. An array
-// literal settles a failed cell locally, and a || fails only when its final
-// fallback does.
+// literal settles a failed cell locally, a range literal a failed bound with
+// its range, and a || fails only when its final fallback does.
 func treeCanFail(expr ast.Expression, nodeFails func(ast.Expression) bool) bool {
-	if _, ok := expr.(*ast.ArrayLiteral); ok {
+	switch expr.(type) {
+	case *ast.ArrayLiteral, *ast.RangeLiteral:
 		return false
 	}
 	if infix, ok := ast.IsLogicalOr(expr); ok {
