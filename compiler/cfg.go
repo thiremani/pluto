@@ -386,14 +386,14 @@ func (cfg *CFG) checkTemplateFlow(template classifiedTemplate) {
 	defer cfg.PopBlock()
 
 	outputs := identSet(template.fn.Outputs)
-	assigned := cfg.forwardPass(template, outputs)
-	cfg.rejectUnassignedOutputs(template.fn.Outputs, assigned)
+	cfg.forwardPass(template, outputs)
 	cfg.backwardPass(outputs)
 }
 
-// forwardPass runs the forward dataflow over a template's statements and
-// returns the outputs it definitely assigns.
-func (cfg *CFG) forwardPass(template classifiedTemplate, outputs map[string]struct{}) map[string]struct{} {
+// forwardPass runs the forward dataflow over a template's statements. An
+// output must be definitely assigned wherever it is read and by the end of the
+// body, where its caller reads it.
+func (cfg *CFG) forwardPass(template classifiedTemplate, outputs map[string]struct{}) {
 	assigned := make(map[string]struct{}, len(outputs))
 	lastWrites := make(map[string]VarEvent)
 
@@ -412,7 +412,7 @@ func (cfg *CFG) forwardPass(template classifiedTemplate, outputs map[string]stru
 		}
 	}
 
-	return assigned
+	cfg.rejectUnassignedOutputs(template.fn.Outputs, assigned)
 }
 
 func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned map[string]struct{}) {
