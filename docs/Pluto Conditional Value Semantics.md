@@ -216,6 +216,19 @@ keep-old rule, reached by propagation or by the gate. The removed bracket form
 `y = (a > 2 10)` was the odd one out (it always assigned, zero on failure);
 spell that `y = a > 2 && 10 || 0`.
 
+They also agree on ranges: a bare range in either value iterates (#146). They
+differ in how often the condition runs. A statement gate's condition runs once
+for each point of the statement's outer iteration domain, before the values,
+whose RHS-local ranges run inside each admitted point; an `&&` condition is
+part of its value, so it runs once for each element the value iterates. With
+`Check` printing its argument and returning 1:
+
+```pluto
+i = 0:3
+a = Check("gate") > 0 i       # prints gate once; a is 2
+b = Check("and") > 0 && i     # prints and three times; b is 2
+```
+
 ## Arrays
 
 A collector cell is a value position, so the same rule applies: a failed cell is
