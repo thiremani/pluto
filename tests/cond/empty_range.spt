@@ -52,22 +52,28 @@ boundCall = Accum(boundCall, 0:(boundN > 0 && boundN))
 "BoundYields: -boundGated -boundOr -boundSum -boundCells -boundCall"
 
 # A bound that fails to yield leaves the loop with no iterations: existing
-# values stay, and a collector gets no cells.
+# values stay, new ones keep their zero value, and a collector gets no cells.
 failGated = 7
 failGated = boundN > 0 0:(boundN < 0 && boundN)
+freshGated = boundN > 0 0:(boundN < 0 && boundN)
 failSum = 7
 failSum = 0:(boundN < 0 && boundN) + 0
+freshSum = 0:(boundN < 0 && boundN) + 0
 failCells = [0:(boundN < 0 && boundN)]
 failCall = 10
 failCall = Accum(failCall, 0:(boundN < 0 && boundN))
-"BoundFails: -failGated -failSum -failCells -failCall"
+freshCall = Accum(10, 0:(boundN < 0 && boundN))
+"BoundFails: -failGated -freshGated -failSum -freshSum -failCells -failCall -freshCall"
 
 # Indexing through such a range reads one element per index it yields.
 boundArr = [10 20 30 40]
+boundWords = ["ten" "twenty" "thirty" "forty"]
 boundPick = boundArr[0:(boundN > 0 && boundN)]
 failPick = 9
 failPick = boundArr[0:(boundN < 0 && boundN)]
-"BoundPicks: -boundPick -failPick"
+freshPick = boundArr[0:(boundN < 0 && boundN)]
+freshWord = boundWords[0:(boundN < 0 && boundN)]
+"BoundPicks: -boundPick -failPick -freshPick -freshWord%q"
 
 # The bounds run once, before the loop, so a bound that reads the destination
 # sees its value from before the statement.
