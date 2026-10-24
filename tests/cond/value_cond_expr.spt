@@ -721,6 +721,26 @@ caSum = 111
 caSum = Accum(Pair(5, 7) > Pair(1, 8))
 "CallArgMergesSlots: -caSum"
 
+# A comparison that repeats a named left passes the call one argument per
+# slot, each typed by the binding's storage.
+rbN = 3
+rbS = Accum(rbN > Pair(1, 2))
+"CallArgRepeatsBinding: -rbS"
+
+# The arguments' count picks the overload.
+rbP = Plus(rbN > Pair(1, 2))
+rbQ = Plus(rbN > 1)
+"CallArgOverload: -rbP -rbQ"
+
+# Only a scalar slot passes the binding on; a mask slot is a fresh array.
+rbA, rbB = Swap(rbN > Pair(1, [1 5]))
+"CallArgScalarAndMask: -rbA -rbB"
+
+# A heap-string binding repeats the same way (leak-checked).
+rbT = "a" ⊕ "b"
+rbU = Cat(rbT > Pair("a", "aa"))
+"CallArgRepeatsHeapBinding: -rbU"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5

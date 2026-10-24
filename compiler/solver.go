@@ -94,6 +94,13 @@ func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
 }
 
+// IsCondScalar reports whether output slot i is a scalar comparison in value
+// position, which yields its left operand. Bounds-safe: an expression with an
+// invalid count carries no modes.
+func (info *ExprInfo) IsCondScalar(i int) bool {
+	return i < len(info.CompareModes) && info.CompareModes[i] == CondScalar
+}
+
 // HasCondExpr returns true if any slot adds conditional value control flow — a
 // scalar comparison, a ||, or a &&. Array masks are deliberately excluded:
 // mask construction adds no comparison failure of its own, while operand and
@@ -2473,9 +2480,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0]); ok {
-			outerTypes = []Type{slotType}
-		}
+		outerTypes = ts.argumentStorage(ce.Arguments[argIndex], outerTypes)
 
 		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
@@ -2502,36 +2507,42 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-// argumentStorage returns the binding storage type to specialize a call
-// argument on, and false when the argument keeps its own type.
-func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type) (Type, bool) {
-	// An argument that does not pass on a binding's value keeps its own type.
-	binding, ok := ts.yieldedBinding(arg)
-	if !ok {
-		return nil, false
-	}
+// argumentStorage returns the types to specialize a call argument's slots on:
+// a slot that passes on a binding's stored value takes the binding's storage
+// type, and every other slot keeps its own.
+func (ts *TypeSolver) argumentStorage(arg ast.Expression, own []Type) []Type {
+	storage := slices.Clone(own)
+	for i, ownType := range own {
+		binding, ok := ts.yieldedBinding(arg, i)
+		if !ok {
+			continue
+		}
 
-	// Parameters and code constants are already typed by their storage.
-	slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
-	if !exists {
-		return nil, false
+		// Parameters and code constants are already typed by their storage, and
+		// a resolved type can differ from its storage only in ownership.
+		slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
+		if exists && IsFullyResolvedType(ownType) {
+			storage[i] = slot
+		}
 	}
-
-	// A resolved type can differ from its storage only in ownership.
-	return slot, IsFullyResolvedType(own)
+	return storage
 }
 
-// yieldedBinding returns the binding whose stored value expr passes on: the
-// identifier itself, or the left operand of a scalar comparison in value
-// position, which yields its LHS.
-func (ts *TypeSolver) yieldedBinding(expr ast.Expression) (*ast.Identifier, bool) {
+// yieldedBinding returns the binding whose stored value slot i of expr passes
+// on: the identifier itself, or what the left operand passes on for a scalar
+// comparison slot in value position, which yields its LHS. A single-slot left
+// repeats to every slot.
+func (ts *TypeSolver) yieldedBinding(expr ast.Expression, slot int) (*ast.Identifier, bool) {
 	for {
 		switch e := expr.(type) {
 		case *ast.Identifier:
 			return e, true
 		case *ast.InfixExpression:
-			if !ts.ExprCache[key(ts.FuncNameMangled, e)].HasCondScalar() {
+			if !ts.ExprCache[key(ts.FuncNameMangled, e)].IsCondScalar(slot) {
 				return nil, false
+			}
+			if len(ts.ExprCache[key(ts.FuncNameMangled, e.Left)].OutTypes) == 1 {
+				slot = 0
 			}
 			expr = e.Left
 		default:

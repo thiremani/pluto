@@ -48,3 +48,16 @@ a, b = MixK(x)
 s = Sum3(xs)
     t = xs[0] + xs[1] + xs[2]
     s = t
+
+res = Plus(x)
+    res = x
+
+res = Plus(x, y)
+    res = x + y
+
+s, t = Swap(x, y)
+    s = y
+    t = x
+
+r = Cat(a, b)
+    r = a ⊕ b
