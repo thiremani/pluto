@@ -539,6 +539,14 @@ func broadcastConds(cond llvm.Value, n int) []llvm.Value {
 func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 
+	// An iterated range literal resolves its bounds where its range is built
+	// (rangeLiteralValue), so they are no condition of the value around it.
+	if _, ok := expr.(*ast.RangeLiteral); ok {
+		if _, iterated := info.Rewrite.(*ast.Identifier); iterated {
+			return nil, temps
+		}
+	}
+
 	// Array-literal cells are local-resolution boundaries: each cell resolves
 	// its own condition at its own level. Statement-level extraction must stop
 	// here — descending in would lift a cell's comparison into a gate over the

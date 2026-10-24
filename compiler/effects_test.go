@@ -161,48 +161,32 @@ nonempty, empty`)
 	requireTargetEffects(t, ts.ScriptCompiler.Script.Root.StatementEffects[empty], TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
 }
 
-func TestDirectCallSeedEffects(t *testing.T) {
+func TestDirectCallEffects(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, "callEffects", "", mustParseCode(t, `y = Always(x)
-    y = x
-
-y = Maybe(x)
-    y = x > 0 x`))
+    y = x`))
 	require.Empty(t, cc.Compile())
 
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `seeded = 7
-seeded = Maybe(1)
-fresh = Maybe(1)
-always = 4
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `always = 4
 always = Always(1)
 arr = [1]
 failed = 9
 failed = Always(arr[2])
 gated = 8
-gated = 1 > 0 Maybe(1)
-seeded, always, failed, gated`)
+gated = 1 > 0 Always(1)
+always, failed, gated`)
 
 	program := ts.ScriptCompiler.Program
-	seeded := program.Statements[1].(*ast.LetStatement)
-	fresh := program.Statements[2].(*ast.LetStatement)
-	always := program.Statements[4].(*ast.LetStatement)
-	failed := program.Statements[7].(*ast.LetStatement)
-	gated := program.Statements[9].(*ast.LetStatement)
-
-	seededEffect := ts.ScriptCompiler.Script.Root.StatementEffects[seeded]
-	requireTargetEffects(t, seededEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Equal(t, []int{0}, seededEffect.ReadsSeed)
-	require.Equal(t, []YieldEffect{MayYield}, ts.ExprCache[key(ts.FuncNameMangled, seeded.Value[0])].YieldEffects)
-
-	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
-	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Empty(t, freshEffect.ReadsSeed)
+	always := program.Statements[1].(*ast.LetStatement)
+	failed := program.Statements[4].(*ast.LetStatement)
+	gated := program.Statements[6].(*ast.LetStatement)
 
 	alwaysEffect := ts.ScriptCompiler.Script.Root.StatementEffects[always]
 	requireTargetEffects(t, alwaysEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
 	require.Empty(t, alwaysEffect.ReadsSeed)
+	require.Equal(t, []YieldEffect{MustYield}, ts.ExprCache[key(ts.FuncNameMangled, always.Value[0])].YieldEffects)
 
 	failedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[failed]
 	requireTargetEffects(t, failedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
@@ -210,63 +194,15 @@ seeded, always, failed, gated`)
 
 	gatedEffect := ts.ScriptCompiler.Script.Root.StatementEffects[gated]
 	requireTargetEffects(t, gatedEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Equal(t, []int{0}, gatedEffect.ReadsSeed)
+	require.Empty(t, gatedEffect.ReadsSeed)
 
-	maybeFunc := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Maybe", []Type{I64})]
 	alwaysFunc := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Always", []Type{I64})]
-
-	require.Equal(t, []WriteEffect{MayWrite}, maybeFunc.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MustWrite}, alwaysFunc.BodyOutputEffects)
-	require.True(t, maybeFunc.Settled)
 	require.True(t, alwaysFunc.Settled)
 }
 
-func TestFunctionOutputIsNotInitiallyWritten(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "wrapperEffects", "", mustParseCode(t, `y = Maybe(x)
-    y = x > 0 x
-
-y = Wrap(x)
-    y = Maybe(x)
-    y = Maybe(x)`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `fresh = Wrap(1)
-existing = 7
-existing = Wrap(1)
-fresh, existing`)
-
-	wrap := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "Wrap", []Type{I64})]
-
-	require.NotNil(t, wrap)
-	require.Equal(t, []WriteEffect{MayWrite}, wrap.BodyOutputEffects)
-
-	template, ok := cc.lookupFuncTemplate("Wrap", 1)
-	require.True(t, ok)
-	firstBodyStmt := template.Body.Statements[0].(*ast.LetStatement)
-	firstBodyEffect := wrap.StatementEffects[firstBodyStmt]
-	requireTargetEffects(t, firstBodyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Empty(t, firstBodyEffect.ReadsSeed)
-
-	secondBodyStmt := template.Body.Statements[1].(*ast.LetStatement)
-	secondBodyEffect := wrap.StatementEffects[secondBodyStmt]
-	requireTargetEffects(t, secondBodyEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Equal(t, []int{0}, secondBodyEffect.ReadsSeed)
-
-	fresh := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
-	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
-	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Empty(t, freshEffect.ReadsSeed)
-
-	existing := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
-	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
-	requireTargetEffects(t, existingEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Equal(t, []int{0}, existingEffect.ReadsSeed)
-}
-
-func TestCallDomainComposesWithBodyOutputEffects(t *testing.T) {
+// A call that runs writes every output, so only its own domain decides
+// whether it writes: an empty range keeps an existing destination.
+func TestCallDomainDecidesCallWrites(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
@@ -279,17 +215,6 @@ existing = Increment(0:0)
 empty = Increment(0:0)
 nonempty = Increment(0:2)
 existing, empty, nonempty`)
-
-	mangled := Mangle(cc.Compiler.MangledPath, "Increment", []Type{Range{Iter: I64}})
-	increment := cc.Compiler.FuncCache[mangled]
-
-	require.NotNil(t, increment)
-	require.Equal(t, []WriteEffect{MustWrite}, increment.BodyOutputEffects)
-
-	template, ok := cc.lookupFuncTemplate("Increment", 1)
-	require.True(t, ok)
-	bodyStmt := template.Body.Statements[0].(*ast.LetStatement)
-	requireTargetEffects(t, increment.StatementEffects[bodyStmt], TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
 
 	existing := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement)
 	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
@@ -339,145 +264,6 @@ existing`)
 	}
 }
 
-func TestConditionalBodyRemainsMayWriteAcrossNonemptyDomain(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "conditionalDomainEffects", "", mustParseCode(t, `y = ConditionalSquare(x)
-    y = x > 5 x * x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `fresh = ConditionalSquare(0:5)
-existing = 9
-existing = ConditionalSquare(0:5)
-fresh, existing`)
-
-	mangled := Mangle(cc.Compiler.MangledPath, "ConditionalSquare", []Type{Range{Iter: I64}})
-	conditional := cc.Compiler.FuncCache[mangled]
-
-	require.NotNil(t, conditional)
-	require.Equal(t, []WriteEffect{MayWrite}, conditional.BodyOutputEffects)
-
-	fresh := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
-	freshEffect := ts.ScriptCompiler.Script.Root.StatementEffects[fresh]
-	requireTargetEffects(t, freshEffect, TargetWriteEffect{TargetIndex: 0, Effect: MayWrite})
-	require.Empty(t, freshEffect.ReadsSeed)
-
-	existing := ts.ScriptCompiler.Program.Statements[2].(*ast.LetStatement)
-	existingEffect := ts.ScriptCompiler.Script.Root.StatementEffects[existing]
-	requireTargetEffects(t, existingEffect, TargetWriteEffect{TargetIndex: 0, Effect: MustWrite})
-	require.Equal(t, []int{0}, existingEffect.ReadsSeed)
-}
-
-func TestRecursiveBodyOutputEffectsConvergeAcrossSCC(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "recursiveEffects", "", mustParseCode(t, `y = A(n)
-    y = B(n)
-
-y = B(n)
-    y = n > 0 A(n - 1)
-    y = n == 0 "done"`))
-	require.Empty(t, cc.Compile())
-
-	solveScriptTypes(t, ctx, cc, t.Name(), `result = A(2)
-result`)
-
-	a := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "A", []Type{I64})]
-	b := cc.Compiler.FuncCache[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
-
-	require.Equal(t, []WriteEffect{MayWrite}, a.BodyOutputEffects)
-	require.Equal(t, []WriteEffect{MayWrite}, b.BodyOutputEffects)
-	require.True(t, a.Settled)
-	require.True(t, b.Settled)
-}
-
-func TestCallGraphWalkOrderAndEdgeViews(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "effectGraphIDs", "", mustParseCode(t, `y = Z(x)
-    y = B(x)
-    C(x)
-    y = B(x)
-
-y = B(x)
-    y = C(x)
-
-y = C(x)
-    y = x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `result = Z(1)
-result`)
-
-	walkOrder := []string{
-		Mangle(cc.Compiler.MangledPath, "Z", []Type{I64}),
-		Mangle(cc.Compiler.MangledPath, "B", []Type{I64}),
-		Mangle(cc.Compiler.MangledPath, "C", []Type{I64}),
-	}
-
-	graph := ts.buildSpecializationCallGraph()
-
-	for index, name := range walkOrder {
-		id := specializationNodeID(index)
-		require.Equal(t, id, graph.byMangled[name])
-		require.Equal(t, name, graph.nodes[id].mangled)
-	}
-
-	zID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "Z", []Type{I64})]
-	bID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "B", []Type{I64})]
-	cID := graph.byMangled[Mangle(cc.Compiler.MangledPath, "C", []Type{I64})]
-
-	require.Equal(t, []specializationNodeID{bID, cID}, graph.nodes[zID].effectCallees)
-	require.Equal(t, []specializationNodeID{zID}, graph.nodes[bID].effectCallers)
-	require.Equal(t, []specializationNodeID{cID}, graph.nodes[bID].effectCallees)
-	require.Equal(t, []specializationNodeID{zID, bID}, graph.nodes[cID].effectCallers)
-	require.Equal(t, [][]specializationNodeID{{cID}, {bID}, {zID}}, graph.calleeFirstComponents())
-	require.Equal(t, []string{walkOrder[1], walkOrder[2]}, graph.nodes[zID].directCallees)
-	require.Equal(t, []string{walkOrder[2]}, graph.nodes[bID].directCallees)
-	require.Empty(t, graph.nodes[cID].directCallees)
-}
-
-func TestCallGraphExcludesScalarEffectEdge(t *testing.T) {
-	ctx := llvm.NewContext()
-	defer ctx.Dispose()
-
-	cc := NewCodeCompiler(ctx, "scalarCompanionEdges", "", mustParseCode(t, `result = Gather(arr)
-    i = 0:3
-    result = [Scale(arr[i])]
-
-result = Scale(x)
-    result = x`))
-	require.Empty(t, cc.Compile())
-
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `arr = [10 20 30]
-result = Gather(arr)
-result`)
-	gatherMangled := Mangle(cc.Compiler.MangledPath, "Gather", []Type{Array{ElemType: I64, Rank: 1}})
-	gatherTemplate, ok := cc.lookupFuncTemplate("Gather", 1)
-	require.True(t, ok)
-	gatherCall := gatherTemplate.Body.Statements[1].(*ast.LetStatement).Value[0].(*ast.ArrayLiteral).Rows[0][0].(*ast.CallExpression)
-	callInfo := ts.ExprCache[key(gatherMangled, gatherCall)]
-	require.True(t, callInfo.ScalarCallVariantEnsured)
-
-	primaryMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.CallParamTypes)
-	scalarMangled := Mangle(cc.Compiler.MangledPath, "Scale", callInfo.ScalarCallParamTypes)
-	require.NotEqual(t, primaryMangled, scalarMangled)
-
-	graph := ts.buildSpecializationCallGraph()
-	gatherID, gatherInBatch := graph.byMangled[gatherMangled]
-	primaryID, primaryInBatch := graph.byMangled[primaryMangled]
-	_, scalarInBatch := graph.byMangled[scalarMangled]
-	require.True(t, gatherInBatch)
-	require.True(t, primaryInBatch)
-	require.True(t, scalarInBatch)
-	require.Equal(t, []specializationNodeID{primaryID}, graph.nodes[gatherID].effectCallees)
-	require.Equal(t, []string{primaryMangled, scalarMangled}, graph.nodes[gatherID].directCallees)
-	require.Equal(t, []string{primaryMangled, scalarMangled}, cc.Compiler.FuncCache[gatherMangled].CFGResult.DirectCallees)
-}
-
 func TestScriptEffectsRejectInvalidExpressionFacts(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -497,15 +283,15 @@ value`)
 	)
 }
 
-func TestMayWriteCallPreservesInvalidInvocationEffect(t *testing.T) {
+func TestCallPreservesInvalidInvocationEffect(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
 
-	cc := NewCodeCompiler(ctx, "invalidCallEffects", "", mustParseCode(t, `y = Maybe(x)
-    y = x > 0 x`))
+	cc := NewCodeCompiler(ctx, "invalidCallEffects", "", mustParseCode(t, `y = Always(x)
+    y = x`))
 	require.Empty(t, cc.Compile())
 
-	ts := solveScriptTypes(t, ctx, cc, t.Name(), `value = Maybe(1 + 1)
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), `value = Always(1 + 1)
 value`)
 
 	stmt := ts.ScriptCompiler.Program.Statements[0].(*ast.LetStatement)
@@ -513,7 +299,7 @@ value`)
 	argument := call.Arguments[0]
 	ts.ExprCache[key(ts.FuncNameMangled, argument)].OutTypes = []Type{Unresolved{}}
 
-	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled, nil, nil)
+	analyzer := newEffectAnalyzer(ts.ScriptCompiler.Compiler, ts.ScriptCompiler.ScriptMangled)
 
 	require.Equal(t, []YieldEffect{YieldInvalid}, analyzer.deriveExpr(call))
 }

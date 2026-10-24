@@ -38,3 +38,93 @@ a, b = 1 > 0 Accum(a, 0:-2), 123
 
 m, n = 1 > 0 Accum(1, 0:-2), 123
 "CondMixedNew: -m -n"
+
+# A range literal's bounds resolve before its loop, like any operands, so a
+# conditional bound works under a gate, in an operation, in a collector and in
+# a call.
+boundN = 3
+boundGated = boundN > 0 0:(boundN > 0 && boundN)
+boundOr = boundN > 0 0:(boundN < 0 || 5)
+boundSum = 0:(boundN > 0 && boundN) + 0
+boundCells = [0:(boundN > 0 && boundN)]
+boundCall = 10
+boundCall = Accum(boundCall, 0:(boundN > 0 && boundN))
+"BoundYields: -boundGated -boundOr -boundSum -boundCells -boundCall"
+
+# A bound that fails to yield leaves the loop with no iterations: existing
+# values stay, new ones keep their zero value, and a collector gets no cells.
+failGated = 7
+failGated = boundN > 0 0:(boundN < 0 && boundN)
+freshGated = boundN > 0 0:(boundN < 0 && boundN)
+failSum = 7
+failSum = 0:(boundN < 0 && boundN) + 0
+freshSum = 0:(boundN < 0 && boundN) + 0
+failCells = [0:(boundN < 0 && boundN)]
+failCall = 10
+failCall = Accum(failCall, 0:(boundN < 0 && boundN))
+freshCall = Accum(10, 0:(boundN < 0 && boundN))
+"BoundFails: -failGated -freshGated -failSum -freshSum -failCells -failCall -freshCall"
+
+# Indexing through such a range reads one element per index it yields.
+boundArr = [10 20 30 40]
+boundWords = ["ten" "twenty" "thirty" "forty"]
+boundPick = boundArr[0:(boundN > 0 && boundN)]
+failPick = 9
+failPick = boundArr[0:(boundN < 0 && boundN)]
+freshPick = boundArr[0:(boundN < 0 && boundN)]
+freshWord = boundWords[0:(boundN < 0 && boundN)]
+"BoundPicks: -boundPick -failPick -freshPick -freshWord%q"
+
+# The bounds run once, before the loop, so a bound that reads the destination
+# sees its value from before the statement.
+selfBound = 0
+selfBound = 1 > 0 0:(selfBound < 1 && 3)
+"SelfBound: -selfBound"
+
+# A bound runs once whatever its form, also when its range indexes an array or
+# nests inside another range's loop.
+countI = 0:3
+countCmp = 7
+countCmp = 1 > 0 0:(Loud(1) > 0)
+countAnd = 1 > 0 0:(Loud(2) > 0 && 3)
+countPick = boundArr[0:Loud(3)]
+countInner = [countI + 0:Loud(2)]
+"BoundCounts: -countCmp -countAnd -countPick -countInner"
+
+# Every range in a nest is built before the nest starts, so an inner bound runs
+# even when an outer range is empty.
+eagerI = 0:0
+eagerCells = [eagerI + 0:Loud(6)]
+"BoundEager: -eagerCells"
+
+# The value's own conditions run per element, without the bounds.
+countMixed = (boundN > 0 && 1) + 0:(Loud(4) > 0 && 3)
+"BoundMixed: -countMixed"
+
+# A call that runs the loop itself gets the range built the same way.
+calleeCmp = 10
+calleeCmp = Accum(calleeCmp, 0:(Loud(5) > 2))
+calleeFail = 10
+calleeFail = Accum(calleeFail, (Loud(4) > 5):3)
+"BoundCallee: -calleeCmp -calleeFail"
+
+# Every bound must yield before the loop starts, out-of-bounds reads included:
+# the loops run no iterations, so nothing is written or printed.
+oobBounds = [2]
+oobSum = 99
+oobSum = oobBounds[1]:(boundN > 0 && 3) + 0
+oobPick = 99
+oobPick = boundArr[oobBounds[1]:(boundN > 0 && 3)]
+oobCall = 10
+oobCall = Accum(oobCall, oobBounds[1]:3)
+"BoundReads: -oobSum -oobPick -oobCall"
+oobBounds[1]:3 + 0
+
+# A heap value compared in a bound is freed once the bound resolves.
+heapBound = 1 > 0 0:(HeapSuffix("a") > "a" && 3)
+"HeapBound: -heapBound"
+
+# A range assigned whole keeps its old range when a bound fails.
+storedYields = KeepRange(3)
+storedFails = KeepRange(0)
+"BoundStored: -storedYields -storedFails"

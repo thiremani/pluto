@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/thiremani/pluto/ast"
@@ -37,7 +36,8 @@ type BasicBlock struct {
 	Stmts []*StmtNode
 }
 
-// CFG owns structural template validation and effect-sensitive dataflow.
+// CFG owns template validation, which classifies writes from the text, and
+// the script's effect-sensitive dataflow.
 type CFG struct {
 	CodeCompiler *CodeCompiler
 	Blocks       []*BasicBlock
@@ -185,21 +185,43 @@ func (cfg *CFG) collectSpecifierReads(value string, tok token.Token, runes []run
 	return reads, spec.end
 }
 
-// AnalyzeFuncs runs syntax-stable structural validation once for every
-// function template. Effect-sensitive diagnostics are deferred until a
-// concrete specialization is settled.
+// AnalyzeFuncs validates every function template once, whether or not
+// anything calls it: structural checks and a classification of each write
+// from the template's text alone, then dataflow checks over those writes.
+// The dataflow checks wait until every template passes the first two, since a
+// caller reads each call as returning values: a function rejected for holding
+// a range in an output would mislead its callers' checks.
 func (cfg *CFG) AnalyzeFuncs() {
+	cfg.CodeCompiler.rangeBindings = make(map[funcKey]map[string]struct{})
+	errorsBefore := len(cfg.Errors)
+
+	var templates []classifiedTemplate
 	for _, stmt := range cfg.CodeCompiler.Code.Statements {
 		fn, ok := stmt.(*ast.FuncStatement)
 		if !ok {
 			continue
 		}
 
-		cfg.validateFuncTemplate(fn)
+		templates = append(templates, cfg.validateFuncTemplate(fn))
+	}
+	if len(cfg.Errors) > errorsBefore {
+		return
+	}
+
+	for _, template := range templates {
+		cfg.checkTemplateFlow(template)
 	}
 }
 
-func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
+// classifiedTemplate keeps what the dataflow checks need from a validated
+// and classified template.
+type classifiedTemplate struct {
+	fn             *ast.FuncStatement
+	statementReads [][]VarEvent
+	writes         [][]textWrite
+}
+
+func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) classifiedTemplate {
 	PushScope(&cfg.Scopes, FuncScope)
 	defer PopScope(&cfg.Scopes)
 
@@ -214,7 +236,7 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 
 	body := cfg.validateTemplateBody(fn.Body.Statements, identSet(fn.Parameters), identSet(fn.Outputs))
 	readInputs, assignedOutputs := body.readInputs, body.assignedOutputs
-	cfg.CodeCompiler.outputReads[funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}] = body.readOutputs
+	cfg.CodeCompiler.outputReads[templateKey(fn)] = body.readOutputs
 
 	for _, input := range fn.Parameters {
 		if _, wasRead := readInputs[input.Value]; wasRead {
@@ -230,6 +252,384 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) {
 
 		cfg.addError(output.Tok(), fmt.Sprintf("output parameter %q is never assigned", output.Value))
 	}
+
+	writes := cfg.classifyTemplateWrites(fn)
+	return classifiedTemplate{fn: fn, statementReads: body.statementReads, writes: writes}
+}
+
+// classifyTemplateWrites classifies every assignment's writes from the
+// template's text, indexed by statement, and records its range bindings for
+// settlement to check. It reports the text it cannot classify: a call that
+// names no template, an operator whose sides do not line up, and an
+// assignment whose values do not fill its targets. The solver rejects each of
+// these in any specialization; the flow checks, which would misread them, wait
+// until no template has one. It also reports an output that holds a range,
+// which a function cannot return.
+func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
+	// A scope of its own resolves each string's markers against the names
+	// defined before it, as the solver resolves them.
+	PushScope(&cfg.Scopes, FuncScope)
+	defer PopScope(&cfg.Scopes)
+	cfg.declareTargets(fn.Parameters)
+	cfg.declareTargets(fn.Outputs)
+
+	// ranges holds the bindings whose latest assignment gave them a range: a
+	// bare range literal or range name assigned without a gate. A parameter
+	// holds one element per run, and no call returns a range. A change between
+	// a range and a non-range value is the solver's to reject, like any other
+	// change of type.
+	ranges := make(map[string]struct{})
+	outputs := identSet(fn.Outputs)
+	writes := make([][]textWrite, len(fn.Body.Statements))
+	for i, stmt := range fn.Body.Statements {
+		cfg.rejectUnclassifiableExprs(statementExpressions(stmt))
+		let, ok := stmt.(*ast.LetStatement)
+		if !ok {
+			continue
+		}
+
+		letWrites, ok := cfg.classifyWrites(let, ranges)
+		if !ok {
+			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.valueCount(let.Value)))
+			continue
+		}
+		cfg.rejectRangeOutputs(outputs, let, letWrites)
+		cfg.declareTargets(let.Name)
+		updateRanges(ranges, let.Name, letWrites)
+		writes[i] = letWrites
+	}
+
+	cfg.CodeCompiler.rangeBindings[templateKey(fn)] = ranges
+	return writes
+}
+
+func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
+	for _, expr := range exprs {
+		switch e := expr.(type) {
+		case *ast.CallExpression:
+			if _, found := cfg.callTemplate(e); !found {
+				cfg.addError(e.Token, undefinedFunction(e.Function.Value))
+			}
+		case *ast.InfixExpression:
+			cfg.rejectMisalignedOperands(e)
+		}
+		cfg.rejectUnclassifiableExprs(ast.ExprChildren(expr))
+	}
+}
+
+// rejectMisalignedOperands reports an operator whose sides yield counts the
+// solver rejects.
+func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
+	left, right := cfg.valueSlots(infix.Left), cfg.valueSlots(infix.Right)
+	switch {
+	case !operandsLineUp(infix, left, right) && infix.IsLogicalAnd():
+		cfg.addError(infix.Token, logicalAndArityMismatch(left, right))
+	case !operandsLineUp(infix, left, right):
+		cfg.addError(infix.Token, operandMismatch(infix.Token.Literal, left, right))
+	}
+}
+
+// operandsLineUp reports whether an operator's sides yield counts the solver
+// accepts: equal counts, or for a && also a condition that folds onto one
+// value or broadcasts to several.
+func operandsLineUp(infix *ast.InfixExpression, left, right int) bool {
+	if infix.IsLogicalAnd() {
+		return left == right || left == 1 || right == 1
+	}
+	return left == right
+}
+
+// rejectRangeOutputs reports an output assigned a range. A function returns a
+// range's bounds instead, and its caller builds the range.
+func (cfg *CFG) rejectRangeOutputs(outputs map[string]struct{}, let *ast.LetStatement, writes []textWrite) {
+	for i, target := range let.Name {
+		if _, isOutput := outputs[target.Value]; !isOutput || !writes[i].holdsRange {
+			continue
+		}
+
+		cfg.addError(target.Tok(), fmt.Sprintf("output %q cannot hold a range; return its bounds and build the range where it is used", target.Value))
+	}
+}
+
+func undefinedFunction(name string) string {
+	return fmt.Sprintf("undefined function: %s", name)
+}
+
+func assignmentMismatch(targets, values int) string {
+	return fmt.Sprintf("assignment mismatch: %s but %s", countOf(targets, "target"), countOf(values, "value"))
+}
+
+func operandMismatch(operator string, left, right int) string {
+	return fmt.Sprintf("operand mismatch: %q has %s on its left but %s on its right", operator, countOf(left, "value"), countOf(right, "value"))
+}
+
+func logicalAndArityMismatch(left, right int) string {
+	return fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", left, right)
+}
+
+// countOf writes n with its noun, in the plural unless n is one.
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// checkTemplateFlow runs the dataflow checks once per template over the writes
+// classified from its text: an output is read only after a definite
+// assignment and is definitely assigned by the end of the body, and no write
+// is dead or overwrites a definite write that nothing read. It runs only on a
+// structurally valid body whose text classifies, so every output read follows
+// some write and every assignment has its writes.
+func (cfg *CFG) checkTemplateFlow(template classifiedTemplate) {
+	cfg.PushBlock()
+	defer cfg.PopBlock()
+
+	outputs := identSet(template.fn.Outputs)
+	cfg.forwardPass(template, outputs)
+	cfg.backwardPass(outputs)
+}
+
+// forwardPass runs the forward dataflow over a template's statements. An
+// output must be definitely assigned wherever it is read and by the end of the
+// body, where its caller reads it.
+func (cfg *CFG) forwardPass(template classifiedTemplate, outputs map[string]struct{}) {
+	assigned := make(map[string]struct{}, len(outputs))
+	lastWrites := make(map[string]VarEvent)
+
+	for i, stmt := range template.fn.Body.Statements {
+		cfg.rejectUnassignedOutputReads(template.statementReads[i], outputs, assigned)
+		events := append([]VarEvent(nil), template.statementReads[i]...)
+		if let, ok := stmt.(*ast.LetStatement); ok {
+			events = append(events, textWriteEvents(let, template.writes[i])...)
+		}
+		cfg.processDataflowEvents(stmt, events, lastWrites)
+
+		for _, event := range events {
+			if _, isOutput := outputs[event.Name]; isOutput && event.Kind == Write {
+				assigned[event.Name] = struct{}{}
+			}
+		}
+	}
+
+	cfg.rejectUnassignedOutputs(template.fn.Outputs, assigned)
+}
+
+func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, assigned map[string]struct{}) {
+	for _, read := range reads {
+		if _, isOutput := outputs[read.Name]; !isOutput {
+			continue
+		}
+		if _, ok := assigned[read.Name]; !ok {
+			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it", read.Name))
+		}
+	}
+}
+
+func (cfg *CFG) rejectUnassignedOutputs(outputs []*ast.Identifier, assigned map[string]struct{}) {
+	for _, output := range outputs {
+		if _, ok := assigned[output.Value]; ok {
+			continue
+		}
+
+		cfg.addError(output.Tok(), fmt.Sprintf("output %q may be left unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it (%s = prev), with each caller passing its destination as that input", output.Value, output.Value))
+	}
+}
+
+// textWriteEvents turns an assignment's text classification into write events
+// at its named targets.
+func textWriteEvents(let *ast.LetStatement, writes []textWrite) []VarEvent {
+	var events []VarEvent
+	for i, target := range let.Name {
+		if isDiscard(target) {
+			continue
+		}
+
+		kind := ConditionalWrite
+		if writes[i].definite {
+			kind = Write
+		}
+		events = append(events, VarEvent{Name: target.Value, Kind: kind, Token: target.Tok()})
+	}
+	return events
+}
+
+// textWrite classifies one assignment target from the text: definite unless
+// the statement's gate, a value that can fail, or a range that may be empty
+// can skip the write; holdsRange when the target receives a Range descriptor.
+type textWrite struct {
+	definite   bool
+	holdsRange bool
+}
+
+// classifyWrites classifies every target of an assignment, discards included,
+// so the result lines up with its names. Values take targets by their output
+// counts; it reports false when those do not fill the targets.
+func (cfg *CFG) classifyWrites(let *ast.LetStatement, ranges map[string]struct{}) ([]textWrite, bool) {
+	if cfg.valueCount(let.Value) != len(let.Name) {
+		return nil, false
+	}
+
+	gated := len(let.Condition) > 0
+	writes := make([]textWrite, 0, len(let.Name))
+	for _, value := range let.Value {
+		definite := !gated && !cfg.maySkip(value, ranges)
+		isRange := !gated && assignsRange(value, ranges)
+		for slot := 0; slot < cfg.valueSlots(value); slot++ {
+			writes = append(writes, textWrite{definite: definite, holdsRange: isRange})
+		}
+	}
+
+	return writes, true
+}
+
+// maySkip reports whether a value can leave its targets unwritten: it can
+// fail (a value-position comparison, &&, a checked access, a || whose last
+// alternative can fail, or a call with such an argument), or a range that may
+// be empty drives it.
+func (cfg *CFG) maySkip(value ast.Expression, ranges map[string]struct{}) bool {
+	// A range literal assigned whole keeps the old value when a bound fails.
+	operands := []ast.Expression{value}
+	if lit, ok := value.(*ast.RangeLiteral); ok {
+		operands = ast.ExprChildren(lit)
+	}
+	for _, operand := range operands {
+		if treeCanFail(operand, textNodeFails) {
+			return true
+		}
+	}
+	return cfg.drivesValue(value, ranges)
+}
+
+func textNodeFails(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.InfixExpression:
+		return e.Token.IsComparison() || e.IsLogicalAnd()
+	case *ast.ArrayRangeExpression:
+		return true
+	}
+	return false
+}
+
+// assignsRange reports whether a value assigned without a gate gives its one
+// target a range: a bare range literal, or a bare range name whose range it
+// copies. Under a gate the value is a computation, so the range iterates.
+func assignsRange(value ast.Expression, ranges map[string]struct{}) bool {
+	switch v := value.(type) {
+	case *ast.RangeLiteral:
+		return true
+	case *ast.Identifier:
+		_, isRange := ranges[v.Value]
+		return isRange
+	}
+	return false
+}
+
+// updateRanges records which of an assignment's targets now hold a range:
+// exactly those it gives one.
+func updateRanges(ranges map[string]struct{}, targets []*ast.Identifier, writes []textWrite) {
+	for i, target := range targets {
+		if isDiscard(target) {
+			continue
+		}
+
+		if writes[i].holdsRange {
+			ranges[target.Value] = struct{}{}
+			continue
+		}
+		delete(ranges, target.Value)
+	}
+}
+
+// drivesValue reports whether a range that may be empty drives an
+// assignment's value: any range the value iterates, apart from a range it
+// assigns whole. A bare range name copies its range without a gate, and a
+// gated write can be skipped anyway.
+func (cfg *CFG) drivesValue(value ast.Expression, ranges map[string]struct{}) bool {
+	switch v := value.(type) {
+	case *ast.RangeLiteral:
+		return cfg.drivesAny(ast.ExprChildren(v), ranges)
+	case *ast.Identifier:
+		return false
+	case *ast.CallExpression:
+		return cfg.drivesAny(v.Arguments, ranges)
+	}
+	return cfg.drives(value, ranges)
+}
+
+// drives reports whether expr iterates a range that may be empty. Every range
+// in it is iterated, except inside an array literal, which settles its cells
+// itself, and in a string's main marker, which formats its range. Only a
+// range literal with constant, nonempty bounds always runs.
+func (cfg *CFG) drives(expr ast.Expression, ranges map[string]struct{}) bool {
+	switch e := expr.(type) {
+	case *ast.ArrayLiteral:
+		return false
+	case *ast.RangeLiteral:
+		return !rangeLiteralGuaranteedNonEmpty(e)
+	case *ast.Identifier:
+		_, isRange := ranges[e.Value]
+		return isRange
+	case *ast.StringLiteral:
+		// A width or precision operand consumes a range as numbers.
+		_, specs := formatMarkerIdentifiers(e.Token.Literal, cfg.isDefined)
+		for _, name := range specs {
+			if _, isRange := ranges[name]; isRange {
+				return true
+			}
+		}
+
+		return false
+	}
+	return cfg.drivesAny(ast.ExprChildren(expr), ranges)
+}
+
+func (cfg *CFG) drivesAny(exprs []ast.Expression, ranges map[string]struct{}) bool {
+	for _, expr := range exprs {
+		if cfg.drives(expr, ranges) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// valueSlots counts the targets a value fills, read from the text the way the
+// solver counts a tuple: a call fills its template's outputs, and an operator
+// its right operand's. An operator whose sides do not line up fills one, as
+// the solver counts it after reporting the mismatch.
+func (cfg *CFG) valueSlots(value ast.Expression) int {
+	switch v := value.(type) {
+	case *ast.CallExpression:
+		if template, ok := cfg.callTemplate(v); ok {
+			return len(template.Outputs)
+		}
+	case *ast.InfixExpression:
+		left, right := cfg.valueSlots(v.Left), cfg.valueSlots(v.Right)
+		if operandsLineUp(v, left, right) {
+			return right
+		}
+	case *ast.PrefixExpression:
+		return cfg.valueSlots(v.Right)
+	}
+	return 1
+}
+
+// valueCount counts the values a list of expressions yields, as valueSlots
+// counts each.
+func (cfg *CFG) valueCount(values []ast.Expression) int {
+	count := 0
+	for _, value := range values {
+		count += cfg.valueSlots(value)
+	}
+
+	return count
+}
+
+// callTemplate finds a call's template by its name and arity, where an
+// argument counts once for each value it yields.
+func (cfg *CFG) callTemplate(call *ast.CallExpression) (*ast.FuncStatement, bool) {
+	return cfg.CodeCompiler.lookupFuncTemplate(call.Function.Value, cfg.valueCount(call.Arguments))
 }
 
 // templateBody is the structural summary of one template body.
@@ -307,57 +707,6 @@ func (cfg *CFG) validateScriptTemplate(statements []ast.Statement) [][]VarEvent 
 	defer PopScope(&cfg.Scopes)
 
 	return cfg.validateTemplateBody(statements, nil, nil).statementReads
-}
-
-// AnalyzeSpecialization runs only typed dataflow over one type
-// specialization, with every input treated as its own value: a call that
-// shares an input with an output only adds reads, so a body valid here is
-// valid in every call. Structural diagnostics were already produced once
-// from the function template.
-func (cfg *CFG) AnalyzeSpecialization(template *ast.FuncStatement, info *FuncInfo) {
-	cfg.PushBlock()
-	defer cfg.PopBlock()
-	PushScope(&cfg.Scopes, FuncScope)
-	defer PopScope(&cfg.Scopes)
-
-	// Parameters must be in scope: the shared marker collector treats an
-	// unknown main marker as literal text and rejects unknown specifier names.
-	for _, param := range template.Parameters {
-		cfg.declareName(param)
-	}
-
-	outputs := identSet(template.Outputs)
-	cfg.typedForwardPass(template, info, outputs)
-	cfg.backwardPass(maps.Clone(outputs))
-}
-
-// typedForwardPass runs the forward dataflow over a body. Per statement, in
-// order: an explicit read of an output needs an earlier definite assignment;
-// the statement's events run; its definite targets become assigned for the
-// statements after it.
-func (cfg *CFG) typedForwardPass(template *ast.FuncStatement, info *FuncInfo, outputs map[string]struct{}) {
-	definitelyAssigned := make(map[string]struct{}, len(outputs))
-	lastWrites := make(map[string]VarEvent)
-	for _, stmt := range template.Body.Statements {
-		reads := cfg.collectStatementReads(stmt)
-		cfg.rejectUnassignedOutputReads(reads, outputs, definitelyAssigned)
-		cfg.processTypedStatement(stmt, reads, info.StatementEffects, lastWrites)
-
-		if let, ok := stmt.(*ast.LetStatement); ok {
-			maps.Copy(definitelyAssigned, definiteTargets(let, info.StatementEffects[let]))
-		}
-	}
-}
-
-func (cfg *CFG) rejectUnassignedOutputReads(reads []VarEvent, outputs, definitelyAssigned map[string]struct{}) {
-	for _, read := range reads {
-		if _, isOutput := outputs[read.Name]; !isOutput {
-			continue
-		}
-		if _, ok := definitelyAssigned[read.Name]; !ok {
-			cfg.addError(read.Token, fmt.Sprintf("output %q is read where it may still be unassigned; assign it unconditionally first, or pass the previous value as an input and initialize from it", read.Name))
-		}
-	}
 }
 
 func (cfg *CFG) typedScriptForwardPass(statements []ast.Statement, effects map[*ast.LetStatement]StatementEffect, statementReads [][]VarEvent) {
@@ -467,7 +816,8 @@ func (cfg *CFG) transferWrite(lastWrites map[string]VarEvent, event VarEvent) {
 	lastWrites[event.Name] = event
 }
 
-// backwardPass identifies unused values and dead stores.
+// backwardPass identifies unused values and dead stores. It walks back from
+// live, the names read after the body (a template's outputs), updating it.
 func (cfg *CFG) backwardPass(live map[string]struct{}) {
 	block := cfg.Blocks[len(cfg.Blocks)-1]
 	for i := len(block.Stmts) - 1; i >= 0; i-- {
@@ -495,8 +845,8 @@ func (cfg *CFG) backwardPass(live map[string]struct{}) {
 }
 
 // An output is readable once an earlier statement has assigned it; a
-// statement's reads precede its own writes. The typed pass narrows this per
-// specialization to writes that definitely assign.
+// statement's reads precede its own writes. The template's dataflow check
+// narrows this to writes that definitely assign.
 func (cfg *CFG) validateStructuralRead(event VarEvent, outputs, assigned map[string]struct{}) {
 	if _, isOutput := outputs[event.Name]; isOutput {
 		if _, isAssigned := assigned[event.Name]; !isAssigned {

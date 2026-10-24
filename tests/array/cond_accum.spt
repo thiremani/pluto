@@ -205,36 +205,34 @@ q = 0:3
 elem = q < 2 arr4[q]
 "ScalarElem: -elem"
 
-# A statement driver gates a distinct bare Range descriptor without consuming it.
-r = 0:3
-i = 0:5
-cross = r < 4 i
-crossValues = [cross]
-"CrossRange: -crossValues"
-
-# A direct bare Range literal is likewise assigned as a descriptor.
-r = 0:3
-litcross = r < 2 0:5
-litcrossValues = [litcross]
-"LitCross: -litcrossValues"
-
 # Scalar conditional iteration: direct range-indexed array expression
 arr5 = [10 20 30 40]
 r = 0:3
 selectionCross = r < 2 arr5[0:3]
 selectionCross
 
-# A rejected descriptor assignment keeps the existing Range value.
-seedlit = 8:10
+# A rejected gated range literal keeps the existing value.
+seedlit = 8
 r = 0:3
 seedlit = r < 0 0:5
-seedlitValues = [seedlit]
-"SeedLit: -seedlitValues"
+"SeedLit: -seedlit"
 
-# A fresh rejected descriptor assignment keeps the zero Range descriptor.
+# A fresh rejected one keeps zero.
 freshlit = r < 0 0:5
-freshlitValues = [freshlit]
-"FreshLit: -freshlitValues"
+"FreshLit: -freshlit"
+
+# A gate with no range of its own makes a bare range iterate too: the
+# assignment keeps the final element, and an empty range keeps the old value.
+gateN = 3
+gateRange = 0:5
+gatedName = gateN > 2 gateRange
+"GatedName: -gatedName"
+gatedLiteral = gateN > 2 0:4
+"GatedLiteral: -gatedLiteral"
+gateEmpty = 0:0
+gatedEmpty = 7
+gatedEmpty = gateN > 2 gateEmpty
+"GatedEmpty: -gatedEmpty"
 
 # A rejected direct range-indexed array expression keeps the old value
 seedSelection = 77

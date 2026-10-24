@@ -66,9 +66,10 @@ width = 5
 A main marker formats its value whatever the type, so a bare `Range` formats
 its descriptor and contributes no iteration: the string is a single value in
 assignment and in print alike. A Range identifier used for dynamic width or
-precision is consumed as a number, which makes it an iteration driver. An
-explicit numeric conversion such as `-i%d` is a compile error while `i` is an
-undriven Range descriptor — a descriptor is not a number.
+precision is consumed as a number, which makes it an iteration driver, and
+several such ranges nest in the order the string names them, the first
+outermost. An explicit numeric conversion such as `-i%d` is a compile error
+while `i` is an undriven Range descriptor — a descriptor is not a number.
 
 ```pluto
 i = 0:3

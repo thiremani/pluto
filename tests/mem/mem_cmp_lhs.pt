@@ -2,4 +2,5 @@
 # named binding permanently borrowed, or scope cleanup never frees its payload.
 out = pickByHeapCompare(k)
     label = "he" ⊕ "llo"
+    out = 0
     out = label > "abc" k

@@ -18,11 +18,19 @@ type CodeCompiler struct {
 	// at owned storage, so every read and every nested call it feeds see
 	// the representation lowering stores.
 	outputReads map[funcKey]map[string]struct{}
+	// rangeBindings records, per template, which bindings hold a Range
+	// descriptor, as the template checks read them from the text. Settlement
+	// checks the solved types agree.
+	rangeBindings map[funcKey]map[string]struct{}
 }
 
 type funcKey struct {
 	name  string
 	arity int
+}
+
+func templateKey(fn *ast.FuncStatement) funcKey {
+	return funcKey{name: fn.Token.Literal, arity: len(fn.Parameters)}
 }
 
 func NewCodeCompiler(ctx llvm.Context, modName, relPath string, code *ast.Code) *CodeCompiler {
@@ -63,7 +71,7 @@ func (cc *CodeCompiler) indexDeclarations() []*token.CompileError {
 				}
 			}
 		case *ast.FuncStatement:
-			key := funcKey{name: s.Token.Literal, arity: len(s.Parameters)}
+			key := templateKey(s)
 			previous, exists := cc.funcTemplates[key]
 			if !exists {
 				cc.funcTemplates[key] = s

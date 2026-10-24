@@ -152,6 +152,20 @@ y = Square(x)
 
 Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
 
+Every body that runs assigns every output on every path. A write under a condition, from a value that can fail, or driven by a range that may be empty can be skipped, so it needs a default first. A function keeps an old value only through an input its caller passes:
+
+```python
+y = Fib(n)
+    y = n
+    y = n > 1 Fib(n - 1) + Fib(n - 2)
+
+out = Maybe(prev, x)
+    out = prev
+    out = x > 0 x
+```
+
+`a = Maybe(a, -1)` keeps `a`. A call therefore either writes all of its outputs or does not run at all: when an argument fails, when the statement's condition fails, or when its range is empty.
+
 ```python
 out, seen = Fold(current, item)
     out = current + item
@@ -219,14 +233,17 @@ lastSquare = Square(i)     # 16
 i                          # prints the descriptor: 0:5
 ```
 
-A bare range is a value: assignment copies it and print shows its descriptor.
-Using it in an operation creates a ranged computation: the assignment keeps
-the final yield, brackets materialize all yields into an array, and passing it
-to a template executes the call once for each value. The compiler can map
-these operations to SIMD instructions — this is range-driven
+A bare range is a value, written as a literal or held by a name: an assignment
+without a gate copies it, and print shows its descriptor unless another
+argument on the line loops over it. Using it under a gate or in an operation
+creates a ranged computation: the assignment keeps the final yield, brackets
+materialize all yields into an array, and passing it to a template executes
+the call once for each value. The
+compiler can map these operations to SIMD instructions — this is range-driven
 auto-vectorization. Each named Range binding is a distinct driver: different
 names form a cartesian domain when consumed together, even when their bounds
-are equal.
+are equal. A function cannot return a range; it returns the bounds, and the
+caller builds the range.
 
 Range-indexed array access follows the same rule:
 

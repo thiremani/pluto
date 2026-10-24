@@ -126,9 +126,8 @@ An unresolved failure that reaches an **invocation boundary** merges lanes
 there: a failed call argument suppresses that call's complete output tuple,
 and a failed print argument suppresses the complete print invocation and its
 newline (see "Print invocation atomicity" under Status). A call that did run
-writes every output (#123, decided and not yet implemented), so a failure
-inside a callee never reaches its caller. Until then, each output of a call
-that ran resolves independently per flattened output slot.
+writes every output (#123), so a failure inside a callee never reaches its
+caller.
 
 ```pluto
 y > 2          # yields y when y > 2, else fails    (the value is the left operand)
@@ -216,6 +215,19 @@ statement gate `y = a > 2  10` both keep `y`'s old value when `a <= 2` — one
 keep-old rule, reached by propagation or by the gate. The removed bracket form
 `y = (a > 2 10)` was the odd one out (it always assigned, zero on failure);
 spell that `y = a > 2 && 10 || 0`.
+
+They also agree on ranges: a bare range in either value iterates (#146). They
+differ in how often the condition runs. A statement gate's condition runs once
+for each point of the statement's outer iteration domain, before the values,
+whose RHS-local ranges run inside each admitted point; an `&&` condition is
+part of its value, so it runs once for each element the value iterates. With
+`Check` printing its argument and returning 1:
+
+```pluto
+i = 0:3
+a = Check("gate") > 0 i       # prints gate once; a is 2
+b = Check("and") > 0 && i     # prints and three times; b is 2
+```
 
 ## Arrays
 
@@ -424,12 +436,10 @@ shape — unresolved meaning no closer resolver claimed it first: in
   failed one. Ordinary calls are currently lazy in exactly the way print
   is, and PIR Step 6 is the behavior change for both. The
   out-of-bounds case changes too: today it materializes a zero and prints. A
-  suppressed invocation still releases its owned temporaries. Today an
-  unwritten direct-return argument resolves to its seed, which is zero in a
-  print, and always yields, because the result carries no validity bit.
-  #123 (decided) removes the case instead of adding a bit: a body that runs
-  writes every output, so a print argument that is a call either yields or
-  failed before the call ran.
+  suppressed invocation still releases its owned temporaries. A
+  direct-return argument carries no validity bit, and #123 removed the need
+  for one instead of adding it: a body that runs writes every output, so a
+  print argument that is a call either yields or failed before the call ran.
 - **Checked-access fallback (decided, not yet implemented):** the nearest
   resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
   `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the

@@ -8,3 +8,22 @@ CondLiteralRangeExisting: 7
 CondLiteralRangeNew: 0
 CondMixedExisting: 5 123
 CondMixedNew: 0 123
+BoundYields: 2 4 2 [0 1 2] 13
+BoundFails: 7 0 7 0 [] 10 0
+BoundPicks: 30 9 0 ""
+SelfBound: 2
+called 1
+called 2
+called 3
+called 2
+BoundCounts: 0 2 30 [0 1 1 2 2 3]
+called 6
+BoundEager: []
+called 4
+BoundMixed: 3
+called 5
+called 4
+BoundCallee: 20 10
+BoundReads: 99 99 10
+HeapBound: 2
+BoundStored: 2 1

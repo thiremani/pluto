@@ -60,8 +60,8 @@ _ = arr[1]
 _ = sarr[1]
 "CheckedBlank: done"
 
-# A conditionally-writing callee with its output discarded, on both the
-# writing and non-writing paths.
+# A callee that overrides its default conditionally, with its output
+# discarded, on both paths.
 _ = maybeStr(1)
 _ = maybeStr(-1)
-"MayWriteBlank: done"
+"DefaultBlank: done"

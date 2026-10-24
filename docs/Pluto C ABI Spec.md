@@ -333,15 +333,17 @@ types:
 - `I64` and `F64` parameters are passed directly. Ranges, internal
   `ArrayRange` descriptors, and other values are passed indirectly.
 - A function with exactly one `I64` or `F64` output returns that scalar
-  directly and receives one hidden seed value. The seed preserves the caller's
-  staged value when the callee does not write its output, including a failed
-  conditional assignment or an empty `Range`/internal `ArrayRange`.
+  directly and receives one hidden seed value. Every body that runs writes
+  every output (#123), so the seed preserves the caller's staged value only
+  when a `Range` or internal `ArrayRange` parameter runs no iteration; a
+  function without one never reads its seed.
 - All other output lists use an indirect `void` return. Argument zero points
   to a carrier whose first `N` fields are output pointers and whose next `N`
   fields are pointers to `i1` write markers.
 - The caller initializes every write marker to false. A callee sets the marker
-  only when that output is actually written. This lets an empty range or
-  skipped conditional preserve an existing caller destination.
+  when it writes that output, which every body that runs does. A marker left
+  false therefore means an empty range parameter, and the caller keeps its
+  existing destination.
 - Output expressions are staged independently at the call site, so one output
   cannot mutate a destination before a sibling right-hand side reads its
   statement-start value.
@@ -373,8 +375,8 @@ may-write—cannot alter the prototype of an existing symbol. A future seedless
 internal fast path must therefore use a distinct private symbol behind this
 stable boundary.
 
-The planned ABI 3.0 (§5.3) removes the seed and the write markers from every
-function without a `Range` or `ArrayRange` parameter.
+The planned ABI 3.0 (§5.3, #69) removes the seed and the write markers from
+every function without a `Range` or `ArrayRange` parameter.
 
 Conceptually, a two-output indirect call uses:
 
@@ -474,14 +476,14 @@ first parameter sharing its first output, which is therefore an `I64`.
 `Demangle` renders it as `math.Fold(I64 -> 1, StrH)`.
 
 The public specialization symbol is unchanged by the variant. C callers
-never see a variant and cannot request one. Under the planned ABI 3.0, a
+never see a variant and cannot request one. Once inputs are stable (#144), a
 variant can no longer change what a body reads within one invocation (§5.3).
 
-### 5.3 Planned: ABI 3.0 (#123)
+### 5.3 Planned: ABI 3.0 (#69)
 
-Decided in #123 and not yet implemented. Every body that runs will write every
-output, so no function needs its destination's old value as an implicit
-input. ABI 3.0 removes the hidden seed and the write markers from every
+Every body that runs writes every output (#123), so no function needs its
+destination's old value as an implicit input. ABI 3.0, tracked in #69 and not
+yet implemented, removes the hidden seed and the write markers from every
 function without a `Range` or `ArrayRange` parameter: a direct return takes
 only its source parameters, and the indirect carrier holds only output
 pointers. `Square` becomes `int64_t Pt_Square_I64(int64_t x)`.
@@ -497,9 +499,9 @@ function such as `Acc` must still report that no iteration ran, since zero
 iterations mean no assignment; it keeps its seed until PIR Step 7 chooses
 between one "did execute" bit and a caller-side emptiness check.
 
-Inputs become stable within each scalar invocation, so within one invocation
-a private variant (§5.2) may only let a shared input and output use one slot
-where no read can tell. Across iterations, a variant must produce what
+Once inputs are stable within each scalar invocation (#144), a private
+variant (§5.2) may only let a shared input and output use one slot within one
+invocation where no read can tell. Across iterations, a variant must produce what
 repeated scalar invocations of the bare specialization produce, with each
 iteration's shared argument rebound to the destination's current value. With
 `out = a + i`, `sum = Acc(sum, 1:5)` from 0 gives 10, while an unshared
