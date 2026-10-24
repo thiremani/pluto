@@ -335,13 +335,24 @@ semantics.
 A value-position `&&` zips slots like `||` does: slot *i* of the right side
 commits exactly when slot *i* of the left yields, so a multi-cell condition
 gates a multi-value right per slot, not as a unit
-(`Pair(1, 2) > Pair(0, 5) && Pair(7, 7)` → `7 0`). The left contributes only
-conditions, so its arity folds or broadcasts onto the value's: one condition
-gating a multi-value right broadcasts (`x, y = a > 2 && Pair(10, 20)` gates
-both slots together, like the statement gate), and a multi-slot condition
-gating one value folds — every slot must yield
-(`Pair(5, 7) > Pair(1, 8) && 9` keeps old, because slot 1 misses). Any other
-arity mismatch is rejected.
+(`Pair(1, 2) > Pair(0, 5) && Pair(7, 7)` → `7 0`).
+
+Every operator pairs its sides' slots the same way, `&&`, `||`, arithmetic and
+comparisons alike: by position, a side with a single slot repeating to match
+the other. Counts that differ and are both above one are rejected. One
+condition gating a multi-value right repeats over it
+(`x, y = a > 2 && Pair(10, 20)` gates both slots together, like the statement
+gate), and a single value gated by a multi-slot condition repeats under each
+slot's own condition (`x, y = Pair(5, 7) > Pair(9, 2) && 9` keeps `x` and sets
+`y` to 9). A multi-slot condition never folds:
+`p = Pair(5, 7) > Pair(1, 2) && 9` has two values for one target and is
+rejected, and checking that every slot holds takes an explicit `&&` chain
+(`5 > 1 && 7 > 2 && 9`). A single fallback repeats to every slot that needs it
+(`Pair(2, 4) > Pair(3, 3) || -1` → `-1 4`), and a single operand to every slot
+of arithmetic or a comparison (`Pair(1, 2) * 2` → `2 4`; `3 > Pair(1, 5)` →
+`3 0` fresh). A call in a repeated value runs once, and each slot that takes a
+string or array owns its own copy. A slot is one of a call's returned values,
+so an array returned as one value repeats whole.
 
 Comparison operands are evaluated eagerly (once); only the yielding combine and
 the commit are gated per slot. The one lazy operand is an `&&` right side,
