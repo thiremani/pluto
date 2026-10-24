@@ -1958,20 +1958,21 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 	left := c.compileExpression(expr.Left, nil)
 	right := c.compileExpression(expr.Right, nil)
 
-	for i := 0; i < len(left); i++ {
-		mode := info.CompareModes[i]
-
+	// Each slot borrows its operands, which are released once below, so a
+	// single-slot side repeats without a copy.
+	for i, mode := range info.CompareModes {
+		l, r := slotAt(left, i), slotAt(right, i)
 		switch mode {
 		case CondArray:
-			res = append(res, c.compileArrayMask(expr.Operator, left[i], right[i], info.OutTypes[i]))
+			res = append(res, c.compileArrayMask(expr.Operator, l, r, info.OutTypes[i]))
 		case CondScalar:
 			// Usually pre-extracted via condLHS, but can still occur when range
 			// comparisons are scalarized by an outer loop (e.g. call arg vectorization).
-			res = append(res, c.compileCondScalar(expr.Operator, left[i], right[i]))
+			res = append(res, c.compileCondScalar(expr.Operator, l, r))
 		case CondOr, CondAnd:
 			panic("internal: value-position logical OR/AND must be lowered through conditional expression branching")
 		case CondNone:
-			res = append(res, c.compileInfix(expr.Operator, left[i], right[i], info.OutTypes[i]))
+			res = append(res, c.compileInfix(expr.Operator, l, r, info.OutTypes[i]))
 		default:
 			// A new CondMode must be classified here deliberately: falling
 			// through would lower a conditional slot as plain arithmetic.
@@ -2009,6 +2010,27 @@ func (c *Compiler) compileShortCircuitAnd(left llvm.Value, compileRight func() l
 		[]llvm.BasicBlock{rhsEnd, falseEnd},
 	)
 	return result
+}
+
+// repeatSlots spreads a single-slot operand over n result slots for lowering
+// that consumes or retains the operand slot by slot. A temporary gets a deep
+// copy for every slot after the first, so each slot owns its payload; a named
+// binding's value is shared, since no slot owns it.
+func (c *Compiler) repeatSlots(expr ast.Expression, syms []*Symbol, n int) []*Symbol {
+	if len(syms) == n {
+		return syms
+	}
+
+	_, isIdent := expr.(*ast.Identifier)
+	repeated := make([]*Symbol, n)
+	repeated[0] = syms[0]
+	for i := 1; i < n; i++ {
+		repeated[i] = syms[0]
+		if !isIdent {
+			repeated[i] = c.deepCopyIfNeeded(c.derefIfPointer(syms[0], fmt.Sprintf("repeat_slot_%d", i)))
+		}
+	}
+	return repeated
 }
 
 // freeTemporary frees operands that are temporaries (not variables).
@@ -2133,13 +2155,19 @@ func (c *Compiler) compileInfixRanges(expr *ast.InfixExpression, info *ExprInfo,
 			left := c.compileExpression(leftRew, nil)
 			right := c.compileExpression(rightRew, nil)
 
-			for i := 0; i < len(left); i++ {
+			// A left released slot by slot needs its own payload in each slot;
+			// otherwise each slot borrows, and the batch cleanup releases once.
+			slotLeft := left
+			if leftTempsHandledInline {
+				slotLeft = c.repeatSlots(leftRew, left, len(info.OutTypes))
+			}
+			for i, outType := range info.OutTypes {
 				c.compileRangeInfixSlot(
 					expr.Operator,
 					info.CompareModes[i],
-					info.OutTypes[i],
-					left[i],
-					right[i],
+					outType,
+					slotAt(slotLeft, i),
+					slotAt(right, i),
 					outputs[i],
 					leftTempsHandledInline,
 				)

@@ -647,8 +647,8 @@ a, b, c = Three(n)
 	}{
 		{name: "AssignmentMismatch", script: "a, b = 1\na", err: "assignment mismatch: 2 targets but 1 value"},
 		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
-		{name: "OperandMismatch", script: "a = Pair(1) * 2\na", err: `operand mismatch: "*" has 2 values on its left but 1 value on its right`},
-		{name: "AndArityMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: "logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
+		{name: "OperandMismatch", script: "a = Pair(1) * Three(1)\na", err: `operand mismatch: "*" has 2 values on its left but 3 values on its right`},
+		{name: "AndOperandMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: `operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
 	}
 
 	for _, test := range tests {
@@ -689,11 +689,11 @@ r = Two(a, b)
 		{name: "UndefinedCallBesideAnotherValue", script: "a, b, c = 1, Missing(1)\na, b, c", errors: []string{"undefined function: Missing"}},
 		{name: "UndefinedCallInAndCondition", script: "a, b = Missing(1) > 0 && 1\na, b", errors: []string{"undefined function: Missing"}},
 		{name: "MismatchInTuple", script: "a, b = Pair(1) + Three(1)\na, b", errors: []string{`operand mismatch: "+" has 2 values on its left but 3 values on its right`}},
-		{name: "AndArityMismatchInTuple", script: "a, b, c = Pair(1 > 0) && Three(1)\na, b, c", errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"}},
-		{name: "MismatchUnderOperator", script: "a, b = (Pair(1) * 2) + Pair(1)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
-		{name: "MismatchUnderPrefix", script: "a, b = -(Pair(1) * 2)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
+		{name: "AndMismatchInTuple", script: "a, b, c = Pair(1 > 0) && Three(1)\na, b, c", errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`}},
+		{name: "MismatchUnderOperator", script: "a, b = (Pair(1) * Three(1)) + Pair(1)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
+		{name: "MismatchUnderPrefix", script: "a, b = -(Pair(1) * Three(1))\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
 		{name: "UndefinedCallInArgument", script: "r = Two(Missing(1))\nr", errors: []string{"undefined function: Missing"}},
-		{name: "MismatchInArgument", script: "r = Two(Pair(1) * 2, 1)\nr", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
+		{name: "MismatchInArgument", script: "r = Two(Pair(1) * Three(1), 1)\nr", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
 		{name: "UndefinedCallUnderAnd", script: "a, b = Pair(1) > Pair(0) && Missing(1)\na, b", errors: []string{"undefined function: Missing"}},
 		{name: "UndefinedCallUnderPrintedOperator", script: "Missing(1) + Pair(1)", errors: []string{"undefined function: Missing"}},
 	}

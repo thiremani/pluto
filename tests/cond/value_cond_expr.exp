@@ -206,6 +206,21 @@ LitTupleB: |
 HeapTupleOr: s3! s9!
 HeapTupleOrBefore: oldC oldD
 HeapTupleOrBothFallback: s7! s7!
+RepeatOrSecond: 2 -1
+RepeatOrAll: -1 -1
+RepeatOrNone: 2 4
+RepeatOrFails: 7 4
+RepeatOrLeft: 5 5 1 2
+HeapRepeatOr: s9? s3! s9? s9?
+RepeatCmp: 9 5 3 9
+HeapRepeatCmp: s4 oldB
+HeapRepeatChain: s99 s0
+RangedHeapRepeatCmp: s99 s99
+RepeatMask: [4 4] [0 0]
+RepeatArith: 2 4 9 8 s4aaa s4bbb [11 12] [21 22]
+RepeatSpine: 9 105
+RepeatFailedCmp: 9 9 5 5
+RepeatPrint: 4 5
 NamedArrMask: [0 2 3] 5 [1 2 3]
 StaticIntoHeapBefore: x1 x2
 StaticIntoHeap: zzz x2

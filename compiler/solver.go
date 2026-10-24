@@ -1969,10 +1969,11 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		})
 	}
 
-	types := make([]Type, len(left))
-	compareModes := make([]CondMode, len(left))
-	for i := range left {
-		types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
+	n := max(len(left), len(right))
+	types := make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		types[i] = ts.logicalOrValueType(slotAt(left, i), slotAt(right, i), expr.Token)
 		compareModes[i] = CondOr
 	}
 
@@ -1989,18 +1990,9 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 // yields the right side's slot i only when the left's slot i yields, so the
 // result types are the right side's. The left never materializes into the
 // result, so its slot types need not match the right's — it only has to be
-// able to fail, or the gate is dead — and its arity folds (N-slot condition
-// gating one value: every slot must yield) or broadcasts (one condition
-// gating an N-slot value) onto the right's; equal arities align per slot.
+// able to fail, or the gate is dead. Its slots pair with the right's like any
+// operator's, a single slot on either side repeating.
 func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
-	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   logicalAndArityMismatch(len(left), len(right)),
-		})
-		return ts.invalidCount(expr)
-	}
-
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
@@ -2024,10 +2016,11 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		})
 	}
 
-	types := make([]Type, len(right))
-	compareModes := make([]CondMode, len(right))
-	for i := range right {
-		t := right[i]
+	n := max(len(left), len(right))
+	types := make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		t := slotAt(right, i)
 		if ptr, ok := t.(Ptr); ok {
 			t = ptr.Elem
 		}
@@ -2067,14 +2060,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		return ts.invalidCount(expr)
 	}
 
-	// A && left contributes only conditions (its values are never a result),
-	// so its arity folds or broadcasts onto the right's — dispatch before the
-	// equal-length rule that value-producing operators need.
-	if expr.IsLogicalAnd() {
-		return ts.typeLogicalAndExpression(expr, left, right)
-	}
-
-	if len(left) != len(right) {
+	if !operandsLineUp(len(left), len(right)) {
 		ce := &token.CompileError{
 			Token: expr.Token,
 			Msg:   operandMismatch(expr.Token.Literal, len(left), len(right)),
@@ -2083,15 +2069,20 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 		return ts.invalidCount(expr)
 	}
 
+	if expr.IsLogicalAnd() {
+		return ts.typeLogicalAndExpression(expr, left, right)
+	}
+
 	if expr.IsLogicalOr() {
 		return ts.typeLogicalOrExpression(expr, left, right)
 	}
 
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
-	types = make([]Type, len(left))
-	compareModes := make([]CondMode, len(left))
-	for i := range left {
-		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
+	n := max(len(left), len(right))
+	types = make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		types[i], compareModes[i] = ts.typeInfixSlot(expr, slotAt(left, i), slotAt(right, i), isValueCmp)
 	}
 
 	// Create new entry

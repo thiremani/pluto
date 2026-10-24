@@ -1411,26 +1411,42 @@ out = Inc(n)
 			errors: []string{"undefined function: Missing"},
 		},
 		{
+			// A single slot repeats to match the other side, for every
+			// operator.
+			name: "SingleSlotRepeats",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c, d = F(n)
+    a, b = Pair(n) * 2
+    c, d = 0, 0
+    c, d = Pair(n) > 0 && n`,
+			errors: []string{},
+		},
+		{
 			// An operator whose sides do not line up has an invalid count too.
 			name: "OperandCountMismatch",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
 a, b = F(n)
-    a, b = Pair(n) * 2`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+    a, b = Pair(n) * Three(n)`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`},
 		},
 		{
 			name: "OrAlternativesCountMismatch",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
-y = Inc(n)
-    y = n + 1
+a, b, c = Three(n)
+    a, b, c = n, n, n
 
 a, b = F(n)
-    a, b = Pair(n > 0) || Inc(3)`,
-			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`},
+    a, b = Pair(n > 0) || Three(n)`,
+			errors: []string{`operand mismatch: "||" has 2 values on its left but 3 values on its right`},
 		},
 		{
 			// An operator over an invalid count is not counted either.
@@ -1438,18 +1454,24 @@ a, b = F(n)
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
 a, b = F(n)
-    a, b = (Pair(n) * 2) + Pair(n)`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+    a, b = (Pair(n) * Three(n)) + Pair(n)`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`},
 		},
 		{
 			name: "MismatchUnderPrefix",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
 a, b = F(n)
-    a, b = -(Pair(n) * 2)`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+    a, b = -(Pair(n) * Three(n))`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`},
 		},
 		{
 			// An argument with an invalid count leaves the call no arity to
@@ -1473,9 +1495,9 @@ y = F(n)
 			errors: []string{"undefined function: Missing"},
 		},
 		{
-			// A && condition folds onto one value or broadcasts to several,
-			// but two conditions cannot gate three values.
-			name: "AndArityMismatch",
+			// A && pairs its slots like any operator, so two conditions cannot
+			// gate three values.
+			name: "AndOperandMismatch",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
@@ -1484,7 +1506,7 @@ a, b, c = Three(n)
 
 a, b, c = F(n)
     a, b, c = Pair(n > 0) && Three(n)`,
-			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
+			errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
 		},
 		{
 			// y's gated write waits until the template's text classifies.

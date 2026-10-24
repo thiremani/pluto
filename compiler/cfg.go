@@ -335,22 +335,16 @@ func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
 		return
 	}
 
-	switch {
-	case !operandsLineUp(infix, left, right) && infix.IsLogicalAnd():
-		cfg.addError(infix.Token, logicalAndArityMismatch(left, right))
-	case !operandsLineUp(infix, left, right):
+	if !operandsLineUp(left, right) {
 		cfg.addError(infix.Token, operandMismatch(infix.Token.Literal, left, right))
 	}
 }
 
-// operandsLineUp reports whether an operator's sides yield counts the solver
-// accepts: equal counts, or for a && also a condition that folds onto one
-// value or broadcasts to several.
-func operandsLineUp(infix *ast.InfixExpression, left, right int) bool {
-	if infix.IsLogicalAnd() {
-		return left == right || left == 1 || right == 1
-	}
-	return left == right
+// operandsLineUp reports whether an operator's sides pair slot by slot: equal
+// counts, or a single slot that repeats to match the other side. Every
+// operator follows it, and the result has the larger count.
+func operandsLineUp(left, right int) bool {
+	return left == right || min(left, right) == 1
 }
 
 // rejectAssignmentCount reports an assignment whose values do not fill its
@@ -387,10 +381,6 @@ func assignmentMismatch(targets, values int) string {
 
 func operandMismatch(operator string, left, right int) string {
 	return fmt.Sprintf("operand mismatch: %q has %s on its left but %s on its right", operator, countOf(left, "value"), countOf(right, "value"))
-}
-
-func logicalAndArityMismatch(left, right int) string {
-	return fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", left, right)
 }
 
 // countOf writes n with its noun, in the plural unless n is one.
@@ -626,7 +616,7 @@ const invalidSlots = -1
 
 // valueSlots counts the targets a value fills, read from the text the way the
 // solver counts a tuple: a call fills its template's outputs, and an operator
-// its right operand's. A call that names no template, an operator whose sides
+// its larger side's. A call that names no template, an operator whose sides
 // do not line up, and a value built on either count invalidSlots.
 func (cfg *CFG) valueSlots(value ast.Expression) int {
 	switch v := value.(type) {
@@ -638,10 +628,10 @@ func (cfg *CFG) valueSlots(value ast.Expression) int {
 		return len(template.Outputs)
 	case *ast.InfixExpression:
 		left, right := cfg.valueSlots(v.Left), cfg.valueSlots(v.Right)
-		if left == invalidSlots || right == invalidSlots || !operandsLineUp(v, left, right) {
+		if left == invalidSlots || right == invalidSlots || !operandsLineUp(left, right) {
 			return invalidSlots
 		}
-		return right
+		return max(left, right)
 	case *ast.PrefixExpression:
 		return cfg.valueSlots(v.Right)
 	}
