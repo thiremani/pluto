@@ -351,8 +351,10 @@ rejected, and checking that every slot holds takes an explicit `&&` chain
 (`Pair(2, 4) > Pair(3, 3) || -1` → `-1 4`), and a single operand to every slot
 of arithmetic or a comparison (`Pair(1, 2) * 2` → `2 4`; `3 > Pair(1, 5)` →
 `3 0` fresh). A call in a repeated value runs once, and each slot that takes a
-string or array owns its own copy. A slot is one of a call's returned values,
-so an array returned as one value repeats whole.
+string or array owns its own copy. Until #117 is fixed, a `&&` or `||` argument
+of a ranged call is the exception: the call evaluates it twice per iteration,
+repeated or not. A slot is one of a call's returned values, so an array returned
+as one value repeats whole.
 
 Comparison operands are evaluated eagerly (once); only the yielding combine and
 the commit are gated per slot. The one lazy operand is an `&&` right side,
