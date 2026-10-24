@@ -33,6 +33,7 @@ type ExprInfo struct {
 	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
+	InvalidCount         bool   // Count unknown after a reported error: an undefined call, a misaligned operator, or a value built on one
 	HasRanges            bool   // True if expression involves ranges (propagated upward during typing)
 	LoopInside           bool   // For CallExpression: true if function handles iteration, false if call site handles it
 	CallParamTypes       []Type // Solver-selected call params for the original expression shape
@@ -981,11 +982,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	if len(stmt.Name) != len(types) {
-		ce := &token.CompileError{
-			Token: stmt.Token,
-			Msg:   assignmentMismatch(len(stmt.Name), len(types)),
-		}
-		ts.Errors = append(ts.Errors, ce)
+		ts.rejectAssignmentCount(stmt, len(types))
 		return
 	}
 
@@ -1033,6 +1030,20 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			Put(ts.Scopes, ident.Value, typ)
 		}
 	}
+}
+
+// rejectAssignmentCount reports an assignment whose values do not fill its
+// targets, unless a value's count is invalid: that value's error is reported
+// where it arose.
+func (ts *TypeSolver) rejectAssignmentCount(stmt *ast.LetStatement, count int) {
+	if slices.ContainsFunc(stmt.Value, ts.countInvalid) {
+		return
+	}
+
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: stmt.Token,
+		Msg:   assignmentMismatch(len(stmt.Name), count),
+	})
 }
 
 // TypeArrayExpression classifies bracket literals as rectangular arrays or
@@ -1987,9 +1998,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 			Token: expr.Token,
 			Msg:   logicalAndArityMismatch(len(left), len(right)),
 		})
-		types := []Type{Unresolved{}}
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-		return types
+		return ts.invalidCount(expr)
 	}
 
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
@@ -2035,12 +2044,28 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	return types
 }
 
+// countInvalid reports whether expr's count is invalid.
+func (ts *TypeSolver) countInvalid(expr ast.Expression) bool {
+	return ts.ExprCache[key(ts.FuncNameMangled, expr)].InvalidCount
+}
+
+// invalidCount records that expr's count is unknown after a reported error,
+// its own or an operand's, so the checks that count its values skip it.
+func (ts *TypeSolver) invalidCount(expr ast.Expression) []Type {
+	types := []Type{Unresolved{}}
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1, InvalidCount: true}
+	return types
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
+	if ts.countInvalid(expr.Left) || ts.countInvalid(expr.Right) {
+		return ts.invalidCount(expr)
+	}
 
 	// A && left contributes only conditions (its values are never a result),
 	// so its arity folds or broadcasts onto the right's — dispatch before the
@@ -2055,9 +2080,7 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 			Msg:   operandMismatch(expr.Token.Literal, len(left), len(right)),
 		}
 		ts.Errors = append(ts.Errors, ce)
-		types = []Type{Unresolved{}}
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-		return
+		return ts.invalidCount(expr)
 	}
 
 	if expr.IsLogicalOr() {
@@ -2245,6 +2268,10 @@ func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) 
 func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []Type) {
 	// Operand is nested, so ranges become their inner type
 	operand := ts.TypeExpression(expr.Right, false)
+	if ts.countInvalid(expr.Right) {
+		return ts.invalidCount(expr)
+	}
+
 	types = []Type{}
 	for _, opType := range operand {
 		if ptr, yes := opType.(Ptr); yes {
@@ -2341,8 +2368,16 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 		return info.OutTypes
 	}
 
+	// A template is found by the number of values its arguments yield, which
+	// an argument with an invalid count leaves unknown.
+	if slices.ContainsFunc(ce.Arguments, ts.countInvalid) {
+		info.InvalidCount = true
+		return info.OutTypes
+	}
+
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
+		info.InvalidCount = true
 		return info.OutTypes
 	}
 

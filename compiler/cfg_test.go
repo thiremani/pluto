@@ -1389,22 +1389,36 @@ out = Inc(n)
 			errors: []string{"undefined function: Missing"},
 		},
 		{
-			// The solver counts an unknown call as one value and reports both.
+			// An unknown call's count is invalid, so the assignment is not
+			// counted.
 			name: "UndefinedFunctionInTuple",
 			code: `a, b = F(x)
     a, b = Missing(x)`,
-			errors: []string{"undefined function: Missing", "assignment mismatch: 2 targets but 1 value"},
+			errors: []string{"undefined function: Missing"},
 		},
 		{
-			// An operator whose sides do not line up yields one value, as the
-			// solver counts it, so the assignment does not line up either.
+			name: "UndefinedFunctionBesideAnotherValue",
+			code: `a, b = F(x)
+    a, b = x, Missing(x)`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// A && whose condition has an invalid count does not count its
+			// value either.
+			name: "UndefinedFunctionInAndCondition",
+			code: `a, b = F(x)
+    a, b = Missing(x) > 0 && x`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			// An operator whose sides do not line up has an invalid count too.
 			name: "OperandCountMismatch",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
 a, b = F(n)
     a, b = Pair(n) * 2`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
 		},
 		{
 			name: "OrAlternativesCountMismatch",
@@ -1416,16 +1430,47 @@ y = Inc(n)
 
 a, b = F(n)
     a, b = Pair(n > 0) || Inc(3)`,
-			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`, "assignment mismatch: 2 targets but 1 value"},
+			errors: []string{`operand mismatch: "||" has 2 values on its left but 1 value on its right`},
 		},
 		{
-			name: "NestedMismatchCountsOneValue",
+			// An operator over an invalid count is not counted either.
+			name: "NestedMismatchReportedOnce",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b = F(n)
+    a, b = (Pair(n) * 2) + Pair(n)`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			name: "MismatchUnderPrefix",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b = F(n)
+    a, b = -(Pair(n) * 2)`,
+			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+		},
+		{
+			// An argument with an invalid count leaves the call no arity to
+			// look up.
+			name: "UndefinedFunctionInArgument",
+			code: `r = Two(a, b)
+    r = a + b
+
+y = F(x)
+    y = Two(Missing(x))`,
+			errors: []string{"undefined function: Missing"},
+		},
+		{
+			name: "UndefinedFunctionUnderPrintedOperator",
 			code: `p, q = Pair(n)
     p, q = n, n + 1
 
 y = F(n)
-    y = (Pair(n) * 2) + 1`,
-			errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`},
+    y = n
+    Missing(n) + Pair(n)`,
+			errors: []string{"undefined function: Missing"},
 		},
 		{
 			// A && condition folds onto one value or broadcasts to several,
@@ -1439,7 +1484,7 @@ a, b, c = Three(n)
 
 a, b, c = F(n)
     a, b, c = Pair(n > 0) && Three(n)`,
-			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3", "assignment mismatch: 3 targets but 1 value"},
+			errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
 		},
 		{
 			// y's gated write waits until the template's text classifies.
@@ -1491,7 +1536,7 @@ func TestUnclassifiableTemplateTextPositions(t *testing.T) {
 	defer ctx.Dispose()
 
 	cc := NewCodeCompiler(ctx, t.Name(), "", mustParseCode(t, `a, b = F(x)
-    a, b = Missing(x)`))
+    a, b = Missing(x) > 0 x`))
 	errs := cc.Compile()
 
 	require.Len(t, errs, 2)

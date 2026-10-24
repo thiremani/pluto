@@ -668,6 +668,52 @@ a, b, c = Three(n)
 	}
 }
 
+// A script reports an undefined call or an operator whose sides do not line
+// up once: the value's count is invalid, and the checks that count values
+// skip it.
+func TestScriptReportsInvalidCountOnce(t *testing.T) {
+	const code = `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
+r = Two(a, b)
+    r = a + b`
+	tests := []struct {
+		name   string
+		script string
+		errors []string
+	}{
+		{name: "UndefinedCallInTuple", script: "a, b = Missing(1)\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallBesideAnotherValue", script: "a, b, c = 1, Missing(1)\na, b, c", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallInAndCondition", script: "a, b = Missing(1) > 0 && 1\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "MismatchInTuple", script: "a, b = Pair(1) + Three(1)\na, b", errors: []string{`operand mismatch: "+" has 2 values on its left but 3 values on its right`}},
+		{name: "AndArityMismatchInTuple", script: "a, b, c = Pair(1 > 0) && Three(1)\na, b, c", errors: []string{"logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"}},
+		{name: "MismatchUnderOperator", script: "a, b = (Pair(1) * 2) + Pair(1)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
+		{name: "MismatchUnderPrefix", script: "a, b = -(Pair(1) * 2)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
+		{name: "UndefinedCallInArgument", script: "r = Two(Missing(1))\nr", errors: []string{"undefined function: Missing"}},
+		{name: "MismatchInArgument", script: "r = Two(Pair(1) * 2, 1)\nr", errors: []string{`operand mismatch: "*" has 2 values on its left but 1 value on its right`}},
+		{name: "UndefinedCallUnderAnd", script: "a, b = Pair(1) > Pair(0) && Missing(1)\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallUnderPrintedOperator", script: "Missing(1) + Pair(1)", errors: []string{"undefined function: Missing"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, code))
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, test.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Equal(t, test.errors, extractErrorMessages(ts.Errors))
+		})
+	}
+}
+
 func TestArrayToScalarAssignmentError(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "arrayToScalar", "", ast.NewCode())
