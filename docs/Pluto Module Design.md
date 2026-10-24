@@ -1,9 +1,9 @@
 # Pluto Module Design
 
 **Status:** design. None of this is implemented yet: today a directory is the
-unit of compilation, `pt.mod` names the module path, and there are no
-imports. This document records the decisions taken so far for modules,
-imports and versioning, and the questions still open.
+unit of compilation, `pt.mod` names the module path, and a module cannot use
+another. This document records the decisions taken so far for modules,
+dependencies and versioning, and the questions still open.
 
 ## What a module is
 
@@ -25,11 +25,87 @@ Everything a module defines is therefore part of its contract with other
 modules. A module that wants to stop offering something removes it in its
 next major release.
 
+## Dependencies
+
+A module lists the modules it uses in its `pt.mod`, each by its module path
+and the minimum release it needs (see "Choosing releases"), optionally with
+an alias. There are no import statements: every `.pt` and `.spt` file in the
+module can use every dependency its `pt.mod` lists. Code names a dependency
+by its alias, or else by the last element of its path, so two dependencies
+whose paths end alike need an alias for at least one. A module that uses
+both `github.com/you/math v2.3.5` and `github.com/thiremani/math v1.2.3`
+might name the second `tmath`. An alias of `.` brings a dependency's names
+in without a prefix, which only a program's root module may do (see "Names
+without a prefix").
+
+A `pt.mod` also names the oldest compiler the module builds with, as
+`go.mod`'s `go` line does. The standard library ships with the compiler and
+is never listed (see "The standard library"), so a module that starts using
+a standard function added in a later compiler raises that minimum.
+
+Beside `pt.mod`, a module's `pt.sum` records the checksums of the releases
+its builds use (see "Checksums").
+
+## The standard library
+
+The standard library ships with the compiler, as Go's does: a compiler
+release fixes its version, and no `pt.mod` lists it. It is a set of
+libraries. The core ones, `int`, `float`, `str`, `array`, `complex` and
+`math`, are aliased as `.` by default, so code writes `Int(23.2)`; a
+library added later, such as one for files or JSON, takes its own name as
+its default alias (`json.Parse`). There is no `std` prefix, so
+`std.Int(23.2)` is an error and every standard function has one spelling. A
+`pt.mod` may give any standard library another alias, such as `s` for
+`str`, and may write out a default, though it need not.
+
+The libraries named for a type hold what belongs to it, such as `str`'s
+`Upper`, `complex`'s `Conj` and the conversions `Int("23")` and
+`Float("2.5")`, which take the place of a `Parse` for each type. A function
+that serves several types lives in exactly one library, since a template
+serves every type its body supports and a name may be defined only once
+(see "Names without a prefix"): `math` holds `Abs`, `Min`, `Max` and `Sqrt`
+for every number type.
+
+Libraries that should change faster than the compiler are ordinary
+modules, as Go's `golang.org/x` modules are.
+
+## Names without a prefix
+
+A module uses names without a prefix from three places: its own functions,
+the standard libraries aliased as `.`, and any dependency aliased as `.`. A
+name and number of inputs may be defined only once among them, as a
+module's own functions already must be: a second definition is an error
+that names both, never a shadow. A module that wants its own `Int` gives
+`int` an alias in its `pt.mod` and writes `int.Int` for the standard one. A
+standalone program, with no `pt.mod` to re-alias in, renames its function
+instead.
+
+A module sees the standard library as of the minimum compiler its `pt.mod`
+names. A function added in a later compiler is not in scope until the
+module raises that minimum, so a compiler release never breaks a module by
+adding a name, and a clash with a new name appears when the module's author
+raises the minimum. Go records the release that added each standard
+function, and since Go 1.23 `go vet` flags one newer than a module's `go`
+line.
+
+A dependency may be aliased as `.` only in a program's root module, and
+publishing refuses a release whose `pt.mod` does so. A dependency's names
+can grow in any Minor release, which another module's requirement may
+select (see "Choosing releases"), so a clash inside a published module
+would break builds whose authors cannot fix it. In a program's own
+`pt.mod`, the clash appears in its author's build, where they can rename or
+re-alias. The standard libraries need no such limit, since a module sees
+their names as of its own minimum compiler.
+
 ## Namespaces and major versions
 
-Another module reaches a module through a namespace: its module path,
-carrying the module's major version, as in `github.com/you/math/v2`. The C
-ABI already mangles such path segments into every symbol, so:
+The symbols for a dependency's functions, operators, constants and structs
+carry its module path and the release the build uses, as in
+`github.com/you/math/v2.3.5`. The C ABI already mangles a version like any
+other path segment (its example is `example.com/math/v1.2.3`). A struct type
+mangled into a symbol should carry its module path too, as the C ABI spec's
+qualified types do (§3.2); that is still to be built, since the compiler
+mangles a struct by its name alone today (`Struct.Mangle`). With both:
 
 - Different major versions of one module can be linked into the same
   program, and each dependent moves to a new major when it chooses to.
@@ -37,9 +113,122 @@ ABI already mangles such path segments into every symbol, so:
   is not a `v2` `Person`, so the two don't mix where one type is required,
   such as a variable that already holds one, or an array's elements. A
   template still accepts either when its body works for it.
-- Minor and patch releases share their major's namespace and replace each
-  other, so each must be compatible with the releases before it in that
-  major line.
+- Within a major, a program holds the one release that "Choosing releases"
+  selects, so minor and patch releases replace each other, and each must be
+  compatible with the releases before it in that major line. The minor and
+  patch in a symbol never tell two releases in one program apart; they keep
+  code compiled against one release from calling another's functions or
+  reading its constants. They do not catch a changed struct layout that
+  reaches code through a module whose own release stayed the same;
+  "Choosing releases" covers that.
+
+## Choosing releases
+
+Releases are chosen by minimal version selection, as in Go. Each `pt.mod`
+records the minimum release it needs of each dependency, and a build uses,
+for each module and major, the highest minimum that any module in the build
+records. There is no lock file: the `pt.mod` files alone decide the releases
+a build uses. A published release never changes, its `pt.mod` included, so a
+module that needs other releases of its dependencies publishes a new release
+of its own, and the same root `pt.mod` selects the same releases every time.
+If `M` v1.0.0 requires `D` v1.2.0 and its author wants `D` v1.3.0, they
+publish `M` v1.0.1, and a root that requires `M` v1.0.0 still builds with
+`D` v1.2.0 until its own `pt.mod` asks for more. "Checksums" describes how a
+build knows that a release holds what was published.
+
+The selection decides a build's dependencies, not its binary. The binary
+also depends on the root module's own source, the compiler version, the
+platform and build settings such as `PLUTO_TARGET_CPU`, whose `native` and
+`portable` settings already give different binaries on one machine and
+compiler. With all of those the same, the binary is the same only if
+compiling and linking are deterministic.
+
+A selection belongs to its root, not to each module in the build: inside
+another module's build, a module may get newer releases of its own
+dependencies than its `pt.mod` names, when another module in that build
+needs them. `M` v1.0.0, requiring `D` v1.2.0, builds against `D` v1.2.0 in
+one program and against `D` v1.3.0 in a program that also requires that.
+That is safe because minor and patch releases keep the contract that
+publishing checks, but code compiled against one struct layout must
+not run with another. A module's compiled code is therefore cached by
+everything it was compiled from: its source, the compiler and build
+settings, and every release it depends on, directly or through other
+modules, as Go's build cache folds each dependency's build identity into a
+package's own. Direct dependencies are not enough. If `A` requires only `B`
+v1.0 and reads the fields of a `D.Person` that `B.Make()` returns, a build
+that selects a newer `D` changes what `A` compiles to, while `A`'s
+requirements and the symbols it uses stay the same: return types are not
+mangled, and `B.Make` is still `B` v1.0's. One release of a module can
+therefore have several builds on a machine.
+
+## Checksums
+
+A module's `pt.sum`, committed beside its `pt.mod`, records the checksums of
+the releases its builds accept: of each dependency's `pt.mod` that minimal
+version selection reads, checked before its requirements are used, and of
+each selected module's source, checked before it is compiled. `pt.mod`
+selects releases and `pt.sum` only verifies them; it neither selects nor
+locks a version. The developer and dependency commands write `pt.mod`;
+Pluto's tooling writes `pt.sum`, which grows with the whole dependency
+graph. A checksum new to `pt.sum` is checked against the release's record
+(below) before it is written. A mismatch with a recorded checksum fails the
+build, and an ordinary build never overwrites one.
+
+A release's record is its entry in the checksum log, with the proxy's copy
+of its source (see "Hosting"): its module path and version, the checksums
+of its source and its `pt.mod`, and the commit it came from. Once a release
+is recorded, its contents are fixed: a tag moved to other contents fails
+every build that checks the log. A Git tag alone cannot give that
+guarantee, a Pluto-specific one such as `pluto/v1.2.3` included, since any
+tag can be moved or deleted: a tag names a release, and the record vouches
+for its contents. The record matters most on first use, when a project has
+no `pt.sum` entry to compare with and would otherwise accept whatever a
+moved tag points at; Go checks new entries against its checksum database
+for the same reason. `pt.sum` still earns its place beside the record: it
+travels with the repository, verifies sources fetched from a mirror or a
+cache, and would expose a record that later changed.
+
+## Hosting
+
+Modules are hosted as Go's are. A module's code lives in its own
+repository, which its module path names, and a release is a version tag
+there: nothing is uploaded and no name is registered. A module path begins
+with a domain, so the name belongs to whoever controls that domain or
+repository, and there is no shared namespace of short names to squat.
+
+Two shared services, both optional, make releases durable and the same for
+everyone, as Go's module proxy and checksum database do:
+
+- A proxy keeps a copy of each release it serves, so a moved tag or a
+  deleted repository changes nothing for builds that fetch through it.
+- A public, append-only checksum log records each release's checksums, and
+  builds check new `pt.sum` entries against it. Before recording a release,
+  the log reruns publishing's comparison of API manifests, which needs only
+  the source, and refuses a version number the changes do not allow, such
+  as a Minor release that removes a function. The rules then hold for a tag
+  pushed without Pluto's tooling too. Rerunning the previous release's
+  tests is left to publishing.
+
+A private module skips both services, and its builds rely on `pt.sum`
+alone.
+
+## C callers
+
+Pluto modules call each other through the versioned symbols described
+above, which change with every release. C code calls a module through
+stable wrappers instead, whose ABI holds for a whole major line:
+
+- A wrapper's symbol keeps the major, or an equivalent such as a versioned
+  library name, but not the minor and patch that Pluto's symbols carry, or
+  every release would rename it.
+- Any struct layout a C caller can see is part of that ABI, whether the
+  struct is passed by value or by pointer: a caller compiled against an old
+  header could declare `Person p` and pass `&p`, and a release that added a
+  field would write past it. A wrapper therefore hands out structs as opaque
+  handles, like C's `FILE *`: the header declares the type without its
+  fields, the wrapper creates and frees it, and C reads and sets its fields
+  through functions. Every struct then stays free to gain a field in a Minor
+  release.
 
 ## Version numbers
 
@@ -86,10 +275,13 @@ A struct type is defined by its constant that lists the most fields, as in
 constant of that type takes the field's zero value. A struct may gain a
 field in a Minor release because struct literals name their fields and may
 leave some out. A struct's printed form and memory layout are not part of
-its contract, and dependents compile from source. When zero is not a safe
-value for the new field in existing constants, the change breaks behavior
-and is Major. Reordering a struct's fields is Major too, since a literal
-that lists every field must use the definition's order.
+its contract: a build compiles every module against the releases it selects
+(see "Choosing releases"), so code compiled against one layout never meets
+another, and C callers see a struct only as an opaque handle (see "C
+callers"). When zero is not a safe value for the new field in existing
+constants, the change breaks behavior and is Major. Reordering a struct's
+fields is Major too, since a literal that lists every field must use the
+definition's order.
 
 When a module's functions take or return a dependency's structs, changes to
 those structs reach the module's own callers, so a dependency update is
@@ -160,6 +352,9 @@ Publishing a release:
 6. Numbers the release: the next version in that category after the
    release it updates, or in a higher category the publisher asks for. A
    lower category is refused, and a version number is never reused.
+7. Tags the release and, for a public module, has the checksum log record
+   it, so that its record is made from the contents these steps checked
+   (see "Hosting").
 
 Publishing reports the version it picked and the changes that decided it:
 
@@ -189,6 +384,19 @@ together with the changes the publisher declares and any migration steps
 they need. A module's own documentation can give advance notice of what a
 later major will remove.
 
+## Programs without a module
+
+A directory with no `pt.mod` in it or above it compiles as a standalone
+program: its own `.pt` and `.spt` files, with the standard library that
+ships with the compiler. A program that uses any other module needs a
+`pt.mod` that declares it, and a reusable module always has one. The
+compiler keeps the standard library in a directory such as `PT_ROOT`, but
+any other module installed there reaches a program only through a
+`pt.mod`: otherwise installing or updating one would change what an
+existing script compiles to, and two machines could build different
+programs from the same source. Today the compiler stops when it finds no
+`pt.mod`, so this is still to be built.
+
 ## While developing
 
 None of this makes ordinary compilation stricter. A function nothing calls,
@@ -203,18 +411,30 @@ or no test runs, still compiles:
 
 ## Open questions
 
-- Import syntax, and how code names another module's functions.
-- Where a release's version is recorded, and how a dependent chooses a
-  release within a major line: a lock file, or the minimum version every
-  dependent needs.
+- How `pt.mod` spells a dependency, an alias for a dependency or a standard
+  library, and the minimum compiler, and how code writes a function,
+  constant or struct from a dependency.
+- Who runs the proxy and the checksum log, and how a private module opts
+  out of them, as Go's `GOPRIVATE` does.
+- Whether raising the minimum compiler, which using a newer standard
+  function requires, is a Minor change or, as the table's row on dropping a
+  supported compiler version now makes it, a Major one.
+- What module path a standalone program's symbols and cache use, with no
+  `pt.mod` to name one.
 - How a publisher declares a compatible addition, a break or a bug fix,
   with any migration note, and asks for a higher category than the changes
   require.
 - Backports: how a publisher picks the maintenance line a release updates,
   with numbering still automatic, and what happens when the computed version
   already exists, such as a Minor on a line whose next minor is out.
-- How the major version is spelled in the module path, including whether
-  `v0` and `v1` carry one.
+- Whether `pt.mod` writes a dependency's major in its path, as Go's `/v2`
+  does, or only in its version, as in `github.com/you/math v2.3.5`.
+  With the version alone, a module that uses two majors of one dependency
+  lists it twice and aliases one; with the path, whether `v0` and `v1` carry
+  one, and a dependency's default name skips the `/vN`.
+- What `0.y.z` releases promise: the categories above, under which a break
+  published after `0.4.2` is `1.0.0`, or SemVer's looser rule, under which
+  anything may change before `1.0.0`.
 - Which functions get a stable C wrapper: a per-function choice for C
   callers, separate from how Pluto modules call each other.
 - The inferred input requirements described under "What the contract
