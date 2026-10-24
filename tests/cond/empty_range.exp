@@ -8,7 +8,7 @@ CondLiteralRangeExisting: 7
 CondLiteralRangeNew: 0
 CondMixedExisting: 5 123
 CondMixedNew: 0 123
-BoundYields: 2 2 2 [0 1 2] 13
+BoundYields: 2 4 2 [0 1 2] 13
 BoundFails: 7 7 [] 10
 BoundPicks: 30 9
 SelfBound: 2

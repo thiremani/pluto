@@ -44,7 +44,7 @@ m, n = 1 > 0 Accum(1, 0:-2), 123
 # a call.
 boundN = 3
 boundGated = boundN > 0 0:(boundN > 0 && boundN)
-boundOr = boundN > 0 0:(boundN < 0 || 3)
+boundOr = boundN > 0 0:(boundN < 0 || 5)
 boundSum = 0:(boundN > 0 && boundN) + 0
 boundCells = [0:(boundN > 0 && boundN)]
 boundCall = 10
