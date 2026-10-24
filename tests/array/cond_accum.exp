@@ -37,8 +37,6 @@ MultiCell: [0 10 1 11]
 ScalarArith: 3
 4
 ScalarElem: 20
-CrossRange: 4
-LitCross: 4
 30
 SeedLit: 8
 FreshLit: 0

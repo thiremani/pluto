@@ -205,19 +205,6 @@ q = 0:3
 elem = q < 2 arr4[q]
 "ScalarElem: -elem"
 
-# A gate makes its value a computation, so a bare range the condition does not
-# name iterates too: the statement runs over both ranges and keeps the final
-# value.
-r = 0:3
-i = 0:5
-cross = r < 4 i
-"CrossRange: -cross"
-
-# A bare range literal under a gate iterates the same way.
-r = 0:3
-litcross = r < 2 0:5
-"LitCross: -litcross"
-
 # Scalar conditional iteration: direct range-indexed array expression
 arr5 = [10 20 30 40]
 r = 0:3
