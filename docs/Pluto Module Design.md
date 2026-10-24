@@ -53,40 +53,57 @@ release fixes its version, and no `pt.mod` lists it. It is a set of
 libraries. The core ones, `int`, `float`, `str`, `array`, `complex` and
 `math`, are aliased as `.` by default, so code writes `Int(23.2)`; a
 library added later, such as one for files or JSON, takes its own name as
-its default alias (`json.Parse`). There is no `std` prefix, so
-`std.Int(23.2)` is an error and every standard function has one spelling. A
-`pt.mod` may give any standard library another alias, such as `s` for
-`str`, and may write out a default, though it need not.
+its default alias (`json.Parse`). There is no implicit `std` namespace
+holding them all, so `std.Int(23.2)` is an error unless a module chooses
+`std` as one library's alias; within a module, each standard function has
+one spelling. A `pt.mod` may give any standard library another alias, such
+as `s` for `str`, and may write out a default, though it need not.
 
 The libraries named for a type hold what belongs to it, such as `str`'s
 `Upper`, `complex`'s `Conj` and the conversions `Int("23")` and
 `Float("2.5")`, which take the place of a `Parse` for each type. A function
 that serves several types lives in exactly one library, since a template
 serves every type its body supports and a name may be defined only once
-(see "Names without a prefix"): `math` holds `Abs`, `Min`, `Max` and `Sqrt`
-for every number type.
+(see "Names without a prefix"): `math` holds `Abs`, `Sqrt`, `Min` and
+`Max`, each for the argument types it supports, so `Min` and `Max` take
+ordered numbers only, complex numbers having no order.
 
 Libraries that should change faster than the compiler are ordinary
 modules, as Go's `golang.org/x` modules are.
 
 ## Names without a prefix
 
-A module uses names without a prefix from three places: its own functions,
-the standard libraries aliased as `.`, and any dependency aliased as `.`. A
-name and number of inputs may be defined only once among them, as a
-module's own functions already must be: a second definition is an error
-that names both, never a shadow. A module that wants its own `Int` gives
-`int` an alias in its `pt.mod` and writes `int.Int` for the standard one. A
-standalone program, with no `pt.mod` to re-alias in, renames its function
-instead.
+A module uses names without a prefix from three places: its own
+definitions, the standard libraries aliased as `.`, and any dependency
+aliased as `.`. Each kind of name has a namespace of its own, as within a
+module today:
+
+- a function, by its name and number of inputs;
+- a constant, by its name, a struct's constants included;
+- a struct type, by its name. A module's constants of a type it defines
+  make one definition, as they do today, and its constant of a type defined
+  elsewhere uses that type, naming only fields that type has.
+
+A name may be defined only once in its namespace across the three places: a
+second definition is an error that names both, never a shadow. A constant
+`Pi` and a function `Pi(x)` may coexist, as they can within a module today,
+since a call's parentheses tell them apart, and so may a struct type and a
+function or constant of the same name. Prefixes are a namespace too: each
+prefix in a module, whether an alias or a dependency's last path element,
+names one library. A module that wants its own `Int` gives `int` an alias
+in its `pt.mod` and writes `int.Int` for the standard one. A standalone
+program, with no `pt.mod` to re-alias in, renames its function instead.
 
 A module sees the standard library as of the minimum compiler its `pt.mod`
-names. A function added in a later compiler is not in scope until the
-module raises that minimum, so a compiler release never breaks a module by
-adding a name, and a clash with a new name appears when the module's author
-raises the minimum. Go records the release that added each standard
-function, and since Go 1.23 `go vet` flags one newer than a module's `go`
-line.
+names: a library, a function with a given number of inputs, a constant or a
+struct type added in a later compiler is not in scope until the module
+raises that minimum. A library added later takes no default alias either,
+so a new standard `json` library cannot clash with a module's own `json`
+dependency. A compiler release therefore never breaks a module by adding a
+name, and a clash with a new name appears when the module's author raises
+the minimum. Go records the release that added each standard function, and
+since Go 1.23 `go vet` flags one newer than a module's `go` line; Pluto's
+compiler goes further and hides it.
 
 A dependency may be aliased as `.` only in a program's root module, and
 publishing refuses a release whose `pt.mod` does so. A dependency's names
@@ -171,8 +188,12 @@ selects releases and `pt.sum` only verifies them; it neither selects nor
 locks a version. The developer and dependency commands write `pt.mod`;
 Pluto's tooling writes `pt.sum`, which grows with the whole dependency
 graph. A checksum new to `pt.sum` is checked against the release's record
-(below) before it is written. A mismatch with a recorded checksum fails the
-build, and an ordinary build never overwrites one.
+(below) before it is written. A private module has no public record, so its
+first checksum is checked against a checksum log its owner runs, where
+there is one, and is otherwise taken from the first download over an
+authenticated connection, as Go does for modules it does not check against
+its checksum database. Either way, a mismatch with a recorded checksum
+fails the build, and an ordinary build never overwrites one.
 
 A release's record is its entry in the checksum log, with the proxy's copy
 of its source (see "Hosting"): its module path and version, the checksums
@@ -204,13 +225,18 @@ everyone, as Go's module proxy and checksum database do:
 - A public, append-only checksum log records each release's checksums, and
   builds check new `pt.sum` entries against it. Before recording a release,
   the log reruns publishing's comparison of API manifests, which needs only
-  the source, and refuses a version number the changes do not allow, such
-  as a Minor release that removes a function. The rules then hold for a tag
-  pushed without Pluto's tooling too. Rerunning the previous release's
-  tests is left to publishing.
+  the source, against the highest release below it in its major line,
+  using its own copy of that release, never a tag, and recording that
+  release first if it has not yet seen it: `2.4.8` against `2.4.7`, and a
+  backported `2.3.5` against `2.3.4`, as publishing compares them. It
+  refuses a version number lower than the detected changes require, such
+  as a Minor release that removes a function, so a tag pushed without
+  Pluto's tooling cannot claim too low a number. Being recorded means only
+  that: the log runs no tests, measures no coverage and cannot know what a
+  publisher would have declared, so those stay publishing's checks.
 
-A private module skips both services, and its builds rely on `pt.sum`
-alone.
+A private module skips both public services. Its first use is checked as
+"Checksums" describes, and its builds rely on `pt.sum` after that.
 
 ## C callers
 
@@ -419,6 +445,9 @@ or no test runs, still compiles:
 - Whether raising the minimum compiler, which using a newer standard
   function requires, is a Minor change or, as the table's row on dropping a
   supported compiler version now makes it, a Major one.
+- What a conversion does with text it cannot read, such as `Int("abc")`, or
+  a value it cannot hold: fail to yield a value, as a failed comparison
+  does, or return a second output that says whether it worked.
 - What module path a standalone program's symbols and cache use, with no
   `pt.mod` to name one.
 - How a publisher declares a compatible addition, a break or a bug fix,
