@@ -785,17 +785,18 @@ hoD = "old" ⊕ "D"
 hoC, hoD = PairStr(1, 1) > PairStr(5, 5) || PairStr(7, 7)
 "HeapTupleOrBothFallback: -hoC -hoD"
 
-# A single fallback repeats to every slot that needs it; only the second slot
-# needs it here.
-rpA, rpB = Pair(2, 4) > Pair(1, 5) || -1
+# A single fallback repeats to every slot that needs it, and its call runs
+# once; only the second slot needs it here.
+rpA, rpB = Pair(2, 4) > Pair(1, 5) || Loud(-1)
 "RepeatOrSecond: -rpA -rpB"
 
-# A repeated fallback that every slot needs fills each one.
-rpC, rpD = Pair(2, 4) > Pair(5, 5) || -1
+# A repeated fallback that every slot needs runs once and fills each one.
+rpC, rpD = Pair(2, 4) > Pair(5, 5) || Loud(-2)
 "RepeatOrAll: -rpC -rpD"
 
-# A repeated fallback that no slot needs leaves the left's values.
-rpE, rpF = Pair(2, 4) > Pair(1, 1) || -1
+# A repeated fallback that no slot needs never runs, and leaves the left's
+# values.
+rpE, rpF = Pair(2, 4) > Pair(1, 1) || Loud(-3)
 "RepeatOrNone: -rpE -rpF"
 
 # A repeated fallback that fails leaves the slots that needed it unchanged.
@@ -809,10 +810,10 @@ rpI, rpJ = rpK > 2 || Pair(0, 0)
 rpL, rpM = rpK > 9 || Pair(1, 2)
 "RepeatOrLeft: -rpI -rpJ -rpL -rpM"
 
-# A repeated heap fallback is built once, and each slot that takes it owns a
-# copy (leak-checked).
-hrA, hrB = PairStr(1, 3) > PairStr(2, 2) || MkStr(9) ⊕ "?"
-hrC, hrD = PairStr(1, 1) > PairStr(2, 2) || MkStr(9) ⊕ "?"
+# A repeated heap fallback is built once, whether one slot or both take it,
+# and each slot that takes it owns a copy (leak-checked).
+hrA, hrB = PairStr(1, 3) > PairStr(2, 2) || LoudStr(9) ⊕ "?"
+hrC, hrD = PairStr(1, 1) > PairStr(2, 2) || LoudStr(7) ⊕ "?"
 "HeapRepeatOr: -hrA -hrB -hrC -hrD"
 
 # A comparison repeats a single side: a single right against each left slot,

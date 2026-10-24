@@ -345,14 +345,20 @@ abG = 5 > 9 && 7 > 2 && 9
 "AndOneFails: -abG"
 
 # A multi-slot condition gates a single value slot by slot: the value
-# repeats, and the slot whose condition fails keeps its old value.
+# repeats, its call runs once, and the slot whose condition fails keeps its
+# old value.
 abH, abI = 5, 5
-abH, abI = Pair(5, 7) > Pair(9, 2) && 9
+abH, abI = Pair(5, 7) > Pair(9, 2) && Loud(9)
 "AndRepeatsValue: -abH -abI"
 
-# A repeated heap value is built once, and each slot that takes it owns a
-# copy (leak-checked).
-ahA, ahB = PairStr(3, 1) > PairStr(2, 0) && MkStr(9) ⊕ "?"
+# A repeated value that no slot takes never runs.
+anA, anB = 4, 4
+anA, anB = Pair(1, 2) > Pair(5, 5) && Loud(6)
+"AndRepeatsNone: -anA -anB"
+
+# A repeated heap value is built once, though both slots take it, and each
+# owns a copy (leak-checked).
+ahA, ahB = PairStr(3, 1) > PairStr(2, 0) && LoudStr(8) ⊕ "?"
 "AndRepeatsHeap: -ahA -ahB"
 
 # A repeated array gives each slot that takes it its own copy.

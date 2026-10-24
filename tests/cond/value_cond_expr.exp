@@ -206,12 +206,16 @@ LitTupleB: |
 HeapTupleOr: s3! s9!
 HeapTupleOrBefore: oldC oldD
 HeapTupleOrBothFallback: s7! s7!
+called -1
 RepeatOrSecond: 2 -1
-RepeatOrAll: -1 -1
+called -2
+RepeatOrAll: -2 -2
 RepeatOrNone: 2 4
 RepeatOrFails: 7 4
 RepeatOrLeft: 5 5 1 2
-HeapRepeatOr: s9? s3! s9? s9?
+called 9
+called 7
+HeapRepeatOr: s9? s3! s7? s7?
 RepeatCmp: 9 5 3 9
 HeapRepeatCmp: s4 oldB
 HeapRepeatChain: s99 s0

@@ -84,8 +84,11 @@ AndBroadcastMiss: 0 0
 AndAllHold: 9
 AndAllHoldBefore: 55
 AndOneFails: 55
+called 9
 AndRepeatsValue: 5 9
-AndRepeatsHeap: s9? s9?
+AndRepeatsNone: 4 4
+called 8
+AndRepeatsHeap: s8? s8?
 AndRepeatsArray: [9] [7 8]
 AndRepeatsMask: [9] [0 5]
 AndPrintRepeats: 9 9

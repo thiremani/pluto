@@ -19,6 +19,10 @@ res = Id(x)
 s = MkStr(x)
     s = "s-x"
 
+s = LoudStr(x)
+    "called -x"
+    s = "s-x"
+
 arr = MkArr(x)
     arr = [x x]
 
