@@ -15,8 +15,8 @@ SelfBound: 2
 called 1
 called 2
 called 3
-called 1
-BoundCounts: 0 2 30 [0 1 2]
+called 2
+BoundCounts: 0 2 30 [0 1 1 2 2 3]
 called 6
 BoundEager: []
 called 4

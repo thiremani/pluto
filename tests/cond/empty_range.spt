@@ -78,10 +78,11 @@ selfBound = 1 > 0 0:(selfBound < 1 && 3)
 # A bound runs once whatever its form, also when its range indexes an array or
 # nests inside another range's loop.
 countI = 0:3
+countCmp = 7
 countCmp = 1 > 0 0:(Loud(1) > 0)
 countAnd = 1 > 0 0:(Loud(2) > 0 && 3)
 countPick = boundArr[0:Loud(3)]
-countInner = [countI + 0:Loud(1)]
+countInner = [countI + 0:Loud(2)]
 "BoundCounts: -countCmp -countAnd -countPick -countInner"
 
 # Every range in a nest is built before the nest starts, so an inner bound runs
