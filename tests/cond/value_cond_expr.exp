@@ -225,6 +225,8 @@ HeapRepeatCmp: s4 oldB
 HeapRepeatChain: s99 s0
 RangedHeapRepeatCmp: s99 s99
 RepeatMask: [4 4] [0 0]
+RepeatMaskCopies: [4 4] [0 0] [4 4] [0 0]
+RepeatMaskRight: 4 [4 4]
 RepeatArith: 2 4 9 8 s4aaa s4bbb [11 12] [21 22]
 RepeatSpine: 9 105
 NestedSpine: s4!x s4!y x!s4 y!s4 [12 23] [13 24]

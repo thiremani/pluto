@@ -865,10 +865,20 @@ rhB = "old" ⊕ "B"
 rhA, rhB = MkStr(rhI) > Pair("s0", "s1")
 "RangedHeapRepeatCmp: -rhA -rhB"
 
-# An array returned as one value repeats whole, and each mask is built from
-# its own copy (leak-checked).
+# An array returned as one value repeats whole: both masks read the one
+# array, which is released once (leak-checked).
 rmA, rmB = MkArr(4) > Pair(3, 5)
 "RepeatMask: -rmA -rmB"
+
+# With a scalar condition in the same value, each mask consumes its own copy
+# of the repeated array (leak-checked).
+rmC, rmD = 1 > 0 && MkArr(4) > Pair(3, 5)
+rmE, rmF = MkArr(4) > (Pair(3, 5) > 0)
+"RepeatMaskCopies: -rmC -rmD -rmE -rmF"
+
+# A single right side repeats into a mask slot as well as a scalar one.
+rmG, rmH = Pair(4, MkArr(4)) > 3
+"RepeatMaskRight: -rmG -rmH"
 
 # Arithmetic repeats a single side.
 raA, raB = Pair(1, 2) * 2
