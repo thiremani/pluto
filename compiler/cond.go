@@ -1579,9 +1579,24 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 		slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
 		panic(fmt.Sprintf("internal: conditional spine node %s combined as plain arithmetic", infix.Operator))
 	}
-	l, _ := c.spineSlotValue(infix.Left, i, outType)
-	r, _ := c.spineSlotValue(infix.Right, i, outType)
-	return c.compileInfix(infix.Operator, l, r, outType), true
+	leftInfo := c.ExprCache[key(c.FuncNameMangled, infix.Left)]
+	rightInfo := c.ExprCache[key(c.FuncNameMangled, infix.Right)]
+	l, _ := c.spineSlotValue(infix.Left, i, slotAt(leftInfo.OutTypes, i))
+	r, _ := c.spineSlotValue(infix.Right, i, slotAt(rightInfo.OutTypes, i))
+	val := c.compileInfix(infix.Operator, l, r, outType)
+	c.freeSpineIntermediate(infix.Left, l)
+	c.freeSpineIntermediate(infix.Right, r)
+	return val, true
+}
+
+// freeSpineIntermediate frees an operand that spineSlotValue combined for one
+// slot, once its parent has consumed it. Frame values (leaves, comparison LHS
+// values, masks) are released by the spine's own cleanup.
+func (c *Compiler) freeSpineIntermediate(operand ast.Expression, sym *Symbol) {
+	if _, framed := c.requireCondLHSFrame()[key(c.FuncNameMangled, operand)]; framed {
+		return
+	}
+	c.freeSymbolValue(sym, "spine_intermediate")
 }
 
 // frameMaskKeys snapshots the current condLHS frame's keys, so a nested
