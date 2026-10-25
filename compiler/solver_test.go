@@ -649,6 +649,7 @@ a, b, c = Three(n)
 		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
 		{name: "OperandMismatch", script: "a = Pair(1) * Three(1)\na", err: `operand mismatch: "*" has 2 values on its left but 3 values on its right`},
 		{name: "AndOperandMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: `operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
+		{name: "AndDoesNotFold", script: "a = Pair(1) > 0 && 1\na", err: "assignment mismatch: 1 target but 2 values"},
 	}
 
 	for _, test := range tests {
@@ -690,6 +691,7 @@ r = Two(a, b)
 		{name: "UndefinedCallInAndCondition", script: "a, b = Missing(1) > 0 && 1\na, b", errors: []string{"undefined function: Missing"}},
 		{name: "MismatchInTuple", script: "a, b = Pair(1) + Three(1)\na, b", errors: []string{`operand mismatch: "+" has 2 values on its left but 3 values on its right`}},
 		{name: "AndMismatchInTuple", script: "a, b, c = Pair(1 > 0) && Three(1)\na, b, c", errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`}},
+		{name: "AndMismatchUnderOrInGate", script: "a = Pair(1) > 0 && Three(1) > 0 || 1 > 0  7\na", errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`}},
 		{name: "MismatchUnderOperator", script: "a, b = (Pair(1) * Three(1)) + Pair(1)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
 		{name: "MismatchUnderPrefix", script: "a, b = -(Pair(1) * Three(1))\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
 		{name: "UndefinedCallInArgument", script: "r = Two(Missing(1))\nr", errors: []string{"undefined function: Missing"}},

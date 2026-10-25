@@ -1424,6 +1424,17 @@ a, b, c, d = F(n)
 			errors: []string{},
 		},
 		{
+			// A && never folds a multi-slot condition, so one target cannot
+			// take the values it gates.
+			name: "AndDoesNotFold",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+c = F(n)
+    c = Pair(n) > 0 && n`,
+			errors: []string{"assignment mismatch: 1 target but 2 values"},
+		},
+		{
 			// An operator whose sides do not line up has an invalid count too.
 			name: "OperandCountMismatch",
 			code: `p, q = Pair(n)
@@ -1506,6 +1517,22 @@ a, b, c = Three(n)
 
 a, b, c = F(n)
     a, b, c = Pair(n > 0) && Three(n)`,
+			errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
+		},
+		{
+			// A gate's top-level && chain lists separate conditions, whose
+			// counts need not line up, but an && under || pairs its sides.
+			name: "AndUnderOrInGate",
+			code: `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
+y = F(n)
+    y = 0
+    y = Pair(n) > 0 && Three(n) > 0 1
+    y = Pair(n) > 0 && Three(n) > 0 || n > 0 2`,
 			errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
 		},
 		{

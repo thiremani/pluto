@@ -280,6 +280,14 @@ cjMcStrHeapVal = PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?"
 cjMcCombo = Pair(1, 2) > Pair(0, 1) && a > 2 7
 "CjMcCombo: -cjMcCombo"
 
+# A gate's && chain lists separate conditions, so their slot counts need not
+# line up: each conjunct folds on its own, and one failing slot turns the gate
+# off.
+cjMcCounts = Pair(1, 2) > Pair(0, 1) && Triple(1, 2, 3) > Triple(0, 1, 2) 7
+"CjMcCounts: -cjMcCounts"
+cjMcCountsOff = Pair(1, 2) > Pair(0, 1) && Triple(1, 2, 3) > Triple(0, 5, 2) 7
+"CjMcCountsOff: -cjMcCountsOff"
+
 # && and || composed in one expression: per-slot if-else across a tuple.
 # Slot 0's condition fails (5 > 8), so its && misses and the || fills it;
 # slot 1's condition holds (7 > 1), so its && yields the gated value.
@@ -328,6 +336,10 @@ aoG = 3 > 2 && 4 > 3  99
 "GateAnd: -aoG"
 aoG2 = 3 > 2 && 4 > 9  99
 "GateAndFalse: -aoG2 end"
+
+# The chain stops at the first condition that fails: later ones never run.
+aoG3 = Loud(5) > 0 && Loud(0) > 0 && Loud(6) > 0  99
+"GateAndStops: -aoG3"
 
 # The left of && contributes only conditions, so one condition broadcasts
 # over a multi-value right.

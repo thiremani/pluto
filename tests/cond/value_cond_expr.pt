@@ -9,6 +9,11 @@ a, b = Pair(x, y)
     a = x
     b = y
 
+a, b, c = Triple(x, y, z)
+    a = x
+    b = y
+    c = z
+
 a, b = Mix(x)
     a = [x x + 1]
     b = x
