@@ -232,6 +232,7 @@ RepeatSpine: 9 105
 NestedSpine: s4!x s4!y x!s4 y!s4 [12 23] [13 24]
 NestedSpineFails: oldG s5!!?
 NestedSpineOr: s4!?
+NestedSpineTypes: [1.5] [3.5]
 RepeatFailedCmp: 9 9 5 5
 RepeatPrint: 4 5
 NamedArrMask: [0 2 3] 5 [1 2 3]
