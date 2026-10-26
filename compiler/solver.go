@@ -95,10 +95,9 @@ func (info *ExprInfo) IsMask(i int) bool {
 }
 
 // IsCondScalar reports whether output slot i is a scalar comparison in value
-// position, which yields its left operand. Bounds-safe: an expression with an
-// invalid count carries no modes.
+// position, which yields its left operand.
 func (info *ExprInfo) IsCondScalar(i int) bool {
-	return i < len(info.CompareModes) && info.CompareModes[i] == CondScalar
+	return info.CompareModes[i] == CondScalar
 }
 
 // HasCondExpr returns true if any slot adds conditional value control flow — a
@@ -2509,8 +2508,13 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 
 // argumentStorage returns the types to specialize a call argument's slots on:
 // a slot that passes on a binding's stored value takes the binding's storage
-// type, and every other slot keeps its own.
+// type, and every other slot keeps its own. An argument with an invalid count
+// records no slot modes to follow, so it keeps its own types.
 func (ts *TypeSolver) argumentStorage(arg ast.Expression, own []Type) []Type {
+	if ts.countInvalid(arg) {
+		return own
+	}
+
 	storage := slices.Clone(own)
 	for i, ownType := range own {
 		binding, ok := ts.yieldedBinding(arg, i)
