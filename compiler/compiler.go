@@ -1982,8 +1982,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 	// Free temporary array operands (literals used in expressions)
 	// Variables are not freed here - they're managed by scope cleanup
-	c.freeTemporary(expr.Left, left)
-	c.freeTemporary(expr.Right, right)
+	c.freeConsumedTemporary(expr.Left, left)
+	c.freeConsumedTemporary(expr.Right, right)
 
 	return res
 }
@@ -2492,7 +2492,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 	}
 
 	// Free temporary operand after use - the result is a new value
-	c.freeTemporary(expr.Right, operand)
+	c.freeConsumedTemporary(expr.Right, operand)
 
 	return res
 }

@@ -45,3 +45,37 @@ g2 = HeldSibling([1 2 3], 0, 2)
 g3 = HeldSibling([1 2 3], 1, 5)
 g4 = HeldSibling([1 2 3], 0, 5)
 g, g1, g2, g3, g4
+
+# The print's other argument fails after a sum or a negation consumed the ||
+# copy, so nothing prints.
+s = 0
+s = SumIf([1 2 3], [4 5 6], i - i, 3)
+t = 0
+t = PairSumIf([1 2 3], [4 5 6], i - i, 3)
+r = 0
+r = RightSumIf([1 2 3], [4 5 6], i - i, 3)
+u = 0
+u = NegIf([1 2 3], [4 5 6], i - i, 3)
+s, t, r, u
+
+# With the other argument holding, each print runs.
+s = SumIf([1 2 3], [4 5 6], 0, 7)
+t = PairSumIf([1 2 3], [4 5 6], 0, 7)
+r = RightSumIf([1 2 3], [4 5 6], 0, 7)
+u = NegIf([1 2 3], [4 5 6], 0, 7)
+s, t, r, u
+
+# Gates, && left sides, || right sides and spine leaves, over both outcomes.
+k1 = 5
+k1 = GateSum([1 2 3], [4 5 6], i % 6)
+k2 = 5
+k2 = GateMask([1 2 3], [4 5 6], i % 6)
+k3 = 5
+k3 = AndSum([1 2 3], [4 5 6], i % 6)
+k4 = [0]
+k4 = OrSum([1 2 3], [4 5 6], i % 6)
+k5 = 0
+k6 = 0
+k5, k6 = LeafSum([1 2 3], [4 5 6], i % 6)
+k1, k2, k3, k4, k5, k6
+GateSum([1 2 3], [4 5 6], 0), GateMask([1 2 3], [4 5 6], 0), AndSum([1 2 3], [4 5 6], 0), OrSum([1 2 3], [4 5 6], 0), LeafSum([1 2 3], [4 5 6], 0)

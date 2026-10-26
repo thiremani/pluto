@@ -46,3 +46,46 @@ y = NestedAnd(a, n)
 # later call is skipped; the call's false arm frees only what the call used.
 y = HeldSibling(a, m, n)
     y = ((m > 0 && a || a) + Echo((a > 1)[0] + (n > 3))) || [0]
+
+# A print that a failing argument suppresses does not free again the || copy
+# that a sum or a negation consumed: the copy on either side of the sum,
+# repeated into a two-slot sum, or negated.
+y = SumIf(a, b, n, k)
+    ((n > 1 && a || b) + 0) > 1, k > 5
+    y = n
+
+y = PairSumIf(a, b, n, k)
+    ((n > 1 && a || b) + Pair(0, 0)) > 1, k > 5
+    y = n
+
+y = RightSumIf(a, b, n, k)
+    (0 + (n > 1 && a || b)) > 1, k > 5
+    y = n
+
+y = NegIf(a, b, n, k)
+    (-(n > 1 && a || b)) > -9, k > 5
+    y = n
+
+# The cleanups that run whether or not a condition fails do not free again a
+# copy or mask that arithmetic consumed: a gate's, an && left side's, an ||
+# right side's and a spine leaf's.
+y = GateSum(a, b, n)
+    y = 5
+    y = ((n > 1 && a || b) + 0)[0] > 1 7
+
+y = GateMask(a, b, n)
+    y = 5
+    y = ((a > n) + b)[0] > 4 9
+
+y = AndSum(a, b, n)
+    y = 5
+    y = ((n > 1 && a || b) + 0)[0] > 1 && 7
+
+y = OrSum(a, b, n)
+    y = [0]
+    y = n > 1 && a || ((n > 2 && a || b) + 0) > 1
+
+p, q = LeafSum(a, b, n)
+    p = 0
+    q = 0
+    p, q = Pair(((n > 1 && a || b) + 0)[0], 1) + (Pair(1, 2) > Pair(0, 0))
