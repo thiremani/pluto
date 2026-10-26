@@ -88,4 +88,4 @@ y = OrSum(a, b, n)
 p, q = LeafSum(a, b, n)
     p = 0
     q = 0
-    p, q = Pair(((n > 1 && a || b) + 0)[0], 1) + (Pair(1, 2) > Pair(0, 0))
+    p, q = Pair(((n > 1 && a || b) + 0)[0], n > 2) + (Pair(1, 2) > Pair(0, 0))
