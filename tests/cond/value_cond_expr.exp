@@ -188,10 +188,10 @@ ArithWrapChain: 6 0
 MixArith: [3 4] 0
 CallArgBefore: 111
 CallArgMergesSlots: 111
-CallArgRepeatsBinding: 6
+CallArgRepeatsBinding: 6 99
 CallArgOverload: 6 3
-CallArgScalarAndMask: [3 0] 3
-CallArgRepeatsHeapBinding: abab
+CallArgScalarAndMask: [3 0] 3 8 [7 7]
+CallArgRepeatsHeapBinding: abab old
 called a a
 CallArgRepeatsChainedBinding: aa old ab
 GatedLeafBefore: 77 88

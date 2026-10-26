@@ -722,10 +722,13 @@ caSum = Accum(Pair(5, 7) > Pair(1, 8))
 "CallArgMergesSlots: -caSum"
 
 # A comparison that repeats a named left passes the call one argument per
-# slot, each typed by the binding's storage.
+# slot, each typed by the binding's storage; when one slot fails, the call
+# does not run.
 rbN = 3
 rbS = Accum(rbN > Pair(1, 2))
-"CallArgRepeatsBinding: -rbS"
+rbR = 99
+rbR = Accum(rbN > Pair(1, 5))
+"CallArgRepeatsBinding: -rbS -rbR"
 
 # The arguments' count picks the overload.
 rbP = Plus(rbN > Pair(1, 2))
@@ -733,13 +736,20 @@ rbQ = Plus(rbN > 1)
 "CallArgOverload: -rbP -rbQ"
 
 # Only a scalar slot passes the binding on; a mask slot is a fresh array.
+# When the scalar slot after a mask fails, the call does not run.
 rbA, rbB = Swap(rbN > Pair(1, [1 5]))
-"CallArgScalarAndMask: -rbA -rbB"
+rbC = 8
+rbD = [7 7]
+rbC, rbD = Swap(rbN > Pair([1 5], 9))
+"CallArgScalarAndMask: -rbA -rbB -rbC -rbD"
 
-# A heap-string binding repeats the same way (leak-checked).
+# A heap-string binding repeats the same way, and when one slot fails, the call
+# does not run (leak-checked).
 rbT = "a" ⊕ "b"
 rbU = Cat(rbT > Pair("a", "aa"))
-"CallArgRepeatsHeapBinding: -rbU"
+rbY = "old"
+rbY = Cat(rbT > Pair("a", "zz"))
+"CallArgRepeatsHeapBinding: -rbU -rbY"
 
 # A chain repeats its one-slot left the same way, typed by the binding's
 # storage, which the later widening makes heap; when one slot fails, the call
