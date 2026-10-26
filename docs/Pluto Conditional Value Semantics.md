@@ -78,12 +78,17 @@ g = Pair(1, 2) > Pair(0, 1)  7   # 1 > 0 and 2 > 1 -> gate on,  g = 7
 g = Pair(1, 2) > Pair(1, 5)  8   # 1 > 1 fails     -> gate off, g stays 7
 ```
 
-The multi-cell AND is not a conjunction operator smuggled into the gate — it is
-the only single-bit reading of a per-slot expression in a position that asks one
-question: *did it yield?* A multi-value expression yields when it produces its
-complete value, i.e. every slot yields. The same reading gives a `||` gate its
-OR semantics (its yield flag — `a > 2 || b > 3` yields when either side does),
-and is why an **array cell is rejected** in a gate: mask comparison results do
+The multi-cell AND is not a conjunction operator smuggled into the gate: a gate
+asks one question, *did the condition yield?*, and a multi-value expression
+yields when it produces its complete value, i.e. every slot yields. Calls and
+prints read their arguments the same way: a call runs, and a print prints, only
+when every argument slot yields (see "Print invocation atomicity" under
+Status). The same reading gives a `||` gate its OR semantics: `a > 2 || b > 3`
+yields when either side does, and a multi-slot `||` resolves each slot before
+the gate asks, so
+`m = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3` sets `m` though
+neither side yields whole (slot 0 holds on the left, slot 1 on the right). It
+is also why an **array cell is rejected** in a gate: mask comparison results do
 not provide a scalar predicate, so a gate over one would look meaningful while
 testing nothing. Operand and bounds failures still suppress mask production.
 
@@ -335,13 +340,33 @@ semantics.
 A value-position `&&` zips slots like `||` does: slot *i* of the right side
 commits exactly when slot *i* of the left yields, so a multi-cell condition
 gates a multi-value right per slot, not as a unit
-(`Pair(1, 2) > Pair(0, 5) && Pair(7, 7)` → `7 0`). The left contributes only
-conditions, so its arity folds or broadcasts onto the value's: one condition
-gating a multi-value right broadcasts (`x, y = a > 2 && Pair(10, 20)` gates
-both slots together, like the statement gate), and a multi-slot condition
-gating one value folds — every slot must yield
-(`Pair(5, 7) > Pair(1, 8) && 9` keeps old, because slot 1 misses). Any other
-arity mismatch is rejected.
+(`Pair(1, 2) > Pair(0, 5) && Pair(7, 7)` → `7 0`).
+
+Value operators pair their sides' slots the same way, `&&`, `||`, arithmetic and
+comparisons alike: by position, a side with a single slot repeating to match
+the other. Counts that differ and are both above one are rejected. One
+condition gating a multi-value right repeats over it
+(`x, y = a > 2 && Pair(10, 20)` gates both slots together, like the statement
+gate), and a single value gated by a multi-slot condition repeats under each
+slot's own condition (`x, y = Pair(5, 7) > Pair(9, 2) && 9` keeps `x` and sets
+`y` to 9). A value operator never folds a multi-slot condition:
+`p = Pair(5, 7) > Pair(1, 2) && 9` has two values for one target and is
+rejected, and checking that every slot holds takes a statement gate, which
+admits only when every slot yields (`p = Pair(5, 7) > Pair(1, 2)  9`), or an
+explicit `&&` chain (`5 > 1 && 7 > 2 && 9`). A gate's top-level `&&` chain is
+not this operator but the statement's condition list: each condition gates on
+its own, so their counts need not line up. With `Three` returning three
+values, `x = Pair(1, 2) > 0 && Three(1) > 0  7` checks all five slots, though
+the same `&&` in value position is rejected; an `&&` under a gate's `||` is the
+operator again, and pairs its sides.
+A single fallback repeats to every slot that needs it
+(`Pair(2, 4) > Pair(3, 3) || -1` → `-1 4`), and a single operand to every slot
+of arithmetic or a comparison (`Pair(1, 2) * 2` → `2 4`; `3 > Pair(1, 5)` →
+`3 0` fresh). A call in a repeated value runs once, and each slot that takes a
+string or array owns its own copy. Until #117 is fixed, a `&&` or `||` argument
+of a ranged call is the exception: the call evaluates it twice per iteration,
+repeated or not. A slot is one of a call's returned values, so an array returned
+as one value repeats whole.
 
 Comparison operands are evaluated eagerly (once); only the yielding combine and
 the commit are gated per slot. The one lazy operand is an `&&` right side,

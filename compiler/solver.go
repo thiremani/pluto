@@ -33,6 +33,7 @@ type ExprInfo struct {
 	Rewrite              ast.Expression // expression rewritten with a literal -> compiler-local value, e.g. (0:11) -> $ts_iter_0.
 	ExprLen              int
 	OutTypes             []Type
+	InvalidCount         bool   // Count unknown after a reported error: an undefined call, a misaligned operator, or a value built on one
 	HasRanges            bool   // True if expression involves ranges (propagated upward during typing)
 	LoopInside           bool   // For CallExpression: true if function handles iteration, false if call site handles it
 	CallParamTypes       []Type // Solver-selected call params for the original expression shape
@@ -91,6 +92,12 @@ func (info *ExprInfo) HasCondAnd() bool {
 // slot. Bounds- and nil-safe so cleanup paths can call it on any slot index.
 func (info *ExprInfo) IsMask(i int) bool {
 	return info != nil && i < len(info.CompareModes) && info.CompareModes[i] == CondArray
+}
+
+// IsCondScalar reports whether output slot i is a scalar comparison in value
+// position, which yields its left operand.
+func (info *ExprInfo) IsCondScalar(i int) bool {
+	return info.CompareModes[i] == CondScalar
 }
 
 // HasCondExpr returns true if any slot adds conditional value control flow — a
@@ -981,11 +988,7 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	}
 
 	if len(stmt.Name) != len(types) {
-		ce := &token.CompileError{
-			Token: stmt.Token,
-			Msg:   assignmentMismatch(len(stmt.Name), len(types)),
-		}
-		ts.Errors = append(ts.Errors, ce)
+		ts.rejectAssignmentCount(stmt, len(types))
 		return
 	}
 
@@ -1033,6 +1036,20 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 			Put(ts.Scopes, ident.Value, typ)
 		}
 	}
+}
+
+// rejectAssignmentCount reports an assignment whose values do not fill its
+// targets, unless a value's count is invalid: that value's error is reported
+// where it arose.
+func (ts *TypeSolver) rejectAssignmentCount(stmt *ast.LetStatement, count int) {
+	if slices.ContainsFunc(stmt.Value, ts.countInvalid) {
+		return
+	}
+
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: stmt.Token,
+		Msg:   assignmentMismatch(len(stmt.Name), count),
+	})
 }
 
 // TypeArrayExpression classifies bracket literals as rectangular arrays or
@@ -1958,10 +1975,11 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		})
 	}
 
-	types := make([]Type, len(left))
-	compareModes := make([]CondMode, len(left))
-	for i := range left {
-		types[i] = ts.logicalOrValueType(left[i], right[i], expr.Token)
+	n := max(len(left), len(right))
+	types := make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		types[i] = ts.logicalOrValueType(slotAt(left, i), slotAt(right, i), expr.Token)
 		compareModes[i] = CondOr
 	}
 
@@ -1978,20 +1996,9 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 // yields the right side's slot i only when the left's slot i yields, so the
 // result types are the right side's. The left never materializes into the
 // result, so its slot types need not match the right's — it only has to be
-// able to fail, or the gate is dead — and its arity folds (N-slot condition
-// gating one value: every slot must yield) or broadcasts (one condition
-// gating an N-slot value) onto the right's; equal arities align per slot.
+// able to fail, or the gate is dead. Its slots pair with the right's like any
+// operator's, a single slot on either side repeating.
 func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, right []Type) []Type {
-	if len(left) != len(right) && len(left) != 1 && len(right) != 1 {
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: expr.Token,
-			Msg:   logicalAndArityMismatch(len(left), len(right)),
-		})
-		types := []Type{Unresolved{}}
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-		return types
-	}
-
 	leftInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Left)]
 	rightInfo := ts.ExprCache[key(ts.FuncNameMangled, expr.Right)]
 
@@ -2015,10 +2022,11 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		})
 	}
 
-	types := make([]Type, len(right))
-	compareModes := make([]CondMode, len(right))
-	for i := range right {
-		t := right[i]
+	n := max(len(left), len(right))
+	types := make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		t := slotAt(right, i)
 		if ptr, ok := t.(Ptr); ok {
 			t = ptr.Elem
 		}
@@ -2035,29 +2043,40 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	return types
 }
 
+// countInvalid reports whether expr's count is invalid.
+func (ts *TypeSolver) countInvalid(expr ast.Expression) bool {
+	return ts.ExprCache[key(ts.FuncNameMangled, expr)].InvalidCount
+}
+
+// invalidCount records that expr's count is unknown after a reported error,
+// its own or an operand's, so the checks that count its values skip it.
+func (ts *TypeSolver) invalidCount(expr ast.Expression) []Type {
+	types := []Type{Unresolved{}}
+	ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1, InvalidCount: true}
+	return types
+}
+
 // TypeInfixExpression returns output types of infix expression
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
-
-	// A && left contributes only conditions (its values are never a result),
-	// so its arity folds or broadcasts onto the right's — dispatch before the
-	// equal-length rule that value-producing operators need.
-	if expr.IsLogicalAnd() {
-		return ts.typeLogicalAndExpression(expr, left, right)
+	if ts.countInvalid(expr.Left) || ts.countInvalid(expr.Right) {
+		return ts.invalidCount(expr)
 	}
 
-	if len(left) != len(right) {
+	if !operandsLineUp(len(left), len(right)) {
 		ce := &token.CompileError{
 			Token: expr.Token,
 			Msg:   operandMismatch(expr.Token.Literal, len(left), len(right)),
 		}
 		ts.Errors = append(ts.Errors, ce)
-		types = []Type{Unresolved{}}
-		ts.ExprCache[key(ts.FuncNameMangled, expr)] = &ExprInfo{OutTypes: types, ExprLen: 1}
-		return
+		return ts.invalidCount(expr)
+	}
+
+	if expr.IsLogicalAnd() {
+		return ts.typeLogicalAndExpression(expr, left, right)
 	}
 
 	if expr.IsLogicalOr() {
@@ -2065,10 +2084,11 @@ func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Ty
 	}
 
 	isValueCmp := ts.InValueExpr && expr.Token.IsComparison()
-	types = make([]Type, len(left))
-	compareModes := make([]CondMode, len(left))
-	for i := range left {
-		types[i], compareModes[i] = ts.typeInfixSlot(expr, left[i], right[i], isValueCmp)
+	n := max(len(left), len(right))
+	types = make([]Type, n)
+	compareModes := make([]CondMode, n)
+	for i := range n {
+		types[i], compareModes[i] = ts.typeInfixSlot(expr, slotAt(left, i), slotAt(right, i), isValueCmp)
 	}
 
 	// Create new entry
@@ -2245,6 +2265,10 @@ func (ts *TypeSolver) TypeInfixOp(left, right Type, op string, tok token.Token) 
 func (ts *TypeSolver) TypePrefixExpression(expr *ast.PrefixExpression) (types []Type) {
 	// Operand is nested, so ranges become their inner type
 	operand := ts.TypeExpression(expr.Right, false)
+	if ts.countInvalid(expr.Right) {
+		return ts.invalidCount(expr)
+	}
+
 	types = []Type{}
 	for _, opType := range operand {
 		if ptr, yes := opType.(Ptr); yes {
@@ -2341,8 +2365,16 @@ func (ts *TypeSolver) TypeCallExpression(ce *ast.CallExpression, isRoot bool) []
 		return info.OutTypes
 	}
 
+	// A template is found by the number of values its arguments yield, which
+	// an argument with an invalid count leaves unknown.
+	if slices.ContainsFunc(ce.Arguments, ts.countInvalid) {
+		info.InvalidCount = true
+		return info.OutTypes
+	}
+
 	template, mangled, ok := ts.lookupCallTemplate(ce, args)
 	if !ok {
+		info.InvalidCount = true
 		return info.OutTypes
 	}
 
@@ -2447,9 +2479,7 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
 	for argIndex, outerTypes := range outerTypesPerArg {
-		if slotType, ok := ts.argumentStorage(ce.Arguments[argIndex], outerTypes[0]); ok {
-			outerTypes = []Type{slotType}
-		}
+		outerTypes = ts.argumentStorage(ce.Arguments[argIndex], outerTypes)
 
 		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
@@ -2476,36 +2506,47 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-// argumentStorage returns the binding storage type to specialize a call
-// argument on, and false when the argument keeps its own type.
-func (ts *TypeSolver) argumentStorage(arg ast.Expression, own Type) (Type, bool) {
-	// An argument that does not pass on a binding's value keeps its own type.
-	binding, ok := ts.yieldedBinding(arg)
-	if !ok {
-		return nil, false
+// argumentStorage returns the types to specialize a call argument's slots on:
+// a slot that passes on a binding's stored value takes the binding's storage
+// type, and every other slot keeps its own. An argument with an invalid count
+// records no slot modes to follow, so it keeps its own types.
+func (ts *TypeSolver) argumentStorage(arg ast.Expression, own []Type) []Type {
+	if ts.countInvalid(arg) {
+		return own
 	}
 
-	// Parameters and code constants are already typed by their storage.
-	slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
-	if !exists {
-		return nil, false
-	}
+	storage := slices.Clone(own)
+	for i, ownType := range own {
+		binding, ok := ts.yieldedBinding(arg, i)
+		if !ok {
+			continue
+		}
 
-	// A resolved type can differ from its storage only in ownership.
-	return slot, IsFullyResolvedType(own)
+		// Parameters and code constants are already typed by their storage, and
+		// a resolved type can differ from its storage only in ownership.
+		slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
+		if exists && IsFullyResolvedType(ownType) {
+			storage[i] = slot
+		}
+	}
+	return storage
 }
 
-// yieldedBinding returns the binding whose stored value expr passes on: the
-// identifier itself, or the left operand of a scalar comparison in value
-// position, which yields its LHS.
-func (ts *TypeSolver) yieldedBinding(expr ast.Expression) (*ast.Identifier, bool) {
+// yieldedBinding returns the binding whose stored value slot i of expr passes
+// on: the identifier itself, or what the left operand passes on for a scalar
+// comparison slot in value position, which yields its LHS. A single-slot left
+// repeats to every slot.
+func (ts *TypeSolver) yieldedBinding(expr ast.Expression, slot int) (*ast.Identifier, bool) {
 	for {
 		switch e := expr.(type) {
 		case *ast.Identifier:
 			return e, true
 		case *ast.InfixExpression:
-			if !ts.ExprCache[key(ts.FuncNameMangled, e)].HasCondScalar() {
+			if !ts.ExprCache[key(ts.FuncNameMangled, e)].IsCondScalar(slot) {
 				return nil, false
+			}
+			if len(ts.ExprCache[key(ts.FuncNameMangled, e.Left)].OutTypes) == 1 {
+				slot = 0
 			}
 			expr = e.Left
 		default:

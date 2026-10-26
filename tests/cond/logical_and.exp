@@ -65,6 +65,8 @@ CjMcStr: match
 re:CjMcStrF:\s*
 CjMcStrHeapVal: s9?
 CjMcCombo: 7
+CjMcCounts: 7
+CjMcCountsOff: 0
 AndOrPerSlot: -1 70
 AndLazyBefore: 99
 AndLazySkipped: 99
@@ -79,11 +81,26 @@ RangedAndOrAllMiss: -1
 RangedAndOrLastWin: 40
 GateAnd: 99
 GateAndFalse: 0 end
+called 5
+called 0
+GateAndStops: 0
 AndBroadcast: 10 20
 AndBroadcastMiss: 0 0
-AndFoldBoth: 9
-AndFoldBefore: 55
-AndFoldOneFails: 55
+AndAllHold: 9
+AndAllHoldBefore: 55
+AndOneFails: 55
+called 9
+AndRepeatsValue: 5 9
+AndRepeatsNone: 4 4
+called 8
+AndRepeatsHeap: s8? s8?
+AndRepeatsArray: [9] [7 8]
+AndRepeatsMask: [9] [0 5]
+AndPrintRepeats: 9 9
+AndRepeatedValueFails: 4 4
+AndWidthsN11: 4 5 4 5
+AndWidths1N1: 4 5 4 5
+AndWidths11N: 3 4 3 4
 AndCondBefore: 9
 AndCondAttachedPrefix: -1
 GroupedStatementOpen: 63

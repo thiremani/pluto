@@ -225,15 +225,7 @@ func yieldSlot(effects []YieldEffect, index int) YieldEffect {
 		panic("internal: cannot select from empty yield effects")
 	}
 
-	if len(effects) == 1 {
-		return effects[0]
-	}
-
-	if index >= len(effects) {
-		return foldYieldEffects(effects)
-	}
-
-	return effects[index]
+	return slotAt(effects, index)
 }
 
 // deriveCall yields every output of a call that is invoked, since every body

@@ -721,6 +721,46 @@ caSum = 111
 caSum = Accum(Pair(5, 7) > Pair(1, 8))
 "CallArgMergesSlots: -caSum"
 
+# A comparison that repeats a named left passes the call one argument per
+# slot, each typed by the binding's storage; when one slot fails, the call
+# does not run.
+rbN = 3
+rbS = Accum(rbN > Pair(1, 2))
+rbR = 99
+rbR = Accum(rbN > Pair(1, 5))
+"CallArgRepeatsBinding: -rbS -rbR"
+
+# The arguments' count picks the overload.
+rbP = Plus(rbN > Pair(1, 2))
+rbQ = Plus(rbN > 1)
+"CallArgOverload: -rbP -rbQ"
+
+# Scalar comparison slots retain the binding; mask slots produce fresh arrays.
+# A failed argument slot skips the whole call; any already-built mask must be freed.
+rbA, rbB = Swap(rbN > Pair(1, [1 5]))
+rbC = 8
+rbD = [7 7]
+rbC, rbD = Swap(rbN > Pair([1 5], 9))
+"CallArgScalarAndMask: -rbA -rbB -rbC -rbD"
+
+# A heap-string binding repeats the same way, and when one slot fails, the call
+# does not run (leak-checked).
+rbT = "a" ⊕ "b"
+rbU = Cat(rbT > Pair("a", "aa"))
+rbY = "old"
+rbY = Cat(rbT > Pair("a", "zz"))
+"CallArgRepeatsHeapBinding: -rbU -rbY"
+
+# A chain repeats its one-slot left the same way, typed by the binding's
+# storage, which the later widening makes heap; when one slot fails, the call
+# does not run.
+rbV = "a"
+rbW = LoudCat(rbV > "" < Pair("b", "c"))
+rbX = "old"
+rbX = LoudCat(rbV > "" < Pair("b", ""))
+rbV = rbV ⊕ "b"
+"CallArgRepeatsChainedBinding: -rbW -rbX -rbV"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
@@ -784,6 +824,126 @@ hoD = "old" ⊕ "D"
 "HeapTupleOrBefore: -hoC -hoD"
 hoC, hoD = PairStr(1, 1) > PairStr(5, 5) || PairStr(7, 7)
 "HeapTupleOrBothFallback: -hoC -hoD"
+
+# A single fallback repeats to every slot that needs it, and its call runs
+# once; only the second slot needs it here.
+rpA, rpB = Pair(2, 4) > Pair(1, 5) || Loud(-1)
+"RepeatOrSecond: -rpA -rpB"
+
+# A repeated fallback that every slot needs runs once and fills each one.
+rpC, rpD = Pair(2, 4) > Pair(5, 5) || Loud(-2)
+"RepeatOrAll: -rpC -rpD"
+
+# A repeated fallback that no slot needs never runs, and leaves the left's
+# values.
+rpE, rpF = Pair(2, 4) > Pair(1, 1) || Loud(-3)
+"RepeatOrNone: -rpE -rpF"
+
+# A repeated fallback that fails leaves the slots that needed it unchanged.
+rpK = 5
+rpG, rpH = 7, 7
+rpG, rpH = Pair(2, 4) > Pair(3, 3) || rpK > 9
+"RepeatOrFails: -rpG -rpH"
+
+# A single left repeats over a multi-slot fallback.
+rpI, rpJ = rpK > 2 || Pair(0, 0)
+rpL, rpM = rpK > 9 || Pair(1, 2)
+"RepeatOrLeft: -rpI -rpJ -rpL -rpM"
+
+# A repeated heap fallback is built once, whether one slot or both take it,
+# and each slot that takes it owns a copy (leak-checked).
+hrA, hrB = PairStr(1, 3) > PairStr(2, 2) || LoudStr(9) ⊕ "?"
+hrC, hrD = PairStr(1, 1) > PairStr(2, 2) || LoudStr(7) ⊕ "?"
+"HeapRepeatOr: -hrA -hrB -hrC -hrD"
+
+# A comparison repeats a single side: a single right against each left slot,
+# and a single left against each right slot.
+rcA, rcB = 9, 9
+rcA, rcB = Pair(1, 5) > 2
+rcC, rcD = 9, 9
+rcC, rcD = 3 > Pair(1, 5)
+"RepeatCmp: -rcA -rcB -rcC -rcD"
+
+# A repeated heap left gives each slot its own copy (leak-checked).
+hlA = "old" ⊕ "A"
+hlB = "old" ⊕ "B"
+hlA, hlB = MkStr(4) > Pair("a", "z")
+"HeapRepeatCmp: -hlA -hlB"
+
+# A chained comparison repeats the left it retained, and releases the copies
+# it made: the loop leaves no copy reachable for the leak check.
+rhI = 0:100
+hkA = "old" ⊕ "A"
+hkB = "old" ⊕ "B"
+hkA, hkB = rhI >= 0 && MkStr(rhI) > "a" < Pair("zz", "s1")
+"HeapRepeatChain: -hkA -hkB"
+
+# A ranged comparison gives each slot its own copy of a repeated heap left
+# per iteration (leak-checked).
+rhA = "old" ⊕ "A"
+rhB = "old" ⊕ "B"
+rhA, rhB = MkStr(rhI) > Pair("s0", "s1")
+"RangedHeapRepeatCmp: -rhA -rhB"
+
+# An array returned as one value repeats whole: both masks read the one
+# array, which is released once (leak-checked).
+rmA, rmB = MkArr(4) > Pair(3, 5)
+"RepeatMask: -rmA -rmB"
+
+# With a scalar condition in the same value, each mask consumes its own copy
+# of the repeated array (leak-checked).
+rmC, rmD = 1 > 0 && MkArr(4) > Pair(3, 5)
+rmE, rmF = MkArr(4) > (Pair(3, 5) > 0)
+"RepeatMaskCopies: -rmC -rmD -rmE -rmF"
+
+# A single right side repeats into a mask slot as well as a scalar one.
+rmG, rmH = Pair(4, MkArr(4)) > 3
+"RepeatMaskRight: -rmG -rmH"
+
+# Arithmetic repeats a single side.
+raA, raB = Pair(1, 2) * 2
+raC, raD = 10 - Pair(1, 2)
+raE, raF = MkStr(4) ⊕ LitPair2()
+raG, raH = [1 2] + Pair(10, 20)
+"RepeatArith: -raA -raB -raC -raD -raE -raF -raG -raH"
+
+# Arithmetic over a comparison repeats its single side per slot, and the slot
+# whose comparison fails keeps its old value.
+rsA, rsB = 9, 9
+rsA, rsB = (Pair(1, 5) > 2) + 100
+"RepeatSpine: -rsA -rsB"
+
+# Each slot recombines nested arithmetic over a comparison and frees the
+# intermediates it builds (leak-checked).
+nsA, nsB = ((MkStr(4) > "a") ⊕ "!") ⊕ Pair("x", "y")
+nsC, nsD = Pair("x", "y") ⊕ ("!" ⊕ (MkStr(4) > "a"))
+nsE, nsF = (([1 2] > 0) + [10 20]) + (Pair(1, 2) > 0)
+"NestedSpine: -nsA -nsB -nsC -nsD -nsE -nsF"
+
+# A slot whose comparison fails builds no intermediate and keeps its old value.
+nsG = "old" ⊕ "G"
+nsH = "old" ⊕ "H"
+nsG, nsH = ((PairStr(1, 5) > "s2") ⊕ "!") ⊕ "?"
+"NestedSpineFails: -nsG -nsH"
+
+# A || side recombines its nested arithmetic the same way.
+nsK = ((MkStr(4) > "a") ⊕ "!") ⊕ "?" || "z"
+"NestedSpineOr: -nsK"
+
+# Each nested combine keeps its own slot type, so its integer arrays stay
+# exact above 2^53 until the last + makes them floats.
+nsL, nsM = (((Pair(9007199254740992, 9007199254740994) > 0) + [1]) - 9007199254740992) + 0.5
+"NestedSpineTypes: -nsL -nsM"
+
+# A repeated comparison that fails, fails every slot it feeds.
+rsC, rsD = 9, 9
+rsC, rsD = (1 > 3) + Pair(1, 2)
+rkA, rkB = 5, 5
+rkA, rkB = 1 > 2 < Pair(9, 9)
+"RepeatFailedCmp: -rsC -rsD -rkA -rkB"
+
+# A printed value repeats a single condition over every slot.
+"RepeatPrint:", (3 > 1) + Pair(1, 2)
 
 # A named array operand survives its mask (the mask copies elements; only
 # owned operands — call results, literals, inner masks — are consumed).

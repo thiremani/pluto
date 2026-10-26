@@ -504,11 +504,28 @@ func (c *Compiler) foldSlotConds(conds []llvm.Value) llvm.Value {
 	return cond
 }
 
+// slotAt picks an operand's entry for result slot i: a single slot repeats to
+// every result slot, and several pair with the result's by position.
+func slotAt[T any](slots []T, i int) T {
+	if len(slots) == 1 {
+		return slots[0]
+	}
+	return slots[i]
+}
+
+// slotCondAt picks slot i's condition from an operand's conditions; a
+// condition-free operand has none, so the slot always yields.
 func slotCondAt(conds []llvm.Value, i int) llvm.Value {
-	if i >= len(conds) {
+	if len(conds) == 0 {
 		return llvm.Value{}
 	}
-	return conds[i]
+	return slotAt(conds, i)
+}
+
+// condsAlign reports whether an operand's conditions can feed n result
+// slots: none, a single one that repeats, or one per slot.
+func condsAlign(conds []llvm.Value, n int) bool {
+	return len(conds) <= 1 || len(conds) == n
 }
 
 // broadcastConds spreads one condition over n slots (all nil when cond is nil).
@@ -583,11 +600,11 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 		if len(lConds) == 0 && len(rConds) == 0 {
 			return nil, temps
 		}
-		// The solver enforces operand arity == node arity for non-comparison
-		// infix, so operand conditions are either absent or slot-aligned;
+		// The solver pairs an operand's slots with the node's or repeats a
+		// single one, so operand conditions are absent, single or slot-aligned;
 		// anything else would zip lane i's condition onto lane j (a miscompile).
 		n := len(info.OutTypes)
-		if (len(lConds) != 0 && len(lConds) != n) || (len(rConds) != 0 && len(rConds) != n) {
+		if !condsAlign(lConds, n) || !condsAlign(rConds, n) {
 			panic(fmt.Sprintf("internal: slot conditions misaligned with infix arity (left %d, right %d, slots %d)", len(lConds), len(rConds), n))
 		}
 		conds := make([]llvm.Value, n)
@@ -637,9 +654,16 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	}
 	c.popBoundsGuard()
 
-	conds := make([]llvm.Value, len(left))
-	lhsSyms := make([]*Symbol, len(left))
-	for i := range left {
+	// A single-slot side repeats to every slot. The left is consumed or
+	// retained slot by slot, so a repeated temporary gets a copy for each slot
+	// after the first; the right is only compared, and is released once below.
+	n := len(info.OutTypes)
+	ownLeft := len(left)
+	left = c.repeatSlots(infix.Left, left, n)
+
+	conds := make([]llvm.Value, n)
+	lhsSyms := make([]*Symbol, n)
+	for i := range n {
 		operandCond := c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("operand_cond_%d", i))
 		operandCond = c.andConds(operandCond, boundsOK, fmt.Sprintf("operand_bounds_%d", i))
 		switch info.CompareModes[i] {
@@ -648,14 +672,14 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 			// elements it keeps, so an owned left operand (call result, literal,
 			// inner mask) is consumed here — but a named variable's loaded value
 			// is the variable's live payload and must survive.
-			lhsSyms[i] = c.compileArrayMask(infix.Operator, left[i], right[i], info.OutTypes[i])
+			lhsSyms[i] = c.compileArrayMask(infix.Operator, left[i], slotAt(right, i), info.OutTypes[i])
 			if _, isIdent := infix.Left.(*ast.Identifier); !isIdent {
 				c.freeSymbolValue(left[i], "")
 				left[i].Borrowed = true
 			}
 			conds[i] = operandCond
 		default:
-			lSym, cmpVal := c.compareScalars(infix.Operator, left[i], right[i])
+			lSym, cmpVal := c.compareScalars(infix.Operator, left[i], slotAt(right, i))
 			conds[i] = c.andConds(operandCond, cmpVal, fmt.Sprintf("slot_cond_%d", i))
 			lhsSyms[i] = lSym
 			if _, isIdent := infix.Left.(*ast.Identifier); isIdent {
@@ -678,14 +702,20 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 	// slots), so a consumer free that marks the frame entry borrowed also
 	// neutralizes this temp. Skip a chained inner comparison (a > b < c): its
 	// value came from substituting that already-retained comparison, so it is
-	// the SAME symbol already tracked — re-tracking would free it twice.
-	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; !chained {
-		trackSyms := make([]*Symbol, len(left))
-		for i := range left {
-			trackSyms[i] = lhsSyms[i]
+	// the SAME symbol already tracked — re-tracking would free it twice. The
+	// copies a repeat made of it are this comparison's own.
+	first := 0
+	if _, chained := frame[key(c.FuncNameMangled, infix.Left)]; chained {
+		first = ownLeft
+	}
+	if first < n {
+		trackSyms := make([]*Symbol, 0, n-first)
+		for i := first; i < n; i++ {
+			sym := lhsSyms[i]
 			if info.IsMask(i) {
-				trackSyms[i] = left[i]
+				sym = left[i]
 			}
+			trackSyms = append(trackSyms, sym)
 		}
 		temps = append(temps, condTemp{expr: infix.Left, syms: trackSyms})
 	}
@@ -741,13 +771,6 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 	// The solver rejects a left that cannot fail, so the fold is never nil.
 	if c.foldSlotConds(lConds).IsNil() {
 		panic("internal: value-position && requires a failable left operand")
-	}
-
-	// Map the left's conditions onto the result arity: fold when a multi-slot
-	// condition gates one value (every slot must yield), broadcast when one
-	// condition gates a multi-slot value.
-	if len(lConds) != len(info.OutTypes) {
-		lConds = broadcastConds(c.foldSlotConds(lConds), len(info.OutTypes))
 	}
 
 	slots := c.newLogicalSlots(info.OutTypes)
@@ -826,6 +849,10 @@ func (c *Compiler) newLogicalSlots(outTypes []Type) []logicalSlot {
 // side fills only slots the left left empty, a &&'s right side fills only
 // slots whose left side yielded.
 func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
+	if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) < len(slots) {
+		return c.resolveRepeatedSide(slots, side, takeGate)
+	}
+
 	before := c.frameMaskKeys()
 	conds, sideTemps := c.prepareSpine(side, nil)
 
@@ -841,6 +868,32 @@ func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, 
 
 	c.freeCondTemps(sideTemps)
 	c.freeUnmovedMasksSince(before)
+	return conds
+}
+
+// resolveRepeatedSide resolves a single-slot side once, into a slot of its
+// own, and copies its value into every result slot that takes it, so each
+// result slot owns its payload. The side's slot is released after the copies.
+func (c *Compiler) resolveRepeatedSide(slots []logicalSlot, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
+	sideType := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes[0]
+	if ptr, ok := sideType.(Ptr); ok {
+		sideType = ptr.Elem
+	}
+	single := c.newLogicalSlots([]Type{sideType})
+	conds := c.resolveLogicalSide(single, side, nil)
+	yields, values := c.loadLogicalResults(single)
+
+	for i, sl := range slots {
+		take := yields[0]
+		if takeGate != nil {
+			take = c.andConds(takeGate(i), take, fmt.Sprintf("repeat_take_%d", i))
+		}
+		c.withCondBranch(take, fmt.Sprintf("repeat_store_%d", i), func() {
+			c.fillLogicalSlot(sl, c.deepCopyIfNeeded(values[0]), fmt.Sprintf("repeat_val_%d", i))
+		}, nil)
+	}
+
+	c.freeSymbolValue(values[0], "repeated_side")
 	return conds
 }
 
@@ -1472,7 +1525,13 @@ func (c *Compiler) storeLogicalValue(side ast.Expression, i int, sl logicalSlot)
 		val = c.derefIfPointer(val, fmt.Sprintf("logical_take_val_%d", i))
 		val = c.deepCopyIfNeeded(val)
 	}
-	coerced := c.coerceSymbolForType(val, sl.outType, fmt.Sprintf("logical_val_%d", i))
+	c.fillLogicalSlot(sl, val, fmt.Sprintf("logical_val_%d", i))
+}
+
+// fillLogicalSlot stores an owned value into a ||/&& result slot and marks it
+// yielded.
+func (c *Compiler) fillLogicalSlot(sl logicalSlot, val *Symbol, name string) {
+	coerced := c.coerceSymbolForType(val, sl.outType, name)
 	c.createStore(coerced.Val, sl.value, coerced.Type)
 	i1 := Int{Width: 1}
 	c.createStore(llvm.ConstInt(c.mapToLLVMType(i1), 1, false), sl.yield, i1)
@@ -1505,7 +1564,7 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 		if info.IsMask(i) {
 			return syms[i], true
 		}
-		return syms[i], false
+		return slotAt(syms, i), false
 	}
 
 	infix, ok := expr.(*ast.InfixExpression)
@@ -1520,9 +1579,24 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 		slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
 		panic(fmt.Sprintf("internal: conditional spine node %s combined as plain arithmetic", infix.Operator))
 	}
-	l, _ := c.spineSlotValue(infix.Left, i, outType)
-	r, _ := c.spineSlotValue(infix.Right, i, outType)
-	return c.compileInfix(infix.Operator, l, r, outType), true
+	leftInfo := c.ExprCache[key(c.FuncNameMangled, infix.Left)]
+	rightInfo := c.ExprCache[key(c.FuncNameMangled, infix.Right)]
+	l, _ := c.spineSlotValue(infix.Left, i, slotAt(leftInfo.OutTypes, i))
+	r, _ := c.spineSlotValue(infix.Right, i, slotAt(rightInfo.OutTypes, i))
+	val := c.compileInfix(infix.Operator, l, r, outType)
+	c.freeSpineIntermediate(infix.Left, l)
+	c.freeSpineIntermediate(infix.Right, r)
+	return val, true
+}
+
+// freeSpineIntermediate frees an operand that spineSlotValue combined for one
+// slot, once its parent has consumed it. Frame values (leaves, comparison LHS
+// values, masks) are released by the spine's own cleanup.
+func (c *Compiler) freeSpineIntermediate(operand ast.Expression, sym *Symbol) {
+	if _, framed := c.requireCondLHSFrame()[key(c.FuncNameMangled, operand)]; framed {
+		return
+	}
+	c.freeSymbolValue(sym, "spine_intermediate")
 }
 
 // frameMaskKeys snapshots the current condLHS frame's keys, so a nested

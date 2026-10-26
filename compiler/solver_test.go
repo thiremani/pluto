@@ -647,8 +647,9 @@ a, b, c = Three(n)
 	}{
 		{name: "AssignmentMismatch", script: "a, b = 1\na", err: "assignment mismatch: 2 targets but 1 value"},
 		{name: "UndefinedFunction", script: "a = Missing(1)\na", err: "undefined function: Missing"},
-		{name: "OperandMismatch", script: "a = Pair(1) * 2\na", err: `operand mismatch: "*" has 2 values on its left but 1 value on its right`},
-		{name: "AndArityMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: "logical AND condition arity must match the value's, fold to one, or broadcast from one — got 2 and 3"},
+		{name: "OperandMismatch", script: "a = Pair(1) * Three(1)\na", err: `operand mismatch: "*" has 2 values on its left but 3 values on its right`},
+		{name: "AndOperandMismatch", script: "a = Pair(1 > 0) && Three(1)\na", err: `operand mismatch: "&&" has 2 values on its left but 3 values on its right`},
+		{name: "AndDoesNotFold", script: "a = Pair(1) > 0 && 1\na", err: "assignment mismatch: 1 target but 2 values"},
 	}
 
 	for _, test := range tests {
@@ -664,6 +665,53 @@ a, b, c = Three(n)
 
 			require.NotEmpty(t, ts.Errors)
 			require.Equal(t, test.err, ts.Errors[0].Msg)
+		})
+	}
+}
+
+// A script reports an undefined call or an operator whose sides do not line
+// up once: the value's count is invalid, and the checks that count values
+// skip it.
+func TestScriptReportsInvalidCountOnce(t *testing.T) {
+	const code = `p, q = Pair(n)
+    p, q = n, n + 1
+
+a, b, c = Three(n)
+    a, b, c = n, n, n
+
+r = Two(a, b)
+    r = a + b`
+	tests := []struct {
+		name   string
+		script string
+		errors []string
+	}{
+		{name: "UndefinedCallInTuple", script: "a, b = Missing(1)\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallBesideAnotherValue", script: "a, b, c = 1, Missing(1)\na, b, c", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallInAndCondition", script: "a, b = Missing(1) > 0 && 1\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "MismatchInTuple", script: "a, b = Pair(1) + Three(1)\na, b", errors: []string{`operand mismatch: "+" has 2 values on its left but 3 values on its right`}},
+		{name: "AndMismatchInTuple", script: "a, b, c = Pair(1 > 0) && Three(1)\na, b, c", errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`}},
+		{name: "AndMismatchUnderOrInGate", script: "a = Pair(1) > 0 && Three(1) > 0 || 1 > 0  7\na", errors: []string{`operand mismatch: "&&" has 2 values on its left but 3 values on its right`}},
+		{name: "MismatchUnderOperator", script: "a, b = (Pair(1) * Three(1)) + Pair(1)\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
+		{name: "MismatchUnderPrefix", script: "a, b = -(Pair(1) * Three(1))\na, b", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
+		{name: "UndefinedCallInArgument", script: "r = Two(Missing(1))\nr", errors: []string{"undefined function: Missing"}},
+		{name: "MismatchInArgument", script: "r = Two(Pair(1) * Three(1), 1)\nr", errors: []string{`operand mismatch: "*" has 2 values on its left but 3 values on its right`}},
+		{name: "UndefinedCallUnderAnd", script: "a, b = Pair(1) > Pair(0) && Missing(1)\na, b", errors: []string{"undefined function: Missing"}},
+		{name: "UndefinedCallUnderPrintedOperator", script: "Missing(1) + Pair(1)", errors: []string{"undefined function: Missing"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, test.name, "", mustParseCode(t, code))
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, test.name, mustParseScript(t, test.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			require.Equal(t, test.errors, extractErrorMessages(ts.Errors))
 		})
 	}
 }
@@ -770,6 +818,36 @@ func TestCallArgumentsUseSettledBindingSlotTypes(t *testing.T) {
 				require.True(t, callee.Settled)
 			}
 		})
+	}
+}
+
+// A comparison argument that passes on a binding is the slice its own types
+// are cached in; specializing the call on the binding's storage must not
+// retype it.
+func TestComparisonArgumentRetainsFlowType(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	code := mustParseCode(t, `r = Cat(a, b)
+    r = a ⊕ b
+
+a, b = Pair(x, y)
+    a = x
+    b = y
+`)
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), "s = \"a\"\nr = Cat(s > Pair(\"\", \"\"))\ns = s ⊕ \"b\"\nr, s")
+	call := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+	argInfo := ts.ExprCache[key(ts.FuncNameMangled, call.Arguments[0])]
+
+	require.True(t, IsStrH(ts.ScriptCompiler.Script.Root.Vars["s"]))
+	require.Len(t, info.CallParamTypes, 2)
+	require.Len(t, argInfo.OutTypes, 2)
+	for i := range 2 {
+		require.True(t, IsStrH(info.CallParamTypes[i]), "call must specialize on the binding's storage")
+		require.True(t, IsStrG(argInfo.OutTypes[i]), "argument expressions retain their flow type")
 	}
 }
 

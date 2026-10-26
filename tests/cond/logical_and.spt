@@ -280,6 +280,14 @@ cjMcStrHeapVal = PairStr(3, 1) > PairStr(2, 0) MkStr(9) ⊕ "?"
 cjMcCombo = Pair(1, 2) > Pair(0, 1) && a > 2 7
 "CjMcCombo: -cjMcCombo"
 
+# A gate's && chain lists separate conditions, so their slot counts need not
+# line up: each conjunct folds on its own, and one failing slot turns the gate
+# off.
+cjMcCounts = Pair(1, 2) > Pair(0, 1) && Triple(1, 2, 3) > Triple(0, 1, 2) 7
+"CjMcCounts: -cjMcCounts"
+cjMcCountsOff = Pair(1, 2) > Pair(0, 1) && Triple(1, 2, 3) > Triple(0, 5, 2) 7
+"CjMcCountsOff: -cjMcCountsOff"
+
 # && and || composed in one expression: per-slot if-else across a tuple.
 # Slot 0's condition fails (5 > 8), so its && misses and the || fills it;
 # slot 1's condition holds (7 > 1), so its && yields the gated value.
@@ -329,19 +337,77 @@ aoG = 3 > 2 && 4 > 3  99
 aoG2 = 3 > 2 && 4 > 9  99
 "GateAndFalse: -aoG2 end"
 
-# Left-arity fold and broadcast: the left of && contributes only conditions,
-# so one condition broadcasts over a multi-value right, and a multi-slot
-# condition folds (every slot must yield) over a single value.
+# The chain stops at the first condition that fails: later ones never run.
+aoG3 = Loud(5) > 0 && Loud(0) > 0 && Loud(6) > 0  99
+"GateAndStops: -aoG3"
+
+# The left of && contributes only conditions, so one condition broadcasts
+# over a multi-value right.
 abA, abB = a > 2 && Pair(10, 20)
 "AndBroadcast: -abA -abB"
 abC, abD = b > 2 && Pair(10, 20)
 "AndBroadcastMiss: -abC -abD"
-abF = Pair(5, 7) > Pair(1, 2) && 9
-"AndFoldBoth: -abF"
+
+# Checking that several conditions all hold takes an explicit && chain.
+abF = 5 > 1 && 7 > 2 && 9
+"AndAllHold: -abF"
 abG = 55
-"AndFoldBefore: -abG"
-abG = Pair(5, 7) > Pair(9, 2) && 9
-"AndFoldOneFails: -abG"
+"AndAllHoldBefore: -abG"
+abG = 5 > 9 && 7 > 2 && 9
+"AndOneFails: -abG"
+
+# A multi-slot condition gates a single value slot by slot: the value
+# repeats, its call runs once, and the slot whose condition fails keeps its
+# old value.
+abH, abI = 5, 5
+abH, abI = Pair(5, 7) > Pair(9, 2) && Loud(9)
+"AndRepeatsValue: -abH -abI"
+
+# A repeated value that no slot takes never runs.
+anA, anB = 4, 4
+anA, anB = Pair(1, 2) > Pair(5, 5) && Loud(6)
+"AndRepeatsNone: -anA -anB"
+
+# A repeated heap value is built once, though both slots take it, and each
+# owns a copy (leak-checked).
+ahA, ahB = PairStr(3, 1) > PairStr(2, 0) && LoudStr(8) ⊕ "?"
+"AndRepeatsHeap: -ahA -ahB"
+
+# A repeated array gives each slot that takes it its own copy.
+aaA, aaB = [9], [9]
+aaA, aaB = Pair(1, 9) > 2 && [7 8]
+"AndRepeatsArray: -aaA -aaB"
+
+# A repeated mask is built once, and each slot that takes it owns a copy,
+# though the slot before it skipped the value.
+amA, amB = [9], [9]
+amA, amB = Pair(1, 9) > 2 && [1 5] > 2
+"AndRepeatsMask: -amA -amB"
+
+# A printed && repeats its value the same way.
+"AndPrintRepeats:", Pair(5, 7) > Pair(1, 2) && 9
+
+# A repeated value that fails leaves every slot it would fill unchanged.
+afA, afB = 4, 4
+afA, afB = Pair(5, 7) > Pair(1, 2) && b > 99
+"AndRepeatedValueFails: -afA -afB"
+
+# Widths N, 1, 1 pair the same way however the chain is grouped.
+wnA, wnB, wnC, wnD = 4, 4, 4, 4
+wnA, wnB = (Pair(1, 9) > 2 && 3 > 0) && 5
+wnC, wnD = Pair(1, 9) > 2 && (3 > 0 && 5)
+"AndWidthsN11: -wnA -wnB -wnC -wnD"
+
+# Widths 1, N, 1.
+w1A, w1B, w1C, w1D = 4, 4, 4, 4
+w1A, w1B = (1 > 0 && Pair(1, 9) > 2) && 5
+w1C, w1D = 1 > 0 && (Pair(1, 9) > 2 && 5)
+"AndWidths1N1: -w1A -w1B -w1C -w1D"
+
+# Widths 1, 1, N.
+wvA, wvB = (1 > 0 && 2 > 1) && Pair(3, 4)
+wvC, wvD = 1 > 0 && (2 > 1 && Pair(3, 4))
+"AndWidths11N: -wvA -wvB -wvC -wvD"
 
 # A statement condition is one expression (comma conditions are a parse
 # error); && combines conditions, and the attached-prefix value split fires

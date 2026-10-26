@@ -259,12 +259,12 @@ func (cfg *CFG) validateFuncTemplate(fn *ast.FuncStatement) classifiedTemplate {
 
 // classifyTemplateWrites classifies every assignment's writes from the
 // template's text, indexed by statement, and records its range bindings for
-// settlement to check. It reports the text it cannot classify: a call that
-// names no template, an operator whose sides do not line up, and an
-// assignment whose values do not fill its targets. The solver rejects each of
-// these in any specialization; the flow checks, which would misread them, wait
-// until no template has one. It also reports an output that holds a range,
-// which a function cannot return.
+// settlement to check. It reports the text it cannot classify, each mistake
+// once: a call that names no template, an operator whose sides do not line
+// up, and an assignment whose values do not fill its targets. The solver
+// rejects each of these in any specialization; the flow checks, which would
+// misread them, wait until no template has one. It also reports an output
+// that holds a range, which a function cannot return.
 func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 	// A scope of its own resolves each string's markers against the names
 	// defined before it, as the solver resolves them.
@@ -290,7 +290,7 @@ func (cfg *CFG) classifyTemplateWrites(fn *ast.FuncStatement) [][]textWrite {
 
 		letWrites, ok := cfg.classifyWrites(let, ranges)
 		if !ok {
-			cfg.addError(let.Token, assignmentMismatch(len(let.Name), cfg.valueCount(let.Value)))
+			cfg.rejectAssignmentCount(let)
 			continue
 		}
 		cfg.rejectRangeOutputs(outputs, let, letWrites)
@@ -307,9 +307,7 @@ func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
 	for _, expr := range exprs {
 		switch e := expr.(type) {
 		case *ast.CallExpression:
-			if _, found := cfg.callTemplate(e); !found {
-				cfg.addError(e.Token, undefinedFunction(e.Function.Value))
-			}
+			cfg.rejectUndefinedCall(e)
 		case *ast.InfixExpression:
 			cfg.rejectMisalignedOperands(e)
 		}
@@ -317,26 +315,48 @@ func (cfg *CFG) rejectUnclassifiableExprs(exprs []ast.Expression) {
 	}
 }
 
+// rejectUndefinedCall reports a call that names no template. Arguments with
+// an invalid count leave it no arity to look up, and have their own error.
+func (cfg *CFG) rejectUndefinedCall(call *ast.CallExpression) {
+	if cfg.valueCount(call.Arguments) == invalidSlots {
+		return
+	}
+
+	if _, found := cfg.callTemplate(call); !found {
+		cfg.addError(call.Token, undefinedFunction(call.Function.Value))
+	}
+}
+
 // rejectMisalignedOperands reports an operator whose sides yield counts the
-// solver rejects.
+// solver rejects. A side with an invalid count has its own error.
 func (cfg *CFG) rejectMisalignedOperands(infix *ast.InfixExpression) {
 	left, right := cfg.valueSlots(infix.Left), cfg.valueSlots(infix.Right)
-	switch {
-	case !operandsLineUp(infix, left, right) && infix.IsLogicalAnd():
-		cfg.addError(infix.Token, logicalAndArityMismatch(left, right))
-	case !operandsLineUp(infix, left, right):
+	if left == invalidSlots || right == invalidSlots {
+		return
+	}
+
+	if !operandsLineUp(left, right) {
 		cfg.addError(infix.Token, operandMismatch(infix.Token.Literal, left, right))
 	}
 }
 
-// operandsLineUp reports whether an operator's sides yield counts the solver
-// accepts: equal counts, or for a && also a condition that folds onto one
-// value or broadcasts to several.
-func operandsLineUp(infix *ast.InfixExpression, left, right int) bool {
-	if infix.IsLogicalAnd() {
-		return left == right || left == 1 || right == 1
+// operandsLineUp reports whether an operator's sides pair slot by slot: equal
+// counts, or a single slot that repeats to match the other side. Every
+// operator follows it, and the result has the larger count.
+func operandsLineUp(left, right int) bool {
+	return left == right || min(left, right) == 1
+}
+
+// rejectAssignmentCount reports an assignment whose values do not fill its
+// targets, unless a value's count is invalid: that value's error is reported
+// where it arose.
+func (cfg *CFG) rejectAssignmentCount(let *ast.LetStatement) {
+	count := cfg.valueCount(let.Value)
+	if count == invalidSlots {
+		return
 	}
-	return left == right
+
+	cfg.addError(let.Token, assignmentMismatch(len(let.Name), count))
 }
 
 // rejectRangeOutputs reports an output assigned a range. A function returns a
@@ -361,10 +381,6 @@ func assignmentMismatch(targets, values int) string {
 
 func operandMismatch(operator string, left, right int) string {
 	return fmt.Sprintf("operand mismatch: %q has %s on its left but %s on its right", operator, countOf(left, "value"), countOf(right, "value"))
-}
-
-func logicalAndArityMismatch(left, right int) string {
-	return fmt.Sprintf("logical AND condition arity must match the value's, fold to one, or broadcast from one — got %d and %d", left, right)
 }
 
 // countOf writes n with its noun, in the plural unless n is one.
@@ -594,21 +610,28 @@ func (cfg *CFG) drivesAny(exprs []ast.Expression, ranges map[string]struct{}) bo
 	return false
 }
 
+// invalidSlots counts a value whose count the text cannot give: its error is
+// reported where it arises, and the checks that count values skip it.
+const invalidSlots = -1
+
 // valueSlots counts the targets a value fills, read from the text the way the
 // solver counts a tuple: a call fills its template's outputs, and an operator
-// its right operand's. An operator whose sides do not line up fills one, as
-// the solver counts it after reporting the mismatch.
+// its larger side's. A call that names no template, an operator whose sides
+// do not line up, and a value built on either count invalidSlots.
 func (cfg *CFG) valueSlots(value ast.Expression) int {
 	switch v := value.(type) {
 	case *ast.CallExpression:
-		if template, ok := cfg.callTemplate(v); ok {
-			return len(template.Outputs)
+		template, ok := cfg.callTemplate(v)
+		if !ok {
+			return invalidSlots
 		}
+		return len(template.Outputs)
 	case *ast.InfixExpression:
 		left, right := cfg.valueSlots(v.Left), cfg.valueSlots(v.Right)
-		if operandsLineUp(v, left, right) {
-			return right
+		if left == invalidSlots || right == invalidSlots || !operandsLineUp(left, right) {
+			return invalidSlots
 		}
+		return max(left, right)
 	case *ast.PrefixExpression:
 		return cfg.valueSlots(v.Right)
 	}
@@ -616,11 +639,15 @@ func (cfg *CFG) valueSlots(value ast.Expression) int {
 }
 
 // valueCount counts the values a list of expressions yields, as valueSlots
-// counts each.
+// counts each; one invalid count makes the total invalid.
 func (cfg *CFG) valueCount(values []ast.Expression) int {
 	count := 0
 	for _, value := range values {
-		count += cfg.valueSlots(value)
+		slots := cfg.valueSlots(value)
+		if slots == invalidSlots {
+			return invalidSlots
+		}
+		count += slots
 	}
 
 	return count

@@ -188,6 +188,12 @@ ArithWrapChain: 6 0
 MixArith: [3 4] 0
 CallArgBefore: 111
 CallArgMergesSlots: 111
+CallArgRepeatsBinding: 6 99
+CallArgOverload: 6 3
+CallArgScalarAndMask: [3 0] 3 8 [7 7]
+CallArgRepeatsHeapBinding: abab old
+called a a
+CallArgRepeatsChainedBinding: aa old ab
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88
 GatedLeafPass: 8 9
@@ -206,6 +212,31 @@ LitTupleB: |
 HeapTupleOr: s3! s9!
 HeapTupleOrBefore: oldC oldD
 HeapTupleOrBothFallback: s7! s7!
+called -1
+RepeatOrSecond: 2 -1
+called -2
+RepeatOrAll: -2 -2
+RepeatOrNone: 2 4
+RepeatOrFails: 7 4
+RepeatOrLeft: 5 5 1 2
+called 9
+called 7
+HeapRepeatOr: s9? s3! s7? s7?
+RepeatCmp: 9 5 3 9
+HeapRepeatCmp: s4 oldB
+HeapRepeatChain: s99 s0
+RangedHeapRepeatCmp: s99 s99
+RepeatMask: [4 4] [0 0]
+RepeatMaskCopies: [4 4] [0 0] [4 4] [0 0]
+RepeatMaskRight: 4 [4 4]
+RepeatArith: 2 4 9 8 s4aaa s4bbb [11 12] [21 22]
+RepeatSpine: 9 105
+NestedSpine: s4!x s4!y x!s4 y!s4 [12 23] [13 24]
+NestedSpineFails: oldG s5!!?
+NestedSpineOr: s4!?
+NestedSpineTypes: [1.5] [3.5]
+RepeatFailedCmp: 9 9 5 5
+RepeatPrint: 4 5
 NamedArrMask: [0 2 3] 5 [1 2 3]
 StaticIntoHeapBefore: x1 x2
 StaticIntoHeap: zzz x2
