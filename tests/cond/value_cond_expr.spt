@@ -735,8 +735,8 @@ rbP = Plus(rbN > Pair(1, 2))
 rbQ = Plus(rbN > 1)
 "CallArgOverload: -rbP -rbQ"
 
-# Only a scalar slot passes the binding on; a mask slot is a fresh array.
-# When the scalar slot after a mask fails, the call does not run.
+# Scalar comparison slots retain the binding; mask slots produce fresh arrays.
+# A failed argument slot skips the whole call; any already-built mask must be freed.
 rbA, rbB = Swap(rbN > Pair(1, [1 5]))
 rbC = 8
 rbD = [7 7]
