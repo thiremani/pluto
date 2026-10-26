@@ -70,3 +70,13 @@ r = Cat(a, b)
 r = LoudCat(a, b)
     "called -a -b"
     r = a ⊕ b
+
+# A repeated && side copies the binding's stored string into a slot typed by
+# the binding's storage, which the later widening makes heap.
+p, q = WidenedRepeat(n)
+    s = "a"
+    p = "p"
+    q = "q"
+    p, q = Pair(n, n) >= 0 && s
+    s = s ⊕ "b"
+    p = p ⊕ s

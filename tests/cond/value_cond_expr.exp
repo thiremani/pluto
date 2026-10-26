@@ -194,6 +194,7 @@ CallArgScalarAndMask: [3 0] 3 8 [7 7]
 CallArgRepeatsHeapBinding: abab old
 called a a
 CallArgRepeatsChainedBinding: aa old ab
+WidenedCopy: a a a a w a a b c aab a ab bc
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88
 GatedLeafPass: 8 9

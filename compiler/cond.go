@@ -872,10 +872,12 @@ func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, 
 }
 
 // resolveRepeatedSide resolves a single-slot side once, into a slot of its
-// own, and copies its value into every result slot that takes it, so each
-// result slot owns its payload. The side's slot is released after the copies.
+// own typed by the storage its value is copied from, and copies its value
+// into every result slot that takes it, so each result slot owns its payload.
+// The side's slot is released after the copies.
 func (c *Compiler) resolveRepeatedSide(slots []logicalSlot, side ast.Expression, takeGate func(int) llvm.Value) []llvm.Value {
-	sideType := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes[0]
+	own := c.ExprCache[key(c.FuncNameMangled, side)].OutTypes
+	sideType := yieldedStorage(c.ExprCache, c.FuncNameMangled, c.FuncCache[c.FuncNameMangled].Vars, side, own)[0]
 	if ptr, ok := sideType.(Ptr); ok {
 		sideType = ptr.Elem
 	}

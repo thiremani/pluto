@@ -1975,6 +1975,9 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		})
 	}
 
+	vars := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars
+	left = yieldedStorage(ts.ExprCache, ts.FuncNameMangled, vars, expr.Left, left)
+	right = yieldedStorage(ts.ExprCache, ts.FuncNameMangled, vars, expr.Right, right)
 	n := max(len(left), len(right))
 	types := make([]Type, n)
 	compareModes := make([]CondMode, n)
@@ -2022,6 +2025,8 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		})
 	}
 
+	vars := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars
+	right = yieldedStorage(ts.ExprCache, ts.FuncNameMangled, vars, expr.Right, right)
 	n := max(len(left), len(right))
 	types := make([]Type, n)
 	compareModes := make([]CondMode, n)
@@ -2478,8 +2483,9 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 
 	// Build args and innerArgs from outer types
 	// If loopInside=false, ALL range args become their inner type (loop outside)
+	vars := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars
 	for argIndex, outerTypes := range outerTypesPerArg {
-		outerTypes = ts.argumentStorage(ce.Arguments[argIndex], outerTypes)
+		outerTypes = yieldedStorage(ts.ExprCache, ts.FuncNameMangled, vars, ce.Arguments[argIndex], outerTypes)
 
 		if loopInside {
 			if arrayRangeType, yieldedType, ok := ts.callScopedArrayRangeType(ce.Arguments[argIndex]); ok {
@@ -2506,26 +2512,30 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 	return
 }
 
-// argumentStorage returns the types to specialize a call argument's slots on:
-// a slot that passes on a binding's stored value takes the binding's storage
-// type, and every other slot keeps its own. An argument with an invalid count
-// records no slot modes to follow, so it keeps its own types.
-func (ts *TypeSolver) argumentStorage(arg ast.Expression, own []Type) []Type {
-	if ts.countInvalid(arg) {
+// yieldedStorage returns the types expr's slots are stored as: a slot that
+// passes on a binding's stored value takes the binding's slot type in vars,
+// and every other slot keeps its own. A call specializes its arguments on
+// them, and a value-position && or || types its copies by them. An
+// expression with an invalid count records no slot modes to follow, so it
+// keeps its own types.
+func yieldedStorage(cache map[ExprKey]*ExprInfo, funcNameMangled string, vars map[string]Type, expr ast.Expression, own []Type) []Type {
+	if cache[key(funcNameMangled, expr)].InvalidCount {
 		return own
 	}
 
 	storage := slices.Clone(own)
 	for i, ownType := range own {
-		binding, ok := ts.yieldedBinding(arg, i)
+		binding, ok := yieldedBinding(cache, funcNameMangled, expr, i)
 		if !ok {
 			continue
 		}
 
-		// Parameters and code constants are already typed by their storage, and
-		// a resolved type can differ from its storage only in ownership.
-		slot, exists := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars[binding.Value]
-		if exists && IsFullyResolvedType(ownType) {
+		// Parameters and code constants are already typed by their storage. A
+		// range the statement iterates passes on its element, not the range it
+		// stores; any other resolved type can differ from its storage only in
+		// ownership.
+		slot, exists := vars[binding.Value]
+		if exists && IsFullyResolvedType(ownType) && slot.Kind() == ownType.Kind() {
 			storage[i] = slot
 		}
 	}
@@ -2536,16 +2546,16 @@ func (ts *TypeSolver) argumentStorage(arg ast.Expression, own []Type) []Type {
 // on: the identifier itself, or what the left operand passes on for a scalar
 // comparison slot in value position, which yields its LHS. A single-slot left
 // repeats to every slot.
-func (ts *TypeSolver) yieldedBinding(expr ast.Expression, slot int) (*ast.Identifier, bool) {
+func yieldedBinding(cache map[ExprKey]*ExprInfo, funcNameMangled string, expr ast.Expression, slot int) (*ast.Identifier, bool) {
 	for {
 		switch e := expr.(type) {
 		case *ast.Identifier:
 			return e, true
 		case *ast.InfixExpression:
-			if !ts.ExprCache[key(ts.FuncNameMangled, e)].IsCondScalar(slot) {
+			if !cache[key(funcNameMangled, e)].IsCondScalar(slot) {
 				return nil, false
 			}
-			if len(ts.ExprCache[key(ts.FuncNameMangled, e.Left)].OutTypes) == 1 {
+			if len(cache[key(funcNameMangled, e.Left)].OutTypes) == 1 {
 				slot = 0
 			}
 			expr = e.Left

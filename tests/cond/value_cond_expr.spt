@@ -761,6 +761,27 @@ rbX = LoudCat(rbV > "" < Pair("b", ""))
 rbV = rbV ⊕ "b"
 "CallArgRepeatsChainedBinding: -rbW -rbX -rbV"
 
+# A value-position && or || copies a binding's stored string, typed by the
+# binding's storage, which the later widening makes heap, so every copy is
+# freed: a bare &&, a call argument, a comparison operand, either side of ||,
+# and a repeated side (leak-checked over a loop).
+wdS = "a"
+wdT = "b"
+wdI = 0:200
+wdA = wdI >= 0 && wdS
+wdB = Id(wdI >= 0 && wdS)
+wdC = wdI >= 0 && wdS > ""
+wdD = (wdI < 0 && "q") || wdS
+wdE = wdS < (wdI > 100 && "a" || "b") || "w"
+wdF, wdG = Pair(wdI, wdI) >= 0 && wdS
+wdH, wdJ = (Pair(wdI % 2, 1) > 0 && Pair(wdT, "c")) || wdS
+wdP = ""
+wdQ = ""
+wdP, wdQ = WidenedRepeat(wdI)
+wdS = wdS ⊕ "b"
+wdT = wdT ⊕ "c"
+"WidenedCopy: -wdA -wdB -wdC -wdD -wdE -wdF -wdG -wdH -wdJ -wdP -wdQ -wdS -wdT"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
