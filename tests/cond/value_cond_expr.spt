@@ -741,6 +741,16 @@ rbT = "a" ⊕ "b"
 rbU = Cat(rbT > Pair("a", "aa"))
 "CallArgRepeatsHeapBinding: -rbU"
 
+# A chain repeats its one-slot left the same way, typed by the binding's
+# storage, which the later widening makes heap; when one slot fails, the call
+# does not run.
+rbV = "a"
+rbW = Cat(rbV > "" < Pair("b", "c"))
+rbX = "old"
+rbX = Cat(rbV > "" < Pair("b", ""))
+rbV = rbV ⊕ "b"
+"CallArgRepeatsChainedBinding: -rbW -rbX -rbV"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
