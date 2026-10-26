@@ -821,6 +821,36 @@ func TestCallArgumentsUseSettledBindingSlotTypes(t *testing.T) {
 	}
 }
 
+// A comparison argument that passes on a binding is the slice its own types
+// are cached in; specializing the call on the binding's storage must not
+// retype it.
+func TestComparisonArgumentRetainsFlowType(t *testing.T) {
+	ctx := llvm.NewContext()
+	defer ctx.Dispose()
+	code := mustParseCode(t, `r = Cat(a, b)
+    r = a ⊕ b
+
+a, b = Pair(x, y)
+    a = x
+    b = y
+`)
+	cc := NewCodeCompiler(ctx, t.Name(), "", code)
+	require.Empty(t, cc.Compile())
+
+	ts := solveScriptTypes(t, ctx, cc, t.Name(), "s = \"a\"\nr = Cat(s > Pair(\"\", \"\"))\ns = s ⊕ \"b\"\nr, s")
+	call := ts.ScriptCompiler.Program.Statements[1].(*ast.LetStatement).Value[0].(*ast.CallExpression)
+	info := ts.ExprCache[key(ts.FuncNameMangled, call)]
+	argInfo := ts.ExprCache[key(ts.FuncNameMangled, call.Arguments[0])]
+
+	require.True(t, IsStrH(ts.ScriptCompiler.Script.Root.Vars["s"]))
+	require.Len(t, info.CallParamTypes, 2)
+	require.Len(t, argInfo.OutTypes, 2)
+	for i := range 2 {
+		require.True(t, IsStrH(info.CallParamTypes[i]), "call must specialize on the binding's storage")
+		require.True(t, IsStrG(argInfo.OutTypes[i]), "argument expressions retain their flow type")
+	}
+}
+
 func TestLocalSlotRefinementRemanglesNestedCalls(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
