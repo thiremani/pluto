@@ -66,3 +66,7 @@ s, t = Swap(x, y)
 
 r = Cat(a, b)
     r = a ⊕ b
+
+r = LoudCat(a, b)
+    "called -a -b"
+    r = a ⊕ b

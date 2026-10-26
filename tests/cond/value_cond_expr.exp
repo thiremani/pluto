@@ -192,6 +192,7 @@ CallArgRepeatsBinding: 6
 CallArgOverload: 6 3
 CallArgScalarAndMask: [3 0] 3
 CallArgRepeatsHeapBinding: abab
+called a a
 CallArgRepeatsChainedBinding: aa old ab
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88

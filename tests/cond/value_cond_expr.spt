@@ -745,9 +745,9 @@ rbU = Cat(rbT > Pair("a", "aa"))
 # storage, which the later widening makes heap; when one slot fails, the call
 # does not run.
 rbV = "a"
-rbW = Cat(rbV > "" < Pair("b", "c"))
+rbW = LoudCat(rbV > "" < Pair("b", "c"))
 rbX = "old"
-rbX = Cat(rbV > "" < Pair("b", ""))
+rbX = LoudCat(rbV > "" < Pair("b", ""))
 rbV = rbV ⊕ "b"
 "CallArgRepeatsChainedBinding: -rbW -rbX -rbV"
 
