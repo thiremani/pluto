@@ -1312,6 +1312,13 @@ append.
 - Collector initialization, cell skip policies, finalization, and nested
   collectors as plan nodes per §10; collector cells join ownership
   elaboration.
+- Array-valued cells drop the copy legacy lowering makes of each row into a
+  cell slot (#150): a named row is borrowed and a fresh row (a call, a mask,
+  an `&&` or `||` copy) moves in, so `x = [a b]` copies the rows' elements
+  into `x` and nothing else. A borrowed row still skips with its cell: with
+  `a = [1]` and `row = [1 2]`, `x = a[5] + [row (1 > 0 && row)]` keeps `x`,
+  whereas reading `row` past the failed `a[5]` would leave the rows' shapes
+  unequal and abort the shape check.
 - The remaining ranged and collector print paths migrate. After this step no
   statement form needs the legacy conditional or collector machinery.
 - Collectors join the name allocator and invariant 24: collector nodes
