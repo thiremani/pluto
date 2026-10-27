@@ -154,6 +154,13 @@ Naming the temporary moves the resolver: `tmp = y > 2 && 3` resolves at `tmp`'s
 own `=` (a fresh `tmp` keeps `0`), and `z = x * tmp` then always assigns. Inline
 and named forms differ exactly by where the nearest resolver sits.
 
+An `&&` chain is conditions followed by one value: every operand but the last
+must be able to fail on its own, and the last is the value. The check covers
+the whole chain, so grouping doesn't change it: `((n > 0) && 7) && 8` is
+rejected like `(n > 0) && (7 && 8)`, since `7` is a value where a condition
+belongs. An `||` chain follows the same rule, which checking each `||` on its
+own already gives, since an `||` can fail only when its last fallback can.
+
 ## Fallback `||` resolves the failure
 
 `||` supplies a chosen value when its left side fails to yield. Its left
