@@ -1252,6 +1252,16 @@ append.
 - `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval`.
+- Need through comparison operands, the rest of #148's rule 3: an `&&` or `||`
+  passes the slots its context needs into a comparison's operands, which lower
+  slot by slot, so a slot nothing needs is never computed. Legacy lowering
+  stops need at a comparison, because it computes every operand slot at once.
+  Acceptance tests, with `A` standing for `Pair(1, 2) > Pair(0, 5)`, which
+  fails its second slot, and `G` printing its argument:
+  `x, y = A && ((A || G(7)) > 0)` calls no `G`, and
+  `x, y = A && ((Pair(10, 10) ÷ (A || Pair(G(7), G(8)))) > 0)` calls no `G`
+  and doesn't divide by the slot the `||` leaves empty. `logical_and`'s
+  `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here.
 - Calls with an argument whose conditional or checked failure remains
   unresolved (matrix row 6c), which gain strict source-order argument
   evaluation (§3) with the `F(sideEffect(), failingArg)` and
@@ -1274,6 +1284,9 @@ append.
 - Then ranged gates and ranged conditional combinations, including the ranged
   logical trees `compileCondExprStatement` routes to staging today; `continue`
   versus `skip` scopes become explicit.
+- Step 6's need through comparison operands, for ranged conditionals. Over
+  `i = 0:3`, `x, y = Pair(i, 1) > Pair(0, 5) && ((Pair(i, 1) > Pair(0, 5) ||
+  G(i)) > 0)` calls `G` on no iteration (legacy lowering calls it on 1 and 2).
 - Extend ownership elaboration to carries. Loop emission (`withLoopNest`,
   `createLoopCore`) stays as generic mechanics driven by `domain` regions.
 - Callee-owned domains under #123. Zero iterations mean no assignment,
