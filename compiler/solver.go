@@ -2015,10 +2015,12 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		})
 	}
 
-	// A conditional left gates only if it can fail — an always-yielding ||
-	// never gates. Failure may come from a propagating child in arithmetic,
-	// e.g. (i > 2 < 8) ^ 2 && v.
-	if !ts.expressionCanFail(expr.Left) {
+	// An && chain is conditions followed by one value, however it is grouped,
+	// so each && checks the operand just before it, the last of its left
+	// side's chain. That operand gates only if it can fail — an always-yielding
+	// || never gates — and failure may come from a propagating child in
+	// arithmetic, e.g. (i > 2 < 8) ^ 2 && v.
+	if !ts.expressionCanFail(lastAndOperand(expr.Left)) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
 			Msg:   "logical AND in value position requires a conditional left operand",
@@ -2046,6 +2048,15 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 		CompareModes: compareModes,
 	}
 	return types
+}
+
+// lastAndOperand returns the last operand of expr's && chain: expr itself
+// unless it is an &&, whose right side ends the chain.
+func lastAndOperand(expr ast.Expression) ast.Expression {
+	if and, ok := ast.IsLogicalAnd(expr); ok {
+		return lastAndOperand(and.Right)
+	}
+	return expr
 }
 
 // countInvalid reports whether expr's count is invalid.

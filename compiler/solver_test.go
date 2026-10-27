@@ -1465,6 +1465,58 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
+// TestLogicalChainGrouping: an && or || chain is conditions followed by one
+// value however it is grouped. A value where a condition belongs is one error
+// at the operator after it, and a chain of conditions types cleanly.
+func TestLogicalChainGrouping(t *testing.T) {
+	const andMsg = "logical AND in value position requires a conditional left operand"
+	const orMsg = "logical OR in value position requires a conditional left operand"
+	cases := []struct {
+		name   string
+		script string
+		msg    string // empty when the chain types cleanly
+		column int
+	}{
+		// The operator after 7 starts at column 20 when the chain groups to
+		// the left, and at 19 when it groups to the right.
+		{"AndValueGroupedLeft", "n = 1\nx = ((n > 0) && 7) && 8\nx", andMsg, 20},
+		{"AndValueGroupedRight", "n = 1\nx = (n > 0) && (7 && 8)\nx", andMsg, 19},
+		{"OrValueGroupedLeft", "n = 1\nx = ((n > 0) || 7) || 8\nx", orMsg, 20},
+		{"OrValueGroupedRight", "n = 1\nx = (n > 0) || (7 || 8)\nx", orMsg, 19},
+
+		// A value in the middle of a longer chain: the && after the bare n.
+		{"AndMiddleValueGroupedLeft", "n = 1\nx = ((n > 0 && n) && n > 0) && 9\nx", andMsg, 19},
+		{"AndMiddleValueGroupedRight", "n = 1\nx = n > 0 && (n && (n > 0 && 9))\nx", andMsg, 17},
+
+		{"AndConditionsGroupedLeft", "n = 1\nx = ((n > 0) && (n > 1)) && 8\nx", "", 0},
+		{"AndConditionsGroupedRight", "n = 1\nx = (n > 0) && ((n > 1) && 8)\nx", "", 0},
+		{"OrConditionsGroupedLeft", "n = 1\nx = ((n > 0) || (n > 1)) || 8\nx", "", 0},
+		{"OrConditionsGroupedRight", "n = 1\nx = (n > 0) || ((n > 1) || 8)\nx", "", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+
+			cc := NewCodeCompiler(ctx, tc.name, "", ast.NewCode())
+			require.Empty(t, cc.Compile())
+			sc := NewScriptCompiler(ctx, tc.name, mustParseScript(t, tc.script), cc)
+			ts := NewTypeSolver(sc)
+			ts.Solve()
+
+			if tc.msg == "" {
+				require.Empty(t, ts.Errors)
+				return
+			}
+			require.Len(t, ts.Errors, 1)
+			require.Equal(t, tc.msg, ts.Errors[0].Msg)
+			require.Equal(t, 2, ts.Errors[0].Token.Line)
+			require.Equal(t, tc.column, ts.Errors[0].Token.Column)
+		})
+	}
+}
+
 func TestScalarArrayComparisonInValuePositionIsMask(t *testing.T) {
 	ctx := llvm.NewContext()
 	cc := NewCodeCompiler(ctx, "scalarArrayComparisonValue", "", ast.NewCode())
