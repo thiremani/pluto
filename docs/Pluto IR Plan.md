@@ -1266,7 +1266,9 @@ append.
   unresolved (matrix row 6c), which gain strict source-order argument
   evaluation (§3) with the `F(sideEffect(), failingArg)` and
   `F(failingArg, sideEffect())` regressions. After #123 no non-ranged call
-  defers here for its callee's write effects.
+  defers here for its callee's write effects. `value_cond_expr`'s `Pos` blocks
+  pin today's evaluation beside a failed comparison, in values, calls, cells
+  and prints, so their `.exp` changes here.
 - All non-ranged prints lower as `PrintPlan`s (§3), including call
   arguments: a call that runs writes every output, so a call argument fails
   only through its own arguments or invocation.

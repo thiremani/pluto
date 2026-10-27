@@ -1288,3 +1288,64 @@ sdU, sdW = sdArr[9], sdArr[0]
 msX = 0
 msX = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3
 "MixedSlotOrGate: -msX"
+
+# Beside a failed comparison: today's evaluation, pinned so that PIR Step 6,
+# planned to evaluate every call and print argument, shows here as a diff.
+# Outside every condition, a single-slot value skips its call, on either side.
+pbA, pbB = 9, 9
+pbA = (1 > 2) + Loud(1)
+pbB = Loud(2) + (1 > 2)
+"PosRoot: -pbA -pbB"
+
+# A call's arguments skip it too, on either side of the failed one and
+# whatever the call's slot count.
+pcA, pcB, pcC, pcD, pcE, pcF = 9, 9, 9, 9, 9, 9
+pcA = Two(Loud(1), 1 > 2)
+pcB = Two(1 > 2, Loud(2))
+pcC, pcD = Pair(Loud(3), 1 > 2)
+pcE, pcF = Pair(1 > 2, Loud(4))
+"PosCallArgs: -pcA -pcB -pcC -pcD -pcE -pcF"
+
+# Inside a comparison, an || or an &&, the call runs.
+pdA, pdB, pdD, pdE = 9, 9, 9, 9
+pdA = ((1 > 2) + Loud(1)) > 0
+pdB = 1 > 2 > Loud(2)
+pdC = ((1 > 2) + Loud(3)) || 6
+pdD = 1 > 0 && ((1 > 2) + Loud(4))
+pdE = Two(((1 > 2) + Loud(5)) > 0, 1)
+"PosInsideCondition: -pdA -pdB -pdC -pdD -pdE"
+
+# A cell reads its value the same way, and a failed cell holds zero.
+peA = [(1 > 2) + Loud(1)]
+peB = [((1 > 2) + Loud(2)) > 0]
+"PosCells: -peA -peB"
+
+# Multi-slot arithmetic runs every leaf, also when a repeat makes it
+# multi-slot.
+pfA, pfB, pfC, pfD = 9, 9, 9, 9
+pfA, pfB = (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(1), Loud(2))
+pfC, pfD = (Pair(1, 2) > Pair(5, 5)) + Loud(3)
+"PosMultiSlot: -pfA -pfB -pfC -pfD"
+
+# A print of each reads its arguments as a call does: a failed argument
+# suppresses its line, and multi-slot arithmetic skips its calls as well.
+"PosPrintRoot:", (1 > 2) + Loud(1)
+"PosPrintRootRight:", Loud(2) + (1 > 2)
+"PosPrintCallArg:", Two(Loud(3), 1 > 2)
+"PosPrintPairArg:", Pair(Loud(4), 1 > 2)
+"PosPrintCmp:", ((1 > 2) + Loud(5)) > 0
+"PosPrintChain:", 1 > 2 > Loud(6)
+"PosPrintOr:", ((1 > 2) + Loud(7)) || 6
+"PosPrintAnd:", 1 > 0 && ((1 > 2) + Loud(8))
+"PosPrintCmpArg:", Two(((1 > 2) + Loud(9)) > 0, 1)
+"PosPrintCell:", [((1 > 2) + Loud(10)) > 0]
+"PosPrintMultiSlot:", (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(11), Loud(12))
+"PosPrintRepeat:", (Pair(1, 2) > Pair(5, 5)) + Loud(13)
+
+# Checking every result of a call in a cell takes a helper that returns one
+# value per call; a gate checks every slot itself.
+hpI = 0:5
+hpCells = [Both(hpI) > 0 && hpI]
+hpKept = Both(hpI) > 0 [hpI]
+hpKeptPair = Split(hpI) > Pair(1, 2) [hpI]
+"HelperPattern: -hpCells -hpKept -hpKeptPair"

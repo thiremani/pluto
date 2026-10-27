@@ -514,6 +514,13 @@ ngA = (Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 0)) || Pair(Loud(1), Loud
 ngB = Pair(1, 2) > Pair(0, 5) || (Pair(1, 2) > Pair(5, 0) || Pair(Loud(3), Loud(4)) > Pair(0, 0))  3
 "NeedGateGrouping: -ngA -ngB"
 
+# A gate's top-level && chain is its condition list however it is grouped, so
+# both stop at the condition that fails and neither calls Loud.
+gjA, gjB = 4, 4
+gjA = (Pair(1, 2) > Pair(0, 0) && Pair(1, 2) > Pair(5, 0)) && Pair(Loud(1), Loud(2)) > Pair(0, 0)  7
+gjB = Pair(1, 2) > Pair(0, 0) && (Pair(1, 2) > Pair(5, 0) && Pair(Loud(3), Loud(4)) > Pair(0, 0))  7
+"NeedGateAndGrouping: -gjA -gjB"
+
 # Across iterations the inner && runs Loud only where a slot the outer &&
 # takes also passes the inner condition, in order.
 nrI = 0:4

@@ -64,6 +64,16 @@ s, t = Swap(x, y)
     s = y
     t = x
 
+a, b = Split(x)
+    a = x
+    b = x + 1
+
+# Whether both of Split's results pass their checks, as one value per call.
+ok = Both(x)
+    a, b = Split(x)
+    ok = 0
+    ok = a > 1 && b > 2 1
+
 r = Cat(a, b)
     r = a ⊕ b
 

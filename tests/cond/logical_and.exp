@@ -129,6 +129,7 @@ NeedOrGrouping: 1 2 1 2
 NeedOrInAnd: 1 9
 NeedAndInOr: 1 9
 NeedGateGrouping: 3 3
+NeedGateAndGrouping: 4 4
 called 2
 called 3
 NeedRanged: 3 9

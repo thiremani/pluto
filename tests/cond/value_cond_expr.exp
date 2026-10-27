@@ -357,3 +357,26 @@ ChainCallOuterFalse:  end
 SeedFreshPair: bb a
 SeedOobPair:  a
 MixedSlotOrGate: 3
+PosRoot: 9 9
+PosCallArgs: 9 9 9 9 9 9
+called 1
+called 2
+called 3
+called 4
+called 5
+PosInsideCondition: 9 9 6 9 9
+called 2
+PosCells: [0] [0]
+called 1
+called 2
+called 3
+PosMultiSlot: 9 9 9 9
+called 5
+called 6
+called 7
+PosPrintOr: 6
+called 8
+called 9
+called 10
+PosPrintCell: [0]
+HelperPattern: [0 0 2 3 4] [2 3 4] [2 3 4]
