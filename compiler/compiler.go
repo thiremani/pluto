@@ -3657,8 +3657,11 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 		return
 	}
 
-	// Compile expression and process each resulting symbol
+	// Each argument has its own bounds frame, as an assignment's value does,
+	// so a call whose argument reads out of bounds does not run.
+	c.pushBoundsGuard("print_bounds_guard")
 	syms := c.compileExpression(expr, nil)
+	c.popBoundsGuard()
 	for _, s := range syms {
 		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
 	}

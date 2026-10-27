@@ -18,4 +18,31 @@ st 0 5
 5 0
 --cond middle--
 5 4 6
+--call with oob argument--
+5 0 6
+--ranged call with oob argument--
+called 10
+5 10
+called 20
+5 20
+called 30
+5 30
+5 0
+5 0
+called 10
+5 10
+called 20
+5 20
+called 30
+5 30
+5 0
+5 0
+called 10
+5 11
+called 20
+5 21
+called 30
+5 31
+5 1
+5 1
 --end--
