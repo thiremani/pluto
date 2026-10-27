@@ -479,3 +479,108 @@ nstHeapArgFb = MkStr(a > 9 && "a" || "z")
 nstRi = 0:5
 nstRanged = (nstRi > 2 || nstRi < 1) && nstRi * 10
 "NstRanged: -nstRanged"
+
+# Needed slots: a nested && or || runs its right side only for the slots its
+# context still needs, so regrouping a chain keeps the calls it makes. Here no
+# needed slot reaches Loud in either grouping; the inner && of the second
+# would run it for the slot the outer && already failed.
+ndA, ndB, ndC, ndD = 9, 9, 9, 9
+ndA, ndB = (Pair(1, 2) > Pair(0, 5) && Pair(1, 2) > Pair(5, 0)) && Pair(Loud(1), Loud(2))
+ndC, ndD = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(5, 0) && Pair(Loud(3), Loud(4)))
+"NeedAndGrouping: -ndA -ndB -ndC -ndD"
+
+# The same for ||: the inner || of the second would run Loud for the slot the
+# outer || already filled.
+noA, noB = (Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 0)) || Pair(Loud(1), Loud(2))
+noC, noD = Pair(1, 2) > Pair(0, 5) || (Pair(1, 2) > Pair(5, 0) || Pair(Loud(3), Loud(4)))
+"NeedOrGrouping: -noA -noB -noC -noD"
+
+# An || under an && runs its right side only for the slots the && takes: the
+# || fills the first from its left, and the && fails the second.
+nmA, nmB = 9, 9
+nmA, nmB = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(0, 5) || Pair(Loud(1), Loud(2)))
+"NeedOrInAnd: -nmA -nmB"
+
+# An && under an || runs its right side only for the slots the || leaves
+# empty: the && fails the second.
+nyA, nyB = 9, 9
+nyA, nyB = Pair(1, 2) > Pair(0, 5) || (Pair(1, 2) > Pair(0, 5) && Pair(Loud(1), Loud(2)))
+"NeedAndInOr: -nyA -nyB"
+
+# A gate needs every slot of its condition, and its || still passes on only
+# the slots it leaves empty.
+ngA, ngB = 0, 0
+ngA = (Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 0)) || Pair(Loud(1), Loud(2)) > Pair(0, 0)  3
+ngB = Pair(1, 2) > Pair(0, 5) || (Pair(1, 2) > Pair(5, 0) || Pair(Loud(3), Loud(4)) > Pair(0, 0))  3
+"NeedGateGrouping: -ngA -ngB"
+
+# Across iterations the inner && runs Loud only where a slot the outer &&
+# takes also passes the inner condition, in order.
+nrI = 0:4
+nrA, nrB = 9, 9
+nrA, nrB = Pair(nrI, 1) > Pair(0, 5) && (Pair(nrI, 1) > Pair(1, 0) && Loud(nrI))
+"NeedRanged: -nrA -nrB"
+
+# Arithmetic and negation pass each slot's need to their operands.
+naA, naB, naC, naD = 9, 9, 9, 9
+naA, naB = Pair(1, 2) > Pair(0, 5) && ((Pair(1, 2) > Pair(0, 5) || Loud(1)) + 1)
+naC, naD = Pair(1, 2) > Pair(0, 5) && -(Pair(1, 2) > Pair(0, 5) || Loud(2))
+"NeedThroughArith: -naA -naB -naC -naD"
+
+# The left side of an && or || takes its node's need too.
+nlA, nlB, nlC, nlD = 9, 9, 9, 9
+nlA, nlB = Pair(1, 2) > Pair(0, 5) && ((Pair(1, 2) > Pair(0, 5) || Loud(1) > 0) && 5)
+nlC, nlD = Pair(1, 2) > Pair(0, 5) && ((Pair(1, 2) > Pair(0, 5) || Loud(2) > 0) || 5)
+"NeedLeftSide: -nlA -nlB -nlC -nlD"
+
+# Need stops at a comparison for now: its operands are evaluated whole, so
+# the || inside it runs Loud though no slot the && takes needs it.
+ncA, ncB, ncC, ncD = 9, 9, 9, 9
+ncA, ncB = Pair(1, 2) > Pair(0, 5) && ((Pair(1, 2) > Pair(0, 5) || Loud(1)) > 0)
+ncC, ncD = Pair(1, 2) > Pair(0, 5) && ((Pair(10, 10) ÷ (Pair(1, 2) > Pair(0, 5) || Pair(Loud(2), Loud(4)))) > 0)
+"NeedStopsAtComparison: -ncA -ncB -ncC -ncD"
+
+# A call needs every slot of its arguments.
+nfA, nfB = 9, 9
+nfA, nfB = Pair(1, 2) > Pair(0, 5) && Swap(Pair(1, 2) > Pair(0, 5) || Pair(Loud(1), Loud(2)))
+"NeedCallArgs: -nfA -nfB"
+
+# A repeated right side runs when any slot needs it, here only the second.
+nsA, nsB = 9, 9
+nsA, nsB = Pair(1, 2) > Pair(5, 0) && (1 > 2 || Loud(7))
+"NeedRepeatSecond: -nsA -nsB"
+
+# A repeated fallback under an && runs for the slots the && takes that the ||
+# leaves empty: none, one, then both.
+nzA, nzB, nzC, nzD, nzE, nzF = 9, 9, 9, 9, 9, 9
+nzA, nzB = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(0, 5) || Loud(1))
+nzC, nzD = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(5, 0) || Loud(2))
+nzE, nzF = Pair(1, 2) > Pair(0, 0) && (Pair(1, 2) > Pair(5, 5) || Loud(3))
+"NeedRepeatedFallback: -nzA -nzB -nzC -nzD -nzE -nzF"
+
+# Mixed widths call Loud the same way in either grouping.
+nwA, nwB, nwC, nwD = 9, 9, 9, 9
+nwA, nwB = (Pair(1, 2) > Pair(5, 0) && 1 > 0) && Loud(1)
+nwC, nwD = Pair(1, 2) > Pair(5, 0) && (1 > 0 && Loud(2))
+"NeedWidthsN11: -nwA -nwB -nwC -nwD"
+nvA, nvB, nvC, nvD = 9, 9, 9, 9
+nvA, nvB = (1 > 0 && Pair(1, 2) > Pair(5, 0)) && Loud(3)
+nvC, nvD = 1 > 0 && (Pair(1, 2) > Pair(5, 0) && Loud(4))
+"NeedWidths1N1: -nvA -nvB -nvC -nvD"
+
+# A needed slot runs its whole call and takes its array whole; the slot the
+# && fails takes nothing (leak-checked).
+nbA, nbB = [9], [9]
+nbA, nbB = Pair(1, 2) > Pair(0, 5) && ((Pair(1, 2) > Pair(5, 0) && Pair([1], [2])) || Pair([Loud(7) 8], [Loud(9)]))
+"NeedWholeCall: -nbA -nbB"
+
+# A discarded slot is still needed, so the call it reads runs.
+nxA = 9
+_, nxA = Pair(1, 2) > Pair(0, 5) && (Pair(1, 2) > Pair(5, 5) || Pair(Loud(7), Loud(8)))
+"NeedDiscarded: -nxA"
+
+# A mask slot never misses, so the || needs its right side only for the
+# scalar slot, which the && fails.
+nkA, nkB = [9], 9
+nkA, nkB = Pair(1, 2) > Pair(0, 5) && (Pair([1 5], 3) > Pair(2, 5) || Pair([0], Loud(9)))
+"NeedMaskSlot: -nkA -nkB"

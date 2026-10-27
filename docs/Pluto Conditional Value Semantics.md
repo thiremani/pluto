@@ -367,9 +367,20 @@ string or array owns its own copy. A slot is one of a call's returned values, so
 an array returned as one value repeats whole.
 
 Comparison operands are evaluated eagerly (once); only the yielding combine and
-the commit are gated per slot. The one lazy operand is an `&&` right side,
-evaluated at most once when some left slot yielded — so
-`c > 0 && (a > 2 || 7)` composes: the inner `||` resolves inside the gated arm.
+the commit are gated per slot. The lazy operands are `&&` and `||` right sides:
+each is evaluated at most once, and only when a slot its context still needs
+depends on it — a needed slot whose left side yielded, for an `&&`, or that its
+left side left empty, for an `||`. A statement needs every slot of its value
+and a gate every slot of its condition; an `&&` or `||` passes its need to its
+left side, arithmetic and negation pass each slot's need to their operands, and
+a call, an index or a comparison needs every slot of its operands whenever it
+runs. So `c > 0 && (a > 2 || 7)` composes (the inner `||` resolves inside the
+gated arm), and regrouping a chain keeps the calls it makes: with `p` standing
+for `Pair(1, 2) > Pair(0, 5)`, which fails its second slot, and `q` for
+`Pair(1, 2) > Pair(5, 0)`, which fails its first, neither `p && (q && F())` nor
+`(p && q) && F()` calls `F`. Need doesn't pass through a comparison yet, though
+#148's rule does: `p && ((p || F()) > 0)` calls `F` for the second slot, which
+the `&&` fails.
 
 An **out-of-bounds read is a failed condition on the lanes it feeds**, and it
 propagates like any other failure. Comparisons and calls are not resolvers:
