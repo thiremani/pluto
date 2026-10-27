@@ -3233,8 +3233,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		return nil
 	}
 
+	// Ranges an enclosing loop already binds make this a plain call in that
+	// iteration: the loop's extraction has evaluated the arguments'
+	// conditions, so the call takes their values instead of evaluating them
+	// again.
+	pending := len(c.pendingLoopRanges(info.Ranges)) > 0
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		if !info.LoopInside && len(info.Ranges) > 0 {
+		if !info.LoopInside && pending {
 			// LoopInside=false still needs a temp slot so empty ranges preserve the
 			// existing destination value instead of forcing zero.
 			return c.compileDirectCallWithRanges(sig, info, dest)
@@ -3243,7 +3248,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		return c.compileCallInner(sig, ce, dest)
 	}
 
-	if len(info.Ranges) > 0 && !info.LoopInside {
+	if pending && !info.LoopInside {
 		return c.compileIndirectCallWithRanges(sig, info, dest)
 	}
 

@@ -782,6 +782,18 @@ wdS = wdS ⊕ "b"
 wdT = wdT ⊕ "c"
 "WidenedCopy: -wdA -wdB -wdC -wdD -wdE -wdF -wdG -wdH -wdJ -wdP -wdQ -wdS -wdT"
 
+# A ranged call's && or || argument runs once per iteration, and the call
+# consumes the copy that argument's condition made (leak-checked over a
+# loop), in an assignment and in a print.
+roA = [1 2]
+roI = 0:200
+roX = Id(roI >= 0 && roA)
+roC = 0:3
+roY = Id(roC >= 1 && Loud(roC))
+roZ = Id((roC < 1 && 5) || Loud(roC))
+"RangedCallArgOnce: -roX -roY -roZ"
+"RangedCallArgPrint:", Id(roC >= 1 && Loud(roC))
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
