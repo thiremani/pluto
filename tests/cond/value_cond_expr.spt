@@ -821,6 +821,38 @@ acU = [(acI > 0 && acS) || acT]
 acV = [MkArr((acI > 0 && acI) || 7)]
 "acV", acV
 
+# A negation commits slot by slot, like arithmetic: the slot whose condition
+# holds keeps its value when the other fails, at the root and as an && side.
+ngA = 9
+ngB = 9
+ngA, ngB = -(Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 5))
+ngC = 9
+ngD = 9
+ngC, ngD = Pair(1, 2) > Pair(0, 5) && -(Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 5))
+"NegationPerSlot: -ngA -ngB -ngC -ngD"
+
+# The calls inside a negation run where they run inside the same arithmetic:
+# inside && and in multi-slot arithmetic. A single-slot root still skips them.
+ngE = 9
+ngE = (1 > 0) && -((1 > 2) + Loud(1))
+ngF = 9
+ngG = 9
+ngF, ngG = -((Pair(1, 2) > Pair(5, 0)) + Pair(Loud(2), Loud(3)))
+ngH = 9
+ngH = -((1 > 2) + Loud(4))
+"NegationCalls: -ngE -ngF -ngG -ngH"
+
+# An array-valued negation negates the slot that holds and keeps the failed
+# slot's old array, directly and over a sum it frees (leak-checked).
+ngI = 0:100
+ngP = [9]
+ngQ = [9]
+ngP, ngQ = -(Pair(ngI % 3, 2) > Pair(0, 5) && Pair([1 2], [3 4]))
+ngR = [9]
+ngS = [9]
+ngR, ngS = -((Pair(ngI % 3, 2) > Pair(0, 5) && Pair([1 2], [3 4])) + [10 10])
+"NegationArrays: -ngP -ngQ -ngR -ngS"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5

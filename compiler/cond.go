@@ -1321,8 +1321,8 @@ func (c *Compiler) compileCondExprStatement(stmt *ast.LetStatement, stmtCond llv
 
 // perSlotCommittable reports whether expr commits slot-by-slot in value
 // position: a multi-return expression whose root is a comparison, a
-// value-position ||, or a slot-aligned arithmetic spine over one, so each
-// output slot carries its own condition. Excluded (they keep the single ANDed
+// value-position ||, or a slot-aligned arithmetic spine or negation over one,
+// so each output slot carries its own condition. Excluded (they keep the single ANDed
 // gate): single-return expressions, ranged expressions, and roots whose slots
 // merge — a call's outputs are produced together, so every argument condition
 // gates them all.
@@ -1340,10 +1340,13 @@ func (c *Compiler) perSlotCommittable(expr ast.Expression, info *ExprInfo) bool 
 }
 
 // isSlotAlignedSpine reports whether expr's root is a comparison, a
-// value-position || or &&, or an arithmetic infix tree over one — the shapes
-// whose output slots stay aligned with their operands' slots, so per-slot
-// conditions are well-defined all the way to the root.
+// value-position || or &&, or an arithmetic infix tree or negation over one —
+// the shapes whose output slots stay aligned with their operands' slots, so
+// per-slot conditions are well-defined all the way to the root.
 func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
+	if prefix, ok := expr.(*ast.PrefixExpression); ok {
+		return c.isSlotAlignedSpine(prefix.Right)
+	}
 	infix, ok := expr.(*ast.InfixExpression)
 	if !ok {
 		return false
@@ -1412,6 +1415,10 @@ func (c *Compiler) prepareSpine(expr ast.Expression, temps []condTemp) ([]llvm.V
 			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("spine_and_%d", i))
 		}
 		return conds, temps
+	}
+
+	if prefix, ok := expr.(*ast.PrefixExpression); ok && c.isSlotAlignedSpine(expr) {
+		return c.prepareSpine(prefix.Right, temps)
 	}
 
 	return c.prepareSpineLeaf(expr, info, temps)
@@ -1557,8 +1564,8 @@ func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
 
 // spineSlotValue returns slot i's value for a spine node: retained frame
 // values for comparisons and pre-evaluated leaves, freshly combined arithmetic
-// otherwise. owned reports whether the caller receives ownership (fresh
-// combines and array masks) or a borrowed view it must copy on commit.
+// or negation otherwise. owned reports whether the caller receives ownership
+// (fresh combines and array masks) or a borrowed view it must copy on commit.
 func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Symbol, bool) {
 	frame := c.requireCondLHSFrame()
 	if syms, ok := frame[key(c.FuncNameMangled, expr)]; ok {
@@ -1567,6 +1574,14 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 			return syms[i], true
 		}
 		return slotAt(syms, i), false
+	}
+
+	if prefix, ok := expr.(*ast.PrefixExpression); ok {
+		operandInfo := c.ExprCache[key(c.FuncNameMangled, prefix.Right)]
+		operand, _ := c.spineSlotValue(prefix.Right, i, slotAt(operandInfo.OutTypes, i))
+		val := c.compilePrefix(prefix.Operator, operand, outType)
+		c.freeSpineIntermediate(prefix.Right, operand)
+		return val, true
 	}
 
 	infix, ok := expr.(*ast.InfixExpression)
