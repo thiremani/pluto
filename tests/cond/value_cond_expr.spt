@@ -794,6 +794,33 @@ roZ = Id((roC < 1 && 5) || Loud(roC))
 "RangedCallArgOnce: -roX -roY -roZ"
 "RangedCallArgPrint:", Id(roC >= 1 && Loud(roC))
 
+# An array-valued cell resolves its own conditions, like a scalar cell: a call
+# in a collector, which runs as a plain call in its iteration, and in a fixed
+# literal.
+acA = [1 2]
+acB = [3 4]
+acI = 0:3
+acX = [Id((acI > 0 && acA) || acA)]
+"acX", acX
+acY = [Id((5 > 0 && acA) || acB)]
+"acY", acY
+
+# A named row beside a conditional one is copied into its cell and freed once,
+# in a fixed literal and in a collector (leak-checked).
+acZ = [acA (5 > 0 && acB)]
+"acZ", acZ
+acW = [acA (acI >= 0 && acB)]
+"acW", acW
+
+# Heap strings and a call that builds the row resolve the same way
+# (leak-checked).
+acS = ["x" ⊕ "y" "z"]
+acT = ["u" "v" ⊕ "w"]
+acU = [(acI > 0 && acS) || acT]
+"acU", acU
+acV = [MkArr((acI > 0 && acI) || 7)]
+"acV", acV
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5

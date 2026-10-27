@@ -204,6 +204,36 @@ called 1
 RangedCallArgPrint: 1
 called 2
 RangedCallArgPrint: 2
+acX [
+    1 2
+    1 2
+    1 2
+]
+acY [
+    1 2
+]
+acZ [
+    1 2
+    3 4
+]
+acW [
+    1 2
+    3 4
+    1 2
+    3 4
+    1 2
+    3 4
+]
+acU [
+    "u" "vw"
+    "xy" "z"
+    "xy" "z"
+]
+acV [
+    7 7
+    1 1
+    2 2
+]
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88
 GatedLeafPass: 8 9
