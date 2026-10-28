@@ -1443,8 +1443,9 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // it to their operands, and an && or || runs its right side only for them.
 func (c *Compiler) prepareSpine(expr ast.Expression, need slotNeed, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
-	// A one-slot node, such as a repeated operand, runs only when its slot is
-	// needed.
+	// A one-slot node is needed whenever it runs: under a one-slot parent its
+	// slot is the parent's, and repeated into several slots it fills them
+	// all, so reading only the parent's first slot would miss the others.
 	if len(info.OutTypes) == 1 {
 		need = slotNeed{}
 	}

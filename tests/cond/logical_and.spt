@@ -557,6 +557,14 @@ nsA, nsB = 9, 9
 nsA, nsB = Pair(1, 2) > Pair(5, 0) && (1 > 2 || Loud(7))
 "NeedRepeatSecond: -nsA -nsB"
 
+# A scalar repeated into multi-slot arithmetic, or on a multi-slot &&'s left
+# side, fills every slot, so it is needed when only the second slot is: each
+# runs Loud once.
+nqA, nqB, nqC, nqD = 9, 9, 9, 9
+nqA, nqB = Pair(1, 2) > Pair(5, 0) && ((1 > 2 || Loud(7)) + Pair(10, 20))
+nqC, nqD = Pair(1, 2) > Pair(5, 0) && ((1 > 0 && Loud(8) > 0) && Pair(10, 20))
+"NeedRepeatedScalar: -nqA -nqB -nqC -nqD"
+
 # A repeated fallback under an && runs for the slots the && takes that the ||
 # leaves empty: none, one, then both.
 nzA, nzB, nzC, nzD, nzE, nzF = 9, 9, 9, 9, 9, 9

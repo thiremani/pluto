@@ -144,6 +144,9 @@ called 2
 NeedCallArgs: 2 9
 called 7
 NeedRepeatSecond: 9 7
+called 7
+called 8
+NeedRepeatedScalar: 9 27 9 20
 called 2
 called 3
 NeedRepeatedFallback: 1 9 2 9 3 3
