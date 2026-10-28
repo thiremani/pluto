@@ -578,13 +578,13 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 	// of the left side failed to yield. Outside a spine every slot is needed:
 	// gates, whole values, calls and comparisons read all of them.
 	if or, ok := ast.IsLogicalOr(expr); ok && info.HasFallbackOr() {
-		return c.extractFallbackOrSlots(or, info, slotNeed{}, temps)
+		return c.extractFallbackOrSlots(or, info, nil, temps)
 	}
 
 	// A value-position && gates per slot: slot i yields the right side's slot i
 	// only when slot i of the left side yielded.
 	if and, ok := ast.IsLogicalAnd(expr); ok && info.HasCondAnd() {
-		return c.extractGatingAndSlots(and, info, slotNeed{}, temps)
+		return c.extractGatingAndSlots(and, info, nil, temps)
 	}
 
 	// Comparisons with ranges can be extracted only when all required iterators
@@ -735,28 +735,21 @@ func (c *Compiler) extractComparisonSlots(infix *ast.InfixExpression, info *Expr
 // up owned or a freeable zero (an StrH zero is an owned heap copy, an array
 // zero is null), so the slots travel as one unconditional temporary across
 // both commit conventions (move-on-true vs copy-then-free).
-func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, need slotNeed, temps []condTemp) ([]llvm.Value, []condTemp) {
+func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInfo, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
 	slots := c.newLogicalSlots(info.OutTypes)
 
-	lConds := c.resolveLogicalSide(slots, or.Left, need, nil)
+	lConds := c.resolveLogicalSide(slots, or.Left, needed, nil)
 
-	// The right side evaluates at most once, as a unit, when a slot the
-	// context needs missed; its per-slot stores then fill only still-empty
-	// slots. The solver rejects a left that cannot fail, so the fold is never
-	// nil.
-	leftAllYielded := c.foldSlotConds(lConds)
-	if leftAllYielded.IsNil() {
+	// The solver rejects a left that cannot fail, so the fold is never nil.
+	if c.foldSlotConds(lConds).IsNil() {
 		panic("internal: value-position || requires a failable left operand")
 	}
-	missed := slotNeed{conds: lConds, missed: true}
-	var someMissed llvm.Value
-	if need.conds == nil {
-		someMissed = c.builder.CreateNot(leftAllYielded, "or_some_missed")
-	} else {
-		missed = c.narrowNeed(need, missed, len(slots))
-		someMissed = c.orSlotConds(missed.conds, "or_some_missed")
-	}
-	c.withCondBranch(someMissed, "or_rhs", func() {
+
+	// The right side evaluates at most once, as a unit, for the needed slots
+	// its left side missed; its per-slot stores then fill only still-empty
+	// slots.
+	missed := c.narrowNeeded(needed, c.missedConds(lConds), len(slots))
+	c.withCondBranch(c.orSlotConds(missed, "or_some_missed"), "or_rhs", func() {
 		c.resolveLogicalSide(slots, or.Right, missed, c.slotMissedGate(slots))
 	}, nil)
 
@@ -771,9 +764,9 @@ func (c *Compiler) extractFallbackOrSlots(or *ast.InfixExpression, info *ExprInf
 // a unit, when a left slot the context needs yielded; its per-slot stores then
 // fill only the slots whose left side yielded, so slot i yields exactly when
 // every side's slot i does.
-func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInfo, need slotNeed, temps []condTemp) ([]llvm.Value, []condTemp) {
+func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInfo, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
 	before := c.frameMaskKeys()
-	lConds, leftTemps := c.prepareSpine(and.Left, need, nil)
+	lConds, leftTemps := c.prepareSpine(and.Left, needed, nil)
 	c.freeCondTemps(leftTemps)
 	c.freeUnmovedMasksSince(before)
 
@@ -783,8 +776,8 @@ func (c *Compiler) extractGatingAndSlots(and *ast.InfixExpression, info *ExprInf
 	}
 
 	slots := c.newLogicalSlots(info.OutTypes)
-	taken := c.narrowNeed(need, slotNeed{conds: lConds}, len(slots))
-	c.withCondBranch(c.orSlotConds(taken.conds, "and_some_yielded"), "and_rhs", func() {
+	taken := c.narrowNeeded(needed, lConds, len(slots))
+	c.withCondBranch(c.orSlotConds(taken, "and_some_yielded"), "and_rhs", func() {
 		c.resolveLogicalSide(slots, and.Right, taken, func(i int) llvm.Value {
 			return slotCondAt(lConds, i)
 		})
@@ -831,39 +824,31 @@ func (c *Compiler) orSlotConds(conds []llvm.Value, name string) llvm.Value {
 	return res
 }
 
-// slotNeed is the slots of a node that its context still needs: every slot
-// when conds is nil, else slot i when conds[i] holds, or, with missed set,
-// when it fails, as an || right side needs the slots its left side missed.
-// Only a nested && or || reads it, to run its right side for needed slots.
-type slotNeed struct {
-	conds  []llvm.Value
-	missed bool
+// narrowNeeded is the needed slots of an n-slot node for which conds also
+// holds: the slots an && or || right side must fill.
+func (c *Compiler) narrowNeeded(needed, conds []llvm.Value, n int) []llvm.Value {
+	if needed == nil {
+		return conds
+	}
+	narrowed := make([]llvm.Value, n)
+	for i := range narrowed {
+		narrowed[i] = c.andConds(slotCondAt(needed, i), slotCondAt(conds, i), fmt.Sprintf("need_%d", i))
+	}
+	return narrowed
 }
 
-// neededAt returns slot i's need as an i1, nil when the slot is needed.
-func (c *Compiler) neededAt(need slotNeed, i int) llvm.Value {
-	cond := slotCondAt(need.conds, i)
-	if !need.missed {
-		return cond
+// missedConds negates each slot's condition: the slots an || left side
+// missed. A slot without a condition always yields, so it never misses.
+func (c *Compiler) missedConds(conds []llvm.Value) []llvm.Value {
+	missed := make([]llvm.Value, len(conds))
+	for i, cond := range conds {
+		if cond.IsNil() {
+			missed[i] = llvm.ConstInt(c.mapToLLVMType(Int{Width: 1}), 0, false)
+			continue
+		}
+		missed[i] = c.builder.CreateNot(cond, fmt.Sprintf("or_missed_%d", i))
 	}
-	// A slot its left side always fills never misses.
-	if cond.IsNil() {
-		return llvm.ConstInt(c.mapToLLVMType(Int{Width: 1}), 0, false)
-	}
-	return c.builder.CreateNot(cond, fmt.Sprintf("need_missed_%d", i))
-}
-
-// narrowNeed is the need of an n-slot && or || right side: the slots the node
-// needs that its left side leaves to that side.
-func (c *Compiler) narrowNeed(need, side slotNeed, n int) slotNeed {
-	if need.conds == nil {
-		return side
-	}
-	conds := make([]llvm.Value, n)
-	for i := range conds {
-		conds[i] = c.andConds(c.neededAt(need, i), c.neededAt(side, i), fmt.Sprintf("need_%d", i))
-	}
-	return slotNeed{conds: conds}
+	return missed
 }
 
 // logicalSlot is one output slot of a value-position ||/&& lowering: the
@@ -889,17 +874,17 @@ func (c *Compiler) newLogicalSlots(outTypes []Type) []logicalSlot {
 	return slots
 }
 
-// resolveLogicalSide resolves one ||/&& operand into the result slots; need
+// resolveLogicalSide resolves one ||/&& operand into the result slots; needed
 // holds the slots its context needs from it. takeGate (nil = unrestricted)
 // further gates each slot's store: a ||'s right side fills only slots the left
 // left empty, a &&'s right side fills only slots whose left side yielded.
-func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, need slotNeed, takeGate func(int) llvm.Value) []llvm.Value {
+func (c *Compiler) resolveLogicalSide(slots []logicalSlot, side ast.Expression, needed []llvm.Value, takeGate func(int) llvm.Value) []llvm.Value {
 	if len(c.ExprCache[key(c.FuncNameMangled, side)].OutTypes) < len(slots) {
 		return c.resolveRepeatedSide(slots, side, takeGate)
 	}
 
 	before := c.frameMaskKeys()
-	conds, sideTemps := c.prepareSpine(side, need, nil)
+	conds, sideTemps := c.prepareSpine(side, needed, nil)
 
 	for i, sl := range slots {
 		cond := slotCondAt(conds, i)
@@ -927,7 +912,7 @@ func (c *Compiler) resolveRepeatedSide(slots []logicalSlot, side ast.Expression,
 		sideType = ptr.Elem
 	}
 	single := c.newLogicalSlots([]Type{sideType})
-	conds := c.resolveLogicalSide(single, side, slotNeed{}, nil)
+	conds := c.resolveLogicalSide(single, side, nil, nil)
 	yields, values := c.loadLogicalResults(single)
 
 	for i, sl := range slots {
@@ -1421,7 +1406,7 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 		c.pushCondLHSFrame()
 		defer c.popCondLHSFrame()
 
-		conds, temps := c.prepareSpine(expr, slotNeed{}, nil)
+		conds, temps := c.prepareSpine(expr, nil, nil)
 		for i, outType := range info.OutTypes {
 			c.commitSpineSlot(expr, i, slotCondAt(conds, i), slots[i].temp, outType)
 		}
@@ -1439,22 +1424,24 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // is evaluated once here and its slot values stashed in the frame, gated on
 // its own condition when it has one — a call whose argument comparison fails
 // must not run, and the slots reading it are gated by that same condition.
-// need is the slots expr's context still needs: arithmetic and negation pass
-// it to their operands, and an && or || runs its right side only for them.
-func (c *Compiler) prepareSpine(expr ast.Expression, need slotNeed, temps []condTemp) ([]llvm.Value, []condTemp) {
+// needed is the slots expr's context still needs: nil means every slot, else
+// slot i is needed while needed[i] holds (a nil entry always). Arithmetic and
+// negation pass it to their operands, and an && or || runs its right side
+// only for needed slots.
+func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// A one-slot node is needed whenever it runs: under a one-slot parent its
 	// slot is the parent's, and repeated into several slots it fills them
 	// all, so reading only the parent's first slot would miss the others.
 	if len(info.OutTypes) == 1 {
-		need = slotNeed{}
+		needed = nil
 	}
 
 	if or, ok := ast.IsLogicalOr(expr); ok && info.HasFallbackOr() {
-		return c.extractFallbackOrSlots(or, info, need, temps)
+		return c.extractFallbackOrSlots(or, info, needed, temps)
 	}
 	if and, ok := ast.IsLogicalAnd(expr); ok && info.HasCondAnd() {
-		return c.extractGatingAndSlots(and, info, need, temps)
+		return c.extractGatingAndSlots(and, info, needed, temps)
 	}
 
 	infix, isInfix := expr.(*ast.InfixExpression)
@@ -1464,8 +1451,8 @@ func (c *Compiler) prepareSpine(expr ast.Expression, need slotNeed, temps []cond
 
 	if isInfix && c.isSlotAlignedSpine(expr) {
 		var lConds, rConds []llvm.Value
-		lConds, temps = c.prepareSpine(infix.Left, need, temps)
-		rConds, temps = c.prepareSpine(infix.Right, need, temps)
+		lConds, temps = c.prepareSpine(infix.Left, needed, temps)
+		rConds, temps = c.prepareSpine(infix.Right, needed, temps)
 		conds := make([]llvm.Value, len(info.OutTypes))
 		for i := range conds {
 			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("spine_and_%d", i))
@@ -1474,7 +1461,7 @@ func (c *Compiler) prepareSpine(expr ast.Expression, need slotNeed, temps []cond
 	}
 
 	if prefix, ok := expr.(*ast.PrefixExpression); ok && c.isSlotAlignedSpine(expr) {
-		return c.prepareSpine(prefix.Right, need, temps)
+		return c.prepareSpine(prefix.Right, needed, temps)
 	}
 
 	return c.prepareSpineLeaf(expr, info, temps)
