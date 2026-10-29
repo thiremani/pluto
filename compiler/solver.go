@@ -976,10 +976,14 @@ func (ts *TypeSolver) TypeLetStatement(stmt *ast.LetStatement) {
 	types := []Type{}
 	exprRefs := make([]ast.Expression, 0, len(stmt.Name))
 	exprIdxs := make([]int, 0, len(stmt.Name))
+	vars := ts.ScriptCompiler.Compiler.FuncCache[ts.FuncNameMangled].Vars
 	for _, expr := range stmt.Value {
 		exprTypes := ts.TypeExpression(expr, true)
 		ts.resolveBareRangeAssignment(expr, exprTypes, len(stmt.Condition) > 0)
 		ts.mergeCondRangesIntoValue(expr, condRanges)
+		// A target copies or takes over a binding's stored value, so it stores
+		// what that binding stores.
+		exprTypes = yieldedStorage(ts.ExprCache, ts.FuncNameMangled, vars, expr, exprTypes)
 		for idx := range exprTypes {
 			types = append(types, exprTypes[idx])
 			exprRefs = append(exprRefs, expr)
@@ -2526,9 +2530,9 @@ func (ts *TypeSolver) collectCallArgs(ce *ast.CallExpression, isRoot bool) (args
 // yieldedStorage returns the types expr's slots are stored as: a slot that
 // passes on a binding's stored value takes the binding's slot type in vars,
 // and every other slot keeps its own. A call specializes its arguments on
-// them, and a value-position && or || types its copies by them. An
-// expression with an invalid count records no slot modes to follow, so it
-// keeps its own types.
+// them, and an assignment and a value-position && or || type their copies by
+// them. An expression with an invalid count records no slot modes to follow,
+// so it keeps its own types.
 func yieldedStorage(cache map[ExprKey]*ExprInfo, funcNameMangled string, vars map[string]Type, expr ast.Expression, own []Type) []Type {
 	if cache[key(funcNameMangled, expr)].InvalidCount {
 		return own

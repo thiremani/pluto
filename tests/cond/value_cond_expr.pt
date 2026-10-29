@@ -90,3 +90,12 @@ p, q = WidenedRepeat(n)
     p, q = Pair(n, n) >= 0 && s
     s = s ⊕ "b"
     p = p ⊕ s
+
+# A copy of a widened binding stores heap like it, so a call on the copy takes
+# heap storage.
+p = WidenedTarget(n)
+    s = "a"
+    t = s
+    p = Id(t)
+    s = s ⊕ "b"
+    p = n >= 0 p ⊕ s

@@ -782,6 +782,28 @@ wdS = wdS ⊕ "b"
 wdT = wdT ⊕ "c"
 "WidenedCopy: -wdA -wdB -wdC -wdD -wdE -wdF -wdG -wdH -wdJ -wdP -wdQ -wdS -wdT"
 
+# A binding that copies or takes over a widened binding stores what that
+# binding stores: a call on it, its && copies, a gate and a chained copy free
+# every copy, in a script and in a function body, and replacing it with a
+# static string releases it (leak-checked over a loop).
+whS = "a"
+whT = whS
+whText = "old"
+whText, whOther = whText ⊕ "!", whText
+whI = 0:200
+whA = Id(whT)
+whB = whI >= 0 && whT
+whC, whD = Pair(whI, whI) >= 0 && whOther
+whE = Id(whI >= 0 && whT)
+whF = whI >= 0 whOther
+whU = whT
+whG = Id(whU)
+whP = ""
+whP = WidenedTarget(whI)
+whS = whS ⊕ "b"
+whT = "new"
+"WidenedTarget: -whA -whB -whC -whD -whE -whF -whG -whP -whS -whT -whText -whOther"
+
 # A ranged call's && or || argument runs once per iteration, and the call
 # consumes the copy that argument's condition made (leak-checked over a
 # loop), in an assignment and in a print.
