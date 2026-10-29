@@ -1183,7 +1183,7 @@ follows the binding's **effective storage**, the type of the value held
 now: after `text = "old"` the read solves as a static string while the
 binding stores a materialized heap copy, and a heap value moved, copied, or
 transferred into a binding declared static keeps its flavor, so that
-binding holds heap state its declared type does not show — and every local
+binding can hold heap state its declared type does not show — and every local
 target with its merged target type (`TypeOwnsHeap`: that type requires
 heap cleanup, so an unmanaged value stored here is copied), whether it
 is fresh, and whether the value it holds owns heap state (`HoldsHeap`: a
@@ -1195,9 +1195,15 @@ state, which the next statement's plan reads back; `Validate` checks
 every decision and applies the compiler's directional binding-compatibility
 relation; the lowerer implements the recorded transfers and releases and
 decides nothing; a plan lowered wrongly is the leak-checked suite's to
-catch, the runtime backstop §8 names. The transitive case —
-transfer a widened binding into another, then read and replace the second —
-is pinned end to end in `tests/mem/mem.spt` for strings. Heap swaps show two transfers and zero copies, a duplicate
+catch, the runtime backstop §8 names. Elaboration of a target declared
+static that holds heap is pinned on hand-built plans by `pir`'s
+`TestElaborate`. No fixture reaches it from source, because #150 types a
+binding that copies or takes over a widened binding as heap, like the binding
+it copies (Step 9b's `yieldedStorage`). The transitive case — transfer a
+widened binding into another, then read and replace the second — is pinned
+end to end in `tests/mem/mem.spt` for strings and by
+`TestPlanGoldenEffectiveStorage`: the second binding is declared heap, so
+replacing it copies the static literal and releases the old value. Heap swaps show two transfers and zero copies, a duplicate
 source is taken once and copied once, and heap/struct/table copies, field
 and column reads, and heap discards are pinned by goldens in
 `compiler/pir_test.go` (matrix rows 2, 2b, 4, 5b, 35b, 36b, 36g).
@@ -1252,6 +1258,24 @@ append.
 - `gate` with keep-old/zero commit policies; `require`, `fallback`, `map`,
   `align`, per-slot skip, with the builder splitting every conditional node out
   of `eval`.
+- Ownership of `require`, `fallback` and repeated values comes from
+  elaboration (§8), as for every other outcome: each side stays a borrow of
+  its binding or an owned temporary, and nothing is copied where the sides
+  merge. A consumer that stores the value (a commit) copies a borrow and moves
+  an owned value; one that only reads it (an `eval` operand, a print
+  argument) uses either in place; and each region releases only the owned
+  values no consumer took on that path. Legacy lowering instead copies each
+  borrowed value into an owned result slot (`storeLogicalValue`,
+  `resolveRepeatedSide`), which caused #116 and #130 and copies once per
+  operator in a chain. Acceptance tests, with `s` and `t` heap strings that
+  outlive the statement (a static string's copy count depends on its target,
+  and a borrow of an owner the statement replaces can be promoted to a move):
+  `out = n > 0 && s || t` copies `s` once, at the commit (legacy lowering
+  copies it into the `&&` slot and again into the `||` slot); printing
+  `c > 0 && s` copies nothing; `(c > 0 && s) ⊕ "!"` copies `s` only into the
+  concatenation's result; and `x = c > 0 && s || F()` copies `s` when the
+  left side yields and moves `F()`'s result otherwise, choosing by the yield
+  flags rather than a runtime ownership bit.
 - Need through comparison operands, the rest of #148's rule 3: an `&&` or `||`
   passes the slots its context needs into a comparison's operands, which lower
   slot by slot, so a slot nothing needs is never computed. Legacy lowering
@@ -1373,6 +1397,13 @@ infix, prefix, calls, array indexing, and array-literal cells:
 - the collector rewrite machinery — all of `collect.go`
 - mask sweeps and consumed-temporary marking, gated on leak checks passing
   with cleanup emitted solely from derived release obligations
+- `yieldedStorage` and its uses, with #114: call arguments, `&&` and `||`
+  operands and assignment targets (#150) take the whole-body storage of the
+  binding they copy, so a binding that copies a widened one is typed heap and a
+  later static store into it copies the literal. Elaboration reads what each
+  binding holds now (`storedType`) instead; the rule is planned to be removed
+  once every consumer does and #114's per-statement ownership replaces the
+  whole-body join.
 
 ### Step 10: Affine versioning and final sweep (~1-2 weeks)
 
