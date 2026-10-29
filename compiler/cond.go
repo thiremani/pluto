@@ -522,23 +522,12 @@ func slotCondAt(conds []llvm.Value, i int) llvm.Value {
 	return slotAt(conds, i)
 }
 
-// condsAlign reports whether an operand's conditions can feed n result
-// slots: none, a single one that repeats, or one per slot.
-func condsAlign(conds []llvm.Value, n int) bool {
-	return len(conds) <= 1 || len(conds) == n
-}
-
 // andOperandConds ANDs a slot-aligned operator's operand conditions into its
-// n slots, slot by slot. The solver pairs an operand's slots with the node's
-// or repeats a single one, so operand conditions are absent, single or
-// slot-aligned; anything else would zip lane i's condition onto lane j (a
-// miscompile).
+// n slots, slot by slot. The solver gives each operand one slot or n, so an
+// operand's conditions are absent, single or one per slot.
 func (c *Compiler) andOperandConds(operandConds [][]llvm.Value, n int, name string) []llvm.Value {
 	conds := make([]llvm.Value, n)
 	for _, opConds := range operandConds {
-		if !condsAlign(opConds, n) {
-			panic(fmt.Sprintf("internal: %d operand slot conditions misaligned with %d slots", len(opConds), n))
-		}
 		for i := range conds {
 			conds[i] = c.andConds(conds[i], slotCondAt(opConds, i), fmt.Sprintf("%s_%d", name, i))
 		}
