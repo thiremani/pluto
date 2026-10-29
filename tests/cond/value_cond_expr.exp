@@ -241,6 +241,7 @@ called 2
 called 3
 NegationCalls: 9 9 -5 9
 NegationArrays: [-1 -2] [9] [-11 -12] [9]
+NegationInComparison: -1 9 0 9
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88
 GatedLeafPass: 8 9

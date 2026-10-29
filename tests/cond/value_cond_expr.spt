@@ -875,6 +875,17 @@ ngS = [9]
 ngR, ngS = -((Pair(ngI % 3, 2) > Pair(0, 5) && Pair([1 2], [3 4])) + [10 10])
 "NegationArrays: -ngP -ngQ -ngR -ngS"
 
+# A negation inside a comparison operand keeps each slot's own condition: the
+# slot whose inner comparison holds yields, and the other keeps its old value,
+# directly and under arithmetic.
+ngT = 9
+ngU = 9
+ngT, ngU = -(Pair(1, 2) > Pair(0, 5)) < Pair(0, 0)
+ngV = 9
+ngW = 9
+ngV, ngW = (-(Pair(1, 2) > Pair(0, 5)) + Pair(1, 1)) < Pair(5, 5)
+"NegationInComparison: -ngT -ngU -ngV -ngW"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
