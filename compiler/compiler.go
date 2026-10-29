@@ -2485,6 +2485,14 @@ func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Sym
 	return defaultUnaryOps[key](c, sym, true)
 }
 
+// compileOperation applies a unary or a binary operator to its operand values.
+func (c *Compiler) compileOperation(op string, operands []*Symbol, expected Type) *Symbol {
+	if len(operands) == 1 {
+		return c.compilePrefix(op, operands[0], expected)
+	}
+	return c.compileInfix(op, operands[0], operands[1], expected)
+}
+
 func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
 	operand := c.compileExpression(expr.Right, nil)
 	for i, opSym := range operand {

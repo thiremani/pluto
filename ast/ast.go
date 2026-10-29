@@ -416,14 +416,24 @@ func (de *DotExpression) String() string {
 	return fmt.Sprintf("%s.%s", de.Left.String(), de.Field)
 }
 
+// Operation is an operator applied to its operands, in source order: a
+// prefix's one or an infix's two.
+type Operation interface {
+	Expression
+	Op() string
+	Operands() []Expression
+}
+
 type PrefixExpression struct {
 	Token    token.Token // The prefix token, e.g. !
 	Operator string
 	Right    Expression
 }
 
-func (pe *PrefixExpression) expressionNode()  {}
-func (pe *PrefixExpression) Tok() token.Token { return pe.Token }
+func (pe *PrefixExpression) expressionNode()        {}
+func (pe *PrefixExpression) Tok() token.Token       { return pe.Token }
+func (pe *PrefixExpression) Op() string             { return pe.Operator }
+func (pe *PrefixExpression) Operands() []Expression { return []Expression{pe.Right} }
 func (pe *PrefixExpression) String() string {
 	var out bytes.Buffer
 
@@ -474,8 +484,10 @@ func IsLogicalAnd(exp Expression) (*InfixExpression, bool) {
 	return infix, true
 }
 
-func (ie *InfixExpression) expressionNode()  {}
-func (ie *InfixExpression) Tok() token.Token { return ie.Token }
+func (ie *InfixExpression) expressionNode()        {}
+func (ie *InfixExpression) Tok() token.Token       { return ie.Token }
+func (ie *InfixExpression) Op() string             { return ie.Operator }
+func (ie *InfixExpression) Operands() []Expression { return []Expression{ie.Left, ie.Right} }
 func (ie *InfixExpression) String() string {
 	var out bytes.Buffer
 
@@ -551,10 +563,8 @@ func (ce *CallExpression) String() string {
 // StringLiteral).
 func ExprChildren(expr Expression) []Expression {
 	switch e := expr.(type) {
-	case *InfixExpression:
-		return []Expression{e.Left, e.Right}
-	case *PrefixExpression:
-		return []Expression{e.Right}
+	case Operation:
+		return e.Operands()
 	case *CallExpression:
 		return e.Arguments
 	case *ArrayLiteral:

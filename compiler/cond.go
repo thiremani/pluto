@@ -528,6 +528,24 @@ func condsAlign(conds []llvm.Value, n int) bool {
 	return len(conds) <= 1 || len(conds) == n
 }
 
+// andOperandConds ANDs a slot-aligned operator's operand conditions into its
+// n slots, slot by slot. The solver pairs an operand's slots with the node's
+// or repeats a single one, so operand conditions are absent, single or
+// slot-aligned; anything else would zip lane i's condition onto lane j (a
+// miscompile).
+func (c *Compiler) andOperandConds(operandConds [][]llvm.Value, n int, name string) []llvm.Value {
+	conds := make([]llvm.Value, n)
+	for _, opConds := range operandConds {
+		if !condsAlign(opConds, n) {
+			panic(fmt.Sprintf("internal: %d operand slot conditions misaligned with %d slots", len(opConds), n))
+		}
+		for i := range conds {
+			conds[i] = c.andConds(conds[i], slotCondAt(opConds, i), fmt.Sprintf("%s_%d", name, i))
+		}
+	}
+	return conds
+}
+
 // broadcastConds spreads one condition over n slots (all nil when cond is nil).
 func broadcastConds(cond llvm.Value, n int) []llvm.Value {
 	conds := make([]llvm.Value, n)
@@ -547,8 +565,8 @@ func broadcastConds(cond llvm.Value, n int) []llvm.Value {
 // stashed in the condLHS frame for substitution during later value
 // compilation; retained operand temporaries are appended to temps.
 //
-// Conditions merge along dataflow. A slot-aligned infix combines its
-// children's conditions slot-wise, so each slot of Pair > Pair < Pair or
+// Conditions merge along dataflow. A slot-aligned operator combines its
+// operands' conditions slot-wise, so each slot of Pair > Pair < Pair or
 // (Pair > Pair) + Pair(0, 0) carries only its own comparisons. Any other node
 // (call, index, range, ...) produces its slots together from all of its
 // children, so their conditions AND into every output slot — for a
@@ -593,28 +611,19 @@ func (c *Compiler) extractSlotConds(expr ast.Expression, temps []condTemp) ([]ll
 		return c.extractComparisonSlots(infix, info, temps)
 	}
 
-	switch e := expr.(type) {
-	case *ast.InfixExpression:
-		var lConds, rConds []llvm.Value
-		lConds, temps = c.extractSlotConds(e.Left, temps)
-		rConds, temps = c.extractSlotConds(e.Right, temps)
-		if len(lConds) == 0 && len(rConds) == 0 {
+	if op, ok := expr.(ast.Operation); ok {
+		var operandConds [][]llvm.Value
+		for _, operand := range op.Operands() {
+			var conds []llvm.Value
+			conds, temps = c.extractSlotConds(operand, temps)
+			if len(conds) > 0 {
+				operandConds = append(operandConds, conds)
+			}
+		}
+		if len(operandConds) == 0 {
 			return nil, temps
 		}
-		// The solver pairs an operand's slots with the node's or repeats a
-		// single one, so operand conditions are absent, single or slot-aligned;
-		// anything else would zip lane i's condition onto lane j (a miscompile).
-		n := len(info.OutTypes)
-		if !condsAlign(lConds, n) || !condsAlign(rConds, n) {
-			panic(fmt.Sprintf("internal: slot conditions misaligned with infix arity (left %d, right %d, slots %d)", len(lConds), len(rConds), n))
-		}
-		conds := make([]llvm.Value, n)
-		for i := range conds {
-			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("slot_and_%d", i))
-		}
-		return conds, temps
-	case *ast.PrefixExpression:
-		return c.extractSlotConds(e.Right, temps)
+		return c.andOperandConds(operandConds, len(info.OutTypes), "slot_and"), temps
 	}
 
 	// Non-aligned nodes (calls, indexing, ranges, ...): every child feeds all
@@ -1370,14 +1379,11 @@ func (c *Compiler) perSlotCommittable(expr ast.Expression, info *ExprInfo) bool 
 }
 
 // isSlotAlignedSpine reports whether expr's root is a comparison, a
-// value-position || or &&, or an arithmetic infix tree or negation over one —
-// the shapes whose output slots stay aligned with their operands' slots, so
-// per-slot conditions are well-defined all the way to the root.
+// value-position || or &&, or another operator over one — the shapes whose
+// output slots stay aligned with their operands' slots, so per-slot
+// conditions are well-defined all the way to the root.
 func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
-	if prefix, ok := expr.(*ast.PrefixExpression); ok {
-		return c.isSlotAlignedSpine(prefix.Right)
-	}
-	infix, ok := expr.(*ast.InfixExpression)
+	op, ok := expr.(ast.Operation)
 	if !ok {
 		return false
 	}
@@ -1390,7 +1396,7 @@ func (c *Compiler) isSlotAlignedSpine(expr ast.Expression) bool {
 	if slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
 		return true
 	}
-	return c.isSlotAlignedSpine(infix.Left) || c.isSlotAlignedSpine(infix.Right)
+	return slices.ContainsFunc(op.Operands(), c.isSlotAlignedSpine)
 }
 
 // compilePerSlotAssign lowers a per-slot-committable value expression into its
@@ -1426,8 +1432,8 @@ func (c *Compiler) compilePerSlotAssign(expr ast.Expression, info *ExprInfo, slo
 // must not run, and the slots reading it are gated by that same condition.
 // needed is the slots expr's context still needs: nil means every slot, else
 // slot i is needed while needed[i] holds (a nil entry always). Arithmetic and
-// negation pass it to their operands, and an && or || runs its right side
-// only for needed slots.
+// prefix operators pass it to their operands, and an && or || runs its right
+// side only for needed slots.
 func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps []condTemp) ([]llvm.Value, []condTemp) {
 	info := c.ExprCache[key(c.FuncNameMangled, expr)]
 	// A one-slot node is needed whenever it runs: under a one-slot parent its
@@ -1449,19 +1455,13 @@ func (c *Compiler) prepareSpine(expr ast.Expression, needed []llvm.Value, temps 
 		return c.extractComparisonSlots(infix, info, temps)
 	}
 
-	if isInfix && c.isSlotAlignedSpine(expr) {
-		var lConds, rConds []llvm.Value
-		lConds, temps = c.prepareSpine(infix.Left, needed, temps)
-		rConds, temps = c.prepareSpine(infix.Right, needed, temps)
-		conds := make([]llvm.Value, len(info.OutTypes))
-		for i := range conds {
-			conds[i] = c.andConds(slotCondAt(lConds, i), slotCondAt(rConds, i), fmt.Sprintf("spine_and_%d", i))
+	if op, ok := expr.(ast.Operation); ok && c.isSlotAlignedSpine(expr) {
+		operands := op.Operands()
+		operandConds := make([][]llvm.Value, len(operands))
+		for j, operand := range operands {
+			operandConds[j], temps = c.prepareSpine(operand, needed, temps)
 		}
-		return conds, temps
-	}
-
-	if prefix, ok := expr.(*ast.PrefixExpression); ok && c.isSlotAlignedSpine(expr) {
-		return c.prepareSpine(prefix.Right, needed, temps)
+		return c.andOperandConds(operandConds, len(info.OutTypes), "spine_and"), temps
 	}
 
 	return c.prepareSpineLeaf(expr, info, temps)
@@ -1606,8 +1606,8 @@ func (c *Compiler) freeSkippedSlotMask(expr ast.Expression, i int) {
 }
 
 // spineSlotValue returns slot i's value for a spine node: retained frame
-// values for comparisons and pre-evaluated leaves, freshly combined arithmetic
-// or negation otherwise. owned reports whether the caller receives ownership
+// values for comparisons and pre-evaluated leaves, a freshly combined
+// operator otherwise. owned reports whether the caller receives ownership
 // (fresh combines and array masks) or a borrowed view it must copy on commit.
 func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Symbol, bool) {
 	frame := c.requireCondLHSFrame()
@@ -1619,33 +1619,29 @@ func (c *Compiler) spineSlotValue(expr ast.Expression, i int, outType Type) (*Sy
 		return slotAt(syms, i), false
 	}
 
-	if prefix, ok := expr.(*ast.PrefixExpression); ok {
-		operandInfo := c.ExprCache[key(c.FuncNameMangled, prefix.Right)]
-		operand, _ := c.spineSlotValue(prefix.Right, i, slotAt(operandInfo.OutTypes, i))
-		val := c.compilePrefix(prefix.Operator, operand, outType)
-		c.freeSpineIntermediate(prefix.Right, operand)
-		return val, true
-	}
-
-	infix, ok := expr.(*ast.InfixExpression)
+	op, ok := expr.(ast.Operation)
 	if !ok {
 		panic("internal: spine node missing pre-evaluated slot values")
 	}
-	// A node combined directly must be plain arithmetic: every conditional
+	// A node combined directly must be a plain operator: every conditional
 	// node (comparison, mask, ||, &&) was pre-resolved into the frame above,
 	// so a conditional mode here means a new CondMode slipped past the spine
 	// dispatch unclassified.
 	if info := c.ExprCache[key(c.FuncNameMangled, expr)]; info != nil &&
 		slices.ContainsFunc(info.CompareModes, func(m CondMode) bool { return m != CondNone }) {
-		panic(fmt.Sprintf("internal: conditional spine node %s combined as plain arithmetic", infix.Operator))
+		panic(fmt.Sprintf("internal: conditional spine node %s combined as a plain operator", op.Op()))
 	}
-	leftInfo := c.ExprCache[key(c.FuncNameMangled, infix.Left)]
-	rightInfo := c.ExprCache[key(c.FuncNameMangled, infix.Right)]
-	l, _ := c.spineSlotValue(infix.Left, i, slotAt(leftInfo.OutTypes, i))
-	r, _ := c.spineSlotValue(infix.Right, i, slotAt(rightInfo.OutTypes, i))
-	val := c.compileInfix(infix.Operator, l, r, outType)
-	c.freeSpineIntermediate(infix.Left, l)
-	c.freeSpineIntermediate(infix.Right, r)
+
+	operands := op.Operands()
+	values := make([]*Symbol, len(operands))
+	for j, operand := range operands {
+		operandInfo := c.ExprCache[key(c.FuncNameMangled, operand)]
+		values[j], _ = c.spineSlotValue(operand, i, slotAt(operandInfo.OutTypes, i))
+	}
+	val := c.compileOperation(op.Op(), values, outType)
+	for j, operand := range operands {
+		c.freeSpineIntermediate(operand, values[j])
+	}
 	return val, true
 }
 
