@@ -1284,7 +1284,7 @@ append.
   fails its second slot, and `G` printing its argument:
   `x, y = A && ((A || G(7)) > 0)` calls no `G`, and
   `x, y = A && ((Pair(10, 10) ÷ (A || Pair(G(7), G(8)))) > 0)` calls no `G`
-  and doesn't divide by the slot the `||` leaves empty. `logical_and`'s
+  and doesn't divide by the slot the `||` leaves empty. `logical_ops`'s
   `NeedStopsAtComparison` pins the legacy calls, and its `.exp` changes here.
 - Calls with an argument whose conditional or checked failure remains
   unresolved (matrix row 6c), which gain strict source-order argument

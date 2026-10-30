@@ -196,9 +196,9 @@ two together rather than treating any single row as a deletion trigger.
 - **17** — `compileCondStatement` + `aliasCondDests`. *Tests:* `tests/cond/expr_forms`. *Helpers:* `aliasCondDests`
 - **18** — `compileCondStatement` → ordinary collector inside the IF block. *Tests:* `mem/cache_reuse/cache_reuse.pt`. *Missing:* scalar-gated heap collector. *Helpers:* collector rewrite
 - **19** — `compileCondExprStatement` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `cond/expr_forms`, `math/func.spt`. *Helpers:* `compileCondExprStatement`
-- **20** — `compileCondExprStatement` → `compilePerSlotAssign`. *Tests:* `cond/value_cond_expr`, `cond/logical_and`. *Helpers:* `compilePerSlotAssign`
-- **21** — `compileCondExprStatement` + bounds guard. *Tests:* `array/oob_skip`, `cond/logical_and`. *Helpers:* condLHS spine
-- **22** — `compileCondExprStatement` → `stageCondRangedExpr`. *Tests:* `cond/logical_and:143,413`. *Helpers:* ranged staging
+- **20** — `compileCondExprStatement` → `compilePerSlotAssign`. *Tests:* `cond/value_cond_expr`, `cond/logical_ops`. *Helpers:* `compilePerSlotAssign`
+- **21** — `compileCondExprStatement` + bounds guard. *Tests:* `array/oob_skip`, `cond/logical_ops`. *Helpers:* condLHS spine
+- **22** — `compileCondExprStatement` → `stageCondRangedExpr`. *Tests:* `cond/logical_ops:143,413`. *Helpers:* ranged staging
 - **23** — `compileCondRangedStatement` → `stageCondRangedAssignments`. *Tests:* `array/cond_accum`, `cond/condition_boundary`. *Helpers:* `compileCondRangedStatement`
 - **24** — `compileCondRangedStatement` → `newStatementArrayCollector`. *Tests:* `array/cond_accum`, `cond/domain_activation`. *Helpers:* `statementArrayCollector` trio
 - **25** — `compileCondRangedIteration` → `compileCondExprValue`. *Tests:* `cond/value_cond_expr`, `array/array_expr`. *Helpers:* `compileCondExprValue`
