@@ -1,7 +1,7 @@
 # A print or call that a failing argument suppresses still frees the copy a
 # value-position || made for another argument.
 y = ShowIf(a, n, k)
-    (n > 1 && a || a)[0], k > 5
+    "ShowIf:", (n > 1 && a || a)[0], k > 5
     y = n
 
 y = Two(p, q)
@@ -51,19 +51,19 @@ y = HeldSibling(a, m, n)
 # that a sum or a negation consumed: the copy on either side of the sum,
 # repeated into a two-slot sum, or negated.
 y = SumIf(a, b, n, k)
-    ((n > 1 && a || b) + 0) > 1, k > 5
+    "SumIf:", ((n > 1 && a || b) + 0) > 1, k > 5
     y = n
 
 y = PairSumIf(a, b, n, k)
-    ((n > 1 && a || b) + Pair(0, 0)) > 1, k > 5
+    "PairSumIf:", ((n > 1 && a || b) + Pair(0, 0)) > 1, k > 5
     y = n
 
 y = RightSumIf(a, b, n, k)
-    (0 + (n > 1 && a || b)) > 1, k > 5
+    "RightSumIf:", (0 + (n > 1 && a || b)) > 1, k > 5
     y = n
 
 y = NegIf(a, b, n, k)
-    (-(n > 1 && a || b)) > -9, k > 5
+    "NegIf:", (-(n > 1 && a || b)) > -9, k > 5
     y = n
 
 # The cleanups that run whether or not a condition fails do not free again a
