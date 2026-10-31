@@ -216,7 +216,7 @@ arithmetic: `b > 3x` is `(b > 3)x`, which yields `b * x` when `b > 3`, and
 with its value and fallback is one term, and arithmetic combines terms:
 
 ```pluto
-1 + b > 2 && 10 || 7            # 1 + ((b > 2 && 10) || 7): 11 for b = 5, else 8
+1 + b > 2 && 10 || 7            # 1 + ((b > 2 && 10) || 7): 11 when b > 2, else 8
 b > 2 && 10 + a > 3 && 2 || 7   # (b > 2 && 10) + ((a > 3 && 2) || 7)
 c && 2x                         # (c && 2)x, as b > 3x is (b > 3)x
 (a > 2) + (b > 3) || -1         # (a > 2) + ((b > 3) || -1)
