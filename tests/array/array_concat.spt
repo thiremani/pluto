@@ -47,10 +47,10 @@ res11 = str1 ⊕ str3
 res12 = "" ⊕ str3
 "Both empty str concat: -res12"
 
-# ⊕ binds just below + and -, so arithmetic builds each piece before the join,
-# and parentheses apply arithmetic to the joined array.
+# ⊕ shares + and -'s level, so they apply left to right: arithmetic after a
+# join applies to the joined array, and parentheses apply it to one piece.
 res13 = arr1 + 1 ⊕ arr2 + 2
 res14 = arr1 - 1 ⊕ arr2 - 2
-res15 = (arr1 ⊕ arr2) + 1
+res15 = arr1 ⊕ (arr2 + 1)
 res16 = arr1 ⊕ arr2 ⊕ [50] + 5
 "ConcatPrecedence:", res13, res14, res15, res16
