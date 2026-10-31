@@ -431,13 +431,16 @@ follow the same order: a check's own calls run before the work it gates, so
 `x = io() + (io() > 0)` runs the second `io()` first, and a statement boundary
 keeps text order (`v = io()`, then `x = v + (v > 0)`).
 
-**Status (decided; PIR Step 6):** today's lowering checks first for
-comparisons in single-slot values, call arguments, cells and prints.
-Elsewhere it does not yet: an out-of-bounds read is checked where it is read
+**Status (decided; PIR Steps 6–8):** today's lowering evaluates comparisons
+before the other operands in single-slot values, call arguments, cells and
+prints, but runs every one of them before testing any, so
+`a, b = Pair(1 > 2, Loud(7) > 0)` calls `Loud`. Elsewhere it doesn't check
+first yet: an out-of-bounds read is checked where it is read
 (`Loud(1) + arr[oob]` calls `Loud`), and work inside a comparison's operands,
 an `&&` right side, an `||` left side or multi-slot arithmetic runs before the
 checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). PIR Step 6
-makes every scope check first.
+makes non-ranged statements and prints check first, and ranged statements and
+collector cells follow when they migrate in Steps 7 and 8.
 
 ## Why this model
 
@@ -466,9 +469,9 @@ makes every scope check first.
   to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
   That resolution suppresses the **entire invocation and stays so** —
   retained language behavior under "Print invocation atomicity" below, which
-  keeps today's checks-first order and changes the out-of-bounds case
-  (today a materialized zero prints). ("Gated print" names the unscheduled
-  no-comma syntax, not this.)
+  keeps evaluating conditions before siblings, stops checks at the first
+  failure, and changes the out-of-bounds case (today a materialized zero
+  prints). ("Gated print" names the unscheduled no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
   comparisons (yield the left operand), resolved per slot through chains,
@@ -504,18 +507,20 @@ makes every scope check first.
   the atomic unit, not one physical line: a slot's formatted representation
   may itself span lines, as whole-`Struct` printing does, and suppression
   removes all of it. Failed-conditional suppression is today's behavior,
-  retained with its order: the arguments' checks run first, so a suppressed
+  retained with its order — the arguments' checks run first, so a suppressed
   invocation evaluates none of its other arguments ("Evaluation order: checks
-  first" above). This is the general invocation rule, not a print special
-  case: neither `F(sideEffect(), failingArg)` nor
-  `F(failingArg, sideEffect())` runs the side effect. The out-of-bounds case
-  changes: today an OOB argument materializes a zero, its sibling arguments
-  run, and the line prints; under the decided rule the read is a check, so
-  the invocation is suppressed before anything else runs. A suppressed
-  invocation still releases what its checks allocated. A
-  direct-return argument carries no validity bit, and #123 removed the need
-  for one instead of adding it: a body that runs writes every output, so a
-  print argument that is a call either yields or failed before the call ran.
+  first" above) — except that checks now stop at the first failure: today
+  `"print", 1 > 2, Loud(8) > 0` still calls `Loud`. This is the general
+  invocation rule, not a print special case: neither
+  `F(sideEffect(), failingArg)` nor `F(failingArg, sideEffect())` runs the
+  side effect. The out-of-bounds case changes: today an OOB argument
+  materializes a zero, its sibling arguments run, and the line prints; under
+  the decided rule the read is a check, so the invocation is suppressed
+  before anything else runs. A suppressed invocation still releases what its
+  checks allocated. A direct-return argument carries no validity bit, and
+  #123 removed the need for one instead of adding it: a body that runs writes
+  every output, so a print argument that is a call either yields or failed
+  before the call ran.
 - **Checked-access fallback (decided, not yet implemented):** the nearest
   resolver wins, so `x = arr[oob] || -1` assigns `-1`, and in print position
   `arr[oob] || -1, val1` emits `-1 val1`. The fallback tests the
