@@ -101,7 +101,7 @@ its comparisons). So a chained comparison gates a range directly — the same
 
 ```pluto
 arr = i > 2 < 8  [i * i]      # gate on 2 < i < 8        -> [9 16 25 36 49]
-arr = [i > 2 < 8 && i * i]    # same gate, per cell      -> [0 0 0 9 16 25 36 49 0 0]
+arr = [i > 2 < 8 && (i * i)]  # same gate, per cell      -> [0 0 0 9 16 25 36 49 0 0]
 ```
 
 This holds in every condition slot: a statement gate, an `&&` condition, and a
@@ -194,16 +194,71 @@ a < 2 || 7           # a < 2 is true -> yields a (0), not 7
 The left operand need not be a bare conditional — it may **wrap** its condition
 in arithmetic. Because value-position conditions propagate (the whole value gates
 on them, the same conjunction that drives zero-fill), `||` attaches wherever a
-value can fail and swaps its fallback in for the failure:
+value can fail and swaps its fallback in for the failure. `||` binds tighter
+than arithmetic (see "Precedence" below), so a wrapped left side takes
+parentheses:
 
 ```pluto
-(i > 2 < 8) ^ 2 || -1.0   # i^2 when 2 < i < 8, else -1.0 (incl. i >= 8)
-(a > 2) + 100 || -1       # a + 100 when a > 2, else -1
-(a > 2) + (b > 3) || -1   # a + b when both hold (conditions AND), else -1
+((i > 2 < 8) ^ 2) || -1.0   # i^2 when 2 < i < 8, else -1.0 (incl. i >= 8)
+((a > 2) + 100) || -1       # a + 100 when a > 2, else -1
+((a > 2) + (b > 3)) || -1   # a + b when both hold (conditions AND), else -1
 ```
 
 Only a left operand with **no** condition anywhere in its tree is rejected
-(`5 + 3 || -1`, `a || -1`) — there is nothing that can fail for `||` to catch.
+(`(5 + 3) || -1`, `a || -1`) — there is nothing that can fail for `||` to
+catch.
+
+## Precedence: conditions bind first
+
+A comparison is a filter on the operand next to it, and it binds tighter than
+arithmetic: `b > 3x` is `(b > 3)x`, which yields `b * x` when `b > 3`, and
+`x ^ 4 > 3` is `x^(4 > 3)`. `&&` and `||` follow the same rule, so a condition
+with its value and fallback is one term, and arithmetic combines terms:
+
+```pluto
+1 + b > 2 && 10 || 7            # 1 + ((b > 2 && 10) || 7): 11 for b = 5, else 8
+b > 2 && 10 + a > 3 && 2 || 7   # (b > 2 && 10) + ((a > 3 && 2) || 7)
+c && 2x                         # (c && 2)x, as b > 3x is (b > 3)x
+(a > 2) + (b > 3) || -1         # (a > 2) + ((b > 3) || -1)
+```
+
+A calculation inside a comparison, a branch or a fallback's left side takes
+parentheses:
+
+```pluto
+b > (3x)                    # compares b with the product
+b > 2 && (10 + 2) || 7      # 12 when b > 2, else 7
+c && (3x^2) || 0            # a whole term in the branch
+((a > 2) + (b > 3)) || -1   # -1 when either comparison fails
+```
+
+When arithmetic leaves a fallback's left side unable to fail, as in
+`b > 2 && 10 + 2 || 7`, which reads `(b > 2 && 10) + (2 || 7)`, the error shows
+that grouping and offers both spellings: `b > 2 && (10 + 2) || 7` for a
+calculation in the branch, and `(b > 2 && 10 + 2) || 7` for a fallback over
+the whole sum.
+
+Tightest to loosest:
+
+| level | operators |
+| --- | --- |
+| calls and indexing | `F(x)`, `arr[i]` |
+| prefixes | `-x`, `!x`, `√x` |
+| comparisons | `<`, `>`, `<=`, `>=`, `==`, `!=` |
+| ranges | `:` |
+| conditional AND | `&&` |
+| fallback | `\|\|` |
+| powers, implicit multiplication | `^`, `3x` (`3x^2` is `3(x^2)`, and `2^3x` is `2^(3x)`) |
+| multiplicative | `*`, `/`, `÷`, `%` |
+| additive | `+`, `-`, `⊕` |
+| shifts | `<<`, `>>`, `>>>` |
+| bitwise and | `&` |
+| bitwise xor | `⊻` |
+| bitwise or | `\|` |
+
+Ranges sit between comparisons and `&&`, so `0:n > 2` is a range with a
+conditional bound, and `c && 0:n` puts the whole range on the `&&`'s right
+side.
 
 ## Parentheses are pure grouping
 
@@ -477,7 +532,8 @@ collector cells follow when they migrate in Steps 7 and 8.
   comparisons (yield the left operand), resolved per slot through chains,
   arithmetic, and `||`/`&&` by one extraction pass; the value-position
   conditional `&&` (yields its right side per slot, lazy right, last-wins chains, binds
-  tighter than `||`, so `c && v || w` is a per-slot if-else); conditions are
+  tighter than `||`, so `c && v || w` is a per-slot if-else); comparisons, `&&`
+  and `||` bind tighter than arithmetic (#151, "Precedence"); conditions are
   value positions, so chained comparisons gate directly (`i > 2 < 8`,
   leftmost-binding, including chained multi-return gates) in every condition
   slot; collector zero-fill; array masks (element-wise, length-preserving).
@@ -543,7 +599,7 @@ collector cells follow when they migrate in Steps 7 and 8.
   still admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
-  `[i > 2 && i * 10]` → `[0 0 0 30 40]`); at an assignment root failing
+  `[i > 2 && (i * 10)]` → `[0 0 0 30 40]`); at an assignment root failing
   iterations keep the destination, so the last yielded value wins
   (`r = i > 2 && i` → `4`, and `r = i < 2 && i` → `1` — the failing tail keeps
   the yield from `i = 1`).

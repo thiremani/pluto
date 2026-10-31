@@ -1672,7 +1672,7 @@ The statement plan can grow without becoming a machine IR:
   collector cell is filtered out (`arr = m > 5 [m + 1/2]`), and a non-ranged
   commit keeps old — while a `require` failure is `skip`, a missing outcome
   that `fallback`, a collector's zero-fill, or `=` resolves
-  (`arr = [m > 5 && m + 1/2 || -1]`). A gate never supplies a value, which is
+  (`arr = [m > 5 && (m + 1/2) || -1]`). A gate never supplies a value, which is
   why `x = a > 2  3 || 7` stays an error.
   Multi-return calls (`val > 5 && Pair(m, n) || Pair(1, 2)`) and the
   seed-then-gate idiom (`a, b = 1, 2` then `a, b = val > 5 m, n`) already
