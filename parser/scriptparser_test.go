@@ -468,6 +468,29 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 		{"function", "a + add(b * c) + d", "((a + add((b * c))) + d)"},
 		{"function insicde function", "add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))", "add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)))"},
 		{"multi ops inside function", "add(a + b + c * d / f + g)", "add((((a + b) + ((c * d) / f)) + g))"},
+		{"condition and fallback form one term", "1 + b > 2 && 10 || 7", "(1 + (((b > 2) && 10) || 7))"},
+		{"sum of conditional terms", "b > 2 && 10 + a > 3 && 2 || 7", "(((b > 2) && 10) + (((a > 3) && 2) || 7))"},
+		{"and under product", "c && 2 * x", "((c && 2) * x)"},
+		{"and under implicit mult", "c && 2x", "((c && 2) ⋅ x)"},
+		{"or under product", "a * b || c", "(a * (b || c))"},
+		{"or in exponent", "a ^ b || c", "(a ^ (b || c))"},
+		{"or under power", "a || b ^ c", "((a || b) ^ c)"},
+		{"or under concat", "s ⊕ t || u", "(s ⊕ (t || u))"},
+		{"concat beside sums", "a + 1 ⊕ b + 2", "(((a + 1) ⊕ b) + 2)"},
+		{"concat beside differences", "a - 1 ⊕ b - 2", "(((a - 1) ⊕ b) - 2)"},
+		{"concat left associative", "a ⊕ b ⊕ c", "((a ⊕ b) ⊕ c)"},
+		{"concat under product", "a ⊕ b * 2", "(a ⊕ (b * 2))"},
+		{"concat above shift", "a << b ⊕ c", "(a << (b ⊕ c))"},
+		{"and under shift", "a << b && c", "(a << (b && c))"},
+		{"or under bitwise or", "a | b || c", "(a | (b || c))"},
+		{"or beside calls", "F(a) + G(b) || c", "(F(a) + (G(b) || c))"},
+		{"comparison under implicit mult", "b > 3x", "((b > 3) ⋅ x)"},
+		{"comparison in exponent", "x ^ 4 > 3", "(x ^ (4 > 3))"},
+		{"implicit mult in exponent", "2^3x", "(2 ^ (3 ⋅ x))"},
+		{"power under implicit mult", "3x^2", "(3 ⋅ (x ^ 2))"},
+		{"conditional range bound", "0:n > 2", "0:(n > 2)"},
+		{"range under and", "c && 0:n", "(c && 0:n)"},
+		{"and under or", "a > 2 && b < 3 || c", "(((a > 2) && (b < 3)) || c)"},
 	}
 
 	for _, tt := range tests {
@@ -646,6 +669,23 @@ func TestCommaConditionRejected(t *testing.T) {
 	sp.Parse()
 	require.NotEmpty(t, sp.Errors(), "expected a parse error for a comma condition list")
 	require.Contains(t, sp.Errors()[0], "a statement condition is a single expression; combine conditions with &&")
+}
+
+func TestConditionListBesideArithmetic(t *testing.T) {
+	// Arithmetic inside a condition takes parentheses; after the condition
+	// list, it starts the value.
+	sp := NewScriptParser(lexer.New("TestConditionListBesideArithmetic", "res = (a + 1) > 0 && b > 1 c + 1"))
+	program := sp.Parse()
+	require.Emptyf(t, sp.Errors(), "unexpected errors: %v", sp.Errors())
+	stmt := requireOnlyLetStmt(t, program)
+	require.Equal(t, "res = ((a + 1) > 0) && (b > 1) (c + 1)", stmt.String())
+
+	// Unparenthesized, it takes the whole && chain as its operand, and the
+	// result is not a condition.
+	sp = NewScriptParser(lexer.New("TestConditionListBesideArithmetic", "res = a > 0 && b + 1 c"))
+	sp.Parse()
+	require.Len(t, sp.Errors(), 1)
+	require.Contains(t, sp.Errors()[0], `Expression "(((a > 0) && b) + 1)" is not a condition`)
 }
 
 func TestConditionValueBoundaryAttachedPrefix(t *testing.T) {

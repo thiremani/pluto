@@ -1971,11 +1971,13 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 
 	// Value-position || is left-biased fallback (yield left, else right), so the
 	// left must be able to fail or the fallback is dead. Failure may come from
-	// its root or a propagating child, e.g. (i > 2 < 8) ^ 2 || -1.
+	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1. Naming the
+	// left operand shows when arithmetic took the rest: in b > 2 && 10 + 2 || 7
+	// it is 2.
 	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   "logical OR in value position requires a conditional left operand",
+			Msg:   fmt.Sprintf("logical OR in value position requires a conditional left operand, but its left operand is %s (|| binds tighter than arithmetic)", expr.Left),
 		})
 	}
 
@@ -2023,7 +2025,7 @@ func (ts *TypeSolver) typeLogicalAndExpression(expr *ast.InfixExpression, left, 
 	// so each && checks the operand just before it, the last of its left
 	// side's chain. That operand gates only if it can fail — an always-yielding
 	// || never gates — and failure may come from a propagating child in
-	// arithmetic, e.g. (i > 2 < 8) ^ 2 && v.
+	// arithmetic, e.g. ((i > 2 < 8) ^ 2) && v.
 	if !ts.expressionCanFail(lastAndOperand(expr.Left)) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,

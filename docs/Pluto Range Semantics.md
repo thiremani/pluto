@@ -215,11 +215,11 @@ i > 2 || 0
 This yields `i` when the comparison succeeds, otherwise `0`.
 
 A value-position `&&` conditionally sequences one per-iteration value into the
-next: `i > 2 && i * 10` yields `i * 10` on the iterations where the comparison
+next: `i > 2 && (i * 10)` yields `i * 10` on the iterations where the comparison
 yields and skips the rest. It is local to the containing value expression; it
 is not a statement gate and does not reject sibling RHS expressions. At an
 assignment root a skipped iteration keeps the destination, so the last
-**yielded** value wins (`x = i > 2 && i * 2` over `0:5` ends as `8`).
+**yielded** value wins (`x = i > 2 && (i * 2)` over `0:5` ends as `8`).
 `i > 2 && v || w` resolves per iteration as an if-else.
 
 ## Array Collectors
@@ -307,7 +307,7 @@ type at that position.
 That applies to:
 
 - failed comparison cells
-- failed `&&` cells (`[i > 2 && i * 10]` → `[0 0 0 30 40]`)
+- failed `&&` cells (`[i > 2 && (i * 10)]` → `[0 0 0 30 40]`)
 - out-of-bounds array access inside a cell
 
 Examples:
