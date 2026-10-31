@@ -9,7 +9,7 @@ v = [1 2]
 v = Grow(v)
 v
 
-# Cross-aliases make statement order significant: only the simultaneous form swaps.
+# Inputs are stable, so the sequential and simultaneous swaps agree.
 sequentialLeft, sequentialRight = 1, 2
 sequentialLeft, sequentialRight = SequentialSwap(sequentialLeft, sequentialRight)
 "SequentialSwap:", sequentialLeft, sequentialRight
@@ -57,8 +57,8 @@ arrayAfter = [10]
 arrayAfter, arraySeenAfter = ArrayAfter(arrayAfter, 1:3)
 "ArrayRangeAfter:", arrayAfter, arraySeenAfter
 
-# Nested calls forward sharing even though their argument and target use
-# different local names in the outer template.
+# A nested call shares nothing with its outer caller: its argument and target
+# are different bindings in the outer template.
 nested = 10
 nested, nestedSeen = NestedFold(nested, 5)
 "NestedNumber:", nested, nestedSeen
@@ -69,8 +69,9 @@ nestedArray = [10]
 nestedArray, nestedArraySeen = NestedArrayRange(nestedArray)
 "NestedArrayRange:", nestedArray, nestedArraySeen
 
-# A skipped write leaves the shared value unchanged; multiple writes each
-# read the latest value through the input.
+# A skipped write leaves the shared value unchanged; repeated writes read the
+# stable input, and a nested ranged call continues from each result only
+# through a binding it shares itself.
 taken = 10
 taken, takenSeen = ConditionalFold(taken, 5)
 "ConditionalTaken:", taken, takenSeen
@@ -96,22 +97,21 @@ condNestedSkipped = 10
 condNestedSkipped, condNestedSkippedSeen = ConditionalNested(condNestedSkipped, -1)
 "ConditionalNestedSkipped:", condNestedSkipped, condNestedSkippedSeen
 
-# Sharing is internal to the call: a sibling RHS still reads the caller's
-# pre-assignment binding until every RHS finishes.
+# A sibling RHS still reads the caller's pre-assignment binding until every
+# RHS finishes.
 staged = "hello" ⊕ ""
 staged, stagedSeen, old = ConcatAfter(staged, "abc"), staged
 "StagedString:", staged, stagedSeen, old
 
-# An empty output built from the second input resets the actual shared slot.
-# The output's storage must follow its aliased second input, without changing
-# the unrelated rank.
+# An empty output built from the second input resets the destination without
+# changing the unrelated rank, and the second input keeps its value.
 flat = [1 2]
 matrix = [[3 4]]
 matrix, flatSeen, matrixSeen = ResetPair(flat, matrix)
 "ResetArray:", matrix, flatSeen, matrixSeen
 
-# The wrapper widens the static output to the caller's heap string, and the
-# nested call shares that storage, so the input observes the write.
+# The wrapper's static output widens into the caller's heap string after the
+# call, and the input keeps its value.
 wrapped = "hello" ⊕ "!"
 wrapped, wrappedSeen = Wrap(wrapped)
 "WidenedWrapper:", wrapped, wrappedSeen
@@ -129,9 +129,9 @@ resetSource = [1 2]
 resetTarget, resetLeft, resetRight = ResetPair(resetSource, resetSource)
 "UnsharedReset:", resetTarget, resetLeft, resetRight
 
-# An output is readable once definitely assigned: a sibling output can build
-# on it, and a shared input observes the write. A read string output is solved
-# as owned, so the nested call sees the storage the shared caller holds.
+# An output is readable once definitely assigned, and a sibling output can
+# build on it, while a shared input keeps its value. A read string output is
+# solved as owned, so the nested call sees the storage the caller holds.
 sq, cube = Powers(3)
 "Powers:", sq, cube
 pw = 3
@@ -141,8 +141,8 @@ readTwice = "hello" ⊕ "!"
 readTwice, readKept, readEcho = ReadTwice(readTwice)
 "ReadTwice:", readTwice, readKept, readEcho
 
-# Both arguments share the destination; each iteration triples the running
-# value plus the item through the nested call, and before keeps the seed.
+# Both arguments name the destination; the nested ranged call reads the
+# stable inputs on every iteration, and before keeps the seed.
 pair = 10
 pair, before = SharedPair(pair, pair)
 "SharedPair:", pair, before

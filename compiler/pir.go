@@ -186,7 +186,7 @@ func (c *Compiler) lowerAssignPlan(plan *pir.AssignPlan) {
 	for _, d := range plan.Drops {
 		if d.Kind == pir.DropReplaced {
 			sym, _ := Get(c.Scopes, d.Target)
-			replaced[d.Target] = c.valueSymbol(d.Target, sym, d.Target+"_old_load")
+			replaced[d.Target] = c.derefIfPointer(sym, d.Target+"_old_load")
 		}
 	}
 

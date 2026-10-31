@@ -1,6 +1,13 @@
-# Each iteration observes the output's earlier write through its shared input.
+# Each iteration's input reads the previous iteration's result.
 text = "he" ⊕ "llo"
 sibling = "z"
 i = 0:3
 text, sibling = RefineEcho(text, i)
 "Refined: -text Sibling: -sibling"
+
+# Within one call, or one iteration, the input keeps the caller's string.
+once = "he" ⊕ "llo"
+once, onceEcho = RefineEcho(once, 0)
+single = "he" ⊕ "llo"
+single, singleEcho = RefineEcho(single, 0:1)
+"Once: -once -onceEcho Single: -single -singleEcho"
