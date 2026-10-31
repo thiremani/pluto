@@ -1465,6 +1465,54 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 	}
 }
 
+// TestRegroupedFallbackDiagnostic: || binds tighter than arithmetic, so a
+// calculation meant for a branch, or a fallback meant for a whole sum, leaves
+// || a left operand that cannot fail. The error shows the grouping and the
+// spellings that can fail.
+func TestRegroupedFallbackDiagnostic(t *testing.T) {
+	const prefix = "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads "
+	cases := []struct {
+		name   string
+		code   string
+		script string
+		msg    string
+	}{
+		{"BranchOrWhole", "", "b = 5\nx = b > 2 && 10 + 2 || 7",
+			prefix + "(((b > 2) && 10) + (2 || 7)); write (b > 2) && (10 + 2) || 7 for a calculation in the branch, or (((b > 2) && 10) + 2) || 7 for a fallback over the whole expression"},
+		{"OutermostArithmetic", "", "b = 5\nx = b > 2 && 10 + 2 * 3 || 7",
+			prefix + "(((b > 2) && 10) + (2 * (3 || 7))); write (b > 2) && (10 + (2 * 3)) || 7 for a calculation in the branch, or (((b > 2) && 10) + (2 * 3)) || 7 for a fallback over the whole expression"},
+		{"WholeOnly", "", "a = 5\nx = (a > 2) + 1 || 0",
+			prefix + "((a > 2) + (1 || 0)); write ((a > 2) + 1) || 0 for a fallback over the whole expression"},
+		{"NothingFails", "", "x = 1 + 2 || 7",
+			prefix + "(1 + (2 || 7))"},
+		// Function bodies are retyped on every pass; the error is still one.
+		{"FunctionBody", "r = Pick(b)\n    r = 0\n    r = b > 2 && 10 + 2 || 7", "m = Pick(5)\nm",
+			prefix + "(((b > 2) && 10) + (2 || 7)); write (b > 2) && (10 + 2) || 7 for a calculation in the branch, or (((b > 2) && 10) + 2) || 7 for a fallback over the whole expression"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := llvm.NewContext()
+			defer ctx.Dispose()
+			codeAST := ast.NewCode()
+			if tc.code != "" {
+				codeAST = mustParseCode(t, tc.code)
+			}
+			cc := NewCodeCompiler(ctx, tc.name, "", codeAST)
+			require.Empty(t, cc.Compile())
+
+			sp := parser.NewScriptParser(lexer.New(tc.name+".spt", tc.script))
+			program := sp.Parse()
+			require.Empty(t, sp.Errors(), "unexpected parse errors: %v", sp.Errors())
+
+			ts := NewTypeSolver(NewScriptCompiler(ctx, t.Name(), program, cc))
+			ts.Solve()
+			require.Lenf(t, ts.Errors, 1, "errors: %v", ts.Errors)
+			require.Equal(t, tc.msg, ts.Errors[0].Msg)
+		})
+	}
+}
+
 // TestLogicalChainGrouping: an && or || chain is conditions followed by one
 // value however it is grouped. A value where a condition belongs is one error
 // at the operator after it, and a chain of conditions types cleanly.
