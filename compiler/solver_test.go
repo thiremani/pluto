@@ -1422,16 +1422,16 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 		{
 			// || binds tighter than arithmetic, so a calculation meant for a
 			// branch leaves || a left operand that cannot fail; the error
-			// shows the grouping under the outermost arithmetic.
-			name:        "RegroupedFallbackShowsGrouping",
+			// names it.
+			name:        "RegroupedFallbackNamesLeftOperand",
 			script:      "b = 5\nx = b > 2 && 10 + 2 * 3 || 7",
-			expectError: "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads (((b > 2) && 10) + (2 * (3 || 7))); use parentheses to choose what the fallback applies to",
+			expectError: "logical OR in value position requires a conditional left operand, but its left operand is 3 (|| binds tighter than arithmetic)",
 		},
 		{
 			name:        "RegroupedFallbackInFunctionBody",
 			code:        "r = Pick(b)\n    r = 0\n    r = b > 2 && 10 + 2 || 7",
 			script:      "m = Pick(5)\nm",
-			expectError: "logical OR in value position requires a conditional left operand: || binds tighter than arithmetic, so this reads (((b > 2) && 10) + (2 || 7)); use parentheses to choose what the fallback applies to",
+			expectError: "logical OR in value position requires a conditional left operand, but its left operand is 2 (|| binds tighter than arithmetic)",
 		},
 		{
 			// Conditions are value-position now, so `a > 0 || b` is a fallback whose
@@ -1484,7 +1484,8 @@ func TestLogicalOrDiagnostics(t *testing.T) {
 // at the operator after it, and a chain of conditions types cleanly.
 func TestLogicalChainGrouping(t *testing.T) {
 	const andMsg = "logical AND in value position requires a conditional left operand"
-	const orMsg = "logical OR in value position requires a conditional left operand"
+	const orMsg = "logical OR in value position requires a conditional left operand, but its left operand is "
+	const orNote = " (|| binds tighter than arithmetic)"
 	cases := []struct {
 		name   string
 		script string
@@ -1495,8 +1496,8 @@ func TestLogicalChainGrouping(t *testing.T) {
 		// the left, and at 19 when it groups to the right.
 		{"AndValueGroupedLeft", "n = 1\nx = ((n > 0) && 7) && 8\nx", andMsg, 20},
 		{"AndValueGroupedRight", "n = 1\nx = (n > 0) && (7 && 8)\nx", andMsg, 19},
-		{"OrValueGroupedLeft", "n = 1\nx = ((n > 0) || 7) || 8\nx", orMsg, 20},
-		{"OrValueGroupedRight", "n = 1\nx = (n > 0) || (7 || 8)\nx", orMsg, 19},
+		{"OrValueGroupedLeft", "n = 1\nx = ((n > 0) || 7) || 8\nx", orMsg + "((n > 0) || 7)" + orNote, 20},
+		{"OrValueGroupedRight", "n = 1\nx = (n > 0) || (7 || 8)\nx", orMsg + "7" + orNote, 19},
 
 		// A value in the middle of a longer chain: the && after the bare n.
 		{"AndMiddleValueGroupedLeft", "n = 1\nx = ((n > 0 && n) && n > 0) && 9\nx", andMsg, 19},
@@ -2623,7 +2624,7 @@ func TestRecursiveResultChecksRunOnceTyped(t *testing.T) {
     prior = n > 0 R(n - 1)
     y = prior || n`,
 			script: "v = R(3)\nv",
-			want:   "logical OR in value position requires a conditional left operand",
+			want:   "logical OR in value position requires a conditional left operand, but its left operand is prior (|| binds tighter than arithmetic)",
 		},
 		{
 			name: "AndLeftOperand",

@@ -154,10 +154,6 @@ type TypeSolver struct {
 	storageRevision    uint64          // increments when a previously observed binding slot widens
 	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
 
-	// A value-position || ending a chain of arithmetic right operands, mapped
-	// to the outermost arithmetic over it (deadFallbackMsg).
-	fallbackRoots map[*ast.InfixExpression]*ast.InfixExpression
-
 	recLimit recursionLimit
 }
 
@@ -172,7 +168,6 @@ func NewTypeSolver(sc *ScriptCompiler) *TypeSolver {
 		TmpCounter:         0,
 		PendingAssignments: make(map[pendingAssignment]struct{}),
 		walkedFuncs:        make(map[string]walkedSpecialization),
-		fallbackRoots:      make(map[*ast.InfixExpression]*ast.InfixExpression),
 		recLimit:           newRecursionLimit(maxActiveRecursiveSpecializations),
 	}
 }
@@ -1976,11 +1971,13 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 
 	// Value-position || is left-biased fallback (yield left, else right), so the
 	// left must be able to fail or the fallback is dead. Failure may come from
-	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1.
+	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1. Naming the
+	// left operand shows when arithmetic took the rest: in b > 2 && 10 + 2 || 7
+	// it is 2.
 	if !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   ts.deadFallbackMsg(expr),
+			Msg:   fmt.Sprintf("logical OR in value position requires a conditional left operand, but its left operand is %s (|| binds tighter than arithmetic)", expr.Left),
 		})
 	}
 
@@ -2002,58 +1999,6 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 		CompareModes: compareModes,
 	}
 	return types
-}
-
-const deadFallback = "logical OR in value position requires a conditional left operand"
-
-// deadFallbackMsg explains a fallback whose left operand cannot fail. When
-// arithmetic took the fallback's left side apart, as in b > 2 && 10 + 2 || 7,
-// it shows the grouping, and the writer chooses where the parentheses go.
-func (ts *TypeSolver) deadFallbackMsg(or *ast.InfixExpression) string {
-	root, ok := ts.fallbackRoots[or]
-	if !ok {
-		return deadFallback
-	}
-	return fmt.Sprintf("%s: || binds tighter than arithmetic, so this reads %s; use parentheses to choose what the fallback applies to", deadFallback, root)
-}
-
-// recordFallbackRoot remembers the outermost arithmetic whose right operands
-// end in a value-position ||, which binds tighter and so falls back for the
-// last operand alone. A parent is typed before its operands, so the first
-// record is the outermost.
-func (ts *TypeSolver) recordFallbackRoot(expr *ast.InfixExpression) {
-	if !isArithmetic(expr) {
-		return
-	}
-	or := rightEdgeOr(expr)
-	if or == nil {
-		return
-	}
-	if _, ok := ts.fallbackRoots[or]; !ok {
-		ts.fallbackRoots[or] = expr
-	}
-}
-
-func isArithmetic(expr *ast.InfixExpression) bool {
-	return !expr.IsLogicalAnd() && !expr.IsLogicalOr() && !expr.Token.IsComparison()
-}
-
-// rightEdgeOr returns the value-position || that ends expr's chain of
-// arithmetic right operands, if any.
-func rightEdgeOr(expr *ast.InfixExpression) *ast.InfixExpression {
-	for {
-		right, ok := expr.Right.(*ast.InfixExpression)
-		if !ok {
-			return nil
-		}
-		if right.IsLogicalOr() {
-			return right
-		}
-		if !isArithmetic(right) {
-			return nil
-		}
-		expr = right
-	}
 }
 
 // typeLogicalAndExpression types a value-position && as a gating AND: slot i
@@ -2137,7 +2082,6 @@ func (ts *TypeSolver) invalidCount(expr ast.Expression) []Type {
 // If either left or right operands are pointers, it will dereference them
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
-	ts.recordFallbackRoot(expr)
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
 	if ts.countInvalid(expr.Left) || ts.countInvalid(expr.Right) {
