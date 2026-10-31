@@ -155,7 +155,7 @@ type TypeSolver struct {
 	previousSlotTypes  map[string]Type // prior walk's slots for the body being inferred
 
 	// A value-position || ending a chain of arithmetic right operands, mapped
-	// to the outermost arithmetic over it (deadFallbackMsg).
+	// to the outermost arithmetic over it (reportRegroupedFallback).
 	fallbackRoots map[*ast.InfixExpression]*ast.InfixExpression
 
 	recLimit recursionLimit
@@ -1914,29 +1914,38 @@ func (ts *TypeSolver) typeInfixSlot(expr *ast.InfixExpression, leftType, rightTy
 }
 
 func (ts *TypeSolver) logicalOrValueType(leftType, rightType Type, tok token.Token) Type {
-	if ptr, ok := leftType.(Ptr); ok {
-		leftType = ptr.Elem
+	leftType, rightType = derefType(leftType), derefType(rightType)
+	if t, ok := ts.fallbackValueType(leftType, rightType); ok {
+		return t
 	}
-	if ptr, ok := rightType.(Ptr); ok {
-		rightType = ptr.Elem
-	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: tok,
+		Msg:   fmt.Sprintf("logical OR value operands must have matching output types, got %s and %s", leftType, rightType),
+	})
+	return Unresolved{}
+}
 
+// fallbackValueType returns the type a value-position || yields from sides of
+// the given dereferenced types, and whether those types match.
+func (ts *TypeSolver) fallbackValueType(leftType, rightType Type) (Type, bool) {
 	switch {
 	case ts.pendingOperand(leftType):
-		return rightType
+		return rightType, true
 	case ts.pendingOperand(rightType):
-		return leftType
+		return leftType, true
 	case leftType.Kind() == StrKind && rightType.Kind() == StrKind:
-		return mergeStringFlavor(leftType, rightType)
+		return mergeStringFlavor(leftType, rightType), true
 	case TypeEqual(leftType, rightType):
-		return leftType
-	default:
-		ts.Errors = append(ts.Errors, &token.CompileError{
-			Token: tok,
-			Msg:   fmt.Sprintf("logical OR value operands must have matching output types, got %s and %s", leftType, rightType),
-		})
-		return Unresolved{}
+		return leftType, true
 	}
+	return nil, false
+}
+
+func derefType(t Type) Type {
+	if ptr, ok := t.(Ptr); ok {
+		return ptr.Elem
+	}
+	return t
 }
 
 // typesResolved reports whether a slice is non-empty and every type in it is
@@ -1976,11 +1985,12 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 
 	// Value-position || is left-biased fallback (yield left, else right), so the
 	// left must be able to fail or the fallback is dead. Failure may come from
-	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1.
-	if !ts.expressionCanFail(expr.Left) {
+	// its root or a propagating child, e.g. ((i > 2 < 8) ^ 2) || -1. Arithmetic
+	// over the || reports it instead, once its own types are known.
+	if _, regrouped := ts.fallbackRoots[expr]; !regrouped && !ts.expressionCanFail(expr.Left) {
 		ts.Errors = append(ts.Errors, &token.CompileError{
 			Token: expr.Token,
-			Msg:   ts.deadFallbackMsg(expr),
+			Msg:   deadFallback,
 		})
 	}
 
@@ -2006,13 +2016,30 @@ func (ts *TypeSolver) typeLogicalOrExpression(expr *ast.InfixExpression, left, r
 
 const deadFallback = "logical OR in value position requires a conditional left operand"
 
-// deadFallbackMsg explains a fallback whose left operand cannot fail. When
-// arithmetic took the fallback's left side apart, as in b > 2 && 10 + 2 || 7,
-// it shows the grouping and the spellings the writer may have meant.
-func (ts *TypeSolver) deadFallbackMsg(or *ast.InfixExpression) string {
-	root, ok := ts.fallbackRoots[or]
-	if !ok {
-		return deadFallback
+// reportRegroupedFallback reports the dead fallback that ends root's chain of
+// arithmetic right operands, as in b > 2 && 10 + 2 || 7, when root is the
+// outermost arithmetic over it. It runs once root is typed, so the spellings
+// it offers can be checked against root's types.
+func (ts *TypeSolver) reportRegroupedFallback(root *ast.InfixExpression) {
+	if !isArithmetic(root) {
+		return
+	}
+	or := rightEdgeOr(root)
+	if or == nil || ts.fallbackRoots[or] != root || ts.expressionCanFail(or.Left) {
+		return
+	}
+	ts.Errors = append(ts.Errors, &token.CompileError{
+		Token: or.Token,
+		Msg:   ts.regroupedFallbackMsg(root, or),
+	})
+}
+
+// regroupedFallbackMsg shows how the arithmetic groups and the spellings the
+// writer may have meant, when the fallback's types match the arithmetic's.
+func (ts *TypeSolver) regroupedFallbackMsg(root, or *ast.InfixExpression) string {
+	msg := fmt.Sprintf("%s: || binds tighter than arithmetic, so this reads %s", deadFallback, root)
+	if !ts.fallbackFits(root, or.Right) {
+		return msg
 	}
 
 	var spellings []string
@@ -2024,11 +2051,27 @@ func (ts *TypeSolver) deadFallbackMsg(or *ast.InfixExpression) string {
 		spellings = append(spellings, fmt.Sprintf("%s || %s for a fallback over the whole expression", replaceOperand(root, or, or.Left), or.Right))
 	}
 
-	msg := fmt.Sprintf("%s: || binds tighter than arithmetic, so this reads %s", deadFallback, root)
 	if len(spellings) > 0 {
 		msg += "; write " + strings.Join(spellings, ", or ")
 	}
 	return msg
+}
+
+// fallbackFits reports whether a fallback's types match the arithmetic's, so
+// moving the || out of the arithmetic would type-check.
+func (ts *TypeSolver) fallbackFits(root *ast.InfixExpression, fallback ast.Expression) bool {
+	values := ts.ExprCache[key(ts.FuncNameMangled, root)].OutTypes
+	fallbacks := ts.ExprCache[key(ts.FuncNameMangled, fallback)].OutTypes
+	for i := range max(len(values), len(fallbacks)) {
+		value, fb := derefType(slotAt(values, i)), derefType(slotAt(fallbacks, i))
+		if ts.pendingOperand(value) || ts.pendingOperand(fb) {
+			return false
+		}
+		if _, ok := ts.fallbackValueType(value, fb); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // recordFallbackRoot remembers the outermost arithmetic whose right operands
@@ -2199,6 +2242,7 @@ func (ts *TypeSolver) invalidCount(expr ast.Expression) []Type {
 // This is because pointers are automatically dereferenced
 func (ts *TypeSolver) TypeInfixExpression(expr *ast.InfixExpression) (types []Type) {
 	ts.recordFallbackRoot(expr)
+	defer ts.reportRegroupedFallback(expr)
 	left := ts.TypeExpression(expr.Left, false)
 	right := ts.TypeExpression(expr.Right, false)
 	if ts.countInvalid(expr.Left) || ts.countInvalid(expr.Right) {

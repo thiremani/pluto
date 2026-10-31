@@ -1485,6 +1485,14 @@ func TestRegroupedFallbackDiagnostic(t *testing.T) {
 			prefix + "((a > 2) + (1 || 0)); write ((a > 2) + 1) || 0 for a fallback over the whole expression"},
 		{"NothingFails", "", "x = 1 + 2 || 7",
 			prefix + "(1 + (2 || 7))"},
+		// A spelling is offered only when the fallback's type matches the
+		// arithmetic's: / yields F64, and an array sum isn't a scalar.
+		{"FloatQuotientIntFallback", "", "b = 5\nx = b > 2 && 10 / 2 || 7",
+			prefix + "(((b > 2) && 10) / (2 || 7))"},
+		{"ArraySumScalarFallback", "", "b = 5\nv = [1 2]\nx = b > 2 && v + 1 || 0",
+			prefix + "(((b > 2) && v) + (1 || 0))"},
+		{"ArraySumArrayFallback", "", "b = 5\nv = [1 2]\nx = b > 2 && 1 + v || [0]",
+			prefix + "(((b > 2) && 1) + (v || [0])); write (b > 2) && (1 + v) || [0] for a calculation in the branch, or (((b > 2) && 1) + v) || [0] for a fallback over the whole expression"},
 		// Function bodies are retyped on every pass; the error is still one.
 		{"FunctionBody", "r = Pick(b)\n    r = 0\n    r = b > 2 && 10 + 2 || 7", "m = Pick(5)\nm",
 			prefix + "(((b > 2) && 10) + (2 || 7)); write (b > 2) && (10 + 2) || 7 for a calculation in the branch, or (((b > 2) && 10) + 2) || 7 for a fallback over the whole expression"},
