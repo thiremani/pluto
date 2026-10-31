@@ -135,8 +135,8 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 | Website and language-status accuracy | Section 5; a focused documentation/example pass |
 | Useful application and outside users | One small numerical/data tool; observe a few programmers installing, understanding, and modifying it |
 
-Resolve changes to seeded outputs, default zip-min array arithmetic, or strict
-argument evaluation in explicit semantic PRs. Keep the accepted ABI and current
+Resolve changes to seeded outputs, default zip-min array arithmetic, or
+evaluation order in explicit semantic PRs. Keep the accepted ABI and current
 behavior coherent while implementing analysis fixes. As PIR gains scopes and
 carries, preserve source origins and stable binding identities. Add explicit
 effects before scheduling parallel work; byte buffers, structured errors,

@@ -124,3 +124,42 @@ NstMergeKeepOld: 11 22
 NstHeapArg: sa
 NstHeapArgFallback: sz end
 NstRanged: 40
+NeedAndGrouping: 9 9 9 9
+NeedOrGrouping: 1 2 1 2
+NeedOrInAnd: 1 9
+NeedAndInOr: 1 9
+NeedGateGrouping: 3 3
+NeedGateAndGrouping: 4 4
+called 2
+called 3
+NeedRanged: 3 9
+NeedThroughArith: 2 9 -1 9
+NeedLeftSide: 5 9 1 9
+called 1
+called 2
+called 4
+NeedStopsAtComparison: 1 9 10 9
+called 1
+called 2
+NeedCallArgs: 2 9
+called 7
+NeedRepeatSecond: 9 7
+called 7
+called 8
+NeedRepeatedScalar: 9 27 9 20
+called 2
+called 3
+NeedRepeatedFallback: 1 9 2 9 3 3
+called 1
+called 2
+NeedWidthsN11: 9 1 9 2
+called 3
+called 4
+NeedWidths1N1: 9 3 9 4
+called 7
+called 9
+NeedWholeCall: [7 8] [9]
+called 7
+called 8
+NeedDiscarded: 9
+NeedMaskSlot: [0 5] 9

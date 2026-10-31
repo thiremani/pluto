@@ -1982,8 +1982,8 @@ func (c *Compiler) compileInfixBasic(expr *ast.InfixExpression, info *ExprInfo) 
 
 	// Free temporary array operands (literals used in expressions)
 	// Variables are not freed here - they're managed by scope cleanup
-	c.freeTemporary(expr.Left, left)
-	c.freeTemporary(expr.Right, right)
+	c.freeConsumedTemporary(expr.Left, left)
+	c.freeConsumedTemporary(expr.Right, right)
 
 	return res
 }
@@ -2485,6 +2485,14 @@ func (c *Compiler) compilePrefix(op string, operand *Symbol, expected Type) *Sym
 	return defaultUnaryOps[key](c, sym, true)
 }
 
+// compileOperation applies a unary or a binary operator to its operand values.
+func (c *Compiler) compileOperation(op string, operands []*Symbol, expected Type) *Symbol {
+	if len(operands) == 1 {
+		return c.compilePrefix(op, operands[0], expected)
+	}
+	return c.compileInfix(op, operands[0], operands[1], expected)
+}
+
 func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo) (res []*Symbol) {
 	operand := c.compileExpression(expr.Right, nil)
 	for i, opSym := range operand {
@@ -2492,7 +2500,7 @@ func (c *Compiler) compilePrefixBasic(expr *ast.PrefixExpression, info *ExprInfo
 	}
 
 	// Free temporary operand after use - the result is a new value
-	c.freeTemporary(expr.Right, operand)
+	c.freeConsumedTemporary(expr.Right, operand)
 
 	return res
 }
@@ -3233,8 +3241,13 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		return nil
 	}
 
+	// Ranges an enclosing loop already binds make this a plain call in that
+	// iteration: the loop's extraction has evaluated the arguments'
+	// conditions, so the call takes their values instead of evaluating them
+	// again.
+	pending := len(c.pendingLoopRanges(info.Ranges)) > 0
 	if sig.ABI.Return.Mode == ABIReturnDirect {
-		if !info.LoopInside && len(info.Ranges) > 0 {
+		if !info.LoopInside && pending {
 			// LoopInside=false still needs a temp slot so empty ranges preserve the
 			// existing destination value instead of forcing zero.
 			return c.compileDirectCallWithRanges(sig, info, dest)
@@ -3243,7 +3256,7 @@ func (c *Compiler) compileCallExpression(ce *ast.CallExpression, dest []*ast.Ide
 		return c.compileCallInner(sig, ce, dest)
 	}
 
-	if len(info.Ranges) > 0 && !info.LoopInside {
+	if pending && !info.LoopInside {
 		return c.compileIndirectCallWithRanges(sig, info, dest)
 	}
 
@@ -3652,8 +3665,11 @@ func (c *Compiler) appendPrintExpression(expr ast.Expression, formatStr *string,
 		return
 	}
 
-	// Compile expression and process each resulting symbol
+	// Each argument has its own bounds frame, as an assignment's value does,
+	// so a call whose argument reads out of bounds does not run.
+	c.pushBoundsGuard("print_bounds_guard")
 	syms := c.compileExpression(expr, nil)
+	c.popBoundsGuard()
 	for _, s := range syms {
 		c.appendPrintSymbol(s, expr, formatStr, args, toFree)
 	}

@@ -614,10 +614,10 @@ n, a, s2.age, col, t2`)
 
 // Plan §8: ownership is read from a binding's effective storage, not the
 // solver's flow-typed read. text solves as a static string after
-// `text = "old"` but stores a materialized heap copy; other is declared
-// static yet takes text's heap buffer by transfer, so its later read is a
-// borrow and replacing it releases the held value — a plain store, since the
-// declared type copies nothing.
+// `text = "old"` but stores a materialized heap copy, so its read borrows.
+// other takes text's heap buffer by transfer and is declared heap like text,
+// so replacing it copies the literal and releases the held value. pir's
+// TestElaborate pins a target declared static that holds heap.
 func TestPlanGoldenEffectiveStorage(t *testing.T) {
 	ctx := llvm.NewContext()
 	defer ctx.Dispose()
@@ -655,10 +655,10 @@ copy, other, text`)
         %t0 = eval Str "new" [unmanaged]
 
     commit
-        Str other <- %t0
+        Str other <- %t0 [copy]
         drop other [old]
 `, plans[3].Render(true))
-	require.False(t, plans[3].Commit[0].Target.TypeOwnsHeap)
+	require.True(t, plans[3].Commit[0].Target.TypeOwnsHeap)
 	require.True(t, plans[3].Commit[0].Target.HoldsHeap)
 }
 

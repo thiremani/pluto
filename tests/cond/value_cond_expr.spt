@@ -761,6 +761,135 @@ rbX = LoudCat(rbV > "" < Pair("b", ""))
 rbV = rbV ⊕ "b"
 "CallArgRepeatsChainedBinding: -rbW -rbX -rbV"
 
+# A value-position && or || copies a binding's stored string, typed by the
+# binding's storage, which the later widening makes heap, so every copy is
+# freed: a bare &&, a call argument, a comparison operand, either side of ||,
+# and a repeated side (leak-checked over a loop).
+wdS = "a"
+wdT = "b"
+wdI = 0:200
+wdA = wdI >= 0 && wdS
+wdB = Id(wdI >= 0 && wdS)
+wdC = wdI >= 0 && wdS > ""
+wdD = (wdI < 0 && "q") || wdS
+wdE = wdS < (wdI > 100 && "a" || "b") || "w"
+wdF, wdG = Pair(wdI, wdI) >= 0 && wdS
+wdH, wdJ = (Pair(wdI % 2, 1) > 0 && Pair(wdT, "c")) || wdS
+wdP = ""
+wdQ = ""
+wdP, wdQ = WidenedRepeat(wdI)
+wdS = wdS ⊕ "b"
+wdT = wdT ⊕ "c"
+"WidenedCopy: -wdA -wdB -wdC -wdD -wdE -wdF -wdG -wdH -wdJ -wdP -wdQ -wdS -wdT"
+
+# A binding that copies or takes over a widened binding stores what that
+# binding stores: a call on it, its && copies, a gate and a chained copy free
+# every copy, in a script and in a function body, and replacing it with a
+# static string releases it (leak-checked over a loop).
+whS = "a"
+whT = whS
+whText = "old"
+whText, whOther = whText ⊕ "!", whText
+whI = 0:200
+whA = Id(whT)
+whB = whI >= 0 && whT
+whC, whD = Pair(whI, whI) >= 0 && whOther
+whE = Id(whI >= 0 && whT)
+whF = whI >= 0 whOther
+whU = whT
+whG = Id(whU)
+whP = ""
+whP = WidenedTarget(whI)
+whS = whS ⊕ "b"
+whT = "new"
+"WidenedTarget: -whA -whB -whC -whD -whE -whF -whG -whP -whS -whT -whText -whOther"
+
+# A ranged call's && or || argument runs once per iteration, and the call
+# consumes the copy that argument's condition made (leak-checked over a
+# loop), in an assignment and in a print.
+roA = [1 2]
+roI = 0:200
+roX = Id(roI >= 0 && roA)
+roC = 0:3
+roY = Id(roC >= 1 && Loud(roC))
+roZ = Id((roC < 1 && 5) || Loud(roC))
+"RangedCallArgOnce: -roX -roY -roZ"
+"RangedCallArgPrint:", Id(roC >= 1 && Loud(roC))
+
+# An array-valued cell resolves its own conditions, like a scalar cell: a call
+# in a collector, which runs as a plain call in its iteration, and in a fixed
+# literal.
+acA = [1 2]
+acB = [3 4]
+acI = 0:3
+acX = [Id((acI > 0 && acA) || acA)]
+"acX", acX
+acY = [Id((5 > 0 && acA) || acB)]
+"acY", acY
+
+# A collector cell whose sides differ shows which side each iteration took.
+acQ = [Id((acI > 1 && acA) || acB)]
+"acQ", acQ
+
+# A named row beside a conditional one is copied into its cell and freed once,
+# in a fixed literal and in a collector (leak-checked).
+acZ = [acA (5 > 0 && acB)]
+"acZ", acZ
+acW = [acA (acI >= 0 && acB)]
+"acW", acW
+
+# Heap strings and a call that builds the row resolve the same way
+# (leak-checked).
+acS = ["x" ⊕ "y" "z"]
+acT = ["u" "v" ⊕ "w"]
+acU = [(acI > 0 && acS) || acT]
+"acU", acU
+acV = [MkArr((acI > 0 && acI) || 7)]
+"acV", acV
+
+# A negation commits slot by slot, like arithmetic: the slot whose condition
+# holds keeps its value when the other fails, at the root and as an && side.
+ngA = 9
+ngB = 9
+ngA, ngB = -(Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 5))
+ngC = 9
+ngD = 9
+ngC, ngD = Pair(1, 2) > Pair(0, 5) && -(Pair(1, 2) > Pair(0, 5) || Pair(1, 2) > Pair(5, 5))
+"NegationPerSlot: -ngA -ngB -ngC -ngD"
+
+# The calls inside a negation run where they run inside the same arithmetic:
+# inside && and in multi-slot arithmetic. A single-slot root still skips them.
+ngE = 9
+ngE = (1 > 0) && -((1 > 2) + Loud(1))
+ngF = 9
+ngG = 9
+ngF, ngG = -((Pair(1, 2) > Pair(5, 0)) + Pair(Loud(2), Loud(3)))
+ngH = 9
+ngH = -((1 > 2) + Loud(4))
+"NegationCalls: -ngE -ngF -ngG -ngH"
+
+# An array-valued negation negates the slot that holds and keeps the failed
+# slot's old array, directly and over a sum it frees (leak-checked).
+ngI = 0:100
+ngP = [9]
+ngQ = [9]
+ngP, ngQ = -(Pair(ngI % 3, 2) > Pair(0, 5) && Pair([1 2], [3 4]))
+ngR = [9]
+ngS = [9]
+ngR, ngS = -((Pair(ngI % 3, 2) > Pair(0, 5) && Pair([1 2], [3 4])) + [10 10])
+"NegationArrays: -ngP -ngQ -ngR -ngS"
+
+# A negation inside a comparison operand keeps each slot's own condition: the
+# slot whose inner comparison holds yields, and the other keeps its old value,
+# directly and under arithmetic.
+ngT = 9
+ngU = 9
+ngT, ngU = -(Pair(1, 2) > Pair(0, 5)) < Pair(0, 0)
+ngV = 9
+ngW = 9
+ngV, ngW = (-(Pair(1, 2) > Pair(0, 5)) + Pair(1, 1)) < Pair(5, 5)
+"NegationInComparison: -ngT -ngU -ngV -ngW"
+
 # A comparison nested in a tuple operand gates the slots that read it: the call
 # does not run when its argument comparison fails, and those slots keep old.
 k5 = 5
@@ -1196,3 +1325,64 @@ sdU, sdW = sdArr[9], sdArr[0]
 msX = 0
 msX = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3
 "MixedSlotOrGate: -msX"
+
+# Beside a failed comparison: today's evaluation, pinned so that PIR Step 6,
+# planned to run every check before the work beside it, shows here as a diff.
+# Outside every condition, a single-slot value skips its call, on either side.
+pbA, pbB = 9, 9
+pbA = (1 > 2) + Loud(1)
+pbB = Loud(2) + (1 > 2)
+"PosRoot: -pbA -pbB"
+
+# A call's arguments skip it too, on either side of the failed one and
+# whatever the call's slot count.
+pcA, pcB, pcC, pcD, pcE, pcF = 9, 9, 9, 9, 9, 9
+pcA = Two(Loud(1), 1 > 2)
+pcB = Two(1 > 2, Loud(2))
+pcC, pcD = Pair(Loud(3), 1 > 2)
+pcE, pcF = Pair(1 > 2, Loud(4))
+"PosCallArgs: -pcA -pcB -pcC -pcD -pcE -pcF"
+
+# Inside a comparison, an || or an &&, the call runs.
+pdA, pdB, pdD, pdE = 9, 9, 9, 9
+pdA = ((1 > 2) + Loud(1)) > 0
+pdB = 1 > 2 > Loud(2)
+pdC = ((1 > 2) + Loud(3)) || 6
+pdD = 1 > 0 && ((1 > 2) + Loud(4))
+pdE = Two(((1 > 2) + Loud(5)) > 0, 1)
+"PosInsideCondition: -pdA -pdB -pdC -pdD -pdE"
+
+# A cell reads its value the same way, and a failed cell holds zero.
+peA = [(1 > 2) + Loud(1)]
+peB = [((1 > 2) + Loud(2)) > 0]
+"PosCells: -peA -peB"
+
+# Multi-slot arithmetic runs every leaf, also when a repeat makes it
+# multi-slot.
+pfA, pfB, pfC, pfD = 9, 9, 9, 9
+pfA, pfB = (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(1), Loud(2))
+pfC, pfD = (Pair(1, 2) > Pair(5, 5)) + Loud(3)
+"PosMultiSlot: -pfA -pfB -pfC -pfD"
+
+# A print of each reads its arguments as a call does: a failed argument
+# suppresses its line, and multi-slot arithmetic skips its calls as well.
+"PosPrintRoot:", (1 > 2) + Loud(1)
+"PosPrintRootRight:", Loud(2) + (1 > 2)
+"PosPrintCallArg:", Two(Loud(3), 1 > 2)
+"PosPrintPairArg:", Pair(Loud(4), 1 > 2)
+"PosPrintCmp:", ((1 > 2) + Loud(5)) > 0
+"PosPrintChain:", 1 > 2 > Loud(6)
+"PosPrintOr:", ((1 > 2) + Loud(7)) || 6
+"PosPrintAnd:", 1 > 0 && ((1 > 2) + Loud(8))
+"PosPrintCmpArg:", Two(((1 > 2) + Loud(9)) > 0, 1)
+"PosPrintCell:", [((1 > 2) + Loud(10)) > 0]
+"PosPrintMultiSlot:", (Pair(1, 2) > Pair(5, 5)) + Pair(Loud(11), Loud(12))
+"PosPrintRepeat:", (Pair(1, 2) > Pair(5, 5)) + Loud(13)
+
+# Checking every result of a call in a cell takes a helper that returns one
+# value per call; a gate checks every slot itself.
+hpI = 0:5
+hpCells = [Both(hpI) > 0 && hpI]
+hpKept = Both(hpI) > 0 [hpI]
+hpKeptPair = Split(hpI) > Pair(1, 2) [hpI]
+"HelperPattern: -hpCells -hpKept -hpKeptPair"

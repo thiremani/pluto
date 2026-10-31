@@ -46,18 +46,28 @@ func (c *Compiler) compileFixedStackedArray(lit *ast.ArrayLiteral, arrayType Arr
 			offset = c.builder.CreateMul(c.ConstI64(uint64(i)), childLen, "stacked_array_offset")
 		}
 		c.CopyArrayInto(data, child, childElemType, arrayType.ElemType, offset, applyOffset)
-		c.freeConsumedTemporary(children[i], []*Symbol{child})
+		c.freeSymbolValue(child, "")
 	}
 
 	return &Symbol{Type: arrayType, Val: c.createArrayValue(data, dimensions, arrayType)}
 }
 
+// compileArrayValuedCell resolves an array-valued cell through a seeded slot,
+// as compileArrayLiteralCell does a scalar cell: the cell's conditions and
+// bounds are its own, and the caller owns and frees the slot's value.
 func (c *Compiler) compileArrayValuedCell(child ast.Expression) *Symbol {
-	var compiled *Symbol
+	info := c.ExprCache[key(c.FuncNameMangled, child)]
+	cellSlot := c.newArrayCellSlot(info.OutTypes[0])
+
+	c.pushBoundsGuard("array_cell_bounds_guard")
+	defer c.popBoundsGuard()
+
 	c.withArrayLiteralCellMode(func() {
-		compiled = c.compileExpression(child, nil)[0]
+		c.compileCondExprValue(child, func() {
+			c.storeArrayCellSlotWhenInBounds(cellSlot, c.compileExpression(child, nil), child)
+		})
 	})
-	return c.derefIfPointer(compiled, "stacked_array_child")
+	return c.derefIfPointer(cellSlot, "stacked_array_child")
 }
 
 func (c *Compiler) compileStackedArray(
@@ -141,7 +151,7 @@ func (c *Compiler) appendStackedArrayChild(
 	})
 
 	c.createStore(c.builder.CreateAdd(outerLen, c.ConstI64(1), "stacked_array_outer_len_next"), acc.outerLenSlot, I64)
-	c.freeTemporary(child, []*Symbol{childSymbol})
+	c.freeSymbolValue(childSymbol, "")
 }
 
 func (c *Compiler) createArrayValue(data llvm.Value, dimensions []llvm.Value, arrayType Array) llvm.Value {

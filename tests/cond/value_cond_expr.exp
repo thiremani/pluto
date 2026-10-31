@@ -194,6 +194,59 @@ CallArgScalarAndMask: [3 0] 3 8 [7 7]
 CallArgRepeatsHeapBinding: abab old
 called a a
 CallArgRepeatsChainedBinding: aa old ab
+WidenedCopy: a a a a w a a b c aab a ab bc
+WidenedTarget: a a old old a old a aab ab new old! old
+called 1
+called 2
+called 1
+called 2
+RangedCallArgOnce: [1 2] 2 2
+called 1
+RangedCallArgPrint: 1
+called 2
+RangedCallArgPrint: 2
+acX [
+    1 2
+    1 2
+    1 2
+]
+acY [
+    1 2
+]
+acQ [
+    3 4
+    3 4
+    1 2
+]
+acZ [
+    1 2
+    3 4
+]
+acW [
+    1 2
+    3 4
+    1 2
+    3 4
+    1 2
+    3 4
+]
+acU [
+    "u" "vw"
+    "xy" "z"
+    "xy" "z"
+]
+acV [
+    7 7
+    1 1
+    2 2
+]
+NegationPerSlot: -1 9 -1 9
+called 1
+called 2
+called 3
+NegationCalls: 9 9 -5 9
+NegationArrays: [-1 -2] [9] [-11 -12] [9]
+NegationInComparison: -1 9 0 9
 GatedLeafBefore: 77 88
 GatedLeaf: 77 88
 GatedLeafPass: 8 9
@@ -311,3 +364,26 @@ ChainCallOuterFalse:  end
 SeedFreshPair: bb a
 SeedOobPair:  a
 MixedSlotOrGate: 3
+PosRoot: 9 9
+PosCallArgs: 9 9 9 9 9 9
+called 1
+called 2
+called 3
+called 4
+called 5
+PosInsideCondition: 9 9 6 9 9
+called 2
+PosCells: [0] [0]
+called 1
+called 2
+called 3
+PosMultiSlot: 9 9 9 9
+called 5
+called 6
+called 7
+PosPrintOr: 6
+called 8
+called 9
+called 10
+PosPrintCell: [0]
+HelperPattern: [0 0 2 3 4] [2 3 4] [2 3 4]
