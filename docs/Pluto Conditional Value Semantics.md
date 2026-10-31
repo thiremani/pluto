@@ -373,11 +373,11 @@ of arithmetic or a comparison (`Pair(1, 2) * 2` → `2 4`; `3 > Pair(1, 5)` →
 string or array owns its own copy. A slot is one of a call's returned values, so
 an array returned as one value repeats whole.
 
-Comparison operands are evaluated eagerly (once); only the yielding combine and
-the commit are gated per slot. The lazy operands are `&&` and `||` right sides:
-each is evaluated at most once, and only when a slot its context still needs
-depends on it — a needed slot whose left side yielded, for an `&&`, or that its
-left side left empty, for an `||`. A statement needs every slot of its value
+Every operand is evaluated at most once, in the order "Evaluation order: checks
+first" below describes. The `&&` and `||` right sides are lazy: each is
+evaluated only when a slot its context still needs depends on it — a needed
+slot whose left side yielded, for an `&&`, or that its left side left empty,
+for an `||`. A statement needs every slot of its value
 and a gate every slot of its condition; an `&&` or `||` passes its need to its
 left side, arithmetic and negation pass each slot's need to their operands, and
 a call, an index or a comparison needs every slot of its operands whenever it
@@ -404,6 +404,41 @@ or fixed-array cell, an **unresolved** OOB zero-fills that cell to preserve
 shape — unresolved meaning no closer resolver claimed it first: in
 `[arr[oob] || -1]` the `||` wins and the cell holds `-1`.
 
+## Evaluation order: checks first
+
+A **failure scope** is the region one resolver closes — an RHS slot, a print
+invocation, a collector cell, an `||`'s left side — and its **checks** are the
+comparisons and checked accesses whose failure reaches that resolver. Each
+scope runs its checks first, in source order, each with the operands it needs
+evaluated by the same rule, and a slot stops at its first failed check. The
+scope's other work then runs in source order, only for the slots that passed,
+reusing what the checks computed; a call that feeds several slots runs when
+any of them passed. A failed slot runs nothing beyond its checks (`Loud`
+prints its argument and returns it):
+
+```pluto
+r1, r2 = Pair(Loud(a), c > 5)  # c <= 5: Loud doesn't run, r1 and r2 keep old
+x = Loud(1) + arr[i]           # i out of bounds: Loud doesn't run, x keeps old
+res = 1
+res = Fact(n - 1) * (n > 1)    # n <= 1: res stays 1 and Fact isn't called
+```
+
+A comparison therefore guards the work beside it wherever it is written, as a
+statement gate or an `&&` left side does, and all three skip the same calls. A
+failure that a collector cell or an `||` resolves is not a check of the scope
+around it: `Pair(Loud(1), [3 > 5])` calls `Loud` and yields `1 [0]`. Effects
+follow the same order: a check's own calls run before the work it gates, so
+`x = io() + (io() > 0)` runs the second `io()` first, and a statement boundary
+keeps text order (`v = io()`, then `x = v + (v > 0)`).
+
+**Status (decided; PIR Step 6):** today's lowering checks first for
+comparisons in single-slot values, call arguments, cells and prints.
+Elsewhere it does not yet: an out-of-bounds read is checked where it is read
+(`Loud(1) + arr[oob]` calls `Loud`), and work inside a comparison's operands,
+an `&&` right side, an `||` left side or multi-slot arithmetic runs before the
+checks beside it (`(1 > 0) && ((1 > 2) + Loud(1))` calls `Loud`). PIR Step 6
+makes every scope check first.
+
 ## Why this model
 
 - **One propagation rule:** every failed condition — a comparison, an `&&`, an
@@ -419,6 +454,9 @@ shape — unresolved meaning no closer resolver claimed it first: in
   materializing a sentinel `0` that flows onward; zeros appear only where a
   resolver deliberately introduces them (a fresh seed, a cell's zero-fill, an
   explicit `|| 0`).
+- **Checks guard work:** a slot that fails runs nothing beyond its checks, so
+  a comparison guards the calls beside it wherever it is written — a base
+  case stops a recursion — the same way a statement gate or an `&&` does.
 
 ## Status
 
@@ -428,8 +466,8 @@ shape — unresolved meaning no closer resolver claimed it first: in
   to admitted elements, and the explicit boolean spelling is `cond && 1 || 0`.
   That resolution suppresses the **entire invocation and stays so** —
   retained language behavior under "Print invocation atomicity" below, which
-  also makes sibling evaluation eager and changes the out-of-bounds case
-  (today a materialized zero prints). ("Gated print" names the scheduled
+  keeps today's checks-first order and changes the out-of-bounds case
+  (today a materialized zero prints). ("Gated print" names the unscheduled
   no-comma syntax, not this.)
   `||` fallback in value and
   condition position (per slot over multi-return values); value-position
@@ -466,18 +504,15 @@ shape — unresolved meaning no closer resolver claimed it first: in
   the atomic unit, not one physical line: a slot's formatted representation
   may itself span lines, as whole-`Struct` printing does, and suppression
   removes all of it. Failed-conditional suppression is today's behavior,
-  retained in outcome — but evaluation becomes eager: today a failed
-  conditional also skips evaluating its sibling arguments, while the decided
-  model evaluates every argument in source order before deciding, so sibling
-  side effects occur even when the invocation is suppressed. This is the
-  general invocation rule, not a print special case: every call evaluates
-  all of its arguments in source order before suppression decides, so
-  `F(sideEffect(), failingArg)` runs the side effect and
-  `F(failingArg, sideEffect())` still evaluates the argument after the
-  failed one. Ordinary calls are currently lazy in exactly the way print
-  is, and PIR Step 6 is the behavior change for both. The
-  out-of-bounds case changes too: today it materializes a zero and prints. A
-  suppressed invocation still releases its owned temporaries. A
+  retained with its order: the arguments' checks run first, so a suppressed
+  invocation evaluates none of its other arguments ("Evaluation order: checks
+  first" above). This is the general invocation rule, not a print special
+  case: neither `F(sideEffect(), failingArg)` nor
+  `F(failingArg, sideEffect())` runs the side effect. The out-of-bounds case
+  changes: today an OOB argument materializes a zero, its sibling arguments
+  run, and the line prints; under the decided rule the read is a check, so
+  the invocation is suppressed before anything else runs. A suppressed
+  invocation still releases what its checks allocated. A
   direct-return argument carries no validity bit, and #123 removed the need
   for one instead of adding it: a body that runs writes every output, so a
   print argument that is a call either yields or failed before the call ran.
@@ -491,14 +526,16 @@ shape — unresolved meaning no closer resolver claimed it first: in
   already names an OOB read a failed condition. Scheduled with checked
   accesses and fallbacks in Steps 5-6 of the PIR migration, with regression
   tests when it lands.
-- **Gated print (scheduled before PIR Step 6; not current syntax):** a no-comma prefix form such
-  as `arr[oob] val1, val2` would reject the whole line without evaluating the
-  siblings, following the general rule that a gate admits or rejects its entire
-  region while a failure inside an admitted region skips only its own slot.
-  This does not parse today — `PrintStatement` has no gate — and needs its own
-  parser, AST, and solver work. When it lands, the gate must test the access's
-  yielded/in-bounds bit rather than its value, so an in-bounds zero still
-  admits the region.
+- **Gated print (no longer scheduled; not current syntax):** a no-comma
+  prefix form such as `arr[oob] val1, val2` would reject the whole line
+  without evaluating the siblings. It was scheduled before PIR Step 6 to keep
+  that spelling once print arguments became strict; with checks first,
+  `arr[oob], val1, val2` already evaluates nothing beside the failed read, and
+  `c > 5 && a, b` already gates a line on a condition it doesn't print. It
+  does not parse today — `PrintStatement` has no gate — and would need its
+  own parser, AST, and solver work. If it lands, the gate must test the
+  access's yielded/in-bounds bit rather than its value, so an in-bounds zero
+  still admits the region.
 - **Ranges:** an `&&` may be range-driven. In a collector it iterates and
   zero-fills failed cells (`[i > 2 && i]` → `[0 0 0 3 4]`,
   `[i > 2 && i * 10]` → `[0 0 0 30 40]`); at an assignment root failing

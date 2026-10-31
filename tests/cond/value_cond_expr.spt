@@ -1327,7 +1327,7 @@ msX = Pair(5, 7) > Pair(1, 8) || Pair(5, 7) > Pair(8, 1)  3
 "MixedSlotOrGate: -msX"
 
 # Beside a failed comparison: today's evaluation, pinned so that PIR Step 6,
-# planned to evaluate every call and print argument, shows here as a diff.
+# planned to run every check before the work beside it, shows here as a diff.
 # Outside every condition, a single-slot value skips its call, on either side.
 pbA, pbB = 9, 9
 pbA = (1 > 2) + Loud(1)
