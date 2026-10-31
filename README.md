@@ -141,7 +141,7 @@ Compile and run:
 
 Templates are defined once with a clear input/output contract. The first line declares the output and input — the indented body describes the transformation.
 
-Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference**. A caller may connect an input and an output to the same variable; inside the call, later input reads observe writes through that output. The caller's variable receives the result after every right-hand side of the assignment has been evaluated.
+Think of a template as a **black box**: data flows in through inputs, gets transformed, and flows out through outputs. Outputs work **by reference**. A caller may pass a variable as an input and also name it as a destination; the input keeps the variable's value for the whole call, and the variable receives the result after every right-hand side of the assignment has been evaluated.
 
 `math.pt`
 ```python
@@ -150,7 +150,7 @@ y = Square(x)
     y = x * x
 ```
 
-Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. Read-only means the template cannot assign through the input name; it does not freeze a value shared with an output. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
+Inputs are read-only — they flow in. Outputs flow out: the template may read one only after assigning it unconditionally, as in `sq = x * x` followed by `cube = sq * x`; before that, use a local. A caller may reuse a variable as both argument and destination, `a = Square(a)`.
 
 Every body that runs assigns every output on every path. A write under a condition, from a value that can fail, or driven by a range that may be empty can be skipped, so it needs a default first. A function keeps an old value only through an input its caller passes:
 
@@ -172,10 +172,10 @@ out, seen = Fold(current, item)
     seen = current
 
 value = 10
-value, seen = Fold(value, 5)  # value = 15, seen = 15
+value, seen = Fold(value, 5)  # value = 15, seen = 10
 ```
 
-Moving `seen = current` before `out = current + item` instead makes `seen` equal 10. The same order applies to each iteration of a ranged call. To keep an old value across a write, save it first with an explicit assignment; that is where any copy happens.
+`seen` is 10 whichever statement comes first, since `current` keeps its value for the whole call. In a ranged call, each iteration's `current` is the previous iteration's result: from 10, `value, seen = Fold(value, 1:3)` gives `value = 13, seen = 11`.
 
 ### Generics by use
 

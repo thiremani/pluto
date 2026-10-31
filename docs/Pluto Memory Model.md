@@ -24,8 +24,7 @@ This document describes Pluto's semantic model and compares it with other major 
 7. **Read-Only Function Arguments:** Inputs are read-only and keep their
    values for the whole call, even when the caller also passes the argument
    as a destination. Every body that runs writes every output, and results
-   reach the caller's destinations when the assignment commits. Stable
-   inputs are not implemented yet (#144); see "Status" under Call Site.
+   reach the caller's destinations when the assignment commits.
 8. **Function Locking:** Input arguments hold read locks, outputs hold write locks (automatic concurrency safety).
 9. **Memory Management:** Automatic scope-based deallocation (no GC pauses).
 
@@ -420,16 +419,13 @@ destination is only a copy optimization; across a ranged call's iterations,
 it is what makes each iteration read the previous result. The compiler may
 give the input and the output one slot where no read can tell the
 difference: in `a = Maybe(a, -1)`, the body reads `prev` only in its first
-write to `out`, so `out = prev` needs no copy.
+write to `out`, so `out = prev` would need no copy. The current lowering
+keeps them apart within every invocation and shares storage only between the
+iterations of a callee that runs the range itself.
 
-**Status.** Definite outputs and the per-template checks are implemented
-(#123). Stable inputs are decided and not yet implemented (#144): a shared
-input is still a live reference, so each read observes earlier writes to the
-shared output. `value, seen = FoldAfter(value, 5)` gives `15 15`,
-`p, q = Swap(p, q)` with the sequential body gives `2 2`,
-`value, seen, old = FoldAfter(value, 5), value` gives `15 15 10`, and
-`FoldAfter(value, 1:3)` gives `13 13`. #144 removes this difference, migrates
-`tests/alias_input`, and updates the README's sharing example.
+**Status.** Definite outputs and the per-template checks (#123) and stable
+inputs (#144) are implemented; `tests/alias_input` covers each result above
+for scalars, strings and arrays, in ordinary and ranged calls.
 
 ### Range Parameters
 

@@ -47,12 +47,12 @@ of the language rule is in
 The storage mismatch filed as
 [issue #103](https://github.com/thiremani/pluto/issues/103) is addressed by
 specializing binding arguments on their merged storage type and revisiting
-calls when a later assignment widens that storage. Under live-reference
-semantics, `s = "a"` followed by `s, prev = FoldStr(s, "b")`, where the body
-writes `out = current ⊕ item` before `seen = current`, must produce `ab ab`.
-A shared output takes its input's storage inside the private alias variant,
-preserving sharing without changing unrelated input types. These cases are
-covered by `tests/alias_input`.
+calls when a later assignment widens that storage. With stable inputs,
+`s = "a"` followed by `s, prev = FoldStr(s, "b")`, where the body writes
+`out = current ⊕ item` before `seen = current`, produces `ab a`. In a ranged
+call, a shared output takes its input's storage inside the private alias
+variant, preserving sharing without changing unrelated input types. These
+cases are covered by `tests/alias_input`.
 
 Seed-readable outputs, which would let a body read an output before assigning
 it, are not planned ([issue #105](https://github.com/thiremani/pluto/issues/105)):
@@ -62,12 +62,15 @@ and the caller shares the destination with it.
 **Decided 2026-09-28 ([issue #123](https://github.com/thiremani/pluto/issues/123)).**
 Every body that runs writes every output, sharing is decided only at the call
 site, and inputs keep their values within an invocation, which reverses the
-live references described above. Definite outputs and the per-template flow
-checks are implemented; stable inputs
-([#144](https://github.com/thiremani/pluto/issues/144)) and ABI 3.0
-([#69](https://github.com/thiremani/pluto/issues/69)) are not. The Memory
-Model's "Parameters and Outputs" and "Call Site" state the rules and what
-master still does differently, and the C ABI Spec §5.3 describes ABI 3.0.
+live references described above. Definite outputs, the per-template flow
+checks and stable inputs
+([#144](https://github.com/thiremani/pluto/issues/144)) are implemented; ABI
+3.0 ([#69](https://github.com/thiremani/pluto/issues/69)) is not. Since no
+body observes an output write through an input, the nested-call gap above
+no longer arises for Pluto callers; the C ABI Spec §5 states what a native
+caller that passes one address as an input and an output sees. The Memory
+Model's "Parameters and Outputs" and "Call Site" state the rules, and the C
+ABI Spec §5.3 describes ABI 3.0.
 
 ## 2. Formatting: `%n` removed
 
@@ -121,7 +124,7 @@ and [ABI stability plan](./Pluto%20ABI%20Optimization%20Plan.md).
 
 | Work | Completion criterion / existing reference |
 | --- | --- |
-| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103). Definite outputs and per-template flow checks are done ([#123](https://github.com/thiremani/pluto/issues/123)); stable inputs ([#144](https://github.com/thiremani/pluto/issues/144)) and ABI 3.0 ([#69](https://github.com/thiremani/pluto/issues/69)) land before PIR Step 4's call slice |
+| Seed/effect correctness | Section 1; resolved by the definite-assignment rule for output reads in [PR #104](https://github.com/thiremani/pluto/pull/104); flow-versus-slot call specialization is [#103](https://github.com/thiremani/pluto/issues/103). Definite outputs and per-template flow checks are done ([#123](https://github.com/thiremani/pluto/issues/123)), and so are stable inputs ([#144](https://github.com/thiremani/pluto/issues/144)); ABI 3.0 ([#69](https://github.com/thiremani/pluto/issues/69)) lands before PIR Step 4's call slice |
 | `%n` effect contract | Done: `%n` removed (section 2, #109) |
 | Output path protection | Done ([#80](https://github.com/thiremani/pluto/issues/80)): a script's executable replaces only a missing path or a native executable, never `pt.mod`, a source file, a directory or a symlink, and links through a fresh directory renamed into place |
 | Numeric edge behavior | Define and guard integer divide/remainder faults and invalid shift counts; audit range/count/allocation arithmetic |

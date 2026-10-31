@@ -314,13 +314,14 @@ If one owned source feeds multiple targets, at most one consumer takes it; the
 others require a derived copy.
 
 At a call boundary, `a = F(a)` passes `a`'s value as an input that stays
-stable for the whole invocation (#144, decided): the output starts unassigned
-in its own staging slot, and the lowering may place both in one slot only
-where no read can tell. The real `a` changes only at the outer assignment's
-commit, so sibling RHS expressions continue to read the pre-commit binding.
-Today the shared input is a live reference instead, pinned by
-`tests/alias_input`; the Memory Model's "Call Site" gives both results. Step
-4's call lowering must preserve the external commit.
+stable for the whole invocation (#144): the output starts unassigned in its
+own staging slot, and the lowering may place both in one slot only where no
+read can tell. The real `a` changes only at the outer assignment's commit, so
+sibling RHS expressions continue to read the pre-commit binding. The legacy
+lowering keeps the input and the output apart within every invocation and
+shares storage only between the iterations of a callee-owned range;
+`tests/alias_input` pins the results. Step 4's call lowering must preserve the
+external commit.
 
 ## 7. Loop-Carried State
 
@@ -1027,9 +1028,9 @@ Both passes consume write kinds the same way:
   template-level check, an `out = prev` default before a comparison override
   is live for every argument type, so it needs no exemption.
 - *Shared inputs.* A body is analyzed once per template, with every input
-  treated as its own value. Sharing an input with an output at a call only
-  adds reads today, and none once #144 makes inputs stable, so it can never
-  make a body invalid, and a body must be valid without it:
+  treated as its own value. Inputs are stable (#144), so sharing an input
+  with an output at a call adds no reads; it can never make a body invalid,
+  and a body must be valid without it:
   `out = current + 1` written twice is reported for `x = Twice(x)` as well as
   for `y = Twice(x)`, because the body never reads `out`. A body that means to
   build on its own write says so by naming the output, `out = out + 1`, which
